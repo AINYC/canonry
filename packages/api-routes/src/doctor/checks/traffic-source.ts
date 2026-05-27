@@ -449,7 +449,15 @@ const syncLagCheck: CheckDefinition = {
   title: 'Traffic source sync lag',
   run: (ctx) => {
     if (!ctx.project) return skippedNoProject()
-    const sources = loadProbes(ctx)
+    const allSources = loadProbes(ctx)
+    const sources = allSources.filter((source) => source.sourceType !== TrafficSourceTypes.cloudflare)
+    if (allSources.length > 0 && sources.length === 0) {
+      return {
+        status: CheckStatuses.skipped,
+        code: 'traffic.sync-lag.push-only',
+        summary: 'Only push traffic sources are connected — pull sync lag does not apply.',
+      }
+    }
     if (sources.length === 0) {
       return {
         status: CheckStatuses.skipped,

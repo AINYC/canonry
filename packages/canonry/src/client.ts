@@ -196,6 +196,8 @@ import type {
   TrafficConnectCloudRunRequest,
   TrafficConnectWordpressRequest,
   TrafficConnectVercelRequest,
+  TrafficConnectCloudflareRequest,
+  TrafficConnectCloudflareResponse,
   TrafficSyncResponse,
   TrafficBackfillResponse,
   DiscoverySessionDto,
@@ -400,6 +402,7 @@ import {
   postApiV1ProjectsByNameTrafficConnectCloudRun,
   postApiV1ProjectsByNameTrafficConnectWordpress,
   postApiV1ProjectsByNameTrafficConnectVercel,
+  postApiV1ProjectsByNameTrafficConnectCloudflare,
   postApiV1ProjectsByNameTrafficSourcesByIdSync,
   postApiV1ProjectsByNameTrafficSourcesByIdBackfill,
   postApiV1ProjectsByNameTrafficSourcesByIdReset,
@@ -3078,6 +3081,19 @@ export class ApiClient {
   async trafficConnectVercel(project: string, body: TrafficConnectVercelRequest): Promise<TrafficSourceDto> {
     return this.invoke<TrafficSourceDto>(() =>
       postApiV1ProjectsByNameTrafficConnectVercel({
+        client: this.heyClient,
+        path: { name: project },
+        body,
+      }),
+    )
+  }
+
+  async trafficConnectCloudflare(
+    project: string,
+    body: TrafficConnectCloudflareRequest,
+  ): Promise<TrafficConnectCloudflareResponse> {
+    return this.invoke<TrafficConnectCloudflareResponse>(() =>
+      postApiV1ProjectsByNameTrafficConnectCloudflare({
         client: this.heyClient,
         path: { name: project },
         body,

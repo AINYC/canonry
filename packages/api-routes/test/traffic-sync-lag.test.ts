@@ -108,6 +108,15 @@ describe('traffic sync lag', () => {
     } finally { cleanup() }
   })
 
+  it('skips pull sync lag for a Cloudflare push source', async () => {
+    const { ctx, cleanup } = seed({ lagMs: VERCEL_MAX_SYNC_WINDOW_MS * 3, sourceType: 'cloudflare' })
+    try {
+      const out = await syncLagCheck.run(ctx)
+      expect(out.status).toBe('skipped')
+      expect(out.code).toBe('traffic.sync-lag.push-only')
+    } finally { cleanup() }
+  })
+
   it('catches the case the existing recent-data check reports healthy', async () => {
     // The real incident: 24h behind and discarding, with a full week of older
     // events. recent-data sums a 7-day window, so it sees data and says ok.
