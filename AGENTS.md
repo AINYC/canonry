@@ -45,6 +45,7 @@ packages/integration-google/     Google Search Console integration
 packages/integration-google-analytics/  Google Analytics 4 integration
 packages/integration-bing/       Bing Webmaster Tools integration
 packages/integration-openai-ads/  OpenAI Advertiser API (ChatGPT ads) integration
+packages/integration-cloudflare-worker/ Cloudflare Worker push-ingest adapter + script generator
 packages/integration-wordpress/  WordPress integration
 docs/                            Architecture, data model, setup guides, testing
 plugins/canonry/                  Portable Agent Plugin + Codex/Claude adapters
