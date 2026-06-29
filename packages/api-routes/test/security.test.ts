@@ -7,6 +7,7 @@ import { expect, test } from 'vitest'
 import { ADS_ACTIVATE_SCOPE, ADS_APPROVE_SCOPE, ADS_WRITE_SCOPE } from '@ainyc/canonry-contracts'
 import { createClient, migrate, apiKeys, notifications, projects } from '@ainyc/canonry-db'
 import { apiRoutes } from '../src/index.js'
+import { shouldSkipAuth } from '../src/auth.js'
 import type { ApiRoutesOptions } from '../src/index.js'
 
 function buildApp(opts: Partial<Omit<ApiRoutesOptions, 'db'>> = {}) {
@@ -61,6 +62,9 @@ test('auth protects non-public routes while keeping public exceptions reachable'
       payload: {},
     })
     expect(runRes.statusCode).toBe(401)
+
+    expect(shouldSkipAuth('/api/v1/projects/probe/traffic/cloudflare/ingest')).toBe(true)
+    expect(shouldSkipAuth('/api/v1/projects/probe/traffic/cloudflare/ingest/extra')).toBe(false)
 
     const openApiRes = await app.inject({ method: 'GET', url: '/api/v1/openapi.json' })
     expect(openApiRes.statusCode).toBe(200)
