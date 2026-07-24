@@ -39,15 +39,16 @@ describe('organic-evidence — jsonl degrades to the composite JSON document', (
     expect(mockGetOrganicEvidence).toHaveBeenCalledWith('demo', 60)
   })
 
-  it('describes URL-agnostic pages and available GA4 lead evidence to agents', async () => {
+  it('describes URL-agnostic pages and available GA4 lead-event evidence without claiming attribution', async () => {
     const { canonryMcpTools } = await import('../src/mcp/tool-registry.js')
     const tool = canonryMcpTools.find(entry => entry.name === 'canonry_organic_evidence')
 
     expect(tool?.description).toMatch(/page evidence/i)
-    expect(tool?.description).toMatch(/lead events|lead evidence|leads/i)
+    expect(tool?.description).toMatch(/lead-event evidence/i)
     expect(tool?.description).toMatch(/source-specific/i)
     expect(tool?.description).not.toMatch(/dedicated blog|blog cohort/i)
-    expect(tool?.description).not.toMatch(/lead attribution is unavailable/i)
+    expect(tool?.description).toMatch(/not lead attribution/i)
+    expect(tool?.description).not.toMatch(/AI attention, or leads/i)
   })
 })
 
