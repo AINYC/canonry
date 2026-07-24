@@ -618,6 +618,7 @@ cnry ads sync <project>                          # ads-sync run: entity snapshot
 cnry ads campaigns <project> --format jsonl      # lifecycle timestamps, location IDs, context hints, creative file IDs
 cnry ads insights <project> --level campaign --from 2026-06-01 --format jsonl
 cnry ads summary <project>                       # campaign-level totals only (no double counting)
+cnry ads delivery-diagnostics <project>          # stored snapshot provenance, configuration facts, historical campaign activity
 cnry ads disconnect <project>
 cnry schedule set <project> --kind ads-sync --preset daily
 ```
@@ -632,6 +633,12 @@ verify the available pixel/CAPI sources, event goal, and attribution window
 before launch. Geo search defaults to 20 results and accepts 1-100. Its JSONL
 rows carry `{ project, query, ...location }`; conversion rows carry
 `{ project, ...pixel }` or `{ project, ...eventSetting }`.
+
+`ads delivery-diagnostics` reads stored snapshot provenance, stored
+configuration, and historical campaign activity only. It is never a live OpenAI
+serving or eligibility verdict. Agents must branch on `snapshot.status` /
+`issue` and `assessment.state`; partial or unavailable structure must not be
+treated as current provider state.
 
 Lifecycle inputs are JSON files, or `--input -` for stdin. Every request carries
 a unique `operationKey`. Identical replays return the stored receipt without a

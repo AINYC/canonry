@@ -387,6 +387,60 @@ describe('ads lifecycle commands', () => {
     expect(JSON.parse(log.mock.calls[0]![0] as string)).toEqual(DELIVERY_DIAGNOSTICS)
   })
 
+  it.each(['partial', 'unavailable'] as const)('suppresses stored structure details for a %s snapshot', async (status) => {
+    mockGetAdsDeliveryDiagnostics.mockResolvedValue({
+      ...DELIVERY_DIAGNOSTICS,
+      snapshot: { ...DELIVERY_DIAGNOSTICS.snapshot, status, issue: 'no_ads_sync' },
+      storedConfiguration: {
+        ...DELIVERY_DIAGNOSTICS.storedConfiguration,
+        campaigns: [{
+          id: 'cmpn_1', name: 'Suppressed campaign', status: 'paused', biddingType: 'impressions',
+          dailySpendLimitMicros: null, lifetimeSpendLimitMicros: null, conversionEventSettingIds: [],
+          adGroups: [{
+            id: 'adgrp_1', name: 'Suppressed ad group', status: 'paused', billingEventType: null,
+            maxBidMicros: null, contextHints: [],
+            ads: [{ id: 'ad_1', name: 'Suppressed ad', status: 'paused', reviewStatus: null }],
+          }],
+        }],
+      },
+    })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await adsDeliveryDiagnostics('canonry-audit')
+
+    const output = log.mock.calls.map(([line]) => String(line)).join('\n')
+    expect(output).toContain('Structure details suppressed until a complete trusted snapshot exists.')
+    expect(output).not.toContain('Suppressed campaign')
+    expect(output).not.toContain('Suppressed ad group')
+    expect(output).not.toContain('Suppressed ad')
+  })
+
+  it('renders stored structure details for a complete snapshot', async () => {
+    mockGetAdsDeliveryDiagnostics.mockResolvedValue({
+      ...DELIVERY_DIAGNOSTICS,
+      storedConfiguration: {
+        ...DELIVERY_DIAGNOSTICS.storedConfiguration,
+        campaigns: [{
+          id: 'cmpn_1', name: 'Complete campaign', status: 'paused', biddingType: 'impressions',
+          dailySpendLimitMicros: null, lifetimeSpendLimitMicros: null, conversionEventSettingIds: [],
+          adGroups: [{
+            id: 'adgrp_1', name: 'Complete ad group', status: 'paused', billingEventType: null,
+            maxBidMicros: null, contextHints: [],
+            ads: [{ id: 'ad_1', name: 'Complete ad', status: 'paused', reviewStatus: null }],
+          }],
+        }],
+      },
+    })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await adsDeliveryDiagnostics('canonry-audit')
+
+    const output = log.mock.calls.map(([line]) => String(line)).join('\n')
+    expect(output).toContain('Complete campaign')
+    expect(output).toContain('Complete ad group')
+    expect(output).toContain('Complete ad')
+  })
+
   it('normalizes geo search input and streams location context as JSONL', async () => {
     mockSearchAdsGeo.mockResolvedValue(GEO_RESULTS)
     const output = captureStdout(() =>

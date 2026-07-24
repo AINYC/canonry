@@ -647,7 +647,7 @@ export type AdsConnectionStatusDto = {
 export type AdsDeliveryDiagnosticsDto = {
     snapshot: {
         status: 'unavailable' | 'partial' | 'complete';
-        issue: 'no_ads_connection' | 'no_ads_sync' | 'entity_rows_missing_sync_run_id' | 'entity_rows_span_multiple_sync_runs' | 'source_sync_missing' | 'source_sync_not_ads_sync' | 'source_sync_not_completed' | null;
+        issue: 'no_ads_connection' | 'connection_not_synced' | 'no_ads_sync' | 'entity_rows_missing_sync_run_id' | 'entity_rows_span_multiple_sync_runs' | 'source_sync_missing' | 'source_sync_not_ads_sync' | 'source_sync_not_completed' | null;
         lastSyncedAt: string | null;
         campaignCount: number;
         adGroupCount: number;

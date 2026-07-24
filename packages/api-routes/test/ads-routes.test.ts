@@ -470,6 +470,91 @@ describe('ads routes', () => {
     expect(JSON.stringify(body)).not.toContain('eligible')
   })
 
+  it('GET /ads/delivery-diagnostics fails closed after disconnecting and reconnecting without a sync', async () => {
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+    ctx.seedSnapshots(projectId)
+    insertAdsSync(projectId, 'sync_old')
+    ctx.db.update(adsCampaigns).set({ syncRunId: 'sync_old' }).where(eq(adsCampaigns.id, 'cmpn_bbb')).run()
+    ctx.db.update(adsAdGroups).set({ syncRunId: 'sync_old' }).where(eq(adsAdGroups.id, 'adgrp_ddd')).run()
+    ctx.db.update(adsAds).set({ syncRunId: 'sync_old' }).where(eq(adsAds.id, 'ad_eee')).run()
+    ctx.db.insert(adsInsightsDaily).values({
+      id: crypto.randomUUID(), projectId, syncRunId: 'sync_old', level: 'campaign', entityId: 'cmpn_bbb',
+      date: '2026-06-10', impressions: 7, clicks: 1, spendMicros: 2_000_000, conversions: 0,
+    }).run()
+
+    expect((await ctx.app.inject({ method: 'DELETE', url: '/projects/acme/ads/connection' })).statusCode).toBe(200)
+    expect((await ctx.app.inject({
+      method: 'POST', url: '/projects/acme/ads/connect', payload: { apiKey: 'sk-reconnected' },
+    })).statusCode).toBe(200)
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/delivery-diagnostics' })
+    const body = JSON.parse(res.body) as AdsDeliveryDiagnosticsDto
+    expect(body.snapshot).toMatchObject({ status: 'partial', issue: 'connection_not_synced', lastSyncedAt: null })
+    expect(body.assessment).toEqual({ state: 'partial_snapshot' })
+  })
+
+  it('POST /ads/connect resets the sync binding when rebinding to another account', async () => {
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+    ctx.seedSnapshots(projectId)
+    insertAdsSync(projectId, 'sync_old')
+    ctx.db.update(adsCampaigns).set({ syncRunId: 'sync_old' }).where(eq(adsCampaigns.id, 'cmpn_bbb')).run()
+    ctx.db.update(adsAdGroups).set({ syncRunId: 'sync_old' }).where(eq(adsAdGroups.id, 'adgrp_ddd')).run()
+    ctx.db.update(adsAds).set({ syncRunId: 'sync_old' }).where(eq(adsAds.id, 'ad_eee')).run()
+    ctx.db.update(adsConnections).set({ adAccountId: 'adacct_old' })
+      .where(eq(adsConnections.projectId, projectId)).run()
+
+    const connect = await ctx.app.inject({
+      method: 'POST', url: '/projects/acme/ads/connect', payload: { apiKey: 'sk-rebound' },
+    })
+    expect(connect.statusCode).toBe(200)
+    expect(JSON.parse(connect.body)).toMatchObject({ adAccountId: 'adacct_aaa', lastSyncedAt: null })
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/delivery-diagnostics' })
+    const body = JSON.parse(res.body) as AdsDeliveryDiagnosticsDto
+    expect(body.snapshot).toMatchObject({ status: 'partial', issue: 'connection_not_synced' })
+    expect(body.assessment).toEqual({ state: 'partial_snapshot' })
+  })
+
+  it('GET /ads/delivery-diagnostics reports no observed activity for a complete tree with zero campaign impressions', async () => {
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+    ctx.seedSnapshots(projectId)
+    insertAdsSync(projectId, 'sync_complete')
+    ctx.db.update(adsCampaigns).set({ syncRunId: 'sync_complete' }).where(eq(adsCampaigns.id, 'cmpn_bbb')).run()
+    ctx.db.update(adsAdGroups).set({ syncRunId: 'sync_complete' }).where(eq(adsAdGroups.id, 'adgrp_ddd')).run()
+    ctx.db.update(adsAds).set({ syncRunId: 'sync_complete' }).where(eq(adsAds.id, 'ad_eee')).run()
+    ctx.db.insert(adsInsightsDaily).values({
+      id: crypto.randomUUID(), projectId, syncRunId: 'sync_complete', level: 'campaign', entityId: 'cmpn_bbb',
+      date: '2026-06-10', impressions: 0, clicks: 0, spendMicros: 0, conversions: 0,
+    }).run()
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/delivery-diagnostics' })
+    const body = JSON.parse(res.body) as AdsDeliveryDiagnosticsDto
+    expect(body.snapshot).toMatchObject({ status: 'complete', issue: null })
+    expect(body.assessment).toEqual({ state: 'no_observed_activity' })
+  })
+
+  it('GET /ads/delivery-diagnostics rejects entity provenance from a completed non-ads-sync run', async () => {
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+    ctx.seedSnapshots(projectId)
+    ctx.db.insert(runs).values({
+      id: 'sync_not_ads', projectId, kind: RunKinds['answer-visibility'], status: RunStatuses.completed, trigger: 'manual', createdAt: NOW,
+    }).run()
+    ctx.db.update(adsCampaigns).set({ syncRunId: 'sync_not_ads' }).where(eq(adsCampaigns.id, 'cmpn_bbb')).run()
+    ctx.db.update(adsAdGroups).set({ syncRunId: 'sync_not_ads' }).where(eq(adsAdGroups.id, 'adgrp_ddd')).run()
+    ctx.db.update(adsAds).set({ syncRunId: 'sync_not_ads' }).where(eq(adsAds.id, 'ad_eee')).run()
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/delivery-diagnostics' })
+    const body = JSON.parse(res.body) as AdsDeliveryDiagnosticsDto
+    expect(body.snapshot).toMatchObject({
+      status: 'partial', issue: 'source_sync_not_ads_sync', sourceSync: { runId: 'sync_not_ads', status: 'completed' },
+    })
+    expect(body.assessment).toEqual({ state: 'partial_snapshot' })
+  })
+
   it('POST /ads/connect verifies the key, stores the credential in config, and writes the row + audit', async () => {
     const projectId = ctx.seedProject()
     const res = await ctx.app.inject({

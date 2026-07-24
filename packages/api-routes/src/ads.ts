@@ -251,6 +251,7 @@ function runSourceDto(row: SyncRunRow): AdsDeliveryDiagnosticsDto['snapshot']['s
 
 function storedSnapshotProvenance(input: {
   connected: boolean
+  connectionLastSyncedAt: string | null
   hasEntityRows: boolean
   hasEntityWithoutSyncRunId: boolean
   entitySyncRunIds: ReadonlySet<string>
@@ -261,6 +262,20 @@ function storedSnapshotProvenance(input: {
     return {
       status: AdsDeliverySnapshotStatuses.unavailable,
       issue: AdsDeliverySnapshotIssues.no_ads_connection,
+      sourceSync: null,
+    }
+  }
+
+  // Entity rows and ads-sync runs are retained after disconnecting. They do
+  // not prove that they belong to this connection after it is re-established
+  // (or rebound to another account). A successful sync of the current binding
+  // is the required provenance floor before any snapshot can be complete.
+  if (input.connectionLastSyncedAt === null) {
+    return {
+      status: input.hasEntityRows
+        ? AdsDeliverySnapshotStatuses.partial
+        : AdsDeliverySnapshotStatuses.unavailable,
+      issue: AdsDeliverySnapshotIssues.connection_not_synced,
       sourceSync: null,
     }
   }
@@ -1951,6 +1966,12 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
             reviewStatus: account.reviewStatus,
             integrityReviewStatus: account.integrityReviewStatus,
             integrityDecision: account.integrityDecision,
+            // A credential rotation for the same account preserves its
+            // snapshot watermark. A different account invalidates all stored
+            // entity/insight provenance until the new binding is synced.
+            lastSyncedAt: existingRow.adAccountId === account.id
+              ? existingRow.lastSyncedAt
+              : null,
             updatedAt: now,
           }).where(eq(adsConnections.id, existingRow.id)).run()
         } else {
@@ -2621,6 +2642,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       .get()
     const snapshot = storedSnapshotProvenance({
       connected: Boolean(connection),
+      connectionLastSyncedAt: connection?.lastSyncedAt ?? null,
       hasEntityRows: entityRows.length > 0,
       hasEntityWithoutSyncRunId,
       entitySyncRunIds,

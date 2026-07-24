@@ -267,6 +267,7 @@ export const AdsDeliverySnapshotStatuses = adsDeliverySnapshotStatusSchema.enum
 /** Why a stored entity tree cannot be treated as one complete ads snapshot. */
 export const adsDeliverySnapshotIssueSchema = z.enum([
   'no_ads_connection',
+  'connection_not_synced',
   'no_ads_sync',
   'entity_rows_missing_sync_run_id',
   'entity_rows_span_multiple_sync_runs',

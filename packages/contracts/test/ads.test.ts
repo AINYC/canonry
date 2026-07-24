@@ -338,6 +338,11 @@ describe('DTO schemas', () => {
     expect(parsed.assessment.state).toBe('observed_activity')
     expect(adsDeliveryDiagnosticsDtoSchema.safeParse({
       ...parsed,
+      snapshot: { ...parsed.snapshot, status: 'partial', issue: 'connection_not_synced', sourceSync: null },
+      assessment: { state: 'partial_snapshot' },
+    }).success).toBe(true)
+    expect(adsDeliveryDiagnosticsDtoSchema.safeParse({
+      ...parsed,
       assessment: { state: 'serving' },
     }).success).toBe(false)
   })

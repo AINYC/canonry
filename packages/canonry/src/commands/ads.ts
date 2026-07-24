@@ -45,6 +45,7 @@ import {
   AdsOperationStates,
   AdsOperationStepStates,
   AdsHistoricalCampaignRollupStatuses,
+  AdsDeliverySnapshotStatuses,
   formatMicros,
 } from '@ainyc/canonry-contracts'
 import type { z } from 'zod'
@@ -619,6 +620,10 @@ export async function adsDeliveryDiagnostics(project: string, opts?: { format?: 
     console.log('Historical:   no stored campaign rollups')
   }
   console.log('Evidence:     stored snapshot and historical rollups only; not an OpenAI eligibility or serving verdict.')
+  if (result.snapshot.status !== AdsDeliverySnapshotStatuses.complete) {
+    console.log('Structure details suppressed until a complete trusted snapshot exists.')
+    return
+  }
 
   for (const campaign of result.storedConfiguration.campaigns) {
     const budget = campaign.dailySpendLimitMicros !== null
