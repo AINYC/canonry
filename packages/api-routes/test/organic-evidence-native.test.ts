@@ -548,6 +548,37 @@ describe('organic evidence native measurement reconciliation', () => {
       .not.toMatch(/coincide/i)
   })
 
+  it('emits the organic-session finding only when GA4 cohorts changed', async () => {
+    seedNativeMeasurement(ctx)
+
+    const changed = await getRawEvidence(ctx)
+    expect(changed.findings).toContainEqual(expect.objectContaining({
+      tone: 'neutral',
+      title: 'Organic sessions changed',
+      detail: expect.stringMatching(/16 in the latest cohort versus 35 prior/i),
+    }))
+
+    ctx.db.delete(gaAcquisitionDaily).run()
+    for (const date of ['2026-06-17', GA_ANCHOR]) {
+      insertAcquisition(ctx, {
+        date,
+        channelGroup: 'Organic Search',
+        hostName: 'demand-iq.com',
+        landingPage: '/blog/flat',
+        sessions: 0,
+      })
+    }
+
+    const flat = await getRawEvidence(ctx)
+    expect(flat.ga4?.cohorts.slice(-2).map(row => row.organicSessions)).toEqual([0, 0])
+    expect(flat.findings.map(row => row.title)).not.toContain(
+      'Organic sessions changed',
+    )
+    expect(flat.limitations).toContainEqual(expect.objectContaining({
+      code: 'units-not-combined',
+    }))
+  })
+
   it.each([
     { label: 'unchanged at zero', priorImpressions: 0, latestImpressions: 0 },
     { label: 'declining', priorImpressions: 100, latestImpressions: 50 },
@@ -680,6 +711,34 @@ describe('organic evidence native measurement reconciliation', () => {
       createdAt: NOW,
       updatedAt: NOW,
     }).run()
+    ctx.db.insert(crawlerEventsHourly).values({
+      projectId: ctx.projectId,
+      sourceId,
+      tsHour: '2026-07-20T18:00:00.000Z',
+      botId: 'crawler-unsupported-status',
+      operator: 'Unknown',
+      verificationStatus: 'future_verification_status',
+      pathNormalized: '/unsupported-status',
+      status: 200,
+      hits: 11,
+      sampledUserAgent: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    }).run()
+    ctx.db.insert(aiUserFetchEventsHourly).values({
+      projectId: ctx.projectId,
+      sourceId,
+      tsHour: '2026-07-20T19:00:00.000Z',
+      botId: 'fetch-unsupported-status',
+      operator: 'Unknown',
+      verificationStatus: 'future_verification_status',
+      pathNormalized: '/unsupported-status',
+      status: 200,
+      hits: 13,
+      sampledUserAgent: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    }).run()
 
     const body = await getRawEvidence(ctx)
 
@@ -688,6 +747,11 @@ describe('organic evidence native measurement reconciliation', () => {
       userFetchHits: { verified: 5, claimedUnverified: 5, unknownAiLike: 3 },
       referralSessions: { total: 13, paid: 2, organic: 6, unknown: 5 },
     })
+    expect(body.pages.map(row => row.path)).not.toContain('/unsupported-status')
+    expect(body.limitations).toContainEqual(expect.objectContaining({
+      code: 'unsupported-server-verification-status',
+      detail: expect.stringMatching(/skipped 24 server hits across 2 rows/i),
+    }))
   })
 
   it('signals page-detail truncation in the machine-readable limitations', async () => {

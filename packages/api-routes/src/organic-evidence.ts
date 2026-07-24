@@ -72,6 +72,37 @@ function sumSearchRows(rows: Array<{ clicks: number; impressions: number }>) {
   )
 }
 
+type VerificationTier = 'verified' | 'claimedUnverified' | 'unknownAiLike'
+
+const classifyVerificationStatus = (status: string): VerificationTier | null => {
+  if (status === VerificationStatuses.verified) return 'verified'
+  if (status === VerificationStatuses.claimed_unverified) return 'claimedUnverified'
+  if (status === VerificationStatuses.unknown_ai_like) return 'unknownAiLike'
+  return null
+}
+
+const emptyVerificationCounts = () => ({
+  verified: 0,
+  claimedUnverified: 0,
+  unknownAiLike: 0,
+})
+
+function summarizeVerificationHits(rows: Array<{ verificationStatus: string; hits: number }>) {
+  const counts = emptyVerificationCounts()
+  let unsupportedRows = 0
+  let unsupportedHits = 0
+  for (const row of rows) {
+    const tier = classifyVerificationStatus(row.verificationStatus)
+    if (!tier) {
+      unsupportedRows += 1
+      unsupportedHits += row.hits
+      continue
+    }
+    counts[tier] += row.hits
+  }
+  return { counts, unsupportedRows, unsupportedHits }
+}
+
 function summarizeServer(
   crawlers: Array<typeof crawlerEventsHourly.$inferSelect>,
   fetches: Array<typeof aiUserFetchEventsHourly.$inferSelect>,
@@ -80,30 +111,18 @@ function summarizeServer(
   const total = referrals.reduce((count, row) => count + row.sessionsOrHits, 0)
   const paid = referrals.reduce((count, row) => count + row.paidSessionsOrHits, 0)
   const organic = referrals.reduce((count, row) => count + row.organicSessionsOrHits, 0)
+  const crawlerHits = summarizeVerificationHits(crawlers)
+  const userFetchHits = summarizeVerificationHits(fetches)
   return {
-    crawlerHits: {
-      verified: crawlers
-        .filter(row => row.verificationStatus === VerificationStatuses.verified)
-        .reduce((count, row) => count + row.hits, 0),
-      claimedUnverified: crawlers
-        .filter(row => row.verificationStatus === VerificationStatuses.claimed_unverified)
-        .reduce((count, row) => count + row.hits, 0),
-      unknownAiLike: crawlers
-        .filter(row => row.verificationStatus === VerificationStatuses.unknown_ai_like)
-        .reduce((count, row) => count + row.hits, 0),
+    summary: {
+      crawlerHits: crawlerHits.counts,
+      userFetchHits: userFetchHits.counts,
+      referralSessions: { total, paid, organic, unknown: Math.max(0, total - paid - organic) },
     },
-    userFetchHits: {
-      verified: fetches
-        .filter(row => row.verificationStatus === VerificationStatuses.verified)
-        .reduce((count, row) => count + row.hits, 0),
-      claimedUnverified: fetches
-        .filter(row => row.verificationStatus === VerificationStatuses.claimed_unverified)
-        .reduce((count, row) => count + row.hits, 0),
-      unknownAiLike: fetches
-        .filter(row => row.verificationStatus === VerificationStatuses.unknown_ai_like)
-        .reduce((count, row) => count + row.hits, 0),
+    unsupportedVerification: {
+      rows: crawlerHits.unsupportedRows + userFetchHits.unsupportedRows,
+      hits: crawlerHits.unsupportedHits + userFetchHits.unsupportedHits,
     },
-    referralSessions: { total, paid, organic, unknown: Math.max(0, total - paid - organic) },
   }
 }
 
@@ -343,7 +362,8 @@ export function buildOrganicEvidence(
   const crawlers = allCrawlers.filter(row => serverInWindow(row.tsHour))
   const fetches = allFetches.filter(row => serverInWindow(row.tsHour))
   const referrals = allReferrals.filter(row => serverInWindow(row.tsHour))
-  const server = serverSources.length ? summarizeServer(crawlers, fetches, referrals) : null
+  const serverSummary = summarizeServer(crawlers, fetches, referrals)
+  const server = serverSources.length ? serverSummary.summary : null
 
   const latest = db.select().from(runs).where(and(
     eq(runs.projectId, project.id),
@@ -396,16 +416,16 @@ export function buildOrganicEvidence(
   }
 
   for (const row of crawlers) {
+    const tier = classifyVerificationStatus(row.verificationStatus)
+    if (!tier) continue
     const counts = ensurePage(row.pathNormalized).server.crawlerHits
-    if (row.verificationStatus === VerificationStatuses.verified) counts.verified += row.hits
-    else if (row.verificationStatus === VerificationStatuses.claimed_unverified) counts.claimedUnverified += row.hits
-    else counts.unknownAiLike += row.hits
+    counts[tier] += row.hits
   }
   for (const row of fetches) {
+    const tier = classifyVerificationStatus(row.verificationStatus)
+    if (!tier) continue
     const counts = ensurePage(row.pathNormalized).server.userFetchHits
-    if (row.verificationStatus === VerificationStatuses.verified) counts.verified += row.hits
-    else if (row.verificationStatus === VerificationStatuses.claimed_unverified) counts.claimedUnverified += row.hits
-    else counts.unknownAiLike += row.hits
+    counts[tier] += row.hits
   }
   for (const row of referrals) {
     const counts = ensurePage(row.landingPathNormalized).server.referralSessions
@@ -446,10 +466,10 @@ export function buildOrganicEvidence(
   }
   const latestGa = ga4?.cohorts.at(-1)
   const priorGa = ga4?.cohorts.at(-2)
-  if (ga4 && latestGa && priorGa) {
+  if (ga4 && latestGa && priorGa && latestGa.organicSessions !== priorGa.organicSessions) {
     findings.push({
       tone: 'neutral',
-      title: 'Organic sessions remain a separate outcome',
+      title: 'Organic sessions changed',
       detail: `GA4 organic sessions were ${comparisonDetail(latestGa.organicSessions, priorGa.organicSessions)}; visibility alone does not establish lead impact.`,
     })
   }
@@ -563,6 +583,12 @@ export function buildOrganicEvidence(
     limitations.push({
       code: 'unverified-ai-user-agents',
       detail: 'Claimed-unverified and heuristic AI requests are user-agent evidence without operator IP verification and are reported separately from verified requests.',
+    })
+  }
+  if (serverSummary.unsupportedVerification.rows > 0) {
+    limitations.push({
+      code: 'unsupported-server-verification-status',
+      detail: `Skipped ${serverSummary.unsupportedVerification.hits} server hits across ${serverSummary.unsupportedVerification.rows} rows with unsupported verification statuses; they are excluded from all verification tiers.`,
     })
   }
   if (visibility && visibility.ageDays > 30) {
