@@ -1674,6 +1674,90 @@ export type DiscoverySessionDto = {
     createdAt: string;
 };
 
+export type ResearchRunCreate = {
+    queries: Array<string>;
+    provider?: string;
+    model?: string;
+    location?: {
+        label: string;
+        city: string;
+        region: string;
+        country: string;
+        timezone?: string;
+    } | null;
+    idempotencyKey?: string;
+};
+
+export type ResearchRunDetailDto = {
+    id: string;
+    projectId: string;
+    status: 'queued' | 'running' | 'completed' | 'partial' | 'failed';
+    provider: string;
+    requestedModel: string | null;
+    resolvedModel: string;
+    location: {
+        label: string;
+        city: string;
+        region: string;
+        country: string;
+        timezone?: string;
+    } | null;
+    totalQueries: number;
+    completedQueries: number;
+    failedQueries: number;
+    error: string | null;
+    startedAt: string | null;
+    finishedAt: string | null;
+    createdAt: string;
+    queries: Array<{
+        id: string;
+        position: number;
+        query: string;
+        status: 'queued' | 'running' | 'completed' | 'failed';
+        requestedModel: string | null;
+        resolvedModel: string;
+        servedModel: string | null;
+        answerText: string | null;
+        groundingSources: Array<{
+            uri: string;
+            title: string;
+        }>;
+        citedDomains: Array<string>;
+        searchQueries: Array<string>;
+        answerMentioned: boolean | null;
+        citationState: 'cited' | 'not-cited';
+        error: string | null;
+        startedAt: string | null;
+        finishedAt: string | null;
+        createdAt: string;
+    }>;
+};
+
+export type ResearchRunListDto = {
+    runs: Array<{
+        id: string;
+        projectId: string;
+        status: 'queued' | 'running' | 'completed' | 'partial' | 'failed';
+        provider: string;
+        requestedModel: string | null;
+        resolvedModel: string;
+        location: {
+            label: string;
+            city: string;
+            region: string;
+            country: string;
+            timezone?: string;
+        } | null;
+        totalQueries: number;
+        completedQueries: number;
+        failedQueries: number;
+        error: string | null;
+        startedAt: string | null;
+        finishedAt: string | null;
+        createdAt: string;
+    }>;
+};
+
 export type DoctorReportDto = {
     scope: 'global' | 'project';
     /**
@@ -1731,6 +1815,111 @@ export type Ga4AiReferralHistoryEntry = {
     sourceDimension: 'session' | 'first_user' | 'manual_utm';
 };
 
+export type Ga4MeasurementAnalysisDto = {
+    window: '30d' | '60d' | '90d';
+    bucketDays: 30;
+    filters: {
+        hostScope: 'marketing' | 'all';
+        marketingHosts: Array<string>;
+        pathPrefix: string | null;
+        brandTerms: Array<string>;
+        queryMixScope: 'property';
+    };
+    acquisition: {
+        status: 'never-synced' | 'ready' | 'error';
+        error: string | null;
+        syncedAt: string | null;
+        periods: Array<{
+            label: 'earliest' | 'middle' | 'previous' | 'latest';
+            startDate: string;
+            endDate: string;
+            sessions: number;
+        }>;
+        channels: Array<{
+            channelGroup: string;
+            periods: Array<{
+                label: 'earliest' | 'middle' | 'previous' | 'latest';
+                startDate: string;
+                endDate: string;
+                sessions: number;
+            }>;
+        }>;
+        pages: Array<{
+            hostName: string;
+            landingPage: string;
+            periods: Array<{
+                label: 'earliest' | 'middle' | 'previous' | 'latest';
+                startDate: string;
+                endDate: string;
+                sessions: number;
+            }>;
+        }>;
+    };
+    leads: {
+        status: 'never-synced' | 'ready' | 'error';
+        error: string | null;
+        syncedAt: string | null;
+        attributionScope: 'landing-page' | 'channel';
+        hostAndPathFiltersApplied: boolean;
+        periods: Array<{
+            label: 'earliest' | 'middle' | 'previous' | 'latest';
+            startDate: string;
+            endDate: string;
+            eventCount: number;
+        }>;
+        channels: Array<{
+            channelGroup: string;
+            periods: Array<{
+                label: 'earliest' | 'middle' | 'previous' | 'latest';
+                startDate: string;
+                endDate: string;
+                eventCount: number;
+            }>;
+        }>;
+    };
+    searchDemand: {
+        status: 'ready' | 'unavailable';
+        periods: Array<{
+            label: 'earliest' | 'middle' | 'previous' | 'latest';
+            startDate: string;
+            endDate: string;
+            propertyClicks: number;
+            propertyImpressions: number;
+            reportedQueryClicks: number;
+            reportedQueryImpressions: number;
+            brandedClicks: number;
+            brandedImpressions: number;
+            nonBrandedClicks: number;
+            nonBrandedImpressions: number;
+            unreportedClicks: number;
+            unreportedImpressions: number;
+        }>;
+        queries: Array<{
+            query: string;
+            classification: 'branded' | 'non-branded';
+            periods: Array<{
+                label: 'earliest' | 'middle' | 'previous' | 'latest';
+                startDate: string;
+                endDate: string;
+                clicks: number;
+                impressions: number;
+            }>;
+        }>;
+        pages: Array<{
+            hostName: string;
+            landingPage: string;
+            periods: Array<{
+                label: 'earliest' | 'middle' | 'previous' | 'latest';
+                startDate: string;
+                endDate: string;
+                clicks: number;
+                impressions: number;
+            }>;
+        }>;
+        latestDate: string | null;
+    };
+};
+
 export type Ga4SessionHistoryEntry = {
     date: string;
     sessions: number;
@@ -1765,6 +1954,21 @@ export type Ga4SyncResponseDto = {
     socialReferralCount: number;
     days: number;
     syncedAt: string;
+    measurement: {
+        acquisition: {
+            days: number;
+            status: 'ready' | 'error';
+            rowCount: number;
+            error?: string;
+        };
+        leads: {
+            days: number;
+            status: 'ready' | 'error' | 'not-configured';
+            rowCount: number;
+            attributionScope?: 'landing-page' | 'channel';
+            error?: string;
+        };
+    };
     syncedComponents?: Array<string>;
 };
 
@@ -2264,11 +2468,6 @@ export type OrganicEvidenceDto = {
     contractVersion: 'organic-evidence/v1';
     periodDays: 60 | 90;
     asOfDate: string | null;
-    cohorts: Array<{
-        name: 'earliest' | 'middle' | 'prior' | 'latest';
-        startDate: string;
-        endDate: string;
-    }>;
     coverage: {
         gsc: boolean;
         ga4: boolean;
@@ -2325,7 +2524,6 @@ export type OrganicEvidenceDto = {
     } | null;
     ga4: {
         organicSessions: number;
-        blogOrganicSessions: number;
         cohorts: Array<{
             name: 'earliest' | 'middle' | 'prior' | 'latest';
             startDate: string;
@@ -2337,46 +2535,6 @@ export type OrganicEvidenceDto = {
         paidSessions: number;
         organicSessions: number;
     } | null;
-    blog: {
-        pathRule: '/blog and descendants';
-        gsc: {
-            cohorts: Array<{
-                name: 'earliest' | 'middle' | 'prior' | 'latest';
-                startDate: string;
-                endDate: string;
-                totals: {
-                    clicks: number;
-                    impressions: number;
-                };
-            }>;
-        } | null;
-        ga4: {
-            cohorts: Array<{
-                name: 'earliest' | 'middle' | 'prior' | 'latest';
-                startDate: string;
-                endDate: string;
-                organicSessions: number;
-            }>;
-        } | null;
-        server: {
-            crawlerHits: {
-                verified: number;
-                claimedUnverified: number;
-                unknownAiLike: number;
-            };
-            userFetchHits: {
-                verified: number;
-                claimedUnverified: number;
-                unknownAiLike: number;
-            };
-            referralSessions: {
-                total: number;
-                paid: number;
-                organic: number;
-                unknown: number;
-            };
-        } | null;
-    };
     server: {
         crawlerHits: {
             verified: number;
@@ -2403,6 +2561,110 @@ export type OrganicEvidenceDto = {
         mentionedPairs: number;
         citedPairs: number;
     } | null;
+    measurement: {
+        window: '30d' | '60d' | '90d';
+        bucketDays: 30;
+        filters: {
+            hostScope: 'marketing' | 'all';
+            marketingHosts: Array<string>;
+            pathPrefix: string | null;
+            brandTerms: Array<string>;
+            queryMixScope: 'property';
+        };
+        acquisition: {
+            status: 'never-synced' | 'ready' | 'error';
+            error: string | null;
+            syncedAt: string | null;
+            periods: Array<{
+                label: 'earliest' | 'middle' | 'previous' | 'latest';
+                startDate: string;
+                endDate: string;
+                sessions: number;
+            }>;
+            channels: Array<{
+                channelGroup: string;
+                periods: Array<{
+                    label: 'earliest' | 'middle' | 'previous' | 'latest';
+                    startDate: string;
+                    endDate: string;
+                    sessions: number;
+                }>;
+            }>;
+            pages: Array<{
+                hostName: string;
+                landingPage: string;
+                periods: Array<{
+                    label: 'earliest' | 'middle' | 'previous' | 'latest';
+                    startDate: string;
+                    endDate: string;
+                    sessions: number;
+                }>;
+            }>;
+        };
+        leads: {
+            status: 'never-synced' | 'ready' | 'error';
+            error: string | null;
+            syncedAt: string | null;
+            attributionScope: 'landing-page' | 'channel';
+            hostAndPathFiltersApplied: boolean;
+            periods: Array<{
+                label: 'earliest' | 'middle' | 'previous' | 'latest';
+                startDate: string;
+                endDate: string;
+                eventCount: number;
+            }>;
+            channels: Array<{
+                channelGroup: string;
+                periods: Array<{
+                    label: 'earliest' | 'middle' | 'previous' | 'latest';
+                    startDate: string;
+                    endDate: string;
+                    eventCount: number;
+                }>;
+            }>;
+        };
+        searchDemand: {
+            status: 'ready' | 'unavailable';
+            periods: Array<{
+                label: 'earliest' | 'middle' | 'previous' | 'latest';
+                startDate: string;
+                endDate: string;
+                propertyClicks: number;
+                propertyImpressions: number;
+                reportedQueryClicks: number;
+                reportedQueryImpressions: number;
+                brandedClicks: number;
+                brandedImpressions: number;
+                nonBrandedClicks: number;
+                nonBrandedImpressions: number;
+                unreportedClicks: number;
+                unreportedImpressions: number;
+            }>;
+            queries: Array<{
+                query: string;
+                classification: 'branded' | 'non-branded';
+                periods: Array<{
+                    label: 'earliest' | 'middle' | 'previous' | 'latest';
+                    startDate: string;
+                    endDate: string;
+                    clicks: number;
+                    impressions: number;
+                }>;
+            }>;
+            pages: Array<{
+                hostName: string;
+                landingPage: string;
+                periods: Array<{
+                    label: 'earliest' | 'middle' | 'previous' | 'latest';
+                    startDate: string;
+                    endDate: string;
+                    clicks: number;
+                    impressions: number;
+                }>;
+            }>;
+            latestDate: string | null;
+        };
+    };
     pages: Array<{
         path: string;
         gsc: {
@@ -2465,6 +2727,11 @@ export type ProjectDto = {
         timezone?: string;
     }>;
     defaultLocation?: string | null;
+    measurement: {
+        marketingHosts: Array<string>;
+        brandTerms: Array<string>;
+        leadEventNames: Array<string>;
+    };
     autoExtractBacklinks: boolean;
     configSource: 'cli' | 'api' | 'config-file';
     configRevision: number;
@@ -2495,6 +2762,11 @@ export type ProjectUpsertRequest = {
         timezone?: string;
     }>;
     defaultLocation?: string | null;
+    measurement?: {
+        marketingHosts: Array<string>;
+        brandTerms: Array<string>;
+        leadEventNames: Array<string>;
+    };
     autoExtractBacklinks?: boolean;
     configSource?: 'cli' | 'api' | 'config-file';
 };
@@ -2530,6 +2802,11 @@ export type ProjectConfig = {
             timezone?: string;
         }>;
         defaultLocation?: string;
+        measurement: {
+            marketingHosts: Array<string>;
+            brandTerms: Array<string>;
+            leadEventNames: Array<string>;
+        };
         schedule?: {
             preset?: string;
             cron?: string;
@@ -2580,6 +2857,11 @@ export type ProjectOverviewDto = {
             timezone?: string;
         }>;
         defaultLocation?: string | null;
+        measurement: {
+            marketingHosts: Array<string>;
+            brandTerms: Array<string>;
+            leadEventNames: Array<string>;
+        };
         autoExtractBacklinks: boolean;
         configSource: 'cli' | 'api' | 'config-file';
         configRevision: number;
@@ -4586,6 +4868,121 @@ export type GetApiV1ProjectsByNameDeletePreviewResponses = {
 };
 
 export type GetApiV1ProjectsByNameDeletePreviewResponse = GetApiV1ProjectsByNameDeletePreviewResponses[keyof GetApiV1ProjectsByNameDeletePreviewResponses];
+
+export type GetApiV1ProjectsByNameResearchRunsData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Max runs, default 20 and maximum 100.
+         */
+        limit?: number;
+    };
+    url: '/api/v1/projects/{name}/research/runs';
+};
+
+export type GetApiV1ProjectsByNameResearchRunsErrors = {
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameResearchRunsError = GetApiV1ProjectsByNameResearchRunsErrors[keyof GetApiV1ProjectsByNameResearchRunsErrors];
+
+export type GetApiV1ProjectsByNameResearchRunsResponses = {
+    /**
+     * Research runs returned newest first.
+     */
+    200: ResearchRunListDto;
+};
+
+export type GetApiV1ProjectsByNameResearchRunsResponse = GetApiV1ProjectsByNameResearchRunsResponses[keyof GetApiV1ProjectsByNameResearchRunsResponses];
+
+export type PostApiV1ProjectsByNameResearchRunsData = {
+    body: ResearchRunCreate;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/research/runs';
+};
+
+export type PostApiV1ProjectsByNameResearchRunsErrors = {
+    /**
+     * Invalid provider, model, location, or request.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * Idempotency key was reused with a different payload.
+     */
+    409: ErrorEnvelope;
+    /**
+     * Research executor is unavailable on this deployment.
+     */
+    422: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameResearchRunsError = PostApiV1ProjectsByNameResearchRunsErrors[keyof PostApiV1ProjectsByNameResearchRunsErrors];
+
+export type PostApiV1ProjectsByNameResearchRunsResponses = {
+    /**
+     * Idempotent request returned its existing research run.
+     */
+    200: ResearchRunDetailDto;
+    /**
+     * Research batch queued.
+     */
+    202: ResearchRunDetailDto;
+};
+
+export type PostApiV1ProjectsByNameResearchRunsResponse = PostApiV1ProjectsByNameResearchRunsResponses[keyof PostApiV1ProjectsByNameResearchRunsResponses];
+
+export type GetApiV1ProjectsByNameResearchRunsByRunIdData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Research run ID.
+         */
+        runId: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/research/runs/{runId}';
+};
+
+export type GetApiV1ProjectsByNameResearchRunsByRunIdErrors = {
+    /**
+     * Project or research run not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameResearchRunsByRunIdError = GetApiV1ProjectsByNameResearchRunsByRunIdErrors[keyof GetApiV1ProjectsByNameResearchRunsByRunIdErrors];
+
+export type GetApiV1ProjectsByNameResearchRunsByRunIdResponses = {
+    /**
+     * Research run detail returned.
+     */
+    200: ResearchRunDetailDto;
+};
+
+export type GetApiV1ProjectsByNameResearchRunsByRunIdResponse = GetApiV1ProjectsByNameResearchRunsByRunIdResponses[keyof GetApiV1ProjectsByNameResearchRunsByRunIdResponses];
 
 export type GetApiV1ProjectsByNameLocationsData = {
     body?: never;
@@ -10527,6 +10924,57 @@ export type GetApiV1ProjectsByNameGaStatusResponses = {
 
 export type GetApiV1ProjectsByNameGaStatusResponse = GetApiV1ProjectsByNameGaStatusResponses[keyof GetApiV1ProjectsByNameGaStatusResponses];
 
+export type GetApiV1ProjectsByNameGaMeasurementAnalysisData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * 30-day cohorts to return.
+         */
+        window?: '30d' | '60d' | '90d';
+        /**
+         * Configured marketing hosts or every observed host.
+         */
+        hostScope?: 'marketing' | 'all';
+        /**
+         * Optional boundary-safe normalized landing-page prefix.
+         */
+        pathPrefix?: string;
+        /**
+         * Maximum page and query detail rows. Native channels are never truncated.
+         */
+        limit?: number;
+    };
+    url: '/api/v1/projects/{name}/ga/measurement-analysis';
+};
+
+export type GetApiV1ProjectsByNameGaMeasurementAnalysisErrors = {
+    /**
+     * Invalid measurement analysis filters.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGaMeasurementAnalysisError = GetApiV1ProjectsByNameGaMeasurementAnalysisErrors[keyof GetApiV1ProjectsByNameGaMeasurementAnalysisErrors];
+
+export type GetApiV1ProjectsByNameGaMeasurementAnalysisResponses = {
+    /**
+     * GA4 measurement analysis returned.
+     */
+    200: Ga4MeasurementAnalysisDto;
+};
+
+export type GetApiV1ProjectsByNameGaMeasurementAnalysisResponse = GetApiV1ProjectsByNameGaMeasurementAnalysisResponses[keyof GetApiV1ProjectsByNameGaMeasurementAnalysisResponses];
+
 export type PostApiV1ProjectsByNameGaSyncData = {
     body?: {
         days?: number;
@@ -10968,7 +11416,7 @@ export type GetApiV1ProjectsByNameOrganicEvidenceData = {
     };
     query?: {
         /**
-         * Evidence window in days — 60 or 90 (default 90). Returned as fixed 30-day cohorts ending on the latest date shared by GSC and GA4.
+         * Evidence window in days — 60 or 90 (default 90). GSC and GA4 retain source-specific 30-day cohort dates.
          */
         period?: 60 | 90;
     };

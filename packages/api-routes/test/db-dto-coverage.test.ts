@@ -22,6 +22,8 @@ import {
   contentTargetDismissalDtoSchema,
   discoveryProbeDtoSchema,
   discoverySessionDtoSchema,
+  researchRunQuerySchema,
+  researchRunSummarySchema,
   ga4AiReferralDtoSchema,
   ga4ConnectionDtoSchema,
   ga4SocialReferralDtoSchema,
@@ -402,6 +404,18 @@ const COVERAGE: Record<string, CoverageEntry> = {
     dto: ga4ConnectionDtoSchema,
     internal: {},
   },
+  gaAcquisitionDaily: {
+    kind: 'internal-only',
+    reason: 'Typed GA4 acquisition foundation; its public read model lands in the follow-up measurement API PR.',
+  },
+  gaLeadEventsDaily: {
+    kind: 'internal-only',
+    reason: 'Typed GA4 attributed lead-event foundation; its public read model lands in the follow-up measurement API PR.',
+  },
+  gaMeasurementSyncStates: {
+    kind: 'internal-only',
+    reason: 'Component-level sync completeness and error state backing the follow-up measurement API.',
+  },
   gaDailyTotals: {
     kind: 'internal-only',
     reason: 'Property-level daily GA4 totals (no landing-page dim), the deduplicated `users` source for the session-history response. Backing store only — its values reach callers through that response, not as a direct row DTO. Mirrors gscDailyTotals.',
@@ -467,6 +481,23 @@ const COVERAGE: Record<string, CoverageEntry> = {
     dto: discoveryProbeDtoSchema,
     internal: {
       rawResponse: 'Raw provider payload; internal debugging artifact.',
+    },
+  },
+  researchRuns: {
+    kind: 'dto',
+    dto: researchRunSummarySchema,
+    internal: {
+      idempotencyKey: 'Retry deduplication key is never returned.',
+      requestHash: 'Internal idempotency comparison only.',
+    },
+  },
+  researchRunQueries: {
+    kind: 'dto',
+    dto: researchRunQuerySchema,
+    internal: {
+      researchRunId: 'Implied by the enclosing detail route.',
+      queryText: 'Serialized as the public `query` field.',
+      rawResponse: 'Raw provider payload retained for diagnostics.',
     },
   },
   backlinkDomains: {

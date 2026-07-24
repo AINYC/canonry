@@ -64,6 +64,7 @@ const expectedToolNames = [
   'canonry_gsc_coverage_history',
   'canonry_gsc_sitemaps',
   'canonry_ga_status',
+  'canonry_ga_measurement_analysis',
   'canonry_ga_traffic',
   'canonry_ga_coverage',
   'canonry_ga_ai_referral_history',
@@ -118,6 +119,9 @@ const expectedToolNames = [
   'canonry_agent_clear',
   'canonry_agent_webhook_attach',
   'canonry_agent_webhook_detach',
+  'canonry_research_run_start',
+  'canonry_research_runs_list',
+  'canonry_research_run_get',
   'canonry_discover_run_start',
   'canonry_discover_sessions_list',
   'canonry_discover_session_get',
@@ -156,8 +160,8 @@ const expectedToolNames = [
 
 describe('MCP tool registry', () => {
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(136)
-    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(86)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(140)
+    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(89)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(readNames)
@@ -196,12 +200,12 @@ describe('MCP tool registry', () => {
     expect(counts.get('monitoring')).toBe(28)
     expect(counts.get('setup')).toBe(24)
     expect(counts.get('gsc')).toBe(8)
-    expect(counts.get('ga')).toBe(8)
+    expect(counts.get('ga')).toBe(9)
     expect(counts.get('gbp')).toBe(13)
     expect(counts.get('ads')).toBe(24)
     expect(counts.get('traffic')).toBe(10)
     expect(counts.get('agent')).toBe(5)
-    expect(counts.get('discovery')).toBe(6)
+    expect(counts.get('discovery')).toBe(9)
   })
 
   it('generates JSON schema from every Zod input schema', () => {
@@ -687,6 +691,11 @@ const handlerCases: HandlerCase[] = [
   { tool: 'canonry_gsc_coverage_history', input: { project: 'acme', limit: 5 }, methods: ['gscCoverageHistory'] },
   { tool: 'canonry_gsc_sitemaps', input: projectInput, methods: ['gscSitemaps'] },
   { tool: 'canonry_ga_status', input: projectInput, methods: ['gaStatus'] },
+  {
+    tool: 'canonry_ga_measurement_analysis',
+    input: { project: 'acme', window: '90d', hostScope: 'marketing', pathPrefix: '/blog', limit: 5 },
+    methods: ['gaMeasurementAnalysis'],
+  },
   { tool: 'canonry_ga_traffic', input: { project: 'acme', limit: 5 }, methods: ['gaTraffic'] },
   { tool: 'canonry_ga_coverage', input: projectInput, methods: ['gaCoverage'] },
   { tool: 'canonry_ga_ai_referral_history', input: { project: 'acme', window: '7d' }, methods: ['gaAiReferralHistory'] },
@@ -849,6 +858,9 @@ const handlerCases: HandlerCase[] = [
   { tool: 'canonry_agent_clear', input: projectInput, methods: ['resetAgentTranscript'] },
   { tool: 'canonry_agent_webhook_attach', input: { project: 'acme', url: 'https://agent.example.com/hook' }, methods: ['listNotifications', 'createNotification'] },
   { tool: 'canonry_agent_webhook_detach', input: projectInput, methods: ['listNotifications', 'deleteNotification'], fixture: 'agent-notification' },
+  { tool: 'canonry_research_run_start', input: { project: 'acme', request: { queries: ['best AEO software'], provider: 'openai' } }, methods: ['startResearchRun'] },
+  { tool: 'canonry_research_runs_list', input: { project: 'acme', limit: 5 }, methods: ['listResearchRuns'] },
+  { tool: 'canonry_research_run_get', input: { project: 'acme', runId: 'research-1' }, methods: ['getResearchRun'] },
   { tool: 'canonry_discover_run_start', input: { project: 'acme', request: { icpDescription: 'AEO analyst tool' } }, methods: ['triggerDiscoveryRun'] },
   { tool: 'canonry_discover_sessions_list', input: { project: 'acme', limit: 5 }, methods: ['listDiscoverySessions'] },
   { tool: 'canonry_discover_session_get', input: { project: 'acme', sessionId: 'sess-1' }, methods: ['getDiscoverySession'] },

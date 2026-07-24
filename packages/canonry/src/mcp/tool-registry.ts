@@ -21,8 +21,11 @@ import {
   discoveryCompetitorTypeSchema,
   discoveryPromoteRequestSchema,
   discoveryRunRequestSchema,
+  researchRunCreateSchema,
   keywordBatchRequestSchema,
   keywordGenerateRequestSchema,
+  gaMeasurementAnalysisWindowSchema,
+  gaMeasurementHostScopeSchema,
   queryGenerateRequestSchema,
   queryBatchRequestSchema,
   notificationCreateRequestSchema,
@@ -192,6 +195,14 @@ const gaWindowInputSchema = z.object({
 
 const gaTrafficInputSchema = gaWindowInputSchema.extend({
   limit: z.number().int().positive().max(500).optional(),
+})
+
+const gaMeasurementAnalysisInputSchema = z.object({
+  project: projectNameSchema,
+  window: gaMeasurementAnalysisWindowSchema.optional(),
+  hostScope: gaMeasurementHostScopeSchema.optional(),
+  pathPrefix: z.string().min(1).optional(),
+  limit: z.number().int().positive().max(100).optional(),
 })
 
 const queriesInputSchema = z.object({
@@ -513,6 +524,21 @@ const discoverySessionIdInputSchema = z.object({
   sessionId: z.string().min(1).describe('Discovery session ID returned by canonry_discover_run_start.'),
 })
 
+const researchRunStartInputSchema = z.object({
+  project: projectNameSchema,
+  request: researchRunCreateSchema.describe('One shared provider/model/location context for every free-form query in this saved research batch.'),
+})
+
+const researchRunsListInputSchema = z.object({
+  project: projectNameSchema,
+  limit: z.number().int().positive().max(100).optional().describe('Max saved research runs returned. Default 20.'),
+})
+
+const researchRunIdInputSchema = z.object({
+  project: projectNameSchema,
+  runId: z.string().min(1).describe('Research run ID returned by canonry_research_run_start.'),
+})
+
 const discoveryHarvestInputSchema = z.object({
   project: projectNameSchema,
   sessionId: z.string().min(1).describe('Discovery session ID returned by canonry_discover_run_start.'),
@@ -655,7 +681,7 @@ export const canonryMcpTools = [
     name: 'canonry_organic_evidence',
     title: 'Reconcile organic and AI evidence',
     description:
-      'One-call investigation of whether organic work is gaining visibility, traffic, AI attention, or leads. Returns fixed 30-day GSC and GA4 cohorts, a dedicated blog cohort, server-observed AI crawling/user-fetch/referral evidence, the latest answer-visibility sweep, source coverage, page evidence, findings, and limitations. It preserves native units and explicitly reports that lead attribution is unavailable in v1. Prefer this over fanning out across GSC, GA, traffic, and visibility tools.',
+      'One-call investigation of whether organic work is gaining visibility, traffic, AI attention, or leads. Returns source-specific 30-day GSC and GA4 cohorts, URL-agnostic page evidence, available GA4 lead events, server-observed AI crawling/user-fetch/referral evidence, the latest answer-visibility sweep, source coverage, findings, and limitations. It preserves native units. Prefer this over fanning out across GSC, GA, traffic, and visibility tools.',
     access: 'read',
     tier: 'monitoring',
     inputSchema: z.object({
@@ -1188,6 +1214,20 @@ export const canonryMcpTools = [
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/ga/status'],
     handler: (client, input) => client.gaStatus(input.project),
+  }),
+  defineTool({
+    name: 'canonry_ga_measurement_analysis',
+    title: 'Analyze GA acquisition and search demand',
+    description: 'Compare native GA4 channels and lead events with branded/non-brand Search Console demand over fixed 30-day cohorts.',
+    access: 'read',
+    tier: 'ga',
+    inputSchema: gaMeasurementAnalysisInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/ga/measurement-analysis'],
+    handler: (client, input) => client.gaMeasurementAnalysis(
+      input.project,
+      compactStringParams(input, ['window', 'hostScope', 'pathPrefix', 'limit']),
+    ),
   }),
   defineTool({
     name: 'canonry_ga_traffic',
@@ -1845,6 +1885,42 @@ export const canonryMcpTools = [
       await client.deleteNotification(input.project, agentNotification.id)
       return { status: 'detached', project: input.project }
     },
+  }),
+  defineTool({
+    name: 'canonry_research_run_start',
+    title: 'Start research query run',
+    description:
+      'Run a batch of free-form queries once each against one API provider, with an optional exact model and location. Results are saved as a research run for later inspection. This does not add any query to the tracked basket or affect overview tracking.',
+    access: 'write',
+    tier: 'discovery',
+    inputSchema: researchRunStartInputSchema,
+    annotations: writeAnnotations({ idempotentHint: false, openWorldHint: true }),
+    openApiOperations: ['POST /api/v1/projects/{name}/research/runs'],
+    handler: (client, input) => client.startResearchRun(input.project, input.request),
+  }),
+  defineTool({
+    name: 'canonry_research_runs_list',
+    title: 'List research query runs',
+    description:
+      'List saved research query runs for a project, newest first. Research and ICP discovery are distinct workflows: these are direct free-form query experiments and never modify the tracked basket.',
+    access: 'read',
+    tier: 'discovery',
+    inputSchema: researchRunsListInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/research/runs'],
+    handler: (client, input) => client.listResearchRuns(input.project, input.limit === undefined ? undefined : { limit: input.limit }),
+  }),
+  defineTool({
+    name: 'canonry_research_run_get',
+    title: 'Get research query run',
+    description:
+      'Get the saved per-query answers, sources, cited domains, and independent mention/citation results for one research run. It is read-only and does not promote or track any query.',
+    access: 'read',
+    tier: 'discovery',
+    inputSchema: researchRunIdInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/research/runs/{runId}'],
+    handler: (client, input) => client.getResearchRun(input.project, input.runId),
   }),
   defineTool({
     name: 'canonry_discover_run_start',

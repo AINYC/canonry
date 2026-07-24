@@ -310,7 +310,7 @@ const organicEvidencePeriodQueryParameter: OpenApiParameter = {
   name: 'period',
   in: 'query',
   description:
-    'Evidence window in days — 60 or 90 (default 90). Returned as fixed 30-day cohorts ending on the latest date shared by GSC and GA4.',
+    'Evidence window in days — 60 or 90 (default 90). GSC and GA4 retain source-specific 30-day cohort dates.',
   schema: { type: 'integer', enum: [60, 90] },
 }
 
@@ -473,6 +473,25 @@ const routeCatalog: OpenApiOperation[] = [
       200: rawJsonResponse('Preview of cascade impact.', looseObjectSchema),
       404: errorResponse('Project not found.'),
     },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/projects/{name}/research/runs',
+    summary: 'Start an isolated research query batch',
+    description: 'Runs one to fifty ad-hoc queries through one API provider and saves the answer evidence. Research never creates tracked queries, shared runs, snapshots, insights, or notifications.',
+    tags: ['research'], parameters: [nameParameter],
+    requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/ResearchRunCreate' } } } },
+    responses: { 200: jsonResponse('Idempotent request returned its existing research run.', 'ResearchRunDetailDto'), 202: jsonResponse('Research batch queued.', 'ResearchRunDetailDto'), 400: errorResponse('Invalid provider, model, location, or request.'), 404: errorResponse('Project not found.'), 409: errorResponse('Idempotency key was reused with a different payload.'), 422: errorResponse('Research executor is unavailable on this deployment.') },
+  },
+  {
+    method: 'get', path: '/api/v1/projects/{name}/research/runs', summary: 'List saved research query batches', tags: ['research'],
+    parameters: [nameParameter, { name: 'limit', in: 'query', description: 'Max runs, default 20 and maximum 100.', schema: integerSchema }],
+    responses: { 200: jsonResponse('Research runs returned newest first.', 'ResearchRunListDto'), 404: errorResponse('Project not found.') },
+  },
+  {
+    method: 'get', path: '/api/v1/projects/{name}/research/runs/{runId}', summary: 'Get a research query batch and saved answers', tags: ['research'],
+    parameters: [nameParameter, { name: 'runId', in: 'path', required: true, description: 'Research run ID.', schema: stringSchema }],
+    responses: { 200: jsonResponse('Research run detail returned.', 'ResearchRunDetailDto'), 404: errorResponse('Project or research run not found.') },
   },
   {
     method: 'post',
@@ -3567,6 +3586,47 @@ const routeCatalog: OpenApiOperation[] = [
     },
   },
   {
+    method: 'get',
+    path: '/api/v1/projects/{name}/ga/measurement-analysis',
+    summary: 'Get GA4 measurement analysis',
+    tags: ['ga4'],
+    parameters: [
+      nameParameter,
+      {
+        name: 'window',
+        in: 'query',
+        description: '30-day cohorts to return.',
+        schema: { type: 'string', enum: ['30d', '60d', '90d'], default: '90d' },
+      },
+      {
+        name: 'hostScope',
+        in: 'query',
+        description: 'Configured marketing hosts or every observed host.',
+        schema: { type: 'string', enum: ['marketing', 'all'], default: 'marketing' },
+      },
+      {
+        name: 'pathPrefix',
+        in: 'query',
+        description: 'Optional boundary-safe normalized landing-page prefix.',
+        schema: stringSchema,
+      },
+      {
+        name: 'limit',
+        in: 'query',
+        description: 'Maximum page and query detail rows. Native channels are never truncated.',
+        schema: { type: 'integer', minimum: 1, maximum: 100, default: 100 },
+      },
+    ],
+    responses: {
+      200: jsonResponse(
+        'GA4 measurement analysis returned.',
+        'GA4MeasurementAnalysisDto',
+      ),
+      400: errorResponse('Invalid measurement analysis filters.'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
     method: 'post',
     path: '/api/v1/projects/{name}/ga/sync',
     summary: 'Sync GA4 traffic and AI referral data',
@@ -3736,7 +3796,7 @@ const routeCatalog: OpenApiOperation[] = [
     summary: 'Reconciled organic and AI evidence',
     tags: ['analytics'],
     description:
-      'Returns a decision-ready evidence ladder across GSC visibility, GA4 organic sessions, server-observed AI crawling/user fetches/referrals, and the latest answer-visibility sweep. Sources retain their native units, fixed 30-day cohorts share a common anchor, blog paths are broken out explicitly, and coverage gaps and no-lead-attribution caveats are machine-readable.',
+      'Returns a decision-ready evidence ladder across GSC visibility, native GA4 channels and lead events, server-observed AI crawling/user fetches/referrals, and the latest answer-visibility sweep. Sources retain native units and source-specific cohort dates; URL-agnostic page evidence is reported separately. Sync, coverage, attribution-scope, and causality caveats are machine-readable.',
     parameters: [nameParameter, organicEvidencePeriodQueryParameter],
     responses: {
       200: jsonResponse('Organic evidence returned.', 'OrganicEvidenceDto'),

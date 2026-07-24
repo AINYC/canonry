@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { gaMeasurementAnalysisDtoSchema } from './measurement.js'
 
 export const organicEvidencePeriodSchema = z.union([z.literal(60), z.literal(90)])
 export type OrganicEvidencePeriodDays = z.infer<typeof organicEvidencePeriodSchema>
@@ -37,9 +38,8 @@ const referralCountsSchema = z.object({
 export const organicEvidenceDtoSchema = z.object({
   contractVersion: z.literal('organic-evidence/v1'),
   periodDays: organicEvidencePeriodSchema,
-  /** Latest date shared by GSC and GA4 when both exist. */
+  /** Latest headline evidence date, preferring the GSC property date when available. */
   asOfDate: z.string().nullable(),
-  cohorts: z.array(cohortSchema),
   coverage: z.object({
     gsc: z.boolean(),
     ga4: z.boolean(),
@@ -61,24 +61,12 @@ export const organicEvidenceDtoSchema = z.object({
   }).nullable(),
   ga4: z.object({
     organicSessions: z.number().int().nonnegative(),
-    blogOrganicSessions: z.number().int().nonnegative(),
     cohorts: z.array(sessionCohortSchema),
   }).nullable(),
   gaAiReferrals: z.object({
     paidSessions: z.number().int().nonnegative(),
     organicSessions: z.number().int().nonnegative(),
   }).nullable(),
-  /** `/blog` and descendants, reconciled without combining unlike units. */
-  blog: z.object({
-    pathRule: z.literal('/blog and descendants'),
-    gsc: z.object({ cohorts: z.array(searchCohortSchema) }).nullable(),
-    ga4: z.object({ cohorts: z.array(sessionCohortSchema) }).nullable(),
-    server: z.object({
-      crawlerHits: crawlerCountsSchema,
-      userFetchHits: crawlerCountsSchema,
-      referralSessions: referralCountsSchema,
-    }).nullable(),
-  }),
   server: z.object({
     crawlerHits: crawlerCountsSchema,
     userFetchHits: crawlerCountsSchema,
@@ -92,6 +80,7 @@ export const organicEvidenceDtoSchema = z.object({
     mentionedPairs: z.number().int().nonnegative(),
     citedPairs: z.number().int().nonnegative(),
   }).nullable(),
+  measurement: gaMeasurementAnalysisDtoSchema,
   pages: z.array(z.object({
     path: z.string(),
     gsc: countSchema,

@@ -40,6 +40,7 @@ import type {
   GaSyncResponse,
   GaTrafficResponse,
   GaCoverageResponse,
+  GaMeasurementAnalysisDto,
   GaSocialReferralTrendResponse,
   GaAttributionTrendResponse,
   GA4AiReferralHistoryEntry,
@@ -141,6 +142,9 @@ import type {
   DiscoveryPromotePreview,
   DiscoveryPromoteRequest,
   DiscoveryPromoteResult,
+  ResearchRunCreate,
+  ResearchRunDetailDto,
+  ResearchRunListDto,
   ApiKeyDto,
   ApiKeyListDto,
   CreateApiKeyRequest,
@@ -309,6 +313,7 @@ import {
   postApiV1ProjectsByNameGaConnect,
   deleteApiV1ProjectsByNameGaDisconnect,
   getApiV1ProjectsByNameGaStatus,
+  getApiV1ProjectsByNameGaMeasurementAnalysis,
   postApiV1ProjectsByNameGaSync,
   getApiV1ProjectsByNameGaTraffic,
   getApiV1ProjectsByNameGaCoverage,
@@ -334,6 +339,9 @@ import {
   getApiV1ProjectsByNameDiscoverSessionsById,
   getApiV1ProjectsByNameDiscoverSessionsByIdHarvest,
   getApiV1ProjectsByNameDiscoverSessionsByIdPromote,
+  postApiV1ProjectsByNameResearchRuns,
+  getApiV1ProjectsByNameResearchRuns,
+  getApiV1ProjectsByNameResearchRunsByRunId,
   postApiV1ProjectsByNameDiscoverSessionsByIdPromote,
   // Technical AEO (site-audit)
   getApiV1ProjectsByNameTechnicalAeo,
@@ -2000,6 +2008,19 @@ export class ApiClient {
     )
   }
 
+  async gaMeasurementAnalysis(
+    project: string,
+    params?: Record<string, string>,
+  ): Promise<GaMeasurementAnalysisDto> {
+    return this.invoke<GaMeasurementAnalysisDto>(() =>
+      getApiV1ProjectsByNameGaMeasurementAnalysis({
+        client: this.heyClient,
+        path: { name: project },
+        query: params as never,
+      }),
+    )
+  }
+
   async gaSync(project: string, body?: { days?: number; only?: string }): Promise<GaSyncResponse> {
     return this.invoke<GaSyncResponse>(() =>
       postApiV1ProjectsByNameGaSync({
@@ -2209,6 +2230,41 @@ export class ApiClient {
       getApiV1ProjectsByNameDiscoverSessionsById({
         client: this.heyClient,
         path: { name: project, id: sessionId },
+      }),
+    )
+  }
+
+  // ── Research query runs ────────────────────────────────────────────────
+
+  /**
+   * Start one saved research batch. Research results are deliberately kept
+   * outside the tracked-query basket and visibility-run history.
+   */
+  async startResearchRun(project: string, request: ResearchRunCreate): Promise<ResearchRunDetailDto> {
+    return this.invoke<ResearchRunDetailDto>(() =>
+      postApiV1ProjectsByNameResearchRuns({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+      }),
+    )
+  }
+
+  async listResearchRuns(project: string, opts?: { limit?: number }): Promise<ResearchRunListDto> {
+    return this.invoke<ResearchRunListDto>(() =>
+      getApiV1ProjectsByNameResearchRuns({
+        client: this.heyClient,
+        path: { name: project },
+        query: { limit: opts?.limit !== undefined ? String(opts.limit) : undefined } as never,
+      }),
+    )
+  }
+
+  async getResearchRun(project: string, runId: string): Promise<ResearchRunDetailDto> {
+    return this.invoke<ResearchRunDetailDto>(() =>
+      getApiV1ProjectsByNameResearchRunsByRunId({
+        client: this.heyClient,
+        path: { name: project, runId },
       }),
     )
   }
