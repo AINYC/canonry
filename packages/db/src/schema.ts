@@ -1170,6 +1170,7 @@ export const researchRunQueries = sqliteTable('research_run_queries', {
   requestedModel: text('requested_model'), resolvedModel: text('resolved_model').notNull(), servedModel: text('served_model'), answerText: text('answer_text'),
   groundingSources: text('grounding_sources', { mode: 'json' }).$type<import('@ainyc/canonry-contracts').GroundingSource[]>().notNull().default([]),
   citedDomains: text('cited_domains', { mode: 'json' }).$type<string[]>().notNull().default([]), searchQueries: text('search_queries', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  namedCompetitors: text('named_competitors', { mode: 'json' }).$type<string[]>().notNull().default([]), citedCompetitorDomains: text('cited_competitor_domains', { mode: 'json' }).$type<string[]>().notNull().default([]),
   answerMentioned: integer('answer_mentioned', { mode: 'boolean' }), citationState: text('citation_state'), rawResponse: text('raw_response', { mode: 'json' }).$type<Record<string, unknown> | null>(), error: text('error'),
   startedAt: text('started_at'), finishedAt: text('finished_at'), createdAt: text('created_at').notNull(),
 }, (table) => [index('idx_research_run_queries_run').on(table.researchRunId), uniqueIndex('idx_research_run_queries_run_position').on(table.researchRunId, table.position)])

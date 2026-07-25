@@ -26,7 +26,7 @@ describe('research routes', () => {
     const { app, db, requested } = harness()
     const payload = { queries: ['best solar installer', 'solar cost'], provider: 'openai', model: 'gpt-4.1', location: { label: 'New York', city: 'New York', region: 'NY', country: 'US' }, idempotencyKey: 'retry-1' }
     const created = await app.inject({ method: 'POST', url: '/api/v1/projects/alpha/research/runs', payload })
-    expect(created.statusCode).toBe(202); const body = created.json(); expect(body.queries).toHaveLength(2); expect(requested).toHaveLength(1)
+    expect(created.statusCode).toBe(202); const body = created.json(); expect(body.queries).toHaveLength(2); expect(body.queries[0]).toMatchObject({ namedCompetitors: [], citedCompetitorDomains: [] }); expect(requested).toHaveLength(1)
     expect(db.select().from(queries).all()).toHaveLength(0); expect(db.select().from(runs).all()).toHaveLength(0)
     expect((await app.inject({ method: 'GET', url: '/api/v1/projects/alpha/research/runs' })).json().runs).toHaveLength(1)
     expect((await app.inject({ method: 'GET', url: `/api/v1/projects/beta/research/runs/${body.id}` })).statusCode).toBe(404)

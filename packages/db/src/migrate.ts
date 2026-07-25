@@ -2471,6 +2471,16 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       )`,
     ],
   },
+  {
+    // Keep research batches useful as a competitor-comparison workspace while
+    // retaining their strict isolation from tracked visibility snapshots.
+    version: 110,
+    name: 'research-query-named-and-cited-competitors',
+    statements: [
+      `ALTER TABLE research_run_queries ADD COLUMN named_competitors TEXT NOT NULL DEFAULT '[]'`,
+      `ALTER TABLE research_run_queries ADD COLUMN cited_competitor_domains TEXT NOT NULL DEFAULT '[]'`,
+    ],
+  },
 ]
 
 /**
