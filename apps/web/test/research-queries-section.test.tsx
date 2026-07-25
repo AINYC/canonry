@@ -72,7 +72,7 @@ test('resets the selected query when switching research history batches', async 
   })
   const query = (id: string, text: string) => ({
     id, position: 0, query: text, status: 'completed', requestedModel: null, resolvedModel: 'gpt-5-a', servedModel: 'gpt-5-a',
-    answerText: `${text} answer`, groundingSources: [], citedDomains: [], searchQueries: [], answerMentioned: false,
+    answerText: `${text} answer`, groundingSources: [], citedDomains: [], searchQueries: [], namedCompetitors: ['Rival'], citedCompetitorDomains: ['rival.example'], answerMentioned: false,
     citationState: 'not-cited', error: null, startedAt: '2026-07-23T10:00:00.000Z', finishedAt: '2026-07-23T10:00:01.000Z', createdAt: '2026-07-23T10:00:00.000Z',
   })
   const restoreFetch = mockFetch((url) => {
@@ -99,6 +99,10 @@ test('resets the selected query when switching research history batches', async 
   fireEvent.click(screen.getByRole('tab', { name: 'Research queries' }))
 
   await screen.findByText('First run first query answer')
+  expect(screen.getByText('Named in answer')).toBeTruthy()
+  expect(screen.getByText('Rival')).toBeTruthy()
+  expect(screen.getByText('Cited competitor domains')).toBeTruthy()
+  expect(screen.getByText('rival.example')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'First run selected query' }))
   expect(await screen.findByText('First run selected query answer')).toBeTruthy()
 

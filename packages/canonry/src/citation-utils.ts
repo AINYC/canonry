@@ -107,6 +107,20 @@ export function computeCompetitorOverlap(
   return [...overlapSet]
 }
 
+/** Domains from the final citation list that belong to tracked competitors. */
+export function computeCitedCompetitorDomains(
+  citedDomains: readonly string[],
+  competitorDomains: readonly string[],
+): string[] {
+  const citedCompetitors = new Set<string>()
+  for (const citedDomain of citedDomains) {
+    for (const competitorDomain of competitorDomains) {
+      if (domainMatches(citedDomain, competitorDomain)) citedCompetitors.add(competitorDomain)
+    }
+  }
+  return [...citedCompetitors]
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -188,7 +202,7 @@ export function extractRecommendedCompetitors(
   for (const pattern of candidatePatterns) {
     let match: RegExpExecArray | null
     while ((match = pattern.exec(answerText)) !== null) {
-      const candidate = cleanCandidateName(match[1] ?? '')
+      const candidate = cleanCandidateName(match[1])
       const candidateKey = brandKeyFromText(candidate)
       if (!candidateKey) continue
       if (genericKeys.has(candidateKey)) continue

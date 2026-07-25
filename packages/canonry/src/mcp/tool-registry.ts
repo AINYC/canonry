@@ -1914,7 +1914,7 @@ export const canonryMcpTools = [
     name: 'canonry_research_run_get',
     title: 'Get research query run',
     description:
-      'Get the saved per-query answers, sources, cited domains, and independent mention/citation results for one research run. It is read-only and does not promote or track any query.',
+      'Get saved per-query answers, source links, cited domains, answer-text named competitors, cited competitor domains, and independent mention/citation results for one research run. It is read-only and does not promote or track any query.',
     access: 'read',
     tier: 'discovery',
     inputSchema: researchRunIdInputSchema,

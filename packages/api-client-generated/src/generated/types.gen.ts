@@ -1790,6 +1790,8 @@ export type ResearchRunDetailDto = {
         }>;
         citedDomains: Array<string>;
         searchQueries: Array<string>;
+        namedCompetitors: Array<string>;
+        citedCompetitorDomains: Array<string>;
         answerMentioned: boolean | null;
         citationState: 'cited' | 'not-cited';
         error: string | null;

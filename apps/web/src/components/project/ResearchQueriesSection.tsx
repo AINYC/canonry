@@ -321,6 +321,23 @@ function ResearchAnswer({ query, isLoading }: { query: ResearchRunQueryDto | nul
       ) : (
         <p className="text-sm text-muted">{query.status === ResearchQueryStatuses.failed ? 'This query did not return an answer.' : 'The answer will appear here when this query finishes.'}</p>
       )}
+      {query.namedCompetitors.length > 0 && (
+        <div>
+          <p className="text-[10px] uppercase tracking-wide text-muted">Named in answer</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {query.namedCompetitors.map(name => <span key={name} className="mention-chip mention-chip--competitor">{name}</span>)}
+          </div>
+        </div>
+      )}
+      {query.citedCompetitorDomains.length > 0 && (
+        <div>
+          <p className="text-[10px] uppercase tracking-wide text-muted">Cited competitor domains</p>
+          <p className="mt-1 text-xs leading-5 text-muted">Cited as a source, not merely named in the answer.</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {query.citedCompetitorDomains.map(domain => <span key={domain} className="mention-chip mention-chip--competitor">{domain.replace(/^www\./, '')}</span>)}
+          </div>
+        </div>
+      )}
       {query.groundingSources.length > 0 && (
         <div>
           <p className="text-[10px] uppercase tracking-wide text-muted">Source links</p>

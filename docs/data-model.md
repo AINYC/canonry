@@ -225,6 +225,7 @@ Local-AEO signals. The OAuth connection reuses `google_connections` with `connec
 |-------|---------|
 | **discovery_sessions** | One row per `canonry discover run` invocation. Captures the research artifact for a session: ICP snapshot, seed/dedup/probe phase counts, bucket counts (cited / aspirational / wasted-surface), `competitor_map` as a JSON array of `{domain, hits}` entries (default `'[]'`), a nullable `warning` (non-fatal operator flag, e.g. the seed-dedup degenerate-collapse guard), and the nullable seed-source diagnostics `seed_from_answer_count` / `seed_from_grounding_count, seed_brand_filtered_count` (split of raw seed candidates by origin — answer text vs. grounding fan-out — recorded at seed time; null on legacy sessions, consumed by no gate). Status flows `queued → seeding → probing → completed` (or `failed`). FK: projectId → projects |
 | **discovery_probes** | One row per (session × candidate query) probe. Stores the query text (free-form — not promoted to `queries` until the operator adopts it), citation_state, cited_domains, `answer_mentioned` (the answer-text mention signal, independent of citation; nullable for legacy rows), bucket classification, and raw provider response. **No `UNIQUE(session_id, query)`** so v2 multi-provider amplification can probe the same query across Gemini + ChatGPT + Claude in one session without a migration. FK: sessionId → discovery_sessions, projectId → projects |
+| **research_runs / research_run_queries** | Saved, isolated free-form research batches. Each result stores the answer, source links, cited domains, answer-text named competitors, and cited competitor domains as separate signals. They never create tracked `queries`, shared `runs`, snapshots, insights, notifications, or schedules. |
 
 ### Content
 
@@ -254,6 +255,8 @@ Several text columns store serialized JSON. Always use `parseJsonColumn()` from 
 | `health_snapshots.providerBreakdown` | `Record<string, { total: number; cited: number; rate: number }>` |
 | `discovery_sessions.competitorMap` | `Array<{ domain: string; hits: number; competitorType: DiscoveryCompetitorType }>` |
 | `discovery_probes.citedDomains` | `string[]` |
+| `research_run_queries.namedCompetitors` | `string[]` |
+| `research_run_queries.citedCompetitorDomains` | `string[]` |
 | `recommendation_briefs.brief` | `ContentBriefDto` (native `mode: 'json'`, not via `parseJsonColumn`) |
 
 ## Conventions

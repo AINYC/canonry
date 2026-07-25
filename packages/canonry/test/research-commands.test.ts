@@ -21,7 +21,7 @@ const detail: ResearchRunDetailDto = {
     id: 'query-1', position: 0, query: 'best AEO software', status: 'completed', requestedModel: null,
     resolvedModel: 'gpt-test', servedModel: 'gpt-test', answerText: 'A useful answer.',
     groundingSources: [{ title: 'Source', uri: 'https://example.com/source' }], citedDomains: ['example.com'],
-    searchQueries: [], answerMentioned: true, citationState: 'cited', error: null,
+    searchQueries: [], namedCompetitors: ['Rival'], citedCompetitorDomains: ['rival.example'], answerMentioned: true, citationState: 'cited', error: null,
     startedAt: null, finishedAt: null, createdAt: '2026-07-23T00:00:00Z',
   }],
 }
@@ -54,10 +54,12 @@ describe('research commands', () => {
     expect(JSON.parse(writes[0]!)).toMatchObject({ project: 'demo', id: 'research-1' })
   })
 
-  it('renders answers, source links, and independent cited/mentioned labels for human detail', async () => {
+  it('renders answers, source links, named competitors, and independent cited/mentioned labels for human detail', async () => {
     const output = await captureLog(() => researchShow('demo', 'research-1', {}))
     expect(output).toContain('A useful answer.')
     expect(output).toContain('https://example.com/source')
+    expect(output).toContain('Named competitors: Rival')
+    expect(output).toContain('Cited competitor domains: rival.example')
     expect(output).toContain('CITED  MENTIONED')
   })
 

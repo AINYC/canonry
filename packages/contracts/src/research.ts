@@ -35,6 +35,7 @@ export const researchRunQuerySchema = z.object({
   id: z.string(), position: z.number().int(), query: z.string(), status: researchQueryStatusSchema,
   requestedModel: z.string().nullable(), resolvedModel: z.string(), servedModel: z.string().nullable(),
   answerText: z.string().nullable(), groundingSources: z.array(groundingSourceSchema), citedDomains: z.array(z.string()), searchQueries: z.array(z.string()),
+  namedCompetitors: z.array(z.string()).default([]), citedCompetitorDomains: z.array(z.string()).default([]),
   answerMentioned: z.boolean().nullable(), citationState: citationStateSchema.nullable(), error: z.string().nullable(),
   startedAt: z.string().nullable(), finishedAt: z.string().nullable(), createdAt: z.string(),
 })

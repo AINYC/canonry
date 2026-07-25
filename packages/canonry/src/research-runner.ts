@@ -9,7 +9,7 @@ import {
   ResearchQueryStatuses,
   ResearchRunStatuses,
 } from '@ainyc/canonry-contracts'
-import { determineCitationState } from './citation-utils.js'
+import { computeCitedCompetitorDomains, determineCitationState, extractRecommendedCompetitors } from './citation-utils.js'
 import type { ProviderRegistry } from './provider-registry.js'
 import { ProviderExecutionGate } from './provider-execution-gate.js'
 import { getCurrentUsageDay, releaseDailyQueryQuota, reserveDailyQueryQuota } from './usage-quota.js'
@@ -73,10 +73,19 @@ export async function executeResearchRun(db: DatabaseClient, registry: ProviderR
           return provider.adapter.executeTrackedQuery({ query: row.queryText, canonicalDomains: domains, competitorDomains, ...(run.location ? { location: run.location } : {}) }, config)
         })
         const normalized = provider.adapter.normalizeResult(raw)
+        const namedCompetitors = extractRecommendedCompetitors(
+          normalized.answerText,
+          domains,
+          normalized.citedDomains,
+          competitorDomains,
+          brands,
+        )
+        const citedCompetitorDomains = computeCitedCompetitorDomains(normalized.citedDomains, competitorDomains)
         const completed = db.update(researchRunQueries).set({
           status: ResearchQueryStatuses.completed, servedModel: raw.servedModel ?? null,
           answerText: normalized.answerText, groundingSources: normalized.groundingSources,
           citedDomains: normalized.citedDomains, searchQueries: normalized.searchQueries,
+          namedCompetitors, citedCompetitorDomains,
           answerMentioned: determineAnswerMentioned(normalized.answerText, brands, domains),
           citationState: determineCitationState(normalized, domains), rawResponse: raw.rawResponse as Record<string, unknown>,
           finishedAt: new Date().toISOString(),

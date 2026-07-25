@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createClient, migrate, projects, researchRunQueries, researchRuns, usageCounters } from '@ainyc/canonry-db'
+import { competitors, createClient, migrate, projects, researchRunQueries, researchRuns, usageCounters } from '@ainyc/canonry-db'
 import { executeResearchRun } from '../src/research-runner.js'
 import { ProviderRegistry } from '../src/provider-registry.js'
 import { reserveDailyQueryQuota } from '../src/usage-quota.js'
@@ -14,6 +14,7 @@ afterEach(() => cleanup.splice(0).forEach(dir => fs.rmSync(dir, { recursive: tru
 function setup(opts: {
   answer?: string
   citedDomains?: string[]
+  competitorDomains?: string[]
   failQueries?: boolean
   blockBad?: Promise<void>
 } = {}) {
@@ -23,6 +24,9 @@ function setup(opts: {
   migrate(db)
   const now = new Date().toISOString()
   db.insert(projects).values({ id: 'p', name: 'p', displayName: 'Alpha', canonicalDomain: 'alpha.com', country: 'US', language: 'en', createdAt: now, updatedAt: now }).run()
+  for (const domain of opts.competitorDomains ?? []) {
+    db.insert(competitors).values({ id: crypto.randomUUID(), projectId: 'p', domain, createdAt: now }).run()
+  }
   db.insert(researchRuns).values({ id: 'r', projectId: 'p', status: 'queued', provider: 'test', resolvedModel: 'exact-model', totalQueries: 2, completedQueries: 0, failedQueries: 0, createdAt: now }).run()
   for (const [position, queryText] of ['good', 'bad'].entries()) {
     db.insert(researchRunQueries).values({
@@ -85,6 +89,45 @@ describe('executeResearchRun', () => {
     expect(run.status).toBe('completed')
     expect(completed.every(row => row.status === 'completed')).toBe(true)
     expect(completed.every(row => row.answerMentioned === true && row.citationState === 'not-cited')).toBe(true)
+  })
+
+  it('persists answer-text competitor names separately from cited competitor domains', async () => {
+    const { db, registry } = setup({
+      answer: '- **Rival**: a strong alternative for growing teams.',
+      citedDomains: ['rival.example'],
+      competitorDomains: ['rival.example'],
+      failQueries: false,
+    })
+    await executeResearchRun(db, registry, 'r', 'p')
+    const completed = db.select().from(researchRunQueries).all()
+    expect(completed.every(row => row.namedCompetitors.includes('Rival'))).toBe(true)
+    expect(completed.map(row => row.citedCompetitorDomains)).toEqual([['rival.example'], ['rival.example']])
+  })
+
+  it('does not turn an answer-text competitor name into a citation', async () => {
+    const { db, registry } = setup({
+      answer: '- **Rival**: a strong alternative for growing teams.',
+      citedDomains: ['independent.example'],
+      competitorDomains: ['rival.example'],
+      failQueries: false,
+    })
+    await executeResearchRun(db, registry, 'r', 'p')
+    const completed = db.select().from(researchRunQueries).all()
+    expect(completed.every(row => row.namedCompetitors.includes('Rival'))).toBe(true)
+    expect(completed.every(row => row.citedCompetitorDomains.length === 0)).toBe(true)
+  })
+
+  it('does not turn a competitor citation into an answer-text name', async () => {
+    const { db, registry } = setup({
+      answer: 'An independent answer with no ranked competitors.',
+      citedDomains: ['rival.example'],
+      competitorDomains: ['rival.example'],
+      failQueries: false,
+    })
+    await executeResearchRun(db, registry, 'r', 'p')
+    const completed = db.select().from(researchRunQueries).all()
+    expect(completed.every(row => row.namedCompetitors.length === 0)).toBe(true)
+    expect(completed.map(row => row.citedCompetitorDomains)).toEqual([['rival.example'], ['rival.example']])
   })
 
   it('marks the parent failed when every provider call fails', async () => {

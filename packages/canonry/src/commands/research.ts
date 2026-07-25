@@ -145,6 +145,12 @@ function printDetail(project: string, detail: ResearchRunDetailDto, format?: str
     console.log(`  ${query.query.slice(0, 58).padEnd(58)}  ${query.status.padEnd(10)}  ${cited.padEnd(5)}  ${mentioned}`)
     if (query.error) console.log(`    Error: ${query.error}`)
     if (query.answerText) console.log(`    Answer: ${query.answerText}`)
+    if (query.namedCompetitors.length > 0) {
+      console.log(`    Named competitors: ${query.namedCompetitors.join(', ')}`)
+    }
+    if (query.citedCompetitorDomains.length > 0) {
+      console.log(`    Cited competitor domains: ${query.citedCompetitorDomains.join(', ')}`)
+    }
     if (query.groundingSources.length > 0) {
       console.log('    Sources:')
       for (const source of query.groundingSources) {
