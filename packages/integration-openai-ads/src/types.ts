@@ -307,22 +307,58 @@ export interface OpenAiAdsInsightRow {
   campaign_name?: string
 }
 
+/**
+ * The two insight call shapes, and why a caller that wants BOTH conversions
+ * and the day in progress has to make both. Captured live on 2026-07-26
+ * against an active account on `America/New_York`, at 12:56 local.
+ *
+ * RANGED (`timeRanges` set) is the only shape that carries conversions, and
+ * the only shape that can bound a window. It reports a daily bucket only when
+ * the requested range covers that bucket's WHOLE span, so it never returns the
+ * account's current local day: that day's bucket ends at the next local
+ * midnight, and an `until` there is refused (see `until` below). A range
+ * scoped to the open day alone comes back `200` with `count: 0` rather than a
+ * partial row.
+ *
+ * UNRANGED (`timeRanges` omitted) is the only shape that returns the day in
+ * progress, as a bucket whose `end_time` is the next local midnight. It
+ * refuses conversion fields:
+ * `400: time_ranges must be provided when requesting conversions.`
+ */
 export interface OpenAiAdsInsightsOptions {
   // Namespaced field names, e.g. 'campaign.clicks', 'ad_group.spend',
   // 'metadata.readable_time'. Invalid names get a 400 whose message
   // enumerates the valid catalog.
   fields?: string[]
-  /** Live Advertiser API contract: conversion metrics require at least one
-   *  JSON-encoded time_ranges[] object. Hour ranges are account-timezone
-   *  aware and avoid treating a still-open local day as a future range. */
+  /** Conversion metrics require at least one JSON-encoded time_ranges[]
+   *  object. Omitting it is also what makes the in-progress day come back. */
   timeRanges?: OpenAiAdsInsightHourRange[]
+  /**
+   * Stop after the FIRST page instead of walking the whole collection.
+   *
+   * For the unranged in-progress-day read, which has no way to bound its
+   * window: without this, one row costs a walk of the entity's entire
+   * lifetime on every sync. Daily buckets come back newest-first (captured),
+   * so the open day is on page one.
+   */
+  firstPageOnly?: boolean
 }
 
 export interface OpenAiAdsInsightHourRange {
   type: 'hour_range'
   /** Inclusive local account hour in YYYY-MM-DDTHH format. */
   since: string
-  /** Exclusive local account hour in YYYY-MM-DDTHH format. */
+  /**
+   * Exclusive local account hour in YYYY-MM-DDTHH format.
+   *
+   * MUST NOT be in the future. An edge past the current UTC day's end is
+   * refused with `400: time_ranges.end cannot be in the future.`, which fails
+   * the whole call rather than degrading. In the 2026-07-26 capture, edges
+   * through `2026-07-26T20` local (the next UTC midnight) were accepted and
+   * `2026-07-26T21` onward were refused, so the next LOCAL midnight is not a
+   * usable edge while the day is open. Nothing is lost by staying in the past:
+   * no accepted edge, future or not, returned the in-progress day.
+   */
   until: string
   timezone: string
 }

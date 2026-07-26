@@ -38,6 +38,7 @@ import {
   adsCtr,
   adsCpcMicros,
   alreadyExists,
+  formatIsoDateInTimeZone,
   notFound,
   operationInProgress,
   providerError,
@@ -442,11 +443,43 @@ function storedSnapshotProvenance(input: {
   }
 }
 
-function historicalCampaignRollups(rows: readonly CampaignInsightRow[]): AdsDeliveryDiagnosticsDto['historicalCampaignRollups'] {
+/**
+ * The ad account's CURRENT local calendar date: the one date whose stored
+ * rollup row is still filling.
+ *
+ * Every rollup date is an account-local calendar date: the sync asks the
+ * provider for a range expressed in the account's timezone and stores the
+ * provider's own `readable_time` verbatim. Deriving "today" in UTC instead
+ * names a different day for any account far enough east or west of it, which
+ * would either mark a finished day as partial or let a partial one pass as
+ * final, the same class of error the window boundaries already avoid.
+ *
+ * An account with no captured timezone (never synced) falls back to UTC, the
+ * same default the live comparison uses.
+ */
+function adsAccountToday(timezone: string | null | undefined, nowIso: string): string {
+  return formatIsoDateInTimeZone(nowIso, timezone ?? 'UTC')
+}
+
+/**
+ * `accountToday` when it is the newest date in the window, otherwise null.
+ *
+ * A window that stops short of today holds only closed days, so nothing in it
+ * is provisional. A window that reaches today ends on a partial day and has to
+ * say so, because its totals keep moving until that day closes.
+ */
+function inProgressWindowDate(newestDate: string | null, accountToday: string): string | null {
+  return newestDate !== null && newestDate === accountToday ? accountToday : null
+}
+
+function historicalCampaignRollups(
+  rows: readonly CampaignInsightRow[],
+  accountToday: string,
+): AdsDeliveryDiagnosticsDto['historicalCampaignRollups'] {
   if (rows.length === 0) {
     return {
       status: AdsHistoricalCampaignRollupStatuses.unavailable,
-      window: { from: null, to: null },
+      window: { from: null, to: null, inProgressDate: null },
       totals: null,
     }
   }
@@ -468,7 +501,7 @@ function historicalCampaignRollups(rows: readonly CampaignInsightRow[]): AdsDeli
 
   return {
     status: AdsHistoricalCampaignRollupStatuses.reported,
-    window: { from: fromDate, to: toDate },
+    window: { from: fromDate, to: toDate, inProgressDate: inProgressWindowDate(toDate, accountToday) },
     totals: {
       impressions,
       clicks,
@@ -516,15 +549,20 @@ const ADS_LIVE_MAX_ADS_PER_AD_GROUP = 20
  *
  * Every list/insight reader call is an auto-paginating walk in the provider
  * client (`fetchAllPages` in `packages/integration-openai-ads`), which issues
- * up to `OPENAI_ADS_MAX_PAGES` requests before it throws. So the honest
- * worst-case cost of one live-delivery read is this budget MULTIPLIED by the
- * page cap: 40 × 100 = about 4000 upstream HTTP requests, not 40. The
- * response reports both units (`maxReaderCalls`, `maxUpstreamHttpRequests`)
- * so a caller is never reading one and thinking it is the other.
+ * up to `OPENAI_ADS_MAX_PAGES` requests before it throws. An INSIGHT reader
+ * call additionally issues one single-page request for the day in progress,
+ * which the ranged walk cannot return. So the honest worst-case cost of one
+ * live-delivery read is this budget multiplied by the page cap PLUS one
+ * request per call: 40 × (100 + 1) = about 4040 upstream HTTP requests, not
+ * 40. The response reports both units (`maxReaderCalls`,
+ * `maxUpstreamHttpRequests`) so a caller is never reading one and thinking it
+ * is the other.
  *
  * The multiplier is a documented bound, not an observation: pagination happens
  * below the injected `AdsLiveDeliveryReader` seam, so the route cannot count
- * actual HTTP requests without instrumenting the shared provider client.
+ * actual HTTP requests without instrumenting the shared provider client. The
+ * ceiling is deliberately conservative: it charges every reader call for the
+ * extra request, though only the insight calls make one.
  */
 const ADS_LIVE_MAX_READER_CALLS = 40
 /**
@@ -2855,6 +2893,13 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       .orderBy(asc(adsInsightsDaily.date))
       .all()
 
+    const conn = app.db.select().from(adsConnections)
+      .where(eq(adsConnections.projectId, project.id)).get()
+    // The sync now stores the account's current local day while it is still
+    // running, so a caller summing these rows would otherwise fold a running
+    // figure into a total of finished days without any way to tell.
+    const accountToday = adsAccountToday(conn?.timezone, new Date().toISOString())
+
     const dtoRows: AdsInsightRowDto[] = rows.map((row) => ({
       level: row.level as AdsInsightLevel,
       entityId: row.entityId,
@@ -2865,10 +2910,9 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       conversions: row.conversions,
       ctr: adsCtr(row.clicks, row.impressions),
       cpcMicros: adsCpcMicros(row.spendMicros, row.clicks),
+      inProgress: row.date === accountToday,
     }))
 
-    const conn = app.db.select().from(adsConnections)
-      .where(eq(adsConnections.projectId, project.id)).get()
     const response: AdsInsightsResponse = { rows: dtoRows, currencyCode: conn?.currencyCode ?? null }
     return response
   })
@@ -2909,7 +2953,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       sourceSync,
       latestAdsSync,
     })
-    const rollups = historicalCampaignRollups(app.db.select({
+    const rollupRows = app.db.select({
       date: adsInsightsDaily.date,
       impressions: adsInsightsDaily.impressions,
       clicks: adsInsightsDaily.clicks,
@@ -2920,7 +2964,11 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
         eq(adsInsightsDaily.projectId, project.id),
         eq(adsInsightsDaily.level, AdsInsightLevels.campaign),
       ))
-      .all())
+      .all()
+    const rollups = historicalCampaignRollups(
+      rollupRows,
+      adsAccountToday(connection?.timezone, new Date().toISOString()),
+    )
 
     const adsByGroup = new Map<string, AdsDeliveryDiagnosticsDto['storedConfiguration']['campaigns'][number]['adGroups'][number]['ads']>()
     for (const ad of adRows) {
@@ -3013,9 +3061,10 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
    *
    * COST: the walk is bounded in READER CALLS, and a reader call is not one
    * HTTP request. Each list/insight reader call auto-paginates inside the
-   * provider client up to `OPENAI_ADS_MAX_PAGES` (100) times, so the honest
-   * worst case for one live-delivery read is about 40 × 100 = 4000 upstream
-   * HTTP requests. The response says both numbers explicitly
+   * provider client up to `OPENAI_ADS_MAX_PAGES` (100) times, and an insight
+   * call adds one more single-page request for the day in progress, so the
+   * honest worst case for one live-delivery read is about 40 × 101 = 4040
+   * upstream HTTP requests. The response says both numbers explicitly
    * (`bounds.maxReaderCalls` vs `bounds.maxUpstreamHttpRequests`); the HTTP
    * figure is a documented ceiling, since pagination happens below the reader
    * seam where this route cannot observe it.
@@ -3348,7 +3397,9 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
           maxReaderCalls: ADS_LIVE_MAX_READER_CALLS,
           readerCalls,
           maxPagesPerReaderCall: liveDeliveryMaxPagesPerReaderCall,
-          maxUpstreamHttpRequests: ADS_LIVE_MAX_READER_CALLS * liveDeliveryMaxPagesPerReaderCall,
+          // The +1 is the single-page in-progress-day request an insight
+          // reader call makes alongside its paginating ranged walk.
+          maxUpstreamHttpRequests: ADS_LIVE_MAX_READER_CALLS * (liveDeliveryMaxPagesPerReaderCall + 1),
           truncated,
         },
         entities,
@@ -3405,7 +3456,14 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       campaignCount,
       adGroupCount,
       adCount,
-      window: { from: fromDate, to: toDate },
+      window: {
+        from: fromDate,
+        to: toDate,
+        inProgressDate: inProgressWindowDate(
+          toDate,
+          adsAccountToday(row?.timezone, new Date().toISOString()),
+        ),
+      },
       totals: {
         impressions,
         clicks,

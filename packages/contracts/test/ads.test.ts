@@ -3,6 +3,7 @@ import {
   adsCtr,
   adsCpcMicros,
   adsInsightRowDtoSchema,
+  adsRollupWindowDtoSchema,
   adsSummaryDtoSchema,
   adsDeliveryDiagnosticsDtoSchema,
   adsLiveDeliveryDtoSchema,
@@ -216,21 +217,39 @@ describe('DTO schemas', () => {
     const parsed = adsInsightRowDtoSchema.parse({
       level: 'campaign', entityId: 'cmpn_x', date: '2026-06-10',
       impressions: 0, clicks: 0, spendMicros: 0, conversions: 0, ctr: null, cpcMicros: null,
+      inProgress: false,
     })
     expect(parsed.ctr).toBeNull()
     expect(parsed.conversions).toBe(0)
+  })
+
+  test('insight row must state whether the day it covers is still filling', () => {
+    // The sync stores the account's CURRENT local day while it is running, so
+    // a consumer that sums these rows has to be able to tell a running figure
+    // from a closed one. Leaving the flag implicit is what let a partial day
+    // pass as final, so it is required rather than defaulted.
+    expect(adsInsightRowDtoSchema.safeParse({
+      level: 'campaign', entityId: 'cmpn_x', date: '2026-06-10',
+      impressions: 10, clicks: 1, spendMicros: 1000, conversions: 0, ctr: 0.1, cpcMicros: 1000,
+    }).success).toBe(false)
+    expect(adsInsightRowDtoSchema.parse({
+      level: 'campaign', entityId: 'cmpn_x', date: '2026-06-10',
+      impressions: 10, clicks: 1, spendMicros: 1000, conversions: 0, ctr: 0.1, cpcMicros: 1000,
+      inProgress: true,
+    }).inProgress).toBe(true)
   })
 
   test('insight row requires an integer conversions count', () => {
     // Missing → invalid (the field is required so a zero is always explicit).
     expect(adsInsightRowDtoSchema.safeParse({
       level: 'campaign', entityId: 'cmpn_x', date: '2026-06-10',
-      impressions: 10, clicks: 1, spendMicros: 1000, ctr: 0.1, cpcMicros: 1000,
+      impressions: 10, clicks: 1, spendMicros: 1000, ctr: 0.1, cpcMicros: 1000, inProgress: false,
     }).success).toBe(false)
     // Fractional → invalid (the column is an integer; rounding happens at ingest).
     expect(adsInsightRowDtoSchema.safeParse({
       level: 'campaign', entityId: 'cmpn_x', date: '2026-06-10',
       impressions: 10, clicks: 1, spendMicros: 1000, conversions: 2.5, ctr: 0.1, cpcMicros: 1000,
+      inProgress: false,
     }).success).toBe(false)
   })
 
@@ -266,7 +285,7 @@ describe('DTO schemas', () => {
   test('summary requires window and totals incl. conversions', () => {
     const ok = adsSummaryDtoSchema.safeParse({
       connected: true, campaignCount: 2, adGroupCount: 16, adCount: 20,
-      window: { from: '2026-06-07', to: '2026-06-10' },
+      window: { from: '2026-06-07', to: '2026-06-10', inProgressDate: '2026-06-10' },
       totals: { impressions: 18047, clicks: 235, spendMicros: 498_470_000, conversions: 9, ctr: 0.013, cpcMicros: 2_121_148 },
     })
     expect(ok.success).toBe(true)
@@ -274,10 +293,25 @@ describe('DTO schemas', () => {
     // totals without conversions is now invalid (the field is required).
     expect(adsSummaryDtoSchema.safeParse({
       connected: true, campaignCount: 0, adGroupCount: 0, adCount: 0,
-      window: { from: null, to: null },
+      window: { from: null, to: null, inProgressDate: null },
       totals: { impressions: 0, clicks: 0, spendMicros: 0, ctr: null, cpcMicros: null },
     }).success).toBe(false)
     expect(adsSummaryDtoSchema.safeParse({ connected: false }).success).toBe(false)
+  })
+
+  test('a rollup window must say which of its dates is still filling', () => {
+    // The window's own totals move while its last date is open, so the field
+    // is required: an omitted marker reads as a closed window, which is the
+    // reading that made a running total look like a finished one.
+    expect(adsSummaryDtoSchema.safeParse({
+      connected: true, campaignCount: 1, adGroupCount: 1, adCount: 1,
+      window: { from: '2026-06-07', to: '2026-06-10' },
+      totals: { impressions: 1, clicks: 0, spendMicros: 0, conversions: 0, ctr: null, cpcMicros: null },
+    }).success).toBe(false)
+    // A window that stops short of the account's today carries an explicit null.
+    expect(adsRollupWindowDtoSchema.parse({
+      from: '2026-06-07', to: '2026-06-09', inProgressDate: null,
+    }).inProgressDate).toBeNull()
   })
 
   test('connection status carries an optional conversionTrackingConfigured flag', () => {
@@ -311,7 +345,7 @@ describe('DTO schemas', () => {
       },
       historicalCampaignRollups: {
         status: 'reported',
-        window: { from: '2026-07-16', to: '2026-07-17' },
+        window: { from: '2026-07-16', to: '2026-07-17', inProgressDate: null },
         totals: { impressions: 8, clicks: 1, spendMicros: 2_000_000, conversions: 0, ctr: 0.125, cpcMicros: 2_000_000 },
       },
       storedConfiguration: {

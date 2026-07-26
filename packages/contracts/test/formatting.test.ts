@@ -16,6 +16,7 @@ import {
   isoDateDaysBeforeInTimeZone,
   parseInclusiveEndMs,
   startOfDayHourInTimeZone,
+  startOfNextDayHourInTimeZone,
 } from '../src/formatting.js'
 
 describe('formatRatio', () => {
@@ -202,6 +203,79 @@ describe('startOfDayHourInTimeZone', () => {
   test('a date that is not YYYY-MM-DD degrades to hour 00', () => {
     expect(startOfDayHourInTimeZone('not-a-date', 'America/Santiago')).toBe('not-a-dateT00')
     expect(startOfDayHourInTimeZone('', 'America/Santiago')).toBe('T00')
+  })
+})
+
+describe('startOfNextDayHourInTimeZone', () => {
+  const DAY_MS = 24 * 60 * 60 * 1_000
+
+  /**
+   * What the helper replaces: add a fixed 24 hours to the day's start and read
+   * back the local wall clock. Kept as an oracle so each case can state whether
+   * the naive step is wrong, and so the ordinary rows prove the fix does not
+   * over-correct a day that was always fine.
+   */
+  const fixedDurationStep = (isoDate: string, timeZone: string): string => {
+    const startedAt = Date.parse(`${isoDate}T12:00:00.000Z`)
+    return formatIsoDateInTimeZone(new Date(startedAt + DAY_MS).toISOString(), timeZone)
+  }
+
+  test('an ordinary day ends at hour 00 of the next calendar date', () => {
+    expect(startOfNextDayHourInTimeZone('2026-07-21', 'America/New_York')).toBe('2026-07-22T00')
+    expect(startOfNextDayHourInTimeZone('2026-06-10', 'America/Denver')).toBe('2026-06-11T00')
+    expect(startOfNextDayHourInTimeZone('2026-06-10', 'Asia/Tokyo')).toBe('2026-06-11T00')
+    expect(startOfNextDayHourInTimeZone('2026-06-10', 'UTC')).toBe('2026-06-11T00')
+  })
+
+  test('it rolls month and year boundaries as a calendar does', () => {
+    expect(startOfNextDayHourInTimeZone('2026-01-31', 'UTC')).toBe('2026-02-01T00')
+    expect(startOfNextDayHourInTimeZone('2026-12-31', 'UTC')).toBe('2027-01-01T00')
+    // 2028 is a leap year, so February really does have a 29th.
+    expect(startOfNextDayHourInTimeZone('2028-02-28', 'UTC')).toBe('2028-02-29T00')
+  })
+
+  test('the day a zone springs forward AT midnight ends at the next day hour 01', () => {
+    // America/Santiago moves the clock at 24:00 on 2026-09-05, so 2026-09-06
+    // has no hour 00 and the edge that closes 09-05 is 09-06 at 01:00. The
+    // naive +24h step reads 09-06 as the DATE and would hand back an hour the
+    // zone's own calendar never had.
+    expect(startOfNextDayHourInTimeZone('2026-09-05', 'America/Santiago')).toBe('2026-09-06T01')
+    expect(fixedDurationStep('2026-09-05', 'America/Santiago')).toBe('2026-09-06')
+    expect(startOfNextDayHourInTimeZone('2026-03-07', 'America/Havana')).toBe('2026-03-08T01')
+  })
+
+  test('a fall-back day is 25 hours long and still ends at the next day hour 00', () => {
+    // America/New_York repeats 01:00 on 2026-11-01, so a +24h step from that
+    // day's start lands back INSIDE 11-01 and would close the day on itself.
+    expect(startOfNextDayHourInTimeZone('2026-11-01', 'America/New_York')).toBe('2026-11-02T00')
+    // A spring-forward day (23 hours) at the other end of the same zone.
+    expect(startOfNextDayHourInTimeZone('2026-03-08', 'America/New_York')).toBe('2026-03-09T00')
+  })
+
+  test('it is the exclusive edge that covers the whole day it closes', () => {
+    // The pairing that matters to a range: the day starts where
+    // startOfDayHourInTimeZone says and ends where this says, and the second is
+    // strictly after the first for both the short and the long local day.
+    for (const [date, zone] of [
+      ['2026-03-08', 'America/New_York'],
+      ['2026-11-01', 'America/New_York'],
+      ['2026-09-05', 'America/Santiago'],
+      ['2026-06-10', 'America/Denver'],
+    ] as const) {
+      const since = startOfDayHourInTimeZone(date, zone)
+      const until = startOfNextDayHourInTimeZone(date, zone)
+      expect(until > since).toBe(true)
+      expect(until.slice(0, 10) > date).toBe(true)
+    }
+  })
+
+  test('an unknown zone degrades to the next date at hour 00 instead of throwing', () => {
+    expect(startOfNextDayHourInTimeZone('2026-09-05', 'Not/AZone')).toBe('2026-09-06T00')
+  })
+
+  test('a date that is not YYYY-MM-DD degrades without inventing a date', () => {
+    expect(startOfNextDayHourInTimeZone('not-a-date', 'America/Santiago')).toBe('not-a-dateT00')
+    expect(startOfNextDayHourInTimeZone('', 'America/Santiago')).toBe('T00')
   })
 })
 

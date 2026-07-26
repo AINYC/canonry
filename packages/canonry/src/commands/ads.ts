@@ -81,6 +81,19 @@ function readRequest<TSchema extends z.ZodTypeAny>(inputPath: string | undefined
   }
 }
 
+/**
+ * The suffix that tells a reader the last date in a window is not a finished
+ * day. Empty when every date in the window is closed.
+ *
+ * The sync now stores the ad account's current local day while it is still
+ * running, so a total that spans it keeps rising. Reading such a total as a
+ * closed one is the mistake this note exists to prevent, so it names the date
+ * rather than saying "today": the account's day is not necessarily the reader's.
+ */
+function partialDayNote(inProgressDate: string | null): string {
+  return inProgressDate === null ? '' : ` (${inProgressDate} still filling)`
+}
+
 function printOperationDetails(operation: AdsOperationDto): void {
   console.log(`Operation: ${operation.operationKey}`)
   if (operation.entityId) console.log(`Entity:    ${operation.entityType ?? 'unknown'} ${operation.entityId}`)
@@ -572,8 +585,12 @@ export async function adsInsights(project: string, opts?: {
   console.log('DATE        LEVEL      ENTITY                                 IMPR    CLICKS  SPEND      CPC')
   for (const row of result.rows) {
     const cpc = row.cpcMicros != null ? formatMicros(row.cpcMicros, currency) : '—'
+    // A row for the account's current day is still filling. Say so on the row
+    // rather than in a footnote, so a reader scanning the table cannot compare
+    // it against the finished days above it by accident.
+    const partial = row.inProgress ? '  (still filling)' : ''
     console.log(
-      `${row.date}  ${row.level.padEnd(9)}  ${row.entityId.padEnd(36).slice(0, 36)}  ${String(row.impressions).padStart(6)}  ${String(row.clicks).padStart(6)}  ${formatMicros(row.spendMicros, currency).padStart(9)}  ${cpc}`,
+      `${row.date}  ${row.level.padEnd(9)}  ${row.entityId.padEnd(36).slice(0, 36)}  ${String(row.impressions).padStart(6)}  ${String(row.clicks).padStart(6)}  ${formatMicros(row.spendMicros, currency).padStart(9)}  ${cpc}${partial}`,
     )
   }
 }
@@ -593,7 +610,7 @@ export async function adsSummary(project: string, opts?: { format?: string }): P
   }
   console.log(`Account:      ${result.displayName ?? 'unknown'} (${result.currencyCode ?? '?'})`)
   console.log(`Structure:    ${result.campaignCount} campaigns / ${result.adGroupCount} ad groups / ${result.adCount} ads`)
-  console.log(`Window:       ${result.window.from ?? '—'} → ${result.window.to ?? '—'}`)
+  console.log(`Window:       ${result.window.from ?? '—'} → ${result.window.to ?? '—'}${partialDayNote(result.window.inProgressDate)}`)
   console.log(`Impressions:  ${result.totals.impressions}`)
   console.log(`Clicks:       ${result.totals.clicks}${result.totals.ctr != null ? ` (CTR ${(result.totals.ctr * 100).toFixed(2)}%)` : ''}`)
   console.log(`Spend:        ${formatMicros(result.totals.spendMicros, result.currencyCode ?? 'USD')}${result.totals.cpcMicros != null ? ` (CPC ${formatMicros(result.totals.cpcMicros, result.currencyCode ?? 'USD')})` : ''}`)
@@ -617,7 +634,8 @@ export async function adsDeliveryDiagnostics(project: string, opts?: { format?: 
     result.historicalCampaignRollups.status === AdsHistoricalCampaignRollupStatuses.reported &&
     result.historicalCampaignRollups.totals !== null
   ) {
-    console.log(`Historical:   ${result.historicalCampaignRollups.totals.impressions} impressions / ${result.historicalCampaignRollups.totals.clicks} clicks (${result.historicalCampaignRollups.window.from} → ${result.historicalCampaignRollups.window.to})`)
+    const rollupWindow = result.historicalCampaignRollups.window
+    console.log(`Historical:   ${result.historicalCampaignRollups.totals.impressions} impressions / ${result.historicalCampaignRollups.totals.clicks} clicks (${rollupWindow.from} → ${rollupWindow.to})${partialDayNote(rollupWindow.inProgressDate)}`)
   } else {
     console.log('Historical:   no stored campaign rollups')
   }

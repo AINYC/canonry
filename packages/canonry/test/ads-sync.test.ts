@@ -17,11 +17,22 @@ import {
 import {
   executeAdsSync,
   liveAdsInsightHourRange,
+  readInsightDays,
   trailingAdsInsightHourRange,
 } from '../src/ads-sync.js'
 import type { CanonryConfig } from '../src/config.js'
 
 const NOW = '2026-06-10T00:00:00.000Z'
+
+/** The account's wall-clock hour, the unit both range edges are expressed in. */
+function accountHourFor(at: Date, timezone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23',
+  }).formatToParts(at)
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)!.value
+  return `${value('year')}-${value('month')}-${value('day')}T${value('hour')}`
+}
 
 function createTempDb() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-ads-sync-test-'))
@@ -119,16 +130,136 @@ afterEach(() => {
 })
 
 describe('executeAdsSync', () => {
-  it('builds the verified trailing hour-range contract in the advertiser timezone', () => {
+  it('closes the trailing range on the START of the account current local day', () => {
+    // 17:37 UTC is 13:37 in New York. The edge is the start of that local day,
+    // which is the highest edge the provider accepts: an `until` in the future
+    // is refused outright with "400: time_ranges.end cannot be in the future",
+    // failing the whole call rather than clamping. Nothing is lost by staying
+    // in the past, since a ranged call never returns the open day at any edge.
     expect(trailingAdsInsightHourRange(
       new Date('2026-07-21T17:37:00.000Z'),
       'America/New_York',
     )).toEqual({
       type: 'hour_range',
+      // Unchanged: only the upper edge moves, so the 90-day backfill window is
+      // exactly the window it always was.
       since: '2026-04-22T13',
-      until: '2026-07-21T13',
+      until: '2026-07-21T00',
       timezone: 'America/New_York',
     })
+  })
+
+  it('never names an upper edge later than the account current local hour', () => {
+    // The regression guard for the 400. Whatever the zone or the time of day,
+    // the edge must already have happened on the account's own wall clock.
+    for (const [iso, zone] of [
+      ['2026-07-21T17:37:00.000Z', 'America/New_York'],
+      ['2026-11-01T18:00:00.000Z', 'America/New_York'], // 25-hour fall-back day
+      ['2026-03-08T17:00:00.000Z', 'America/New_York'], // 23-hour spring-forward day
+      ['2026-09-06T19:00:00.000Z', 'America/Santiago'], // no hour 00 that day
+      ['2026-06-10T18:00:00.000Z', 'Asia/Tokyo'],
+      ['2026-06-10T18:00:00.000Z', 'Pacific/Kiritimati'], // UTC+14
+      ['2026-06-10T02:00:00.000Z', 'Pacific/Midway'], // UTC-11
+    ] as const) {
+      const at = new Date(iso)
+      const nowHour = accountHourFor(at, zone)
+      expect(trailingAdsInsightHourRange(at, zone).until <= nowHour).toBe(true)
+      expect(liveAdsInsightHourRange({
+        startDate: '2026-01-01',
+        fetchedAtMs: at.getTime(),
+        timezone: zone,
+      }).until <= nowHour).toBe(true)
+    }
+  })
+
+  it('opens the day at the first hour that local day actually has', () => {
+    // America/Santiago springs forward AT midnight into 2026-09-06: the clock
+    // goes 23:59:59 -> 01:00:00, so that day has no hour 00 and it begins at
+    // 01:00. Naming "2026-09-06T00" would ask the provider about a wall-clock
+    // hour its own calendar never had.
+    const at = new Date('2026-09-06T19:00:00.000Z') // 16:00 local on 09-06
+    expect(trailingAdsInsightHourRange(at, 'America/Santiago').until).toBe('2026-09-06T01')
+    expect(liveAdsInsightHourRange({
+      startDate: '2026-09-05',
+      fetchedAtMs: at.getTime(),
+      timezone: 'America/Santiago',
+    })).toEqual({
+      type: 'hour_range',
+      since: '2026-09-05T00',
+      until: '2026-09-06T01',
+      timezone: 'America/Santiago',
+    })
+  })
+
+  it('lands the edge on the current date across both DST transitions', () => {
+    // The edge is a calendar lookup, not arithmetic over a day's length, so a
+    // 25-hour fall-back day and a 23-hour spring-forward day are both simply
+    // "the date the anchor is in".
+    const fallBack = new Date('2026-11-01T18:00:00.000Z') // 13:00 local on 11-01
+    expect(trailingAdsInsightHourRange(fallBack, 'America/New_York').until).toBe('2026-11-01T00')
+    expect(liveAdsInsightHourRange({
+      startDate: '2026-10-30',
+      fetchedAtMs: fallBack.getTime(),
+      timezone: 'America/New_York',
+    }).until).toBe('2026-11-01T00')
+    expect(trailingAdsInsightHourRange(
+      new Date('2026-03-08T17:00:00.000Z'),
+      'America/New_York',
+    ).until).toBe('2026-03-08T00')
+  })
+
+  it('reads the closed days ranged and the open day unranged, and merges them', async () => {
+    // The two calls exist because neither shape can do both jobs: the ranged
+    // one is the only source of conversions, the unranged one the only source
+    // of the day in progress.
+    const seen: Array<Record<string, unknown>> = []
+    const read = async (options: Record<string, unknown>) => {
+      seen.push(options)
+      return options.timeRanges
+        ? [{ id: 'closed', start_time: 1, end_time: 2, readable_time: '2026-06-09', impressions: 3326, conversions: 7 }]
+        : [
+            { id: 'open', start_time: 2, end_time: 3, readable_time: '2026-06-10', impressions: 1736 },
+            { id: 'stale', start_time: 1, end_time: 2, readable_time: '2026-06-09', impressions: 3326 },
+          ]
+    }
+
+    const result = await readInsightDays({
+      read: read as never,
+      rangedFields: ['campaign.conversions'],
+      inProgressFields: ['campaign.impressions'],
+      timeRanges: [trailingAdsInsightHourRange(new Date('2026-06-10T18:00:00.000Z'), 'America/Denver')],
+      inProgressDate: '2026-06-10',
+    })
+
+    expect(result.closedDays.map((row) => row.readable_time)).toEqual(['2026-06-09'])
+    expect(result.closedDays[0]?.conversions).toBe(7)
+    // ONLY the open day is taken from the unranged response. Its other rows
+    // duplicate the ranged ones and carry no conversions, so adopting them
+    // would overwrite real counts with nothing.
+    expect(result.inProgressDay?.readable_time).toBe('2026-06-10')
+    expect(result.inProgressDay?.conversions).toBeUndefined()
+
+    // The ranged call asks for conversions; the unranged one must not, and is
+    // capped at one page because it has no way to bound its own window.
+    expect(seen[0]).toEqual({ fields: ['campaign.conversions'], timeRanges: [expect.objectContaining({ until: '2026-06-10T00' })] })
+    expect(seen[1]).toEqual({ fields: ['campaign.impressions'], firstPageOnly: true })
+  })
+
+  it('reports no open day rather than an empty one when the provider has nothing yet', async () => {
+    // Ordinary early in a local day, and permanent for an entity that is not
+    // delivering. A zero-filled row would claim the provider reported zero.
+    const result = await readInsightDays({
+      read: (async (options: Record<string, unknown>) => (options.timeRanges
+        ? [{ id: 'closed', start_time: 1, end_time: 2, readable_time: '2026-06-09', impressions: 3326, conversions: 0 }]
+        : [{ id: 'older', start_time: 1, end_time: 2, readable_time: '2026-06-09', impressions: 3326 }])) as never,
+      rangedFields: ['campaign.conversions'],
+      inProgressFields: ['campaign.impressions'],
+      timeRanges: [],
+      inProgressDate: '2026-06-10',
+    })
+
+    expect(result.inProgressDay).toBeNull()
+    expect(result.closedDays).toHaveLength(1)
   })
 
   it('builds a live insight range from the request only, never from the clock', () => {
@@ -142,7 +273,11 @@ describe('executeAdsSync', () => {
       // The start of the window's first local day: that day is a WHOLE day
       // upstream, so it is comparable with the whole-day stored rollup.
       since: '2026-07-14T00',
-      until: '2026-07-21T13',
+      // And the start of the local day the anchor is in, so the range covers
+      // the window's CLOSED days. It may not reach past that: an edge in the
+      // future is a 400 on the whole call, and no accepted edge returns the
+      // open day anyway, so the open day is read unranged instead.
+      until: '2026-07-21T00',
       timezone: 'America/New_York',
     }
 
@@ -295,6 +430,124 @@ describe('executeAdsSync', () => {
     expect(db.select().from(adsAdGroups).all().length).toBe(1)
     expect(db.select().from(adsAds).all().length).toBe(1)
     expect(db.select().from(adsInsightsDaily).all().length).toBe(3)
+  })
+
+  it('overwrites the in-progress day on the next sync rather than duplicating or sticking', async () => {
+    const db = createTempDb()
+    seed(db)
+
+    // 18:00 UTC is 12:00 in Denver, so the account's local 2026-06-10 is a
+    // half over. The provider serves that day only from the UNRANGED call, so
+    // the SAME date comes back with bigger numbers on every read and the
+    // rollup row has to track them: it is keyed (project, level, entity,
+    // date), so a second sync must UPSERT rather than insert a second row or
+    // leave the first read's partial figure in place forever.
+    vi.useFakeTimers()
+    onTestFinished(() => { vi.useRealTimers() })
+    vi.setSystemTime(new Date('2026-06-10T18:00:00.000Z'))
+
+    // The closed day carries a real conversion count; the open day never does.
+    const closedDay = { ...CAMPAIGN_INSIGHTS[0], conversions: 9 }
+    let partialDay = {
+      id: 'r2', start_time: 2, end_time: 3, readable_time: '2026-06-10',
+      impressions: 1736, clicks: 23, spend: 39.28,
+    }
+    globalThis.fetch = async (url: string | URL | Request) => {
+      const u = String(url)
+      const respond = (payload: unknown) => new Response(JSON.stringify(payload), { status: 200 })
+      const ranged = u.includes('time_ranges')
+      if (u.endsWith('/ad_account')) return respond(ACCOUNT)
+      // The provider's real split: the ranged call stops before the open day,
+      // the unranged call leads with it and repeats the closed days behind it.
+      if (u.includes('/campaigns/cmpn_bbb/insights')) {
+        return respond(list(ranged ? [closedDay] : [partialDay, CAMPAIGN_INSIGHTS[0]]))
+      }
+      if (u.includes('/ad_groups/adgrp_ddd/insights')) return respond(list(ranged ? [] : AD_GROUP_INSIGHTS))
+      if (u.includes('/campaigns')) return respond(list([CAMPAIGN]))
+      if (u.includes('/ad_groups?campaign_id=cmpn_bbb')) return respond(list([AD_GROUP]))
+      if (u.includes('/ads?ad_group_id=adgrp_ddd')) return respond(list([AD]))
+      throw new Error(`unexpected URL in test: ${u}`)
+    }
+
+    const inProgressRows = () => db.select().from(adsInsightsDaily).all()
+      .filter((row) => row.level === 'campaign' && row.date === '2026-06-10')
+
+    await executeAdsSync(db, 'run_1', 'proj_1', { config: testConfig() })
+    expect(inProgressRows()).toHaveLength(1)
+    expect(inProgressRows()[0]?.impressions).toBe(1736)
+    const firstRowId = inProgressRows()[0]?.id
+
+    // Later the same local day: more delivery has landed on that same date.
+    partialDay = { ...partialDay, impressions: 2061, clicks: 31, spend: 55.1 }
+    db.insert(runs).values({
+      id: 'run_2', projectId: 'proj_1', kind: 'ads-sync', status: 'queued', trigger: 'manual', createdAt: NOW,
+    }).run()
+    await executeAdsSync(db, 'run_2', 'proj_1', { config: testConfig() })
+
+    const after = inProgressRows()
+    // Not duplicated: still exactly one row for the day, and the same row.
+    expect(after).toHaveLength(1)
+    expect(after[0]?.id).toBe(firstRowId)
+    // Not stuck: every metric moved to the newer partial reading, and the row
+    // now points at the sync that last wrote it.
+    expect(after[0]?.impressions).toBe(2061)
+    expect(after[0]?.clicks).toBe(31)
+    expect(after[0]?.spendMicros).toBe(55_100_000)
+    expect(after[0]?.syncRunId).toBe('run_2')
+
+    // The completed day beside it is untouched by the overwrite, conversions
+    // included: the unranged read repeats that date without a conversion
+    // count, and adopting it would have zeroed a real figure.
+    const completedDay = db.select().from(adsInsightsDaily).all()
+      .find((row) => row.level === 'campaign' && row.date === '2026-06-09')
+    expect(completedDay?.impressions).toBe(3326)
+    expect(completedDay?.conversions).toBe(9)
+  })
+
+  it('leaves a stored conversion count alone on a day the provider will not report', async () => {
+    const db = createTempDb()
+    seed(db)
+
+    vi.useFakeTimers()
+    onTestFinished(() => { vi.useRealTimers() })
+    vi.setSystemTime(new Date('2026-06-10T18:00:00.000Z'))
+
+    // A real count already stored for the open date, as if the row had been
+    // written by an earlier sync that could read it.
+    db.insert(adsInsightsDaily).values({
+      id: 'pre_existing', projectId: 'proj_1', syncRunId: null,
+      level: 'campaign', entityId: 'cmpn_bbb', date: '2026-06-10',
+      impressions: 100, clicks: 2, spendMicros: 1_000_000, conversions: 5,
+    }).run()
+
+    globalThis.fetch = async (url: string | URL | Request) => {
+      const u = String(url)
+      const respond = (payload: unknown) => new Response(JSON.stringify(payload), { status: 200 })
+      const ranged = u.includes('time_ranges')
+      if (u.endsWith('/ad_account')) return respond(ACCOUNT)
+      if (u.includes('/campaigns/cmpn_bbb/insights')) {
+        return respond(list(ranged ? [] : [{
+          id: 'r2', start_time: 2, end_time: 3, readable_time: '2026-06-10',
+          impressions: 1736, clicks: 23, spend: 39.28,
+        }]))
+      }
+      if (u.includes('/ad_groups/adgrp_ddd/insights')) return respond(list([]))
+      if (u.includes('/campaigns')) return respond(list([CAMPAIGN]))
+      if (u.includes('/ad_groups?campaign_id=cmpn_bbb')) return respond(list([AD_GROUP]))
+      if (u.includes('/ads?ad_group_id=adgrp_ddd')) return respond(list([AD]))
+      throw new Error(`unexpected URL in test: ${u}`)
+    }
+
+    await executeAdsSync(db, 'run_1', 'proj_1', { config: testConfig() })
+
+    const row = db.select().from(adsInsightsDaily).all()
+      .find((r) => r.level === 'campaign' && r.date === '2026-06-10')
+    // The metrics the unranged call DID report moved.
+    expect(row?.impressions).toBe(1736)
+    expect(row?.clicks).toBe(23)
+    // The one it could not report is left as it was. Writing 0 here would turn
+    // a number this read could not obtain into a number that is simply wrong.
+    expect(row?.conversions).toBe(5)
   })
 
   it('fails the run when no config credential exists for the project', async () => {

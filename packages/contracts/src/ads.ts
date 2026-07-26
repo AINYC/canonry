@@ -218,6 +218,19 @@ export const adsInsightRowDtoSchema = z.object({
   ctr: z.number().nullable(),
   /** spendMicros / clicks, rounded to integer micros; null when clicks is 0. */
   cpcMicros: z.number().int().nullable(),
+  /**
+   * True when `date` is the ad account's CURRENT local calendar date, so this
+   * row is a running figure rather than a closed day. The sync re-reads the
+   * open day and overwrites the row every time it runs, so the numbers here
+   * keep rising until the day ends. Do not compare it against a finished day
+   * or treat it as final.
+   *
+   * `conversions` is the one field that does NOT fill in live on such a row.
+   * The provider serves the open day only from a call that may not request
+   * conversion metrics, so the count stays at 0 until the day closes and the
+   * next sync reads the real figure. Treat it as not yet reported.
+   */
+  inProgress: z.boolean(),
 })
 export type AdsInsightRowDto = z.infer<typeof adsInsightRowDtoSchema>
 
@@ -227,6 +240,25 @@ export const adsInsightsResponseSchema = z.object({
   currencyCode: z.string().nullable().optional(),
 })
 export type AdsInsightsResponse = z.infer<typeof adsInsightsResponseSchema>
+
+/**
+ * The stored rollup date range, and which date inside it is still filling.
+ *
+ * `inProgressDate` is the ad account's CURRENT local calendar date, present
+ * only when the window actually reaches it. The row for that date is a partial
+ * day: the sync re-reads the open day, so today's delivery lands as soon as it
+ * happens and is overwritten on every later sync. Totals spanning it are a
+ * running figure, not a closed one, and their `conversions` component excludes
+ * that day entirely (the provider does not report conversions for a day still
+ * open). `null` means every date in the window is a complete day, or that
+ * there are no rows at all.
+ */
+export const adsRollupWindowDtoSchema = z.object({
+  from: z.string().nullable(),
+  to: z.string().nullable(),
+  inProgressDate: z.string().nullable(),
+})
+export type AdsRollupWindowDto = z.infer<typeof adsRollupWindowDtoSchema>
 
 export const adsTotalsDtoSchema = z.object({
   impressions: z.number().int(),
@@ -247,10 +279,7 @@ export const adsSummaryDtoSchema = z.object({
   adGroupCount: z.number().int(),
   adCount: z.number().int(),
   /** Date range the totals cover (oldest/newest rollup date), null when empty. */
-  window: z.object({
-    from: z.string().nullable(),
-    to: z.string().nullable(),
-  }),
+  window: adsRollupWindowDtoSchema,
   /** Campaign-level rollup totals over the window (levels are not summed across). */
   totals: adsTotalsDtoSchema,
 })
@@ -353,7 +382,7 @@ export const adsDeliveryDiagnosticsDtoSchema = z.object({
   }),
   historicalCampaignRollups: z.object({
     status: adsHistoricalCampaignRollupStatusSchema,
-    window: z.object({ from: z.string().nullable(), to: z.string().nullable() }),
+    window: adsRollupWindowDtoSchema,
     totals: adsTotalsDtoSchema.nullable(),
   }),
   storedConfiguration: z.object({

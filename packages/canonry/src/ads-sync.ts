@@ -6,6 +6,7 @@ import {
   buildRunErrorFromMessages,
   serializeRunError,
   dollarsToMicros,
+  formatIsoDateInTimeZone,
   startOfDayHourInTimeZone,
 } from '@ainyc/canonry-contracts'
 import {
@@ -22,6 +23,7 @@ import type {
   OpenAiAdsCampaign,
   OpenAiAdsInsightHourRange,
   OpenAiAdsInsightRow,
+  OpenAiAdsInsightsOptions,
 } from '@ainyc/canonry-integration-openai-ads'
 import type { CanonryConfig } from './config.js'
 import { getOpenAiAdsConnection } from './ads-config.js'
@@ -31,6 +33,12 @@ const log = createLogger('AdsSync')
 
 export const CAMPAIGN_INSIGHT_FIELDS = ['campaign.impressions', 'campaign.clicks', 'campaign.spend', 'campaign.conversions', 'metadata.readable_time']
 export const AD_GROUP_INSIGHT_FIELDS = ['ad_group.impressions', 'ad_group.clicks', 'ad_group.spend', 'ad_group.conversions', 'metadata.readable_time']
+// The same fields MINUS conversions, for the unranged call that returns the
+// day in progress. Asking for conversions without time_ranges[] is a 400, and
+// the range that would satisfy it is the range that excludes the open day, so
+// the day in progress has no conversion figure to read until it closes.
+export const CAMPAIGN_IN_PROGRESS_INSIGHT_FIELDS = CAMPAIGN_INSIGHT_FIELDS.filter((field) => field !== 'campaign.conversions')
+export const AD_GROUP_IN_PROGRESS_INSIGHT_FIELDS = AD_GROUP_INSIGHT_FIELDS.filter((field) => field !== 'ad_group.conversions')
 const INSIGHTS_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1_000
 
 function accountHour(date: Date, timezone: string): string {
@@ -50,19 +58,65 @@ function accountHour(date: Date, timezone: string): string {
   return `${value('year')}-${value('month')}-${value('day')}T${value('hour')}`
 }
 
+/**
+ * The account's CURRENT local calendar date. Every provider daily bucket is
+ * stamped with one of these (`readable_time`), and so is every stored rollup
+ * row, so this is the one value that says which row is the day in progress.
+ */
+export function accountLocalDate(at: Date, timezone: string): string {
+  return formatIsoDateInTimeZone(at.toISOString(), timezone)
+}
+
+/**
+ * The EXCLUSIVE upper edge of the last CLOSED account-local day: the start of
+ * the day `at` falls in.
+ *
+ * This is the highest edge a ranged call can safely name, and asking for more
+ * buys nothing. Captured live on 2026-07-26 (account on `America/New_York`,
+ * 12:56 local):
+ *
+ * - An `until` in the future is refused outright with
+ *   `400: time_ranges.end cannot be in the future.` Edges through
+ *   `2026-07-26T20` local (the next UTC midnight) were accepted, and
+ *   `2026-07-26T21` through a week out were all refused. The next LOCAL
+ *   midnight is therefore not a usable edge, and because the refusal is a 400
+ *   on the whole call rather than a clamp, reaching for it does not undercount
+ *   the sync, it FAILS the sync.
+ * - No accepted edge returns the day in progress anyway. The provider reports
+ *   a daily bucket only when the range covers that bucket's whole span, and
+ *   the open day's bucket ends at the next local midnight. Every accepted
+ *   future edge still came back without today, and a range scoped to the open
+ *   day alone returned `200` with `count: 0` rather than a partial row.
+ *
+ * So the ranged call is for closed days, and the day in progress arrives from
+ * the unranged call instead (see `readInsightDays`). Landing the edge on the
+ * start of the open day rather than the current hour is what keeps those two
+ * sources disjoint: the ranged call then structurally cannot return the same
+ * date the unranged call supplies, so neither can overwrite the other.
+ *
+ * `startOfDayHourInTimeZone` resolves the day's first hour that EXISTS: that
+ * is hour 00 except in a zone that springs forward AT midnight, which has no
+ * hour 00 on the transition day.
+ */
+function startOfAccountDay(at: Date, timezone: string): string {
+  return startOfDayHourInTimeZone(accountLocalDate(at, timezone), timezone)
+}
+
 export function trailingAdsInsightHourRange(
   now: Date,
   timezone: string,
   lookbackMs: number = INSIGHTS_LOOKBACK_MS,
 ): OpenAiAdsInsightHourRange {
-  // The live API rejects conversion fields without time_ranges[] and rejects
-  // incomplete future local days. A timezone-aware hour range includes the
-  // current completed boundary and works across daylight-saving transitions.
-  // The sync keeps the default 90-day lookback.
+  // The live API rejects conversion fields without time_ranges[], so this
+  // ranged call is how the sync reads conversions at all. A timezone-aware
+  // hour range works across daylight-saving transitions, and the upper edge
+  // closes on the account's current local day: everything below it is a
+  // finished day, and the day in progress comes from the unranged call.
+  // `since` keeps the default 90-day lookback.
   return {
     type: 'hour_range',
     since: accountHour(new Date(now.getTime() - lookbackMs), timezone),
-    until: accountHour(now, timezone),
+    until: startOfAccountDay(now, timezone),
     timezone,
   }
 }
@@ -81,10 +135,16 @@ export function trailingAdsInsightHourRange(
  *   forward AT midnight, where hour 00 is skipped and naming it would ask the
  *   provider about a wall-clock hour its own calendar never had, so
  *   `startOfDayHourInTimeZone` resolves the day's first hour that exists.
- * - `until` is the FROZEN read anchor. Calling `new Date()` per insight would
- *   let a walk that crosses an account-local hour boundary compare different
- *   entities over different ranges, with the reported `fetchedAt` describing
- *   none of them.
+ * - `until` is the START of the account-local day the FROZEN read anchor falls
+ *   in, so this range covers the window's CLOSED days and stops there. It may
+ *   not reach further: an edge in the future is refused outright (see
+ *   `startOfAccountDay`), and no accepted edge returns the open day regardless.
+ *   The open day is read separately and unranged, so that the live side and
+ *   the stored side both carry it and the comparison does not report a
+ *   stored-only day as drift on every read. Deriving the edge from the frozen
+ *   anchor pins every insight call in one walk to the identical range more
+ *   firmly than an hourly edge did, since this one only moves at local
+ *   midnight, so the reported `fetchedAt` describes all of them.
  */
 export function liveAdsInsightHourRange(request: {
   startDate: string
@@ -94,8 +154,43 @@ export function liveAdsInsightHourRange(request: {
   return {
     type: 'hour_range',
     since: startOfDayHourInTimeZone(request.startDate, request.timezone),
-    until: accountHour(new Date(request.fetchedAtMs), request.timezone),
+    until: startOfAccountDay(new Date(request.fetchedAtMs), request.timezone),
     timezone: request.timezone,
+  }
+}
+
+/**
+ * One entity's daily insight rows, from the two calls it takes to get them
+ * all. Neither call alone is enough: the ranged one is the only shape that
+ * carries conversions and the only one that can bound a window, and the
+ * unranged one is the only shape that returns the day in progress.
+ *
+ * `inProgressDay` is null when the provider has nothing for the open day yet,
+ * which is the ordinary state early in a local day and the permanent state for
+ * an entity that is not delivering. That is not an error and not a zero: the
+ * caller writes no row for it rather than writing an empty one.
+ *
+ * The unranged call is capped at ONE page. It has no way to bound its window,
+ * so a full walk would fetch the entity's entire lifetime on every sync to
+ * find one row. Daily buckets come back newest-first (captured), so the open
+ * day is on page one. If the provider ever reordered them the open day would
+ * drop back out of the sync, which is a visible undercount and the behavior
+ * before this change, rather than a wrong number written into a row.
+ */
+export async function readInsightDays(input: {
+  read: (options: OpenAiAdsInsightsOptions) => Promise<OpenAiAdsInsightRow[]>
+  rangedFields: readonly string[]
+  inProgressFields: readonly string[]
+  timeRanges: readonly OpenAiAdsInsightHourRange[]
+  inProgressDate: string
+}): Promise<{ closedDays: OpenAiAdsInsightRow[]; inProgressDay: OpenAiAdsInsightRow | null }> {
+  const [closedDays, unranged] = await Promise.all([
+    input.read({ fields: [...input.rangedFields], timeRanges: [...input.timeRanges] }),
+    input.read({ fields: [...input.inProgressFields], firstPageOnly: true }),
+  ])
+  return {
+    closedDays,
+    inProgressDay: unranged.find((row) => row.readable_time === input.inProgressDate) ?? null,
   }
 }
 
@@ -110,12 +205,23 @@ interface InsightUpsert {
   impressions: number
   clicks: number
   spendMicros: number
-  conversions: number
+  /**
+   * `null` when the provider did not REPORT conversions for this day, which is
+   * every reading of the day in progress. Distinct from 0, which is a reported
+   * count of none, and the reason the write path leaves the stored column
+   * alone rather than stamping a placeholder over it.
+   */
+  conversions: number | null
 }
 
 // The insights API returns spend/cpc as DECIMAL DOLLARS while budgets/bids
 // are integer micros — rollups normalize everything to micros at ingest.
-function toInsightUpserts(level: InsightUpsert['level'], entityId: string, rows: OpenAiAdsInsightRow[]): InsightUpsert[] {
+function toInsightUpserts(
+  level: InsightUpsert['level'],
+  entityId: string,
+  rows: readonly OpenAiAdsInsightRow[],
+  opts: { conversionsReported: boolean },
+): InsightUpsert[] {
   const upserts: InsightUpsert[] = []
   for (const row of rows) {
     if (!row.readable_time) {
@@ -129,10 +235,30 @@ function toInsightUpserts(level: InsightUpsert['level'], entityId: string, rows:
       impressions: row.impressions ?? 0,
       clicks: row.clicks ?? 0,
       spendMicros: dollarsToMicros(row.spend ?? 0),
-      conversions: Math.round(row.conversions ?? 0),
+      conversions: opts.conversionsReported ? Math.round(row.conversions ?? 0) : null,
     })
   }
   return upserts
+}
+
+/**
+ * Both halves of one entity's read, flattened into rollup upserts. The closed
+ * days carry a reported conversion count; the day in progress never does.
+ */
+function toDailyUpserts(
+  level: InsightUpsert['level'],
+  entityId: string,
+  read: { closedDays: OpenAiAdsInsightRow[]; inProgressDay: OpenAiAdsInsightRow | null },
+): InsightUpsert[] {
+  return [
+    ...toInsightUpserts(level, entityId, read.closedDays, { conversionsReported: true }),
+    ...toInsightUpserts(
+      level,
+      entityId,
+      read.inProgressDay ? [read.inProgressDay] : [],
+      { conversionsReported: false },
+    ),
+  ]
 }
 
 /**
@@ -174,7 +300,12 @@ export async function executeAdsSync(
     // so one bad campaign degrades the run to partial instead of failed.
     const account = await getAdAccount(apiKey)
     const campaigns = await listCampaigns(apiKey)
-    const insightTimeRanges = [trailingAdsInsightHourRange(new Date(), account.timezone)]
+    // One anchor for the whole walk: the range and the "which date is still
+    // open" question must agree, or a walk that crosses local midnight would
+    // ask for closed days up to one date and look for the open day at another.
+    const insightAnchor = new Date()
+    const insightTimeRanges = [trailingAdsInsightHourRange(insightAnchor, account.timezone)]
+    const inProgressDate = accountLocalDate(insightAnchor, account.timezone)
 
     const errors = new Map<string, string>()
     const adGroupsByCampaign = new Map<string, OpenAiAdsAdGroup[]>()
@@ -186,26 +317,32 @@ export async function executeAdsSync(
       try {
         const [adGroups, campaignInsights] = await Promise.all([
           listAdGroups(apiKey, campaign.id),
-          getCampaignInsights(apiKey, campaign.id, {
-            fields: CAMPAIGN_INSIGHT_FIELDS,
+          readInsightDays({
+            read: (options) => getCampaignInsights(apiKey, campaign.id, options),
+            rangedFields: CAMPAIGN_INSIGHT_FIELDS,
+            inProgressFields: CAMPAIGN_IN_PROGRESS_INSIGHT_FIELDS,
             timeRanges: insightTimeRanges,
+            inProgressDate,
           }),
         ])
         const groupResults = await Promise.all(adGroups.map(async (group) => ({
           group,
           ads: await listAds(apiKey, group.id),
-          insights: await getAdGroupInsights(apiKey, group.id, {
-            fields: AD_GROUP_INSIGHT_FIELDS,
+          insights: await readInsightDays({
+            read: (options) => getAdGroupInsights(apiKey, group.id, options),
+            rangedFields: AD_GROUP_INSIGHT_FIELDS,
+            inProgressFields: AD_GROUP_IN_PROGRESS_INSIGHT_FIELDS,
             timeRanges: insightTimeRanges,
+            inProgressDate,
           }),
         })))
 
         syncedCampaigns.push(campaign)
         adGroupsByCampaign.set(campaign.id, adGroups)
-        insightUpserts.push(...toInsightUpserts('campaign', campaign.id, campaignInsights))
+        insightUpserts.push(...toDailyUpserts('campaign', campaign.id, campaignInsights))
         for (const { group, ads, insights } of groupResults) {
           adsByGroup.set(group.id, ads)
-          insightUpserts.push(...toInsightUpserts('ad_group', group.id, insights))
+          insightUpserts.push(...toDailyUpserts('ad_group', group.id, insights))
         }
       } catch (err) {
         errors.set(campaign.name, err instanceof Error ? err.message : String(err))
@@ -293,7 +430,16 @@ export async function executeAdsSync(
         tx.insert(adsInsightsDaily).values({
           id: crypto.randomUUID(),
           projectId,
-          ...upsert,
+          level: upsert.level,
+          entityId: upsert.entityId,
+          date: upsert.date,
+          impressions: upsert.impressions,
+          clicks: upsert.clicks,
+          spendMicros: upsert.spendMicros,
+          // A day whose conversions the provider will not report yet starts at
+          // the column default. The first sync after that day closes reads it
+          // from the ranged call and fills it in.
+          conversions: upsert.conversions ?? 0,
           syncRunId: runId,
         }).onConflictDoUpdate({
           target: [adsInsightsDaily.projectId, adsInsightsDaily.level, adsInsightsDaily.entityId, adsInsightsDaily.date],
@@ -301,7 +447,10 @@ export async function executeAdsSync(
             impressions: upsert.impressions,
             clicks: upsert.clicks,
             spendMicros: upsert.spendMicros,
-            conversions: upsert.conversions,
+            // Only written when the provider actually reported a count.
+            // Stamping a placeholder over a stored figure would turn a number
+            // this read could not obtain into a number that is simply wrong.
+            ...(upsert.conversions === null ? {} : { conversions: upsert.conversions }),
             syncRunId: runId,
           },
         }).run()
