@@ -220,10 +220,15 @@ export const adsInsightRowDtoSchema = z.object({
   cpcMicros: z.number().int().nullable(),
   /**
    * True when `date` is the ad account's CURRENT local calendar date, so this
-   * row is a running figure rather than a closed day. The sync asks the
-   * provider for the whole current local day and overwrites the row on every
-   * later sync, so the numbers here keep rising until the day ends. Do not
-   * compare it against a finished day or treat it as final.
+   * row is a running figure rather than a closed day. The sync re-reads the
+   * open day and overwrites the row every time it runs, so the numbers here
+   * keep rising until the day ends. Do not compare it against a finished day
+   * or treat it as final.
+   *
+   * `conversions` is the one field that does NOT fill in live on such a row.
+   * The provider serves the open day only from a call that may not request
+   * conversion metrics, so the count stays at 0 until the day closes and the
+   * next sync reads the real figure. Treat it as not yet reported.
    */
   inProgress: z.boolean(),
 })
@@ -241,10 +246,12 @@ export type AdsInsightsResponse = z.infer<typeof adsInsightsResponseSchema>
  *
  * `inProgressDate` is the ad account's CURRENT local calendar date, present
  * only when the window actually reaches it. The row for that date is a partial
- * day: the sync asks the provider for the whole current local day, so today's
- * delivery lands as soon as it happens and is overwritten on every later sync.
- * Totals spanning it are a running figure, not a closed one. `null` means every
- * date in the window is a complete day, or that there are no rows at all.
+ * day: the sync re-reads the open day, so today's delivery lands as soon as it
+ * happens and is overwritten on every later sync. Totals spanning it are a
+ * running figure, not a closed one, and their `conversions` component excludes
+ * that day entirely (the provider does not report conversions for a day still
+ * open). `null` means every date in the window is a complete day, or that
+ * there are no rows at all.
  */
 export const adsRollupWindowDtoSchema = z.object({
   from: z.string().nullable(),

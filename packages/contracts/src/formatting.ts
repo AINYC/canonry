@@ -269,11 +269,15 @@ export function startOfDayHourInTimeZone(isoDate: string, timeZone: string): str
  * `YYYY-MM-DDTHH` for where the calendar day AFTER `isoDate` starts on the wall
  * clock in `timeZone`. This is the EXCLUSIVE upper edge of `isoDate` itself.
  *
- * Use it whenever a range has to CONTAIN a whole local day rather than stop
- * inside it, above all when that day is the one currently in progress. Naming
- * the current hour leaves the day's own end boundary outside the range, and a
- * third party that only reports a bucket its request fully covers then omits
- * that day entirely: the data is not missing upstream, it was never asked for.
+ * Use it to say where a local day ENDS: whether a bucket is wholly inside a
+ * window, how long a local day actually was, where the next one begins.
+ *
+ * NOT for the upper edge of a live request over the day currently in progress.
+ * That edge is by definition in the future, and a third party may refuse it
+ * outright rather than clamp it: the OpenAI Ads insights API answers
+ * `400: time_ranges.end cannot be in the future`, which fails the whole call.
+ * Bound such a request by the CURRENT day's start (`startOfDayHourInTimeZone`)
+ * and read the open day some other way.
  *
  * The step is a CALENDAR step, never `+24h`: the local day a zone springs
  * forward on is 23 hours and the one it falls back on is 25, so adding a fixed

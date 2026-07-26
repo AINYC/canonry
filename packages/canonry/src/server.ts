@@ -109,8 +109,12 @@ import { executeGbpSync } from "./gbp-sync.js";
 import {
   executeAdsSync,
   liveAdsInsightHourRange,
+  accountLocalDate,
+  readInsightDays,
   CAMPAIGN_INSIGHT_FIELDS,
   AD_GROUP_INSIGHT_FIELDS,
+  CAMPAIGN_IN_PROGRESS_INSIGHT_FIELDS,
+  AD_GROUP_IN_PROGRESS_INSIGHT_FIELDS,
 } from "./ads-sync.js";
 import {
   getOpenAiAdsConnection,
@@ -147,6 +151,8 @@ import {
   uploadImageFromUrl,
   OPENAI_ADS_MAX_PAGES,
   type OpenAiAdsBiddingConfigRequest,
+  type OpenAiAdsInsightRow,
+  type OpenAiAdsInsightsOptions,
 } from "@ainyc/canonry-integration-openai-ads";
 import { executeInspectSitemap } from "./gsc-inspect-sitemap.js";
 import { executeBingInspectSitemap } from "./bing-inspect-sitemap.js";
@@ -1091,6 +1097,31 @@ export async function createServer(opts: {
   // ads-sync so a live row and a stored rollup measure the same quantities, and
   // the SAME range for every insight call in one walk: both ends of that range
   // come from the route's request, so this reader never reads the clock.
+  //
+  // It also reads the day in progress the SAME way ads-sync does, through
+  // `readInsightDays`. The stored side carries that day, so a live side that
+  // omitted it would report a stored-only day as drift on every read. The
+  // date it looks for comes from the route's frozen anchor, never from now.
+  const adsLiveInsightDays = (
+    read: (options: OpenAiAdsInsightsOptions) => Promise<OpenAiAdsInsightRow[]>,
+    request: { startDate: string; fetchedAtMs: number; timezone: string },
+    rangedFields: readonly string[],
+    inProgressFields: readonly string[],
+  ) =>
+    readInsightDays({
+      read,
+      rangedFields,
+      inProgressFields,
+      timeRanges: [liveAdsInsightHourRange(request)],
+      inProgressDate: accountLocalDate(new Date(request.fetchedAtMs), request.timezone),
+    });
+
+  const adsLiveMetricRows = (read: {
+    closedDays: OpenAiAdsInsightRow[];
+    inProgressDay: OpenAiAdsInsightRow | null;
+  }) =>
+    [...read.closedDays, ...(read.inProgressDay ? [read.inProgressDay] : [])].map(adsLiveMetricRow);
+
   const adsLiveDeliveryReader = {
     listCampaigns: async (apiKey: string) =>
       (await listCampaigns(apiKey)).map((campaign) => adsLiveEntity(campaign, { mode: campaign.mode })),
@@ -1105,19 +1136,23 @@ export async function createServer(opts: {
       campaignId: string,
       request: { startDate: string; fetchedAtMs: number; timezone: string },
     ) =>
-      (await getCampaignInsights(apiKey, campaignId, {
-        fields: CAMPAIGN_INSIGHT_FIELDS,
-        timeRanges: [liveAdsInsightHourRange(request)],
-      })).map(adsLiveMetricRow),
+      adsLiveMetricRows(await adsLiveInsightDays(
+        (options) => getCampaignInsights(apiKey, campaignId, options),
+        request,
+        CAMPAIGN_INSIGHT_FIELDS,
+        CAMPAIGN_IN_PROGRESS_INSIGHT_FIELDS,
+      )),
     adGroupInsights: async (
       apiKey: string,
       adGroupId: string,
       request: { startDate: string; fetchedAtMs: number; timezone: string },
     ) =>
-      (await getAdGroupInsights(apiKey, adGroupId, {
-        fields: AD_GROUP_INSIGHT_FIELDS,
-        timeRanges: [liveAdsInsightHourRange(request)],
-      })).map(adsLiveMetricRow),
+      adsLiveMetricRows(await adsLiveInsightDays(
+        (options) => getAdGroupInsights(apiKey, adGroupId, options),
+        request,
+        AD_GROUP_INSIGHT_FIELDS,
+        AD_GROUP_IN_PROGRESS_INSIGHT_FIELDS,
+      )),
   };
 
   const scheduler = new Scheduler(opts.db, {

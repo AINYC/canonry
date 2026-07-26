@@ -127,6 +127,42 @@ export const FIXTURE_INSIGHT_ROW_FULL: OpenAiAdsInsightRow = {
   start_time: 1781071200,
 }
 
+/**
+ * The day still IN PROGRESS, from an UNRANGED insight call. Captured live on
+ * 2026-07-26 at 12:56 local (`America/New_York`); identifiers sanitized.
+ *
+ * Two things about it are the whole reason the unranged call exists. Its
+ * `end_time` is the NEXT local midnight, which is why a ranged call cannot
+ * cover it and therefore never returns it. And it carries no `conversions`
+ * key, because the call that returns it is the one that may not ask for
+ * conversions. Absent, not zero: nothing here reports the day's conversions.
+ */
+export const FIXTURE_INSIGHT_ROW_IN_PROGRESS_DAY: OpenAiAdsInsightRow = {
+  id: 'start=1785038400:end=1785124800:entity_id=cmpn_0000000000000000000000000000bbbb',
+  clicks: 0,
+  end_time: 1785124800,
+  impressions: 72,
+  readable_time: '2026-07-26',
+  spend: 0,
+  start_time: 1785038400,
+}
+
+/**
+ * The CLOSED day beside it in the same capture, from the RANGED call whose
+ * `until` was the start of the account's current local day. It carries
+ * `conversions`, and its `end_time` is the in-progress row's `start_time`.
+ */
+export const FIXTURE_INSIGHT_ROW_CLOSED_DAY: OpenAiAdsInsightRow = {
+  id: 'start=1784952000:end=1785038400:entity_id=cmpn_0000000000000000000000000000bbbb',
+  clicks: 0,
+  conversions: 0,
+  end_time: 1785038400,
+  impressions: 115,
+  readable_time: '2026-07-25',
+  spend: 0,
+  start_time: 1784952000,
+}
+
 export function makeListResponse<T>(
   data: T[],
   overrides: Partial<Omit<OpenAiAdsListResponse<T>, 'data'>> = {},
@@ -184,6 +220,34 @@ export const FIXTURE_ERROR_MISSING_PARAM = {
     type: 'invalid_request_error',
     param: 'campaign_id',
     code: 'missing_required_parameter',
+  },
+}
+
+/**
+ * Real 400 body, captured 2026-07-26, for a time_ranges[] whose `until` was
+ * the NEXT account-local midnight while the day was still open. Verbatim,
+ * including the message's own leading "400: " and the null code.
+ *
+ * Every `until` past the end of the current UTC day produced this: the next
+ * local midnight, a full day beyond it, and a week beyond it were identical.
+ */
+export const FIXTURE_ERROR_FUTURE_RANGE_END = {
+  error: {
+    message: '400: time_ranges.end cannot be in the future.',
+    type: 'server_error',
+    param: null,
+    code: null,
+  },
+}
+
+// Real 400 body, captured 2026-07-26, for conversion fields requested without
+// time_ranges[], at campaign and at ad-group level alike.
+export const FIXTURE_ERROR_CONVERSIONS_NEED_RANGE = {
+  error: {
+    message: '400: time_ranges must be provided when requesting conversions.',
+    type: 'server_error',
+    param: null,
+    code: null,
   },
 }
 

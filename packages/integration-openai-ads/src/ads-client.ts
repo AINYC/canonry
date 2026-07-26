@@ -374,11 +374,16 @@ async function adsFetch<T>(
 // first_id/last_id/has_more (captured live). The `after=` request param
 // follows the OpenAI list convention; it has not been exercised against a
 // multi-page dataset yet — revisit if pagination misbehaves on large accounts.
-async function fetchAllPages<T>(apiKey: string, path: string, queryPairs: readonly string[]): Promise<T[]> {
+async function fetchAllPages<T>(
+  apiKey: string,
+  path: string,
+  queryPairs: readonly string[],
+  maxPages: number = OPENAI_ADS_MAX_PAGES,
+): Promise<T[]> {
   const items: T[] = []
   let after: string | null = null
 
-  for (let page = 0; page < OPENAI_ADS_MAX_PAGES; page++) {
+  for (let page = 0; page < maxPages; page++) {
     const pairs: string[] = after ? [...queryPairs, `after=${encodeURIComponent(after)}`] : [...queryPairs]
     const response: OpenAiAdsListResponse<T> = await adsFetch<OpenAiAdsListResponse<T>>(apiKey, path, pairs)
     items.push(...response.data)
@@ -387,6 +392,10 @@ async function fetchAllPages<T>(apiKey: string, path: string, queryPairs: readon
     }
     after = response.last_id
   }
+
+  // A caller that asked for ONE page said the rest is not its business, so a
+  // truncated walk is the requested outcome rather than the safety cap firing.
+  if (maxPages < OPENAI_ADS_MAX_PAGES) return items
 
   adsClientLog('error', 'pagination.cap-reached', { path, pages: OPENAI_ADS_MAX_PAGES, items: items.length })
   throw new OpenAiAdsApiError(
@@ -402,6 +411,10 @@ function insightsPairs(opts?: OpenAiAdsInsightsOptions): string[] {
     ...(opts?.timeRanges ?? []).map((range) =>
       `time_ranges[]=${encodeURIComponent(JSON.stringify(range))}`),
   ]
+}
+
+function insightsMaxPages(opts?: OpenAiAdsInsightsOptions): number {
+  return opts?.firstPageOnly ? 1 : OPENAI_ADS_MAX_PAGES
 }
 
 export async function getAdAccount(apiKey: string): Promise<OpenAiAdsAccount> {
@@ -578,7 +591,12 @@ export async function getAdAccountInsights(
   opts?: OpenAiAdsInsightsOptions,
 ): Promise<OpenAiAdsInsightRow[]> {
   validateApiKey(apiKey)
-  return fetchAllPages<OpenAiAdsInsightRow>(apiKey, 'ad_account/insights', insightsPairs(opts))
+  return fetchAllPages<OpenAiAdsInsightRow>(
+    apiKey,
+    'ad_account/insights',
+    insightsPairs(opts),
+    insightsMaxPages(opts),
+  )
 }
 
 export async function getCampaignInsights(
@@ -592,6 +610,7 @@ export async function getCampaignInsights(
     apiKey,
     `campaigns/${encodeURIComponent(campaignId)}/insights`,
     insightsPairs(opts),
+    insightsMaxPages(opts),
   )
 }
 
@@ -606,5 +625,6 @@ export async function getAdGroupInsights(
     apiKey,
     `ad_groups/${encodeURIComponent(adGroupId)}/insights`,
     insightsPairs(opts),
+    insightsMaxPages(opts),
   )
 }

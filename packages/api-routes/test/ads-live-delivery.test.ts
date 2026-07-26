@@ -105,20 +105,26 @@ function accountHourKey(atMs: number, timezone: string): string {
   return `${value('year')}-${value('month')}-${value('day')}T${value('hour')}`
 }
 
+/** The account-local date the frozen read anchor falls in. */
+function readDateOf(request: AdsLiveInsightsRequest): string {
+  return formatIsoDateInTimeZone(new Date(request.fetchedAtMs).toISOString(), request.timezone)
+}
+
 /**
  * The hour range the host builds from one insight request. Mirrors
  * `liveAdsInsightHourRange` in the host's ads-sync, down to resolving both
  * edges through the shared timezone helpers rather than assuming every
- * account's day begins at local hour 00 or ends 24 hours later.
+ * account's day begins at local hour 00.
+ *
+ * `until` is the START of the anchor's local day, so the range covers the
+ * window's CLOSED days and stops. It cannot reach further: the provider
+ * refuses an `until` in the future outright. The open day arrives from a
+ * separate unranged call instead. See `servedDayBuckets`.
  */
 function rangeOf(request: AdsLiveInsightsRequest) {
-  const readDate = formatIsoDateInTimeZone(
-    new Date(request.fetchedAtMs).toISOString(),
-    request.timezone,
-  )
   return {
     since: startOfDayHourInTimeZone(request.startDate, request.timezone),
-    until: startOfNextDayHourInTimeZone(readDate, request.timezone),
+    until: startOfDayHourInTimeZone(readDateOf(request), request.timezone),
     timezone: request.timezone,
   }
 }
@@ -140,22 +146,29 @@ function servedBuckets(
 }
 
 /**
- * What the provider actually emits: DAILY buckets, and only for a day whose own
- * boundaries the requested range fully covers. A day runs from where it starts
- * on the account's wall clock to where the next day starts, so a range that
- * stops at the read instant's local hour does not cover the current day at all
- * and the provider returns nothing for it.
+ * What the provider actually emits, and what the host reader therefore has to
+ * do twice to get a whole window.
  *
- * This is the shape that hid the in-progress day. An hourly fake cannot see it:
- * hourly slices of today fall inside a mid-day edge quite happily.
+ * The RANGED call serves DAILY buckets, and only for a day whose own
+ * boundaries the range fully covers. A day runs from where it starts on the
+ * account's wall clock to where the next day starts, so the day in progress,
+ * whose end is still in the future, can never be covered by a range the
+ * provider will accept, and comes back from no ranged call at all.
+ *
+ * The UNRANGED call is what serves that day, so the host makes it alongside
+ * and keeps the anchor's local date from it. This fake mirrors both, because
+ * the stored side carries the open day: a live side that omitted it would
+ * report a stored-only day as drift on every single read.
  */
 function servedDayBuckets(
   buckets: Array<{ date: string; impressions: number }>,
   request: AdsLiveInsightsRequest,
 ) {
   const range = rangeOf(request)
+  const readDate = readDateOf(request)
   return buckets
     .filter((bucket) => {
+      if (bucket.date === readDate) return true
       const dayStart = startOfDayHourInTimeZone(bucket.date, request.timezone)
       const dayEnd = startOfNextDayHourInTimeZone(bucket.date, request.timezone)
       return dayStart >= range.since && dayEnd <= range.until
@@ -822,14 +835,15 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     expect(body.drift.metricsDrifted).toBe(0)
   })
 
-  it('asks the provider for the WHOLE last day of the window, so the day in progress is not false drift', async () => {
+  it('reads the day in progress unranged, so it is not false drift', async () => {
     // 12:00 UTC is 06:00 in Denver, so the account's local 2026-06-10 is a
     // quarter over and its daily bucket runs to 06-11 00:00 local. The
-    // provider serves a day only when the range covers that WHOLE span, so an
-    // upper edge at the read instant's local hour returned nothing for the day
-    // in progress while the stored side held that day's partial row from the
-    // last sync. The comparison then reported a stored-only day as drift on
-    // every read, and the live totals ran a day behind the provider's own UI.
+    // provider serves a day only when the range covers that WHOLE span, and
+    // it refuses a range that ends in the future, so no ranged call can ever
+    // return the day in progress. The stored side holds that day's partial row
+    // from the last sync, so a live side without it reported a stored-only day
+    // as drift on every read and ran a day behind the provider's own UI. The
+    // host reads it from a second, unranged call instead.
     await start({
       campaigns: [liveEntity('cmpn_1', 'active', { name: 'Homeowners Free Estimate' })],
       adGroups: [],
@@ -854,9 +868,10 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     const body = JSON.parse(res.body) as AdsLiveDeliveryDto
 
     expect(res.statusCode).toBe(200)
-    // The upper edge is the START of the next local day, so the current day's
-    // own boundary sits inside the range.
-    expect(rangeOf(ctx.insightRequests[0].request).until).toBe('2026-06-11T00')
+    // The ranged edge stops at the START of the open day and never names a
+    // future hour: "2026-06-11T00" would be refused with
+    // "400: time_ranges.end cannot be in the future" and fail the whole read.
+    expect(rangeOf(ctx.insightRequests[0].request).until).toBe('2026-06-10T00')
     // And that day is the window's last day on the stored side too, so the
     // two sides are filtered and asked over the same closing date.
     expect(liveComparisonWindow(Date.parse(NOW), 7, 'America/Denver').endDate).toBe('2026-06-10')
@@ -905,7 +920,7 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     const ranges = ctx.insightRequests.map((entry) => rangeOf(entry.request))
     expect(ranges[0]).toEqual({
       since: '2026-06-03T00',
-      until: '2026-06-11T00',
+      until: '2026-06-10T00',
       timezone: 'America/Denver',
     })
     expect(ranges[1]).toEqual(ranges[0])
@@ -928,8 +943,10 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     expect(body.bounds.maxReaderCalls).toBe(40)
     // A reader call is not one HTTP request: each list/insight read
     // auto-paginates, so the honest ceiling is two orders of magnitude higher.
+    // An insight read additionally makes one single-page unranged request for
+    // the day in progress, which the ceiling charges to every reader call.
     expect(body.bounds.maxPagesPerReaderCall).toBe(100)
-    expect(body.bounds.maxUpstreamHttpRequests).toBe(4_000)
+    expect(body.bounds.maxUpstreamHttpRequests).toBe(40 * (100 + 1))
   })
 
   it('spends the attempt once provider I/O has begun, so a failed read is still throttled', async () => {
@@ -1084,7 +1101,7 @@ describe('GET /projects/:name/ads/live-delivery', () => {
 
     // A whole minimum interval passes while the first walk is STILL upstream.
     // A claim expressed as a timestamp expires exactly here, which admitted a
-    // second walk onto the same account: with a ~4000-request ceiling per walk,
+    // second walk onto the same account: with a ~4040-request ceiling per walk,
     // a slow provider makes overlapping walks the normal case rather than the
     // rare one.
     vi.setSystemTime(new Date(Date.parse(NOW) + 60_001))

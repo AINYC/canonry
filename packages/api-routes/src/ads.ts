@@ -549,15 +549,20 @@ const ADS_LIVE_MAX_ADS_PER_AD_GROUP = 20
  *
  * Every list/insight reader call is an auto-paginating walk in the provider
  * client (`fetchAllPages` in `packages/integration-openai-ads`), which issues
- * up to `OPENAI_ADS_MAX_PAGES` requests before it throws. So the honest
- * worst-case cost of one live-delivery read is this budget MULTIPLIED by the
- * page cap: 40 × 100 = about 4000 upstream HTTP requests, not 40. The
- * response reports both units (`maxReaderCalls`, `maxUpstreamHttpRequests`)
- * so a caller is never reading one and thinking it is the other.
+ * up to `OPENAI_ADS_MAX_PAGES` requests before it throws. An INSIGHT reader
+ * call additionally issues one single-page request for the day in progress,
+ * which the ranged walk cannot return. So the honest worst-case cost of one
+ * live-delivery read is this budget multiplied by the page cap PLUS one
+ * request per call: 40 × (100 + 1) = about 4040 upstream HTTP requests, not
+ * 40. The response reports both units (`maxReaderCalls`,
+ * `maxUpstreamHttpRequests`) so a caller is never reading one and thinking it
+ * is the other.
  *
  * The multiplier is a documented bound, not an observation: pagination happens
  * below the injected `AdsLiveDeliveryReader` seam, so the route cannot count
- * actual HTTP requests without instrumenting the shared provider client.
+ * actual HTTP requests without instrumenting the shared provider client. The
+ * ceiling is deliberately conservative: it charges every reader call for the
+ * extra request, though only the insight calls make one.
  */
 const ADS_LIVE_MAX_READER_CALLS = 40
 /**
@@ -3056,9 +3061,10 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
    *
    * COST: the walk is bounded in READER CALLS, and a reader call is not one
    * HTTP request. Each list/insight reader call auto-paginates inside the
-   * provider client up to `OPENAI_ADS_MAX_PAGES` (100) times, so the honest
-   * worst case for one live-delivery read is about 40 × 100 = 4000 upstream
-   * HTTP requests. The response says both numbers explicitly
+   * provider client up to `OPENAI_ADS_MAX_PAGES` (100) times, and an insight
+   * call adds one more single-page request for the day in progress, so the
+   * honest worst case for one live-delivery read is about 40 × 101 = 4040
+   * upstream HTTP requests. The response says both numbers explicitly
    * (`bounds.maxReaderCalls` vs `bounds.maxUpstreamHttpRequests`); the HTTP
    * figure is a documented ceiling, since pagination happens below the reader
    * seam where this route cannot observe it.
@@ -3391,7 +3397,9 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
           maxReaderCalls: ADS_LIVE_MAX_READER_CALLS,
           readerCalls,
           maxPagesPerReaderCall: liveDeliveryMaxPagesPerReaderCall,
-          maxUpstreamHttpRequests: ADS_LIVE_MAX_READER_CALLS * liveDeliveryMaxPagesPerReaderCall,
+          // The +1 is the single-page in-progress-day request an insight
+          // reader call makes alongside its paginating ranged walk.
+          maxUpstreamHttpRequests: ADS_LIVE_MAX_READER_CALLS * (liveDeliveryMaxPagesPerReaderCall + 1),
           truncated,
         },
         entities,

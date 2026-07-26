@@ -48,9 +48,13 @@ import {
   FIXTURE_EMPTY_CONVERSION_PIXELS,
   FIXTURE_ERROR_401,
   FIXTURE_ERROR_BAD_FIELDS,
+  FIXTURE_ERROR_CONVERSIONS_NEED_RANGE,
+  FIXTURE_ERROR_FUTURE_RANGE_END,
   FIXTURE_ERROR_MISSING_PARAM,
+  FIXTURE_INSIGHT_ROW_CLOSED_DAY,
   FIXTURE_INSIGHT_ROW_DEFAULT,
   FIXTURE_INSIGHT_ROW_FULL,
+  FIXTURE_INSIGHT_ROW_IN_PROGRESS_DAY,
   FIXTURE_GEO_SEARCH,
   makeListResponse,
 } from './fixtures.js'
@@ -658,6 +662,86 @@ describe('insights', () => {
     expect(calls[0]!.url).toBe(
       `${OPENAI_ADS_API_BASE}/campaigns/cmpn_abc/insights?fields[]=campaign.conversions&fields[]=metadata.readable_time&time_ranges[]=%7B%22type%22%3A%22hour_range%22%2C%22since%22%3A%222026-04-21T13%22%2C%22until%22%3A%222026-07-21T13%22%2C%22timezone%22%3A%22America%2FNew_York%22%7D`,
     )
+  })
+
+  it('surfaces the future-range-end 400 rather than degrading to a short window', async () => {
+    // Captured live 2026-07-26: an `until` at the NEXT account-local midnight
+    // while that day was still open. This is the whole call failing, not a
+    // range being clamped, so a caller that reaches for the open day through
+    // `until` loses every metric it was also asking for.
+    mockFetchOnce(FIXTURE_ERROR_FUTURE_RANGE_END, 400)
+
+    await expect(() =>
+      getCampaignInsights('test-key', 'cmpn_abc', {
+        fields: ['campaign.conversions', 'metadata.readable_time'],
+        timeRanges: [{
+          type: 'hour_range',
+          since: '2026-04-27T00',
+          until: '2026-07-27T00',
+          timezone: 'America/New_York',
+        }],
+      }),
+    ).rejects.toThrow(/time_ranges\.end cannot be in the future/)
+  })
+
+  it('surfaces the conversions-need-a-range 400', async () => {
+    // The other half of the bind: the unranged call is the only one that
+    // returns the open day, and it is the one that may not ask for
+    // conversions. Captured live 2026-07-26 at both levels.
+    mockFetchOnce(FIXTURE_ERROR_CONVERSIONS_NEED_RANGE, 400)
+
+    await expect(() =>
+      getCampaignInsights('test-key', 'cmpn_abc', { fields: ['campaign.conversions'] }),
+    ).rejects.toThrow(/time_ranges must be provided when requesting conversions/)
+  })
+
+  it('returns the in-progress day from an unranged call, without conversions', async () => {
+    const calls = mockFetchOnce(makeListResponse([
+      FIXTURE_INSIGHT_ROW_IN_PROGRESS_DAY,
+      FIXTURE_INSIGHT_ROW_CLOSED_DAY,
+    ]))
+
+    const rows = await getCampaignInsights('test-key', 'cmpn_abc', {
+      fields: ['campaign.impressions', 'campaign.clicks', 'campaign.spend', 'metadata.readable_time'],
+    })
+
+    // No time_ranges[] pair at all: that omission is what returns the open day.
+    expect(calls[0]!.url).not.toContain('time_ranges')
+    // Newest first, and the open day's bucket ends at the NEXT local midnight,
+    // which is exactly the boundary a ranged call may not name.
+    expect(rows[0]!.readable_time).toBe('2026-07-26')
+    expect(rows[0]!.end_time).toBe(1785124800)
+    expect(rows[0]!.impressions).toBe(72)
+    // Absent, not zero. The caller must not read this as "no conversions".
+    expect(rows[0]!.conversions).toBeUndefined()
+    // The closed day beside it did come back with conversions, from the ranged
+    // call whose upper edge was the start of the open day.
+    expect(rows[1]!.readable_time).toBe('2026-07-25')
+    expect(rows[1]!.conversions).toBe(0)
+  })
+
+  it('stops after one page when the caller asks for the first page only', async () => {
+    // The unranged in-progress-day read cannot bound its window, so without
+    // this it walks the entity's whole lifetime for one row on every sync.
+    const urls: string[] = []
+    globalThis.fetch = async (url: string | URL | Request) => {
+      urls.push(String(url))
+      return new Response(JSON.stringify(makeListResponse(
+        [FIXTURE_INSIGHT_ROW_IN_PROGRESS_DAY],
+        { has_more: true, last_id: FIXTURE_INSIGHT_ROW_IN_PROGRESS_DAY.id },
+      )), { status: 200 })
+    }
+
+    const rows = await getCampaignInsights('test-key', 'cmpn_abc', {
+      fields: ['campaign.impressions'],
+      firstPageOnly: true,
+    })
+
+    // One request, and a truncated walk is the requested outcome: `has_more`
+    // stays true and the pagination safety cap does NOT fire.
+    expect(urls).toHaveLength(1)
+    expect(rows).toHaveLength(1)
+    expect(urls[0]).not.toContain('after=')
   })
 
   it('supports ad-group-level insights', async () => {

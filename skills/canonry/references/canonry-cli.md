@@ -635,6 +635,12 @@ without saying so. Every read that can reach it says which date it is:
 holds only closed days). "Current" means current in the ACCOUNT's timezone, not
 yours.
 
+One number on that row is not just partial, it is missing: conversions. OpenAI
+will not report a conversion count for a day that is still open, so the current
+day always shows 0 conversions no matter what actually happened. The real
+figure lands on the first sync after the day closes. Impressions, clicks, and
+spend are live on that row as usual.
+
 `ads account`, `ads geo search`, and both `ads conversions` commands read the
 live OpenAI Advertiser API rather than the local synced snapshot. Use `account`
 to verify the connected advertiser and review state, `geo search` to resolve
