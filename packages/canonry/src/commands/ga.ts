@@ -341,19 +341,22 @@ export async function gaAiReferralDaily(project: string, opts?: { window?: strin
     return
   }
 
+  // Sessions only. GA counts users DISTINCT at the grain it was asked for, and
+  // these rows are keyed down to the landing page, so there is no user count
+  // that can be added up truthfully here. See ga4AiReferralDailyDtoSchema.
   const dateWidth = 12
   const sourceWidth = Math.min(30, Math.max(10, ...result.sources.map((s) => s.length)))
   console.log(`GA4 AI Referral Sessions per Day for "${project}":\n`)
-  console.log(`  ${'DATE'.padEnd(dateWidth)}  ${'SOURCE'.padEnd(sourceWidth)}  ${'SESSIONS'.padEnd(10)}${'PAID'.padEnd(8)}${'ORGANIC'.padEnd(9)}${'USERS'.padEnd(8)}`)
-  console.log(`  ${'─'.repeat(dateWidth)}  ${'─'.repeat(sourceWidth)}  ${'─'.repeat(10)}${'─'.repeat(8)}${'─'.repeat(9)}${'─'.repeat(8)}`)
+  console.log(`  ${'DATE'.padEnd(dateWidth)}  ${'SOURCE'.padEnd(sourceWidth)}  ${'SESSIONS'.padEnd(10)}${'PAID'.padEnd(8)}${'ORGANIC'.padEnd(9)}`)
+  console.log(`  ${'─'.repeat(dateWidth)}  ${'─'.repeat(sourceWidth)}  ${'─'.repeat(10)}${'─'.repeat(8)}${'─'.repeat(9)}`)
   for (const day of result.days) {
     for (const entry of day.bySource) {
       console.log(
-        `  ${day.date.padEnd(dateWidth)}  ${entry.source.padEnd(sourceWidth)}  ${String(entry.sessions).padEnd(10)}${String(entry.paidSessions).padEnd(8)}${String(entry.organicSessions).padEnd(9)}${String(entry.users).padEnd(8)}`,
+        `  ${day.date.padEnd(dateWidth)}  ${entry.source.padEnd(sourceWidth)}  ${String(entry.sessions).padEnd(10)}${String(entry.paidSessions).padEnd(8)}${String(entry.organicSessions).padEnd(9)}`,
       )
     }
   }
-  console.log(`\n  Total: ${result.totalSessions} sessions (${result.totalPaidSessions} paid, ${result.totalOrganicSessions} organic), ${result.totalUsers} users`)
+  console.log(`\n  Total: ${result.totalSessions} sessions (${result.totalPaidSessions} paid, ${result.totalOrganicSessions} organic)`)
 }
 
 export async function gaSocialReferralHistory(project: string, opts?: { window?: string; format?: string }): Promise<void> {

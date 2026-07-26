@@ -3529,7 +3529,7 @@ export const getApiV1ProjectsByNameGaAiReferralDailyQueryKey = (options: Options
 /**
  * Get AI referral sessions per day and per source
  *
- * Sums landing pages within one attribution dimension and never across dimensions, so totalSessions equals the aiSessionsDeduped reported by /ga/traffic for the same window.
+ * Sums landing pages within one attribution dimension and never across dimensions, so totalSessions equals the aiSessionsDeduped reported by /ga/traffic for the same window. Sessions only: GA counts users as a distinct count at the grain requested, so an AI-referral user total cannot be summed from these rows and no un-dimensioned AI-referral fetch exists to supply one.
  */
 export const getApiV1ProjectsByNameGaAiReferralDailyOptions = (options: Options<GetApiV1ProjectsByNameGaAiReferralDailyData>) => {
     return queryOptions({

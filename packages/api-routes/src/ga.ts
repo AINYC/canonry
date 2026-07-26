@@ -1351,6 +1351,11 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     // Deliberately unaggregated in SQL. Landing pages must be summed inside a
     // dimension and dimensions must not be summed at all, which is not a single
     // GROUP BY, so the raw rows go to the shared aggregator.
+    //
+    // `users` is deliberately not selected. GA counts users DISTINCT at the
+    // grain it was asked for, so this table's user column does not sum across
+    // landing pages, sources, or dates, and no un-dimensioned AI-referral fetch
+    // exists to get a true one. This series reports sessions only.
     const rows = app.db
       .select({
         date: gaAiReferrals.date,
@@ -1360,7 +1365,6 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         sourceDimension: gaAiReferrals.sourceDimension,
         channelGroup: gaAiReferrals.channelGroup,
         sessions: gaAiReferrals.sessions,
-        users: gaAiReferrals.users,
       })
       .from(gaAiReferrals)
       .where(and(...conditions))

@@ -1961,20 +1961,17 @@ export type Ga4AiReferralDailyDto = {
     days: Array<{
         date: string;
         sessions: number;
-        users: number;
         paidSessions: number;
         organicSessions: number;
         bySource: Array<{
             source: string;
             sessions: number;
-            users: number;
             paidSessions: number;
             organicSessions: number;
         }>;
     }>;
     sources: Array<string>;
     totalSessions: number;
-    totalUsers: number;
     totalPaidSessions: number;
     totalOrganicSessions: number;
 };

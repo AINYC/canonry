@@ -68,7 +68,6 @@ const EMPTY_AI_DAILY: GA4AiReferralDailyDto = {
   days: [],
   sources: [],
   totalSessions: 0,
-  totalUsers: 0,
   totalPaidSessions: 0,
   totalOrganicSessions: 0,
 }

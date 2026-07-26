@@ -33,9 +33,39 @@ import type { AiReferralTrafficClass, GA4AiReferralDailyDto } from '@ainyc/canon
  * winner set produced by `resolveWinningDimensions` below. Two surfaces that
  * derive the same quantity independently will eventually disagree; two
  * surfaces that fold the same winner set cannot.
+ *
+ * THE COMPANION RULE FOR USERS. Everything above is about SESSIONS, and it
+ * does not transfer:
+ *
+ *   SESSIONS sum across landing pages within a dimension.
+ *   USERS DO NOT SUM AT ANY GRAIN.
+ *
+ * GA reports `totalUsers` as a COUNT DISTINCT evaluated at the grain the
+ * report asked for. One visitor who reads three pages is ONE user, but they
+ * contribute a `users` value to all three landing-page rows, so adding those
+ * rows counts them three times. The same is true across mediums, channel
+ * groups, sources and dates. There is no grain at which the stored `users`
+ * column may be added up, which is why no surface here publishes one.
+ *
+ * Sessions escape this because GA4 attributes exactly one landing page to a
+ * session and dates are disjoint, so the landing-page rows partition the day.
+ *
+ * A correct users figure requires GA to do the dedup in an un-dimensioned
+ * report. `ga_daily_totals` is that fetch for whole-property traffic, but
+ * there is no AI-referral equivalent: `fetchAiReferrals` is always dimensioned
+ * by source/medium/landingPage/channelGroup. So an AI-referral user count
+ * cannot be computed and cannot be fetched. It is therefore not reported, the
+ * same call `aiReferralSectionSchema` made when it withdrew its user counts.
+ * Do not reintroduce one here with a caveat: a wrong number with a caveat is
+ * still a wrong number on a customer-facing surface.
  */
 
-/** One `ga_ai_referrals` row as every aggregation here needs to see it. */
+/**
+ * One `ga_ai_referrals` row as the session aggregations need to see it.
+ *
+ * `users` is absent on purpose. Nothing that derives a published number reads
+ * it, so a caller selecting sessions alone is the normal case.
+ */
 export interface AiReferralAggregationRow {
   date: string
   source: string
@@ -44,14 +74,23 @@ export interface AiReferralAggregationRow {
   sourceDimension: string
   channelGroup: string
   sessions: number | null
+}
+
+/**
+ * A row that also carries `users`, required only by `summarizeAiReferralCounts`
+ * because it still has to feed the legacy `/ga/traffic` user fields. Typed
+ * separately so that caller cannot forget the column and silently report zero
+ * users, while every other caller is free of it.
+ */
+export interface AiReferralSummaryRow extends AiReferralAggregationRow {
   users: number | null
 }
 
 /**
  * One (date, source, medium) tuple after the winning lens has been chosen.
  *
- * Sessions and users each pick their own winning dimension, matching the
- * independent MAX(sessions) / MAX(users) dedupe this replaced.
+ * SESSIONS ONLY. There is deliberately no user figure on this type, so no
+ * surface folding the winner set can publish one by accident.
  */
 export interface AiReferralWinningTuple {
   date: string
@@ -59,15 +98,11 @@ export interface AiReferralWinningTuple {
   medium: string
   paidSessions: number
   organicSessions: number
-  paidUsers: number
-  organicUsers: number
 }
 
-interface DimensionClassCounts {
+interface DimensionSessionCounts {
   paidSessions: number
   organicSessions: number
-  paidUsers: number
-  organicUsers: number
 }
 
 export function normalizeAiTrafficClass(value: string | null | undefined): AiReferralTrafficClass {
@@ -100,7 +135,7 @@ export function resolveWinningDimensions(
     date: string
     source: string
     medium: string
-    byDimension: Map<string, DimensionClassCounts>
+    byDimension: Map<string, DimensionSessionCounts>
   }
 
   const groups = new Map<string, TupleGroup>()
@@ -114,18 +149,15 @@ export function resolveWinningDimensions(
     }
     let dim = group.byDimension.get(row.sourceDimension)
     if (!dim) {
-      dim = { paidSessions: 0, organicSessions: 0, paidUsers: 0, organicUsers: 0 }
+      dim = { paidSessions: 0, organicSessions: 0 }
       group.byDimension.set(row.sourceDimension, dim)
     }
     // Sum across landing pages (and channel groups) inside this one dimension.
     const sessions = row.sessions ?? 0
-    const users = row.users ?? 0
     if (normalizeAiTrafficClass(row.trafficClass) === AiReferralTrafficClasses.paid) {
       dim.paidSessions += sessions
-      dim.paidUsers += users
     } else {
       dim.organicSessions += sessions
-      dim.organicUsers += users
     }
   }
 
@@ -134,19 +166,69 @@ export function resolveWinningDimensions(
     const dims = [...group.byDimension.values()]
     const bestSessions = dims.reduce((best, d) =>
       d.paidSessions + d.organicSessions > best.paidSessions + best.organicSessions ? d : best)
-    const bestUsers = dims.reduce((best, d) =>
-      d.paidUsers + d.organicUsers > best.paidUsers + best.organicUsers ? d : best)
     winners.push({
       date: group.date,
       source: group.source,
       medium: group.medium,
       paidSessions: bestSessions.paidSessions,
       organicSessions: bestSessions.organicSessions,
-      paidUsers: bestUsers.paidUsers,
-      organicUsers: bestUsers.organicUsers,
     })
   }
   return winners
+}
+
+/**
+ * The winning dimension's user counts, for the LEGACY `/ga/traffic` fields ONLY.
+ *
+ * Every number this returns is a landing-page sum and therefore over-counts any
+ * visitor who touched more than one page. It exists because `aiUsersDeduped`,
+ * `paidAiUsersDeduped`, `organicAiUsersDeduped` and their `bySession` siblings
+ * have shipped on `/ga/traffic` since long before this module, and withdrawing
+ * published fields is a breaking change that needs its own version plan. This
+ * reproduces the previous behaviour byte-for-byte rather than silently changing
+ * a number under existing consumers.
+ *
+ * It is deliberately private and deliberately separate from the winner set, so
+ * no new surface can reach it. Do not export it, and do not add a caller.
+ */
+function resolveLegacyWinningUsers(rows: readonly AiReferralSummaryRow[]): {
+  paidUsers: number
+  organicUsers: number
+} {
+  interface DimensionUserCounts { paidUsers: number, organicUsers: number }
+  const groups = new Map<string, Map<string, DimensionUserCounts>>()
+
+  for (const row of rows) {
+    const key = `${row.date}\0${row.source}\0${row.medium}`
+    let byDimension = groups.get(key)
+    if (!byDimension) {
+      byDimension = new Map()
+      groups.set(key, byDimension)
+    }
+    let dim = byDimension.get(row.sourceDimension)
+    if (!dim) {
+      dim = { paidUsers: 0, organicUsers: 0 }
+      byDimension.set(row.sourceDimension, dim)
+    }
+    const users = row.users ?? 0
+    if (normalizeAiTrafficClass(row.trafficClass) === AiReferralTrafficClasses.paid) {
+      dim.paidUsers += users
+    } else {
+      dim.organicUsers += users
+    }
+  }
+
+  let paidUsers = 0
+  let organicUsers = 0
+  for (const byDimension of groups.values()) {
+    const dims = [...byDimension.values()]
+    // Users picked their own winning dimension before this refactor; preserved.
+    const best = dims.reduce((winner, d) =>
+      d.paidUsers + d.organicUsers > winner.paidUsers + winner.organicUsers ? d : winner)
+    paidUsers += best.paidUsers
+    organicUsers += best.organicUsers
+  }
+  return { paidUsers, organicUsers }
 }
 
 /**
@@ -156,8 +238,13 @@ export function resolveWinningDimensions(
  * is the narrower session-lens-only view the disjoint channel breakdown needs,
  * which is a plain sum over the `session` rows because a single lens is
  * already disjoint by landing page.
+ *
+ * The `.users` figures on every bucket are the legacy landing-page-summed
+ * counts described at the top of this file. They are inflated and they back
+ * only the pre-existing /ga/traffic response fields. Read `.sessions` for
+ * anything new.
  */
-export function summarizeAiReferralCounts(rows: readonly AiReferralAggregationRow[]) {
+export function summarizeAiReferralCounts(rows: readonly AiReferralSummaryRow[]) {
   const paidDeduped = emptyAiCounts()
   const organicDeduped = emptyAiCounts()
   const paidBySession = emptyAiCounts()
@@ -167,9 +254,14 @@ export function summarizeAiReferralCounts(rows: readonly AiReferralAggregationRo
   for (const winner of resolveWinningDimensions(rows)) {
     paidDeduped.sessions += winner.paidSessions
     organicDeduped.sessions += winner.organicSessions
-    paidDeduped.users += winner.paidUsers
-    organicDeduped.users += winner.organicUsers
   }
+
+  // The ONLY call site of the legacy user math, backing six `users` fields
+  // /ga/traffic has published since before this module existed. Reproduced
+  // unchanged rather than silently altered; no new surface may add a seventh.
+  const legacyUsers = resolveLegacyWinningUsers(rows)
+  paidDeduped.users = legacyUsers.paidUsers
+  organicDeduped.users = legacyUsers.organicUsers
 
   for (const row of rows) {
     if (row.sourceDimension !== 'session') continue
@@ -210,6 +302,11 @@ export function summarizeAiReferralCounts(rows: readonly AiReferralAggregationRo
  * source instead of summed flat, so `totalSessions` here is identical to
  * `summarizeAiReferralCounts(rows).deduped.sessions` for the same rows by
  * construction rather than by two call sites happening to match.
+ *
+ * SESSIONS ONLY. There is no user count here and there must never be one: the
+ * winner set's user figures are landing-page sums, and rolling them up further
+ * across sources and mediums would compound the over-count. See the users rule
+ * at the top of this file for why no correct alternative exists.
  */
 export function buildAiReferralDailySeries(
   rows: readonly AiReferralAggregationRow[],
@@ -217,7 +314,6 @@ export function buildAiReferralDailySeries(
   interface SourceBucket {
     source: string
     sessions: number
-    users: number
     paidSessions: number
     organicSessions: number
   }
@@ -225,13 +321,11 @@ export function buildAiReferralDailySeries(
   const byDate = new Map<string, Map<string, SourceBucket>>()
   const sourceTotals = new Map<string, number>()
   let totalSessions = 0
-  let totalUsers = 0
   let totalPaidSessions = 0
   let totalOrganicSessions = 0
 
   for (const winner of resolveWinningDimensions(rows)) {
     const sessions = winner.paidSessions + winner.organicSessions
-    const users = winner.paidUsers + winner.organicUsers
     let bySource = byDate.get(winner.date)
     if (!bySource) {
       bySource = new Map()
@@ -239,19 +333,17 @@ export function buildAiReferralDailySeries(
     }
     let bucket = bySource.get(winner.source)
     if (!bucket) {
-      bucket = { source: winner.source, sessions: 0, users: 0, paidSessions: 0, organicSessions: 0 }
+      bucket = { source: winner.source, sessions: 0, paidSessions: 0, organicSessions: 0 }
       bySource.set(winner.source, bucket)
     }
     // Mediums are disjoint within a tuple, so a source's day is the sum of its
     // winning tuples. This is the only place the per-source day is defined.
     bucket.sessions += sessions
-    bucket.users += users
     bucket.paidSessions += winner.paidSessions
     bucket.organicSessions += winner.organicSessions
 
     sourceTotals.set(winner.source, (sourceTotals.get(winner.source) ?? 0) + sessions)
     totalSessions += sessions
-    totalUsers += users
     totalPaidSessions += winner.paidSessions
     totalOrganicSessions += winner.organicSessions
   }
@@ -264,7 +356,6 @@ export function buildAiReferralDailySeries(
       return {
         date,
         sessions: sources.reduce((sum, s) => sum + s.sessions, 0),
-        users: sources.reduce((sum, s) => sum + s.users, 0),
         paidSessions: sources.reduce((sum, s) => sum + s.paidSessions, 0),
         organicSessions: sources.reduce((sum, s) => sum + s.organicSessions, 0),
         bySource: sources,
@@ -276,5 +367,5 @@ export function buildAiReferralDailySeries(
       bSessions - aSessions || aSource.localeCompare(bSource))
     .map(([source]) => source)
 
-  return { days, sources, totalSessions, totalUsers, totalPaidSessions, totalOrganicSessions }
+  return { days, sources, totalSessions, totalPaidSessions, totalOrganicSessions }
 }

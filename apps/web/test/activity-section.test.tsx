@@ -106,12 +106,11 @@ test('loads connected GA4 data without changing hook order', async () => {
     if (urlPath.endsWith('/projects/test-project/ga/ai-referral-daily')) {
       return jsonResponse({
         days: [
-          { date: '2026-03-30', sessions: 5, users: 4, paidSessions: 0, organicSessions: 5, bySource: [{ source: 'chatgpt.com', sessions: 5, users: 4, paidSessions: 0, organicSessions: 5 }] },
-          { date: '2026-03-31', sessions: 7, users: 5, paidSessions: 0, organicSessions: 7, bySource: [{ source: 'chatgpt.com', sessions: 7, users: 5, paidSessions: 0, organicSessions: 7 }] },
+          { date: '2026-03-30', sessions: 5, paidSessions: 0, organicSessions: 5, bySource: [{ source: 'chatgpt.com', sessions: 5, paidSessions: 0, organicSessions: 5 }] },
+          { date: '2026-03-31', sessions: 7, paidSessions: 0, organicSessions: 7, bySource: [{ source: 'chatgpt.com', sessions: 7, paidSessions: 0, organicSessions: 7 }] },
         ],
         sources: ['chatgpt.com'],
         totalSessions: 12,
-        totalUsers: 9,
         totalPaidSessions: 0,
         totalOrganicSessions: 12,
       })
@@ -228,7 +227,7 @@ test('renders five-channel breakdown with disjoint Organic, Social, Direct, Know
         lastSyncedAt: '2026-03-31T12:00:00.000Z',
       })
     }
-    if (urlPath.endsWith('/projects/test-project/ga/ai-referral-daily')) return jsonResponse({ days: [], sources: [], totalSessions: 0, totalUsers: 0, totalPaidSessions: 0, totalOrganicSessions: 0 })
+    if (urlPath.endsWith('/projects/test-project/ga/ai-referral-daily')) return jsonResponse({ days: [], sources: [], totalSessions: 0, totalPaidSessions: 0, totalOrganicSessions: 0 })
     if (urlPath.endsWith('/projects/test-project/ga/session-history')) return jsonResponse([])
     if (urlPath.endsWith('/projects/test-project/ga/social-referral-history')) return jsonResponse([])
     throw new Error(`Unexpected fetch: ${url}`)
@@ -352,7 +351,7 @@ test('social table collapses to top 25 with show-all toggle and surfaces Other-s
         lastSyncedAt: '2026-04-02T12:00:00.000Z',
       })
     }
-    if (urlPath.endsWith('/projects/test-project/ga/ai-referral-daily')) return jsonResponse({ days: [], sources: [], totalSessions: 0, totalUsers: 0, totalPaidSessions: 0, totalOrganicSessions: 0 })
+    if (urlPath.endsWith('/projects/test-project/ga/ai-referral-daily')) return jsonResponse({ days: [], sources: [], totalSessions: 0, totalPaidSessions: 0, totalOrganicSessions: 0 })
     if (urlPath.endsWith('/projects/test-project/ga/session-history')) return jsonResponse([])
     if (urlPath.endsWith('/projects/test-project/ga/social-referral-history')) return jsonResponse(history)
     throw new Error(`Unexpected fetch: ${url}`)

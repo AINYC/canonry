@@ -97,7 +97,7 @@ describe('buildAiReferralDailySeries', () => {
     expect(series.days[0]!.sessions).not.toBe(1)
     expect(series.days[0]!.sessions).not.toBe(105)
     expect(series.days[0]!.bySource).toEqual([
-      { source: 'chatgpt', sessions: 35, users: 35, paidSessions: 0, organicSessions: 35 },
+      { source: 'chatgpt', sessions: 35, paidSessions: 0, organicSessions: 35 },
     ])
     expect(series.totalSessions).toBe(35)
   })
@@ -133,8 +133,8 @@ describe('buildAiReferralDailySeries', () => {
 
     expect(series.days).toHaveLength(1)
     expect(series.days[0]!.bySource).toEqual([
-      { source: 'chatgpt', sessions: 12, users: 12, paidSessions: 0, organicSessions: 12 },
-      { source: 'claude.ai', sessions: 6, users: 6, paidSessions: 0, organicSessions: 6 },
+      { source: 'chatgpt', sessions: 12, paidSessions: 0, organicSessions: 12 },
+      { source: 'claude.ai', sessions: 6, paidSessions: 0, organicSessions: 6 },
     ])
     // 12 + 6, the winning lens per source. Not 17 + 8 (summed lenses) and not
     // 5 + 2 (the losing lenses).
@@ -161,7 +161,6 @@ describe('buildAiReferralDailySeries', () => {
       days: [],
       sources: [],
       totalSessions: 0,
-      totalUsers: 0,
       totalPaidSessions: 0,
       totalOrganicSessions: 0,
     })
@@ -185,7 +184,6 @@ describe('conservation between the daily series and the window summary', () => {
     const summary = summarizeAiReferralCounts(rows)
 
     expect(series.totalSessions).toBe(summary.deduped.sessions)
-    expect(series.totalUsers).toBe(summary.deduped.users)
     expect(series.totalPaidSessions).toBe(summary.paidDeduped.sessions)
     expect(series.totalOrganicSessions).toBe(summary.organicDeduped.sessions)
     // Guard the assertion itself against an all-zero fixture.
@@ -216,5 +214,64 @@ describe('conservation between the daily series and the window summary', () => {
       expect(fromSources).toBe(day.sessions)
       expect(day.paidSessions + day.organicSessions).toBe(day.sessions)
     }
+  })
+})
+
+describe('users are never published', () => {
+  // GA counts users DISTINCT at the grain the report was asked for, and these
+  // rows are keyed down to the landing page, so the stored `users` column does
+  // not sum at ANY grain this series serves. There is no correct AI-referral
+  // user figure to fetch either. These tests exist so a future edit cannot
+  // quietly reintroduce one.
+  const rows = [
+    ...landingPageRows({ date: '2026-07-26', source: 'chatgpt', pages: 35 }),
+    ...landingPageRows({ date: '2026-07-25', source: 'claude.ai', pages: 18, dimensions: ['session'] }),
+  ]
+
+  const USER_KEYS = ['users', 'totalUsers', 'paidUsers', 'organicUsers', 'visitors', 'totalVisitors']
+
+  it('exposes no user count anywhere in the daily series', () => {
+    const series = buildAiReferralDailySeries(rows)
+
+    for (const key of USER_KEYS) {
+      expect(series).not.toHaveProperty(key)
+    }
+    for (const day of series.days) {
+      expect(day.sessions).toBeGreaterThan(0)
+      for (const key of USER_KEYS) {
+        expect(day).not.toHaveProperty(key)
+        for (const entry of day.bySource) {
+          expect(entry).not.toHaveProperty(key)
+        }
+      }
+    }
+  })
+
+  it('leaks no user-shaped key through serialization', () => {
+    const serialized = JSON.stringify(buildAiReferralDailySeries(rows))
+    expect(serialized).not.toMatch(/user/i)
+    expect(serialized).not.toMatch(/visitor/i)
+  })
+
+  it('carries no user figure on the shared winner set at all', () => {
+    // The primitive both the chart and the summary fold is sessions-only, so
+    // no surface built on it can publish a user count by accident. The legacy
+    // /ga/traffic user math lives in a private function, not here.
+    for (const winner of resolveWinningDimensions(rows)) {
+      for (const key of USER_KEYS) {
+        expect(winner).not.toHaveProperty(key)
+      }
+      expect(Object.keys(winner).sort()).toEqual(
+        ['date', 'medium', 'organicSessions', 'paidSessions', 'source'],
+      )
+    }
+  })
+
+  it('preserves the legacy /ga/traffic user totals unchanged', () => {
+    // Not an endorsement of the number: a regression guard that this refactor
+    // did not silently alter what /ga/traffic has always returned. 35 rows of
+    // one user each on the winning lens still sums to 35, as it did before.
+    const summary = summarizeAiReferralCounts(rows)
+    expect(summary.deduped.users).toBe(53)
   })
 })

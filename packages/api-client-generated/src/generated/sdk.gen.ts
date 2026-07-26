@@ -3143,7 +3143,7 @@ export const getApiV1ProjectsByNameGaAiReferralHistory = <ThrowOnError extends b
 /**
  * Get AI referral sessions per day and per source
  *
- * Sums landing pages within one attribution dimension and never across dimensions, so totalSessions equals the aiSessionsDeduped reported by /ga/traffic for the same window.
+ * Sums landing pages within one attribution dimension and never across dimensions, so totalSessions equals the aiSessionsDeduped reported by /ga/traffic for the same window. Sessions only: GA counts users as a distinct count at the grain requested, so an AI-referral user total cannot be summed from these rows and no un-dimensioned AI-referral fetch exists to supply one.
  */
 export const getApiV1ProjectsByNameGaAiReferralDaily = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameGaAiReferralDailyData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameGaAiReferralDailyResponses, GetApiV1ProjectsByNameGaAiReferralDailyErrors, ThrowOnError>({

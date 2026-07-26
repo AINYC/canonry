@@ -2159,6 +2159,10 @@ describe('GA4 routes', () => {
       totalSessions: number
     }
 
+    // Sessions only. GA counts users DISTINCT at the grain asked for, and these
+    // rows are keyed to the landing page, so no user count here could be true.
+    expect(res.payload).not.toMatch(/user/i)
+
     const byDate = new Map(daily.days.map((d) => [d.date, d]))
     // 35 real sessions, not 1 (one landing page) and not 105 (three lenses summed).
     expect(byDate.get('2026-07-26')!.sessions).toBe(35)

@@ -10,7 +10,6 @@ const EMPTY: GA4AiReferralDailyDto = {
   days: [],
   sources: [],
   totalSessions: 0,
-  totalUsers: 0,
   totalPaidSessions: 0,
   totalOrganicSessions: 0,
 }
@@ -30,11 +29,10 @@ describe('buildAiChartData', () => {
         users: 35,
         paidSessions: 0,
         organicSessions: 35,
-        bySource: [{ source: 'chatgpt', sessions: 35, users: 35, paidSessions: 0, organicSessions: 35 }],
+        bySource: [{ source: 'chatgpt', sessions: 35, paidSessions: 0, organicSessions: 35 }],
       }],
       sources: ['chatgpt'],
       totalSessions: 35,
-      totalUsers: 35,
       totalPaidSessions: 0,
       totalOrganicSessions: 35,
     }
@@ -54,15 +52,14 @@ describe('buildAiChartData', () => {
   it('agrees with the summary total the cards render', () => {
     const daily: GA4AiReferralDailyDto = {
       days: [
-        { date: '2026-07-25', sessions: 18, users: 18, paidSessions: 0, organicSessions: 18, bySource: [{ source: 'chatgpt', sessions: 18, users: 18, paidSessions: 0, organicSessions: 18 }] },
-        { date: '2026-07-26', sessions: 35, users: 35, paidSessions: 5, organicSessions: 30, bySource: [
-          { source: 'chatgpt', sessions: 30, users: 30, paidSessions: 5, organicSessions: 25 },
-          { source: 'claude.ai', sessions: 5, users: 5, paidSessions: 0, organicSessions: 5 },
+        { date: '2026-07-25', sessions: 18, paidSessions: 0, organicSessions: 18, bySource: [{ source: 'chatgpt', sessions: 18, paidSessions: 0, organicSessions: 18 }] },
+        { date: '2026-07-26', sessions: 35, paidSessions: 5, organicSessions: 30, bySource: [
+          { source: 'chatgpt', sessions: 30, paidSessions: 5, organicSessions: 25 },
+          { source: 'claude.ai', sessions: 5, paidSessions: 0, organicSessions: 5 },
         ] },
       ],
       sources: ['chatgpt', 'claude.ai'],
       totalSessions: 53,
-      totalUsers: 53,
       totalPaidSessions: 5,
       totalOrganicSessions: 48,
     }
@@ -79,10 +76,9 @@ describe('buildAiChartData', () => {
   it('keeps AI dates that have no session-history row', () => {
     const daily: GA4AiReferralDailyDto = {
       ...EMPTY,
-      days: [{ date: '2026-07-24', sessions: 2, users: 2, paidSessions: 0, organicSessions: 2, bySource: [{ source: 'claude.ai', sessions: 2, users: 2, paidSessions: 0, organicSessions: 2 }] }],
+      days: [{ date: '2026-07-24', sessions: 2, paidSessions: 0, organicSessions: 2, bySource: [{ source: 'claude.ai', sessions: 2, paidSessions: 0, organicSessions: 2 }] }],
       sources: ['claude.ai'],
       totalSessions: 2,
-      totalUsers: 2,
       totalOrganicSessions: 2,
     }
 

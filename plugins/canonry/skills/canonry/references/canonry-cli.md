@@ -513,11 +513,13 @@ cnry ga attribution <project> [--trend]       # unified channel breakdown (organ
                                                   # sessions + raw and display share %s); --trend adds 7d/30d
                                                   # direction per channel + biggest mover
 cnry ga ai-referral-daily <project>           # AI sessions per day and per source: days[] with
-                                                  # {date, sessions, users, paidSessions, organicSessions,
+                                                  # {date, sessions, paidSessions, organicSessions,
                                                   # bySource[]} + window totals. Landing pages summed inside
                                                   # ONE attribution dimension, never across dimensions, so
                                                   # totalSessions equals aiSessionsDeduped from `ga traffic`.
-                                                  # Use this for any AI session COUNT.
+                                                  # Use this for any AI session COUNT. Sessions only: GA
+                                                  # counts users DISTINCT per grain, so an AI-referral user
+                                                  # count cannot be summed from these rows or fetched.
 cnry ga ai-referral-history <project>         # RAW DETAIL, one row per (day × source × dimension ×
                                                   # landing page): {date, source, medium, attribution,
                                                   # landingPage, sessions, users}. Rows are fragments of a

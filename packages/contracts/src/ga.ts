@@ -392,7 +392,6 @@ export type GA4AiReferralHistoryEntry = z.infer<typeof ga4AiReferralHistoryEntry
 export const ga4AiReferralDailySourceSchema = z.object({
   source: z.string(),
   sessions: z.number(),
-  users: z.number(),
   paidSessions: z.number(),
   organicSessions: z.number(),
 })
@@ -401,7 +400,6 @@ export type GA4AiReferralDailySource = z.infer<typeof ga4AiReferralDailySourceSc
 export const ga4AiReferralDailyEntrySchema = z.object({
   date: z.string(),
   sessions: z.number(),
-  users: z.number(),
   paidSessions: z.number(),
   organicSessions: z.number(),
   /** Per-source split of the day. `sessions` is the sum of these. */
@@ -412,11 +410,21 @@ export type GA4AiReferralDailyEntry = z.infer<typeof ga4AiReferralDailyEntrySche
 /**
  * Per-date, per-source AI referral sessions for the trend chart.
  *
- * Every count here obeys the one conservation rule for `ga_ai_referrals`: sum
- * across landing pages within ONE attribution dimension, never across
- * dimensions. `totalSessions` is the same quantity the traffic response
- * reports as `aiSessionsDeduped` for the same window, folded from the same
- * winning-dimension set, so the chart and the summary card cannot drift.
+ * SESSIONS ONLY, deliberately, matching `aiReferralSectionSchema`. Sessions
+ * obey the conservation rule for `ga_ai_referrals`: sum across landing pages
+ * within ONE attribution dimension, never across dimensions. `totalSessions`
+ * is the same quantity the traffic response reports as `aiSessionsDeduped` for
+ * the same window, folded from the same winning-dimension set, so the chart
+ * and the summary card cannot drift.
+ *
+ * A `users` count is deliberately absent and must not be added. GA reports
+ * `totalUsers` as a COUNT DISTINCT at the grain it was asked for, and
+ * `ga_ai_referrals` is keyed by (date, source, medium, channelGroup,
+ * landingPage, sourceDimension), so users do not sum at ANY grain this DTO
+ * serves: not per date, not per source, not per window. `fetchAiReferrals` is
+ * always dimensioned and no un-dimensioned AI-referral fetch exists, so there
+ * is nothing true to report. `ga_daily_totals` cannot stand in either, since
+ * it is property-level across ALL traffic rather than AI-scoped or per-source.
  */
 export const ga4AiReferralDailyDtoSchema = z.object({
   /** Ascending by date. Dates with no AI referrals are absent, not zero-filled. */
@@ -424,7 +432,6 @@ export const ga4AiReferralDailyDtoSchema = z.object({
   /** Sources present in the window, ordered by total sessions descending. */
   sources: z.array(z.string()),
   totalSessions: z.number(),
-  totalUsers: z.number(),
   totalPaidSessions: z.number(),
   totalOrganicSessions: z.number(),
 })
