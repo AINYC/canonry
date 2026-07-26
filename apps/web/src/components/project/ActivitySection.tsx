@@ -83,7 +83,9 @@ const EMPTY_AI_DAILY: GA4AiReferralDailyDto = {
   totalOrganicSessions: 0,
 }
 
-type PageSortKey = 'landingPage' | 'sessions' | 'organicSessions' | 'users'
+// No 'users': GA counts users DISTINCT at the grain requested, so an AI
+// landing-page user total cannot be summed and is no longer emitted.
+type PageSortKey = 'landingPage' | 'sessions' | 'organicSessions'
 // No 'users' on the two AI-referral tables: /ga/traffic stopped emitting a
 // per-row user count in 4.135.0 (GA counts users distinct per grain).
 type ReferralSortKey = 'source' | 'medium' | 'sessions'
@@ -1175,7 +1177,6 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
                     <SortHeader label="Sessions" sortKey="sessions" current={pageSortKey} dir={pageSortDir} onSort={handlePageSort} align="right" />
                     <SortHeader label="Organic" sortKey="organicSessions" current={pageSortKey} dir={pageSortDir} onSort={handlePageSort} align="right" />
                     <th className="text-right py-1 font-medium">Organic %</th>
-                    <SortHeader label="Users" sortKey="users" current={pageSortKey} dir={pageSortDir} onSort={handlePageSort} align="right" />
                   </tr>
                 </thead>
                 <tbody>
@@ -1440,9 +1441,6 @@ function LandingPageRow({ page }: { page: ApiGaTrafficPage }) {
       </td>
       <td className="py-1.5 text-right text-secondary tabular-nums">
         {organicPct}%
-      </td>
-      <td className="py-1.5 text-right text-strong tabular-nums">
-        {page.users.toLocaleString()}
       </td>
     </tr>
   )
