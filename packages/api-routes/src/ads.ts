@@ -151,8 +151,27 @@ export interface AdsLiveProviderEntity {
   updatedAt: number | null
 }
 
+/**
+ * The insight range for ONE live-delivery reader call. Both ends come from the
+ * route; a reader must never derive either of them from its own clock.
+ *
+ * `startDate` is the SAME account-local `YYYY-MM-DD` the stored side is
+ * filtered to, and the provider range starts at 00:00 local on it. That is
+ * what makes the first day of the window a WHOLE day on the live side, so it
+ * is comparable with the whole-day stored rollup it is diffed against.
+ *
+ * `fetchedAtMs` is the frozen read anchor and bounds the range at the top, so
+ * every insight call in one walk covers the identical range even when the walk
+ * crosses an account-local hour boundary, and the `fetchedAt` the response
+ * reports is the instant those ranges were actually measured from.
+ *
+ * There is deliberately no `lookbackDays` here. The start boundary must have
+ * exactly ONE derivation, and it is `startDate`: handing a reader the day count
+ * and letting it re-derive the boundary is how the two sides came apart.
+ */
 export interface AdsLiveInsightsRequest {
-  lookbackDays: number
+  startDate: string
+  fetchedAtMs: number
   /** Account-local timezone the provider's time ranges are expressed in. */
   timezone: string
 }
@@ -2942,10 +2961,17 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
    * gate: it mutates no Canonry state either (unlike `POST /ads/sync`, whose
    * `ads.write` scope covers the run row it inserts).
    *
-   * `fetchedAt` is the instant the read was ISSUED, the same anchor the metrics
-   * window is measured back from. Every date in the comparison is an
+   * `fetchedAt` is the instant the read was ISSUED, and it is frozen for the
+   * whole walk: every insight call is handed that same anchor, so entities read
+   * seconds apart are still compared over one identical range and the reported
+   * `fetchedAt` describes all of them. Every date in the comparison is an
    * ACCOUNT-LOCAL calendar date, because that is what the provider buckets by
    * and what ads-sync stores.
+   *
+   * THROTTLE: the slot is claimed before any provider I/O and is given back
+   * only if the read failed before the provider was touched at all. Once a
+   * provider request has gone out the attempt is spent (see
+   * `providerIoStarted`).
    *
    * COST: the walk is bounded in READER CALLS, and a reader call is not one
    * HTTP request. Each list/insight reader call auto-paginates inside the
@@ -2991,18 +3017,14 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
     }
     // Claim the interval BEFORE any provider I/O, and synchronously, so two
     // concurrent callers cannot both slip through the gap while the first one
-    // is still walking. Claim first, release on failure: the reverse order
-    // (do the I/O, then claim) reopens exactly that hole.
+    // is still walking. The reverse order (do the I/O, then claim) reopens
+    // exactly that hole.
     if (liveDeliveryMinIntervalMs > 0) {
       pruneLiveDeliverySlots(fetchedAtMs)
       liveDeliveryLastReadAtMs.set(project.id, fetchedAtMs)
     }
     /**
-     * Give the slot back when the read failed before producing anything
-     * useful. A 502 from account verification or the campaign list costs the
-     * operator nothing but the wait, and locking them out for a full minute
-     * after a failure is exactly backwards: a failed read is when a retry
-     * matters most.
+     * Give the slot back ONLY while nothing has been asked of the provider yet.
      *
      * Restores the PREDECESSOR rather than deleting, so a successful read
      * earlier in the interval keeps the rest of its window, and skips the
@@ -3015,9 +3037,27 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       else liveDeliveryLastReadAtMs.set(project.id, lastReadAtMs)
     }
 
-    // A partial failure that still yields a response (captured in `errors`)
-    // KEEPS the claim: it made real provider calls and produced a useful
-    // answer. Only a read that produces nothing gives the slot back.
+    /**
+     * The attempt is COUNTED once provider I/O begins, and this flag is what
+     * says whether it has.
+     *
+     * One admitted read can fan out to about 4000 upstream HTTP requests, so
+     * handing the slot back after an upstream failure turns a provider outage
+     * into a retry storm: every failure would immediately re-arm the next
+     * attempt, at full cost, for as long as the outage lasts. Once any provider
+     * request has gone out the attempt is spent and the throttle holds for the
+     * whole interval, failure or not. That covers a total failure exactly as it
+     * covers a partial one (a walk that yields a response with entries in
+     * `errors` keeps its claim too).
+     *
+     * A read that fails BEFORE the provider was touched costs nothing, so it
+     * must not cost the operator the interval. Every such case known to this
+     * route (invalid query, no ads connection, no reader configured,
+     * unresolvable project) already rejects above, before the claim; the flag
+     * covers the remaining window between claiming the slot and reaching the
+     * first provider call.
+     */
+    let providerIoStarted = false
     try {
       let readerCalls = 0
       let truncated = false
@@ -3045,6 +3085,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       // rows with the wrong account would be worse than returning nothing.
       readerCalls += 1
       let account: VerifiedAdsAccount
+      providerIoStarted = true
       try {
         account = await verifyAdsAccount(apiKey)
       } catch (error) {
@@ -3112,7 +3153,18 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       // provider's insight range is expressed in, what the provider dates its
       // buckets by, and therefore what the stored rollup dates mean.
       const accountTimezone = account.timezone ?? 'UTC'
-      const insightsRequest = { lookbackDays, timezone: accountTimezone }
+      // ONE derivation of the compared range, for both sides. The stored rows
+      // are filtered to this window and the provider is asked for exactly it,
+      // from 00:00 local on `startDate` to the frozen read anchor. Deriving the
+      // provider's start independently produced a first day that was a whole
+      // day in the rollup and a mid-day slice upstream, which the diff then
+      // reported as drift on every single read.
+      const window = liveComparisonWindow(fetchedAtMs, lookbackDays, accountTimezone)
+      const insightsRequest: AdsLiveInsightsRequest = {
+        startDate: window.startDate,
+        fetchedAtMs,
+        timezone: accountTimezone,
+      }
       const observations: AdsLiveEntityObservation[] = []
       const walkedCampaignIds = new Set<string>()
       const walkedAdGroupIds = new Set<string>()
@@ -3237,7 +3289,6 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
         }
       }
 
-      const window = liveComparisonWindow(fetchedAtMs, lookbackDays, accountTimezone)
       const entities: AdsLiveEntityComparison[] = observations.map(
         (observation) => buildLiveEntityComparison(observation, window),
       )
@@ -3263,7 +3314,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       }
       return response
     } catch (error) {
-      releaseLiveDeliverySlot()
+      if (!providerIoStarted) releaseLiveDeliverySlot()
       throw error
     }
   })

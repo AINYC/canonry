@@ -69,10 +69,17 @@ const ADS_LIVE_DAY_MS = 24 * 60 * 60 * 1_000
  *   provider was never asked about, which reads as the provider having dropped
  *   real data.
  *
- * The first and last days are still PARTIAL on the live side (the provider's
- * range is an hour range anchored to the read instant, not a whole local day).
- * A boundary-day metric difference is therefore expected and is not a
- * timezone defect.
+ * `startDate` is also the date the PROVIDER range is asked to start at, at
+ * 00:00 account-local (see `AdsLiveInsightsRequest`). The two boundaries have
+ * one derivation on purpose. When the provider's range instead began at the
+ * read instant's local hour, the first day of every window was a mid-day slice
+ * upstream and a whole day in the rollup, so the diff manufactured drift on it
+ * on every read no matter how healthy the account was.
+ *
+ * `endDate` is the account's CURRENT local day, which is in progress on both
+ * sides: the live side runs to the read instant and the stored side to the last
+ * ads-sync. A difference there is snapshot staleness, which is the signal this
+ * endpoint exists to surface, so it is reported as the drift it is.
  */
 export function liveComparisonWindow(
   fetchedAtMs: number,

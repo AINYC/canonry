@@ -108,7 +108,7 @@ import { executeGscSync } from "./gsc-sync.js";
 import { executeGbpSync } from "./gbp-sync.js";
 import {
   executeAdsSync,
-  trailingAdsInsightHourRange,
+  liveAdsInsightHourRange,
   CAMPAIGN_INSIGHT_FIELDS,
   AD_GROUP_INSIGHT_FIELDS,
 } from "./ads-sync.js";
@@ -1088,7 +1088,9 @@ export async function createServer(opts: {
   });
 
   // Read-only live-delivery surfaces. It requests the SAME insight fields as
-  // ads-sync so a live row and a stored rollup measure the same quantities.
+  // ads-sync so a live row and a stored rollup measure the same quantities, and
+  // the SAME range for every insight call in one walk: both ends of that range
+  // come from the route's request, so this reader never reads the clock.
   const adsLiveDeliveryReader = {
     listCampaigns: async (apiKey: string) =>
       (await listCampaigns(apiKey)).map((campaign) => adsLiveEntity(campaign, { mode: campaign.mode })),
@@ -1101,28 +1103,20 @@ export async function createServer(opts: {
     campaignInsights: async (
       apiKey: string,
       campaignId: string,
-      request: { lookbackDays: number; timezone: string },
+      request: { startDate: string; fetchedAtMs: number; timezone: string },
     ) =>
       (await getCampaignInsights(apiKey, campaignId, {
         fields: CAMPAIGN_INSIGHT_FIELDS,
-        timeRanges: [trailingAdsInsightHourRange(
-          new Date(),
-          request.timezone,
-          request.lookbackDays * 24 * 60 * 60 * 1_000,
-        )],
+        timeRanges: [liveAdsInsightHourRange(request)],
       })).map(adsLiveMetricRow),
     adGroupInsights: async (
       apiKey: string,
       adGroupId: string,
-      request: { lookbackDays: number; timezone: string },
+      request: { startDate: string; fetchedAtMs: number; timezone: string },
     ) =>
       (await getAdGroupInsights(apiKey, adGroupId, {
         fields: AD_GROUP_INSIGHT_FIELDS,
-        timeRanges: [trailingAdsInsightHourRange(
-          new Date(),
-          request.timezone,
-          request.lookbackDays * 24 * 60 * 60 * 1_000,
-        )],
+        timeRanges: [liveAdsInsightHourRange(request)],
       })).map(adsLiveMetricRow),
   };
 

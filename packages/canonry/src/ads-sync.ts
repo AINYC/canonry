@@ -53,13 +53,40 @@ export function trailingAdsInsightHourRange(
   // The live API rejects conversion fields without time_ranges[] and rejects
   // incomplete future local days. A timezone-aware hour range includes the
   // current completed boundary and works across daylight-saving transitions.
-  // The sync keeps the default 90-day lookback; on-demand live reads pass a
-  // tighter window.
+  // The sync keeps the default 90-day lookback.
   return {
     type: 'hour_range',
     since: accountHour(new Date(now.getTime() - lookbackMs), timezone),
     until: accountHour(now, timezone),
     timezone,
+  }
+}
+
+/**
+ * The provider hour range for ONE live-delivery insight call.
+ *
+ * Both ends come from the route's request, never from this process's clock:
+ *
+ * - `since` is 00:00 account-local on the window's first day, so that day is a
+ *   WHOLE day upstream and is comparable with the whole-day stored rollup it is
+ *   diffed against. A range that started at the read instant's local hour made
+ *   the first day a mid-day slice on the live side only, which the comparison
+ *   then reported as drift on every read.
+ * - `until` is the FROZEN read anchor. Calling `new Date()` per insight would
+ *   let a walk that crosses an account-local hour boundary compare different
+ *   entities over different ranges, with the reported `fetchedAt` describing
+ *   none of them.
+ */
+export function liveAdsInsightHourRange(request: {
+  startDate: string
+  fetchedAtMs: number
+  timezone: string
+}): OpenAiAdsInsightHourRange {
+  return {
+    type: 'hour_range',
+    since: `${request.startDate}T00`,
+    until: accountHour(new Date(request.fetchedAtMs), request.timezone),
+    timezone: request.timezone,
   }
 }
 

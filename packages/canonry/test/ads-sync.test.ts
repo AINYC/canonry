@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, onTestFinished } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -14,7 +14,11 @@ import {
   adsAds,
   adsInsightsDaily,
 } from '@ainyc/canonry-db'
-import { executeAdsSync, trailingAdsInsightHourRange } from '../src/ads-sync.js'
+import {
+  executeAdsSync,
+  liveAdsInsightHourRange,
+  trailingAdsInsightHourRange,
+} from '../src/ads-sync.js'
 import type { CanonryConfig } from '../src/config.js'
 
 const NOW = '2026-06-10T00:00:00.000Z'
@@ -125,6 +129,35 @@ describe('executeAdsSync', () => {
       until: '2026-07-21T13',
       timezone: 'America/New_York',
     })
+  })
+
+  it('builds a live insight range from the request only, never from the clock', () => {
+    const request = {
+      startDate: '2026-07-14',
+      fetchedAtMs: Date.parse('2026-07-21T17:37:00.000Z'),
+      timezone: 'America/New_York',
+    }
+    const expected = {
+      type: 'hour_range',
+      // 00:00 local on the window's first day: that day is a WHOLE day
+      // upstream, so it is comparable with the whole-day stored rollup.
+      since: '2026-07-14T00',
+      until: '2026-07-21T13',
+      timezone: 'America/New_York',
+    }
+
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-07-21T17:37:00.000Z'))
+      expect(liveAdsInsightHourRange(request)).toEqual(expected)
+      // A walk that crosses an account-local hour still measures the same
+      // range: the anchor is the frozen instant the route issued the read at,
+      // and the reported `fetchedAt` therefore describes every call in it.
+      vi.setSystemTime(new Date('2026-07-21T18:41:00.000Z'))
+      expect(liveAdsInsightHourRange(request)).toEqual(expected)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('snapshots entities, normalizes insights spend to micros, and completes the run', async () => {

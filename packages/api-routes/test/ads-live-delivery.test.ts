@@ -21,6 +21,7 @@ import {
 import { adsRoutes } from '../src/ads.js'
 import type {
   AdsLiveDeliveryReader,
+  AdsLiveInsightsRequest,
   AdsLiveProviderEntity,
   VerifiedAdsAccount,
 } from '../src/ads.js'
@@ -81,12 +82,58 @@ function metricRow(
   }
 }
 
+/**
+ * The account-local `YYYY-MM-DDTHH` bucket key, the unit the provider's hour
+ * ranges are expressed in. Mirrors `accountHour` in the host's ads-sync.
+ */
+function accountHourKey(atMs: number, timezone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(atMs))
+  const value = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((part) => part.type === type)!.value
+  return `${value('year')}-${value('month')}-${value('day')}T${value('hour')}`
+}
+
+/** The hour range the host builds from one insight request. */
+function rangeOf(request: AdsLiveInsightsRequest) {
+  return {
+    since: `${request.startDate}T00`,
+    until: accountHourKey(request.fetchedAtMs, request.timezone),
+    timezone: request.timezone,
+  }
+}
+
+/**
+ * What a provider does with an hour range: serve the buckets that fall inside
+ * it and nothing else. A fake that returns its fixture regardless of the range
+ * cannot see a window-alignment bug at all.
+ */
+function servedBuckets(
+  buckets: Array<{ hour: string; impressions: number }>,
+  request: AdsLiveInsightsRequest,
+) {
+  const range = rangeOf(request)
+  return buckets
+    .filter((bucket) => bucket.hour >= range.since && bucket.hour <= range.until)
+    .map((bucket) => metricRow(bucket.hour.slice(0, 10), { impressions: bucket.impressions }))
+}
+
 interface Overrides {
   campaigns?: AdsLiveProviderEntity[]
   adGroups?: AdsLiveProviderEntity[]
   ads?: AdsLiveProviderEntity[]
   campaignMetrics?: ReturnType<typeof metricRow>[]
   adGroupMetrics?: ReturnType<typeof metricRow>[]
+  /** Hourly campaign buckets, served only when they fall inside the asked-for range. */
+  campaignHourBuckets?: Array<{ hour: string; impressions: number }>
+  /** Advances the fake clock after each insight call, so a walk can outlive an hour. */
+  advanceClockPerInsightMs?: number
   readerError?: unknown
   verifyError?: unknown
   verifiedAccountId?: string
@@ -113,8 +160,19 @@ function buildApp(overrides: Overrides = {}) {
   })
 
   const readerCalls: Array<{ method: string; apiKey: string; entityId?: string }> = []
+  const insightRequests: Array<{
+    method: string
+    request: AdsLiveInsightsRequest
+    wallClockNow: number
+  }> = []
   const throwIfConfigured = () => {
     if (overrides.readerError !== undefined) throw overrides.readerError
+  }
+  const recordInsight = (method: string, request: AdsLiveInsightsRequest) => {
+    insightRequests.push({ method, request, wallClockNow: Date.now() })
+    if (overrides.advanceClockPerInsightMs !== undefined) {
+      vi.setSystemTime(new Date(Date.now() + overrides.advanceClockPerInsightMs))
+    }
   }
 
   const reader: AdsLiveDeliveryReader = {
@@ -133,13 +191,16 @@ function buildApp(overrides: Overrides = {}) {
       throwIfConfigured()
       return overrides.ads ?? []
     },
-    campaignInsights: async (apiKey, campaignId) => {
+    campaignInsights: async (apiKey, campaignId, request) => {
       readerCalls.push({ method: 'campaignInsights', apiKey, entityId: campaignId })
+      recordInsight('campaignInsights', request)
       throwIfConfigured()
+      if (overrides.campaignHourBuckets) return servedBuckets(overrides.campaignHourBuckets, request)
       return overrides.campaignMetrics ?? []
     },
-    adGroupInsights: async (apiKey, adGroupId) => {
+    adGroupInsights: async (apiKey, adGroupId, request) => {
       readerCalls.push({ method: 'adGroupInsights', apiKey, entityId: adGroupId })
+      recordInsight('adGroupInsights', request)
       throwIfConfigured()
       return overrides.adGroupMetrics ?? []
     },
@@ -245,7 +306,7 @@ function buildApp(overrides: Overrides = {}) {
   }
 
   return {
-    app, db, tmpDir, reader, readerCalls, logLines,
+    app, db, tmpDir, reader, readerCalls, insightRequests, logLines,
     seedProject, seedConnection, seedStaleSnapshot, seedDatedCampaign,
   }
 }
@@ -650,6 +711,84 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     expect(campaign.drifted).toBe(false)
   })
 
+  it('asks the provider for the WHOLE first day of the window, so the boundary day is not false drift', async () => {
+    // 12:00 UTC is 06:00 in Denver, so a range anchored to the read instant's
+    // local hour would start the first day at 06:00 and miss its morning,
+    // while the stored rollup for that day is a full day. Every read would
+    // then report the difference as drift, on a healthy account.
+    await start({
+      campaigns: [liveEntity('cmpn_1', 'active', { name: 'Homeowners Free Estimate' })],
+      adGroups: [],
+      ads: [],
+      campaignHourBuckets: [
+        { hour: '2026-06-03T02', impressions: 40 },
+        { hour: '2026-06-03T18', impressions: 60 },
+      ],
+    })
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+    ctx.seedDatedCampaign(projectId, '2026-06-03', 100)
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    const body = JSON.parse(res.body) as AdsLiveDeliveryDto
+
+    expect(res.statusCode).toBe(200)
+    // The provider range starts at 00:00 local on the window's first day, and
+    // that day is the SAME boundary the stored side is filtered to.
+    expect(ctx.insightRequests[0].request).toEqual({
+      startDate: '2026-06-03',
+      fetchedAtMs: Date.parse(NOW),
+      timezone: 'America/Denver',
+    })
+    expect(rangeOf(ctx.insightRequests[0].request).since).toBe('2026-06-03T00')
+    expect(liveComparisonWindow(Date.parse(NOW), 7, 'America/Denver').startDate).toBe('2026-06-03')
+
+    const campaign = body.entities.find((entity) => entity.id === 'cmpn_1')!
+    expect(campaign.metricDeltas).toEqual([{
+      date: '2026-06-03',
+      live: { impressions: 100, clicks: 0, spendMicros: 0, conversions: 0 },
+      stored: { impressions: 100, clicks: 0, spendMicros: 0, conversions: 0 },
+      drifted: false,
+    }])
+    expect(campaign.drifted).toBe(false)
+    expect(body.drift.metricsDrifted).toBe(0)
+  })
+
+  it('pins every insight call in one walk to the identical range, across an hour boundary', async () => {
+    await start({
+      campaigns: [liveEntity('cmpn_1', 'active')],
+      adGroups: [liveEntity('adgrp_1', 'active')],
+      ads: [],
+      // The walk itself outlives an account-local hour between the two calls.
+      advanceClockPerInsightMs: 61 * 60_000,
+    })
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    const body = JSON.parse(res.body) as AdsLiveDeliveryDto
+
+    expect(res.statusCode).toBe(200)
+    expect(ctx.insightRequests.map((entry) => entry.method))
+      .toEqual(['campaignInsights', 'adGroupInsights'])
+    // The clock genuinely moved across an hour boundary between the calls.
+    expect(ctx.insightRequests.map((entry) => accountHourKey(entry.wallClockNow, 'America/Denver')))
+      .toEqual(['2026-06-10T06', '2026-06-10T07'])
+    // Both calls still measure one identical range, anchored to the instant
+    // the response reports as `fetchedAt`.
+    const ranges = ctx.insightRequests.map((entry) => rangeOf(entry.request))
+    expect(ranges[0]).toEqual({
+      since: '2026-06-03T00',
+      until: '2026-06-10T06',
+      timezone: 'America/Denver',
+    })
+    expect(ranges[1]).toEqual(ranges[0])
+    expect(body.fetchedAt).toBe(NOW)
+    expect(ctx.insightRequests.every(
+      (entry) => entry.request.fetchedAtMs === Date.parse(body.fetchedAt),
+    )).toBe(true)
+  })
+
   it('reports the walk budget in reader calls and the real upstream HTTP ceiling', async () => {
     await start({ campaigns: [liveEntity('cmpn_1', 'active')], adGroups: [], ads: [] })
     const projectId = ctx.seedProject()
@@ -667,7 +806,7 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     expect(body.bounds.maxUpstreamHttpRequests).toBe(4_000)
   })
 
-  it('releases the throttle slot when the read fails, so a retry is not blocked', async () => {
+  it('spends the attempt once provider I/O has begun, so a failed read is still throttled', async () => {
     await start({
       campaigns: [liveEntity('cmpn_1', 'active')],
       adGroups: [],
@@ -688,18 +827,22 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     const failed = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
     expect(failed.statusCode).toBe(502)
 
-    // Same instant, no clock advance: a read that produced nothing must not
-    // cost the operator the whole interval.
+    // Same instant. Account verification and the campaign list already went
+    // upstream, so this attempt is spent: one admitted read can fan out to
+    // thousands of HTTP requests, and re-arming on failure would turn a
+    // provider outage into a retry storm.
     const retry = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
-    expect(retry.statusCode).toBe(200)
-    expect(attempts).toBe(2)
+    expect(retry.statusCode).toBe(429)
+    expect(attempts).toBe(1)
 
-    // The read that DID produce a result keeps the slot.
+    // The interval still expires normally; the failure costs one interval, not more.
+    vi.setSystemTime(new Date(Date.parse(NOW) + 60_001))
     const third = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
-    expect(third.statusCode).toBe(429)
+    expect(third.statusCode).toBe(200)
+    expect(attempts).toBe(2)
   })
 
-  it('releases the slot when account verification fails, not just the campaign list', async () => {
+  it('spends the attempt when account verification fails: the provider was already called', async () => {
     await start({
       verifyError: Object.assign(new Error('upstream down'), { status: 503 }),
       minIntervalMs: 60_000,
@@ -711,8 +854,44 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     const second = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
 
     expect(first.statusCode).toBe(502)
-    // Still the provider's failure, never a lockout on top of it.
-    expect(second.statusCode).toBe(502)
+    // Verification IS provider I/O, so the attempt counted.
+    expect(second.statusCode).toBe(429)
+  })
+
+  it('does not spend the attempt when the read fails before the provider is touched', async () => {
+    await start({
+      campaigns: [liveEntity('cmpn_1', 'active')],
+      adGroups: [],
+      ads: [],
+      minIntervalMs: 60_000,
+    })
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const badInput = await ctx.app.inject({
+      method: 'GET',
+      url: '/projects/acme/ads/live-delivery?lookbackDays=90',
+    })
+    expect(badInput.statusCode).toBe(400)
+    expect(ctx.readerCalls).toEqual([])
+
+    // Same instant: nothing was asked of the provider, so nothing was spent
+    // and the operator can correct the request immediately.
+    const retry = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    expect(retry.statusCode).toBe(200)
+  })
+
+  it('does not spend the attempt for a project with no ads connection', async () => {
+    await start({ campaigns: [liveEntity('cmpn_1', 'active')], adGroups: [], ads: [], minIntervalMs: 60_000 })
+    const projectId = ctx.seedProject()
+
+    const noConnection = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    expect(noConnection.statusCode).toBe(400)
+    expect(ctx.readerCalls).toEqual([])
+
+    ctx.seedConnection(projectId)
+    const retry = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    expect(retry.statusCode).toBe(200)
   })
 
   it('admits only one of two concurrent reads while the first is still in flight', async () => {
@@ -738,10 +917,12 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     const first = ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
     await inFlight
     const second = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
-    expect(second.statusCode).toBe(429)
 
     openGate()
-    expect((await first).statusCode).toBe(200)
+    // Exactly one 200 and one 429: the successful read holds the interval, and
+    // the loser is rejected rather than queued.
+    const statuses = [(await first).statusCode, second.statusCode].sort()
+    expect(statuses).toEqual([200, 429])
     expect(ctx.readerCalls.filter((call) => call.method === 'listCampaigns')).toHaveLength(1)
   })
 

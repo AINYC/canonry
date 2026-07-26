@@ -647,11 +647,16 @@ unaggregated and in the provider's own units, next to the stored snapshot values
 and an explicit per-entity delta. Reach for it when the stored snapshot is
 contradicted by the advertiser UI, not for routine checks: it is read-only but
 it spends a third-party call budget, so one project may issue at most one live
-read per minute (`429` with `retryAfterMs` otherwise). Read `bounds.truncated`
-before concluding anything about entities you did not see, and treat
-`presence: "stored-only"` as "absent upstream" ONLY on an untruncated,
-error-free read. `--lookback-days` (1-30, default 7) sizes the metrics window;
-`--campaign` scopes the walk.
+read per minute (`429` with `retryAfterMs` otherwise). The attempt is counted as
+soon as the provider is called, so a `502` still costs the interval: on an
+upstream failure wait out `retryAfterMs` instead of retrying straight away. Read
+`bounds.truncated` before concluding anything about entities you did not see,
+and treat `presence: "stored-only"` as "absent upstream" ONLY on an untruncated,
+error-free read. In `metricDeltas`, every date except the account's current
+local day compares whole days on both sides, so a difference there is real; the
+current local day is still accruing live while the stored side stopped at the
+last sync, so a difference on it is snapshot staleness. `--lookback-days` (1-30,
+default 7) sizes the metrics window; `--campaign` scopes the walk.
 
 Lifecycle inputs are JSON files, or `--input -` for stdin. Every request carries
 a unique `operationKey`. Identical replays return the stored receipt without a
