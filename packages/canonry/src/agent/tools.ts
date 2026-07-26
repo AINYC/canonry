@@ -85,6 +85,7 @@ export const AERO_ADS_OPERATOR_MCP_TOOL_NAMES: ReadonlySet<CanonryMcpToolName> =
   CanonryMcpToolNames.canonry_ads_insights,
   CanonryMcpToolNames.canonry_ads_summary,
   CanonryMcpToolNames.canonry_ads_delivery_diagnostics,
+  CanonryMcpToolNames.canonry_ads_live_delivery,
   CanonryMcpToolNames.canonry_ads_operations_unresolved,
   CanonryMcpToolNames.canonry_ads_operation_get,
   CanonryMcpToolNames.canonry_ads_operation_reconcile,

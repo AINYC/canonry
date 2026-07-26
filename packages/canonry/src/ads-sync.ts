@@ -2,7 +2,12 @@ import crypto from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { runs, projects, adsConnections, adsCampaigns, adsAdGroups, adsAds, adsInsightsDaily } from '@ainyc/canonry-db'
-import { buildRunErrorFromMessages, serializeRunError, dollarsToMicros } from '@ainyc/canonry-contracts'
+import {
+  buildRunErrorFromMessages,
+  serializeRunError,
+  dollarsToMicros,
+  startOfDayHourInTimeZone,
+} from '@ainyc/canonry-contracts'
 import {
   getAdAccount,
   listCampaigns,
@@ -24,8 +29,8 @@ import { createLogger } from './logger.js'
 
 const log = createLogger('AdsSync')
 
-const CAMPAIGN_INSIGHT_FIELDS = ['campaign.impressions', 'campaign.clicks', 'campaign.spend', 'campaign.conversions', 'metadata.readable_time']
-const AD_GROUP_INSIGHT_FIELDS = ['ad_group.impressions', 'ad_group.clicks', 'ad_group.spend', 'ad_group.conversions', 'metadata.readable_time']
+export const CAMPAIGN_INSIGHT_FIELDS = ['campaign.impressions', 'campaign.clicks', 'campaign.spend', 'campaign.conversions', 'metadata.readable_time']
+export const AD_GROUP_INSIGHT_FIELDS = ['ad_group.impressions', 'ad_group.clicks', 'ad_group.spend', 'ad_group.conversions', 'metadata.readable_time']
 const INSIGHTS_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1_000
 
 function accountHour(date: Date, timezone: string): string {
@@ -48,15 +53,49 @@ function accountHour(date: Date, timezone: string): string {
 export function trailingAdsInsightHourRange(
   now: Date,
   timezone: string,
+  lookbackMs: number = INSIGHTS_LOOKBACK_MS,
 ): OpenAiAdsInsightHourRange {
   // The live API rejects conversion fields without time_ranges[] and rejects
   // incomplete future local days. A timezone-aware hour range includes the
   // current completed boundary and works across daylight-saving transitions.
+  // The sync keeps the default 90-day lookback.
   return {
     type: 'hour_range',
-    since: accountHour(new Date(now.getTime() - INSIGHTS_LOOKBACK_MS), timezone),
+    since: accountHour(new Date(now.getTime() - lookbackMs), timezone),
     until: accountHour(now, timezone),
     timezone,
+  }
+}
+
+/**
+ * The provider hour range for ONE live-delivery insight call.
+ *
+ * Both ends come from the route's request, never from this process's clock:
+ *
+ * - `since` is the START of the window's first day in the account's own wall
+ *   clock, so that day is a WHOLE day upstream and is comparable with the
+ *   whole-day stored rollup it is diffed against. A range that started at the
+ *   read instant's local hour made the first day a mid-day slice on the live
+ *   side only, which the comparison then reported as drift on every read.
+ *   That start is hour 00 on all but one day a year in zones that spring
+ *   forward AT midnight, where hour 00 is skipped and naming it would ask the
+ *   provider about a wall-clock hour its own calendar never had, so
+ *   `startOfDayHourInTimeZone` resolves the day's first hour that exists.
+ * - `until` is the FROZEN read anchor. Calling `new Date()` per insight would
+ *   let a walk that crosses an account-local hour boundary compare different
+ *   entities over different ranges, with the reported `fetchedAt` describing
+ *   none of them.
+ */
+export function liveAdsInsightHourRange(request: {
+  startDate: string
+  fetchedAtMs: number
+  timezone: string
+}): OpenAiAdsInsightHourRange {
+  return {
+    type: 'hour_range',
+    since: startOfDayHourInTimeZone(request.startDate, request.timezone),
+    until: accountHour(new Date(request.fetchedAtMs), request.timezone),
+    timezone: request.timezone,
   }
 }
 

@@ -155,6 +155,7 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'GET /api/v1/projects/{name}/ads/insights': 'included',
   'GET /api/v1/projects/{name}/ads/summary': 'included',
   'GET /api/v1/projects/{name}/ads/delivery-diagnostics': 'included',
+  'GET /api/v1/projects/{name}/ads/live-delivery': 'included',
   'GET /api/v1/projects/{name}/gbp/metrics': 'included',
   'GET /api/v1/projects/{name}/gbp/keywords': 'included',
   'GET /api/v1/projects/{name}/gbp/place-actions': 'included',

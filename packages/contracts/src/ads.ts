@@ -1047,6 +1047,180 @@ export const adsOperationReconcileResponseSchema = z.object({
 })
 export type AdsOperationReconcileResponse = z.infer<typeof adsOperationReconcileResponseSchema>
 
+/**
+ * Live-delivery request knobs. Neither field is an identity key: the route
+ * never reuses, caches, or consolidates another request's result: its
+ * minimum-interval throttle only rejects, so there is no reuse branch a new
+ * parameter could silently ride through.
+ */
+export const adsLiveDeliveryQuerySchema = z.object({
+  campaignId: z.string().min(1).max(200).optional(),
+  lookbackDays: z.coerce.number().int().min(1).max(30).default(7),
+})
+export type AdsLiveDeliveryQuery = z.infer<typeof adsLiveDeliveryQuerySchema>
+
+export const adsLiveEntityTypeSchema = z.enum(['campaign', 'ad_group', 'ad'])
+export type AdsLiveEntityType = z.infer<typeof adsLiveEntityTypeSchema>
+export const AdsLiveEntityTypes = adsLiveEntityTypeSchema.enum
+
+/** Where an entity was observed: on the provider, in the local snapshot, or both. */
+export const adsLivePresenceSchema = z.enum(['both', 'live-only', 'stored-only'])
+export type AdsLivePresence = z.infer<typeof adsLivePresenceSchema>
+export const AdsLivePresences = adsLivePresenceSchema.enum
+
+export const adsLiveDeliveryBasisSchema = z.literal('live-provider-read')
+export const AdsLiveDeliveryBases = { liveProviderRead: 'live-provider-read' } as const
+
+/**
+ * One metric bucket exactly as the provider returned it. Values are NOT
+ * normalized: `spend` stays in the provider's decimal currency units (the
+ * insights API returns dollars while budgets/bids are integer micros), and an
+ * absent metric stays `null` rather than being coerced to 0. The comparable,
+ * micro-normalized view lives in `metricDeltas`.
+ */
+export const adsLiveMetricRowSchema = z.object({
+  date: z.string().nullable(),
+  startTime: z.number().nullable(),
+  endTime: z.number().nullable(),
+  impressions: z.number().nullable(),
+  clicks: z.number().nullable(),
+  spend: z.number().nullable(),
+  conversions: z.number().nullable(),
+  ctr: z.number().nullable(),
+  cpc: z.number().nullable(),
+  cpm: z.number().nullable(),
+})
+export type AdsLiveMetricRow = z.infer<typeof adsLiveMetricRowSchema>
+
+/** Comparable per-date metric totals. Spend is micros on both sides. */
+export const adsLiveMetricValuesSchema = z.object({
+  impressions: z.number().int(),
+  clicks: z.number().int(),
+  spendMicros: z.number().int(),
+  conversions: z.number().int(),
+})
+export type AdsLiveMetricValues = z.infer<typeof adsLiveMetricValuesSchema>
+
+export const adsLiveMetricDeltaSchema = z.object({
+  date: z.string(),
+  live: adsLiveMetricValuesSchema.nullable(),
+  stored: adsLiveMetricValuesSchema.nullable(),
+  drifted: z.boolean(),
+})
+export type AdsLiveMetricDelta = z.infer<typeof adsLiveMetricDeltaSchema>
+
+export const adsLiveFieldDeltaSchema = z.object({
+  field: z.string(),
+  live: z.string().nullable(),
+  stored: z.string().nullable(),
+})
+export type AdsLiveFieldDelta = z.infer<typeof adsLiveFieldDeltaSchema>
+
+/**
+ * The provider's own state for one entity. `status` and `reviewStatus` are the
+ * provider's strings verbatim; Canonry does not derive a serving verdict from
+ * them. `mode` is campaign-only and null elsewhere.
+ */
+export const adsLiveEntityStateSchema = z.object({
+  name: z.string().nullable(),
+  status: z.string(),
+  reviewStatus: z.string().nullable(),
+  mode: z.string().nullable(),
+  updatedAt: z.number().nullable(),
+})
+export type AdsLiveEntityState = z.infer<typeof adsLiveEntityStateSchema>
+
+export const adsStoredEntityStateSchema = z.object({
+  name: z.string(),
+  status: z.string(),
+  reviewStatus: z.string().nullable(),
+  upstreamUpdatedAt: z.number().nullable(),
+  syncedAt: z.string(),
+})
+export type AdsStoredEntityState = z.infer<typeof adsStoredEntityStateSchema>
+
+export const adsLiveEntityComparisonSchema = z.object({
+  entityType: adsLiveEntityTypeSchema,
+  id: z.string(),
+  parentId: z.string().nullable(),
+  presence: adsLivePresenceSchema,
+  live: adsLiveEntityStateSchema.nullable(),
+  stored: adsStoredEntityStateSchema.nullable(),
+  fieldDeltas: z.array(adsLiveFieldDeltaSchema),
+  /** Provider rows, unaggregated. Null for ads (no per-ad insights surface). */
+  liveMetrics: z.array(adsLiveMetricRowSchema).nullable(),
+  metricDeltas: z.array(adsLiveMetricDeltaSchema).nullable(),
+  drifted: z.boolean(),
+})
+export type AdsLiveEntityComparison = z.infer<typeof adsLiveEntityComparisonSchema>
+
+/**
+ * One failed provider surface. It carries a fixed surface label, the entity the
+ * call was for, and the upstream HTTP status only, never the upstream message,
+ * body, or code, because those are provider-controlled strings that can echo
+ * request material back to the caller.
+ */
+export const adsLiveReadFailureSchema = z.object({
+  surface: z.string(),
+  entityId: z.string().nullable(),
+  upstreamStatus: z.number().int().nullable(),
+})
+export type AdsLiveReadFailure = z.infer<typeof adsLiveReadFailureSchema>
+
+/**
+ * A live, read-only passthrough of the connected ad account: what the provider
+ * says RIGHT NOW, the corresponding local snapshot values, and the per-entity
+ * delta between them. It never mutates provider state and never waits for a
+ * sync run. The walk is bounded (see `bounds`) because it calls a third-party
+ * API on demand.
+ */
+export const adsLiveDeliveryDtoSchema = z.object({
+  basis: adsLiveDeliveryBasisSchema,
+  /** Instant the live read was issued; the metrics window is measured back from it. */
+  fetchedAt: z.string(),
+  adAccountId: z.string(),
+  storedSnapshotSyncedAt: z.string().nullable(),
+  metricsWindow: z.object({ lookbackDays: z.number().int().positive() }),
+  /**
+   * Two different units live here, and confusing them understates the cost of
+   * this endpoint by two orders of magnitude.
+   *
+   * A READER CALL is one logical list or insight read. Every list/insight
+   * reader call is an auto-paginating walk, so one reader call can issue up to
+   * `maxPagesPerReaderCall` upstream HTTP requests before the client gives up.
+   * `maxUpstreamHttpRequests` is the honest worst-case ceiling in HTTP
+   * requests (`maxReaderCalls * maxPagesPerReaderCall`, about 4000 at the
+   * shipped defaults, not 40).
+   *
+   * `readerCalls` is an observed count of reader calls. There is deliberately
+   * no observed HTTP-request count: the pagination happens inside the provider
+   * client, below the injected reader seam, so the route cannot see it.
+   */
+  bounds: z.object({
+    maxCampaigns: z.number().int().positive(),
+    maxAdGroupsPerCampaign: z.number().int().positive(),
+    maxAdsPerAdGroup: z.number().int().positive(),
+    /** Budget in logical reader calls, NOT in upstream HTTP requests. */
+    maxReaderCalls: z.number().int().positive(),
+    /** Reader calls this read actually issued. Observed, not a bound. */
+    readerCalls: z.number().int().nonnegative(),
+    /** Pages one paginated reader call may fetch before the client gives up. */
+    maxPagesPerReaderCall: z.number().int().positive(),
+    /** Worst-case upstream HTTP requests. A documented bound, not an observation. */
+    maxUpstreamHttpRequests: z.number().int().positive(),
+    truncated: z.boolean(),
+  }),
+  entities: z.array(adsLiveEntityComparisonSchema),
+  drift: z.object({
+    entitiesCompared: z.number().int().nonnegative(),
+    driftedEntities: z.number().int().nonnegative(),
+    statusDrifted: z.number().int().nonnegative(),
+    metricsDrifted: z.number().int().nonnegative(),
+  }),
+  errors: z.array(adsLiveReadFailureSchema),
+})
+export type AdsLiveDeliveryDto = z.infer<typeof adsLiveDeliveryDtoSchema>
+
 /** clicks / impressions; null when impressions is 0 (never divide by zero). */
 export function adsCtr(clicks: number, impressions: number): number | null {
   return impressions > 0 ? clicks / impressions : null

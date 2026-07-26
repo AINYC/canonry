@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, onTestFinished } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -14,7 +14,11 @@ import {
   adsAds,
   adsInsightsDaily,
 } from '@ainyc/canonry-db'
-import { executeAdsSync, trailingAdsInsightHourRange } from '../src/ads-sync.js'
+import {
+  executeAdsSync,
+  liveAdsInsightHourRange,
+  trailingAdsInsightHourRange,
+} from '../src/ads-sync.js'
 import type { CanonryConfig } from '../src/config.js'
 
 const NOW = '2026-06-10T00:00:00.000Z'
@@ -125,6 +129,62 @@ describe('executeAdsSync', () => {
       until: '2026-07-21T13',
       timezone: 'America/New_York',
     })
+  })
+
+  it('builds a live insight range from the request only, never from the clock', () => {
+    const request = {
+      startDate: '2026-07-14',
+      fetchedAtMs: Date.parse('2026-07-21T17:37:00.000Z'),
+      timezone: 'America/New_York',
+    }
+    const expected = {
+      type: 'hour_range',
+      // The start of the window's first local day: that day is a WHOLE day
+      // upstream, so it is comparable with the whole-day stored rollup.
+      since: '2026-07-14T00',
+      until: '2026-07-21T13',
+      timezone: 'America/New_York',
+    }
+
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-07-21T17:37:00.000Z'))
+      expect(liveAdsInsightHourRange(request)).toEqual(expected)
+      // A walk that crosses an account-local hour still measures the same
+      // range: the anchor is the frozen instant the route issued the read at,
+      // and the reported `fetchedAt` therefore describes every call in it.
+      vi.setSystemTime(new Date('2026-07-21T18:41:00.000Z'))
+      expect(liveAdsInsightHourRange(request)).toEqual(expected)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('starts the live range at the first local hour the account timezone actually has', () => {
+    // America/Santiago springs forward AT midnight on 2026-09-06: the clock
+    // goes 23:59:59 -> 01:00:00, so local hour 00 does not exist that day and
+    // "2026-09-06T00" would name a wall-clock hour the account never had.
+    expect(liveAdsInsightHourRange({
+      startDate: '2026-09-06',
+      fetchedAtMs: Date.parse('2026-09-08T12:00:00.000Z'),
+      timezone: 'America/Santiago',
+    }).since).toBe('2026-09-06T01')
+
+    // Same day, an ordinary account: nothing moves. The fix must not shift the
+    // window for the accounts that were always fine.
+    expect(liveAdsInsightHourRange({
+      startDate: '2026-09-06',
+      fetchedAtMs: Date.parse('2026-09-08T12:00:00.000Z'),
+      timezone: 'America/New_York',
+    }).since).toBe('2026-09-06T00')
+
+    // And a normal account on ITS OWN spring-forward day, where the gap is at
+    // 02:00 local: midnight is intact, so the window still starts at hour 00.
+    expect(liveAdsInsightHourRange({
+      startDate: '2026-03-08',
+      fetchedAtMs: Date.parse('2026-03-10T12:00:00.000Z'),
+      timezone: 'America/New_York',
+    }).since).toBe('2026-03-08T00')
   })
 
   it('snapshots entities, normalizes insights spend to micros, and completes the run', async () => {

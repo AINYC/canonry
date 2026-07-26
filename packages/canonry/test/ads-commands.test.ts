@@ -9,6 +9,7 @@ import type {
   AdsConversionEventSettingListResponse,
   AdsConversionPixelListResponse,
   AdsDeliveryDiagnosticsDto,
+  AdsLiveDeliveryDto,
   AdsGeoSearchResponse,
   AdsOperationReconcileResponse,
   AdsOperationResponse,
@@ -22,6 +23,7 @@ const mockSearchAdsGeo = vi.fn()
 const mockGetAdsConversionPixels = vi.fn()
 const mockGetAdsConversionEventSettings = vi.fn()
 const mockGetAdsDeliveryDiagnostics = vi.fn()
+const mockGetAdsLiveDelivery = vi.fn()
 const mockGetAdsOperation = vi.fn()
 const mockGetUnresolvedAdsOperations = vi.fn()
 const mockReconcileAdsOperation = vi.fn()
@@ -51,6 +53,7 @@ vi.mock('../src/client.js', () => ({
     getAdsConversionPixels: mockGetAdsConversionPixels,
     getAdsConversionEventSettings: mockGetAdsConversionEventSettings,
     getAdsDeliveryDiagnostics: mockGetAdsDeliveryDiagnostics,
+    getAdsLiveDelivery: mockGetAdsLiveDelivery,
     getAdsOperation: mockGetAdsOperation,
     getUnresolvedAdsOperations: mockGetUnresolvedAdsOperations,
     reconcileAdsOperation: mockReconcileAdsOperation,
@@ -71,6 +74,7 @@ const {
   adsConversionEventSettings,
   adsConversionPixels,
   adsDeliveryDiagnostics,
+  adsLiveDelivery,
   adsGeoSearch,
   adsOperationGet,
   adsOperationReconcile,
@@ -278,6 +282,66 @@ const EVENT_SETTINGS: AdsConversionEventSettingListResponse = {
   }],
 }
 
+const LIVE_DELIVERY: AdsLiveDeliveryDto = {
+  basis: 'live-provider-read',
+  fetchedAt: '2026-06-10T12:00:00.000Z',
+  adAccountId: 'adacct_aaa',
+  storedSnapshotSyncedAt: '2026-06-09T00:00:00.000Z',
+  metricsWindow: { lookbackDays: 7 },
+  bounds: {
+    maxCampaigns: 5,
+    maxAdGroupsPerCampaign: 10,
+    maxAdsPerAdGroup: 20,
+    maxReaderCalls: 40,
+    readerCalls: 6,
+    maxPagesPerReaderCall: 100,
+    maxUpstreamHttpRequests: 4_000,
+    truncated: false,
+  },
+  entities: [{
+    entityType: 'campaign',
+    id: 'cmpn_1',
+    parentId: null,
+    presence: 'both',
+    live: {
+      name: 'Homeowners Free Estimate',
+      status: 'active',
+      reviewStatus: null,
+      mode: 'standard',
+      updatedAt: 200,
+    },
+    stored: {
+      name: 'Homeowners Free Estimate',
+      status: 'paused',
+      reviewStatus: null,
+      upstreamUpdatedAt: 100,
+      syncedAt: '2026-06-09T00:00:00.000Z',
+    },
+    fieldDeltas: [{ field: 'status', live: 'active', stored: 'paused' }],
+    liveMetrics: [{
+      date: '2026-06-10',
+      startTime: 1_760_000_000,
+      endTime: 1_760_086_400,
+      impressions: 162,
+      clicks: 5,
+      spend: 1.5,
+      conversions: 0,
+      ctr: null,
+      cpc: null,
+      cpm: null,
+    }],
+    metricDeltas: [{
+      date: '2026-06-10',
+      live: { impressions: 162, clicks: 5, spendMicros: 1_500_000, conversions: 0 },
+      stored: { impressions: 111, clicks: 3, spendMicros: 1_000_000, conversions: 0 },
+      drifted: true,
+    }],
+    drifted: true,
+  }],
+  drift: { entitiesCompared: 1, driftedEntities: 1, statusDrifted: 1, metricsDrifted: 1 },
+  errors: [],
+}
+
 const DELIVERY_DIAGNOSTICS: AdsDeliveryDiagnosticsDto = {
   snapshot: {
     status: 'complete',
@@ -375,6 +439,41 @@ describe('ads lifecycle commands', () => {
 
     expect(mockGetAdsAccount).toHaveBeenCalledWith('canonry-audit')
     expect(JSON.parse(log.mock.calls[0]![0] as string)).toEqual(ACCOUNT)
+  })
+
+  it('reads the live provider state and the stored-snapshot delta as JSON', async () => {
+    mockGetAdsLiveDelivery.mockResolvedValue(LIVE_DELIVERY)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await adsLiveDelivery('canonry-audit', { campaignId: 'cmpn_1', lookbackDays: 7, format: 'json' })
+
+    expect(mockGetAdsLiveDelivery).toHaveBeenCalledWith('canonry-audit', {
+      campaignId: 'cmpn_1',
+      lookbackDays: 7,
+    })
+    expect(JSON.parse(log.mock.calls[0]![0] as string)).toEqual(LIVE_DELIVERY)
+  })
+
+  it('renders live-vs-stored drift, provider call budget, and read failures', async () => {
+    mockGetAdsLiveDelivery.mockResolvedValue({
+      ...LIVE_DELIVERY,
+      bounds: { ...LIVE_DELIVERY.bounds, truncated: true },
+      errors: [{ surface: 'ad group list', entityId: 'cmpn_1', upstreamStatus: 503 }],
+    })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await adsLiveDelivery('canonry-audit')
+
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n')
+    expect(output).toContain('live provider read')
+    expect(output).toContain('Drift:        1/1 entities (1 status, 1 metrics)')
+    expect(output).toContain('TRUNCATED')
+    expect(output).toContain('Read failed:  ad group list cmpn_1 [HTTP 503]')
+    expect(output).toContain('live active / stored paused')
+    // The budget line must not let a reader call read as one HTTP request.
+    expect(output).toContain('6/40 reader calls, up to 4000 upstream HTTP requests')
+    expect(output).toContain('2026-06-10: live 162 impr / 5 clicks')
+    expect(output).toContain('DRIFT')
   })
 
   it('reads stored delivery diagnostics without a provider verdict', async () => {

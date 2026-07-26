@@ -9,10 +9,13 @@ import {
   formatDateRange,
   formatDeltaCopy,
   formatIsoDate,
+  formatIsoDateInTimeZone,
   formatNumber,
   formatRatio,
   formatWindowCountDelta,
+  isoDateDaysBeforeInTimeZone,
   parseInclusiveEndMs,
+  startOfDayHourInTimeZone,
 } from '../src/formatting.js'
 
 describe('formatRatio', () => {
@@ -88,6 +91,285 @@ describe('formatIsoDate', () => {
 
   test('invalid input falls back to original string', () => {
     expect(formatIsoDate('not-a-date')).toBe('not-a-date')
+  })
+})
+
+describe('formatIsoDateInTimeZone', () => {
+  test('a zone east of UTC has already rolled to the next calendar day', () => {
+    // 22:00 UTC is 07:00 the NEXT day in Tokyo (UTC+9).
+    expect(formatIsoDate('2026-06-10T22:00:00.000Z')).toBe('2026-06-10')
+    expect(formatIsoDateInTimeZone('2026-06-10T22:00:00.000Z', 'Asia/Tokyo')).toBe('2026-06-11')
+  })
+
+  test('a zone west of UTC is still on the previous calendar day', () => {
+    // 02:00 UTC is 19:00 the PREVIOUS day in Denver (UTC-7 in June).
+    expect(formatIsoDate('2026-06-11T02:00:00.000Z')).toBe('2026-06-11')
+    expect(formatIsoDateInTimeZone('2026-06-11T02:00:00.000Z', 'America/Denver')).toBe('2026-06-10')
+  })
+
+  test('UTC matches the plain UTC formatter', () => {
+    expect(formatIsoDateInTimeZone('2026-06-10T22:00:00.000Z', 'UTC')).toBe('2026-06-10')
+  })
+
+  test('zero-pads single-digit month and day', () => {
+    expect(formatIsoDateInTimeZone('2026-01-03T12:00:00.000Z', 'Europe/Berlin')).toBe('2026-01-03')
+  })
+
+  test('an unknown zone degrades to the UTC date instead of throwing', () => {
+    expect(formatIsoDateInTimeZone('2026-06-10T22:00:00.000Z', 'Not/AZone')).toBe('2026-06-10')
+  })
+
+  test('invalid input falls back to the original string', () => {
+    expect(formatIsoDateInTimeZone('not-a-date', 'Asia/Tokyo')).toBe('not-a-date')
+  })
+})
+
+describe('startOfDayHourInTimeZone', () => {
+  /**
+   * Independent oracle for which local hours a zone really shows on a date, so
+   * these tests cannot quietly go vacuous if a zone's rules or the platform's
+   * tzdata change. Deliberately brute force (sweep real instants and record
+   * what the clock reads) rather than the offset round trip the implementation
+   * uses, so the two cannot share a mistake.
+   */
+  const localHoursShownOn = (isoDate: string, timeZone: string): Set<number> => {
+    const format = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      hourCycle: 'h23',
+    })
+    const shown = new Set<number>()
+    // The whole local day sits inside this UTC span for every real zone offset.
+    const fromMs = Date.parse(`${isoDate}T00:00:00.000Z`) - 24 * 60 * 60 * 1_000
+    for (let ms = fromMs; ms <= fromMs + 72 * 60 * 60 * 1_000; ms += 5 * 60_000) {
+      const parts = format.formatToParts(new Date(ms))
+      const value = (type: Intl.DateTimeFormatPartTypes): string =>
+        parts.find((part) => part.type === type)?.value ?? ''
+      if (`${value('year')}-${value('month')}-${value('day')}` !== isoDate) continue
+      shown.add(Number(value('hour')))
+    }
+    return shown
+  }
+
+  test('a zone with no transition starts its day at hour 00', () => {
+    expect(startOfDayHourInTimeZone('2026-06-10', 'America/New_York')).toBe('2026-06-10T00')
+    expect(startOfDayHourInTimeZone('2026-06-10', 'Asia/Tokyo')).toBe('2026-06-10T00')
+    expect(startOfDayHourInTimeZone('2026-06-10', 'UTC')).toBe('2026-06-10T00')
+    expect(startOfDayHourInTimeZone('2026-01-03', 'Europe/Berlin')).toBe('2026-01-03T00')
+  })
+
+  test('a spring-forward day whose gap is NOT at midnight still starts at hour 00', () => {
+    // America/New_York springs forward at 02:00 local, so midnight is intact
+    // and only hour 02 is missing.
+    const shown = localHoursShownOn('2026-03-08', 'America/New_York')
+    expect(shown.has(0)).toBe(true)
+    expect(shown.has(2)).toBe(false)
+    expect(startOfDayHourInTimeZone('2026-03-08', 'America/New_York')).toBe('2026-03-08T00')
+    // And the fall-back day, where 01:00 happens twice, is equally unaffected.
+    expect(startOfDayHourInTimeZone('2026-11-01', 'America/New_York')).toBe('2026-11-01T00')
+  })
+
+  test('America/Santiago skips local hour 00 when it springs forward at midnight', () => {
+    // Chile moves the clock at 24:00 on the first Saturday of September, so
+    // 2026-09-06 runs 01:00, 02:00, ... and never has an hour 00.
+    const shown = localHoursShownOn('2026-09-06', 'America/Santiago')
+    expect(shown.has(0)).toBe(false)
+    expect(shown.has(1)).toBe(true)
+    expect(startOfDayHourInTimeZone('2026-09-06', 'America/Santiago')).toBe('2026-09-06T01')
+  })
+
+  test('America/Havana skips local hour 00 when it springs forward at midnight', () => {
+    const shown = localHoursShownOn('2026-03-08', 'America/Havana')
+    expect(shown.has(0)).toBe(false)
+    expect(shown.has(1)).toBe(true)
+    expect(startOfDayHourInTimeZone('2026-03-08', 'America/Havana')).toBe('2026-03-08T01')
+  })
+
+  test('the day before and the day after a midnight gap are untouched', () => {
+    expect(startOfDayHourInTimeZone('2026-09-05', 'America/Santiago')).toBe('2026-09-05T00')
+    expect(startOfDayHourInTimeZone('2026-09-07', 'America/Santiago')).toBe('2026-09-07T00')
+    expect(startOfDayHourInTimeZone('2026-03-07', 'America/Havana')).toBe('2026-03-07T00')
+    expect(startOfDayHourInTimeZone('2026-03-09', 'America/Havana')).toBe('2026-03-09T00')
+  })
+
+  test('an unknown zone degrades to hour 00 instead of throwing', () => {
+    expect(startOfDayHourInTimeZone('2026-09-06', 'Not/AZone')).toBe('2026-09-06T00')
+  })
+
+  test('a date that is not YYYY-MM-DD degrades to hour 00', () => {
+    expect(startOfDayHourInTimeZone('not-a-date', 'America/Santiago')).toBe('not-a-dateT00')
+    expect(startOfDayHourInTimeZone('', 'America/Santiago')).toBe('T00')
+  })
+})
+
+describe('isoDateDaysBeforeInTimeZone', () => {
+  const DAY_MS = 24 * 60 * 60 * 1_000
+
+  /**
+   * What the helper replaces: subtract a fixed number of 24-hour periods from
+   * the instant, then read the calendar date in the zone. Kept here so the
+   * table can state, per row, whether the naive step is wrong and by how much.
+   * A row where the two agree is a control: it proves the fix does not
+   * over-correct an ordinary day into a different answer.
+   */
+  const fixedDurationStep = (iso: string, days: number, timeZone: string): string =>
+    formatIsoDateInTimeZone(new Date(Date.parse(iso) - days * DAY_MS).toISOString(), timeZone)
+
+  /**
+   * Zones chosen for DIFFERENT transition times, because the defect depends on
+   * where the missing / repeated hour sits relative to local midnight:
+   * America/New_York moves at 02:00 local, Europe/Berlin at 01:00 UTC (so 02:00
+   * / 03:00 local), and America/Santiago moves AT midnight. Asia/Tokyo never
+   * transitions at all and is the ordinary-zone control.
+   */
+  const CASES: Array<{
+    what: string
+    iso: string
+    days: number
+    zone: string
+    expected: string
+    /** What the old fixed-duration arithmetic returns. Equal to `expected` on the controls. */
+    naive: string
+  }> = [
+    {
+      what: 'New York, spring forward: stepping back ONTO the 23-hour day',
+      iso: '2026-03-09T04:30:00.000Z', // 00:30 on the 9th, local
+      days: 1,
+      zone: 'America/New_York',
+      expected: '2026-03-08',
+      naive: '2026-03-07',
+    },
+    {
+      what: 'New York, spring forward: a 7-day window whose span contains the gap',
+      iso: '2026-03-12T04:30:00.000Z', // 00:30 on the 12th, local
+      days: 7,
+      zone: 'America/New_York',
+      expected: '2026-03-05',
+      naive: '2026-03-04',
+    },
+    {
+      what: 'New York, fall back: stepping back OFF the 25-hour day',
+      iso: '2026-11-02T04:30:00.000Z', // 23:30 on the 1st, local
+      days: 1,
+      zone: 'America/New_York',
+      expected: '2026-10-31',
+      naive: '2026-11-01',
+    },
+    {
+      what: 'New York, fall back: a 7-day window whose span contains the repeated hour',
+      iso: '2026-11-04T04:30:00.000Z', // 23:30 on the 3rd, local
+      days: 7,
+      zone: 'America/New_York',
+      expected: '2026-10-27',
+      naive: '2026-10-28',
+    },
+    {
+      what: 'Berlin, spring forward: a zone that transitions on a UTC instant',
+      iso: '2026-03-29T22:30:00.000Z', // 00:30 on the 30th, local
+      days: 1,
+      zone: 'Europe/Berlin',
+      expected: '2026-03-29',
+      naive: '2026-03-28',
+    },
+    {
+      what: 'Berlin, fall back',
+      iso: '2026-10-25T22:30:00.000Z', // 23:30 on the 25th, local
+      days: 1,
+      zone: 'Europe/Berlin',
+      expected: '2026-10-24',
+      naive: '2026-10-25',
+    },
+    {
+      what: 'Santiago, spring forward AT midnight: the target day has no hour 00',
+      iso: '2026-09-07T03:30:00.000Z', // 00:30 on the 7th, local
+      days: 1,
+      zone: 'America/Santiago',
+      expected: '2026-09-06',
+      naive: '2026-09-05',
+    },
+    {
+      what: 'Santiago, fall back AT midnight: the source day is 25 hours long',
+      iso: '2026-04-05T03:30:00.000Z', // 23:30 on the 4th, local
+      days: 1,
+      zone: 'America/Santiago',
+      expected: '2026-04-03',
+      naive: '2026-04-04',
+    },
+    // Controls. The fix must leave every one of these exactly where it was.
+    {
+      what: 'control: the transition day itself, read at midday, is an ordinary step',
+      iso: '2026-03-08T16:00:00.000Z',
+      days: 1,
+      zone: 'America/New_York',
+      expected: '2026-03-07',
+      naive: '2026-03-07',
+    },
+    {
+      what: 'control: an ordinary date in a transitioning zone',
+      iso: '2026-06-10T12:00:00.000Z',
+      days: 7,
+      zone: 'America/New_York',
+      expected: '2026-06-03',
+      naive: '2026-06-03',
+    },
+    {
+      what: 'control: an ordinary zone that never transitions',
+      iso: '2026-03-09T04:30:00.000Z',
+      days: 1,
+      zone: 'Asia/Tokyo',
+      expected: '2026-03-08',
+      naive: '2026-03-08',
+    },
+    {
+      what: 'control: an ordinary zone, multi-day step across the date line difference',
+      iso: '2026-06-10T22:00:00.000Z', // already the 11th in Tokyo
+      days: 7,
+      zone: 'Asia/Tokyo',
+      expected: '2026-06-04',
+      naive: '2026-06-04',
+    },
+    {
+      what: 'control: UTC itself',
+      iso: '2026-06-10T22:00:00.000Z',
+      days: 7,
+      zone: 'UTC',
+      expected: '2026-06-03',
+      naive: '2026-06-03',
+    },
+  ]
+
+  for (const testCase of CASES) {
+    test(testCase.what, () => {
+      expect(isoDateDaysBeforeInTimeZone(testCase.iso, testCase.days, testCase.zone))
+        .toBe(testCase.expected)
+      // Pins what the row is FOR: a DST row must disagree with the fixed
+      // 24-hour step, and a control must agree with it.
+      expect(fixedDurationStep(testCase.iso, testCase.days, testCase.zone)).toBe(testCase.naive)
+    })
+  }
+
+  test('a zero-day step is the observed local date itself', () => {
+    expect(isoDateDaysBeforeInTimeZone('2026-06-10T22:00:00.000Z', 0, 'Asia/Tokyo')).toBe('2026-06-11')
+    expect(isoDateDaysBeforeInTimeZone('2026-06-10T22:00:00.000Z', 0, 'America/Denver')).toBe('2026-06-10')
+  })
+
+  test('stepping back over a month and a year boundary rolls over correctly', () => {
+    expect(isoDateDaysBeforeInTimeZone('2026-01-01T05:30:00.000Z', 1, 'America/New_York')).toBe('2025-12-31')
+    expect(isoDateDaysBeforeInTimeZone('2026-03-01T12:00:00.000Z', 1, 'UTC')).toBe('2026-02-28')
+    expect(isoDateDaysBeforeInTimeZone('2024-03-01T12:00:00.000Z', 1, 'UTC')).toBe('2024-02-29')
+  })
+
+  test('an unknown zone degrades to stepping the UTC date instead of throwing', () => {
+    expect(isoDateDaysBeforeInTimeZone('2026-03-09T04:30:00.000Z', 1, 'Not/AZone')).toBe('2026-03-08')
+  })
+
+  test('an unusable input or day count comes back unchanged rather than becoming a wrong date', () => {
+    expect(isoDateDaysBeforeInTimeZone('not-a-date', 1, 'America/New_York')).toBe('not-a-date')
+    expect(isoDateDaysBeforeInTimeZone('2026-03-09T04:30:00.000Z', Number.NaN, 'America/New_York'))
+      .toBe('2026-03-09')
   })
 })
 
