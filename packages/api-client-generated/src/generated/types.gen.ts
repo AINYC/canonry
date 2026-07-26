@@ -9813,7 +9813,7 @@ export type GetApiV1ProjectsByNameAdsLiveDeliveryData = {
          */
         campaignId?: string;
         /**
-         * Metrics window in days (1-30, default 7).
+         * Metrics window in calendar days of the ad account timezone (1-30, default 7).
          */
         lookbackDays?: number;
     };
@@ -9830,7 +9830,7 @@ export type GetApiV1ProjectsByNameAdsLiveDeliveryErrors = {
      */
     404: ErrorEnvelope;
     /**
-     * Live read requested again before the minimum interval elapsed.
+     * Another live read for this project is still running, or the minimum interval since the last provider read has not elapsed. error.details.reason says which.
      */
     429: ErrorEnvelope;
     /**

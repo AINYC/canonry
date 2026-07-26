@@ -208,7 +208,12 @@ export interface AdsRoutesOptions {
   adsReader?: AdsReader
   /** Optional read-only live-delivery adapter. The host resolves the project credential server-side. */
   adsLiveDeliveryReader?: AdsLiveDeliveryReader
-  /** Minimum gap between live-delivery reads for one project. Set to 0 to disable the throttle. */
+  /**
+   * Minimum gap between live-delivery reads for one project. Set to 0 to
+   * disable that spacing. It does not disable single-flight: a walk still
+   * refuses a concurrent walk for the same project, which is a correctness and
+   * cost property of the walk itself rather than a rate knob.
+   */
   adsLiveDeliveryMinIntervalMs?: number
   /**
    * The provider client's pagination cap, used only to REPORT the worst-case
@@ -528,7 +533,12 @@ const ADS_LIVE_MAX_READER_CALLS = 40
  * mirrors it for deployments that wire a reader without declaring one.
  */
 const DEFAULT_ADS_LIVE_MAX_PAGES_PER_READER_CALL = 100
-/** One live read per project per minute; the throttle rejects, it never queues. */
+/**
+ * Minimum gap between consecutive live reads for one project. Reads are also
+ * single-flight per project, which is separate state: a walk can run longer
+ * than this interval, so the interval cannot be what keeps two walks apart.
+ * Both rules reject, neither queues.
+ */
 const DEFAULT_ADS_LIVE_DELIVERY_MIN_INTERVAL_MS = 60_000
 
 const DEFAULT_RECONCILE_SWEEP_INTERVAL_MS = 60_000
@@ -2038,21 +2048,42 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
     opts.adsLiveDeliveryMaxPagesPerReaderCall ?? DEFAULT_ADS_LIVE_MAX_PAGES_PER_READER_CALL,
   )
   /**
-   * Instant of the last ADMITTED live-delivery read per project. In-process and
-   * per server instance: this bounds on-demand third-party calls, it is not a
-   * security control.
+   * Live-delivery admission control. TWO jobs, and they need two pieces of
+   * state, because one timestamp cannot do both:
+   *
+   * - MUTUAL EXCLUSION while a walk runs. A walk has no bound on how long it
+   *   takes: it can issue about 4000 upstream HTTP requests, and a slow
+   *   provider can hold it open for far longer than any interval. Expressing
+   *   that as "the last read started less than an interval ago" makes exclusion
+   *   expire mid-walk, which admits a second caller and puts two walks on the
+   *   same account at once. Exclusion is therefore explicit in-flight state,
+   *   held for exactly as long as the walk actually runs.
+   * - RATE LIMIT between walks. That one IS a timestamp: it says how soon after
+   *   an attempt the next one may start.
+   *
+   * Both are in-process and per server instance: they bound on-demand
+   * third-party calls, they are not a security control.
    */
-  const liveDeliveryLastReadAtMs = new Map<string, number>()
+  const liveDeliveryInFlight = new Set<string>()
+  /**
+   * Instant of the last live-delivery attempt per project that reached provider
+   * I/O. Only such an attempt is recorded, so the rate limit never needs a
+   * compensating release: an attempt that cost the provider nothing simply
+   * never lands here.
+   */
+  const liveDeliveryLastAttemptAtMs = new Map<string, number>()
   /**
    * Drop entries that can no longer reject anything. Without this the Map keeps
    * one entry per project that has EVER issued a live read, for the lifetime of
-   * the process. Sweeping on each admitted read bounds it to the projects that
-   * read inside one interval, and admitted reads are themselves throttled, so
-   * the sweep is cheap.
+   * the process. Sweeping when an attempt is recorded bounds it to the projects
+   * that read inside one interval, and recorded attempts are themselves rate
+   * limited, so the sweep is cheap. The in-flight Set needs no sweep: every
+   * entry is removed in the walk's `finally`, so it is bounded by the number of
+   * requests actually running.
    */
-  const pruneLiveDeliverySlots = (nowMs: number): void => {
-    for (const [projectId, lastAtMs] of liveDeliveryLastReadAtMs) {
-      if (nowMs - lastAtMs >= liveDeliveryMinIntervalMs) liveDeliveryLastReadAtMs.delete(projectId)
+  const pruneLiveDeliveryAttempts = (nowMs: number): void => {
+    for (const [projectId, lastAtMs] of liveDeliveryLastAttemptAtMs) {
+      if (nowMs - lastAtMs >= liveDeliveryMinIntervalMs) liveDeliveryLastAttemptAtMs.delete(projectId)
     }
   }
   const reconcilePolicy: ReconcilePolicy = {
@@ -2971,10 +3002,14 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
    * ACCOUNT-LOCAL calendar date, because that is what the provider buckets by
    * and what ads-sync stores.
    *
-   * THROTTLE: the slot is claimed before any provider I/O and is given back
-   * only if the read failed before the provider was touched at all. Once a
-   * provider request has gone out the attempt is spent (see
-   * `providerIoStarted`).
+   * ADMISSION: two separate rules, because they answer two different
+   * questions. A per-project IN-FLIGHT marker refuses a second read for as long
+   * as the first one is actually walking, which a duration cannot express: the
+   * walk is unbounded in time and would outlive any interval. A per-project
+   * MINIMUM INTERVAL then spaces out consecutive walks, counted from the last
+   * attempt that reached provider I/O, so a failure after the first provider
+   * call holds the interval exactly like a success while a failure before it
+   * costs nothing.
    *
    * COST: the walk is bounded in READER CALLS, and a reader call is not one
    * HTTP request. Each list/insight reader call auto-paginates inside the
@@ -3008,59 +3043,64 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
     }
 
     const fetchedAtMs = Date.now()
-    const lastReadAtMs = liveDeliveryLastReadAtMs.get(project.id)
-    if (liveDeliveryMinIntervalMs > 0 && lastReadAtMs !== undefined) {
-      const retryAfterMs = lastReadAtMs + liveDeliveryMinIntervalMs - fetchedAtMs
-      if (retryAfterMs > 0) {
-        throw quotaExceeded('OpenAI Ads live delivery reads', {
-          minIntervalMs: liveDeliveryMinIntervalMs,
-          retryAfterMs,
-        })
-      }
+    const lastAttemptAtMs = liveDeliveryLastAttemptAtMs.get(project.id)
+    const remainingIntervalMs = liveDeliveryMinIntervalMs > 0 && lastAttemptAtMs !== undefined
+      ? lastAttemptAtMs + liveDeliveryMinIntervalMs - fetchedAtMs
+      : 0
+    // EXCLUSION, first and unconditionally: a walk already running for this
+    // project owns it until it ends, however long that takes and whatever the
+    // interval is. This is what the interval alone could not express, because a
+    // walk can outlive any interval and the timestamp would then expire while
+    // the first walk was still upstream.
+    if (liveDeliveryInFlight.has(project.id)) {
+      throw quotaExceeded('OpenAI Ads live delivery reads', {
+        reason: 'read-in-flight',
+        minIntervalMs: liveDeliveryMinIntervalMs,
+        // A LOWER bound, and only when the interval itself still blocks. How
+        // much longer the running walk needs is unknowable from here, so once
+        // it has outlived the interval there is no honest number to give and
+        // the field is absent rather than guessed.
+        ...(remainingIntervalMs > 0 ? { retryAfterMs: remainingIntervalMs } : {}),
+      })
     }
-    // Claim the interval BEFORE any provider I/O, and synchronously, so two
-    // concurrent callers cannot both slip through the gap while the first one
-    // is still walking. The reverse order (do the I/O, then claim) reopens
-    // exactly that hole.
-    if (liveDeliveryMinIntervalMs > 0) {
-      pruneLiveDeliverySlots(fetchedAtMs)
-      liveDeliveryLastReadAtMs.set(project.id, fetchedAtMs)
+    // RATE LIMIT between walks, measured from the last attempt that actually
+    // reached the provider.
+    if (remainingIntervalMs > 0) {
+      throw quotaExceeded('OpenAI Ads live delivery reads', {
+        reason: 'min-interval',
+        minIntervalMs: liveDeliveryMinIntervalMs,
+        retryAfterMs: remainingIntervalMs,
+      })
     }
-    /**
-     * Give the slot back ONLY while nothing has been asked of the provider yet.
-     *
-     * Restores the PREDECESSOR rather than deleting, so a successful read
-     * earlier in the interval keeps the rest of its window, and skips the
-     * restore entirely if a later read has since taken the slot.
-     */
-    const releaseLiveDeliverySlot = (): void => {
-      if (liveDeliveryMinIntervalMs <= 0) return
-      if (liveDeliveryLastReadAtMs.get(project.id) !== fetchedAtMs) return
-      if (lastReadAtMs === undefined) liveDeliveryLastReadAtMs.delete(project.id)
-      else liveDeliveryLastReadAtMs.set(project.id, lastReadAtMs)
-    }
+    // Claimed synchronously, before any `await`, so two concurrent callers
+    // cannot both pass the check above; released in the `finally` below however
+    // the walk ends, so neither a throw nor a rejection can wedge the project.
+    liveDeliveryInFlight.add(project.id)
 
     /**
-     * The attempt is COUNTED once provider I/O begins, and this flag is what
-     * says whether it has.
+     * Spend the attempt against the rate limit. Called once, immediately before
+     * the FIRST provider request.
      *
-     * One admitted read can fan out to about 4000 upstream HTTP requests, so
-     * handing the slot back after an upstream failure turns a provider outage
-     * into a retry storm: every failure would immediately re-arm the next
-     * attempt, at full cost, for as long as the outage lasts. Once any provider
-     * request has gone out the attempt is spent and the throttle holds for the
-     * whole interval, failure or not. That covers a total failure exactly as it
-     * covers a partial one (a walk that yields a response with entries in
-     * `errors` keeps its claim too).
+     * One admitted read can fan out to about 4000 upstream HTTP requests, so an
+     * attempt that reaches the provider is spent whether or not it succeeds:
+     * re-arming on failure would turn a provider outage into a retry storm,
+     * every failure immediately re-admitting the next attempt at full cost for
+     * as long as the outage lasts. That covers a total failure exactly as it
+     * covers a partial one (a walk that returns a response with entries in
+     * `errors` has spent its attempt too).
      *
-     * A read that fails BEFORE the provider was touched costs nothing, so it
-     * must not cost the operator the interval. Every such case known to this
-     * route (invalid query, no ads connection, no reader configured,
-     * unresolvable project) already rejects above, before the claim; the flag
-     * covers the remaining window between claiming the slot and reaching the
-     * first provider call.
+     * A read that fails BEFORE the provider is touched costs nothing, and
+     * recording nothing is what lets the operator correct it and retry at once.
+     * That falls out of WHERE this is called rather than from a compensating
+     * release: the rate-limit clock is only ever written once the provider is
+     * about to be asked something.
      */
-    let providerIoStarted = false
+    const spendLiveDeliveryAttempt = (): void => {
+      if (liveDeliveryMinIntervalMs <= 0) return
+      pruneLiveDeliveryAttempts(fetchedAtMs)
+      liveDeliveryLastAttemptAtMs.set(project.id, fetchedAtMs)
+    }
+
     try {
       let readerCalls = 0
       let truncated = false
@@ -3088,7 +3128,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       // rows with the wrong account would be worse than returning nothing.
       readerCalls += 1
       let account: VerifiedAdsAccount
-      providerIoStarted = true
+      spendLiveDeliveryAttempt()
       try {
         account = await verifyAdsAccount(apiKey)
       } catch (error) {
@@ -3316,9 +3356,8 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
         errors,
       }
       return response
-    } catch (error) {
-      if (!providerIoStarted) releaseLiveDeliverySlot()
-      throw error
+    } finally {
+      liveDeliveryInFlight.delete(project.id)
     }
   })
 

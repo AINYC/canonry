@@ -2923,7 +2923,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'get',
     path: '/api/v1/projects/{name}/ads/live-delivery',
     summary: 'Live provider read of ads status and metrics, with the local snapshot delta',
-    description: 'Calls the OpenAI Ads API right now with the stored connection and returns the provider\'s current status and metrics unaggregated, alongside the corresponding local snapshot values and an explicit per-entity delta. Dates on both sides are the ad account\'s local calendar dates. The first day of the window is measured from 00:00 in the account timezone on both sides, so it is a whole day either way and a difference on it is real; the current local day is in progress on both sides, so a difference there is snapshot staleness. Read-only: it never creates, updates, pauses, or activates anything, and it never waits for a sync run. The walk is bounded by per-level caps and a budget of 40 reader calls (see bounds), and one project may issue at most one live read per minute. The attempt is counted as soon as the provider is called, so a read that fails upstream still holds the interval; only a read rejected before the provider was called leaves the next one free. A reader call is not one HTTP request: each list or insight read auto-paginates up to 100 pages, so the worst-case upstream cost of a single request is about 4000 HTTP requests, reported as bounds.maxUpstreamHttpRequests.',
+    description: 'Calls the OpenAI Ads API right now with the stored connection and returns the provider\'s current status and metrics unaggregated, alongside the corresponding local snapshot values and an explicit per-entity delta. Dates on both sides are the ad account\'s local calendar dates. The first day of the window is measured from 00:00 in the account timezone on both sides, so it is a whole day either way and a difference on it is real; the current local day is in progress on both sides, so a difference there is snapshot staleness. Read-only: it never creates, updates, pauses, or activates anything, and it never waits for a sync run. The window counts calendar days in the account timezone, not fixed 24-hour periods, so a daylight-saving transition cannot move the first day. The walk is bounded by per-level caps and a budget of 40 reader calls (see bounds). Admission has two rules: a project may have only one live read running at a time (a second request is refused for as long as the first is actually walking, which can exceed any interval), and consecutive reads are spaced by at least one minute. The interval is counted as soon as the provider is called, so a read that fails upstream still holds it; only a read rejected before the provider was called leaves the next one free. A reader call is not one HTTP request: each list or insight read auto-paginates up to 100 pages, so the worst-case upstream cost of a single request is about 4000 HTTP requests, reported as bounds.maxUpstreamHttpRequests.',
     tags: ['ads'],
     parameters: [
       nameParameter,
@@ -2936,7 +2936,7 @@ const routeCatalog: OpenApiOperation[] = [
       {
         name: 'lookbackDays',
         in: 'query',
-        description: 'Metrics window in days (1-30, default 7).',
+        description: 'Metrics window in calendar days of the ad account timezone (1-30, default 7).',
         schema: integerSchema,
       },
     ],
@@ -2944,7 +2944,7 @@ const routeCatalog: OpenApiOperation[] = [
       200: jsonResponse('Live provider state and snapshot delta returned.', 'AdsLiveDeliveryDto'),
       400: errorResponse('Invalid query, or no ads connection for this project.'),
       404: errorResponse('Project not found.'),
-      429: errorResponse('Live read requested again before the minimum interval elapsed.'),
+      429: errorResponse('Another live read for this project is still running, or the minimum interval since the last provider read has not elapsed. error.details.reason says which.'),
       502: errorResponse('The OpenAI Ads API read failed.'),
     },
   },

@@ -430,6 +430,26 @@ describe('ads live delivery comparison (pure)', () => {
     }])
   })
 
+  it('counts the lookback in CALENDAR days, so a DST transition cannot move the start date', () => {
+    // The window's first day is also the day the provider range starts at, so
+    // a boundary that slips by one lands a whole metric date on one side of
+    // the comparison only, which then reads as drift on a healthy account.
+    // Spring forward: the local day is 23 hours, so a fixed 24-hour step from
+    // just after midnight on the 9th skips the 8th entirely.
+    expect(liveComparisonWindow(Date.parse('2026-03-09T04:30:00.000Z'), 1, 'America/New_York'))
+      .toEqual({ startDate: '2026-03-08', endDate: '2026-03-09' })
+    // Fall back: the local day is 25 hours, so the same step from late on the
+    // 1st never leaves it.
+    expect(liveComparisonWindow(Date.parse('2026-11-02T04:30:00.000Z'), 1, 'America/New_York'))
+      .toEqual({ startDate: '2026-10-31', endDate: '2026-11-01' })
+    // A zone that transitions AT midnight, where the target day has no hour 00.
+    expect(liveComparisonWindow(Date.parse('2026-09-07T03:30:00.000Z'), 1, 'America/Santiago'))
+      .toEqual({ startDate: '2026-09-06', endDate: '2026-09-07' })
+    // Control: an ordinary date in the same zone is untouched by the fix.
+    expect(liveComparisonWindow(Date.parse('2026-06-10T12:00:00.000Z'), 7, 'America/New_York'))
+      .toEqual({ startDate: '2026-06-03', endDate: '2026-06-10' })
+  })
+
   it('summarizes drift across entities without conflating status and metric drift', () => {
     const statusOnly = buildLiveEntityComparison({
       entityType: 'campaign',
@@ -674,9 +694,15 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     vi.setSystemTime(new Date(Date.parse(NOW) + 20_000))
     const second = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
     expect(second.statusCode).toBe(429)
-    const body = JSON.parse(second.body) as { error: { code: string; details?: Record<string, number> } }
+    const body = JSON.parse(second.body) as { error: { code: string; details?: Record<string, unknown> } }
     expect(body.error.code).toBe('QUOTA_EXCEEDED')
-    expect(body.error.details).toMatchObject({ minIntervalMs: 60_000, retryAfterMs: 40_000 })
+    // Refused for being EARLY, not for being concurrent: the first walk
+    // finished, so this is purely the spacing rule.
+    expect(body.error.details).toMatchObject({
+      reason: 'min-interval',
+      minIntervalMs: 60_000,
+      retryAfterMs: 40_000,
+    })
     expect(ctx.readerCalls.filter((call) => call.method === 'listCampaigns')).toHaveLength(1)
 
     vi.setSystemTime(new Date(Date.parse(NOW) + 60_001))
@@ -929,6 +955,90 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     const statuses = [(await first).statusCode, second.statusCode].sort()
     expect(statuses).toEqual([200, 429])
     expect(ctx.readerCalls.filter((call) => call.method === 'listCampaigns')).toHaveLength(1)
+  })
+
+  it('refuses a concurrent read even after the interval has expired mid-walk', async () => {
+    // Fake the CLOCK ONLY: the first read is deliberately left unawaited while
+    // it is still walking, which needs real event-loop turns to dispatch, but
+    // the whole point of this case is to move time forward while it runs.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(NOW))
+    let openGate!: () => void
+    const gate = new Promise<void>((resolve) => { openGate = resolve })
+    let markInFlight!: () => void
+    const inFlight = new Promise<void>((resolve) => { markInFlight = resolve })
+    let verifyStarts = 0
+    await start({
+      campaigns: [],
+      minIntervalMs: 60_000,
+      holdVerify: gate,
+      onVerifyStart: () => {
+        verifyStarts += 1
+        if (verifyStarts === 1) markInFlight()
+        // A second walk must never get here. Let it through rather than park
+        // it behind the same gate, so a regression fails on the assertions
+        // below instead of deadlocking into a timeout.
+        else openGate()
+      },
+    })
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const first = ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    await inFlight
+
+    // A whole minimum interval passes while the first walk is STILL upstream.
+    // A claim expressed as a timestamp expires exactly here, which admitted a
+    // second walk onto the same account: with a ~4000-request ceiling per walk,
+    // a slow provider makes overlapping walks the normal case rather than the
+    // rare one.
+    vi.setSystemTime(new Date(Date.parse(NOW) + 60_001))
+    const second = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+
+    expect(second.statusCode).toBe(429)
+    const body = JSON.parse(second.body) as { error: { code: string; details?: Record<string, unknown> } }
+    expect(body.error.code).toBe('QUOTA_EXCEEDED')
+    // Refused for being CONCURRENT. The interval is already gone, so no
+    // retryAfterMs is claimed: how much longer the running walk needs is not
+    // knowable from here.
+    expect(body.error.details).toEqual({ reason: 'read-in-flight', minIntervalMs: 60_000 })
+
+    openGate()
+    expect((await first).statusCode).toBe(200)
+    // The refused read never reached the provider: exactly one walk happened.
+    expect(verifyStarts).toBe(1)
+    expect(ctx.readerCalls.filter((call) => call.method === 'listCampaigns')).toHaveLength(1)
+  })
+
+  it('clears the in-flight marker when the walk throws, so a failure cannot wedge the project', async () => {
+    let verifyStarts = 0
+    await start({
+      verifyError: Object.assign(new Error('upstream down'), { status: 503 }),
+      minIntervalMs: 60_000,
+      onVerifyStart: () => { verifyStarts += 1 },
+    })
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const failed = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    expect(failed.statusCode).toBe(502)
+    expect(verifyStarts).toBe(1)
+
+    // Same instant: refused by the SPACING rule, because the attempt reached
+    // the provider. A leaked marker would show up here as a concurrency
+    // refusal for a walk that is not running.
+    const immediate = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    expect(immediate.statusCode).toBe(429)
+    expect((JSON.parse(immediate.body) as { error: { details?: Record<string, unknown> } }).error.details)
+      .toMatchObject({ reason: 'min-interval' })
+
+    // Past the interval the spacing rule has no opinion left, so the read is
+    // admitted and reaches the provider again. A leaked marker would refuse
+    // this project forever.
+    vi.setSystemTime(new Date(Date.parse(NOW) + 60_001))
+    const next = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    expect(next.statusCode).toBe(502)
+    expect(verifyStarts).toBe(2)
   })
 
   it('400s a project with no ads connection without calling the provider', async () => {

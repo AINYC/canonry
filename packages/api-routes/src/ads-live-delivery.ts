@@ -6,7 +6,11 @@
  * then hands both sides here to be diffed. Everything in this file is
  * deterministic and unit-testable without a provider.
  */
-import { dollarsToMicros, formatIsoDateInTimeZone } from '@ainyc/canonry-contracts'
+import {
+  dollarsToMicros,
+  formatIsoDateInTimeZone,
+  isoDateDaysBeforeInTimeZone,
+} from '@ainyc/canonry-contracts'
 import type {
   AdsLiveDeliveryDto,
   AdsLiveEntityComparison,
@@ -48,8 +52,6 @@ export interface AdsLiveComparisonWindow {
   endDate: string
 }
 
-const ADS_LIVE_DAY_MS = 24 * 60 * 60 * 1_000
-
 /**
  * The date window the stored side is compared over, dated in the ACCOUNT's
  * timezone.
@@ -80,18 +82,23 @@ const ADS_LIVE_DAY_MS = 24 * 60 * 60 * 1_000
  * sides: the live side runs to the read instant and the stored side to the last
  * ads-sync. A difference there is snapshot staleness, which is the signal this
  * endpoint exists to surface, so it is reported as the drift it is.
+ *
+ * `lookbackDays` counts CALENDAR days in that same zone, which is why the start
+ * is stepped by `isoDateDaysBeforeInTimeZone` rather than by subtracting
+ * `lookbackDays × 24h` from the read instant. A local day is not always 24
+ * hours: the day a zone springs forward is 23 and the day it falls back is 25,
+ * so a fixed-duration step lands on the wrong calendar date around a transition
+ * and the window then gains or loses a metric date.
  */
 export function liveComparisonWindow(
   fetchedAtMs: number,
   lookbackDays: number,
   timezone: string,
 ): AdsLiveComparisonWindow {
+  const fetchedAtIso = new Date(fetchedAtMs).toISOString()
   return {
-    startDate: formatIsoDateInTimeZone(
-      new Date(fetchedAtMs - lookbackDays * ADS_LIVE_DAY_MS).toISOString(),
-      timezone,
-    ),
-    endDate: formatIsoDateInTimeZone(new Date(fetchedAtMs).toISOString(), timezone),
+    startDate: isoDateDaysBeforeInTimeZone(fetchedAtIso, lookbackDays, timezone),
+    endDate: formatIsoDateInTimeZone(fetchedAtIso, timezone),
   }
 }
 

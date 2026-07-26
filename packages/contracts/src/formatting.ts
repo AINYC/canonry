@@ -130,6 +130,59 @@ export function formatIsoDateInTimeZone(iso: string, timeZone: string): string {
   }
 }
 
+/**
+ * The calendar date `days` days after `isoDate`, both plain `YYYY-MM-DD`.
+ *
+ * Pure calendar arithmetic. `Date.UTC` is only a convenient month/year rollover
+ * engine here: UTC has no daylight saving, so adding to its day field cannot
+ * gain or lose an hour and cannot land on a different date than a paper
+ * calendar would. Doing the same step in milliseconds against a ZONED instant
+ * is what produces the off-by-one this exists to prevent, which is why the
+ * public entry point below converts to a calendar date FIRST and steps second.
+ *
+ * A value that is not a calendar date comes back untouched, so a degraded
+ * upstream reading degrades once rather than turning into a wrong date.
+ */
+function shiftIsoCalendarDate(isoDate: string, days: number): string {
+  if (!Number.isFinite(days)) return isoDate
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate)
+  if (!match?.[1] || !match[2] || !match[3]) return isoDate
+  const shifted = new Date(Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]) + Math.trunc(days),
+  ))
+  if (Number.isNaN(shifted.getTime())) return isoDate
+  const yyyy = shifted.getUTCFullYear()
+  const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(shifted.getUTCDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
+/**
+ * `YYYY-MM-DD` for the calendar date `days` CALENDAR days before the date that
+ * `iso` falls on as observed in `timeZone`.
+ *
+ * Use this for every "N days back" window boundary that is a calendar date. The
+ * tempting alternative, subtracting `days × 24h` from the instant and then
+ * formatting in the zone, is not calendar arithmetic: a spring-forward local day
+ * is 23 hours long and a fall-back local day is 25, so a fixed 24-hour step
+ * skips the short day or fails to leave the long one. Concretely, a one-day
+ * New York lookback from just after midnight on 2026-03-09 lands on March 7
+ * instead of March 8, and from late on 2026-11-01 it lands on November 1 instead
+ * of October 31, which silently adds a metric date to the window or drops one.
+ *
+ * Stepping the CALENDAR instead is exact by construction: the zone decides which
+ * date the instant is, and the count is then applied to that date, so no
+ * duration is ever converted into a number of days.
+ *
+ * Degrades the same way the rest of this module does: an unusable zone falls
+ * back to the UTC date, and an unusable input comes back unchanged.
+ */
+export function isoDateDaysBeforeInTimeZone(iso: string, days: number, timeZone: string): string {
+  return shiftIsoCalendarDate(formatIsoDateInTimeZone(iso, timeZone), -days)
+}
+
 const HOURS_PER_DAY = 24
 const ONE_DAY_MS = 24 * 60 * 60 * 1_000
 
