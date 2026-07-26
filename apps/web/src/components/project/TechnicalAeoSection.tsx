@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ChevronDown, ChevronRight, LoaderCircle, Play, RefreshCw, ScanSearch } from 'lucide-react'
 import type { MetricTone } from '../../view-models.js'
@@ -31,6 +31,13 @@ import {
 import { addToast } from '../../lib/toast-store.js'
 import { Button } from '../ui/button.js'
 import { Card } from '../ui/card.js'
+import {
+  DataTablePagination,
+  DataTableSearch,
+  MiddleTruncatedText,
+  urlSearchText,
+  useClientTable,
+} from '../shared/DataTableControls.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { useTriggerSiteAudit } from '../../queries/mutations.js'
@@ -38,6 +45,11 @@ import { getRunTrackerState, subscribeRunTracker } from '../../lib/run-tracker-s
 
 const PAGES_FETCH_LIMIT = 100
 const FACTOR_DRILLDOWN_PAGE_CAP = 12
+const EMPTY_SITE_AUDIT_PAGES: SiteAuditPageDto[] = []
+
+function siteAuditPageSearchText(page: SiteAuditPageDto): string {
+  return urlSearchText(page.url)
+}
 
 function scoreTone(score: number): MetricTone {
   if (score >= 70) return 'positive'
@@ -194,6 +206,18 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
       : 'Starting audit'
 
   const score = scoreQuery.data
+  const allPages = pagesQuery.data?.pages ?? EMPTY_SITE_AUDIT_PAGES
+  const hasErrors = (score?.pagesErrored ?? 0) > 0
+  const showErrorsOnly = errorsOnly && hasErrors
+  const tableSourcePages = useMemo(
+    () => showErrorsOnly ? allPages.filter((page) => page.status === 'error') : allPages,
+    [allPages, showErrorsOnly],
+  )
+  const pagesTable = useClientTable({
+    rows: tableSourcePages,
+    getSearchText: siteAuditPageSearchText,
+  })
+  const pagesCapped = score ? score.pagesAudited > allPages.length : false
 
   useEffect(() => {
     setErrorsOnly(false)
@@ -246,12 +270,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
   const trendPoints = trendQuery.data?.points ?? []
   const trendRows = trendPoints.map((p) => ({ runId: p.runId, date: p.auditedAt, score: p.aggregateScore }))
   const viewingHistorical = selectedRunId !== null
-  const allPages = pagesQuery.data?.pages ?? []
   const successPages = allPages.filter((p) => p.status === 'success')
-  const hasErrors = score.pagesErrored > 0
-  const showErrorsOnly = errorsOnly && hasErrors
-  const visiblePages = showErrorsOnly ? allPages.filter((p) => p.status === 'error') : allPages
-  const pagesCapped = score.pagesAudited > allPages.length
 
   // For a factor, the audited pages scoring below pass (< 70) on that factor,
   // worst-first — the "what's failing" behind the pass/partial/fail counts.
@@ -554,7 +573,10 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
             <div className="inline-flex items-center gap-1 rounded-full border border-default p-0.5" role="group" aria-label="Filter pages">
               <button
                 type="button"
-                onClick={() => setErrorsOnly(false)}
+                onClick={() => {
+                  setErrorsOnly(false)
+                  pagesTable.setPage(1)
+                }}
                 aria-pressed={!showErrorsOnly}
                 className={`min-h-11 rounded-full px-3 py-1 text-xs font-medium tabular-nums transition-colors ${!showErrorsOnly ? 'bg-mono-800 text-heading' : 'text-muted hover:text-neutral'}`}
               >
@@ -562,7 +584,10 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
               </button>
               <button
                 type="button"
-                onClick={() => setErrorsOnly(true)}
+                onClick={() => {
+                  setErrorsOnly(true)
+                  pagesTable.setPage(1)
+                }}
                 aria-pressed={showErrorsOnly}
                 className={`min-h-11 rounded-full px-3 py-1 text-xs font-medium tabular-nums transition-colors ${showErrorsOnly ? 'bg-negative-500/15 text-negative' : 'text-muted hover:text-neutral'}`}
               >
@@ -571,8 +596,19 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
             </div>
           ) : null}
         </div>
-        {visiblePages.length === 0 ? (
-          <p className="supporting-copy mt-3">No pages recorded.</p>
+        {allPages.length > 0 ? (
+          <DataTableSearch
+            value={pagesTable.query}
+            onChange={pagesTable.setQuery}
+            label="Filter audited page URLs"
+            placeholder="Filter page URL or query parameters"
+            className="mt-3 max-w-md"
+          />
+        ) : null}
+        {pagesTable.totalRows === 0 ? (
+          <p className="supporting-copy mt-3">
+            {pagesTable.hasQuery ? 'No pages match this filter.' : 'No pages recorded.'}
+          </p>
         ) : (
           <>
             <div className="evidence-table-wrap mt-3">
@@ -585,7 +621,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
                   </tr>
                 </thead>
                 <tbody>
-                  {visiblePages.map((p: SiteAuditPageDto) => (
+                  {pagesTable.rows.map((p: SiteAuditPageDto) => (
                     <tr key={p.url}>
                       <td className="text-right tabular-nums">
                         {p.status === 'error'
@@ -595,7 +631,12 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
                       <td>{p.status === 'error' ? <ToneBadge tone="negative">Error</ToneBadge> : <ToneBadge tone={scoreTone(p.overallScore)}>{statusLabel(p.overallScore)}</ToneBadge>}</td>
                       <td className="w-full max-w-0">
                         <a href={p.url} target="_blank" rel="noreferrer" className="block truncate text-neutral hover:text-heading" title={p.status === 'error' ? p.error ?? p.url : p.url}>
-                          {p.url}
+                          <MiddleTruncatedText
+                            value={p.url}
+                            headLength={54}
+                            tailLength={20}
+                            title={p.status === 'error' ? p.error ?? p.url : p.url}
+                          />
                         </a>
                       </td>
                     </tr>
@@ -603,6 +644,14 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
                 </tbody>
               </table>
             </div>
+            <DataTablePagination
+              page={pagesTable.page}
+              pageSize={pagesTable.pageSize}
+              visibleRows={pagesTable.rows.length}
+              totalRows={pagesTable.totalRows}
+              onPageChange={pagesTable.setPage}
+              itemLabel={pagesTable.hasQuery ? 'matches' : 'rows'}
+            />
             {pagesCapped ? (
               <p className="mt-2 text-xs text-faint">Showing the worst {allPages.length} of {score.pagesAudited} audited pages.</p>
             ) : null}

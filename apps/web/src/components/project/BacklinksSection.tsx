@@ -19,6 +19,10 @@ import {
 } from '../shared/ChartPrimitives.js'
 import { Button } from '../ui/button.js'
 import { Card } from '../ui/card.js'
+import {
+  DataTablePagination,
+  DEFAULT_TABLE_PAGE_SIZE,
+} from '../shared/DataTableControls.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
 import { asyncHandler } from '../../lib/async-handler.js'
 
@@ -106,7 +110,7 @@ import type {
   CcReleaseSyncDto,
 } from '../../api.js'
 
-const PAGE_SIZE = 50
+const PAGE_SIZE = DEFAULT_TABLE_PAGE_SIZE
 
 const SOURCE_LABELS: Record<BacklinkSource, string> = {
   commoncrawl: 'Common Crawl',
@@ -330,9 +334,7 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
   const pageRows = list?.rows ?? []
   const visibleTotal = list?.total ?? 0
   const hiddenCount = summary?.excludedLinkingDomains ?? 0
-  const canPage = visibleTotal > PAGE_SIZE
   const page = Math.floor(offset / PAGE_SIZE) + 1
-  const totalPages = Math.max(1, Math.ceil(visibleTotal / PAGE_SIZE))
 
   useEffect(() => {
     if (offset > 0 && offset >= visibleTotal) setOffset(0)
@@ -866,14 +868,7 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
         )}
 
         <div className="mt-4">
-          <div className="flex items-center justify-between mb-2">
-            <p className="eyebrow eyebrow-soft">Top referring domains</p>
-            {canPage && (
-              <p className="text-xs text-faint">
-                Page {page} of {totalPages} · {formatNumber(visibleTotal)} total
-              </p>
-            )}
-          </div>
+          <p className="eyebrow eyebrow-soft mb-2">Top referring domains</p>
           <Card className="surface-card overflow-hidden">
             <table className="w-full text-sm">
               <thead>
@@ -899,28 +894,13 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
               </tbody>
             </table>
           </Card>
-          {canPage && (
-            <div className="flex items-center justify-end gap-2 mt-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={offset === 0}
-                onClick={() => setOffset((v) => Math.max(0, v - PAGE_SIZE))}
-              >
-                Previous
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={offset + PAGE_SIZE >= visibleTotal}
-                onClick={() => setOffset((v) => v + PAGE_SIZE)}
-              >
-                Next
-              </Button>
-            </div>
-          )}
+          <DataTablePagination
+            page={page}
+            pageSize={PAGE_SIZE}
+            visibleRows={pageRows.length}
+            totalRows={visibleTotal}
+            onPageChange={(nextPage) => setOffset((nextPage - 1) * PAGE_SIZE)}
+          />
         </div>
 
         <div className="mt-4 flex items-center gap-3 flex-wrap">

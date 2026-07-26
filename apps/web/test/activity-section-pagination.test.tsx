@@ -132,39 +132,49 @@ function renderPanel(landingPages: ApiGaTrafficAiLandingPage[]) {
   )
 }
 
-test('shows 50 landing-page rows per page and paginates the rest', async () => {
+test('shows 25 landing-page rows per page and paginates the rest', async () => {
   renderPanel(makeLandingPages(60))
 
-  // Page 1: first 50 rows render, the 51st does not.
-  await waitFor(() => expect(screen.getByText('1–50 of 60 rows')).toBeTruthy())
+  // Page 1: first 25 rows render, the 26th does not.
+  await waitFor(() => expect(screen.getByText('1–25 of 60 rows')).toBeTruthy())
   expect(screen.getByText('/page-000')).toBeTruthy()
-  expect(screen.getByText('/page-049')).toBeTruthy()
-  expect(screen.queryByText('/page-050')).toBeNull()
+  expect(screen.getByText('/page-024')).toBeTruthy()
+  expect(screen.queryByText('/page-025')).toBeNull()
 
-  // Controls: Page 1 of 2, Previous disabled, Next enabled.
-  expect(screen.getByText('Page 1 of 2')).toBeTruthy()
+  // Controls: Page 1 of 3, Previous disabled, Next enabled.
+  expect(screen.getByText('Page 1 of 3')).toBeTruthy()
   const prev = screen.getByRole('button', { name: 'Previous' })
   const next = screen.getByRole('button', { name: 'Next' })
   expect(prev.hasAttribute('disabled')).toBe(true)
   expect(next.hasAttribute('disabled')).toBe(false)
 
-  // Advance: page 2 shows the remaining 10 rows, Next is now disabled.
+  // Advance: page 2 shows the next 25 rows.
   fireEvent.click(next)
+  await waitFor(() => expect(screen.getByText('26–50 of 60 rows')).toBeTruthy())
+  expect(screen.getByText('Page 2 of 3')).toBeTruthy()
+  expect(screen.getByText('/page-025')).toBeTruthy()
+  expect(screen.getByText('/page-049')).toBeTruthy()
+  expect(screen.queryByText('/page-024')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Next' }).hasAttribute('disabled')).toBe(false)
+  expect(screen.getByRole('button', { name: 'Previous' }).hasAttribute('disabled')).toBe(false)
+
+  // Page 3 shows the remaining 10 rows, and Next is now disabled.
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }))
   await waitFor(() => expect(screen.getByText('51–60 of 60 rows')).toBeTruthy())
-  expect(screen.getByText('Page 2 of 2')).toBeTruthy()
+  expect(screen.getByText('Page 3 of 3')).toBeTruthy()
   expect(screen.getByText('/page-050')).toBeTruthy()
   expect(screen.getByText('/page-059')).toBeTruthy()
   expect(screen.queryByText('/page-049')).toBeNull()
   expect(screen.getByRole('button', { name: 'Next' }).hasAttribute('disabled')).toBe(true)
-  expect(screen.getByRole('button', { name: 'Previous' }).hasAttribute('disabled')).toBe(false)
 })
 
-test('renders no pagination controls when there are 50 or fewer rows', async () => {
-  renderPanel(makeLandingPages(50))
+test('renders no pagination controls when there are 25 or fewer rows', async () => {
+  renderPanel(makeLandingPages(25))
 
-  await waitFor(() => expect(screen.getByText('50 rows')).toBeTruthy())
-  // No range caption and no pager for a single page.
-  expect(screen.queryByText('1–50 of 50 rows')).toBeNull()
+  await waitFor(() => expect(screen.getByText('25 rows')).toBeTruthy())
+  // The shared footer always reports the visible range, but omits page controls
+  // when there is only one page.
+  expect(screen.getByText('1–25 of 25 rows')).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Next' })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Previous' })).toBeNull()
   expect(screen.queryByText(/Page \d+ of/)).toBeNull()
@@ -174,12 +184,48 @@ test('changing the sort resets to page 1', async () => {
   renderPanel(makeLandingPages(60))
 
   // Jump to page 2.
-  await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeTruthy())
+  await waitFor(() => expect(screen.getByText('Page 1 of 3')).toBeTruthy())
   fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-  await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeTruthy())
+  await waitFor(() => expect(screen.getByText('Page 2 of 3')).toBeTruthy())
 
   // Re-sorting (click the "Landing Page" header) snaps back to page 1.
   fireEvent.click(screen.getByRole('button', { name: /Landing Page/ }))
-  await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeTruthy())
-  expect(screen.getByText('1–50 of 60 rows')).toBeTruthy()
+  await waitFor(() => expect(screen.getByText('Page 1 of 3')).toBeTruthy())
+  expect(screen.getByText('1–25 of 60 rows')).toBeTruthy()
+})
+
+test('middle-truncates long URLs while preserving the full value for filtering and accessibility', async () => {
+  const landingPage = `/audit?olref=${'summer-launch-'.repeat(8)}&campaign=summer-launch&content=footer-link`
+  renderPanel([
+    {
+      source: 'chatgpt.com',
+      medium: 'referral',
+      sourceDimension: 'manual_utm',
+      landingPage,
+      sessions: 12,
+      users: 9,
+    },
+    ...makeLandingPages(30),
+  ])
+
+  await waitFor(() => expect(screen.getByText('1–25 of 31 rows')).toBeTruthy())
+  const expectedDisplay = `${[...landingPage].slice(0, 36).join('')}…${[...landingPage].slice(-18).join('')}`
+  const displayedUrl = screen.getByText(expectedDisplay)
+  expect(displayedUrl.getAttribute('aria-hidden')).toBe('true')
+  expect(displayedUrl.parentElement?.getAttribute('title')).toBe(landingPage)
+  expect(displayedUrl.parentElement?.querySelector('.sr-only')?.textContent).toBe(landingPage)
+
+  const filter = screen.getByRole('searchbox', { name: 'Filter landing page URLs or query parameters' })
+  fireEvent.change(filter, { target: { value: 'olref campaign summer footer' } })
+
+  await waitFor(() => expect(screen.getByText('1 match')).toBeTruthy())
+  expect(screen.getByText(expectedDisplay)).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Next' })).toBeNull()
+
+  fireEvent.change(filter, { target: { value: 'campaign=missing' } })
+  await waitFor(() => expect(screen.getByText('0 matches')).toBeTruthy())
+  expect(screen.getByText('No landing pages match this filter')).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Clear filter' }))
+  await waitFor(() => expect(screen.getByText('1–25 of 31 rows')).toBeTruthy())
 })

@@ -4,6 +4,11 @@ import { CitationStates, brandLabelFromDomain } from '@ainyc/canonry-contracts'
 
 import { Button } from '../ui/button.js'
 import { CitationBadge } from '../shared/CitationBadge.js'
+import {
+  DataTablePagination,
+  DataTableSearch,
+  useClientTable,
+} from '../shared/DataTableControls.js'
 import { ProviderBadge } from '../shared/ProviderBadge.js'
 import { CitationTimeline, mergeProviderHistories } from './CitationTimeline.js'
 import { useDrawer } from '../../hooks/use-drawer.js'
@@ -20,7 +25,23 @@ export interface EvidenceSignalSummary {
   tone: SignalTone
 }
 
+interface EvidenceGroup {
+  key: string
+  phrase: string
+  location: string | null
+  items: CitationInsightVm[]
+  rawItems: CitationInsightVm[]
+}
+
 const ANSWER_PREVIEW_MAX = 320
+
+function evidenceGroupSearchText(group: EvidenceGroup): string {
+  return [
+    group.phrase,
+    group.location ?? '',
+    ...group.rawItems.map((item) => item.provider),
+  ].join(' ')
+}
 
 /** Map a snapshot to the state value driving the column for the active mode.
  *  In citations mode we read `citationState` directly. In mentions mode we
@@ -178,14 +199,7 @@ export function EvidenceTable({
   const [density, setDensity] = useState<Density>(defaultDensity)
 
   const groups = useMemo(() => {
-    type Group = {
-      key: string
-      phrase: string
-      location: string | null
-      items: CitationInsightVm[]
-      rawItems: CitationInsightVm[]
-    }
-    const map = new Map<string, Group>()
+    const map = new Map<string, EvidenceGroup>()
     for (const rawItem of evidence) {
       const phrase = rawItem.query
       const location = compareLocations ? (rawItem.location ?? null) : null
@@ -197,6 +211,13 @@ export function EvidenceTable({
     }
     return [...map.values()]
   }, [evidence, mode, compareLocations])
+  const groupsTable = useClientTable({
+    rows: groups,
+    getSearchText: evidenceGroupSearchText,
+  })
+  const visibleGroupKeys = groupsTable.rows.map((group) => group.key)
+  const visibleGroupsExpanded = visibleGroupKeys.length > 0
+    && visibleGroupKeys.every((key) => expandedRows.has(key))
 
   const toggleRow = (key: string) => {
     setExpandedRows(prev => {
@@ -257,14 +278,17 @@ export function EvidenceTable({
             type="button"
             className="text-[11px] text-secondary hover:text-strong"
             onClick={() => {
-              setExpandedRows(prev =>
-                prev.size === groups.length
-                  ? new Set()
-                  : new Set(groups.map(g => g.key)),
-              )
+              setExpandedRows((previous) => {
+                const next = new Set(previous)
+                for (const key of visibleGroupKeys) {
+                  if (visibleGroupsExpanded) next.delete(key)
+                  else next.add(key)
+                }
+                return next
+              })
             }}
           >
-            {expandedRows.size === groups.length && groups.length > 0 ? 'Collapse all' : 'Expand all'}
+            {visibleGroupsExpanded ? 'Collapse page' : 'Expand page'}
           </button>
           <div className="flex items-center gap-2">
             <span className="text-[10px] uppercase tracking-wide text-muted">Density</span>
@@ -303,6 +327,15 @@ export function EvidenceTable({
           </div>
         </div>
       </div>
+      {groups.length > 0 ? (
+        <DataTableSearch
+          value={groupsTable.query}
+          onChange={groupsTable.setQuery}
+          label="Filter tracked queries"
+          placeholder="Filter query, location, or provider"
+          className="mb-3 max-w-md"
+        />
+      ) : null}
       <div className="evidence-table-wrap">
         <table className="evidence-table">
           <thead>
@@ -316,7 +349,7 @@ export function EvidenceTable({
             </tr>
           </thead>
           <tbody>
-            {groups.map(({ key: groupKey, phrase, location, items, rawItems }) => {
+            {groupsTable.rows.map(({ key: groupKey, phrase, location, items, rawItems }) => {
               const isExpanded = expandedRows.has(groupKey)
               const states = items.map(i => i.citationState)
               const aggState: CitationState =
@@ -435,6 +468,17 @@ export function EvidenceTable({
           </tbody>
         </table>
       </div>
+      {groupsTable.totalRows === 0 && groupsTable.hasQuery ? (
+        <p className="supporting-copy mt-3">No tracked queries match this filter.</p>
+      ) : null}
+      <DataTablePagination
+        page={groupsTable.page}
+        pageSize={groupsTable.pageSize}
+        visibleRows={groupsTable.rows.length}
+        totalRows={groupsTable.totalRows}
+        onPageChange={groupsTable.setPage}
+        itemLabel={groupsTable.hasQuery ? 'matches' : 'queries'}
+      />
       <p className="sr-only" aria-live="polite">
         Showing {presenceVerb === 'cited' ? 'citations (sources)' : 'mentions (answer text)'}.
       </p>
