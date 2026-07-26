@@ -1587,13 +1587,17 @@ export interface ApiGaTrafficPage {
   users: number
 }
 
+/**
+ * `users` is absent by design. GA reports it as a COUNT DISTINCT at the grain
+ * requested, so /ga/traffic withdrew it from these rows in 4.135.0 rather than
+ * keep summing one visitor once per landing page and per date in the window.
+ */
 export interface ApiGaTrafficReferral {
   source: string
   medium: string
   trafficClass: 'organic' | 'paid'
   sourceDimension: 'session' | 'first_user' | 'manual_utm'
   sessions: number
-  users: number
 }
 
 export interface ApiGaTrafficAiLandingPage {
@@ -1603,7 +1607,6 @@ export interface ApiGaTrafficAiLandingPage {
   sourceDimension: 'session' | 'first_user' | 'manual_utm'
   landingPage: string
   sessions: number
-  users: number
 }
 
 export interface ApiGaSocialReferral {
@@ -1639,28 +1642,16 @@ export interface ApiGaTraffic {
   aiReferralLandingPages: ApiGaTrafficAiLandingPage[]
   /** Deduped AI session total (MAX per date+source+medium across attribution dimensions). Cross-cutting: can overlap with Direct/Organic/Social. */
   aiSessionsDeduped: number
-  /** Deduped AI user total. */
-  aiUsersDeduped: number
   /** Deduped paid AI sessions. */
   paidAiSessionsDeduped: number
-  /** Deduped paid AI users. */
-  paidAiUsersDeduped: number
   /** Deduped organic/non-paid AI sessions. */
   organicAiSessionsDeduped: number
-  /** Deduped organic/non-paid AI users. */
-  organicAiUsersDeduped: number
   /** AI sessions whose CURRENT sessionSource matched an AI engine. Can overlap with raw Organic/Social/Direct totals; channelBreakdown removes those overlaps for display. */
   aiSessionsBySession: number
-  /** AI users whose CURRENT sessionSource matched an AI engine. */
-  aiUsersBySession: number
   /** Session-source paid AI sessions. */
   paidAiSessionsBySession: number
-  /** Session-source paid AI users. */
-  paidAiUsersBySession: number
   /** Session-source organic/non-paid AI sessions. */
   organicAiSessionsBySession: number
-  /** Session-source organic/non-paid AI users. */
-  organicAiUsersBySession: number
   socialReferrals: ApiGaSocialReferral[]
   /** Total social sessions (session-scoped via sessionDefaultChannelGroup). */
   socialSessions: number

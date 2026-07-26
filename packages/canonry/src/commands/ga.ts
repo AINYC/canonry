@@ -169,15 +169,17 @@ export async function gaTraffic(project: string, opts?: { limit?: number; window
   if (result.aiReferrals.length > 0) {
     const attrWidth = 12
     const classWidth = 8
+    // Sessions only. GA counts users DISTINCT at the grain it was asked for,
+    // so these rows carry no user figure to print.
     console.log('  AI REFERRAL SOURCES')
-    console.log(`  ${'SOURCE'.padEnd(25)}  ${'MEDIUM'.padEnd(15)}  ${'CLASS'.padEnd(classWidth)}  ${'ATTRIBUTION'.padEnd(attrWidth)}  ${'SESSIONS'.padEnd(10)}${'USERS'.padEnd(8)}`)
-    console.log(`  ${'─'.repeat(25)}  ${'─'.repeat(15)}  ${'─'.repeat(classWidth)}  ${'─'.repeat(attrWidth)}  ${'─'.repeat(10)}${'─'.repeat(8)}`)
+    console.log(`  ${'SOURCE'.padEnd(25)}  ${'MEDIUM'.padEnd(15)}  ${'CLASS'.padEnd(classWidth)}  ${'ATTRIBUTION'.padEnd(attrWidth)}  ${'SESSIONS'.padEnd(10)}`)
+    console.log(`  ${'─'.repeat(25)}  ${'─'.repeat(15)}  ${'─'.repeat(classWidth)}  ${'─'.repeat(attrWidth)}  ${'─'.repeat(10)}`)
 
     for (const ref of result.aiReferrals) {
       const dimLabel = ref.sourceDimension === 'first_user' ? 'first-visit' : ref.sourceDimension === 'manual_utm' ? 'utm' : 'session'
       const classLabel = ref.trafficClass === 'paid' ? 'paid' : 'organic'
       console.log(
-        `  ${ref.source.padEnd(25)}  ${ref.medium.padEnd(15)}  ${classLabel.padEnd(classWidth)}  ${dimLabel.padEnd(attrWidth)}  ${String(ref.sessions).padEnd(10)}${String(ref.users).padEnd(8)}`,
+        `  ${ref.source.padEnd(25)}  ${ref.medium.padEnd(15)}  ${classLabel.padEnd(classWidth)}  ${dimLabel.padEnd(attrWidth)}  ${String(ref.sessions).padEnd(10)}`,
       )
     }
     console.log()
@@ -186,15 +188,15 @@ export async function gaTraffic(project: string, opts?: { limit?: number; window
   if (result.aiReferralLandingPages.length > 0) {
     const attrWidth = 12
     console.log('  AI REFERRAL LANDING PAGES')
-    console.log(`  ${'LANDING PAGE'.padEnd(30)}  ${'SOURCE'.padEnd(25)}  ${'ATTRIBUTION'.padEnd(attrWidth)}  ${'SESSIONS'.padEnd(10)}${'USERS'.padEnd(8)}`)
-    console.log(`  ${'─'.repeat(30)}  ${'─'.repeat(25)}  ${'─'.repeat(attrWidth)}  ${'─'.repeat(10)}${'─'.repeat(8)}`)
+    console.log(`  ${'LANDING PAGE'.padEnd(30)}  ${'SOURCE'.padEnd(25)}  ${'ATTRIBUTION'.padEnd(attrWidth)}  ${'SESSIONS'.padEnd(10)}`)
+    console.log(`  ${'─'.repeat(30)}  ${'─'.repeat(25)}  ${'─'.repeat(attrWidth)}  ${'─'.repeat(10)}`)
 
     for (const row of result.aiReferralLandingPages) {
       const dimLabel = row.sourceDimension === 'first_user' ? 'first-visit' : row.sourceDimension === 'manual_utm' ? 'utm' : 'session'
       const page = row.landingPage.length > 30 ? row.landingPage.slice(0, 27) + '...' : row.landingPage
       const source = row.source.length > 25 ? row.source.slice(0, 22) + '...' : row.source
       console.log(
-        `  ${page.padEnd(30)}  ${source.padEnd(25)}  ${dimLabel.padEnd(attrWidth)}  ${String(row.sessions).padEnd(10)}${String(row.users).padEnd(8)}`,
+        `  ${page.padEnd(30)}  ${source.padEnd(25)}  ${dimLabel.padEnd(attrWidth)}  ${String(row.sessions).padEnd(10)}`,
       )
     }
     console.log()
@@ -544,17 +546,11 @@ export async function gaAttribution(project: string, opts?: { trend?: boolean; f
         totalUsers: traffic.totalUsers,
         organicSessions: traffic.totalOrganicSessions,
         aiSessions: traffic.aiSessionsDeduped,
-        aiUsers: traffic.aiUsersDeduped,
         paidAiSessions: traffic.paidAiSessionsDeduped,
-        paidAiUsers: traffic.paidAiUsersDeduped,
         organicAiSessions: traffic.organicAiSessionsDeduped,
-        organicAiUsers: traffic.organicAiUsersDeduped,
         aiSessionsBySession: traffic.aiSessionsBySession,
-        aiUsersBySession: traffic.aiUsersBySession,
         paidAiSessionsBySession: traffic.paidAiSessionsBySession,
-        paidAiUsersBySession: traffic.paidAiUsersBySession,
         organicAiSessionsBySession: traffic.organicAiSessionsBySession,
-        organicAiUsersBySession: traffic.organicAiUsersBySession,
         socialSessions: traffic.socialSessions,
         socialUsers: traffic.socialUsers,
         directSessions: traffic.totalDirectSessions,
@@ -633,17 +629,11 @@ export async function gaAttribution(project: string, opts?: { trend?: boolean; f
       totalUsers: traffic.totalUsers,
       organicSessions: traffic.totalOrganicSessions,
       aiSessions: traffic.aiSessionsDeduped,
-      aiUsers: traffic.aiUsersDeduped,
       paidAiSessions: traffic.paidAiSessionsDeduped,
-      paidAiUsers: traffic.paidAiUsersDeduped,
       organicAiSessions: traffic.organicAiSessionsDeduped,
-      organicAiUsers: traffic.organicAiUsersDeduped,
       aiSessionsBySession: traffic.aiSessionsBySession,
-      aiUsersBySession: traffic.aiUsersBySession,
       paidAiSessionsBySession: traffic.paidAiSessionsBySession,
-      paidAiUsersBySession: traffic.paidAiUsersBySession,
       organicAiSessionsBySession: traffic.organicAiSessionsBySession,
-      organicAiUsersBySession: traffic.organicAiUsersBySession,
       socialSessions: traffic.socialSessions,
       socialUsers: traffic.socialUsers,
       directSessions: traffic.totalDirectSessions,

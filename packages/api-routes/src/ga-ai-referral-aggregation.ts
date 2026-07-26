@@ -55,16 +55,19 @@ import type { AiReferralTrafficClass, GA4AiReferralDailyDto } from '@ainyc/canon
  * there is no AI-referral equivalent: `fetchAiReferrals` is always dimensioned
  * by source/medium/landingPage/channelGroup. So an AI-referral user count
  * cannot be computed and cannot be fetched. It is therefore not reported, the
- * same call `aiReferralSectionSchema` made when it withdrew its user counts.
- * Do not reintroduce one here with a caveat: a wrong number with a caveat is
- * still a wrong number on a customer-facing surface.
+ * same call `aiReferralSectionSchema` made when it withdrew its user counts
+ * and the same call `/ga/traffic` made in 4.135.0 when it withdrew its six
+ * `*Users*` fields and the `users` on its two referral row types. Do not
+ * reintroduce one here with a caveat: a wrong number with a caveat is still a
+ * wrong number on a customer-facing surface.
  */
 
 /**
- * One `ga_ai_referrals` row as the session aggregations need to see it.
+ * One `ga_ai_referrals` row as these aggregations need to see it.
  *
- * `users` is absent on purpose. Nothing that derives a published number reads
- * it, so a caller selecting sessions alone is the normal case.
+ * `users` is absent on purpose, and there is no sibling row type that carries
+ * it: nothing derives a published number from that column any more, so no
+ * caller has a reason to select it.
  */
 export interface AiReferralAggregationRow {
   date: string
@@ -74,16 +77,6 @@ export interface AiReferralAggregationRow {
   sourceDimension: string
   channelGroup: string
   sessions: number | null
-}
-
-/**
- * A row that also carries `users`, required only by `summarizeAiReferralCounts`
- * because it still has to feed the legacy `/ga/traffic` user fields. Typed
- * separately so that caller cannot forget the column and silently report zero
- * users, while every other caller is free of it.
- */
-export interface AiReferralSummaryRow extends AiReferralAggregationRow {
-  users: number | null
 }
 
 /**
@@ -112,7 +105,7 @@ export function normalizeAiTrafficClass(value: string | null | undefined): AiRef
 }
 
 function emptyAiCounts() {
-  return { sessions: 0, users: 0 }
+  return { sessions: 0 }
 }
 
 /**
@@ -178,60 +171,6 @@ export function resolveWinningDimensions(
 }
 
 /**
- * The winning dimension's user counts, for the LEGACY `/ga/traffic` fields ONLY.
- *
- * Every number this returns is a landing-page sum and therefore over-counts any
- * visitor who touched more than one page. It exists because `aiUsersDeduped`,
- * `paidAiUsersDeduped`, `organicAiUsersDeduped` and their `bySession` siblings
- * have shipped on `/ga/traffic` since long before this module, and withdrawing
- * published fields is a breaking change that needs its own version plan. This
- * reproduces the previous behaviour byte-for-byte rather than silently changing
- * a number under existing consumers.
- *
- * It is deliberately private and deliberately separate from the winner set, so
- * no new surface can reach it. Do not export it, and do not add a caller.
- */
-function resolveLegacyWinningUsers(rows: readonly AiReferralSummaryRow[]): {
-  paidUsers: number
-  organicUsers: number
-} {
-  interface DimensionUserCounts { paidUsers: number, organicUsers: number }
-  const groups = new Map<string, Map<string, DimensionUserCounts>>()
-
-  for (const row of rows) {
-    const key = `${row.date}\0${row.source}\0${row.medium}`
-    let byDimension = groups.get(key)
-    if (!byDimension) {
-      byDimension = new Map()
-      groups.set(key, byDimension)
-    }
-    let dim = byDimension.get(row.sourceDimension)
-    if (!dim) {
-      dim = { paidUsers: 0, organicUsers: 0 }
-      byDimension.set(row.sourceDimension, dim)
-    }
-    const users = row.users ?? 0
-    if (normalizeAiTrafficClass(row.trafficClass) === AiReferralTrafficClasses.paid) {
-      dim.paidUsers += users
-    } else {
-      dim.organicUsers += users
-    }
-  }
-
-  let paidUsers = 0
-  let organicUsers = 0
-  for (const byDimension of groups.values()) {
-    const dims = [...byDimension.values()]
-    // Users picked their own winning dimension before this refactor; preserved.
-    const best = dims.reduce((winner, d) =>
-      d.paidUsers + d.organicUsers > winner.paidUsers + winner.organicUsers ? d : winner)
-    paidUsers += best.paidUsers
-    organicUsers += best.organicUsers
-  }
-  return { paidUsers, organicUsers }
-}
-
-/**
  * Window totals for the AI traffic cards.
  *
  * `deduped` folds the winner set from `resolveWinningDimensions`. `bySession`
@@ -239,12 +178,12 @@ function resolveLegacyWinningUsers(rows: readonly AiReferralSummaryRow[]): {
  * which is a plain sum over the `session` rows because a single lens is
  * already disjoint by landing page.
  *
- * The `.users` figures on every bucket are the legacy landing-page-summed
- * counts described at the top of this file. They are inflated and they back
- * only the pre-existing /ga/traffic response fields. Read `.sessions` for
- * anything new.
+ * SESSIONS ONLY. Every bucket used to carry a `.users` landing-page sum backing
+ * the six `/ga/traffic` user fields; 4.135.0 withdrew those fields and deleted
+ * the math behind them. See the users rule at the top of this file for why no
+ * correct replacement can be computed or fetched.
  */
-export function summarizeAiReferralCounts(rows: readonly AiReferralSummaryRow[]) {
+export function summarizeAiReferralCounts(rows: readonly AiReferralAggregationRow[]) {
   const paidDeduped = emptyAiCounts()
   const organicDeduped = emptyAiCounts()
   const paidBySession = emptyAiCounts()
@@ -256,17 +195,9 @@ export function summarizeAiReferralCounts(rows: readonly AiReferralSummaryRow[])
     organicDeduped.sessions += winner.organicSessions
   }
 
-  // The ONLY call site of the legacy user math, backing six `users` fields
-  // /ga/traffic has published since before this module existed. Reproduced
-  // unchanged rather than silently altered; no new surface may add a seventh.
-  const legacyUsers = resolveLegacyWinningUsers(rows)
-  paidDeduped.users = legacyUsers.paidUsers
-  organicDeduped.users = legacyUsers.organicUsers
-
   for (const row of rows) {
     if (row.sourceDimension !== 'session') continue
     const sessions = row.sessions ?? 0
-    const users = row.users ?? 0
     bySessionChannelGroup.set(
       row.channelGroup,
       (bySessionChannelGroup.get(row.channelGroup) ?? 0) + sessions,
@@ -275,7 +206,6 @@ export function summarizeAiReferralCounts(rows: readonly AiReferralSummaryRow[])
       ? paidBySession
       : organicBySession
     bucket.sessions += sessions
-    bucket.users += users
   }
 
   return {
@@ -284,14 +214,8 @@ export function summarizeAiReferralCounts(rows: readonly AiReferralSummaryRow[])
     paidBySession,
     organicBySession,
     bySessionChannelGroup,
-    deduped: {
-      sessions: paidDeduped.sessions + organicDeduped.sessions,
-      users: paidDeduped.users + organicDeduped.users,
-    },
-    bySession: {
-      sessions: paidBySession.sessions + organicBySession.sessions,
-      users: paidBySession.users + organicBySession.users,
-    },
+    deduped: { sessions: paidDeduped.sessions + organicDeduped.sessions },
+    bySession: { sessions: paidBySession.sessions + organicBySession.sessions },
   }
 }
 

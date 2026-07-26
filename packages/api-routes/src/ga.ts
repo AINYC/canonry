@@ -1092,7 +1092,6 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         trafficClass: gaAiReferrals.trafficClass,
         sourceDimension: gaAiReferrals.sourceDimension,
         sessions: sql<number>`SUM(${gaAiReferrals.sessions})`,
-        users: sql<number>`SUM(${gaAiReferrals.users})`,
       })
       .from(gaAiReferrals)
       .where(and(...aiConditions))
@@ -1107,7 +1106,6 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         sourceDimension: gaAiReferrals.sourceDimension,
         landingPage: sql<string>`COALESCE(${gaAiReferrals.landingPageNormalized}, ${gaAiReferrals.landingPage})`,
         sessions: sql<number>`SUM(${gaAiReferrals.sessions})`,
-        users: sql<number>`SUM(${gaAiReferrals.users})`,
       })
       .from(gaAiReferrals)
       .where(and(...aiConditions))
@@ -1120,6 +1118,9 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       )
       .all()
 
+    // `users` is deliberately not selected. GA counts users DISTINCT at the
+    // grain it was asked for, so the stored column cannot be summed at any
+    // grain — see the users rule in `ga-ai-referral-aggregation.ts`.
     const aiRowsForTotals = app.db
       .select({
         date: gaAiReferrals.date,
@@ -1129,7 +1130,6 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         sourceDimension: gaAiReferrals.sourceDimension,
         channelGroup: gaAiReferrals.channelGroup,
         sessions: gaAiReferrals.sessions,
-        users: gaAiReferrals.users,
       })
       .from(gaAiReferrals)
       .where(and(...aiConditions))
@@ -1214,13 +1214,18 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         directSessions: r.directSessions ?? 0,
         users: r.users ?? 0,
       })),
+      // No `users` on either referral row type, and no `ai*Users*` totals: GA
+      // reports users as a COUNT DISTINCT at the grain requested, so summing
+      // the stored column across landing pages (and, for these rows, across
+      // every date in the window) counted one visitor once per row. Withdrawn
+      // in 4.135.0; see `ga-ai-referral-aggregation.ts` for why no correct
+      // figure can be computed or fetched.
       aiReferrals: aiReferrals.map((r) => ({
         source: r.source,
         medium: r.medium,
         trafficClass: normalizeAiTrafficClass(r.trafficClass),
         sourceDimension: r.sourceDimension,
         sessions: r.sessions ?? 0,
-        users: r.users ?? 0,
       })),
       aiReferralLandingPages: aiReferralLandingPages.map((r) => ({
         source: r.source,
@@ -1229,20 +1234,13 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         sourceDimension: r.sourceDimension,
         landingPage: r.landingPage,
         sessions: r.sessions ?? 0,
-        users: r.users ?? 0,
       })),
       aiSessionsDeduped: aiSummary.deduped.sessions,
-      aiUsersDeduped: aiSummary.deduped.users,
       paidAiSessionsDeduped: aiSummary.paidDeduped.sessions,
-      paidAiUsersDeduped: aiSummary.paidDeduped.users,
       organicAiSessionsDeduped: aiSummary.organicDeduped.sessions,
-      organicAiUsersDeduped: aiSummary.organicDeduped.users,
       aiSessionsBySession: aiSummary.bySession.sessions,
-      aiUsersBySession: aiSummary.bySession.users,
       paidAiSessionsBySession: aiSummary.paidBySession.sessions,
-      paidAiUsersBySession: aiSummary.paidBySession.users,
       organicAiSessionsBySession: aiSummary.organicBySession.sessions,
-      organicAiUsersBySession: aiSummary.organicBySession.users,
       socialReferrals: socialReferrals.map((r) => ({
         source: r.source,
         medium: r.medium,

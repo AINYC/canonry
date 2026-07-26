@@ -21,21 +21,14 @@ describe('GA contracts', () => {
           sourceDimension: 'session',
           landingPage: '/pricing',
           sessions: 12,
-          users: 9,
         },
       ],
       aiSessionsDeduped: 12,
-      aiUsersDeduped: 9,
       paidAiSessionsDeduped: 0,
-      paidAiUsersDeduped: 0,
       organicAiSessionsDeduped: 12,
-      organicAiUsersDeduped: 9,
       aiSessionsBySession: 12,
-      aiUsersBySession: 9,
       paidAiSessionsBySession: 0,
-      paidAiUsersBySession: 0,
       organicAiSessionsBySession: 12,
-      organicAiUsersBySession: 9,
       socialReferrals: [],
       socialSessions: 0,
       socialUsers: 0,
@@ -71,6 +64,18 @@ describe('GA contracts', () => {
     })
 
     expect(parsed.aiReferralLandingPages[0]!.landingPage).toBe('/pricing')
+
+    // The AI-referral user counts were withdrawn in 4.135.0: /ga/traffic stops
+    // emitting them, and the schema keeps them optional so an existing consumer
+    // still parses the response and reads `undefined` rather than throwing on a
+    // missing required field (or reading an inflated number).
+    expect(parsed.aiUsersDeduped).toBeUndefined()
+    expect(parsed.paidAiUsersDeduped).toBeUndefined()
+    expect(parsed.organicAiUsersDeduped).toBeUndefined()
+    expect(parsed.aiUsersBySession).toBeUndefined()
+    expect(parsed.paidAiUsersBySession).toBeUndefined()
+    expect(parsed.organicAiUsersBySession).toBeUndefined()
+    expect(parsed.aiReferralLandingPages[0]!.users).toBeUndefined()
   })
 
   it('includes landingPage in AI referral history entries', () => {
