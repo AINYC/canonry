@@ -34,8 +34,6 @@ The legacy package name `@ainyc/canonry` is still published at the same versions
 
 Open [http://localhost:4100/setup](http://localhost:4100/setup). A guided wizard walks you through provider keys, project setup, queries, and your first visibility check.
 
-If you serve Canonry on `0.0.0.0` or a LAN address, complete first-run dashboard password setup from loopback first, or authenticate with a `cnry_...` bearer key. The unauthenticated setup path is loopback-only by design.
-
 Prefer the terminal?
 
 ```bash
@@ -44,15 +42,6 @@ cnry query add my-site "your first query" "second query"
 cnry run my-site --wait
 cnry evidence my-site
 cnry insights my-site
-```
-
-To pin a project to a provider model for future sweeps, use an explicit
-override. Omitting a provider keeps the project on all configured engines;
-omitting its model keeps that engine on the instance setting.
-
-```bash
-cnry project update my-site --provider gemini --provider-model gemini=gemini-2.5-pro
-cnry project update my-site --clear-provider-model gemini
 ```
 
 ## Or use any shell-capable coding agent
@@ -72,8 +61,6 @@ Set up canonry for me. Canonry is an open-source platform that tracks how AI ans
 6. Read `.claude/skills/aero/SKILL.md` and summarize the existing mention and citation evidence. Propose the technical audit, including its page limit, and ask for separate approval before running `cnry technical-aeo run <project> --wait`; after approval, read the result with `cnry technical-aeo score <project> --format json`.
 7. Open the dashboard only if I ask, then summarize what you found: mention and citation rates per provider, the top 3 gaps, and the highest-impact site issues. Ask again before drafting content, submitting URLs, editing files, publishing, or performing any other mutation or quota-consuming operation.
 ```
-
-One-click copy at [canonry.ai](https://canonry.ai).
 
 ## If you get stuck
 
