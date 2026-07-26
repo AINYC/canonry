@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import type { GscPerformanceDailyDto, MetricsWindow } from '@ainyc/canonry-contracts'
 
 import { Button } from '../ui/button.js'
 import { Card } from '../ui/card.js'
+import {
+  DataTablePagination,
+  DataTableSearch,
+  DEFAULT_TABLE_PAGE_SIZE,
+  MiddleTruncatedText,
+  useClientTable,
+} from '../shared/DataTableControls.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
 import { CHART_NEUTRAL, CHART_TONE, CHART_SERIES_COLORS } from '../shared/ChartPrimitives.js'
 import { formatTimestamp, formatBooleanState, SearchMetric, SEARCH_METRIC_LABELS } from '../../lib/format-helpers.js'
@@ -81,7 +88,6 @@ export function GscSection({
     endDate: '',
     query: '',
     page: '',
-    limit: '20',
   })
   const [performanceOffset, setPerformanceOffset] = useState(0)
   const [performanceHasMore, setPerformanceHasMore] = useState(false)
@@ -126,6 +132,11 @@ export function GscSection({
       return dir === 'asc' ? av - bv : bv - av
     })
   }, [performance, perfSort])
+  const performanceTable = useClientTable({
+    rows: sortedPerformance,
+    pageSize: DEFAULT_TABLE_PAGE_SIZE,
+  })
+  const displayedPerformanceRows = performanceDisplayedExpanded ? performanceTable.rows : sortedPerformance
   const [coverageHistory, setCoverageHistory] = useState<Array<{ date: string; indexed: number; notIndexed: number; reasonBreakdown: Record<string, number> }>>([])
   const [selectedReason, setSelectedReason] = useState<string | null>(null)
   const [coveragePage, setCoveragePage] = useState<number>(1)
@@ -160,9 +171,6 @@ export function GscSection({
   const coverageTotalPages = Math.max(1, Math.ceil(coverageList.length / COVERAGE_PAGE_SIZE))
   const coverageCurrentPage = Math.min(Math.max(1, coveragePage), coverageTotalPages)
   const coveragePageStart = (coverageCurrentPage - 1) * COVERAGE_PAGE_SIZE
-  const coverageShowPagination = coverageList.length > COVERAGE_PAGE_SIZE
-  const coverageRangeStart = coverageList.length === 0 ? 0 : coveragePageStart + 1
-  const coverageRangeEnd = Math.min(coveragePageStart + COVERAGE_PAGE_SIZE, coverageList.length)
 
   const pagedIndexed = useMemo(
     () => coverage?.indexed.slice(coveragePageStart, coveragePageStart + COVERAGE_PAGE_SIZE) ?? [],
@@ -260,11 +268,10 @@ export function GscSection({
     setLoadingPerformance(true)
     const offset = offsetOverride ?? performanceOffset
     try {
-      const pageSize = parseInt(performanceFilters.limit, 10) || 20
       // Expanded mode (filter or sort active) fetches up to EXPANDED_PERFORMANCE_LIMIT
       // so client-side sort/filter sees the full matching set, not just one page.
       // Paged mode fetches pageSize+1 to detect "has more" without a COUNT query.
-      const fetchLimit = isPerformanceExpanded ? EXPANDED_PERFORMANCE_LIMIT : pageSize + 1
+      const fetchLimit = isPerformanceExpanded ? EXPANDED_PERFORMANCE_LIMIT : DEFAULT_TABLE_PAGE_SIZE + 1
       const fetchOffset = isPerformanceExpanded ? 0 : offset
       // URL-string query params per the spec — empty strings stripped so the
       // generated cache key only varies on values the server actually sees.
@@ -291,8 +298,8 @@ export function GscSection({
         setPerformanceTotalLoaded(rows.length)
         setPerformanceDisplayedExpanded(true)
       } else {
-        setPerformanceHasMore(rows.length > pageSize)
-        setPerformance(rows.slice(0, pageSize))
+        setPerformanceHasMore(rows.length > DEFAULT_TABLE_PAGE_SIZE)
+        setPerformance(rows.slice(0, DEFAULT_TABLE_PAGE_SIZE))
         setPerformanceTotalLoaded(0)
         setPerformanceDisplayedExpanded(false)
       }
@@ -1250,41 +1257,14 @@ export function GscSection({
                         <p className="text-sm text-muted">No URLs in this category.</p>
                       )}
 
-                      {coverageShowPagination && (
-                        <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-secondary">
-                          <p className="tabular-nums">
-                            Showing <span className="text-neutral">{coverageRangeStart.toLocaleString('en-US')}</span>–
-                            <span className="text-neutral">{coverageRangeEnd.toLocaleString('en-US')}</span> of{' '}
-                            <span className="text-neutral">{coverageList.length.toLocaleString('en-US')}</span> URLs
-                          </p>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setCoveragePage((p) => Math.max(1, p - 1))}
-                              disabled={coverageCurrentPage <= 1}
-                              aria-label="Previous page"
-                              className="inline-flex items-center gap-1 rounded-md border border-base bg-bg px-2.5 py-1.5 text-strong transition hover:border-strong hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-mono-800 disabled:hover:text-strong"
-                            >
-                              <ChevronLeft className="size-3.5" />
-                              Prev
-                            </button>
-                            <span className="tabular-nums">
-                              Page <span className="text-strong">{coverageCurrentPage}</span> of{' '}
-                              <span className="text-strong">{coverageTotalPages}</span>
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => setCoveragePage((p) => Math.min(coverageTotalPages, p + 1))}
-                              disabled={coverageCurrentPage >= coverageTotalPages}
-                              aria-label="Next page"
-                              className="inline-flex items-center gap-1 rounded-md border border-base bg-bg px-2.5 py-1.5 text-strong transition hover:border-strong hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-mono-800 disabled:hover:text-strong"
-                            >
-                              Next
-                              <ChevronRight className="size-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      )}
+                      <DataTablePagination
+                        page={coverageCurrentPage}
+                        pageSize={COVERAGE_PAGE_SIZE}
+                        visibleRows={Math.min(COVERAGE_PAGE_SIZE, coverageList.length - coveragePageStart)}
+                        totalRows={coverageList.length}
+                        onPageChange={setCoveragePage}
+                        itemLabel="URLs"
+                      />
                     </div>
                   </>
                 ) : (
@@ -1320,7 +1300,7 @@ export function GscSection({
                         </button>
                       ))}
                     </div>
-                    <Button type="button" variant="outline" size="sm" disabled={loadingPerformance} onClick={() => { setPerformanceOffset(0); void loadPerformanceRows(0); void loadPerformanceDaily() }}>
+                    <Button type="button" variant="outline" size="sm" disabled={loadingPerformance} onClick={() => { setPerformanceOffset(0); performanceTable.setPage(1); void loadPerformanceRows(0); void loadPerformanceDaily() }}>
                       <RefreshCw className={`h-3.5 w-3.5 ${loadingPerformance ? 'animate-spin' : ''}`} aria-hidden="true" />
                       {loadingPerformance ? 'Loading\u2026' : 'Apply filters'}
                     </Button>
@@ -1430,7 +1410,7 @@ export function GscSection({
                   )
                 })()}
 
-                <div className="mt-3 grid gap-2 lg:grid-cols-5">
+                <div className="mt-3 grid gap-2 lg:grid-cols-4">
                   <input
                     className="rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
                     type="date"
@@ -1447,38 +1427,22 @@ export function GscSection({
                     value={performanceFilters.endDate}
                     onChange={(e) => setPerformanceFilters((prev) => ({ ...prev, endDate: e.target.value }))}
                   />
-                  <input
-                    className="rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
-                    type="text"
-                    placeholder="Contains query…"
-                    aria-label="Filter query (substring match)"
-                    title="Case-insensitive substring match on the query column."
+                  <DataTableSearch
                     value={performanceFilters.query}
-                    onChange={(e) => setPerformanceFilters((prev) => ({ ...prev, query: e.target.value }))}
+                    onChange={(value) => setPerformanceFilters((prev) => ({ ...prev, query: value }))}
+                    label="Filter search queries"
+                    placeholder="Contains query…"
                   />
-                  <input
-                    className="rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
-                    type="text"
-                    placeholder="Contains page URL…"
-                    aria-label="Filter page (substring match)"
-                    title="Case-insensitive substring match on the page URL."
+                  <DataTableSearch
                     value={performanceFilters.page}
-                    onChange={(e) => setPerformanceFilters((prev) => ({ ...prev, page: e.target.value }))}
-                  />
-                  <input
-                    className="rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
-                    type="number"
-                    min="1"
-                    placeholder="Rows per page (20)"
-                    aria-label="Rows per page"
-                    title="Rows per page. Ignored while a filter or column sort is active — then up to 500 matches are loaded."
-                    value={performanceFilters.limit}
-                    onChange={(e) => setPerformanceFilters((prev) => ({ ...prev, limit: e.target.value }))}
+                    onChange={(value) => setPerformanceFilters((prev) => ({ ...prev, page: value }))}
+                    label="Filter page URLs"
+                    placeholder="Contains page URL…"
                   />
                 </div>
                 <p className="mt-2 text-xs text-muted">
                   Query and page filters match case-insensitive substrings. Click Apply filters to run.
-                  When a filter or column sort is active, up to {EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows load so sorting covers the full set.
+                  Filtering and sorting examine up to {EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows while the table stays at {DEFAULT_TABLE_PAGE_SIZE} rows per page.
                 </p>
                 {performance.length > 0 ? (
                   <>
@@ -1498,7 +1462,8 @@ export function GscSection({
                                 <button
                                   type="button"
                                   className="w-full cursor-pointer select-none text-right hover:text-strong focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-mono-400 rounded px-1 -mx-1"
-                                  onClick={() =>
+                                  onClick={() => {
+                                    performanceTable.setPage(1)
                                     setPerfSort((prev) =>
                                       prev?.key === col
                                         ? prev.dir === 'desc'
@@ -1506,7 +1471,7 @@ export function GscSection({
                                           : null
                                         : { key: col, dir: 'desc' },
                                     )
-                                  }
+                                  }}
                                 >
                                   {SEARCH_METRIC_LABELS[col]}
                                   {perfSort?.key === col ? (perfSort.dir === 'desc' ? ' \u2193' : ' \u2191') : ''}
@@ -1516,11 +1481,13 @@ export function GscSection({
                           </tr>
                         </thead>
                         <tbody>
-                          {sortedPerformance.map((row, i) => (
+                          {displayedPerformanceRows.map((row, i) => (
                             <tr key={`${row.date}:${row.query}:${row.page}:${i}`}>
                               <td className="text-secondary">{row.date}</td>
                               <td className="max-w-xs truncate text-strong">{row.query}</td>
-                              <td className="max-w-xs truncate text-secondary">{row.page}</td>
+                              <td className="max-w-xs text-secondary">
+                                <MiddleTruncatedText value={row.page} />
+                              </td>
                               <td className="text-right tabular-nums text-neutral">{row.clicks.toLocaleString()}</td>
                               <td className="text-right tabular-nums text-secondary">{row.impressions.toLocaleString()}</td>
                               <td className="text-right tabular-nums text-secondary">{(Number.isFinite(row.ctr) ? row.ctr * 100 : 0).toFixed(1)}%</td>
@@ -1530,56 +1497,31 @@ export function GscSection({
                         </tbody>
                       </table>
                     </div>
-                    {performanceDisplayedExpanded ? (
-                      <div className="mt-3 text-xs text-muted">
-                        <span className="tabular-nums">
-                          Showing {performanceTotalLoaded.toLocaleString()} matching row{performanceTotalLoaded === 1 ? '' : 's'}
-                          {performanceTotalLoaded >= EXPANDED_PERFORMANCE_LIMIT
-                            ? ` (capped at ${EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} \u2014 narrow the filter to see more)`
-                            : ''}
-                        </span>
-                      </div>
-                    ) : (performanceOffset > 0 || performanceHasMore) && (() => {
-                      const pageSize = parseInt(performanceFilters.limit, 10) || 20
-                      const from = performanceOffset + 1
-                      const to = performanceOffset + performance.length
-                      return (
-                        <div className="mt-3 flex items-center justify-between text-xs text-muted">
-                          <span className="tabular-nums">
-                            Showing {from.toLocaleString()}{' \u2013 '}{to.toLocaleString()}
-                            {performanceHasMore ? '+' : ''}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              disabled={loadingPerformance || performanceOffset === 0}
-                              onClick={() => {
-                                const next = Math.max(0, performanceOffset - pageSize)
-                                setPerformanceOffset(next)
-                                void loadPerformanceRows(next)
-                              }}
-                            >
-                              Previous
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              disabled={loadingPerformance || !performanceHasMore}
-                              onClick={() => {
-                                const next = performanceOffset + pageSize
-                                setPerformanceOffset(next)
-                                void loadPerformanceRows(next)
-                              }}
-                            >
-                              Next
-                            </Button>
-                          </div>
-                        </div>
-                      )
-                    })()}
+                    <DataTablePagination
+                      page={performanceDisplayedExpanded
+                        ? performanceTable.page
+                        : Math.floor(performanceOffset / DEFAULT_TABLE_PAGE_SIZE) + 1}
+                      pageSize={DEFAULT_TABLE_PAGE_SIZE}
+                      visibleRows={displayedPerformanceRows.length}
+                      totalRows={performanceDisplayedExpanded ? performanceTotalLoaded : undefined}
+                      hasNextPage={performanceDisplayedExpanded ? undefined : performanceHasMore}
+                      disabled={loadingPerformance}
+                      itemLabel={performanceDisplayedExpanded ? 'matches' : 'rows'}
+                      onPageChange={(nextPage) => {
+                        if (performanceDisplayedExpanded) {
+                          performanceTable.setPage(nextPage)
+                          return
+                        }
+                        const nextOffset = (nextPage - 1) * DEFAULT_TABLE_PAGE_SIZE
+                        setPerformanceOffset(nextOffset)
+                        void loadPerformanceRows(nextOffset)
+                      }}
+                    />
+                    {performanceDisplayedExpanded && performanceTotalLoaded >= EXPANDED_PERFORMANCE_LIMIT ? (
+                      <p className="mt-2 text-xs text-muted">
+                        Results are capped at {EXPANDED_PERFORMANCE_LIMIT.toLocaleString()}; narrow the filters to search beyond this set.
+                      </p>
+                    ) : null}
                   </>
                 ) : (
                   <p className="mt-3 text-sm text-muted">No performance rows match the current filters yet.</p>

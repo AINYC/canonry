@@ -21,6 +21,13 @@ import {
 import { Link } from '@tanstack/react-router'
 import { Button } from '../ui/button.js'
 import { Card } from '../ui/card.js'
+import {
+  DataTablePagination,
+  DataTableSearch,
+  MiddleTruncatedText,
+  urlSearchText,
+  useClientTable,
+} from '../shared/DataTableControls.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
 import type { MetricsWindow } from '@ainyc/canonry-contracts'
@@ -62,7 +69,7 @@ const SOURCE_COLORS = CHART_SERIES_COLORS
 const SOCIAL_OTHER_COLOR = CHART_NEUTRAL.textDim
 const SOCIAL_TOTAL_COLOR = CHART_NEUTRAL.textFaint
 const SOCIAL_TABLE_DEFAULT_LIMIT = 25
-const AI_LANDING_PAGE_SIZE = 50
+const AI_LANDING_PAGE_SIZE = 25
 
 const EMPTY_AI_DAILY: GA4AiReferralDailyDto = {
   days: [],
@@ -228,7 +235,6 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
   const [socialSortDir, setSocialSortDir] = useState<SortDir>('desc')
   const [aiLandingSortKey, setAiLandingSortKey] = useState<AiLandingPageSortKey>('sessions')
   const [aiLandingSortDir, setAiLandingSortDir] = useState<SortDir>('desc')
-  const [aiLandingPage, setAiLandingPage] = useState(1)
   const [aiDaily, setAiDaily] = useState<GA4AiReferralDailyDto>(EMPTY_AI_DAILY)
   const [sessionHistory, setSessionHistory] = useState<GA4SessionHistoryEntry[]>([])
   const [socialHistory, setSocialHistory] = useState<GA4SocialReferralHistoryEntry[]>([])
@@ -380,16 +386,6 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
     }
   }
 
-  function handleAiLandingSort(key: AiLandingPageSortKey) {
-    setAiLandingPage(1)
-    if (aiLandingSortKey === key) {
-      setAiLandingSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))
-    } else {
-      setAiLandingSortKey(key)
-      setAiLandingSortDir('desc')
-    }
-  }
-
   const sortedPages = useMemo(() => {
     if (!traffic?.topPages) return []
     return [...traffic.topPages].sort((a, b) => {
@@ -416,24 +412,41 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
 
   const sortedAiLandingPages = useMemo(() => {
     if (!traffic?.aiReferralLandingPages) return []
-    return [...traffic.aiReferralLandingPages].sort((a, b) => {
-      const av = a[aiLandingSortKey]
-      const bv = b[aiLandingSortKey]
-      if (typeof av === 'string' && typeof bv === 'string') {
-        return aiLandingSortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
-      }
-      return aiLandingSortDir === 'asc' ? (av as number) - (bv as number) : (bv as number) - (av as number)
-    })
+    return [...traffic.aiReferralLandingPages]
+      .sort((a, b) => {
+        const av = a[aiLandingSortKey]
+        const bv = b[aiLandingSortKey]
+        if (typeof av === 'string' && typeof bv === 'string') {
+          return aiLandingSortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
+        }
+        return aiLandingSortDir === 'asc' ? (av as number) - (bv as number) : (bv as number) - (av as number)
+      })
   }, [traffic?.aiReferralLandingPages, aiLandingSortKey, aiLandingSortDir])
 
-  const aiLandingTotalPages = Math.max(1, Math.ceil(sortedAiLandingPages.length / AI_LANDING_PAGE_SIZE))
-  // Clamp to a valid page so a stale page index (e.g. after a resync shrinks the list) still renders.
-  const aiLandingCurrentPage = Math.min(Math.max(1, aiLandingPage), aiLandingTotalPages)
-  const aiLandingPageStart = (aiLandingCurrentPage - 1) * AI_LANDING_PAGE_SIZE
-  const pagedAiLandingPages = useMemo(
-    () => sortedAiLandingPages.slice(aiLandingPageStart, aiLandingPageStart + AI_LANDING_PAGE_SIZE),
-    [sortedAiLandingPages, aiLandingPageStart],
-  )
+  const aiLandingTable = useClientTable({
+    rows: sortedAiLandingPages,
+    getSearchText: (row) => urlSearchText(row.landingPage),
+    pageSize: AI_LANDING_PAGE_SIZE,
+  })
+  const aiLandingRowCount = aiLandingTable.totalRows > 0
+    ? `${aiLandingTable.totalRows.toLocaleString()} ${
+      aiLandingTable.hasQuery
+        ? (aiLandingTable.totalRows === 1 ? 'match' : 'matches')
+        : (aiLandingTable.totalRows === 1 ? 'row' : 'rows')
+    }`
+    : aiLandingTable.hasQuery && (traffic?.aiReferralLandingPages.length ?? 0) > 0
+      ? '0 matches'
+      : 'No landing-page rows'
+
+  function handleAiLandingSort(key: AiLandingPageSortKey) {
+    aiLandingTable.setPage(1)
+    if (aiLandingSortKey === key) {
+      setAiLandingSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))
+    } else {
+      setAiLandingSortKey(key)
+      setAiLandingSortDir('desc')
+    }
+  }
 
   const sortedSocialReferrals = useMemo(() => {
     if (!traffic?.socialReferrals) return []
@@ -834,57 +847,61 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
                   <h3 className="text-sm font-semibold text-heading">Known AI referrers by landing page</h3>
                 </div>
                 <p className="text-xs text-muted">
-                  {sortedAiLandingPages.length > AI_LANDING_PAGE_SIZE
-                    ? `${aiLandingPageStart + 1}–${aiLandingPageStart + pagedAiLandingPages.length} of ${sortedAiLandingPages.length} rows`
-                    : sortedAiLandingPages.length > 0
-                      ? `${sortedAiLandingPages.length} rows`
-                      : 'No landing-page rows'}
+                  {aiLandingRowCount}
                 </p>
               </div>
 
-              {sortedAiLandingPages.length > 0 ? (
+              {traffic.aiReferralLandingPages.length > 0 ? (
                 <>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="text-[10px] uppercase tracking-wider text-muted">
-                          <SortHeader label="Landing Page" sortKey="landingPage" current={aiLandingSortKey} dir={aiLandingSortDir} onSort={handleAiLandingSort} align="left" />
-                          <SortHeader label="Source" sortKey="source" current={aiLandingSortKey} dir={aiLandingSortDir} onSort={handleAiLandingSort} align="left" />
-                          <th className="py-1 font-medium text-left">Attribution</th>
-                          <SortHeader label="Sessions" sortKey="sessions" current={aiLandingSortKey} dir={aiLandingSortDir} onSort={handleAiLandingSort} align="right" />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {pagedAiLandingPages.map((row) => (
-                          <AiReferralLandingPageRow
-                            key={`${row.landingPage}:${row.source}:${row.medium}:${row.sourceDimension}`}
-                            row={row}
-                          />
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <DataTableSearch
+                    value={aiLandingTable.query}
+                    onChange={aiLandingTable.setQuery}
+                    label="Filter landing page URLs or query parameters"
+                    placeholder="Filter URL or query parameters"
+                    className="mb-4 max-w-md"
+                  />
 
-                  {aiLandingTotalPages > 1 && (
-                    <div className="mt-3 flex items-center justify-center gap-2">
+                  {aiLandingTable.totalRows > 0 ? (
+                    <>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-[10px] uppercase tracking-wider text-muted">
+                              <SortHeader label="Landing Page" sortKey="landingPage" current={aiLandingSortKey} dir={aiLandingSortDir} onSort={handleAiLandingSort} align="left" />
+                              <SortHeader label="Source" sortKey="source" current={aiLandingSortKey} dir={aiLandingSortDir} onSort={handleAiLandingSort} align="left" />
+                              <th className="py-1 font-medium text-left">Attribution</th>
+                              <SortHeader label="Sessions" sortKey="sessions" current={aiLandingSortKey} dir={aiLandingSortDir} onSort={handleAiLandingSort} align="right" />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {aiLandingTable.rows.map((row) => (
+                              <AiReferralLandingPageRow
+                                key={`${row.landingPage}:${row.source}:${row.medium}:${row.sourceDimension}`}
+                                row={row}
+                              />
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <DataTablePagination
+                        page={aiLandingTable.page}
+                        pageSize={aiLandingTable.pageSize}
+                        visibleRows={aiLandingTable.rows.length}
+                        totalRows={aiLandingTable.totalRows}
+                        onPageChange={aiLandingTable.setPage}
+                        itemLabel={aiLandingTable.hasQuery ? 'matches' : 'rows'}
+                      />
+                    </>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-8 text-center">
+                      <p className="text-sm text-secondary">No landing pages match this filter</p>
                       <button
                         type="button"
-                        onClick={() => setAiLandingPage(aiLandingCurrentPage - 1)}
-                        disabled={aiLandingCurrentPage <= 1}
-                        className="text-xs text-secondary hover:text-strong disabled:opacity-40 disabled:hover:text-secondary px-3 py-1 rounded-full border border-base hover:border-strong disabled:hover:border-base transition-colors"
+                        onClick={() => aiLandingTable.setQuery('')}
+                        className="mt-2 text-xs text-link hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-mono-500"
                       >
-                        Previous
-                      </button>
-                      <span className="text-xs text-muted tabular-nums">
-                        Page {aiLandingCurrentPage} of {aiLandingTotalPages}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setAiLandingPage(aiLandingCurrentPage + 1)}
-                        disabled={aiLandingCurrentPage >= aiLandingTotalPages}
-                        className="text-xs text-secondary hover:text-strong disabled:opacity-40 disabled:hover:text-secondary px-3 py-1 rounded-full border border-base hover:border-strong disabled:hover:border-base transition-colors"
-                      >
-                        Next
+                        Clear filter
                       </button>
                     </div>
                   )}
@@ -1498,8 +1515,8 @@ function AiReferralLandingPageRow({ row }: { row: ApiGaTrafficAiLandingPage }) {
 
   return (
     <tr className="border-t border-subtle">
-      <td className="py-1.5 text-neutral max-w-[360px] truncate" title={row.landingPage}>
-        {row.landingPage}
+      <td className="max-w-[400px] py-1.5 text-neutral">
+        <MiddleTruncatedText value={row.landingPage} className="whitespace-nowrap" />
       </td>
       <td className="py-1.5 text-strong max-w-[220px] truncate" title={row.source}>
         {row.source}
