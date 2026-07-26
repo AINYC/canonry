@@ -769,6 +769,89 @@ export type AdsInsightsResponse = {
     currencyCode?: string | null;
 };
 
+export type AdsLiveDeliveryDto = {
+    basis: 'live-provider-read';
+    fetchedAt: string;
+    adAccountId: string;
+    storedSnapshotSyncedAt: string | null;
+    metricsWindow: {
+        lookbackDays: number;
+    };
+    bounds: {
+        maxCampaigns: number;
+        maxAdGroupsPerCampaign: number;
+        maxAdsPerAdGroup: number;
+        maxProviderCalls: number;
+        providerCalls: number;
+        truncated: boolean;
+    };
+    entities: Array<{
+        entityType: 'campaign' | 'ad_group' | 'ad';
+        id: string;
+        parentId: string | null;
+        presence: 'both' | 'live-only' | 'stored-only';
+        live: {
+            name: string | null;
+            status: string;
+            reviewStatus: string | null;
+            mode: string | null;
+            updatedAt: number | null;
+        } | null;
+        stored: {
+            name: string;
+            status: string;
+            reviewStatus: string | null;
+            upstreamUpdatedAt: number | null;
+            syncedAt: string;
+        } | null;
+        fieldDeltas: Array<{
+            field: string;
+            live: string | null;
+            stored: string | null;
+        }>;
+        liveMetrics: Array<{
+            date: string | null;
+            startTime: number | null;
+            endTime: number | null;
+            impressions: number | null;
+            clicks: number | null;
+            spend: number | null;
+            conversions: number | null;
+            ctr: number | null;
+            cpc: number | null;
+            cpm: number | null;
+        }> | null;
+        metricDeltas: Array<{
+            date: string;
+            live: {
+                impressions: number;
+                clicks: number;
+                spendMicros: number;
+                conversions: number;
+            } | null;
+            stored: {
+                impressions: number;
+                clicks: number;
+                spendMicros: number;
+                conversions: number;
+            } | null;
+            drifted: boolean;
+        }> | null;
+        drifted: boolean;
+    }>;
+    drift: {
+        entitiesCompared: number;
+        driftedEntities: number;
+        statusDrifted: number;
+        metricsDrifted: number;
+    };
+    errors: Array<{
+        surface: string;
+        entityId: string | null;
+        upstreamStatus: number | null;
+    }>;
+};
+
 export type AdsOperationReconcileResponse = {
     operation: {
         id: string;
@@ -9713,6 +9796,57 @@ export type GetApiV1ProjectsByNameAdsDeliveryDiagnosticsResponses = {
 };
 
 export type GetApiV1ProjectsByNameAdsDeliveryDiagnosticsResponse = GetApiV1ProjectsByNameAdsDeliveryDiagnosticsResponses[keyof GetApiV1ProjectsByNameAdsDeliveryDiagnosticsResponses];
+
+export type GetApiV1ProjectsByNameAdsLiveDeliveryData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Scope the walk to a single campaign.
+         */
+        campaignId?: string;
+        /**
+         * Metrics window in days (1-30, default 7).
+         */
+        lookbackDays?: number;
+    };
+    url: '/api/v1/projects/{name}/ads/live-delivery';
+};
+
+export type GetApiV1ProjectsByNameAdsLiveDeliveryErrors = {
+    /**
+     * Invalid query, or no ads connection for this project.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * Live read requested again before the minimum interval elapsed.
+     */
+    429: ErrorEnvelope;
+    /**
+     * The OpenAI Ads API read failed.
+     */
+    502: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameAdsLiveDeliveryError = GetApiV1ProjectsByNameAdsLiveDeliveryErrors[keyof GetApiV1ProjectsByNameAdsLiveDeliveryErrors];
+
+export type GetApiV1ProjectsByNameAdsLiveDeliveryResponses = {
+    /**
+     * Live provider state and snapshot delta returned.
+     */
+    200: AdsLiveDeliveryDto;
+};
+
+export type GetApiV1ProjectsByNameAdsLiveDeliveryResponse = GetApiV1ProjectsByNameAdsLiveDeliveryResponses[keyof GetApiV1ProjectsByNameAdsLiveDeliveryResponses];
 
 export type PostApiV1ProjectsByNameBingConnectData = {
     body: {

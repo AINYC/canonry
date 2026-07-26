@@ -24,8 +24,8 @@ import { createLogger } from './logger.js'
 
 const log = createLogger('AdsSync')
 
-const CAMPAIGN_INSIGHT_FIELDS = ['campaign.impressions', 'campaign.clicks', 'campaign.spend', 'campaign.conversions', 'metadata.readable_time']
-const AD_GROUP_INSIGHT_FIELDS = ['ad_group.impressions', 'ad_group.clicks', 'ad_group.spend', 'ad_group.conversions', 'metadata.readable_time']
+export const CAMPAIGN_INSIGHT_FIELDS = ['campaign.impressions', 'campaign.clicks', 'campaign.spend', 'campaign.conversions', 'metadata.readable_time']
+export const AD_GROUP_INSIGHT_FIELDS = ['ad_group.impressions', 'ad_group.clicks', 'ad_group.spend', 'ad_group.conversions', 'metadata.readable_time']
 const INSIGHTS_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1_000
 
 function accountHour(date: Date, timezone: string): string {
@@ -48,13 +48,16 @@ function accountHour(date: Date, timezone: string): string {
 export function trailingAdsInsightHourRange(
   now: Date,
   timezone: string,
+  lookbackMs: number = INSIGHTS_LOOKBACK_MS,
 ): OpenAiAdsInsightHourRange {
   // The live API rejects conversion fields without time_ranges[] and rejects
   // incomplete future local days. A timezone-aware hour range includes the
   // current completed boundary and works across daylight-saving transitions.
+  // The sync keeps the default 90-day lookback; on-demand live reads pass a
+  // tighter window.
   return {
     type: 'hour_range',
-    since: accountHour(new Date(now.getTime() - INSIGHTS_LOOKBACK_MS), timezone),
+    since: accountHour(new Date(now.getTime() - lookbackMs), timezone),
     until: accountHour(now, timezone),
     timezone,
   }

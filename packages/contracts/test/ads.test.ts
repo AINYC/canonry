@@ -5,6 +5,8 @@ import {
   adsInsightRowDtoSchema,
   adsSummaryDtoSchema,
   adsDeliveryDiagnosticsDtoSchema,
+  adsLiveDeliveryDtoSchema,
+  adsLiveDeliveryQuerySchema,
   adsCampaignDtoSchema,
   adsAdGroupDtoSchema,
   adsAccountDtoSchema,
@@ -951,5 +953,111 @@ describe('approval-bound campaign-tree activation contracts', () => {
     })
     expect(response.operation.kind).toBe(AdsOperationKinds.campaign_tree_activate)
     expect(response.steps.map((step) => step.state)).toEqual(['active'])
+  })
+})
+
+describe('ads live delivery contract', () => {
+  const ENTITY = {
+    entityType: 'campaign',
+    id: 'cmpn_1',
+    parentId: null,
+    presence: 'both',
+    live: {
+      name: 'Homeowners Free Estimate',
+      status: 'active',
+      reviewStatus: null,
+      mode: 'standard',
+      updatedAt: 200,
+    },
+    stored: {
+      name: 'Homeowners Free Estimate',
+      status: 'paused',
+      reviewStatus: null,
+      upstreamUpdatedAt: 100,
+      syncedAt: '2026-06-09T00:00:00.000Z',
+    },
+    fieldDeltas: [{ field: 'status', live: 'active', stored: 'paused' }],
+    liveMetrics: [{
+      date: '2026-06-10',
+      startTime: 1_760_000_000,
+      endTime: 1_760_086_400,
+      impressions: 162,
+      clicks: 5,
+      spend: 1.5,
+      conversions: 0,
+      ctr: null,
+      cpc: null,
+      cpm: null,
+    }],
+    metricDeltas: [{
+      date: '2026-06-10',
+      live: { impressions: 162, clicks: 5, spendMicros: 1_500_000, conversions: 0 },
+      stored: { impressions: 111, clicks: 3, spendMicros: 1_000_000, conversions: 0 },
+      drifted: true,
+    }],
+    drifted: true,
+  }
+
+  const RESPONSE = {
+    basis: 'live-provider-read',
+    fetchedAt: '2026-06-10T12:00:00.000Z',
+    adAccountId: 'adacct_1',
+    storedSnapshotSyncedAt: '2026-06-09T00:00:00.000Z',
+    metricsWindow: { lookbackDays: 7 },
+    bounds: {
+      maxCampaigns: 5,
+      maxAdGroupsPerCampaign: 10,
+      maxAdsPerAdGroup: 20,
+      maxProviderCalls: 40,
+      providerCalls: 6,
+      truncated: false,
+    },
+    entities: [ENTITY],
+    drift: { entitiesCompared: 1, driftedEntities: 1, statusDrifted: 1, metricsDrifted: 1 },
+    errors: [],
+  }
+
+  test('defaults the metrics window and rejects an out-of-range lookback', () => {
+    expect(adsLiveDeliveryQuerySchema.parse({})).toEqual({ lookbackDays: 7 })
+    expect(adsLiveDeliveryQuerySchema.parse({ campaignId: 'cmpn_1', lookbackDays: '14' }))
+      .toEqual({ campaignId: 'cmpn_1', lookbackDays: 14 })
+    expect(adsLiveDeliveryQuerySchema.safeParse({ lookbackDays: 0 }).success).toBe(false)
+    expect(adsLiveDeliveryQuerySchema.safeParse({ lookbackDays: 31 }).success).toBe(false)
+  })
+
+  test('keeps live metrics nullable and unaggregated, and pins the live basis', () => {
+    const parsed = adsLiveDeliveryDtoSchema.parse(RESPONSE)
+    expect(parsed.basis).toBe('live-provider-read')
+    // Provider units survive: spend is NOT normalized on the live side.
+    expect(parsed.entities[0]!.liveMetrics![0]!.spend).toBe(1.5)
+    expect(parsed.entities[0]!.metricDeltas![0]!.live!.spendMicros).toBe(1_500_000)
+
+    // An entity the provider has no metrics surface for carries no delta.
+    const adOnly = adsLiveDeliveryDtoSchema.parse({
+      ...RESPONSE,
+      entities: [{
+        ...ENTITY,
+        entityType: 'ad',
+        id: 'ad_1',
+        parentId: 'adgrp_1',
+        liveMetrics: null,
+        metricDeltas: null,
+      }],
+    })
+    expect(adOnly.entities[0]!.metricDeltas).toBeNull()
+
+    expect(adsLiveDeliveryDtoSchema.safeParse({ ...RESPONSE, basis: 'stored-snapshot' }).success).toBe(false)
+  })
+
+  test('a read failure carries a status only, never provider text', () => {
+    const parsed = adsLiveDeliveryDtoSchema.parse({
+      ...RESPONSE,
+      errors: [{ surface: 'ad group list', entityId: 'cmpn_1', upstreamStatus: 503 }],
+    })
+    expect(parsed.errors).toEqual([{ surface: 'ad group list', entityId: 'cmpn_1', upstreamStatus: 503 }])
+    expect(adsLiveDeliveryDtoSchema.safeParse({
+      ...RESPONSE,
+      errors: [{ surface: 'ad group list', entityId: 'cmpn_1', upstreamStatus: 503, message: 'Bearer sk-test' }],
+    }).data?.errors[0]).toEqual({ surface: 'ad group list', entityId: 'cmpn_1', upstreamStatus: 503 })
   })
 })

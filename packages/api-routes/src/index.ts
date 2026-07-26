@@ -153,6 +153,8 @@ export interface ApiRoutesOptions {
   adsCredentialStore?: AdsRoutesOptions['adsCredentialStore']
   verifyAdsAccount?: AdsRoutesOptions['verifyAdsAccount']
   adsReader?: AdsRoutesOptions['adsReader']
+  adsLiveDeliveryReader?: AdsRoutesOptions['adsLiveDeliveryReader']
+  adsLiveDeliveryMinIntervalMs?: AdsRoutesOptions['adsLiveDeliveryMinIntervalMs']
   onAdsSyncRequested?: AdsRoutesOptions['onAdsSyncRequested']
   adsOperator?: AdsRoutesOptions['adsOperator']
   adsReconcileSweepIntervalMs?: AdsRoutesOptions['adsReconcileSweepIntervalMs']
@@ -408,6 +410,8 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       adsCredentialStore: opts.adsCredentialStore,
       verifyAdsAccount: opts.verifyAdsAccount,
       adsReader: opts.adsReader,
+      adsLiveDeliveryReader: opts.adsLiveDeliveryReader,
+      adsLiveDeliveryMinIntervalMs: opts.adsLiveDeliveryMinIntervalMs,
       onAdsSyncRequested: opts.onAdsSyncRequested,
       adsOperator: opts.adsOperator,
       adsReconcileSweepIntervalMs: opts.adsReconcileSweepIntervalMs,

@@ -11,6 +11,7 @@ import {
   adsInsights,
   adsSummary,
   adsDeliveryDiagnostics,
+  adsLiveDelivery,
   adsOperationGet,
   adsOperationReconcile,
   adsOperationResumeActivation,
@@ -393,6 +394,27 @@ export const ADS_CLI_COMMANDS: readonly CliCommandSpec[] = [
     run: async (input) => {
       const project = requireProject(input, 'ads.summary', 'canonry ads summary <project> [--format json]')
       await adsSummary(project, { format: input.format })
+    },
+  },
+  {
+    path: ['ads', 'live-delivery'],
+    usage: 'canonry ads live-delivery <project> [--campaign <id>] [--lookback-days <n>] [--format json]',
+    options: {
+      campaign: stringOption(),
+      'lookback-days': stringOption(),
+    },
+    run: async (input) => {
+      const usage = 'canonry ads live-delivery <project> [--campaign <id>] [--lookback-days <n>] [--format json]'
+      const project = requireProject(input, 'ads.live-delivery', usage)
+      await adsLiveDelivery(project, {
+        campaignId: getString(input.values, 'campaign'),
+        lookbackDays: parseIntegerOption(input, 'lookback-days', {
+          command: 'ads.live-delivery',
+          message: '--lookback-days must be an integer from 1 to 30',
+          usage,
+        }),
+        format: input.format,
+      })
     },
   },
   {

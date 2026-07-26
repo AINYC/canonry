@@ -71,8 +71,8 @@ export function forbidden(message = 'Forbidden', details?: Record<string, unknow
   return new AppError('FORBIDDEN', message, 403, details)
 }
 
-export function quotaExceeded(metric: string): AppError {
-  return new AppError('QUOTA_EXCEEDED', `Quota exceeded for ${metric}`, 429)
+export function quotaExceeded(metric: string, details?: Record<string, unknown>): AppError {
+  return new AppError('QUOTA_EXCEEDED', `Quota exceeded for ${metric}`, 429, details)
 }
 
 export function providerError(message: string, details?: Record<string, unknown>): AppError {

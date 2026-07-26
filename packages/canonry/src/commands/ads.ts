@@ -15,6 +15,7 @@ import type {
   AdsInsightsResponse,
   AdsSummaryDto,
   AdsDeliveryDiagnosticsDto,
+  AdsLiveDeliveryDto,
   AdsSyncResponse,
   AdsOperationDto,
   AdsOperationReconcileResponse,
@@ -46,6 +47,7 @@ import {
   AdsOperationStepStates,
   AdsHistoricalCampaignRollupStatuses,
   AdsDeliverySnapshotStatuses,
+  AdsLiveEntityTypes,
   formatMicros,
 } from '@ainyc/canonry-contracts'
 import type { z } from 'zod'
@@ -636,6 +638,55 @@ export async function adsDeliveryDiagnostics(project: string, opts?: { format?: 
       const bid = group.maxBidMicros === null ? 'no stored max bid' : `max bid ${formatMicros(group.maxBidMicros)}`
       console.log(`  - ${group.name} [${group.status}] — ${group.billingEventType ?? 'unknown billing'}, ${bid}, ${group.contextHints.length} context hints`)
       for (const ad of group.ads) console.log(`      ${ad.name} [${ad.status}] review=${ad.reviewStatus ?? 'unknown'}`)
+    }
+  }
+}
+
+export async function adsLiveDelivery(
+  project: string,
+  opts?: { campaignId?: string; lookbackDays?: number; format?: string },
+): Promise<void> {
+  const result: AdsLiveDeliveryDto = await getClient().getAdsLiveDelivery(project, {
+    campaignId: opts?.campaignId,
+    lookbackDays: opts?.lookbackDays,
+  })
+
+  if (isMachineFormat(opts?.format)) {
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+
+  console.log(`Read at:      ${result.fetchedAt} (live provider read)`)
+  console.log(`Ad account:   ${result.adAccountId}`)
+  console.log(`Snapshot:     last synced ${result.storedSnapshotSyncedAt ?? 'never'}`)
+  console.log(`Metrics:      last ${result.metricsWindow.lookbackDays}d, as the provider reported them`)
+  console.log(`Provider:     ${result.bounds.providerCalls}/${result.bounds.maxProviderCalls} calls${result.bounds.truncated ? ' (TRUNCATED — walk hit a cap)' : ''}`)
+  console.log(`Drift:        ${result.drift.driftedEntities}/${result.drift.entitiesCompared} entities (${result.drift.statusDrifted} status, ${result.drift.metricsDrifted} metrics)`)
+  for (const failure of result.errors) {
+    console.log(`Read failed:  ${failure.surface}${failure.entityId ? ` ${failure.entityId}` : ''}${failure.upstreamStatus === null ? '' : ` [HTTP ${failure.upstreamStatus}]`}`)
+  }
+
+  for (const entity of result.entities) {
+    const indent = entity.entityType === AdsLiveEntityTypes.campaign
+      ? ''
+      : entity.entityType === AdsLiveEntityTypes.ad_group ? '  ' : '    '
+    const label = entity.live?.name ?? entity.stored?.name ?? entity.id
+    const liveStatus = entity.live === null ? 'absent upstream' : entity.live.status
+    const storedStatus = entity.stored === null ? 'absent locally' : entity.stored.status
+    const marker = entity.drifted ? 'DRIFT' : 'match'
+    console.log(`${indent}${label} [${entity.entityType}] — live ${liveStatus} / stored ${storedStatus} — ${marker}`)
+    for (const delta of entity.fieldDeltas) {
+      console.log(`${indent}  ${delta.field}: live ${delta.live ?? 'none'} / stored ${delta.stored ?? 'none'}`)
+    }
+    for (const delta of entity.metricDeltas ?? []) {
+      if (!delta.drifted) continue
+      const live = delta.live === null
+        ? 'no provider row'
+        : `${delta.live.impressions} impr / ${delta.live.clicks} clicks / ${formatMicros(delta.live.spendMicros)}`
+      const stored = delta.stored === null
+        ? 'no stored row'
+        : `${delta.stored.impressions} impr / ${delta.stored.clicks} clicks / ${formatMicros(delta.stored.spendMicros)}`
+      console.log(`${indent}  ${delta.date}: live ${live} / stored ${stored}`)
     }
   }
 }

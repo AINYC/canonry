@@ -156,6 +156,7 @@ canonry ads campaigns <project> [--format json|jsonl] # snapshots incl. context 
 canonry ads insights <project> [--level campaign|ad_group] [--entity <id>] [--from <d>] [--to <d>] [--format json|jsonl]
 canonry ads summary <project>                         # campaign-level totals (spend in micros, derived ctr/cpc)
 canonry ads delivery-diagnostics <project>            # stored snapshot provenance, configuration facts, historical campaign activity (not provider serving/eligibility)
+canonry ads live-delivery <project> [--campaign <id>] [--lookback-days <n>]  # LIVE provider read (status + metrics as the provider gave them) plus the stored-snapshot delta; read-only, bounded, at most one per project per minute
 canonry ads disconnect <project>
 
 # Technical AEO — site-wide technical audit (powered by the `site-audit` run kind + @ainyc/aeo-audit's runSitemapAudit)

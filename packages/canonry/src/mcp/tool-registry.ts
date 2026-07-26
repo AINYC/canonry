@@ -267,6 +267,12 @@ const adsGeoSearchInputSchema = adsGeoSearchQuerySchema.extend({
   project: projectNameSchema,
 })
 
+const adsLiveDeliveryInputSchema = z.object({
+  project: projectNameSchema,
+  campaignId: z.string().min(1).max(200).optional(),
+  lookbackDays: z.number().int().min(1).max(30).optional(),
+})
+
 const adsOperationInputSchema = z.object({
   project: projectNameSchema,
   operationKey: z.string().min(8).max(128),
@@ -2152,6 +2158,20 @@ export const canonryMcpTools = [
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/ads/delivery-diagnostics'],
     handler: (client, input) => client.getAdsDeliveryDiagnostics(input.project),
+  }),
+  defineTool({
+    name: 'canonry_ads_live_delivery',
+    title: 'Live ads read with stored-snapshot delta',
+    description: 'Call the OpenAI Ads API right now and return the provider\'s current status and metrics per campaign / ad group / ad, unaggregated, alongside the stored snapshot values and an explicit per-entity delta. Use this when stored data is suspected of being stale or contradicted by the advertiser UI. Read-only: it mutates nothing and does not wait for a sync. The walk is bounded and one project may issue at most one live read per minute, so prefer canonry_ads_delivery_diagnostics for routine checks.',
+    access: 'read',
+    tier: 'ads',
+    inputSchema: adsLiveDeliveryInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/ads/live-delivery'],
+    handler: (client, input) => client.getAdsLiveDelivery(input.project, {
+      campaignId: input.campaignId,
+      lookbackDays: input.lookbackDays,
+    }),
   }),
   defineTool({
     name: 'canonry_ads_operations_unresolved',

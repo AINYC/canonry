@@ -106,7 +106,12 @@ import { checkLatestVersionForServer } from "./update-check.js";
 import { JobRunner } from "./job-runner.js";
 import { executeGscSync } from "./gsc-sync.js";
 import { executeGbpSync } from "./gbp-sync.js";
-import { executeAdsSync } from "./ads-sync.js";
+import {
+  executeAdsSync,
+  trailingAdsInsightHourRange,
+  CAMPAIGN_INSIGHT_FIELDS,
+  AD_GROUP_INSIGHT_FIELDS,
+} from "./ads-sync.js";
 import {
   getOpenAiAdsConnection,
   upsertOpenAiAdsConnection,
@@ -129,7 +134,9 @@ import {
   listConversionEventSettings,
   listConversionPixels,
   getAdGroup,
+  getAdGroupInsights,
   getCampaign,
+  getCampaignInsights,
   searchGeoLocations,
   pauseAd,
   pauseAdGroup,
@@ -1051,6 +1058,73 @@ export async function createServer(opts: {
     pauseAd: async (apiKey: string, id: string) => adsAdEntityResult(await pauseAd(apiKey, id)),
   };
 
+  const adsLiveEntity = (entity: {
+    id: string;
+    name: string;
+    status: string;
+    updated_at: number;
+  }, extra?: { reviewStatus?: string | null; mode?: string | null }) => ({
+    id: entity.id,
+    name: entity.name,
+    status: entity.status,
+    reviewStatus: extra?.reviewStatus ?? null,
+    mode: extra?.mode ?? null,
+    updatedAt: entity.updated_at,
+  });
+
+  const adsLiveMetricRow = (row: Awaited<ReturnType<typeof getCampaignInsights>>[number]) => ({
+    date: row.readable_time ?? null,
+    startTime: row.start_time ?? null,
+    endTime: row.end_time ?? null,
+    impressions: row.impressions ?? null,
+    clicks: row.clicks ?? null,
+    // Provider units: the insights API returns decimal currency for spend.
+    spend: row.spend ?? null,
+    conversions: row.conversions ?? null,
+    ctr: row.ctr ?? null,
+    cpc: row.cpc ?? null,
+    cpm: row.cpm ?? null,
+  });
+
+  // Read-only live-delivery surfaces. It requests the SAME insight fields as
+  // ads-sync so a live row and a stored rollup measure the same quantities.
+  const adsLiveDeliveryReader = {
+    listCampaigns: async (apiKey: string) =>
+      (await listCampaigns(apiKey)).map((campaign) => adsLiveEntity(campaign, { mode: campaign.mode })),
+    listAdGroups: async (apiKey: string, campaignId: string) =>
+      (await listAdGroups(apiKey, campaignId)).map((adGroup) => adsLiveEntity(adGroup)),
+    listAds: async (apiKey: string, adGroupId: string) =>
+      (await listAds(apiKey, adGroupId)).map((ad) =>
+        adsLiveEntity(ad, { reviewStatus: ad.review_status ?? ad.review?.status ?? null }),
+      ),
+    campaignInsights: async (
+      apiKey: string,
+      campaignId: string,
+      request: { lookbackDays: number; timezone: string },
+    ) =>
+      (await getCampaignInsights(apiKey, campaignId, {
+        fields: CAMPAIGN_INSIGHT_FIELDS,
+        timeRanges: [trailingAdsInsightHourRange(
+          new Date(),
+          request.timezone,
+          request.lookbackDays * 24 * 60 * 60 * 1_000,
+        )],
+      })).map(adsLiveMetricRow),
+    adGroupInsights: async (
+      apiKey: string,
+      adGroupId: string,
+      request: { lookbackDays: number; timezone: string },
+    ) =>
+      (await getAdGroupInsights(apiKey, adGroupId, {
+        fields: AD_GROUP_INSIGHT_FIELDS,
+        timeRanges: [trailingAdsInsightHourRange(
+          new Date(),
+          request.timezone,
+          request.lookbackDays * 24 * 60 * 60 * 1_000,
+        )],
+      })).map(adsLiveMetricRow),
+  };
+
   const scheduler = new Scheduler(opts.db, {
     onRunCreated: (runId, projectId, providers, location) => {
       jobRunner
@@ -1950,6 +2024,7 @@ export async function createServer(opts: {
     adsCredentialStore,
     verifyAdsAccount,
     adsReader,
+    adsLiveDeliveryReader,
     adsOperator,
     onAdsSyncRequested: (runId: string, projectId: string) => {
       runAdsSync(runId, projectId);

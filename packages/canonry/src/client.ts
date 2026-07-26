@@ -79,6 +79,7 @@ import type {
   AdsPauseRequest,
   AdsSummaryDto,
   AdsDeliveryDiagnosticsDto,
+  AdsLiveDeliveryDto,
   GbpSyncResponse,
   GbpDailyMetricListResponse,
   GbpKeywordImpressionListResponse,
@@ -255,6 +256,7 @@ import {
   getApiV1ProjectsByNameAdsInsights,
   getApiV1ProjectsByNameAdsSummary,
   getApiV1ProjectsByNameAdsDeliveryDiagnostics,
+  getApiV1ProjectsByNameAdsLiveDelivery,
   getApiV1ProjectsByNameAdsOperations,
   getApiV1ProjectsByNameAdsOperationsByOperationKey,
   postApiV1ProjectsByNameAdsOperationsByOperationKeyReconcile,
@@ -1498,6 +1500,22 @@ export class ApiClient {
   async getAdsDeliveryDiagnostics(project: string): Promise<AdsDeliveryDiagnosticsDto> {
     return this.invoke<AdsDeliveryDiagnosticsDto>(() =>
       getApiV1ProjectsByNameAdsDeliveryDiagnostics({ client: this.heyClient, path: { name: project } }),
+    )
+  }
+
+  async getAdsLiveDelivery(
+    project: string,
+    opts?: { campaignId?: string; lookbackDays?: number },
+  ): Promise<AdsLiveDeliveryDto> {
+    return this.invoke<AdsLiveDeliveryDto>(() =>
+      getApiV1ProjectsByNameAdsLiveDelivery({
+        client: this.heyClient,
+        path: { name: project },
+        query: {
+          ...(opts?.campaignId === undefined ? {} : { campaignId: opts.campaignId }),
+          ...(opts?.lookbackDays === undefined ? {} : { lookbackDays: opts.lookbackDays }),
+        },
+      }),
     )
   }
 

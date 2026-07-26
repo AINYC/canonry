@@ -2920,6 +2920,35 @@ const routeCatalog: OpenApiOperation[] = [
     },
   },
   {
+    method: 'get',
+    path: '/api/v1/projects/{name}/ads/live-delivery',
+    summary: 'Live provider read of ads status and metrics, with the local snapshot delta',
+    description: 'Calls the OpenAI Ads API right now with the stored connection and returns the provider\'s current status and metrics unaggregated, alongside the corresponding local snapshot values and an explicit per-entity delta. Read-only: it never creates, updates, pauses, or activates anything, and it never waits for a sync run. The walk is bounded by per-level caps and a total provider-call budget (see bounds), and one project may issue at most one live read per minute.',
+    tags: ['ads'],
+    parameters: [
+      nameParameter,
+      {
+        name: 'campaignId',
+        in: 'query',
+        description: 'Scope the walk to a single campaign.',
+        schema: stringSchema,
+      },
+      {
+        name: 'lookbackDays',
+        in: 'query',
+        description: 'Metrics window in days (1-30, default 7).',
+        schema: integerSchema,
+      },
+    ],
+    responses: {
+      200: jsonResponse('Live provider state and snapshot delta returned.', 'AdsLiveDeliveryDto'),
+      400: errorResponse('Invalid query, or no ads connection for this project.'),
+      404: errorResponse('Project not found.'),
+      429: errorResponse('Live read requested again before the minimum interval elapsed.'),
+      502: errorResponse('The OpenAI Ads API read failed.'),
+    },
+  },
+  {
     method: 'post',
     path: '/api/v1/projects/{name}/bing/connect',
     summary: 'Connect Bing Webmaster Tools',
