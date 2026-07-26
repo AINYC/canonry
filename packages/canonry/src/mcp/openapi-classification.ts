@@ -212,6 +212,7 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'POST /api/v1/projects/{name}/ga/sync': 'deferred',
   'GET /api/v1/projects/{name}/ga/traffic': 'included',
   'GET /api/v1/projects/{name}/ga/ai-referral-history': 'included',
+  'GET /api/v1/projects/{name}/ga/ai-referral-daily': 'included',
   'GET /api/v1/projects/{name}/ga/social-referral-history': 'included',
   'GET /api/v1/projects/{name}/ga/social-referral-trend': 'included',
   'GET /api/v1/projects/{name}/ga/attribution-trend': 'included',

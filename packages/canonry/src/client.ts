@@ -43,6 +43,7 @@ import type {
   GaMeasurementAnalysisDto,
   GaSocialReferralTrendResponse,
   GaAttributionTrendResponse,
+  GA4AiReferralDailyDto,
   GA4AiReferralHistoryEntry,
   GA4SocialReferralHistoryEntry,
   GA4SessionHistoryEntry,
@@ -322,6 +323,7 @@ import {
   getApiV1ProjectsByNameGaTraffic,
   getApiV1ProjectsByNameGaCoverage,
   getApiV1ProjectsByNameGaAiReferralHistory,
+  getApiV1ProjectsByNameGaAiReferralDaily,
   getApiV1ProjectsByNameGaSocialReferralHistory,
   getApiV1ProjectsByNameGaSocialReferralTrend,
   getApiV1ProjectsByNameGaAttributionTrend,
@@ -2076,6 +2078,16 @@ export class ApiClient {
   async gaAiReferralHistory(project: string, params?: Record<string, string>): Promise<GA4AiReferralHistoryEntry[]> {
     return this.invoke<GA4AiReferralHistoryEntry[]>(() =>
       getApiV1ProjectsByNameGaAiReferralHistory({
+        client: this.heyClient,
+        path: { name: project },
+        query: params as never,
+      }),
+    )
+  }
+
+  async gaAiReferralDaily(project: string, params?: Record<string, string>): Promise<GA4AiReferralDailyDto> {
+    return this.invoke<GA4AiReferralDailyDto>(() =>
+      getApiV1ProjectsByNameGaAiReferralDaily({
         client: this.heyClient,
         path: { name: project },
         query: params as never,

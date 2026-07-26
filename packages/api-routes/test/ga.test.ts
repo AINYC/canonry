@@ -2094,6 +2094,102 @@ describe('GA4 routes', () => {
     credentials.delete('test-project')
   })
 
+  it('GET /ga/ai-referral-daily returns error when no connection', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/test-project/ga/ai-referral-daily',
+    })
+    expect(res.statusCode).toBe(400)
+    const body = JSON.parse(res.payload)
+    expect(body.error.message).toMatch(/No GA4 connection/)
+  })
+
+  it('GET /ga/ai-referral-daily counts a landing-page-fragmented day at its real total and agrees with /ga/traffic', async () => {
+    const now = new Date().toISOString()
+    credentials.set('test-project', {
+      projectName: 'test-project',
+      propertyId: '999888',
+      clientEmail: 'sa@test.iam.gserviceaccount.com',
+      privateKey: 'fake-key',
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    db.delete(gaAiReferrals).where(eq(gaAiReferrals.projectId, projectId)).run()
+
+    // The real stored shape: one row per landing page, each worth exactly one
+    // session, repeated across the three overlapping attribution lenses.
+    const seed = (date: string, source: string, pages: number, dimensions: string[]) => {
+      for (const sourceDimension of dimensions) {
+        for (let page = 0; page < pages; page++) {
+          db.insert(gaAiReferrals).values({
+            id: crypto.randomUUID(),
+            projectId,
+            date,
+            source,
+            medium: 'referral',
+            sourceDimension,
+            channelGroup: 'Referral',
+            trafficClass: 'organic',
+            landingPage: `/page-${page}?utm_source=${source}`,
+            landingPageNormalized: `/page-${page}`,
+            sessions: 1,
+            users: 1,
+            syncedAt: now,
+          }).run()
+        }
+      }
+    }
+
+    seed('2026-07-26', 'chatgpt', 35, ['session', 'first_user', 'manual_utm'])
+    seed('2026-07-25', 'chatgpt', 18, ['session', 'first_user', 'manual_utm'])
+    // One date in a single lens, and one source whose lenses disagree.
+    seed('2026-07-23', 'chatgpt', 1, ['session'])
+    seed('2026-07-22', 'perplexity.ai', 3, ['session'])
+    seed('2026-07-22', 'perplexity.ai', 11, ['manual_utm'])
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/test-project/ga/ai-referral-daily',
+    })
+    expect(res.statusCode).toBe(200)
+    const daily = JSON.parse(res.payload) as {
+      days: Array<{ date: string; sessions: number; bySource: Array<{ source: string; sessions: number }> }>
+      sources: string[]
+      totalSessions: number
+    }
+
+    // Sessions only. GA counts users DISTINCT at the grain asked for, and these
+    // rows are keyed to the landing page, so no user count here could be true.
+    expect(res.payload).not.toMatch(/user/i)
+
+    const byDate = new Map(daily.days.map((d) => [d.date, d]))
+    // 35 real sessions, not 1 (one landing page) and not 105 (three lenses summed).
+    expect(byDate.get('2026-07-26')!.sessions).toBe(35)
+    expect(byDate.get('2026-07-25')!.sessions).toBe(18)
+    expect(byDate.get('2026-07-23')!.sessions).toBe(1)
+    // The winning lens for the disagreeing source, not the sum and not the loser.
+    expect(byDate.get('2026-07-22')!.sessions).toBe(11)
+    expect(byDate.get('2026-07-26')!.bySource).toEqual([
+      expect.objectContaining({ source: 'chatgpt', sessions: 35 }),
+    ])
+    expect(daily.days.map((d) => d.date)).toEqual([...daily.days.map((d) => d.date)].sort())
+
+    // The chart series and the summary card must agree for the same window.
+    const trafficRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/test-project/ga/traffic',
+    })
+    expect(trafficRes.statusCode).toBe(200)
+    const traffic = JSON.parse(trafficRes.payload) as { aiSessionsDeduped: number }
+    expect(daily.totalSessions).toBe(traffic.aiSessionsDeduped)
+    expect(daily.totalSessions).toBe(65)
+    expect(daily.days.reduce((sum, d) => sum + d.sessions, 0)).toBe(daily.totalSessions)
+
+    db.delete(gaAiReferrals).where(eq(gaAiReferrals.projectId, projectId)).run()
+    credentials.delete('test-project')
+  })
+
   it('GET /ga/social-referral-history returns error when no connection', async () => {
     const res = await app.inject({
       method: 'GET',

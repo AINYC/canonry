@@ -512,8 +512,19 @@ cnry ga traffic <project>                     # current-period rollup; returns: 
 cnry ga attribution <project> [--trend]       # unified channel breakdown (organic / ai / social / direct
                                                   # sessions + raw and display share %s); --trend adds 7d/30d
                                                   # direction per channel + biggest mover
-cnry ga ai-referral-history <project>         # daily array of {date, source, medium, attribution,
-                                                  # sessions, users}; one row per (day × source × dimension)
+cnry ga ai-referral-daily <project>           # AI sessions per day and per source: days[] with
+                                                  # {date, sessions, paidSessions, organicSessions,
+                                                  # bySource[]} + window totals. Landing pages summed inside
+                                                  # ONE attribution dimension, never across dimensions, so
+                                                  # totalSessions equals aiSessionsDeduped from `ga traffic`.
+                                                  # Use this for any AI session COUNT. Sessions only: GA
+                                                  # counts users DISTINCT per grain, so an AI-referral user
+                                                  # count cannot be summed from these rows or fetched.
+cnry ga ai-referral-history <project>         # RAW DETAIL, one row per (day × source × dimension ×
+                                                  # landing page): {date, source, medium, attribution,
+                                                  # landingPage, sessions, users}. Rows are fragments of a
+                                                  # day, commonly worth 1 session each. Never collapse them
+                                                  # into a total; read ai-referral-daily instead.
 cnry ga social-referral-history <project>     # daily array of {date, source, medium, channel,
                                                   # sessions, users}; channel ∈ {Organic Social, Paid Social}
 cnry ga social-referral-summary <project> [--trend]
@@ -913,7 +924,7 @@ Every command takes `--format`:
 - **`json`** — one pretty-printed JSON document (the full envelope). Stable contract.
 - **`jsonl`** — newline-delimited JSON: the command's **primary collection**, one self-contained record per line. The agent-friendly machine format — no envelope key to guess (`.checks` vs `.results` vs `.rows`), no `jq` flattening, greppable line by line.
 
-`jsonl` is supported by every **collection** command — one whose primary output is a list: `insights`, `runs`, `evidence`, `history`, `query/keyword/competitor list`, `notify list/events`, `google` reads (`performance`, `performance-daily`, `inspections`, `coverage-history`, `deindexed`, `status`, `properties`, `list-sitemaps`), `bing` reads (`coverage-history`, `inspections`, `performance`, `sites`), `ga` reads (`ai-referral-history`, `social-referral-history`, `session-history`, `coverage`), `ads geo search` and `ads conversions` reads, `traffic events/sources/status`, `discover list/show`, `content targets/sources/gaps/map`, `backlinks list/releases`, `project list/locations`, `key list`, `agent memory list`, `agent providers`, `sources` (streams the ranked cited-domain list), and `doctor`. (`content brief` is an object command — `jsonl` degrades to its JSON document.)
+`jsonl` is supported by every **collection** command — one whose primary output is a list: `insights`, `runs`, `evidence`, `history`, `query/keyword/competitor list`, `notify list/events`, `google` reads (`performance`, `performance-daily`, `inspections`, `coverage-history`, `deindexed`, `status`, `properties`, `list-sitemaps`), `bing` reads (`coverage-history`, `inspections`, `performance`, `sites`), `ga` reads (`ai-referral-daily`, `ai-referral-history`, `social-referral-history`, `session-history`, `coverage`), `ads geo search` and `ads conversions` reads, `traffic events/sources/status`, `discover list/show`, `content targets/sources/gaps/map`, `backlinks list/releases`, `project list/locations`, `key list`, `agent memory list`, `agent providers`, `sources` (streams the ranked cited-domain list), and `doctor`. (`content brief` is an object command — `jsonl` degrades to its JSON document.)
 
 Each `jsonl` line re-injects the envelope context it would otherwise lose, so a line lifted out still self-describes:
 
