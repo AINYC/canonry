@@ -1,4 +1,4 @@
-import type { GaConnectResponse, GaStatusResponse, GaSyncResponse, GaTrafficResponse, GaCoverageResponse, GaMeasurementAnalysisDto, GaSocialReferralTrendResponse, GaAttributionTrendResponse, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry } from '@ainyc/canonry-contracts'
+import type { GaConnectResponse, GaStatusResponse, GaSyncResponse, GaTrafficResponse, GaCoverageResponse, GaMeasurementAnalysisDto, GaSocialReferralTrendResponse, GaAttributionTrendResponse, GA4AiReferralDailyDto, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry } from '@ainyc/canonry-contracts'
 import { createApiClient } from '../client.js'
 import { CliError, isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
@@ -320,6 +320,40 @@ export async function gaAiReferralHistory(project: string, opts?: { window?: str
       `  ${row.date.padEnd(dateWidth)}  ${row.source.padEnd(sourceWidth)}  ${dimLabel.padEnd(attrWidth)}  ${String(row.sessions).padEnd(10)}${String(row.users).padEnd(8)}`,
     )
   }
+}
+
+export async function gaAiReferralDaily(project: string, opts?: { window?: string; format?: string }): Promise<void> {
+  const client = getClient()
+  const result: GA4AiReferralDailyDto = await client.gaAiReferralDaily(project, opts?.window ? { window: opts.window } : undefined)
+
+  if (opts?.format === 'json') {
+    console.log(JSON.stringify(result, null, 2))
+    return
+  } else if (opts?.format === 'jsonl') {
+    // One self-contained day per line; prepend the envelope context (project +
+    // resolved window) so a line lifted out still says what it covers.
+    emitJsonl(result.days.map(day => ({ project, window: opts?.window, ...day })))
+    return
+  }
+
+  if (result.days.length === 0) {
+    console.log(`No AI referral sessions.${opts?.window ? ' Try a wider window or omit --window.' : ' Run "canonry ga sync <project>" first.'}`)
+    return
+  }
+
+  const dateWidth = 12
+  const sourceWidth = Math.min(30, Math.max(10, ...result.sources.map((s) => s.length)))
+  console.log(`GA4 AI Referral Sessions per Day for "${project}":\n`)
+  console.log(`  ${'DATE'.padEnd(dateWidth)}  ${'SOURCE'.padEnd(sourceWidth)}  ${'SESSIONS'.padEnd(10)}${'PAID'.padEnd(8)}${'ORGANIC'.padEnd(9)}${'USERS'.padEnd(8)}`)
+  console.log(`  ${'─'.repeat(dateWidth)}  ${'─'.repeat(sourceWidth)}  ${'─'.repeat(10)}${'─'.repeat(8)}${'─'.repeat(9)}${'─'.repeat(8)}`)
+  for (const day of result.days) {
+    for (const entry of day.bySource) {
+      console.log(
+        `  ${day.date.padEnd(dateWidth)}  ${entry.source.padEnd(sourceWidth)}  ${String(entry.sessions).padEnd(10)}${String(entry.paidSessions).padEnd(8)}${String(entry.organicSessions).padEnd(9)}${String(entry.users).padEnd(8)}`,
+      )
+    }
+  }
+  console.log(`\n  Total: ${result.totalSessions} sessions (${result.totalPaidSessions} paid, ${result.totalOrganicSessions} organic), ${result.totalUsers} users`)
 }
 
 export async function gaSocialReferralHistory(project: string, opts?: { window?: string; format?: string }): Promise<void> {

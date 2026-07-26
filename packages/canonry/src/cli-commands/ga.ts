@@ -1,4 +1,5 @@
 import {
+  gaAiReferralDaily,
   gaAiReferralHistory,
   gaAttribution,
   gaConnect,
@@ -136,6 +137,20 @@ export const GA_CLI_COMMANDS: readonly CliCommandSpec[] = [
     },
   },
   {
+    path: ['ga', 'ai-referral-daily'],
+    usage: 'canonry ga ai-referral-daily <project> [--window 30d] [--format json]',
+    options: {
+      window: stringOption(),
+    },
+    run: async (input) => {
+      const project = requireProject(input, 'ga.ai-referral-daily', 'canonry ga ai-referral-daily <project> [--window 30d] [--format json]')
+      await gaAiReferralDaily(project, {
+        window: getString(input.values, 'window'),
+        format: input.format,
+      })
+    },
+  },
+  {
     path: ['ga', 'social-referral-history'],
     usage: 'canonry ga social-referral-history <project> [--window 30d] [--format json]',
     options: {
@@ -198,7 +213,7 @@ export const GA_CLI_COMMANDS: readonly CliCommandSpec[] = [
       unknownSubcommand(input.positionals[0], {
         command: 'ga',
         usage: 'canonry ga <subcommand> <project> [args]',
-        available: ['connect', 'disconnect', 'status', 'sync', 'measurement-analysis', 'traffic', 'coverage', 'ai-referral-history', 'social-referral-history', 'session-history', 'social-referral-summary', 'attribution'],
+        available: ['connect', 'disconnect', 'status', 'sync', 'measurement-analysis', 'traffic', 'coverage', 'ai-referral-history', 'ai-referral-daily', 'social-referral-history', 'session-history', 'social-referral-summary', 'attribution'],
       })
     },
   },

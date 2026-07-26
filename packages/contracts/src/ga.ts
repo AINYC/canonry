@@ -364,6 +364,18 @@ export interface GaCoverageResponse {
   pages: Array<{ landingPage: string; sessions: number; organicSessions: number; users: number }>
 }
 
+/**
+ * One raw AI-referral cell: a single landing page, under a single attribution
+ * dimension, on one date.
+ *
+ * These rows are DETAIL, not totals. A day of traffic from one source is many
+ * of them, each commonly worth exactly 1 session, repeated across the three
+ * overlapping `sourceDimension` lenses. Collapsing them with MAX undercounts
+ * the day to a single page, and summing them across dimensions inflates it
+ * roughly threefold. For any per-date or per-source AI session COUNT, read
+ * `GET /ga/ai-referral-daily` (`GA4AiReferralDailyDto`), which applies the
+ * conservation rule once, server side.
+ */
 export const ga4AiReferralHistoryEntrySchema = z.object({
   date: z.string(),
   source: z.string(),
@@ -376,6 +388,47 @@ export const ga4AiReferralHistoryEntrySchema = z.object({
   sourceDimension: ga4SourceDimensionSchema,
 })
 export type GA4AiReferralHistoryEntry = z.infer<typeof ga4AiReferralHistoryEntrySchema>
+
+export const ga4AiReferralDailySourceSchema = z.object({
+  source: z.string(),
+  sessions: z.number(),
+  users: z.number(),
+  paidSessions: z.number(),
+  organicSessions: z.number(),
+})
+export type GA4AiReferralDailySource = z.infer<typeof ga4AiReferralDailySourceSchema>
+
+export const ga4AiReferralDailyEntrySchema = z.object({
+  date: z.string(),
+  sessions: z.number(),
+  users: z.number(),
+  paidSessions: z.number(),
+  organicSessions: z.number(),
+  /** Per-source split of the day. `sessions` is the sum of these. */
+  bySource: z.array(ga4AiReferralDailySourceSchema),
+})
+export type GA4AiReferralDailyEntry = z.infer<typeof ga4AiReferralDailyEntrySchema>
+
+/**
+ * Per-date, per-source AI referral sessions for the trend chart.
+ *
+ * Every count here obeys the one conservation rule for `ga_ai_referrals`: sum
+ * across landing pages within ONE attribution dimension, never across
+ * dimensions. `totalSessions` is the same quantity the traffic response
+ * reports as `aiSessionsDeduped` for the same window, folded from the same
+ * winning-dimension set, so the chart and the summary card cannot drift.
+ */
+export const ga4AiReferralDailyDtoSchema = z.object({
+  /** Ascending by date. Dates with no AI referrals are absent, not zero-filled. */
+  days: z.array(ga4AiReferralDailyEntrySchema),
+  /** Sources present in the window, ordered by total sessions descending. */
+  sources: z.array(z.string()),
+  totalSessions: z.number(),
+  totalUsers: z.number(),
+  totalPaidSessions: z.number(),
+  totalOrganicSessions: z.number(),
+})
+export type GA4AiReferralDailyDto = z.infer<typeof ga4AiReferralDailyDtoSchema>
 
 export const ga4SocialReferralHistoryEntrySchema = z.object({
   date: z.string(),

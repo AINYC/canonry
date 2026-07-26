@@ -37,13 +37,13 @@ import {
   isEmbed,
 } from '../../api.js'
 import {
-  getApiV1ProjectsByNameGaAiReferralHistoryOptions,
+  getApiV1ProjectsByNameGaAiReferralDailyOptions,
   getApiV1ProjectsByNameGaSessionHistoryOptions,
   getApiV1ProjectsByNameGaSocialReferralHistoryOptions,
   getApiV1ProjectsByNameGaStatusOptions,
   getApiV1ProjectsByNameGaTrafficOptions,
 } from '@ainyc/canonry-api-client/react-query'
-import type { ApiGaStatus, ApiGaTraffic, ApiGaTrafficAiLandingPage, ApiGaTrafficPage, ApiGaTrafficReferral, ApiGaSocialReferral, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry } from '../../api.js'
+import type { ApiGaStatus, ApiGaTraffic, ApiGaTrafficAiLandingPage, ApiGaTrafficPage, ApiGaTrafficReferral, ApiGaSocialReferral, GA4AiReferralDailyDto, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry } from '../../api.js'
 import { TRAFFIC_STALE_MS } from '../../queries/query-client.js'
 import { asyncHandler } from '../../lib/async-handler.js'
 import {
@@ -53,6 +53,7 @@ import {
   decodeSocialSourceLabel,
   truncateLabel,
 } from '../../lib/social-chart-helpers.js'
+import { buildAiChartData } from '../../lib/ai-chart-helpers.js'
 
 const TRAFFIC_WINDOWS: MetricsWindow[] = ['7d', '30d', '90d', 'all']
 
@@ -62,6 +63,15 @@ const SOCIAL_OTHER_COLOR = CHART_NEUTRAL.textDim
 const SOCIAL_TOTAL_COLOR = CHART_NEUTRAL.textFaint
 const SOCIAL_TABLE_DEFAULT_LIMIT = 25
 const AI_LANDING_PAGE_SIZE = 50
+
+const EMPTY_AI_DAILY: GA4AiReferralDailyDto = {
+  days: [],
+  sources: [],
+  totalSessions: 0,
+  totalUsers: 0,
+  totalPaidSessions: 0,
+  totalOrganicSessions: 0,
+}
 
 type PageSortKey = 'landingPage' | 'sessions' | 'organicSessions' | 'users'
 type ReferralSortKey = 'source' | 'medium' | 'sessions' | 'users'
@@ -218,7 +228,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
   const [aiLandingSortKey, setAiLandingSortKey] = useState<AiLandingPageSortKey>('sessions')
   const [aiLandingSortDir, setAiLandingSortDir] = useState<SortDir>('desc')
   const [aiLandingPage, setAiLandingPage] = useState(1)
-  const [aiHistory, setAiHistory] = useState<GA4AiReferralHistoryEntry[]>([])
+  const [aiDaily, setAiDaily] = useState<GA4AiReferralDailyDto>(EMPTY_AI_DAILY)
   const [sessionHistory, setSessionHistory] = useState<GA4SessionHistoryEntry[]>([])
   const [socialHistory, setSocialHistory] = useState<GA4SocialReferralHistoryEntry[]>([])
   const [socialTableExpanded, setSocialTableExpanded] = useState(false)
@@ -241,7 +251,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
 
       if (!s.connected) {
         setTraffic(null)
-        setAiHistory([])
+        setAiDaily(EMPTY_AI_DAILY)
         setSessionHistory([])
         setSocialHistory([])
         setLoading(false)
@@ -251,7 +261,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
       // `window === 'all'` collapses to omitting the param; helper-level
       // contracts treat unset / 'all' identically.
       const windowParam = trafficWindow === 'all' ? undefined : trafficWindow
-      const [trafficData, aiHistoryData, sessionHistoryData, socialHistoryData] = await Promise.all([
+      const [trafficData, aiDailyData, sessionHistoryData, socialHistoryData] = await Promise.all([
         // `/ga/traffic` still returns a loose-object response in the spec —
         // cast through `ApiGaTraffic` until `GaTrafficResponse` gains a Zod
         // schema and gets registered. SDK type is `{[k: string]: unknown}`.
@@ -264,13 +274,13 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
           staleTime: TRAFFIC_STALE_MS,
         }).then((data) => data as unknown as ApiGaTraffic),
         queryClient.fetchQuery({
-          ...getApiV1ProjectsByNameGaAiReferralHistoryOptions({
+          ...getApiV1ProjectsByNameGaAiReferralDailyOptions({
             client: heyClient,
             path: { name: projectName },
             query: windowParam ? { window: windowParam } : undefined,
           }),
           staleTime: TRAFFIC_STALE_MS,
-        }).catch(() => [] as GA4AiReferralHistoryEntry[]),
+        }).catch(() => EMPTY_AI_DAILY),
         queryClient.fetchQuery({
           ...getApiV1ProjectsByNameGaSessionHistoryOptions({
             client: heyClient,
@@ -290,7 +300,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
       ])
       if (cancelled.current) return
       setTraffic(trafficData)
-      setAiHistory(aiHistoryData)
+      setAiDaily(aiDailyData)
       setSessionHistory(sessionHistoryData)
       setSocialHistory(socialHistoryData)
       setLoading(false)
@@ -448,44 +458,9 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
   // Keep this above the early returns so the hook order stays stable while the
   // component transitions from loading or disconnected to connected.
   const { chartData, chartSources, dateRange } = useMemo(() => {
-    const sources = [...new Set(aiHistory.map((r) => r.source))]
-    const byDate = new Map<string, Record<string, number>>()
-
-    for (const row of sessionHistory) {
-      byDate.set(row.date, { _totalSessions: row.sessions, _organicSessions: row.organicSessions })
-    }
-
-    // Deduplicate across attribution dimensions: sessionSource, firstUserSource,
-    // and sessionManualSource are overlapping lenses, not disjoint visits. Take
-    // MAX(sessions) per date+source across dimensions to avoid double-counting.
-    const dedupedAi = new Map<string, number>()
-    for (const row of aiHistory) {
-      const key = `${row.date}::${row.source}`
-      const prev = dedupedAi.get(key) ?? 0
-      dedupedAi.set(key, Math.max(prev, row.sessions))
-    }
-
-    for (const [key, sessions] of dedupedAi) {
-      const [date, source] = key.split('::')
-      let entry = byDate.get(date!)
-      if (!entry) {
-        entry = { _totalSessions: 0, _organicSessions: 0 }
-        byDate.set(date!, entry)
-      }
-      entry[source!] = (entry[source!] ?? 0) + sessions
-    }
-
-    const data = [...byDate.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, vals]) => ({ date, ...vals }))
-
-    const dates = data.map((d) => d.date)
-    const range = dates.length > 0
-      ? { start: dates[0], end: dates[dates.length - 1] }
-      : null
-
-    return { chartData: data, chartSources: sources, dateRange: range }
-  }, [aiHistory, sessionHistory])
+    const agg = buildAiChartData(aiDaily, sessionHistory)
+    return { chartData: agg.data, chartSources: agg.sources, dateRange: agg.dateRange }
+  }, [aiDaily, sessionHistory])
 
   if (loading && !status) {
     return <p className="text-sm text-muted py-8 text-center">Loading traffic data…</p>

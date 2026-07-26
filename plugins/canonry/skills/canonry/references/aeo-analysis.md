@@ -133,8 +133,9 @@ Look for patterns: are gaps growing or shrinking? Are new competitors appearing?
 A lost mention (or lost citation) isn't always a lost user. Before declaring a regression real, confirm whether AI-referral traffic actually fell on the same window:
 ```bash
 cnry ga status <project>                          # confirm lastSyncedAt is recent; re-sync if stale
-cnry ga ai-referral-history <project> --format json
-                                                      # daily {date, source, medium, attribution, sessions, users}
+cnry ga ai-referral-daily <project> --format json
+                                                      # AI sessions per day and per source, deduplicated across
+                                                      # attribution dimensions; totals match `cnry ga traffic`
 cnry ga attribution <project> --trend             # 7d/30d direction per channel + biggest mover
 ```
 Read the result against the citation loss window:

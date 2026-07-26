@@ -1957,6 +1957,28 @@ export type DoctorReportDto = {
     }>;
 };
 
+export type Ga4AiReferralDailyDto = {
+    days: Array<{
+        date: string;
+        sessions: number;
+        users: number;
+        paidSessions: number;
+        organicSessions: number;
+        bySource: Array<{
+            source: string;
+            sessions: number;
+            users: number;
+            paidSessions: number;
+            organicSessions: number;
+        }>;
+    }>;
+    sources: Array<string>;
+    totalSessions: number;
+    totalUsers: number;
+    totalPaidSessions: number;
+    totalOrganicSessions: number;
+};
+
 export type Ga4AiReferralHistoryEntry = {
     date: string;
     source: string;
@@ -11328,6 +11350,45 @@ export type GetApiV1ProjectsByNameGaAiReferralHistoryResponses = {
 };
 
 export type GetApiV1ProjectsByNameGaAiReferralHistoryResponse = GetApiV1ProjectsByNameGaAiReferralHistoryResponses[keyof GetApiV1ProjectsByNameGaAiReferralHistoryResponses];
+
+export type GetApiV1ProjectsByNameGaAiReferralDailyData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Time window for analytics queries.
+         */
+        window?: '7d' | '30d' | '90d' | 'all';
+    };
+    url: '/api/v1/projects/{name}/ga/ai-referral-daily';
+};
+
+export type GetApiV1ProjectsByNameGaAiReferralDailyErrors = {
+    /**
+     * GA4 is not connected.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGaAiReferralDailyError = GetApiV1ProjectsByNameGaAiReferralDailyErrors[keyof GetApiV1ProjectsByNameGaAiReferralDailyErrors];
+
+export type GetApiV1ProjectsByNameGaAiReferralDailyResponses = {
+    /**
+     * AI referral daily series returned.
+     */
+    200: Ga4AiReferralDailyDto;
+};
+
+export type GetApiV1ProjectsByNameGaAiReferralDailyResponse = GetApiV1ProjectsByNameGaAiReferralDailyResponses[keyof GetApiV1ProjectsByNameGaAiReferralDailyResponses];
 
 export type GetApiV1ProjectsByNameGaSocialReferralHistoryData = {
     body?: never;

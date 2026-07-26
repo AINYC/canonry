@@ -2,10 +2,11 @@ import crypto from 'node:crypto'
 import { eq, desc, and, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { gaTrafficSnapshots, gaTrafficSummaries, gaTrafficWindowSummaries, gaDailyTotals, gaAiReferrals, gaSocialReferrals, gaAcquisitionDaily, gaLeadEventsDaily, gaMeasurementSyncStates, runs } from '@ainyc/canonry-db'
-import { AiReferralTrafficClasses, classifyAiReferralTrafficClass, validationError, notFound, RunKinds, RunStatuses, RunTriggers, parseWindow, windowCutoff, normalizeUrlPath } from '@ainyc/canonry-contracts'
-import type { AiReferralTrafficClass, GA4ChannelBreakdownDto } from '@ainyc/canonry-contracts'
+import { classifyAiReferralTrafficClass, validationError, notFound, RunKinds, RunStatuses, RunTriggers, parseWindow, windowCutoff, normalizeUrlPath } from '@ainyc/canonry-contracts'
+import type { GA4ChannelBreakdownDto } from '@ainyc/canonry-contracts'
 import { resolveProject, writeAuditLog } from './helpers.js'
 import { buildSessionHistory } from './ga-session-history.js'
+import { buildAiReferralDailySeries, normalizeAiTrafficClass, summarizeAiReferralCounts } from './ga-ai-referral-aggregation.js'
 import {
   getAccessToken,
   fetchTrafficByLandingPage,
@@ -95,6 +96,12 @@ function buildChannelBreakdown(input: {
 // manual_utm), but those dimensions are overlapping lenses on the same visit
 // — summing them across dimensions would double-count. Result is sorted by
 // sessions descending.
+//
+// Callers MUST hand this rows whose landing pages are already summed inside
+// each dimension (i.e. landing page absent from the GROUP BY, or present
+// because the row IS a per-page breakdown). Feeding it per-landing-page rows
+// and treating the result as a total collapses the tuple to one page. See the
+// conservation invariant at the top of `ga-ai-referral-aggregation.ts`.
 function pickWinningDimension<T extends { sessions: number | null }>(
   rows: T[],
   tupleKey: (row: T) => string,
@@ -108,16 +115,6 @@ function pickWinningDimension<T extends { sessions: number | null }>(
     }
   }
   return [...winners.values()].sort((a, b) => (b.sessions ?? 0) - (a.sessions ?? 0))
-}
-
-function normalizeAiTrafficClass(value: string | null | undefined): AiReferralTrafficClass {
-  return value === AiReferralTrafficClasses.paid
-    ? AiReferralTrafficClasses.paid
-    : AiReferralTrafficClasses.organic
-}
-
-function emptyAiCounts() {
-  return { sessions: 0, users: 0 }
 }
 
 type GaDatabase = FastifyInstance['db']
@@ -285,104 +282,6 @@ function persistMeasurementError(
       updatedAt,
     },
   }).run()
-}
-
-interface DimensionClassCounts {
-  paidSessions: number
-  organicSessions: number
-  paidUsers: number
-  organicUsers: number
-}
-
-function summarizeAiReferralCounts(rows: Array<{
-  date: string
-  source: string
-  medium: string
-  trafficClass: string | null
-  sourceDimension: string
-  channelGroup: string
-  sessions: number | null
-  users: number | null
-}>) {
-  // The deduped total dedupes on (date, source, medium) ONLY — 'session',
-  // 'first_user', and 'manual_utm' are overlapping attribution lenses on the
-  // same visits, so it takes MAX across dimensions and never sums them.
-  // Traffic class must NOT join this key: a visit counted paid under one lens
-  // and organic under another would then survive twice and inflate the
-  // combined total. Instead we keep each dimension's paid/organic split and,
-  // for the winning (MAX) dimension, partition its total by class — the rows
-  // within a dimension are disjoint by class, so paid + organic always equals
-  // the deduped total.
-  const dedupeGroups = new Map<string, Map<string, DimensionClassCounts>>()
-  const bySessionChannelGroup = new Map<string, number>()
-  const paidDeduped = emptyAiCounts()
-  const organicDeduped = emptyAiCounts()
-  const paidBySession = emptyAiCounts()
-  const organicBySession = emptyAiCounts()
-
-  for (const row of rows) {
-    const isPaid = normalizeAiTrafficClass(row.trafficClass) === AiReferralTrafficClasses.paid
-    const sessions = row.sessions ?? 0
-    const users = row.users ?? 0
-    const key = `${row.date}\0${row.source}\0${row.medium}`
-    let byDimension = dedupeGroups.get(key)
-    if (!byDimension) {
-      byDimension = new Map()
-      dedupeGroups.set(key, byDimension)
-    }
-    let dim = byDimension.get(row.sourceDimension)
-    if (!dim) {
-      dim = { paidSessions: 0, organicSessions: 0, paidUsers: 0, organicUsers: 0 }
-      byDimension.set(row.sourceDimension, dim)
-    }
-    if (isPaid) {
-      dim.paidSessions += sessions
-      dim.paidUsers += users
-    } else {
-      dim.organicSessions += sessions
-      dim.organicUsers += users
-    }
-
-    if (row.sourceDimension === 'session') {
-      bySessionChannelGroup.set(
-        row.channelGroup,
-        (bySessionChannelGroup.get(row.channelGroup) ?? 0) + sessions,
-      )
-      const sessionBucket = isPaid ? paidBySession : organicBySession
-      sessionBucket.sessions += sessions
-      sessionBucket.users += users
-    }
-  }
-
-  for (const byDimension of dedupeGroups.values()) {
-    const dims = [...byDimension.values()]
-    // Sessions and users each pick their own winning dimension, matching the
-    // prior independent MAX(sessions) / MAX(users) dedupe.
-    const bestSessions = dims.reduce((best, d) =>
-      d.paidSessions + d.organicSessions > best.paidSessions + best.organicSessions ? d : best)
-    const bestUsers = dims.reduce((best, d) =>
-      d.paidUsers + d.organicUsers > best.paidUsers + best.organicUsers ? d : best)
-    paidDeduped.sessions += bestSessions.paidSessions
-    organicDeduped.sessions += bestSessions.organicSessions
-    paidDeduped.users += bestUsers.paidUsers
-    organicDeduped.users += bestUsers.organicUsers
-  }
-
-  return {
-    paidDeduped,
-    organicDeduped,
-    paidBySession,
-    organicBySession,
-    bySessionChannelGroup,
-    deduped: {
-      sessions: paidDeduped.sessions + organicDeduped.sessions,
-      users: paidDeduped.users + organicDeduped.users,
-    },
-    bySession: {
-      sessions: paidBySession.sessions + organicBySession.sessions,
-      users: paidBySession.users + organicBySession.users,
-    },
-  }
 }
 
 export interface Ga4CredentialRecord {
@@ -1388,6 +1287,11 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
   })
 
   // GET /projects/:name/ga/ai-referral-history
+  //
+  // RAW DETAIL, one row per landing page per attribution dimension. Every row
+  // is a fragment of a day, very often worth exactly 1 session. Do not collapse
+  // these rows into a per-date or per-source count; that is what
+  // /ga/ai-referral-daily below exists for.
   app.get<{
     Params: { name: string }
     Querystring: { window?: string }
@@ -1424,6 +1328,45 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       .all()
 
     return rows
+  })
+
+  // GET /projects/:name/ga/ai-referral-daily
+  //
+  // The per-date, per-source AI session series. Reads the same raw rows the
+  // traffic totals read and folds them through the same
+  // `resolveWinningDimensions` primitive, so this series and the AI cards on
+  // /ga/traffic agree by construction: summing `days[].sessions` over a window
+  // reproduces that window's `aiSessionsDeduped` exactly.
+  app.get<{
+    Params: { name: string }
+    Querystring: { window?: string }
+  }>('/projects/:name/ga/ai-referral-daily', async (request, _reply) => {
+    const project = resolveProject(app.db, request.params.name)
+    requireGa4Connection(opts, project.name, project.canonicalDomain)
+
+    const cutoffDate = windowCutoff(parseWindow(request.query.window))?.slice(0, 10) ?? null
+    const conditions = [eq(gaAiReferrals.projectId, project.id)]
+    if (cutoffDate) conditions.push(sql`${gaAiReferrals.date} >= ${cutoffDate}`)
+
+    // Deliberately unaggregated in SQL. Landing pages must be summed inside a
+    // dimension and dimensions must not be summed at all, which is not a single
+    // GROUP BY, so the raw rows go to the shared aggregator.
+    const rows = app.db
+      .select({
+        date: gaAiReferrals.date,
+        source: gaAiReferrals.source,
+        medium: gaAiReferrals.medium,
+        trafficClass: gaAiReferrals.trafficClass,
+        sourceDimension: gaAiReferrals.sourceDimension,
+        channelGroup: gaAiReferrals.channelGroup,
+        sessions: gaAiReferrals.sessions,
+        users: gaAiReferrals.users,
+      })
+      .from(gaAiReferrals)
+      .where(and(...conditions))
+      .all()
+
+    return buildAiReferralDailySeries(rows)
   })
 
   // GET /projects/:name/ga/social-referral-history

@@ -3708,11 +3708,25 @@ const routeCatalog: OpenApiOperation[] = [
   {
     method: 'get',
     path: '/api/v1/projects/{name}/ga/ai-referral-history',
-    summary: 'Get AI referral sessions per day grouped by source and landing page',
+    summary: 'Get raw AI referral detail rows per day, landing page, and attribution dimension',
+    description: 'Detail rows, not totals. One row per landing page per attribution dimension, so a single day of one source is many rows and each is commonly worth one session. Use /ga/ai-referral-daily for per-date or per-source session counts.',
     tags: ['ga4'],
     parameters: [nameParameter, analyticsWindowParameter],
     responses: {
       200: jsonArrayResponse('AI referral history returned.', 'GA4AiReferralHistoryEntry'),
+      400: errorResponse('GA4 is not connected.'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/ga/ai-referral-daily',
+    summary: 'Get AI referral sessions per day and per source',
+    description: 'Sums landing pages within one attribution dimension and never across dimensions, so totalSessions equals the aiSessionsDeduped reported by /ga/traffic for the same window.',
+    tags: ['ga4'],
+    parameters: [nameParameter, analyticsWindowParameter],
+    responses: {
+      200: jsonResponse('AI referral daily series returned.', 'GA4AiReferralDailyDto'),
       400: errorResponse('GA4 is not connected.'),
       404: errorResponse('Project not found.'),
     },

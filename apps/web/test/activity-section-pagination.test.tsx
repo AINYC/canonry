@@ -124,7 +124,7 @@ function renderPanel(landingPages: ApiGaTrafficAiLandingPage[]) {
     if (urlPath.endsWith('/projects/test-project/ga/traffic')) {
       return jsonResponse(makeTraffic(landingPages))
     }
-    if (urlPath.endsWith('/projects/test-project/ga/ai-referral-history')) return jsonResponse([])
+    if (urlPath.endsWith('/projects/test-project/ga/ai-referral-daily')) return jsonResponse({ days: [], sources: [], totalSessions: 0, totalUsers: 0, totalPaidSessions: 0, totalOrganicSessions: 0 })
     if (urlPath.endsWith('/projects/test-project/ga/session-history')) return jsonResponse([])
     if (urlPath.endsWith('/projects/test-project/ga/social-referral-history')) return jsonResponse([])
     throw new Error(`Unexpected fetch: ${url}`)
