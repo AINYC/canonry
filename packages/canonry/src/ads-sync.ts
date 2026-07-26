@@ -6,7 +6,9 @@ import {
   buildRunErrorFromMessages,
   serializeRunError,
   dollarsToMicros,
+  formatIsoDateInTimeZone,
   startOfDayHourInTimeZone,
+  startOfNextDayHourInTimeZone,
 } from '@ainyc/canonry-contracts'
 import {
   getAdAccount,
@@ -50,19 +52,42 @@ function accountHour(date: Date, timezone: string): string {
   return `${value('year')}-${value('month')}-${value('day')}T${value('hour')}`
 }
 
+/**
+ * The EXCLUSIVE upper edge that covers the whole account-local day `at` falls
+ * in: the start of the next account-local day.
+ *
+ * The provider reports a daily bucket only when the requested range fully
+ * covers that bucket's own boundaries, and the current day's bucket runs to the
+ * NEXT local midnight. An upper edge at the current local hour therefore leaves
+ * today's boundary outside the range and the provider omits today's row
+ * entirely, so every read silently loses the day in progress. Asking through
+ * the next local midnight is what makes the partial day come back.
+ *
+ * Both range builders derive their `until` here so the two can never disagree,
+ * and it is calendar arithmetic (`startOfNextDayHourInTimeZone`) rather than
+ * `+24h`, because a local day is 23 hours the day a zone springs forward and 25
+ * the day it falls back, and a zone that springs forward AT midnight has no
+ * hour 00 on that one day.
+ */
+function endOfAccountDayExclusive(at: Date, timezone: string): string {
+  return startOfNextDayHourInTimeZone(formatIsoDateInTimeZone(at.toISOString(), timezone), timezone)
+}
+
 export function trailingAdsInsightHourRange(
   now: Date,
   timezone: string,
   lookbackMs: number = INSIGHTS_LOOKBACK_MS,
 ): OpenAiAdsInsightHourRange {
-  // The live API rejects conversion fields without time_ranges[] and rejects
-  // incomplete future local days. A timezone-aware hour range includes the
-  // current completed boundary and works across daylight-saving transitions.
-  // The sync keeps the default 90-day lookback.
+  // The live API rejects conversion fields without time_ranges[], so the sync
+  // is a ranged call. A timezone-aware hour range works across daylight-saving
+  // transitions, and the upper edge runs through the END of the account's
+  // current local day so the day in progress is included instead of dropped.
+  // The sync keeps the default 90-day lookback, and `since` is untouched: only
+  // the upper edge moves, so the backfill window is exactly what it was.
   return {
     type: 'hour_range',
     since: accountHour(new Date(now.getTime() - lookbackMs), timezone),
-    until: accountHour(now, timezone),
+    until: endOfAccountDayExclusive(now, timezone),
     timezone,
   }
 }
@@ -81,10 +106,14 @@ export function trailingAdsInsightHourRange(
  *   forward AT midnight, where hour 00 is skipped and naming it would ask the
  *   provider about a wall-clock hour its own calendar never had, so
  *   `startOfDayHourInTimeZone` resolves the day's first hour that exists.
- * - `until` is the FROZEN read anchor. Calling `new Date()` per insight would
- *   let a walk that crosses an account-local hour boundary compare different
- *   entities over different ranges, with the reported `fetchedAt` describing
- *   none of them.
+ * - `until` is the END of the account-local day the FROZEN read anchor falls
+ *   in, so the current day is a whole bucket upstream and comes back at all.
+ *   An edge at the anchor's local hour left today's own boundary outside the
+ *   range and the provider dropped today's row, which is what made a live read
+ *   report less delivery than the provider's own UI. Deriving it from the
+ *   frozen anchor still pins every insight call in one walk to the identical
+ *   range, more firmly than an hourly edge did, since this one only moves at
+ *   local midnight, so the reported `fetchedAt` describes all of them.
  */
 export function liveAdsInsightHourRange(request: {
   startDate: string
@@ -94,7 +123,7 @@ export function liveAdsInsightHourRange(request: {
   return {
     type: 'hour_range',
     since: startOfDayHourInTimeZone(request.startDate, request.timezone),
-    until: accountHour(new Date(request.fetchedAtMs), request.timezone),
+    until: endOfAccountDayExclusive(new Date(request.fetchedAtMs), request.timezone),
     timezone: request.timezone,
   }
 }

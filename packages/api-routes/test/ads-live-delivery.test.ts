@@ -6,7 +6,12 @@ import crypto from 'node:crypto'
 import { Writable } from 'node:stream'
 import Fastify from 'fastify'
 import { eq } from 'drizzle-orm'
-import { AppError, startOfDayHourInTimeZone } from '@ainyc/canonry-contracts'
+import {
+  AppError,
+  formatIsoDateInTimeZone,
+  startOfDayHourInTimeZone,
+  startOfNextDayHourInTimeZone,
+} from '@ainyc/canonry-contracts'
 import type { AdsLiveDeliveryDto } from '@ainyc/canonry-contracts'
 import {
   createClient,
@@ -102,14 +107,18 @@ function accountHourKey(atMs: number, timezone: string): string {
 
 /**
  * The hour range the host builds from one insight request. Mirrors
- * `liveAdsInsightHourRange` in the host's ads-sync, down to resolving the
- * start through the shared `startOfDayHourInTimeZone` rather than assuming
- * every account's day begins at local hour 00.
+ * `liveAdsInsightHourRange` in the host's ads-sync, down to resolving both
+ * edges through the shared timezone helpers rather than assuming every
+ * account's day begins at local hour 00 or ends 24 hours later.
  */
 function rangeOf(request: AdsLiveInsightsRequest) {
+  const readDate = formatIsoDateInTimeZone(
+    new Date(request.fetchedAtMs).toISOString(),
+    request.timezone,
+  )
   return {
     since: startOfDayHourInTimeZone(request.startDate, request.timezone),
-    until: accountHourKey(request.fetchedAtMs, request.timezone),
+    until: startOfNextDayHourInTimeZone(readDate, request.timezone),
     timezone: request.timezone,
   }
 }
@@ -117,7 +126,8 @@ function rangeOf(request: AdsLiveInsightsRequest) {
 /**
  * What a provider does with an hour range: serve the buckets that fall inside
  * it and nothing else. A fake that returns its fixture regardless of the range
- * cannot see a window-alignment bug at all.
+ * cannot see a window-alignment bug at all. `until` is the EXCLUSIVE edge, so
+ * a bucket landing exactly on it belongs to the next range.
  */
 function servedBuckets(
   buckets: Array<{ hour: string; impressions: number }>,
@@ -125,8 +135,32 @@ function servedBuckets(
 ) {
   const range = rangeOf(request)
   return buckets
-    .filter((bucket) => bucket.hour >= range.since && bucket.hour <= range.until)
+    .filter((bucket) => bucket.hour >= range.since && bucket.hour < range.until)
     .map((bucket) => metricRow(bucket.hour.slice(0, 10), { impressions: bucket.impressions }))
+}
+
+/**
+ * What the provider actually emits: DAILY buckets, and only for a day whose own
+ * boundaries the requested range fully covers. A day runs from where it starts
+ * on the account's wall clock to where the next day starts, so a range that
+ * stops at the read instant's local hour does not cover the current day at all
+ * and the provider returns nothing for it.
+ *
+ * This is the shape that hid the in-progress day. An hourly fake cannot see it:
+ * hourly slices of today fall inside a mid-day edge quite happily.
+ */
+function servedDayBuckets(
+  buckets: Array<{ date: string; impressions: number }>,
+  request: AdsLiveInsightsRequest,
+) {
+  const range = rangeOf(request)
+  return buckets
+    .filter((bucket) => {
+      const dayStart = startOfDayHourInTimeZone(bucket.date, request.timezone)
+      const dayEnd = startOfNextDayHourInTimeZone(bucket.date, request.timezone)
+      return dayStart >= range.since && dayEnd <= range.until
+    })
+    .map((bucket) => metricRow(bucket.date, { impressions: bucket.impressions }))
 }
 
 interface Overrides {
@@ -137,6 +171,8 @@ interface Overrides {
   adGroupMetrics?: ReturnType<typeof metricRow>[]
   /** Hourly campaign buckets, served only when they fall inside the asked-for range. */
   campaignHourBuckets?: Array<{ hour: string; impressions: number }>
+  /** Daily campaign buckets, served only when the range covers the whole day. */
+  campaignDayBuckets?: Array<{ date: string; impressions: number }>
   /** Advances the fake clock after each insight call, so a walk can outlive an hour. */
   advanceClockPerInsightMs?: number
   readerError?: unknown
@@ -201,6 +237,7 @@ function buildApp(overrides: Overrides = {}) {
       recordInsight('campaignInsights', request)
       throwIfConfigured()
       if (overrides.campaignHourBuckets) return servedBuckets(overrides.campaignHourBuckets, request)
+      if (overrides.campaignDayBuckets) return servedDayBuckets(overrides.campaignDayBuckets, request)
       return overrides.campaignMetrics ?? []
     },
     adGroupInsights: async (apiKey, adGroupId, request) => {
@@ -785,6 +822,64 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     expect(body.drift.metricsDrifted).toBe(0)
   })
 
+  it('asks the provider for the WHOLE last day of the window, so the day in progress is not false drift', async () => {
+    // 12:00 UTC is 06:00 in Denver, so the account's local 2026-06-10 is a
+    // quarter over and its daily bucket runs to 06-11 00:00 local. The
+    // provider serves a day only when the range covers that WHOLE span, so an
+    // upper edge at the read instant's local hour returned nothing for the day
+    // in progress while the stored side held that day's partial row from the
+    // last sync. The comparison then reported a stored-only day as drift on
+    // every read, and the live totals ran a day behind the provider's own UI.
+    await start({
+      campaigns: [liveEntity('cmpn_1', 'active', { name: 'Homeowners Free Estimate' })],
+      adGroups: [],
+      ads: [],
+      campaignDayBuckets: [
+        { date: '2026-06-09', impressions: 137 },
+        // Partial on BOTH sides and equal: the last ads-sync stored exactly
+        // this reading of the day in progress, so there is nothing to report.
+        { date: '2026-06-10', impressions: 68 },
+      ],
+    })
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+    ctx.seedDatedCampaign(projectId, '2026-06-09', 137)
+    ctx.db.insert(adsInsightsDaily).values({
+      id: crypto.randomUUID(), projectId, syncRunId: null,
+      level: 'campaign', entityId: 'cmpn_1', date: '2026-06-10',
+      impressions: 68, clicks: 0, spendMicros: 0, conversions: 0,
+    }).run()
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    const body = JSON.parse(res.body) as AdsLiveDeliveryDto
+
+    expect(res.statusCode).toBe(200)
+    // The upper edge is the START of the next local day, so the current day's
+    // own boundary sits inside the range.
+    expect(rangeOf(ctx.insightRequests[0].request).until).toBe('2026-06-11T00')
+    // And that day is the window's last day on the stored side too, so the
+    // two sides are filtered and asked over the same closing date.
+    expect(liveComparisonWindow(Date.parse(NOW), 7, 'America/Denver').endDate).toBe('2026-06-10')
+
+    const campaign = body.entities.find((entity) => entity.id === 'cmpn_1')!
+    expect(campaign.metricDeltas).toEqual([
+      {
+        date: '2026-06-09',
+        live: { impressions: 137, clicks: 0, spendMicros: 0, conversions: 0 },
+        stored: { impressions: 137, clicks: 0, spendMicros: 0, conversions: 0 },
+        drifted: false,
+      },
+      {
+        date: '2026-06-10',
+        live: { impressions: 68, clicks: 0, spendMicros: 0, conversions: 0 },
+        stored: { impressions: 68, clicks: 0, spendMicros: 0, conversions: 0 },
+        drifted: false,
+      },
+    ])
+    expect(campaign.drifted).toBe(false)
+    expect(body.drift.metricsDrifted).toBe(0)
+  })
+
   it('pins every insight call in one walk to the identical range, across an hour boundary', async () => {
     await start({
       campaigns: [liveEntity('cmpn_1', 'active')],
@@ -810,7 +905,7 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     const ranges = ctx.insightRequests.map((entry) => rangeOf(entry.request))
     expect(ranges[0]).toEqual({
       since: '2026-06-03T00',
-      until: '2026-06-10T06',
+      until: '2026-06-11T00',
       timezone: 'America/Denver',
     })
     expect(ranges[1]).toEqual(ranges[0])

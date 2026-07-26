@@ -119,16 +119,60 @@ afterEach(() => {
 })
 
 describe('executeAdsSync', () => {
-  it('builds the verified trailing hour-range contract in the advertiser timezone', () => {
+  it('runs the trailing range through the END of the account current local day', () => {
+    // 17:37 UTC is 13:37 in New York. The upper edge used to be that same
+    // local hour, which leaves the current day's own end boundary (the next
+    // local midnight) outside the range. The provider only reports a daily
+    // bucket its range fully covers, so today was omitted from every sync and
+    // the stored totals ran a whole day behind the provider's own UI.
     expect(trailingAdsInsightHourRange(
       new Date('2026-07-21T17:37:00.000Z'),
       'America/New_York',
     )).toEqual({
       type: 'hour_range',
+      // Unchanged: only the upper edge moves, so the 90-day backfill window is
+      // exactly the window it always was.
       since: '2026-04-22T13',
-      until: '2026-07-21T13',
+      until: '2026-07-22T00',
       timezone: 'America/New_York',
     })
+  })
+
+  it('closes the day at the first hour the NEXT local day actually has', () => {
+    // America/Santiago springs forward AT midnight into 2026-09-06: the clock
+    // goes 23:59:59 -> 01:00:00, so that day has no hour 00 and the edge that
+    // closes 09-05 is 09-06 at 01:00. Naming "2026-09-06T00" would ask the
+    // provider about a wall-clock hour its own calendar never had.
+    const at = new Date('2026-09-05T20:00:00.000Z') // 16:00 local on 09-05
+    expect(trailingAdsInsightHourRange(at, 'America/Santiago').until).toBe('2026-09-06T01')
+    expect(liveAdsInsightHourRange({
+      startDate: '2026-09-05',
+      fetchedAtMs: at.getTime(),
+      timezone: 'America/Santiago',
+    })).toEqual({
+      type: 'hour_range',
+      since: '2026-09-05T00',
+      until: '2026-09-06T01',
+      timezone: 'America/Santiago',
+    })
+  })
+
+  it('closes a 25-hour fall-back day on the next date, not 24 hours later', () => {
+    // America/New_York repeats 01:00 on 2026-11-01, so that local day is 25
+    // hours long. Adding a fixed 24 hours to its start lands back INSIDE
+    // 11-01, which would close the day on itself and drop it again.
+    const at = new Date('2026-11-01T18:00:00.000Z') // 13:00 local on 11-01
+    expect(trailingAdsInsightHourRange(at, 'America/New_York').until).toBe('2026-11-02T00')
+    expect(liveAdsInsightHourRange({
+      startDate: '2026-10-30',
+      fetchedAtMs: at.getTime(),
+      timezone: 'America/New_York',
+    }).until).toBe('2026-11-02T00')
+    // The 23-hour spring-forward day at the other end of the same zone.
+    expect(trailingAdsInsightHourRange(
+      new Date('2026-03-08T17:00:00.000Z'),
+      'America/New_York',
+    ).until).toBe('2026-03-09T00')
   })
 
   it('builds a live insight range from the request only, never from the clock', () => {
@@ -142,7 +186,9 @@ describe('executeAdsSync', () => {
       // The start of the window's first local day: that day is a WHOLE day
       // upstream, so it is comparable with the whole-day stored rollup.
       since: '2026-07-14T00',
-      until: '2026-07-21T13',
+      // And the end of the window's LAST local day, so the day in progress is
+      // a whole bucket upstream too and comes back at all.
+      until: '2026-07-22T00',
       timezone: 'America/New_York',
     }
 
@@ -295,6 +341,64 @@ describe('executeAdsSync', () => {
     expect(db.select().from(adsAdGroups).all().length).toBe(1)
     expect(db.select().from(adsAds).all().length).toBe(1)
     expect(db.select().from(adsInsightsDaily).all().length).toBe(3)
+  })
+
+  it('overwrites the in-progress day on the next sync rather than duplicating or sticking', async () => {
+    const db = createTempDb()
+    seed(db)
+
+    // The sync now asks through the end of the account's current local day, so
+    // the provider returns that day while it is still filling. The SAME date
+    // therefore comes back with bigger numbers on every read, and the rollup
+    // row for it has to track them: it is keyed (project, level, entity, date),
+    // so a second sync must UPSERT rather than insert a second row or leave the
+    // first read's partial figure in place forever.
+    let partialDay = {
+      id: 'r2', start_time: 2, end_time: 3, readable_time: '2026-06-10',
+      impressions: 1736, clicks: 23, spend: 39.28,
+    }
+    globalThis.fetch = async (url: string | URL | Request) => {
+      const u = String(url)
+      const respond = (payload: unknown) => new Response(JSON.stringify(payload), { status: 200 })
+      if (u.endsWith('/ad_account')) return respond(ACCOUNT)
+      if (u.includes('/campaigns/cmpn_bbb/insights')) return respond(list([CAMPAIGN_INSIGHTS[0], partialDay]))
+      if (u.includes('/ad_groups/adgrp_ddd/insights')) return respond(list(AD_GROUP_INSIGHTS))
+      if (u.includes('/campaigns')) return respond(list([CAMPAIGN]))
+      if (u.includes('/ad_groups?campaign_id=cmpn_bbb')) return respond(list([AD_GROUP]))
+      if (u.includes('/ads?ad_group_id=adgrp_ddd')) return respond(list([AD]))
+      throw new Error(`unexpected URL in test: ${u}`)
+    }
+
+    const inProgressRows = () => db.select().from(adsInsightsDaily).all()
+      .filter((row) => row.level === 'campaign' && row.date === '2026-06-10')
+
+    await executeAdsSync(db, 'run_1', 'proj_1', { config: testConfig() })
+    expect(inProgressRows()).toHaveLength(1)
+    expect(inProgressRows()[0]?.impressions).toBe(1736)
+    const firstRowId = inProgressRows()[0]?.id
+
+    // Later the same local day: more delivery has landed on that same date.
+    partialDay = { ...partialDay, impressions: 2061, clicks: 31, spend: 55.1 }
+    db.insert(runs).values({
+      id: 'run_2', projectId: 'proj_1', kind: 'ads-sync', status: 'queued', trigger: 'manual', createdAt: NOW,
+    }).run()
+    await executeAdsSync(db, 'run_2', 'proj_1', { config: testConfig() })
+
+    const after = inProgressRows()
+    // Not duplicated: still exactly one row for the day, and the same row.
+    expect(after).toHaveLength(1)
+    expect(after[0]?.id).toBe(firstRowId)
+    // Not stuck: every metric moved to the newer partial reading, and the row
+    // now points at the sync that last wrote it.
+    expect(after[0]?.impressions).toBe(2061)
+    expect(after[0]?.clicks).toBe(31)
+    expect(after[0]?.spendMicros).toBe(55_100_000)
+    expect(after[0]?.syncRunId).toBe('run_2')
+
+    // The completed day beside it is untouched by the overwrite.
+    const completedDay = db.select().from(adsInsightsDaily).all()
+      .find((row) => row.level === 'campaign' && row.date === '2026-06-09')
+    expect(completedDay?.impressions).toBe(3326)
   })
 
   it('fails the run when no config credential exists for the project', async () => {

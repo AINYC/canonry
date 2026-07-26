@@ -626,6 +626,15 @@ cnry schedule set <project> --kind ads-sync --preset daily
 
 `ads sync` runs report `completed` / `partial` (some campaigns failed; per-campaign errors on the run) / `failed`. Doctor checks: `ads.auth.connection`, `ads.data.recent-sync` (both skipped when not connected).
 
+The stored rollups include the ad account's CURRENT local day while it is still
+running, so the newest date is a partial figure that grows on every sync. Do not
+compare it against a finished day, and do not fold it into a period total
+without saying so. Every read that can reach it says which date it is:
+`ads insights` flags the row (`inProgress: true`), and `ads summary` /
+`ads delivery-diagnostics` carry `window.inProgressDate` (null when the window
+holds only closed days). "Current" means current in the ACCOUNT's timezone, not
+yours.
+
 `ads account`, `ads geo search`, and both `ads conversions` commands read the
 live OpenAI Advertiser API rather than the local synced snapshot. Use `account`
 to verify the connected advertiser and review state, `geo search` to resolve

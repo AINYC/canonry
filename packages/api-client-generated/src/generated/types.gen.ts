@@ -662,6 +662,7 @@ export type AdsDeliveryDiagnosticsDto = {
         window: {
             from: string | null;
             to: string | null;
+            inProgressDate: string | null;
         };
         totals: {
             impressions: number;
@@ -765,6 +766,7 @@ export type AdsInsightsResponse = {
         conversions: number;
         ctr: number | null;
         cpcMicros: number | null;
+        inProgress: boolean;
     }>;
     currencyCode?: string | null;
 };
@@ -945,6 +947,7 @@ export type AdsSummaryDto = {
     window: {
         from: string | null;
         to: string | null;
+        inProgressDate: string | null;
     };
     totals: {
         impressions: number;

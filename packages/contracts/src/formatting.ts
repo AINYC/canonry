@@ -265,6 +265,31 @@ export function startOfDayHourInTimeZone(isoDate: string, timeZone: string): str
   }
 }
 
+/**
+ * `YYYY-MM-DDTHH` for where the calendar day AFTER `isoDate` starts on the wall
+ * clock in `timeZone`. This is the EXCLUSIVE upper edge of `isoDate` itself.
+ *
+ * Use it whenever a range has to CONTAIN a whole local day rather than stop
+ * inside it, above all when that day is the one currently in progress. Naming
+ * the current hour leaves the day's own end boundary outside the range, and a
+ * third party that only reports a bucket its request fully covers then omits
+ * that day entirely: the data is not missing upstream, it was never asked for.
+ *
+ * The step is a CALENDAR step, never `+24h`: the local day a zone springs
+ * forward on is 23 hours and the one it falls back on is 25, so adding a fixed
+ * duration lands on the wrong date around a transition. Where the resulting day
+ * actually starts is then resolved by `startOfDayHourInTimeZone`, which is hour
+ * 00 except on the one day a year a zone that springs forward AT midnight has
+ * no hour 00.
+ *
+ * Degrades the way the rest of this module does: an unusable date comes back as
+ * its own hour 00 rather than throwing, so a window boundary never takes a read
+ * down.
+ */
+export function startOfNextDayHourInTimeZone(isoDate: string, timeZone: string): string {
+  return startOfDayHourInTimeZone(shiftIsoCalendarDate(isoDate, 1), timeZone)
+}
+
 export function formatDateRange(start: string, end: string): string {
   if (!start && !end) return ''
   if (start && end) return `${formatDate(start)} → ${formatDate(end)}`

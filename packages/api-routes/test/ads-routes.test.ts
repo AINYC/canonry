@@ -2461,7 +2461,54 @@ describe('ads routes', () => {
     expect(body.totals.conversions).toBe(6)
     expect(body.totals.ctr).toBeCloseTo(63 / 5162, 8)
     expect(body.totals.cpcMicros).toBe(Math.round(129_730_000 / 63))
-    expect(body.window).toEqual({ from: '2026-06-08', to: '2026-06-10' })
+    // Every seeded date is long closed by the time this runs, so nothing in
+    // the window is provisional.
+    expect(body.window).toEqual({ from: '2026-06-08', to: '2026-06-10', inProgressDate: null })
+  })
+
+  it('marks the account current local day as still filling, in the ACCOUNT timezone', async () => {
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId) // America/Denver
+    ctx.seedSnapshots(projectId)
+    ctx.seedInsights(projectId)
+
+    vi.useFakeTimers()
+    try {
+      // 02:00 UTC on the 11th is still 20:00 on the 10th in Denver. The
+      // account's rollup dates are ITS local dates, so a UTC-derived "today"
+      // would call the 10th closed while it is still running.
+      vi.setSystemTime(new Date('2026-06-11T02:00:00.000Z'))
+
+      const summary = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/summary' })
+      expect(JSON.parse(summary.body).window).toEqual({
+        from: '2026-06-08', to: '2026-06-10', inProgressDate: '2026-06-10',
+      })
+
+      const diagnostics = await ctx.app.inject({
+        method: 'GET', url: '/projects/acme/ads/delivery-diagnostics',
+      })
+      const diag = JSON.parse(diagnostics.body) as AdsDeliveryDiagnosticsDto
+      expect(diag.historicalCampaignRollups.window).toEqual({
+        from: '2026-06-08', to: '2026-06-10', inProgressDate: '2026-06-10',
+      })
+
+      const insights = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/insights' })
+      const rows = (JSON.parse(insights.body) as { rows: Array<{ date: string; inProgress: boolean }> }).rows
+      // Every row for the open day is flagged, at both levels, and only those.
+      expect(rows.filter((row) => row.inProgress).map((row) => row.date)).toEqual(['2026-06-10', '2026-06-10'])
+      expect(rows.filter((row) => !row.inProgress).map((row) => row.date)).toEqual(['2026-06-08', '2026-06-09'])
+
+      // Once the account's clock has left that day, nothing is provisional and
+      // the same stored rows report as a closed window.
+      vi.setSystemTime(new Date('2026-06-11T12:00:00.000Z'))
+      const later = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/summary' })
+      expect(JSON.parse(later.body).window.inProgressDate).toBeNull()
+      const laterInsights = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/insights' })
+      const laterRows = (JSON.parse(laterInsights.body) as { rows: Array<{ inProgress: boolean }> }).rows
+      expect(laterRows.every((row) => !row.inProgress)).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('DELETE /ads/connection removes the row + credential and is idempotent', async () => {

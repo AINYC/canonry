@@ -38,6 +38,7 @@ import {
   adsCtr,
   adsCpcMicros,
   alreadyExists,
+  formatIsoDateInTimeZone,
   notFound,
   operationInProgress,
   providerError,
@@ -442,11 +443,43 @@ function storedSnapshotProvenance(input: {
   }
 }
 
-function historicalCampaignRollups(rows: readonly CampaignInsightRow[]): AdsDeliveryDiagnosticsDto['historicalCampaignRollups'] {
+/**
+ * The ad account's CURRENT local calendar date: the one date whose stored
+ * rollup row is still filling.
+ *
+ * Every rollup date is an account-local calendar date: the sync asks the
+ * provider for a range expressed in the account's timezone and stores the
+ * provider's own `readable_time` verbatim. Deriving "today" in UTC instead
+ * names a different day for any account far enough east or west of it, which
+ * would either mark a finished day as partial or let a partial one pass as
+ * final, the same class of error the window boundaries already avoid.
+ *
+ * An account with no captured timezone (never synced) falls back to UTC, the
+ * same default the live comparison uses.
+ */
+function adsAccountToday(timezone: string | null | undefined, nowIso: string): string {
+  return formatIsoDateInTimeZone(nowIso, timezone ?? 'UTC')
+}
+
+/**
+ * `accountToday` when it is the newest date in the window, otherwise null.
+ *
+ * A window that stops short of today holds only closed days, so nothing in it
+ * is provisional. A window that reaches today ends on a partial day and has to
+ * say so, because its totals keep moving until that day closes.
+ */
+function inProgressWindowDate(newestDate: string | null, accountToday: string): string | null {
+  return newestDate !== null && newestDate === accountToday ? accountToday : null
+}
+
+function historicalCampaignRollups(
+  rows: readonly CampaignInsightRow[],
+  accountToday: string,
+): AdsDeliveryDiagnosticsDto['historicalCampaignRollups'] {
   if (rows.length === 0) {
     return {
       status: AdsHistoricalCampaignRollupStatuses.unavailable,
-      window: { from: null, to: null },
+      window: { from: null, to: null, inProgressDate: null },
       totals: null,
     }
   }
@@ -468,7 +501,7 @@ function historicalCampaignRollups(rows: readonly CampaignInsightRow[]): AdsDeli
 
   return {
     status: AdsHistoricalCampaignRollupStatuses.reported,
-    window: { from: fromDate, to: toDate },
+    window: { from: fromDate, to: toDate, inProgressDate: inProgressWindowDate(toDate, accountToday) },
     totals: {
       impressions,
       clicks,
@@ -2855,6 +2888,13 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       .orderBy(asc(adsInsightsDaily.date))
       .all()
 
+    const conn = app.db.select().from(adsConnections)
+      .where(eq(adsConnections.projectId, project.id)).get()
+    // The sync now stores the account's current local day while it is still
+    // running, so a caller summing these rows would otherwise fold a running
+    // figure into a total of finished days without any way to tell.
+    const accountToday = adsAccountToday(conn?.timezone, new Date().toISOString())
+
     const dtoRows: AdsInsightRowDto[] = rows.map((row) => ({
       level: row.level as AdsInsightLevel,
       entityId: row.entityId,
@@ -2865,10 +2905,9 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       conversions: row.conversions,
       ctr: adsCtr(row.clicks, row.impressions),
       cpcMicros: adsCpcMicros(row.spendMicros, row.clicks),
+      inProgress: row.date === accountToday,
     }))
 
-    const conn = app.db.select().from(adsConnections)
-      .where(eq(adsConnections.projectId, project.id)).get()
     const response: AdsInsightsResponse = { rows: dtoRows, currencyCode: conn?.currencyCode ?? null }
     return response
   })
@@ -2909,7 +2948,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       sourceSync,
       latestAdsSync,
     })
-    const rollups = historicalCampaignRollups(app.db.select({
+    const rollupRows = app.db.select({
       date: adsInsightsDaily.date,
       impressions: adsInsightsDaily.impressions,
       clicks: adsInsightsDaily.clicks,
@@ -2920,7 +2959,11 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
         eq(adsInsightsDaily.projectId, project.id),
         eq(adsInsightsDaily.level, AdsInsightLevels.campaign),
       ))
-      .all())
+      .all()
+    const rollups = historicalCampaignRollups(
+      rollupRows,
+      adsAccountToday(connection?.timezone, new Date().toISOString()),
+    )
 
     const adsByGroup = new Map<string, AdsDeliveryDiagnosticsDto['storedConfiguration']['campaigns'][number]['adGroups'][number]['ads']>()
     for (const ad of adRows) {
@@ -3405,7 +3448,14 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       campaignCount,
       adGroupCount,
       adCount,
-      window: { from: fromDate, to: toDate },
+      window: {
+        from: fromDate,
+        to: toDate,
+        inProgressDate: inProgressWindowDate(
+          toDate,
+          adsAccountToday(row?.timezone, new Date().toISOString()),
+        ),
+      },
       totals: {
         impressions,
         clicks,
