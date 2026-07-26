@@ -139,7 +139,7 @@ describe('executeAdsSync', () => {
     }
     const expected = {
       type: 'hour_range',
-      // 00:00 local on the window's first day: that day is a WHOLE day
+      // The start of the window's first local day: that day is a WHOLE day
       // upstream, so it is comparable with the whole-day stored rollup.
       since: '2026-07-14T00',
       until: '2026-07-21T13',
@@ -158,6 +158,33 @@ describe('executeAdsSync', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('starts the live range at the first local hour the account timezone actually has', () => {
+    // America/Santiago springs forward AT midnight on 2026-09-06: the clock
+    // goes 23:59:59 -> 01:00:00, so local hour 00 does not exist that day and
+    // "2026-09-06T00" would name a wall-clock hour the account never had.
+    expect(liveAdsInsightHourRange({
+      startDate: '2026-09-06',
+      fetchedAtMs: Date.parse('2026-09-08T12:00:00.000Z'),
+      timezone: 'America/Santiago',
+    }).since).toBe('2026-09-06T01')
+
+    // Same day, an ordinary account: nothing moves. The fix must not shift the
+    // window for the accounts that were always fine.
+    expect(liveAdsInsightHourRange({
+      startDate: '2026-09-06',
+      fetchedAtMs: Date.parse('2026-09-08T12:00:00.000Z'),
+      timezone: 'America/New_York',
+    }).since).toBe('2026-09-06T00')
+
+    // And a normal account on ITS OWN spring-forward day, where the gap is at
+    // 02:00 local: midnight is intact, so the window still starts at hour 00.
+    expect(liveAdsInsightHourRange({
+      startDate: '2026-03-08',
+      fetchedAtMs: Date.parse('2026-03-10T12:00:00.000Z'),
+      timezone: 'America/New_York',
+    }).since).toBe('2026-03-08T00')
   })
 
   it('snapshots entities, normalizes insights spend to micros, and completes the run', async () => {

@@ -14,6 +14,7 @@ import {
   formatRatio,
   formatWindowCountDelta,
   parseInclusiveEndMs,
+  startOfDayHourInTimeZone,
 } from '../src/formatting.js'
 
 describe('formatRatio', () => {
@@ -119,6 +120,87 @@ describe('formatIsoDateInTimeZone', () => {
 
   test('invalid input falls back to the original string', () => {
     expect(formatIsoDateInTimeZone('not-a-date', 'Asia/Tokyo')).toBe('not-a-date')
+  })
+})
+
+describe('startOfDayHourInTimeZone', () => {
+  /**
+   * Independent oracle for which local hours a zone really shows on a date, so
+   * these tests cannot quietly go vacuous if a zone's rules or the platform's
+   * tzdata change. Deliberately brute force (sweep real instants and record
+   * what the clock reads) rather than the offset round trip the implementation
+   * uses, so the two cannot share a mistake.
+   */
+  const localHoursShownOn = (isoDate: string, timeZone: string): Set<number> => {
+    const format = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      hourCycle: 'h23',
+    })
+    const shown = new Set<number>()
+    // The whole local day sits inside this UTC span for every real zone offset.
+    const fromMs = Date.parse(`${isoDate}T00:00:00.000Z`) - 24 * 60 * 60 * 1_000
+    for (let ms = fromMs; ms <= fromMs + 72 * 60 * 60 * 1_000; ms += 5 * 60_000) {
+      const parts = format.formatToParts(new Date(ms))
+      const value = (type: Intl.DateTimeFormatPartTypes): string =>
+        parts.find((part) => part.type === type)?.value ?? ''
+      if (`${value('year')}-${value('month')}-${value('day')}` !== isoDate) continue
+      shown.add(Number(value('hour')))
+    }
+    return shown
+  }
+
+  test('a zone with no transition starts its day at hour 00', () => {
+    expect(startOfDayHourInTimeZone('2026-06-10', 'America/New_York')).toBe('2026-06-10T00')
+    expect(startOfDayHourInTimeZone('2026-06-10', 'Asia/Tokyo')).toBe('2026-06-10T00')
+    expect(startOfDayHourInTimeZone('2026-06-10', 'UTC')).toBe('2026-06-10T00')
+    expect(startOfDayHourInTimeZone('2026-01-03', 'Europe/Berlin')).toBe('2026-01-03T00')
+  })
+
+  test('a spring-forward day whose gap is NOT at midnight still starts at hour 00', () => {
+    // America/New_York springs forward at 02:00 local, so midnight is intact
+    // and only hour 02 is missing.
+    const shown = localHoursShownOn('2026-03-08', 'America/New_York')
+    expect(shown.has(0)).toBe(true)
+    expect(shown.has(2)).toBe(false)
+    expect(startOfDayHourInTimeZone('2026-03-08', 'America/New_York')).toBe('2026-03-08T00')
+    // And the fall-back day, where 01:00 happens twice, is equally unaffected.
+    expect(startOfDayHourInTimeZone('2026-11-01', 'America/New_York')).toBe('2026-11-01T00')
+  })
+
+  test('America/Santiago skips local hour 00 when it springs forward at midnight', () => {
+    // Chile moves the clock at 24:00 on the first Saturday of September, so
+    // 2026-09-06 runs 01:00, 02:00, ... and never has an hour 00.
+    const shown = localHoursShownOn('2026-09-06', 'America/Santiago')
+    expect(shown.has(0)).toBe(false)
+    expect(shown.has(1)).toBe(true)
+    expect(startOfDayHourInTimeZone('2026-09-06', 'America/Santiago')).toBe('2026-09-06T01')
+  })
+
+  test('America/Havana skips local hour 00 when it springs forward at midnight', () => {
+    const shown = localHoursShownOn('2026-03-08', 'America/Havana')
+    expect(shown.has(0)).toBe(false)
+    expect(shown.has(1)).toBe(true)
+    expect(startOfDayHourInTimeZone('2026-03-08', 'America/Havana')).toBe('2026-03-08T01')
+  })
+
+  test('the day before and the day after a midnight gap are untouched', () => {
+    expect(startOfDayHourInTimeZone('2026-09-05', 'America/Santiago')).toBe('2026-09-05T00')
+    expect(startOfDayHourInTimeZone('2026-09-07', 'America/Santiago')).toBe('2026-09-07T00')
+    expect(startOfDayHourInTimeZone('2026-03-07', 'America/Havana')).toBe('2026-03-07T00')
+    expect(startOfDayHourInTimeZone('2026-03-09', 'America/Havana')).toBe('2026-03-09T00')
+  })
+
+  test('an unknown zone degrades to hour 00 instead of throwing', () => {
+    expect(startOfDayHourInTimeZone('2026-09-06', 'Not/AZone')).toBe('2026-09-06T00')
+  })
+
+  test('a date that is not YYYY-MM-DD degrades to hour 00', () => {
+    expect(startOfDayHourInTimeZone('not-a-date', 'America/Santiago')).toBe('not-a-dateT00')
+    expect(startOfDayHourInTimeZone('', 'America/Santiago')).toBe('T00')
   })
 })
 

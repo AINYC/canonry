@@ -40,6 +40,70 @@ export function formatIsoDate(iso: string): string {
 }
 
 /**
+ * The single place this package asks the platform what a named timezone's wall
+ * clock reads. Everything zone-aware below is built on it, so there is one
+ * formatter configuration to reason about rather than several near-copies.
+ *
+ * `hourCycle: 'h23'` is what makes the hour a plain 0-23 number: the default
+ * for many locales is a 12-hour clock, which would render midnight as `12`.
+ */
+function zonedClockFormat(timeZone: string): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  })
+}
+
+/** The formatted pieces of a zoned wall clock, keyed by part type. */
+function readZonedParts(
+  format: Intl.DateTimeFormat,
+  date: Date,
+): Partial<Record<Intl.DateTimeFormatPartTypes, string>> {
+  const values: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {}
+  for (const part of format.formatToParts(date)) values[part.type] = part.value
+  return values
+}
+
+interface ZonedClockReading {
+  year: number
+  month: number
+  day: number
+  hour: number
+  minute: number
+  second: number
+}
+
+/**
+ * The wall clock in the formatter's zone at `date` as numbers, or null if any
+ * piece of it is missing or unparseable. Callers that only need the calendar
+ * date use `readZonedParts` directly, so a missing time part can never cost
+ * them a date they could have read.
+ */
+function readZonedClock(format: Intl.DateTimeFormat, date: Date): ZonedClockReading | null {
+  const parts = readZonedParts(format, date)
+  const value = (raw: string | undefined): number | null => {
+    if (raw === undefined) return null
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  const year = value(parts.year)
+  const month = value(parts.month)
+  const day = value(parts.day)
+  const hour = value(parts.hour)
+  const minute = value(parts.minute)
+  const second = value(parts.second)
+  if (year === null || month === null || day === null) return null
+  if (hour === null || minute === null || second === null) return null
+  return { year, month, day, hour, minute, second }
+}
+
+/**
  * `YYYY-MM-DD` for an instant as observed in `timeZone`, not in UTC.
  *
  * Use this, not `formatIsoDate`, whenever the resulting date has to line up
@@ -55,21 +119,96 @@ export function formatIsoDateInTimeZone(iso: string, timeZone: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   try {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).formatToParts(d)
-    const value = (type: Intl.DateTimeFormatPartTypes): string | undefined =>
-      parts.find((part) => part.type === type)?.value
-    const yyyy = value('year')
-    const mm = value('month')
-    const dd = value('day')
+    const parts = readZonedParts(zonedClockFormat(timeZone), d)
+    const yyyy = parts.year
+    const mm = parts.month
+    const dd = parts.day
     if (!yyyy || !mm || !dd) return formatIsoDate(iso)
     return `${yyyy}-${mm}-${dd}`
   } catch {
     return formatIsoDate(iso)
+  }
+}
+
+const HOURS_PER_DAY = 24
+const ONE_DAY_MS = 24 * 60 * 60 * 1_000
+
+/**
+ * Does the wall clock in the formatter's zone ever read exactly
+ * `year-month-day hour:00:00`?
+ *
+ * A local wall-clock time is not guaranteed to exist. On the day a zone springs
+ * forward, the clock jumps over a span of local time that no instant maps to.
+ * The test is a round trip: guess the instant by removing the zone's offset
+ * from the wall time, then ask the zone what that instant actually reads as. A
+ * skipped wall time never reads back as itself.
+ *
+ * The offset has to be sampled a day to either side rather than at the wall
+ * time itself, because near a transition the "wrong" side's offset is what
+ * lands on the right instant. Both are tried, and a match on either proves
+ * existence.
+ */
+function localHourExists(
+  format: Intl.DateTimeFormat,
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+): boolean {
+  const asIfUtcMs = Date.UTC(year, month - 1, day, hour)
+  for (const probeMs of [asIfUtcMs - ONE_DAY_MS, asIfUtcMs + ONE_DAY_MS]) {
+    const probeClock = readZonedClock(format, new Date(probeMs))
+    if (!probeClock) continue
+    const offsetMs = Date.UTC(
+      probeClock.year,
+      probeClock.month - 1,
+      probeClock.day,
+      probeClock.hour,
+      probeClock.minute,
+      probeClock.second,
+    ) - probeMs
+    const candidate = readZonedClock(format, new Date(asIfUtcMs - offsetMs))
+    if (!candidate) continue
+    if (
+      candidate.year === year && candidate.month === month && candidate.day === day
+      && candidate.hour === hour && candidate.minute === 0 && candidate.second === 0
+    ) return true
+  }
+  return false
+}
+
+/**
+ * `YYYY-MM-DDTHH` for the start of the calendar day `isoDate` as the wall clock
+ * in `timeZone` actually runs it: the day's first local hour that EXISTS.
+ *
+ * Almost always `${isoDate}T00`. It is not in a zone whose daylight-saving
+ * transition happens AT midnight, where the clock goes straight from 23:59:59
+ * to 01:00:00 and local hour 00 never occurs on that one day of the year
+ * (America/Santiago and America/Havana both do this; the set is not fixed, so
+ * it is derived from the zone rather than listed). Naming that hour to a third
+ * party asks about a wall-clock time its own calendar does not contain, and
+ * nothing in the request says what should happen to it. Walking forward to the
+ * first hour that does exist asks for the day the zone really has.
+ *
+ * Degrades to `${isoDate}T00` on an unusable date or zone, and on the rare
+ * whole day a zone skips (a date-line move), for the same reason the rest of
+ * this module degrades: a window boundary must not take the request down.
+ */
+export function startOfDayHourInTimeZone(isoDate: string, timeZone: string): string {
+  const hourBoundary = (hour: number): string => `${isoDate}T${String(hour).padStart(2, '0')}`
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate)
+  if (!match?.[1] || !match[2] || !match[3]) return hourBoundary(0)
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  try {
+    const format = zonedClockFormat(timeZone)
+    for (let hour = 0; hour < HOURS_PER_DAY; hour += 1) {
+      if (localHourExists(format, year, month, day, hour)) return hourBoundary(hour)
+    }
+    return hourBoundary(0)
+  } catch {
+    return hourBoundary(0)
   }
 }
 

@@ -6,7 +6,7 @@ import crypto from 'node:crypto'
 import { Writable } from 'node:stream'
 import Fastify from 'fastify'
 import { eq } from 'drizzle-orm'
-import { AppError } from '@ainyc/canonry-contracts'
+import { AppError, startOfDayHourInTimeZone } from '@ainyc/canonry-contracts'
 import type { AdsLiveDeliveryDto } from '@ainyc/canonry-contracts'
 import {
   createClient,
@@ -100,10 +100,15 @@ function accountHourKey(atMs: number, timezone: string): string {
   return `${value('year')}-${value('month')}-${value('day')}T${value('hour')}`
 }
 
-/** The hour range the host builds from one insight request. */
+/**
+ * The hour range the host builds from one insight request. Mirrors
+ * `liveAdsInsightHourRange` in the host's ads-sync, down to resolving the
+ * start through the shared `startOfDayHourInTimeZone` rather than assuming
+ * every account's day begins at local hour 00.
+ */
 function rangeOf(request: AdsLiveInsightsRequest) {
   return {
-    since: `${request.startDate}T00`,
+    since: startOfDayHourInTimeZone(request.startDate, request.timezone),
     until: accountHourKey(request.fetchedAtMs, request.timezone),
     timezone: request.timezone,
   }

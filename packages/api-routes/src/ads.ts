@@ -156,9 +156,12 @@ export interface AdsLiveProviderEntity {
  * route; a reader must never derive either of them from its own clock.
  *
  * `startDate` is the SAME account-local `YYYY-MM-DD` the stored side is
- * filtered to, and the provider range starts at 00:00 local on it. That is
- * what makes the first day of the window a WHOLE day on the live side, so it
- * is comparable with the whole-day stored rollup it is diffed against.
+ * filtered to, and the provider range starts where that local day starts. That
+ * is what makes the first day of the window a WHOLE day on the live side, so it
+ * is comparable with the whole-day stored rollup it is diffed against. The
+ * reader resolves that start through `startOfDayHourInTimeZone`, which is local
+ * hour 00 except in a zone that springs forward AT midnight, where hour 00 does
+ * not exist on the transition day and the day begins at 01.
  *
  * `fetchedAtMs` is the frozen read anchor and bounds the range at the top, so
  * every insight call in one walk covers the identical range even when the walk
@@ -3155,10 +3158,10 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       const accountTimezone = account.timezone ?? 'UTC'
       // ONE derivation of the compared range, for both sides. The stored rows
       // are filtered to this window and the provider is asked for exactly it,
-      // from 00:00 local on `startDate` to the frozen read anchor. Deriving the
-      // provider's start independently produced a first day that was a whole
-      // day in the rollup and a mid-day slice upstream, which the diff then
-      // reported as drift on every single read.
+      // from the start of the local day `startDate` to the frozen read anchor.
+      // Deriving the provider's start independently produced a first day that
+      // was a whole day in the rollup and a mid-day slice upstream, which the
+      // diff then reported as drift on every single read.
       const window = liveComparisonWindow(fetchedAtMs, lookbackDays, accountTimezone)
       const insightsRequest: AdsLiveInsightsRequest = {
         startDate: window.startDate,

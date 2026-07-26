@@ -2,7 +2,12 @@ import crypto from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { runs, projects, adsConnections, adsCampaigns, adsAdGroups, adsAds, adsInsightsDaily } from '@ainyc/canonry-db'
-import { buildRunErrorFromMessages, serializeRunError, dollarsToMicros } from '@ainyc/canonry-contracts'
+import {
+  buildRunErrorFromMessages,
+  serializeRunError,
+  dollarsToMicros,
+  startOfDayHourInTimeZone,
+} from '@ainyc/canonry-contracts'
 import {
   getAdAccount,
   listCampaigns,
@@ -67,11 +72,15 @@ export function trailingAdsInsightHourRange(
  *
  * Both ends come from the route's request, never from this process's clock:
  *
- * - `since` is 00:00 account-local on the window's first day, so that day is a
- *   WHOLE day upstream and is comparable with the whole-day stored rollup it is
- *   diffed against. A range that started at the read instant's local hour made
- *   the first day a mid-day slice on the live side only, which the comparison
- *   then reported as drift on every read.
+ * - `since` is the START of the window's first day in the account's own wall
+ *   clock, so that day is a WHOLE day upstream and is comparable with the
+ *   whole-day stored rollup it is diffed against. A range that started at the
+ *   read instant's local hour made the first day a mid-day slice on the live
+ *   side only, which the comparison then reported as drift on every read.
+ *   That start is hour 00 on all but one day a year in zones that spring
+ *   forward AT midnight, where hour 00 is skipped and naming it would ask the
+ *   provider about a wall-clock hour its own calendar never had, so
+ *   `startOfDayHourInTimeZone` resolves the day's first hour that exists.
  * - `until` is the FROZEN read anchor. Calling `new Date()` per insight would
  *   let a walk that crosses an account-local hour boundary compare different
  *   entities over different ranges, with the reported `fetchedAt` describing
@@ -84,7 +93,7 @@ export function liveAdsInsightHourRange(request: {
 }): OpenAiAdsInsightHourRange {
   return {
     type: 'hour_range',
-    since: `${request.startDate}T00`,
+    since: startOfDayHourInTimeZone(request.startDate, request.timezone),
     until: accountHour(new Date(request.fetchedAtMs), request.timezone),
     timezone: request.timezone,
   }
