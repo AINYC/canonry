@@ -6,7 +6,7 @@
  * then hands both sides here to be diffed. Everything in this file is
  * deterministic and unit-testable without a provider.
  */
-import { dollarsToMicros } from '@ainyc/canonry-contracts'
+import { dollarsToMicros, formatIsoDateInTimeZone } from '@ainyc/canonry-contracts'
 import type {
   AdsLiveDeliveryDto,
   AdsLiveEntityComparison,
@@ -48,6 +48,46 @@ export interface AdsLiveComparisonWindow {
   endDate: string
 }
 
+const ADS_LIVE_DAY_MS = 24 * 60 * 60 * 1_000
+
+/**
+ * The date window the stored side is compared over, dated in the ACCOUNT's
+ * timezone.
+ *
+ * Every date in this comparison is an account-local calendar date. The
+ * provider's insight range is requested in the account timezone, the provider
+ * stamps each bucket with its own local `readable_time`, and ads-sync stores
+ * that value verbatim as the rollup date. Deriving these boundaries in UTC
+ * instead misreports drift twice over for any account whose local date differs
+ * from the UTC date at the read instant:
+ *
+ * - East of UTC, the account's current local day is already tomorrow in local
+ *   terms but still today in UTC, so the stored row for that day falls past a
+ *   UTC `endDate` and is filtered out while the provider's row for the same
+ *   day is kept. The response then claims there is no stored row at all.
+ * - At the other end, a UTC `startDate` a day early admits a stored day the
+ *   provider was never asked about, which reads as the provider having dropped
+ *   real data.
+ *
+ * The first and last days are still PARTIAL on the live side (the provider's
+ * range is an hour range anchored to the read instant, not a whole local day).
+ * A boundary-day metric difference is therefore expected and is not a
+ * timezone defect.
+ */
+export function liveComparisonWindow(
+  fetchedAtMs: number,
+  lookbackDays: number,
+  timezone: string,
+): AdsLiveComparisonWindow {
+  return {
+    startDate: formatIsoDateInTimeZone(
+      new Date(fetchedAtMs - lookbackDays * ADS_LIVE_DAY_MS).toISOString(),
+      timezone,
+    ),
+    endDate: formatIsoDateInTimeZone(new Date(fetchedAtMs).toISOString(), timezone),
+  }
+}
+
 const EMPTY_METRIC_VALUES: AdsLiveMetricValues = {
   impressions: 0,
   clicks: 0,
@@ -74,7 +114,7 @@ function fieldDelta(
 
 /**
  * Status / name / review drift for an entity present on both sides. An entity
- * present on only one side has no field delta — its `presence` already says
+ * present on only one side has no field delta: its `presence` already says
  * everything, and pairing a value against "absent" would read as a value change.
  */
 export function buildFieldDeltas(
@@ -96,7 +136,7 @@ export function buildFieldDeltas(
  * The provider returns one row per time bucket, and buckets are disjoint, so
  * impressions / clicks / spend / conversions are additive within a date. The
  * ratio metrics (ctr / cpc / cpm) are NOT additive and are deliberately absent
- * here — they survive only in `liveMetrics`, exactly as the provider sent them.
+ * here. They survive only in `liveMetrics`, exactly as the provider sent them.
  * Spend is converted from the insights API's decimal currency units to the
  * integer micros the local rollups store, so the two sides are commensurable.
  */
@@ -125,7 +165,7 @@ function sameMetrics(a: AdsLiveMetricValues, b: AdsLiveMetricValues): boolean {
  *
  * Dates are the union of the dates the provider reported and the stored dates
  * that fall inside the window. Stored history older than the window is not
- * compared — the provider was never asked about it, so its absence upstream is
+ * compared: the provider was never asked about it, so its absence upstream is
  * not drift.
  */
 export function buildMetricDeltas(

@@ -1049,7 +1049,7 @@ export type AdsOperationReconcileResponse = z.infer<typeof adsOperationReconcile
 
 /**
  * Live-delivery request knobs. Neither field is an identity key: the route
- * never reuses, caches, or consolidates another request's result — its
+ * never reuses, caches, or consolidates another request's result: its
  * minimum-interval throttle only rejects, so there is no reuse branch a new
  * parameter could silently ride through.
  */
@@ -1118,7 +1118,7 @@ export type AdsLiveFieldDelta = z.infer<typeof adsLiveFieldDeltaSchema>
 
 /**
  * The provider's own state for one entity. `status` and `reviewStatus` are the
- * provider's strings verbatim — Canonry does not derive a serving verdict from
+ * provider's strings verbatim; Canonry does not derive a serving verdict from
  * them. `mode` is campaign-only and null elsewhere.
  */
 export const adsLiveEntityStateSchema = z.object({
@@ -1156,7 +1156,7 @@ export type AdsLiveEntityComparison = z.infer<typeof adsLiveEntityComparisonSche
 
 /**
  * One failed provider surface. It carries a fixed surface label, the entity the
- * call was for, and the upstream HTTP status only — never the upstream message,
+ * call was for, and the upstream HTTP status only, never the upstream message,
  * body, or code, because those are provider-controlled strings that can echo
  * request material back to the caller.
  */
@@ -1181,12 +1181,33 @@ export const adsLiveDeliveryDtoSchema = z.object({
   adAccountId: z.string(),
   storedSnapshotSyncedAt: z.string().nullable(),
   metricsWindow: z.object({ lookbackDays: z.number().int().positive() }),
+  /**
+   * Two different units live here, and confusing them understates the cost of
+   * this endpoint by two orders of magnitude.
+   *
+   * A READER CALL is one logical list or insight read. Every list/insight
+   * reader call is an auto-paginating walk, so one reader call can issue up to
+   * `maxPagesPerReaderCall` upstream HTTP requests before the client gives up.
+   * `maxUpstreamHttpRequests` is the honest worst-case ceiling in HTTP
+   * requests (`maxReaderCalls * maxPagesPerReaderCall`, about 4000 at the
+   * shipped defaults, not 40).
+   *
+   * `readerCalls` is an observed count of reader calls. There is deliberately
+   * no observed HTTP-request count: the pagination happens inside the provider
+   * client, below the injected reader seam, so the route cannot see it.
+   */
   bounds: z.object({
     maxCampaigns: z.number().int().positive(),
     maxAdGroupsPerCampaign: z.number().int().positive(),
     maxAdsPerAdGroup: z.number().int().positive(),
-    maxProviderCalls: z.number().int().positive(),
-    providerCalls: z.number().int().nonnegative(),
+    /** Budget in logical reader calls, NOT in upstream HTTP requests. */
+    maxReaderCalls: z.number().int().positive(),
+    /** Reader calls this read actually issued. Observed, not a bound. */
+    readerCalls: z.number().int().nonnegative(),
+    /** Pages one paginated reader call may fetch before the client gives up. */
+    maxPagesPerReaderCall: z.number().int().positive(),
+    /** Worst-case upstream HTTP requests. A documented bound, not an observation. */
+    maxUpstreamHttpRequests: z.number().int().positive(),
     truncated: z.boolean(),
   }),
   entities: z.array(adsLiveEntityComparisonSchema),

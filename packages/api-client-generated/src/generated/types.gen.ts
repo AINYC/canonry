@@ -781,8 +781,10 @@ export type AdsLiveDeliveryDto = {
         maxCampaigns: number;
         maxAdGroupsPerCampaign: number;
         maxAdsPerAdGroup: number;
-        maxProviderCalls: number;
-        providerCalls: number;
+        maxReaderCalls: number;
+        readerCalls: number;
+        maxPagesPerReaderCall: number;
+        maxUpstreamHttpRequests: number;
         truncated: boolean;
     };
     entities: Array<{

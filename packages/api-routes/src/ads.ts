@@ -38,7 +38,6 @@ import {
   adsCtr,
   adsCpcMicros,
   alreadyExists,
-  formatIsoDate,
   notFound,
   operationInProgress,
   providerError,
@@ -95,10 +94,10 @@ import { requireScope } from './auth.js'
 import { registerAdsActivationRoutes } from './ads-activation-routes.js'
 import {
   buildLiveEntityComparison,
+  liveComparisonWindow,
   summarizeLiveDrift,
 } from './ads-live-delivery.js'
 import type {
-  AdsLiveComparisonWindow,
   AdsLiveEntityObservation,
   AdsStoredMetricRow,
 } from './ads-live-delivery.js'
@@ -189,6 +188,11 @@ export interface AdsRoutesOptions {
   adsLiveDeliveryReader?: AdsLiveDeliveryReader
   /** Minimum gap between live-delivery reads for one project. Set to 0 to disable the throttle. */
   adsLiveDeliveryMinIntervalMs?: number
+  /**
+   * The provider client's pagination cap, used only to REPORT the worst-case
+   * upstream HTTP-request ceiling honestly. It changes no behaviour.
+   */
+  adsLiveDeliveryMaxPagesPerReaderCall?: number
   /** Fired after a manual sync run row is created; host runs the ads-sync worker. */
   onAdsSyncRequested?: (runId: string, projectId: string) => void
   /** Optional lifecycle adapter. The host resolves the project credential and calls the upstream Ads API. */
@@ -480,10 +484,30 @@ function storedActivityAssessment(
 const ADS_LIVE_MAX_CAMPAIGNS = 5
 const ADS_LIVE_MAX_AD_GROUPS_PER_CAMPAIGN = 10
 const ADS_LIVE_MAX_ADS_PER_AD_GROUP = 20
-const ADS_LIVE_MAX_PROVIDER_CALLS = 40
+/**
+ * Budget in READER CALLS, not in upstream HTTP requests.
+ *
+ * Every list/insight reader call is an auto-paginating walk in the provider
+ * client (`fetchAllPages` in `packages/integration-openai-ads`), which issues
+ * up to `OPENAI_ADS_MAX_PAGES` requests before it throws. So the honest
+ * worst-case cost of one live-delivery read is this budget MULTIPLIED by the
+ * page cap: 40 × 100 = about 4000 upstream HTTP requests, not 40. The
+ * response reports both units (`maxReaderCalls`, `maxUpstreamHttpRequests`)
+ * so a caller is never reading one and thinking it is the other.
+ *
+ * The multiplier is a documented bound, not an observation: pagination happens
+ * below the injected `AdsLiveDeliveryReader` seam, so the route cannot count
+ * actual HTTP requests without instrumenting the shared provider client.
+ */
+const ADS_LIVE_MAX_READER_CALLS = 40
+/**
+ * Pages one paginated reader call may fetch before the client gives up. The
+ * host passes the provider client's real `OPENAI_ADS_MAX_PAGES`; this default
+ * mirrors it for deployments that wire a reader without declaring one.
+ */
+const DEFAULT_ADS_LIVE_MAX_PAGES_PER_READER_CALL = 100
 /** One live read per project per minute; the throttle rejects, it never queues. */
 const DEFAULT_ADS_LIVE_DELIVERY_MIN_INTERVAL_MS = 60_000
-const ADS_LIVE_DAY_MS = 24 * 60 * 60 * 1_000
 
 const DEFAULT_RECONCILE_SWEEP_INTERVAL_MS = 60_000
 const DEFAULT_RECONCILE_PENDING_STALE_MS = 5 * 60_000
@@ -1114,13 +1138,6 @@ function storedEntityState(row: {
     reviewStatus: row.reviewStatus ?? null,
     upstreamUpdatedAt: row.upstreamUpdatedAt,
     syncedAt: row.syncedAt,
-  }
-}
-
-function liveComparisonWindow(fetchedAtMs: number, lookbackDays: number): AdsLiveComparisonWindow {
-  return {
-    startDate: formatIsoDate(new Date(fetchedAtMs - lookbackDays * ADS_LIVE_DAY_MS).toISOString()),
-    endDate: formatIsoDate(new Date(fetchedAtMs).toISOString()),
   }
 }
 
@@ -1994,12 +2011,28 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
     0,
     opts.adsLiveDeliveryMinIntervalMs ?? DEFAULT_ADS_LIVE_DELIVERY_MIN_INTERVAL_MS,
   )
+  const liveDeliveryMaxPagesPerReaderCall = Math.max(
+    1,
+    opts.adsLiveDeliveryMaxPagesPerReaderCall ?? DEFAULT_ADS_LIVE_MAX_PAGES_PER_READER_CALL,
+  )
   /**
    * Instant of the last ADMITTED live-delivery read per project. In-process and
-   * per server instance — this bounds on-demand third-party calls, it is not a
+   * per server instance: this bounds on-demand third-party calls, it is not a
    * security control.
    */
   const liveDeliveryLastReadAtMs = new Map<string, number>()
+  /**
+   * Drop entries that can no longer reject anything. Without this the Map keeps
+   * one entry per project that has EVER issued a live read, for the lifetime of
+   * the process. Sweeping on each admitted read bounds it to the projects that
+   * read inside one interval, and admitted reads are themselves throttled, so
+   * the sweep is cheap.
+   */
+  const pruneLiveDeliverySlots = (nowMs: number): void => {
+    for (const [projectId, lastAtMs] of liveDeliveryLastReadAtMs) {
+      if (nowMs - lastAtMs >= liveDeliveryMinIntervalMs) liveDeliveryLastReadAtMs.delete(projectId)
+    }
+  }
   const reconcilePolicy: ReconcilePolicy = {
     pendingMinIdleMs: pendingStaleMs,
     backoffBaseMs,
@@ -2903,16 +2936,25 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
    * Live passthrough read: what the provider says RIGHT NOW, the corresponding
    * local snapshot values, and the per-entity delta between them.
    *
-   * Read-only — the injected `AdsLiveDeliveryReader` exposes list/insight GETs
+   * Read-only: the injected `AdsLiveDeliveryReader` exposes list/insight GETs
    * only, so this route cannot create, update, pause, or activate anything. It
    * is deliberately NOT scope-gated beyond the auth plugin's read-only method
    * gate: it mutates no Canonry state either (unlike `POST /ads/sync`, whose
    * `ads.write` scope covers the run row it inserts).
    *
-   * `fetchedAt` is the instant the read was ISSUED — the same anchor the
-   * metrics window is measured back from. The campaign listing is the one call
-   * this route cannot bound itself (the adapter pages it, capped upstream by
-   * `OPENAI_ADS_MAX_PAGES`); every deeper level is capped here.
+   * `fetchedAt` is the instant the read was ISSUED, the same anchor the metrics
+   * window is measured back from. Every date in the comparison is an
+   * ACCOUNT-LOCAL calendar date, because that is what the provider buckets by
+   * and what ads-sync stores.
+   *
+   * COST: the walk is bounded in READER CALLS, and a reader call is not one
+   * HTTP request. Each list/insight reader call auto-paginates inside the
+   * provider client up to `OPENAI_ADS_MAX_PAGES` (100) times, so the honest
+   * worst case for one live-delivery read is about 40 × 100 = 4000 upstream
+   * HTTP requests. The response says both numbers explicitly
+   * (`bounds.maxReaderCalls` vs `bounds.maxUpstreamHttpRequests`); the HTTP
+   * figure is a documented ceiling, since pagination happens below the reader
+   * seam where this route cannot observe it.
    */
   app.get<{
     Params: { name: string }
@@ -2947,247 +2989,283 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
         })
       }
     }
-    // Claim the interval BEFORE any provider I/O so two concurrent callers
-    // cannot both slip through the gap while the first one is still walking.
-    liveDeliveryLastReadAtMs.set(project.id, fetchedAtMs)
+    // Claim the interval BEFORE any provider I/O, and synchronously, so two
+    // concurrent callers cannot both slip through the gap while the first one
+    // is still walking. Claim first, release on failure: the reverse order
+    // (do the I/O, then claim) reopens exactly that hole.
+    if (liveDeliveryMinIntervalMs > 0) {
+      pruneLiveDeliverySlots(fetchedAtMs)
+      liveDeliveryLastReadAtMs.set(project.id, fetchedAtMs)
+    }
+    /**
+     * Give the slot back when the read failed before producing anything
+     * useful. A 502 from account verification or the campaign list costs the
+     * operator nothing but the wait, and locking them out for a full minute
+     * after a failure is exactly backwards: a failed read is when a retry
+     * matters most.
+     *
+     * Restores the PREDECESSOR rather than deleting, so a successful read
+     * earlier in the interval keeps the rest of its window, and skips the
+     * restore entirely if a later read has since taken the slot.
+     */
+    const releaseLiveDeliverySlot = (): void => {
+      if (liveDeliveryMinIntervalMs <= 0) return
+      if (liveDeliveryLastReadAtMs.get(project.id) !== fetchedAtMs) return
+      if (lastReadAtMs === undefined) liveDeliveryLastReadAtMs.delete(project.id)
+      else liveDeliveryLastReadAtMs.set(project.id, lastReadAtMs)
+    }
 
-    let providerCalls = 0
-    let truncated = false
-    const errors: AdsLiveReadFailure[] = []
-    const callProvider = async <T>(
-      surface: string,
-      entityId: string | null,
-      run: () => Promise<T>,
-    ): Promise<T | null> => {
-      if (providerCalls >= ADS_LIVE_MAX_PROVIDER_CALLS) {
-        truncated = true
-        return null
+    // A partial failure that still yields a response (captured in `errors`)
+    // KEEPS the claim: it made real provider calls and produced a useful
+    // answer. Only a read that produces nothing gives the slot back.
+    try {
+      let readerCalls = 0
+      let truncated = false
+      const errors: AdsLiveReadFailure[] = []
+      const callProvider = async <T>(
+        surface: string,
+        entityId: string | null,
+        run: () => Promise<T>,
+      ): Promise<T | null> => {
+        if (readerCalls >= ADS_LIVE_MAX_READER_CALLS) {
+          truncated = true
+          return null
+        }
+        readerCalls += 1
+        try {
+          return await run()
+        } catch (error) {
+          errors.push(liveReadFailure(surface, entityId, error))
+          return null
+        }
       }
-      providerCalls += 1
+
+      // Identity first: the stored account id says which account the CONNECTION is
+      // bound to, not which account the key currently belongs to. Labelling live
+      // rows with the wrong account would be worse than returning nothing.
+      readerCalls += 1
+      let account: VerifiedAdsAccount
       try {
-        return await run()
+        account = await verifyAdsAccount(apiKey)
       } catch (error) {
-        errors.push(liveReadFailure(surface, entityId, error))
-        return null
+        throw liveReadProviderError('account identity', error)
       }
-    }
+      if (account.id !== connection.adAccountId) {
+        throw validationError('The configured key belongs to a different OpenAI ad account; reconnect this project')
+      }
 
-    // Identity first: the stored account id says which account the CONNECTION is
-    // bound to, not which account the key currently belongs to. Labelling live
-    // rows with the wrong account would be worse than returning nothing.
-    providerCalls += 1
-    let account: VerifiedAdsAccount
-    try {
-      account = await verifyAdsAccount(apiKey)
-    } catch (error) {
-      throw liveReadProviderError('account identity', error)
-    }
-    if (account.id !== connection.adAccountId) {
-      throw validationError('The configured key belongs to a different OpenAI ad account; reconnect this project')
-    }
+      readerCalls += 1
+      let liveCampaigns: AdsLiveProviderEntity[]
+      try {
+        liveCampaigns = await reader.listCampaigns(apiKey)
+      } catch (error) {
+        throw liveReadProviderError('campaign list', error)
+      }
+      const scopedCampaigns = campaignId === undefined
+        ? liveCampaigns
+        : liveCampaigns.filter((campaign) => campaign.id === campaignId)
+      if (scopedCampaigns.length > ADS_LIVE_MAX_CAMPAIGNS) truncated = true
+      const walkedCampaigns = scopedCampaigns.slice(0, ADS_LIVE_MAX_CAMPAIGNS)
 
-    providerCalls += 1
-    let liveCampaigns: AdsLiveProviderEntity[]
-    try {
-      liveCampaigns = await reader.listCampaigns(apiKey)
-    } catch (error) {
-      throw liveReadProviderError('campaign list', error)
-    }
-    const scopedCampaigns = campaignId === undefined
-      ? liveCampaigns
-      : liveCampaigns.filter((campaign) => campaign.id === campaignId)
-    if (scopedCampaigns.length > ADS_LIVE_MAX_CAMPAIGNS) truncated = true
-    const walkedCampaigns = scopedCampaigns.slice(0, ADS_LIVE_MAX_CAMPAIGNS)
+      const storedCampaignRows = app.db.select().from(adsCampaigns).where(and(
+        eq(adsCampaigns.projectId, project.id),
+        campaignId === undefined ? undefined : eq(adsCampaigns.id, campaignId),
+      )).all()
+      const storedAdGroupRows = app.db.select().from(adsAdGroups).where(and(
+        eq(adsAdGroups.projectId, project.id),
+        campaignId === undefined ? undefined : eq(adsAdGroups.campaignId, campaignId),
+      )).all()
+      const storedAdGroupIds = new Set(storedAdGroupRows.map((row) => row.id))
+      const storedAdRows = app.db.select().from(adsAds)
+        .where(eq(adsAds.projectId, project.id)).all()
+        .filter((row) => campaignId === undefined || storedAdGroupIds.has(row.adGroupId))
+      const storedInsightRows = app.db.select({
+        level: adsInsightsDaily.level,
+        entityId: adsInsightsDaily.entityId,
+        date: adsInsightsDaily.date,
+        impressions: adsInsightsDaily.impressions,
+        clicks: adsInsightsDaily.clicks,
+        spendMicros: adsInsightsDaily.spendMicros,
+        conversions: adsInsightsDaily.conversions,
+      }).from(adsInsightsDaily).where(eq(adsInsightsDaily.projectId, project.id)).all()
 
-    const storedCampaignRows = app.db.select().from(adsCampaigns).where(and(
-      eq(adsCampaigns.projectId, project.id),
-      campaignId === undefined ? undefined : eq(adsCampaigns.id, campaignId),
-    )).all()
-    const storedAdGroupRows = app.db.select().from(adsAdGroups).where(and(
-      eq(adsAdGroups.projectId, project.id),
-      campaignId === undefined ? undefined : eq(adsAdGroups.campaignId, campaignId),
-    )).all()
-    const storedAdGroupIds = new Set(storedAdGroupRows.map((row) => row.id))
-    const storedAdRows = app.db.select().from(adsAds)
-      .where(eq(adsAds.projectId, project.id)).all()
-      .filter((row) => campaignId === undefined || storedAdGroupIds.has(row.adGroupId))
-    const storedInsightRows = app.db.select({
-      level: adsInsightsDaily.level,
-      entityId: adsInsightsDaily.entityId,
-      date: adsInsightsDaily.date,
-      impressions: adsInsightsDaily.impressions,
-      clicks: adsInsightsDaily.clicks,
-      spendMicros: adsInsightsDaily.spendMicros,
-      conversions: adsInsightsDaily.conversions,
-    }).from(adsInsightsDaily).where(eq(adsInsightsDaily.projectId, project.id)).all()
+      const storedCampaignById = new Map(storedCampaignRows.map((row) => [row.id, row]))
+      const storedAdGroupById = new Map(storedAdGroupRows.map((row) => [row.id, row]))
+      const storedAdById = new Map(storedAdRows.map((row) => [row.id, row]))
+      const storedMetricsByEntity = new Map<string, AdsStoredMetricRow[]>()
+      for (const row of storedInsightRows) {
+        const key = `${row.level}:${row.entityId}`
+        const bucket = storedMetricsByEntity.get(key) ?? []
+        bucket.push({
+          date: row.date,
+          impressions: row.impressions,
+          clicks: row.clicks,
+          spendMicros: row.spendMicros,
+          conversions: row.conversions,
+        })
+        storedMetricsByEntity.set(key, bucket)
+      }
+      const storedMetricsFor = (level: AdsInsightLevel, entityId: string): AdsStoredMetricRow[] =>
+        storedMetricsByEntity.get(`${level}:${entityId}`) ?? []
 
-    const storedCampaignById = new Map(storedCampaignRows.map((row) => [row.id, row]))
-    const storedAdGroupById = new Map(storedAdGroupRows.map((row) => [row.id, row]))
-    const storedAdById = new Map(storedAdRows.map((row) => [row.id, row]))
-    const storedMetricsByEntity = new Map<string, AdsStoredMetricRow[]>()
-    for (const row of storedInsightRows) {
-      const key = `${row.level}:${row.entityId}`
-      const bucket = storedMetricsByEntity.get(key) ?? []
-      bucket.push({
-        date: row.date,
-        impressions: row.impressions,
-        clicks: row.clicks,
-        spendMicros: row.spendMicros,
-        conversions: row.conversions,
-      })
-      storedMetricsByEntity.set(key, bucket)
-    }
-    const storedMetricsFor = (level: AdsInsightLevel, entityId: string): AdsStoredMetricRow[] =>
-      storedMetricsByEntity.get(`${level}:${entityId}`) ?? []
+      // ONE timezone for the whole comparison: the account's. It is what the
+      // provider's insight range is expressed in, what the provider dates its
+      // buckets by, and therefore what the stored rollup dates mean.
+      const accountTimezone = account.timezone ?? 'UTC'
+      const insightsRequest = { lookbackDays, timezone: accountTimezone }
+      const observations: AdsLiveEntityObservation[] = []
+      const walkedCampaignIds = new Set<string>()
+      const walkedAdGroupIds = new Set<string>()
+      const walkedAdIds = new Set<string>()
 
-    const insightsRequest = { lookbackDays, timezone: account.timezone ?? 'UTC' }
-    const observations: AdsLiveEntityObservation[] = []
-    const walkedCampaignIds = new Set<string>()
-    const walkedAdGroupIds = new Set<string>()
-    const walkedAdIds = new Set<string>()
-
-    for (const campaign of walkedCampaigns) {
-      walkedCampaignIds.add(campaign.id)
-      const campaignMetrics = await callProvider(
-        'campaign insights',
-        campaign.id,
-        () => reader.campaignInsights(apiKey, campaign.id, insightsRequest),
-      )
-      observations.push({
-        entityType: AdsLiveEntityTypes.campaign,
-        id: campaign.id,
-        parentId: null,
-        live: liveEntityState(campaign),
-        stored: storedCampaignById.has(campaign.id)
-          ? storedEntityState(storedCampaignById.get(campaign.id)!)
-          : null,
-        // A metrics call that did not happen is not evidence about metrics, so
-        // both sides stay null and no delta is claimed.
-        liveMetrics: campaignMetrics,
-        storedMetrics: campaignMetrics === null
-          ? null
-          : storedMetricsFor(AdsInsightLevels.campaign, campaign.id),
-      })
-
-      const liveAdGroups = await callProvider(
-        'ad group list',
-        campaign.id,
-        () => reader.listAdGroups(apiKey, campaign.id),
-      )
-      if (liveAdGroups === null) continue
-      if (liveAdGroups.length > ADS_LIVE_MAX_AD_GROUPS_PER_CAMPAIGN) truncated = true
-
-      for (const adGroup of liveAdGroups.slice(0, ADS_LIVE_MAX_AD_GROUPS_PER_CAMPAIGN)) {
-        walkedAdGroupIds.add(adGroup.id)
-        const adGroupMetrics = await callProvider(
-          'ad group insights',
-          adGroup.id,
-          () => reader.adGroupInsights(apiKey, adGroup.id, insightsRequest),
+      for (const campaign of walkedCampaigns) {
+        walkedCampaignIds.add(campaign.id)
+        const campaignMetrics = await callProvider(
+          'campaign insights',
+          campaign.id,
+          () => reader.campaignInsights(apiKey, campaign.id, insightsRequest),
         )
         observations.push({
-          entityType: AdsLiveEntityTypes.ad_group,
-          id: adGroup.id,
-          parentId: campaign.id,
-          live: liveEntityState(adGroup),
-          stored: storedAdGroupById.has(adGroup.id)
-            ? storedEntityState(storedAdGroupById.get(adGroup.id)!)
+          entityType: AdsLiveEntityTypes.campaign,
+          id: campaign.id,
+          parentId: null,
+          live: liveEntityState(campaign),
+          stored: storedCampaignById.has(campaign.id)
+            ? storedEntityState(storedCampaignById.get(campaign.id)!)
             : null,
-          liveMetrics: adGroupMetrics,
-          storedMetrics: adGroupMetrics === null
+          // A metrics call that did not happen is not evidence about metrics, so
+          // both sides stay null and no delta is claimed.
+          liveMetrics: campaignMetrics,
+          storedMetrics: campaignMetrics === null
             ? null
-            : storedMetricsFor(AdsInsightLevels.ad_group, adGroup.id),
+            : storedMetricsFor(AdsInsightLevels.campaign, campaign.id),
         })
 
-        const liveAds = await callProvider(
-          'ad list',
-          adGroup.id,
-          () => reader.listAds(apiKey, adGroup.id),
+        const liveAdGroups = await callProvider(
+          'ad group list',
+          campaign.id,
+          () => reader.listAdGroups(apiKey, campaign.id),
         )
-        if (liveAds === null) continue
-        if (liveAds.length > ADS_LIVE_MAX_ADS_PER_AD_GROUP) truncated = true
+        if (liveAdGroups === null) continue
+        if (liveAdGroups.length > ADS_LIVE_MAX_AD_GROUPS_PER_CAMPAIGN) truncated = true
 
-        for (const ad of liveAds.slice(0, ADS_LIVE_MAX_ADS_PER_AD_GROUP)) {
-          walkedAdIds.add(ad.id)
+        for (const adGroup of liveAdGroups.slice(0, ADS_LIVE_MAX_AD_GROUPS_PER_CAMPAIGN)) {
+          walkedAdGroupIds.add(adGroup.id)
+          const adGroupMetrics = await callProvider(
+            'ad group insights',
+            adGroup.id,
+            () => reader.adGroupInsights(apiKey, adGroup.id, insightsRequest),
+          )
+          observations.push({
+            entityType: AdsLiveEntityTypes.ad_group,
+            id: adGroup.id,
+            parentId: campaign.id,
+            live: liveEntityState(adGroup),
+            stored: storedAdGroupById.has(adGroup.id)
+              ? storedEntityState(storedAdGroupById.get(adGroup.id)!)
+              : null,
+            liveMetrics: adGroupMetrics,
+            storedMetrics: adGroupMetrics === null
+              ? null
+              : storedMetricsFor(AdsInsightLevels.ad_group, adGroup.id),
+          })
+
+          const liveAds = await callProvider(
+            'ad list',
+            adGroup.id,
+            () => reader.listAds(apiKey, adGroup.id),
+          )
+          if (liveAds === null) continue
+          if (liveAds.length > ADS_LIVE_MAX_ADS_PER_AD_GROUP) truncated = true
+
+          for (const ad of liveAds.slice(0, ADS_LIVE_MAX_ADS_PER_AD_GROUP)) {
+            walkedAdIds.add(ad.id)
+            observations.push({
+              entityType: AdsLiveEntityTypes.ad,
+              id: ad.id,
+              parentId: adGroup.id,
+              live: liveEntityState(ad),
+              stored: storedAdById.has(ad.id) ? storedEntityState(storedAdById.get(ad.id)!) : null,
+              // The provider has no per-ad insights surface (same reason ads-sync
+              // stores no ad-level rollups), so ads carry status evidence only.
+              liveMetrics: null,
+              storedMetrics: null,
+            })
+          }
+        }
+      }
+
+      // Stored rows the walk never saw are only meaningful when the walk was
+      // COMPLETE. After a truncation or a failed sub-read, "absent upstream" and
+      // "not looked at" are indistinguishable, so nothing is claimed.
+      if (!truncated && errors.length === 0) {
+        for (const row of storedCampaignRows) {
+          if (walkedCampaignIds.has(row.id)) continue
+          observations.push({
+            entityType: AdsLiveEntityTypes.campaign,
+            id: row.id,
+            parentId: null,
+            live: null,
+            stored: storedEntityState(row),
+            liveMetrics: null,
+            storedMetrics: null,
+          })
+        }
+        for (const row of storedAdGroupRows) {
+          if (walkedAdGroupIds.has(row.id)) continue
+          observations.push({
+            entityType: AdsLiveEntityTypes.ad_group,
+            id: row.id,
+            parentId: row.campaignId,
+            live: null,
+            stored: storedEntityState(row),
+            liveMetrics: null,
+            storedMetrics: null,
+          })
+        }
+        for (const row of storedAdRows) {
+          if (walkedAdIds.has(row.id)) continue
           observations.push({
             entityType: AdsLiveEntityTypes.ad,
-            id: ad.id,
-            parentId: adGroup.id,
-            live: liveEntityState(ad),
-            stored: storedAdById.has(ad.id) ? storedEntityState(storedAdById.get(ad.id)!) : null,
-            // The provider has no per-ad insights surface (same reason ads-sync
-            // stores no ad-level rollups), so ads carry status evidence only.
+            id: row.id,
+            parentId: row.adGroupId,
+            live: null,
+            stored: storedEntityState(row),
             liveMetrics: null,
             storedMetrics: null,
           })
         }
       }
-    }
 
-    // Stored rows the walk never saw are only meaningful when the walk was
-    // COMPLETE. After a truncation or a failed sub-read, "absent upstream" and
-    // "not looked at" are indistinguishable, so nothing is claimed.
-    if (!truncated && errors.length === 0) {
-      for (const row of storedCampaignRows) {
-        if (walkedCampaignIds.has(row.id)) continue
-        observations.push({
-          entityType: AdsLiveEntityTypes.campaign,
-          id: row.id,
-          parentId: null,
-          live: null,
-          stored: storedEntityState(row),
-          liveMetrics: null,
-          storedMetrics: null,
-        })
+      const window = liveComparisonWindow(fetchedAtMs, lookbackDays, accountTimezone)
+      const entities: AdsLiveEntityComparison[] = observations.map(
+        (observation) => buildLiveEntityComparison(observation, window),
+      )
+      const response: AdsLiveDeliveryDto = {
+        basis: AdsLiveDeliveryBases.liveProviderRead,
+        fetchedAt: new Date(fetchedAtMs).toISOString(),
+        adAccountId: account.id,
+        storedSnapshotSyncedAt: connection.lastSyncedAt ?? null,
+        metricsWindow: { lookbackDays },
+        bounds: {
+          maxCampaigns: ADS_LIVE_MAX_CAMPAIGNS,
+          maxAdGroupsPerCampaign: ADS_LIVE_MAX_AD_GROUPS_PER_CAMPAIGN,
+          maxAdsPerAdGroup: ADS_LIVE_MAX_ADS_PER_AD_GROUP,
+          maxReaderCalls: ADS_LIVE_MAX_READER_CALLS,
+          readerCalls,
+          maxPagesPerReaderCall: liveDeliveryMaxPagesPerReaderCall,
+          maxUpstreamHttpRequests: ADS_LIVE_MAX_READER_CALLS * liveDeliveryMaxPagesPerReaderCall,
+          truncated,
+        },
+        entities,
+        drift: summarizeLiveDrift(entities),
+        errors,
       }
-      for (const row of storedAdGroupRows) {
-        if (walkedAdGroupIds.has(row.id)) continue
-        observations.push({
-          entityType: AdsLiveEntityTypes.ad_group,
-          id: row.id,
-          parentId: row.campaignId,
-          live: null,
-          stored: storedEntityState(row),
-          liveMetrics: null,
-          storedMetrics: null,
-        })
-      }
-      for (const row of storedAdRows) {
-        if (walkedAdIds.has(row.id)) continue
-        observations.push({
-          entityType: AdsLiveEntityTypes.ad,
-          id: row.id,
-          parentId: row.adGroupId,
-          live: null,
-          stored: storedEntityState(row),
-          liveMetrics: null,
-          storedMetrics: null,
-        })
-      }
+      return response
+    } catch (error) {
+      releaseLiveDeliverySlot()
+      throw error
     }
-
-    const window = liveComparisonWindow(fetchedAtMs, lookbackDays)
-    const entities: AdsLiveEntityComparison[] = observations.map(
-      (observation) => buildLiveEntityComparison(observation, window),
-    )
-    const response: AdsLiveDeliveryDto = {
-      basis: AdsLiveDeliveryBases.liveProviderRead,
-      fetchedAt: new Date(fetchedAtMs).toISOString(),
-      adAccountId: account.id,
-      storedSnapshotSyncedAt: connection.lastSyncedAt ?? null,
-      metricsWindow: { lookbackDays },
-      bounds: {
-        maxCampaigns: ADS_LIVE_MAX_CAMPAIGNS,
-        maxAdGroupsPerCampaign: ADS_LIVE_MAX_AD_GROUPS_PER_CAMPAIGN,
-        maxAdsPerAdGroup: ADS_LIVE_MAX_ADS_PER_AD_GROUP,
-        maxProviderCalls: ADS_LIVE_MAX_PROVIDER_CALLS,
-        providerCalls,
-        truncated,
-      },
-      entities,
-      drift: summarizeLiveDrift(entities),
-      errors,
-    }
-    return response
   })
 
   app.get<{ Params: { name: string } }>('/projects/:name/ads/summary', async (request) => {

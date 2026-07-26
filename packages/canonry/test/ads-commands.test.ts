@@ -292,8 +292,10 @@ const LIVE_DELIVERY: AdsLiveDeliveryDto = {
     maxCampaigns: 5,
     maxAdGroupsPerCampaign: 10,
     maxAdsPerAdGroup: 20,
-    maxProviderCalls: 40,
-    providerCalls: 6,
+    maxReaderCalls: 40,
+    readerCalls: 6,
+    maxPagesPerReaderCall: 100,
+    maxUpstreamHttpRequests: 4_000,
     truncated: false,
   },
   entities: [{
@@ -468,6 +470,8 @@ describe('ads lifecycle commands', () => {
     expect(output).toContain('TRUNCATED')
     expect(output).toContain('Read failed:  ad group list cmpn_1 [HTTP 503]')
     expect(output).toContain('live active / stored paused')
+    // The budget line must not let a reader call read as one HTTP request.
+    expect(output).toContain('6/40 reader calls, up to 4000 upstream HTTP requests')
     expect(output).toContain('2026-06-10: live 162 impr / 5 clicks')
     expect(output).toContain('DRIFT')
   })

@@ -145,6 +145,7 @@ import {
   updateAdGroup,
   updateCampaign,
   uploadImageFromUrl,
+  OPENAI_ADS_MAX_PAGES,
   type OpenAiAdsBiddingConfigRequest,
 } from "@ainyc/canonry-integration-openai-ads";
 import { executeInspectSitemap } from "./gsc-inspect-sitemap.js";
@@ -2025,6 +2026,10 @@ export async function createServer(opts: {
     verifyAdsAccount,
     adsReader,
     adsLiveDeliveryReader,
+    // Reporting only: lets the route state the true upstream HTTP ceiling
+    // (reader-call budget x pages per reader call) instead of implying that a
+    // reader call is one request.
+    adsLiveDeliveryMaxPagesPerReaderCall: OPENAI_ADS_MAX_PAGES,
     adsOperator,
     onAdsSyncRequested: (runId: string, projectId: string) => {
       runAdsSync(runId, projectId);

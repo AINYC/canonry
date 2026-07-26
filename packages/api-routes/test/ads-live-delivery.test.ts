@@ -28,6 +28,7 @@ import {
   buildFieldDeltas,
   buildMetricDeltas,
   buildLiveEntityComparison,
+  liveComparisonWindow,
   summarizeLiveDrift,
 } from '../src/ads-live-delivery.js'
 
@@ -89,6 +90,11 @@ interface Overrides {
   readerError?: unknown
   verifyError?: unknown
   verifiedAccountId?: string
+  /** Blocks account verification until resolved, so a read stays in flight. */
+  holdVerify?: Promise<void>
+  /** Fires when a read reaches account verification, before it parks. */
+  onVerifyStart?: () => void
+  accountTimezone?: string
   minIntervalMs?: number
   omitReader?: boolean
 }
@@ -160,11 +166,18 @@ function buildApp(overrides: Overrides = {}) {
       removeConnection: () => false,
     },
     verifyAdsAccount: async () => {
+      overrides.onVerifyStart?.()
+      if (overrides.holdVerify) await overrides.holdVerify
       if (overrides.verifyError !== undefined) throw overrides.verifyError
-      return { ...VERIFIED, id: overrides.verifiedAccountId ?? VERIFIED.id }
+      return {
+        ...VERIFIED,
+        id: overrides.verifiedAccountId ?? VERIFIED.id,
+        timezone: overrides.accountTimezone ?? VERIFIED.timezone,
+      }
     },
     adsLiveDeliveryReader: overrides.omitReader ? undefined : reader,
     adsLiveDeliveryMinIntervalMs: overrides.minIntervalMs ?? 0,
+    adsLiveDeliveryMaxPagesPerReaderCall: 100,
     adsReconcileSweepIntervalMs: 0,
   })
 
@@ -205,8 +218,8 @@ function buildApp(overrides: Overrides = {}) {
     }).run()
     const rows = [
       { level: 'campaign', entityId: 'cmpn_1', date: '2026-06-10', impressions: 111, clicks: 3, spendMicros: 1_000_000, conversions: 0 },
-      // Older than the 7d window — never compared, because the provider was
-      // never asked about it.
+      // Older than the 7d window, so never compared: the provider was never
+      // asked about it.
       { level: 'campaign', entityId: 'cmpn_1', date: '2026-05-01', impressions: 9_999, clicks: 99, spendMicros: 9_000_000, conversions: 9 },
     ]
     for (const row of rows) {
@@ -214,7 +227,27 @@ function buildApp(overrides: Overrides = {}) {
     }
   }
 
-  return { app, db, tmpDir, reader, readerCalls, logLines, seedProject, seedConnection, seedStaleSnapshot }
+  /**
+   * One campaign whose stored rollup is dated the way ads-sync dates it: with
+   * the provider's own `readable_time`, which is an ACCOUNT-LOCAL calendar day.
+   */
+  function seedDatedCampaign(projectId: string, date: string, impressions: number): void {
+    db.insert(adsCampaigns).values({
+      id: 'cmpn_1', projectId, name: 'Homeowners Free Estimate', status: 'active',
+      biddingType: 'clicks', dailySpendLimitMicros: 150_000_000, syncedAt: NOW,
+      conversionEventSettingIds: [], upstreamUpdatedAt: 200,
+    }).run()
+    db.insert(adsInsightsDaily).values({
+      id: crypto.randomUUID(), projectId, syncRunId: null,
+      level: 'campaign', entityId: 'cmpn_1', date,
+      impressions, clicks: 0, spendMicros: 0, conversions: 0,
+    }).run()
+  }
+
+  return {
+    app, db, tmpDir, reader, readerCalls, logLines,
+    seedProject, seedConnection, seedStaleSnapshot, seedDatedCampaign,
+  }
 }
 
 describe('ads live delivery comparison (pure)', () => {
@@ -293,6 +326,42 @@ describe('ads live delivery comparison (pure)', () => {
     expect(storedOnly[0]).toMatchObject({ date: '2026-06-08', live: null, drifted: true })
 
     expect(buildMetricDeltas(null, null, WINDOW)).toBeNull()
+  })
+
+  it('dates the compared window in the account timezone, so an east-of-UTC day is not dropped', () => {
+    // 22:00 UTC on the 10th is already 07:00 on the 11th in Tokyo, and both
+    // the provider's buckets and the stored rollups are dated in the account's
+    // own zone. A UTC-derived window ends a whole day early here.
+    const fetchedAtMs = Date.parse('2026-06-10T22:00:00.000Z')
+    expect(liveComparisonWindow(fetchedAtMs, 7, 'Asia/Tokyo')).toEqual({
+      startDate: '2026-06-04',
+      endDate: '2026-06-11',
+    })
+    expect(liveComparisonWindow(fetchedAtMs, 7, 'UTC')).toEqual({
+      startDate: '2026-06-03',
+      endDate: '2026-06-10',
+    })
+
+    const live = [metricRow('2026-06-11', { impressions: 162 })]
+    const stored = [{ date: '2026-06-11', impressions: 162, clicks: 0, spendMicros: 0, conversions: 0 }]
+
+    // Account-dated window: the two sides meet and agree.
+    expect(buildMetricDeltas(live, stored, liveComparisonWindow(fetchedAtMs, 7, 'Asia/Tokyo'))).toEqual([{
+      date: '2026-06-11',
+      live: { impressions: 162, clicks: 0, spendMicros: 0, conversions: 0 },
+      stored: { impressions: 162, clicks: 0, spendMicros: 0, conversions: 0 },
+      drifted: false,
+    }])
+
+    // UTC-derived window: the stored row falls past `endDate` and is filtered
+    // out, so identical numbers are reported as the snapshot having nothing.
+    // That is the misreport this window derivation exists to avoid.
+    expect(buildMetricDeltas(live, stored, liveComparisonWindow(fetchedAtMs, 7, 'UTC'))).toEqual([{
+      date: '2026-06-11',
+      live: { impressions: 162, clicks: 0, spendMicros: 0, conversions: 0 },
+      stored: null,
+      drifted: true,
+    }])
   })
 
   it('summarizes drift across entities without conflating status and metric drift', () => {
@@ -549,6 +618,133 @@ describe('GET /projects/:name/ads/live-delivery', () => {
     expect(third.statusCode).toBe(200)
   })
 
+  it('does not report an east-of-UTC account\'s current local day as drift', async () => {
+    // 22:00 UTC is already the 11th in Tokyo. The provider reports a bucket
+    // for the 11th and the local snapshot holds the identical row for the
+    // 11th; a UTC-derived window would filter the stored side out and call it
+    // drift.
+    vi.setSystemTime(new Date('2026-06-10T22:00:00.000Z'))
+    await start({
+      accountTimezone: 'Asia/Tokyo',
+      campaigns: [liveEntity('cmpn_1', 'active', { name: 'Homeowners Free Estimate' })],
+      adGroups: [],
+      ads: [],
+      campaignMetrics: [metricRow('2026-06-11', { impressions: 162 })],
+    })
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+    ctx.seedDatedCampaign(projectId, '2026-06-11', 162)
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    const body = JSON.parse(res.body) as AdsLiveDeliveryDto
+
+    expect(res.statusCode).toBe(200)
+    const campaign = body.entities.find((entity) => entity.id === 'cmpn_1')!
+    expect(campaign.metricDeltas).toEqual([{
+      date: '2026-06-11',
+      live: { impressions: 162, clicks: 0, spendMicros: 0, conversions: 0 },
+      stored: { impressions: 162, clicks: 0, spendMicros: 0, conversions: 0 },
+      drifted: false,
+    }])
+    expect(body.drift.metricsDrifted).toBe(0)
+    expect(campaign.drifted).toBe(false)
+  })
+
+  it('reports the walk budget in reader calls and the real upstream HTTP ceiling', async () => {
+    await start({ campaigns: [liveEntity('cmpn_1', 'active')], adGroups: [], ads: [] })
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    const body = JSON.parse(res.body) as AdsLiveDeliveryDto
+
+    // account identity + campaign list + campaign insights + ad group list.
+    expect(body.bounds.readerCalls).toBe(4)
+    expect(body.bounds.maxReaderCalls).toBe(40)
+    // A reader call is not one HTTP request: each list/insight read
+    // auto-paginates, so the honest ceiling is two orders of magnitude higher.
+    expect(body.bounds.maxPagesPerReaderCall).toBe(100)
+    expect(body.bounds.maxUpstreamHttpRequests).toBe(4_000)
+  })
+
+  it('releases the throttle slot when the read fails, so a retry is not blocked', async () => {
+    await start({
+      campaigns: [liveEntity('cmpn_1', 'active')],
+      adGroups: [],
+      ads: [],
+      minIntervalMs: 60_000,
+    })
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const listCampaigns = ctx.reader.listCampaigns
+    let attempts = 0
+    ctx.reader.listCampaigns = async (apiKey) => {
+      attempts += 1
+      if (attempts === 1) throw Object.assign(new Error('upstream down'), { status: 502 })
+      return listCampaigns(apiKey)
+    }
+
+    const failed = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    expect(failed.statusCode).toBe(502)
+
+    // Same instant, no clock advance: a read that produced nothing must not
+    // cost the operator the whole interval.
+    const retry = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    expect(retry.statusCode).toBe(200)
+    expect(attempts).toBe(2)
+
+    // The read that DID produce a result keeps the slot.
+    const third = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    expect(third.statusCode).toBe(429)
+  })
+
+  it('releases the slot when account verification fails, not just the campaign list', async () => {
+    await start({
+      verifyError: Object.assign(new Error('upstream down'), { status: 503 }),
+      minIntervalMs: 60_000,
+    })
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    const first = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    const second = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+
+    expect(first.statusCode).toBe(502)
+    // Still the provider's failure, never a lockout on top of it.
+    expect(second.statusCode).toBe(502)
+  })
+
+  it('admits only one of two concurrent reads while the first is still in flight', async () => {
+    // Real timers: an unawaited injection needs real event-loop turns to
+    // dispatch, and a frozen clock stalls it.
+    vi.useRealTimers()
+    let openGate!: () => void
+    const gate = new Promise<void>((resolve) => { openGate = resolve })
+    let markInFlight!: () => void
+    const inFlight = new Promise<void>((resolve) => { markInFlight = resolve })
+    await start({
+      campaigns: [],
+      minIntervalMs: 60_000,
+      holdVerify: gate,
+      onVerifyStart: () => { markInFlight() },
+    })
+    const projectId = ctx.seedProject()
+    ctx.seedConnection(projectId)
+
+    // The first read parks inside account verification and is NOT awaited, so
+    // the second one arrives while the first is genuinely mid-walk. This is
+    // the case the claim-before-I/O ordering exists for.
+    const first = ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    await inFlight
+    const second = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
+    expect(second.statusCode).toBe(429)
+
+    openGate()
+    expect((await first).statusCode).toBe(200)
+    expect(ctx.readerCalls.filter((call) => call.method === 'listCampaigns')).toHaveLength(1)
+  })
+
   it('400s a project with no ads connection without calling the provider', async () => {
     await start()
     ctx.seedProject()
@@ -635,8 +831,8 @@ describe('live delivery credential safety', () => {
     const res = await ctx.app.inject({ method: 'GET', url: '/projects/acme/ads/live-delivery' })
 
     expect(res.statusCode).toBe(200)
-    // The reader DOES receive the key — that is the whole point of a
-    // server-side passthrough — but nothing it touches reaches the caller.
+    // The reader DOES receive the key (that is the whole point of a
+    // server-side passthrough) but nothing it touches reaches the caller.
     expect(ctx.readerCalls.every((call) => call.apiKey === API_KEY)).toBe(true)
     expect(res.body).not.toContain(API_KEY)
     expect(JSON.stringify(JSON.parse(res.body))).not.toContain(API_KEY)

@@ -39,6 +39,40 @@ export function formatIsoDate(iso: string): string {
   }
 }
 
+/**
+ * `YYYY-MM-DD` for an instant as observed in `timeZone`, not in UTC.
+ *
+ * Use this, not `formatIsoDate`, whenever the resulting date has to line up
+ * with a third party that buckets its data by its own local calendar day. For
+ * a zone east of UTC the local day rolls over first, so a UTC-derived date is
+ * a whole day behind for part of every day.
+ *
+ * An unusable input or zone falls back to the UTC date rather than throwing:
+ * a window boundary should degrade, not take the request down.
+ */
+export function formatIsoDateInTimeZone(iso: string, timeZone: string): string {
+  if (!iso) return formatIsoDate(iso)
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(d)
+    const value = (type: Intl.DateTimeFormatPartTypes): string | undefined =>
+      parts.find((part) => part.type === type)?.value
+    const yyyy = value('year')
+    const mm = value('month')
+    const dd = value('day')
+    if (!yyyy || !mm || !dd) return formatIsoDate(iso)
+    return `${yyyy}-${mm}-${dd}`
+  } catch {
+    return formatIsoDate(iso)
+  }
+}
+
 export function formatDateRange(start: string, end: string): string {
   if (!start && !end) return ''
   if (start && end) return `${formatDate(start)} → ${formatDate(end)}`

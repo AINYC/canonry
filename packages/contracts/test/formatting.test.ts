@@ -9,6 +9,7 @@ import {
   formatDateRange,
   formatDeltaCopy,
   formatIsoDate,
+  formatIsoDateInTimeZone,
   formatNumber,
   formatRatio,
   formatWindowCountDelta,
@@ -88,6 +89,36 @@ describe('formatIsoDate', () => {
 
   test('invalid input falls back to original string', () => {
     expect(formatIsoDate('not-a-date')).toBe('not-a-date')
+  })
+})
+
+describe('formatIsoDateInTimeZone', () => {
+  test('a zone east of UTC has already rolled to the next calendar day', () => {
+    // 22:00 UTC is 07:00 the NEXT day in Tokyo (UTC+9).
+    expect(formatIsoDate('2026-06-10T22:00:00.000Z')).toBe('2026-06-10')
+    expect(formatIsoDateInTimeZone('2026-06-10T22:00:00.000Z', 'Asia/Tokyo')).toBe('2026-06-11')
+  })
+
+  test('a zone west of UTC is still on the previous calendar day', () => {
+    // 02:00 UTC is 19:00 the PREVIOUS day in Denver (UTC-7 in June).
+    expect(formatIsoDate('2026-06-11T02:00:00.000Z')).toBe('2026-06-11')
+    expect(formatIsoDateInTimeZone('2026-06-11T02:00:00.000Z', 'America/Denver')).toBe('2026-06-10')
+  })
+
+  test('UTC matches the plain UTC formatter', () => {
+    expect(formatIsoDateInTimeZone('2026-06-10T22:00:00.000Z', 'UTC')).toBe('2026-06-10')
+  })
+
+  test('zero-pads single-digit month and day', () => {
+    expect(formatIsoDateInTimeZone('2026-01-03T12:00:00.000Z', 'Europe/Berlin')).toBe('2026-01-03')
+  })
+
+  test('an unknown zone degrades to the UTC date instead of throwing', () => {
+    expect(formatIsoDateInTimeZone('2026-06-10T22:00:00.000Z', 'Not/AZone')).toBe('2026-06-10')
+  })
+
+  test('invalid input falls back to the original string', () => {
+    expect(formatIsoDateInTimeZone('not-a-date', 'Asia/Tokyo')).toBe('not-a-date')
   })
 })
 

@@ -2435,7 +2435,7 @@ export const getApiV1ProjectsByNameAdsDeliveryDiagnostics = <ThrowOnError extend
 /**
  * Live provider read of ads status and metrics, with the local snapshot delta
  *
- * Calls the OpenAI Ads API right now with the stored connection and returns the provider's current status and metrics unaggregated, alongside the corresponding local snapshot values and an explicit per-entity delta. Read-only: it never creates, updates, pauses, or activates anything, and it never waits for a sync run. The walk is bounded by per-level caps and a total provider-call budget (see bounds), and one project may issue at most one live read per minute.
+ * Calls the OpenAI Ads API right now with the stored connection and returns the provider's current status and metrics unaggregated, alongside the corresponding local snapshot values and an explicit per-entity delta. Dates on both sides are the ad account's local calendar dates. Read-only: it never creates, updates, pauses, or activates anything, and it never waits for a sync run. The walk is bounded by per-level caps and a budget of 40 reader calls (see bounds), and one project may issue at most one live read per minute. A reader call is not one HTTP request: each list or insight read auto-paginates up to 100 pages, so the worst-case upstream cost of a single request is about 4000 HTTP requests, reported as bounds.maxUpstreamHttpRequests.
  */
 export const getApiV1ProjectsByNameAdsLiveDelivery = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameAdsLiveDeliveryData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameAdsLiveDeliveryResponses, GetApiV1ProjectsByNameAdsLiveDeliveryErrors, ThrowOnError>({

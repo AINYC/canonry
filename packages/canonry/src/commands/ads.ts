@@ -660,7 +660,9 @@ export async function adsLiveDelivery(
   console.log(`Ad account:   ${result.adAccountId}`)
   console.log(`Snapshot:     last synced ${result.storedSnapshotSyncedAt ?? 'never'}`)
   console.log(`Metrics:      last ${result.metricsWindow.lookbackDays}d, as the provider reported them`)
-  console.log(`Provider:     ${result.bounds.providerCalls}/${result.bounds.maxProviderCalls} calls${result.bounds.truncated ? ' (TRUNCATED — walk hit a cap)' : ''}`)
+  // Two units, said plainly: a reader call is a logical list/insight read and
+  // auto-paginates upstream, so the HTTP ceiling is far above the call count.
+  console.log(`Provider:     ${result.bounds.readerCalls}/${result.bounds.maxReaderCalls} reader calls, up to ${result.bounds.maxUpstreamHttpRequests} upstream HTTP requests${result.bounds.truncated ? ' (TRUNCATED, walk hit a cap)' : ''}`)
   console.log(`Drift:        ${result.drift.driftedEntities}/${result.drift.entitiesCompared} entities (${result.drift.statusDrifted} status, ${result.drift.metricsDrifted} metrics)`)
   for (const failure of result.errors) {
     console.log(`Read failed:  ${failure.surface}${failure.entityId ? ` ${failure.entityId}` : ''}${failure.upstreamStatus === null ? '' : ` [HTTP ${failure.upstreamStatus}]`}`)
@@ -674,7 +676,7 @@ export async function adsLiveDelivery(
     const liveStatus = entity.live === null ? 'absent upstream' : entity.live.status
     const storedStatus = entity.stored === null ? 'absent locally' : entity.stored.status
     const marker = entity.drifted ? 'DRIFT' : 'match'
-    console.log(`${indent}${label} [${entity.entityType}] — live ${liveStatus} / stored ${storedStatus} — ${marker}`)
+    console.log(`${indent}${label} [${entity.entityType}]: live ${liveStatus} / stored ${storedStatus} (${marker})`)
     for (const delta of entity.fieldDeltas) {
       console.log(`${indent}  ${delta.field}: live ${delta.live ?? 'none'} / stored ${delta.stored ?? 'none'}`)
     }
