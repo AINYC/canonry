@@ -25,7 +25,23 @@ export interface EvidenceSignalSummary {
   tone: SignalTone
 }
 
+interface EvidenceGroup {
+  key: string
+  phrase: string
+  location: string | null
+  items: CitationInsightVm[]
+  rawItems: CitationInsightVm[]
+}
+
 const ANSWER_PREVIEW_MAX = 320
+
+function evidenceGroupSearchText(group: EvidenceGroup): string {
+  return [
+    group.phrase,
+    group.location ?? '',
+    ...group.rawItems.map((item) => item.provider),
+  ].join(' ')
+}
 
 /** Map a snapshot to the state value driving the column for the active mode.
  *  In citations mode we read `citationState` directly. In mentions mode we
@@ -183,14 +199,7 @@ export function EvidenceTable({
   const [density, setDensity] = useState<Density>(defaultDensity)
 
   const groups = useMemo(() => {
-    type Group = {
-      key: string
-      phrase: string
-      location: string | null
-      items: CitationInsightVm[]
-      rawItems: CitationInsightVm[]
-    }
-    const map = new Map<string, Group>()
+    const map = new Map<string, EvidenceGroup>()
     for (const rawItem of evidence) {
       const phrase = rawItem.query
       const location = compareLocations ? (rawItem.location ?? null) : null
@@ -204,11 +213,7 @@ export function EvidenceTable({
   }, [evidence, mode, compareLocations])
   const groupsTable = useClientTable({
     rows: groups,
-    getSearchText: (group) => [
-      group.phrase,
-      group.location ?? '',
-      ...group.rawItems.map((item) => item.provider),
-    ].join(' '),
+    getSearchText: evidenceGroupSearchText,
   })
   const visibleGroupKeys = groupsTable.rows.map((group) => group.key)
   const visibleGroupsExpanded = visibleGroupKeys.length > 0

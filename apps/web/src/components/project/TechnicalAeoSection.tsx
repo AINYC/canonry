@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ChevronDown, ChevronRight, LoaderCircle, Play, RefreshCw, ScanSearch } from 'lucide-react'
 import type { MetricTone } from '../../view-models.js'
@@ -45,6 +45,11 @@ import { getRunTrackerState, subscribeRunTracker } from '../../lib/run-tracker-s
 
 const PAGES_FETCH_LIMIT = 100
 const FACTOR_DRILLDOWN_PAGE_CAP = 12
+const EMPTY_SITE_AUDIT_PAGES: SiteAuditPageDto[] = []
+
+function siteAuditPageSearchText(page: SiteAuditPageDto): string {
+  return urlSearchText(page.url)
+}
 
 function scoreTone(score: number): MetricTone {
   if (score >= 70) return 'positive'
@@ -201,13 +206,16 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
       : 'Starting audit'
 
   const score = scoreQuery.data
-  const allPages = pagesQuery.data?.pages ?? []
+  const allPages = pagesQuery.data?.pages ?? EMPTY_SITE_AUDIT_PAGES
   const hasErrors = (score?.pagesErrored ?? 0) > 0
   const showErrorsOnly = errorsOnly && hasErrors
-  const tableSourcePages = showErrorsOnly ? allPages.filter((p) => p.status === 'error') : allPages
+  const tableSourcePages = useMemo(
+    () => showErrorsOnly ? allPages.filter((page) => page.status === 'error') : allPages,
+    [allPages, showErrorsOnly],
+  )
   const pagesTable = useClientTable({
     rows: tableSourcePages,
-    getSearchText: (page) => urlSearchText(page.url),
+    getSearchText: siteAuditPageSearchText,
   })
   const pagesCapped = score ? score.pagesAudited > allPages.length : false
 
@@ -623,7 +631,12 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
                       <td>{p.status === 'error' ? <ToneBadge tone="negative">Error</ToneBadge> : <ToneBadge tone={scoreTone(p.overallScore)}>{statusLabel(p.overallScore)}</ToneBadge>}</td>
                       <td className="w-full max-w-0">
                         <a href={p.url} target="_blank" rel="noreferrer" className="block truncate text-neutral hover:text-heading" title={p.status === 'error' ? p.error ?? p.url : p.url}>
-                          <MiddleTruncatedText value={p.url} headLength={54} tailLength={20} />
+                          <MiddleTruncatedText
+                            value={p.url}
+                            headLength={54}
+                            tailLength={20}
+                            title={p.status === 'error' ? p.error ?? p.url : p.url}
+                          />
                         </a>
                       </td>
                     </tr>

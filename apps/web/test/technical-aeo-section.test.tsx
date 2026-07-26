@@ -191,3 +191,31 @@ test('loads the scorecard and pages for a selected historical audit', async () =
   expect(fetchedUrls.some((url) => url.includes('runId=audit_old'))).toBe(true)
   expect(fetchedUrls.filter((url) => url.includes('runId=audit_old'))).toHaveLength(2)
 })
+
+test('preserves the crawl error as the tooltip on a truncated page URL', () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(scoreKey, { ...score('audit_old'), pagesErrored: 1 })
+  const url = `https://citypoint.example/${'long-path-segment-'.repeat(8)}failed`
+  queryClient.setQueryData(pagesKey, {
+    project: projectName,
+    runId: 'audit_old',
+    auditedAt: null,
+    total: 1,
+    pages: [{
+      url,
+      status: 'error',
+      error: 'Crawl timed out after 30 seconds',
+      overallScore: 0,
+    }],
+  })
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TechnicalAeoSection projectName={projectName} projectId={projectId} />
+    </QueryClientProvider>,
+  )
+
+  const visibleUrl = screen.getByText(`${[...url].slice(0, 54).join('')}…${[...url].slice(-20).join('')}`)
+  expect(visibleUrl.parentElement?.getAttribute('title')).toBe('Crawl timed out after 30 seconds')
+  expect(visibleUrl.parentElement?.querySelector('.sr-only')?.textContent).toBe(url)
+})

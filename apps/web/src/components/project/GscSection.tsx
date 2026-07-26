@@ -607,6 +607,7 @@ export function GscSection({
 
   useEffect(() => {
     setPerformanceOffset(0)
+    performanceTable.setPage(1)
     void loadPerformanceRows(0)
     void loadPerformanceDaily()
   }, [gscWindow])

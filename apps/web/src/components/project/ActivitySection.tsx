@@ -69,6 +69,10 @@ const SOURCE_COLORS = CHART_SERIES_COLORS
 const SOCIAL_OTHER_COLOR = CHART_NEUTRAL.textDim
 const SOCIAL_TOTAL_COLOR = CHART_NEUTRAL.textFaint
 const SOCIAL_TABLE_DEFAULT_LIMIT = 25
+
+function aiLandingPageSearchText(row: ApiGaTrafficAiLandingPage): string {
+  return urlSearchText(row.landingPage)
+}
 const AI_LANDING_PAGE_SIZE = 25
 
 const EMPTY_AI_DAILY: GA4AiReferralDailyDto = {
@@ -425,7 +429,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
 
   const aiLandingTable = useClientTable({
     rows: sortedAiLandingPages,
-    getSearchText: (row) => urlSearchText(row.landingPage),
+    getSearchText: aiLandingPageSearchText,
     pageSize: AI_LANDING_PAGE_SIZE,
   })
   const aiLandingRowCount = aiLandingTable.totalRows > 0

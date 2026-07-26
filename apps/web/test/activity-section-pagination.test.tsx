@@ -211,8 +211,9 @@ test('middle-truncates long URLs while preserving the full value for filtering a
   await waitFor(() => expect(screen.getByText('1–25 of 31 rows')).toBeTruthy())
   const expectedDisplay = `${[...landingPage].slice(0, 36).join('')}…${[...landingPage].slice(-18).join('')}`
   const displayedUrl = screen.getByText(expectedDisplay)
-  expect(displayedUrl.getAttribute('title')).toBe(landingPage)
-  expect(displayedUrl.getAttribute('aria-label')).toBe(landingPage)
+  expect(displayedUrl.getAttribute('aria-hidden')).toBe('true')
+  expect(displayedUrl.parentElement?.getAttribute('title')).toBe(landingPage)
+  expect(displayedUrl.parentElement?.querySelector('.sr-only')?.textContent).toBe(landingPage)
 
   const filter = screen.getByRole('searchbox', { name: 'Filter landing page URLs or query parameters' })
   fireEvent.change(filter, { target: { value: 'olref campaign summer footer' } })

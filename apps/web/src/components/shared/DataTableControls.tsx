@@ -38,15 +38,24 @@ export function MiddleTruncatedText({
   headLength,
   tailLength,
   className,
+  title,
 }: {
   value: string
   headLength?: number
   tailLength?: number
   className?: string
+  title?: string
 }) {
+  const displayValue = truncateMiddleText(value, headLength, tailLength)
+
   return (
-    <span className={className} title={value} aria-label={value}>
-      {truncateMiddleText(value, headLength, tailLength)}
+    <span className={className} title={title ?? value}>
+      {displayValue === value ? value : (
+        <>
+          <span className="sr-only">{value}</span>
+          <span aria-hidden="true">{displayValue}</span>
+        </>
+      )}
     </span>
   )
 }
@@ -132,7 +141,7 @@ export function DataTableSearch({
         placeholder={placeholder}
         autoComplete="off"
         spellCheck={false}
-        className="h-9 w-full rounded-md border border-default bg-surface/50 pl-9 pr-9 text-sm text-strong placeholder:text-muted outline-none transition focus:border-mono-500 focus:ring-1 focus:ring-mono-500"
+        className="h-9 w-full rounded-md border border-default bg-surface/50 pl-9 pr-9 text-sm text-strong placeholder:text-muted outline-none transition focus:border-mono-500 focus:ring-1 focus:ring-mono-500 [&::-webkit-search-cancel-button]:appearance-none"
       />
       {value.trim().length > 0 ? (
         <button
