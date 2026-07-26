@@ -47,17 +47,11 @@ function makeTraffic(aiReferralLandingPages: ApiGaTrafficAiLandingPage[]) {
     aiReferrals: [],
     aiReferralLandingPages,
     aiSessionsDeduped: 0,
-    aiUsersDeduped: 0,
     paidAiSessionsDeduped: 0,
-    paidAiUsersDeduped: 0,
     organicAiSessionsDeduped: 0,
-    organicAiUsersDeduped: 0,
     aiSessionsBySession: 0,
-    aiUsersBySession: 0,
     paidAiSessionsBySession: 0,
-    paidAiUsersBySession: 0,
     organicAiSessionsBySession: 0,
-    organicAiUsersBySession: 0,
     socialReferrals: [],
     socialSessions: 0,
     socialUsers: 0,
@@ -104,7 +98,6 @@ function makeLandingPages(count: number): ApiGaTrafficAiLandingPage[] {
     sourceDimension: 'session' as const,
     landingPage: `/page-${String(i).padStart(3, '0')}`,
     sessions: count - i,
-    users: count - i,
   }))
 }
 

@@ -689,21 +689,20 @@ describe('GA4 routes', () => {
     expect(body.topPages[0].landingPage).toBe('/page-a')
     expect(body.topPages[0].sessions).toBe(300)
     expect(body.topPages[1].landingPage).toBe('/page-b')
+    // No `users` on either referral row type — the seeded row carries users: 10
+    // and the response must not report it. toEqual is exact, so an extra key
+    // fails here.
     expect(body.aiReferrals).toEqual([
-      { source: 'chatgpt.com', medium: 'referral', trafficClass: 'organic', sourceDimension: 'session', sessions: 17, users: 10 },
+      { source: 'chatgpt.com', medium: 'referral', trafficClass: 'organic', sourceDimension: 'session', sessions: 17 },
     ])
     expect(body.aiReferralLandingPages).toEqual([
-      { source: 'chatgpt.com', medium: 'referral', trafficClass: 'organic', sourceDimension: 'session', landingPage: '/page-a', sessions: 17, users: 10 },
+      { source: 'chatgpt.com', medium: 'referral', trafficClass: 'organic', sourceDimension: 'session', landingPage: '/page-a', sessions: 17 },
     ])
     expect(body.aiSessionsDeduped).toBe(17)
-    expect(body.aiUsersDeduped).toBe(10)
     expect(body.paidAiSessionsDeduped).toBe(0)
-    expect(body.paidAiUsersDeduped).toBe(0)
     expect(body.organicAiSessionsDeduped).toBe(17)
-    expect(body.organicAiUsersDeduped).toBe(10)
     // Only sessionSource-attributed rows seeded, so bySession matches dedup here.
     expect(body.aiSessionsBySession).toBe(17)
-    expect(body.aiUsersBySession).toBe(10)
     expect(body.paidAiSessionsBySession).toBe(0)
     expect(body.organicAiSessionsBySession).toBe(17)
     expect(body.aiSharePctBySession).toBe(5)
@@ -928,15 +927,11 @@ describe('GA4 routes', () => {
 
       // Combined deduped total is the cross-lens MAX, unchanged by the split.
       expect(body.aiSessionsDeduped).toBe(30)
-      expect(body.aiUsersDeduped).toBe(25)
       // The winning (larger) lens is the organic first_user row.
       expect(body.paidAiSessionsDeduped).toBe(0)
-      expect(body.paidAiUsersDeduped).toBe(0)
       expect(body.organicAiSessionsDeduped).toBe(30)
-      expect(body.organicAiUsersDeduped).toBe(25)
       // Invariant: the class split always partitions the deduped total.
       expect(body.paidAiSessionsDeduped + body.organicAiSessionsDeduped).toBe(body.aiSessionsDeduped)
-      expect(body.paidAiUsersDeduped + body.organicAiUsersDeduped).toBe(body.aiUsersDeduped)
       // Session-lens-only totals are disjoint by class, so the paid session row stands.
       expect(body.aiSessionsBySession).toBe(20)
       expect(body.paidAiSessionsBySession).toBe(20)
@@ -1739,6 +1734,148 @@ describe('GA4 routes', () => {
     } finally {
       db.delete(gaAiReferrals).where(inArray(gaAiReferrals.id, seededIds)).run()
       credentials.delete('test-project')
+    }
+  })
+
+  it('GET /ga/traffic reports AI referral sessions only, never a user count', async () => {
+    // The eight withdrawn fields (4.135.0). GA reports `totalUsers` as a COUNT
+    // DISTINCT at the grain requested, and `ga_ai_referrals` is keyed by
+    // (date, source, medium, channelGroup, landingPage, sourceDimension), so
+    // every one of these was a sum over rows that each re-counted the same
+    // visitor. No un-dimensioned AI-referral fetch exists, so the number could
+    // not be corrected — only withdrawn.
+    const WITHDRAWN_SUMMARY_FIELDS = [
+      'aiUsersDeduped',
+      'paidAiUsersDeduped',
+      'organicAiUsersDeduped',
+      'aiUsersBySession',
+      'paidAiUsersBySession',
+      'organicAiUsersBySession',
+    ] as const
+
+    const now = new Date().toISOString()
+    const projectRes = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/projects/ai-users-withdrawn',
+      payload: {
+        displayName: 'AI Users Withdrawn',
+        canonicalDomain: 'users-withdrawn.example',
+        country: 'US',
+        language: 'en',
+      },
+    })
+    const withdrawnProjectId = JSON.parse(projectRes.payload).id as string
+    credentials.set('ai-users-withdrawn', {
+      projectName: 'ai-users-withdrawn',
+      propertyId: '444333',
+      clientEmail: 'sa@test.iam.gserviceaccount.com',
+      privateKey: 'fake-key',
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    // A fixture that over-counts users on every axis at once: two landing
+    // pages, two dates, two attribution lenses, and both traffic classes.
+    // Summing the stored `users` column the way the withdrawn fields did gave
+    // 20 (paid 6 + organic 14) for traffic one visitor could account for.
+    const seeded = [
+      { id: crypto.randomUUID(), date: '2026-05-01', medium: 'referral', trafficClass: 'organic' as const, sourceDimension: 'session', landingPage: '/a', sessions: 6, users: 5 },
+      { id: crypto.randomUUID(), date: '2026-05-01', medium: 'referral', trafficClass: 'organic' as const, sourceDimension: 'session', landingPage: '/b', sessions: 4, users: 4 },
+      { id: crypto.randomUUID(), date: '2026-05-01', medium: 'referral', trafficClass: 'organic' as const, sourceDimension: 'first_user', landingPage: '/a', sessions: 7, users: 6 },
+      { id: crypto.randomUUID(), date: '2026-05-02', medium: 'referral', trafficClass: 'organic' as const, sourceDimension: 'session', landingPage: '/a', sessions: 5, users: 5 },
+      { id: crypto.randomUUID(), date: '2026-05-02', medium: 'cpc', trafficClass: 'paid' as const, sourceDimension: 'session', landingPage: '/a', sessions: 8, users: 6 },
+    ]
+
+    try {
+      db.insert(gaTrafficSummaries).values({
+        id: crypto.randomUUID(),
+        projectId: withdrawnProjectId,
+        periodStart: '2026-05-01',
+        periodEnd: '2026-05-02',
+        totalSessions: 200,
+        totalOrganicSessions: 50,
+        totalUsers: 150,
+        syncedAt: now,
+      }).run()
+      db.insert(gaAiReferrals).values(seeded.map((row) => ({
+        id: row.id,
+        projectId: withdrawnProjectId,
+        date: row.date,
+        source: 'chatgpt.com',
+        medium: row.medium,
+        trafficClass: row.trafficClass,
+        sourceDimension: row.sourceDimension,
+        landingPage: row.landingPage,
+        landingPageNormalized: row.landingPage,
+        sessions: row.sessions,
+        users: row.users,
+        syncedAt: now,
+      }))).run()
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/projects/ai-users-withdrawn/ga/traffic',
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+
+      // ── The withdrawal: none of the eight keys is emitted. ──────────────
+      for (const field of WITHDRAWN_SUMMARY_FIELDS) {
+        expect(body).not.toHaveProperty(field)
+      }
+      expect(body.aiReferrals.length).toBeGreaterThan(0)
+      expect(body.aiReferralLandingPages.length).toBeGreaterThan(0)
+      for (const row of body.aiReferrals) expect(row).not.toHaveProperty('users')
+      for (const row of body.aiReferralLandingPages) expect(row).not.toHaveProperty('users')
+      // Property-level and social user counts are a different signal (GA
+      // deduplicates those itself) and must survive the withdrawal.
+      expect(body.totalUsers).toBe(150)
+      expect(body).toHaveProperty('socialUsers')
+
+      // ── The session numbers are unchanged by the withdrawal. ────────────
+      // Deduped folds the winner set: (05-01, referral) session lens 6+4=10
+      // beats first_user 7; (05-02, referral) session 5; (05-02, cpc) paid 8.
+      expect(body.aiSessionsDeduped).toBe(23)
+      expect(body.paidAiSessionsDeduped).toBe(8)
+      expect(body.organicAiSessionsDeduped).toBe(15)
+      expect(body.paidAiSessionsDeduped + body.organicAiSessionsDeduped).toBe(body.aiSessionsDeduped)
+      // Session-lens-only view: rows 1, 2, 4, 5 (the first_user row drops out).
+      expect(body.aiSessionsBySession).toBe(23)
+      expect(body.paidAiSessionsBySession).toBe(8)
+      expect(body.organicAiSessionsBySession).toBe(15)
+      expect(body.paidAiSessionsBySession + body.organicAiSessionsBySession).toBe(body.aiSessionsBySession)
+
+      // Shares over the 200-session denominator, values and display strings.
+      expect(body.aiSharePct).toBe(12)
+      expect(body.aiSharePctBySession).toBe(12)
+      expect(body.paidAiSharePct).toBe(4)
+      expect(body.paidAiSharePctBySession).toBe(4)
+      expect(body.organicAiSharePct).toBe(8)
+      expect(body.organicAiSharePctBySession).toBe(8)
+      expect(body.aiSharePctDisplay).toBe('12%')
+      expect(body.aiSharePctBySessionDisplay).toBe('12%')
+      expect(body.paidAiSharePctDisplay).toBe('4%')
+      expect(body.paidAiSharePctBySessionDisplay).toBe('4%')
+      expect(body.organicAiSharePctDisplay).toBe('8%')
+      expect(body.organicAiSharePctBySessionDisplay).toBe('8%')
+      expect(body.channelBreakdown.ai.sessions).toBe(23)
+
+      // Per-row sessions still sum landing pages and dates inside one lens,
+      // then keep the winning lens — exactly as before.
+      expect(body.aiReferrals).toEqual([
+        { source: 'chatgpt.com', medium: 'referral', trafficClass: 'organic', sourceDimension: 'session', sessions: 15 },
+        { source: 'chatgpt.com', medium: 'cpc', trafficClass: 'paid', sourceDimension: 'session', sessions: 8 },
+      ])
+      expect(body.aiReferralLandingPages).toEqual(expect.arrayContaining([
+        { source: 'chatgpt.com', medium: 'referral', trafficClass: 'organic', sourceDimension: 'session', landingPage: '/a', sessions: 11 },
+        { source: 'chatgpt.com', medium: 'referral', trafficClass: 'organic', sourceDimension: 'session', landingPage: '/b', sessions: 4 },
+        { source: 'chatgpt.com', medium: 'cpc', trafficClass: 'paid', sourceDimension: 'session', landingPage: '/a', sessions: 8 },
+      ]))
+      expect(body.aiReferralLandingPages).toHaveLength(3)
+    } finally {
+      credentials.delete('ai-users-withdrawn')
+      db.delete(gaAiReferrals).where(inArray(gaAiReferrals.id, seeded.map((r) => r.id))).run()
+      db.delete(gaTrafficSummaries).where(eq(gaTrafficSummaries.projectId, withdrawnProjectId)).run()
     }
   })
 

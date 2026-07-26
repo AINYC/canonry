@@ -31,7 +31,21 @@ export const ga4AiReferralDtoSchema = z.object({
   medium: z.string(),
   trafficClass: aiReferralTrafficClassSchema,
   sessions: z.number(),
-  users: z.number(),
+  /**
+   * @deprecated Never emitted since 4.135.0. Removed in the next major.
+   *
+   * GA reports `totalUsers` as a COUNT DISTINCT at the grain requested, and
+   * `ga_ai_referrals` is keyed by (date, source, medium, channelGroup,
+   * landingPage, sourceDimension), so summing it re-counted the same visitor on
+   * every extra day, page and channel they appear in. Unlike GA daily users, no
+   * un-dimensioned AI-referral fetch exists to ask Google for the true figure,
+   * so the number could not be corrected — only withdrawn. Optional rather than
+   * deleted so existing API / `canonry ga traffic --format json` / MCP
+   * consumers keep parsing; they now read `undefined` instead of an inflated
+   * number. Sessions are unaffected: GA4 attributes exactly one landing page
+   * per session, so the landing-page rows partition the day and do sum.
+   */
+  users: z.number().optional(),
   /**
    * The winning attribution dimension for this (source, medium) tuple — the
    * one with the highest session count. GA4 emits one row per dimension
@@ -54,7 +68,8 @@ export const ga4AiReferralLandingPageDtoSchema = z.object({
   sourceDimension: ga4SourceDimensionSchema,
   landingPage: z.string(),
   sessions: z.number(),
-  users: z.number(),
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  users: z.number().optional(),
 })
 export type GA4AiReferralLandingPageDto = z.infer<typeof ga4AiReferralLandingPageDtoSchema>
 
@@ -102,28 +117,28 @@ export const ga4TrafficSummaryDtoSchema = z.object({
   aiReferralLandingPages: z.array(ga4AiReferralLandingPageDtoSchema),
   /** Deduped AI session total: MAX(sessions) per date+source+medium across attribution dimensions, then summed. Cross-cutting: can overlap with Direct/Organic/Social via firstUserSource. */
   aiSessionsDeduped: z.number(),
-  /** Deduped AI user total: MAX(users) per date+source+medium across attribution dimensions, then summed. */
-  aiUsersDeduped: z.number(),
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  aiUsersDeduped: z.number().optional(),
   /** Deduped AI sessions whose attribution carries paid intent. */
   paidAiSessionsDeduped: z.number(),
-  /** Deduped users for paid AI sessions. */
-  paidAiUsersDeduped: z.number(),
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  paidAiUsersDeduped: z.number().optional(),
   /** Deduped AI sessions without paid intent evidence. */
   organicAiSessionsDeduped: z.number(),
-  /** Deduped users for organic/non-paid AI sessions. */
-  organicAiUsersDeduped: z.number(),
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  organicAiUsersDeduped: z.number().optional(),
   /** AI sessions whose CURRENT sessionSource matched an AI engine. Can overlap with raw Organic/Social/Direct totals; `channelBreakdown` removes those overlaps for display. */
   aiSessionsBySession: z.number(),
-  /** AI users whose CURRENT sessionSource matched an AI engine. Can overlap with raw Organic/Social/Direct totals. */
-  aiUsersBySession: z.number(),
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  aiUsersBySession: z.number().optional(),
   /** Session-source-only paid AI sessions. */
   paidAiSessionsBySession: z.number(),
-  /** Session-source-only paid AI users. */
-  paidAiUsersBySession: z.number(),
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  paidAiUsersBySession: z.number().optional(),
   /** Session-source-only organic/non-paid AI sessions. */
   organicAiSessionsBySession: z.number(),
-  /** Session-source-only organic/non-paid AI users. */
-  organicAiUsersBySession: z.number(),
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  organicAiUsersBySession: z.number().optional(),
   socialReferrals: z.array(ga4SocialReferralDtoSchema),
   /** Total social sessions (session-scoped, no cross-dimension dedup needed). */
   socialSessions: z.number(),
@@ -270,34 +285,34 @@ export interface GaTrafficResponse {
   totalDirectSessions: number
   totalUsers: number
   topPages: Array<{ landingPage: string; sessions: number; organicSessions: number; directSessions: number; users: number }>
-  /** Deduped to the winning attribution dimension (highest sessions) per (source, medium). */
-  aiReferrals: Array<{ source: string; medium: string; trafficClass: AiReferralTrafficClass; sessions: number; users: number; sourceDimension: GA4SourceDimension }>
-  /** Deduped to the winning attribution dimension (highest sessions) per (source, medium, landingPage). */
-  aiReferralLandingPages: Array<{ source: string; medium: string; trafficClass: AiReferralTrafficClass; sourceDimension: GA4SourceDimension; landingPage: string; sessions: number; users: number }>
+  /** Deduped to the winning attribution dimension (highest sessions) per (source, medium). `users` is deprecated — see `GA4AiReferralDto.users`; never emitted since 4.135.0. */
+  aiReferrals: Array<{ source: string; medium: string; trafficClass: AiReferralTrafficClass; sessions: number; users?: number; sourceDimension: GA4SourceDimension }>
+  /** Deduped to the winning attribution dimension (highest sessions) per (source, medium, landingPage). `users` is deprecated — see `GA4AiReferralDto.users`; never emitted since 4.135.0. */
+  aiReferralLandingPages: Array<{ source: string; medium: string; trafficClass: AiReferralTrafficClass; sourceDimension: GA4SourceDimension; landingPage: string; sessions: number; users?: number }>
   /** Deduped AI session total: MAX(sessions) per date+source+medium across attribution dimensions, then summed. Cross-cutting: can overlap with Direct/Organic/Social via firstUserSource. */
   aiSessionsDeduped: number
-  /** Deduped AI user total: MAX(users) per date+source+medium across attribution dimensions, then summed. */
-  aiUsersDeduped: number
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  aiUsersDeduped?: number
   /** Deduped AI sessions whose attribution carries paid intent. */
   paidAiSessionsDeduped: number
-  /** Deduped users for paid AI sessions. */
-  paidAiUsersDeduped: number
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  paidAiUsersDeduped?: number
   /** Deduped AI sessions without paid intent evidence. */
   organicAiSessionsDeduped: number
-  /** Deduped users for organic/non-paid AI sessions. */
-  organicAiUsersDeduped: number
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  organicAiUsersDeduped?: number
   /** AI sessions whose CURRENT sessionSource matched an AI engine. Can overlap with raw Organic/Social/Direct totals; `channelBreakdown` removes those overlaps for display. */
   aiSessionsBySession: number
-  /** AI users whose CURRENT sessionSource matched an AI engine. Can overlap with raw Organic/Social/Direct totals. */
-  aiUsersBySession: number
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  aiUsersBySession?: number
   /** Session-source-only paid AI sessions. */
   paidAiSessionsBySession: number
-  /** Session-source-only paid AI users. */
-  paidAiUsersBySession: number
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  paidAiUsersBySession?: number
   /** Session-source-only organic/non-paid AI sessions. */
   organicAiSessionsBySession: number
-  /** Session-source-only organic/non-paid AI users. */
-  organicAiUsersBySession: number
+  /** @deprecated See `GA4AiReferralDto.users`. Never emitted since 4.135.0. */
+  organicAiUsersBySession?: number
   socialReferrals: Array<{ source: string; medium: string; sessions: number; users: number; channelGroup: string }>
   /** Total social sessions (session-scoped via sessionDefaultChannelGroup). */
   socialSessions: number

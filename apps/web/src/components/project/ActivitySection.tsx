@@ -73,9 +73,11 @@ const EMPTY_AI_DAILY: GA4AiReferralDailyDto = {
 }
 
 type PageSortKey = 'landingPage' | 'sessions' | 'organicSessions' | 'users'
-type ReferralSortKey = 'source' | 'medium' | 'sessions' | 'users'
+// No 'users' on the two AI-referral tables: /ga/traffic stopped emitting a
+// per-row user count in 4.135.0 (GA counts users distinct per grain).
+type ReferralSortKey = 'source' | 'medium' | 'sessions'
 type SocialSortKey = 'source' | 'medium' | 'sessions' | 'users'
-type AiLandingPageSortKey = 'landingPage' | 'source' | 'sessions' | 'users'
+type AiLandingPageSortKey = 'landingPage' | 'source' | 'sessions'
 type SortDir = 'asc' | 'desc'
 
 function formatCompact(n: number): string {
@@ -806,7 +808,6 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
                         <th className="py-1 font-medium text-left">Attribution</th>
                         <SortHeader label="Sessions" sortKey="sessions" current={referralSortKey} dir={referralSortDir} onSort={handleReferralSort} align="right" />
                         <th className="py-1 font-medium text-right">Share</th>
-                        <SortHeader label="Users" sortKey="users" current={referralSortKey} dir={referralSortDir} onSort={handleReferralSort} align="right" />
                       </tr>
                     </thead>
                     <tbody>
@@ -851,7 +852,6 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
                           <SortHeader label="Source" sortKey="source" current={aiLandingSortKey} dir={aiLandingSortDir} onSort={handleAiLandingSort} align="left" />
                           <th className="py-1 font-medium text-left">Attribution</th>
                           <SortHeader label="Sessions" sortKey="sessions" current={aiLandingSortKey} dir={aiLandingSortDir} onSort={handleAiLandingSort} align="right" />
-                          <SortHeader label="Users" sortKey="users" current={aiLandingSortKey} dir={aiLandingSortDir} onSort={handleAiLandingSort} align="right" />
                         </tr>
                       </thead>
                       <tbody>
@@ -1488,9 +1488,6 @@ function AiReferralRow({
       <td className="py-1.5 text-right text-secondary tabular-nums">
         {share}%
       </td>
-      <td className="py-1.5 text-right text-strong tabular-nums">
-        {referral.users.toLocaleString()}
-      </td>
     </tr>
   )
 }
@@ -1517,9 +1514,6 @@ function AiReferralLandingPageRow({ row }: { row: ApiGaTrafficAiLandingPage }) {
       </td>
       <td className="py-1.5 text-right text-positive-400 tabular-nums">
         {row.sessions.toLocaleString()}
-      </td>
-      <td className="py-1.5 text-right text-strong tabular-nums">
-        {row.users.toLocaleString()}
       </td>
     </tr>
   )

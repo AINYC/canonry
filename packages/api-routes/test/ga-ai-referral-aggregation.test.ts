@@ -33,7 +33,6 @@ function landingPageRows(input: {
         sourceDimension,
         channelGroup: input.channelGroup ?? 'Referral',
         sessions: 1,
-        users: 1,
       })
     }
   }
@@ -255,8 +254,7 @@ describe('users are never published', () => {
 
   it('carries no user figure on the shared winner set at all', () => {
     // The primitive both the chart and the summary fold is sessions-only, so
-    // no surface built on it can publish a user count by accident. The legacy
-    // /ga/traffic user math lives in a private function, not here.
+    // no surface built on it can publish a user count by accident.
     for (const winner of resolveWinningDimensions(rows)) {
       for (const key of USER_KEYS) {
         expect(winner).not.toHaveProperty(key)
@@ -267,11 +265,30 @@ describe('users are never published', () => {
     }
   })
 
-  it('preserves the legacy /ga/traffic user totals unchanged', () => {
-    // Not an endorsement of the number: a regression guard that this refactor
-    // did not silently alter what /ga/traffic has always returned. 35 rows of
-    // one user each on the winning lens still sums to 35, as it did before.
+  it('exposes no user count on any window-total bucket', () => {
+    // Every bucket used to carry a `.users` landing-page sum feeding the six
+    // /ga/traffic user fields. 4.135.0 withdrew those fields and deleted the
+    // math; the buckets are sessions-only now, and the sessions are unchanged.
     const summary = summarizeAiReferralCounts(rows)
-    expect(summary.deduped.users).toBe(53)
+
+    const buckets = [
+      summary.deduped,
+      summary.bySession,
+      summary.paidDeduped,
+      summary.organicDeduped,
+      summary.paidBySession,
+      summary.organicBySession,
+    ]
+    for (const bucket of buckets) {
+      expect(Object.keys(bucket)).toEqual(['sessions'])
+      for (const key of USER_KEYS) {
+        expect(bucket).not.toHaveProperty(key)
+      }
+    }
+
+    // The winning lens still sums 35 + 18 landing-page rows, as before.
+    expect(summary.deduped.sessions).toBe(53)
+    expect(summary.organicDeduped.sessions).toBe(53)
+    expect(summary.paidDeduped.sessions).toBe(0)
   })
 })
