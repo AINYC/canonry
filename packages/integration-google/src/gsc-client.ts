@@ -138,7 +138,13 @@ async function gscFetch<T>(accessToken: string, url: string, opts?: { method?: s
     throw new GoogleApiError(`GSC API error (${res.status}): ${detail}`, res.status)
   }
 
-  return (await res.json()) as T
+  // Sitemap submission returns 204 No Content. Keep JSON handling for every
+  // existing read/write endpoint while allowing successful empty responses.
+  if (res.status === 204 || res.headers.get('content-length') === '0') {
+    return undefined as T
+  }
+  const text = await res.text()
+  return (text ? JSON.parse(text) : undefined) as T
 }
 
 export async function listSites(accessToken: string): Promise<GscSite[]> {
@@ -150,15 +156,30 @@ export async function listSites(accessToken: string): Promise<GscSite[]> {
   return data.siteEntry ?? []
 }
 
-export async function listSitemaps(accessToken: string, siteUrl: string): Promise<GscSitemap[]> {
+export async function listSitemaps(accessToken: string, siteUrl: string, sitemapIndex?: string): Promise<GscSitemap[]> {
   validateAccessToken(accessToken)
   validateSiteUrl(siteUrl)
+  if (sitemapIndex != null) validateUrl(sitemapIndex)
   const encodedSiteUrl = encodeURIComponent(siteUrl)
+  const sitemapIndexQuery = sitemapIndex == null ? '' : `?sitemapIndex=${encodeURIComponent(sitemapIndex)}`
   const data = await gscFetch<{ sitemap?: GscSitemap[] }>(
     accessToken,
-    `${GSC_API_BASE}/sites/${encodedSiteUrl}/sitemaps`,
+    `${GSC_API_BASE}/sites/${encodedSiteUrl}/sitemaps${sitemapIndexQuery}`,
   )
   return data.sitemap ?? []
+}
+
+/** Submit (or ask Google to refetch) a sitemap. A successful response only
+ * confirms Google accepted the request; it does not imply indexing. */
+export async function submitSitemap(accessToken: string, siteUrl: string, sitemapUrl: string): Promise<void> {
+  validateAccessToken(accessToken)
+  validateSiteUrl(siteUrl)
+  validateUrl(sitemapUrl)
+  await gscFetch<void>(
+    accessToken,
+    `${GSC_API_BASE}/sites/${encodeURIComponent(siteUrl)}/sitemaps/${encodeURIComponent(sitemapUrl)}`,
+    { method: 'PUT' },
+  )
 }
 
 export interface FetchSearchAnalyticsOptions {

@@ -63,6 +63,7 @@ const expectedToolNames = [
   'canonry_gsc_coverage',
   'canonry_gsc_coverage_history',
   'canonry_gsc_sitemaps',
+  'canonry_gsc_sitemaps_submit',
   'canonry_ga_status',
   'canonry_ga_measurement_analysis',
   'canonry_ga_traffic',
@@ -163,7 +164,7 @@ const expectedToolNames = [
 
 describe('MCP tool registry', () => {
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(143)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(144)
     expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(92)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
@@ -202,7 +203,7 @@ describe('MCP tool registry', () => {
     }
     expect(counts.get('monitoring')).toBe(28)
     expect(counts.get('setup')).toBe(24)
-    expect(counts.get('gsc')).toBe(8)
+    expect(counts.get('gsc')).toBe(9)
     expect(counts.get('ga')).toBe(10)
     expect(counts.get('gbp')).toBe(13)
     expect(counts.get('ads')).toBe(26)
@@ -214,10 +215,9 @@ describe('MCP tool registry', () => {
   it('generates JSON schema from every Zod input schema', () => {
     for (const tool of canonryMcpTools) {
       expect(tool.inputSchema).toBeTruthy()
-      expect(tool.inputJsonSchema).toMatchObject({
-        type: 'object',
-        title: tool.name,
-      })
+      expect(tool.inputJsonSchema).toMatchObject({ title: tool.name })
+      const schema = tool.inputJsonSchema as { type?: string; anyOf?: unknown[] }
+      expect(schema.type === 'object' || Array.isArray(schema.anyOf)).toBe(true)
       expect(tool.inputJsonSchema).not.toHaveProperty('$ref')
     }
 
@@ -433,6 +433,14 @@ describe('MCP tool registry', () => {
       destructiveHint: true,
       openWorldHint: true,
     })
+    expect(annotations.canonry_gsc_sitemaps_submit).toMatchObject({ idempotentHint: false, destructiveHint: false, openWorldHint: true })
+  })
+
+  it('accepts exactly one sitemap submission branch', () => {
+    const tool = canonryMcpTools.find((candidate) => candidate.name === 'canonry_gsc_sitemaps_submit')!
+    expect(tool.inputSchema.safeParse({ project: 'acme', sitemapUrls: ['https://example.com/sitemap.xml'] }).success).toBe(true)
+    expect(tool.inputSchema.safeParse({ project: 'acme', mode: 'indexes' }).success).toBe(true)
+    expect(tool.inputSchema.safeParse({ project: 'acme', sitemapUrls: ['https://example.com/sitemap.xml'], mode: 'indexes' }).success).toBe(false)
   })
 
   it('classifies every OpenAPI operation for MCP coverage drift', () => {
@@ -692,7 +700,29 @@ const handlerCases: HandlerCase[] = [
   { tool: 'canonry_gsc_deindexed', input: projectInput, methods: ['gscDeindexed'] },
   { tool: 'canonry_gsc_coverage', input: projectInput, methods: ['gscCoverage'] },
   { tool: 'canonry_gsc_coverage_history', input: { project: 'acme', limit: 5 }, methods: ['gscCoverageHistory'] },
-  { tool: 'canonry_gsc_sitemaps', input: projectInput, methods: ['gscSitemaps'] },
+  { tool: 'canonry_gsc_sitemaps', input: projectInput, methods: ['gscSitemaps'], expectedArgs: [['acme', { sitemapIndex: undefined }]] },
+  {
+    tool: 'canonry_gsc_sitemaps_submit',
+    input: { project: 'acme', sitemapUrls: ['https://example.com/sitemap.xml'] },
+    methods: ['gscSubmitSitemaps'],
+    expectedArgs: [['acme', { sitemapUrls: ['https://example.com/sitemap.xml'] }]],
+  },
+  {
+    tool: 'canonry_gsc_sitemaps_submit',
+    input: { project: 'acme', mode: 'indexes' },
+    methods: ['gscSitemaps', 'gscSubmitSitemaps'],
+    expectedArgs: [['acme'], ['acme', { sitemapUrls: ['https://example.com/index.xml'] }]],
+  },
+  {
+    tool: 'canonry_gsc_sitemaps_submit',
+    input: { project: 'acme', mode: 'all-files' },
+    methods: ['gscSitemaps', 'gscSitemaps', 'gscSubmitSitemaps'],
+    expectedArgs: [
+      ['acme'],
+      ['acme', { sitemapIndex: 'https://example.com/index.xml' }],
+      ['acme', { sitemapUrls: ['https://example.com/index.xml', 'https://example.com/child.xml'] }],
+    ],
+  },
   { tool: 'canonry_ga_status', input: projectInput, methods: ['gaStatus'] },
   {
     tool: 'canonry_ga_measurement_analysis',
@@ -884,6 +914,16 @@ function makeClient(calls: Array<{ method: string; args: unknown[] }>, fixture?:
         if (method === 'listCompetitors') return [{ id: 'c1', domain: 'rival.example.com', createdAt: '2026-04-27T00:00:00Z' }]
         if (method === 'listNotifications') return notifications
         if (method === 'createNotification') return { id: 'notif-new', source: 'agent' }
+        if (method === 'gscSitemaps') {
+          const params = args[1] as { sitemapIndex?: string } | undefined
+          return params?.sitemapIndex
+            ? { sitemaps: [{ path: 'https://example.com/child.xml' }], summary: { total: 1, indexes: 0, files: 1 }, preferredSubmissionUrls: ['https://example.com/child.xml'] }
+            : { sitemaps: [{ path: 'https://example.com/index.xml', isSitemapsIndex: true }], summary: { total: 1, indexes: 1, files: 0 }, preferredSubmissionUrls: ['https://example.com/index.xml'] }
+        }
+        if (method === 'gscSubmitSitemaps') {
+          const urls = (args[1] as { sitemapUrls: string[] }).sitemapUrls
+          return { summary: { total: urls.length, accepted: urls.length, failed: 0 }, results: [] }
+        }
         return { ok: true, method }
       }
     },

@@ -16,6 +16,7 @@ import {
   googleRequestIndexing,
   googleSetProperty,
   googleSetSitemap,
+  googleSubmitSitemaps,
   googleStatus,
   googleSync,
 } from '../commands/google.js'
@@ -110,6 +111,38 @@ export const GOOGLE_CLI_COMMANDS: readonly CliCommandSpec[] = [
     run: async (input) => {
       const project = requireProject(input, 'google.list-sitemaps', 'canonry google list-sitemaps <project> [--format json]')
       await googleListSitemaps(project, { format: input.format })
+    },
+  },
+  {
+    path: ['google', 'submit-sitemap'],
+    usage: 'canonry google submit-sitemap <project> [url...] [--configured|--all|--all-files] [--format json|jsonl]',
+    options: {
+      configured: { type: 'boolean', default: false },
+      all: { type: 'boolean', default: false },
+      'all-files': { type: 'boolean', default: false },
+    },
+    run: async (input) => {
+      const project = requireProject(input, 'google.submit-sitemap', 'canonry google submit-sitemap <project> [url...] [--configured|--all|--all-files] [--format json|jsonl]')
+      const sitemapUrls = input.positionals.slice(1)
+      const configured = getBoolean(input.values, 'configured')
+      const all = getBoolean(input.values, 'all')
+      const allFiles = getBoolean(input.values, 'all-files')
+      if (Number(sitemapUrls.length > 0) + Number(configured) + Number(all) + Number(allFiles) !== 1) {
+        throw usageError('Error: provide sitemap URL(s), --configured, --all, or --all-files (exactly one)', {
+          message: 'provide sitemap URL(s), --configured, --all, or --all-files (exactly one)',
+          details: {
+            command: 'google.submit-sitemap',
+            usage: 'canonry google submit-sitemap <project> [url...] [--configured|--all|--all-files] [--format json|jsonl]',
+          },
+        })
+      }
+      await googleSubmitSitemaps(project, {
+        sitemapUrls,
+        configured,
+        all,
+        allFiles,
+        format: input.format,
+      })
     },
   },
   {
@@ -305,12 +338,12 @@ export const GOOGLE_CLI_COMMANDS: readonly CliCommandSpec[] = [
   },
   {
     path: ['google'],
-    usage: 'canonry google <connect|disconnect|status|properties|set-property|set-sitemap|list-sitemaps|discover-sitemaps|sync|performance|performance-daily|inspect|inspect-sitemap|coverage|coverage-history|inspections|deindexed|request-indexing|refresh> <project> [args]',
+    usage: 'canonry google <connect|disconnect|status|properties|set-property|set-sitemap|list-sitemaps|submit-sitemap|discover-sitemaps|sync|performance|performance-daily|inspect|inspect-sitemap|coverage|coverage-history|inspections|deindexed|request-indexing|refresh> <project> [args]',
     run: async (input) => {
       unknownSubcommand(input.positionals[0], {
         command: 'google',
-        usage: 'canonry google <connect|disconnect|status|properties|set-property|set-sitemap|list-sitemaps|discover-sitemaps|sync|performance|performance-daily|inspect|inspect-sitemap|coverage|coverage-history|inspections|deindexed|request-indexing|refresh> <project> [args]',
-        available: ['connect', 'disconnect', 'status', 'properties', 'set-property', 'set-sitemap', 'list-sitemaps', 'discover-sitemaps', 'sync', 'performance', 'performance-daily', 'inspect', 'inspect-sitemap', 'coverage', 'coverage-history', 'inspections', 'deindexed', 'request-indexing', 'refresh'],
+        usage: 'canonry google <connect|disconnect|status|properties|set-property|set-sitemap|list-sitemaps|submit-sitemap|discover-sitemaps|sync|performance|performance-daily|inspect|inspect-sitemap|coverage|coverage-history|inspections|deindexed|request-indexing|refresh> <project> [args]',
+        available: ['connect', 'disconnect', 'status', 'properties', 'set-property', 'set-sitemap', 'list-sitemaps', 'submit-sitemap', 'discover-sitemaps', 'sync', 'performance', 'performance-daily', 'inspect', 'inspect-sitemap', 'coverage', 'coverage-history', 'inspections', 'deindexed', 'request-indexing', 'refresh'],
       })
     },
   },

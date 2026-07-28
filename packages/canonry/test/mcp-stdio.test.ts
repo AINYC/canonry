@@ -171,8 +171,8 @@ describe('canonry-mcp stdio', () => {
     await client.connect(transport)
 
     const list = await client.listTools()
-    // 143 API tools + 2 meta-tools (canonry_help, canonry_load_toolkit).
-    expect(list.tools).toHaveLength(145)
+    // 144 API tools + 2 meta-tools (canonry_help, canonry_load_toolkit).
+    expect(list.tools).toHaveLength(146)
     const names = list.tools.map(tool => tool.name)
     expect(names).toContain('canonry_insights_list')
     expect(names).toContain('canonry_project_overview')
@@ -182,6 +182,7 @@ describe('canonry-mcp stdio', () => {
     expect(names).toContain('canonry_backlinks_latest_release')
     expect(names).toContain('canonry_traffic_connect_vercel')
     expect(names).toContain('canonry_ads_operation_resume_activation')
+    expect(names).toContain('canonry_gsc_sitemaps_submit')
     expect(names).toContain('canonry_help')
   })
 })

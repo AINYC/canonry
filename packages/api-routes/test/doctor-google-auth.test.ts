@@ -33,7 +33,7 @@ function buildStore(connection?: Partial<GoogleConnectionRecord>): GoogleConnect
         refreshToken: 'refresh-token',
         tokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
         scopes: [
-          'https://www.googleapis.com/auth/webmasters.readonly',
+          'https://www.googleapis.com/auth/webmasters',
           'https://www.googleapis.com/auth/indexing',
         ],
         createdAt: '2026-04-01T00:00:00.000Z',
@@ -204,7 +204,7 @@ describe('google.auth.scopes', () => {
     const result = await check.run(
       ctx({
         googleConnectionStore: buildStore({
-          scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
+          scopes: ['https://www.googleapis.com/auth/webmasters'],
         }),
       }),
     )
@@ -212,13 +212,14 @@ describe('google.auth.scopes', () => {
     expect(result.code).toBe('google.auth.indexing-scope-missing')
   })
 
-  it('fails when the GSC scope itself is missing', async () => {
+  it('reports a specific remediation when the full sitemap-write scope is missing', async () => {
     const result = await check.run(
       ctx({
         googleConnectionStore: buildStore({ scopes: [] }),
       }),
     )
     expect(result.status).toBe('fail')
-    expect(result.code).toBe('google.auth.required-scope-missing')
+    expect(result.code).toBe('google.auth.sitemap-write-scope-missing')
+    expect(result.remediation).toMatch(/full Search Console webmasters scope/)
   })
 })

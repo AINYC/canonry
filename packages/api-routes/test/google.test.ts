@@ -1,10 +1,11 @@
 import crypto from 'node:crypto'
-import { describe, it, beforeAll, afterAll, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, beforeAll, afterAll, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import Fastify from 'fastify'
-import { createClient, migrate, projects, runs, gscCoverageSnapshots, gscUrlInspections, gscSearchData, gscDailyTotals } from '@ainyc/canonry-db'
+import { eq } from 'drizzle-orm'
+import { createClient, migrate, projects, runs, auditLog, gscCoverageSnapshots, gscUrlInspections, gscSearchData, gscDailyTotals } from '@ainyc/canonry-db'
 import { AppError } from '@ainyc/canonry-contracts'
 import { googleRoutes } from '../src/google.js'
 
@@ -950,6 +951,7 @@ describe('googleRoutes: POST /projects/:name/google/indexing/request', () => {
   let tmpDir: string
   let db: ReturnType<typeof createClient>
   let originalFetch: typeof globalThis.fetch
+  let gscScopes: string[]
 
   beforeEach(() => {
     originalFetch = globalThis.fetch
@@ -960,6 +962,7 @@ describe('googleRoutes: POST /projects/:name/google/indexing/request', () => {
   })
 
   beforeAll(async () => {
+    gscScopes = ['https://www.googleapis.com/auth/webmasters.readonly']
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'google-indexing-request-'))
     const dbPath = path.join(tmpDir, 'test.db')
     db = createClient(dbPath)
@@ -1058,7 +1061,7 @@ describe('googleRoutes: POST /projects/:name/google/indexing/request', () => {
           accessToken: 'test-access-token',
           refreshToken: 'test-refresh-token',
           tokenExpiresAt: tokenExpires,
-          scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
+          scopes: gscScopes,
           createdAt: now,
           updatedAt: now,
         }],
@@ -1071,7 +1074,7 @@ describe('googleRoutes: POST /projects/:name/google/indexing/request', () => {
               accessToken: 'test-access-token',
               refreshToken: 'test-refresh-token',
               tokenExpiresAt: tokenExpires,
-              scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
+              scopes: gscScopes,
               createdAt: now,
               updatedAt: now,
             }
@@ -1119,6 +1122,119 @@ describe('googleRoutes: POST /projects/:name/google/indexing/request', () => {
     expect(body.summary.total).toBe(1)
     expect(body.summary.succeeded).toBe(1)
     expect(body.results[0]!.status).toBe('success')
+  })
+
+  it('returns top-level sitemap summary and prefers sitemap indexes for submission', async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      sitemap: [
+        { path: 'https://example.com/sitemap.xml', isSitemapsIndex: false },
+        { path: 'https://example.com/sitemap-index.xml', isSitemapsIndex: true },
+      ],
+    }), { status: 200 })
+    const res = await app.inject({ method: 'GET', url: '/projects/testproj/google/gsc/sitemaps' })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { summary: { total: number; indexes: number; files: number }; preferredSubmissionUrls: string[] }
+    expect(body.summary).toEqual({ total: 2, indexes: 1, files: 1 })
+    expect(body.preferredSubmissionUrls).toEqual(['https://example.com/sitemap-index.xml'])
+  })
+
+  it('lists an owned sitemap index\'s children with their parent URL', async () => {
+    const sitemapIndex = 'https://example.com/sitemap-index.xml'
+    let requestUrl = ''
+    globalThis.fetch = async (url: string | URL | Request) => {
+      requestUrl = String(url)
+      return new Response(JSON.stringify({ sitemap: [{ path: 'https://example.com/child.xml' }] }), { status: 200 })
+    }
+    const res = await app.inject({ method: 'GET', url: `/projects/testproj/google/gsc/sitemaps?sitemapIndex=${encodeURIComponent(sitemapIndex)}` })
+    expect(res.statusCode).toBe(200)
+    expect(requestUrl).toContain(`sitemapIndex=${encodeURIComponent(sitemapIndex)}`)
+    expect(res.json().sitemaps[0]).toMatchObject({ path: 'https://example.com/child.xml', parentSitemapUrl: sitemapIndex })
+  })
+
+  it('rejects an unowned sitemapIndex before the Google request', async () => {
+    const fetchMock = vi.fn()
+    globalThis.fetch = fetchMock
+    const res = await app.inject({
+      method: 'GET',
+      url: `/projects/testproj/google/gsc/sitemaps?sitemapIndex=${encodeURIComponent('https://attacker.example/sitemap.xml')}`,
+    })
+    expect(res.statusCode).toBe(400)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('submits deduplicated owned sitemap URLs sequentially and audits accepted requests', async () => {
+    gscScopes = ['https://www.googleapis.com/auth/webmasters']
+    const requested: string[] = []
+    globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
+      requested.push(String(url))
+      expect(init?.method).toBe('PUT')
+      return new Response(null, { status: 204 })
+    }
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/projects/testproj/google/gsc/sitemaps/submit',
+      payload: { sitemapUrls: ['https://example.com/sitemap.xml', 'https://example.com/sitemap.xml', 'https://blog.example.com/sitemap.xml'] },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(requested).toHaveLength(2)
+    const body = res.json() as { summary: { total: number; accepted: number; failed: number }; results: Array<{ sitemapUrl: string; status: string }> }
+    expect(body.summary).toEqual({ total: 2, accepted: 2, failed: 0 })
+    expect(body.results.map((result) => result.sitemapUrl)).toEqual(['https://example.com/sitemap.xml', 'https://blog.example.com/sitemap.xml'])
+    expect(body.results.every((result) => result.status === 'accepted')).toBe(true)
+    const audits = db.select().from(auditLog).where(eq(auditLog.action, 'google.sitemap.submitted')).all()
+    expect(audits).toHaveLength(2)
+    expect(audits[0]).toMatchObject({ action: 'google.sitemap.submitted', entityType: 'sitemap', projectId: 'p1' })
+  })
+
+  it('collects per-sitemap failures without stopping later submissions', async () => {
+    gscScopes = ['https://www.googleapis.com/auth/webmasters']
+    const requested: string[] = []
+    globalThis.fetch = async (url: string | URL | Request) => {
+      requested.push(String(url))
+      return requested.length === 2
+        ? new Response('Google rejected sitemap', { status: 400 })
+        : new Response(null, { status: 204 })
+    }
+    const res = await app.inject({
+      method: 'POST',
+      url: '/projects/testproj/google/gsc/sitemaps/submit',
+      payload: { sitemapUrls: ['https://example.com/one.xml', 'https://example.com/two.xml', 'https://example.com/three.xml'] },
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { summary: { total: number; accepted: number; failed: number }; results: Array<{ status: string; error?: string }> }
+    expect(requested).toHaveLength(3)
+    expect(body.summary).toEqual({ total: 3, accepted: 2, failed: 1 })
+    expect(body.results.map((result) => result.status)).toEqual(['accepted', 'error', 'accepted'])
+    expect(body.results[1]!.error).toMatch(/Google rejected sitemap/)
+  })
+
+  it('rejects sitemap URLs outside the configured property before making a network request', async () => {
+    gscScopes = ['https://www.googleapis.com/auth/webmasters']
+    const fetchMock = vi.fn()
+    globalThis.fetch = fetchMock
+    const res = await app.inject({
+      method: 'POST',
+      url: '/projects/testproj/google/gsc/sitemaps/submit',
+      payload: { sitemapUrls: ['https://attacker.example/sitemap.xml'] },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('blocks legacy read-only connections before making a network request', async () => {
+    gscScopes = ['https://www.googleapis.com/auth/webmasters.readonly']
+    const fetchMock = vi.fn()
+    globalThis.fetch = fetchMock
+    const res = await app.inject({
+      method: 'POST',
+      url: '/projects/testproj/google/gsc/sitemaps/submit',
+      payload: { sitemapUrls: ['https://example.com/sitemap.xml'] },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error.message).toMatch(/read-only webmasters scope/)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('requests indexing for all unindexed URLs', async () => {

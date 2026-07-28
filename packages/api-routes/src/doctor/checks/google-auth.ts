@@ -315,17 +315,23 @@ const scopesCheck: CheckDefinition = {
         details: { granted: [...granted] },
       }
     }
-    const gscMissing = missing.includes(GSC_SCOPE)
-    const indexingOnlyMissing = !gscMissing && missing.includes(INDEXING_SCOPE) && missing.length === 1
+    const sitemapWriteScopeMissing = missing.includes(GSC_SCOPE)
+    const indexingOnlyMissing = !sitemapWriteScopeMissing && missing.includes(INDEXING_SCOPE) && missing.length === 1
     return {
       status: indexingOnlyMissing ? CheckStatuses.warn : CheckStatuses.fail,
       code: indexingOnlyMissing
         ? 'google.auth.indexing-scope-missing'
-        : 'google.auth.required-scope-missing',
+        : sitemapWriteScopeMissing
+          ? 'google.auth.sitemap-write-scope-missing'
+          : 'google.auth.required-scope-missing',
       summary: indexingOnlyMissing
         ? 'Indexing API scope is not granted — `canonry google request-indexing` will fail.'
-        : `Missing required scopes: ${missing.join(', ')}.`,
-      remediation: `Reconnect to grant missing scopes: \`canonry google connect ${ctx.project.name} --type gsc\`.`,
+        : sitemapWriteScopeMissing
+          ? 'Full Search Console webmasters scope is not granted — sitemap submission will fail; existing reads continue to work.'
+          : `Missing required scopes: ${missing.join(', ')}.`,
+      remediation: sitemapWriteScopeMissing
+        ? `Reconnect to grant the full Search Console webmasters scope: \`canonry google connect ${ctx.project.name} --type gsc\`.`
+        : `Reconnect to grant missing scopes: \`canonry google connect ${ctx.project.name} --type gsc\`.`,
       details: { granted: [...granted], missing },
     }
   },

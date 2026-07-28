@@ -47,6 +47,7 @@ import {
 } from '@ainyc/canonry-contracts'
 import { z } from 'zod'
 import type { ApiClient } from '../client.js'
+import { submitGscSitemaps } from '../commands/google.js'
 import {
   analyticsWindowSchema,
   compactStringParams,
@@ -187,6 +188,22 @@ const gscCoverageHistoryInputSchema = z.object({
   project: projectNameSchema,
   limit: z.number().int().positive().max(500).optional(),
 })
+
+const gscSitemapsInputSchema = z.object({
+  project: projectNameSchema,
+  sitemapIndex: z.string().url().optional(),
+})
+
+const gscSitemapsSubmitInputSchema = z.union([
+  z.object({
+    project: projectNameSchema,
+    sitemapUrls: z.array(z.string().url()).min(1).max(50),
+  }).strict(),
+  z.object({
+    project: projectNameSchema,
+    mode: z.enum(['indexes', 'all-files']),
+  }).strict(),
+])
 
 const gaWindowInputSchema = z.object({
   project: projectNameSchema,
@@ -634,7 +651,7 @@ export const canonryMcpTools = [
     description: 'Get a Canonry project by name.',
     access: 'read',
     tier: 'core',
-    inputSchema: projectInputSchema,
+    inputSchema: gscSitemapsInputSchema,
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}'],
     handler: (client, input) => client.getProject(input.project),
@@ -1205,10 +1222,29 @@ export const canonryMcpTools = [
     description: 'Get sitemap data from Google Search Console for a Canonry project.',
     access: 'read',
     tier: 'gsc',
-    inputSchema: projectInputSchema,
+    inputSchema: gscSitemapsInputSchema,
     annotations: readAnnotations(true),
     openApiOperations: ['GET /api/v1/projects/{name}/google/gsc/sitemaps'],
-    handler: (client, input) => client.gscSitemaps(input.project),
+    handler: (client, input) => client.gscSitemaps(input.project, { sitemapIndex: input.sitemapIndex }),
+  }),
+  defineTool({
+    name: 'canonry_gsc_sitemaps_submit',
+    title: 'Submit GSC sitemaps',
+    description: 'Submit up to 50 explicit sitemap URLs, preferred sitemap indexes, or all top-level sitemap files plus every index child to Google Search Console for refetching. Google acceptance does not guarantee indexing.',
+    access: 'write',
+    tier: 'gsc',
+    inputSchema: gscSitemapsSubmitInputSchema,
+    annotations: writeAnnotations({ idempotentHint: false, openWorldHint: true }),
+    openApiOperations: ['POST /api/v1/projects/{name}/google/gsc/sitemaps/submit'],
+    handler: (client, input) => submitGscSitemaps(
+      client,
+      input.project,
+      'sitemapUrls' in input
+        ? { sitemapUrls: input.sitemapUrls }
+        : input.mode === 'indexes'
+          ? { all: true }
+          : { allFiles: true },
+    ),
   }),
   defineTool({
     name: 'canonry_ga_status',

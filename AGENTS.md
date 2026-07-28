@@ -166,6 +166,9 @@ canonry technical-aeo pages <project> [--status success|error] [--sort score-asc
 canonry technical-aeo trend <project> [--limit <n>] [--format json|jsonl]            # aggregate-score history across past audits
 # Schedule it: canonry schedule set <project> --kind site-audit --preset weekly
 
+# Google Search Console sitemaps — list, store a local default, or submit/resubmit to Google
+canonry google submit-sitemap <project> (<url...>|--configured|--all|--all-files) [--format json|jsonl]
+
 # MCP adapter (separate bin, stdio only)
 canonry-mcp                                          # core tier (~12 tools); load toolkits on demand
 canonry-mcp --read-only                              # core read tier; toolkits load read-only tools only
@@ -306,7 +309,7 @@ Each check returns `status: ok | warn | fail | skipped`, a stable machine-readab
 For MCP clients such as Claude Desktop, Codex, or custom agent shells that
 prefer a typed tool catalog over shell or HTTP, the package ships a separate
 `canonry-mcp` bin. It is a thin stdio adapter over `createApiClient()` — not
-a parallel surface. v1 exposes 139 curated API tools (88 read, 51 write) — including
+a parallel surface. v1 exposes 140 curated API tools (88 read, 52 write) — including
 the `canonry_project_overview` and `canonry_search` core composites; the
 catalog is split across a small **core tier** (always loaded) and nine
 **toolkits** (`monitoring`, `setup`, `gsc`, `ga`, `gbp`, `ads`, `traffic`, `agent`, `discovery`) that the client
@@ -320,7 +323,7 @@ from `~/.canonry/config.yaml`.
 Key files:
 - `packages/canonry/src/mcp/server.ts` — `createCanonryMcpServer` (one client per server instance, registers core tier + meta tools)
 - `packages/canonry/src/mcp/cli.ts` — stdio entrypoint + scope/eager flag parsing
-- `packages/canonry/src/mcp/tool-registry.ts` — single source of truth for all 139 API tools, each tagged with a `tier`
+- `packages/canonry/src/mcp/tool-registry.ts` — single source of truth for all 140 API tools, each tagged with a `tier`
 - `packages/canonry/src/mcp/toolkits.ts` — toolkit catalog (`monitoring`, `setup`, `gsc`, `ga`, `gbp`, `ads`, `traffic`, `agent`, `discovery`) consumed by `canonry_help`
 - `packages/canonry/src/mcp/dynamic-catalog.ts` — `DynamicToolCatalog`: enables tools on `canonry_load_toolkit`, drives `canonry_help`
 - `packages/canonry/src/mcp/openapi-classification.ts` — drift table; every published OpenAPI op is `included`, `deferred`, or `excluded-protocol`

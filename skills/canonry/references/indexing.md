@@ -4,9 +4,9 @@ Getting pages indexed fast is high-leverage AEO work. Unindexed pages are invisi
 
 ## Priority Order
 
-1. **Google Indexing API** — fastest path to ChatGPT/Perplexity visibility (they lean on Google)
-2. **Bing WMT + IndexNow** — fastest path to Copilot/Bing AI visibility
-3. **Sitemap submission** — baseline for both; do once on setup
+1. **Sitemap submission** — general-site discovery signal; submit on setup and resubmit after material sitemap changes
+2. **Bing WMT + IndexNow** — crawl notification path for Bing-backed surfaces
+3. **Google Indexing API** — only for eligible JobPosting and livestream BroadcastEvent pages
 
 ---
 
@@ -41,6 +41,18 @@ cnry google list-sitemaps <project>               # list submitted sitemaps
 cnry google inspect-sitemap <project> --wait      # bulk inspect all sitemap URLs
 ```
 
+### Submit or resubmit sitemaps
+```bash
+cnry google submit-sitemap <project> https://example.com/sitemap.xml
+cnry google submit-sitemap <project> --configured  # Canonry's saved default
+cnry google submit-sitemap <project> --all         # prefer sitemap indexes (fallback: top-level files)
+cnry google submit-sitemap <project> --all-files   # include top-level files and index children (batched by 50)
+```
+
+An accepted submission asks Google to refetch the sitemap; it does not guarantee
+that any URL will be indexed. Existing read-only GSC connections must reconnect
+once to grant the full `webmasters` scope required for sitemap submission.
+
 ### Inspect individual URLs
 ```bash
 cnry google inspect <project> <url>              # inspect specific URL
@@ -61,7 +73,7 @@ cnry google request-indexing <project> --all-unindexed
 **Requirements:**
 - "Web Search Indexing API" enabled in the GCP project
 - OAuth connection set up in canonry (`cnry settings` shows Google connection)
-- Officially intended for JobPosting/BroadcastEvent schema; in practice Google processes all URLs
+- The URL has eligible `JobPosting` or livestream `BroadcastEvent` structured data
 
 **After submitting:** Check coverage again after 48h. Once indexed, ask for
 explicit approval before running a quota-consuming sweep — pages must be
@@ -143,11 +155,12 @@ Expected response: `202 Accepted`
 
 | Goal | Tool |
 |---|---|
-| Get pages into ChatGPT / Perplexity / Claude | Google Indexing API |
+| Notify Google about an eligible job or livestream page | Google Indexing API |
 | Get pages into Copilot / Bing AI | IndexNow + Bing WMT |
 | Audit what Google currently knows | `cnry google coverage <project>` |
 | Audit what Bing currently knows | `cnry bing coverage <project>` |
 | Fast crawl of new/updated pages on Bing | IndexNow batch submit |
+| Ask Google to refetch changed sitemaps | `cnry google submit-sitemap <project> --all` |
 | Ongoing Google crawl health | `cnry google sync` + `cnry google performance` |
 | Ongoing Bing crawl health | Bing WMT sitemap + `cnry bing performance` |
 | Find deindexed pages | `cnry google deindexed <project>` |
@@ -156,10 +169,11 @@ Expected response: `202 Accepted`
 
 ## General Workflow for New Client Pages
 
-1. `cnry google coverage <project>` — identify unindexed pages
-2. `cnry google request-indexing <project> --all-unindexed` — push to Google
-3. `cnry bing request-indexing <project> --all-unindexed` — push to Bing
-4. Submit sitemap to Bing WMT (manual, one-time per site)
-5. Send IndexNow batch for key URLs
-6. Re-check coverage after 48h
-7. After explicit approval, run a sweep once pages are confirmed indexed
+1. `cnry google submit-sitemap <project> --configured` — submit the saved sitemap
+2. `cnry google coverage <project>` — identify unindexed pages
+3. For eligible job or livestream pages only: `cnry google request-indexing <project> --all-unindexed`
+4. `cnry bing request-indexing <project> --all-unindexed` — push to Bing
+5. Submit sitemap to Bing WMT (manual, one-time per site)
+6. Send IndexNow batch for key URLs
+7. Re-check coverage after 48h
+8. After explicit approval, run a sweep once pages are confirmed indexed

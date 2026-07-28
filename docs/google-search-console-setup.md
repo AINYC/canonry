@@ -159,6 +159,11 @@ canonry google set-property <project> https://example.com/
 
 ## Step 6 — Configure Sitemaps (Optional)
 
+`list-sitemaps` reads the sitemap registrations already in Google Search Console.
+`set-sitemap` only stores Canonry's local default for later inspection or
+`--configured` submission. `submit-sitemap` asks Google to submit or resubmit
+one or more sitemap URLs for refetching.
+
 ### Web UI
 
 On the **Search Console** tab, enter your sitemap URL in the sitemap input field.
@@ -169,12 +174,28 @@ On the **Search Console** tab, enter your sitemap URL in the sitemap input field
 # Auto-discover from GSC + robots.txt
 canonry google discover-sitemaps <project> --wait
 
-# Or set manually
+# Or save Canonry's local default (this does not submit it to Google)
 canonry google set-sitemap <project> https://example.com/sitemap.xml
 
-# List configured sitemaps
+# List sitemap registrations currently in Google Search Console
 canonry google list-sitemaps <project>
+
+# Submit one or more sitemap URLs to Google for refetching
+canonry google submit-sitemap <project> https://example.com/sitemap.xml https://example.com/news-sitemap.xml
+
+# Resubmit Canonry's saved default, or prefer sitemap indexes (fallback: top-level files)
+canonry google submit-sitemap <project> --configured
+canonry google submit-sitemap <project> --all
+
+# Submit every top-level sitemap and every child listed by each sitemap index
+canonry google submit-sitemap <project> --all-files
 ```
+
+Google accepting a sitemap requests a refetch; it does not guarantee that its
+URLs will be indexed. Existing read-only OAuth connections must disconnect and
+reconnect to grant the full `webmasters` scope required for sitemap submission.
+Use `--all` for the normal large-property case; `--all-files` can submit many
+more files and Canonry batches them in groups of 50.
 
 ---
 

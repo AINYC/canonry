@@ -79,6 +79,13 @@ function renderSection() {
       const offset = Number(query.get('offset') ?? 0)
       return jsonResponse(pagedRows.slice(offset, offset + 26))
     }
+    if (path.includes('/google/gsc/sitemaps')) {
+      return jsonResponse({
+        sitemaps: [],
+        summary: { total: 0, indexes: 0, files: 0 },
+        preferredSubmissionUrls: [],
+      })
+    }
     if (path.includes('/google/gsc/inspections')) return jsonResponse([])
     if (path.includes('/google/gsc/deindexed')) return jsonResponse([])
     if (path.includes('/google/gsc/coverage/history')) return jsonResponse([])
