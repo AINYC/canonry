@@ -2480,16 +2480,10 @@ export type GscSearchDataDto = {
     position: number;
 };
 
-export type GscSiteListResponseDto = {
-    sites: Array<{
-        siteUrl: string;
-        permissionLevel: string;
-    }>;
-};
-
-export type GscSitemapListResponseDto = {
+export type GscDiscoverSitemapsResponseDto = {
     sitemaps: Array<{
         path: string;
+        parentSitemapUrl?: string;
         lastSubmitted?: string;
         isPending?: boolean;
         isSitemapsIndex?: boolean;
@@ -2500,9 +2494,70 @@ export type GscSitemapListResponseDto = {
         contents?: Array<{
             type: string;
             submitted: string;
-            indexed: string;
+            /**
+             * Deprecated compatibility field.
+             */
+            indexed?: string;
         }>;
     }>;
+    primarySitemapUrl: string;
+    run: {
+        id: string;
+        projectId: string;
+        kind: string;
+        status: string;
+        trigger: string;
+        createdAt: string;
+    } | null;
+};
+
+export type GscSiteListResponseDto = {
+    sites: Array<{
+        siteUrl: string;
+        permissionLevel: string;
+    }>;
+};
+
+export type GscSubmitSitemapsResponseDto = {
+    summary: {
+        total: number;
+        accepted: number;
+        failed: number;
+    };
+    results: Array<{
+        sitemapUrl: string;
+        status: 'accepted' | 'error';
+        submittedAt?: string;
+        error?: string;
+    }>;
+};
+
+export type GscSitemapListResponseDto = {
+    sitemaps: Array<{
+        path: string;
+        parentSitemapUrl?: string;
+        lastSubmitted?: string;
+        isPending?: boolean;
+        isSitemapsIndex?: boolean;
+        type?: string;
+        lastDownloaded?: string;
+        warnings?: string;
+        errors?: string;
+        contents?: Array<{
+            type: string;
+            submitted: string;
+            /**
+             * Deprecated compatibility field.
+             */
+            indexed?: string;
+        }>;
+    }>;
+    summary: {
+        total: number;
+        indexes: number;
+        files: number;
+    };
+    preferredSubmissionUrls: Array<string>;
 };
 
 export type GscUrlInspectionDto = {
@@ -4910,6 +4965,42 @@ export type GetApiV1OpenapiJsonResponses = {
 };
 
 export type GetApiV1OpenapiJsonResponse = GetApiV1OpenapiJsonResponses[keyof GetApiV1OpenapiJsonResponses];
+
+export type PostApiV1ProjectsByNameGoogleGscSitemapsSubmitData = {
+    body: {
+        sitemapUrls: Array<string>;
+    };
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/google/gsc/sitemaps/submit';
+};
+
+export type PostApiV1ProjectsByNameGoogleGscSitemapsSubmitErrors = {
+    /**
+     * Invalid sitemap request, property ownership, or OAuth scope.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project or connection not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameGoogleGscSitemapsSubmitError = PostApiV1ProjectsByNameGoogleGscSitemapsSubmitErrors[keyof PostApiV1ProjectsByNameGoogleGscSitemapsSubmitErrors];
+
+export type PostApiV1ProjectsByNameGoogleGscSitemapsSubmitResponses = {
+    /**
+     * Per-sitemap submission results returned.
+     */
+    200: GscSubmitSitemapsResponseDto;
+};
+
+export type PostApiV1ProjectsByNameGoogleGscSitemapsSubmitResponse = PostApiV1ProjectsByNameGoogleGscSitemapsSubmitResponses[keyof PostApiV1ProjectsByNameGoogleGscSitemapsSubmitResponses];
 
 export type DeleteApiV1ProjectsByNameData = {
     body?: never;
@@ -7872,7 +7963,12 @@ export type GetApiV1ProjectsByNameGoogleGscSitemapsData = {
          */
         name: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Optional owned sitemap-index URL. When present, returns that index's child entries.
+         */
+        sitemapIndex?: string;
+    };
     url: '/api/v1/projects/{name}/google/gsc/sitemaps';
 };
 
@@ -7927,9 +8023,7 @@ export type PostApiV1ProjectsByNameGoogleGscDiscoverSitemapsResponses = {
     /**
      * Discovered sitemaps and queued run returned.
      */
-    200: {
-        [key: string]: unknown;
-    };
+    200: GscDiscoverSitemapsResponseDto;
 };
 
 export type PostApiV1ProjectsByNameGoogleGscDiscoverSitemapsResponse = PostApiV1ProjectsByNameGoogleGscDiscoverSitemapsResponses[keyof PostApiV1ProjectsByNameGoogleGscDiscoverSitemapsResponses];

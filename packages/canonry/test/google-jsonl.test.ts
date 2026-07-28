@@ -8,6 +8,7 @@ const mockGscDeindexed = vi.fn()
 const mockGoogleConnections = vi.fn()
 const mockGoogleProperties = vi.fn()
 const mockGscSitemaps = vi.fn()
+const mockGscSubmitSitemaps = vi.fn()
 
 vi.mock('../src/client.js', () => ({
   createApiClient: () => ({
@@ -19,6 +20,7 @@ vi.mock('../src/client.js', () => ({
     googleConnections: mockGoogleConnections,
     googleProperties: mockGoogleProperties,
     gscSitemaps: mockGscSitemaps,
+    gscSubmitSitemaps: mockGscSubmitSitemaps,
   }),
 }))
 
@@ -51,7 +53,9 @@ const {
   googleStatus,
   googleProperties,
   googleListSitemaps,
+  googleSubmitSitemaps,
 } = await import('../src/commands/google.js')
+const { runCli } = await import('../src/cli.js')
 
 const PROJECT = 'demo'
 
@@ -318,6 +322,177 @@ describe('google jsonl output', () => {
       const cap = captureLog(() => googleListSitemaps(PROJECT, { format: 'json' }))
       await cap.run
       expect(JSON.parse(cap.text())).toEqual(sitemapsEnvelope)
+    })
+
+    it('human output reports submitted URL totals without deprecated indexed counts', async () => {
+      mockGscSitemaps.mockResolvedValue(sitemapsEnvelope)
+      const cap = captureLog(() => googleListSitemaps(PROJECT, {}))
+      await cap.run
+      expect(cap.text()).toContain('Submitted URLs: 10')
+      expect(cap.text()).not.toContain('Indexed:')
+    })
+  })
+
+  describe('googleSubmitSitemaps', () => {
+    const submission = {
+      summary: { total: 2, accepted: 1, failed: 1 },
+      results: [
+        { sitemapUrl: 'https://x/sitemap.xml', status: 'accepted', submittedAt: '2026-07-27T00:00:00.000Z' },
+        { sitemapUrl: 'https://x/bad.xml', status: 'error', error: 'Google rejected the sitemap' },
+      ],
+    }
+
+    it('deduplicates explicit URLs and preserves the full response as JSON', async () => {
+      mockGscSubmitSitemaps.mockResolvedValue(submission)
+      const cap = captureLog(() => googleSubmitSitemaps(PROJECT, {
+        sitemapUrls: ['https://x/sitemap.xml', 'https://x/sitemap.xml'],
+        format: 'json',
+      }))
+      await cap.run
+      expect(mockGscSubmitSitemaps).toHaveBeenCalledWith(PROJECT, { sitemapUrls: ['https://x/sitemap.xml'] })
+      expect(JSON.parse(cap.text())).toEqual(submission)
+    })
+
+    it('rejects more than 50 explicit sitemap URLs before calling the API', async () => {
+      const sitemapUrls = Array.from({ length: 51 }, (_, index) => `https://x/sitemap-${index}.xml`)
+      await expect(() => googleSubmitSitemaps(PROJECT, { sitemapUrls })).rejects.toMatchObject({
+        code: 'CLI_USAGE_ERROR',
+        details: { sitemapUrls: 51, maxSitemapUrls: 50 },
+      })
+      expect(mockGscSubmitSitemaps).not.toHaveBeenCalled()
+    })
+
+    it('uses the configured GSC sitemap URL', async () => {
+      mockGoogleConnections.mockResolvedValue([{ connectionType: 'gsc', sitemapUrl: 'https://x/configured.xml' }])
+      mockGscSubmitSitemaps.mockResolvedValue({ summary: { total: 1, accepted: 1, failed: 0 }, results: [] })
+      await googleSubmitSitemaps(PROJECT, { configured: true, format: 'json' })
+      expect(mockGscSubmitSitemaps).toHaveBeenCalledWith(PROJECT, { sitemapUrls: ['https://x/configured.xml'] })
+    })
+
+    it('uses preferred sitemap indexes for --all', async () => {
+      mockGscSitemaps.mockResolvedValue({
+        sitemaps: [
+          { path: 'https://x/sitemap.xml' },
+          { path: 'https://x/sitemap-index.xml', isSitemapsIndex: true },
+        ],
+        preferredSubmissionUrls: ['https://x/sitemap-index.xml'],
+      })
+      mockGscSubmitSitemaps.mockResolvedValue({ summary: { total: 1, accepted: 1, failed: 0 }, results: [] })
+      await googleSubmitSitemaps(PROJECT, { all: true, format: 'json' })
+      expect(mockGscSubmitSitemaps).toHaveBeenCalledWith(PROJECT, { sitemapUrls: ['https://x/sitemap-index.xml'] })
+    })
+
+    it('falls back to all top-level sitemaps when --all has no indexes', async () => {
+      mockGscSitemaps.mockResolvedValue({ sitemaps: [
+        { path: 'https://x/sitemap.xml' },
+        { path: 'https://x/sitemap.xml' },
+        { path: 'https://x/other.xml' },
+      ], preferredSubmissionUrls: [] })
+      mockGscSubmitSitemaps.mockResolvedValue({ summary: { total: 2, accepted: 2, failed: 0 }, results: [] })
+      await googleSubmitSitemaps(PROJECT, { all: true, format: 'json' })
+      expect(mockGscSubmitSitemaps).toHaveBeenCalledWith(PROJECT, { sitemapUrls: ['https://x/sitemap.xml', 'https://x/other.xml'] })
+    })
+
+    it('expands index children through the list API, chunks at 50, and aggregates --all-files', async () => {
+      const childUrls = Array.from({ length: 51 }, (_, index) => `https://x/child-${index}.xml`)
+      mockGscSitemaps.mockImplementation((_project: string, params?: { sitemapIndex?: string }) => {
+        if (params?.sitemapIndex) return Promise.resolve({ sitemaps: childUrls.map((path) => ({ path })), preferredSubmissionUrls: [] })
+        return Promise.resolve({
+          sitemaps: [
+            { path: 'https://x/index.xml', isSitemapsIndex: true },
+            { path: 'https://x/standalone.xml' },
+          ],
+          preferredSubmissionUrls: ['https://x/index.xml'],
+        })
+      })
+      mockGscSubmitSitemaps.mockImplementation((_project: string, body: { sitemapUrls: string[] }) => Promise.resolve({
+        summary: { total: body.sitemapUrls.length, accepted: body.sitemapUrls.length, failed: 0 },
+        results: body.sitemapUrls.map((sitemapUrl) => ({ sitemapUrl, status: 'accepted' as const })),
+      }))
+      const cap = captureLog(() => googleSubmitSitemaps(PROJECT, { allFiles: true, format: 'json' }))
+      await cap.run
+      expect(mockGscSitemaps).toHaveBeenNthCalledWith(1, PROJECT)
+      expect(mockGscSitemaps).toHaveBeenNthCalledWith(2, PROJECT, { sitemapIndex: 'https://x/index.xml' })
+      expect(mockGscSubmitSitemaps).toHaveBeenCalledTimes(2)
+      expect(mockGscSubmitSitemaps.mock.calls.flatMap(([, body]) => (body as { sitemapUrls: string[] }).sitemapUrls)).not.toContain('https://x/index.xml')
+      expect(mockGscSubmitSitemaps.mock.calls.flatMap(([, body]) => (body as { sitemapUrls: string[] }).sitemapUrls)).toContain('https://x/standalone.xml')
+      expect(JSON.parse(cap.text())).toMatchObject({ summary: { total: 52, accepted: 52, failed: 0 } })
+    })
+
+    it('reports preserved partial results when a later batch fails', async () => {
+      const childUrls = Array.from({ length: 100 }, (_, index) => `https://x/child-${index}.xml`)
+      mockGscSitemaps.mockImplementation((_project: string, params?: { sitemapIndex?: string }) => {
+        if (params?.sitemapIndex) return Promise.resolve({ sitemaps: childUrls.map((path) => ({ path })), preferredSubmissionUrls: [] })
+        return Promise.resolve({ sitemaps: [{ path: 'https://x/index.xml', isSitemapsIndex: true }], preferredSubmissionUrls: ['https://x/index.xml'] })
+      })
+      mockGscSubmitSitemaps
+        .mockResolvedValueOnce({ summary: { total: 50, accepted: 49, failed: 1 }, results: [] })
+        .mockRejectedValueOnce(new Error('Google unavailable'))
+      await expect(() => googleSubmitSitemaps(PROJECT, { allFiles: true })).rejects.toMatchObject({
+        code: 'GOOGLE_SITEMAP_SUBMISSION_PARTIAL',
+        exitCode: 2,
+        details: {
+          accepted: 49,
+          failed: 1,
+          completed: 50,
+          attempted: 100,
+          unconfirmed: 50,
+          remaining: 0,
+          unconfirmedBatch: { index: 2, total: 2 },
+        },
+      })
+      expect(mockGscSubmitSitemaps).toHaveBeenCalledTimes(2)
+    })
+
+    it('falls back to the parent index when --all-files cannot discover children', async () => {
+      mockGscSitemaps.mockImplementation((_project: string, params?: { sitemapIndex?: string }) => {
+        if (params?.sitemapIndex) return Promise.resolve({ sitemaps: [], preferredSubmissionUrls: [] })
+        return Promise.resolve({
+          sitemaps: [{ path: 'https://x/index.xml', isSitemapsIndex: true }],
+          preferredSubmissionUrls: ['https://x/index.xml'],
+        })
+      })
+      mockGscSubmitSitemaps.mockResolvedValue({
+        summary: { total: 1, accepted: 1, failed: 0 },
+        results: [{ sitemapUrl: 'https://x/index.xml', status: 'accepted' }],
+      })
+
+      await googleSubmitSitemaps(PROJECT, { allFiles: true, format: 'json' })
+
+      expect(mockGscSubmitSitemaps).toHaveBeenCalledWith(PROJECT, {
+        sitemapUrls: ['https://x/index.xml'],
+      })
+    })
+
+    it('emits one project-tagged result per line for jsonl', async () => {
+      mockGscSubmitSitemaps.mockResolvedValue(submission)
+      const cap = captureStdout(() => googleSubmitSitemaps(PROJECT, { sitemapUrls: ['https://x/sitemap.xml'], format: 'jsonl' }))
+      await cap.run
+      expect(cap.lines().map((line) => JSON.parse(line))).toEqual(submission.results.map((result) => ({ project: PROJECT, ...result })))
+    })
+
+    it('makes refetch and indexing expectations explicit in human output', async () => {
+      mockGscSubmitSitemaps.mockResolvedValue({
+        summary: { total: 1, accepted: 1, failed: 0 },
+        results: [{ sitemapUrl: 'https://x/sitemap.xml', status: 'accepted' }],
+      })
+      const cap = captureLog(() => googleSubmitSitemaps(PROJECT, { sitemapUrls: ['https://x/sitemap.xml'] }))
+      await cap.run
+      expect(cap.text()).toContain('Accepted by Google for sitemap refetch')
+      expect(cap.text()).toContain('does not guarantee indexing')
+    })
+
+    it('rejects missing or conflicting source modes with CLI_USAGE_ERROR', async () => {
+      await expect(() => googleSubmitSitemaps(PROJECT, {})).rejects.toMatchObject({ code: 'CLI_USAGE_ERROR' })
+      await expect(() => googleSubmitSitemaps(PROJECT, { sitemapUrls: ['https://x/sitemap.xml'], configured: true })).rejects.toMatchObject({ code: 'CLI_USAGE_ERROR' })
+    })
+
+    it('CLI rejects conflicting source modes before calling the API', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      const exitCode = await runCli(['google', 'submit-sitemap', PROJECT, 'https://x/sitemap.xml', '--configured'])
+      error.mockRestore()
+      expect(exitCode).toBe(1)
+      expect(mockGscSubmitSitemaps).not.toHaveBeenCalled()
     })
   })
 })

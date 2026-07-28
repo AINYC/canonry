@@ -412,6 +412,34 @@ const routeCatalog: OpenApiOperation[] = [
     },
   },
   {
+    method: 'post',
+    path: '/api/v1/projects/{name}/google/gsc/sitemaps/submit',
+    summary: 'Submit GSC sitemaps',
+    description: 'Submits sitemap URLs to Google Search Console sequentially. An accepted result means Google accepted the submit/refetch request; it does not indicate indexing.',
+    tags: ['google'],
+    parameters: [nameParameter],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: {
+            type: 'object',
+            required: ['sitemapUrls'],
+            additionalProperties: false,
+            properties: {
+              sitemapUrls: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', format: 'uri', pattern: '^https?://' } },
+            },
+          },
+        },
+      },
+    },
+    responses: {
+      200: jsonResponse('Per-sitemap submission results returned.', 'GscSubmitSitemapsResponseDto'),
+      400: errorResponse('Invalid sitemap request, property ownership, or OAuth scope.'),
+      404: errorResponse('Project or connection not found.'),
+    },
+  },
+  {
     method: 'put',
     path: '/api/v1/projects/{name}',
     summary: 'Create or update a project',
@@ -1988,7 +2016,15 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/google/gsc/sitemaps',
     summary: 'List GSC sitemaps',
     tags: ['google'],
-    parameters: [nameParameter],
+    parameters: [
+      nameParameter,
+      {
+        name: 'sitemapIndex',
+        in: 'query',
+        description: 'Optional owned sitemap-index URL. When present, returns that index\'s child entries.',
+        schema: { type: 'string', format: 'uri', pattern: '^https?://' },
+      },
+    ],
     responses: {
       200: jsonResponse('GSC sitemaps returned.', 'GscSitemapListResponseDto'),
       400: errorResponse('Invalid sitemap request.'),
@@ -2002,8 +2038,7 @@ const routeCatalog: OpenApiOperation[] = [
     tags: ['google'],
     parameters: [nameParameter],
     responses: {
-      // TODO: Add `DiscoverSitemapsResponse` Zod schema in contracts.
-      200: rawJsonResponse('Discovered sitemaps and queued run returned.', looseObjectSchema),
+      200: jsonResponse('Discovered sitemaps and queued run returned.', 'GscDiscoverSitemapsResponseDto'),
       400: errorResponse('Invalid sitemap discovery request.'),
       404: errorResponse('Project or connection not found.'),
     },

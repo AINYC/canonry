@@ -170,7 +170,9 @@ export type GscSiteListResponseDto = z.infer<typeof gscSiteListResponseDtoSchema
 export const gscSitemapContentDtoSchema = z.object({
   type: z.string(),
   submitted: z.string(),
-  indexed: z.string(),
+  // Google still returns this for existing sitemap reads, but it is not a
+  // reliable submission outcome. Retained only for response compatibility.
+  indexed: z.string().optional().describe('Deprecated compatibility field.'),
 })
 export type GscSitemapContentDto = z.infer<typeof gscSitemapContentDtoSchema>
 
@@ -180,6 +182,7 @@ export type GscSitemapContentDto = z.infer<typeof gscSitemapContentDtoSchema>
  */
 export const gscSitemapDtoSchema = z.object({
   path: z.string(),
+  parentSitemapUrl: z.string().optional(),
   lastSubmitted: z.string().optional(),
   isPending: z.boolean().optional(),
   isSitemapsIndex: z.boolean().optional(),
@@ -197,5 +200,56 @@ export type GscSitemapDto = z.infer<typeof gscSitemapDtoSchema>
  */
 export const gscSitemapListResponseDtoSchema = z.object({
   sitemaps: z.array(gscSitemapDtoSchema).default([]),
+  summary: z.object({
+    total: z.number().int().nonnegative(),
+    indexes: z.number().int().nonnegative(),
+    files: z.number().int().nonnegative(),
+  }),
+  preferredSubmissionUrls: z.array(z.string()).default([]),
 })
 export type GscSitemapListResponseDto = z.infer<typeof gscSitemapListResponseDtoSchema>
+
+export const gscSubmitSitemapsRequestDtoSchema = z.object({
+  sitemapUrls: z.array(
+    z.string().url().refine(
+      (value) => {
+        const protocol = new URL(value).protocol
+        return protocol === 'http:' || protocol === 'https:'
+      },
+      { message: 'Sitemap URL must use http or https.' },
+    ),
+  ).min(1).max(50),
+})
+export type GscSubmitSitemapsRequestDto = z.infer<typeof gscSubmitSitemapsRequestDtoSchema>
+
+export const gscSubmitSitemapResultDtoSchema = z.object({
+  sitemapUrl: z.string(),
+  status: z.enum(['accepted', 'error']),
+  submittedAt: z.string().optional(),
+  error: z.string().optional(),
+})
+export type GscSubmitSitemapResultDto = z.infer<typeof gscSubmitSitemapResultDtoSchema>
+
+export const gscSubmitSitemapsResponseDtoSchema = z.object({
+  summary: z.object({
+    total: z.number().int().nonnegative(),
+    accepted: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+  }),
+  results: z.array(gscSubmitSitemapResultDtoSchema),
+})
+export type GscSubmitSitemapsResponseDto = z.infer<typeof gscSubmitSitemapsResponseDtoSchema>
+
+export const gscDiscoverSitemapsResponseDtoSchema = z.object({
+  sitemaps: z.array(gscSitemapDtoSchema),
+  primarySitemapUrl: z.string(),
+  run: z.object({
+    id: z.string(),
+    projectId: z.string(),
+    kind: z.string(),
+    status: z.string(),
+    trigger: z.string(),
+    createdAt: z.string(),
+  }).nullable(),
+})
+export type GscDiscoverSitemapsResponseDto = z.infer<typeof gscDiscoverSitemapsResponseDtoSchema>

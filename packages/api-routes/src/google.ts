@@ -9,6 +9,7 @@ import {
   gbpDiscoverRequestSchema, gbpLocationSelectionRequestSchema, gbpSyncRequestSchema,
   type GbpLocationDto, type GbpLocationListResponse, type GbpAccountListResponse,
   type GbpPlaceDetailsListResponse,
+  gscSubmitSitemapsRequestDtoSchema,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from './gbp-summary.js'
@@ -20,6 +21,7 @@ import {
   refreshAccessToken,
   listSites,
   listSitemaps,
+  submitSitemap,
   inspectUrl as gscInspectUrl,
   publishUrlNotification,
   GSC_SCOPE,
@@ -65,6 +67,37 @@ function scopesForConnectionType(type: GoogleConnectionType): string[] {
     case 'gsc': return [GSC_SCOPE, INDEXING_SCOPE]
     case 'ga4': return [GA4_SCOPE]
     case 'gbp': return [GBP_SCOPE]
+  }
+}
+
+function isSitemapOwnedByProperty(sitemapUrl: string, propertyId: string, canonicalDomain: string): boolean {
+  let sitemap: URL
+  try {
+    sitemap = new URL(sitemapUrl)
+  } catch {
+    return false
+  }
+  if (sitemap.protocol !== 'http:' && sitemap.protocol !== 'https:') return false
+
+  if (/^sc-domain:/i.test(propertyId)) {
+    const domain = propertyId.slice('sc-domain:'.length).toLowerCase()
+    const host = sitemap.hostname.toLowerCase()
+    return host === domain || host.endsWith(`.${domain}`)
+  }
+
+  if (/^\d+$/.test(propertyId)) {
+    const domain = normalizeProjectDomain(canonicalDomain)
+    return sitemap.hostname.toLowerCase().replace(/^www\./, '') === domain
+  }
+
+  try {
+    const property = new URL(propertyId)
+    if (property.protocol !== 'http:' && property.protocol !== 'https:') return false
+    if (sitemap.origin !== property.origin) return false
+    const prefix = property.pathname.endsWith('/') ? property.pathname : `${property.pathname}/`
+    return sitemap.pathname === property.pathname || sitemap.pathname.startsWith(prefix)
+  } catch {
+    return false
   }
 }
 
@@ -1117,7 +1150,10 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
   })
 
   // GET /projects/:name/google/gsc/sitemaps
-  app.get<{ Params: { name: string } }>('/projects/:name/google/gsc/sitemaps', async (request) => {
+  app.get<{
+    Params: { name: string }
+    Querystring: { sitemapIndex?: string }
+  }>('/projects/:name/google/gsc/sitemaps', async (request) => {
     const { clientId: googleClientId, clientSecret: googleClientSecret } = getAuthConfig()
     if (!googleClientId || !googleClientSecret) {
       throw validationError('Google OAuth is not configured')
@@ -1126,17 +1162,94 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     const store = requireConnectionStore()
 
     const project = resolveProject(app.db, request.params.name)
+    const conn = store.getConnection(project.canonicalDomain, 'gsc')
+    if (!conn?.propertyId) {
+      throw validationError('No GSC property configured for this connection. Set one with "canonry google set-property".')
+    }
+    const sitemapIndex = request.query.sitemapIndex
+    if (sitemapIndex && !isSitemapOwnedByProperty(sitemapIndex, conn.propertyId, project.canonicalDomain)) {
+      throw validationError(`sitemapIndex must belong to the configured GSC property "${conn.propertyId}".`)
+    }
     try {
       const { accessToken, propertyId } = await getValidToken(store, project.canonicalDomain, 'gsc', googleClientId, googleClientSecret)
       if (!propertyId) {
         throw validationError('No GSC property configured for this connection. Set one with "canonry google set-property".')
       }
 
-      const sitemaps = await listSitemaps(accessToken, propertyId)
-      return { sitemaps }
+      const entries = await listSitemaps(accessToken, propertyId, sitemapIndex)
+      const sitemaps = sitemapIndex
+        ? entries.map((sitemap) => ({ ...sitemap, parentSitemapUrl: sitemapIndex }))
+        : entries
+      const indexes = sitemaps.filter((sitemap) => sitemap.isSitemapsIndex).length
+      return {
+        sitemaps,
+        summary: { total: sitemaps.length, indexes, files: sitemaps.length - indexes },
+        preferredSubmissionUrls: indexes > 0
+          ? sitemaps.filter((sitemap) => sitemap.isSitemapsIndex).map((sitemap) => sitemap.path)
+          : sitemaps.map((sitemap) => sitemap.path),
+      }
     } catch (err) {
       throw gscErrorToAppError(err, 'Failed to list Search Console sitemaps')
     }
+  })
+
+  // POST /projects/:name/google/gsc/sitemaps/submit
+  app.post<{
+    Params: { name: string }
+    Body: { sitemapUrls: string[] }
+  }>('/projects/:name/google/gsc/sitemaps/submit', async (request) => {
+    const parsed = gscSubmitSitemapsRequestDtoSchema.safeParse(request.body ?? {})
+    if (!parsed.success) {
+      throw validationError('sitemapUrls must contain between 1 and 50 valid sitemap URLs')
+    }
+    const sitemapUrls = [...new Set(parsed.data.sitemapUrls)]
+    const project = resolveProject(app.db, request.params.name)
+    const store = requireConnectionStore()
+    const conn = store.getConnection(project.canonicalDomain, 'gsc')
+    if (!conn) {
+      throw validationError('No GSC connection found for this domain. Run "canonry google connect" first.')
+    }
+    if (!conn.propertyId) {
+      throw validationError('No GSC property configured for this connection. Set one with "canonry google set-property".')
+    }
+    const invalidUrls = sitemapUrls.filter((url) => !isSitemapOwnedByProperty(url, conn.propertyId!, project.canonicalDomain))
+    if (invalidUrls.length > 0) {
+      throw validationError(`Sitemap URLs must belong to the configured GSC property "${conn.propertyId}". Invalid: ${invalidUrls.slice(0, 5).join(', ')}`)
+    }
+    if (!(conn.scopes ?? []).includes(GSC_SCOPE)) {
+      throw validationError('This GSC connection has the read-only webmasters scope and cannot submit sitemaps. Reconnect with "canonry google connect" to grant the full webmasters scope.')
+    }
+
+    const { clientId: googleClientId, clientSecret: googleClientSecret } = getAuthConfig()
+    if (!googleClientId || !googleClientSecret) {
+      throw validationError('Google OAuth is not configured')
+    }
+    let accessToken: string
+    try {
+      ({ accessToken } = await getValidToken(store, project.canonicalDomain, 'gsc', googleClientId, googleClientSecret))
+    } catch (err) {
+      throw gscErrorToAppError(err, 'Failed to authorize Search Console sitemap submission')
+    }
+
+    const results: Array<{ sitemapUrl: string; status: 'accepted' | 'error'; submittedAt?: string; error?: string }> = []
+    for (const sitemapUrl of sitemapUrls) {
+      try {
+        await submitSitemap(accessToken, conn.propertyId, sitemapUrl)
+        const submittedAt = new Date().toISOString()
+        writeAuditLog(app.db, {
+          projectId: project.id,
+          actor: 'api',
+          action: 'google.sitemap.submitted',
+          entityType: 'sitemap',
+          entityId: sitemapUrl,
+        })
+        results.push({ sitemapUrl, status: 'accepted', submittedAt })
+      } catch (err) {
+        results.push({ sitemapUrl, status: 'error', error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    const accepted = results.filter((result) => result.status === 'accepted').length
+    return { summary: { total: results.length, accepted, failed: results.length - accepted }, results }
   })
 
   // POST /projects/:name/google/gsc/discover-sitemaps
@@ -1167,11 +1280,14 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     }
 
     if (sitemaps.length === 0) {
-      throw validationError('No sitemaps found for this GSC property. Submit a sitemap in Google Search Console first.')
+      throw validationError(
+        `No sitemaps found for this GSC property. Submit one with ` +
+        `"canonry google submit-sitemap ${request.params.name} <url>" first.`,
+      )
     }
 
-    // Prefer non-index sitemaps, otherwise use the first one
-    const primary = sitemaps.find((s) => !s.isSitemapsIndex) ?? sitemaps[0]!
+    // A sitemap index gives inspection the complete site surface; use it first.
+    const primary = sitemaps.find((s) => s.isSitemapsIndex) ?? sitemaps[0]!
     const sitemapUrl = primary.path
 
     // Store discovered sitemap URL on the connection

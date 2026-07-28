@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { RefreshCw } from 'lucide-react'
 import type { GscPerformanceDailyDto, MetricsWindow } from '@ainyc/canonry-contracts'
 
 import { Button } from '../ui/button.js'
@@ -25,11 +24,11 @@ import {
   fetchSettings,
   googleConnect,
   googleDisconnect,
-  isEmbed,
   saveGoogleProperty,
   inspectGscUrl,
   saveSitemapUrl,
   fetchGscSitemaps,
+  submitGscSitemaps,
   requestIndexing,
   heyClient,
   type ApiGscSitemap,
@@ -52,7 +51,6 @@ import {
   getApiV1ProjectsByNameGooglePropertiesOptions,
 } from '@ainyc/canonry-api-client/react-query'
 import {
-  useTriggerDiscoverSitemaps,
   useTriggerGscSync,
   useTriggerInspectSitemap,
 } from '../../queries/mutations.js'
@@ -61,6 +59,26 @@ import { GSC_STALE_MS } from '../../queries/query-client.js'
 const GSC_WINDOWS: MetricsWindow[] = ['7d', '30d', '90d', 'all']
 const EXPANDED_PERFORMANCE_LIMIT = 500
 const COVERAGE_PAGE_SIZE = 25
+
+function sitemapDiscoveredUrlCount(sitemap: ApiGscSitemap): number {
+  return sitemap.contents?.reduce((total, content) => total + Number(content.submitted || 0), 0) ?? 0
+}
+
+function sitemapIssueText(sitemap: ApiGscSitemap): string {
+  const errors = Number(sitemap.errors ?? 0)
+  const warnings = Number(sitemap.warnings ?? 0)
+  return [
+    errors > 0 ? `${errors} error${errors === 1 ? '' : 's'}` : '',
+    warnings > 0 ? `${warnings} warning${warnings === 1 ? '' : 's'}` : '',
+  ].filter(Boolean).join(' · ')
+}
+
+function sitemapGoogleStatus(sitemap: ApiGscSitemap): string {
+  if (sitemap.isPending) return 'Processing'
+  if (Number(sitemap.errors ?? 0) > 0) return 'Errors'
+  if (Number(sitemap.warnings ?? 0) > 0) return 'Warnings'
+  return 'Success'
+}
 
 export function GscSection({
   projectName,
@@ -108,9 +126,18 @@ export function GscSection({
   const [loadingCoverage, setLoadingCoverage] = useState(false)
   const [listingSitemaps, setListingSitemaps] = useState(false)
   const [discoveredSitemaps, setDiscoveredSitemaps] = useState<ApiGscSitemap[] | null>(null)
+  const [sitemapSummary, setSitemapSummary] = useState<{ total: number; indexes: number; files: number } | null>(null)
+  const [preferredSubmissionUrls, setPreferredSubmissionUrls] = useState<string[]>([])
+  const [expandedSitemapIndexes, setExpandedSitemapIndexes] = useState<Set<string>>(new Set())
+  const [sitemapChildren, setSitemapChildren] = useState<Partial<Record<string, ApiGscSitemap[]>>>({})
+  const [loadingSitemapChildren, setLoadingSitemapChildren] = useState<Set<string>>(new Set())
+  const [sitemapSearch, setSitemapSearch] = useState('')
+  const [sitemapSubmissionProgress, setSitemapSubmissionProgress] = useState<{ completed: number; total: number } | null>(null)
   const [sitemapUrlInput, setSitemapUrlInput] = useState('')
   const [savingSitemap, setSavingSitemap] = useState(false)
+  const [submittingSitemaps, setSubmittingSitemaps] = useState(false)
   const [setupExpanded, setSetupExpanded] = useState(false)
+  const [coverageHistoryExpanded, setCoverageHistoryExpanded] = useState(false)
   const [coverageTab, setCoverageTab] = useState<'indexed' | 'notIndexed' | 'deindexed'>('indexed')
   const [perfSort, setPerfSort] = useState<{ key: SearchMetric; dir: 'asc' | 'desc' } | null>(null)
 
@@ -137,9 +164,19 @@ export function GscSection({
     pageSize: DEFAULT_TABLE_PAGE_SIZE,
   })
   const displayedPerformanceRows = performanceDisplayedExpanded ? performanceTable.rows : sortedPerformance
-  const [coverageHistory, setCoverageHistory] = useState<Array<{ date: string; indexed: number; notIndexed: number; reasonBreakdown: Record<string, number> }>>([])
+  const sitemapTable = useClientTable({
+    rows: (discoveredSitemaps ?? []).filter((sitemap) => sitemap.path.toLowerCase().includes(sitemapSearch.trim().toLowerCase())),
+    pageSize: DEFAULT_TABLE_PAGE_SIZE,
+  })
+  const [_coverageHistory, setCoverageHistory] = useState<Array<{ date: string; indexed: number; notIndexed: number; reasonBreakdown: Record<string, number> }>>([])
   const [selectedReason, setSelectedReason] = useState<string | null>(null)
   const [coveragePage, setCoveragePage] = useState<number>(1)
+  const coverageHistoryDelta = useMemo(() => {
+    if (_coverageHistory.length < 2) return null
+    const current = _coverageHistory[_coverageHistory.length - 1]!
+    const previous = _coverageHistory[_coverageHistory.length - 2]!
+    return { indexed: current.indexed - previous.indexed, notIndexed: current.notIndexed - previous.notIndexed }
+  }, [_coverageHistory])
 
   // Reset to page 1 whenever the active URL list changes (tab switch, drill-down
   // enter/exit, or a fresh coverage sync), so the user doesn't land on a stale
@@ -213,15 +250,23 @@ export function GscSection({
   }
 
   const gscConn = connections.find((c) => c.connectionType === 'gsc')
+  const canSubmitSitemaps = (gscConn?.scopes ?? []).includes('https://www.googleapis.com/auth/webmasters')
+  const primarySitemapSubmissionUrls = preferredSubmissionUrls.length > 0
+    ? preferredSubmissionUrls
+    : (discoveredSitemaps ?? []).map((sitemap) => sitemap.path)
+  const preferredIndexCount = primarySitemapSubmissionUrls.filter((url) =>
+    discoveredSitemaps?.some((sitemap) => sitemap.path === url && sitemap.isSitemapsIndex),
+  ).length
+  const primarySitemapSubmissionLabel = preferredIndexCount === 1
+    ? 'Resubmit sitemap index'
+    : preferredIndexCount > 1
+      ? 'Resubmit sitemap indexes'
+      : 'Resubmit all sitemaps'
   const hasHistoricalData = performance.length > 0 || inspections.length > 0 || deindexed.length > 0
   const triggerGscSyncMutation = useTriggerGscSync()
-  const triggerDiscoverSitemapsMutation = useTriggerDiscoverSitemaps()
   const triggerInspectSitemapMutation = useTriggerInspectSitemap()
 
-  async function loadProperties(
-    currentConn: ApiGoogleConnection | undefined,
-    options: { force?: boolean; notify?: boolean } = {},
-  ) {
+  async function loadProperties(currentConn: ApiGoogleConnection | undefined) {
     if (!currentConn) {
       setProperties([])
       setSelectedProperty('')
@@ -232,33 +277,14 @@ export function GscSection({
     try {
       const { sites } = await queryClient.fetchQuery({
         ...getApiV1ProjectsByNameGooglePropertiesOptions({ client: heyClient, path: { name: projectName } }),
-        staleTime: options.force ? 0 : GSC_STALE_MS,
+        staleTime: GSC_STALE_MS,
       })
       setProperties(sites)
       setSelectedProperty(currentConn.propertyId ?? sites[0]?.siteUrl ?? '')
       setActionNeeded(null)
-      if (options.notify) {
-        addToast({
-          title: 'GSC properties refreshed',
-          detail: `${sites.length} propert${sites.length === 1 ? 'y' : 'ies'} available for this connection.`,
-          tone: sites.length > 0 ? 'positive' : 'caution',
-          dedupeKey: `gsc:properties:${projectName}`,
-          dedupeMode: 'replace',
-        })
-      }
     } catch (err) {
       setProperties([])
       reportGscError(err, 'Failed to load Search Console properties')
-      if (options.notify) {
-        const info = extractApiErrorInfo(err)
-        addToast({
-          title: 'GSC property refresh failed',
-          detail: info.message || 'Failed to load Search Console properties',
-          tone: 'negative',
-          dedupeKey: `gsc:properties:${projectName}`,
-          dedupeMode: 'replace',
-        })
-      }
     } finally {
       setPropertiesLoading(false)
     }
@@ -333,7 +359,7 @@ export function GscSection({
     }
   }
 
-  async function loadInspectionHistory(options: { force?: boolean; notify?: boolean } = {}) {
+  async function loadInspectionHistory() {
     setLoadingInspections(true)
     try {
       const filterUrl = inspectionFilterUrl.trim() || undefined
@@ -346,83 +372,43 @@ export function GscSection({
             path: { name: projectName },
             query: inspectionsQuery as never,
           }),
-          staleTime: options.force ? 0 : GSC_STALE_MS,
+          staleTime: GSC_STALE_MS,
         }),
         queryClient.fetchQuery({
           ...getApiV1ProjectsByNameGoogleGscDeindexedOptions({ client: heyClient, path: { name: projectName } }),
-          staleTime: options.force ? 0 : GSC_STALE_MS,
+          staleTime: GSC_STALE_MS,
         }),
       ])
       setInspections(history)
       setDeindexed(deindexedRows)
-      if (options.notify) {
-        addToast({
-          title: 'Inspection history refreshed',
-          detail: `${history.length} recent inspection${history.length === 1 ? '' : 's'} loaded${deindexedRows.length > 0 ? `, ${deindexedRows.length} deindexed URL${deindexedRows.length === 1 ? '' : 's'} flagged` : ''}.`,
-          tone: 'positive',
-          dedupeKey: `gsc:inspection-history:${projectName}`,
-          dedupeMode: 'replace',
-        })
-      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load GSC inspection history'
       setInspections([])
       setDeindexed([])
-      setError(message)
-      if (options.notify) {
-        addToast({
-          title: 'Inspection history refresh failed',
-          detail: message,
-          tone: 'negative',
-          dedupeKey: `gsc:inspection-history:${projectName}`,
-          dedupeMode: 'replace',
-        })
-      }
+      setError(err instanceof Error ? err.message : 'Failed to load GSC inspection history')
     } finally {
       setLoadingInspections(false)
     }
   }
 
-  async function loadCoverage(options: { force?: boolean; notify?: boolean } = {}) {
+  async function loadCoverage() {
     setLoadingCoverage(true)
     try {
       const [data, history] = await Promise.all([
         queryClient.fetchQuery({
           ...getApiV1ProjectsByNameGoogleGscCoverageOptions({ client: heyClient, path: { name: projectName } }),
-          staleTime: options.force ? 0 : GSC_STALE_MS,
+          staleTime: GSC_STALE_MS,
         }),
         queryClient.fetchQuery({
           ...getApiV1ProjectsByNameGoogleGscCoverageHistoryOptions({ client: heyClient, path: { name: projectName } }),
-          staleTime: options.force ? 0 : GSC_STALE_MS,
+          staleTime: GSC_STALE_MS,
         }).catch(() => []),
       ])
       setCoverage(data)
       setCoverageHistory(history)
-      if (options.notify) {
-        addToast({
-          title: 'GSC coverage refreshed',
-          detail: data.summary.total > 0
-            ? `${data.summary.indexed}/${data.summary.total} URLs indexed. Use Inspect sitemap to re-read new sitemap URLs.`
-            : 'No coverage rows yet. Inspect the sitemap to populate this view.',
-          tone: data.summary.total > 0 ? 'positive' : 'caution',
-          dedupeKey: `gsc:coverage:${projectName}`,
-          dedupeMode: 'replace',
-        })
-      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load coverage data'
       setCoverage(null)
       setCoverageHistory([])
-      setError(message)
-      if (options.notify) {
-        addToast({
-          title: 'GSC coverage refresh failed',
-          detail: message,
-          tone: 'negative',
-          dedupeKey: `gsc:coverage:${projectName}`,
-          dedupeMode: 'replace',
-        })
-      }
+      setError(err instanceof Error ? err.message : 'Failed to load coverage data')
     } finally {
       setLoadingCoverage(false)
     }
@@ -444,15 +430,7 @@ export function GscSection({
         dedupeMode: 'replace',
       })
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to request indexing'
-      setError(message)
-      addToast({
-        title: 'Indexing request failed',
-        detail: message,
-        tone: 'negative',
-        dedupeKey: `gsc:indexing:${projectName}`,
-        dedupeMode: 'replace',
-      })
+      setError(err instanceof Error ? err.message : 'Failed to request indexing')
     } finally {
       setRequestingIndexing(false)
     }
@@ -474,58 +452,9 @@ export function GscSection({
         dedupeMode: 'replace',
       })
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to request indexing'
-      setError(message)
-      addToast({
-        title: 'Indexing request failed',
-        detail: message,
-        tone: 'negative',
-        dedupeKey: `gsc:indexing-all:${projectName}`,
-        dedupeMode: 'replace',
-      })
+      setError(err instanceof Error ? err.message : 'Failed to request indexing')
     } finally {
       setRequestingIndexing(false)
-    }
-  }
-
-  async function handleSaveSitemap() {
-    if (!sitemapUrlInput.trim()) return
-    setSavingSitemap(true)
-    setError(null)
-    try {
-      await saveSitemapUrl(projectName, 'gsc', sitemapUrlInput.trim())
-      await queryClient.invalidateQueries({ predicate: (query) => { const head = query.queryKey[0] as { _id?: string } | undefined; return typeof head?._id === "string" && head._id.startsWith("getApiV1ProjectsByNameGoogleGsc") } })
-      setConnections((prev) => prev.map((c) => (
-        c.connectionType === 'gsc' ? { ...c, sitemapUrl: sitemapUrlInput.trim() } : c
-      )))
-      addToast({
-        title: 'Sitemap URL saved',
-        detail: `${projectName} will use the updated sitemap URL.`,
-        tone: 'positive',
-        dedupeKey: `gsc:sitemap:${projectName}`,
-        dedupeMode: 'drop',
-      })
-      setSitemapUrlInput('')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save sitemap URL')
-    } finally {
-      setSavingSitemap(false)
-    }
-  }
-
-  async function handleDiscoverSitemaps() {
-    setError(null)
-    try {
-      const result = await triggerDiscoverSitemapsMutation.mutateAsync({
-        projectName,
-        projectLabel: projectName,
-      })
-      setDiscoveredSitemaps(result.sitemaps)
-      setConnections((prev) => prev.map((c) => (
-        c.connectionType === 'gsc' ? { ...c, sitemapUrl: result.primarySitemapUrl } : c
-      )))
-    } catch {
-      // Mutation hook handles the toast; keep the last discovered sitemap state visible.
     }
   }
 
@@ -539,36 +468,161 @@ export function GscSection({
         result,
       )
       setDiscoveredSitemaps(result.sitemaps)
+      setSitemapSummary(result.summary)
+      setPreferredSubmissionUrls(result.preferredSubmissionUrls)
+      setExpandedSitemapIndexes(new Set())
+      setSitemapChildren({})
       if (result.sitemaps.length === 0) {
-        setNotice('No sitemaps found in this GSC property. Submit a sitemap in Google Search Console first.')
-        addToast({
-          title: 'No GSC sitemaps found',
-          detail: 'Submit a sitemap in Google Search Console, then browse again.',
-          tone: 'caution',
-          dedupeKey: `gsc:sitemaps:${projectName}`,
-          dedupeMode: 'replace',
-        })
-      } else {
-        addToast({
-          title: 'GSC sitemaps loaded',
-          detail: `${result.sitemaps.length} sitemap${result.sitemaps.length === 1 ? '' : 's'} returned from Search Console.`,
-          tone: 'positive',
-          dedupeKey: `gsc:sitemaps:${projectName}`,
-          dedupeMode: 'replace',
-        })
+        setNotice('No sitemaps found in this GSC property. Submit one here to start Google processing it.')
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to list sitemaps'
-      setError(message)
-      addToast({
-        title: 'Could not load GSC sitemaps',
-        detail: message,
-        tone: 'negative',
-        dedupeKey: `gsc:sitemaps:${projectName}`,
-        dedupeMode: 'replace',
-      })
+      setError(err instanceof Error ? err.message : 'Failed to list sitemaps')
     } finally {
       setListingSitemaps(false)
+    }
+  }
+
+  async function toggleSitemapIndex(sitemapIndex: string) {
+    const isExpanded = expandedSitemapIndexes.has(sitemapIndex)
+    setExpandedSitemapIndexes((current) => {
+      const next = new Set(current)
+      if (isExpanded) next.delete(sitemapIndex)
+      else next.add(sitemapIndex)
+      return next
+    })
+    if (isExpanded || sitemapChildren[sitemapIndex]) return
+    setLoadingSitemapChildren((current) => new Set(current).add(sitemapIndex))
+    try {
+      const result = await fetchGscSitemaps(projectName, sitemapIndex)
+      setSitemapChildren((current) => ({ ...current, [sitemapIndex]: result.sitemaps }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load sitemap files')
+    } finally {
+      setLoadingSitemapChildren((current) => {
+        const next = new Set(current)
+        next.delete(sitemapIndex)
+        return next
+      })
+    }
+  }
+
+  async function handleSubmitSitemaps(sitemapUrls: string[]) {
+    if (!canSubmitSitemaps || sitemapUrls.length === 0) return
+    const uniqueUrls = [...new Set(sitemapUrls)]
+    setSubmittingSitemaps(true)
+    setError(null)
+    setSitemapSubmissionProgress({ completed: 0, total: uniqueUrls.length })
+    let accepted = 0
+    let failed = 0
+    let attempted = 0
+    let partialFailureMessage: string | null = null
+    try {
+      for (let start = 0; start < uniqueUrls.length; start += 50) {
+        const batch = uniqueUrls.slice(start, start + 50)
+        try {
+          const result = await submitGscSitemaps(projectName, batch)
+          accepted += result.summary.accepted
+          failed += result.summary.failed
+          attempted += batch.length
+          setSitemapSubmissionProgress({ completed: attempted, total: uniqueUrls.length })
+        } catch (err) {
+          attempted += batch.length
+          const unconfirmed = batch.length
+          const remaining = uniqueUrls.length - attempted
+          const reason = err instanceof Error ? err.message : 'The batch request failed'
+          const detail = `${accepted} accepted, ${failed} failed, ${unconfirmed} unconfirmed, ${remaining} not attempted. Google may still process accepted sitemaps; indexing is not guaranteed.`
+          partialFailureMessage = `Sitemap submission stopped after a batch request failed. ${detail} ${reason}`
+          setError(partialFailureMessage)
+          addToast({
+            title: 'Sitemap resubmission partially completed',
+            detail,
+            tone: 'caution',
+            dedupeKey: `gsc:sitemap-submit:${projectName}`,
+            dedupeMode: 'replace',
+          })
+          return
+        }
+      }
+      const total = uniqueUrls.length
+      addToast({
+        title: failed === 0 ? 'Sitemap submitted to Google' : 'Some sitemap submissions need attention',
+        detail: failed === 0
+          ? 'Google accepted the sitemap submission/refetch request; indexing is not guaranteed.'
+          : `Google accepted ${accepted}/${total} sitemap submissions; ${failed} failed. Indexing is not guaranteed.`,
+        tone: failed === 0 ? 'positive' : 'caution',
+        dedupeKey: `gsc:sitemap-submit:${projectName}`,
+        dedupeMode: 'replace',
+      })
+      setSitemapUrlInput('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit sitemap to Google')
+    } finally {
+      setSubmittingSitemaps(false)
+      setSitemapSubmissionProgress(null)
+      await handleListSitemaps()
+      if (partialFailureMessage) setError(partialFailureMessage)
+    }
+  }
+
+  async function handleResubmitAllFiles() {
+    setSubmittingSitemaps(true)
+    const topLevel = discoveredSitemaps ?? []
+    try {
+      const indexes = topLevel.filter((sitemap) => sitemap.isSitemapsIndex)
+      const expandedIndexUrls: string[] = []
+      for (let start = 0; start < indexes.length; start += 4) {
+        const batch = await Promise.all(indexes.slice(start, start + 4).map(async (index) => {
+          const cachedChildren = sitemapChildren[index.path]
+          if (cachedChildren) return cachedChildren
+          const result = await fetchGscSitemaps(projectName, index.path)
+          setSitemapChildren((current) => ({ ...current, [index.path]: result.sitemaps }))
+          return result.sitemaps
+        }))
+        batch.forEach((children, index) => {
+          expandedIndexUrls.push(...(
+            children.length > 0
+              ? children.map((sitemap) => sitemap.path)
+              : [indexes[start + index]!.path]
+          ))
+        })
+      }
+      await handleSubmitSitemaps(
+        [
+          ...topLevel.filter((sitemap) => !sitemap.isSitemapsIndex).map((sitemap) => sitemap.path),
+          ...expandedIndexUrls,
+        ],
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load sitemap files')
+      setSubmittingSitemaps(false)
+    }
+  }
+
+  async function handleUseSitemapForAudits(sitemapUrl: string) {
+    setSavingSitemap(true)
+    setError(null)
+    try {
+      await saveSitemapUrl(projectName, 'gsc', sitemapUrl)
+      setConnections((prev) => prev.map((connection) => (
+        connection.connectionType === 'gsc' ? { ...connection, sitemapUrl } : connection
+      )))
+      addToast({ title: 'Sitemap selected for audits', detail: sitemapUrl, tone: 'positive', dedupeKey: `gsc:sitemap-audit:${projectName}`, dedupeMode: 'replace' })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to select sitemap for audits')
+    } finally {
+      setSavingSitemap(false)
+    }
+  }
+
+  async function handleInspectSitemap(sitemapUrl?: string) {
+    try {
+      await triggerInspectSitemapMutation.mutateAsync({
+        projectName,
+        projectLabel: projectName,
+        opts: sitemapUrl ? { sitemapUrl } : undefined,
+      })
+    } catch {
+      // Mutation hook presents failures and keeps the current table available.
     }
   }
 
@@ -593,6 +647,7 @@ export function GscSection({
         loadPerformanceDaily(),
         loadInspectionHistory(),
         loadCoverage(),
+        currentConn?.propertyId ? handleListSitemaps() : Promise.resolve(),
       ])
     } finally {
       setLoading(false)
@@ -607,7 +662,6 @@ export function GscSection({
 
   useEffect(() => {
     setPerformanceOffset(0)
-    performanceTable.setPage(1)
     void loadPerformanceRows(0)
     void loadPerformanceDaily()
   }, [gscWindow])
@@ -808,15 +862,13 @@ export function GscSection({
               <code className="text-secondary">{gscConn.domain}</code>
               <span className="text-mono-700">·</span>
               <span>Last updated {formatTimestamp(gscConn.updatedAt)}</span>
-              {!isEmbed() && (
-                <button
-                  type="button"
-                  className="ml-auto text-muted transition-colors hover:text-negative-400"
-                  onClick={asyncHandler(handleDisconnect)}
-                >
-                  Disconnect
-                </button>
-              )}
+              <button
+                type="button"
+                className="ml-auto text-muted transition-colors hover:text-negative-400"
+                onClick={asyncHandler(handleDisconnect)}
+              >
+                Disconnect
+              </button>
             </div>
           ) : (
             <Card className="surface-card">
@@ -835,446 +887,28 @@ export function GscSection({
                     ? 'Generate a Google OAuth link for this project and have the client sign in with a Google account that already has access to the correct Search Console property.'
                     : 'Set Google OAuth client credentials first. Once configured, you can generate a consent link for this project domain.'}
                 </p>
-                {!isEmbed() && (
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    {googleConfigured ? (
-                      <Button type="button" variant="outline" size="sm" disabled={connecting} onClick={asyncHandler(handleConnect)}>
-                        {connecting ? 'Opening\u2026' : 'Connect Google Search Console'}
-                      </Button>
-                    ) : (
-                      <Button type="button" variant="outline" size="sm" asChild>
-                        <Link to="/settings">Open Settings</Link>
-                      </Button>
-                    )}
-                    {!googleConfigured && (
-                      <p className="text-xs text-muted">The same Google OAuth app credentials are shared across all projects.</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            </Card>
-          )}
-
-          {/* One-time sitemap prompt — shown when connected but no sitemap URL stored */}
-          {gscConn && !gscConn.sitemapUrl && (
-            <div className="rounded-lg border border-caution-800/40 bg-caution-950/20 px-4 py-3">
-              <div className="flex items-start gap-3">
-                <span className="mt-0.5 text-caution-400">
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5" aria-hidden="true">
-                    <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-                  </svg>
-                </span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-caution-300">Set your sitemap URL</p>
-                  <p className="mt-1 text-xs text-caution-400/70">Canonry uses your sitemap to discover URLs for index coverage inspection. Auto-discover from GSC or enter it manually.</p>
-                  {!isEmbed() && (
-                    <div className="mt-2 flex flex-col gap-2">
-                      <div className="flex flex-col gap-2 lg:flex-row">
-                        <Button
-                          type="button"
-                          size="sm"
-                          disabled={triggerDiscoverSitemapsMutation.isPending || !gscConn.propertyId}
-                          onClick={asyncHandler(handleDiscoverSitemaps)}
-                        >
-                          {triggerDiscoverSitemapsMutation.isPending ? 'Discovering\u2026' : 'Auto-discover from GSC'}
-                        </Button>
-                        <span className="self-center text-xs text-caution-400/60">or enter manually:</span>
-                      </div>
-                      <div className="flex flex-col gap-2 lg:flex-row">
-                        <input
-                          className="flex-1 rounded border border-caution-800/40 bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-500 focus:border-caution-600 focus:outline-none"
-                          type="url"
-                          placeholder="https://example.com/sitemap.xml"
-                          value={sitemapUrlInput}
-                          onChange={(e) => setSitemapUrlInput(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && void handleSaveSitemap()}
-                        />
-                        <Button type="button" size="sm" variant="outline" disabled={savingSitemap || !sitemapUrlInput.trim()} onClick={asyncHandler(handleSaveSitemap)}>
-                          {savingSitemap ? 'Saving\u2026' : 'Save sitemap URL'}
-                        </Button>
-                      </div>
-                    </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {googleConfigured ? (
+                    <Button type="button" variant="outline" size="sm" disabled={connecting} onClick={asyncHandler(handleConnect)}>
+                      {connecting ? 'Opening\u2026' : 'Connect Google Search Console'}
+                    </Button>
+                  ) : (
+                    <Button type="button" variant="outline" size="sm" asChild>
+                      <Link to="/settings">Open Settings</Link>
+                    </Button>
+                  )}
+                  {!googleConfigured && (
+                    <p className="text-xs text-muted">The same Google OAuth app credentials are shared across all projects.</p>
                   )}
                 </div>
               </div>
-            </div>
+            </Card>
           )}
 
           {/* ── DATA SECTIONS (shown first for connected projects) ── */}
 
           {(gscConn || hasHistoricalData) && (
-            <>
-              {/* Coverage overview + donut + history chart — shown first for relevance */}
-              <Card className="surface-card">
-                <div className="section-head section-head-inline">
-                  <div>
-                    <p className="eyebrow eyebrow-soft">Coverage</p>
-                    <h3>Index coverage</h3>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {!isEmbed() && coverage && coverage.notIndexed.length > 0 && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={requestingIndexing}
-                        onClick={() => void handleRequestIndexingAllUnindexed()}
-                      >
-                        {requestingIndexing ? 'Requesting\u2026' : `Request indexing (${coverage.notIndexed.length})`}
-                      </Button>
-                    )}
-                    <Button type="button" variant="outline" size="sm" disabled={loadingCoverage} onClick={() => void loadCoverage({ force: true, notify: true })}>
-                      <RefreshCw className={`h-3.5 w-3.5 ${loadingCoverage ? 'animate-spin' : ''}`} aria-hidden="true" />
-                      {loadingCoverage ? 'Loading\u2026' : 'Refresh coverage'}
-                    </Button>
-                  </div>
-                </div>
-
-                {coverage && coverage.summary.total > 0 ? (
-                  <>
-                    {/* Hero donut — centered, front and center */}
-                    <div className="mt-6 flex flex-col items-center">
-                      {(() => {
-                        const total = coverage.summary.indexed + coverage.summary.notIndexed
-                        const pct = total > 0 ? coverage.summary.indexed / total : 0
-                        const notPct = total > 0 ? coverage.summary.notIndexed / total : 0
-                        const r = 54
-                        const circ = 2 * Math.PI * r
-                        const indexedOffset = circ * (1 - pct)
-                        const notIndexedArc = circ * notPct
-                        const notIndexedStart = circ * pct
-                        return (
-                          <>
-                            <div className="relative h-48 w-48">
-                              <svg viewBox="0 0 128 128" className="h-full w-full" aria-hidden="true">
-                                {/* Background track */}
-                                <circle cx="64" cy="64" r={r} fill="none" stroke={CHART_NEUTRAL.trackSubtle} strokeWidth="14" />
-                                {/* Indexed arc — emerald */}
-                                <circle
-                                  cx="64" cy="64" r={r} fill="none"
-                                  stroke={CHART_TONE.positiveDeep} strokeWidth="14"
-                                  strokeDasharray={circ} strokeDashoffset={indexedOffset}
-                                  strokeLinecap="round"
-                                  transform="rotate(-90 64 64)"
-                                  style={{ transition: 'stroke-dashoffset 0.6s ease' }}
-                                />
-                                {/* Not-indexed arc — zinc */}
-                                {coverage.summary.notIndexed > 0 && (
-                                  <circle
-                                    cx="64" cy="64" r={r} fill="none"
-                                    stroke={CHART_NEUTRAL.textFaint} strokeWidth="14"
-                                    strokeDasharray={`${notIndexedArc} ${circ - notIndexedArc}`}
-                                    strokeDashoffset={-notIndexedStart}
-                                    transform="rotate(-90 64 64)"
-                                    style={{ transition: 'stroke-dasharray 0.6s ease, stroke-dashoffset 0.6s ease' }}
-                                  />
-                                )}
-                              </svg>
-                              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                                <span className="text-3xl font-bold tabular-nums text-primary">{(pct * 100).toFixed(0)}%</span>
-                                <span className="text-xs uppercase tracking-widest text-muted mt-0.5">Indexed</span>
-                              </div>
-                            </div>
-
-                            {/* Counts row beneath donut */}
-                            <div className="mt-4 flex items-center justify-center gap-8">
-                              <div className="flex items-center gap-2">
-                                <span className="inline-block h-2.5 w-2.5 rounded-full bg-positive-500" />
-                                <div>
-                                  <p className="text-2xl font-semibold tabular-nums text-primary">{coverage.summary.indexed.toLocaleString()}</p>
-                                  <p className="text-[11px] uppercase tracking-wide text-muted">Indexed</p>
-                                </div>
-                              </div>
-                              <div className="h-8 w-px bg-mono-800" />
-                              <div className="flex items-center gap-2">
-                                <span className="inline-block h-2.5 w-2.5 rounded-full bg-mono-500" />
-                                <div>
-                                  <p className="text-2xl font-semibold tabular-nums text-primary">{coverage.summary.notIndexed.toLocaleString()}</p>
-                                  <p className="text-[11px] uppercase tracking-wide text-muted">
-                                    Not indexed
-                                    {(coverage.reasonGroups ?? []).length > 0 && (
-                                      <span className="ml-1 text-faint">
-                                        · {(coverage.reasonGroups ?? []).length} {(coverage.reasonGroups ?? []).length === 1 ? 'reason' : 'reasons'}
-                                      </span>
-                                    )}
-                                  </p>
-                                </div>
-                              </div>
-                              {coverage.summary.deindexed > 0 && (
-                                <>
-                                  <div className="h-8 w-px bg-mono-800" />
-                                  <div className="flex items-center gap-2">
-                                    <span className="inline-block h-2.5 w-2.5 rounded-full bg-negative-500" />
-                                    <div>
-                                      <p className="text-2xl font-semibold tabular-nums text-primary">{coverage.summary.deindexed.toLocaleString()}</p>
-                                      <p className="text-[11px] uppercase tracking-wide text-muted">Deindexed</p>
-                                    </div>
-                                  </div>
-                                </>
-                              )}
-                            </div>
-                          </>
-                        )
-                      })()}
-                    </div>
-
-                    {coverageHistory.length >= 2 ? (
-                      <div className="mt-8 border-t border-subtle pt-5">
-                        <div className="section-head section-head-inline">
-                          <div>
-                            <p className="eyebrow eyebrow-soft">History</p>
-                            <h4>Coverage over time</h4>
-                          </div>
-                          <span className="text-xs text-muted">{coverageHistory.length} snapshots</span>
-                        </div>
-                        <div className="evidence-table-wrap mt-3">
-                          <table className="evidence-table">
-                            <thead>
-                              <tr>
-                                <th>Date</th>
-                                <th className="text-right">Indexed</th>
-                                <th className="text-right">Not indexed</th>
-                                <th className="text-right">Coverage</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {coverageHistory.slice(-8).reverse().map((snapshot) => {
-                                const total = snapshot.indexed + snapshot.notIndexed
-                                const percent = total > 0 ? Math.round(snapshot.indexed / total * 100) : 0
-                                return (
-                                  <tr key={snapshot.date}>
-                                    <td className="tabular-nums text-secondary">{new Date(`${snapshot.date}T00:00:00`).toLocaleDateString()}</td>
-                                    <td className="text-right tabular-nums text-positive-400">{snapshot.indexed.toLocaleString()}</td>
-                                    <td className="text-right tabular-nums text-muted">{snapshot.notIndexed.toLocaleString()}</td>
-                                    <td className="text-right tabular-nums text-strong">{percent}%</td>
-                                  </tr>
-                                )
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    ) : null}
-
-
-                    {/* Tab pills */}
-                    <div className="mt-3 flex gap-1">
-                      {(['indexed', 'notIndexed', 'deindexed'] as const).map((tab) => {
-                        const count = tab === 'indexed' ? coverage.indexed.length
-                          : tab === 'notIndexed' ? coverage.notIndexed.length
-                          : coverage.deindexed.length
-                        const label = tab === 'indexed' ? 'Indexed' : tab === 'notIndexed' ? 'Not Indexed' : 'Deindexed'
-                        return (
-                          <button
-                            key={tab}
-                            type="button"
-                            aria-pressed={coverageTab === tab}
-                            className={`min-h-11 rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                              coverageTab === tab
-                                ? 'bg-mono-700 text-heading'
-                                : 'text-secondary hover:bg-mono-800 hover:text-strong'
-                            }`}
-                            onClick={() => { setCoverageTab(tab); setSelectedReason(null) }}
-                          >
-                            {label} ({count})
-                          </button>
-                        )
-                      })}
-                    </div>
-
-                    <div className="mt-3 overflow-x-auto">
-                      {/* Indexed URL table */}
-                      {coverageTab === 'indexed' && coverage.indexed.length > 0 && (
-                        <table className="data-table w-full text-sm">
-                          <thead>
-                            <tr>
-                              <th className="text-left">URL</th>
-                              <th className="text-left">Verdict</th>
-                              <th className="text-left">Last Crawl</th>
-                              <th className="text-left">Mobile</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {pagedIndexed.map((row) => (
-                              <tr key={row.id}>
-                                <td className="max-w-sm truncate text-strong">{row.url}</td>
-                                <td className="text-secondary">{row.verdict ?? 'Unknown'}</td>
-                                <td className="text-secondary">{row.crawlTime ? row.crawlTime.split('T')[0] : '\u2014'}</td>
-                                <td className="text-secondary">{row.isMobileFriendly === true ? 'Yes' : row.isMobileFriendly === false ? 'No' : '\u2014'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-
-                      {/* Not Indexed — reason groups + detail drill-down */}
-                      {coverageTab === 'notIndexed' && !selectedReason && (coverage.reasonGroups ?? []).length > 0 && (
-                        <table className="data-table w-full text-sm">
-                          <thead>
-                            <tr>
-                              <th className="text-left">Reason</th>
-                              <th className="text-right">Pages</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(coverage.reasonGroups ?? []).map((group) => (
-                              <tr
-                                key={group.reason}
-                                className="cursor-pointer hover:bg-surface-inset-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
-                                onClick={() => setSelectedReason(group.reason)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' || e.key === ' ') {
-                                    e.preventDefault()
-                                    setSelectedReason(group.reason)
-                                  }
-                                }}
-                                tabIndex={0}
-                                role="button"
-                                aria-label={`View ${group.reason} pages`}
-                              >
-                                <td className="text-strong">{group.reason}</td>
-                                <td className="text-right tabular-nums text-secondary">{group.count}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-
-                      {/* Not Indexed — no reason groups, show flat list */}
-                      {coverageTab === 'notIndexed' && !selectedReason && (coverage.reasonGroups ?? []).length === 0 && coverage.notIndexed.length > 0 && (
-                        <table className="data-table w-full text-sm">
-                          <thead>
-                            <tr>
-                              <th className="text-left">URL</th>
-                              <th className="text-left">Indexing State</th>
-                              <th className="text-left">Coverage</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {pagedNotIndexedFlat.map((row) => (
-                              <tr key={row.id}>
-                                <td className="max-w-sm truncate text-strong">{row.url}</td>
-                                <td className="text-secondary">{row.indexingState ?? 'Unknown'}</td>
-                                <td className="text-secondary">{row.coverageState ?? 'Unknown'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-
-                      {/* Reason detail view — drill-down for a specific reason */}
-                      {coverageTab === 'notIndexed' && selectedReason && (() => {
-                        const group = (coverage.reasonGroups ?? []).find((g) => g.reason === selectedReason)
-                        if (!group) return null
-                        return (
-                          <div>
-                            <div className="flex items-center gap-2 mb-3">
-                              <button
-                                type="button"
-                                className="text-xs text-secondary hover:text-strong transition-colors"
-                                onClick={() => setSelectedReason(null)}
-                              >
-                                {'\u2190'} Back to reasons
-                              </button>
-                            </div>
-                            <div className="mb-3 flex items-center justify-between rounded-lg border border-default bg-surface-subtle p-3">
-                              <div>
-                                <p className="text-sm font-medium text-strong">{group.reason}</p>
-                                <p className="mt-1 text-xs text-muted">{group.count} affected page{group.count !== 1 ? 's' : ''}</p>
-                              </div>
-                              {!isEmbed() && (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  disabled={requestingIndexing}
-                                  onClick={() => void handleRequestIndexing(group.urls.map((u) => u.url))}
-                                >
-                                  {requestingIndexing ? 'Requesting\u2026' : `Request indexing (${group.count})`}
-                                </Button>
-                              )}
-                            </div>
-
-                            <table className="data-table w-full text-sm">
-                              <thead>
-                                <tr>
-                                  <th className="text-left">URL</th>
-                                  <th className="text-left">Last Crawl</th>
-                                  {!isEmbed() && <th className="w-8"></th>}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {pagedReasonUrls.map((row) => (
-                                  <tr key={row.id}>
-                                    <td className="max-w-sm truncate text-strong">{row.url}</td>
-                                    <td className="text-secondary">{row.crawlTime ? row.crawlTime.split('T')[0] : '\u2014'}</td>
-                                    {!isEmbed() && (
-                                      <td>
-                                        <button
-                                          type="button"
-                                          className="text-xs text-muted hover:text-strong transition-colors"
-                                          disabled={requestingIndexing}
-                                          onClick={() => void handleRequestIndexing([row.url])}
-                                          title="Request indexing"
-                                        >
-                                          Index
-                                        </button>
-                                      </td>
-                                    )}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )
-                      })()}
-
-                      {/* Deindexed table */}
-                      {coverageTab === 'deindexed' && coverage.deindexed.length > 0 && (
-                        <table className="data-table w-full text-sm">
-                          <thead>
-                            <tr>
-                              <th className="text-left">URL</th>
-                              <th className="text-left">Previous</th>
-                              <th className="text-left">Current</th>
-                              <th className="text-left">Detected</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {pagedDeindexed.map((row, i) => (
-                              <tr key={`${row.url}-${i}`}>
-                                <td className="max-w-sm truncate text-strong">{row.url}</td>
-                                <td className="text-secondary">{row.previousState}</td>
-                                <td className="text-secondary">{row.currentState}</td>
-                                <td className="text-secondary">{row.transitionDate.split('T')[0]}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-                      {((coverageTab === 'indexed' && coverage.indexed.length === 0) ||
-                        (coverageTab === 'notIndexed' && !selectedReason && coverage.notIndexed.length === 0) ||
-                        (coverageTab === 'deindexed' && coverage.deindexed.length === 0)) && (
-                        <p className="text-sm text-muted">No URLs in this category.</p>
-                      )}
-
-                      <DataTablePagination
-                        page={coverageCurrentPage}
-                        pageSize={COVERAGE_PAGE_SIZE}
-                        visibleRows={Math.min(COVERAGE_PAGE_SIZE, coverageList.length - coveragePageStart)}
-                        totalRows={coverageList.length}
-                        onPageChange={setCoveragePage}
-                        itemLabel="URLs"
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <p className="mt-3 text-sm text-muted">
-                    {loadingCoverage ? 'Loading coverage data\u2026' : 'No coverage data yet. Inspect your sitemap to populate this view.'}
-                  </p>
-                )}
-              </Card>
-
+           <div className="space-y-3">
               {/* Performance summary + charts */}
               <Card className="surface-card">
                 <div className="section-head section-head-inline">
@@ -1295,14 +929,17 @@ export function GscSection({
                               ? 'bg-mono-700 border-mono-600 text-primary'
                               : 'border-base text-secondary hover:border-strong hover:text-neutral'
                           }`}
-                          onClick={() => setGscWindow(w)}
+                          onClick={() => {
+                            setGscWindow(w)
+                            setPerformanceOffset(0)
+                            performanceTable.setPage(1)
+                          }}
                         >
                           {w === 'all' ? 'All' : w}
                         </button>
                       ))}
                     </div>
                     <Button type="button" variant="outline" size="sm" disabled={loadingPerformance} onClick={() => { setPerformanceOffset(0); performanceTable.setPage(1); void loadPerformanceRows(0); void loadPerformanceDaily() }}>
-                      <RefreshCw className={`h-3.5 w-3.5 ${loadingPerformance ? 'animate-spin' : ''}`} aria-hidden="true" />
                       {loadingPerformance ? 'Loading\u2026' : 'Apply filters'}
                     </Button>
                   </div>
@@ -1529,7 +1166,484 @@ export function GscSection({
                 )}
               </Card>
 
-              {/* URL Inspection */}
+             <Card className="surface-card">
+                <div className="section-head section-head-inline">
+                  <div>
+                    <p className="eyebrow eyebrow-soft">Coverage</p>
+                    <h3>Index coverage</h3>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {coverage && coverage.notIndexed.length > 0 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={requestingIndexing}
+                        onClick={() => void handleRequestIndexingAllUnindexed()}
+                      >
+                        {requestingIndexing ? 'Requesting\u2026' : `Request indexing (${coverage.notIndexed.length})`}
+                      </Button>
+                    )}
+                    <Button type="button" variant="outline" size="sm" disabled={loadingCoverage} onClick={() => void loadCoverage()}>
+                      {loadingCoverage ? 'Loading\u2026' : 'Reload saved coverage'}
+                    </Button>
+                  </div>
+                </div>
+
+                {coverage && coverage.summary.total > 0 ? (
+                  <>
+                    {/* Hero donut — centered, front and center */}
+                    <div className="mt-6 flex flex-col items-center">
+                      {(() => {
+                        const total = coverage.summary.indexed + coverage.summary.notIndexed
+                        const pct = total > 0 ? coverage.summary.indexed / total : 0
+                        const notPct = total > 0 ? coverage.summary.notIndexed / total : 0
+                        const r = 54
+                        const circ = 2 * Math.PI * r
+                        const indexedOffset = circ * (1 - pct)
+                        const notIndexedArc = circ * notPct
+                        const notIndexedStart = circ * pct
+                        return (
+                          <>
+                            <div className="relative h-48 w-48">
+                              <svg viewBox="0 0 128 128" className="h-full w-full" aria-hidden="true">
+                                {/* Background track */}
+                                <circle cx="64" cy="64" r={r} fill="none" stroke={CHART_NEUTRAL.trackSubtle} strokeWidth="14" />
+                                {/* Indexed arc — emerald */}
+                                <circle
+                                  cx="64" cy="64" r={r} fill="none"
+                                  stroke={CHART_TONE.positiveDeep} strokeWidth="14"
+                                  strokeDasharray={circ} strokeDashoffset={indexedOffset}
+                                  strokeLinecap="round"
+                                  transform="rotate(-90 64 64)"
+                                  style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+                                />
+                                {/* Not-indexed arc — zinc */}
+                                {coverage.summary.notIndexed > 0 && (
+                                  <circle
+                                    cx="64" cy="64" r={r} fill="none"
+                                    stroke={CHART_NEUTRAL.textFaint} strokeWidth="14"
+                                    strokeDasharray={`${notIndexedArc} ${circ - notIndexedArc}`}
+                                    strokeDashoffset={-notIndexedStart}
+                                    transform="rotate(-90 64 64)"
+                                    style={{ transition: 'stroke-dasharray 0.6s ease, stroke-dashoffset 0.6s ease' }}
+                                  />
+                                )}
+                              </svg>
+                              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                                <span className="text-3xl font-bold tabular-nums text-primary">{(pct * 100).toFixed(0)}%</span>
+                                <span className="text-xs uppercase tracking-widest text-muted mt-0.5">Indexed</span>
+                              </div>
+                            </div>
+
+                            {/* Counts row beneath donut */}
+                            <div className="mt-4 flex items-center justify-center gap-8">
+                              <div className="flex items-center gap-2">
+                                <span className="inline-block h-2.5 w-2.5 rounded-full bg-positive-500" />
+                                <div>
+                                  <p className="text-2xl font-semibold tabular-nums text-primary">{coverage.summary.indexed.toLocaleString()}</p>
+                                  <p className="text-[11px] uppercase tracking-wide text-muted">Indexed</p>
+                                </div>
+                              </div>
+                              <div className="h-8 w-px bg-mono-800" />
+                              <div className="flex items-center gap-2">
+                                <span className="inline-block h-2.5 w-2.5 rounded-full bg-mono-500" />
+                                <div>
+                                  <p className="text-2xl font-semibold tabular-nums text-primary">{coverage.summary.notIndexed.toLocaleString()}</p>
+                                  <p className="text-[11px] uppercase tracking-wide text-muted">
+                                    Not indexed
+                                    {(coverage.reasonGroups ?? []).length > 0 && (
+                                      <span className="ml-1 text-faint">
+                                        · {(coverage.reasonGroups ?? []).length} {(coverage.reasonGroups ?? []).length === 1 ? 'reason' : 'reasons'}
+                                      </span>
+                                    )}
+                                  </p>
+                                </div>
+                              </div>
+                              {coverage.summary.deindexed > 0 && (
+                                <>
+                                  <div className="h-8 w-px bg-mono-800" />
+                                  <div className="flex items-center gap-2">
+                                    <span className="inline-block h-2.5 w-2.5 rounded-full bg-negative-500" />
+                                    <div>
+                                      <p className="text-2xl font-semibold tabular-nums text-primary">{coverage.summary.deindexed.toLocaleString()}</p>
+                                      <p className="text-[11px] uppercase tracking-wide text-muted">Deindexed</p>
+                                    </div>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </>
+                        )
+                      })()}
+                    </div>
+
+
+                    {/* Tab pills */}
+                    <div className="mt-3 flex gap-1">
+                      {(['indexed', 'notIndexed', 'deindexed'] as const).map((tab) => {
+                        const count = tab === 'indexed' ? coverage.indexed.length
+                          : tab === 'notIndexed' ? coverage.notIndexed.length
+                          : coverage.deindexed.length
+                        const label = tab === 'indexed' ? 'Indexed' : tab === 'notIndexed' ? 'Not Indexed' : 'Deindexed'
+                        return (
+                          <button
+                            key={tab}
+                            type="button"
+                            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                              coverageTab === tab
+                                ? 'bg-mono-700 text-heading'
+                                : 'text-secondary hover:bg-mono-800 hover:text-strong'
+                            }`}
+                            onClick={() => { setCoverageTab(tab); setSelectedReason(null) }}
+                          >
+                            {label} ({count})
+                          </button>
+                        )
+                      })}
+                    </div>
+
+                    <div className="mt-3 overflow-x-auto">
+                      {/* Indexed URL table */}
+                      {coverageTab === 'indexed' && coverage.indexed.length > 0 && (
+                        <table className="data-table w-full text-sm">
+                          <thead>
+                            <tr>
+                              <th className="text-left">URL</th>
+                              <th className="text-left">Verdict</th>
+                              <th className="text-left">Last Crawl</th>
+                              <th className="text-left">Mobile</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pagedIndexed.map((row) => (
+                              <tr key={row.id}>
+                                <td className="max-w-sm truncate text-strong">{row.url}</td>
+                                <td className="text-secondary">{row.verdict ?? 'Unknown'}</td>
+                                <td className="text-secondary">{row.crawlTime ? row.crawlTime.split('T')[0] : '\u2014'}</td>
+                                <td className="text-secondary">{row.isMobileFriendly === true ? 'Yes' : row.isMobileFriendly === false ? 'No' : '\u2014'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+
+                      {/* Not Indexed — reason groups + detail drill-down */}
+                      {coverageTab === 'notIndexed' && !selectedReason && (coverage.reasonGroups ?? []).length > 0 && (
+                        <table className="data-table w-full text-sm">
+                          <thead>
+                            <tr>
+                              <th className="text-left">Reason</th>
+                              <th className="text-right">Pages</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(coverage.reasonGroups ?? []).map((group) => (
+                              <tr
+                                key={group.reason}
+                                className="cursor-pointer hover:bg-surface-inset-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
+                                onClick={() => setSelectedReason(group.reason)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault()
+                                    setSelectedReason(group.reason)
+                                  }
+                                }}
+                                tabIndex={0}
+                                role="button"
+                                aria-label={`View ${group.reason} pages`}
+                              >
+                                <td className="text-strong">{group.reason}</td>
+                                <td className="text-right tabular-nums text-secondary">{group.count}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+
+                      {/* Not Indexed — no reason groups, show flat list */}
+                      {coverageTab === 'notIndexed' && !selectedReason && (coverage.reasonGroups ?? []).length === 0 && coverage.notIndexed.length > 0 && (
+                        <table className="data-table w-full text-sm">
+                          <thead>
+                            <tr>
+                              <th className="text-left">URL</th>
+                              <th className="text-left">Indexing State</th>
+                              <th className="text-left">Coverage</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pagedNotIndexedFlat.map((row) => (
+                              <tr key={row.id}>
+                                <td className="max-w-sm truncate text-strong">{row.url}</td>
+                                <td className="text-secondary">{row.indexingState ?? 'Unknown'}</td>
+                                <td className="text-secondary">{row.coverageState ?? 'Unknown'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+
+                      {/* Reason detail view — drill-down for a specific reason */}
+                      {coverageTab === 'notIndexed' && selectedReason && (() => {
+                        const group = (coverage.reasonGroups ?? []).find((g) => g.reason === selectedReason)
+                        if (!group) return null
+                        return (
+                          <div>
+                            <div className="flex items-center gap-2 mb-3">
+                              <button
+                                type="button"
+                                className="text-xs text-secondary hover:text-strong transition-colors"
+                                onClick={() => setSelectedReason(null)}
+                              >
+                                {'\u2190'} Back to reasons
+                              </button>
+                            </div>
+                            <div className="mb-3 flex items-center justify-between rounded-lg border border-default bg-surface-subtle p-3">
+                              <div>
+                                <p className="text-sm font-medium text-strong">{group.reason}</p>
+                                <p className="mt-1 text-xs text-muted">{group.count} affected page{group.count !== 1 ? 's' : ''}</p>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={requestingIndexing}
+                                onClick={() => void handleRequestIndexing(group.urls.map((u) => u.url))}
+                              >
+                                {requestingIndexing ? 'Requesting\u2026' : `Request indexing (${group.count})`}
+                              </Button>
+                            </div>
+
+                            <table className="data-table w-full text-sm">
+                              <thead>
+                                <tr>
+                                  <th className="text-left">URL</th>
+                                  <th className="text-left">Last Crawl</th>
+                                  <th className="w-8"></th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {pagedReasonUrls.map((row) => (
+                                  <tr key={row.id}>
+                                    <td className="max-w-sm truncate text-strong">{row.url}</td>
+                                    <td className="text-secondary">{row.crawlTime ? row.crawlTime.split('T')[0] : '\u2014'}</td>
+                                    <td>
+                                      <button
+                                        type="button"
+                                        className="text-xs text-muted hover:text-strong transition-colors"
+                                        disabled={requestingIndexing}
+                                        onClick={() => void handleRequestIndexing([row.url])}
+                                        title="Request indexing"
+                                      >
+                                        Index
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )
+                      })()}
+
+                      {/* Deindexed table */}
+                      {coverageTab === 'deindexed' && coverage.deindexed.length > 0 && (
+                        <table className="data-table w-full text-sm">
+                          <thead>
+                            <tr>
+                              <th className="text-left">URL</th>
+                              <th className="text-left">Previous</th>
+                              <th className="text-left">Current</th>
+                              <th className="text-left">Detected</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pagedDeindexed.map((row, i) => (
+                              <tr key={`${row.url}-${i}`}>
+                                <td className="max-w-sm truncate text-strong">{row.url}</td>
+                                <td className="text-secondary">{row.previousState}</td>
+                                <td className="text-secondary">{row.currentState}</td>
+                                <td className="text-secondary">{row.transitionDate.split('T')[0]}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {((coverageTab === 'indexed' && coverage.indexed.length === 0) ||
+                        (coverageTab === 'notIndexed' && !selectedReason && coverage.notIndexed.length === 0) ||
+                        (coverageTab === 'deindexed' && coverage.deindexed.length === 0)) && (
+                        <p className="text-sm text-muted">No URLs in this category.</p>
+                      )}
+
+                      <DataTablePagination
+                        page={coverageCurrentPage}
+                        pageSize={COVERAGE_PAGE_SIZE}
+                        visibleRows={Math.min(COVERAGE_PAGE_SIZE, coverageList.length - coveragePageStart)}
+                        totalRows={coverageList.length}
+                        onPageChange={setCoveragePage}
+                        itemLabel="URLs"
+                      />
+                    </div>
+                    <p className="mt-3 text-xs text-muted">Google's Indexing API is intended for eligible JobPosting and BroadcastEvent pages. Sitemap resubmission is the general-site bulk path.</p>
+
+                    <div className="mt-4 border-t border-default pt-3">
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between text-left text-xs text-secondary hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
+                        aria-expanded={coverageHistoryExpanded}
+                        onClick={() => setCoverageHistoryExpanded((value) => !value)}
+                      >
+                        <span>Coverage history</span>
+                        <span>{coverageHistoryExpanded ? 'Hide snapshots' : _coverageHistory.length > 0 ? `View ${_coverageHistory.length} snapshots` : 'View history'}</span>
+                      </button>
+                      <p className="mt-1 text-xs text-muted">Current: {coverage.summary.indexed.toLocaleString()} indexed, {coverage.summary.notIndexed.toLocaleString()} not indexed.{coverageHistoryDelta && <> Since the last snapshot: {coverageHistoryDelta.indexed >= 0 ? '+' : ''}{coverageHistoryDelta.indexed.toLocaleString()} indexed, {coverageHistoryDelta.notIndexed >= 0 ? '+' : ''}{coverageHistoryDelta.notIndexed.toLocaleString()} not indexed.</>}</p>
+                      {coverageHistoryExpanded && (
+                        <div className="mt-3 overflow-x-auto">
+                          {_coverageHistory.length > 0 ? (
+                            <table className="data-table w-full text-sm">
+                              <thead><tr><th className="text-left">Date</th><th className="text-right">Indexed</th><th className="text-right">Not indexed</th></tr></thead>
+                              <tbody>{_coverageHistory.map((snapshot) => <tr key={snapshot.date}><td className="text-secondary">{snapshot.date}</td><td className="text-right tabular-nums text-neutral">{snapshot.indexed.toLocaleString()}</td><td className="text-right tabular-nums text-secondary">{snapshot.notIndexed.toLocaleString()}</td></tr>)}</tbody>
+                            </table>
+                          ) : <p className="text-sm text-muted">No saved coverage snapshots yet.</p>}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <p className="mt-3 text-sm text-muted">
+                    {loadingCoverage ? 'Loading coverage data\u2026' : 'No coverage data yet. Inspect your sitemap to populate this view.'}
+                  </p>
+                )}
+              </Card>
+
+              <Card className="surface-card">
+                <div className="section-head section-head-inline">
+                  <div>
+                    <p className="eyebrow eyebrow-soft">Sitemaps</p>
+                    <h3>Sitemap operations</h3>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={listingSitemaps || !gscConn?.propertyId}
+                    onClick={() => void handleListSitemaps()}
+                  >
+                    {listingSitemaps ? 'Reloading\u2026' : 'Reload from Google'}
+                  </Button>
+                </div>
+                <div className="mt-3 flex flex-col gap-2 lg:flex-row">
+                  <input
+                    className="flex-1 rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
+                    type="url"
+                    placeholder="https://example.com/sitemap.xml"
+                    value={sitemapUrlInput}
+                    onChange={(event) => setSitemapUrlInput(event.target.value)}
+                    onKeyDown={(event) => event.key === 'Enter' && void handleSubmitSitemaps([sitemapUrlInput.trim()])}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!canSubmitSitemaps || submittingSitemaps || !sitemapUrlInput.trim()}
+                    onClick={() => void handleSubmitSitemaps([sitemapUrlInput.trim()])}
+                  >
+                    {submittingSitemaps ? 'Submitting\u2026' : 'Submit sitemap to Google'}
+                  </Button>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={!canSubmitSitemaps || submittingSitemaps || primarySitemapSubmissionUrls.length === 0}
+                    onClick={() => void handleSubmitSitemaps(primarySitemapSubmissionUrls)}
+                  >
+                    {submittingSitemaps ? 'Resubmitting\u2026' : primarySitemapSubmissionLabel}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={!canSubmitSitemaps || submittingSitemaps || !discoveredSitemaps?.length}
+                    onClick={() => void handleResubmitAllFiles()}
+                  >
+                    Resubmit all files
+                  </Button>
+                  {sitemapSummary && (
+                    <span className="text-xs text-muted">
+                      Top level: {sitemapSummary.indexes} index{sitemapSummary.indexes === 1 ? '' : 'es'}, {sitemapSummary.files} file{sitemapSummary.files === 1 ? '' : 's'}
+                    </span>
+                  )}
+                  {sitemapSubmissionProgress && <span className="text-xs text-secondary">Submitting {sitemapSubmissionProgress.completed}/{sitemapSubmissionProgress.total}</span>}
+                </div>
+                <p className="mt-2 text-xs text-muted">Google is asked to refetch these sitemaps. Indexing is not guaranteed.</p>
+                {!canSubmitSitemaps && gscConn && (
+                  <div className="mt-2 flex items-center gap-2 text-xs text-caution-400">
+                    <span>Reconnect to allow sitemap submission. This connection has read-only Search Console access.</span>
+                    <button type="button" className="text-secondary underline hover:text-strong" onClick={asyncHandler(handleConnect)}>Reconnect</button>
+                  </div>
+                )}
+                {discoveredSitemaps && (
+                  <div className="mt-3 overflow-x-auto">
+                    {discoveredSitemaps.length > 0 ? (
+                      <>
+                        <DataTableSearch value={sitemapSearch} onChange={(value) => { setSitemapSearch(value); sitemapTable.setPage(1) }} label="Filter sitemaps" placeholder="Filter sitemaps…" />
+                        <table className="data-table mt-3 w-full text-sm">
+                        <thead>
+                          <tr>
+                            <th className="text-left">Sitemap</th>
+                            <th className="text-left">Type</th>
+                            <th className="text-left">Google status</th>
+                            <th className="text-left">Last submitted</th>
+                            <th className="text-left">Last read</th>
+                            <th className="text-right">Discovered URLs</th>
+                            <th className="text-left">Issues</th>
+                            <th className="text-left">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sitemapTable.rows.flatMap((sitemap) => {
+                            const discoveredUrls = sitemapDiscoveredUrlCount(sitemap)
+                            const issues = sitemapIssueText(sitemap)
+                            const googleStatus = sitemapGoogleStatus(sitemap)
+                            const children = sitemapChildren[sitemap.path] ?? []
+                            const expanded = expandedSitemapIndexes.has(sitemap.path)
+                            const row = (
+                              <tr key={sitemap.path}>
+                                <td className="max-w-xs text-strong"><MiddleTruncatedText value={sitemap.path} /></td>
+                                <td className="text-secondary">{sitemap.isSitemapsIndex ? <button type="button" className="text-secondary hover:text-strong" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} files in ${sitemap.path}`} onClick={() => void toggleSitemapIndex(sitemap.path)}>{loadingSitemapChildren.has(sitemap.path) ? 'Loading…' : `${expanded ? '▾' : '▸'} Index${sitemapChildren[sitemap.path] ? ` (${children.length})` : ''}`}</button> : 'Sitemap'}</td>
+                                <td className="text-secondary">{googleStatus}</td>
+                                <td className="text-secondary">{sitemap.lastSubmitted ? sitemap.lastSubmitted.split('T')[0] : '—'}</td>
+                                <td className="text-secondary">{sitemap.lastDownloaded ? sitemap.lastDownloaded.split('T')[0] : '—'}</td>
+                                <td className="text-right tabular-nums text-neutral">{discoveredUrls.toLocaleString()}</td>
+                                <td className="max-w-48 text-secondary">{issues || '—'}</td>
+                                <td><div className="flex flex-wrap gap-2"><button type="button" className="text-xs text-secondary hover:text-strong" disabled={!canSubmitSitemaps || submittingSitemaps} onClick={() => void handleSubmitSitemaps([sitemap.path])}>{sitemap.lastSubmitted ? 'Resubmit to Google' : 'Submit to Google'}</button><button type="button" className="text-xs text-secondary hover:text-strong" disabled={savingSitemap} onClick={() => void handleUseSitemapForAudits(sitemap.path)}>Use for audits</button><button type="button" className="text-xs text-secondary hover:text-strong" disabled={triggerInspectSitemapMutation.isPending} onClick={() => void handleInspectSitemap(sitemap.path)}>Inspect URLs</button></div></td>
+                              </tr>
+                            )
+                            const childRows = sitemap.isSitemapsIndex && expanded ? children.map((child) => (
+                              <tr key={`${sitemap.path}:${child.path}`}>
+                                <td className="max-w-xs pl-6 text-secondary"><MiddleTruncatedText value={child.path} /></td>
+                                <td className="text-secondary">File</td>
+                                <td className="text-secondary">{sitemapGoogleStatus(child)}</td>
+                                <td className="text-secondary">{child.lastSubmitted ? child.lastSubmitted.split('T')[0] : '—'}</td>
+                                <td className="text-secondary">{child.lastDownloaded ? child.lastDownloaded.split('T')[0] : '—'}</td>
+                                <td className="text-right tabular-nums text-neutral">{sitemapDiscoveredUrlCount(child).toLocaleString()}</td>
+                                <td className="text-secondary">{sitemapIssueText(child) || '—'}</td>
+                                <td><div className="flex flex-wrap gap-2"><button type="button" className="text-xs text-secondary hover:text-strong" disabled={!canSubmitSitemaps || submittingSitemaps} onClick={() => void handleSubmitSitemaps([child.path])}>Resubmit</button><button type="button" className="text-xs text-secondary hover:text-strong" disabled={savingSitemap} onClick={() => void handleUseSitemapForAudits(child.path)}>Use for audits</button><button type="button" className="text-xs text-secondary hover:text-strong" disabled={triggerInspectSitemapMutation.isPending} onClick={() => void handleInspectSitemap(child.path)}>Inspect URLs</button></div></td>
+                              </tr>
+                            )) : []
+                            return [row, ...childRows]
+                          })}
+                        </tbody>
+                      </table>
+                      <DataTablePagination page={sitemapTable.page} pageSize={DEFAULT_TABLE_PAGE_SIZE} visibleRows={sitemapTable.rows.length} totalRows={sitemapTable.totalRows} onPageChange={sitemapTable.setPage} itemLabel="sitemaps" />
+                      </>
+                    ) : <p className="text-sm text-muted">No sitemaps found for this property.</p>}
+                  </div>
+                )}
+              </Card>
+
+             {/* URL Inspection */}
               <Card className="surface-card">
                 <div className="section-head">
                   <div>
@@ -1537,21 +1651,19 @@ export function GscSection({
                     <h3>Inspect a URL</h3>
                   </div>
                 </div>
-                {!isEmbed() && (
-                  <div className="mt-3 flex flex-col gap-2 lg:flex-row">
-                    <input
-                      className="flex-1 rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
-                      type="url"
-                      placeholder="https://example.com/page"
-                      value={inspectionUrl}
-                      onChange={(e) => setInspectionUrl(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && void handleInspect()}
-                    />
-                    <Button type="button" size="sm" disabled={inspecting || !gscConn?.propertyId || !inspectionUrl.trim()} onClick={asyncHandler(handleInspect)}>
-                      {inspecting ? 'Inspecting\u2026' : 'Inspect URL'}
-                    </Button>
-                  </div>
-                )}
+                <div className="mt-3 flex flex-col gap-2 lg:flex-row">
+                  <input
+                    className="flex-1 rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
+                    type="url"
+                    placeholder="https://example.com/page"
+                    value={inspectionUrl}
+                    onChange={(e) => setInspectionUrl(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && void handleInspect()}
+                  />
+                  <Button type="button" size="sm" disabled={inspecting || !gscConn?.propertyId || !inspectionUrl.trim()} onClick={asyncHandler(handleInspect)}>
+                    {inspecting ? 'Inspecting\u2026' : 'Inspect URL'}
+                  </Button>
+                </div>
                 {inspectionResult && (
                   <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <div className="rounded-lg border border-default bg-surface-subtle p-3">
@@ -1581,8 +1693,7 @@ export function GscSection({
                     <p className="eyebrow eyebrow-soft">History</p>
                     <h3>Inspection log</h3>
                   </div>
-                  <Button type="button" variant="outline" size="sm" disabled={loadingInspections} onClick={() => void loadInspectionHistory({ force: true, notify: true })}>
-                    <RefreshCw className={`h-3.5 w-3.5 ${loadingInspections ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  <Button type="button" variant="outline" size="sm" disabled={loadingInspections} onClick={() => void loadInspectionHistory()}>
                     {loadingInspections ? 'Loading\u2026' : 'Refresh history'}
                   </Button>
                 </div>
@@ -1594,7 +1705,7 @@ export function GscSection({
                     value={inspectionFilterUrl}
                     onChange={(e) => setInspectionFilterUrl(e.target.value)}
                   />
-                  <Button type="button" size="sm" variant="outline" disabled={loadingInspections} onClick={() => void loadInspectionHistory({ force: true, notify: true })}>
+                  <Button type="button" size="sm" variant="outline" disabled={loadingInspections} onClick={() => void loadInspectionHistory()}>
                     Apply filter
                   </Button>
                 </div>
@@ -1665,7 +1776,7 @@ export function GscSection({
                   <p className="mt-3 text-sm text-muted">No deindexed transitions recorded.</p>
                 )}
               </Card>
-            </>
+            </div>
           )}
 
           {/* ── SETUP SECTION (at bottom, collapsible for connected projects) ── */}
@@ -1718,15 +1829,12 @@ export function GscSection({
                           )}
                         </select>
                         <div className="flex flex-wrap items-center gap-2">
-                          <Button type="button" size="sm" variant="outline" disabled={propertiesLoading} onClick={() => void loadProperties(gscConn, { force: true, notify: true })}>
-                            <RefreshCw className={`h-3.5 w-3.5 ${propertiesLoading ? 'animate-spin' : ''}`} aria-hidden="true" />
+                          <Button type="button" size="sm" variant="outline" disabled={propertiesLoading} onClick={() => void loadProperties(gscConn)}>
                             {propertiesLoading ? 'Refreshing\u2026' : 'Refresh properties'}
                           </Button>
-                          {!isEmbed() && (
-                            <Button type="button" size="sm" disabled={!selectedProperty || savingProperty} onClick={asyncHandler(handleSaveProperty)}>
-                              {savingProperty ? 'Saving\u2026' : 'Save property'}
-                            </Button>
-                          )}
+                          <Button type="button" size="sm" disabled={!selectedProperty || savingProperty} onClick={asyncHandler(handleSaveProperty)}>
+                            {savingProperty ? 'Saving\u2026' : 'Save property'}
+                          </Button>
                         </div>
                         <p className="text-xs text-muted">The selected property is used for future syncs and URL inspections for this project.</p>
                       </div>
@@ -1761,16 +1869,14 @@ export function GscSection({
                             Replace existing imported rows for the requested range
                           </label>
                         </div>
-                        {!isEmbed() && (
-                          <Button
-                            type="button"
-                            size="sm"
-                            disabled={triggerGscSyncMutation.isPending || !gscConn.propertyId}
-                            onClick={asyncHandler(handleSync)}
-                          >
-                            {triggerGscSyncMutation.isPending ? 'Queueing\u2026' : 'Queue sync'}
-                          </Button>
-                        )}
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={triggerGscSyncMutation.isPending || !gscConn.propertyId}
+                          onClick={asyncHandler(handleSync)}
+                        >
+                          {triggerGscSyncMutation.isPending ? 'Queueing\u2026' : 'Queue sync'}
+                        </Button>
                         {!gscConn.propertyId && (
                           <p className="text-xs text-caution-400">Select a Search Console property before queueing a sync.</p>
                         )}
@@ -1778,131 +1884,6 @@ export function GscSection({
                     </Card>
                   </div>
 
-                  {/* Sitemap configuration */}
-                  <Card className="surface-card">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow eyebrow-soft">Sitemap</p>
-                        <h3>Sitemap configuration</h3>
-                      </div>
-                    </div>
-                    <div className="mt-3 space-y-3">
-                      {gscConn.sitemapUrl && (
-                        <div className="rounded-lg border border-default bg-surface-subtle p-3">
-                          <p className="text-xs uppercase tracking-wide text-muted">Current sitemap URL</p>
-                          <p className="mt-1 text-sm text-strong break-all">{gscConn.sitemapUrl}</p>
-                        </div>
-                      )}
-                      {/* Sitemap actions: list (no run) or auto-discover (saves + queues run) */}
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          disabled={listingSitemaps || !gscConn.propertyId}
-                          onClick={() => void handleListSitemaps()}
-                        >
-                          {listingSitemaps ? 'Loading\u2026' : 'Browse sitemaps from GSC'}
-                        </Button>
-                        {!isEmbed() && (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            disabled={triggerDiscoverSitemapsMutation.isPending || !gscConn.propertyId}
-                            onClick={asyncHandler(handleDiscoverSitemaps)}
-                          >
-                            {triggerDiscoverSitemapsMutation.isPending ? 'Discovering\u2026' : 'Auto-discover and queue inspection'}
-                          </Button>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted">Browse lists available sitemaps without queueing a run. Auto-discover saves the primary sitemap and queues an inspection.</p>
-                      {discoveredSitemaps && discoveredSitemaps.length > 0 && (
-                        <div className="rounded-lg border border-default bg-surface-subtle p-3 space-y-2">
-                          <p className="text-xs uppercase tracking-wide text-muted">Sitemaps ({discoveredSitemaps.length})</p>
-                          {discoveredSitemaps.map((s) => {
-                            const content = s.contents?.[0]
-                            return (
-                              <div key={s.path} className="flex items-start justify-between gap-2 text-xs">
-                                <div>
-                                  <p className="text-strong break-all">{s.path}</p>
-                                  {s.lastSubmitted && (
-                                    <p className="text-muted">Submitted: {s.lastSubmitted.split('T')[0]}</p>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-3 shrink-0">
-                                  {content && (
-                                    <div className="text-right">
-                                      <p className="text-neutral">{content.indexed} / {content.submitted}</p>
-                                      <p className="text-muted">indexed</p>
-                                    </div>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="text-xs text-secondary hover:text-strong transition-colors"
-                                    onClick={() => setSitemapUrlInput(s.path)}
-                                  >
-                                    Use
-                                  </button>
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                      {!isEmbed() && (
-                        <div className="flex flex-col gap-2 lg:flex-row">
-                          <input
-                            className="flex-1 rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
-                            type="url"
-                            placeholder={gscConn.sitemapUrl ? 'Update sitemap URL\u2026' : 'https://example.com/sitemap.xml'}
-                            value={sitemapUrlInput}
-                            onChange={(e) => setSitemapUrlInput(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && sitemapUrlInput.trim() && void handleSaveSitemap()}
-                          />
-                          <Button type="button" size="sm" disabled={savingSitemap || !sitemapUrlInput.trim()} onClick={asyncHandler(handleSaveSitemap)}>
-                            {savingSitemap ? 'Saving\u2026' : gscConn.sitemapUrl ? 'Update' : 'Save'}
-                          </Button>
-                        </div>
-                      )}
-                      {!isEmbed() && (
-                        <div className="flex flex-col gap-2 lg:flex-row">
-                          <input
-                            className="flex-1 rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
-                            type="url"
-                            placeholder="Sitemap URL for inspection (leave empty for saved default)"
-                            id={`gsc-sitemap-inspect-${projectName}`}
-                          />
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            disabled={triggerInspectSitemapMutation.isPending || !gscConn.propertyId}
-                            onClick={asyncHandler(async () => {
-                            const el = document.getElementById(`gsc-sitemap-inspect-${projectName}`) as HTMLInputElement | null
-                            const url = el?.value?.trim() || gscConn.sitemapUrl || undefined
-                            setError(null)
-                            setNotice(null)
-                            try {
-                              await triggerInspectSitemapMutation.mutateAsync({
-                                projectName,
-                                projectLabel: projectName,
-                                opts: { sitemapUrl: url },
-                              })
-                            } catch {
-                              // Mutation hook handles the toast-only failure path for queued inspections.
-                            }
-                          })}
-                        >
-                          {triggerInspectSitemapMutation.isPending ? 'Queueing\u2026' : 'Inspect sitemap'}
-                          </Button>
-                        </div>
-                      )}
-                      {!gscConn.propertyId && (
-                        <p className="text-xs text-caution-400">Select a Search Console property first.</p>
-                      )}
-                    </div>
-                  </Card>
                 </div>
               )}
             </>

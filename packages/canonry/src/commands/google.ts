@@ -1,11 +1,15 @@
-import type { GscUrlInspectionDto, IndexingRequestResultDto } from '@ainyc/canonry-contracts'
+import type {
+  GscSubmitSitemapsResponseDto,
+  GscUrlInspectionDto,
+  IndexingRequestResultDto,
+} from '@ainyc/canonry-contracts'
 import { type ApiClient, createApiClient } from '../client.js'
-import { CliError, isMachineFormat } from '../cli-error.js'
+import { CliError, EXIT_SYSTEM_ERROR, isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
 
 const INDEXING_API_SCOPE_NOTICE =
   "Note: Google's Indexing API officially supports only pages with JobPosting or BroadcastEvent (livestream VideoObject) structured data. " +
-  'For other URL types, submissions are accepted (HTTP 200) but not guaranteed to be prioritized for crawling. ' +
+  'Other URL types are outside the supported use of that API. ' +
   'For general pages, submit a sitemap and use URL Inspection to monitor status.'
 
 function getClient() {
@@ -489,7 +493,7 @@ export async function googleListSitemaps(project: string, opts: { format?: strin
       path: string
       lastSubmitted?: string
       isSitemapsIndex?: boolean
-      contents?: Array<{ type: string; submitted: string; indexed: string }>
+      contents?: Array<{ type: string; submitted: string }>
       warnings?: string
       errors?: string
     }>
@@ -504,18 +508,187 @@ export async function googleListSitemaps(project: string, opts: { format?: strin
   }
 
   if (result.sitemaps.length === 0) {
-    console.log(`No sitemaps found for project "${project}". Submit a sitemap in Google Search Console first.`)
+    console.log(
+      `No sitemaps found for project "${project}". ` +
+      `Run "canonry google submit-sitemap ${project} <url>" to submit one.`,
+    )
     return
   }
 
   console.log(`\nSitemaps for project "${project}":\n`)
   for (const s of result.sitemaps) {
-    const indexed = s.contents?.[0]?.indexed ?? '?'
-    const submitted = s.contents?.[0]?.submitted ?? '?'
+    const submitted = sitemapSubmittedUrlTotal(s.contents)
     const isIndex = s.isSitemapsIndex ? ' [index]' : ''
     console.log(`  ${s.path}${isIndex}`)
-    console.log(`    Indexed: ${indexed} / ${submitted} submitted  |  Last submitted: ${s.lastSubmitted ?? 'unknown'}`)
+    console.log(`    Submitted URLs: ${submitted}  |  Last submitted: ${s.lastSubmitted ?? 'unknown'}`)
   }
+}
+
+function sitemapSubmittedUrlTotal(contents: Array<{ submitted: string }> | undefined): number | '?' {
+  if (!contents?.length) return '?'
+  return contents.reduce((total, content) => total + (Number.parseInt(content.submitted, 10) || 0), 0)
+}
+
+function dedupeSitemapUrls(urls: string[]): string[] {
+  return [...new Set(urls.map((url) => url.trim()).filter(Boolean))]
+}
+
+export type GscSitemapSubmissionOptions = {
+  sitemapUrls?: string[]
+  configured?: boolean
+  all?: boolean
+  allFiles?: boolean
+  onProgress?: (completedBatches: number, totalBatches: number) => void
+}
+
+export async function submitGscSitemaps(
+  client: ApiClient,
+  project: string,
+  opts: GscSitemapSubmissionOptions,
+): Promise<GscSubmitSitemapsResponseDto> {
+  const explicitUrls = dedupeSitemapUrls(opts.sitemapUrls ?? [])
+  const modes = Number(explicitUrls.length > 0) + Number(Boolean(opts.configured)) + Number(Boolean(opts.all)) + Number(Boolean(opts.allFiles))
+  if (modes !== 1) {
+    throw new CliError({
+      code: 'CLI_USAGE_ERROR',
+      message: 'provide sitemap URL(s), --configured, --all, or --all-files (exactly one)',
+      displayMessage: 'Error: provide sitemap URL(s), --configured, --all, or --all-files (exactly one)',
+      details: { command: 'google.submit-sitemap' },
+    })
+  }
+  if (explicitUrls.length > 50) {
+    throw new CliError({
+      code: 'CLI_USAGE_ERROR',
+      message: 'explicit sitemap URL submissions support at most 50 URLs; split the URLs into groups of 50 or use --all/--all-files for discovered sitemaps',
+      displayMessage: 'Error: explicit sitemap URL submissions support at most 50 URLs; split the URLs into groups of 50 or use --all/--all-files for discovered sitemaps',
+      details: { command: 'google.submit-sitemap', sitemapUrls: explicitUrls.length, maxSitemapUrls: 50 },
+    })
+  }
+
+  let sitemapUrls = explicitUrls
+  if (opts.configured) {
+    const connections = await client.googleConnections(project)
+    const sitemapUrl = connections.find((connection) => connection.connectionType === 'gsc')?.sitemapUrl
+    if (!sitemapUrl || !sitemapUrl.trim()) {
+      throw new CliError({
+        code: 'CLI_USAGE_ERROR',
+        message: 'no configured GSC sitemap URL found; use a URL, --all, or --all-files',
+        displayMessage: 'Error: no configured GSC sitemap URL found; use a URL, --all, or --all-files',
+        details: { command: 'google.submit-sitemap', project },
+      })
+    }
+    sitemapUrls = dedupeSitemapUrls([sitemapUrl])
+  } else if (opts.all || opts.allFiles) {
+    const topLevel = await client.gscSitemaps(project)
+    if (opts.all) {
+      sitemapUrls = dedupeSitemapUrls(
+        topLevel.preferredSubmissionUrls.length > 0
+          ? topLevel.preferredSubmissionUrls
+          : topLevel.sitemaps.map((sitemap) => sitemap.path),
+      )
+    } else if (opts.allFiles) {
+      const indexes = topLevel.sitemaps.filter((sitemap) => sitemap.isSitemapsIndex).map((sitemap) => sitemap.path)
+      const children = []
+      for (let offset = 0; offset < indexes.length; offset += 4) {
+        children.push(...await Promise.all(
+          indexes.slice(offset, offset + 4).map((sitemapIndex) => client.gscSitemaps(project, { sitemapIndex })),
+        ))
+      }
+      const expandedIndexUrls = children.flatMap((result, index) =>
+        result.sitemaps.length > 0
+          ? result.sitemaps.map((sitemap) => sitemap.path)
+          : [indexes[index]!],
+      )
+      sitemapUrls = dedupeSitemapUrls([
+        ...topLevel.sitemaps.filter((sitemap) => !sitemap.isSitemapsIndex).map((sitemap) => sitemap.path),
+        ...expandedIndexUrls,
+      ])
+    }
+    if (sitemapUrls.length === 0) {
+      throw new CliError({
+        code: 'CLI_USAGE_ERROR',
+        message: 'no GSC sitemaps found; provide a URL or use --configured',
+        displayMessage: 'Error: no GSC sitemaps found; provide a URL or use --configured',
+        details: { command: 'google.submit-sitemap', project },
+      })
+    }
+  }
+
+  const batches = opts.all || opts.allFiles
+    ? Array.from({ length: Math.ceil(sitemapUrls.length / 50) }, (_, index) => sitemapUrls.slice(index * 50, index * 50 + 50))
+    : [sitemapUrls]
+  const aggregate: GscSubmitSitemapsResponseDto = {
+    summary: { total: 0, accepted: 0, failed: 0 },
+    results: [],
+  }
+  for (const [index, batchSitemapUrls] of batches.entries()) {
+    try {
+      const result = await client.gscSubmitSitemaps(project, { sitemapUrls: batchSitemapUrls })
+      aggregate.summary.total += result.summary.total
+      aggregate.summary.accepted += result.summary.accepted
+      aggregate.summary.failed += result.summary.failed
+      aggregate.results.push(...result.results)
+      opts.onProgress?.(index + 1, batches.length)
+    } catch (cause) {
+      if (index === 0) throw cause
+      const attempted = aggregate.summary.total + batchSitemapUrls.length
+      const remaining = sitemapUrls.length - attempted
+      const causeDetails = cause instanceof CliError
+        ? { code: cause.code, message: cause.message, details: cause.details }
+        : { message: cause instanceof Error ? cause.message : String(cause) }
+      throw new CliError({
+        code: 'GOOGLE_SITEMAP_SUBMISSION_PARTIAL',
+        message: `Sitemap submission stopped at batch ${index + 1}/${batches.length}; ${aggregate.summary.accepted} accepted, ${aggregate.summary.failed} failed, ${batchSitemapUrls.length} unconfirmed, ${remaining} not attempted.`,
+        displayMessage: `Sitemap submission stopped at batch ${index + 1}/${batches.length}; ${aggregate.summary.accepted} accepted, ${aggregate.summary.failed} failed, ${batchSitemapUrls.length} unconfirmed, ${remaining} not attempted. Earlier accepted submissions were not rolled back.`,
+        exitCode: cause instanceof CliError && cause.exitCode === 1 ? 1 : EXIT_SYSTEM_ERROR,
+        details: {
+          project,
+          accepted: aggregate.summary.accepted,
+          failed: aggregate.summary.failed,
+          completed: aggregate.summary.total,
+          attempted,
+          unconfirmed: batchSitemapUrls.length,
+          remaining,
+          unconfirmedBatch: { index: index + 1, total: batches.length, sitemapUrls: batchSitemapUrls },
+          partialResult: aggregate,
+          cause: causeDetails,
+        },
+      })
+    }
+  }
+  return aggregate
+}
+
+export async function googleSubmitSitemaps(project: string, opts: GscSitemapSubmissionOptions & {
+  format?: string
+}): Promise<void> {
+  const client = getClient()
+  const result = await submitGscSitemaps(client, project, {
+    ...opts,
+    onProgress: !isMachineFormat(opts.format) && (opts.all || opts.allFiles)
+      ? (completedBatches, totalBatches) => process.stderr.write(`Submitted sitemap batch ${completedBatches}/${totalBatches}\n`)
+      : undefined,
+  })
+  if (opts.format === 'json') {
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+  if (opts.format === 'jsonl') {
+    emitJsonl(result.results.map((entry) => ({ project, ...entry })))
+    return
+  }
+
+  for (const entry of result.results) {
+    if (entry.status === 'accepted') {
+      console.log(`Accepted by Google for sitemap refetch: ${entry.sitemapUrl}`)
+      if (entry.submittedAt) console.log(`  Submitted at: ${entry.submittedAt}`)
+    } else {
+      console.error(`Failed to submit sitemap: ${entry.sitemapUrl}`)
+      if (entry.error) console.error(`  Error: ${entry.error}`)
+    }
+  }
+  console.log(`Summary: ${result.summary.accepted} accepted, ${result.summary.failed} failed (${result.summary.total} total)`)
+  console.log('Google accepting a sitemap for refetch does not guarantee indexing.')
 }
 
 export async function googleInspectSitemap(project: string, opts: {
@@ -604,7 +777,7 @@ export async function googleDiscoverSitemaps(project: string, opts: { wait?: boo
       path: string
       lastSubmitted?: string
       isSitemapsIndex?: boolean
-      contents?: Array<{ type: string; submitted: string; indexed: string }>
+      contents?: Array<{ type: string; submitted: string }>
       warnings?: string
       errors?: string
     }>
@@ -621,10 +794,9 @@ export async function googleDiscoverSitemaps(project: string, opts: { wait?: boo
     console.log(`\nDiscovered ${result.sitemaps.length} sitemap(s) for project "${project}":\n`)
     for (const s of result.sitemaps) {
       const primary = s.path === result.primarySitemapUrl ? ' (primary)' : ''
-      const indexed = s.contents?.[0]?.indexed ?? '?'
-      const submitted = s.contents?.[0]?.submitted ?? '?'
+      const submitted = sitemapSubmittedUrlTotal(s.contents)
       console.log(`  ${s.path}${primary}`)
-      console.log(`    Indexed: ${indexed} / ${submitted} submitted  |  Last submitted: ${s.lastSubmitted ?? 'unknown'}`)
+      console.log(`    Submitted URLs: ${submitted}  |  Last submitted: ${s.lastSubmitted ?? 'unknown'}`)
     }
 
     console.log(`\nPrimary sitemap: ${result.primarySitemapUrl}`)

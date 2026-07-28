@@ -112,6 +112,7 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'GET /api/v1/projects/{name}/google/gsc/coverage': 'included',
   'GET /api/v1/projects/{name}/google/gsc/coverage/history': 'included',
   'GET /api/v1/projects/{name}/google/gsc/sitemaps': 'included',
+  'POST /api/v1/projects/{name}/google/gsc/sitemaps/submit': 'included',
   'POST /api/v1/projects/{name}/google/gsc/discover-sitemaps': 'deferred',
   'POST /api/v1/projects/{name}/google/gsc/inspect-sitemap': 'deferred',
   'POST /api/v1/projects/{name}/google/indexing/request': 'deferred',

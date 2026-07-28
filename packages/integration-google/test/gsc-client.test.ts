@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { listSites, listSitemaps, fetchSearchAnalytics, inspectUrl, publishUrlNotification, getUrlNotificationStatus } from '../src/gsc-client.js'
+import { listSites, listSitemaps, submitSitemap, fetchSearchAnalytics, inspectUrl, publishUrlNotification, getUrlNotificationStatus } from '../src/gsc-client.js'
 import { GSC_API_BASE, URL_INSPECTION_API, INDEXING_API_BASE } from '../src/constants.js'
 
 describe('listSites', () => {
@@ -46,6 +46,14 @@ describe('listSites', () => {
       () => listSites('bad-token'),
     ).rejects.toThrow(/expired or revoked/)
     await expect(() => listSites('bad-token')).rejects.toMatchObject({ name: 'GoogleApiError' })
+  })
+
+  it('throws a typed error for an empty successful response', async () => {
+    globalThis.fetch = async () => new Response(null, { status: 204 })
+    await expect(() => listSites('test-token')).rejects.toMatchObject({
+      name: 'GoogleApiError',
+      message: expect.stringMatching(/empty response/),
+    })
   })
 })
 
@@ -100,6 +108,18 @@ describe('listSitemaps', () => {
     expect(capturedUrl).toContain(encodeURIComponent('sc-domain:example.com'))
   })
 
+  it('passes an encoded sitemapIndex query when listing an index\'s children', async () => {
+    let capturedUrl = ''
+    globalThis.fetch = async (url: string | URL | Request) => {
+      capturedUrl = String(url)
+      return new Response(JSON.stringify({ sitemap: [] }), { status: 200 })
+    }
+
+    const sitemapIndex = 'https://example.com/sitemaps/main index.xml'
+    await listSitemaps('test-token', 'sc-domain:example.com', sitemapIndex)
+    expect(capturedUrl).toBe(`${GSC_API_BASE}/sites/${encodeURIComponent('sc-domain:example.com')}/sitemaps?sitemapIndex=${encodeURIComponent(sitemapIndex)}`)
+  })
+
   it('accepts a numeric property ID and uses it in the request path', async () => {
     let capturedUrl = ''
     globalThis.fetch = async (url: string | URL | Request) => {
@@ -114,6 +134,40 @@ describe('listSitemaps', () => {
   it('throws GoogleApiError on 401', async () => {
     globalThis.fetch = async () => new Response('Unauthorized', { status: 401 })
     await expect(() => listSitemaps('bad-token', 'https://example.com/')).rejects.toMatchObject({ name: 'GoogleApiError' })
+  })
+
+  it('throws a typed error for an empty successful response', async () => {
+    globalThis.fetch = async () => new Response('', { status: 200 })
+    await expect(() => listSitemaps('test-token', 'https://example.com/')).rejects.toMatchObject({
+      name: 'GoogleApiError',
+      message: expect.stringMatching(/empty response/),
+    })
+  })
+})
+
+describe('submitSitemap', () => {
+  let originalFetch: typeof globalThis.fetch
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  it('PUTs the encoded property and sitemap URL and accepts an empty 204 response', async () => {
+    let capturedUrl = ''
+    let capturedMethod = ''
+    globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
+      capturedUrl = String(url)
+      capturedMethod = String(init?.method)
+      return new Response(null, { status: 204 })
+    }
+
+    await expect(submitSitemap('test-token', 'sc-domain:example.com', 'https://example.com/sitemap.xml')).resolves.toBeUndefined()
+    expect(capturedMethod).toBe('PUT')
+    expect(capturedUrl).toBe(`${GSC_API_BASE}/sites/${encodeURIComponent('sc-domain:example.com')}/sitemaps/${encodeURIComponent('https://example.com/sitemap.xml')}`)
   })
 })
 

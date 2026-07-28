@@ -1,6 +1,9 @@
 export const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 export const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
-export const GSC_SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly'
+/** Full Search Console scope. Required for mutations such as sitemap submit. */
+export const GSC_SCOPE = 'https://www.googleapis.com/auth/webmasters'
+/** Legacy read-only Search Console scope, retained to identify connections that need re-authorization. */
+export const GSC_READONLY_SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly'
 export const INDEXING_SCOPE = 'https://www.googleapis.com/auth/indexing'
 export const GSC_API_BASE = 'https://www.googleapis.com/webmasters/v3'
 export const URL_INSPECTION_API = 'https://searchconsole.googleapis.com/v1/urlInspection/index:inspect'

@@ -106,7 +106,7 @@ function gscClientLog(level: 'info' | 'error', action: string, ctx?: Record<stri
   stream.write(JSON.stringify(entry) + '\n')
 }
 
-async function gscFetch<T>(accessToken: string, url: string, opts?: { method?: string; body?: unknown }): Promise<T> {
+async function gscFetchResponse(accessToken: string, url: string, opts?: { method?: string; body?: unknown }): Promise<Response> {
   const method = opts?.method ?? 'GET'
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
@@ -138,27 +138,55 @@ async function gscFetch<T>(accessToken: string, url: string, opts?: { method?: s
     throw new GoogleApiError(`GSC API error (${res.status}): ${detail}`, res.status)
   }
 
-  return (await res.json()) as T
+  return res
+}
+
+async function gscFetchJson<T>(accessToken: string, url: string, opts?: { method?: string; body?: unknown }): Promise<T> {
+  const res = await gscFetchResponse(accessToken, url, opts)
+  const text = await res.text()
+  if (!text) {
+    throw new GoogleApiError('GSC API returned an empty response where JSON was expected', res.status)
+  }
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    throw new GoogleApiError('GSC API returned invalid JSON', res.status)
+  }
 }
 
 export async function listSites(accessToken: string): Promise<GscSite[]> {
   validateAccessToken(accessToken)
-  const data = await gscFetch<{ siteEntry?: GscSite[] }>(
+  const data = await gscFetchJson<{ siteEntry?: GscSite[] }>(
     accessToken,
     `${GSC_API_BASE}/sites`,
   )
   return data.siteEntry ?? []
 }
 
-export async function listSitemaps(accessToken: string, siteUrl: string): Promise<GscSitemap[]> {
+export async function listSitemaps(accessToken: string, siteUrl: string, sitemapIndex?: string): Promise<GscSitemap[]> {
   validateAccessToken(accessToken)
   validateSiteUrl(siteUrl)
+  if (sitemapIndex != null) validateUrl(sitemapIndex)
   const encodedSiteUrl = encodeURIComponent(siteUrl)
-  const data = await gscFetch<{ sitemap?: GscSitemap[] }>(
+  const sitemapIndexQuery = sitemapIndex == null ? '' : `?sitemapIndex=${encodeURIComponent(sitemapIndex)}`
+  const data = await gscFetchJson<{ sitemap?: GscSitemap[] }>(
     accessToken,
-    `${GSC_API_BASE}/sites/${encodedSiteUrl}/sitemaps`,
+    `${GSC_API_BASE}/sites/${encodedSiteUrl}/sitemaps${sitemapIndexQuery}`,
   )
   return data.sitemap ?? []
+}
+
+/** Submit (or ask Google to refetch) a sitemap. A successful response only
+ * confirms Google accepted the request; it does not imply indexing. */
+export async function submitSitemap(accessToken: string, siteUrl: string, sitemapUrl: string): Promise<void> {
+  validateAccessToken(accessToken)
+  validateSiteUrl(siteUrl)
+  validateUrl(sitemapUrl)
+  await gscFetchResponse(
+    accessToken,
+    `${GSC_API_BASE}/sites/${encodeURIComponent(siteUrl)}/sitemaps/${encodeURIComponent(sitemapUrl)}`,
+    { method: 'PUT' },
+  )
 }
 
 export interface FetchSearchAnalyticsOptions {
@@ -205,7 +233,7 @@ export async function fetchSearchAnalytics(
     }
 
     const encodedSiteUrl = encodeURIComponent(siteUrl)
-    const data = await gscFetch<GscSearchAnalyticsResponse>(
+    const data = await gscFetchJson<GscSearchAnalyticsResponse>(
       accessToken,
       `${GSC_API_BASE}/sites/${encodedSiteUrl}/searchAnalytics/query`,
       { method: 'POST', body: requestBody },
@@ -230,7 +258,7 @@ export async function publishUrlNotification(
 ): Promise<IndexingApiResponse> {
   validateAccessToken(accessToken)
   validateUrl(url)
-  return gscFetch<IndexingApiResponse>(
+  return gscFetchJson<IndexingApiResponse>(
     accessToken,
     `${INDEXING_API_BASE}/urlNotifications:publish`,
     {
@@ -247,7 +275,7 @@ export async function getUrlNotificationStatus(
   validateAccessToken(accessToken)
   validateUrl(url)
   const encodedUrl = encodeURIComponent(url)
-  return gscFetch<IndexingApiResponse>(
+  return gscFetchJson<IndexingApiResponse>(
     accessToken,
     `${INDEXING_API_BASE}/urlNotifications/metadata?url=${encodedUrl}`,
   )
@@ -261,7 +289,7 @@ export async function inspectUrl(
   validateAccessToken(accessToken)
   validateUrl(inspectionUrl)
   validateSiteUrl(siteUrl)
-  return gscFetch<GscUrlInspectionResult>(
+  return gscFetchJson<GscUrlInspectionResult>(
     accessToken,
     URL_INSPECTION_API,
     {

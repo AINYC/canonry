@@ -44,7 +44,7 @@ function makeStore(record?: Partial<GoogleConnectionRecord>): GoogleConnectionSt
         refreshToken: 'refresh',
         tokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
         scopes: [
-          'https://www.googleapis.com/auth/webmasters.readonly',
+          'https://www.googleapis.com/auth/webmasters',
           'https://www.googleapis.com/auth/indexing',
         ],
         createdAt: '2026-04-01T00:00:00.000Z',

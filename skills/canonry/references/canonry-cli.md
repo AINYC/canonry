@@ -392,6 +392,10 @@ cnry google properties <project>                       # list available properti
 cnry google set-property <project> <url>               # set GSC property URL
 cnry google set-sitemap <project> <url>                # set sitemap URL
 cnry google list-sitemaps <project>                    # list submitted sitemaps
+cnry google submit-sitemap <project> <url...>           # submit up to 50 explicit sitemap URLs
+cnry google submit-sitemap <project> --configured       # submit Canonry's saved default
+cnry google submit-sitemap <project> --all              # prefer sitemap indexes (fallback: top-level files)
+cnry google submit-sitemap <project> --all-files        # include top-level files and index children (batched by 50)
 cnry google discover-sitemaps <project> --wait         # auto-discover and inspect
 
 cnry google sync <project>                             # sync GSC data

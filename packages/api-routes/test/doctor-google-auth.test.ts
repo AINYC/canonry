@@ -33,7 +33,7 @@ function buildStore(connection?: Partial<GoogleConnectionRecord>): GoogleConnect
         refreshToken: 'refresh-token',
         tokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
         scopes: [
-          'https://www.googleapis.com/auth/webmasters.readonly',
+          'https://www.googleapis.com/auth/webmasters',
           'https://www.googleapis.com/auth/indexing',
         ],
         createdAt: '2026-04-01T00:00:00.000Z',
@@ -200,11 +200,11 @@ describe('google.auth.scopes', () => {
     expect(result.code).toBe('google.auth.scopes-ok')
   })
 
-  it('warns when only the indexing scope is missing', async () => {
+  it('warns when the full scope lacks Indexing API access', async () => {
     const result = await check.run(
       ctx({
         googleConnectionStore: buildStore({
-          scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
+          scopes: ['https://www.googleapis.com/auth/webmasters'],
         }),
       }),
     )
@@ -212,13 +212,39 @@ describe('google.auth.scopes', () => {
     expect(result.code).toBe('google.auth.indexing-scope-missing')
   })
 
-  it('fails when the GSC scope itself is missing', async () => {
+  it('warns existing read-only plus indexing installations to reconnect for sitemap writes', async () => {
     const result = await check.run(
       ctx({
-        googleConnectionStore: buildStore({ scopes: [] }),
+        googleConnectionStore: buildStore({
+          scopes: [
+            'https://www.googleapis.com/auth/webmasters.readonly',
+            'https://www.googleapis.com/auth/indexing',
+          ],
+        }),
       }),
+    )
+    expect(result.status).toBe('warn')
+    expect(result.code).toBe('google.auth.sitemap-write-scope-missing')
+    expect(result.remediation).toMatch(/full Search Console webmasters scope/)
+  })
+
+  it('warns when a read-only installation lacks optional write scopes', async () => {
+    const result = await check.run(
+      ctx({
+        googleConnectionStore: buildStore({ scopes: ['https://www.googleapis.com/auth/webmasters.readonly'] }),
+      }),
+    )
+    expect(result.status).toBe('warn')
+    expect(result.code).toBe('google.auth.sitemap-write-scope-missing')
+    expect(result.summary).toMatch(/Indexing API are unavailable/)
+  })
+
+  it('fails only when neither full nor read-only Search Console access is granted', async () => {
+    const result = await check.run(
+      ctx({ googleConnectionStore: buildStore({ scopes: ['https://www.googleapis.com/auth/indexing'] }) }),
     )
     expect(result.status).toBe('fail')
     expect(result.code).toBe('google.auth.required-scope-missing')
+    expect(result.summary).toMatch(/GSC reads will fail/)
   })
 })

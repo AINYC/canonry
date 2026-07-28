@@ -94,6 +94,10 @@ import type {
   GscUrlInspectionDto,
   GscCoverageSummaryDto,
   GscCoverageSnapshotDto,
+  GscDiscoverSitemapsResponseDto,
+  GscSitemapListResponseDto,
+  GscSubmitSitemapsRequestDto,
+  GscSubmitSitemapsResponseDto,
   InsightDto,
   HealthSnapshotDto,
   CitationVisibilityResponse,
@@ -295,6 +299,7 @@ import {
   postApiV1ProjectsByNameGoogleGscInspectSitemap,
   getApiV1ProjectsByNameGoogleGscSitemaps,
   postApiV1ProjectsByNameGoogleGscDiscoverSitemaps,
+  postApiV1ProjectsByNameGoogleGscSitemapsSubmit,
   // Google Indexing
   postApiV1ProjectsByNameGoogleIndexingRequest,
   // Bing
@@ -1869,14 +1874,28 @@ export class ApiClient {
     )
   }
 
-  async gscSitemaps(project: string): Promise<object> {
-    return this.invoke<object>(() =>
-      getApiV1ProjectsByNameGoogleGscSitemaps({ client: this.heyClient, path: { name: project } }),
+  async gscSitemaps(project: string, params?: { sitemapIndex?: string }): Promise<GscSitemapListResponseDto> {
+    return this.invoke<GscSitemapListResponseDto>(() =>
+      getApiV1ProjectsByNameGoogleGscSitemaps({
+        client: this.heyClient,
+        path: { name: project },
+        query: { sitemapIndex: params?.sitemapIndex },
+      }),
     )
   }
 
-  async gscDiscoverSitemaps(project: string): Promise<object> {
-    return this.invoke<object>(() =>
+  async gscSubmitSitemaps(project: string, body: GscSubmitSitemapsRequestDto): Promise<GscSubmitSitemapsResponseDto> {
+    return this.invoke<GscSubmitSitemapsResponseDto>(() =>
+      postApiV1ProjectsByNameGoogleGscSitemapsSubmit({
+        client: this.heyClient,
+        path: { name: project },
+        body,
+      }),
+    )
+  }
+
+  async gscDiscoverSitemaps(project: string): Promise<GscDiscoverSitemapsResponseDto> {
+    return this.invoke<GscDiscoverSitemapsResponseDto>(() =>
       postApiV1ProjectsByNameGoogleGscDiscoverSitemaps({ client: this.heyClient, path: { name: project } }),
     )
   }

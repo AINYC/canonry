@@ -47,6 +47,7 @@ import {
 } from '@ainyc/canonry-contracts'
 import { z } from 'zod'
 import type { ApiClient } from '../client.js'
+import { CliError, EXIT_SYSTEM_ERROR } from '../cli-error.js'
 import {
   analyticsWindowSchema,
   compactStringParams,
@@ -187,6 +188,114 @@ const gscCoverageHistoryInputSchema = z.object({
   project: projectNameSchema,
   limit: z.number().int().positive().max(500).optional(),
 })
+
+const gscSitemapsInputSchema = z.object({
+  project: projectNameSchema,
+  sitemapIndex: z.string().url().optional(),
+})
+
+const gscSitemapsSubmitInputSchema = z.union([
+  z.object({
+    project: projectNameSchema,
+    sitemapUrls: z.array(z.string().url()).min(1).max(50),
+  }).strict(),
+  z.object({
+    project: projectNameSchema,
+    mode: z.enum(['indexes', 'all-files']),
+  }).strict(),
+])
+
+type GscSitemapsSubmitInput = z.infer<typeof gscSitemapsSubmitInputSchema>
+
+async function submitGscSitemapsFromMcp(
+  client: ApiClient,
+  input: GscSitemapsSubmitInput,
+): Promise<Awaited<ReturnType<ApiClient['gscSubmitSitemaps']>>> {
+  let sitemapUrls: string[]
+  if ('sitemapUrls' in input) {
+    sitemapUrls = uniqueStrings(input.sitemapUrls)
+  } else {
+    const topLevel = await client.gscSitemaps(input.project)
+    if (input.mode === 'indexes') {
+      sitemapUrls = uniqueStrings(
+        topLevel.preferredSubmissionUrls.length > 0
+          ? topLevel.preferredSubmissionUrls
+          : topLevel.sitemaps.map((sitemap) => sitemap.path),
+      )
+    } else {
+      const indexes = topLevel.sitemaps
+        .filter((sitemap) => sitemap.isSitemapsIndex)
+        .map((sitemap) => sitemap.path)
+      const expandedIndexUrls: string[] = []
+      for (let offset = 0; offset < indexes.length; offset += 4) {
+        const children = await Promise.all(
+          indexes.slice(offset, offset + 4).map(
+            (sitemapIndex) => client.gscSitemaps(input.project, { sitemapIndex }),
+          ),
+        )
+        children.forEach((result, index) => {
+          const sitemapIndex = indexes[offset + index]!
+          expandedIndexUrls.push(...(
+            result.sitemaps.length > 0
+              ? result.sitemaps.map((sitemap) => sitemap.path)
+              : [sitemapIndex]
+          ))
+        })
+      }
+      sitemapUrls = uniqueStrings([
+        ...topLevel.sitemaps
+          .filter((sitemap) => !sitemap.isSitemapsIndex)
+          .map((sitemap) => sitemap.path),
+        ...expandedIndexUrls,
+      ])
+    }
+  }
+
+  if (sitemapUrls.length === 0) {
+    throw new Error('No GSC sitemaps found. Submit an explicit sitemap URL first.')
+  }
+
+  const aggregate: Awaited<ReturnType<ApiClient['gscSubmitSitemaps']>> = {
+    summary: { total: 0, accepted: 0, failed: 0 },
+    results: [],
+  }
+  for (let offset = 0; offset < sitemapUrls.length; offset += 50) {
+    const batchSitemapUrls = sitemapUrls.slice(offset, offset + 50)
+    try {
+      const result = await client.gscSubmitSitemaps(input.project, {
+        sitemapUrls: batchSitemapUrls,
+      })
+      aggregate.summary.total += result.summary.total
+      aggregate.summary.accepted += result.summary.accepted
+      aggregate.summary.failed += result.summary.failed
+      aggregate.results.push(...result.results)
+    } catch (cause) {
+      if (offset === 0) throw cause
+      const attempted = aggregate.summary.total + batchSitemapUrls.length
+      const remaining = sitemapUrls.length - attempted
+      throw new CliError({
+        code: 'GOOGLE_SITEMAP_SUBMISSION_PARTIAL',
+        message: `Sitemap submission stopped after ${aggregate.summary.total} completed results; ${batchSitemapUrls.length} are unconfirmed and ${remaining} were not attempted.`,
+        exitCode: cause instanceof CliError && cause.exitCode === 1 ? 1 : EXIT_SYSTEM_ERROR,
+        details: {
+          project: input.project,
+          accepted: aggregate.summary.accepted,
+          failed: aggregate.summary.failed,
+          completed: aggregate.summary.total,
+          attempted,
+          unconfirmed: batchSitemapUrls.length,
+          remaining,
+          unconfirmedBatch: { index: Math.floor(offset / 50) + 1, sitemapUrls: batchSitemapUrls },
+          partialResult: aggregate,
+          cause: cause instanceof CliError
+            ? { code: cause.code, message: cause.message, details: cause.details }
+            : { message: cause instanceof Error ? cause.message : String(cause) },
+        },
+      })
+    }
+  }
+  return aggregate
+}
 
 const gaWindowInputSchema = z.object({
   project: projectNameSchema,
@@ -634,7 +743,7 @@ export const canonryMcpTools = [
     description: 'Get a Canonry project by name.',
     access: 'read',
     tier: 'core',
-    inputSchema: projectInputSchema,
+    inputSchema: gscSitemapsInputSchema,
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}'],
     handler: (client, input) => client.getProject(input.project),
@@ -1205,10 +1314,21 @@ export const canonryMcpTools = [
     description: 'Get sitemap data from Google Search Console for a Canonry project.',
     access: 'read',
     tier: 'gsc',
-    inputSchema: projectInputSchema,
+    inputSchema: gscSitemapsInputSchema,
     annotations: readAnnotations(true),
     openApiOperations: ['GET /api/v1/projects/{name}/google/gsc/sitemaps'],
-    handler: (client, input) => client.gscSitemaps(input.project),
+    handler: (client, input) => client.gscSitemaps(input.project, { sitemapIndex: input.sitemapIndex }),
+  }),
+  defineTool({
+    name: 'canonry_gsc_sitemaps_submit',
+    title: 'Submit GSC sitemaps',
+    description: 'Submit up to 50 explicit sitemap URLs, preferred sitemap indexes, or every standalone top-level file plus index child to Google Search Console for refetching. Parent indexes are not redundantly submitted in all-files mode. Google acceptance does not guarantee indexing.',
+    access: 'write',
+    tier: 'gsc',
+    inputSchema: gscSitemapsSubmitInputSchema,
+    annotations: writeAnnotations({ idempotentHint: false, openWorldHint: true }),
+    openApiOperations: ['POST /api/v1/projects/{name}/google/gsc/sitemaps/submit'],
+    handler: submitGscSitemapsFromMcp,
   }),
   defineTool({
     name: 'canonry_ga_status',
