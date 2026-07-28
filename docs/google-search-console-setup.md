@@ -187,7 +187,8 @@ canonry google submit-sitemap <project> https://example.com/sitemap.xml https://
 canonry google submit-sitemap <project> --configured
 canonry google submit-sitemap <project> --all
 
-# Submit every top-level sitemap and every child listed by each sitemap index
+# Submit every standalone top-level sitemap and every child listed by each sitemap index
+# (parent index URLs are not redundantly submitted)
 canonry google submit-sitemap <project> --all-files
 ```
 

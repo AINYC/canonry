@@ -536,6 +536,41 @@ describe('MCP tool handlers', () => {
       }
     }
   })
+
+  it('preserves completed sitemap results when a later MCP batch is unconfirmed', async () => {
+    const childUrls = Array.from({ length: 100 }, (_, index) => `https://example.com/child-${index}.xml`)
+    let submitCalls = 0
+    const client = {
+      gscSitemaps: async (_project: string, params?: { sitemapIndex?: string }) => params?.sitemapIndex
+        ? { sitemaps: childUrls.map((path) => ({ path })), preferredSubmissionUrls: [] }
+        : {
+            sitemaps: [{ path: 'https://example.com/index.xml', isSitemapsIndex: true }],
+            preferredSubmissionUrls: ['https://example.com/index.xml'],
+          },
+      gscSubmitSitemaps: async (_project: string, body: { sitemapUrls: string[] }) => {
+        submitCalls += 1
+        if (submitCalls === 2) throw new Error('connection lost')
+        return {
+          summary: { total: body.sitemapUrls.length, accepted: body.sitemapUrls.length, failed: 0 },
+          results: body.sitemapUrls.map((sitemapUrl) => ({ sitemapUrl, status: 'accepted' as const })),
+        }
+      },
+    } as unknown as ApiClient
+    const tool = canonryMcpTools.find(candidate => candidate.name === 'canonry_gsc_sitemaps_submit')!
+
+    await expect(tool.handler(client, { project: 'acme', mode: 'all-files' })).rejects.toMatchObject({
+      code: 'GOOGLE_SITEMAP_SUBMISSION_PARTIAL',
+      details: {
+        accepted: 50,
+        failed: 0,
+        completed: 50,
+        attempted: 100,
+        unconfirmed: 50,
+        remaining: 0,
+      },
+    })
+    expect(submitCalls).toBe(2)
+  })
 })
 
 describe('Dynamic tool catalog', () => {
@@ -720,7 +755,7 @@ const handlerCases: HandlerCase[] = [
     expectedArgs: [
       ['acme'],
       ['acme', { sitemapIndex: 'https://example.com/index.xml' }],
-      ['acme', { sitemapUrls: ['https://example.com/index.xml', 'https://example.com/child.xml'] }],
+      ['acme', { sitemapUrls: ['https://example.com/child.xml'] }],
     ],
   },
   { tool: 'canonry_ga_status', input: projectInput, methods: ['gaStatus'] },

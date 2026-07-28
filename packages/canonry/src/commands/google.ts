@@ -4,7 +4,7 @@ import type {
   IndexingRequestResultDto,
 } from '@ainyc/canonry-contracts'
 import { type ApiClient, createApiClient } from '../client.js'
-import { CliError, isMachineFormat } from '../cli-error.js'
+import { CliError, EXIT_SYSTEM_ERROR, isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
 
 const INDEXING_API_SCOPE_NOTICE =
@@ -556,6 +556,14 @@ export async function submitGscSitemaps(
       details: { command: 'google.submit-sitemap' },
     })
   }
+  if (explicitUrls.length > 50) {
+    throw new CliError({
+      code: 'CLI_USAGE_ERROR',
+      message: 'explicit sitemap URL submissions support at most 50 URLs; split the URLs into groups of 50 or use --all/--all-files for discovered sitemaps',
+      displayMessage: 'Error: explicit sitemap URL submissions support at most 50 URLs; split the URLs into groups of 50 or use --all/--all-files for discovered sitemaps',
+      details: { command: 'google.submit-sitemap', sitemapUrls: explicitUrls.length, maxSitemapUrls: 50 },
+    })
+  }
 
   let sitemapUrls = explicitUrls
   if (opts.configured) {
@@ -586,9 +594,14 @@ export async function submitGscSitemaps(
           indexes.slice(offset, offset + 4).map((sitemapIndex) => client.gscSitemaps(project, { sitemapIndex })),
         ))
       }
+      const expandedIndexUrls = children.flatMap((result, index) =>
+        result.sitemaps.length > 0
+          ? result.sitemaps.map((sitemap) => sitemap.path)
+          : [indexes[index]!],
+      )
       sitemapUrls = dedupeSitemapUrls([
-        ...topLevel.sitemaps.map((sitemap) => sitemap.path),
-        ...children.flatMap((result) => result.sitemaps.map((sitemap) => sitemap.path)),
+        ...topLevel.sitemaps.filter((sitemap) => !sitemap.isSitemapsIndex).map((sitemap) => sitemap.path),
+        ...expandedIndexUrls,
       ])
     }
     if (sitemapUrls.length === 0) {
@@ -608,13 +621,40 @@ export async function submitGscSitemaps(
     summary: { total: 0, accepted: 0, failed: 0 },
     results: [],
   }
-  for (const [index, sitemapUrls] of batches.entries()) {
-    const result = await client.gscSubmitSitemaps(project, { sitemapUrls })
-    aggregate.summary.total += result.summary.total
-    aggregate.summary.accepted += result.summary.accepted
-    aggregate.summary.failed += result.summary.failed
-    aggregate.results.push(...result.results)
-    opts.onProgress?.(index + 1, batches.length)
+  for (const [index, batchSitemapUrls] of batches.entries()) {
+    try {
+      const result = await client.gscSubmitSitemaps(project, { sitemapUrls: batchSitemapUrls })
+      aggregate.summary.total += result.summary.total
+      aggregate.summary.accepted += result.summary.accepted
+      aggregate.summary.failed += result.summary.failed
+      aggregate.results.push(...result.results)
+      opts.onProgress?.(index + 1, batches.length)
+    } catch (cause) {
+      if (index === 0) throw cause
+      const attempted = aggregate.summary.total + batchSitemapUrls.length
+      const remaining = sitemapUrls.length - attempted
+      const causeDetails = cause instanceof CliError
+        ? { code: cause.code, message: cause.message, details: cause.details }
+        : { message: cause instanceof Error ? cause.message : String(cause) }
+      throw new CliError({
+        code: 'GOOGLE_SITEMAP_SUBMISSION_PARTIAL',
+        message: `Sitemap submission stopped at batch ${index + 1}/${batches.length}; ${aggregate.summary.accepted} accepted, ${aggregate.summary.failed} failed, ${batchSitemapUrls.length} unconfirmed, ${remaining} not attempted.`,
+        displayMessage: `Sitemap submission stopped at batch ${index + 1}/${batches.length}; ${aggregate.summary.accepted} accepted, ${aggregate.summary.failed} failed, ${batchSitemapUrls.length} unconfirmed, ${remaining} not attempted. Earlier accepted submissions were not rolled back.`,
+        exitCode: cause instanceof CliError && cause.exitCode === 1 ? 1 : EXIT_SYSTEM_ERROR,
+        details: {
+          project,
+          accepted: aggregate.summary.accepted,
+          failed: aggregate.summary.failed,
+          completed: aggregate.summary.total,
+          attempted,
+          unconfirmed: batchSitemapUrls.length,
+          remaining,
+          unconfirmedBatch: { index: index + 1, total: batches.length, sitemapUrls: batchSitemapUrls },
+          partialResult: aggregate,
+          cause: causeDetails,
+        },
+      })
+    }
   }
   return aggregate
 }

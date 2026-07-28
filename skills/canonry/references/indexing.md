@@ -46,7 +46,7 @@ cnry google inspect-sitemap <project> --wait      # bulk inspect all sitemap URL
 cnry google submit-sitemap <project> https://example.com/sitemap.xml
 cnry google submit-sitemap <project> --configured  # Canonry's saved default
 cnry google submit-sitemap <project> --all         # prefer sitemap indexes (fallback: top-level files)
-cnry google submit-sitemap <project> --all-files   # include top-level files and index children (batched by 50)
+cnry google submit-sitemap <project> --all-files   # standalone top-level files + index children, not parent indexes (batched by 50)
 ```
 
 An accepted submission asks Google to refetch the sitemap; it does not guarantee

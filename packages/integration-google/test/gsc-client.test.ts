@@ -47,6 +47,14 @@ describe('listSites', () => {
     ).rejects.toThrow(/expired or revoked/)
     await expect(() => listSites('bad-token')).rejects.toMatchObject({ name: 'GoogleApiError' })
   })
+
+  it('throws a typed error for an empty successful response', async () => {
+    globalThis.fetch = async () => new Response(null, { status: 204 })
+    await expect(() => listSites('test-token')).rejects.toMatchObject({
+      name: 'GoogleApiError',
+      message: expect.stringMatching(/empty response/),
+    })
+  })
 })
 
 describe('listSitemaps', () => {
@@ -126,6 +134,14 @@ describe('listSitemaps', () => {
   it('throws GoogleApiError on 401', async () => {
     globalThis.fetch = async () => new Response('Unauthorized', { status: 401 })
     await expect(() => listSitemaps('bad-token', 'https://example.com/')).rejects.toMatchObject({ name: 'GoogleApiError' })
+  })
+
+  it('throws a typed error for an empty successful response', async () => {
+    globalThis.fetch = async () => new Response('', { status: 200 })
+    await expect(() => listSitemaps('test-token', 'https://example.com/')).rejects.toMatchObject({
+      name: 'GoogleApiError',
+      message: expect.stringMatching(/empty response/),
+    })
   })
 })
 

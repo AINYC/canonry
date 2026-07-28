@@ -512,14 +512,36 @@ export function GscSection({
     setSubmittingSitemaps(true)
     setError(null)
     setSitemapSubmissionProgress({ completed: 0, total: uniqueUrls.length })
+    let accepted = 0
+    let failed = 0
+    let attempted = 0
+    let partialFailureMessage: string | null = null
     try {
-      let accepted = 0
-      let failed = 0
       for (let start = 0; start < uniqueUrls.length; start += 50) {
-        const result = await submitGscSitemaps(projectName, uniqueUrls.slice(start, start + 50))
-        accepted += result.summary.accepted
-        failed += result.summary.failed
-        setSitemapSubmissionProgress({ completed: Math.min(start + 50, uniqueUrls.length), total: uniqueUrls.length })
+        const batch = uniqueUrls.slice(start, start + 50)
+        try {
+          const result = await submitGscSitemaps(projectName, batch)
+          accepted += result.summary.accepted
+          failed += result.summary.failed
+          attempted += batch.length
+          setSitemapSubmissionProgress({ completed: attempted, total: uniqueUrls.length })
+        } catch (err) {
+          attempted += batch.length
+          const unconfirmed = batch.length
+          const remaining = uniqueUrls.length - attempted
+          const reason = err instanceof Error ? err.message : 'The batch request failed'
+          const detail = `${accepted} accepted, ${failed} failed, ${unconfirmed} unconfirmed, ${remaining} not attempted. Google may still process accepted sitemaps; indexing is not guaranteed.`
+          partialFailureMessage = `Sitemap submission stopped after a batch request failed. ${detail} ${reason}`
+          setError(partialFailureMessage)
+          addToast({
+            title: 'Sitemap resubmission partially completed',
+            detail,
+            tone: 'caution',
+            dedupeKey: `gsc:sitemap-submit:${projectName}`,
+            dedupeMode: 'replace',
+          })
+          return
+        }
       }
       const total = uniqueUrls.length
       addToast({
@@ -531,13 +553,14 @@ export function GscSection({
         dedupeKey: `gsc:sitemap-submit:${projectName}`,
         dedupeMode: 'replace',
       })
-      await handleListSitemaps()
       setSitemapUrlInput('')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit sitemap to Google')
     } finally {
       setSubmittingSitemaps(false)
       setSitemapSubmissionProgress(null)
+      await handleListSitemaps()
+      if (partialFailureMessage) setError(partialFailureMessage)
     }
   }
 
@@ -546,7 +569,7 @@ export function GscSection({
     const topLevel = discoveredSitemaps ?? []
     try {
       const indexes = topLevel.filter((sitemap) => sitemap.isSitemapsIndex)
-      const children: ApiGscSitemap[] = []
+      const expandedIndexUrls: string[] = []
       for (let start = 0; start < indexes.length; start += 4) {
         const batch = await Promise.all(indexes.slice(start, start + 4).map(async (index) => {
           const cachedChildren = sitemapChildren[index.path]
@@ -555,9 +578,20 @@ export function GscSection({
           setSitemapChildren((current) => ({ ...current, [index.path]: result.sitemaps }))
           return result.sitemaps
         }))
-        children.push(...batch.flat())
+        batch.forEach((children, index) => {
+          expandedIndexUrls.push(...(
+            children.length > 0
+              ? children.map((sitemap) => sitemap.path)
+              : [indexes[start + index]!.path]
+          ))
+        })
       }
-      await handleSubmitSitemaps([...topLevel, ...children].map((sitemap) => sitemap.path))
+      await handleSubmitSitemaps(
+        [
+          ...topLevel.filter((sitemap) => !sitemap.isSitemapsIndex).map((sitemap) => sitemap.path),
+          ...expandedIndexUrls,
+        ],
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load sitemap files')
       setSubmittingSitemaps(false)
