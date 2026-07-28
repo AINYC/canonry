@@ -347,19 +347,17 @@ export function RootLayout() {
     setDismissedUpdateVersion(updateAvailable.latest)
   }
   const toggleSidebar = () => {
-    setSidebarHidden((hidden) => {
-      const next = !hidden
-      try {
-        if (next) {
-          window.localStorage.setItem('canonry:sidebarHidden', 'true')
-        } else {
-          window.localStorage.removeItem('canonry:sidebarHidden')
-        }
-      } catch {
-        // Best-effort persistence. The control still works for this session.
+    const next = !sidebarHidden
+    try {
+      if (next) {
+        window.localStorage.setItem('canonry:sidebarHidden', 'true')
+      } else {
+        window.localStorage.removeItem('canonry:sidebarHidden')
       }
-      return next
-    })
+    } catch {
+      // Best-effort persistence. The control still works for this session.
+    }
+    setSidebarHidden(next)
   }
 
   // ── Run detail for drawer ──
@@ -676,7 +674,7 @@ export function RootLayout() {
                 size="icon"
                 type="button"
                 aria-label={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'}
-                aria-controls="desktop-sidebar"
+                aria-controls={sidebarHidden ? undefined : 'desktop-sidebar'}
                 aria-expanded={!sidebarHidden}
                 title={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'}
                 onClick={toggleSidebar}
