@@ -11,6 +11,8 @@ import {
   LayoutDashboard,
   Link2,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Radar,
   Rocket,
@@ -298,6 +300,14 @@ export function RootLayout() {
 
   // ── UI state ──
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [sidebarHidden, setSidebarHidden] = useState(() => {
+    if (typeof window === 'undefined') return false
+    try {
+      return window.localStorage.getItem('canonry:sidebarHidden') === 'true'
+    } catch {
+      return false
+    }
+  })
   // Per-version dismiss for the update pill. Read once on mount; updates only
   // when the user clicks ×. When a newer version ships, the dismissed value
   // no longer matches `updateAvailable.latest`, so the pill reappears.
@@ -335,6 +345,21 @@ export function RootLayout() {
       // best-effort — Safari private mode etc.
     }
     setDismissedUpdateVersion(updateAvailable.latest)
+  }
+  const toggleSidebar = () => {
+    setSidebarHidden((hidden) => {
+      const next = !hidden
+      try {
+        if (next) {
+          window.localStorage.setItem('canonry:sidebarHidden', 'true')
+        } else {
+          window.localStorage.removeItem('canonry:sidebarHidden')
+        }
+      } catch {
+        // Best-effort persistence. The control still works for this session.
+      }
+      return next
+    })
   }
 
   // ── Run detail for drawer ──
@@ -386,6 +411,11 @@ export function RootLayout() {
   const isFirstRunSetup = location.pathname === '/setup'
     && safeDashboard !== null
     && safeDashboard.portfolioOverview.projects.length === 0
+  const shellModifier = isFirstRunSetup
+    ? 'app-shell-focus'
+    : sidebarHidden
+      ? 'app-shell-sidebar-hidden'
+      : ''
 
   const selectedRun = runId
     ? (safeDashboard ? findRunById(safeDashboard, runId) : undefined)
@@ -490,14 +520,14 @@ export function RootLayout() {
   }
 
   return (
-    <div className={`app-shell ${isFirstRunSetup ? 'app-shell-focus' : ''}`}>
+    <div className={`app-shell ${shellModifier}`}>
       <a className="skip-link" href="#content">
         Skip to content
       </a>
 
       {/* ── Sidebar (desktop) ── */}
-      {!isFirstRunSetup && (
-      <aside className="sidebar" aria-label="Primary navigation">
+      {!isFirstRunSetup && !sidebarHidden && (
+      <aside id="desktop-sidebar" className="sidebar" aria-label="Primary navigation">
         <div className="sidebar-brand">
           <BrandLockup
             version={healthSnapshot.apiStatus.version}
@@ -639,6 +669,25 @@ export function RootLayout() {
         {/* Topbar */}
         <header className="topbar">
           <div className="topbar-left">
+            {!isFirstRunSetup && (
+              <Button
+                className="sidebar-privacy-toggle"
+                variant="ghost"
+                size="icon"
+                type="button"
+                aria-label={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'}
+                aria-controls="desktop-sidebar"
+                aria-expanded={!sidebarHidden}
+                title={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'}
+                onClick={toggleSidebar}
+              >
+                {sidebarHidden ? (
+                  <PanelLeftOpen className="size-4" />
+                ) : (
+                  <PanelLeftClose className="size-4" />
+                )}
+              </Button>
+            )}
             <div className="topbar-brand-mobile">
               <BrandLockup compact />
             </div>

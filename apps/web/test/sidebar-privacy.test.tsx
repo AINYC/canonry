@@ -1,0 +1,89 @@
+import { afterEach, beforeAll, beforeEach, expect, test } from 'vitest'
+import { fireEvent, render } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { RouterProvider } from '@tanstack/react-router'
+
+import { DashboardProvider } from '../src/contexts/dashboard-context.js'
+import { createDashboardFixture } from '../src/mock-data.js'
+import { createAppRouter } from '../src/router/router.js'
+import { preloadAllLazyRoutes } from '../src/router/routes.js'
+
+beforeAll(async () => {
+  await preloadAllLazyRoutes()
+})
+
+const storedValues = new Map<string, string>()
+const localStorageMock: Storage = {
+  get length() {
+    return storedValues.size
+  },
+  clear() {
+    storedValues.clear()
+  },
+  getItem(key) {
+    return storedValues.get(key) ?? null
+  },
+  key(index) {
+    return [...storedValues.keys()][index] ?? null
+  },
+  removeItem(key) {
+    storedValues.delete(key)
+  },
+  setItem(key, value) {
+    storedValues.set(key, value)
+  },
+}
+
+beforeEach(() => {
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: localStorageMock,
+  })
+})
+
+afterEach(() => {
+  storedValues.clear()
+})
+
+async function renderRoute(pathname: string) {
+  const fixture = createDashboardFixture({})
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const router = createAppRouter(queryClient, { initialEntries: [pathname] })
+  await router.load()
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <DashboardProvider value={{ dashboard: fixture.dashboard, health: fixture.health }}>
+        <RouterProvider router={router} />
+      </DashboardProvider>
+    </QueryClientProvider>,
+  )
+}
+
+test('sidebar can be hidden and restored from the desktop topbar', async () => {
+  const { container, getByRole } = await renderRoute('/projects/project_citypoint/report')
+
+  expect(container.querySelector('#desktop-sidebar')).not.toBeNull()
+
+  fireEvent.click(getByRole('button', { name: 'Hide sidebar' }))
+
+  expect(container.querySelector('#desktop-sidebar')).toBeNull()
+  expect(container.querySelector('.app-shell-sidebar-hidden')).not.toBeNull()
+  expect(window.localStorage.getItem('canonry:sidebarHidden')).toBe('true')
+
+  fireEvent.click(getByRole('button', { name: 'Show sidebar' }))
+
+  expect(container.querySelector('#desktop-sidebar')).not.toBeNull()
+  expect(container.querySelector('.app-shell-sidebar-hidden')).toBeNull()
+  expect(window.localStorage.getItem('canonry:sidebarHidden')).toBeNull()
+})
+
+test('hidden sidebar preference survives a reload', async () => {
+  window.localStorage.setItem('canonry:sidebarHidden', 'true')
+
+  const { container, getByRole } = await renderRoute('/projects/project_citypoint/report')
+
+  expect(container.querySelector('#desktop-sidebar')).toBeNull()
+  expect(container.querySelector('.app-shell-sidebar-hidden')).not.toBeNull()
+  expect(getByRole('button', { name: 'Show sidebar' })).toBeDefined()
+})
