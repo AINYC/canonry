@@ -1,11 +1,12 @@
 import type { NormalizedQueryResult } from '@ainyc/canonry-contracts'
-import { brandKeyFromText, brandLabelFromDomain, normalizeProjectDomain, registrableDomain } from '@ainyc/canonry-contracts'
-
-function domainMatches(domain: string, canonicalDomain: string): boolean {
-  const normalized = normalizeProjectDomain(canonicalDomain)
-  const d = normalizeProjectDomain(domain)
-  return d === normalized || d.endsWith(`.${normalized}`)
-}
+import {
+  brandKeyFromText,
+  brandLabelFromDomain,
+  hostMatchesDomain,
+  registrableDomain,
+  textContainsBrandAlias,
+  textContainsDomain,
+} from '@ainyc/canonry-contracts'
 
 /**
  * Of the domains an engine cited for a (query, provider) snapshot, return the
@@ -26,7 +27,7 @@ export function pickProjectCitedDomain(
   projectDomains: string[],
 ): string | undefined {
   for (const cited of citedDomains) {
-    if (projectDomains.some(pd => domainMatches(cited, pd))) return cited
+    if (projectDomains.some(pd => hostMatchesDomain(cited, pd))) return cited
   }
   return undefined
 }
@@ -36,28 +37,13 @@ export function determineCitationState(
   domains: string[],
 ): 'cited' | 'not-cited' {
   for (const canonicalDomain of domains) {
-    const bareDomain = normalizeProjectDomain(canonicalDomain)
-
-    if (normalized.citedDomains.some(d => domainMatches(d, bareDomain))) {
+    if (normalized.citedDomains.some(d => hostMatchesDomain(d, canonicalDomain))) {
       return 'cited'
     }
 
-    const lowerDomain = bareDomain.toLowerCase()
     for (const source of normalized.groundingSources) {
-      try {
-        const uri = source.uri.toLowerCase()
-        if (lowerDomain.includes('.') && uri.includes(lowerDomain)) {
-          return 'cited'
-        }
-      } catch {
-        // ignore
-      }
-      if (source.title) {
-        const titleLower = source.title.toLowerCase().replace(/^www\./, '')
-        if (titleLower === lowerDomain || titleLower.endsWith(`.${lowerDomain}`)) {
-          return 'cited'
-        }
-      }
+      if (hostMatchesDomain(source.uri, canonicalDomain)) return 'cited'
+      if (source.title && hostMatchesDomain(source.title, canonicalDomain)) return 'cited'
     }
   }
 
@@ -72,25 +58,23 @@ export function computeCompetitorOverlap(
 
   for (const d of normalized.citedDomains) {
     for (const cd of competitorDomains) {
-      if (domainMatches(d, cd)) {
+      if (hostMatchesDomain(d, cd)) {
         overlapSet.add(cd)
       }
     }
   }
 
   for (const source of normalized.groundingSources) {
-    const uri = source.uri.toLowerCase()
     for (const cd of competitorDomains) {
-      if (uri.includes(cd.toLowerCase())) {
+      if (hostMatchesDomain(source.uri, cd)) {
         overlapSet.add(cd)
       }
     }
   }
 
   if (normalized.answerText) {
-    const lowerAnswer = normalized.answerText.toLowerCase()
     for (const cd of competitorDomains) {
-      if (lowerAnswer.includes(cd.toLowerCase())) {
+      if (textContainsDomain(normalized.answerText, cd)) {
         overlapSet.add(cd)
       }
       // Use the registrable domain's brand label (eTLD+1's leftmost label) so
@@ -98,7 +82,7 @@ export function computeCompetitorOverlap(
       // brand `roofle`, not the subdomain `offers` — otherwise the literal
       // word "offers" in the answer prose would falsely flag the competitor.
       const brand = brandLabelFromDomain(cd)
-      if (brand.length >= 4 && new RegExp(`\\b${escapeRegExp(brand)}\\b`, 'i').test(lowerAnswer)) {
+      if (brandKeyFromText(brand).length >= 4 && textContainsBrandAlias(normalized.answerText, brand)) {
         overlapSet.add(cd)
       }
     }
@@ -115,14 +99,10 @@ export function computeCitedCompetitorDomains(
   const citedCompetitors = new Set<string>()
   for (const citedDomain of citedDomains) {
     for (const competitorDomain of competitorDomains) {
-      if (domainMatches(citedDomain, competitorDomain)) citedCompetitors.add(competitorDomain)
+      if (hostMatchesDomain(citedDomain, competitorDomain)) citedCompetitors.add(competitorDomain)
     }
   }
   return [...citedCompetitors]
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /**
@@ -142,20 +122,20 @@ export function extractRecommendedCompetitors(
 ): string[] {
   if (!answerText || answerText.length < 20) return []
 
-  const ownBrandKeys = new Set<string>(
-    ownDomains.flatMap(domain => collectBrandKeysFromDomain(domain)),
+  const ownBrandAliases = new Set<string>(
+    ownDomains.flatMap(domain => collectBrandAliasesFromDomain(domain)),
   )
   for (const name of ownBrandNames) {
-    const key = brandKeyFromText(name)
-    if (key.length >= 4) ownBrandKeys.add(key)
+    if (brandKeyFromText(name).length >= 4) ownBrandAliases.add(name)
   }
-  const knownCompetitorKeys = new Set(
+  const ownKeys = new Set([...ownBrandAliases].map(brandKeyFromText))
+  const knownCompetitorAliases = new Set(
     [...citedDomains, ...competitorDomains]
-      .flatMap(domain => collectBrandKeysFromDomain(domain))
-      .filter(key => !ownBrandKeys.has(key)),
+      .flatMap(domain => collectBrandAliasesFromDomain(domain))
+      .filter(alias => !ownKeys.has(brandKeyFromText(alias))),
   )
 
-  if (knownCompetitorKeys.size === 0) return []
+  if (knownCompetitorAliases.size === 0) return []
 
   const candidatePatterns = [
     /^\s*(?:[-*]|\d+\.)\s+(?:\*\*)?([A-Z0-9][A-Za-z0-9][\w\s.&',/()-]{1,50}?)(?:\*\*)?\s*[:\u2014\u2013-]/gm,
@@ -207,8 +187,8 @@ export function extractRecommendedCompetitors(
       if (!candidateKey) continue
       if (genericKeys.has(candidateKey)) continue
       if (candidate.split(/\s+/).length > 6) continue
-      if (matchesBrandKey(candidateKey, ownBrandKeys)) continue
-      if (!matchesBrandKey(candidateKey, knownCompetitorKeys)) continue
+      if (matchesBrandAlias(candidate, ownBrandAliases)) continue
+      if (!matchesBrandAlias(candidate, knownCompetitorAliases)) continue
       if (!seen.has(candidateKey)) seen.set(candidateKey, candidate)
     }
   }
@@ -223,30 +203,20 @@ function cleanCandidateName(candidate: string): string {
     .trim()
 }
 
-function collectBrandKeysFromDomain(domain: string): string[] {
-  // Source brand keys from the registrable domain only — never from
+function collectBrandAliasesFromDomain(domain: string): string[] {
+  // Source aliases from the registrable domain only — never from
   // subdomain labels — so a competitor `offers.roofle.com` does not contribute
-  // `offers` as a brand key (which would let the answer-text word "offers"
+  // `offers` as a brand alias (which would let the answer-text word "offers"
   // false-match in extractRecommendedCompetitors).
   const reg = registrableDomain(domain)
-  if (!reg) {
-    const hostname = normalizeProjectDomain(domain).split('/')[0] ?? ''
-    const fallback = hostname.replace(/[^a-z0-9]/gi, '').toLowerCase()
-    return fallback.length >= 4 ? [fallback] : []
-  }
-  const keys = new Set<string>()
-  const fullKey = reg.replace(/[^a-z0-9]/gi, '').toLowerCase()
-  if (fullKey.length >= 4) keys.add(fullKey)
-  const brand = brandLabelFromDomain(reg).replace(/[^a-z0-9]/gi, '').toLowerCase()
-  if (brand.length >= 4) keys.add(brand)
-  return [...keys]
+  if (!reg) return []
+  const aliases = new Set<string>()
+  if (brandKeyFromText(reg).length >= 4) aliases.add(reg)
+  const brand = brandLabelFromDomain(reg)
+  if (brandKeyFromText(brand).length >= 4) aliases.add(brand)
+  return [...aliases]
 }
 
-function matchesBrandKey(candidateKey: string, brandKeys: Set<string>): boolean {
-  for (const brandKey of brandKeys) {
-    if (candidateKey === brandKey) return true
-    if (candidateKey.startsWith(brandKey) || candidateKey.endsWith(brandKey)) return true
-    if (brandKey.startsWith(candidateKey) || brandKey.endsWith(candidateKey)) return true
-  }
-  return false
+function matchesBrandAlias(candidate: string, aliases: ReadonlySet<string>): boolean {
+  return [...aliases].some(alias => textContainsBrandAlias(candidate, alias))
 }

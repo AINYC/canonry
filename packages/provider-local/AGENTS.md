@@ -26,6 +26,7 @@ All provider packages follow the same 4-file structure and implement the same `P
 ## Common Mistakes
 
 - **Not normalizing grounding sources to standard `CitedSource` format** — local models may not provide web search grounding at all.
+- **Deriving citations from answer prose** — a domain written in `answerText` is a mention only. Populate `citedDomains` exclusively from structured grounding sources; mention and citation are independent signals.
 - **Forgetting to export from `adapter.ts`** — the provider registry imports the adapter object.
 
 ## See Also

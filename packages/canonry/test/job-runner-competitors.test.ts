@@ -1,7 +1,11 @@
 import { expect, test } from 'vitest'
 import type { NormalizedQueryResult } from '@ainyc/canonry-contracts'
 
-import { computeCompetitorOverlap, extractRecommendedCompetitors } from '../src/citation-utils.js'
+import {
+  computeCompetitorOverlap,
+  determineCitationState,
+  extractRecommendedCompetitors,
+} from '../src/citation-utils.js'
 
 function buildResult(answer: string, overrides?: Partial<NormalizedQueryResult>): NormalizedQueryResult {
   return {
@@ -71,6 +75,21 @@ test('computeCompetitorOverlap matches the full registrable domain in the answer
   const answer = 'See pricing at roofle.com for details.'
   const result = buildResult(answer)
   expect(computeCompetitorOverlap(result, ['roofle.com'])).toEqual(['roofle.com'])
+})
+
+test('domain identity matching rejects hostname and prose substrings', () => {
+  const result = buildResult('Acmeology links to notacme.com.', {
+    groundingSources: [{ uri: 'https://notacme.com/path/acme.com', title: 'Not Acme' }],
+  })
+  expect(computeCompetitorOverlap(result, ['acme.com'])).toEqual([])
+  expect(determineCitationState(result, ['acme.com'])).toBe('not-cited')
+})
+
+test('domain identity matching accepts a structured source subdomain', () => {
+  const result = buildResult('No domain is written in prose.', {
+    groundingSources: [{ uri: 'https://docs.acme.com/guide', title: 'Guide' }],
+  })
+  expect(determineCitationState(result, ['acme.com'])).toBe('cited')
 })
 
 test('extractRecommendedCompetitors does not seed a brand from a subdomain label', () => {

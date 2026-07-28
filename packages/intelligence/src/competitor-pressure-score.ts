@@ -1,4 +1,5 @@
 import type { ProjectOverviewCompetitorDto, ScoreSummaryDto } from '@ainyc/canonry-contracts'
+import { hostMatchesAnyDomain, hostMatchesDomain } from '@ainyc/canonry-contracts'
 import { pressureTone } from './score-tones.js'
 
 export interface CompetitorPressureSnapshot {
@@ -48,10 +49,9 @@ export function buildCompetitorPressureScore(
     }
   }
 
-  const competitorSet = new Set(competitorDomains)
   let overlapCount = 0
   for (const snap of snapshots) {
-    if (snap.competitorOverlap.some(d => competitorSet.has(d))) {
+    if (snap.competitorOverlap.some(domain => hostMatchesAnyDomain(domain, competitorDomains))) {
       overlapCount++
     }
   }
@@ -102,8 +102,8 @@ export function buildOverviewCompetitors(
     const citedQuerySet = new Set<string>()
     for (const snap of snapshots) {
       if (
-        snap.competitorOverlap.includes(competitor.domain)
-        || snap.citedDomains.includes(competitor.domain)
+        snap.competitorOverlap.some(domain => hostMatchesDomain(domain, competitor.domain))
+        || snap.citedDomains.some(domain => hostMatchesDomain(domain, competitor.domain))
       ) {
         if (snap.queryId) citedQuerySet.add(snap.queryId)
       }

@@ -1,27 +1,12 @@
 import https from 'node:https'
 import { resolveWebhookTarget } from '@ainyc/canonry-api-routes'
+import { hostOf } from '@ainyc/canonry-contracts'
 import type { SafeWebhookTarget } from '@ainyc/canonry-api-routes'
 
 const FETCH_TIMEOUT_MS = 10_000
 const MAX_TEXT_LENGTH = 4000
 const MAX_BODY_BYTES = 512_000 // 512 KB max download
 const USER_AGENT = 'Canonry/1.0 (site-analysis)'
-
-/**
- * Extract a bare hostname from a domain that may be stored as a full URL.
- * Handles "https://www.example.com", "www.example.com", "example.com", etc.
- */
-function extractHostname(domain: string): string {
-  let hostname = domain
-  try {
-    if (hostname.includes('://')) {
-      hostname = new URL(hostname).hostname
-    }
-  } catch {
-    // not a URL, use as-is
-  }
-  return hostname.replace(/^www\./, '')
-}
 
 /**
  * Fetch HTML using the pinned resolved address to prevent DNS rebinding.
@@ -95,7 +80,8 @@ function fetchWithPinnedAddress(target: SafeWebhookTarget): Promise<string> {
  * Uses pinned DNS resolution to prevent SSRF via DNS rebinding.
  */
 export async function fetchSiteText(domain: string): Promise<string> {
-  const hostname = extractHostname(domain)
+  const hostname = hostOf(domain)
+  if (!hostname) return ''
   const url = `https://${hostname}`
 
   // SSRF check: resolve DNS and reject private/loopback addresses

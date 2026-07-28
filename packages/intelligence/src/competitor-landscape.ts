@@ -1,4 +1,5 @@
 import type { CompetitorRow, GroundingSource, ProjectReportDto } from '@ainyc/canonry-contracts'
+import { hostMatchesDomain } from '@ainyc/canonry-contracts'
 import { citedDomainBelongsToProject } from './domain-matching.js'
 
 export interface CompetitorLandscapeSnapshot {
@@ -40,11 +41,8 @@ export function buildCompetitorLandscape(
         entry.count++
         if (q) entry.queries.add(q)
       }
-      const competitorNorm = normalizeUrlDomain(competitor)
       for (const gs of snap.groundingSources) {
-        const host = normalizeUrlDomain(extractHostFromUri(gs.uri))
-        if (!host) continue
-        if (host === competitorNorm || host.endsWith(`.${competitorNorm}`)) {
+        if (hostMatchesDomain(gs.uri, competitor)) {
           const entry = competitorMap.get(competitor)!
           const pageQueries = entry.pages.get(gs.uri) ?? new Set<string>()
           if (q) pageQueries.add(q)
@@ -86,16 +84,4 @@ export function buildCompetitorLandscape(
   competitorRows.sort((a, b) => b.citationCount - a.citationCount)
 
   return { projectCitationCount, competitors: competitorRows }
-}
-
-function normalizeUrlDomain(domain: string): string {
-  return domain.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '')
-}
-
-function extractHostFromUri(uri: string): string {
-  try {
-    return new URL(uri).hostname
-  } catch {
-    return ''
-  }
 }

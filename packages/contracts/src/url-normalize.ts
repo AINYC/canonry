@@ -5,6 +5,13 @@
  * page identity are removed.
  */
 
+import { LinkifyIt } from 'linkify-it'
+import tlds from 'tlds'
+import { getDomain, getDomainWithoutSuffix, getHostname } from 'tldts'
+
+const DOMAIN_PARSE_OPTIONS = { allowPrivateDomains: true } as const
+const LINKIFY = new LinkifyIt({ fuzzyLink: true, fuzzyEmail: false }).tlds(tlds)
+
 const STRIP_KEYS: ReadonlySet<string> = new Set([
   // Click identifiers
   'fbclid',
@@ -113,12 +120,71 @@ export function hostOf(value: string | null | undefined): string | null {
   if (value == null) return null
   const trimmed = value.trim()
   if (!trimmed) return null
-  try {
-    const url = trimmed.includes('://') ? new URL(trimmed) : new URL(`https://${trimmed}`)
-    return url.hostname.replace(/^www\./, '').toLowerCase()
-  } catch {
-    return null
+  const hostname = getHostname(trimmed)
+  return hostname ? hostname.replace(/^www\./i, '').toLowerCase() : null
+}
+
+/**
+ * Reduce a URL or hostname to its registrable domain (eTLD+1) using the
+ * maintained Public Suffix List bundled by `tldts`. Private suffixes are
+ * enabled so independently-owned sites such as `tenant.github.io` and
+ * `tenant.vercel.app` remain separate identities.
+ */
+export function registrableDomain(value: string | null | undefined): string {
+  if (value == null || value.trim() === '') return ''
+  return getDomain(value, DOMAIN_PARSE_OPTIONS)?.toLowerCase() ?? ''
+}
+
+/** The registrable domain without its public suffix. */
+export function brandLabelFromDomain(value: string | null | undefined): string {
+  if (value == null || value.trim() === '') return ''
+  return getDomainWithoutSuffix(value, DOMAIN_PARSE_OPTIONS)?.toLowerCase() ?? ''
+}
+
+/**
+ * True when `candidate` is the same host as `domain`, or a subdomain of it.
+ * Both inputs may be bare hosts or full URLs.
+ */
+export function hostMatchesDomain(
+  candidate: string | null | undefined,
+  domain: string | null | undefined,
+): boolean {
+  const candidateHost = hostOf(candidate)
+  const domainHost = hostOf(domain)
+  if (!candidateHost || !domainHost) return false
+  return candidateHost === domainHost || candidateHost.endsWith(`.${domainHost}`)
+}
+
+/** True when a host/URL belongs to any domain in `domains`. */
+export function hostMatchesAnyDomain(
+  candidate: string | null | undefined,
+  domains: readonly string[],
+): boolean {
+  return domains.some(domain => hostMatchesDomain(candidate, domain))
+}
+
+/**
+ * Extract normalized domain hosts from prose using `linkify-it` for text
+ * recognition and `tldts` for hostname/PSL validation.
+ */
+export function extractDomainsFromText(text: string | null | undefined): string[] {
+  if (!text) return []
+  const domains = new Set<string>()
+  for (const match of LINKIFY.match(text) ?? []) {
+    if (match.schema === 'mailto:') continue
+    const host = hostOf(match.url)
+    if (!host || !registrableDomain(host)) continue
+    domains.add(host)
   }
+  return [...domains]
+}
+
+/** True when prose contains `domain` itself or one of its subdomains. */
+export function textContainsDomain(
+  text: string | null | undefined,
+  domain: string | null | undefined,
+): boolean {
+  return extractDomainsFromText(text).some(candidate => hostMatchesDomain(candidate, domain))
 }
 
 export function normalizeUrlPath(input: string | null | undefined): string | null {

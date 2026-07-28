@@ -1,18 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { extractDomainMentions, normalizeResult, extractServedModel } from '../src/normalize.js'
+import { normalizeResult, extractServedModel } from '../src/normalize.js'
 import type { LocalRawResult } from '../src/types.js'
 
 describe('normalizeResult', () => {
-  it('extracts domain mentions from answer text', () => {
-    const text = 'Check out example.com and https://another-site.org/path. Also sub.domain.co.uk.'
-    const domains = extractDomainMentions(text)
-    expect(domains).toContain('example.com')
-    expect(domains).toContain('another-site.org')
-    expect(domains).toContain('sub.domain.co.uk')
-    expect(domains).not.toContain('www.example.com')
-  })
-
-  it('normalizes a full local result', () => {
+  it('does not fabricate citations from domains written in answer prose', () => {
     const raw: LocalRawResult = {
       provider: 'local',
       model: 'llama3',
@@ -30,7 +21,24 @@ describe('normalizeResult', () => {
     }
     const normalized = normalizeResult(raw)
     expect(normalized.answerText).toBe('The domain is canonry.io')
-    expect(normalized.citedDomains).toContain('canonry.io')
+    expect(normalized.citedDomains).toEqual([])
+    expect(normalized.groundingSources).toEqual([])
+  })
+
+  it('derives cited domains only from structured grounding sources', () => {
+    const raw: LocalRawResult = {
+      provider: 'local',
+      model: 'llama3',
+      rawResponse: { choices: [{ message: { content: 'See the sources.' } }] },
+      groundingSources: [
+        { uri: 'https://www.example.com/article', title: 'Example' },
+        { uri: 'https://docs.example.com/guide', title: 'Guide' },
+      ],
+      searchQueries: [],
+    }
+    const normalized = normalizeResult(raw)
+    expect(normalized.citedDomains).toEqual(['example.com', 'docs.example.com'])
+    expect(normalized.groundingSources).toEqual(raw.groundingSources)
   })
 })
 

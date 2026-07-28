@@ -72,9 +72,8 @@ export const VERTEX_AI_SEARCH_PROXY_DOMAIN = 'vertexaisearch.cloud.google.com'
  * grounding sources as noise. Use this set to filter provider-owned
  * infrastructure out of citation extraction.
  *
- * Matched as eTLD+1: a callsite typically tests
- * `host === d || host.endsWith('.' + d)` so an entry of `anthropic.com`
- * catches `api.anthropic.com`, `docs.anthropic.com`, etc.
+ * Match through `hostMatchesAnyDomain` so an entry of `anthropic.com` catches
+ * `api.anthropic.com`, `docs.anthropic.com`, etc.
  */
 export const AI_PROVIDER_INFRA_DOMAINS = [
   AI_ENGINE_DOMAINS.openai,

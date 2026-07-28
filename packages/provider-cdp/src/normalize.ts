@@ -1,4 +1,12 @@
-import { AI_ENGINE_SELF_DOMAINS, type GroundingSource, type RawQueryResult, type NormalizedQueryResult } from '@ainyc/canonry-contracts'
+import {
+  AI_ENGINE_SELF_DOMAINS,
+  hostMatchesAnyDomain,
+  hostOf,
+  registrableDomain,
+  type GroundingSource,
+  type RawQueryResult,
+  type NormalizedQueryResult,
+} from '@ainyc/canonry-contracts'
 
 /**
  * Extract unique domains from grounding sources.
@@ -8,14 +16,10 @@ export function extractCitedDomains(groundingSources: GroundingSource[]): string
   const domains = new Set<string>()
 
   for (const source of groundingSources) {
-    try {
-      const url = new URL(source.uri)
-      const domain = url.hostname.replace(/^www\./, '').toLowerCase()
-      // Skip internal AI service domains
-      if (!AI_ENGINE_SELF_DOMAINS.chatgpt.some((self) => domain.includes(self))) {
-        domains.add(domain)
-      }
-    } catch {
+    const domain = hostOf(source.uri)
+    if (domain && registrableDomain(domain)) {
+      if (!hostMatchesAnyDomain(domain, AI_ENGINE_SELF_DOMAINS.chatgpt)) domains.add(domain)
+    } else {
       // Try extracting domain from title as fallback (similar to Gemini provider)
       const titleDomain = extractDomainFromTitle(source.title)
       if (titleDomain) domains.add(titleDomain)
@@ -27,13 +31,10 @@ export function extractCitedDomains(groundingSources: GroundingSource[]): string
 
 /** Try to extract a bare domain from a title string (e.g. "example.com - Page Title") */
 function extractDomainFromTitle(title: string): string | undefined {
-  const domainPattern = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i
   // Check if the title starts with what looks like a domain
   const firstWord = title.split(/[\s\-–—|]/)[0]?.trim()
-  if (firstWord && domainPattern.test(firstWord)) {
-    return firstWord.replace(/^www\./, '').toLowerCase()
-  }
-  return undefined
+  if (!firstWord || !registrableDomain(firstWord)) return undefined
+  return hostOf(firstWord) ?? undefined
 }
 
 /** Normalize a CDP raw query result into standard format */

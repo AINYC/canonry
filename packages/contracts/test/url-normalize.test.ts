@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { absolutizeProjectUrl, hostOf, normalizeUrlPath } from '../src/url-normalize.js'
+import {
+  absolutizeProjectUrl,
+  brandLabelFromDomain,
+  extractDomainsFromText,
+  hostMatchesDomain,
+  hostOf,
+  normalizeUrlPath,
+  registrableDomain,
+  textContainsDomain,
+} from '../src/url-normalize.js'
 
 describe('hostOf', () => {
   it('extracts the host from a full URL, www-stripped and lowercased', () => {
@@ -18,6 +27,41 @@ describe('hostOf', () => {
     expect(hostOf('')).toBe(null)
     expect(hostOf('   ')).toBe(null)
     expect(hostOf('not a url')).toBe(null)
+  })
+})
+
+describe('domain identity', () => {
+  it('uses the Public Suffix List for registrable domains', () => {
+    expect(registrableDomain('https://news.bbc.co.uk/story')).toBe('bbc.co.uk')
+    expect(brandLabelFromDomain('https://news.bbc.co.uk/story')).toBe('bbc')
+  })
+
+  it('treats private-suffix tenants as separate domains', () => {
+    expect(registrableDomain('docs.canonry.github.io')).toBe('canonry.github.io')
+    expect(brandLabelFromDomain('docs.canonry.github.io')).toBe('canonry')
+  })
+
+  it('matches only the same host or a real subdomain', () => {
+    expect(hostMatchesDomain('https://docs.example.com/x', 'example.com')).toBe(true)
+    expect(hostMatchesDomain('notexample.com', 'example.com')).toBe(false)
+    expect(hostMatchesDomain('example.com.evil.test', 'example.com')).toBe(false)
+  })
+})
+
+describe('domains in prose', () => {
+  it('extracts full and bare domains without a hand-maintained TLD regex', () => {
+    expect(extractDomainsFromText(
+      'See example.com, https://docs.example.co.uk/path, and tenant.vercel.app.',
+    )).toEqual(['example.com', 'docs.example.co.uk', 'tenant.vercel.app'])
+  })
+
+  it('does not treat email addresses or lookalike domains as a match', () => {
+    expect(extractDomainsFromText('Email hello@example.com for help.')).toEqual([])
+    expect(textContainsDomain('Use notexample.com instead.', 'example.com')).toBe(false)
+  })
+
+  it('recognizes an explicitly written domain or subdomain', () => {
+    expect(textContainsDomain('Read https://docs.example.com/start.', 'example.com')).toBe(true)
   })
 })
 

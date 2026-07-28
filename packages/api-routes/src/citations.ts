@@ -4,6 +4,8 @@ import { competitors, queries, querySnapshots, runs } from '@ainyc/canonry-db'
 import {
   emptyCitationVisibility,
   citationStateToCited,
+  hostMatchesDomain,
+  hostOf,
   type CitationCoverageProvider,
   type CitationCoverageRow,
   type CitationVisibilityResponse,
@@ -94,7 +96,7 @@ export async function citationRoutes(app: FastifyInstance) {
       .from(competitors)
       .where(eq(competitors.projectId, project.id))
       .all()
-      .map(c => normalizeDomain(c.domain))
+      .map(c => hostOf(c.domain) ?? '')
       .filter(d => d.length > 0)
 
     const response = computeCitationVisibility({
@@ -212,21 +214,22 @@ export function computeCitationVisibility(input: ComputeInput): CitationVisibili
   // a configured competitor appears in cited domains. Each row is one
   // (query, provider, competitor-set) tuple — a single query can show up
   // multiple times if multiple providers have the gap.
-  const competitorSet = new Set(competitorDomains)
   const competitorGaps: CompetitorGapRow[] = []
   const queryById = new Map(qs.map(q => [q.id, q.query]))
 
   for (const snap of latestByPair.values()) {
     if (citationStateToCited(snap.citationState as CitationState)) continue
-    if (competitorSet.size === 0) continue
+    if (competitorDomains.length === 0) continue
     const cited = snap.citedDomains
     const overlap = snap.competitorOverlap
     // Some normalizers populate competitorOverlap directly; others only
     // populate citedDomains. Use either source for resilience.
     const candidates = new Set(
-      [...cited, ...overlap].map(d => normalizeDomain(d)).filter(d => d.length > 0),
+      [...cited, ...overlap].map(d => hostOf(d) ?? '').filter(d => d.length > 0),
     )
-    const citingCompetitors = Array.from(candidates).filter(d => competitorSet.has(d))
+    const citingCompetitors = competitorDomains.filter(
+      competitor => [...candidates].some(candidate => hostMatchesDomain(candidate, competitor)),
+    )
     if (citingCompetitors.length === 0) continue
 
     competitorGaps.push({
@@ -272,8 +275,4 @@ export function computeCitationVisibility(input: ComputeInput): CitationVisibili
     competitorGaps,
     status: 'ready',
   }
-}
-
-function normalizeDomain(domain: string): string {
-  return domain.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '')
 }

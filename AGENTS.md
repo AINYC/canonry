@@ -650,7 +650,8 @@ The contract test `packages/api-routes/test/openapi-contract.test.ts` enforces a
 | Concern | File |
 |---------|------|
 | Date / number / ratio formatting | `packages/contracts/src/formatting.ts` |
-| URL / domain normalization | `packages/contracts/src/url-normalize.ts` |
+| URL / domain identity | `packages/contracts/src/url-normalize.ts` (`hostOf`, PSL-aware `registrableDomain` / `brandLabelFromDomain`, exact-or-subdomain matching, prose domain extraction) |
+| Brand identity matching | `packages/contracts/src/brand-matching.ts` (exact approved aliases across case/spacing/punctuation variants; never fuzzy/edit-distance matching for metrics) |
 | Tracked-query text normalization | `packages/contracts/src/query-normalize.ts` (`normalizeQueryText` — trim + lowercase for dedup / FK-null text matching) |
 | Report action / opportunity dedup | `packages/contracts/src/report-dedup.ts` |
 | Error factories | `packages/contracts/src/errors.ts` |

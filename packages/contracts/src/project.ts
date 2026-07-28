@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { validationError } from './errors.js'
 import { locationContextSchema, providerModelsSchema, providerNameSchema, type LocationContext } from './provider.js'
 import { measurementConfigSchema, defaultMeasurementConfig } from './measurement.js'
+import { hostOf } from './url-normalize.js'
 
 export const configSourceSchema = z.enum(['cli', 'api', 'config-file'])
 export type ConfigSource = z.infer<typeof configSourceSchema>
@@ -196,98 +197,7 @@ export type CompetitorBatchRequest = z.infer<typeof competitorBatchRequestSchema
 
 /** Normalize a user-supplied project domain for matching and deduplication. */
 export function normalizeProjectDomain(input: string): string {
-  let domain = input.trim().toLowerCase()
-  try {
-    if (domain.includes('://')) {
-      domain = new URL(domain).hostname.toLowerCase()
-    }
-  } catch {
-    // ignore invalid URLs and use the raw input
-  }
-  return domain.replace(/^www\./, '')
-}
-
-// Two-label public suffixes where the eTLD+1 needs three labels
-// (e.g. example.co.uk → example.co.uk, not co.uk). Not exhaustive — a real
-// PSL has thousands of entries — but covers the common ccTLDs Canonry users
-// hit. Keep alphabetized.
-const MULTI_LABEL_PUBLIC_SUFFIXES = new Set([
-  'ac.uk',
-  'co.id',
-  'co.il',
-  'co.in',
-  'co.jp',
-  'co.kr',
-  'co.nz',
-  'co.th',
-  'co.uk',
-  'co.za',
-  'com.au',
-  'com.br',
-  'com.cn',
-  'com.mx',
-  'com.ph',
-  'com.sg',
-  'com.tr',
-  'edu.au',
-  'edu.sg',
-  'gov.au',
-  'gov.uk',
-  'me.uk',
-  'ne.jp',
-  'net.au',
-  'net.br',
-  'net.cn',
-  'net.in',
-  'net.tr',
-  'or.jp',
-  'or.kr',
-  'org.au',
-  'org.br',
-  'org.in',
-  'org.nz',
-  'org.tr',
-  'org.uk',
-  'org.za',
-])
-
-/**
- * Reduce a domain to its registrable form (eTLD+1).
- *
- * `offers.roofle.com` → `roofle.com`
- * `acme.com` → `acme.com`
- * `bbc.co.uk` → `bbc.co.uk`
- * `news.bbc.co.uk` → `bbc.co.uk`
- *
- * Strips subdomains so an arbitrary subdomain label (`offers`, `blog`, `app`)
- * cannot leak into brand-token matching against answer text. Returns `''` for
- * empty or single-label input. Idempotent.
- */
-export function registrableDomain(input: string): string {
-  const normalized = normalizeProjectDomain(input)
-  if (!normalized) return ''
-  const hostname = normalized.split('/')[0]?.split(':')[0] ?? ''
-  if (!hostname) return ''
-  const labels = hostname.split('.').filter(Boolean)
-  if (labels.length < 2) return ''
-  if (labels.length === 2) return labels.join('.')
-  const lastTwo = labels.slice(-2).join('.')
-  if (MULTI_LABEL_PUBLIC_SUFFIXES.has(lastTwo)) {
-    return labels.length >= 3 ? labels.slice(-3).join('.') : ''
-  }
-  return labels.slice(-2).join('.')
-}
-
-/**
- * The leftmost label of the registrable domain — the "brand" segment used for
- * word-boundary matching against answer text. `offers.roofle.com` → `roofle`,
- * `acme.com` → `acme`, `bbc.co.uk` → `bbc`. Returns `''` if there is no
- * extractable brand label.
- */
-export function brandLabelFromDomain(input: string): string {
-  const reg = registrableDomain(input)
-  if (!reg) return ''
-  return reg.split('.')[0] ?? ''
+  return hostOf(input) ?? input.trim().toLowerCase().replace(/^www\./, '')
 }
 
 /** Returns deduplicated list of all domains owned by the project. */

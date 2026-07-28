@@ -21,6 +21,7 @@ import {
   RunStatuses,
   VerificationStatuses,
   hostOf,
+  hostMatchesAnyDomain,
   normalizeUrlPath,
   organicEvidencePeriodSchema,
   validationError,
@@ -43,12 +44,8 @@ const normalizedPath = (value: string | null | undefined) => {
   return normalized.split('?')[0] || '/'
 }
 const inRange = (date: string, startDate: string, endDate: string) => date >= startDate && date <= endDate
-const normalizedHost = (value: string) => value.trim().toLowerCase().replace(/^www\./, '')
-const matchesMarketingHost = (value: string, marketingHosts: string[]) => {
-  const hostname = normalizedHost(value)
-  return marketingHosts.some(candidate =>
-    hostname === candidate || hostname.endsWith(`.${candidate}`))
-}
+const matchesMarketingHost = (value: string, marketingHosts: string[]) =>
+  hostMatchesAnyDomain(value, marketingHosts)
 const pageMatchesMarketingHost = (value: string, marketingHosts: string[]) => {
   return matchesMarketingHost(hostOf(value) ?? '', marketingHosts)
 }
@@ -152,7 +149,9 @@ export function buildOrganicEvidence(
   const nativeAcquisition = measurement.acquisition
   const nativeAcquisitionActive = nativeAcquisition.status !== 'never-synced'
   const marketingHosts = measurement.filters.marketingHosts
-  const normalizedMarketingHosts = [...new Set(marketingHosts.map(normalizedHost).filter(Boolean))]
+  const normalizedMarketingHosts = [...new Set(
+    marketingHosts.map(host => hostOf(host)).filter((host): host is string => host !== null),
+  )]
   const nativeStartDate = nativeAcquisition.periods[0]?.startDate
   const nativeEndDate = nativeAcquisition.periods.at(-1)?.endDate
   const gscCoverage = aggregateCoverage(db.select({

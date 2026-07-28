@@ -214,13 +214,13 @@ test('competitor gaps lists not-cited queries where a configured competitor appe
 
   const run = insertRun(ctx.db, projectId, '2026-04-28T00:00:00Z')
 
-  // Query A: not cited; rival.com appears in cited domains => gap row
+  // Query A: not cited; a rival.com subdomain appears in cited domains => gap row
   insertSnapshot(ctx.db, {
     runId: run,
     queryId: qA,
     provider: 'gemini',
     citationState: 'not-cited',
-    citedDomains: ['rival.com', 'unrelated.com'],
+    citedDomains: ['docs.rival.com', 'unrelated.com'],
     createdAt: '2026-04-28T00:00:01Z',
   })
 

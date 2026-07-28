@@ -1,5 +1,5 @@
 import OpenAI from 'openai'
-import { normalizeServedModel } from '@ainyc/canonry-contracts'
+import { hostOf, normalizeServedModel, registrableDomain } from '@ainyc/canonry-contracts'
 import { withRetry } from './utils.js'
 import type {
   GroundingSource,
@@ -100,11 +100,12 @@ export async function executeTrackedQuery(input: LocalTrackedQueryInput): Promis
 
 export function normalizeResult(raw: LocalRawResult): LocalNormalizedResult {
   const answerText = extractAnswerText(raw.rawResponse)
-  const citedDomains = extractDomainMentions(answerText)
-  const groundingSources: GroundingSource[] = citedDomains.map(domain => ({
-    uri: `http://${domain}`,
-    title: domain
-  }))
+  const groundingSources: GroundingSource[] = raw.groundingSources
+  const citedDomains = [...new Set(
+    groundingSources
+      .map(source => hostOf(source.uri))
+      .filter((domain): domain is string => domain !== null && registrableDomain(domain).length > 0),
+  )]
 
   return {
     provider: 'local',
@@ -147,29 +148,6 @@ export async function generateText(prompt: string, config: LocalConfig): Promise
     }),
   )
   return response.choices[0]?.message?.content ?? ''
-}
-
-/**
- * Scan answer text for domain mentions — used as a citation heuristic
- * since local LLMs don't have structured grounding/search data.
- */
-export function extractDomainMentions(text: string): string[] {
-  const domains = new Set<string>()
-
-  // Match URLs like https://example.com/path or http://example.com
-  const urlPattern = /https?:\/\/([a-zA-Z0-9][-a-zA-Z0-9]*(?:\.[a-zA-Z0-9][-a-zA-Z0-9]*)+)/g
-  let match
-  while ((match = urlPattern.exec(text)) !== null) {
-    domains.add(match[1].replace(/^www\./, '').toLowerCase())
-  }
-
-  // Match bare domain mentions including subdomains (e.g. docs.example.com, foo.example.co.uk)
-  const domainPattern = /(?:^|[\s(["'])((?:[a-zA-Z0-9][-a-zA-Z0-9]*\.)+(?:com|org|net|io|co|dev|ai|app|edu|gov|biz|info|tech|health|dental|legal|law|med|uk|us|ca|au|de|fr|es|it|nl|se|no|dk|fi|jp|cn|kr|br|mx|ru|in|sg|nz|za)(?:\.[a-zA-Z]{2})?)(?:[\s).,;/"']|$)/g
-  while ((match = domainPattern.exec(text)) !== null) {
-    domains.add(match[1].replace(/^www\./, '').toLowerCase())
-  }
-
-  return [...domains]
 }
 
 /**

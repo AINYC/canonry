@@ -157,6 +157,9 @@ export const chatgptTarget: CDPTarget = {
       const { result } = await client.Runtime.evaluate({
         expression: `(() => {
           const SELF_DOMAINS = ${selfDomainsLiteral};
+          const isSelfDomain = hostname => SELF_DOMAINS.some(
+            self => hostname === self || hostname.endsWith('.' + self)
+          );
           const sources = [];
           const seen = new Set();
           const turns = document.querySelectorAll('[data-message-author-role="assistant"]');
@@ -180,7 +183,7 @@ export const chatgptTarget: CDPTarget = {
               }
             }
 
-            if (!seen.has(href) && !SELF_DOMAINS.includes(hostname)) {
+            if (!seen.has(href) && !isSelfDomain(hostname)) {
               seen.add(href);
               sources.push({
                 uri: href,
@@ -197,7 +200,7 @@ export const chatgptTarget: CDPTarget = {
             if (href && !seen.has(href)) {
               let hostname = '';
               try { hostname = new URL(href).hostname.replace(/^www\\./, ''); } catch {}
-              if (!SELF_DOMAINS.includes(hostname)) {
+              if (!isSelfDomain(hostname)) {
                 seen.add(href);
                 sources.push({ uri: href, title: title || hostname || href });
               }

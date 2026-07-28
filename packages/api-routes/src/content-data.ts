@@ -33,6 +33,8 @@ import {
 } from '@ainyc/canonry-intelligence'
 import {
   CitationStates,
+  hostMatchesDomain,
+  hostOf,
   RunKinds,
   RunStatuses,
   type GroundingSource,
@@ -69,14 +71,14 @@ export function loadOrchestratorInput(
   locationFilter: LocationScope = undefined,
 ): OrchestratorInput {
   const projectId = project.id
-  const ownDomain = normalizeDomain(project.canonicalDomain)
+  const ownDomain = hostOf(project.canonicalDomain) ?? ''
   const ownedDomains = project.ownedDomains ?? []
-  const ourDomains = new Set([ownDomain, ...ownedDomains.map(normalizeDomain)])
+  const ourDomains = new Set([ownDomain, ...ownedDomains.map(domain => hostOf(domain) ?? '')])
 
   const trackedQueries = listQueries(db, projectId)
   const candidateQueryStrings = trackedQueries.filter(isBlogShapedQuery)
 
-  const trackedCompetitors = listCompetitorDomains(db, projectId).map(normalizeDomain)
+  const trackedCompetitors = listCompetitorDomains(db, projectId).map(domain => hostOf(domain) ?? '')
   const competitorSet = new Set(trackedCompetitors)
 
   // Limit the orchestrator window to runs at the latest run's location so
@@ -137,7 +139,7 @@ function loadDomainClasses(db: DatabaseClient, projectId: string): Map<string, D
     .from(domainClassifications)
     .where(eq(domainClassifications.projectId, projectId))
     .all()
-  return new Map(rows.map((r) => [normalizeDomain(r.domain), r.competitorType]))
+  return new Map(rows.map((r) => [hostOf(r.domain) ?? '', r.competitorType]))
 }
 
 function buildQueryIntentModifiers(project: ProjectRow, locationFilter: LocationScope): string[] {
@@ -517,23 +519,24 @@ function aggregateCandidate(opts: AggregateCandidateOpts): CandidateQuery {
     const isLatestRun = snap.runId === opts.latestRunId
     const competitorOverlap = snap.competitorOverlap
     for (const domain of competitorOverlap) {
-      const normalized = normalizeDomain(domain)
-      if (!opts.competitorSet.has(normalized)) continue
-      competitorTally.set(normalized, (competitorTally.get(normalized) ?? 0) + 1)
+      const normalized = hostOf(domain) ?? ''
+      const competitor = findMatchingDomain(normalized, opts.competitorSet)
+      if (!competitor) continue
+      competitorTally.set(competitor, (competitorTally.get(competitor) ?? 0) + 1)
     }
 
     const grounding = extractGroundingSources(snap.rawResponse)
     for (const g of grounding) {
-      const domain = normalizeDomain(extractHostFromUri(g.uri))
+      const domain = hostOf(g.uri) ?? ''
       if (!domain) continue
-      if (opts.ourDomains.has(domain)) {
+      if (findMatchingDomain(domain, opts.ourDomains)) {
         if (isLatestRun) ourCitedInLatestRun = true
         recordGroundingHit(ourGroundingTally, g, domain, snap.provider)
         continue
       }
       // Count toward the full cited surface before the tracked-competitor gate.
       citedSurfaceTally.set(domain, (citedSurfaceTally.get(domain) ?? 0) + 1)
-      if (!opts.competitorSet.has(domain)) continue
+      if (!findMatchingDomain(domain, opts.competitorSet)) continue
       recordGroundingHit(competitorGroundingTally, g, domain, snap.provider)
     }
   }
@@ -555,6 +558,10 @@ function aggregateCandidate(opts: AggregateCandidateOpts): CandidateQuery {
     citedSurfaceDomains: Array.from(citedSurfaceTally.entries()).map(([domain, citationCount]) => ({ domain, citationCount })),
     runsOfHistory: new Set(opts.snapshots.map((s) => s.runId)).size,
   }
+}
+
+function findMatchingDomain(candidate: string, domains: ReadonlySet<string>): string | undefined {
+  return [...domains].find(domain => hostMatchesDomain(candidate, domain))
 }
 
 function recordGroundingHit(
@@ -619,18 +626,6 @@ export function extractGroundingSources(rawResponse: string | null): GroundingSo
     // ignore — malformed rawResponse just yields no grounding sources
   }
   return []
-}
-
-export function extractHostFromUri(uri: string): string {
-  try {
-    return new URL(uri).hostname
-  } catch {
-    return ''
-  }
-}
-
-export function normalizeDomain(domain: string): string {
-  return domain.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '')
 }
 
 function extractPath(url: string): string {

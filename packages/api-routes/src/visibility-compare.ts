@@ -2,6 +2,7 @@ import { buildMentionShare } from '@ainyc/canonry-intelligence'
 import {
   CitationStates,
   hostOf,
+  hostMatchesDomain,
   wilsonInterval,
   type VisibilityCompareDto,
   type VisibilityCompareMetric,
@@ -62,11 +63,6 @@ interface BasketPair {
 
 function basketPairKey(queryId: string, provider: string): string {
   return JSON.stringify([queryId, provider])
-}
-
-/** A cited hostname belongs to a competitor when it equals or is a subdomain of the competitor's host. */
-function citedHostMatches(citedHost: string, competitorHost: string): boolean {
-  return citedHost === competitorHost || citedHost.endsWith(`.${competitorHost}`)
 }
 
 /** Attribute snapshots to currently-tracked queries (drop the rest), restricted to the common query/provider-pair basket. */
@@ -222,7 +218,7 @@ function countPeriod(snaps: Attributed[], competitors: VisibilityCompareCompetit
         .map((d) => hostOf(d))
         .filter((h): h is string => h !== null && h.length > 0)
       for (const compHost of competitorHosts) {
-        if (citedHosts.some((ch) => citedHostMatches(ch, compHost))) competitorCited += 1
+        if (citedHosts.some((ch) => hostMatchesDomain(ch, compHost))) competitorCited += 1
       }
     }
   }

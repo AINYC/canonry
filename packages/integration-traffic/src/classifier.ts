@@ -1,5 +1,10 @@
 import type { AiReferralTrafficClass, NormalizedTrafficRequest } from '@ainyc/canonry-contracts'
-import { AiReferralTrafficClasses, classifyAiReferralTrafficClass } from '@ainyc/canonry-contracts'
+import {
+  AiReferralTrafficClasses,
+  classifyAiReferralTrafficClass,
+  hostMatchesDomain,
+  hostOf,
+} from '@ainyc/canonry-contracts'
 import { verifyIpForRule } from './ip-verify.js'
 import { DEFAULT_AI_CRAWLER_RULES, DEFAULT_AI_REFERRER_RULES, SELF_TRAFFIC_USER_AGENT_PATTERNS } from './rules.js'
 import type {
@@ -21,9 +26,7 @@ function normalizeHost(host: string): string {
 }
 
 function hostMatches(host: string, domain: string): boolean {
-  const normalizedHost = normalizeHost(host)
-  const normalizedDomain = normalizeHost(domain)
-  return normalizedHost === normalizedDomain || normalizedHost.endsWith(`.${normalizedDomain}`)
+  return hostMatchesDomain(host, domain)
 }
 
 // UTM source values are often a short label rather than a hostname (e.g.
@@ -37,12 +40,7 @@ function utmTokenMatchesDomain(utmSource: string, domain: string): boolean {
 }
 
 function hostFromUrl(value: string | null): string | null {
-  if (!value) return null
-  try {
-    return normalizeHost(new URL(value).hostname)
-  } catch {
-    return null
-  }
+  return hostOf(value)
 }
 
 function utmSourceFromQuery(queryString: string | null): string | null {
