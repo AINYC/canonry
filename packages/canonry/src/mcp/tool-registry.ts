@@ -47,7 +47,6 @@ import {
 } from '@ainyc/canonry-contracts'
 import { z } from 'zod'
 import type { ApiClient } from '../client.js'
-import { submitGscSitemaps } from '../commands/google.js'
 import {
   analyticsWindowSchema,
   compactStringParams,
@@ -204,6 +203,65 @@ const gscSitemapsSubmitInputSchema = z.union([
     mode: z.enum(['indexes', 'all-files']),
   }).strict(),
 ])
+
+type GscSitemapsSubmitInput = z.infer<typeof gscSitemapsSubmitInputSchema>
+
+async function submitGscSitemapsFromMcp(
+  client: ApiClient,
+  input: GscSitemapsSubmitInput,
+): Promise<Awaited<ReturnType<ApiClient['gscSubmitSitemaps']>>> {
+  let sitemapUrls: string[]
+  if ('sitemapUrls' in input) {
+    sitemapUrls = uniqueStrings(input.sitemapUrls)
+  } else {
+    const topLevel = await client.gscSitemaps(input.project)
+    if (input.mode === 'indexes') {
+      sitemapUrls = uniqueStrings(
+        topLevel.preferredSubmissionUrls.length > 0
+          ? topLevel.preferredSubmissionUrls
+          : topLevel.sitemaps.map((sitemap) => sitemap.path),
+      )
+    } else {
+      const indexes = topLevel.sitemaps
+        .filter((sitemap) => sitemap.isSitemapsIndex)
+        .map((sitemap) => sitemap.path)
+      const childUrls: string[] = []
+      for (let offset = 0; offset < indexes.length; offset += 4) {
+        const children = await Promise.all(
+          indexes.slice(offset, offset + 4).map(
+            (sitemapIndex) => client.gscSitemaps(input.project, { sitemapIndex }),
+          ),
+        )
+        childUrls.push(...children.flatMap(
+          (result) => result.sitemaps.map((sitemap) => sitemap.path),
+        ))
+      }
+      sitemapUrls = uniqueStrings([
+        ...topLevel.sitemaps.map((sitemap) => sitemap.path),
+        ...childUrls,
+      ])
+    }
+  }
+
+  if (sitemapUrls.length === 0) {
+    throw new Error('No GSC sitemaps found. Submit an explicit sitemap URL first.')
+  }
+
+  const aggregate: Awaited<ReturnType<ApiClient['gscSubmitSitemaps']>> = {
+    summary: { total: 0, accepted: 0, failed: 0 },
+    results: [],
+  }
+  for (let offset = 0; offset < sitemapUrls.length; offset += 50) {
+    const result = await client.gscSubmitSitemaps(input.project, {
+      sitemapUrls: sitemapUrls.slice(offset, offset + 50),
+    })
+    aggregate.summary.total += result.summary.total
+    aggregate.summary.accepted += result.summary.accepted
+    aggregate.summary.failed += result.summary.failed
+    aggregate.results.push(...result.results)
+  }
+  return aggregate
+}
 
 const gaWindowInputSchema = z.object({
   project: projectNameSchema,
@@ -1236,15 +1294,7 @@ export const canonryMcpTools = [
     inputSchema: gscSitemapsSubmitInputSchema,
     annotations: writeAnnotations({ idempotentHint: false, openWorldHint: true }),
     openApiOperations: ['POST /api/v1/projects/{name}/google/gsc/sitemaps/submit'],
-    handler: (client, input) => submitGscSitemaps(
-      client,
-      input.project,
-      'sitemapUrls' in input
-        ? { sitemapUrls: input.sitemapUrls }
-        : input.mode === 'indexes'
-          ? { all: true }
-          : { allFiles: true },
-    ),
+    handler: submitGscSitemapsFromMcp,
   }),
   defineTool({
     name: 'canonry_ga_status',
