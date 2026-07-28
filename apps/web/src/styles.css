@@ -740,6 +740,12 @@
     @apply flex min-h-screen min-w-0 flex-1 flex-col lg:pl-56;
   }
 
+  /* Presentation privacy: removing the sidebar also removes its desktop
+     gutter, giving the active project view the full viewport width. */
+  .app-shell-sidebar-hidden .main-area {
+    @apply lg:pl-0;
+  }
+
   /* First-run focus mode (sidebar hidden) — drop the 224px sidebar gutter
      so the wizard centers across the full viewport instead of being
      offset right. Applied via the `app-shell-focus` modifier set by
@@ -754,6 +760,10 @@
 
   .topbar-left {
     @apply flex items-center gap-3;
+  }
+
+  .sidebar-privacy-toggle {
+    @apply hidden lg:inline-flex;
   }
 
   .topbar-brand-mobile {
