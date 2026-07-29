@@ -2121,6 +2121,34 @@
 
   /* ── Evidence table ── */
 
+  .evidence-quick-views {
+    @apply flex items-end gap-5 overflow-x-auto border-b border-subtle;
+  }
+
+  .evidence-quick-views-label {
+    @apply shrink-0 pb-2.5 text-[10px] font-medium uppercase tracking-wide text-secondary;
+  }
+
+  .evidence-quick-view-list {
+    @apply flex min-w-max items-end gap-5;
+  }
+
+  .evidence-quick-view {
+    @apply -mb-px inline-flex min-h-9 items-center gap-1.5 rounded-sm border-b-2 border-transparent px-0.5 pb-2.5 pt-1 text-xs font-medium text-secondary transition-colors hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg;
+  }
+
+  .evidence-quick-view--active {
+    @apply border-accent text-heading;
+  }
+
+  .evidence-quick-view-count {
+    @apply font-mono text-[10px] tabular-nums text-secondary;
+  }
+
+  .evidence-quick-view--active .evidence-quick-view-count {
+    @apply text-strong;
+  }
+
   .evidence-table-wrap {
     @apply overflow-x-auto rounded-xl border border-default;
   }
@@ -2156,6 +2184,31 @@
 
   .evidence-change-cell {
     @apply text-xs text-muted;
+  }
+
+  .evidence-signal-value {
+    @apply inline-grid items-center gap-1.5 text-xs font-medium text-secondary;
+    grid-template-columns: 1rem auto;
+  }
+
+  .evidence-signal-value svg {
+    @apply size-3.5;
+  }
+
+  .evidence-signal-value--present {
+    @apply text-strong;
+  }
+
+  .evidence-signal-value--present svg {
+    @apply text-positive;
+  }
+
+  .evidence-signal-value--absent svg {
+    @apply text-muted;
+  }
+
+  .evidence-signal-value--pending svg {
+    @apply text-faint;
   }
 
   /* ── Findings table ── */

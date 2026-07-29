@@ -22,14 +22,16 @@ afterEach(() => {
 function point(
   runId: string,
   citationState: RunHistoryPoint['citationState'],
-  answerMentioned: boolean,
+  answerMentioned: boolean | undefined,
 ): RunHistoryPoint {
   return {
     runId,
     createdAt: `2026-07-${runId === 'r1' ? '01' : '02'}T12:00:00.000Z`,
     citationState,
     answerMentioned,
-    visibilityState: answerMentioned ? 'visible' : 'not-visible',
+    visibilityState: answerMentioned == null
+      ? 'pending'
+      : answerMentioned ? 'visible' : 'not-visible',
   }
 }
 
@@ -180,6 +182,42 @@ test('uses a named disclosure and query-specific answer actions instead of an in
     name: 'Review Gemini answer for best solar installer',
   }))
   expect(drawer.openEvidence).toHaveBeenCalledWith('gemini-evidence')
+})
+
+test('uses plain text quick views and engine states instead of pill indicators', () => {
+  const items = [
+    evidenceItem({
+      id: 'independent-signals',
+      query: 'independent signal query',
+      provider: 'gemini',
+      history: [point('r1', 'not-cited', true), point('r2', 'not-cited', true)],
+    }),
+    evidenceItem({
+      id: 'pending-signals',
+      query: 'independent signal query',
+      provider: 'openai',
+      history: [point('r2', 'pending', undefined)],
+    }),
+  ]
+  const { container } = render(<EvidenceTable evidence={items} />)
+
+  const allView = screen.getByRole('button', { name: 'All, 1 query' })
+  expect(allView.className).toContain('evidence-quick-view')
+  expect(allView.className).not.toContain('filter-chip')
+
+  fireEvent.click(screen.getByRole('button', {
+    name: 'Review engines for independent signal query',
+  }))
+
+  const engineStates = [...container.querySelectorAll('.evidence-signal-value')]
+  const engines = screen.getByRole('list', { name: 'Engine results for independent signal query' })
+  expect(engineStates).toHaveLength(4)
+  expect(engineStates.every(state => !state.className.includes('badge'))).toBe(true)
+  expect(within(engines).getAllByText('Mention status:')).toHaveLength(2)
+  expect(within(engines).getAllByText('Citation status:')).toHaveLength(2)
+  expect(within(engines).getByText('Mentioned')).toBeTruthy()
+  expect(within(engines).getByText('Not cited')).toBeTruthy()
+  expect(within(engines).getAllByText('No result')).toHaveLength(2)
 })
 
 test('search and empty states explain how to recover', () => {

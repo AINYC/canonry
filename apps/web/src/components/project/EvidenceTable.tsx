@@ -1,8 +1,7 @@
 import { Fragment, useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronRight, Clock3, Minus } from 'lucide-react'
 
 import { Button } from '../ui/button.js'
-import { CitationBadge } from '../shared/CitationBadge.js'
 import {
   DataTablePagination,
   DataTableSearch,
@@ -330,6 +329,29 @@ function currentStatusLabel(state: CitationState, mode: CoverageMode): string {
   return isPresentState(state) ? 'Cited' : 'Not cited'
 }
 
+function EvidenceSignalValue({
+  state,
+  mode,
+}: {
+  state: CitationState
+  mode: CoverageMode
+}) {
+  const tone = state === 'pending' ? 'pending' : isPresentState(state) ? 'present' : 'absent'
+  const Icon = tone === 'present' ? Check : tone === 'pending' ? Clock3 : Minus
+
+  return (
+    <span className={`evidence-signal-value evidence-signal-value--${tone}`}>
+      <Icon aria-hidden="true" />
+      <span>
+        <span className="sr-only">
+          {mode === 'mentions' ? 'Mention status: ' : 'Citation status: '}
+        </span>
+        {currentStatusLabel(state, mode)}
+      </span>
+    </span>
+  )
+}
+
 function changeToneClass(label: string): string {
   if (label.includes('lost')) return 'text-negative'
   if (label.includes('gained')) return 'text-positive'
@@ -509,28 +531,30 @@ export function EvidenceTable({
           placeholder="Search queries, locations, or engines"
           className="max-w-xl"
         />
-        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Query evidence quick views">
-          <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-secondary">Quick views</span>
-          {QUICK_VIEWS.map(view => {
-            const active = quickView === view
-            return (
-              <button
-                key={view}
-                type="button"
-                aria-pressed={active}
-                aria-label={`${quickViewLabel(view)}, ${quickViewCounts[view]} ${
-                  quickViewCounts[view] === 1 ? 'query' : 'queries'
-                }`}
-                onClick={() => handleQuickView(view)}
-                className={`filter-chip inline-flex items-center gap-1.5 text-secondary ${active ? 'filter-chip-active' : ''}`}
-              >
-                {quickViewLabel(view)}
-                <span className={`tabular-nums ${active ? 'text-strong' : 'text-secondary'}`}>
-                  {quickViewCounts[view]}
-                </span>
-              </button>
-            )
-          })}
+        <div className="evidence-quick-views" role="group" aria-label="Query evidence quick views">
+          <span className="evidence-quick-views-label">Quick views</span>
+          <div className="evidence-quick-view-list">
+            {QUICK_VIEWS.map(view => {
+              const active = quickView === view
+              return (
+                <button
+                  key={view}
+                  type="button"
+                  aria-pressed={active}
+                  aria-label={`${quickViewLabel(view)}, ${quickViewCounts[view]} ${
+                    quickViewCounts[view] === 1 ? 'query' : 'queries'
+                  }`}
+                  onClick={() => handleQuickView(view)}
+                  className={`evidence-quick-view ${active ? 'evidence-quick-view--active' : ''}`}
+                >
+                  <span>{quickViewLabel(view)}</span>
+                  <span className="evidence-quick-view-count">
+                    {quickViewCounts[view]}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         </div>
       </div>
 
@@ -671,15 +695,15 @@ export function EvidenceTable({
                                     ) : null}
                                   </div>
                                   <div>
-                                    <CitationBadge
+                                    <EvidenceSignalValue
                                       state={mentionState}
-                                      label={currentStatusLabel(mentionState, 'mentions')}
+                                      mode="mentions"
                                     />
                                   </div>
                                   <div>
-                                    <CitationBadge
+                                    <EvidenceSignalValue
                                       state={citationState}
-                                      label={currentStatusLabel(citationState, 'citations')}
+                                      mode="citations"
                                     />
                                   </div>
                                   <div className="text-xs">
