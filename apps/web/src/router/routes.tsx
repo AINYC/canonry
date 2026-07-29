@@ -243,12 +243,6 @@ export const setupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/setup',
   component: SetupPage,
-  beforeLoad: ({ context }) => {
-    const projects = context.queryClient.getQueryData(getApiV1ProjectsQueryKey({ client: heyClient })) as unknown[] | undefined
-    if (projects && projects.length > 0) {
-      throw redirect({ to: '/' })
-    }
-  },
 })
 
 export const backlinksRoute = createRoute({

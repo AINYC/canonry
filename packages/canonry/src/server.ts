@@ -104,6 +104,7 @@ import {
 } from "./telemetry.js";
 import { checkLatestVersionForServer } from "./update-check.js";
 import { JobRunner } from "./job-runner.js";
+import { maybeShowActivationNotice } from './activation-notice.js'
 import { executeGscSync } from "./gsc-sync.js";
 import { executeGbpSync } from "./gbp-sync.js";
 import {
@@ -619,7 +620,12 @@ export async function createServer(opts: {
   const port = opts.config.port ?? 4100;
   const serverUrl = `http://localhost:${port}`;
 
-  const jobRunner = new JobRunner(opts.db, registry);
+  const jobRunner = new JobRunner(opts.db, registry, {
+    // The one-time first-sweep thank-you. Lives on the serve console because
+    // runs execute here, including the foreground serve that init hands off
+    // to. TTY-gated inside, so supervised deployments never see it.
+    onFirstActivation: () => maybeShowActivationNotice(),
+  });
   jobRunner.recoverStaleRuns();
   const notifier = new Notifier(opts.db, serverUrl);
   const intelligenceService = new IntelligenceService(opts.db);
@@ -2305,6 +2311,8 @@ export async function createServer(opts: {
           app.log.error({ runId, err }, "Job runner failed");
         });
     },
+    getRunnableProviderNames: () =>
+      registry.getAll().map((provider) => provider.adapter.name),
     onProviderUpdate: (
       providerName: string,
       apiKey: string,
@@ -2485,6 +2493,10 @@ export async function createServer(opts: {
       saveConfigPatch(config);
       // Keep in-memory config in sync
       opts.config.telemetry = enabled;
+    },
+    recordOnboardingEvent: (event) => {
+      const { event: eventName, eventId, ...properties } = event;
+      trackEvent(eventName, properties, { source: "dashboard", eventId });
     },
     onCdpConfigure: async (host: string, port: number) => {
       if (!opts.config.cdp) opts.config.cdp = {};

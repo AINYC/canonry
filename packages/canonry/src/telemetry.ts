@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import os from 'node:os'
 import { isGhostTelemetryEvent } from '@ainyc/canonry-contracts'
 import { loadConfig, saveConfigPatch, configExists, loadConfigRaw } from './config.js'
+import type { SetupState } from './setup-state.js'
 
 import { createRequire } from 'node:module'
 const _require = createRequire(import.meta.url)
@@ -19,9 +20,9 @@ const ANON_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
  * `canonry serve` switches itself to `'cli-server'` so dashboard/API-driven
  * runs can be told apart from one-shot `canonry run` invocations.
  *
- * Future surfaces (`'wp-plugin'`, `'mcp-server'`, `'api'`, `'dashboard'`,
- * `'agent-runtime'`) are reserved here so receivers can validate against a
- * stable enum even before each emitter exists.
+ * Dashboard setup events are forwarded through the local API with an explicit
+ * `'dashboard'` override. The other future surfaces remain reserved so
+ * receivers can validate against a stable enum before each emitter exists.
  */
 export type TelemetrySource =
   | 'cli'
@@ -34,12 +35,14 @@ export type TelemetrySource =
 
 /**
  * Free-shape JSON-serializable property bag. Nested objects are allowed for
- * grouped fields like `phases` (run.completed) and `setupState` (cli.command).
+ * grouped fields like `phases` (run.completed) and `setup_state` (cli.command).
  * Non-JSON values (functions, symbols) silently drop in `JSON.stringify`.
  */
 export type TelemetryProperties = Record<string, unknown>
 
 export interface TelemetryEvent {
+  /** Unique UUID for receiver-side retry/deduplication. */
+  eventId: string
   /** Stable per-install UUID stored in `~/.canonry/config.yaml`. */
   anonymousId: string
   /** Per-process UUID — groups the events from one CLI invocation or one
@@ -65,12 +68,32 @@ export interface TelemetryEvent {
 }
 
 export interface TrackEventOptions {
+  /** Caller-generated idempotency key, used by forwarded browser events. */
+  eventId?: string
   /** Override the global default source — used by `canonry serve` to flip
    *  to `'cli-server'` and by tests. */
   source?: TelemetrySource
   /** Free-form sub-source for finer attribution. */
   sourceContext?: string
   /** Stable error classifier (see `RUN_ERROR_CODES` etc. in callers). */
+  errorCode?: string
+}
+
+export type CliCommandDurationBucket =
+  | 'under_1s'
+  | '1s_to_10s'
+  | '10s_to_1m'
+  | '1m_to_5m'
+  | '5m_to_30m'
+  | '30m_or_more'
+
+export interface CliCommandFinishedInput {
+  /** Registered command path (`wordpress.schema.deploy`), never raw argv. */
+  command: string
+  success: boolean
+  durationMs: number
+  setupState?: SetupState
+  /** Stable `CliError.code`; raw error text must never be sent. */
   errorCode?: string
 }
 
@@ -81,10 +104,69 @@ export function shouldDropTelemetryEvent(
   return isGhostTelemetryEvent(event, properties)
 }
 
+/**
+ * Low-cardinality command duration. Buckets preserve enough resolution to
+ * distinguish fast reads, setup friction, and long-running jobs without
+ * transmitting an exact behavioral timestamp.
+ */
+export function bucketCliCommandDuration(durationMs: number): CliCommandDurationBucket {
+  const duration = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0
+  if (duration < 1_000) return 'under_1s'
+  if (duration < 10_000) return '1s_to_10s'
+  if (duration < 60_000) return '10s_to_1m'
+  if (duration < 300_000) return '1m_to_5m'
+  if (duration < 1_800_000) return '5m_to_30m'
+  return '30m_or_more'
+}
+
+/**
+ * Emit the terminal half of a CLI command lifecycle. The caller builds setup
+ * state after command execution so successful and partially-applied commands
+ * can be distinguished from no-progress failures.
+ */
+export function trackCliCommandFinished(input: CliCommandFinishedInput): void {
+  trackEvent(
+    'cli.command.finished',
+    {
+      command: input.command,
+      success: input.success,
+      duration_bucket: bucketCliCommandDuration(input.durationMs),
+      ...(input.setupState ? { setup_state: input.setupState } : {}),
+    },
+    input.errorCode ? { errorCode: input.errorCode } : undefined,
+  )
+}
+
 // ── Per-process state ──────────────────────────────────────────────────
 
 const SESSION_ID = crypto.randomUUID()
 let CURRENT_SOURCE: TelemetrySource = 'cli'
+
+const TELEMETRY_SOURCE_VALUES: ReadonlySet<string> = new Set([
+  'cli', 'cli-server', 'api', 'mcp-server', 'wp-plugin', 'dashboard', 'agent-runtime',
+] satisfies TelemetrySource[])
+
+/**
+ * Harness-declared source, e.g. `CANONRY_TELEMETRY_SOURCE=wp-plugin` set by a
+ * hosting automation that spawns this CLI.
+ *
+ * WHY AN ENV VAR: the biggest pollution in the install metrics is subprocess
+ * invocations minting install IDs that look human. The spawn site is outside
+ * this repo (a WordPress host's cron, a CI harness), so the only lever we can
+ * offer it is self-identification, the same way `CANONRY_ANONYMOUS_ID` already
+ * lets a harness pin a stable install ID. A tagged source lets the pipeline
+ * exclude that traffic exactly instead of guessing from behavior.
+ *
+ * Validated against the enum and read at event time, so an unknown value is
+ * ignored rather than poisoning the receiver's source field. It wins over the
+ * process default AND over `setTelemetrySource`, because what spawned the
+ * process outranks what the process believes it is: a wp-plugin harness that
+ * runs `canonry serve` is still wp-plugin traffic.
+ */
+function envSourceOverride(): TelemetrySource | undefined {
+  const raw = process.env.CANONRY_TELEMETRY_SOURCE?.trim()
+  return raw && TELEMETRY_SOURCE_VALUES.has(raw) ? (raw as TelemetrySource) : undefined
+}
 
 /**
  * Override the global default source for subsequent `trackEvent` calls.
@@ -291,9 +373,10 @@ export function trackEvent(
   if (!anonymousId) return
 
   const payload: TelemetryEvent = {
+    eventId: options?.eventId ?? crypto.randomUUID(),
     anonymousId,
     sessionId: SESSION_ID,
-    source: options?.source ?? CURRENT_SOURCE,
+    source: options?.source ?? envSourceOverride() ?? CURRENT_SOURCE,
     event,
     timestamp: new Date().toISOString(),
     version: VERSION,
@@ -309,12 +392,18 @@ export function trackEvent(
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS)
   timeout.unref() // Don't keep the process alive waiting for telemetry
 
-  fetch(TELEMETRY_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal: controller.signal,
-  })
-    .catch(() => {})
-    .finally(() => clearTimeout(timeout))
+  try {
+    void fetch(TELEMETRY_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    })
+      .catch(() => {})
+      .finally(() => clearTimeout(timeout))
+  } catch {
+    // A custom fetch implementation can throw synchronously. Telemetry must
+    // still never affect the command's result or keep its timeout alive.
+    clearTimeout(timeout)
+  }
 }

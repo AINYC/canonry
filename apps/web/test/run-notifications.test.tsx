@@ -23,7 +23,7 @@ import {
   getApiV1RunsByIdQueryKey,
   getApiV1RunsQueryKey,
 } from '@ainyc/canonry-api-client/react-query'
-import { useTriggerGscSync, useTriggerRun, useTriggerSiteAudit } from '../src/queries/mutations.js'
+import { useTriggerAllRuns, useTriggerGscSync, useTriggerRun, useTriggerSiteAudit } from '../src/queries/mutations.js'
 import { createQueryClient } from '../src/queries/query-client.js'
 
 const projectsCacheKey = getApiV1ProjectsQueryKey({ client: heyClient })
@@ -371,6 +371,34 @@ function TriggerRunButton() {
   )
 }
 
+function SetupTriggerRunButton() {
+  const mutation = useTriggerRun()
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        mutation.mutate({
+          projectName: 'citypoint',
+          projectLabel: 'Citypoint Dental NYC',
+          sourceAction: 'setup-launch',
+        })
+      }}
+    >
+      Trigger setup run
+    </button>
+  )
+}
+
+function TriggerAllRunsButton() {
+  const mutation = useTriggerAllRuns()
+  return (
+    <button type="button" onClick={() => mutation.mutate(undefined)}>
+      Trigger all runs
+    </button>
+  )
+}
+
 test('invalidates GSC project queries when a tracked gsc-sync run completes', async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = input instanceof Request ? input.url : String(input)
@@ -556,6 +584,63 @@ test('maps RUN_IN_PROGRESS errors to one caution toast with an extended timer', 
     expect(runInProgressToasts[0]?.durationMs).toBe(8000)
     expect(runInProgressToasts[0]?.detail).toContain('Citypoint Dental NYC already has an active run')
   })
+})
+
+test('leaves setup run failures to the wizard inline recovery state', async () => {
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+    error: {
+      code: 'NO_PROVIDER',
+      message: 'Configure a provider before starting a run.',
+    },
+  }), {
+    status: 503,
+    headers: { 'content-type': 'application/json' },
+  }))
+  vi.stubGlobal('fetch', fetchMock)
+
+  const queryClient = createQueryClient()
+  render(
+    <QueryClientProvider client={queryClient}>
+      <SetupTriggerRunButton />
+    </QueryClientProvider>,
+  )
+
+  fireEvent.click(screen.getByRole('button', { name: 'Trigger setup run' }))
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+  expect(getToasts()).toEqual([])
+})
+
+test('does not track run-all projects rejected by activation preflight', async () => {
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify([
+    {
+      projectName: 'citypoint',
+      projectId: 'proj_1',
+      status: 'error',
+      error: 'No runnable answer provider is configured.',
+      errorCode: 'NO_PROVIDER',
+    },
+  ]), {
+    status: 207,
+    headers: { 'content-type': 'application/json' },
+  }))
+  vi.stubGlobal('fetch', fetchMock)
+
+  const queryClient = createQueryClient()
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TriggerAllRunsButton />
+    </QueryClientProvider>,
+  )
+
+  fireEvent.click(screen.getByRole('button', { name: 'Trigger all runs' }))
+
+  await waitFor(() => {
+    expect(getToasts().some(toast => toast.title === 'No runs queued')).toBe(true)
+  })
+  expect(getRunTrackerState().runs).toEqual({})
+  expect(getToasts().find(toast => toast.title === 'No runs queued')?.detail)
+    .toContain('need provider or query setup')
 })
 
 test('clears a tracked sync run that has aged out of the /runs window so its button cannot wedge', async () => {

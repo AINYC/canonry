@@ -8,6 +8,99 @@
  * collector drops them again as a backstop for older CLIs that still send, so
  * both surfaces classify with this one predicate and can never drift.
  */
+import { z } from 'zod'
+
+export const ONBOARDING_FLOW_VERSION = 1 as const
+
+export const onboardingStepSchema = z.enum([
+  'system',
+  'project',
+  'queries',
+  'competitors',
+  'run',
+])
+export type OnboardingStep = z.infer<typeof onboardingStepSchema>
+
+export const onboardingCountBucketSchema = z.enum([
+  '0',
+  '1',
+  '2-3',
+  '4-5',
+  '6-10',
+  '11+',
+])
+export type OnboardingCountBucket = z.infer<typeof onboardingCountBucketSchema>
+
+export function bucketOnboardingCount(value: number): OnboardingCountBucket {
+  if (!Number.isFinite(value) || value <= 0) return '0'
+  if (value < 2) return '1'
+  if (value < 4) return '2-3'
+  if (value < 6) return '4-5'
+  if (value < 11) return '6-10'
+  return '11+'
+}
+
+export const onboardingBlockReasonSchema = z.enum([
+  'api_unavailable',
+  'database_unavailable',
+  'worker_unavailable',
+  'no_provider',
+  'no_queries',
+  'provider_save_failed',
+  'project_create_failed',
+  'query_save_failed',
+  'run_rejected',
+  'run_failed',
+  'run_cancelled',
+  'unknown',
+])
+export type OnboardingBlockReason = z.infer<typeof onboardingBlockReasonSchema>
+
+const onboardingEventBaseSchema = z.object({
+  eventId: z.string().uuid(),
+  flowVersion: z.literal(ONBOARDING_FLOW_VERSION),
+  onboardingSessionId: z.string().uuid(),
+})
+
+/**
+ * Privacy-safe dashboard onboarding milestones accepted by the local API.
+ * Every field is an allowlisted enum, boolean, or coarse count bucket. Raw
+ * domains, project/query text, provider errors, and credentials never cross
+ * this boundary.
+ */
+export const onboardingTelemetryEventSchema = z.discriminatedUnion('event', [
+  onboardingEventBaseSchema.extend({
+    event: z.literal('onboarding.started'),
+    step: onboardingStepSchema,
+    resumed: z.boolean(),
+  }).strict(),
+  onboardingEventBaseSchema.extend({
+    event: z.literal('onboarding.step_completed'),
+    step: onboardingStepSchema,
+    method: z.enum(['existing', 'inline', 'manual', 'generated', 'skipped', 'automatic']),
+    countBucket: onboardingCountBucketSchema.optional(),
+  }).strict(),
+  onboardingEventBaseSchema.extend({
+    event: z.literal('onboarding.blocked'),
+    step: onboardingStepSchema,
+    action: z.enum(['continue', 'configure_provider', 'generate_queries', 'save', 'launch_run', 'retry_run']),
+    reasonCode: onboardingBlockReasonSchema,
+  }).strict(),
+  onboardingEventBaseSchema.extend({
+    event: z.literal('run.requested'),
+    origin: z.literal('dashboard_setup'),
+    result: z.enum(['queued', 'rejected']),
+    providerCountBucket: onboardingCountBucketSchema,
+    queryCountBucket: onboardingCountBucketSchema,
+    reasonCode: onboardingBlockReasonSchema.optional(),
+  }).strict(),
+])
+export type OnboardingTelemetryEvent = z.infer<typeof onboardingTelemetryEventSchema>
+
+export const telemetryEventAcceptedDtoSchema = z.object({
+  accepted: z.boolean(),
+})
+export type TelemetryEventAcceptedDto = z.infer<typeof telemetryEventAcceptedDtoSchema>
 
 const GHOST_TELEMETRY_TEST_LOCATIONS = new Set(['nyc', 'lax', 'chi'])
 

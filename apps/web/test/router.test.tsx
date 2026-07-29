@@ -151,10 +151,11 @@ test('/ redirects to /setup when portfolio is empty', async () => {
   expect(router.state.location.pathname).toBe('/setup')
 })
 
-test('/setup redirects to / when projects exist', async () => {
+test('/setup stays available when projects exist so incomplete setup can resume', async () => {
   const fixture = createDashboardFixture()
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  // Pre-seed query cache with projects so beforeLoad redirects
+  // A project row alone is not proof of activation: it may still need
+  // queries, a provider, or a successful baseline.
   queryClient.setQueryData(projectsCacheKey, fixture.dashboard.projects.map(p => p.project))
   const router = createAppRouter(queryClient, { initialEntries: ['/setup'] })
   await router.load()
@@ -167,7 +168,7 @@ test('/setup redirects to / when projects exist', async () => {
     </QueryClientProvider>,
   )
 
-  expect(router.state.location.pathname).toBe('/')
+  expect(router.state.location.pathname).toBe('/setup')
 })
 
 // ── Active nav highlighting ──

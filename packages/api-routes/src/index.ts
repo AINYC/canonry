@@ -89,6 +89,8 @@ export interface ApiRoutesOptions {
 
   /** Callback when a run is created (wire up job runner) */
   onRunCreated?: (runId: string, projectId: string, providers?: string[], location?: import('@ainyc/canonry-contracts').LocationContext | null) => void
+  /** Returns providers currently registered and runnable by the host worker. */
+  getRunnableProviderNames?: () => readonly string[]
   /** Provider configuration summary for settings endpoint */
   providerSummary?: ProviderSummaryEntry[]
   /** Resolves agent LLM provider key status for the `config.agent-providers` doctor check. See `DoctorContext.getAgentProviderSummary`. */
@@ -138,6 +140,8 @@ export interface ApiRoutesOptions {
   /** Telemetry status/toggle callbacks */
   getTelemetryStatus?: TelemetryRoutesOptions['getTelemetryStatus']
   setTelemetryEnabled?: TelemetryRoutesOptions['setTelemetryEnabled']
+  /** Privacy-safe dashboard onboarding milestones. */
+  recordOnboardingEvent?: TelemetryRoutesOptions['recordOnboardingEvent']
   /** Google auth config and storage */
   getGoogleAuthConfig?: GoogleRoutesOptions['getGoogleAuthConfig']
   /** Resolved Google Places config for the `gbp.places.api-key` doctor check. */
@@ -355,6 +359,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
     await api.register(runRoutes, {
       onRunCreated: opts.onRunCreated,
       validProviderNames: opts.providerAdapters?.map(a => a.name),
+      getRunnableProviderNames: opts.getRunnableProviderNames,
     } satisfies RunRoutesOptions)
     await api.register(applyRoutes, {
       onScheduleUpdated: opts.onScheduleUpdated,
@@ -406,6 +411,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
     await api.register(telemetryRoutes, {
       getTelemetryStatus: opts.getTelemetryStatus,
       setTelemetryEnabled: opts.setTelemetryEnabled,
+      recordOnboardingEvent: opts.recordOnboardingEvent,
     } satisfies TelemetryRoutesOptions)
     await api.register(adsRoutes, {
       adsCredentialStore: opts.adsCredentialStore,

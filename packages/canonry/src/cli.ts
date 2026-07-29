@@ -1,12 +1,25 @@
 #!/usr/bin/env node --import tsx
 import { pathToFileURL } from 'node:url'
-import { trackEvent, isTelemetryEnabled, isFirstRun, getOrCreateAnonymousId, showFirstRunNotice, detectAndTrackUpgrade } from './telemetry.js'
+import {
+  trackEvent,
+  trackCliCommandFinished,
+  isTelemetryEnabled,
+  isFirstRun,
+  getOrCreateAnonymousId,
+  showFirstRunNotice,
+  detectAndTrackUpgrade,
+} from './telemetry.js'
 import { buildSetupState } from './setup-state.js'
 import type { CliFormat } from './cli-error.js'
 import { CliError, EXIT_SYSTEM_ERROR, printCliError, usageError } from './cli-error.js'
 import { dispatchRegisteredCommand } from './cli-dispatch.js'
+import type { CliCommandSpec } from './cli-dispatch.js'
 import { REGISTERED_CLI_COMMANDS } from './cli-commands.js'
 import { checkLatestVersionForCli } from './update-check.js'
+import { buildSetupNudgeLine } from './setup-nudge.js'
+import { consumePendingServeHandoff } from './commands/init.js'
+import { serveCommand } from './commands/serve.js'
+import { isMachineFormat } from './cli-error.js'
 
 const USAGE = `
 cnry — AEO monitoring CLI   ('canonry' also works)
@@ -77,6 +90,58 @@ function extractFormat(cmdArgs: string[]): CliFormat {
   return 'text'
 }
 
+/**
+ * Resolve argv to the longest registered command path. Unknown input is
+ * deliberately collapsed to one stable value so typos, project names, and
+ * other positional text can never leak into telemetry or explode cardinality.
+ */
+function resolveCommandIdentifier(
+  args: readonly string[],
+  specs: readonly CliCommandSpec[],
+): string {
+  const spec = [...specs]
+    .sort((a, b) => b.path.length - a.path.length)
+    .find(candidate =>
+      candidate.path.every((segment, index) => args[index] === segment),
+    )
+  return spec?.path.join('.') ?? 'unknown'
+}
+
+const TELEMETRY_ERROR_CODES = new Set([
+  'NOT_FOUND',
+  'ALREADY_EXISTS',
+  'VALIDATION_ERROR',
+  'AUTH_REQUIRED',
+  'AUTH_INVALID',
+  'FORBIDDEN',
+  'QUOTA_EXCEEDED',
+  'PROVIDER_ERROR',
+  'NO_PROVIDER',
+  'NO_QUERIES',
+  'RUN_IN_PROGRESS',
+  'OPERATION_IN_PROGRESS',
+  'UNSUPPORTED_KIND',
+  'RUN_NOT_CANCELLABLE',
+  'NOT_IMPLEMENTED',
+  'INTERNAL_ERROR',
+  'DELIVERY_FAILED',
+  'AGENT_BUSY',
+  'MISSING_DEPENDENCY',
+  'RUNTIME_STATE_MISSING',
+  'API_ERROR',
+  'CLI_ERROR',
+  'CLI_USAGE_ERROR',
+  'CLI_SYSTEM_ERROR',
+  'CONNECTION_ERROR',
+  'UNEXPECTED_RESPONSE_FORMAT',
+])
+
+function telemetryErrorCode(err: unknown): string {
+  if (!(err instanceof CliError)) return 'CLI_ERROR'
+  if (TELEMETRY_ERROR_CODES.has(err.code)) return err.code
+  return typeof err.details?.httpStatus === 'number' ? 'API_ERROR' : 'CLI_ERROR'
+}
+
 export async function runCli(args = process.argv.slice(2)): Promise<number> {
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     console.log(USAGE)
@@ -102,27 +167,20 @@ export async function runCli(args = process.argv.slice(2)): Promise<number> {
     getOrCreateAnonymousId()
   }
 
-  // Resolve command name for telemetry (e.g. "project.create", "run")
-  // Only include subcommand when it is a known subcommand name, not a positional arg
-  // like a project name. Commands where arg[1] is always a subcommand (never a positional):
-  const SUBCOMMAND_COMMANDS = new Set(['backfill', 'project', 'query', 'keyword', 'competitor', 'schedule', 'notify', 'settings', 'telemetry', 'google', 'bing', 'wordpress', 'cdp', 'traffic'])
-  // Commands where arg[1] is usually a positional but has known subcommands:
-  const MIXED_SUBCOMMANDS: Record<string, Set<string>> = {
-    insights: new Set(['dismiss']),
-    run: new Set(['show', 'cancel']),
-  }
-  let resolvedCommand: string
-  if (SUBCOMMAND_COMMANDS.has(command) && args[1] && !args[1].startsWith('-')) {
-    resolvedCommand = `${command}.${args[1]}`
-  } else if (MIXED_SUBCOMMANDS[command] && args[1] && MIXED_SUBCOMMANDS[command].has(args[1])) {
-    resolvedCommand = `${command}.${args[1]}`
-  } else {
-    resolvedCommand = command
-  }
+  const resolvedCommand = resolveCommandIdentifier(args, REGISTERED_CLI_COMMANDS)
+  const shouldTrackCommand =
+    !isHelpRequest &&
+    command !== 'telemetry' &&
+    isTelemetryEnabled()
+  // `init` creates and persists the install identity itself. Emitting before
+  // dispatch would use the config-less machine fallback, then split the same
+  // attempt across a new persisted anonymousId. Its post-command lifecycle
+  // event is still emitted below.
+  const shouldTrackCommandStart = shouldTrackCommand && command !== 'init'
 
   // Track CLI command usage (fire-and-forget).
   // Skip for `telemetry` commands and help requests.
-  if (!isHelpRequest && command !== 'telemetry') {
+  if (shouldTrackCommandStart) {
     // Emit `cli.upgraded` once per version bump, before `cli.command`, so
     // upgrade events are correlated with the first command on the new build.
     detectAndTrackUpgrade()
@@ -151,8 +209,35 @@ export async function runCli(args = process.argv.slice(2)): Promise<number> {
     })
   }
 
+  const commandStartedAt = Date.now()
+
   try {
     if (await dispatchRegisteredCommand(args, format, REGISTERED_CLI_COMMANDS)) {
+      if (shouldTrackCommand) {
+        trackCliCommandFinished({
+          command: resolvedCommand,
+          success: true,
+          durationMs: Date.now() - commandStartedAt,
+          setupState: buildSetupState(),
+        })
+      }
+      // The stalled-setup line. Independent of telemetry consent (it is user
+      // guidance, not measurement), but LAZY about reading state: control
+      // commands and non-interactive runs must not touch config or the
+      // database, and the nudge's own gates guarantee that.
+      const nudge = buildSetupNudgeLine({
+        command: resolvedCommand,
+        machineFormat: isMachineFormat(format),
+        stderrIsTTY: Boolean(process.stderr.isTTY),
+        getSetupState: buildSetupState,
+      })
+      if (nudge) process.stderr.write(nudge)
+      // Init's dashboard handoff, honored only after init's own lifecycle
+      // event is on the wire so serve's unbounded runtime cannot pollute
+      // init's duration bucket.
+      if (consumePendingServeHandoff()) {
+        await serveCommand(format as CliFormat)
+      }
       return 0
     }
     throw usageError(`Error: unknown command: ${command}\nRun "cnry --help" for usage.`, {
@@ -163,6 +248,17 @@ export async function runCli(args = process.argv.slice(2)): Promise<number> {
       },
     })
   } catch (err: unknown) {
+    // A failed init has not established the persisted identity or shown the
+    // disclosure yet, so it must remain completely silent.
+    if (shouldTrackCommand && command !== 'init') {
+      trackCliCommandFinished({
+        command: resolvedCommand,
+        success: false,
+        durationMs: Date.now() - commandStartedAt,
+        setupState: buildSetupState(),
+        errorCode: telemetryErrorCode(err),
+      })
+    }
     printCliError(err, format)
     return err instanceof CliError ? err.exitCode : EXIT_SYSTEM_ERROR
   }

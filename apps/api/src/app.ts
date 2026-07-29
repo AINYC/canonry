@@ -122,6 +122,8 @@ export function buildApp(env: PlatformEnv) {
     },
     providerSummary,
     providerAdapters,
+    getRunnableProviderNames: () =>
+      providerSummary.filter(provider => provider.configured).map(provider => provider.name),
     googleStateSecret: env.googleStateSecret,
   })
 

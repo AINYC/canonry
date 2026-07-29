@@ -1,7 +1,12 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
+import {
+  ONBOARDING_FLOW_VERSION,
+  bucketOnboardingCount,
+  type OnboardingTelemetryEvent,
+} from '@ainyc/canonry-contracts'
 
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
@@ -13,7 +18,9 @@ import {
   setCompetitors,
   generateQueries as apiGenerateQueries,
   updateProviderConfig,
+  fetchQueries,
   heyClient,
+  recordOnboardingEvent,
 } from '../api.js'
 import { getApiV1RunsByIdOptions } from '@ainyc/canonry-api-client/react-query'
 import { useTriggerRun } from '../queries/mutations.js'
@@ -22,6 +29,16 @@ import { useHealth } from '../queries/use-health.js'
 import { useInitialDashboard } from '../contexts/dashboard-context.js'
 import { buildSetupModel, serviceStatusTooltip } from '../lib/health-helpers.js'
 import { asyncHandler } from '../lib/async-handler.js'
+import { summarizeRunError } from '../lib/format-helpers.js'
+import {
+  createOnboardingEventId,
+  getOrCreateOnboardingSessionId,
+  isOnboardingHealthSettled,
+  onboardingErrorReason,
+  onboardingStepFromIndex,
+  onboardingSystemBlockReason,
+} from '../lib/onboarding-telemetry.js'
+import type { DashboardVm, HealthSnapshot, ProjectCommandCenterVm, RunListItemVm } from '../view-models.js'
 
 const SETUP_STEPS = [
   { label: 'System check', description: 'Verify your instance is ready' },
@@ -30,6 +47,39 @@ const SETUP_STEPS = [
   { label: 'Competitors', description: 'Add competitor domains' },
   { label: 'Launch', description: 'Start your first visibility sweep' },
 ] as const
+
+type SetupStep = 0 | 1 | 2 | 3 | 4
+type PendingOnboardingTelemetryEvent<T> = T extends unknown ? Omit<T, 'eventId'> : never
+
+export function isSuccessfulSetupRun(
+  status: RunListItemVm['status'],
+  snapshotCount: number,
+): boolean {
+  return (status === 'completed' || status === 'partial') && snapshotCount > 0
+}
+
+export function deriveSetupStep(input: {
+  launchReady: boolean
+  hasProject: boolean
+  queryCount: number
+  competitorCount: number
+  hasRunAttempt: boolean
+}): SetupStep {
+  if (!input.launchReady) return 0
+  if (!input.hasProject) return 1
+  if (input.queryCount === 0) return 2
+  if (input.competitorCount === 0 && !input.hasRunAttempt) return 3
+  return 4
+}
+
+function projectHasSuccessfulBaseline(
+  project: ProjectCommandCenterVm,
+): boolean {
+  // The project overview derives this count from the latest successful
+  // non-probe answer-visibility snapshots. Unlike the global run list, it is
+  // not capped to a recent window, so an older activation remains complete.
+  return project.queryCounts.total > 0
+}
 
 function SetupStepIndicator({ current, labels }: { current: number; labels: readonly { label: string }[] }) {
   return (
@@ -78,31 +128,108 @@ export function SetupPage() {
     )
   }
 
+  return (
+    <ReadySetupPage
+      dashboard={safeDashboard}
+      initialHealth={contextDashboard?.health}
+      enableLiveStatus={!contextDashboard}
+      refetch={refetch}
+    />
+  )
+}
+
+function ReadySetupPage({
+  dashboard: safeDashboard,
+  initialHealth,
+  enableLiveStatus,
+  refetch,
+}: {
+  dashboard: DashboardVm
+  initialHealth?: HealthSnapshot
+  enableLiveStatus: boolean
+  refetch: () => Promise<void>
+}) {
   const settings = safeDashboard.settings
 
-  const enableLiveStatus = !contextDashboard
-  const healthQuery = useHealth(enableLiveStatus, contextDashboard?.health)
-  const healthSnapshot = healthQuery.data ?? contextDashboard?.health ?? { apiStatus: { label: 'API', state: 'checking', detail: 'Checking service health' }, workerStatus: { label: 'Worker', state: 'checking', detail: 'Checking service health' } }
+  const healthQuery = useHealth(enableLiveStatus, initialHealth)
+  const healthSnapshot = healthQuery.data ?? initialHealth ?? { apiStatus: { label: 'API', state: 'checking', detail: 'Checking service health' }, workerStatus: { label: 'Worker', state: 'checking', detail: 'Checking service health' } }
   const model = buildSetupModel(safeDashboard.setup, healthSnapshot, settings)
 
   const navigate = useNavigate()
+  const onboardingSessionId = useRef(getOrCreateOnboardingSessionId()).current
+  const recordedOnboardingEvents = useRef(new Set<string>())
+  const emitOnboardingEvent = useCallback((
+    event: PendingOnboardingTelemetryEvent<OnboardingTelemetryEvent>,
+    dedupeKey?: string,
+  ) => {
+    if (dedupeKey) {
+      if (recordedOnboardingEvents.current.has(dedupeKey)) return
+      recordedOnboardingEvents.current.add(dedupeKey)
+    }
+    void recordOnboardingEvent({
+      ...event,
+      eventId: createOnboardingEventId(),
+    } as OnboardingTelemetryEvent)
+  }, [])
 
-  const [step, setStep] = useState(0)
+  const resumeProject: ProjectCommandCenterVm | null = safeDashboard.projects.find(
+    project => !projectHasSuccessfulBaseline(project),
+  ) ?? safeDashboard.projects.at(0) ?? null
+  const resumeProjectRuns = resumeProject
+    ? safeDashboard.runs
+      .filter(run => run.projectId === resumeProject.project.id)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    : []
+  // Overview queryCounts is snapshot-derived, so it is only a fast fallback
+  // while the canonical tracked-query list loads. Always fetch that list:
+  // partial runs may contain fewer snapshots than the project's actual basket.
+  const snapshotQueryCount = resumeProject?.queryCounts.total ?? 0
+  const resumeProjectName = resumeProject?.project.name
+  const resumeQueriesQuery = useQuery({
+    queryKey: ['setup', 'resume-queries', resumeProjectName],
+    queryFn: () => resumeProjectName ? fetchQueries(resumeProjectName) : Promise.resolve([]),
+    enabled: !!resumeProjectName,
+  })
+  const durableQueries = resumeQueriesQuery.data ?? []
+  const durableQueryCount = resumeQueriesQuery.data?.length ?? snapshotQueryCount
+  const durableCompetitors = resumeProject?.competitors.map(competitor => competitor.domain) ?? []
+  const latestPersistedRun = resumeProjectRuns.at(0) ?? null
+  const hasExistingSuccessfulBaseline = !!resumeProject
+    && projectHasSuccessfulBaseline(resumeProject)
+  const resumeLoading = !!resumeProject && resumeQueriesQuery.isPending
+  const initialResumeStep = deriveSetupStep({
+    launchReady: model.launchState.enabled,
+    hasProject: !!resumeProject,
+    queryCount: durableQueryCount,
+    competitorCount: durableCompetitors.length,
+    hasRunAttempt: resumeProjectRuns.length > 0 || hasExistingSuccessfulBaseline,
+  })
+  const nextStepAfterSystemCheck = deriveSetupStep({
+    launchReady: true,
+    hasProject: !!resumeProject,
+    queryCount: durableQueryCount,
+    competitorCount: durableCompetitors.length,
+    hasRunAttempt: resumeProjectRuns.length > 0 || hasExistingSuccessfulBaseline,
+  })
 
-  const [projectName, setProjectName] = useState('')
-  const [displayName, setDisplayName] = useState('')
-  const [domain, setDomain] = useState('')
-  const [country, setCountry] = useState('US')
-  const [language, setLanguage] = useState('en')
-  const [autoExtractBacklinks, setAutoExtractBacklinks] = useState(false)
-  const [createdProjectName, setCreatedProjectName] = useState<string | null>(null)
+  const [step, setStep] = useState<SetupStep>(initialResumeStep)
+  const [resumeApplied, setResumeApplied] = useState(!resumeLoading)
+
+  const [projectName, setProjectName] = useState(resumeProject?.project.name ?? '')
+  const [displayName, setDisplayName] = useState(resumeProject?.project.displayName ?? '')
+  const [domain, setDomain] = useState(resumeProject?.project.canonicalDomain ?? '')
+  const [country, setCountry] = useState(resumeProject?.project.country ?? 'US')
+  const [language, setLanguage] = useState(resumeProject?.project.language ?? 'en')
+  const [autoExtractBacklinks, setAutoExtractBacklinks] = useState(resumeProject?.project.autoExtractBacklinks ?? false)
+  const [createdProjectName, setCreatedProjectName] = useState<string | null>(resumeProject?.project.name ?? null)
   const [projectError, setProjectError] = useState<string | null>(null)
   const [projectSaving, setProjectSaving] = useState(false)
 
-  const [queriesText, setQueriesText] = useState('')
-  const [queriesSaved, setQueriesSaved] = useState(false)
+  const [queriesText, setQueriesText] = useState(durableQueries.map(query => query.query).join('\n'))
+  const [queriesSaved, setQueriesSaved] = useState(durableQueryCount > 0)
   const [queriesError, setQueriesError] = useState<string | null>(null)
   const [queriesSaving, setQueriesSaving] = useState(false)
+  const [queriesGenerated, setQueriesGenerated] = useState(false)
 
   const readyProviders = settings.providerStatuses.filter(p => p.state === 'ready')
   const [selectedProvider, setSelectedProvider] = useState(readyProviders[0]?.name ?? '')
@@ -110,14 +237,19 @@ export function SetupPage() {
   const [generatingQueries, setGeneratingQueries] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
 
-  const [competitorsText, setCompetitorsText] = useState('')
-  const [competitorsSaved, setCompetitorsSaved] = useState(false)
+  const [competitorsText, setCompetitorsText] = useState(durableCompetitors.join('\n'))
+  const [competitorsSaved, setCompetitorsSaved] = useState(durableCompetitors.length > 0)
   const [competitorsError, setCompetitorsError] = useState<string | null>(null)
   const [competitorsSaving, setCompetitorsSaving] = useState(false)
 
-  const [runTriggered, setRunTriggered] = useState(false)
+  const [runTriggered, setRunTriggered] = useState(
+    !!latestPersistedRun && !hasExistingSuccessfulBaseline,
+  )
   const [runSaving, setRunSaving] = useState(false)
-  const [launchedRunId, setLaunchedRunId] = useState<string | null>(null)
+  const [runError, setRunError] = useState<string | null>(null)
+  const [launchedRunId, setLaunchedRunId] = useState<string | null>(
+    hasExistingSuccessfulBaseline ? null : latestPersistedRun?.id ?? null,
+  )
   const triggerRunMutation = useTriggerRun()
 
   // Poll the newly-triggered run so Step 5 can show results inline instead
@@ -155,8 +287,117 @@ export function SetupPage() {
   const slug = projectName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
   const parsedQueries = queriesText.split('\n').map(k => k.trim()).filter(Boolean)
   const parsedCompetitors = competitorsText.split('\n').map(c => c.trim()).filter(Boolean)
+  const effectiveQueryCount = Math.max(durableQueryCount, queriesSaved ? parsedQueries.length : 0)
+  const launchBlockedReason = model.launchState.blockedReason
+    ?? (!createdProjectName
+      ? 'Create a project before launching the first sweep.'
+      : effectiveQueryCount === 0
+        ? 'Add at least one query before launching the first sweep.'
+        : undefined)
+  const systemBlockReason = onboardingSystemBlockReason({
+    apiReady: healthSnapshot.apiStatus.state === 'ok',
+    databaseConfigured: healthSnapshot.apiStatus.databaseConfigured,
+    workerReady: healthSnapshot.workerStatus.state === 'ok',
+    providerReady: readyProviders.length > 0,
+  })
 
-  const apiReady = model.healthChecks.some((c) => c.id === 'api' && c.state === 'ready')
+  useEffect(() => {
+    if (resumeApplied || resumeLoading) return
+    setStep(initialResumeStep)
+    if (durableQueries.length > 0) {
+      setQueriesText(durableQueries.map(query => query.query).join('\n'))
+      setQueriesSaved(true)
+    }
+    setResumeApplied(true)
+  }, [durableQueries, initialResumeStep, resumeApplied, resumeLoading])
+
+  useEffect(() => {
+    if (readyProviders.length === 0) {
+      setSelectedProvider('')
+      return
+    }
+    if (!readyProviders.some(provider => provider.name === selectedProvider)) {
+      setSelectedProvider(readyProviders[0]!.name)
+    }
+  }, [readyProviders, selectedProvider])
+
+  useEffect(() => {
+    if (!resumeApplied) return
+    emitOnboardingEvent({
+      flowVersion: ONBOARDING_FLOW_VERSION,
+      onboardingSessionId,
+      event: 'onboarding.started',
+      step: onboardingStepFromIndex(initialResumeStep),
+      resumed: !!resumeProject,
+    }, 'onboarding.started')
+
+    if (!resumeProject && initialResumeStep > 0) {
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.step_completed',
+        step: 'system',
+        method: 'automatic',
+      }, 'onboarding.step_completed:system')
+    }
+  }, [
+    emitOnboardingEvent,
+    initialResumeStep,
+    onboardingSessionId,
+    resumeApplied,
+    resumeProject,
+  ])
+
+  useEffect(() => {
+    if (!isOnboardingHealthSettled(healthSnapshot) || !systemBlockReason) return
+    emitOnboardingEvent({
+      flowVersion: ONBOARDING_FLOW_VERSION,
+      onboardingSessionId,
+      event: 'onboarding.blocked',
+      step: 'system',
+      action: systemBlockReason === 'no_provider' ? 'configure_provider' : 'continue',
+      reasonCode: systemBlockReason,
+    }, `onboarding.blocked:system:${systemBlockReason}`)
+  }, [emitOnboardingEvent, healthSnapshot, onboardingSessionId, systemBlockReason])
+
+  const polledRunStatus = launchedRun.data?.status
+  const polledSnapshotCount = launchedRun.data?.snapshots?.length ?? 0
+  useEffect(() => {
+    if (!runTriggered || !polledRunStatus) return
+    if (isSuccessfulSetupRun(polledRunStatus, polledSnapshotCount)) {
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.step_completed',
+        step: 'run',
+        method: 'automatic',
+        countBucket: bucketOnboardingCount(polledSnapshotCount),
+      }, 'onboarding.step_completed:run')
+      return
+    }
+
+    const reasonCode = polledRunStatus === 'cancelled'
+      ? 'run_cancelled'
+      : polledRunStatus === 'failed'
+        || ((polledRunStatus === 'completed' || polledRunStatus === 'partial') && polledSnapshotCount === 0)
+        ? 'run_failed'
+        : undefined
+    if (!reasonCode) return
+    emitOnboardingEvent({
+      flowVersion: ONBOARDING_FLOW_VERSION,
+      onboardingSessionId,
+      event: 'onboarding.blocked',
+      step: 'run',
+      action: 'retry_run',
+      reasonCode,
+    }, `onboarding.blocked:run:${reasonCode}`)
+  }, [
+    emitOnboardingEvent,
+    onboardingSessionId,
+    polledRunStatus,
+    polledSnapshotCount,
+    runTriggered,
+  ])
 
   const handleCreateProject = async () => {
     if (!slug || !domain) return
@@ -184,9 +425,24 @@ export function SetupPage() {
       // `void refetch()` raced with `setStep`, occasionally leaving the
       // step indicator at 2 while the card content reverted to step 1.
       await refetch()
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.step_completed',
+        step: 'project',
+        method: 'manual',
+      }, 'onboarding.step_completed:project')
       setStep(2)
     } catch (err) {
       setProjectError(err instanceof Error ? err.message : 'Failed to create project')
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.blocked',
+        step: 'project',
+        action: 'save',
+        reasonCode: 'project_create_failed',
+      }, 'onboarding.blocked:project:project_create_failed')
     } finally {
       setProjectSaving(false)
     }
@@ -202,9 +458,25 @@ export function SetupPage() {
       await setQueries(createdProjectName, queries)
       setQueriesSaved(true)
       await refetch()
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.step_completed',
+        step: 'queries',
+        method: queriesGenerated ? 'generated' : 'manual',
+        countBucket: bucketOnboardingCount(queries.length),
+      }, 'onboarding.step_completed:queries')
       setStep(3)
     } catch (err) {
       setQueriesError(err instanceof Error ? err.message : 'Failed to save queries')
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.blocked',
+        step: 'queries',
+        action: 'save',
+        reasonCode: 'query_save_failed',
+      }, 'onboarding.blocked:queries:query_save_failed')
     } finally {
       setQueriesSaving(false)
     }
@@ -221,9 +493,18 @@ export function SetupPage() {
           ? queriesText.trimEnd() + '\n' + result.queries.join('\n')
           : result.queries.join('\n')
         setQueriesText(newText)
+        setQueriesGenerated(true)
       }
     } catch (err) {
       setGenerateError(err instanceof Error ? err.message : 'Failed to generate queries')
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.blocked',
+        step: 'queries',
+        action: 'generate_queries',
+        reasonCode: onboardingErrorReason(err, 'unknown'),
+      }, 'onboarding.blocked:queries:generate')
     } finally {
       setGeneratingQueries(false)
     }
@@ -239,9 +520,25 @@ export function SetupPage() {
       await setCompetitors(createdProjectName, competitors)
       setCompetitorsSaved(true)
       await refetch()
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.step_completed',
+        step: 'competitors',
+        method: 'manual',
+        countBucket: bucketOnboardingCount(competitors.length),
+      }, 'onboarding.step_completed:competitors')
       setStep(4)
     } catch (err) {
       setCompetitorsError(err instanceof Error ? err.message : 'Failed to save competitors')
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.blocked',
+        step: 'competitors',
+        action: 'save',
+        reasonCode: 'unknown',
+      }, 'onboarding.blocked:competitors:save')
     } finally {
       setCompetitorsSaving(false)
     }
@@ -262,19 +559,55 @@ export function SetupPage() {
         dedupeMode: 'drop',
       })
       setGeminiKey('')
-      // Refetch dashboard so the health-check row flips to "Ready" and the
-      // "Continue" button at the bottom of Step 1 becomes enabled.
+      // Refetch dashboard so provider health and the launch gate both use the
+      // newly-saved configuration. Select Gemini immediately so query
+      // generation is ready when the operator reaches Step 3.
       await refetch()
+      setSelectedProvider(
+        settings.providerStatuses.find(provider => provider.name.toLowerCase() === 'gemini')?.name
+          ?? 'gemini',
+      )
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.step_completed',
+        step: 'system',
+        method: 'inline',
+      }, 'onboarding.step_completed:system')
     } catch (err) {
       setGeminiError(err instanceof Error ? err.message : 'Failed to save Gemini key')
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'onboarding.blocked',
+        step: 'system',
+        action: 'configure_provider',
+        reasonCode: 'provider_save_failed',
+      }, 'onboarding.blocked:system:provider_save_failed')
     } finally {
       setGeminiSaving(false)
     }
   }
 
   const handleLaunchRun = async () => {
-    if (!createdProjectName) return
+    if (!createdProjectName || launchBlockedReason) {
+      setRunError(launchBlockedReason ?? 'Complete setup before launching the first sweep.')
+      const reasonCode = systemBlockReason
+        ?? (!createdProjectName ? 'unknown' : effectiveQueryCount === 0 ? 'no_queries' : 'run_rejected')
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'run.requested',
+        origin: 'dashboard_setup',
+        result: 'rejected',
+        providerCountBucket: bucketOnboardingCount(readyProviders.length),
+        queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
+        reasonCode,
+      })
+      return
+    }
     setRunSaving(true)
+    setRunError(null)
     try {
       const run = await triggerRunMutation.mutateAsync({
         projectName: createdProjectName,
@@ -283,15 +616,61 @@ export function SetupPage() {
       })
       setLaunchedRunId(run.id)
       setRunTriggered(true)
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'run.requested',
+        origin: 'dashboard_setup',
+        result: 'queued',
+        providerCountBucket: bucketOnboardingCount(readyProviders.length),
+        queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
+      })
       await refetch()
-    } catch {
-      // Mutation hook surfaces the toast and error state.
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : 'Failed to queue the visibility sweep. Retry when the instance is ready.')
+      emitOnboardingEvent({
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        onboardingSessionId,
+        event: 'run.requested',
+        origin: 'dashboard_setup',
+        result: 'rejected',
+        providerCountBucket: bucketOnboardingCount(readyProviders.length),
+        queryCountBucket: bucketOnboardingCount(effectiveQueryCount),
+        reasonCode: onboardingErrorReason(err, 'run_rejected'),
+      })
     } finally {
       setRunSaving(false)
     }
   }
 
-  const goBack = () => setStep((s) => Math.max(0, s - 1))
+  const goBack = () => setStep((s) => Math.max(0, s - 1) as SetupStep)
+  const completeExistingStep = (
+    completedStep: 'project' | 'queries' | 'competitors',
+    nextStep: SetupStep,
+    count?: number,
+  ) => {
+    emitOnboardingEvent({
+      flowVersion: ONBOARDING_FLOW_VERSION,
+      onboardingSessionId,
+      event: 'onboarding.step_completed',
+      step: completedStep,
+      method: 'existing',
+      ...(count === undefined ? {} : { countBucket: bucketOnboardingCount(count) }),
+    }, `onboarding.step_completed:${completedStep}`)
+    setStep(nextStep)
+  }
+
+  const skipCompetitors = () => {
+    emitOnboardingEvent({
+      flowVersion: ONBOARDING_FLOW_VERSION,
+      onboardingSessionId,
+      event: 'onboarding.step_completed',
+      step: 'competitors',
+      method: 'skipped',
+      countBucket: '0',
+    }, 'onboarding.step_completed:competitors')
+    setStep(4)
+  }
 
   const stepContent = (() => {
     switch (step) {
@@ -301,7 +680,7 @@ export function SetupPage() {
             <div className="section-head">
               <div>
                 <p className="eyebrow eyebrow-soft">Step 1 of 5</p>
-                <h2>System ready</h2>
+                <h2>System check</h2>
               </div>
             </div>
             <p className="supporting-copy">Checking that your Canonry instance is configured and reachable.</p>
@@ -343,7 +722,12 @@ export function SetupPage() {
                             {geminiSaving ? 'Saving...' : 'Save'}
                           </Button>
                         </div>
-                        {geminiError && <p className="text-xs text-negative-400">{geminiError}</p>}
+                        {geminiError && (
+                          <div role="alert" className="space-y-1 text-xs text-negative">
+                            <p>{geminiError}</p>
+                            <p>Check that the key is complete, then retry Save.</p>
+                          </div>
+                        )}
                         <p className="text-[11px] text-faint">
                           Other providers (OpenAI, Claude, Perplexity) configurable later via{' '}
                           <Link to="/settings" className="text-muted hover:text-neutral underline underline-offset-2">
@@ -370,8 +754,26 @@ export function SetupPage() {
               ))}
             </div>
             <div className="setup-nav">
-              <span />
-              <Button type="button" disabled={!apiReady} onClick={() => setStep(1)}>
+              {model.launchState.blockedReason ? (
+                <p role="status" className="supporting-copy text-negative">
+                  {model.launchState.blockedReason}
+                </p>
+              ) : <span />}
+              <Button
+                type="button"
+                disabled={!model.launchState.enabled}
+                title={model.launchState.blockedReason}
+                onClick={() => {
+                  emitOnboardingEvent({
+                    flowVersion: ONBOARDING_FLOW_VERSION,
+                    onboardingSessionId,
+                    event: 'onboarding.step_completed',
+                    step: 'system',
+                    method: 'automatic',
+                  }, 'onboarding.step_completed:system')
+                  setStep(nextStepAfterSystemCheck)
+                }}
+              >
                 Continue
               </Button>
             </div>
@@ -393,7 +795,7 @@ export function SetupPage() {
                 <p className="text-neutral">Project <span className="text-heading font-medium">{createdProjectName}</span> created successfully.</p>
                 <div className="setup-nav">
                   <Button type="button" variant="outline" onClick={goBack}>Back</Button>
-                  <Button type="button" onClick={() => setStep(2)}>Continue</Button>
+                  <Button type="button" onClick={() => completeExistingStep('project', 2)}>Continue</Button>
                 </div>
               </div>
             ) : (
@@ -458,21 +860,35 @@ export function SetupPage() {
                 <p className="eyebrow eyebrow-soft">Step 3 of 5</p>
                 <h2>Add queries</h2>
               </div>
-              {queriesSaved ? (
+              {resumeQueriesQuery.isError ? (
+                <ToneBadge tone="negative">Load failed</ToneBadge>
+              ) : queriesSaved ? (
                 <ToneBadge tone="positive">{parsedQueries.length} saved</ToneBadge>
               ) : (
                 <ToneBadge tone="neutral">{parsedQueries.length} quer{parsedQueries.length !== 1 ? 'ies' : 'y'}</ToneBadge>
               )}
             </div>
             <p className="supporting-copy">Enter the search queries you want to track. One per line.</p>
-            {queriesSaved ? (
+            {resumeQueriesQuery.isError ? (
+              <div className="compact-stack">
+                <div role="alert" className="rounded-md border border-negative bg-negative-soft p-3 text-sm text-negative">
+                  Saved queries could not be loaded. Retry before changing the query basket.
+                </div>
+                <div className="setup-nav">
+                  <Button type="button" variant="outline" onClick={goBack}>Back</Button>
+                  <Button type="button" onClick={() => { void resumeQueriesQuery.refetch() }}>
+                    Retry loading queries
+                  </Button>
+                </div>
+              </div>
+            ) : queriesSaved ? (
               <div className="compact-stack">
                 <ul className="detail-list">
                   {parsedQueries.map((q) => <li key={q}>{q}</li>)}
                 </ul>
                 <div className="setup-nav">
                   <Button type="button" variant="outline" onClick={goBack}>Back</Button>
-                  <Button type="button" onClick={() => setStep(3)}>Continue</Button>
+                  <Button type="button" onClick={() => completeExistingStep('queries', 3, parsedQueries.length)}>Continue</Button>
                 </div>
               </div>
             ) : (
@@ -569,7 +985,7 @@ export function SetupPage() {
                 </ul>
                 <div className="setup-nav">
                   <Button type="button" variant="outline" onClick={goBack}>Back</Button>
-                  <Button type="button" onClick={() => setStep(4)}>Continue</Button>
+                  <Button type="button" onClick={() => completeExistingStep('competitors', 4, parsedCompetitors.length)}>Continue</Button>
                 </div>
               </div>
             ) : (
@@ -589,7 +1005,7 @@ export function SetupPage() {
                 <div className="setup-nav">
                   <Button type="button" variant="outline" onClick={goBack}>Back</Button>
                   <div className="flex gap-2">
-                    <Button type="button" variant="outline" onClick={() => setStep(4)}>
+                    <Button type="button" variant="outline" onClick={skipCompetitors}>
                       Skip
                     </Button>
                     <Button type="button" disabled={parsedCompetitors.length === 0 || competitorsSaving} onClick={asyncHandler(handleSaveCompetitors)}>
@@ -604,19 +1020,38 @@ export function SetupPage() {
 
       case 4: {
         const run = launchedRun.data
-        const terminal = run?.status === 'completed' || run?.status === 'partial' || run?.status === 'failed' || run?.status === 'cancelled'
+        const runStatus = run?.status
+          ?? (launchedRunId === latestPersistedRun?.id ? latestPersistedRun.status : undefined)
+        const terminal = runStatus === 'completed'
+          || runStatus === 'partial'
+          || runStatus === 'failed'
+          || runStatus === 'cancelled'
         const snapshots = run?.snapshots ?? []
         const cited = snapshots.filter(s => s.citationState === 'cited').length
         const mentioned = snapshots.filter(s => s.answerMentioned === true).length
         const totalQueries = new Set(snapshots.map(s => s.query).filter((q): q is string => !!q)).size
+        const successfulRun = runStatus ? isSuccessfulSetupRun(runStatus, snapshots.length) : false
+        const persistedSetupComplete = hasExistingSuccessfulBaseline && !runTriggered
+        const runFailureDetail = runError
+          ?? (run?.error
+            ? summarizeRunError(run.error)
+            : runStatus === 'cancelled'
+              ? 'The sweep was cancelled before it produced a baseline.'
+              : (runStatus === 'completed' || runStatus === 'partial') && snapshots.length === 0
+                ? 'The sweep finished without producing any snapshots. Confirm the query set and provider configuration, then retry.'
+                : latestPersistedRun?.statusDetail
+                  || 'The sweep did not produce a baseline. Review provider configuration, then retry.')
 
-        const stepBadge = !runTriggered
-          ? null
-          : terminal && (run?.status === 'completed' || run?.status === 'partial')
-            ? <ToneBadge tone="positive">Complete</ToneBadge>
-            : terminal
-              ? <ToneBadge tone="negative">Failed</ToneBadge>
-              : <ToneBadge tone="caution">Running</ToneBadge>
+        let stepBadge: ReactNode = null
+        if (persistedSetupComplete || successfulRun) {
+          stepBadge = <ToneBadge tone="positive">Complete</ToneBadge>
+        } else if (runError && !runTriggered) {
+          stepBadge = <ToneBadge tone="negative">Failed</ToneBadge>
+        } else if (terminal) {
+          stepBadge = <ToneBadge tone="negative">{runStatus === 'cancelled' ? 'Cancelled' : 'Failed'}</ToneBadge>
+        } else if (runTriggered) {
+          stepBadge = <ToneBadge tone="caution">Running</ToneBadge>
+        }
 
         return (
           <Card className="surface-card step-card">
@@ -627,15 +1062,38 @@ export function SetupPage() {
               </div>
               {stepBadge}
             </div>
-            {!runTriggered ? (
+            {persistedSetupComplete ? (
+              <div className="compact-stack">
+                <p className="text-secondary">
+                  Setup is complete. <span className="text-strong font-medium">{createdProjectName}</span> already has a successful answer-visibility baseline.
+                </p>
+                <div className="setup-nav">
+                  <span />
+                  <Button type="button" onClick={() => { void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' }) }}>
+                    Open project dashboard →
+                  </Button>
+                </div>
+              </div>
+            ) : !runTriggered ? (
               <div className="compact-stack">
                 <p className="supporting-copy">
                   Everything is configured. Launch an answer-visibility sweep to start tracking citations for <span className="text-heading font-medium">{createdProjectName}</span>.
                 </p>
+                {(launchBlockedReason || runError) && (
+                  <div role="alert" className="rounded-md border border-negative bg-negative-soft p-3 text-sm text-negative">
+                    <p>{runError ?? launchBlockedReason}</p>
+                    <p className="mt-1 text-xs text-secondary">Resolve the blocker above, then retry the sweep here.</p>
+                  </div>
+                )}
                 <div className="setup-nav">
                   <Button type="button" variant="outline" onClick={goBack}>Back</Button>
-                  <Button type="button" disabled={runSaving} onClick={asyncHandler(handleLaunchRun)}>
-                    {runSaving ? 'Launching...' : 'Launch visibility sweep'}
+                  <Button
+                    type="button"
+                    disabled={runSaving || !!launchBlockedReason}
+                    title={launchBlockedReason}
+                    onClick={asyncHandler(handleLaunchRun)}
+                  >
+                    {runSaving ? 'Launching...' : runError ? 'Retry visibility sweep' : 'Launch visibility sweep'}
                   </Button>
                 </div>
               </div>
@@ -645,8 +1103,16 @@ export function SetupPage() {
                   Sweep running — typically 30-60s. Polling every 2s…
                 </p>
                 <div className="rounded-md border border-default bg-surface p-3 text-xs text-muted">
-                  <p>Status: <span className="text-neutral">{run?.status ?? 'queued'}</span></p>
+                  <p>Status: <span className="text-neutral">{runStatus ?? 'queued'}</span></p>
                 </div>
+                {launchedRun.isError && (
+                  <div role="alert" className="rounded-md border border-negative bg-negative-soft p-3 text-sm text-negative">
+                    <p>{launchedRun.error instanceof Error ? launchedRun.error.message : 'Could not refresh the sweep status.'}</p>
+                    <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => { void launchedRun.refetch() }}>
+                      Retry status check
+                    </Button>
+                  </div>
+                )}
                 <div className="setup-nav">
                   <span />
                   <Button type="button" variant="outline" onClick={() => { void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' }) }}>
@@ -654,13 +1120,18 @@ export function SetupPage() {
                   </Button>
                 </div>
               </div>
-            ) : run?.status === 'failed' ? (
+            ) : !successfulRun ? (
               <div className="compact-stack">
-                <p className="text-negative-400">Sweep failed. Inspect the run on the project page for the provider error and retry from there.</p>
+                <div role="alert" className="rounded-md border border-negative bg-negative-soft p-3 text-sm text-negative">
+                  <p>{runFailureDetail}</p>
+                  <p className="mt-1 text-xs text-secondary">Fix provider or query configuration if needed, then retry without leaving setup.</p>
+                </div>
                 <div className="setup-nav">
-                  <span />
-                  <Button type="button" onClick={() => { void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' }) }}>
-                    Open project
+                  <Button type="button" variant="outline" asChild>
+                    <Link to="/settings">Configure providers</Link>
+                  </Button>
+                  <Button type="button" disabled={runSaving || !!launchBlockedReason} onClick={asyncHandler(handleLaunchRun)}>
+                    {runSaving ? 'Retrying...' : 'Retry visibility sweep'}
                   </Button>
                 </div>
               </div>

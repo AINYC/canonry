@@ -91,6 +91,9 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'POST /api/v1/projects/{name}/notifications/{id}/test': 'deferred',
   'GET /api/v1/telemetry': 'deferred',
   'PUT /api/v1/telemetry': 'deferred',
+  // Dashboard-to-local-server observability protocol. It records no product
+  // capability and is intentionally not an agent tool.
+  'POST /api/v1/telemetry/onboarding': 'excluded-protocol',
   'GET /api/v1/screenshots/{snapshotId}': 'excluded-protocol',
   'GET /api/v1/cdp/status': 'deferred',
   'POST /api/v1/cdp/screenshot': 'deferred',

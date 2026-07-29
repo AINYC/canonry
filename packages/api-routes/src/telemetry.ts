@@ -1,9 +1,15 @@
 import type { FastifyInstance } from 'fastify'
-import { notImplemented, validationError } from '@ainyc/canonry-contracts'
+import {
+  notImplemented,
+  onboardingTelemetryEventSchema,
+  validationError,
+  type OnboardingTelemetryEvent,
+} from '@ainyc/canonry-contracts'
 
 export interface TelemetryRoutesOptions {
   getTelemetryStatus?: () => { enabled: boolean; anonymousId?: string }
   setTelemetryEnabled?: (enabled: boolean) => void
+  recordOnboardingEvent?: (event: OnboardingTelemetryEvent) => void
 }
 
 export async function telemetryRoutes(app: FastifyInstance, opts: TelemetryRoutesOptions) {
@@ -35,5 +41,23 @@ export async function telemetryRoutes(app: FastifyInstance, opts: TelemetryRoute
       enabled: status?.enabled ?? enabled,
       anonymousId: status?.anonymousId ? status.anonymousId.slice(0, 8) + '...' : undefined,
     }
+  })
+
+  app.post<{ Body: unknown }>('/telemetry/onboarding', async (request, reply) => {
+    const parsed = onboardingTelemetryEventSchema.safeParse(request.body)
+    if (!parsed.success) {
+      throw validationError('Invalid onboarding telemetry event', {
+        issues: parsed.error.issues.map(issue => ({
+          code: issue.code,
+          path: issue.path.join('.'),
+        })),
+      })
+    }
+
+    // Missing wiring is a supported deployment posture. The dashboard should
+    // never fail onboarding because its host does not collect product
+    // telemetry (for example, apps/api or an opted-out local instance).
+    opts.recordOnboardingEvent?.(parsed.data)
+    return reply.status(202).send({ accepted: Boolean(opts.recordOnboardingEvent) })
   })
 }

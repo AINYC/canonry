@@ -902,7 +902,7 @@ describe('canonry', () => {
     }
   })
 
-  it('initCommand fires cli.init telemetry with setupState reflecting configured surfaces', async () => {
+  it('initCommand fires cli.init telemetry with structured post-init setup state', async () => {
     const tmpDir = path.join(os.tmpdir(), `canonry-init-setup-state-${crypto.randomUUID()}`)
     vi.stubEnv('CANONRY_CONFIG_DIR', tmpDir)
     vi.stubEnv('CANONRY_TELEMETRY_DISABLED', undefined as unknown as string)
@@ -933,7 +933,15 @@ describe('canonry', () => {
       const initEvent = captured.find(p => p.event === 'cli.init')
       expect(initEvent, 'expected a cli.init telemetry event').toBeTruthy()
       const props = initEvent!.properties as Record<string, unknown>
-      // The install funnel uses setupState to slice "configured a provider" cohorts.
+      expect(props.setup_state).toEqual({
+        provider_count: 1,
+        has_keywords: false,
+        project_count: 0,
+        is_first_run: false,
+      })
+      expect(props.googleConfigured).toBe(true)
+      expect(props.agentConfigured).toBe(false)
+      // Retained temporarily for existing reports while they migrate.
       expect(props.setupState).toBe('google|provider')
       expect(props.providerCount).toBe(1)
     } finally {

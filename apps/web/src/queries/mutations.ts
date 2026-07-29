@@ -72,14 +72,33 @@ function queueTrackedRunToast(run: ApiRun, options: {
 }
 
 function queueTrackedBatchToast(results: ApiTriggerAllRunsResult[]) {
-  const queuedRuns = results.filter((result): result is ApiRun & { projectName: string } => result.status !== 'conflict')
-  const skippedRuns = results.filter((result): result is Extract<ApiTriggerAllRunsResult, { status: 'conflict' }> => result.status === 'conflict')
+  const queuedRuns = results.filter(
+    (result): result is ApiRun & { projectName: string } =>
+      result.status !== 'conflict' && result.status !== 'error',
+  )
+  const conflictRuns = results.filter(
+    (result): result is Extract<ApiTriggerAllRunsResult, { status: 'conflict' }> =>
+      result.status === 'conflict',
+  )
+  const blockedRuns = results.filter(
+    (result): result is Extract<ApiTriggerAllRunsResult, { status: 'error' }> =>
+      result.status === 'error',
+  )
+  const skippedCount = conflictRuns.length + blockedRuns.length
 
   if (queuedRuns.length === 0) {
+    const blockers = [
+      blockedRuns.length > 0
+        ? `${blockedRuns.length} need provider or query setup`
+        : null,
+      conflictRuns.length > 0
+        ? `${conflictRuns.length} already have an active run`
+        : null,
+    ].filter((part): part is string => part !== null)
     addToast({
       title: 'No runs queued',
-      detail: skippedRuns.length > 0
-        ? `${skippedRuns.length} project${skippedRuns.length === 1 ? '' : 's'} already had a run in progress.`
+      detail: blockers.length > 0
+        ? `${blockers.join('; ')}.`
         : 'No projects were available to queue.',
       tone: 'caution',
       durationMs: 8000,
@@ -103,15 +122,15 @@ function queueTrackedBatchToast(results: ApiTriggerAllRunsResult[]) {
   const batchId = createTrackedBatch({
     runIds: queuedRuns.map(run => run.id),
     queuedCount: queuedRuns.length,
-    skippedCount: skippedRuns.length,
+    skippedCount,
   })
 
   addToast({
     title: 'Run-all batch queued',
-    detail: skippedRuns.length > 0
-      ? `${queuedRuns.length} project${queuedRuns.length === 1 ? '' : 's'} queued, ${skippedRuns.length} skipped because a run is already active.`
+    detail: skippedCount > 0
+      ? `${queuedRuns.length} project${queuedRuns.length === 1 ? '' : 's'} queued; ${skippedCount} need attention or already have an active run.`
       : `${queuedRuns.length} project${queuedRuns.length === 1 ? '' : 's'} queued.`,
-    tone: skippedRuns.length > 0 ? 'caution' : 'neutral',
+    tone: skippedCount > 0 ? 'caution' : 'neutral',
     dedupeKey: `batch:${batchId}`,
     dedupeMode: 'replace',
   })
@@ -158,6 +177,7 @@ export function useTriggerRun() {
       })
     },
     onError: (error, variables) => {
+      if (variables.sourceAction === 'setup-launch') return
       handleTrackedRunError(error, {
         projectKey: variables.projectName,
         projectLabel: variables.projectLabel ?? variables.projectName,

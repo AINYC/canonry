@@ -151,12 +151,19 @@ export function useDashboardOverview(initialDashboard?: DashboardVm | null, opti
     const queries: Array<Promise<unknown>> = [
       projectsQuery.refetch(),
       runsQuery.refetch(),
+      ...projectOverviewQueries.map(query => query.refetch()),
     ]
     if (includeSettings) {
       queries.push(settingsQuery.refetch())
     }
     await Promise.all(queries)
-  }, [includeSettings, projectsQuery.refetch, runsQuery.refetch, settingsQuery.refetch])
+  }, [
+    includeSettings,
+    projectOverviewQueries,
+    projectsQuery.refetch,
+    runsQuery.refetch,
+    settingsQuery.refetch,
+  ])
 
   return {
     dashboard,

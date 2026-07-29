@@ -1037,7 +1037,9 @@ const routeCatalog: OpenApiOperation[] = [
     },
     responses: {
       201: jsonResponse('Run queued.', 'RunDto'),
+      422: errorResponse('Project has no tracked queries.'),
       409: errorResponse('Run already in progress.'),
+      503: errorResponse('No runnable answer provider is configured.'),
     },
   },
   {
@@ -1666,6 +1668,24 @@ const routeCatalog: OpenApiOperation[] = [
       200: rawJsonResponse('Telemetry updated.', looseObjectSchema),
       400: errorResponse('Invalid telemetry request.'),
       501: errorResponse('Telemetry configuration is not available.'),
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/telemetry/onboarding',
+    summary: 'Record a privacy-safe onboarding milestone',
+    tags: ['telemetry'],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/OnboardingTelemetryEvent' },
+        },
+      },
+    },
+    responses: {
+      202: jsonResponse('Onboarding milestone accepted.', 'TelemetryEventAcceptedDto'),
+      400: errorResponse('Invalid onboarding telemetry event.'),
     },
   },
   {

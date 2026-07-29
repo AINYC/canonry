@@ -1,6 +1,6 @@
 import { test, expect, onTestFinished, describe } from 'vitest'
 
-import { appendEmbedRenderToken, connectServerTrafficWordpress, fetchProjects, installBacklinks, loginWithPassword, triggerGscSync } from '../src/api.js'
+import { appendEmbedRenderToken, connectServerTrafficWordpress, fetchProjects, installBacklinks, loginWithPassword, recordOnboardingEvent, triggerGscSync } from '../src/api.js'
 
 /**
  * After the hey-api migration the SDK calls `fetch(new Request(...))` —
@@ -188,5 +188,60 @@ describe('apiFetch Content-Type header', () => {
     await loginWithPassword('pw')
 
     expect(observed?.path).toBe('/api/v1/session?token=render-token-456')
+  })
+
+  test('posts only the allowlisted onboarding event shape', async () => {
+    let observed: Observed | undefined
+    const restore = mockFetch((req) => {
+      observed = req
+      return jsonResponse({ accepted: true }, 202)
+    })
+    onTestFinished(restore)
+
+    await recordOnboardingEvent({
+      eventId: 'd34421e8-ff3a-45ad-baad-964180ae4120',
+      flowVersion: 1,
+      onboardingSessionId: '30ed4717-c740-433f-9d37-05421e3f1a75',
+      event: 'onboarding.started',
+      step: 'system',
+      resumed: false,
+    })
+
+    expect(observed?.path).toBe('/api/v1/telemetry/onboarding')
+    expect(observed?.method).toBe('POST')
+    expect(JSON.parse(String(observed?.body))).toEqual({
+      eventId: 'd34421e8-ff3a-45ad-baad-964180ae4120',
+      flowVersion: 1,
+      onboardingSessionId: '30ed4717-c740-433f-9d37-05421e3f1a75',
+      event: 'onboarding.started',
+      step: 'system',
+      resumed: false,
+    })
+  })
+
+  test('never lets telemetry delivery failure interrupt setup', async () => {
+    const observedBodies: Array<BodyInit | null | undefined> = []
+    const restore = mockFetch((request) => {
+      observedBodies.push(request.body)
+      return jsonResponse({
+        error: { code: 'INTERNAL_ERROR', message: 'Unavailable' },
+      }, 503)
+    })
+    onTestFinished(restore)
+
+    await expect(recordOnboardingEvent({
+      eventId: 'd34421e8-ff3a-45ad-baad-964180ae4120',
+      flowVersion: 1,
+      onboardingSessionId: '30ed4717-c740-433f-9d37-05421e3f1a75',
+      event: 'onboarding.blocked',
+      step: 'system',
+      action: 'continue',
+      reasonCode: 'api_unavailable',
+    })).resolves.toBeUndefined()
+    expect(observedBodies).toHaveLength(2)
+    expect(observedBodies.map(body => JSON.parse(String(body)).eventId)).toEqual([
+      'd34421e8-ff3a-45ad-baad-964180ae4120',
+      'd34421e8-ff3a-45ad-baad-964180ae4120',
+    ])
   })
 })

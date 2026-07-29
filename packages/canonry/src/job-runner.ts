@@ -2,11 +2,11 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { and, eq, inArray, ne, sql } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { runs, queries, competitors, projects, querySnapshots, usageCounters } from '@ainyc/canonry-db'
 import type { ProviderName, LocationContext } from '@ainyc/canonry-contracts'
-import { buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, serializeRunError } from '@ainyc/canonry-contracts'
+import { ONBOARDING_FLOW_VERSION, bucketOnboardingCount, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, serializeRunError } from '@ainyc/canonry-contracts'
 import type { ProviderRegistry, RegisteredProvider } from './provider-registry.js'
 import { trackEvent } from './telemetry.js'
 import { buildRunCompletedProps, hashDomain, type RunPhaseTimings } from './run-telemetry.js'
@@ -149,11 +149,23 @@ function classifyOneProviderError(message: string): ProviderErrorCode {
 }
 
 export class JobRunner {
+  /**
+   * Invoked exactly when `activation.completed` is emitted: the project's
+   * first non-empty, non-probe answer-visibility result. The serve process
+   * uses it to thank the operator once; it is a UX hook, not telemetry, so it
+   * fires (and is given) independently of whether telemetry is enabled.
+   */
+  private readonly onFirstActivation?: () => void
   private db: DatabaseClient
   private registry: ProviderRegistry
   onRunCompleted?: (runId: string, projectId: string) => Promise<void>
 
-  constructor(db: DatabaseClient, registry: ProviderRegistry) {
+  constructor(
+    db: DatabaseClient,
+    registry: ProviderRegistry,
+    opts?: { onFirstActivation?: () => void },
+  ) {
+    this.onFirstActivation = opts?.onFirstActivation
     this.db = db
     this.registry = registry
   }
@@ -534,6 +546,29 @@ export class JobRunner {
         failureCode ? { errorCode: failureCode } : undefined,
       )
 
+      // Activation is a non-empty first answer-visibility result, not merely a
+      // run row reaching "completed". This excludes probes, zero-query runs,
+      // and later routine sweeps so the funnel has one durable success event.
+      if (
+        existingRun.kind === 'answer-visibility'
+        && runTrigger !== 'probe'
+        && totalSnapshotsInserted > 0
+        && !this.hasPriorActivation(projectId, runId)
+      ) {
+        trackEvent('activation.completed', {
+          flowVersion: ONBOARDING_FLOW_VERSION,
+          status: finalStatus,
+          providerCountBucket: bucketOnboardingCount(executionContext.providerCount),
+          queryCountBucket: bucketOnboardingCount(executionContext.queryCount),
+          snapshotCountBucket: bucketOnboardingCount(totalSnapshotsInserted),
+        })
+        try {
+          this.onFirstActivation?.()
+        } catch {
+          // A celebration must never fail a run.
+        }
+      }
+
       this.incrementUsage(projectId, 'runs', 1)
 
       // Notify after run completion
@@ -649,9 +684,26 @@ export class JobRunner {
     providerReservations.clear()
   }
 
-  private getRunState(runId: string): { status: string; finishedAt: string | null; error: string | null; trigger: string; queries: string[] | null } | undefined {
+  private hasPriorActivation(projectId: string, currentRunId: string): boolean {
+    return this.db
+      .select({ id: querySnapshots.id })
+      .from(querySnapshots)
+      .innerJoin(runs, eq(querySnapshots.runId, runs.id))
+      .where(and(
+        eq(runs.projectId, projectId),
+        eq(runs.kind, 'answer-visibility'),
+        inArray(runs.status, ['completed', 'partial']),
+        ne(runs.trigger, 'probe'),
+        ne(runs.id, currentRunId),
+      ))
+      .limit(1)
+      .get() !== undefined
+  }
+
+  private getRunState(runId: string): { kind: string; status: string; finishedAt: string | null; error: string | null; trigger: string; queries: string[] | null } | undefined {
     return this.db
       .select({
+        kind: runs.kind,
         status: runs.status,
         finishedAt: runs.finishedAt,
         error: runs.error,
