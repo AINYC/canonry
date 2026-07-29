@@ -1,5 +1,13 @@
 import { runAeoAudit } from '@ainyc/aeo-audit'
-import { determineAnswerMentioned, resolveSnapshotRequestQueries } from '@ainyc/canonry-contracts'
+import {
+  determineAnswerMentioned,
+  hostMatchesDomain,
+  hostOf,
+  registrableDomain,
+  resolveSnapshotRequestQueries,
+  textContainsBrandAlias,
+  textContainsDomain,
+} from '@ainyc/canonry-contracts'
 import type {
   GroundingSource,
   SnapshotAccuracy,
@@ -120,7 +128,7 @@ export class SnapshotService {
 
   async createReport(input: SnapshotRequestDto): Promise<SnapshotReportDto> {
     const companyName = input.companyName.trim()
-    const domain = normalizeDomain(input.domain)
+    const domain = hostOf(input.domain) ?? input.domain.trim()
     const manualQueries = normalizeStringList(resolveSnapshotRequestQueries(input))
     const manualCompetitors = normalizeStringList(input.competitors ?? [])
     const providers = this.registry.getAll()
@@ -129,7 +137,7 @@ export class SnapshotService {
     }
 
     const analysisProvider = pickAnalysisProvider(this.registry.getApiProviders())
-    const homepageUrl = `https://${extractHostname(domain)}`
+    const homepageUrl = `https://${domain}`
 
     const [siteText, audit] = await Promise.all([
       fetchSiteText(domain),
@@ -138,7 +146,7 @@ export class SnapshotService {
 
     if (manualQueries.length === 0 && !siteText) {
       throw new Error(
-        `Could not analyze https://${extractHostname(domain)}. ` +
+        `Could not analyze https://${domain}. ` +
         'Try again with a reachable homepage or pass manual category queries via --queries.',
       )
     }
@@ -694,19 +702,14 @@ function buildFallbackRecommendedActions(audit: SnapshotAuditDto): string[] {
 }
 
 function citesTargetDomain(citedDomains: string[], groundingSources: GroundingSource[], targetDomain: string): boolean {
-  const normalizedTarget = extractHostname(targetDomain)
   for (const domain of citedDomains) {
-    if (domainMatches(domain, normalizedTarget)) {
+    if (hostMatchesDomain(domain, targetDomain)) {
       return true
     }
   }
   for (const source of groundingSources) {
-    if (source.uri && source.uri.toLowerCase().includes(normalizedTarget.toLowerCase())) {
-      return true
-    }
-    if (source.title && source.title.toLowerCase().includes(normalizedTarget.toLowerCase())) {
-      return true
-    }
+    if (hostMatchesDomain(source.uri, targetDomain)) return true
+    if (source.title && hostMatchesDomain(source.title, targetDomain)) return true
   }
   return false
 }
@@ -718,22 +721,21 @@ function extractCompetitorsFromResponse(ctx: {
   targetDomain: string
 }): string[] {
   const competitors = new Set<string>()
-  const lowerAnswer = ctx.answerText.toLowerCase()
-  const targetDomain = extractHostname(ctx.targetDomain)
+  const targetDomain = hostOf(ctx.targetDomain) ?? ctx.targetDomain
 
   for (const hint of ctx.manualCompetitors) {
     if (isDomainLike(hint)) {
-      const normalizedHint = normalizeDomain(hint)
-      if (domainMatches(normalizedHint, targetDomain)) continue
+      const normalizedHint = hostOf(hint) ?? hint
+      if (hostMatchesDomain(normalizedHint, targetDomain)) continue
       if (
-        ctx.citedDomains.some(domain => domainMatches(domain, normalizedHint))
-        || lowerAnswer.includes(normalizedHint.toLowerCase())
+        ctx.citedDomains.some(domain => hostMatchesDomain(domain, normalizedHint))
+        || textContainsDomain(ctx.answerText, normalizedHint)
       ) {
         competitors.add(normalizedHint)
       }
       continue
     }
-    if (hint.length >= 3 && lowerAnswer.includes(hint.toLowerCase())) {
+    if (hint.length >= 3 && textContainsBrandAlias(ctx.answerText, hint)) {
       competitors.add(hint)
     }
   }
@@ -794,30 +796,8 @@ function uniqueStrings(values: string[] | unknown): string[] {
   )]
 }
 
-function normalizeDomain(value: string): string {
-  const trimmed = value.trim()
-  if (!trimmed) return trimmed
-  try {
-    const url = trimmed.includes('://') ? new URL(trimmed) : new URL(`https://${trimmed}`)
-    return url.hostname.replace(/^www\./, '').toLowerCase()
-  } catch {
-    return trimmed.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase()
-  }
-}
-
-function extractHostname(value: string): string {
-  return normalizeDomain(value)
-}
-
-function domainMatches(candidate: string, target: string): boolean {
-  const normalizedCandidate = normalizeDomain(candidate)
-  const normalizedTarget = normalizeDomain(target)
-  return normalizedCandidate === normalizedTarget || normalizedCandidate.endsWith(`.${normalizedTarget}`)
-}
-
 function isDomainLike(value: string): boolean {
-  const normalized = normalizeDomain(value)
-  return normalized.includes('.') && !normalized.includes(' ')
+  return registrableDomain(value).length > 0
 }
 
 function clipText(value: string, length: number): string {

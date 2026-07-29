@@ -1,4 +1,9 @@
-import { brandKeyFromText, type MetricTone, type ScoreSummaryDto } from '@ainyc/canonry-contracts'
+import {
+  brandKeyFromText,
+  textContainsAnyBrandAlias,
+  type MetricTone,
+  type ScoreSummaryDto,
+} from '@ainyc/canonry-contracts'
 
 export interface MentionShareSnapshot {
   /** True when the project's brand or domain appears in the LLM's answer text.
@@ -102,18 +107,23 @@ export function buildMentionShare(
   let projectMentionSnapshots = 0
   let snapshotsWithAnswerText = 0
   const competitorCounts = new Map<string, number>()
-  for (const c of options.competitors) competitorCounts.set(c.domain, 0)
+  const competitorAliases = new Map<string, string[]>()
+  for (const competitor of options.competitors) {
+    competitorCounts.set(competitor.domain, 0)
+    competitorAliases.set(
+      competitor.domain,
+      competitor.brandTokens.filter(alias => brandKeyFromText(alias).length >= 3),
+    )
+  }
 
   for (const snap of snapshots) {
     const text = snap.answerText ?? ''
     if (text.length === 0) continue
     snapshotsWithAnswerText++
     if (snap.projectMentioned) projectMentionSnapshots++
-    // Build the answer's brand-key once per snapshot — it powers the
-    // spacing/hyphenation-tolerant match path below.
-    const answerBrandKey = brandKeyFromText(text)
     for (const competitor of options.competitors) {
-      if (competitorMentioned(text, answerBrandKey, competitor.brandTokens)) {
+      const aliases = competitorAliases.get(competitor.domain) ?? []
+      if (textContainsAnyBrandAlias(text, aliases)) {
         competitorCounts.set(competitor.domain, (competitorCounts.get(competitor.domain) ?? 0) + 1)
       }
     }
@@ -173,27 +183,6 @@ function mentionShareTone(score: number): MetricTone {
   if (score >= 50) return 'positive'
   if (score >= 25) return 'caution'
   return 'negative'
-}
-
-function competitorMentioned(
-  text: string,
-  answerBrandKey: string,
-  brandTokens: readonly string[],
-): boolean {
-  for (const token of brandTokens) {
-    if (token.length < 3) continue
-    // Word-boundary regex match — fast path, preserves exact phrasing
-    // ("demand-iq" matches "demand-iq" in prose verbatim).
-    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    if (new RegExp(`\\b${escaped}\\b`, 'i').test(text)) return true
-    // Brand-key match — strips non-alphanumerics so a token like
-    // "demand-iq" also matches "Demand IQ" or "DemandIQ" in answer prose.
-    // Mirrors the project-side normalization in `extractAnswerMentions`
-    // so the competitor matcher and project matcher stay in lockstep.
-    const tokenBrandKey = brandKeyFromText(token)
-    if (tokenBrandKey.length >= 3 && answerBrandKey.includes(tokenBrandKey)) return true
-  }
-  return false
 }
 
 function describe(parts: {

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { categorizeSource, type SourceCategory } from './source-categories.js'
 import { normalizeProjectDomain } from './project.js'
 import { DiscoveryCompetitorTypes, type DiscoveryCompetitorType } from './discovery.js'
+import { hostMatchesAnyDomain } from './url-normalize.js'
 
 /**
  * Actionable classification of a cited domain, layered on top of the generic
@@ -74,16 +75,6 @@ export function surfaceClassFromCompetitorType(type: DiscoveryCompetitorType): S
  * (packages/canonry citation-utils) — kept here as the pure, dependency-free
  * form so the classifier can live in contracts.
  */
-function matchesAnyDomain(candidate: string, domains: readonly string[]): boolean {
-  if (!candidate) return false
-  for (const domain of domains) {
-    const normalized = normalizeProjectDomain(domain)
-    if (!normalized) continue
-    if (candidate === normalized || candidate.endsWith(`.${normalized}`)) return true
-  }
-  return false
-}
-
 export interface SurfaceClassContext {
   /** The project's own domains — `effectiveDomains(project)`. */
   projectDomains: readonly string[]
@@ -116,8 +107,8 @@ export function classifySurfaceFromCategory(
 ): SurfaceClass {
   const candidate = normalizeProjectDomain(domain)
 
-  if (matchesAnyDomain(candidate, context.projectDomains)) return SurfaceClasses.own
-  if (matchesAnyDomain(candidate, context.competitorDomains)) return SurfaceClasses['direct-competitor']
+  if (hostMatchesAnyDomain(candidate, context.projectDomains)) return SurfaceClasses.own
+  if (hostMatchesAnyDomain(candidate, context.competitorDomains)) return SurfaceClasses['direct-competitor']
   if (storedClass) return storedClass
 
   switch (category) {

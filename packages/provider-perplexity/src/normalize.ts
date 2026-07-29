@@ -1,5 +1,11 @@
 import OpenAI from 'openai'
-import { AI_ENGINE_SELF_DOMAINS, normalizeServedModel } from '@ainyc/canonry-contracts'
+import {
+  AI_ENGINE_SELF_DOMAINS,
+  hostMatchesAnyDomain,
+  hostOf,
+  normalizeServedModel,
+  registrableDomain,
+} from '@ainyc/canonry-contracts'
 import { withRetry } from './utils.js'
 import type {
   PerplexityConfig,
@@ -264,17 +270,13 @@ export function extractCitedDomains(groundingSources: GroundingSource[]): string
 }
 
 function extractDomainFromUri(uri: string): string | null {
-  try {
-    const url = new URL(uri)
-    const hostname = url.hostname.replace(/^www\./, '').toLowerCase()
-    // Skip internal AI service domains
-    if (AI_ENGINE_SELF_DOMAINS.chatgpt.some((self) => hostname.includes(self))) {
-      return null
-    }
-    return hostname
-  } catch {
-    return null
-  }
+  const hostname = hostOf(uri)
+  if (
+    !hostname
+    || !registrableDomain(hostname)
+    || hostMatchesAnyDomain(hostname, AI_ENGINE_SELF_DOMAINS.chatgpt)
+  ) return null
+  return hostname
 }
 
 export async function generateText(prompt: string, config: PerplexityConfig): Promise<string> {

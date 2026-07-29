@@ -21,7 +21,7 @@ describe('provider-local validateConfig', () => {
 })
 
 describe('provider-local normalizeResult', () => {
-  it('synthesizes grounding sources from domain mentions', () => {
+  it('keeps answer-text domains separate from structured citations', () => {
     const raw = {
       provider: 'local' as const,
       model: 'llama3',
@@ -32,11 +32,7 @@ describe('provider-local normalizeResult', () => {
       searchQueries: []
     }
     const result = normalizeResult(raw)
-    expect(result.citedDomains).toContain('example.com')
-    expect(result.citedDomains).toContain('test.org')
-    expect(result.citedDomains.length).toBe(2)
-    expect(result.groundingSources).toContainEqual({ uri: 'http://example.com', title: 'example.com' })
-    expect(result.groundingSources).toContainEqual({ uri: 'http://test.org', title: 'test.org' })
-    expect(result.groundingSources.length).toBe(2)
+    expect(result.citedDomains).toEqual([])
+    expect(result.groundingSources).toEqual([])
   })
 })

@@ -886,10 +886,7 @@ describe('extractAnswerMentions', () => {
     expect(result.matchedTerms).toContain('AZ Coatings')
   })
 
-  it('does not loose-match short brand keys across word boundaries', () => {
-    // "acme" (4 chars) is below the brand-key threshold, so the loose match
-    // is gated off. Without that gate, "pa cme" would strip to "pacme" and
-    // falsely contain "acme".
+  it('does not concatenate across unrelated words to manufacture a match', () => {
     const result = extractAnswerMentions(
       'Find the pa cme report in the archive.',
       ['Acme'],
@@ -899,9 +896,7 @@ describe('extractAnswerMentions', () => {
     expect(result.matchedTerms).toEqual([])
   })
 
-  it('does not loose-match short brand+suffix pairings via the stripped normalized candidate', () => {
-    // "Bob Inc" stripped normalized candidate is "bob"; matched as a whole
-    // word, "bob" must not match inside "bobsled".
+  it('does not invent an alias by stripping a legal suffix', () => {
     const result = extractAnswerMentions(
       'Bobsled racing is fun this winter.',
       ['Bob Inc'],
@@ -910,44 +905,60 @@ describe('extractAnswerMentions', () => {
     expect(result.mentioned).toBe(false)
     expect(result.matchedTerms).toEqual([])
 
-    // Companion positive: when the stripped form appears as a whole word,
-    // it should still match — whole-word matching protects without erasing
-    // legitimate detections.
+    // "Bob" is a separate identity and must be configured as an alias before
+    // it can affect mention KPIs.
     expect(extractAnswerMentions(
       'Bob is great at fixing things.',
-      ['Bob Inc'],
+      ['Bob Inc', 'Bob'],
       ['bob.example.com'],
     ).mentioned).toBe(true)
   })
 
-  it('matches when display name carries a trailing LLC/Inc/Corp classifier', () => {
-    // Spaced form: "AZ Coatings LLC" should match an answer that drops the LLC.
+  it('requires a configured alias when an answer drops a legal classifier', () => {
     expect(extractAnswerMentions(
       'Local contractors include AZ Coatings (Michigan/Detroit Area).',
       ['AZ Coatings LLC'],
       ['azcoatingsllc.com'],
-    ).mentioned).toBe(true)
+    ).mentioned).toBe(false)
 
-    // Concatenated form: "azcoatingsllc" should also match without the suffix.
     expect(extractAnswerMentions(
       'Local contractors include AZ Coatings (Michigan/Detroit Area).',
-      ['azcoatingsllc'],
+      ['AZ Coatings LLC', 'AZ Coatings'],
       ['azcoatingsllc.com'],
     ).mentioned).toBe(true)
 
-    // "Inc" is stripped likewise.
+    // A domain-derived identity can still provide the exact shorter name.
     expect(extractAnswerMentions(
       'According to Sherwin Williams paints are the best.',
       ['Sherwin Williams Inc'],
       ['sherwinwilliams.com'],
     ).mentioned).toBe(true)
 
-    // "Corporation" (long form) is stripped too.
     expect(extractAnswerMentions(
       'Microsoft is launching a new product line.',
       ['Microsoft Corporation'],
       ['microsoft.com'],
     ).mentioned).toBe(true)
+  })
+
+  it('requires a configured alias when an answer drops a category word', () => {
+    expect(extractAnswerMentions(
+      'Gjelina is a popular Venice restaurant.',
+      ['Gjelina Hotel'],
+      ['gjelinahotel.com'],
+    ).mentioned).toBe(false)
+
+    expect(extractAnswerMentions(
+      'Gjelina is a popular Venice restaurant.',
+      ['Gjelina Hotel', 'Gjelina'],
+      ['gjelinahotel.com'],
+    ).mentioned).toBe(true)
+
+    expect(extractAnswerMentions(
+      'Gelina is a different spelling.',
+      ['Gjelina Hotel', 'Gjelina'],
+      ['gjelinahotel.com'],
+    ).mentioned).toBe(false)
   })
 
   it('does not match the leftmost subdomain label as a brand token', () => {
@@ -1092,8 +1103,8 @@ describe('extractAnswerMentions', () => {
     // in surrounding prose). The match itself is correct, but matchedTerms
     // must NOT surface "roofing" — otherwise it gets shown as a chip in the
     // UI and highlighted everywhere the generic word appears, which is
-    // misleading. Only the distinctive prefix ("cenco") and the displayName
-    // should be exposed as evidence.
+    // misleading. Only the configured displayName and exact domain-derived
+    // identity should be exposed as evidence.
     const result = extractAnswerMentions(
       'Denver-area picks: Precision Exteriors (commercial roofing), ESS Roofing & Exteriors (storm damage), and Cenco Roofing for residential work. Budget around $11,000 for a full roofing replacement.',
       ['Cenco Roofing'],
@@ -1101,7 +1112,7 @@ describe('extractAnswerMentions', () => {
     )
     expect(result.mentioned).toBe(true)
     expect(result.matchedTerms).toContain('Cenco Roofing')
-    expect(result.matchedTerms).toContain('cenco')
+    expect(result.matchedTerms).toContain('cencoroofing')
     expect(result.matchedTerms).not.toContain('roofing')
   })
 
@@ -1110,7 +1121,7 @@ describe('extractAnswerMentions', () => {
   it('fires on a standalone alias mention even when displayName is absent', () => {
     // The LlamaIndex / LlamaParse case. Project displayName="LlamaIndex"
     // with aliases=["LlamaParse"]; answer mentions only "LlamaParse".
-    // Each brand name is its own identity in the strong-match path.
+    // Each approved brand name is matched as its own identity.
     const result = extractAnswerMentions(
       'LlamaParse is a great parser for PDFs.',
       ['LlamaIndex', 'LlamaParse'],
@@ -1120,9 +1131,9 @@ describe('extractAnswerMentions', () => {
     expect(result.matchedTerms).toContain('LlamaParse')
   })
 
-  it('multi-word name still requires 2 token matches within its own group', () => {
-    // The threshold heuristic is preserved per-identity. "Cenco Roofing"
-    // with no other identities: a single "roofing" mention is not enough.
+  it('multi-word names do not match on a trailing descriptor alone', () => {
+    // The exact approved identity "Cenco Roofing" is not present when only
+    // the generic descriptor "roofing" appears.
     const result = extractAnswerMentions(
       'Most homeowners pay $300 for a basic roofing inspection.',
       ['Cenco Roofing'],
@@ -1133,10 +1144,7 @@ describe('extractAnswerMentions', () => {
 
   it("explicit alias fires even when displayName tokens don't match", () => {
     // The LlamaIndex / LlamaParse case. With aliases declared, each alias
-    // runs the strong-match pipeline independently, so a standalone
-    // "LlamaParse" mention fires on the alias's normalized candidate even
-    // though the combined token pool ["llamaindex", "llamaparse"] would
-    // otherwise need 2 matches to clear the multi-token threshold.
+    // is matched independently, so a standalone "LlamaParse" mention fires.
     const result = extractAnswerMentions(
       'LlamaParse is a great tool for parsing.',
       ['LlamaIndex', 'LlamaParse'],

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { hostMatchesDomain, hostOf } from './url-normalize.js'
 
 export const sourceCategorySchema = z.enum([
   'competitor',
@@ -144,20 +145,13 @@ const CATEGORY_LABELS: Record<SourceCategory, string> = {
 }
 
 export function categorizeSource(uri: string): { category: SourceCategory; label: string; domain: string } {
-  let domain: string
-  try {
-    const url = new URL(uri.startsWith('http') ? uri : `https://${uri}`)
-    domain = url.hostname.replace(/^www\./, '')
-  } catch {
-    domain = uri.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0] ?? uri
-  }
+  const domain = hostOf(uri) ?? uri.trim().toLowerCase()
 
   const domainLower = domain.toLowerCase()
 
   for (const rule of SOURCE_CATEGORY_RULES) {
     if (
-      domainLower === rule.pattern ||
-      domainLower.endsWith(`.${rule.pattern}`) ||
+      (!rule.pattern.startsWith('.') && hostMatchesDomain(domainLower, rule.pattern)) ||
       (rule.pattern.startsWith('.') && domainLower.endsWith(rule.pattern))
     ) {
       return { category: rule.category, label: rule.label, domain }

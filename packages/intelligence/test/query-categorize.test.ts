@@ -77,3 +77,40 @@ describe('categorizeQueryByIntent', () => {
     expect(categorizeQueryByIntent('demand iq', [])).not.toBe('brand')
   })
 })
+
+describe('approved brand aliases', () => {
+  const withoutAlias = buildBrandTokens('gjelinahotel.com', ['Gjelina Hotel'])
+  const gjelina = buildBrandTokens('gjelinahotel.com', ['Gjelina Hotel', 'Gjelina'])
+  const demandiq = buildBrandTokens('demand-iq.com', ['Demand IQ'])
+
+  test('does not derive an unreviewed category-stripped identity', () => {
+    expect(withoutAlias).toEqual(['gjelinahotel'])
+    expect(categorizeQueryByIntent('gjelina', withoutAlias)).not.toBe('brand')
+  })
+
+  test('classifies an approved shorter alias and its modifiers', () => {
+    expect(gjelina).toEqual(['gjelinahotel', 'gjelina'])
+    expect(categorizeQueryByIntent('gjelina', gjelina)).toBe('brand')
+    expect(categorizeQueryByIntent('gjelina venice', gjelina)).toBe('brand')
+    expect(categorizeQueryByIntent('gjelina los angeles', gjelina)).toBe('brand')
+  })
+
+  test('does not brand category words, substrings, or edit-distance neighbors', () => {
+    expect(categorizeQueryByIntent('hotel', gjelina)).not.toBe('brand')
+    expect(categorizeQueryByIntent('venice beach hotels', gjelina)).not.toBe('brand')
+    expect(categorizeQueryByIntent('gelina venice', gjelina)).not.toBe('brand')
+    expect(categorizeQueryByIntent('selina venice', gjelina)).not.toBe('brand')
+    expect(categorizeQueryByIntent('price comparison', ['prime'])).not.toBe('brand')
+    expect(categorizeQueryByIntent('apply online', ['apple'])).not.toBe('brand')
+    expect(categorizeQueryByIntent('roofing leads on demand', demandiq)).not.toBe('brand')
+    expect(categorizeQueryByIntent('demand intelligence', demandiq)).not.toBe('brand')
+  })
+
+  test('lets an operator approve a high-value misspelling explicitly', () => {
+    const withTypoAlias = buildBrandTokens(
+      'gjelinahotel.com',
+      ['Gjelina Hotel', 'Gjelina', 'Gelina'],
+    )
+    expect(categorizeQueryByIntent('gelina venice', withTypoAlias)).toBe('brand')
+  })
+})

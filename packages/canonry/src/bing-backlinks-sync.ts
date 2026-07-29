@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { backlinkDomains, backlinkSummaries, projects, runs } from '@ainyc/canonry-db'
 import { getLinkCounts, getUrlLinks, type BingInboundLink } from '@ainyc/canonry-integration-bing'
-import { BacklinkSources, RunStatuses, computeBacklinkSummaryMetrics, hostOf, type BacklinkSummaryMetrics } from '@ainyc/canonry-contracts'
+import { BacklinkSources, RunStatuses, computeBacklinkSummaryMetrics, hostMatchesDomain, hostOf, type BacklinkSummaryMetrics } from '@ainyc/canonry-contracts'
 import { createLogger } from './logger.js'
 
 const log = createLogger('BingBacklinkSync')
@@ -58,7 +58,7 @@ export function aggregateInboundLinksByDomain(
   for (const link of links) {
     const host = hostOf(link.Url)
     if (!host) continue
-    if (target && (host === target || host.endsWith(`.${target}`))) continue
+    if (target && hostMatchesDomain(host, target)) continue
     let urls = byHost.get(host)
     if (!urls) {
       urls = new Set()

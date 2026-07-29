@@ -1,5 +1,5 @@
 import type { AiReferralTrafficClass, NormalizedTrafficRequest } from '@ainyc/canonry-contracts'
-import { AiReferralTrafficClasses } from '@ainyc/canonry-contracts'
+import { AiReferralTrafficClasses, hostOf } from '@ainyc/canonry-contracts'
 import { classifyAiReferral, classifyAiUserFetch, classifyCrawler, isSelfTraffic } from './classifier.js'
 import type {
   AiReferralEventHourlyBucket,
@@ -66,14 +66,9 @@ function sessionWindowBucket(value: string, windowMs: number): string {
   return new Date(Math.floor(date.getTime() / windowMs) * windowMs).toISOString()
 }
 
-function normalizeHost(host: string | null): string | null {
-  if (!host) return null
-  return host.trim().toLowerCase().replace(/^www\./, '') || null
-}
-
 function sameHost(a: string | null, b: string | null): boolean {
-  const normalizedA = normalizeHost(a)
-  const normalizedB = normalizeHost(b)
+  const normalizedA = hostOf(a)
+  const normalizedB = hostOf(b)
   return !!normalizedA && !!normalizedB && normalizedA === normalizedB
 }
 

@@ -1,5 +1,12 @@
 import { GoogleGenAI, type GenerateContentResponse } from '@google/genai'
-import { AI_ENGINE_SELF_DOMAINS, VERTEX_AI_SEARCH_PROXY_DOMAIN, normalizeServedModel } from '@ainyc/canonry-contracts'
+import {
+  AI_ENGINE_SELF_DOMAINS,
+  VERTEX_AI_SEARCH_PROXY_DOMAIN,
+  hostMatchesAnyDomain,
+  hostOf,
+  normalizeServedModel,
+  registrableDomain,
+} from '@ainyc/canonry-contracts'
 import { withRetry } from './utils.js'
 import type {
   GeminiConfig,
@@ -311,20 +318,18 @@ function extractCitedDomainsFromSources(groundingSources: GroundingSource[]): st
 }
 
 function extractDomainFromTitle(title: string): string | null {
-  const trimmed = title.trim().toLowerCase()
-  if (/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z]{2,})+$/.test(trimmed)) {
-    return trimmed.replace(/^www\./, '')
-  }
-  return null
+  const trimmed = title.trim()
+  return registrableDomain(trimmed) ? hostOf(trimmed) : null
 }
 
 function extractDomainFromUri(uri: string): string | null {
   try {
     const url = new URL(uri)
-    const hostname = url.hostname.replace(/^www\./, '').toLowerCase()
+    const hostname = hostOf(uri)
+    if (!hostname || !registrableDomain(hostname)) return null
 
     // Skip internal AI service domains
-    if (AI_ENGINE_SELF_DOMAINS.chatgpt.some((self) => hostname.includes(self))) {
+    if (hostMatchesAnyDomain(hostname, AI_ENGINE_SELF_DOMAINS.chatgpt)) {
       return null
     }
 
@@ -336,8 +341,7 @@ function extractDomainFromUri(uri: string): string | null {
         try {
           const decoded = decodeURIComponent(redirectPath)
           if (decoded.startsWith('http')) {
-            const realUrl = new URL(decoded)
-            return realUrl.hostname.replace(/^www\./, '')
+            return hostOf(decoded)
           }
         } catch {
           // Not a decodable URL

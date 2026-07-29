@@ -1,5 +1,6 @@
 import { and, ne, notLike, type SQL } from 'drizzle-orm'
 import { backlinkDomains } from '@ainyc/canonry-db'
+import { hostMatchesDomain, hostOf } from '@ainyc/canonry-contracts'
 
 // Crawler / SERP / proxy hosts that show up in the Common Crawl hyperlink graph
 // but don't represent editorial backlinks. Industry tools (Ahrefs, Semrush,
@@ -26,12 +27,11 @@ export const BACKLINK_FILTER_PATTERNS: readonly string[] = [
 ]
 
 export function isFilteredBacklinkDomain(domain: string): boolean {
-  const lower = domain.toLowerCase()
   for (const pattern of BACKLINK_FILTER_PATTERNS) {
     if (pattern.startsWith('*.')) {
       const suffix = pattern.slice(2)
-      if (lower === suffix || lower.endsWith('.' + suffix)) return true
-    } else if (lower === pattern.toLowerCase()) {
+      if (hostMatchesDomain(domain, suffix)) return true
+    } else if (hostOf(domain) === hostOf(pattern)) {
       return true
     }
   }

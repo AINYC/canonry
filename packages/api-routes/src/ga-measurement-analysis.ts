@@ -14,6 +14,7 @@ import {
   gaMeasurementAnalysisWindowSchema,
   gaMeasurementHostScopeSchema,
   hostOf,
+  hostMatchesAnyDomain,
   normalizeUrlPath,
   validationError,
 } from '@ainyc/canonry-contracts'
@@ -138,10 +139,7 @@ function stableUnique(values: string[], normalize: (value: string) => string): s
 }
 
 function matchesHost(value: string, marketingHosts: string[]): boolean {
-  const normalized = normalizeHost(value)
-  return marketingHosts.some(
-    candidate => normalized === candidate || normalized.endsWith(`.${candidate}`),
-  )
+  return hostMatchesAnyDomain(value, marketingHosts)
 }
 
 function normalizeLandingPage(value: string | null | undefined): string {

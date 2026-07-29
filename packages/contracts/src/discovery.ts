@@ -1,7 +1,15 @@
 import { z } from 'zod'
+import {
+  brandKeyFromText,
+  textContainsAnyBrandAlias,
+} from './brand-matching.js'
 import { citationStateSchema } from './run.js'
 import { cosineSimilarity } from './embeddings.js'
-import { hostOf } from './url-normalize.js'
+import {
+  brandLabelFromDomain,
+  hostOf,
+  textContainsDomain,
+} from './url-normalize.js'
 import { locationContextSchema } from './provider.js'
 
 export const discoveryBucketSchema = z.enum(['cited', 'aspirational', 'wasted-surface'])
@@ -252,11 +260,10 @@ export function seedCollapseWarning(input: {
  * per-session brand shares of 37-60% were observed live, and filtering after
  * the count would deflate the retention ratio and false-trip collapse guards.
  *
- * Matching is deliberately conservative:
- *  - brand names match as whole-token phrases (case- and whitespace-insensitive),
- *    plus their squashed form ("AZ Coatings" also matches "azcoatings") when it
- *    is 4+ characters;
- *  - canonical domains match as full hosts with and without "www."
+ * Matching is deliberately conservative and uses the shared identity layer:
+ *  - approved brand names match across case, spacing, and punctuation
+ *    presentation variants, but never spelling guesses or substrings;
+ *  - canonical domains are recognized in prose as full hosts
  *    ("azcoatings.com", "www.azcoatings.com") but NEVER as the bare label —
  *    a business at roofing.com must not drop every "roofing" query;
  *  - competitor brand names are untouched (only the customer's identities are
@@ -268,59 +275,20 @@ export function filterBrandedSeedCandidates(input: {
   brandNames: readonly string[]
   canonicalDomains: readonly string[]
 }): { kept: string[]; droppedBranded: string[] } {
-  const tokens = brandMatchTokens(input.brandNames, input.canonicalDomains)
-  if (tokens.length === 0) return { kept: [...input.candidates], droppedBranded: [] }
+  const brandAliases = input.brandNames.filter(name => brandKeyFromText(name).length >= 3)
+  const domains = input.canonicalDomains.filter(domain => hostOf(domain) !== null)
+  if (brandAliases.length === 0 && domains.length === 0) {
+    return { kept: [...input.candidates], droppedBranded: [] }
+  }
   const kept: string[] = []
   const droppedBranded: string[] = []
   for (const candidate of input.candidates) {
-    const normalized = normalizeForBrandMatch(candidate)
-    if (tokens.some(token => containsWholeToken(normalized, token))) droppedBranded.push(candidate)
+    const branded = textContainsAnyBrandAlias(candidate, brandAliases)
+      || domains.some(domain => textContainsDomain(candidate, domain))
+    if (branded) droppedBranded.push(candidate)
     else kept.push(candidate)
   }
   return { kept, droppedBranded }
-}
-
-function normalizeForBrandMatch(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, ' ').trim()
-}
-
-function brandMatchTokens(brandNames: readonly string[], canonicalDomains: readonly string[]): string[] {
-  const tokens = new Set<string>()
-  for (const name of brandNames) {
-    const normalized = normalizeForBrandMatch(name)
-    // One- or two-character "brands" ("A", "GO") are indistinguishable from
-    // ordinary words; matching them would shred generic queries.
-    if (normalized.length < 3) continue
-    tokens.add(normalized)
-    const squashed = normalized.replace(/[^a-z0-9]/g, '')
-    if (squashed.length >= 4 && squashed !== normalized) tokens.add(squashed)
-  }
-  for (const domain of canonicalDomains) {
-    // Configured domains arrive raw (project upsert/apply store them as
-    // given), so a value like "https://www.Example.com/path" must still
-    // yield the "example.com" token. hostOf is the canonical extractor;
-    // fall back to the normalized raw string for values it cannot parse.
-    const host = hostOf(domain) ?? normalizeForBrandMatch(domain).replace(/^www\./, '')
-    if (!host) continue
-    tokens.add(host)
-    tokens.add(`www.${host}`)
-  }
-  return [...tokens]
-}
-
-/** Whole-token containment: the match must not extend an adjacent alphanumeric
- *  run ("subclassing" never matches "class"; "azcoatings.com/reviews" matches
- *  "azcoatings.com" because "/" is a boundary). */
-function containsWholeToken(normalized: string, token: string): boolean {
-  let index = normalized.indexOf(token)
-  while (index !== -1) {
-    const before = index === 0 ? ' ' : normalized[index - 1]!
-    const afterIndex = index + token.length
-    const after = afterIndex >= normalized.length ? ' ' : normalized[afterIndex]!
-    if (!/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after)) return true
-    index = normalized.indexOf(token, index + 1)
-  }
-  return false
 }
 
 /** Providers able to generate seed candidates (v1: the two whose phrasing
@@ -674,10 +642,10 @@ export function buildHarvestAnchorTerms(corpus: readonly string[], domains: read
     for (const token of significantHarvestTokens(text)) set.add(token)
   }
   for (const domain of domains) {
-    const host = hostOf(domain)
-    if (!host) continue
-    // Drop the public suffix so ".com"/".tech"/".info" never become anchor terms.
-    const label = host.replace(/\.[a-z0-9]+$/, '')
+    // Drop the full public suffix so ".com"/".co.uk"/private suffixes never
+    // become anchor terms.
+    const label = brandLabelFromDomain(domain)
+    if (!label) continue
     for (const token of significantHarvestTokens(label)) set.add(token)
   }
   return [...set]

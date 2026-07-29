@@ -2,7 +2,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { WebSearchTool20250305 } from "@anthropic-ai/sdk/resources/messages/messages.js";
 import {
   AI_ENGINE_SELF_DOMAINS,
+  hostMatchesAnyDomain,
+  hostOf,
   normalizeServedModel,
+  registrableDomain,
 } from "@ainyc/canonry-contracts";
 import { withRetry } from "./utils.js";
 import type {
@@ -374,19 +377,15 @@ function extractCitedDomainsFromSources(
 }
 
 function extractDomainFromUri(uri: string): string | null {
-  try {
-    const url = new URL(uri);
-    const hostname = url.hostname.replace(/^www\./, "").toLowerCase();
-    // Skip internal AI service domains
-    if (
-      AI_ENGINE_SELF_DOMAINS.chatgpt.some((self) => hostname.includes(self))
-    ) {
-      return null;
-    }
-    return hostname;
-  } catch {
+  const hostname = hostOf(uri);
+  if (
+    !hostname ||
+    !registrableDomain(hostname) ||
+    hostMatchesAnyDomain(hostname, AI_ENGINE_SELF_DOMAINS.chatgpt)
+  ) {
     return null;
   }
+  return hostname;
 }
 
 export async function generateText(

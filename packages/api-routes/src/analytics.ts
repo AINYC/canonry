@@ -5,7 +5,7 @@ import {
   AI_PROVIDER_INFRA_DOMAINS, brandLabelFromDomain, categorizeSource, categoryLabel, CitationStates,
   classifySurfaceFromCategory, surfaceClassFromCompetitorType, surfaceClassLabel,
   effectiveDomains, evaluateModelPointerExposure, normalizeProjectDomain, parseWindow, RunKinds, RunStatuses,
-  windowCutoff, validationError,
+  windowCutoff, validationError, hostMatchesAnyDomain,
 } from '@ainyc/canonry-contracts'
 import type {
   BrandMetricsDto, GapAnalysisDto, SourceBreakdownDto,
@@ -726,15 +726,7 @@ interface DomainAgg {
 const ANCHOR_SWEEP_SCAN_LIMIT = 60
 
 function isProviderInfraDomain(uri: string): boolean {
-  try {
-    const host = new URL(uri).hostname.toLowerCase()
-    for (const blocked of AI_PROVIDER_INFRA_DOMAINS) {
-      if (host === blocked || host.endsWith(`.${blocked}`)) return true
-    }
-  } catch {
-    // malformed URI — skip
-  }
-  return false
+  return hostMatchesAnyDomain(uri, AI_PROVIDER_INFRA_DOMAINS)
 }
 
 function parseGroundingSources(rawResponse: string | null): Array<{ uri: string; title: string }> {

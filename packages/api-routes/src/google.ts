@@ -5,6 +5,8 @@ import { gscSearchData, gscUrlInspections, gscCoverageSnapshots, gbpLocations, g
 import {
   validationError, notFound, normalizeProjectDomain, parseWindow, windowCutoff,
   authRequired, forbidden, quotaExceeded, providerError, escapeLikePattern, AppError,
+  hostMatchesDomain,
+  hostOf,
   type GoogleConnectionType,
   gbpDiscoverRequestSchema, gbpLocationSelectionRequestSchema, gbpSyncRequestSchema,
   type GbpLocationDto, type GbpLocationListResponse, type GbpAccountListResponse,
@@ -50,11 +52,9 @@ import {
  * `www.` is stripped on both sides; an unparseable URL is not on the domain.
  */
 function isOnProjectDomain(url: string, projectDomain: string): boolean {
-  try {
-    return new URL(url).hostname.toLowerCase().replace(/^www\./, '') === projectDomain
-  } catch {
-    return false
-  }
+  const urlHost = hostOf(url)
+  const projectHost = hostOf(projectDomain)
+  return urlHost !== null && projectHost !== null && urlHost === projectHost
 }
 
 /**
@@ -81,13 +81,11 @@ function isSitemapOwnedByProperty(sitemapUrl: string, propertyId: string, canoni
 
   if (/^sc-domain:/i.test(propertyId)) {
     const domain = propertyId.slice('sc-domain:'.length).toLowerCase()
-    const host = sitemap.hostname.toLowerCase()
-    return host === domain || host.endsWith(`.${domain}`)
+    return hostMatchesDomain(sitemap.hostname, domain)
   }
 
   if (/^\d+$/.test(propertyId)) {
-    const domain = normalizeProjectDomain(canonicalDomain)
-    return sitemap.hostname.toLowerCase().replace(/^www\./, '') === domain
+    return hostOf(sitemap.hostname) === hostOf(canonicalDomain)
   }
 
   try {

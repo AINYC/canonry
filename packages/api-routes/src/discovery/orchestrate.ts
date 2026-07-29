@@ -2,7 +2,6 @@ import crypto from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { discoveryProbes, discoverySessions, domainClassifications } from '@ainyc/canonry-db'
-import { normalizeDomain } from '../content-data.js'
 import {
   CitationStates,
   computeDedupSimilarityStats,
@@ -16,6 +15,7 @@ import {
   clusterByCosine,
   cosineSimilarity,
   filterBrandedSeedCandidates,
+  hostOf,
   mapWithConcurrency,
   pickClusterRepresentative,
   seedCollapseWarning,
@@ -607,7 +607,7 @@ export function upsertDomainClassifications(
   if (competitorMap.length === 0) return
   const now = new Date().toISOString()
   for (const entry of competitorMap) {
-    const domain = normalizeDomain(entry.domain)
+    const domain = hostOf(entry.domain) ?? ''
     if (!domain) continue
     db.insert(domainClassifications)
       .values({

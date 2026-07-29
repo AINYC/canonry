@@ -17,6 +17,9 @@
     "lint": "eslint src/ test/"
   },
   "dependencies": {
+    "linkify-it": "^6.1.0",
+    "tlds": "^1.261.0",
+    "tldts": "^7.4.9",
     "zod": "^4.1.12"
   }
 }
