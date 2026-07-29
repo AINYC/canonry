@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { Search, X } from 'lucide-react'
-import { brandKeyFromText, brandLabelFromDomain, CitationStates, effectiveDomains, normalizeProjectDomain } from '@ainyc/canonry-contracts'
+import { brandKeyFromText, brandLabelFromDomain, effectiveDomains, normalizeProjectDomain } from '@ainyc/canonry-contracts'
 
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { highlightTermsInText, type HighlightTermGroup } from '../../lib/highlight.js'
@@ -14,6 +14,7 @@ import type { CitationInsightVm, ProjectCommandCenterVm } from '../../view-model
 export interface EvidenceDisplayData {
   citationState: string
   answerMentioned?: boolean
+  mentionState?: string
   visibilityState?: string
   visibilityTransition?: string
   provider: string
@@ -30,6 +31,42 @@ export interface EvidenceDisplayData {
   summary: string
 }
 
+export type MentionResult = 'mentioned' | 'not-mentioned' | 'pending' | 'unknown'
+
+/** Resolve answer-text presence without using citation state as a fallback.
+ * A cited source does not prove that the brand appeared in the answer. */
+export function resolveMentionResult(
+  input: Pick<EvidenceDisplayData, 'answerMentioned' | 'mentionState' | 'visibilityState'>,
+): MentionResult {
+  if (input.mentionState === 'mentioned') return 'mentioned'
+  if (input.mentionState === 'not-mentioned') return 'not-mentioned'
+  if (input.mentionState === 'pending') return 'pending'
+  if (input.visibilityState === 'pending') return 'pending'
+  if (input.visibilityState === 'visible') return 'mentioned'
+  if (input.visibilityState === 'not-visible') return 'not-mentioned'
+  if (input.answerMentioned === true) return 'mentioned'
+  if (input.answerMentioned === false) return 'not-mentioned'
+  return 'unknown'
+}
+
+function mentionResultLabel(result: MentionResult): string {
+  switch (result) {
+    case 'mentioned': return 'mentioned'
+    case 'not-mentioned': return 'not mentioned'
+    case 'pending': return 'mention pending'
+    case 'unknown': return 'no mention result'
+  }
+}
+
+export function resolveMentionTransitionLabel(
+  result: MentionResult,
+  transition?: string,
+): 'first mention' | 'mention lost' | null {
+  if (result === 'mentioned' && transition === 'emerging') return 'first mention'
+  if (result === 'not-mentioned' && transition === 'lost') return 'mention lost'
+  return null
+}
+
 function describeMentionChange(transition?: string, mentionState?: string): string {
   switch (transition) {
     case 'new': return 'First observation'
@@ -41,6 +78,7 @@ function describeMentionChange(transition?: string, mentionState?: string): stri
       // either while the API and DTO migration rolls out.
       if (mentionState === 'mentioned' || mentionState === 'visible') return 'Mentioned in latest run'
       if (mentionState === 'pending') return 'Awaiting first run'
+      if (mentionState == null) return 'No mention result'
       return 'Not mentioned in latest run'
   }
 }
@@ -86,8 +124,9 @@ export function EvidenceDetailModal({
         setAutoFetchedDisplay({
           citationState: snap.citationState,
           answerMentioned: snap.answerMentioned,
+          mentionState: snap.mentionState,
           visibilityState: snap.visibilityState,
-          visibilityTransition: latestHistoryRun.visibilityTransition,
+          visibilityTransition: latestHistoryRun.mentionTransition ?? latestHistoryRun.visibilityTransition,
           provider: snap.provider,
           model: snap.model ?? evidence.model,
           answerSnippet: snap.answerText ?? evidence.answerSnippet,
@@ -113,7 +152,7 @@ export function EvidenceDetailModal({
       citationState: evidence.citationState,
       answerMentioned: evidence.answerMentioned,
       visibilityState: evidence.visibilityState,
-      visibilityTransition: history.at(-1)?.visibilityTransition,
+      visibilityTransition: history.at(-1)?.mentionTransition ?? history.at(-1)?.visibilityTransition,
       provider: evidence.provider,
       model: evidence.model,
       answerSnippet: evidence.answerSnippet,
@@ -128,17 +167,11 @@ export function EvidenceDetailModal({
       summary: evidence.summary,
     }
 
-  const isPending = display.visibilityState === 'pending' || display.citationState === 'pending'
-  const isVisible = isPending
-    ? false
-    : display.visibilityState != null
-      ? display.visibilityState === 'visible'
-      : display.answerMentioned != null
-        ? display.answerMentioned
-        : (display.citationState === CitationStates.cited || display.citationState === 'emerging')
-  const hasMentionData = display.answerMentioned != null
-    || display.visibilityState != null
-    || display.recommendedCompetitors.length > 0
+  const mentionResult = resolveMentionResult(display)
+  const hasMentionData = mentionResult !== 'unknown'
+  const isMentionUnknown = mentionResult === 'unknown'
+  const isPending = mentionResult === 'pending' || isMentionUnknown
+  const isVisible = mentionResult === 'mentioned'
   const hasSourceData = display.citedDomains.length > 0
     || display.groundingSources.length > 0
     || display.evidenceUrls.length > 0
@@ -188,6 +221,7 @@ export function EvidenceDetailModal({
     const requestId = ++activeRequestRef.current
 
     if (idx === -1 || idx === history.length - 1) {
+      setLoadingHistory(false)
       setSelectedRunIdx(-1)
       setHistoricalSnapshot(null)
       setShowFullAnswer(false)
@@ -200,6 +234,7 @@ export function EvidenceDetailModal({
     // Check cache first
     const cacheKey = `${run.runId}::${evidence.query}::${evidence.provider}`
     if (runCache[cacheKey]) {
+      setLoadingHistory(false)
       setHistoricalSnapshot(runCache[cacheKey])
       return
     }
@@ -220,8 +255,9 @@ export function EvidenceDetailModal({
       const data: EvidenceDisplayData = snap ? {
         citationState: snap.citationState,
         answerMentioned: snap.answerMentioned,
+        mentionState: snap.mentionState,
         visibilityState: snap.visibilityState,
-        visibilityTransition: run.visibilityTransition,
+        visibilityTransition: run.mentionTransition ?? run.visibilityTransition,
         provider: snap.provider,
         model: snap.model ?? null,
         answerSnippet: snap.answerText ?? '',
@@ -237,8 +273,9 @@ export function EvidenceDetailModal({
       } : {
         citationState: run.citationState,
         answerMentioned: run.answerMentioned,
+        mentionState: run.mentionState,
         visibilityState: run.visibilityState,
-        visibilityTransition: run.visibilityTransition,
+        visibilityTransition: run.mentionTransition ?? run.visibilityTransition,
         provider: evidence.provider,
         model: run.model ?? null,
         answerSnippet: '',
@@ -260,8 +297,9 @@ export function EvidenceDetailModal({
       setHistoricalSnapshot({
         citationState: run.citationState,
         answerMentioned: run.answerMentioned,
+        mentionState: run.mentionState,
         visibilityState: run.visibilityState,
-        visibilityTransition: run.visibilityTransition,
+        visibilityTransition: run.mentionTransition ?? run.visibilityTransition,
         provider: evidence.provider,
         model: run.model ?? null,
         answerSnippet: '',
@@ -301,18 +339,25 @@ export function EvidenceDetailModal({
         meta: providerMeta,
       }
     }
+    if (isPending) {
+      if (isMentionUnknown) {
+        return {
+          label: 'No mention result',
+          title: 'This run did not report answer-text mention data',
+          meta: providerMeta,
+        }
+      }
+      return {
+        label: 'Pending',
+        title: 'Awaiting first run',
+        meta: 'No provider data yet',
+      }
+    }
     if (display.visibilityTransition === 'lost') {
       return {
         label: 'Mention lost',
         title: 'Your brand no longer appears in this answer',
         meta: providerMeta,
-      }
-    }
-    if (isPending) {
-      return {
-        label: 'Pending',
-        title: 'Awaiting first run',
-        meta: 'No provider data yet',
       }
     }
     return {
@@ -405,12 +450,21 @@ export function EvidenceDetailModal({
               <div className="flex items-center gap-1 overflow-x-auto pb-1">
                 {history.map((run, i) => {
                   const isSelected = (selectedRunIdx === -1 && i === history.length - 1) || selectedRunIdx === i
-                  const visibilityState = run.visibilityState ?? (run.answerMentioned ? 'visible' : 'not-visible')
-                  const visibilityTransition = run.visibilityTransition ?? visibilityState
-                  const dotColor = visibilityState === 'visible'
-                    ? 'bg-positive-400' : visibilityTransition === 'emerging'
-                      ? 'bg-caution-400' : visibilityTransition === 'lost'
-                        ? 'bg-negative-400' : 'bg-mono-600'
+                  const runMentionResult = resolveMentionResult(run)
+                  const visibilityTransition = run.mentionTransition ?? run.visibilityTransition
+                  const mentionTransitionLabel = resolveMentionTransitionLabel(
+                    runMentionResult,
+                    visibilityTransition,
+                  )
+                  const dotColor = runMentionResult === 'unknown' || runMentionResult === 'pending'
+                    ? 'bg-mono-600'
+                    : visibilityTransition === 'lost'
+                      ? 'bg-negative-400'
+                      : visibilityTransition === 'emerging'
+                        ? 'bg-caution-400'
+                        : runMentionResult === 'mentioned'
+                          ? 'bg-positive-400'
+                          : 'bg-mono-600'
                   const date = new Date(run.createdAt)
                   const label = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
                   const modelChanged = Boolean(run.model && i > 0 && history[i - 1]?.model && history[i - 1]!.model !== run.model)
@@ -421,16 +475,23 @@ export function EvidenceDetailModal({
                       className={`evidence-run-dot ${isSelected ? 'evidence-run-dot--selected' : ''}`}
                       onClick={() => { void selectHistoricalRun(i === history.length - 1 ? -1 : i) }}
                       aria-label={[
-                        `Run ${label}: ${visibilityState}`,
+                        `Run ${label}: ${mentionResultLabel(runMentionResult)}`,
+                        mentionTransitionLabel,
                         run.model ? `model ${run.model}` : null,
                         modelChanged ? 'model changed' : null,
                       ].filter(Boolean).join(' \u2014 ')}
                       aria-pressed={isSelected}
                     >
-                      <span
-                        className={`size-2 rounded-full ${dotColor} ${modelChanged ? 'ring-1 ring-caution-300/80 ring-offset-2 ring-offset-bg' : ''}`}
-                        aria-hidden="true"
-                      />
+                      <span className="flex items-center gap-1" aria-hidden="true">
+                        <span
+                          className={`size-2 rounded-full ${dotColor} ${modelChanged ? 'ring-1 ring-caution-300/80 ring-offset-2 ring-offset-bg' : ''}`}
+                        />
+                        {mentionTransitionLabel ? (
+                          <span className="text-[9px] font-semibold uppercase tracking-wide text-secondary">
+                            {mentionTransitionLabel === 'mention lost' ? 'Lost' : 'New'}
+                          </span>
+                        ) : null}
+                      </span>
                       <span className="text-[10px] text-muted">{label}</span>
                     </button>
                   )
@@ -438,7 +499,7 @@ export function EvidenceDetailModal({
               </div>
               {selectedRunIdx >= 0 && selectedRunIdx < history.length && (
                 <p className="text-[11px] text-muted mt-1">
-                  Viewing run from {new Date(history[selectedRunIdx].createdAt).toLocaleString()} {'\u2014'} <span className="capitalize">{history[selectedRunIdx].visibilityState ?? (history[selectedRunIdx].answerMentioned ? 'visible' : 'not-visible')}</span>
+                  Viewing run from {new Date(history[selectedRunIdx].createdAt).toLocaleString()} {'\u2014'} <span>{mentionResultLabel(resolveMentionResult(history[selectedRunIdx]))}</span>
                   <button type="button" className="text-secondary hover:text-strong ml-2" onClick={() => { void selectHistoricalRun(-1) }}>{'\u2190'} Back to latest</button>
                 </p>
               )}
@@ -458,9 +519,13 @@ export function EvidenceDetailModal({
           )}
 
           {/* ── Two-column body ── */}
-          <div className="evidence-modal-body">
+          <div className="evidence-modal-body" aria-busy={loadingHistory}>
             {loadingHistory && (
-              <div className="md:col-span-2 flex items-center justify-center py-12 text-muted text-sm">
+              <div
+                className="md:col-span-2 flex items-center justify-center py-12 text-muted text-sm"
+                role="status"
+                aria-live="polite"
+              >
                 Loading historical run data{'\u2026'}
               </div>
             )}
@@ -527,7 +592,7 @@ export function EvidenceDetailModal({
                   )}
 
                   {/* Action items — only for latest run */}
-                  {!isViewingHistory && evidence.relatedTechnicalSignals.length > 0 && (
+                  {!isViewingHistory && !isPending && evidence.relatedTechnicalSignals.length > 0 && (
                     <div>
                       <p className="drawer-section-label">
                         {isVisible ? 'Why you\'re visible' : 'What to fix'}
@@ -596,7 +661,7 @@ export function EvidenceDetailModal({
                         <div className={`mention-status mention-status--${isVisible ? 'mentioned' : 'not-mentioned'}`}>
                           <span className="mention-status-icon">{isPending ? '…' : isVisible ? '✓' : '—'}</span>
                           <span className="mention-status-label">
-                            {isPending ? 'Pending' : isVisible ? 'Mentioned' : 'Not mentioned'}
+                            {isMentionUnknown ? 'No result' : isPending ? 'Pending' : isVisible ? 'Mentioned' : 'Not mentioned'}
                           </span>
                         </div>
 
@@ -629,8 +694,8 @@ export function EvidenceDetailModal({
                       {(display.recommendedCompetitors.length > 0 || display.competitorDomains.length > 0) && (
                         <div>
                           <div className="drawer-section-label flex items-center">
-                            <span>Competitors in answer</span>
-                            <InfoTooltip text="Competitors detected in the answer text or cited source links. Includes both tracked competitors and names extracted by Canonry." />
+                            <span>Competitor evidence</span>
+                            <InfoTooltip text="Competitors detected in the answer text or source links. Includes both tracked competitors and names extracted by Canonry." />
                           </div>
                           <div className="flex flex-wrap gap-1.5">
                             {(() => {

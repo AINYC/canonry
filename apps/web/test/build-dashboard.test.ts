@@ -500,6 +500,10 @@ test('buildProjectCommandCenter keeps historical-only provider badges on their o
   expect(geminiEvidence?.changeLabel).toBe('First observation')
   expect(geminiEvidence?.runHistory).toHaveLength(1)
   expect(openaiEvidence?.citationState).toBe('not-cited')
+  expect(geminiEvidence?.visibilityState).toBeUndefined()
+  expect(openaiEvidence?.visibilityState).toBeUndefined()
+  expect(geminiEvidence?.visibilityChangeLabel).toBe('No mention result')
+  expect(openaiEvidence?.summary).toMatch(/No answer-text mention result/)
 })
 
 test('buildProjectCommandCenter populates score gauges from the overview DTO when provided', () => {

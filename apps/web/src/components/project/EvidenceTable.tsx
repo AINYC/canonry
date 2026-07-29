@@ -1,6 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
-import { ChevronRight } from 'lucide-react'
-import { CitationStates, brandLabelFromDomain } from '@ainyc/canonry-contracts'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight } from 'lucide-react'
 
 import { Button } from '../ui/button.js'
 import { CitationBadge } from '../shared/CitationBadge.js'
@@ -9,15 +8,23 @@ import {
   DataTableSearch,
   useClientTable,
 } from '../shared/DataTableControls.js'
+import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { ProviderBadge } from '../shared/ProviderBadge.js'
-import { CitationTimeline, mergeProviderHistories } from './CitationTimeline.js'
 import { useDrawer } from '../../hooks/use-drawer.js'
-import { highlightTermsInText, type HighlightTermGroup } from '../../lib/highlight.js'
 import type { CitationInsightVm, CitationState, RunHistoryPoint } from '../../view-models.js'
 
 export type CoverageMode = 'citations' | 'mentions'
-type Density = 'compact' | 'detailed'
+export type EvidenceQuickView =
+  | 'all'
+  | 'changed'
+  | 'mention-lost'
+  | 'citation-lost'
+  | 'never-mentioned'
+  | 'never-cited'
+export type EvidenceSortKey = 'attention' | 'query' | 'mentioned' | 'cited'
+type SortDirection = 'asc' | 'desc'
 type SignalTone = 'positive' | 'negative' | 'neutral' | 'pending'
+type SignalChange = 'gained' | 'lost' | 'none'
 
 export interface EvidenceSignalSummary {
   key: CoverageMode
@@ -25,90 +32,70 @@ export interface EvidenceSignalSummary {
   tone: SignalTone
 }
 
+export interface EvidenceSignalCoverage {
+  present: number
+  observed: number
+  expected: number
+  never: boolean
+}
+
+export interface EvidenceGroupSummary {
+  mentioned: EvidenceSignalCoverage
+  cited: EvidenceSignalCoverage
+  mentionGainedProviders: string[]
+  mentionLostProviders: string[]
+  citationGainedProviders: string[]
+  citationLostProviders: string[]
+  changeLabels: string[]
+  changed: boolean
+  attentionRank: number
+}
+
 interface EvidenceGroup {
   key: string
+  domId: string
   phrase: string
   location: string | null
   items: CitationInsightVm[]
-  rawItems: CitationInsightVm[]
+  summary: EvidenceGroupSummary
 }
 
-const ANSWER_PREVIEW_MAX = 320
+const QUICK_VIEWS: EvidenceQuickView[] = [
+  'all',
+  'changed',
+  'mention-lost',
+  'citation-lost',
+  'never-mentioned',
+  'never-cited',
+]
 
 function evidenceGroupSearchText(group: EvidenceGroup): string {
   return [
     group.phrase,
     group.location ?? '',
-    ...group.rawItems.map((item) => item.provider),
+    ...group.items.flatMap((item) => [item.provider, item.location ?? '']),
   ].join(' ')
 }
 
-/** Map a snapshot to the state value driving the column for the active mode.
- *  In citations mode we read `citationState` directly. In mentions mode we
- *  collapse to `cited`/`not-cited`/`pending` based on `answerMentioned` (with
- *  `visibilityState` as a fallback) so the visualization can reuse the same
- *  dot palette and badge component. */
+/** Project the requested signal onto the shared state vocabulary.
+ * Mention and citation remain independent; neither is inferred from the other. */
 function deriveStateForMode(
-  input: { citationState: string; answerMentioned?: boolean; visibilityState?: string },
+  input: {
+    citationState: string
+    answerMentioned?: boolean
+    mentionState?: string
+    visibilityState?: string
+  },
   mode: CoverageMode,
 ): CitationState {
   if (mode === 'citations') return input.citationState as CitationState
+  if (input.mentionState === 'mentioned') return 'cited'
+  if (input.mentionState === 'not-mentioned') return 'not-cited'
+  if (input.mentionState === 'pending') return 'pending'
   if (input.visibilityState === 'pending') return 'pending'
-  if (input.answerMentioned == null && input.visibilityState == null) return 'pending'
+  if (input.answerMentioned == null && input.mentionState == null && input.visibilityState == null) return 'pending'
   const mentioned = input.visibilityState === 'visible' || input.answerMentioned === true
   return mentioned ? 'cited' : 'not-cited'
-}
-
-function statusLabelForMode(state: CitationState, mode: CoverageMode): string {
-  if (mode === 'mentions') {
-    switch (state) {
-      case 'cited': return 'Mentioned'
-      case 'not-cited': return 'Not Mentioned'
-      case 'pending': return 'Pending'
-      // 'emerging' / 'lost' are collapsed by deriveStateForMode in mentions mode,
-      // but fall through here defensively if a caller passes them anyway.
-      case 'emerging': return 'Newly Mentioned'
-      case 'lost': return 'No Longer Mentioned'
-    }
-  }
-  switch (state) {
-    case 'cited': return 'Cited'
-    case 'not-cited': return 'Not Cited'
-    case 'lost': return 'Lost'
-    case 'emerging': return 'Emerging'
-    case 'pending': return 'Pending'
-  }
-}
-
-function describeChange(history: RunHistoryPoint[], mode: CoverageMode): string {
-  const verb = mode === 'mentions' ? 'mentioned' : 'cited'
-  const verbCap = mode === 'mentions' ? 'Mentioned' : 'Cited'
-  if (history.length === 0) return 'Awaiting first run'
-  if (history.length === 1) return 'First observation'
-  const latest = history[history.length - 1]!.citationState
-  const prev = history[history.length - 2]!.citationState
-  if (prev !== 'cited' && latest === 'cited') return `Newly ${verb}`
-  if (prev === 'cited' && latest !== 'cited') return 'Lost since last run'
-  let streak = 0
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i]!.citationState === latest) streak++
-    else break
-  }
-  if (latest === 'cited') return streak <= 1 ? `${verbCap} in latest run` : `${verbCap} for ${streak} runs`
-  return streak <= 1 ? `Not ${verb} in latest run` : `Not ${verb} across ${streak} runs`
-}
-
-function projectItemsForMode(items: CitationInsightVm[], mode: CoverageMode): CitationInsightVm[] {
-  return items.map(item => projectItemForMode(item, mode))
-}
-
-function projectItemForMode(item: CitationInsightVm, mode: CoverageMode): CitationInsightVm {
-  if (mode === 'citations') return item
-  return {
-    ...item,
-    citationState: deriveStateForMode(item, mode),
-    runHistory: item.runHistory.map(h => ({ ...h, citationState: deriveStateForMode(h, mode) })),
-  }
 }
 
 function historyForMode(history: RunHistoryPoint[], mode: CoverageMode): RunHistoryPoint[] {
@@ -117,6 +104,10 @@ function historyForMode(history: RunHistoryPoint[], mode: CoverageMode): RunHist
     ...point,
     citationState: deriveStateForMode(point, mode),
   }))
+}
+
+function isPresentState(state: string): boolean {
+  return state === 'cited' || state === 'emerging'
 }
 
 function summarizeProjectedSignalHistory(projected: RunHistoryPoint[], mode: CoverageMode): EvidenceSignalSummary {
@@ -128,8 +119,11 @@ function summarizeProjectedSignalHistory(projected: RunHistoryPoint[], mode: Cov
 
   const latest = projected[projected.length - 1]!.citationState
   const previous = projected.length >= 2 ? projected[projected.length - 2]!.citationState : null
-  const isPresent = latest === 'cited' || latest === 'emerging'
-  const wasPresent = previous === 'cited' || previous === 'emerging'
+  if (latest === 'pending') {
+    return { key: mode, label: `${subjectCap} pending`, tone: 'pending' }
+  }
+  const isPresent = isPresentState(latest)
+  const wasPresent = previous !== null && isPresentState(previous)
 
   if (latest === 'lost' || (previous !== null && wasPresent && !isPresent)) {
     return { key: mode, label: `Lost ${subject}`, tone: 'negative' }
@@ -150,434 +144,594 @@ export function summarizeSignalHistory(history: RunHistoryPoint[], mode: Coverag
   return summarizeProjectedSignalHistory(historyForMode(history, mode), mode)
 }
 
-export function summarizeSignalsForItems(items: CitationInsightVm[]): EvidenceSignalSummary[] {
-  const mentionHistory = mergeProviderHistories(projectItemsForMode(items, 'mentions'))
-  const citationHistory = mergeProviderHistories(items)
-  return [
-    summarizeProjectedSignalHistory(mentionHistory, 'mentions'),
-    summarizeProjectedSignalHistory(citationHistory, 'citations'),
-  ]
+function classifySignalChange(history: RunHistoryPoint[], mode: CoverageMode): SignalChange {
+  const projected = historyForMode(history, mode)
+  if (projected.length < 2) return 'none'
+  const scopedLocations = new Set(
+    projected
+      .map(point => point.location)
+      .filter((location): location is string => Boolean(location)),
+  )
+  if (scopedLocations.size > 1) return 'none'
+
+  const latest = projected[projected.length - 1]!.citationState
+  const previous = projected[projected.length - 2]!.citationState
+  if (latest === 'pending' || previous === 'pending') return 'none'
+  const isPresent = isPresentState(latest)
+  const wasPresent = isPresentState(previous)
+
+  if (latest === 'lost' || (wasPresent && !isPresent)) return 'lost'
+  if (latest === 'emerging' || (!wasPresent && isPresent)) return 'gained'
+  return 'none'
 }
 
-function SignalBadge({ signal }: { signal: EvidenceSignalSummary }) {
-  const toneClass = signal.tone === 'positive'
-    ? 'border-positive-500/25 bg-positive-500/10 text-positive'
-    : signal.tone === 'negative'
-      ? 'border-negative-500/25 bg-negative-500/10 text-negative'
-      : signal.tone === 'pending'
-        ? 'border-caution-500/20 bg-caution-500/10 text-caution'
-        : 'border-mono-700/60 bg-bg-elevated/70 text-secondary'
+function coverageForItems(items: CitationInsightVm[], mode: CoverageMode): EvidenceSignalCoverage {
+  const providerItems = items.filter(item => item.provider.trim().length > 0)
+  const currentStates = providerItems.map(item => deriveStateForMode(item, mode))
+  const observedStates = currentStates.filter(state => state !== 'pending')
+  const historicalStates = providerItems.flatMap(item => {
+    const history = historyForMode(item.runHistory, mode)
+    return history.length > 0
+      ? history.map(point => point.citationState)
+      : [deriveStateForMode(item, mode)]
+  }).filter(state => state !== 'pending')
+
+  return {
+    present: observedStates.filter(isPresentState).length,
+    observed: observedStates.length,
+    expected: providerItems.length,
+    never: historicalStates.length > 0 && historicalStates.every(state => !isPresentState(state)),
+  }
+}
+
+function changedProviders(
+  items: CitationInsightVm[],
+  mode: CoverageMode,
+  change: Exclude<SignalChange, 'none'>,
+): string[] {
+  return [...new Set(
+    items
+      .filter(item => item.provider && classifySignalChange(item.runHistory, mode) === change)
+      .map(item => item.provider),
+  )]
+}
+
+function providerLabel(provider: string): string {
+  if (!provider) return 'Unknown engine'
+  const knownLabels: Record<string, string> = {
+    openai: 'OpenAI',
+    gemini: 'Gemini',
+    claude: 'Claude',
+    perplexity: 'Perplexity',
+    local: 'Local',
+    zai: 'Z.ai',
+    deepinfra: 'DeepInfra',
+  }
+  if (knownLabels[provider.toLocaleLowerCase()]) return knownLabels[provider.toLocaleLowerCase()]!
+  return provider.charAt(0).toLocaleUpperCase() + provider.slice(1)
+}
+
+function formatChangeLabel(
+  signal: 'Mention' | 'Citation',
+  direction: 'gained' | 'lost',
+  providers: string[],
+): string | null {
+  if (providers.length === 0) return null
+  if (providers.length === 1) return `${signal} ${direction} on ${providerLabel(providers[0]!)}`
+  return `${signal} ${direction} on ${providers.length} engines`
+}
+
+export function summarizeEvidenceGroup(items: CitationInsightVm[]): EvidenceGroupSummary {
+  const mentioned = coverageForItems(items, 'mentions')
+  const cited = coverageForItems(items, 'citations')
+  const mentionLostProviders = changedProviders(items, 'mentions', 'lost')
+  const citationLostProviders = changedProviders(items, 'citations', 'lost')
+  const mentionGainedProviders = changedProviders(items, 'mentions', 'gained')
+  const citationGainedProviders = changedProviders(items, 'citations', 'gained')
+  const changeLabels = [
+    formatChangeLabel('Mention', 'lost', mentionLostProviders),
+    formatChangeLabel('Citation', 'lost', citationLostProviders),
+    formatChangeLabel('Mention', 'gained', mentionGainedProviders),
+    formatChangeLabel('Citation', 'gained', citationGainedProviders),
+  ].filter((label): label is string => label !== null)
+  const lossCount = mentionLostProviders.length + citationLostProviders.length
+  const gainCount = mentionGainedProviders.length + citationGainedProviders.length
+  const absenceRank = Number(mentioned.observed > 0 && mentioned.present === 0)
+    + Number(cited.observed > 0 && cited.present === 0)
+
+  return {
+    mentioned,
+    cited,
+    mentionGainedProviders,
+    mentionLostProviders,
+    citationGainedProviders,
+    citationLostProviders,
+    changeLabels,
+    changed: changeLabels.length > 0,
+    attentionRank: (lossCount * 100) + (gainCount * 10) + absenceRank,
+  }
+}
+
+function matchesQuickView(summary: EvidenceGroupSummary, view: EvidenceQuickView): boolean {
+  switch (view) {
+    case 'all': return true
+    case 'changed': return summary.changed
+    case 'mention-lost': return summary.mentionLostProviders.length > 0
+    case 'citation-lost': return summary.citationLostProviders.length > 0
+    case 'never-mentioned': return summary.mentioned.never
+    case 'never-cited': return summary.cited.never
+  }
+}
+
+function quickViewLabel(view: EvidenceQuickView): string {
+  switch (view) {
+    case 'all': return 'All'
+    case 'changed': return 'Changed'
+    case 'mention-lost': return 'Mention lost'
+    case 'citation-lost': return 'Citation lost'
+    case 'never-mentioned': return 'No recent mentions'
+    case 'never-cited': return 'No recent citations'
+  }
+}
+
+function coverageSortValue(coverage: EvidenceSignalCoverage): number {
+  return coverage.observed === 0 ? -1 : coverage.present / coverage.observed
+}
+
+function compareGroups(
+  left: EvidenceGroup,
+  right: EvidenceGroup,
+  key: EvidenceSortKey,
+  direction: SortDirection,
+): number {
+  const multiplier = direction === 'asc' ? 1 : -1
+  let comparison = 0
+  switch (key) {
+    case 'query':
+      comparison = left.phrase.localeCompare(right.phrase)
+      break
+    case 'mentioned':
+      comparison = coverageSortValue(left.summary.mentioned) - coverageSortValue(right.summary.mentioned)
+      break
+    case 'cited':
+      comparison = coverageSortValue(left.summary.cited) - coverageSortValue(right.summary.cited)
+      break
+    case 'attention':
+      comparison = left.summary.attentionRank - right.summary.attentionRank
+      break
+  }
+  return comparison === 0
+    ? left.phrase.localeCompare(right.phrase)
+    : comparison * multiplier
+}
+
+function coverageText(coverage: EvidenceSignalCoverage): string {
+  if (coverage.observed === 0) return 'No result'
+  return `${coverage.present} of ${coverage.observed}`
+}
+
+function coverageReportingText(coverage: EvidenceSignalCoverage): string {
+  if (coverage.expected === 0) return 'No results expected'
+  if (coverage.observed < coverage.expected) {
+    return `${coverage.observed} of ${coverage.expected} results reported`
+  }
+  return 'all results reported'
+}
+
+function coverageDescription(coverage: EvidenceSignalCoverage, verb: 'mentioned' | 'cited'): string {
+  if (coverage.observed === 0) return `No engine results have reported whether this query was ${verb}.`
+  const pending = coverage.expected - coverage.observed
+  return `${coverage.present} of ${coverage.observed} reporting engine results ${verb}${pending > 0 ? `; ${pending} awaiting a result` : ''}.`
+}
+
+function currentStatusLabel(state: CitationState, mode: CoverageMode): string {
+  if (state === 'pending') return 'No result'
+  if (mode === 'mentions') return isPresentState(state) ? 'Mentioned' : 'Not mentioned'
+  return isPresentState(state) ? 'Cited' : 'Not cited'
+}
+
+function changeToneClass(label: string): string {
+  if (label.includes('lost')) return 'text-negative'
+  if (label.includes('gained')) return 'text-positive'
+  return 'text-secondary'
+}
+
+function ChangeSummary({ labels }: { labels: string[] }) {
+  if (labels.length === 0) return <span className="text-secondary">No change</span>
+  const visibleLabels = labels.slice(0, 2)
   return (
-    <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium leading-none ${toneClass}`}>
-      {signal.label}
-    </span>
+    <div className="space-y-1">
+      {visibleLabels.map(label => (
+        <p key={label} className={changeToneClass(label)}>{label}</p>
+      ))}
+      {labels.length > visibleLabels.length ? (
+        <p className="text-secondary">+{labels.length - visibleLabels.length} more changes</p>
+      ) : null}
+    </div>
   )
 }
 
-function SignalStrip({ items }: { items: CitationInsightVm[] }) {
+function providerChangeLabels(item: CitationInsightVm): string[] {
+  const provider = providerLabel(item.provider)
+  return [
+    classifySignalChange(item.runHistory, 'mentions') === 'lost' ? `Mention lost on ${provider}` : null,
+    classifySignalChange(item.runHistory, 'citations') === 'lost' ? `Citation lost on ${provider}` : null,
+    classifySignalChange(item.runHistory, 'mentions') === 'gained' ? `Mention gained on ${provider}` : null,
+    classifySignalChange(item.runHistory, 'citations') === 'gained' ? `Citation gained on ${provider}` : null,
+  ].filter((label): label is string => label !== null)
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  current,
+  direction,
+  onSort,
+  infoText,
+}: {
+  label: string
+  sortKey: EvidenceSortKey
+  current: EvidenceSortKey
+  direction: SortDirection
+  onSort: (key: EvidenceSortKey) => void
+  infoText?: string
+}) {
+  const active = current === sortKey
+  const ariaSort = active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'
+  const Icon = active ? (direction === 'asc' ? ArrowUp : ArrowDown) : ArrowUpDown
+
   return (
-    <div className="mt-1 flex flex-wrap gap-1" aria-label="Latest run mention and citation signals">
-      {summarizeSignalsForItems(items).map(signal => (
-        <SignalBadge key={signal.key} signal={signal} />
-      ))}
-    </div>
+    <th scope="col" aria-sort={ariaSort}>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onSort(sortKey)}
+          className="inline-flex min-h-6 items-center gap-1 rounded text-left hover:text-strong focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-mono-400"
+          aria-label={`Sort by ${label}${active ? `, currently ${ariaSort}` : ''}`}
+        >
+          {label}
+          <Icon aria-hidden="true" className={`size-3 ${active ? 'text-secondary' : 'text-faint'}`} />
+        </button>
+        {infoText ? (
+          <span className="inline-flex [&_.info-tooltip-trigger]:size-6 [&_.info-tooltip-trigger]:p-0">
+            <InfoTooltip text={infoText} />
+          </span>
+        ) : null}
+      </div>
+    </th>
   )
 }
 
 export function EvidenceTable({
   evidence,
   compareLocations = false,
-  defaultDensity = 'detailed',
+  hasTrackedQueries = evidence.length > 0,
 }: {
   evidence: CitationInsightVm[]
   compareLocations?: boolean
-  defaultDensity?: Density
+  hasTrackedQueries?: boolean
 }) {
   const { openEvidence } = useDrawer()
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
-  const [mode, setMode] = useState<CoverageMode>('mentions')
-  const [density, setDensity] = useState<Density>(defaultDensity)
+  const [quickView, setQuickView] = useState<EvidenceQuickView>('all')
+  const [sortKey, setSortKey] = useState<EvidenceSortKey>('attention')
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
 
   const groups = useMemo(() => {
-    const map = new Map<string, EvidenceGroup>()
-    for (const rawItem of evidence) {
-      const phrase = rawItem.query
-      const location = compareLocations ? (rawItem.location ?? null) : null
+    const map = new Map<string, Omit<EvidenceGroup, 'summary'>>()
+    for (const item of evidence) {
+      const phrase = item.query
+      const location = compareLocations ? (item.location ?? null) : null
       const key = compareLocations ? JSON.stringify([phrase, location]) : phrase
-      const existing = map.get(key) ?? { key, phrase, location, items: [], rawItems: [] }
-      existing.items.push(projectItemForMode(rawItem, mode))
-      existing.rawItems.push(rawItem)
+      const existing = map.get(key) ?? {
+        key,
+        domId: `query-evidence-${map.size + 1}`,
+        phrase,
+        location,
+        items: [],
+      }
+      existing.items.push(item)
       map.set(key, existing)
     }
-    return [...map.values()]
-  }, [evidence, mode, compareLocations])
+    return [...map.values()].map(group => ({
+      ...group,
+      summary: summarizeEvidenceGroup(group.items),
+    }))
+  }, [evidence, compareLocations])
+
+  const quickViewCounts = useMemo(() => Object.fromEntries(
+    QUICK_VIEWS.map(view => [view, groups.filter(group => matchesQuickView(group.summary, view)).length]),
+  ) as Record<EvidenceQuickView, number>, [groups])
+
+  const displayedGroups = useMemo(() => groups
+    .filter(group => matchesQuickView(group.summary, quickView))
+    .sort((left, right) => compareGroups(left, right, sortKey, sortDirection)),
+  [groups, quickView, sortKey, sortDirection])
+
   const groupsTable = useClientTable({
-    rows: groups,
+    rows: displayedGroups,
     getSearchText: evidenceGroupSearchText,
   })
-  const visibleGroupKeys = groupsTable.rows.map((group) => group.key)
-  const visibleGroupsExpanded = visibleGroupKeys.length > 0
-    && visibleGroupKeys.every((key) => expandedRows.has(key))
 
   const toggleRow = (key: string) => {
-    setExpandedRows(prev => {
-      const next = new Set(prev)
+    setExpandedRows(previous => {
+      const next = new Set(previous)
       if (next.has(key)) next.delete(key)
       else next.add(key)
       return next
     })
   }
 
-  const presenceVerb = mode === 'mentions' ? 'mentioned' : 'cited'
-  const historyHeader = mode === 'mentions' ? 'Mention History' : 'Citation History'
-  const countNoun = mode === 'mentions' ? 'mentioned' : 'cited'
+  const handleSort = (nextKey: EvidenceSortKey) => {
+    groupsTable.setPage(1)
+    if (sortKey === nextKey) {
+      setSortDirection(previous => previous === 'asc' ? 'desc' : 'asc')
+      return
+    }
+    setSortKey(nextKey)
+    setSortDirection(nextKey === 'query' ? 'asc' : 'desc')
+  }
+
+  const handleQuickView = (nextView: EvidenceQuickView) => {
+    setQuickView(nextView)
+    groupsTable.setPage(1)
+  }
+
+  const clearFilters = () => {
+    setQuickView('all')
+    groupsTable.setQuery('')
+  }
+
+  if (groups.length === 0) {
+    return (
+      <div className="rounded-xl border border-default bg-surface/40 px-5 py-8 text-center">
+        <p className="text-sm font-medium text-strong">
+          {hasTrackedQueries ? 'No query evidence matches these filters' : 'No queries tracked yet'}
+        </p>
+        <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-secondary">
+          {hasTrackedQueries
+            ? 'Choose another location or clear the competitor filter to see tracked query evidence.'
+            : 'Add queries with Manage queries, then run a sweep to collect mention and citation evidence.'}
+        </p>
+      </div>
+    )
+  }
+
+  const hasVisibleRows = groupsTable.totalRows > 0
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="text-[10px] uppercase tracking-wide text-muted">View by</span>
-        <div
-          className="inline-flex gap-0.5 p-0.5 rounded-md bg-bg-elevated/60 border border-subtle"
-          role="tablist"
-          aria-label="Citation tracking view"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'mentions'}
-            className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
-              mode === 'mentions'
-                ? 'bg-mono-800 text-heading'
-                : 'text-secondary hover:text-strong'
-            }`}
-            onClick={() => setMode('mentions')}
-          >
-            Mentions
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'citations'}
-            className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
-              mode === 'citations'
-                ? 'bg-mono-800 text-heading'
-                : 'text-secondary hover:text-strong'
-            }`}
-            onClick={() => setMode('citations')}
-          >
-            Citations
-          </button>
-        </div>
-        <span className="text-[11px] text-muted">
-          {mode === 'mentions'
-            ? 'Brand or domain in answer text'
-            : 'Brand or domain in source links'}
-        </span>
-        <div className="ml-auto flex items-center gap-3">
-          <button
-            type="button"
-            className="text-[11px] text-secondary hover:text-strong"
-            onClick={() => {
-              setExpandedRows((previous) => {
-                const next = new Set(previous)
-                for (const key of visibleGroupKeys) {
-                  if (visibleGroupsExpanded) next.delete(key)
-                  else next.add(key)
-                }
-                return next
-              })
-            }}
-          >
-            {visibleGroupsExpanded ? 'Collapse page' : 'Expand page'}
-          </button>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] uppercase tracking-wide text-muted">Density</span>
-            <div
-              className="inline-flex gap-0.5 p-0.5 rounded-md bg-bg-elevated/60 border border-subtle"
-              role="tablist"
-              aria-label="Evidence row density"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={density === 'compact'}
-                className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
-                  density === 'compact'
-                    ? 'bg-mono-800 text-heading'
-                    : 'text-secondary hover:text-strong'
-                }`}
-                onClick={() => setDensity('compact')}
-              >
-                Compact
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={density === 'detailed'}
-                className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
-                  density === 'detailed'
-                    ? 'bg-mono-800 text-heading'
-                    : 'text-secondary hover:text-strong'
-                }`}
-                onClick={() => setDensity('detailed')}
-              >
-                Detailed
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-      {groups.length > 0 ? (
+      <div className="mb-4 grid gap-3">
         <DataTableSearch
           value={groupsTable.query}
           onChange={groupsTable.setQuery}
-          label="Filter tracked queries"
-          placeholder="Filter query, location, or provider"
-          className="mb-3 max-w-md"
+          label="Search queries, locations, or engines"
+          placeholder="Search queries, locations, or engines"
+          className="max-w-xl"
         />
-      ) : null}
-      <div className="evidence-table-wrap">
-        <table className="evidence-table">
-          <thead>
-            <tr>
-              <th style={{ width: '2rem' }} />
-              <th scope="col">Query</th>
-              <th scope="col">Status</th>
-              <th scope="col">{historyHeader}</th>
-              <th scope="col">Latest run</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {groupsTable.rows.map(({ key: groupKey, phrase, location, items, rawItems }) => {
-              const isExpanded = expandedRows.has(groupKey)
-              const states = items.map(i => i.citationState)
-              const aggState: CitationState =
-                states.includes('cited') ? 'cited' :
-                states.includes('emerging') ? 'emerging' :
-                states.includes('lost') ? 'lost' :
-                states.every(s => s === 'pending') ? 'pending' : 'not-cited'
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Query evidence quick views">
+          <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-secondary">Quick views</span>
+          {QUICK_VIEWS.map(view => {
+            const active = quickView === view
+            return (
+              <button
+                key={view}
+                type="button"
+                aria-pressed={active}
+                aria-label={`${quickViewLabel(view)}, ${quickViewCounts[view]} ${
+                  quickViewCounts[view] === 1 ? 'query' : 'queries'
+                }`}
+                onClick={() => handleQuickView(view)}
+                className={`filter-chip inline-flex items-center gap-1.5 text-secondary ${active ? 'filter-chip-active' : ''}`}
+              >
+                {quickViewLabel(view)}
+                <span className={`tabular-nums ${active ? 'text-strong' : 'text-secondary'}`}>
+                  {quickViewCounts[view]}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
 
-              const mergedHistory = mergeProviderHistories(items)
-              const presentCount = items.filter(i => i.citationState === CitationStates.cited || i.citationState === 'emerging').length
-              const aggChangeLabel = describeChange(mergedHistory, mode)
+      {hasVisibleRows ? (
+        <div className="evidence-table-wrap" role="region" aria-label="Query evidence table" tabIndex={0}>
+          <table className="evidence-table min-w-[860px]">
+            <caption className="sr-only">
+              Mention and citation results by tracked query. Counts use the most recent recorded
+              provider and location result available; results may come from different sweeps.
+            </caption>
+            <thead>
+              <tr>
+                <SortHeader
+                  label="Query"
+                  sortKey="query"
+                  current={sortKey}
+                  direction={sortDirection}
+                  onSort={handleSort}
+                />
+                <SortHeader
+                  label="Mentioned"
+                  sortKey="mentioned"
+                  current={sortKey}
+                  direction={sortDirection}
+                  onSort={handleSort}
+                  infoText="Brand or domain appears in the answer text. Counts use each engine and location's most recent recorded result."
+                />
+                <SortHeader
+                  label="Cited"
+                  sortKey="cited"
+                  current={sortKey}
+                  direction={sortDirection}
+                  onSort={handleSort}
+                  infoText="Your domain appears in source links. Counts use each engine and location's most recent recorded result."
+                />
+                <SortHeader
+                  label="Change since previous"
+                  sortKey="attention"
+                  current={sortKey}
+                  direction={sortDirection}
+                  onSort={handleSort}
+                />
+                <th scope="col"><span className="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {groupsTable.rows.map(group => {
+                const isExpanded = expandedRows.has(group.key)
+                const resultCount = group.items.filter(item => item.provider).length
+                const engineCount = new Set(group.items.map(item => item.provider).filter(Boolean)).size
+                const detailId = `${group.domId}-engines`
 
-              return (
-                <Fragment key={groupKey}>
-                  <tr
-                    className="evidence-phrase-row cursor-pointer hover:bg-mono-800/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
-                    onClick={() => toggleRow(groupKey)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        toggleRow(groupKey)
-                      }
-                    }}
-                    tabIndex={0}
-                    role="button"
-                    aria-expanded={isExpanded}
-                  >
-                    <td>
-                      <ChevronRight
-                        size={14}
-                        className={`transition-transform duration-150 text-muted ${isExpanded ? 'rotate-90' : ''}`}
-                      />
-                    </td>
-                    <td className="evidence-query-cell">
-                      <div>
-                        <span className="font-medium text-heading">{phrase}</span>
-                        {compareLocations && (
-                          <span className="ml-2 text-[10px] uppercase tracking-wide text-muted">
-                            {location ?? 'No location'}
-                          </span>
-                        )}
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {items.map(item => (
-                            <ProviderBadge key={item.id} provider={item.provider} />
-                          ))}
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="flex items-center gap-2">
-                        <CitationBadge state={aggState} label={statusLabelForMode(aggState, mode)} />
-                        <span
-                          className="text-[11px] text-muted"
-                          title={`${presentCount} of ${items.length} engines ${countNoun}`}
+                return (
+                  <Fragment key={group.key}>
+                    <tr className="evidence-phrase-row hover:bg-surface">
+                      <th scope="row" className="evidence-query-cell min-w-[16rem] text-left">
+                        <span className="font-medium text-heading">{group.phrase}</span>
+                        <p className="mt-1 text-[11px] text-secondary">
+                          {[
+                            compareLocations ? (group.location ?? 'No location') : null,
+                            resultCount > 0
+                              ? resultCount === engineCount
+                                ? `${engineCount} ${engineCount === 1 ? 'engine' : 'engines'}`
+                                : `${resultCount} results across ${engineCount} ${engineCount === 1 ? 'engine' : 'engines'}`
+                              : 'Awaiting first sweep',
+                          ].filter(Boolean).join(' · ')}
+                        </p>
+                      </th>
+                      <td>
+                        <p
+                          className="font-mono text-sm font-semibold tabular-nums text-strong"
+                          title={coverageDescription(group.summary.mentioned, 'mentioned')}
                         >
-                          {presentCount}/{items.length}
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <CitationTimeline history={mergedHistory} />
-                    </td>
-                    <td className="evidence-change-cell">
-                      <div>{aggChangeLabel}</div>
-                      <SignalStrip items={rawItems} />
-                    </td>
-                    <td />
-                  </tr>
-                  {isExpanded && items.map((item, index) => (
-                    <Fragment key={item.id}>
-                      <tr className="bg-surface">
-                        <td />
-                        <td className="evidence-query-cell pl-5">
-                          <ProviderBadge provider={item.provider} />
-                        </td>
-                        <td>
-                          <CitationBadge
-                            state={item.citationState}
-                            label={statusLabelForMode(item.citationState, mode)}
+                          {coverageText(group.summary.mentioned)}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-secondary">
+                          {coverageReportingText(group.summary.mentioned)}
+                        </p>
+                      </td>
+                      <td>
+                        <p
+                          className="font-mono text-sm font-semibold tabular-nums text-strong"
+                          title={coverageDescription(group.summary.cited, 'cited')}
+                        >
+                          {coverageText(group.summary.cited)}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-secondary">
+                          {coverageReportingText(group.summary.cited)}
+                        </p>
+                      </td>
+                      <td className="evidence-change-cell min-w-[14rem]">
+                        <ChangeSummary labels={group.summary.changeLabels} />
+                      </td>
+                      <td className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          aria-expanded={isExpanded}
+                          aria-controls={detailId}
+                          aria-label={`${isExpanded ? 'Hide' : 'Review'} engines for ${group.phrase}`}
+                          onClick={() => toggleRow(group.key)}
+                          className="whitespace-nowrap"
+                        >
+                          {isExpanded ? 'Hide engines' : 'Review engines'}
+                          <ChevronRight
+                            aria-hidden="true"
+                            className={`ml-1 size-3.5 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
                           />
-                        </td>
-                        <td>
-                          <CitationTimeline history={item.runHistory} />
-                        </td>
-                        <td className="evidence-change-cell">
-                          <div>{describeChange(item.runHistory, mode)}</div>
-                          <SignalStrip items={[rawItems[index] ?? item]} />
-                        </td>
-                        <td>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); void openEvidence(item.id) }}
-                          >
-                            View
-                          </Button>
+                        </Button>
+                      </td>
+                    </tr>
+                    {isExpanded ? (
+                      <tr id={detailId} className="bg-surface-subtle">
+                        <td colSpan={5} className="!p-0">
+                          <div role="list" aria-label={`Engine results for ${group.phrase}`} className="divide-y divide-mono-800/40">
+                            {group.items.map(item => {
+                              const mentionState = deriveStateForMode(item, 'mentions')
+                              const citationState = deriveStateForMode(item, 'citations')
+                              const changes = providerChangeLabels(item)
+                              const canReview = item.provider.length > 0 && item.runHistory.length > 0
+                              return (
+                                <div
+                                  key={item.id}
+                                  role="listitem"
+                                  className="grid min-w-[820px] grid-cols-[minmax(11rem,1fr)_minmax(8rem,.7fr)_minmax(8rem,.7fr)_minmax(14rem,1.2fr)_auto] items-center gap-4 px-4 py-3"
+                                >
+                                  <div className="pl-3">
+                                    {item.provider ? (
+                                      <ProviderBadge provider={item.provider} />
+                                    ) : (
+                                      <span className="text-xs text-secondary">Awaiting first sweep</span>
+                                    )}
+                                    {(item.model || item.location) ? (
+                                      <p className="mt-1 font-mono text-[10px] text-secondary">
+                                        {[item.model, item.location].filter(Boolean).join(' · ')}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                  <div>
+                                    <CitationBadge
+                                      state={mentionState}
+                                      label={currentStatusLabel(mentionState, 'mentions')}
+                                    />
+                                  </div>
+                                  <div>
+                                    <CitationBadge
+                                      state={citationState}
+                                      label={currentStatusLabel(citationState, 'citations')}
+                                    />
+                                  </div>
+                                  <div className="text-xs">
+                                    <ChangeSummary labels={changes} />
+                                  </div>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    type="button"
+                                    disabled={!canReview}
+                                    aria-label={canReview
+                                      ? `Review ${providerLabel(item.provider)} answer for ${group.phrase}`
+                                      : `No answer available for ${group.phrase}`}
+                                    onClick={() => { if (canReview) void openEvidence(item.id) }}
+                                    className="whitespace-nowrap"
+                                  >
+                                    Review answer
+                                  </Button>
+                                </div>
+                              )
+                            })}
+                          </div>
                         </td>
                       </tr>
-                      {density === 'detailed' && (
-                        <tr className="bg-surface-subtle">
-                          <td />
-                          <td colSpan={5} className="px-5 pb-4">
-                            <AnswerInlinePanel
-                              item={item}
-                              onViewFull={() => openEvidence(item.id)}
-                            />
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  ))}
-                </Fragment>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-      {groupsTable.totalRows === 0 && groupsTable.hasQuery ? (
-        <p className="supporting-copy mt-3">No tracked queries match this filter.</p>
-      ) : null}
+                    ) : null}
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-default bg-surface/30 px-5 py-8 text-center">
+          <p className="text-sm font-medium text-strong">No queries match this view</p>
+          <p className="mt-1 text-xs text-secondary">Clear the search or quick view to see all tracked queries.</p>
+          <Button type="button" variant="ghost" size="sm" className="mt-3" onClick={clearFilters}>
+            Clear filters
+          </Button>
+        </div>
+      )}
+
       <DataTablePagination
         page={groupsTable.page}
         pageSize={groupsTable.pageSize}
         visibleRows={groupsTable.rows.length}
         totalRows={groupsTable.totalRows}
         onPageChange={groupsTable.setPage}
-        itemLabel={groupsTable.hasQuery ? 'matches' : 'queries'}
+        itemLabel={groupsTable.hasQuery || quickView !== 'all' ? 'matches' : 'queries'}
       />
       <p className="sr-only" aria-live="polite">
-        Showing {presenceVerb === 'cited' ? 'citations (sources)' : 'mentions (answer text)'}.
+        Showing {groupsTable.totalRows} of {groups.length} tracked queries.
       </p>
-    </div>
-  )
-}
-
-function buildHighlightGroups(item: CitationInsightVm): HighlightTermGroup[] {
-  const brandTerms = (item.matchedTerms ?? []).filter(t => t.trim().length > 2)
-  const competitorTerms = [
-    ...item.competitorDomains.flatMap(d => {
-      const brand = brandLabelFromDomain(d)
-      return brand.length >= 4 ? [brand] : []
-    }),
-    ...(item.recommendedCompetitors ?? []),
-  ].filter(t => t.trim().length > 2)
-  const groups: HighlightTermGroup[] = []
-  if (brandTerms.length > 0) groups.push({ terms: brandTerms, className: 'answer-highlight-brand' })
-  if (competitorTerms.length > 0) groups.push({ terms: competitorTerms, className: 'answer-highlight-competitor' })
-  return groups
-}
-
-function truncate(text: string, max: number): { body: string; truncated: boolean } {
-  if (text.length <= max) return { body: text, truncated: false }
-  const cut = text.lastIndexOf(' ', max)
-  const body = text.slice(0, cut > max - 40 ? cut : max).trimEnd()
-  return { body: `${body}…`, truncated: true }
-}
-
-function AnswerInlinePanel({
-  item,
-  onViewFull,
-}: {
-  item: CitationInsightVm
-  onViewFull: () => void
-}) {
-  const hasAnswer = item.answerSnippet.trim().length > 0
-  if (!hasAnswer) {
-    return (
-      <p className="text-[11px] text-muted italic">
-        No answer text captured for this run.
-      </p>
-    )
-  }
-
-  const { body, truncated } = truncate(item.answerSnippet, ANSWER_PREVIEW_MAX)
-  const groups = buildHighlightGroups(item)
-
-  return (
-    <div className="space-y-2">
-      <p className="text-[10px] uppercase tracking-wide text-muted">Answer text</p>
-      <p className="text-sm leading-relaxed text-neutral">
-        {highlightTermsInText(body, groups)}
-      </p>
-      {(item.citedDomains.length > 0 || item.competitorDomains.length > 0) && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          {item.citedDomains.length > 0 && (
-            <>
-              <span className="text-[10px] uppercase tracking-wide text-muted">Cited:</span>
-              {item.citedDomains.slice(0, 6).map(d => (
-                <span
-                  key={`c-${d}`}
-                  className="rounded-full border border-mono-700/60 bg-bg-elevated/60 px-2 py-0.5 text-[11px] text-neutral"
-                >
-                  {d}
-                </span>
-              ))}
-              {item.citedDomains.length > 6 && (
-                <span className="text-[10px] text-muted">+{item.citedDomains.length - 6} more</span>
-              )}
-            </>
-          )}
-          {item.competitorDomains.length > 0 && (
-            <>
-              <span className="ml-2 text-[10px] uppercase tracking-wide text-negative-500/80">Competitors:</span>
-              {item.competitorDomains.slice(0, 4).map(d => (
-                <span
-                  key={`co-${d}`}
-                  className="rounded-full border border-negative-900/40 bg-negative-950/30 px-2 py-0.5 text-[11px] text-negative"
-                >
-                  {d}
-                </span>
-              ))}
-              {item.competitorDomains.length > 4 && (
-                <span className="text-[10px] text-muted">+{item.competitorDomains.length - 4} more</span>
-              )}
-            </>
-          )}
-        </div>
-      )}
-      {truncated && (
-        <button
-          type="button"
-          className="text-[11px] font-medium text-positive-400 hover:text-positive"
-          onClick={(e) => { e.stopPropagation(); onViewFull() }}
-        >
-          View full answer →
-        </button>
-      )}
     </div>
   )
 }

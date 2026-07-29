@@ -241,22 +241,24 @@ function buildEvidenceFromTimeline(
           const effectiveTransition = effectiveHistory
             ? effectiveHistory.at(-1)!.transition
             : transition
-          const effectiveVisibilityTransition = effectiveHistory
-            ? (effectiveHistory.at(-1)!.visibilityTransition ?? (effectiveHistory.at(-1)!.visibilityState === 'visible' ? 'visible' : 'not-visible'))
-            : (latestRun?.visibilityTransition ?? (latestRun?.visibilityState === 'visible' ? 'visible' : 'not-visible'))
+          const latestMentionHistory = effectiveHistory?.at(-1)
+          const snapVisibilityState = resolveMentionObservation(
+            snap ?? latestMentionHistory ?? latestRun,
+          )
+          const effectiveVisibilityTransition = latestMentionHistory?.mentionTransition
+            ?? latestMentionHistory?.visibilityTransition
+            ?? snapVisibilityState
+            ?? 'unknown'
 
           // When a provider is missing from the latest run, keep showing its last
           // observed provider-level state instead of leaking the query-level
           // transition from another provider into this synthetic badge row.
           const latestProviderState = effectiveHistory?.at(-1)?.citationState
-          const latestProviderVisibilityState = effectiveHistory?.at(-1)?.visibilityState
           const snapState: CitationState = snap
             ? effectiveTransition === 'lost' ? 'lost'
               : effectiveTransition === 'emerging' ? 'emerging'
               : snap.citationState === CitationStates.cited ? 'cited' : 'not-cited'
             : latestProviderState === CitationStates.cited ? 'cited' : 'not-cited'
-          const snapVisibilityState = (snap?.visibilityState as CitationInsightVm['visibilityState'] | undefined)
-            ?? (latestProviderVisibilityState === 'visible' ? 'visible' : latestProviderVisibilityState === 'pending' ? 'pending' : 'not-visible')
 
           const streak = effectiveHistory
             ? computeStreak(effectiveHistory)
@@ -271,6 +273,7 @@ function buildEvidenceFromTimeline(
               runId: r.runId,
               citationState: r.citationState,
               createdAt: r.createdAt,
+              location: r.location ?? null,
               model: runModels.get(r.runId) ?? null,
               answerMentioned: r.answerMentioned,
               visibilityState: r.visibilityState as RunHistoryPoint['visibilityState'] | undefined,
@@ -408,12 +411,33 @@ function computeStreak(runs: { citationState: string }[]): number {
   return streak
 }
 
-function computeVisibilityStreak(runs: { visibilityState?: string }[]): number {
+function resolveMentionObservation(input: {
+  mentionState?: string
+  visibilityState?: string
+  answerMentioned?: boolean
+} | null | undefined): CitationInsightVm['visibilityState'] | undefined {
+  if (!input) return undefined
+  if (input.mentionState === 'mentioned') return 'visible'
+  if (input.mentionState === 'not-mentioned') return 'not-visible'
+  if (input.visibilityState === 'visible' || input.visibilityState === 'not-visible' || input.visibilityState === 'pending') {
+    return input.visibilityState
+  }
+  if (input.answerMentioned === true) return 'visible'
+  if (input.answerMentioned === false) return 'not-visible'
+  return undefined
+}
+
+function computeVisibilityStreak(runs: {
+  mentionState?: string
+  visibilityState?: string
+  answerMentioned?: boolean
+}[]): number {
   if (runs.length === 0) return 0
-  const latest = runs[runs.length - 1]!.visibilityState ?? 'not-visible'
+  const latest = resolveMentionObservation(runs[runs.length - 1])
+  if (latest == null || latest === 'pending') return 0
   let streak = 0
   for (let i = runs.length - 1; i >= 0; i--) {
-    if ((runs[i]!.visibilityState ?? 'not-visible') === latest) streak++
+    if (resolveMentionObservation(runs[i]) === latest) streak++
     else break
   }
   return streak
@@ -439,6 +463,8 @@ function changeLabel(
     case 'not-cited':
     case 'not-visible':
       return streak <= 1 ? `${capitalizeLabel(resolved.negative)} in latest run` : `${capitalizeLabel(resolved.negative)} across ${streak} runs`
+    case 'pending': return 'Awaiting first run'
+    case 'unknown': return 'No mention result'
     default: return transition
   }
 }
@@ -465,8 +491,9 @@ function visibilityEvidenceSummary(
     case 'pending':
       return `"${query}" has been added but no run has been triggered yet.`
     case 'not-visible':
-    default:
       return `Your brand or domain was not mentioned in AI answers for "${query}".`
+    default:
+      return `No answer-text mention result was reported for "${query}".`
   }
 }
 

@@ -2133,8 +2133,8 @@
     @apply border-b border-default bg-bg-elevated/50;
   }
 
-  .evidence-table th {
-    @apply px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-muted;
+  .evidence-table thead th {
+    @apply px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-secondary;
   }
 
   .evidence-table tbody tr {
@@ -2145,7 +2145,8 @@
     @apply border-b-0;
   }
 
-  .evidence-table td {
+  .evidence-table td,
+  .evidence-table tbody th {
     @apply px-4 py-3 text-neutral;
   }
 

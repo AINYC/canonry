@@ -1854,6 +1854,7 @@ function ProjectPageContent({
           runId: r.runId,
           citationState: r.citationState,
           createdAt: r.createdAt,
+          location: r.location ?? null,
           answerMentioned: r.answerMentioned,
           visibilityState: r.visibilityState as RunHistoryPoint['visibilityState'] | undefined,
           visibilityTransition: r.visibilityTransition,
@@ -1867,6 +1868,7 @@ function ProjectPageContent({
           runId: r.runId,
           citationState: r.citationState,
           createdAt: r.createdAt,
+          location: r.location ?? null,
           answerMentioned: r.answerMentioned,
           visibilityState: r.visibilityState as RunHistoryPoint['visibilityState'] | undefined,
           visibilityTransition: r.visibilityTransition,
@@ -2528,6 +2530,7 @@ function ProjectPageContent({
             <EvidenceTable
               evidence={filteredEvidence}
               compareLocations={compareLocations}
+              hasTrackedQueries={visibilityEvidence.length > 0}
             />
           </OverviewDisclosure>
 
