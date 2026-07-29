@@ -1,4 +1,4 @@
-import { brandKeyFromText, textContainsBrandAlias } from './brand-matching.js'
+import { brandKeyFromText, compileBrandAliases, matchedAliasKeys } from './brand-matching.js'
 import type { MentionState, VisibilityState } from './run.js'
 import {
   brandLabelFromDomain,
@@ -34,25 +34,32 @@ export function extractAnswerMentions(
     }
   }
 
-  // Each configured name is an approved identity. Presentation variants
-  // (spacing, punctuation, case) match; spelling guesses do not.
+  // ONE segmentation for every approved identity, names and domain labels
+  // together. Asking per term re-walked the whole answer each time, and this
+  // runs over every stored answer of every property.
+  const candidates: { term: string; key: string }[] = []
   for (const brandName of brandNames) {
     if (!brandName || !brandName.trim()) continue
-    if (textContainsBrandAlias(answerText, brandName)) {
-      matchedTerms.push(brandName)
-    }
+    const key = brandKeyFromText(brandName)
+    if (key) candidates.push({ term: brandName, key })
   }
-
   // A domain is operator-approved project identity too. Its registrable brand
   // label is useful when no display name exists, but only as an exact
   // presentation-normalized match.
   for (const domain of domains) {
     const brand = brandLabelFromDomain(domain)
-    if (
-      brandKeyFromText(brand).length >= MIN_DOMAIN_BRAND_KEY_LENGTH
-      && textContainsBrandAlias(answerText, brand)
-    ) {
-      matchedTerms.push(brand)
+    const key = brandKeyFromText(brand)
+    if (key.length >= MIN_DOMAIN_BRAND_KEY_LENGTH) candidates.push({ term: brand, key })
+  }
+  if (candidates.length > 0) {
+    const hits = matchedAliasKeys(
+      compileBrandAliases(candidates.map(c => c.term)),
+      answerText,
+    )
+    // Push in the original order: names before domain labels, which the
+    // dedup below depends on.
+    for (const candidate of candidates) {
+      if (hits.has(candidate.key)) matchedTerms.push(candidate.term)
     }
   }
 
