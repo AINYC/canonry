@@ -5,10 +5,23 @@ import { Search, X } from 'lucide-react'
 import { brandKeyFromText, brandLabelFromDomain, effectiveDomains, normalizeProjectDomain } from '@ainyc/canonry-contracts'
 
 import { InfoTooltip } from '../shared/InfoTooltip.js'
+import {
+  buildRecentRecordedDays,
+  EvidenceHistoryMatrix,
+} from '../project/EvidenceHistoryMatrix.js'
 import { highlightTermsInText, type HighlightTermGroup } from '../../lib/highlight.js'
 import { safeExternalUrl } from '../../lib/safe-url.js'
-import { fetchRunDetail, type GroundingSource } from '../../api.js'
-import type { CitationInsightVm, ProjectCommandCenterVm } from '../../view-models.js'
+import {
+  fetchRunDetail,
+  fetchTimeline,
+  type ApiTimelineRunEntry,
+  type GroundingSource,
+} from '../../api.js'
+import type {
+  CitationInsightVm,
+  ProjectCommandCenterVm,
+  RunHistoryPoint,
+} from '../../view-models.js'
 
 /** Shape of snapshot data used for display — works for both current evidence and fetched historical snapshots. */
 export interface EvidenceDisplayData {
@@ -83,6 +96,20 @@ function describeMentionChange(transition?: string, mentionState?: string): stri
   }
 }
 
+function toRunHistoryPoint(run: ApiTimelineRunEntry): RunHistoryPoint {
+  return {
+    runId: run.runId,
+    citationState: run.citationState,
+    createdAt: run.createdAt,
+    location: run.location ?? null,
+    answerMentioned: run.answerMentioned,
+    visibilityState: run.visibilityState as RunHistoryPoint['visibilityState'] | undefined,
+    visibilityTransition: run.visibilityTransition,
+    mentionState: run.mentionState as RunHistoryPoint['mentionState'] | undefined,
+    mentionTransition: run.mentionTransition,
+  }
+}
+
 export function EvidenceDetailModal({
   evidence,
   project,
@@ -97,13 +124,54 @@ export function EvidenceDetailModal({
   const [selectedRunIdx, setSelectedRunIdx] = useState(-1) // -1 = latest (current)
   const [historicalSnapshot, setHistoricalSnapshot] = useState<EvidenceDisplayData | null>(null)
   const [loadingHistory, setLoadingHistory] = useState(false)
+  const [scopedHistory, setScopedHistory] = useState<RunHistoryPoint[] | null>(null)
   // Cache fetched run details so re-clicking a dot is instant
   const [runCache, setRunCache] = useState<Record<string, EvidenceDisplayData>>({})
 
   const projectDomains = effectiveDomains(project.project)
   const myDomains = new Set(projectDomains.map(normalizeProjectDomain))
-  const history = evidence.runHistory
+  const historyLocation = evidence.location?.trim() || null
+  const history = scopedHistory ?? evidence.runHistory
   const hasHistory = history.length > 1
+  const recordedDayHistory = buildRecentRecordedDays(
+    history,
+    evidence.location ?? null,
+    12,
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    setScopedHistory(null)
+    if (!historyLocation || !project.project.name || !evidence.provider) return
+
+    fetchTimeline(project.project.name, historyLocation, 20)
+      .then(entries => {
+        if (cancelled) return
+        const entry = entries.find(candidate => candidate.query === evidence.query)
+        if (!entry) return
+        const providerRuns = Object.entries(entry.providerRuns ?? {})
+          .find(([provider]) => provider.toLowerCase() === evidence.provider.toLowerCase())
+          ?.[1]
+        const runs = providerRuns
+          ?? (Object.keys(entry.providerRuns ?? {}).length === 0 ? entry.runs : undefined)
+        if (runs) {
+          setSelectedRunIdx(-1)
+          setHistoricalSnapshot(null)
+          setScopedHistory(runs.map(toRunHistoryPoint))
+        }
+      })
+      .catch(() => { /* Keep the evidence history as a truthful fallback. */ })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    evidence.id,
+    evidence.provider,
+    evidence.query,
+    historyLocation,
+    project.project.name,
+  ])
 
   // Auto-fetch answer text when the initial evidence has none (e.g. latest run
   // was a single-provider run that didn't include this provider).
@@ -443,10 +511,24 @@ export function EvidenceDetailModal({
             </Dialog.Close>
           </div>
 
-          {/* ── Run history timeline ── */}
+          {recordedDayHistory.status !== 'empty' && (
+            <div className="evidence-modal-timeline">
+              <EvidenceHistoryMatrix
+                id={`recorded-day-trend-${evidence.id}`}
+                provider={display.provider || evidence.provider}
+                data={recordedDayHistory}
+                title="Recorded-day trend"
+              />
+            </div>
+          )}
+
+          {/* ── Raw answer snapshot selector ── */}
           {hasHistory && (
             <div className="evidence-modal-timeline">
-              <p className="drawer-section-label mb-1.5">Run history</p>
+              <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <p className="drawer-section-label mb-0">Answer snapshots</p>
+                <p className="text-[10px] text-secondary">Select a run to inspect the exact answer.</p>
+              </div>
               <div className="flex items-center gap-1 overflow-x-auto pb-1">
                 {history.map((run, i) => {
                   const isSelected = (selectedRunIdx === -1 && i === history.length - 1) || selectedRunIdx === i

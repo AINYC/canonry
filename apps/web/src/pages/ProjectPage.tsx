@@ -2422,7 +2422,7 @@ function ProjectPageContent({
             id="evidence-section"
             eyebrow="Tracked coverage"
             title="Query evidence"
-            meta={`${model.queryCounts.total} ${model.queryCounts.total === 1 ? 'query' : 'queries'}`}
+            meta={`${model.queryCounts.total} tracked ${model.queryCounts.total === 1 ? 'query' : 'queries'}`}
             defaultOpen={isEmbed()}
           >
             {!isEmbed() && (

@@ -1,10 +1,13 @@
 import { expect, test } from 'vitest'
 
 import {
-  buildRecentRecordedDays,
   summarizeEvidenceGroup,
   summarizeSignalHistory,
 } from '../src/components/project/EvidenceTable.js'
+import {
+  buildRecentRecordedDays,
+  recentRecordedDateAxis,
+} from '../src/components/project/EvidenceHistoryMatrix.js'
 import type { CitationInsightVm, RunHistoryPoint } from '../src/view-models.js'
 
 function point(overrides: Partial<RunHistoryPoint>): RunHistoryPoint {
@@ -391,5 +394,22 @@ test('recent recorded days retain only the latest bounded date columns', () => {
     '2026-06-04',
     '2026-06-05',
     '2026-06-06',
+  ])
+})
+
+test('recent recorded day axes align engines and preserve missing observation columns', () => {
+  const gemini = buildRecentRecordedDays([
+    point({ runId: 'g1', createdAt: '2026-06-01T00:00:00Z' }),
+    point({ runId: 'g3', createdAt: '2026-06-03T00:00:00Z' }),
+  ], null)
+  const openai = buildRecentRecordedDays([
+    point({ runId: 'o2', createdAt: '2026-06-02T00:00:00Z' }),
+    point({ runId: 'o3', createdAt: '2026-06-03T00:00:00Z' }),
+  ], null)
+
+  expect(recentRecordedDateAxis([gemini, openai])).toEqual([
+    '2026-06-01',
+    '2026-06-02',
+    '2026-06-03',
   ])
 })

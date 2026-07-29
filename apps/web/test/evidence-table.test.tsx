@@ -107,10 +107,11 @@ test('shows mention and citation evidence together with explicit quick views', (
 
   expect(screen.getByRole('columnheader', { name: /Mentioned/ })).toBeTruthy()
   expect(screen.getByRole('columnheader', { name: /Cited/ })).toBeTruthy()
-  expect(screen.getByRole('columnheader', { name: /Change vs prior recorded day/ })).toBeTruthy()
+  expect(screen.getByRole('columnheader', { name: /Change \/ recent history/ })).toBeTruthy()
   expect(screen.queryByRole('tab')).toBeNull()
   expect(screen.queryByText('Density')).toBeNull()
   expect(screen.queryByText('Latest run')).toBeNull()
+  expect(screen.getByText('1–4 of 4 queries with evidence')).toBeTruthy()
 
   expect(screen.getByRole('button', { name: 'Changed vs prior recorded day, 2 queries' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Mention lost vs prior recorded day, 1 query' })).toBeTruthy()
@@ -169,10 +170,13 @@ test('distinguishes missing prior-day history from a stable comparison', () => {
   ]} />)
 
   expect(screen.getByText('No prior-day comparison')).toBeTruthy()
-  expect(screen.getByText('No change in comparable results')).toBeTruthy()
+  expect(screen.getByText('No change')).toBeTruthy()
+  expect(screen.getByRole('button', {
+    name: "No mention or citation changes when each engine's latest result was compared with its most recent result from an earlier UTC day at the same location.",
+  })).toBeTruthy()
 })
 
-test('uses a named disclosure and query-specific answer actions instead of an interactive row', () => {
+test('aligns engine results as table rows with passive history and one detail action', () => {
   const items = [
     evidenceItem({
       id: 'gemini-evidence',
@@ -199,38 +203,24 @@ test('uses a named disclosure and query-specific answer actions instead of an in
   fireEvent.click(disclosure)
   expect(disclosure.getAttribute('aria-expanded')).toBe('true')
 
-  const engines = screen.getByRole('list', { name: 'Engine results for best solar installer' })
-  expect(within(engines).getByText('gemini')).toBeTruthy()
-  expect(within(engines).getByText('openai')).toBeTruthy()
-  const geminiHistoryDisclosure = within(engines).getByRole('button', {
-    name: 'Show recent history for Gemini',
+  const geminiRow = screen.getByRole('row', {
+    name: 'Gemini result for best solar installer',
   })
-  expect(geminiHistoryDisclosure.getAttribute('aria-expanded')).toBe('false')
-  fireEvent.click(geminiHistoryDisclosure)
-  expect(geminiHistoryDisclosure.getAttribute('aria-expanded')).toBe('true')
-  const geminiHistory = within(engines).getByRole('table', {
-    name: 'Recent recorded days for Gemini',
+  const openaiRow = screen.getByRole('row', {
+    name: 'OpenAI result for best solar installer',
   })
-  expect(within(geminiHistory).getByRole('columnheader', { name: /July 1, 2026 UTC/ })).toBeTruthy()
-  expect(within(geminiHistory).getByRole('columnheader', { name: /July 2, 2026 UTC/ })).toBeTruthy()
-  expect(within(geminiHistory).getByRole('rowheader', { name: 'Mentioned' })).toBeTruthy()
-  expect(within(geminiHistory).getByRole('rowheader', { name: 'Cited' })).toBeTruthy()
-  expect(within(geminiHistory).getAllByRole('cell', { name: 'Mentioned' })).toHaveLength(1)
-  expect(within(geminiHistory).getAllByRole('cell', { name: 'Cited' })).toHaveLength(1)
-  expect(within(geminiHistory.closest('figure')!).getByText(/2 recorded days/)).toBeTruthy()
-
-  fireEvent.click(within(engines).getByRole('button', {
-    name: 'Show recent history for OpenAI',
-  }))
-  expect(within(engines).queryByRole('table', {
-    name: 'Recent recorded days for Gemini',
-  })).toBeNull()
-  expect(within(engines).getByRole('table', {
-    name: 'Recent recorded days for OpenAI',
-  })).toBeTruthy()
+  const geminiCells = [...geminiRow.querySelectorAll(':scope > th, :scope > td')]
+  expect(geminiCells).toHaveLength(5)
+  expect(geminiCells[0]?.textContent).toContain('gemini')
+  expect(geminiCells[1]?.textContent).toContain('Mentioned')
+  expect(geminiCells[2]?.textContent).toContain('Cited')
+  expect(within(geminiRow).getByRole('img', { name: /Recent recorded days for Gemini/ })).toBeTruthy()
+  expect(within(openaiRow).getByRole('img', { name: /Recent recorded days for OpenAI/ })).toBeTruthy()
+  expect(within(geminiRow).queryByRole('button', { name: /recent history/i })).toBeNull()
+  expect(screen.getAllByText('Citation gained on Gemini')).toHaveLength(1)
 
   fireEvent.click(screen.getByRole('button', {
-    name: 'Review Gemini answer and run history for best solar installer',
+    name: 'Review Gemini answer and history for best solar installer',
   }))
   expect(drawer.openEvidence).toHaveBeenCalledWith('gemini-evidence')
 })
@@ -261,14 +251,22 @@ test('uses plain text quick views and engine states instead of pill indicators',
   }))
 
   const engineStates = [...container.querySelectorAll('.evidence-signal-value')]
-  const engines = screen.getByRole('list', { name: 'Engine results for independent signal query' })
+  const geminiRow = screen.getByRole('row', {
+    name: 'Gemini result for independent signal query',
+  })
+  const openaiRow = screen.getByRole('row', {
+    name: 'OpenAI result for independent signal query',
+  })
   expect(engineStates).toHaveLength(4)
   expect(engineStates.every(state => !state.className.includes('badge'))).toBe(true)
-  expect(within(engines).getAllByText('Mention status:')).toHaveLength(2)
-  expect(within(engines).getAllByText('Citation status:')).toHaveLength(2)
+  expect(within(geminiRow).getByText('Mention status:')).toBeTruthy()
+  expect(within(openaiRow).getByText('Mention status:')).toBeTruthy()
+  expect(within(geminiRow).getByText('Citation status:')).toBeTruthy()
+  expect(within(openaiRow).getByText('Citation status:')).toBeTruthy()
   expect(engineStates.some(state => state.textContent?.includes('Mentioned'))).toBe(true)
   expect(engineStates.some(state => state.textContent?.includes('Not cited'))).toBe(true)
-  expect(within(engines).getAllByText('No result')).toHaveLength(2)
+  expect([...geminiRow.querySelectorAll('.evidence-signal-value'), ...openaiRow.querySelectorAll('.evidence-signal-value')]
+    .filter(state => state.textContent?.includes('No result'))).toHaveLength(2)
 })
 
 test('search and empty states explain how to recover', () => {
@@ -282,6 +280,34 @@ test('search and empty states explain how to recover', () => {
   expect(screen.getByText('alpha lost query')).toBeTruthy()
 })
 
+test('labels pagination as query locations when comparison expands rows', () => {
+  render(<EvidenceTable
+    evidence={[
+      {
+        ...evidenceItem({
+          id: 'florida',
+          query: 'local dentist',
+          provider: 'gemini',
+          history: [point('r1', 'cited', true)],
+        }),
+        location: 'Florida',
+      },
+      {
+        ...evidenceItem({
+          id: 'michigan',
+          query: 'local dentist',
+          provider: 'gemini',
+          history: [point('r1', 'cited', true)],
+        }),
+        location: 'Michigan',
+      },
+    ]}
+    compareLocations
+  />)
+
+  expect(screen.getByText('1–2 of 2 query locations with evidence')).toBeTruthy()
+})
+
 test('quick-view counts follow the search query and active view', () => {
   render(<EvidenceTable evidence={fixture()} />)
 
@@ -289,21 +315,22 @@ test('quick-view counts follow the search query and active view', () => {
   fireEvent.change(search, { target: { value: 'delta stable' } })
 
   expect(screen.getByRole('button', { name: 'All, 1 query' })).toBeTruthy()
-  expect(screen.getByRole('button', {
+  const changedZero = screen.getByRole('button', {
     name: 'Changed vs prior recorded day, 0 queries',
-  })).toBeTruthy()
-  expect(screen.getByRole('button', {
+  })
+  const mentionLostZero = screen.getByRole('button', {
     name: 'Mention lost vs prior recorded day, 0 queries',
-  })).toBeTruthy()
-  expect(screen.getByRole('button', {
+  })
+  const citationLostZero = screen.getByRole('button', {
     name: 'Citation lost vs prior recorded day, 0 queries',
-  })).toBeTruthy()
+  })
+  expect(changedZero.hasAttribute('disabled')).toBe(true)
+  expect(mentionLostZero.hasAttribute('disabled')).toBe(true)
+  expect(citationLostZero.hasAttribute('disabled')).toBe(true)
   expect(screen.getByText('delta stable query')).toBeTruthy()
 
-  fireEvent.click(screen.getByRole('button', {
-    name: 'Changed vs prior recorded day, 0 queries',
-  }))
-  expect(screen.getByText('No queries match this view')).toBeTruthy()
+  fireEvent.click(changedZero)
+  expect(screen.getByText('delta stable query')).toBeTruthy()
 
   fireEvent.change(search, { target: { value: 'alpha lost' } })
   expect(screen.getByRole('button', { name: 'All, 1 query' })).toBeTruthy()

@@ -2141,12 +2141,20 @@
     @apply border-accent text-heading;
   }
 
+  .evidence-quick-view:disabled {
+    @apply cursor-not-allowed text-faint opacity-50;
+  }
+
   .evidence-quick-view-count {
     @apply font-mono text-[10px] tabular-nums text-secondary;
   }
 
   .evidence-quick-view--active .evidence-quick-view-count {
     @apply text-strong;
+  }
+
+  .evidence-quick-view:disabled .evidence-quick-view-count {
+    @apply text-faint;
   }
 
   .evidence-table-wrap {
@@ -2182,8 +2190,56 @@
     @apply font-medium text-heading;
   }
 
+  .evidence-engine-cell {
+    @apply pl-7 font-normal;
+  }
+
   .evidence-change-cell {
     @apply text-xs text-muted;
+  }
+
+  .evidence-history-cell {
+    @apply py-2;
+  }
+
+  .evidence-history-strip {
+    @apply grid max-w-[15rem] gap-0.5;
+  }
+
+  .evidence-history-strip-track {
+    @apply grid grid-cols-[2.75rem_1fr] items-center gap-1.5;
+  }
+
+  .evidence-history-strip-label {
+    @apply text-[9px] font-medium uppercase tracking-wide text-secondary;
+  }
+
+  .evidence-history-strip-marks {
+    @apply flex min-w-0 items-center justify-end gap-px;
+  }
+
+  .evidence-history-strip-mark {
+    @apply inline-flex h-3.5 w-3 shrink-0 items-center justify-center border-b border-transparent font-mono text-[10px] leading-none;
+  }
+
+  .evidence-history-strip-mark--present {
+    @apply text-positive;
+  }
+
+  .evidence-history-strip-mark--absent {
+    @apply text-muted;
+  }
+
+  .evidence-history-strip-mark--pending {
+    @apply text-faint;
+  }
+
+  .evidence-history-strip-mark--missing {
+    @apply text-transparent;
+  }
+
+  .evidence-history-strip-mark--latest {
+    @apply border-mono-500;
   }
 
   .evidence-signal-value {
