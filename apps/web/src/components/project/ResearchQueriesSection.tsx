@@ -18,6 +18,7 @@ import {
   postApiV1ProjectsByNameResearchRunsMutation,
 } from '@ainyc/canonry-api-client/react-query'
 import { addToast } from '../../lib/toast-store.js'
+import { invalidateProjectQueryDomain } from '../../queries/query-invalidation.js'
 import { safeExternalUrl } from '../../lib/safe-url.js'
 import { Button } from '../ui/button.js'
 import { Card } from '../ui/card.js'
@@ -394,10 +395,5 @@ function toneForResearchQuery(status: ResearchRunQueryDto['status']) {
 }
 
 async function refreshResearch(queryClient: Pick<ReturnType<typeof useQueryClient>, 'invalidateQueries'>) {
-  await queryClient.invalidateQueries({
-    predicate: (query) => {
-      const head = query.queryKey[0] as { _id?: string } | undefined
-      return typeof head?._id === 'string' && head._id.startsWith('getApiV1ProjectsByNameResearchRuns')
-    },
-  })
+  await invalidateProjectQueryDomain(queryClient, 'researchRuns')
 }

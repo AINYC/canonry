@@ -7,27 +7,7 @@ import {
 } from '@ainyc/canonry-api-client/react-query'
 
 import { heyClient } from '../api.js'
-
-/**
- * Invalidate every generated TanStack query whose operation id starts
- * with `prefix`. The SDK-generated `<op>QueryKey` helpers produce flat
- * keys (`[{_id: 'getApiV1...', ...}]`) with no shared hierarchical
- * prefix, so we match by name pattern rather than referencing a
- * legacy `queryKeys.<domain>.project(name)` hierarchy.
- *
- * Caution: prefix matching is greedy — `'getApiV1Projects'` matches the
- * entire project sub-tree (Bing, GSC, GA, etc.), not just the bare
- * `/projects` list. For "exactly the top-level list" use the direct
- * `getApiV1ProjectsQueryKey` helper instead.
- */
-function invalidateByOpPrefix(queryClient: QueryClient, prefix: string) {
-  void queryClient.invalidateQueries({
-    predicate: (query) => {
-      const head = query.queryKey[0] as { _id?: string } | undefined
-      return typeof head?._id === 'string' && head._id.startsWith(prefix)
-    },
-  })
-}
+import { invalidateProjectQueryDomain } from './query-invalidation.js'
 
 /**
  * Map a run kind to the SDK operation prefixes it invalidates.
@@ -58,7 +38,7 @@ export function invalidateQueriesForRunKind(
   // must be invalidated too or the page won't refresh after a run completes.
   // `getApiV1ProjectsByNameRuns` matches only the runs sub-endpoint (there is
   // no per-project run-detail op), so the prefix is safe (not greedy).
-  invalidateByOpPrefix(queryClient, 'getApiV1ProjectsByNameRuns')
+  void invalidateProjectQueryDomain(queryClient, 'runs')
 
   switch (kind) {
     case RunKinds['answer-visibility']:
@@ -92,31 +72,31 @@ export function invalidateQueriesForRunKind(
     case RunKinds['backlink-extract']:
       return
     case RunKinds['site-audit']:
-      invalidateByOpPrefix(queryClient, 'getApiV1ProjectsByNameTechnicalAeo')
+      void invalidateProjectQueryDomain(queryClient, 'technicalAeo')
       return
     case RunKinds['gsc-sync']:
     case RunKinds['inspect-sitemap']:
-      invalidateByOpPrefix(queryClient, 'getApiV1ProjectsByNameGoogleGsc')
+      void invalidateProjectQueryDomain(queryClient, 'gsc')
       return
     case RunKinds['ga-sync']:
-      invalidateByOpPrefix(queryClient, 'getApiV1ProjectsByNameGa')
+      void invalidateProjectQueryDomain(queryClient, 'ga')
       return
     case RunKinds['traffic-sync']:
-      invalidateByOpPrefix(queryClient, 'getApiV1ProjectsByNameGa')
-      invalidateByOpPrefix(queryClient, 'getApiV1ProjectsByNameTraffic')
+      void invalidateProjectQueryDomain(queryClient, 'ga')
+      void invalidateProjectQueryDomain(queryClient, 'traffic')
       return
     case RunKinds['bing-inspect']:
     case RunKinds['bing-inspect-sitemap']:
-      invalidateByOpPrefix(queryClient, 'getApiV1ProjectsByNameBing')
+      void invalidateProjectQueryDomain(queryClient, 'bing')
       return
     case RunKinds['aeo-discover-seed']:
     case RunKinds['aeo-discover-probe']:
       return
     case RunKinds['gbp-sync']:
-      invalidateByOpPrefix(queryClient, 'getApiV1ProjectsByNameGbp')
+      void invalidateProjectQueryDomain(queryClient, 'gbp')
       return
     case RunKinds['ads-sync']:
-      invalidateByOpPrefix(queryClient, 'getApiV1ProjectsByNameAds')
+      void invalidateProjectQueryDomain(queryClient, 'ads')
       return
     default: {
       const _exhaustive: never = kind

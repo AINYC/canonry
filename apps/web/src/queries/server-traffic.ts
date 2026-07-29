@@ -24,6 +24,7 @@ import {
 } from '../api.js'
 import type { MetricTone } from '../view-models.js'
 import { TRAFFIC_STALE_MS } from './query-client.js'
+import { invalidateProjectQueryDomain } from './query-invalidation.js'
 
 export function toneFromTrafficSourceStatus(status: TrafficSourceStatus): MetricTone {
   switch (status) {
@@ -77,12 +78,7 @@ function paramsForFilters(filters: ServerTrafficEventsFilters): {
  * new traffic endpoints landing in the SDK.
  */
 function invalidateTrafficQueries(queryClient: QueryClient) {
-  void queryClient.invalidateQueries({
-    predicate: (query) => {
-      const head = query.queryKey[0] as { _id?: string } | undefined
-      return typeof head?._id === 'string' && head._id.startsWith('getApiV1ProjectsByNameTraffic')
-    },
-  })
+  void invalidateProjectQueryDomain(queryClient, 'traffic')
 }
 
 export function useServerTrafficSources(project: string | null) {

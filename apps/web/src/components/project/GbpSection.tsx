@@ -55,6 +55,7 @@ import {
 import { fetchInsights, heyClient, isEmbed } from '../../api.js'
 import { addToast } from '../../lib/toast-store.js'
 import { getRunTrackerState, subscribeRunTracker, trackRun } from '../../lib/run-tracker-store.js'
+import { invalidateProjectQueryDomain } from '../../queries/query-invalidation.js'
 
 const GBP_ATTENTION_TYPES = new Set<InsightType>([
   'gbp-listing-discrepancy',
@@ -113,12 +114,7 @@ export function GbpSection({ projectName, projectId }: { projectName: string; pr
   })
 
   function invalidateGbp() {
-    void queryClient.invalidateQueries({
-      predicate: (query) => {
-        const head = query.queryKey[0] as { _id?: string } | undefined
-        return typeof head?._id === 'string' && head._id.startsWith('getApiV1ProjectsByNameGbp')
-      },
-    })
+    void invalidateProjectQueryDomain(queryClient, 'gbp')
   }
 
   // GBP sync is an async background run: POST /gbp/sync queues a `gbp-sync` run

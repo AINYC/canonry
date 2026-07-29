@@ -23,6 +23,7 @@ import type { ContentTargetDismissRequest } from '@ainyc/canonry-contracts'
 import { createTrackedBatch, trackRun, type TrackedRunSourceAction } from '../lib/run-tracker-store.js'
 import { addToast } from '../lib/toast-store.js'
 import { invalidateQueriesForRunKind } from './run-invalidations.js'
+import { invalidateProjectQueryDomain } from './query-invalidation.js'
 
 /**
  * Invalidate the two top-level list endpoints. We use exact-key matches
@@ -364,19 +365,9 @@ export function useDismissContentTarget() {
     mutationFn: ({ projectName, body }: { projectName: string; body: ContentTargetDismissRequest }) =>
       dismissContentTarget(projectName, body),
     onSuccess: () => {
-      void queryClient.invalidateQueries({
-        // Match every per-project op-id; the report endpoint is one of many,
-        // and a content-target dismissal affects any DTO derived from
-        // `buildContentTargetRows` (report, /content/targets,
-        // /content/dismissals listing).
-        predicate: (query) =>
-          Array.isArray(query.queryKey)
-          && typeof query.queryKey[0] === 'object'
-          && query.queryKey[0] !== null
-          && '_id' in query.queryKey[0]
-          && typeof (query.queryKey[0] as { _id: unknown })._id === 'string'
-          && (query.queryKey[0] as { _id: string })._id.startsWith('getApiV1ProjectsByName'),
-      })
+      // Match every per-project generated operation; the report endpoint is
+      // one of many DTOs derived from `buildContentTargetRows`.
+      void invalidateProjectQueryDomain(queryClient, 'project')
       void queryClient.invalidateQueries({ predicate: isProjectDetailQuery })
     },
   })
@@ -389,15 +380,7 @@ export function useUndismissContentTarget() {
     mutationFn: ({ projectName, targetRef }: { projectName: string; targetRef: string }) =>
       undismissContentTarget(projectName, targetRef),
     onSuccess: () => {
-      void queryClient.invalidateQueries({
-        predicate: (query) =>
-          Array.isArray(query.queryKey)
-          && typeof query.queryKey[0] === 'object'
-          && query.queryKey[0] !== null
-          && '_id' in query.queryKey[0]
-          && typeof (query.queryKey[0] as { _id: unknown })._id === 'string'
-          && (query.queryKey[0] as { _id: string })._id.startsWith('getApiV1ProjectsByName'),
-      })
+      void invalidateProjectQueryDomain(queryClient, 'project')
       void queryClient.invalidateQueries({ predicate: isProjectDetailQuery })
     },
   })

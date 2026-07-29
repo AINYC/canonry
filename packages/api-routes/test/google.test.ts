@@ -7,7 +7,7 @@ import Fastify from 'fastify'
 import { eq } from 'drizzle-orm'
 import { createClient, migrate, projects, runs, auditLog, gscCoverageSnapshots, gscUrlInspections, gscSearchData, gscDailyTotals } from '@ainyc/canonry-db'
 import { AppError } from '@ainyc/canonry-contracts'
-import { googleRoutes } from '../src/google.js'
+import { googleOAuthSuccessHtml, googleRoutes } from '../src/google.js'
 
 // Reproduce state signing functions from google.ts to verify behavior
 function signState(payload: string, secret: string): string {
@@ -135,6 +135,18 @@ describe('state signing', () => {
   it('rejects garbage input', () => {
     const result = verifySignedState('not-valid-base64url!!!', 'secret')
     expect(result).toBeNull()
+  })
+})
+
+describe('Google OAuth success page', () => {
+  it('notifies and closes an OAuth popup without exposing token data', () => {
+    const html = googleOAuthSuccessHtml('gsc')
+
+    expect(html).toContain('canonry:google-oauth-complete')
+    expect(html).toContain('"connectionType":"gsc"')
+    expect(html).toContain('window.opener.postMessage')
+    expect(html).toContain('window.close()')
+    expect(html).not.toMatch(/accessToken|refreshToken/)
   })
 })
 
