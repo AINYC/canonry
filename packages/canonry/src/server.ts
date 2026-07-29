@@ -2305,6 +2305,8 @@ export async function createServer(opts: {
           app.log.error({ runId, err }, "Job runner failed");
         });
     },
+    getRunnableProviderNames: () =>
+      registry.getAll().map((provider) => provider.adapter.name),
     onProviderUpdate: (
       providerName: string,
       apiKey: string,
@@ -2485,6 +2487,10 @@ export async function createServer(opts: {
       saveConfigPatch(config);
       // Keep in-memory config in sync
       opts.config.telemetry = enabled;
+    },
+    recordOnboardingEvent: (event) => {
+      const { event: eventName, eventId, ...properties } = event;
+      trackEvent(eventName, properties, { source: "dashboard", eventId });
     },
     onCdpConfigure: async (host: string, port: number) => {
       if (!opts.config.cdp) opts.config.cdp = {};

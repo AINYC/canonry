@@ -5,7 +5,8 @@ import path from 'node:path'
 import { getBootstrapEnv } from '@ainyc/canonry-config'
 import { getConfigDir, getConfigPath, configExists, saveConfig } from '../config.js'
 import type { CanonryConfig } from '../config.js'
-import { trackEvent, showFirstRunNotice } from '../telemetry.js'
+import { trackEvent, showFirstRunNotice, isTelemetryEnabled } from '../telemetry.js'
+import { buildSetupState } from '../setup-state.js'
 import { createClient, migrate } from '@ainyc/canonry-db'
 import { apiKeys } from '@ainyc/canonry-db'
 import { CliError, type CliFormat, isMachineFormat } from '../cli-error.js'
@@ -394,16 +395,34 @@ export async function initCommand(opts?: InitOptions): Promise<ResolvedAgentLLM 
     }
   }
 
-  trackEvent('cli.init', {
-    providerCount: providerNames.length,
-    providers: providerNames,
-    setupState: encodeSetupState({
-      hasProvider: !!hasProvider,
-      hasGoogle: !!google,
-      hasAgent: !!agentLLM,
-    }),
-    skillsInstalled: !!skillsSummary,
-  })
+  if (isTelemetryEnabled()) {
+    const postInitSetupState = buildSetupState()
+    trackEvent('cli.init', {
+      providerCount: providerNames.length,
+      providers: providerNames,
+      ...(postInitSetupState
+        ? {
+            setup_state: {
+              ...postInitSetupState,
+              // This snapshot represents a successfully completed init. The
+              // anonymous ID is persisted inside trackEvent immediately after
+              // properties are composed, so override the pre-send read here.
+              is_first_run: false,
+            },
+          }
+        : {}),
+      googleConfigured: !!google,
+      agentConfigured: !!agentLLM,
+      // Deprecated compact field retained while existing telemetry reports
+      // migrate to the structured setup_state object.
+      setupState: encodeLegacySetupState({
+        hasProvider: !!hasProvider,
+        hasGoogle: !!google,
+        hasAgent: !!agentLLM,
+      }),
+      skillsInstalled: !!skillsSummary,
+    })
+  }
 
   return agentLLM
 }
@@ -449,7 +468,7 @@ function buildNextSteps(): string[] {
  * Format: pipe-joined flags (`provider|google` / `provider` / `none`).
  * Sorted alphabetically so the cardinality stays low.
  */
-function encodeSetupState(state: {
+function encodeLegacySetupState(state: {
   hasProvider: boolean
   hasGoogle: boolean
   hasAgent: boolean

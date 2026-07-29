@@ -48,7 +48,7 @@ describe('run lifecycle CLI contract', () => {
       apiUrl: 'http://localhost:0',
       database: dbPath,
       apiKey: apiKeyPlain,
-      providers: {},
+      providers: { gemini: { apiKey: 'test-key' } },
     }
 
     fs.writeFileSync(configPath, JSON.stringify(config), 'utf-8')

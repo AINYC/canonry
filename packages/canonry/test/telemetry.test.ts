@@ -317,6 +317,67 @@ describe('telemetry', () => {
 
   // ── trackEvent ──────────────────────────────────────────────────────
 
+  describe('CLI command telemetry', () => {
+    it('uses stable, privacy-preserving duration buckets', async () => {
+      const { bucketCliCommandDuration } = await import('../src/telemetry.js')
+
+      expect(bucketCliCommandDuration(-1)).toBe('under_1s')
+      expect(bucketCliCommandDuration(999)).toBe('under_1s')
+      expect(bucketCliCommandDuration(1_000)).toBe('1s_to_10s')
+      expect(bucketCliCommandDuration(10_000)).toBe('10s_to_1m')
+      expect(bucketCliCommandDuration(60_000)).toBe('1m_to_5m')
+      expect(bucketCliCommandDuration(300_000)).toBe('5m_to_30m')
+      expect(bucketCliCommandDuration(1_800_000)).toBe('30m_or_more')
+      expect(bucketCliCommandDuration(Number.NaN)).toBe('under_1s')
+    })
+
+    it('emits a terminal event with post-command state and stable error code', async () => {
+      const { trackCliCommandFinished } = await import('../src/telemetry.js')
+      const { saveConfig } = await import('../src/config.js')
+      saveConfig(makeConfig({ anonymousId: crypto.randomUUID() }))
+
+      let capturedBody: string | undefined
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+        capturedBody = init?.body as string
+        return new Response()
+      }
+
+      try {
+        trackCliCommandFinished({
+          command: 'project.create',
+          success: false,
+          durationMs: 12_000,
+          setupState: {
+            provider_count: 1,
+            has_keywords: false,
+            project_count: 1,
+            is_first_run: false,
+          },
+          errorCode: 'PROJECT_CREATE_FAILED',
+        })
+        await new Promise(resolve => setTimeout(resolve, 10))
+
+        const payload = JSON.parse(capturedBody!)
+        expect(payload.event).toBe('cli.command.finished')
+        expect(payload.errorCode).toBe('PROJECT_CREATE_FAILED')
+        expect(payload.properties).toEqual({
+          command: 'project.create',
+          success: false,
+          duration_bucket: '10s_to_1m',
+          setup_state: {
+            provider_count: 1,
+            has_keywords: false,
+            project_count: 1,
+            is_first_run: false,
+          },
+        })
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+  })
+
   describe('trackEvent', () => {
     it('drops known no-provider test-location run telemetry before fetch', async () => {
       const { shouldDropTelemetryEvent, trackEvent } = await import('../src/telemetry.js')
@@ -358,6 +419,23 @@ describe('telemetry', () => {
       try {
         trackEvent('test.event', { foo: 'bar' })
         expect(fetchCalled, 'fetch should not be called when telemetry is disabled').toBe(false)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    it('does not throw when a custom fetch implementation throws synchronously', async () => {
+      const { trackEvent } = await import('../src/telemetry.js')
+      const { saveConfig } = await import('../src/config.js')
+      saveConfig(makeConfig({ anonymousId: crypto.randomUUID() }))
+
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = (() => {
+        throw new Error('synchronous fetch failure')
+      }) as typeof globalThis.fetch
+
+      try {
+        expect(() => trackEvent('test.event')).not.toThrow()
       } finally {
         globalThis.fetch = originalFetch
       }
@@ -419,6 +497,9 @@ describe('telemetry', () => {
 
         expect(capturedBody).toBeTruthy()
         const payload = JSON.parse(capturedBody!)
+        expect(payload.eventId).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+        )
         expect(payload.anonymousId, 'version should be set').toBe(anonId)
         expect(payload.event).toBe('cli.command')
         expect(payload.os).toBe(process.platform)
@@ -434,6 +515,66 @@ describe('telemetry', () => {
         expect(payload.sessionId).toMatch(
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
         )
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    it('assigns a unique eventId to every event for receiver deduplication', async () => {
+      const { trackEvent } = await import('../src/telemetry.js')
+      const { saveConfig } = await import('../src/config.js')
+      saveConfig(makeConfig({ anonymousId: crypto.randomUUID() }))
+
+      const capturedBodies: string[] = []
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+        if (typeof init?.body === 'string') capturedBodies.push(init.body)
+        return new Response()
+      }
+
+      try {
+        trackEvent('test.first')
+        trackEvent('test.second')
+        await new Promise(resolve => setTimeout(resolve, 10))
+
+        const eventIds = capturedBodies.map(body => {
+          const payload = JSON.parse(body) as { eventId: string }
+          return payload.eventId
+        })
+        expect(eventIds).toHaveLength(2)
+        expect(eventIds[0]).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+        )
+        expect(eventIds[1]).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+        )
+        expect(eventIds[0]).not.toBe(eventIds[1])
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    it('preserves a forwarded eventId across delivery retries', async () => {
+      const { trackEvent } = await import('../src/telemetry.js')
+      const { saveConfig } = await import('../src/config.js')
+      saveConfig(makeConfig({ anonymousId: crypto.randomUUID() }))
+
+      const eventId = crypto.randomUUID()
+      let capturedBody: string | undefined
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+        capturedBody = init?.body as string
+        return new Response()
+      }
+
+      try {
+        trackEvent('onboarding.started', { flowVersion: 1 }, {
+          source: 'dashboard',
+          eventId,
+        })
+        await new Promise(resolve => setTimeout(resolve, 10))
+
+        expect(JSON.parse(capturedBody!).eventId).toBe(eventId)
       } finally {
         globalThis.fetch = originalFetch
       }

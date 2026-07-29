@@ -355,6 +355,7 @@ top-level envelope:
 
 ```jsonc
 {
+  "eventId":     "uuid-v4",          // unique per emission; receiver deduplication key
   "anonymousId": "uuid-v4",          // stable per-install (~/.canonry/config.yaml)
   "sessionId":   "uuid-v4",          // per-process — same for every event in one CLI invocation / serve boot
   "source":      "cli",              // surface that emitted; see TelemetrySource below
@@ -379,7 +380,7 @@ top-level envelope:
 | `api` | Reserved — direct API caller (cloud `apps/api`) |
 | `mcp-server` | Reserved — `canonry-mcp` stdio adapter (currently forbidden from emitting per `Surface Priority → Agent & automation design principles → MCP adapter boundary`; emission would require a separate adapter) |
 | `wp-plugin` | Reserved — WordPress plugin |
-| `dashboard` | Reserved — browser-side emissions from `apps/web/` |
+| `dashboard` | Setup milestones forwarded by the local API; still obeys the instance telemetry opt-out |
 | `agent-runtime` | Reserved — Aero / external agent runtimes |
 
 ### Event catalog
@@ -387,10 +388,16 @@ top-level envelope:
 | Event | Properties | Notes |
 |-------|-----------|-------|
 | `cli.command` | `{ command, setup_state? }` | Fires on every CLI invocation except `telemetry` and `--help`. `setup_state: { provider_count, has_keywords, project_count, is_first_run }` lets the receiver cohort by configured / not-configured. |
-| `cli.init` | `{ providerCount, providers }` | Fires from `canonry init`. |
+| `cli.command.finished` | `{ command, success, duration_bucket, setup_state? }` | Terminal command outcome. Command is resolved from the registered command catalog; raw argv and exact duration are never sent. Failures use top-level stable `errorCode`. |
+| `cli.init` | `{ providerCount, providers, setup_state?, googleConfigured, agentConfigured, setupState, skillsInstalled }` | Fires after successful `canonry init`; `setup_state` is the post-init snapshot. `setupState` is retained temporarily for report compatibility. |
 | `cli.upgraded` | `{ fromVersion, toVersion }` | Fires once when the on-disk `lastSeenVersion` differs from the running build. Suppressed on a fresh install (no prior version recorded). |
 | `serve.started` | `{ providerCount, providers }` | Fires after `canonry serve` opens its listener; this is also when `source` flips to `cli-server`. |
 | `run.completed` | `{ status, providerCount, providers, queryCount, durationMs, trigger?, domainHash?, phases?, location? }` | `trigger` mirrors `runs.trigger` (`manual` / `scheduled` / `config-apply`). `domainHash` = SHA-256 of the project canonical hostname (no raw domains stored). `phases = { setup_ms, provider_call_ms, total_ms }`. Failures additionally set top-level `errorCode` from `RunErrorCode` (`PROJECT_NOT_FOUND` / `RUN_NOT_FOUND` / `RUN_NOT_EXECUTABLE` / `NO_PROVIDERS` / `QUOTA_EXCEEDED` / `RUN_CANCELLED` / `PROVIDER_ERROR` / `INTERNAL`). |
+| `onboarding.started` | `{ flowVersion, onboardingSessionId, step, resumed }` | Dashboard setup entry/resume. Accepted through the strict `/api/v1/telemetry/onboarding` contract; the browser-generated top-level `eventId` is preserved across one delivery retry. |
+| `onboarding.step_completed` | `{ flowVersion, onboardingSessionId, step, method, countBucket? }` | Durable setup milestone; raw domains, queries, and keys are forbidden by the contract. |
+| `onboarding.blocked` | `{ flowVersion, onboardingSessionId, step, action, reasonCode }` | Stable recovery point and low-cardinality blocker. |
+| `run.requested` | `{ flowVersion, onboardingSessionId, origin, result, providerCountBucket, queryCountBucket, reasonCode? }` | Setup launch attempt, including synchronous rejection. |
+| `activation.completed` | `{ flowVersion, status, providerCountBucket, queryCountBucket, snapshotCountBucket }` | Emitted once for the first non-probe answer-visibility run that persists at least one snapshot. |
 
 ### Adding a new event
 

@@ -31,12 +31,16 @@ async function renderApp(
   pathname: string,
   options: Parameters<typeof createDashboardFixture>[0] = {},
   mutateFixture?: (fixture: ReturnType<typeof createDashboardFixture>) => void,
+  trackedQueries: Record<string, { query: string }[]> = {},
 ): Promise<string> {
   const fixture = createDashboardFixture(options)
   mutateFixture?.(fixture)
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
+  for (const [projectName, queries] of Object.entries(trackedQueries)) {
+    queryClient.setQueryData(['setup', 'resume-queries', projectName], queries)
+  }
 
   const router = createAppRouter(queryClient, { initialEntries: [pathname] })
   await router.load()
@@ -118,13 +122,68 @@ test('settings route renders the Google Search Console OAuth configuration card'
   expect(html).toMatch(/Configure Google OAuth|Update OAuth app/)
 })
 
-test('setup route renders the step wizard with system check first', async () => {
-  const html = await renderApp('/setup')
+test('setup route skips completed health checks and starts at project creation', async () => {
+  const html = await renderApp('/setup', {}, (fixture) => {
+    fixture.dashboard.projects = []
+    fixture.dashboard.runs = []
+  })
 
   expect(html).toMatch(/Setup/)
-  expect(html).toMatch(/System ready/)
-  expect(html).toMatch(/Step 1 of 5/)
-  expect(html).toMatch(/Continue/)
+  expect(html).toMatch(/Create project/)
+  expect(html).toMatch(/Step 2 of 5/)
+})
+
+test('setup resumes at queries when a durable project has no query basket', async () => {
+  const html = await renderApp('/setup', {}, (fixture) => {
+    fixture.dashboard.projects = [fixture.dashboard.projects[0]!]
+    fixture.dashboard.projects[0]!.queryCounts.total = 0
+    fixture.dashboard.projects[0]!.competitors = []
+    fixture.dashboard.runs = []
+  })
+
+  expect(html).toMatch(/Step 3 of 5/)
+  expect(html).toMatch(/Add queries/)
+})
+
+test('setup blocks progress until API, worker, and provider readiness pass', async () => {
+  const html = await renderApp('/setup', { providerNeedsConfig: true }, (fixture) => {
+    fixture.dashboard.projects = []
+    fixture.dashboard.runs = []
+  })
+
+  expect(html).toMatch(/Launch is blocked until at least one provider is configured/)
+  expect(html).toMatch(/Paste a Gemini key/)
+  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Continue<\/button>/)
+})
+
+test('setup treats a cancelled first run as retryable, not complete', async () => {
+  const html = await renderApp('/setup', {}, (fixture) => {
+    const project = fixture.dashboard.projects[0]!
+    const cancelled = {
+      ...fixture.dashboard.runs.find(run => run.projectId === project.project.id)!,
+      status: 'cancelled' as const,
+      statusDetail: 'Cancelled by operator before provider responses completed.',
+    }
+    fixture.dashboard.projects = [project]
+    project.queryCounts.total = 0
+    fixture.dashboard.runs = [cancelled]
+  }, {
+    'Citypoint Dental NYC': [{ query: 'emergency dentist brooklyn' }],
+  })
+
+  expect(html).toMatch(/Cancelled/)
+  expect(html).toMatch(/Retry visibility sweep/)
+  expect(html).not.toMatch(/Setup is complete/)
+})
+
+test('setup recognizes an older baseline outside the global run window', async () => {
+  const html = await renderApp('/setup', {}, (fixture) => {
+    fixture.dashboard.projects = [fixture.dashboard.projects[0]!]
+    fixture.dashboard.runs = []
+  })
+
+  expect(html).toMatch(/Setup is complete/)
+  expect(html).not.toMatch(/Launch visibility sweep/)
 })
 
 test('overview route renders first-run onboarding guidance when there are no projects', async () => {

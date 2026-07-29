@@ -39,7 +39,7 @@ describe('location CLI commands', () => {
       apiUrl: 'http://localhost:0',
       database: dbPath,
       apiKey: apiKeyPlain,
-      providers: {},
+      providers: { gemini: { apiKey: 'test-key' } },
     }
 
     fs.writeFileSync(configPath, JSON.stringify(config), 'utf-8')
@@ -282,6 +282,7 @@ describe('location CLI commands', () => {
       country: 'US',
       language: 'en',
     })
+    await client.appendQueries('test-proj', ['location query'])
     await client.addLocation('test-proj', { label: 'nyc', city: 'New York', region: 'NY', country: 'US' })
     await client.addLocation('test-proj', { label: 'lax', city: 'Los Angeles', region: 'CA', country: 'US' })
 
@@ -309,6 +310,7 @@ describe('location CLI commands', () => {
       country: 'US',
       language: 'en',
     })
+    await client.appendQueries('test-proj', ['location query'])
     await client.addLocation('test-proj', { label: 'nyc', city: 'New York', region: 'NY', country: 'US' })
     await client.addLocation('test-proj', { label: 'lax', city: 'Los Angeles', region: 'CA', country: 'US' })
     await client.addLocation('test-proj', { label: 'chi', city: 'Chicago', region: 'IL', country: 'US' })
@@ -335,6 +337,7 @@ describe('location CLI commands', () => {
       country: 'US',
       language: 'en',
     })
+    await client.appendQueries('test-proj', ['location query'])
     await client.addLocation('test-proj', { label: 'nyc', city: 'New York', region: 'NY', country: 'US' })
     await client.addLocation('test-proj', { label: 'lax', city: 'Los Angeles', region: 'CA', country: 'US' })
 
@@ -372,6 +375,7 @@ describe('location CLI commands', () => {
       country: 'US',
       language: 'en',
     })
+    await client.appendQueries('test-proj', ['location query'])
 
     const { triggerRun } = await import('../src/commands/run.js')
     await expect(() => triggerRun('test-proj', { allLocations: true })).rejects.toThrow(/No locations configured/)
@@ -399,6 +403,8 @@ describe('location CLI commands', () => {
       country: 'US',
       language: 'en',
     })
+    await client.appendQueries('no-loc', ['location query'])
+    await client.appendQueries('with-loc', ['location query'])
     await client.addLocation('with-loc', { label: 'nyc', city: 'New York', region: 'NY', country: 'US' })
     await client.addLocation('with-loc', { label: 'lax', city: 'Los Angeles', region: 'CA', country: 'US' })
 

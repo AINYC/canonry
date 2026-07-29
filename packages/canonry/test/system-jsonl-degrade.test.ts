@@ -159,6 +159,7 @@ vi.mock('../src/server.js', () => ({
 vi.mock('../src/telemetry.js', () => ({
   trackEvent: vi.fn(),
   setTelemetrySource: vi.fn(),
+  isTelemetryEnabled: vi.fn().mockReturnValue(false),
 }))
 vi.mock('../src/commands/backfill.js', () => ({
   backfillNormalizedPaths: () => ({ updated: 0 }),

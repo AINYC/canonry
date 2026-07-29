@@ -2694,6 +2694,41 @@ export type NotificationDto = {
     updatedAt: string;
 };
 
+export type OnboardingTelemetryEvent = {
+    eventId: string;
+    flowVersion: 1;
+    onboardingSessionId: string;
+    event: 'onboarding.started';
+    step: 'system' | 'project' | 'queries' | 'competitors' | 'run';
+    resumed: boolean;
+} | {
+    eventId: string;
+    flowVersion: 1;
+    onboardingSessionId: string;
+    event: 'onboarding.step_completed';
+    step: 'system' | 'project' | 'queries' | 'competitors' | 'run';
+    method: 'existing' | 'inline' | 'manual' | 'generated' | 'skipped' | 'automatic';
+    countBucket?: '0' | '1' | '2-3' | '4-5' | '6-10' | '11+';
+} | {
+    eventId: string;
+    flowVersion: 1;
+    onboardingSessionId: string;
+    event: 'onboarding.blocked';
+    step: 'system' | 'project' | 'queries' | 'competitors' | 'run';
+    action: 'continue' | 'configure_provider' | 'generate_queries' | 'save' | 'launch_run' | 'retry_run';
+    reasonCode: 'api_unavailable' | 'database_unavailable' | 'worker_unavailable' | 'no_provider' | 'no_queries' | 'provider_save_failed' | 'project_create_failed' | 'query_save_failed' | 'run_rejected' | 'run_failed' | 'run_cancelled' | 'unknown';
+} | {
+    eventId: string;
+    flowVersion: 1;
+    onboardingSessionId: string;
+    event: 'run.requested';
+    origin: 'dashboard_setup';
+    result: 'queued' | 'rejected';
+    providerCountBucket: '0' | '1' | '2-3' | '4-5' | '6-10' | '11+';
+    queryCountBucket: '0' | '1' | '2-3' | '4-5' | '6-10' | '11+';
+    reasonCode?: 'api_unavailable' | 'database_unavailable' | 'worker_unavailable' | 'no_provider' | 'no_queries' | 'provider_save_failed' | 'project_create_failed' | 'query_save_failed' | 'run_rejected' | 'run_failed' | 'run_cancelled' | 'unknown';
+};
+
 export type OrganicEvidenceDto = {
     contractVersion: 'organic-evidence/v1';
     periodDays: 60 | 90;
@@ -4345,6 +4380,10 @@ export type SourceBreakdownDto = {
     runId: string;
     window: '7d' | '30d' | '90d' | 'all';
     limit: number | null;
+};
+
+export type TelemetryEventAcceptedDto = {
+    accepted: boolean;
 };
 
 export type TrafficBackfillResponse = {
@@ -6010,6 +6049,14 @@ export type PostApiV1ProjectsByNameRunsErrors = {
      * Run already in progress.
      */
     409: ErrorEnvelope;
+    /**
+     * Project has no tracked queries.
+     */
+    422: ErrorEnvelope;
+    /**
+     * No runnable answer provider is configured.
+     */
+    503: ErrorEnvelope;
 };
 
 export type PostApiV1ProjectsByNameRunsError = PostApiV1ProjectsByNameRunsErrors[keyof PostApiV1ProjectsByNameRunsErrors];
@@ -7213,6 +7260,31 @@ export type PutApiV1TelemetryResponses = {
 };
 
 export type PutApiV1TelemetryResponse = PutApiV1TelemetryResponses[keyof PutApiV1TelemetryResponses];
+
+export type PostApiV1TelemetryOnboardingData = {
+    body: OnboardingTelemetryEvent;
+    path?: never;
+    query?: never;
+    url: '/api/v1/telemetry/onboarding';
+};
+
+export type PostApiV1TelemetryOnboardingErrors = {
+    /**
+     * Invalid onboarding telemetry event.
+     */
+    400: ErrorEnvelope;
+};
+
+export type PostApiV1TelemetryOnboardingError = PostApiV1TelemetryOnboardingErrors[keyof PostApiV1TelemetryOnboardingErrors];
+
+export type PostApiV1TelemetryOnboardingResponses = {
+    /**
+     * Onboarding milestone accepted.
+     */
+    202: TelemetryEventAcceptedDto;
+};
+
+export type PostApiV1TelemetryOnboardingResponse = PostApiV1TelemetryOnboardingResponses[keyof PostApiV1TelemetryOnboardingResponses];
 
 export type GetApiV1ScreenshotsBySnapshotIdData = {
     body?: never;

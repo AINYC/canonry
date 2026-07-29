@@ -7,6 +7,8 @@ export type ErrorCode =
   | 'FORBIDDEN'
   | 'QUOTA_EXCEEDED'
   | 'PROVIDER_ERROR'
+  | 'NO_PROVIDER'
+  | 'NO_QUERIES'
   | 'RUN_IN_PROGRESS'
   | 'OPERATION_IN_PROGRESS'
   | 'UNSUPPORTED_KIND'
@@ -77,6 +79,24 @@ export function quotaExceeded(metric: string, details?: Record<string, unknown>)
 
 export function providerError(message: string, details?: Record<string, unknown>): AppError {
   return new AppError('PROVIDER_ERROR', message, 502, details)
+}
+
+export function noProvider(projectName: string, details?: Record<string, unknown>): AppError {
+  return new AppError(
+    'NO_PROVIDER',
+    `No runnable answer provider is configured for '${projectName}'. Configure a provider before starting a run.`,
+    503,
+    { projectName, ...details },
+  )
+}
+
+export function noQueries(projectName: string): AppError {
+  return new AppError(
+    'NO_QUERIES',
+    `Project '${projectName}' has no tracked queries. Add at least one query before starting a run.`,
+    422,
+    { projectName },
+  )
 }
 
 export function runInProgress(projectName: string): AppError {

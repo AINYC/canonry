@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { isGhostTelemetryEvent } from '@ainyc/canonry-contracts'
 
 export interface TelemetryCollectorEvent {
+  eventId?: unknown
   anonymousId?: unknown
   sessionId?: unknown
   source?: unknown

@@ -4,9 +4,12 @@ import type { FastifyInstance } from 'fastify'
 import { runs, querySnapshots, queries, projects, parseJsonColumn } from '@ainyc/canonry-db'
 import type { LocationContext } from '@ainyc/canonry-contracts'
 import {
+  type AppError,
   RunKinds,
   RunTriggers,
   runTriggerRequestSchema,
+  noProvider,
+  noQueries,
   unsupportedKind,
   runInProgress,
   runNotCancellable,
@@ -24,6 +27,8 @@ export interface RunRoutesOptions {
   onRunCreated?: (runId: string, projectId: string, providers?: string[], location?: LocationContext | null) => void
   /** Valid provider names from registered adapters — used to reject unknown providers */
   validProviderNames?: string[]
+  /** Current provider registry membership. When omitted, activation preflight is disabled. */
+  getRunnableProviderNames?: () => readonly string[]
 }
 
 export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
@@ -55,16 +60,33 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
     }
     const providers = rawProviders?.length ? rawProviders : undefined
 
+    // Validate activation state before queuing a normal sweep. Probe runs keep
+    // their existing operator-test semantics and are validated by the worker.
+    const shouldPreflight = trigger !== RunTriggers.probe
+      && opts.getRunnableProviderNames !== undefined
+    const trackedRows = (body.queries?.length || shouldPreflight)
+      ? app.db
+          .select({ query: queries.query })
+          .from(queries)
+          .where(eq(queries.projectId, project.id))
+          .all()
+      : []
+    if (shouldPreflight) {
+      const preflightError = answerVisibilityPreflightError({
+        projectName: project.name,
+        projectProviders: project.providers,
+        requestedProviders: providers,
+        runnableProviderNames: opts.getRunnableProviderNames!(),
+        trackedQueryCount: trackedRows.length,
+      })
+      if (preflightError) throw preflightError
+    }
+
     // Validate that body.queries (if provided) is a subset of the project's
     // tracked queries. Untracked queries can't produce snapshots (no queries
     // row to FK against), so we reject up-front rather than silently dropping.
     let scopedQueries: string[] | null = null
     if (body.queries?.length) {
-      const trackedRows = app.db
-        .select({ query: queries.query })
-        .from(queries)
-        .where(eq(queries.projectId, project.id))
-        .all()
       const tracked = new Set(trackedRows.map(r => r.query))
       const missing = body.queries.filter(q => !tracked.has(q))
       if (missing.length) {
@@ -353,8 +375,35 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
 
     const now = new Date().toISOString()
     const results = []
+    const runnableProviderNames = opts.getRunnableProviderNames?.()
 
     for (const project of allProjects) {
+      if (runnableProviderNames) {
+        const trackedQuery = app.db
+          .select({ id: queries.id })
+          .from(queries)
+          .where(eq(queries.projectId, project.id))
+          .limit(1)
+          .get()
+        const preflightError = answerVisibilityPreflightError({
+          projectName: project.name,
+          projectProviders: project.providers,
+          requestedProviders: providers,
+          runnableProviderNames,
+          trackedQueryCount: trackedQuery ? 1 : 0,
+        })
+        if (preflightError) {
+          results.push({
+            projectName: project.name,
+            projectId: project.id,
+            status: 'error',
+            error: preflightError.message,
+            errorCode: preflightError.code,
+          })
+          continue
+        }
+      }
+
       // Resolve default location for this project
       const projectLocations = project.locations
       let resolvedLocation: LocationContext | undefined
@@ -437,6 +486,45 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
     assertProjectScope(request, run.projectId)
     return reply.send(loadRunDetail(app, run))
   })
+}
+
+function answerVisibilityPreflightError(input: {
+  projectName: string
+  projectProviders: readonly string[]
+  requestedProviders?: readonly string[]
+  runnableProviderNames: readonly string[]
+  trackedQueryCount: number
+}): AppError | null {
+  if (input.trackedQueryCount === 0) {
+    return noQueries(input.projectName)
+  }
+
+  const availableProviders = normalizeProviderNames(input.runnableProviderNames)
+  const requestedProviders = normalizeProviderNames(input.requestedProviders ?? [])
+  const projectProviders = normalizeProviderNames(input.projectProviders)
+  const selectedProviders = requestedProviders.length > 0
+    ? requestedProviders
+    : projectProviders.length > 0
+      ? projectProviders
+      : availableProviders
+  const available = new Set(availableProviders)
+  const runnableProviders = selectedProviders.filter(provider => available.has(provider))
+
+  if (runnableProviders.length > 0) return null
+
+  return noProvider(input.projectName, {
+    availableProviders,
+    selectedProviders,
+    selectionSource: requestedProviders.length > 0
+      ? 'request'
+      : projectProviders.length > 0
+        ? 'project'
+        : 'instance',
+  })
+}
+
+function normalizeProviderNames(providerNames: readonly string[]): string[] {
+  return [...new Set(providerNames.map(name => name.trim().toLowerCase()).filter(Boolean))]
 }
 
 function parseRunTriggerRequest(value: unknown) {
