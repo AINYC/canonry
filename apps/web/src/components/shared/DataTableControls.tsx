@@ -7,6 +7,21 @@ function queryTokens(query: string): string[] {
   return query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
 }
 
+function matchesQueryTokens(searchableText: string, tokens: string[]): boolean {
+  const normalizedText = searchableText.toLocaleLowerCase()
+  return tokens.every(token => normalizedText.includes(token))
+}
+
+export function filterClientTableRows<T>(
+  rows: readonly T[],
+  query: string,
+  getSearchText?: (row: T) => string,
+): readonly T[] {
+  const tokens = queryTokens(query)
+  if (tokens.length === 0 || !getSearchText) return rows
+  return rows.filter(row => matchesQueryTokens(getSearchText(row), tokens))
+}
+
 export function urlSearchText(value: string): string {
   let decoded = value
   try {
@@ -71,15 +86,11 @@ export function useClientTable<T>({
 }) {
   const [query, setQueryValue] = useState('')
   const [pageValue, setPageValue] = useState(1)
-  const tokens = useMemo(() => queryTokens(query), [query])
 
-  const filteredRows = useMemo(() => {
-    if (tokens.length === 0 || !getSearchText) return rows
-    return rows.filter((row) => {
-      const searchableText = getSearchText(row).toLocaleLowerCase()
-      return tokens.every((token) => searchableText.includes(token))
-    })
-  }, [getSearchText, rows, tokens])
+  const filteredRows = useMemo(
+    () => filterClientTableRows(rows, query, getSearchText),
+    [getSearchText, query, rows],
+  )
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize))
   const page = Math.min(Math.max(1, pageValue), totalPages)

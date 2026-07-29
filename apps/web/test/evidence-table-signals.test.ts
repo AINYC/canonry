@@ -188,3 +188,113 @@ test('cross-location provider history does not create false sequential changes',
 
   expect(summarizeEvidenceGroup([mixedLocations]).changeLabels).toEqual([])
 })
+
+test.each([
+  ['unscoped to scoped', null, 'florida'],
+  ['scoped to unscoped', 'florida', null],
+] as const)('%s history does not create false changes', (_label, from, to) => {
+  const mixedLocations = item([
+    point({
+      runId: 'r1',
+      createdAt: '2026-06-01T00:00:00Z',
+      citationState: 'cited',
+      answerMentioned: true,
+      location: from,
+    }),
+    point({
+      runId: 'r2',
+      createdAt: '2026-06-02T00:00:00Z',
+      citationState: 'not-cited',
+      answerMentioned: false,
+      location: to,
+    }),
+  ])
+
+  const summary = summarizeEvidenceGroup([mixedLocations])
+  expect(summary.changeLabels).toEqual([])
+  expect(summary.changed).toBe(false)
+  expect(summary.hasPriorDateComparison).toBe(false)
+})
+
+test('a legacy location transition does not suppress later same-location comparisons', () => {
+  const stableScopedHistory = item([
+    point({
+      runId: 'legacy-unscoped',
+      createdAt: '2026-06-01T00:00:00Z',
+      citationState: 'cited',
+      answerMentioned: true,
+      location: null,
+    }),
+    point({
+      runId: 'prior-scoped',
+      createdAt: '2026-06-02T00:00:00Z',
+      citationState: 'cited',
+      answerMentioned: true,
+      location: 'florida',
+    }),
+    point({
+      runId: 'latest-scoped',
+      createdAt: '2026-06-03T00:00:00Z',
+      citationState: 'not-cited',
+      answerMentioned: false,
+      location: 'florida',
+    }),
+  ])
+
+  const summary = summarizeEvidenceGroup([stableScopedHistory])
+  expect(summary.changeLabels).toEqual([
+    'Mention lost on Gemini',
+    'Citation lost on Gemini',
+  ])
+  expect(summary.hasPriorDateComparison).toBe(true)
+})
+
+test('same-day reruns do not create a prior-day comparison', () => {
+  const sameDayNoise = item([
+    point({
+      runId: 'r1',
+      createdAt: '2026-06-02T17:39:00Z',
+      citationState: 'cited',
+      answerMentioned: true,
+    }),
+    point({
+      runId: 'r2',
+      createdAt: '2026-06-02T17:51:00Z',
+      citationState: 'not-cited',
+      answerMentioned: false,
+    }),
+  ])
+
+  const summary = summarizeEvidenceGroup([sameDayNoise])
+  expect(summary.changeLabels).toEqual([])
+  expect(summary.changed).toBe(false)
+  expect(summary.hasPriorDateComparison).toBe(false)
+})
+
+test('latest state is compared with the prior recorded day, not the previous run', () => {
+  const revertedWithinDay = item([
+    point({
+      runId: 'prior-day',
+      createdAt: '2026-06-01T17:39:00Z',
+      citationState: 'not-cited',
+      answerMentioned: false,
+    }),
+    point({
+      runId: 'same-day-gain',
+      createdAt: '2026-06-02T17:39:00Z',
+      citationState: 'cited',
+      answerMentioned: true,
+    }),
+    point({
+      runId: 'same-day-loss',
+      createdAt: '2026-06-02T17:51:00Z',
+      citationState: 'lost',
+      answerMentioned: false,
+    }),
+  ])
+
+  const summary = summarizeEvidenceGroup([revertedWithinDay])
+  expect(summary.changeLabels).toEqual([])
+  expect(summary.changed).toBe(false)
+  expect(summary.hasPriorDateComparison).toBe(true)
+})

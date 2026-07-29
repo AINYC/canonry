@@ -5,6 +5,7 @@ import { Button } from '../ui/button.js'
 import {
   DataTablePagination,
   DataTableSearch,
+  filterClientTableRows,
   useClientTable,
 } from '../shared/DataTableControls.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
@@ -23,7 +24,7 @@ export type EvidenceQuickView =
 export type EvidenceSortKey = 'attention' | 'query' | 'mentioned' | 'cited'
 type SortDirection = 'asc' | 'desc'
 type SignalTone = 'positive' | 'negative' | 'neutral' | 'pending'
-type SignalChange = 'gained' | 'lost' | 'none'
+type SignalChange = 'gained' | 'lost' | 'unchanged' | 'unavailable'
 
 export interface EvidenceSignalSummary {
   key: CoverageMode
@@ -47,6 +48,7 @@ export interface EvidenceGroupSummary {
   citationLostProviders: string[]
   changeLabels: string[]
   changed: boolean
+  hasPriorDateComparison: boolean
   attentionRank: number
 }
 
@@ -109,25 +111,55 @@ function isPresentState(state: string): boolean {
   return state === 'cited' || state === 'emerging'
 }
 
+function comparisonAcrossSweepDates(projected: RunHistoryPoint[]): {
+  latest: RunHistoryPoint | null
+  previous: RunHistoryPoint | null
+} {
+  const datedPoints = projected.map((point, index) => ({
+    index,
+    point,
+    timestamp: Date.parse(point.createdAt),
+  }))
+  if (datedPoints.some(({ timestamp }) => !Number.isFinite(timestamp))) {
+    return { latest: projected.at(-1) ?? null, previous: null }
+  }
+
+  datedPoints.sort((left, right) => left.timestamp - right.timestamp || left.index - right.index)
+  const latestPoint = datedPoints.at(-1) ?? null
+  const latest = latestPoint?.point ?? null
+  if (!latest) return { latest: null, previous: null }
+
+  const latestDate = new Date(latestPoint!.timestamp).toISOString().slice(0, 10)
+  for (let index = datedPoints.length - 2; index >= 0; index -= 1) {
+    const candidate = datedPoints[index]!
+    const candidateDate = new Date(candidate.timestamp).toISOString().slice(0, 10)
+    if (candidateDate !== latestDate) {
+      return { latest, previous: candidate.point }
+    }
+  }
+  return { latest, previous: null }
+}
+
 function summarizeProjectedSignalHistory(projected: RunHistoryPoint[], mode: CoverageMode): EvidenceSignalSummary {
   const subject = mode === 'mentions' ? 'mention' : 'citation'
   const subjectCap = mode === 'mentions' ? 'Mention' : 'Citation'
-  if (projected.length === 0) {
+  const comparison = comparisonAcrossSweepDates(projected)
+  if (!comparison.latest) {
     return { key: mode, label: `${subjectCap} pending`, tone: 'pending' }
   }
 
-  const latest = projected[projected.length - 1]!.citationState
-  const previous = projected.length >= 2 ? projected[projected.length - 2]!.citationState : null
+  const latest = comparison.latest.citationState
+  const previous = comparison.previous?.citationState ?? null
   if (latest === 'pending') {
     return { key: mode, label: `${subjectCap} pending`, tone: 'pending' }
   }
   const isPresent = isPresentState(latest)
   const wasPresent = previous !== null && isPresentState(previous)
 
-  if (latest === 'lost' || (previous !== null && wasPresent && !isPresent)) {
+  if (previous !== null && wasPresent && !isPresent) {
     return { key: mode, label: `Lost ${subject}`, tone: 'negative' }
   }
-  if (latest === 'emerging' || (previous !== null && !wasPresent && isPresent)) {
+  if (previous !== null && !wasPresent && isPresent) {
     return { key: mode, label: `New ${subject}`, tone: 'positive' }
   }
   if (previous === null && isPresent) {
@@ -145,23 +177,23 @@ export function summarizeSignalHistory(history: RunHistoryPoint[], mode: Coverag
 
 function classifySignalChange(history: RunHistoryPoint[], mode: CoverageMode): SignalChange {
   const projected = historyForMode(history, mode)
-  if (projected.length < 2) return 'none'
-  const scopedLocations = new Set(
-    projected
-      .map(point => point.location)
-      .filter((location): location is string => Boolean(location)),
-  )
-  if (scopedLocations.size > 1) return 'none'
+  if (projected.length < 2) return 'unavailable'
 
-  const latest = projected[projected.length - 1]!.citationState
-  const previous = projected[projected.length - 2]!.citationState
-  if (latest === 'pending' || previous === 'pending') return 'none'
+  const comparison = comparisonAcrossSweepDates(projected)
+  if (!comparison.latest || !comparison.previous) return 'unavailable'
+  const locations = new Set(
+    [comparison.previous, comparison.latest].map(point => point.location?.trim() || null),
+  )
+  if (locations.size > 1) return 'unavailable'
+  const latest = comparison.latest.citationState
+  const previous = comparison.previous.citationState
+  if (latest === 'pending' || previous === 'pending') return 'unavailable'
   const isPresent = isPresentState(latest)
   const wasPresent = isPresentState(previous)
 
-  if (latest === 'lost' || (wasPresent && !isPresent)) return 'lost'
-  if (latest === 'emerging' || (!wasPresent && isPresent)) return 'gained'
-  return 'none'
+  if (wasPresent && !isPresent) return 'lost'
+  if (!wasPresent && isPresent) return 'gained'
+  return 'unchanged'
 }
 
 function coverageForItems(items: CitationInsightVm[], mode: CoverageMode): EvidenceSignalCoverage {
@@ -186,7 +218,7 @@ function coverageForItems(items: CitationInsightVm[], mode: CoverageMode): Evide
 function changedProviders(
   items: CitationInsightVm[],
   mode: CoverageMode,
-  change: Exclude<SignalChange, 'none'>,
+  change: Extract<SignalChange, 'gained' | 'lost'>,
 ): string[] {
   return [...new Set(
     items
@@ -235,6 +267,10 @@ export function summarizeEvidenceGroup(items: CitationInsightVm[]): EvidenceGrou
   ].filter((label): label is string => label !== null)
   const lossCount = mentionLostProviders.length + citationLostProviders.length
   const gainCount = mentionGainedProviders.length + citationGainedProviders.length
+  const hasPriorDateComparison = items.some(item => (
+    classifySignalChange(item.runHistory, 'mentions') !== 'unavailable'
+    || classifySignalChange(item.runHistory, 'citations') !== 'unavailable'
+  ))
   const absenceRank = Number(mentioned.observed > 0 && mentioned.present === 0)
     + Number(cited.observed > 0 && cited.present === 0)
 
@@ -247,6 +283,7 @@ export function summarizeEvidenceGroup(items: CitationInsightVm[]): EvidenceGrou
     citationLostProviders,
     changeLabels,
     changed: changeLabels.length > 0,
+    hasPriorDateComparison,
     attentionRank: (lossCount * 100) + (gainCount * 10) + absenceRank,
   }
 }
@@ -265,11 +302,20 @@ function matchesQuickView(summary: EvidenceGroupSummary, view: EvidenceQuickView
 function quickViewLabel(view: EvidenceQuickView): string {
   switch (view) {
     case 'all': return 'All'
-    case 'changed': return 'Changed'
+    case 'changed': return 'Changed vs prior recorded day'
     case 'mention-lost': return 'Mention lost'
     case 'citation-lost': return 'Citation lost'
     case 'never-mentioned': return 'No recent mentions'
     case 'never-cited': return 'No recent citations'
+  }
+}
+
+function quickViewAccessibleLabel(view: EvidenceQuickView): string {
+  switch (view) {
+    case 'changed': return 'Changed vs prior recorded day'
+    case 'mention-lost': return 'Mention lost vs prior recorded day'
+    case 'citation-lost': return 'Citation lost vs prior recorded day'
+    default: return quickViewLabel(view)
   }
 }
 
@@ -358,8 +404,20 @@ function changeToneClass(label: string): string {
   return 'text-secondary'
 }
 
-function ChangeSummary({ labels }: { labels: string[] }) {
-  if (labels.length === 0) return <span className="text-secondary">No change</span>
+function ChangeSummary({
+  labels,
+  hasPriorDateComparison,
+}: {
+  labels: string[]
+  hasPriorDateComparison: boolean
+}) {
+  if (labels.length === 0) {
+    return (
+      <span className="text-secondary">
+        {hasPriorDateComparison ? 'No change in comparable results' : 'No prior-day comparison'}
+      </span>
+    )
+  }
   const visibleLabels = labels.slice(0, 2)
   return (
     <div className="space-y-1">
@@ -373,14 +431,22 @@ function ChangeSummary({ labels }: { labels: string[] }) {
   )
 }
 
-function providerChangeLabels(item: CitationInsightVm): string[] {
+function providerChangeSummary(item: CitationInsightVm): {
+  labels: string[]
+  hasPriorDateComparison: boolean
+} {
   const provider = providerLabel(item.provider)
-  return [
-    classifySignalChange(item.runHistory, 'mentions') === 'lost' ? `Mention lost on ${provider}` : null,
-    classifySignalChange(item.runHistory, 'citations') === 'lost' ? `Citation lost on ${provider}` : null,
-    classifySignalChange(item.runHistory, 'mentions') === 'gained' ? `Mention gained on ${provider}` : null,
-    classifySignalChange(item.runHistory, 'citations') === 'gained' ? `Citation gained on ${provider}` : null,
-  ].filter((label): label is string => label !== null)
+  const mentionChange = classifySignalChange(item.runHistory, 'mentions')
+  const citationChange = classifySignalChange(item.runHistory, 'citations')
+  return {
+    labels: [
+      mentionChange === 'lost' ? `Mention lost on ${provider}` : null,
+      citationChange === 'lost' ? `Citation lost on ${provider}` : null,
+      mentionChange === 'gained' ? `Mention gained on ${provider}` : null,
+      citationChange === 'gained' ? `Citation gained on ${provider}` : null,
+    ].filter((label): label is string => label !== null),
+    hasPriorDateComparison: mentionChange !== 'unavailable' || citationChange !== 'unavailable',
+  }
 }
 
 function SortHeader({
@@ -461,10 +527,6 @@ export function EvidenceTable({
     }))
   }, [evidence, compareLocations])
 
-  const quickViewCounts = useMemo(() => Object.fromEntries(
-    QUICK_VIEWS.map(view => [view, groups.filter(group => matchesQuickView(group.summary, view)).length]),
-  ) as Record<EvidenceQuickView, number>, [groups])
-
   const displayedGroups = useMemo(() => groups
     .filter(group => matchesQuickView(group.summary, quickView))
     .sort((left, right) => compareGroups(left, right, sortKey, sortDirection)),
@@ -474,6 +536,18 @@ export function EvidenceTable({
     rows: displayedGroups,
     getSearchText: evidenceGroupSearchText,
   })
+
+  const searchMatchedGroups = useMemo(
+    () => filterClientTableRows(groups, groupsTable.query, evidenceGroupSearchText),
+    [groups, groupsTable.query],
+  )
+
+  const quickViewCounts = useMemo(() => Object.fromEntries(
+    QUICK_VIEWS.map(view => [
+      view,
+      searchMatchedGroups.filter(group => matchesQuickView(group.summary, view)).length,
+    ]),
+  ) as Record<EvidenceQuickView, number>, [searchMatchedGroups])
 
   const toggleRow = (key: string) => {
     setExpandedRows(previous => {
@@ -541,7 +615,7 @@ export function EvidenceTable({
                   key={view}
                   type="button"
                   aria-pressed={active}
-                  aria-label={`${quickViewLabel(view)}, ${quickViewCounts[view]} ${
+                  aria-label={`${quickViewAccessibleLabel(view)}, ${quickViewCounts[view]} ${
                     quickViewCounts[view] === 1 ? 'query' : 'queries'
                   }`}
                   onClick={() => handleQuickView(view)}
@@ -564,6 +638,9 @@ export function EvidenceTable({
             <caption className="sr-only">
               Mention and citation results by tracked query. Counts use the most recent recorded
               provider and location result available; results may come from different sweeps.
+              Change comparisons use the day's latest result and the most recent result from an
+              earlier UTC calendar date. Within-day reruns are collapsed. Pending results and
+              results from different locations are not compared.
             </caption>
             <thead>
               <tr>
@@ -591,11 +668,12 @@ export function EvidenceTable({
                   infoText="Your domain appears in source links. Counts use each engine and location's most recent recorded result."
                 />
                 <SortHeader
-                  label="Change since previous"
+                  label="Change vs prior recorded day"
                   sortKey="attention"
                   current={sortKey}
                   direction={sortDirection}
                   onSort={handleSort}
+                  infoText="Compares the day's latest result with the most recent result from an earlier UTC date. Within-day reruns are collapsed. Pending results and results from different locations are not compared."
                 />
                 <th scope="col"><span className="sr-only">Actions</span></th>
               </tr>
@@ -646,7 +724,10 @@ export function EvidenceTable({
                         </p>
                       </td>
                       <td className="evidence-change-cell min-w-[14rem]">
-                        <ChangeSummary labels={group.summary.changeLabels} />
+                        <ChangeSummary
+                          labels={group.summary.changeLabels}
+                          hasPriorDateComparison={group.summary.hasPriorDateComparison}
+                        />
                       </td>
                       <td className="text-right">
                         <Button
@@ -674,7 +755,7 @@ export function EvidenceTable({
                             {group.items.map(item => {
                               const mentionState = deriveStateForMode(item, 'mentions')
                               const citationState = deriveStateForMode(item, 'citations')
-                              const changes = providerChangeLabels(item)
+                              const changes = providerChangeSummary(item)
                               const canReview = item.provider.length > 0 && item.runHistory.length > 0
                               return (
                                 <div
@@ -707,7 +788,10 @@ export function EvidenceTable({
                                     />
                                   </div>
                                   <div className="text-xs">
-                                    <ChangeSummary labels={changes} />
+                                    <ChangeSummary
+                                      labels={changes.labels}
+                                      hasPriorDateComparison={changes.hasPriorDateComparison}
+                                    />
                                   </div>
                                   <Button
                                     variant="ghost"

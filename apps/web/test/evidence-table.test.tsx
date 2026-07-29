@@ -107,18 +107,20 @@ test('shows mention and citation evidence together with explicit quick views', (
 
   expect(screen.getByRole('columnheader', { name: /Mentioned/ })).toBeTruthy()
   expect(screen.getByRole('columnheader', { name: /Cited/ })).toBeTruthy()
-  expect(screen.getByRole('columnheader', { name: /Change since previous/ })).toBeTruthy()
+  expect(screen.getByRole('columnheader', { name: /Change vs prior recorded day/ })).toBeTruthy()
   expect(screen.queryByRole('tab')).toBeNull()
   expect(screen.queryByText('Density')).toBeNull()
   expect(screen.queryByText('Latest run')).toBeNull()
 
-  expect(screen.getByRole('button', { name: 'Changed, 2 queries' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Mention lost, 1 query' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Citation lost, 1 query' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Changed vs prior recorded day, 2 queries' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Mention lost vs prior recorded day, 1 query' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Citation lost vs prior recorded day, 1 query' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'No recent mentions, 1 query' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'No recent citations, 1 query' })).toBeTruthy()
 
-  fireEvent.click(screen.getByRole('button', { name: 'Mention lost, 1 query' }))
+  fireEvent.click(screen.getByRole('button', {
+    name: 'Mention lost vs prior recorded day, 1 query',
+  }))
 
   expect(screen.getByText('alpha lost query')).toBeTruthy()
   expect(screen.queryByText('bravo gained query')).toBeNull()
@@ -145,6 +147,29 @@ test('sorts losses first by default and exposes sortable evidence columns', () =
     'bravo',
     'alpha',
   ])
+})
+
+test('distinguishes missing prior-day history from a stable comparison', () => {
+  render(<EvidenceTable evidence={[
+    evidenceItem({
+      id: 'first-observation',
+      query: 'first observed query',
+      provider: 'gemini',
+      history: [point('r1', 'cited', true)],
+    }),
+    evidenceItem({
+      id: 'stable-comparison',
+      query: 'stable compared query',
+      provider: 'openai',
+      history: [
+        point('r1', 'cited', true),
+        point('r2', 'cited', true),
+      ],
+    }),
+  ]} />)
+
+  expect(screen.getByText('No prior-day comparison')).toBeTruthy()
+  expect(screen.getByText('No change in comparable results')).toBeTruthy()
 })
 
 test('uses a named disclosure and query-specific answer actions instead of an interactive row', () => {
@@ -228,6 +253,37 @@ test('search and empty states explain how to recover', () => {
 
   expect(screen.getByText('No queries match this view')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
+  expect(screen.getByText('alpha lost query')).toBeTruthy()
+})
+
+test('quick-view counts follow the search query and active view', () => {
+  render(<EvidenceTable evidence={fixture()} />)
+
+  const search = screen.getByRole('searchbox', { name: 'Search queries, locations, or engines' })
+  fireEvent.change(search, { target: { value: 'delta stable' } })
+
+  expect(screen.getByRole('button', { name: 'All, 1 query' })).toBeTruthy()
+  expect(screen.getByRole('button', {
+    name: 'Changed vs prior recorded day, 0 queries',
+  })).toBeTruthy()
+  expect(screen.getByRole('button', {
+    name: 'Mention lost vs prior recorded day, 0 queries',
+  })).toBeTruthy()
+  expect(screen.getByRole('button', {
+    name: 'Citation lost vs prior recorded day, 0 queries',
+  })).toBeTruthy()
+  expect(screen.getByText('delta stable query')).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('button', {
+    name: 'Changed vs prior recorded day, 0 queries',
+  }))
+  expect(screen.getByText('No queries match this view')).toBeTruthy()
+
+  fireEvent.change(search, { target: { value: 'alpha lost' } })
+  expect(screen.getByRole('button', { name: 'All, 1 query' })).toBeTruthy()
+  expect(screen.getByRole('button', {
+    name: 'Changed vs prior recorded day, 1 query',
+  })).toBeTruthy()
   expect(screen.getByText('alpha lost query')).toBeTruthy()
 })
 
