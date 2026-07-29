@@ -52,6 +52,7 @@ import {
 } from '@ainyc/canonry-api-client/react-query'
 import type { ApiGaStatus, ApiGaTraffic, ApiGaTrafficAiLandingPage, ApiGaTrafficPage, ApiGaTrafficReferral, ApiGaSocialReferral, GA4AiReferralDailyDto, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry } from '../../api.js'
 import { TRAFFIC_STALE_MS } from '../../queries/query-client.js'
+import { invalidateProjectQueryDomain } from '../../queries/query-invalidation.js'
 import { asyncHandler } from '../../lib/async-handler.js'
 import {
   SOCIAL_OTHER_KEY,
@@ -339,7 +340,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
     try {
       const result = await triggerGaSync(projectName)
       setNotice(`Synced ${result.rowCount.toLocaleString()} page rows, ${result.aiReferralCount.toLocaleString()} AI and ${result.socialReferralCount.toLocaleString()} social referral rows (${result.days} days)`)
-      await queryClient.invalidateQueries({ predicate: (query) => { const head = query.queryKey[0] as { _id?: string } | undefined; return typeof head?._id === "string" && head._id.startsWith("getApiV1ProjectsByNameGa") } })
+      await invalidateProjectQueryDomain(queryClient, 'ga')
       await loadData({ current: false })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sync failed')
@@ -354,7 +355,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
     setNotice(null)
     try {
       await disconnectGa(projectName)
-      await queryClient.invalidateQueries({ predicate: (query) => { const head = query.queryKey[0] as { _id?: string } | undefined; return typeof head?._id === "string" && head._id.startsWith("getApiV1ProjectsByNameGa") } })
+      await invalidateProjectQueryDomain(queryClient, 'ga')
       setStatus({ connected: false, propertyId: null, clientEmail: null, lastSyncedAt: null, createdAt: null, updatedAt: null })
       setTraffic(null)
       setNotice('GA4 disconnected')
@@ -502,7 +503,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
         projectName={projectName}
         onConnected={() => {
           void (async () => {
-            await queryClient.invalidateQueries({ predicate: (query) => { const head = query.queryKey[0] as { _id?: string } | undefined; return typeof head?._id === "string" && head._id.startsWith("getApiV1ProjectsByNameGa") } })
+            await invalidateProjectQueryDomain(queryClient, 'ga')
             await loadData({ current: false })
           })()
         }}

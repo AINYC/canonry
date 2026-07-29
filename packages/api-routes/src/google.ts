@@ -40,6 +40,27 @@ import {
   buildLocationProfileFields,
 } from '@ainyc/canonry-integration-google-business-profile'
 
+const GOOGLE_OAUTH_COMPLETE_MESSAGE = 'canonry:google-oauth-complete'
+
+export function googleOAuthSuccessHtml(type: GoogleConnectionType): string {
+  const message = JSON.stringify({
+    type: GOOGLE_OAUTH_COMPLETE_MESSAGE,
+    connectionType: type,
+  })
+
+  return `<html><body style="font-family:system-ui;text-align:center;padding:60px">
+    <h2>Connected successfully!</h2>
+    <p>Google ${type.toUpperCase()} has been linked to your domain.</p>
+    <p style="color:#888">This window closes automatically.</p>
+    <script>
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage(${message}, '*')
+        window.close()
+      }
+    </script>
+  </body></html>`
+}
+
 /**
  * Does a URL sit on the project's canonical host?
  *
@@ -592,13 +613,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       diff: { domain, type, propertyId },
     })
 
-    return reply.type('text/html').send(
-      `<html><body style="font-family:system-ui;text-align:center;padding:60px">
-        <h2>Connected successfully!</h2>
-        <p>Google ${type.toUpperCase()} has been linked to your domain.</p>
-        <p style="color:#888">You can close this tab.</p>
-      </body></html>`,
-    )
+    return reply.type('text/html').send(googleOAuthSuccessHtml(type as GoogleConnectionType))
   }
 
   // GET /google/callback — shared OAuth redirect target (excluded from auth middleware)

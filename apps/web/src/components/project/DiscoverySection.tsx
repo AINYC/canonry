@@ -18,6 +18,7 @@ import {
   getApiV1RunsQueryKey,
 } from '@ainyc/canonry-api-client/react-query'
 import { addToast } from '../../lib/toast-store.js'
+import { invalidateProjectQueryDomain } from '../../queries/query-invalidation.js'
 import { Button } from '../ui/button.js'
 import { Card } from '../ui/card.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
@@ -540,12 +541,7 @@ async function refreshDiscovery(
   // variant. Runs list uses the exact key to avoid invalidating
   // run-detail caches unnecessarily.
   await Promise.all([
-    queryClient.invalidateQueries({
-      predicate: (query) => {
-        const head = query.queryKey[0] as { _id?: string } | undefined
-        return typeof head?._id === 'string' && head._id.startsWith('getApiV1ProjectsByNameDiscover')
-      },
-    }),
+    invalidateProjectQueryDomain(queryClient, 'discovery'),
     queryClient.invalidateQueries({ queryKey: getApiV1RunsQueryKey({ client: heyClient }) }),
   ])
 }

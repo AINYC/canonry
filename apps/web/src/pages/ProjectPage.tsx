@@ -79,6 +79,7 @@ import {
 } from '@ainyc/canonry-api-client/react-query'
 import { useAppendQueries, useTriggerRun } from '../queries/mutations.js'
 import { GSC_STALE_MS } from '../queries/query-client.js'
+import { invalidateProjectQueryDomain } from '../queries/query-invalidation.js'
 import { useQuery } from '@tanstack/react-query'
 import { getApiV1ProjectsOptions } from '@ainyc/canonry-api-client/react-query'
 import { useProjectDashboard } from '../queries/use-project-dashboard.js'
@@ -89,22 +90,6 @@ import type { ProjectCommandCenterVm, RunHistoryPoint } from '../view-models.js'
 export type ProjectPageTab = 'overview' | 'search-console' | 'local' | 'discovery' | 'report' | 'activity' | 'backlinks' | 'technical-aeo' | 'history' | 'settings'
 
 type SearchConsoleWorkspace = 'google' | 'bing'
-
-/**
- * Invalidate every generated TanStack query whose operation id starts
- * with `prefix`. Used to replace the legacy hierarchical `queryKeys.X.project(name)`
- * invalidations now that all cache keys come from the SDK helpers — the
- * generated keys are flat (`[{_id: 'getApiV1...', ...}]`) and don't share
- * a hierarchical prefix.
- */
-function invalidateByOpPrefix(queryClient: ReturnType<typeof useQueryClient>, prefix: string) {
-  return queryClient.invalidateQueries({
-    predicate: (query) => {
-      const head = query.queryKey[0] as { _id?: string } | undefined
-      return typeof head?._id === 'string' && head._id.startsWith(prefix)
-    },
-  })
-}
 
 /**
  * Patch the cached `useProjectDashboard` detail entries for a single project
@@ -210,7 +195,7 @@ function BingSection({
     setError(null)
     try {
       const result = await apiBingConnect(projectName, apiKeyInput.trim())
-      await invalidateByOpPrefix(queryClient, "getApiV1ProjectsByNameBing")
+      await invalidateProjectQueryDomain(queryClient, 'bing')
       setApiKeyInput('')
       if (result.availableSites.length > 0) {
         setSites(result.availableSites)
@@ -224,7 +209,7 @@ function BingSection({
   async function handleDisconnect() {
     try {
       await apiBingDisconnect(projectName)
-      await invalidateByOpPrefix(queryClient, "getApiV1ProjectsByNameBing")
+      await invalidateProjectQueryDomain(queryClient, 'bing')
       setConnection(null)
       setSites([])
       setCoverage(null)
@@ -242,7 +227,7 @@ function BingSection({
     if (!selectedSite) return
     try {
       await apiBingSetSite(projectName, selectedSite)
-      await invalidateByOpPrefix(queryClient, "getApiV1ProjectsByNameBing")
+      await invalidateProjectQueryDomain(queryClient, 'bing')
       await loadData()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to set site')
@@ -253,7 +238,7 @@ function BingSection({
     if (!inspectionUrl.trim()) return
     try {
       const result = await inspectBingUrl(projectName, inspectionUrl.trim())
-      await invalidateByOpPrefix(queryClient, "getApiV1ProjectsByNameBing")
+      await invalidateProjectQueryDomain(queryClient, 'bing')
       setInspectionResult(result)
       setInspections((prev) => [result, ...prev])
     } catch (e) {
@@ -902,8 +887,8 @@ function SearchConsoleSection({
       // Reload both coverage summaries from fresh DB values
       setRefreshState('reloading')
       await Promise.all([
-        invalidateByOpPrefix(queryClient, "getApiV1ProjectsByNameGoogleGsc"),
-        invalidateByOpPrefix(queryClient, "getApiV1ProjectsByNameBing"),
+        invalidateProjectQueryDomain(queryClient, 'gsc'),
+        invalidateProjectQueryDomain(queryClient, 'bing'),
       ])
       await loadSummary(true)
       setWorkspaceRefreshNonce((current) => current + 1)

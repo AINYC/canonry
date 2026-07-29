@@ -55,10 +55,12 @@ import {
   useTriggerInspectSitemap,
 } from '../../queries/mutations.js'
 import { GSC_STALE_MS } from '../../queries/query-client.js'
+import { invalidateProjectQueryDomain } from '../../queries/query-invalidation.js'
 
 const GSC_WINDOWS: MetricsWindow[] = ['7d', '30d', '90d', 'all']
 const EXPANDED_PERFORMANCE_LIMIT = 500
 const COVERAGE_PAGE_SIZE = 25
+const GOOGLE_OAUTH_COMPLETE_MESSAGE = 'canonry:google-oauth-complete'
 
 function sitemapDiscoveredUrlCount(sitemap: ApiGscSitemap): number {
   return sitemap.contents?.reduce((total, content) => total + Number(content.submitted || 0), 0) ?? 0
@@ -266,7 +268,7 @@ export function GscSection({
   const triggerGscSyncMutation = useTriggerGscSync()
   const triggerInspectSitemapMutation = useTriggerInspectSitemap()
 
-  async function loadProperties(currentConn: ApiGoogleConnection | undefined) {
+  async function loadProperties(currentConn: ApiGoogleConnection | undefined, force = false) {
     if (!currentConn) {
       setProperties([])
       setSelectedProperty('')
@@ -277,7 +279,7 @@ export function GscSection({
     try {
       const { sites } = await queryClient.fetchQuery({
         ...getApiV1ProjectsByNameGooglePropertiesOptions({ client: heyClient, path: { name: projectName } }),
-        staleTime: GSC_STALE_MS,
+        staleTime: force ? 0 : GSC_STALE_MS,
       })
       setProperties(sites)
       setSelectedProperty(currentConn.propertyId ?? sites[0]?.siteUrl ?? '')
@@ -359,7 +361,7 @@ export function GscSection({
     }
   }
 
-  async function loadInspectionHistory() {
+  async function loadInspectionHistory(force = false) {
     setLoadingInspections(true)
     try {
       const filterUrl = inspectionFilterUrl.trim() || undefined
@@ -372,11 +374,11 @@ export function GscSection({
             path: { name: projectName },
             query: inspectionsQuery as never,
           }),
-          staleTime: GSC_STALE_MS,
+          staleTime: force ? 0 : GSC_STALE_MS,
         }),
         queryClient.fetchQuery({
           ...getApiV1ProjectsByNameGoogleGscDeindexedOptions({ client: heyClient, path: { name: projectName } }),
-          staleTime: GSC_STALE_MS,
+          staleTime: force ? 0 : GSC_STALE_MS,
         }),
       ])
       setInspections(history)
@@ -390,17 +392,17 @@ export function GscSection({
     }
   }
 
-  async function loadCoverage() {
+  async function loadCoverage(force = false) {
     setLoadingCoverage(true)
     try {
       const [data, history] = await Promise.all([
         queryClient.fetchQuery({
           ...getApiV1ProjectsByNameGoogleGscCoverageOptions({ client: heyClient, path: { name: projectName } }),
-          staleTime: GSC_STALE_MS,
+          staleTime: force ? 0 : GSC_STALE_MS,
         }),
         queryClient.fetchQuery({
           ...getApiV1ProjectsByNameGoogleGscCoverageHistoryOptions({ client: heyClient, path: { name: projectName } }),
-          staleTime: GSC_STALE_MS,
+          staleTime: force ? 0 : GSC_STALE_MS,
         }).catch(() => []),
       ])
       setCoverage(data)
@@ -598,17 +600,18 @@ export function GscSection({
     }
   }
 
-  async function handleUseSitemapForAudits(sitemapUrl: string) {
+  async function handleSetDefaultSitemap(sitemapUrl: string) {
     setSavingSitemap(true)
     setError(null)
     try {
       await saveSitemapUrl(projectName, 'gsc', sitemapUrl)
+      await invalidateProjectQueryDomain(queryClient, 'google')
       setConnections((prev) => prev.map((connection) => (
         connection.connectionType === 'gsc' ? { ...connection, sitemapUrl } : connection
       )))
-      addToast({ title: 'Sitemap selected for audits', detail: sitemapUrl, tone: 'positive', dedupeKey: `gsc:sitemap-audit:${projectName}`, dedupeMode: 'replace' })
+      addToast({ title: 'Default sitemap updated', detail: sitemapUrl, tone: 'positive', dedupeKey: `gsc:sitemap-default:${projectName}`, dedupeMode: 'replace' })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to select sitemap for audits')
+      setError(err instanceof Error ? err.message : 'Failed to set the default sitemap')
     } finally {
       setSavingSitemap(false)
     }
@@ -689,7 +692,7 @@ export function GscSection({
     setError(null)
     setNotice(null)
     try {
-      const { authUrl } = await googleConnect(projectName, 'gsc')
+      const { authUrl, redirectUri } = await googleConnect(projectName, 'gsc')
       if (!authUrl.startsWith('https://accounts.google.com/')) {
         setError('Unexpected OAuth redirect URL. Please try again.')
         return
@@ -699,13 +702,39 @@ export function GscSection({
         window.location.assign(authUrl)
         return
       }
-      setNotice('Finish the Google consent flow in the popup, then close it to refresh this project.')
-      const timer = window.setInterval(() => {
-        if (popup.closed) {
-          window.clearInterval(timer)
+      const callbackOrigin = redirectUri ? new URL(redirectUri).origin : window.location.origin
+      let refreshStarted = false
+      let timer: number | null = null
+
+      const cleanup = () => {
+        if (timer !== null) window.clearInterval(timer)
+        window.removeEventListener('message', handleOAuthComplete)
+      }
+      const refreshConnection = async (completed: boolean) => {
+        if (refreshStarted) return
+        refreshStarted = true
+        cleanup()
+        setNotice(completed ? 'Google connected. Refreshing access…' : 'Refreshing Google connection…')
+        try {
+          await invalidateProjectQueryDomain(queryClient, 'google')
+          await loadSection()
+        } finally {
           setNotice(null)
-          void queryClient.invalidateQueries({ predicate: (query) => { const head = query.queryKey[0] as { _id?: string } | undefined; return typeof head?._id === "string" && head._id.startsWith("getApiV1ProjectsByNameGoogleGsc") } })
-          void loadSection()
+        }
+      }
+      function handleOAuthComplete(event: MessageEvent) {
+        if (event.source !== popup || event.origin !== callbackOrigin) return
+        if (!event.data || typeof event.data !== 'object') return
+        const message = event.data as { type?: unknown; connectionType?: unknown }
+        if (message.type !== GOOGLE_OAUTH_COMPLETE_MESSAGE || message.connectionType !== 'gsc') return
+        void refreshConnection(true)
+      }
+
+      window.addEventListener('message', handleOAuthComplete)
+      setNotice('Finish the Google consent flow in the popup. This page will refresh automatically.')
+      timer = window.setInterval(() => {
+        if (popup.closed) {
+          void refreshConnection(false)
         }
       }, 1000)
     } catch (err) {
@@ -720,7 +749,7 @@ export function GscSection({
     setNotice(null)
     try {
       await googleDisconnect(projectName, 'gsc')
-      await queryClient.invalidateQueries({ predicate: (query) => { const head = query.queryKey[0] as { _id?: string } | undefined; return typeof head?._id === "string" && head._id.startsWith("getApiV1ProjectsByNameGoogleGsc") } })
+      await invalidateProjectQueryDomain(queryClient, 'google')
       setConnections((prev) => prev.filter((c) => c.connectionType !== 'gsc'))
       setProperties([])
       setSelectedProperty('')
@@ -735,7 +764,7 @@ export function GscSection({
     setError(null)
     try {
       await saveGoogleProperty(projectName, 'gsc', selectedProperty)
-      await queryClient.invalidateQueries({ predicate: (query) => { const head = query.queryKey[0] as { _id?: string } | undefined; return typeof head?._id === "string" && head._id.startsWith("getApiV1ProjectsByNameGoogleGsc") } })
+      await invalidateProjectQueryDomain(queryClient, 'google')
       setConnections((prev) => prev.map((connection) => (
         connection.connectionType === 'gsc'
           ? { ...connection, propertyId: selectedProperty }
@@ -767,7 +796,7 @@ export function GscSection({
           full: fullSync || undefined,
         },
       })
-      await queryClient.invalidateQueries({ predicate: (query) => { const head = query.queryKey[0] as { _id?: string } | undefined; return typeof head?._id === "string" && head._id.startsWith("getApiV1ProjectsByNameGoogleGsc") } })
+      await invalidateProjectQueryDomain(queryClient, 'gsc')
     } catch {
       // Mutation hook handles the toast-only failure path for queued syncs.
     }
@@ -780,7 +809,7 @@ export function GscSection({
     setNotice(null)
     try {
       const result = await inspectGscUrl(projectName, inspectionUrl.trim())
-      await queryClient.invalidateQueries({ predicate: (query) => { const head = query.queryKey[0] as { _id?: string } | undefined; return typeof head?._id === "string" && head._id.startsWith("getApiV1ProjectsByNameGoogleGsc") } })
+      await invalidateProjectQueryDomain(queryClient, 'gsc')
       setInspectionResult(result)
       setInspectionUrl('')
       await loadInspectionHistory()
@@ -1184,7 +1213,7 @@ export function GscSection({
                         {requestingIndexing ? 'Requesting\u2026' : `Request indexing (${coverage.notIndexed.length})`}
                       </Button>
                     )}
-                    <Button type="button" variant="outline" size="sm" disabled={loadingCoverage} onClick={() => void loadCoverage()}>
+                    <Button type="button" variant="outline" size="sm" disabled={loadingCoverage} onClick={() => void loadCoverage(true)}>
                       {loadingCoverage ? 'Loading\u2026' : 'Reload saved coverage'}
                     </Button>
                   </div>
@@ -1578,8 +1607,8 @@ export function GscSection({
                 </div>
                 <p className="mt-2 text-xs text-muted">Google is asked to refetch these sitemaps. Indexing is not guaranteed.</p>
                 {!canSubmitSitemaps && gscConn && (
-                  <div className="mt-2 flex items-center gap-2 text-xs text-caution-400">
-                    <span>Reconnect to allow sitemap submission. This connection has read-only Search Console access.</span>
+                  <div className="mt-2 flex items-center gap-2 text-xs text-caution">
+                    <span>Reconnect to let Canonry submit sitemaps. Your current Canonry OAuth grant is read-only.</span>
                     <button type="button" className="text-secondary underline hover:text-strong" onClick={asyncHandler(handleConnect)}>Reconnect</button>
                   </div>
                 )}
@@ -1617,7 +1646,7 @@ export function GscSection({
                                 <td className="text-secondary">{sitemap.lastDownloaded ? sitemap.lastDownloaded.split('T')[0] : '—'}</td>
                                 <td className="text-right tabular-nums text-neutral">{discoveredUrls.toLocaleString()}</td>
                                 <td className="max-w-48 text-secondary">{issues || '—'}</td>
-                                <td><div className="flex flex-wrap gap-2"><button type="button" className="text-xs text-secondary hover:text-strong" disabled={!canSubmitSitemaps || submittingSitemaps} onClick={() => void handleSubmitSitemaps([sitemap.path])}>{sitemap.lastSubmitted ? 'Resubmit to Google' : 'Submit to Google'}</button><button type="button" className="text-xs text-secondary hover:text-strong" disabled={savingSitemap} onClick={() => void handleUseSitemapForAudits(sitemap.path)}>Use for audits</button><button type="button" className="text-xs text-secondary hover:text-strong" disabled={triggerInspectSitemapMutation.isPending} onClick={() => void handleInspectSitemap(sitemap.path)}>Inspect URLs</button></div></td>
+                                <td><div className="flex flex-wrap gap-2"><button type="button" className="text-xs text-secondary hover:text-strong" disabled={!canSubmitSitemaps || submittingSitemaps} onClick={() => void handleSubmitSitemaps([sitemap.path])}>{sitemap.lastSubmitted ? 'Resubmit to Google' : 'Submit to Google'}</button>{gscConn?.sitemapUrl === sitemap.path ? <span className="text-xs text-muted" title="Used when no sitemap URL is provided for Canonry GSC operations.">Default sitemap</span> : <button type="button" className="text-xs text-secondary hover:text-strong" disabled={savingSitemap} title="Use this sitemap by default for Canonry GSC operations." onClick={() => void handleSetDefaultSitemap(sitemap.path)}>Set as default</button>}<button type="button" className="text-xs text-secondary hover:text-strong" disabled={triggerInspectSitemapMutation.isPending} onClick={() => void handleInspectSitemap(sitemap.path)}>Inspect URLs</button></div></td>
                               </tr>
                             )
                             const childRows = sitemap.isSitemapsIndex && expanded ? children.map((child) => (
@@ -1629,7 +1658,7 @@ export function GscSection({
                                 <td className="text-secondary">{child.lastDownloaded ? child.lastDownloaded.split('T')[0] : '—'}</td>
                                 <td className="text-right tabular-nums text-neutral">{sitemapDiscoveredUrlCount(child).toLocaleString()}</td>
                                 <td className="text-secondary">{sitemapIssueText(child) || '—'}</td>
-                                <td><div className="flex flex-wrap gap-2"><button type="button" className="text-xs text-secondary hover:text-strong" disabled={!canSubmitSitemaps || submittingSitemaps} onClick={() => void handleSubmitSitemaps([child.path])}>Resubmit</button><button type="button" className="text-xs text-secondary hover:text-strong" disabled={savingSitemap} onClick={() => void handleUseSitemapForAudits(child.path)}>Use for audits</button><button type="button" className="text-xs text-secondary hover:text-strong" disabled={triggerInspectSitemapMutation.isPending} onClick={() => void handleInspectSitemap(child.path)}>Inspect URLs</button></div></td>
+                                <td><div className="flex flex-wrap gap-2"><button type="button" className="text-xs text-secondary hover:text-strong" disabled={!canSubmitSitemaps || submittingSitemaps} onClick={() => void handleSubmitSitemaps([child.path])}>Resubmit</button>{gscConn?.sitemapUrl === child.path ? <span className="text-xs text-muted" title="Used when no sitemap URL is provided for Canonry GSC operations.">Default sitemap</span> : <button type="button" className="text-xs text-secondary hover:text-strong" disabled={savingSitemap} title="Use this sitemap by default for Canonry GSC operations." onClick={() => void handleSetDefaultSitemap(child.path)}>Set as default</button>}<button type="button" className="text-xs text-secondary hover:text-strong" disabled={triggerInspectSitemapMutation.isPending} onClick={() => void handleInspectSitemap(child.path)}>Inspect URLs</button></div></td>
                               </tr>
                             )) : []
                             return [row, ...childRows]
@@ -1693,7 +1722,7 @@ export function GscSection({
                     <p className="eyebrow eyebrow-soft">History</p>
                     <h3>Inspection log</h3>
                   </div>
-                  <Button type="button" variant="outline" size="sm" disabled={loadingInspections} onClick={() => void loadInspectionHistory()}>
+                  <Button type="button" variant="outline" size="sm" disabled={loadingInspections} onClick={() => void loadInspectionHistory(true)}>
                     {loadingInspections ? 'Loading\u2026' : 'Refresh history'}
                   </Button>
                 </div>
@@ -1705,7 +1734,7 @@ export function GscSection({
                     value={inspectionFilterUrl}
                     onChange={(e) => setInspectionFilterUrl(e.target.value)}
                   />
-                  <Button type="button" size="sm" variant="outline" disabled={loadingInspections} onClick={() => void loadInspectionHistory()}>
+                  <Button type="button" size="sm" variant="outline" disabled={loadingInspections} onClick={() => void loadInspectionHistory(true)}>
                     Apply filter
                   </Button>
                 </div>
@@ -1829,7 +1858,7 @@ export function GscSection({
                           )}
                         </select>
                         <div className="flex flex-wrap items-center gap-2">
-                          <Button type="button" size="sm" variant="outline" disabled={propertiesLoading} onClick={() => void loadProperties(gscConn)}>
+                          <Button type="button" size="sm" variant="outline" disabled={propertiesLoading} onClick={() => void loadProperties(gscConn, true)}>
                             {propertiesLoading ? 'Refreshing\u2026' : 'Refresh properties'}
                           </Button>
                           <Button type="button" size="sm" disabled={!selectedProperty || savingProperty} onClick={asyncHandler(handleSaveProperty)}>
