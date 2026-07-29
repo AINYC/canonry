@@ -20,9 +20,11 @@ const ENV_KEYS = [
   'CANONRY_TELEMETRY_DISABLED',
   'DO_NOT_TRACK',
   'CI',
+  'CANONRY_CONFIG_DIR',
 ] as const
 
 let savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>>
+let configDir: string
 
 beforeEach(() => {
   savedEnv = {}
@@ -31,6 +33,15 @@ beforeEach(() => {
     delete process.env[key]
   }
   process.env.CANONRY_ANONYMOUS_ID = crypto.randomUUID()
+  // Point config at an EMPTY directory, not just scrub env. `isTelemetryEnabled`
+  // has one more input than the env vars above: with no override it falls back
+  // to the host's real ~/.canonry/config.yaml, and on an operator machine that
+  // file says `telemetry: false`. The positive test below then fails without a
+  // code defect, and the two negative tests pass without testing anything,
+  // since nothing is ever emitted. An empty config dir is the documented
+  // no-config state: telemetry defaults on, the anonymous ID comes from env.
+  configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-activation-config-'))
+  process.env.CANONRY_CONFIG_DIR = configDir
 })
 
 afterEach(() => {
@@ -39,6 +50,7 @@ afterEach(() => {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
   }
+  fs.rmSync(configDir, { recursive: true, force: true })
 })
 
 function buildAdapter(): ProviderAdapter {
