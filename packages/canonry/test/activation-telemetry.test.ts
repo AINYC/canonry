@@ -25,6 +25,7 @@ const ENV_KEYS = [
 
 let savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>>
 let configDir: string
+let activationCallbacks = 0
 
 beforeEach(() => {
   savedEnv = {}
@@ -40,6 +41,7 @@ beforeEach(() => {
   // code defect, and the two negative tests pass without testing anything,
   // since nothing is ever emitted. An empty config dir is the documented
   // no-config state: telemetry defaults on, the anonymous ID comes from env.
+  activationCallbacks = 0
   configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-activation-config-'))
   process.env.CANONRY_CONFIG_DIR = configDir
 })
@@ -124,7 +126,15 @@ function createFixture(queryCount: number) {
       maxRequestsPerDay: 100,
     },
   })
-  return { db, projectId, runner: new JobRunner(db, registry) }
+  return {
+    db,
+    projectId,
+    runner: new JobRunner(db, registry, {
+      onFirstActivation: () => {
+        activationCallbacks += 1
+      },
+    }),
+  }
 }
 
 function queueRun(
@@ -171,6 +181,9 @@ describe('activation telemetry', () => {
 
     const activations = payloads.filter(payload => payload.event === 'activation.completed')
     expect(activations).toHaveLength(1)
+    // The UX hook rides the same guard as the event: once, on the first
+    // non-empty result, so the serve console can thank the operator.
+    expect(activationCallbacks).toBe(1)
     expect(activations[0]?.properties).toEqual({
       flowVersion: 1,
       status: 'completed',
@@ -188,6 +201,7 @@ describe('activation telemetry', () => {
     })
 
     expect(payloads.some(payload => payload.event === 'activation.completed')).toBe(false)
+    expect(activationCallbacks).toBe(0)
   })
 
   it('does not count an operator probe as activation', async () => {
@@ -198,5 +212,6 @@ describe('activation telemetry', () => {
     })
 
     expect(payloads.some(payload => payload.event === 'activation.completed')).toBe(false)
+    expect(activationCallbacks).toBe(0)
   })
 })

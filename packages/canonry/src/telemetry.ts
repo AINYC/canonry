@@ -142,6 +142,32 @@ export function trackCliCommandFinished(input: CliCommandFinishedInput): void {
 const SESSION_ID = crypto.randomUUID()
 let CURRENT_SOURCE: TelemetrySource = 'cli'
 
+const TELEMETRY_SOURCE_VALUES: ReadonlySet<string> = new Set([
+  'cli', 'cli-server', 'api', 'mcp-server', 'wp-plugin', 'dashboard', 'agent-runtime',
+] satisfies TelemetrySource[])
+
+/**
+ * Harness-declared source, e.g. `CANONRY_TELEMETRY_SOURCE=wp-plugin` set by a
+ * hosting automation that spawns this CLI.
+ *
+ * WHY AN ENV VAR: the biggest pollution in the install metrics is subprocess
+ * invocations minting install IDs that look human. The spawn site is outside
+ * this repo (a WordPress host's cron, a CI harness), so the only lever we can
+ * offer it is self-identification, the same way `CANONRY_ANONYMOUS_ID` already
+ * lets a harness pin a stable install ID. A tagged source lets the pipeline
+ * exclude that traffic exactly instead of guessing from behavior.
+ *
+ * Validated against the enum and read at event time, so an unknown value is
+ * ignored rather than poisoning the receiver's source field. It wins over the
+ * process default AND over `setTelemetrySource`, because what spawned the
+ * process outranks what the process believes it is: a wp-plugin harness that
+ * runs `canonry serve` is still wp-plugin traffic.
+ */
+function envSourceOverride(): TelemetrySource | undefined {
+  const raw = process.env.CANONRY_TELEMETRY_SOURCE?.trim()
+  return raw && TELEMETRY_SOURCE_VALUES.has(raw) ? (raw as TelemetrySource) : undefined
+}
+
 /**
  * Override the global default source for subsequent `trackEvent` calls.
  * Callers can still pass `options.source` to override per-event.
@@ -350,7 +376,7 @@ export function trackEvent(
     eventId: options?.eventId ?? crypto.randomUUID(),
     anonymousId,
     sessionId: SESSION_ID,
-    source: options?.source ?? CURRENT_SOURCE,
+    source: options?.source ?? envSourceOverride() ?? CURRENT_SOURCE,
     event,
     timestamp: new Date().toISOString(),
     version: VERSION,

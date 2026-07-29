@@ -1172,4 +1172,52 @@ describe('telemetry', () => {
       }
     })
   })
+
+  describe('CANONRY_TELEMETRY_SOURCE', () => {
+    // The spawn sites that mint ghost installs (a WP host's cron, a CI
+    // harness) live outside this repo; self-identification is the only lever
+    // we can hand them. These tests pin the contract: validated, wins over
+    // the process default, loses to an explicit per-event source.
+    async function captureSource(env: Record<string, string | undefined>): Promise<unknown> {
+      const { trackEvent } = await import('../src/telemetry.js')
+      const saved: Record<string, string | undefined> = {}
+      for (const [key, value] of Object.entries(env)) {
+        saved[key] = process.env[key]
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      const captured: Array<Record<string, unknown>> = []
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+        if (init?.body) captured.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return new Response('{}', { status: 200 })
+      }
+      try {
+        trackEvent('cli.command', { command: 'status' })
+        await new Promise(resolve => setTimeout(resolve, 20))
+      } finally {
+        globalThis.fetch = originalFetch
+        for (const [key, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[key]
+          else process.env[key] = value
+        }
+      }
+      return captured[0]?.source
+    }
+
+    it('tags events with a valid harness-declared source', async () => {
+      process.env.CANONRY_ANONYMOUS_ID = crypto.randomUUID()
+      expect(await captureSource({ CANONRY_TELEMETRY_SOURCE: 'wp-plugin' })).toBe('wp-plugin')
+    })
+
+    it('ignores an unknown source value rather than sending it', async () => {
+      process.env.CANONRY_ANONYMOUS_ID = crypto.randomUUID()
+      expect(await captureSource({ CANONRY_TELEMETRY_SOURCE: 'my-cool-bot' })).toBe('cli')
+    })
+
+    it('ignores whitespace-only values', async () => {
+      process.env.CANONRY_ANONYMOUS_ID = crypto.randomUUID()
+      expect(await captureSource({ CANONRY_TELEMETRY_SOURCE: '  ' })).toBe('cli')
+    })
+  })
 })

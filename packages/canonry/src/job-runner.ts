@@ -149,11 +149,23 @@ function classifyOneProviderError(message: string): ProviderErrorCode {
 }
 
 export class JobRunner {
+  /**
+   * Invoked exactly when `activation.completed` is emitted: the project's
+   * first non-empty, non-probe answer-visibility result. The serve process
+   * uses it to thank the operator once; it is a UX hook, not telemetry, so it
+   * fires (and is given) independently of whether telemetry is enabled.
+   */
+  private readonly onFirstActivation?: () => void
   private db: DatabaseClient
   private registry: ProviderRegistry
   onRunCompleted?: (runId: string, projectId: string) => Promise<void>
 
-  constructor(db: DatabaseClient, registry: ProviderRegistry) {
+  constructor(
+    db: DatabaseClient,
+    registry: ProviderRegistry,
+    opts?: { onFirstActivation?: () => void },
+  ) {
+    this.onFirstActivation = opts?.onFirstActivation
     this.db = db
     this.registry = registry
   }
@@ -550,6 +562,11 @@ export class JobRunner {
           queryCountBucket: bucketOnboardingCount(executionContext.queryCount),
           snapshotCountBucket: bucketOnboardingCount(totalSnapshotsInserted),
         })
+        try {
+          this.onFirstActivation?.()
+        } catch {
+          // A celebration must never fail a run.
+        }
       }
 
       this.incrementUsage(projectId, 'runs', 1)

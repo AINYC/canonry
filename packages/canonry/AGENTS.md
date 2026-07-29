@@ -9,7 +9,9 @@ The publishable npm package (`@canonry/canonry`, plus compatibility publish as `
 | File | Role |
 |------|------|
 | `src/cli.ts` | CLI entry point — shebang, telemetry, command dispatch |
-| `src/telemetry.ts` | `trackEvent`, source attribution, per-process `sessionId`, `cli.upgraded` detection |
+| `src/telemetry.ts` | `trackEvent`, source attribution (incl. the validated `CANONRY_TELEMETRY_SOURCE` harness override), per-process `sessionId`, `cli.upgraded` detection |
+| `src/setup-nudge.ts` | The stalled-setup stderr line: human-mode + TTY only, lazy state read, exempt roots |
+| `src/activation-notice.ts` | Once-ever first-activation notice; marker written before printing, TTY-gated |
 | `src/run-telemetry.ts` | `classifyRunError`, `buildRunCompletedProps` — keeps the `run.completed` payload composition in one spot |
 | `src/setup-state.ts` | `buildSetupState` — `{ provider_count, has_keywords, project_count, is_first_run }` snapshot ridden on every `cli.command` |
 | `src/cli-commands.ts` | `REGISTERED_CLI_COMMANDS` array — declarative command specs |

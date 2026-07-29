@@ -13,6 +13,46 @@ import { CliError, type CliFormat, isMachineFormat } from '../cli-error.js'
 import { installSkills, type SkillsInstallSummary } from './skills.js'
 import { installMcp, type McpInstallResult } from './mcp.js'
 
+/**
+ * Hand control to `canonry serve` after init finishes.
+ *
+ * A flag rather than a direct call, because init's own lifecycle telemetry is
+ * emitted by the dispatcher when the command RETURNS. Serve never returns, so
+ * launching it from inside init would record every init that chose the
+ * dashboard as a half-hour command. The dispatcher consumes this after the
+ * init event is on the wire.
+ */
+let pendingServeHandoff = false
+
+export function consumePendingServeHandoff(): boolean {
+  const pending = pendingServeHandoff
+  pendingServeHandoff = false
+  return pending
+}
+
+/**
+ * Ask for a provider key, offering one the machine ALREADY HAS first.
+ *
+ * The single biggest activation wall is leaving the terminal to go mint an
+ * API key. `bootstrap` has read these env vars for CI since forever; a
+ * developer running interactive init very often has one exported too, and
+ * making them re-paste a secret they already exported is friction with no
+ * upside. The VALUE is never echoed; the prompt names only the variable.
+ */
+export async function promptProviderApiKey(
+  label: string,
+  envVar: string,
+  promptFn: (question: string) => Promise<string> = prompt,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const fromEnv = env[envVar]?.trim()
+  if (fromEnv) {
+    const answer = await promptFn(`Found ${envVar} in your environment. Use it? [Y/n]: `)
+    if (!/^n/i.test(answer.trim())) return fromEnv
+  }
+  return promptFn(`${label} API key (press Enter to skip): `)
+}
+
 function prompt(question: string): Promise<string> {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -172,28 +212,28 @@ export async function initCommand(opts?: InitOptions): Promise<ResolvedAgentLLM 
     console.log('Or use "canonry bootstrap".\n')
 
     // Gemini
-    const geminiApiKey = await prompt('Gemini API key (press Enter to skip): ')
+    const geminiApiKey = await promptProviderApiKey('Gemini', 'GEMINI_API_KEY')
     if (geminiApiKey) {
       const geminiModel = await prompt('  Gemini model [gemini-2.5-flash]: ') || 'gemini-2.5-flash'
       providers.gemini = { apiKey: geminiApiKey, model: geminiModel, quota: DEFAULT_QUOTA }
     }
 
     // OpenAI
-    const openaiApiKey = await prompt('OpenAI API key (press Enter to skip): ')
+    const openaiApiKey = await promptProviderApiKey('OpenAI', 'OPENAI_API_KEY')
     if (openaiApiKey) {
       const openaiModel = await prompt('  OpenAI model [gpt-4o]: ') || 'gpt-4o'
       providers.openai = { apiKey: openaiApiKey, model: openaiModel, quota: DEFAULT_QUOTA }
     }
 
     // Claude
-    const claudeApiKey = await prompt('Anthropic API key (press Enter to skip): ')
+    const claudeApiKey = await promptProviderApiKey('Anthropic', 'ANTHROPIC_API_KEY')
     if (claudeApiKey) {
       const claudeModel = await prompt('  Claude model [claude-sonnet-4-6]: ') || 'claude-sonnet-4-6'
       providers.claude = { apiKey: claudeApiKey, model: claudeModel, quota: DEFAULT_QUOTA }
     }
 
     // Perplexity
-    const perplexityApiKey = await prompt('Perplexity API key (press Enter to skip): ')
+    const perplexityApiKey = await promptProviderApiKey('Perplexity', 'PERPLEXITY_API_KEY')
     if (perplexityApiKey) {
       const perplexityModel = await prompt('  Perplexity model [sonar]: ') || 'sonar'
       providers.perplexity = { apiKey: perplexityApiKey, model: perplexityModel, quota: DEFAULT_QUOTA }
@@ -422,6 +462,20 @@ export async function initCommand(opts?: InitOptions): Promise<ResolvedAgentLLM 
       }),
       skillsInstalled: !!skillsSummary,
     })
+  }
+
+  // End inside the product, not at a printout. Half of new installs run init
+  // and never another command; every printed "Next:" line is a place to lose
+  // more of them, and the dashboard wizard (resumable, with inline provider
+  // setup) is strictly better than terminal instructions that describe it.
+  // Interactive human sessions only: machine formats and piped stdio keep the
+  // printed next steps as the contract.
+  if (!isMachineFormat(format) && process.stdin.isTTY && process.stdout.isTTY) {
+    const answer = await prompt('\nStart the dashboard now? [Y/n]: ')
+    if (!/^n/i.test(answer.trim())) {
+      pendingServeHandoff = true
+      console.log('Handing off to the dashboard. Finish setup at /setup once it is up.')
+    }
   }
 
   return agentLLM

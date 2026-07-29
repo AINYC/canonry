@@ -16,6 +16,10 @@ import { dispatchRegisteredCommand } from './cli-dispatch.js'
 import type { CliCommandSpec } from './cli-dispatch.js'
 import { REGISTERED_CLI_COMMANDS } from './cli-commands.js'
 import { checkLatestVersionForCli } from './update-check.js'
+import { buildSetupNudgeLine } from './setup-nudge.js'
+import { consumePendingServeHandoff } from './commands/init.js'
+import { serveCommand } from './commands/serve.js'
+import { isMachineFormat } from './cli-error.js'
 
 const USAGE = `
 cnry — AEO monitoring CLI   ('canonry' also works)
@@ -216,6 +220,23 @@ export async function runCli(args = process.argv.slice(2)): Promise<number> {
           durationMs: Date.now() - commandStartedAt,
           setupState: buildSetupState(),
         })
+      }
+      // The stalled-setup line. Independent of telemetry consent (it is user
+      // guidance, not measurement), but LAZY about reading state: control
+      // commands and non-interactive runs must not touch config or the
+      // database, and the nudge's own gates guarantee that.
+      const nudge = buildSetupNudgeLine({
+        command: resolvedCommand,
+        machineFormat: isMachineFormat(format),
+        stderrIsTTY: Boolean(process.stderr.isTTY),
+        getSetupState: buildSetupState,
+      })
+      if (nudge) process.stderr.write(nudge)
+      // Init's dashboard handoff, honored only after init's own lifecycle
+      // event is on the wire so serve's unbounded runtime cannot pollute
+      // init's duration bucket.
+      if (consumePendingServeHandoff()) {
+        await serveCommand(format as CliFormat)
       }
       return 0
     }
