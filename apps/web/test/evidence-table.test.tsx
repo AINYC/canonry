@@ -202,9 +202,35 @@ test('uses a named disclosure and query-specific answer actions instead of an in
   const engines = screen.getByRole('list', { name: 'Engine results for best solar installer' })
   expect(within(engines).getByText('gemini')).toBeTruthy()
   expect(within(engines).getByText('openai')).toBeTruthy()
+  const geminiHistoryDisclosure = within(engines).getByRole('button', {
+    name: 'Show recent history for Gemini',
+  })
+  expect(geminiHistoryDisclosure.getAttribute('aria-expanded')).toBe('false')
+  fireEvent.click(geminiHistoryDisclosure)
+  expect(geminiHistoryDisclosure.getAttribute('aria-expanded')).toBe('true')
+  const geminiHistory = within(engines).getByRole('table', {
+    name: 'Recent recorded days for Gemini',
+  })
+  expect(within(geminiHistory).getByRole('columnheader', { name: /July 1, 2026 UTC/ })).toBeTruthy()
+  expect(within(geminiHistory).getByRole('columnheader', { name: /July 2, 2026 UTC/ })).toBeTruthy()
+  expect(within(geminiHistory).getByRole('rowheader', { name: 'Mentioned' })).toBeTruthy()
+  expect(within(geminiHistory).getByRole('rowheader', { name: 'Cited' })).toBeTruthy()
+  expect(within(geminiHistory).getAllByRole('cell', { name: 'Mentioned' })).toHaveLength(1)
+  expect(within(geminiHistory).getAllByRole('cell', { name: 'Cited' })).toHaveLength(1)
+  expect(within(geminiHistory.closest('figure')!).getByText(/2 recorded days/)).toBeTruthy()
+
+  fireEvent.click(within(engines).getByRole('button', {
+    name: 'Show recent history for OpenAI',
+  }))
+  expect(within(engines).queryByRole('table', {
+    name: 'Recent recorded days for Gemini',
+  })).toBeNull()
+  expect(within(engines).getByRole('table', {
+    name: 'Recent recorded days for OpenAI',
+  })).toBeTruthy()
 
   fireEvent.click(screen.getByRole('button', {
-    name: 'Review Gemini answer for best solar installer',
+    name: 'Review Gemini answer and run history for best solar installer',
   }))
   expect(drawer.openEvidence).toHaveBeenCalledWith('gemini-evidence')
 })
@@ -240,8 +266,8 @@ test('uses plain text quick views and engine states instead of pill indicators',
   expect(engineStates.every(state => !state.className.includes('badge'))).toBe(true)
   expect(within(engines).getAllByText('Mention status:')).toHaveLength(2)
   expect(within(engines).getAllByText('Citation status:')).toHaveLength(2)
-  expect(within(engines).getByText('Mentioned')).toBeTruthy()
-  expect(within(engines).getByText('Not cited')).toBeTruthy()
+  expect(engineStates.some(state => state.textContent?.includes('Mentioned'))).toBe(true)
+  expect(engineStates.some(state => state.textContent?.includes('Not cited'))).toBe(true)
   expect(within(engines).getAllByText('No result')).toHaveLength(2)
 })
 

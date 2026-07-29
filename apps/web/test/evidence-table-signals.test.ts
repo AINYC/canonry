@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest'
 
 import {
+  buildRecentRecordedDays,
   summarizeEvidenceGroup,
   summarizeSignalHistory,
 } from '../src/components/project/EvidenceTable.js'
@@ -297,4 +298,98 @@ test('latest state is compared with the prior recorded day, not the previous run
   expect(summary.changeLabels).toEqual([])
   expect(summary.changed).toBe(false)
   expect(summary.hasPriorDateComparison).toBe(true)
+})
+
+test('recent recorded days collapse same-day results and keep mention and citation independent', () => {
+  const history = [
+    point({
+      runId: 'latest',
+      createdAt: '2026-06-29T17:51:00Z',
+      citationState: 'not-cited',
+      answerMentioned: true,
+    }),
+    point({
+      runId: 'first-day',
+      createdAt: '2026-06-22T17:39:00Z',
+      citationState: 'not-cited',
+      answerMentioned: false,
+    }),
+    point({
+      runId: 'same-day-earlier',
+      createdAt: '2026-06-29T17:39:00Z',
+      citationState: 'cited',
+      answerMentioned: false,
+    }),
+  ]
+
+  const result = buildRecentRecordedDays(history, null)
+  expect(result.status).toBe('ready')
+  if (result.status !== 'ready') throw new Error('Expected comparable history')
+  expect(result.totalRecordedDays).toBe(2)
+  expect(result.days).toEqual([
+    {
+      dateKey: '2026-06-22',
+      resultCount: 1,
+      mentionState: 'not-cited',
+      citationState: 'not-cited',
+    },
+    {
+      dateKey: '2026-06-29',
+      resultCount: 2,
+      mentionState: 'cited',
+      citationState: 'not-cited',
+    },
+  ])
+})
+
+test('recent recorded days show only the current location when legacy history mixes scopes', () => {
+  const history = [
+    point({
+      runId: 'legacy-unscoped',
+      createdAt: '2026-06-01T00:00:00Z',
+      location: null,
+    }),
+    point({
+      runId: 'florida-one',
+      createdAt: '2026-06-02T00:00:00Z',
+      location: 'florida',
+    }),
+    point({
+      runId: 'florida-two',
+      createdAt: '2026-06-03T00:00:00Z',
+      location: 'florida',
+    }),
+  ]
+
+  const scoped = buildRecentRecordedDays(history, 'florida')
+  expect(scoped.status).toBe('ready')
+  if (scoped.status !== 'ready') throw new Error('Expected scoped history')
+  expect(scoped.location).toBe('florida')
+  expect(scoped.days.map(day => day.dateKey)).toEqual(['2026-06-02', '2026-06-03'])
+
+  expect(buildRecentRecordedDays(history, null)).toEqual({
+    status: 'mixed-locations',
+    days: [],
+    totalRecordedDays: 0,
+  })
+})
+
+test('recent recorded days retain only the latest bounded date columns', () => {
+  const history = Array.from({ length: 6 }, (_, index) => point({
+    runId: `r${index + 1}`,
+    createdAt: `2026-06-${String(index + 1).padStart(2, '0')}T00:00:00Z`,
+    citationState: index % 2 === 0 ? 'cited' : 'not-cited',
+    answerMentioned: index % 2 === 0,
+  }))
+
+  const result = buildRecentRecordedDays(history, null, 4)
+  expect(result.status).toBe('ready')
+  if (result.status !== 'ready') throw new Error('Expected recent history')
+  expect(result.totalRecordedDays).toBe(6)
+  expect(result.days.map(day => day.dateKey)).toEqual([
+    '2026-06-03',
+    '2026-06-04',
+    '2026-06-05',
+    '2026-06-06',
+  ])
 })

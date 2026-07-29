@@ -10,6 +10,10 @@ import {
 } from '../shared/DataTableControls.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { ProviderBadge } from '../shared/ProviderBadge.js'
+import {
+  EvidenceHistoryMatrix,
+  type EvidenceHistoryMatrixData,
+} from './EvidenceHistoryMatrix.js'
 import { useDrawer } from '../../hooks/use-drawer.js'
 import type { CitationInsightVm, CitationState, RunHistoryPoint } from '../../view-models.js'
 
@@ -173,6 +177,74 @@ function summarizeProjectedSignalHistory(projected: RunHistoryPoint[], mode: Cov
 
 export function summarizeSignalHistory(history: RunHistoryPoint[], mode: CoverageMode): EvidenceSignalSummary {
   return summarizeProjectedSignalHistory(historyForMode(history, mode), mode)
+}
+
+function normalizedHistoryLocation(location?: string | null): string | null {
+  return location?.trim() || null
+}
+
+export function buildRecentRecordedDays(
+  history: RunHistoryPoint[],
+  currentLocation: string | null,
+  maxDays = 4,
+): EvidenceHistoryMatrixData {
+  const datedPoints = history
+    .map((point, index) => ({
+      index,
+      point,
+      timestamp: Date.parse(point.createdAt),
+      location: normalizedHistoryLocation(point.location),
+    }))
+    .filter(point => Number.isFinite(point.timestamp))
+    .sort((left, right) => left.timestamp - right.timestamp || left.index - right.index)
+
+  if (datedPoints.length === 0) {
+    return { status: 'empty', days: [], totalRecordedDays: 0 }
+  }
+
+  const targetLocation = normalizedHistoryLocation(currentLocation)
+  const locations = new Set(datedPoints.map(point => point.location))
+  let comparablePoints = datedPoints
+
+  if (targetLocation !== null) {
+    comparablePoints = datedPoints.filter(point => point.location === targetLocation)
+    if (comparablePoints.length === 0) {
+      return { status: 'no-comparable-history', days: [], totalRecordedDays: 0 }
+    }
+  } else if (locations.size > 1) {
+    return { status: 'mixed-locations', days: [], totalRecordedDays: 0 }
+  }
+
+  const byDate = new Map<string, {
+    dateKey: string
+    resultCount: number
+    latest: RunHistoryPoint
+  }>()
+  for (const entry of comparablePoints) {
+    const dateKey = new Date(entry.timestamp).toISOString().slice(0, 10)
+    const existing = byDate.get(dateKey)
+    byDate.set(dateKey, {
+      dateKey,
+      resultCount: (existing?.resultCount ?? 0) + 1,
+      latest: entry.point,
+    })
+  }
+
+  const allDays = [...byDate.values()]
+  const shownDays = allDays.slice(-Math.max(1, maxDays))
+  const resolvedLocation = targetLocation
+    ?? (locations.size === 1 ? [...locations][0]! : null)
+  return {
+    status: 'ready',
+    totalRecordedDays: allDays.length,
+    location: resolvedLocation,
+    days: shownDays.map(day => ({
+      dateKey: day.dateKey,
+      resultCount: day.resultCount,
+      mentionState: deriveStateForMode(day.latest, 'mentions'),
+      citationState: deriveStateForMode(day.latest, 'citations'),
+    })),
+  }
 }
 
 function classifySignalChange(history: RunHistoryPoint[], mode: CoverageMode): SignalChange {
@@ -501,6 +573,7 @@ export function EvidenceTable({
 }) {
   const { openEvidence } = useDrawer()
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null)
   const [quickView, setQuickView] = useState<EvidenceQuickView>('all')
   const [sortKey, setSortKey] = useState<EvidenceSortKey>('attention')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
@@ -550,6 +623,7 @@ export function EvidenceTable({
   ) as Record<EvidenceQuickView, number>, [searchMatchedGroups])
 
   const toggleRow = (key: string) => {
+    setExpandedHistoryId(null)
     setExpandedRows(previous => {
       const next = new Set(previous)
       if (next.has(key)) next.delete(key)
@@ -756,6 +830,13 @@ export function EvidenceTable({
                               const mentionState = deriveStateForMode(item, 'mentions')
                               const citationState = deriveStateForMode(item, 'citations')
                               const changes = providerChangeSummary(item)
+                              const recentHistory = buildRecentRecordedDays(
+                                item.runHistory,
+                                item.location ?? null,
+                              )
+                              const historyId = `${group.domId}-${item.id}-history`
+                              const canShowHistory = recentHistory.status !== 'empty'
+                              const isHistoryExpanded = expandedHistoryId === item.id
                               const canReview = item.provider.length > 0 && item.runHistory.length > 0
                               return (
                                 <div
@@ -773,6 +854,26 @@ export function EvidenceTable({
                                       <p className="mt-1 font-mono text-[10px] text-secondary">
                                         {[item.model, item.location].filter(Boolean).join(' · ')}
                                       </p>
+                                    ) : null}
+                                    {canShowHistory ? (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        type="button"
+                                        aria-expanded={isHistoryExpanded}
+                                        aria-controls={historyId}
+                                        aria-label={`${isHistoryExpanded ? 'Hide' : 'Show'} recent history for ${providerLabel(item.provider)}`}
+                                        onClick={() => {
+                                          setExpandedHistoryId(previous => previous === item.id ? null : item.id)
+                                        }}
+                                        className="-ml-2 mt-1 h-7 px-2 text-xs"
+                                      >
+                                        <ChevronRight
+                                          aria-hidden="true"
+                                          className={`mr-1 size-3.5 transition-transform ${isHistoryExpanded ? 'rotate-90' : ''}`}
+                                        />
+                                        Recent history
+                                      </Button>
                                     ) : null}
                                   </div>
                                   <div>
@@ -799,13 +900,20 @@ export function EvidenceTable({
                                     type="button"
                                     disabled={!canReview}
                                     aria-label={canReview
-                                      ? `Review ${providerLabel(item.provider)} answer for ${group.phrase}`
+                                      ? `Review ${providerLabel(item.provider)} answer and run history for ${group.phrase}`
                                       : `No answer available for ${group.phrase}`}
                                     onClick={() => { if (canReview) void openEvidence(item.id) }}
                                     className="whitespace-nowrap"
                                   >
-                                    Review answer
+                                    Answer &amp; history
                                   </Button>
+                                  {isHistoryExpanded ? (
+                                    <EvidenceHistoryMatrix
+                                      id={historyId}
+                                      provider={providerLabel(item.provider)}
+                                      data={recentHistory}
+                                    />
+                                  ) : null}
                                 </div>
                               )
                             })}
