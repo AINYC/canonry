@@ -2,8 +2,9 @@
 
 [![npm version](https://img.shields.io/npm/v/@canonry/canonry)](https://www.npmjs.com/package/@canonry/canonry) [![Node.js >= 22.14](https://img.shields.io/badge/node-%3E%3D22.14-brightgreen)](https://nodejs.org)
 
-**Agent-first AEO operating platform. Open source. Self-hosted.**
+Agent first AEO monitoring and execution platform. **Open source. Self-hosted. Local**
 
+- **Local-only:** Canonry runs on your machine and stores its data in SQLite.
 - Track citations across Gemini, ChatGPT, Claude, Perplexity, and local LLMs
 - Watch AI engines crawl and refer traffic via [server-log ingestion](skills/canonry/references/server-side-traffic.md) — Cloud Run, Vercel, and the WordPress Traffic Logger plugin today
 - Diagnose against real traffic with built-in [GSC](docs/google-search-console-setup.md), [GA4](docs/google-analytics-setup.md), and [Bing Webmaster](docs/bing-webmaster-setup.md)
