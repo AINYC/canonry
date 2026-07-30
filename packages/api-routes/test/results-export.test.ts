@@ -23,6 +23,11 @@ interface ResultExportResponse {
     cited: boolean
     answerMentioned: boolean | null
     mentionState: string | null
+    citedUrls: string[] | null
+    captureStatus: string | null
+    sourceCount: number | null
+    resolvedCount: number | null
+    captureVersion: number | null
     answerText: string | null
     groundingSources: Array<{ uri: string; title: string }>
     searchQueries: string[]
@@ -98,6 +103,11 @@ function buildCtx(): Ctx {
       answerMentioned: true,
       answerText: 'Acme, Inc. is a cited answer.',
       citedDomains: ['acme.example'],
+      citedUrls: ['https://acme.example/guide'],
+      captureStatus: 'complete',
+      sourceCount: 1,
+      resolvedCount: 1,
+      captureVersion: 1,
       competitorOverlap: ['rival.example'],
       recommendedCompetitors: ['new-rival.example'],
       location: 'new-york',
@@ -220,11 +230,21 @@ describe('GET /api/v1/projects/:name/results/export', () => {
       answerText: 'Acme, Inc. is a cited answer.',
       groundingSources: [{ uri: 'https://acme.example/guide', title: 'Acme guide' }],
       searchQueries: ['acme guide'],
+      citedUrls: ['https://acme.example/guide'],
+      captureStatus: 'complete',
+      sourceCount: 1,
+      resolvedCount: 1,
+      captureVersion: 1,
     })
     expect(body.records[1]).toMatchObject({
       runStatus: 'partial',
       answerMentioned: null,
       mentionState: null,
+      citedUrls: null,
+      captureStatus: null,
+      sourceCount: null,
+      resolvedCount: null,
+      captureVersion: null,
     })
     expect(body.records[2]).toMatchObject({
       runStatus: 'failed',
@@ -265,6 +285,7 @@ describe('GET /api/v1/projects/:name/results/export', () => {
     expect(res.headers['content-type']).toContain('text/csv')
     expect(res.headers['content-disposition']).toMatch(/\.csv"/)
     expect(res.body).toContain('export_schema_version,project_id,project_name,project_display_name,canonical_domain')
+    expect(res.body.split('\r\n')[0]).toContain('cited_urls_json,capture_status,source_count,resolved_count,capture_version')
     expect(res.body).toContain("'=SUM(1,1)")
     expect(res.body).not.toContain('privateProviderField')
   })

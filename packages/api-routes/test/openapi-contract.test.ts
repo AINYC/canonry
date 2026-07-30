@@ -223,6 +223,29 @@ describe('openapi contract', () => {
     expect(JSON.stringify(schema?.properties?.measurement)).toContain('days')
   })
 
+  it('publishes the typed search response, including cited URL matches', async () => {
+    const ctx = buildObservedApp()
+    contexts.push(ctx)
+    await ctx.app.ready()
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/openapi.json' })
+    expect(res.statusCode).toBe(200)
+
+    const body = res.json() as {
+      components?: { schemas?: Record<string, unknown> }
+      paths: Record<string, Record<string, {
+        responses?: Record<string, {
+          content?: Record<string, { schema?: { $ref?: string } }>
+        }>
+      }>>
+    }
+
+    const responseSchema = body.paths['/api/v1/projects/{name}/search']?.get
+      ?.responses?.['200']?.content?.['application/json']?.schema
+    expect(responseSchema?.$ref).toBe('#/components/schemas/ProjectSearchResponseDto')
+    expect(JSON.stringify(body.components?.schemas?.ProjectSearchResponseDto)).toContain('citedUrls')
+  })
+
   it('every registered component schema is referenced by at least one route', async () => {
     // Keeps the schema table honest: removing a schema from a route without
     // removing it from `openapi-schemas.ts` is a slow leak. This test

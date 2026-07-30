@@ -824,6 +824,41 @@ describe('GET /api/v1/projects/:name/search', () => {
     await app.close()
   })
 
+  it('finds a term that appears only in a captured cited URL', async () => {
+    const { app, db, latestRunId, queryB } = seedProjectWithRuns()
+    db.insert(querySnapshots).values({
+      id: crypto.randomUUID(),
+      runId: latestRunId,
+      queryId: queryB,
+      provider: 'gemini',
+      citationState: 'not-cited',
+      answerText: null,
+      citedDomains: [],
+      citedUrls: ['https://publisher.example/guides/cited-url-needle-path'],
+      captureStatus: 'complete',
+      sourceCount: 1,
+      resolvedCount: 1,
+      captureVersion: 1,
+      competitorOverlap: [],
+      recommendedCompetitors: [],
+      rawResponse: null,
+      createdAt: '2026-04-18T14:20:31.000Z',
+    }).run()
+    await app.ready()
+
+    const res = await app.inject({ method: 'GET', url: '/api/v1/projects/demo/search?q=cited-url-needle' })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as ProjectSearchResponseDto
+    const hit = body.hits.find((candidate) => candidate.kind === 'snapshot' && candidate.matchedField === 'citedUrls')
+    expect(hit).toMatchObject({
+      kind: 'snapshot',
+      matchedField: 'citedUrls',
+      snippet: expect.stringContaining('https://publisher.example/guides/cited-url-needle-path'),
+    })
+
+    await app.close()
+  })
+
   it('rejects queries shorter than 2 chars', async () => {
     const { app } = seedProjectWithRuns()
     await app.ready()

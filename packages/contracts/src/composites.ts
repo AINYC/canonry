@@ -465,7 +465,7 @@ export const projectSearchSnapshotHitSchema = z.object({
   provider: z.string(),
   model: z.string().nullable(),
   citationState: citationStateSchema,
-  matchedField: z.enum(['answerText', 'citedDomains', 'searchQueries', 'query']),
+  matchedField: z.enum(['answerText', 'citedDomains', 'citedUrls', 'searchQueries', 'query']),
   snippet: z.string(),
   createdAt: z.string(),
 })

@@ -3665,7 +3665,7 @@ export const getApiV1ProjectsByNameOverview = <ThrowOnError extends boolean = fa
 /**
  * Search query snapshots and insights for text
  *
- * Returns the most recent snapshots and insights whose answer text, cited domains, raw response, or insight title/query/recommendation/cause matches the query. Use to find anything mentioning a competitor, term, or URL without paginating snapshots.
+ * Returns the most recent snapshots and insights whose answer text, cited domains, captured cited URLs, raw response, or insight title/query/recommendation/cause matches the query. Use to find anything mentioning a competitor, term, or URL without paginating snapshots.
  */
 export const getApiV1ProjectsByNameSearch = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameSearchData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameSearchResponses, GetApiV1ProjectsByNameSearchErrors, ThrowOnError>({

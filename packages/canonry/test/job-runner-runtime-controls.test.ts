@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { eq } from 'drizzle-orm'
-import { expect, onTestFinished, test } from 'vitest'
+import { expect, onTestFinished, test, vi } from 'vitest'
 import type {
   NormalizedQueryResult,
   ProviderAdapter,
@@ -244,4 +244,42 @@ test('JobRunner stops dispatching new work after a run is cancelled', async () =
   expect(callCount).toBe(1)
   const snapshots = db.select().from(querySnapshots).where(eq(querySnapshots.runId, runId)).all()
   expect(snapshots).toHaveLength(0)
+})
+
+test('JobRunner does not insert a snapshot when cancellation lands during cited URL resolution', async () => {
+  const { db } = createTempDb('canonry-job-runner-cited-url-cancel-')
+  const { projectId, runId } = seedRunFixture(db, 1)
+  let releaseRedirect: (() => void) | undefined
+  const redirectStarted = new Promise<void>((resolve) => { releaseRedirect = resolve })
+  let markRedirectStarted: (() => void) | undefined
+  const waitForRedirect = new Promise<void>((resolve) => { markRedirectStarted = resolve })
+  const fetchImpl = vi.fn(async () => {
+    markRedirectStarted?.()
+    await redirectStarted
+    return new Response(null, { status: 302, headers: { location: 'https://publisher.example/final' } })
+  })
+  vi.stubGlobal('fetch', fetchImpl)
+  onTestFinished(() => vi.unstubAllGlobals())
+
+  const registry = new ProviderRegistry()
+  registry.register(buildAdapter({
+    async executeTrackedQuery(_input: TrackedQueryInput, _config: ProviderConfig): Promise<RawQueryResult> {
+      return { provider: 'gemini', rawResponse: {}, model: 'stub-model', groundingSources: [{ uri: 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/pending', title: 'Pending' }], searchQueries: [] }
+    },
+    normalizeResult(_raw: RawQueryResult): NormalizedQueryResult {
+      return { provider: 'gemini', answerText: 'stub answer', citedDomains: [], groundingSources: [{ uri: 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/pending', title: 'Pending' }], searchQueries: [] }
+    },
+  }), {
+    provider: 'gemini', apiKey: 'test-key', quotaPolicy: { maxConcurrency: 1, maxRequestsPerMinute: 60, maxRequestsPerDay: 100 },
+  })
+
+  const execution = new JobRunner(db, registry).executeRun(runId, projectId)
+  await waitForRedirect
+  db.update(runs).set({ status: 'cancelled', finishedAt: new Date().toISOString(), error: 'Cancelled by user' }).where(eq(runs.id, runId)).run()
+  releaseRedirect?.()
+  await execution
+
+  expect(fetchImpl).toHaveBeenCalledTimes(1)
+  expect(db.select().from(querySnapshots).where(eq(querySnapshots.runId, runId)).all()).toHaveLength(0)
+  expect(db.select().from(runs).where(eq(runs.id, runId)).get()?.status).toBe('cancelled')
 })

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { providerNameSchema } from './provider.js'
+import { citedUrlCaptureStatusSchema } from './cited-urls.js'
 
 export const runStatusSchema = z.enum(['queued', 'running', 'completed', 'partial', 'failed', 'cancelled'])
 export type RunStatus = z.infer<typeof runStatusSchema>
@@ -239,6 +240,13 @@ export const querySnapshotDtoSchema = z.object({
   transition: computedTransitionSchema.optional(),
   answerText: z.string().nullable().optional(),
   citedDomains: z.array(z.string()).default([]),
+  citedUrls: z.array(z.string()).nullable().default(null),
+  // Spell nullable as a union so the OpenAPI generator preserves null on the
+  // enum (rather than dropping `nullable` from an enum reference).
+  captureStatus: z.union([citedUrlCaptureStatusSchema, z.null()]).default(null),
+  sourceCount: z.number().int().nonnegative().nullable().default(null),
+  resolvedCount: z.number().int().nonnegative().nullable().default(null),
+  captureVersion: z.number().int().positive().nullable().default(null),
   competitorOverlap: z.array(z.string()).default([]),
   recommendedCompetitors: z.array(z.string()).default([]),
   matchedTerms: z.array(z.string()).default([]),

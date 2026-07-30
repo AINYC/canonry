@@ -4126,7 +4126,7 @@ export const getApiV1ProjectsByNameSearchQueryKey = (options: Options<GetApiV1Pr
 /**
  * Search query snapshots and insights for text
  *
- * Returns the most recent snapshots and insights whose answer text, cited domains, raw response, or insight title/query/recommendation/cause matches the query. Use to find anything mentioning a competitor, term, or URL without paginating snapshots.
+ * Returns the most recent snapshots and insights whose answer text, cited domains, captured cited URLs, raw response, or insight title/query/recommendation/cause matches the query. Use to find anything mentioning a competitor, term, or URL without paginating snapshots.
  */
 export const getApiV1ProjectsByNameSearchOptions = (options: Options<GetApiV1ProjectsByNameSearchData>) => {
     return queryOptions({

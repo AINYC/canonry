@@ -723,6 +723,11 @@ describe('api-routes', () => {
       citationState: 'not-cited',
       answerText: '1. Downtown Smiles - strong reviews',
       citedDomains: ['downtownsmiles.com'],
+      citedUrls: ['https://publisher.example/guides/answer'],
+      captureStatus: 'complete',
+      sourceCount: 1,
+      resolvedCount: 1,
+      captureVersion: 1,
       competitorOverlap: ['downtownsmiles.com'],
       recommendedCompetitors: ['Downtown Smiles'],
       rawResponse: '{"groundingSources":[],"searchQueries":[]}',
@@ -736,11 +741,21 @@ describe('api-routes', () => {
         recommendedCompetitors: string[]
         answerMentioned?: boolean
         visibilityState?: string
+        citedUrls?: string[] | null
+        captureStatus?: string | null
+        sourceCount?: number | null
+        resolvedCount?: number | null
+        captureVersion?: number | null
       }>
     }
     expect(runBody.snapshots[0]?.recommendedCompetitors).toEqual(['Downtown Smiles'])
     expect(runBody.snapshots[0]?.answerMentioned).toBe(false)
     expect(runBody.snapshots[0]?.visibilityState).toBe('not-visible')
+    expect(runBody.snapshots[0]?.citedUrls).toEqual(['https://publisher.example/guides/answer'])
+    expect(runBody.snapshots[0]?.captureStatus).toBe('complete')
+    expect(runBody.snapshots[0]?.sourceCount).toBe(1)
+    expect(runBody.snapshots[0]?.resolvedCount).toBe(1)
+    expect(runBody.snapshots[0]?.captureVersion).toBe(1)
 
     const historyRes = await app.inject({ method: 'GET', url: '/api/v1/projects/snapshot-history-project/snapshots' })
     expect(historyRes.statusCode).toBe(200)
@@ -749,11 +764,42 @@ describe('api-routes', () => {
         recommendedCompetitors: string[]
         answerMentioned?: boolean
         visibilityState?: string
+        citedUrls?: string[] | null
+        captureStatus?: string | null
+        sourceCount?: number | null
+        resolvedCount?: number | null
+        captureVersion?: number | null
       }>
     }
     expect(historyBody.snapshots[0]?.recommendedCompetitors).toEqual(['Downtown Smiles'])
     expect(historyBody.snapshots[0]?.answerMentioned).toBe(false)
     expect(historyBody.snapshots[0]?.visibilityState).toBe('not-visible')
+    expect(historyBody.snapshots[0]?.citedUrls).toEqual(['https://publisher.example/guides/answer'])
+    expect(historyBody.snapshots[0]?.captureStatus).toBe('complete')
+    expect(historyBody.snapshots[0]?.sourceCount).toBe(1)
+    expect(historyBody.snapshots[0]?.resolvedCount).toBe(1)
+    expect(historyBody.snapshots[0]?.captureVersion).toBe(1)
+
+    const legacyRunId = crypto.randomUUID()
+    db.insert(runs).values({ id: legacyRunId, projectId, status: 'completed', createdAt: now, finishedAt: now }).run()
+    db.insert(querySnapshots).values({
+      id: crypto.randomUUID(), runId: legacyRunId, queryId, provider: 'gemini', citationState: 'not-cited',
+      answerText: 'Legacy snapshot.', citedDomains: [], competitorOverlap: [], recommendedCompetitors: [], createdAt: now,
+    }).run()
+    const legacyRes = await app.inject({ method: 'GET', url: `/api/v1/runs/${legacyRunId}` })
+    expect(legacyRes.statusCode).toBe(200)
+    const legacy = JSON.parse(legacyRes.payload) as { snapshots: Array<{
+      citedUrls: string[] | null; captureStatus: string | null; sourceCount: number | null; resolvedCount: number | null; captureVersion: number | null
+    }> }
+    expect(legacy.snapshots[0]).toMatchObject({
+      citedUrls: null, captureStatus: null, sourceCount: null, resolvedCount: null, captureVersion: null,
+    })
+    const legacyHistory = (await app.inject({ method: 'GET', url: '/api/v1/projects/snapshot-history-project/snapshots' })).json() as {
+      snapshots: Array<{ runId: string; citedUrls: string[] | null; captureStatus: string | null; sourceCount: number | null; resolvedCount: number | null; captureVersion: number | null }>
+    }
+    expect(legacyHistory.snapshots.find((snapshot) => snapshot.runId === legacyRunId)).toMatchObject({
+      citedUrls: null, captureStatus: null, sourceCount: null, resolvedCount: null, captureVersion: null,
+    })
   })
 
   it('project timeline exposes answer visibility states and transitions', async () => {

@@ -18,6 +18,7 @@ import {
   determineCitationState,
   extractRecommendedCompetitors,
 } from './citation-utils.js'
+import { captureCitedUrls } from './cited-url-capture.js'
 
 const log = createLogger('JobRunner')
 
@@ -380,6 +381,8 @@ export class JobRunner {
             this.throwIfRunCancelled(runId)
 
             const normalized = adapter.normalizeResult(raw)
+            const citedUrlCapture = await captureCitedUrls(providerName, normalized.groundingSources)
+            this.throwIfRunCancelled(runId)
 
             log.info('query.result', { runId, provider: providerName, query: q.query, citedDomains: normalized.citedDomains, groundingSources: normalized.groundingSources.map(s => s.uri), matchDomains: allDomains })
             const citationState = determineCitationState(normalized, allDomains)
@@ -419,6 +422,11 @@ export class JobRunner {
                 answerMentioned,
                 answerText: normalized.answerText,
                 citedDomains: normalized.citedDomains,
+                citedUrls: citedUrlCapture.citedUrls,
+                captureStatus: citedUrlCapture.captureStatus,
+                sourceCount: citedUrlCapture.sourceCount,
+                resolvedCount: citedUrlCapture.resolvedCount,
+                captureVersion: citedUrlCapture.captureVersion,
                 competitorOverlap: overlap,
                 recommendedCompetitors: extractedCompetitors,
                 location: runLocation?.label ?? null,
@@ -445,6 +453,11 @@ export class JobRunner {
                 answerMentioned,
                 answerText: normalized.answerText,
                 citedDomains: normalized.citedDomains,
+                citedUrls: citedUrlCapture.citedUrls,
+                captureStatus: citedUrlCapture.captureStatus,
+                sourceCount: citedUrlCapture.sourceCount,
+                resolvedCount: citedUrlCapture.resolvedCount,
+                captureVersion: citedUrlCapture.captureVersion,
                 competitorOverlap: overlap,
                 recommendedCompetitors: extractedCompetitors,
                 location: runLocation?.label ?? null,

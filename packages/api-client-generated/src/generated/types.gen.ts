@@ -2655,6 +2655,11 @@ export type LatestProjectRunDto = {
             transition?: 'new' | 'cited' | 'lost' | 'emerging' | 'not-cited';
             answerText?: string | null;
             citedDomains: Array<string>;
+            citedUrls: Array<string> | null;
+            captureStatus: 'complete' | 'partial' | 'failed' | 'unsupported' | null;
+            sourceCount: number | null;
+            resolvedCount: number | null;
+            captureVersion: number | null;
             competitorOverlap: Array<string>;
             recommendedCompetitors: Array<string>;
             matchedTerms: Array<string>;
@@ -3168,6 +3173,11 @@ export type ProjectOverviewDto = {
                 transition?: 'new' | 'cited' | 'lost' | 'emerging' | 'not-cited';
                 answerText?: string | null;
                 citedDomains: Array<string>;
+                citedUrls: Array<string> | null;
+                captureStatus: 'complete' | 'partial' | 'failed' | 'unsupported' | null;
+                sourceCount: number | null;
+                resolvedCount: number | null;
+                captureVersion: number | null;
                 competitorOverlap: Array<string>;
                 recommendedCompetitors: Array<string>;
                 matchedTerms: Array<string>;
@@ -3937,6 +3947,37 @@ export type ProjectReportDto = {
     }>;
 };
 
+export type ProjectSearchResponseDto = {
+    query: string;
+    totalHits: number;
+    truncated: boolean;
+    hits: Array<{
+        kind: 'snapshot';
+        id: string;
+        runId: string;
+        query: string;
+        provider: string;
+        model: string | null;
+        citationState: 'cited' | 'not-cited';
+        matchedField: 'answerText' | 'citedDomains' | 'citedUrls' | 'searchQueries' | 'query';
+        snippet: string;
+        createdAt: string;
+    } | {
+        kind: 'insight';
+        id: string;
+        runId: string | null;
+        type: 'regression' | 'gain' | 'opportunity' | 'first-citation' | 'provider-pickup' | 'persistent-gap' | 'competitor-gained' | 'competitor-lost' | 'gbp-lodging-gap' | 'gbp-listing-discrepancy' | 'gbp-cta-gap' | 'gbp-description-missing' | 'gbp-metric-drop' | 'gbp-keyword-drop';
+        severity: 'critical' | 'high' | 'medium' | 'low';
+        title: string;
+        query: string;
+        provider: string;
+        matchedField: 'title' | 'query' | 'recommendation' | 'cause';
+        snippet: string;
+        dismissed: boolean;
+        createdAt: string;
+    }>;
+};
+
 export type QueryDto = {
     id: string;
     query: string;
@@ -3980,6 +4021,11 @@ export type ResultsExportDto = {
         answerMentioned: boolean | null;
         mentionState: 'mentioned' | 'not-mentioned' | null;
         citedDomains: Array<string>;
+        citedUrls: Array<string> | null;
+        captureStatus: 'complete' | 'partial' | 'failed' | 'unsupported' | null;
+        sourceCount: number | null;
+        resolvedCount: number | null;
+        captureVersion: number | null;
         competitorOverlap: Array<string>;
         recommendedCompetitors: Array<string>;
         answerText: string | null;
@@ -4024,6 +4070,11 @@ export type RunDetailDto = {
         transition?: 'new' | 'cited' | 'lost' | 'emerging' | 'not-cited';
         answerText?: string | null;
         citedDomains: Array<string>;
+        citedUrls: Array<string> | null;
+        captureStatus: 'complete' | 'partial' | 'failed' | 'unsupported' | null;
+        sourceCount: number | null;
+        resolvedCount: number | null;
+        captureVersion: number | null;
         competitorOverlap: Array<string>;
         recommendedCompetitors: Array<string>;
         matchedTerms: Array<string>;
@@ -4225,6 +4276,11 @@ export type SnapshotListResponse = {
         transition?: 'new' | 'cited' | 'lost' | 'emerging' | 'not-cited';
         answerText?: string | null;
         citedDomains: Array<string>;
+        citedUrls: Array<string> | null;
+        captureStatus: 'complete' | 'partial' | 'failed' | 'unsupported' | null;
+        sourceCount: number | null;
+        resolvedCount: number | null;
+        captureVersion: number | null;
         competitorOverlap: Array<string>;
         recommendedCompetitors: Array<string>;
         matchedTerms: Array<string>;
@@ -12546,9 +12602,7 @@ export type GetApiV1ProjectsByNameSearchResponses = {
     /**
      * Search hits returned.
      */
-    200: {
-        [key: string]: unknown;
-    };
+    200: ProjectSearchResponseDto;
 };
 
 export type GetApiV1ProjectsByNameSearchResponse = GetApiV1ProjectsByNameSearchResponses[keyof GetApiV1ProjectsByNameSearchResponses];
