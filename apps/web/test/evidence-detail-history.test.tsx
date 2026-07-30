@@ -57,6 +57,7 @@ test('separates the recorded-day trend from exact answer snapshots in one detail
   expect(within(trend).getByRole('columnheader', { name: /July 1, 2026 UTC/ })).toBeTruthy()
   expect(within(trend).getByRole('columnheader', { name: /July 15, 2026 UTC/ })).toBeTruthy()
   expect(within(trend).getByText(/2 results/)).toBeTruthy()
+  expect(trend.querySelector('svg')).toBeNull()
   expect(screen.getByText('Answer snapshots')).toBeTruthy()
   expect(screen.getByText('Select a run to inspect the exact answer.')).toBeTruthy()
 })

@@ -2238,32 +2238,19 @@
     @apply text-transparent;
   }
 
-  .evidence-history-strip-mark--latest {
-    @apply border-mono-500;
-  }
-
   .evidence-signal-value {
-    @apply inline-grid items-center gap-1.5 text-xs font-medium text-secondary;
-    grid-template-columns: 1rem auto;
-  }
-
-  .evidence-signal-value svg {
-    @apply size-3.5;
+    @apply text-xs font-medium text-secondary;
   }
 
   .evidence-signal-value--present {
     @apply text-strong;
   }
 
-  .evidence-signal-value--present svg {
-    @apply text-positive;
-  }
-
-  .evidence-signal-value--absent svg {
+  .evidence-signal-value--absent {
     @apply text-muted;
   }
 
-  .evidence-signal-value--pending svg {
+  .evidence-signal-value--pending {
     @apply text-faint;
   }
 

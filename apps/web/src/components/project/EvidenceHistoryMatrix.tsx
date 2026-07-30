@@ -1,5 +1,3 @@
-import { Check, Clock3, Minus } from 'lucide-react'
-
 import type { CitationState, RunHistoryPoint } from '../../view-models.js'
 
 export interface EvidenceHistoryDay {
@@ -182,17 +180,14 @@ function HistoryValue({
   mode: 'mentions' | 'citations'
 }) {
   const status = historyStatus(state, mode)
-  const Icon = status.tone === 'present' ? Check : status.tone === 'pending' ? Clock3 : Minus
   const toneClass = status.tone === 'present'
-    ? 'text-positive'
+    ? 'text-strong'
     : status.tone === 'pending'
       ? 'text-faint'
       : 'text-muted'
 
   return (
-    <span className="inline-grid grid-cols-[1rem_auto] items-center gap-1.5 text-xs text-secondary">
-      <Icon aria-hidden="true" className={`size-3.5 ${toneClass}`} />
-      <span className="sr-only">{status.label}</span>
+    <span aria-label={status.label} className={`text-xs ${toneClass}`}>
       <span aria-hidden="true">{status.short}</span>
     </span>
   )
@@ -223,7 +218,7 @@ function StripTrack({
     <div className="evidence-history-strip-track" aria-hidden="true">
       <span className="evidence-history-strip-label">{label}</span>
       <span className="evidence-history-strip-marks">
-        {dateKeys.map((dateKey, index) => {
+        {dateKeys.map(dateKey => {
           const day = daysByDate.get(dateKey)
           const state = day?.[mode === 'mentions' ? 'mentionState' : 'citationState']
           const symbol = state === undefined
@@ -248,7 +243,7 @@ function StripTrack({
                     : state === 'cited' || state === 'emerging'
                       ? 'evidence-history-strip-mark--present'
                       : 'evidence-history-strip-mark--absent'
-              } ${index === dateKeys.length - 1 ? 'evidence-history-strip-mark--latest' : ''}`}
+              }`}
             >
               {symbol}
             </span>

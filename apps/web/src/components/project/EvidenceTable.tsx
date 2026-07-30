@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronRight, Clock3, Minus } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight } from 'lucide-react'
 
 import { Button } from '../ui/button.js'
 import {
@@ -389,17 +389,15 @@ function EvidenceSignalValue({
   mode: CoverageMode
 }) {
   const tone = state === 'pending' ? 'pending' : isPresentState(state) ? 'present' : 'absent'
-  const Icon = tone === 'present' ? Check : tone === 'pending' ? Clock3 : Minus
+  const visibleLabel = state === 'pending' ? 'No result' : isPresentState(state) ? 'Yes' : 'No'
+  const statusLabel = `${mode === 'mentions' ? 'Mention' : 'Citation'} status: ${currentStatusLabel(state, mode)}`
 
   return (
-    <span className={`evidence-signal-value evidence-signal-value--${tone}`}>
-      <Icon aria-hidden="true" />
-      <span>
-        <span className="sr-only">
-          {mode === 'mentions' ? 'Mention status: ' : 'Citation status: '}
-        </span>
-        {currentStatusLabel(state, mode)}
-      </span>
+    <span
+      aria-label={statusLabel}
+      className={`evidence-signal-value evidence-signal-value--${tone}`}
+    >
+      {visibleLabel}
     </span>
   )
 }
