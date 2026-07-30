@@ -86,6 +86,23 @@ test('buildProjectCommandCenter evidence summary uses canonical mention vocabula
   // Summary text must use the canonical "mentioned" vocabulary, not "visible".
   expect(evidence!.summary).toMatch(/mentioned/i)
   expect(evidence!.summary).not.toMatch(/\bvisible\b/i)
+
+  // A sparse latest snapshot must not hide the canonical mention observation
+  // already present in its timeline history.
+  const sparseSnapshot = buildProjectCommandCenter({
+    ...data,
+    latestRunDetails: data.latestRunDetails.map(detail => ({
+      ...detail,
+      snapshots: detail.snapshots.map(snapshot => ({
+        ...snapshot,
+        answerMentioned: undefined,
+        visibilityState: undefined,
+        mentionState: undefined,
+      })),
+    })),
+  }).visibilityEvidence[0]
+  expect(sparseSnapshot?.visibilityState).toBe('visible')
+  expect(sparseSnapshot?.summary).toMatch(/is mentioned/i)
 })
 
 test('buildProjectCommandCenter carries the model web search queries into evidence', () => {

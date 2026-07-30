@@ -242,9 +242,9 @@ function buildEvidenceFromTimeline(
             ? effectiveHistory.at(-1)!.transition
             : transition
           const latestMentionHistory = effectiveHistory?.at(-1)
-          const snapVisibilityState = resolveMentionObservation(
-            snap ?? latestMentionHistory ?? latestRun,
-          )
+          const snapVisibilityState = resolveMentionObservation(snap)
+            ?? resolveMentionObservation(latestMentionHistory)
+            ?? resolveMentionObservation(latestRun)
           const effectiveVisibilityTransition = latestMentionHistory?.mentionTransition
             ?? latestMentionHistory?.visibilityTransition
             ?? snapVisibilityState
