@@ -23,6 +23,8 @@ import * as schema from '../src/schema.js'
  */
 
 interface SqliteForeignKey {
+  id: number
+  seq: number
   from: string
   table: string
   to: string
@@ -65,31 +67,41 @@ test('every foreign key declared in schema.ts exists in the migrated database', 
       const actual = db.$client
         .prepare(`PRAGMA foreign_key_list(${config.name})`)
         .all() as SqliteForeignKey[]
-      const actualByColumn = new Map(actual.map((fk) => [fk.from, fk]))
+      const actualGroups = new Map<number, SqliteForeignKey[]>()
+      for (const row of actual) {
+        const group = actualGroups.get(row.id) ?? []
+        group.push(row)
+        actualGroups.set(row.id, group)
+      }
+      const orderedActualGroups = [...actualGroups.values()]
+        .map((group) => group.sort((left, right) => left.seq - right.seq))
 
       for (const foreignKey of config.foreignKeys) {
         const reference = foreignKey.reference()
-        const column = reference.columns[0]!.name
+        const columns = reference.columns.map((column) => column.name)
+        const foreignColumns = reference.foreignColumns.map((column) => column.name)
         const referencedTable = getTableConfig(reference.foreignTable as never).name
         foreignKeysChecked++
 
-        const found = actualByColumn.get(column)
+        const found = orderedActualGroups.find((group) => (
+          group.length === columns.length
+          && group.every((row, index) => (
+            row.from === columns[index]
+            && row.table === referencedTable
+            && row.to === foreignColumns[index]
+          ))
+        ))
         if (!found) {
           problems.push(
-            `${config.name}.${column}: schema.ts declares REFERENCES ${referencedTable}, but the migration created the column with no foreign key`,
+            `${config.name}(${columns.join(', ')}): schema.ts declares REFERENCES ${referencedTable}(${foreignColumns.join(', ')}), but the migration has no matching foreign key`,
           )
           continue
         }
-        if (found.table !== referencedTable) {
-          problems.push(
-            `${config.name}.${column}: schema.ts references ${referencedTable}, migration references ${found.table}`,
-          )
-        }
         const expectedOnDelete = normalizeAction(foreignKey.onDelete)
-        const actualOnDelete = normalizeAction(found.on_delete)
+        const actualOnDelete = normalizeAction(found[0]?.on_delete)
         if (expectedOnDelete !== actualOnDelete) {
           problems.push(
-            `${config.name}.${column}: schema.ts says ON DELETE ${expectedOnDelete}, migration says ON DELETE ${actualOnDelete}`,
+            `${config.name}(${columns.join(', ')}): schema.ts says ON DELETE ${expectedOnDelete}, migration says ON DELETE ${actualOnDelete}`,
           )
         }
       }

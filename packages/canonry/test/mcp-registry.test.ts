@@ -56,6 +56,11 @@ const expectedToolNames = [
   'canonry_backlinks_sources',
   'canonry_settings_get',
   'canonry_google_connections_list',
+  'canonry_gsc_platform_properties',
+  'canonry_gsc_platform_performance',
+  'canonry_gsc_platform_property_upsert',
+  'canonry_gsc_platform_property_remove',
+  'canonry_gsc_platform_property_sync',
   'canonry_gsc_performance',
   'canonry_gsc_performance_daily',
   'canonry_gsc_inspections',
@@ -164,8 +169,8 @@ const expectedToolNames = [
 
 describe('MCP tool registry', () => {
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(144)
-    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(92)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(149)
+    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(94)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(readNames)
@@ -203,7 +208,7 @@ describe('MCP tool registry', () => {
     }
     expect(counts.get('monitoring')).toBe(28)
     expect(counts.get('setup')).toBe(24)
-    expect(counts.get('gsc')).toBe(9)
+    expect(counts.get('gsc')).toBe(14)
     expect(counts.get('ga')).toBe(10)
     expect(counts.get('gbp')).toBe(13)
     expect(counts.get('ads')).toBe(26)
@@ -434,6 +439,9 @@ describe('MCP tool registry', () => {
       openWorldHint: true,
     })
     expect(annotations.canonry_gsc_sitemaps_submit).toMatchObject({ idempotentHint: false, destructiveHint: false, openWorldHint: true })
+    expect(annotations.canonry_gsc_platform_property_upsert).toMatchObject({ idempotentHint: true, destructiveHint: false, openWorldHint: true })
+    expect(annotations.canonry_gsc_platform_property_remove).toMatchObject({ idempotentHint: false, destructiveHint: true })
+    expect(annotations.canonry_gsc_platform_property_sync).toMatchObject({ idempotentHint: false, destructiveHint: false, openWorldHint: true })
   })
 
   it('accepts exactly one sitemap submission branch', () => {

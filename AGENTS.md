@@ -169,6 +169,13 @@ canonry technical-aeo trend <project> [--limit <n>] [--format json|jsonl]       
 # Google Search Console sitemaps — list, store a local default, or submit/resubmit to Google
 canonry google submit-sitemap <project> (<url...>|--configured|--all|--all-files) [--format json|jsonl]
 
+# Google Search Console social/video properties — create/verify in Google's UI first
+canonry google platform list <project> [--format json|jsonl]
+canonry google platform add <project> <site-url> --platform instagram|tiktok|x|youtube [--label <name>]
+canonry google platform sync <project> <property-id> [--wait] [--format json]
+canonry google platform performance <project> [--property <id>] [--dimension page|query] [--window 7d|30d|90d|all]
+canonry google platform remove <project> <property-id> [--format json]
+
 # MCP adapter (separate bin, stdio only)
 canonry-mcp                                          # core tier (~12 tools); load toolkits on demand
 canonry-mcp --read-only                              # core read tier; toolkits load read-only tools only
@@ -176,7 +183,7 @@ canonry-mcp --eager                                  # register all API tools at
 
 # MCP client install helpers (operate on local client config files)
 canonry mcp install --client claude-desktop          # merges a canonry entry into the config
-canonry mcp install --client cursor --read-only      # scope to the 88 read API tools
+canonry mcp install --client cursor --read-only      # scope to the 94 read API tools
 canonry mcp config  --client codex                   # print snippet for clients without auto-install
 
 # Skills — install canonry's agent playbook into a user's project
@@ -309,7 +316,7 @@ Each check returns `status: ok | warn | fail | skipped`, a stable machine-readab
 For MCP clients such as Claude Desktop, Codex, or custom agent shells that
 prefer a typed tool catalog over shell or HTTP, the package ships a separate
 `canonry-mcp` bin. It is a thin stdio adapter over `createApiClient()` — not
-a parallel surface. v1 exposes 140 curated API tools (88 read, 52 write) — including
+a parallel surface. v1 exposes 149 curated API tools (94 read, 55 write) — including
 the `canonry_project_overview` and `canonry_search` core composites; the
 catalog is split across a small **core tier** (always loaded) and nine
 **toolkits** (`monitoring`, `setup`, `gsc`, `ga`, `gbp`, `ads`, `traffic`, `agent`, `discovery`) that the client
@@ -323,7 +330,7 @@ from `~/.canonry/config.yaml`.
 Key files:
 - `packages/canonry/src/mcp/server.ts` — `createCanonryMcpServer` (one client per server instance, registers core tier + meta tools)
 - `packages/canonry/src/mcp/cli.ts` — stdio entrypoint + scope/eager flag parsing
-- `packages/canonry/src/mcp/tool-registry.ts` — single source of truth for all 140 API tools, each tagged with a `tier`
+- `packages/canonry/src/mcp/tool-registry.ts` — single source of truth for all 149 API tools, each tagged with a `tier`
 - `packages/canonry/src/mcp/toolkits.ts` — toolkit catalog (`monitoring`, `setup`, `gsc`, `ga`, `gbp`, `ads`, `traffic`, `agent`, `discovery`) consumed by `canonry_help`
 - `packages/canonry/src/mcp/dynamic-catalog.ts` — `DynamicToolCatalog`: enables tools on `canonry_load_toolkit`, drives `canonry_help`
 - `packages/canonry/src/mcp/openapi-classification.ts` — drift table; every published OpenAPI op is `included`, `deferred`, or `excluded-protocol`

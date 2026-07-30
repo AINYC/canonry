@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import { check, foreignKey, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import type { AdsActivationEntityType, AdsActivationGrantState, AdsActivationManifest, AdsOperationStepState, AdsReconcileFields, BacklinkSource, ContentBriefDto, DiscoveryCompetitorMapEntry, DiscoveryCompetitorType, AiReferralTrafficClass, LocationContext, ProviderModels, ProviderName, SiteAuditCrossCuttingIssueDto, SiteAuditFactorSummaryDto, SiteAuditPageFactorDto, MeasurementConfig, GaLeadAttributionScope, GaMeasurementComponentStatus } from '@ainyc/canonry-contracts'
 
 export const projects = sqliteTable('projects', {
@@ -67,6 +67,7 @@ export const runs = sqliteTable('runs', {
   createdAt: text('created_at').notNull(),
 }, (table) => [
   index('idx_runs_project').on(table.projectId),
+  uniqueIndex('idx_runs_project_id_id').on(table.projectId, table.id),
   index('idx_runs_status').on(table.status),
   index('idx_runs_source').on(table.sourceId),
 ])
@@ -221,6 +222,113 @@ export const googleConnections = sqliteTable('google_connections', {
 }, (table) => [
   uniqueIndex('idx_google_conn_domain_type').on(table.domain, table.connectionType),
   index('idx_google_conn_project').on(table.createdByProjectId),
+])
+
+// Platform properties are intentionally separate from website GSC data: their
+// identifiers can be numeric and their supported dimensions are narrower.
+export const gscPlatformProperties = sqliteTable('gsc_platform_properties', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  siteUrl: text('site_url').notNull(),
+  displayName: text('display_name'),
+  platform: text('platform').notNull(),
+  kind: text('kind').notNull().default('social-video'),
+  permissionLevel: text('permission_level'),
+  status: text('status').notNull().default('active'),
+  lastSyncedAt: text('last_synced_at'),
+  lastError: text('last_error'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_gsc_platform_properties_project_site_url').on(table.projectId, table.siteUrl),
+  uniqueIndex('idx_gsc_platform_properties_project_id').on(table.projectId, table.id),
+  index('idx_gsc_platform_properties_project').on(table.projectId),
+  index('idx_gsc_platform_properties_project_platform').on(table.projectId, table.platform),
+])
+
+export const gscPlatformSearchData = sqliteTable('gsc_platform_search_data', {
+  id: text('id').primaryKey(),
+  propertyId: text('property_id').notNull(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  syncRunId: text('sync_run_id').notNull(),
+  date: text('date').notNull(),
+  query: text('query').notNull(),
+  page: text('page').notNull(),
+  country: text('country'),
+  device: text('device'),
+  clicks: integer('clicks').notNull().default(0),
+  impressions: integer('impressions').notNull().default(0),
+  ctr: text('ctr').notNull().default('0'),
+  position: text('position').notNull().default('0'),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  index('idx_gsc_platform_search_property_date').on(table.propertyId, table.date),
+  index('idx_gsc_platform_search_project_date').on(table.projectId, table.date),
+  index('idx_gsc_platform_search_run').on(table.syncRunId),
+  foreignKey({
+    name: 'gsc_platform_search_project_property_fk',
+    columns: [table.projectId, table.propertyId],
+    foreignColumns: [gscPlatformProperties.projectId, gscPlatformProperties.id],
+  }).onDelete('cascade'),
+  foreignKey({
+    name: 'gsc_platform_search_project_run_fk',
+    columns: [table.projectId, table.syncRunId],
+    foreignColumns: [runs.projectId, runs.id],
+  }).onDelete('cascade'),
+])
+
+export const gscPlatformDailyTotals = sqliteTable('gsc_platform_daily_totals', {
+  id: text('id').primaryKey(),
+  propertyId: text('property_id').notNull(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  syncRunId: text('sync_run_id').notNull(),
+  date: text('date').notNull(),
+  clicks: integer('clicks').notNull(),
+  impressions: integer('impressions').notNull(),
+  position: text('position').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_gsc_platform_daily_totals_property_date').on(table.propertyId, table.date),
+  index('idx_gsc_platform_daily_totals_project_date').on(table.projectId, table.date),
+  index('idx_gsc_platform_daily_totals_run').on(table.syncRunId),
+  foreignKey({
+    name: 'gsc_platform_daily_project_property_fk',
+    columns: [table.projectId, table.propertyId],
+    foreignColumns: [gscPlatformProperties.projectId, gscPlatformProperties.id],
+  }).onDelete('cascade'),
+  foreignKey({
+    name: 'gsc_platform_daily_project_run_fk',
+    columns: [table.projectId, table.syncRunId],
+    foreignColumns: [runs.projectId, runs.id],
+  }).onDelete('cascade'),
+])
+
+export const gscPlatformQueryDailyTotals = sqliteTable('gsc_platform_query_daily_totals', {
+  id: text('id').primaryKey(),
+  propertyId: text('property_id').notNull(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  syncRunId: text('sync_run_id').notNull(),
+  date: text('date').notNull(),
+  query: text('query').notNull(),
+  clicks: integer('clicks').notNull().default(0),
+  impressions: integer('impressions').notNull().default(0),
+  position: text('position').notNull().default('0'),
+  syncedAt: text('synced_at').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_gsc_platform_query_daily_property_date_query').on(table.propertyId, table.date, table.query),
+  index('idx_gsc_platform_query_daily_project_date').on(table.projectId, table.date),
+  index('idx_gsc_platform_query_daily_run').on(table.syncRunId),
+  foreignKey({
+    name: 'gsc_platform_query_project_property_fk',
+    columns: [table.projectId, table.propertyId],
+    foreignColumns: [gscPlatformProperties.projectId, gscPlatformProperties.id],
+  }).onDelete('cascade'),
+  foreignKey({
+    name: 'gsc_platform_query_project_run_fk',
+    columns: [table.projectId, table.syncRunId],
+    foreignColumns: [runs.projectId, runs.id],
+  }).onDelete('cascade'),
 ])
 
 export const gscSearchData = sqliteTable('gsc_search_data', {

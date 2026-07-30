@@ -28,6 +28,75 @@ export const gscSearchDataDtoSchema = z.object({
 })
 export type GscSearchDataDto = z.infer<typeof gscSearchDataDtoSchema>
 
+export const gscPlatformSchema = z.enum(['instagram', 'tiktok', 'x', 'youtube'])
+export type GscPlatform = z.infer<typeof gscPlatformSchema>
+export const GscPlatforms = gscPlatformSchema.enum
+
+export const gscPlatformPropertyKindSchema = z.enum(['social-video'])
+export type GscPlatformPropertyKind = z.infer<typeof gscPlatformPropertyKindSchema>
+export const GscPlatformPropertyKinds = gscPlatformPropertyKindSchema.enum
+
+export const gscPlatformPropertyStatusSchema = z.enum(['active', 'error'])
+export type GscPlatformPropertyStatus = z.infer<typeof gscPlatformPropertyStatusSchema>
+export const GscPlatformPropertyStatuses = gscPlatformPropertyStatusSchema.enum
+
+export const gscPlatformPropertyDtoSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  siteUrl: z.string(),
+  displayName: z.string().nullable(),
+  platform: gscPlatformSchema,
+  kind: gscPlatformPropertyKindSchema,
+  permissionLevel: z.string().nullable(),
+  status: gscPlatformPropertyStatusSchema,
+  lastSyncedAt: z.string().nullable(),
+  lastError: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+export type GscPlatformPropertyDto = z.infer<typeof gscPlatformPropertyDtoSchema>
+
+export const gscPlatformPropertyUpsertRequestDtoSchema = z.object({
+  siteUrl: z.string().min(1),
+  displayName: z.string().nullable().optional(),
+  platform: gscPlatformSchema,
+  kind: gscPlatformPropertyKindSchema.default('social-video'),
+})
+export type GscPlatformPropertyUpsertRequestDto = z.infer<typeof gscPlatformPropertyUpsertRequestDtoSchema>
+
+export const gscPlatformPropertyListResponseDtoSchema = z.object({
+  properties: z.array(gscPlatformPropertyDtoSchema),
+})
+export type GscPlatformPropertyListResponseDto = z.infer<typeof gscPlatformPropertyListResponseDtoSchema>
+
+export const gscPlatformPerformanceDtoSchema = z.object({
+  properties: z.array(gscPlatformPropertyDtoSchema),
+  selectedPropertyId: z.string().nullable(),
+  window: z.object({ startDate: z.string(), endDate: z.string() }),
+  totals: z.object({ clicks: z.number(), impressions: z.number(), ctr: z.number(), position: z.number() }),
+  daily: z.array(z.object({
+    date: z.string(),
+    clicks: z.number(),
+    impressions: z.number(),
+    ctr: z.number(),
+    position: z.number(),
+  })),
+  rows: z.array(z.object({
+    propertyId: z.string(),
+    siteUrl: z.string(),
+    displayName: z.string().nullable(),
+    platform: gscPlatformSchema,
+    dimension: z.enum(['page', 'query']),
+    value: z.string(),
+    clicks: z.number(),
+    impressions: z.number(),
+    ctr: z.number(),
+    position: z.number(),
+  })),
+  pagination: z.object({ limit: z.number(), offset: z.number(), hasMore: z.boolean() }),
+})
+export type GscPlatformPerformanceDto = z.infer<typeof gscPlatformPerformanceDtoSchema>
+
 export const gscPerformanceDailyPointSchema = z.object({
   date: z.string(),
   clicks: z.number(),

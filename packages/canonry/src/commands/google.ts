@@ -1,4 +1,8 @@
 import type {
+  GscPlatform,
+  GscPlatformPerformanceDto,
+  GscPlatformPropertyDto,
+  MetricsWindow,
   GscSubmitSitemapsResponseDto,
   GscUrlInspectionDto,
   IndexingRequestResultDto,
@@ -198,6 +202,166 @@ export async function googleSetProperty(project: string, propertyUrl: string, fo
   }
 
   console.log(`GSC property set to "${propertyUrl}" for project "${project}".`)
+}
+
+export async function googlePlatformList(project: string, format?: string): Promise<void> {
+  const { properties } = await getClient().listGscPlatformProperties(project)
+
+  if (format === 'json') {
+    console.log(JSON.stringify({ properties }, null, 2))
+    return
+  }
+  if (format === 'jsonl') {
+    emitJsonl(properties.map((property: GscPlatformPropertyDto) => ({ project, ...property })))
+    return
+  }
+
+  if (properties.length === 0) {
+    console.log(`No social or video Search Console properties are bound to "${project}".`)
+    console.log('Create the property in Search Console, then run "canonry google platform add".')
+    return
+  }
+
+  console.log(`Social & video Search Console properties for "${project}":\n`)
+  console.log(`  ${'ID'.padEnd(38)}${'PLATFORM'.padEnd(12)}${'PROPERTY'.padEnd(42)}${'STATUS'.padEnd(10)}LAST SYNC`)
+  console.log(`  ${'─'.repeat(38)}${'─'.repeat(12)}${'─'.repeat(42)}${'─'.repeat(10)}${'─'.repeat(20)}`)
+  for (const property of properties) {
+    const label = property.displayName ?? property.siteUrl
+    console.log(
+      `  ${property.id.padEnd(38)}${property.platform.padEnd(12)}${label.slice(0, 40).padEnd(42)}${property.status.padEnd(10)}${property.lastSyncedAt ?? 'never'}`,
+    )
+  }
+}
+
+export async function googlePlatformAdd(
+  project: string,
+  siteUrl: string,
+  opts: { platform: GscPlatform; displayName?: string; format?: string },
+): Promise<void> {
+  const property = await getClient().upsertGscPlatformProperty(project, {
+    siteUrl,
+    displayName: opts.displayName,
+    platform: opts.platform,
+    kind: 'social-video',
+  })
+
+  if (isMachineFormat(opts.format)) {
+    console.log(JSON.stringify(property, null, 2))
+    return
+  }
+
+  console.log(`Bound ${property.platform} Search Console property "${property.displayName ?? property.siteUrl}" to "${project}".`)
+}
+
+export async function googlePlatformRemove(project: string, propertyId: string, format?: string): Promise<void> {
+  await getClient().deleteGscPlatformProperty(project, propertyId)
+
+  if (isMachineFormat(format)) {
+    console.log(JSON.stringify({ project, propertyId, removed: true }, null, 2))
+    return
+  }
+
+  console.log(`Removed Search Console platform property "${propertyId}" from "${project}".`)
+}
+
+export async function googlePlatformSync(
+  project: string,
+  propertyId: string,
+  opts: { wait?: boolean; format?: string },
+): Promise<void> {
+  const client = getClient()
+  const run = await client.syncGscPlatformProperty(project, propertyId)
+
+  if (!opts.wait && isMachineFormat(opts.format)) {
+    console.log(JSON.stringify(run, null, 2))
+    return
+  }
+  if (!isMachineFormat(opts.format)) {
+    console.log(`Platform property sync started (run ${run.id})`)
+  }
+  if (!opts.wait) return
+
+  const current = await waitForRunStatus(client, run.id, {
+    timeoutMs: 10 * 60 * 1000,
+    intervalMs: 2_000,
+    progressLabel: 'Waiting for platform property sync to complete',
+    successStatuses: ['completed'],
+    failureStatuses: ['failed'],
+    timeoutCode: 'GOOGLE_SYNC_TIMEOUT',
+    failureCode: 'GOOGLE_SYNC_FAILED',
+    timeoutMessage: 'Timed out waiting for platform property sync to complete.',
+    failureMessage: 'Platform property sync failed.',
+    details: { project, propertyId },
+  })
+
+  if (isMachineFormat(opts.format)) {
+    console.log(JSON.stringify({ ...run, status: current.status }, null, 2))
+    return
+  }
+  console.log('Platform property sync completed successfully.')
+}
+
+export async function googlePlatformPerformance(project: string, opts: {
+  propertyId?: string
+  dimension?: 'page' | 'query'
+  window?: MetricsWindow
+  startDate?: string
+  endDate?: string
+  limit?: number
+  offset?: number
+  format?: string
+}): Promise<void> {
+  const params = {
+    ...(opts.propertyId ? { propertyId: opts.propertyId } : {}),
+    ...(opts.dimension ? { dimension: opts.dimension } : {}),
+    ...(opts.window ? { window: opts.window } : {}),
+    ...(opts.startDate ? { startDate: opts.startDate } : {}),
+    ...(opts.endDate ? { endDate: opts.endDate } : {}),
+    ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+    ...(opts.offset !== undefined ? { offset: opts.offset } : {}),
+  }
+  const data: GscPlatformPerformanceDto = await getClient().getGscPlatformPerformance(project, params)
+
+  if (opts.format === 'json') {
+    console.log(JSON.stringify(data, null, 2))
+    return
+  }
+  if (opts.format === 'jsonl') {
+    emitJsonl(data.rows.map((row) => ({
+      project,
+      window: data.window,
+      totals: data.totals,
+      ...row,
+    })))
+    return
+  }
+
+  const propertyLabel = data.selectedPropertyId
+    ? data.properties.find((property) => property.id === data.selectedPropertyId)?.displayName ?? data.selectedPropertyId
+    : 'All platforms'
+  const windowLabel = data.window.startDate && data.window.endDate !== '9999-12-31'
+    ? `${data.window.startDate} to ${data.window.endDate}`
+    : 'All available data'
+  console.log(`GSC social & video performance: ${propertyLabel}`)
+  console.log(`Window: ${windowLabel}\n`)
+  console.log(`  Clicks:       ${data.totals.clicks.toLocaleString()}`)
+  console.log(`  Impressions:  ${data.totals.impressions.toLocaleString()}`)
+  console.log(`  CTR:          ${(data.totals.ctr * 100).toFixed(2)}%`)
+  console.log(`  Avg position: ${data.totals.position.toFixed(2)}\n`)
+
+  if (data.rows.length === 0) {
+    console.log('No platform performance data found. Sync a bound property first.')
+    return
+  }
+
+  const valueHeading = (opts.dimension ?? 'page') === 'query' ? 'QUERY' : 'CONTENT'
+  console.log(`  ${'PLATFORM'.padEnd(12)}${valueHeading.padEnd(48)}${'CLICKS'.padStart(10)}${'IMPR'.padStart(12)}${'CTR'.padStart(10)}${'POS'.padStart(8)}`)
+  console.log(`  ${'─'.repeat(12)}${'─'.repeat(48)}${'─'.repeat(10)}${'─'.repeat(12)}${'─'.repeat(10)}${'─'.repeat(8)}`)
+  for (const row of data.rows) {
+    console.log(
+      `  ${row.platform.padEnd(12)}${row.value.slice(0, 46).padEnd(48)}${row.clicks.toLocaleString().padStart(10)}${row.impressions.toLocaleString().padStart(12)}${(row.ctr * 100).toFixed(2).padStart(9)}%${row.position.toFixed(2).padStart(8)}`,
+    )
+  }
 }
 
 export async function googleSync(project: string, opts: {

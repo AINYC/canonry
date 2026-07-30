@@ -152,6 +152,7 @@ export interface ApiRoutesOptions {
   /** Public URL for OAuth redirect URIs (overrides auto-detect from request headers) */
   publicUrl?: string
   onGscSyncRequested?: GoogleRoutesOptions['onGscSyncRequested']
+  onGscPlatformSyncRequested?: GoogleRoutesOptions['onGscPlatformSyncRequested']
   onInspectSitemapRequested?: GoogleRoutesOptions['onInspectSitemapRequested']
   onGbpSyncRequested?: GoogleRoutesOptions['onGbpSyncRequested']
   adsCredentialStore?: AdsRoutesOptions['adsCredentialStore']
@@ -441,6 +442,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       publicUrl: opts.publicUrl,
       routePrefix: opts.routePrefix,
       onGscSyncRequested: opts.onGscSyncRequested,
+      onGscPlatformSyncRequested: opts.onGscPlatformSyncRequested,
       onInspectSitemapRequested: opts.onInspectSitemapRequested,
       onGbpSyncRequested: opts.onGbpSyncRequested,
     } satisfies GoogleRoutesOptions)

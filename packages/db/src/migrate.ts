@@ -2481,6 +2481,62 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE research_run_queries ADD COLUMN cited_competitor_domains TEXT NOT NULL DEFAULT '[]'`,
     ],
   },
+  {
+    version: 111,
+    name: 'gsc-platform-properties',
+    statements: [
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_project_id_id ON runs(project_id, id)`,
+      `CREATE TABLE IF NOT EXISTS gsc_platform_properties (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        site_url TEXT NOT NULL, display_name TEXT, platform TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'social-video', permission_level TEXT,
+        status TEXT NOT NULL DEFAULT 'active', last_synced_at TEXT, last_error TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_gsc_platform_properties_project_site_url ON gsc_platform_properties(project_id, site_url)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_gsc_platform_properties_project_id ON gsc_platform_properties(project_id, id)`,
+      `CREATE INDEX IF NOT EXISTS idx_gsc_platform_properties_project ON gsc_platform_properties(project_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_gsc_platform_properties_project_platform ON gsc_platform_properties(project_id, platform)`,
+      `CREATE TABLE IF NOT EXISTS gsc_platform_search_data (
+        id TEXT PRIMARY KEY, property_id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        sync_run_id TEXT NOT NULL,
+        date TEXT NOT NULL, query TEXT NOT NULL, page TEXT NOT NULL, country TEXT, device TEXT,
+        clicks INTEGER NOT NULL DEFAULT 0, impressions INTEGER NOT NULL DEFAULT 0,
+        ctr TEXT NOT NULL DEFAULT '0', position TEXT NOT NULL DEFAULT '0', created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id, property_id) REFERENCES gsc_platform_properties(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, sync_run_id) REFERENCES runs(project_id, id) ON DELETE CASCADE
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_gsc_platform_search_property_date ON gsc_platform_search_data(property_id, date)`,
+      `CREATE INDEX IF NOT EXISTS idx_gsc_platform_search_project_date ON gsc_platform_search_data(project_id, date)`,
+      `CREATE INDEX IF NOT EXISTS idx_gsc_platform_search_run ON gsc_platform_search_data(sync_run_id)`,
+      `CREATE TABLE IF NOT EXISTS gsc_platform_daily_totals (
+        id TEXT PRIMARY KEY, property_id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        sync_run_id TEXT NOT NULL,
+        date TEXT NOT NULL, clicks INTEGER NOT NULL, impressions INTEGER NOT NULL,
+        position TEXT NOT NULL, created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id, property_id) REFERENCES gsc_platform_properties(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, sync_run_id) REFERENCES runs(project_id, id) ON DELETE CASCADE
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_gsc_platform_daily_totals_property_date ON gsc_platform_daily_totals(property_id, date)`,
+      `CREATE INDEX IF NOT EXISTS idx_gsc_platform_daily_totals_project_date ON gsc_platform_daily_totals(project_id, date)`,
+      `CREATE INDEX IF NOT EXISTS idx_gsc_platform_daily_totals_run ON gsc_platform_daily_totals(sync_run_id)`,
+      `CREATE TABLE IF NOT EXISTS gsc_platform_query_daily_totals (
+        id TEXT PRIMARY KEY, property_id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        sync_run_id TEXT NOT NULL,
+        date TEXT NOT NULL, query TEXT NOT NULL, clicks INTEGER NOT NULL DEFAULT 0,
+        impressions INTEGER NOT NULL DEFAULT 0, position TEXT NOT NULL DEFAULT '0',
+        synced_at TEXT NOT NULL, created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id, property_id) REFERENCES gsc_platform_properties(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, sync_run_id) REFERENCES runs(project_id, id) ON DELETE CASCADE
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_gsc_platform_query_daily_property_date_query ON gsc_platform_query_daily_totals(property_id, date, query)`,
+      `CREATE INDEX IF NOT EXISTS idx_gsc_platform_query_daily_project_date ON gsc_platform_query_daily_totals(project_id, date)`,
+      `CREATE INDEX IF NOT EXISTS idx_gsc_platform_query_daily_run ON gsc_platform_query_daily_totals(sync_run_id)`,
+    ],
+  },
 ]
 
 /**

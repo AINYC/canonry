@@ -1,7 +1,26 @@
 import crypto from 'node:crypto'
-import { eq, and, desc, sql, inArray } from 'drizzle-orm'
+import { eq, and, asc, desc, sql, inArray } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
-import { gscSearchData, gscUrlInspections, gscCoverageSnapshots, gbpLocations, gbpDailyMetrics, gbpKeywordImpressions, gbpKeywordMonthly, gbpPlaceActions, gbpLodgingSnapshots, gbpAttributesSnapshots, gbpPlaceDetails, runs, projects, type DatabaseClient } from '@ainyc/canonry-db'
+import {
+  gscSearchData,
+  gscUrlInspections,
+  gscCoverageSnapshots,
+  gscPlatformProperties,
+  gscPlatformSearchData,
+  gscPlatformDailyTotals,
+  gscPlatformQueryDailyTotals,
+  gbpLocations,
+  gbpDailyMetrics,
+  gbpKeywordImpressions,
+  gbpKeywordMonthly,
+  gbpPlaceActions,
+  gbpLodgingSnapshots,
+  gbpAttributesSnapshots,
+  gbpPlaceDetails,
+  runs,
+  projects,
+  type DatabaseClient,
+} from '@ainyc/canonry-db'
 import {
   validationError, notFound, normalizeProjectDomain, parseWindow, windowCutoff,
   authRequired, forbidden, quotaExceeded, providerError, escapeLikePattern, AppError,
@@ -12,6 +31,14 @@ import {
   type GbpLocationDto, type GbpLocationListResponse, type GbpAccountListResponse,
   type GbpPlaceDetailsListResponse,
   gscSubmitSitemapsRequestDtoSchema,
+  gscPlatformPropertyDtoSchema,
+  gscPlatformPropertyListResponseDtoSchema,
+  gscPlatformPropertyUpsertRequestDtoSchema,
+  gscPlatformPerformanceDtoSchema,
+  GscPlatformPropertyStatuses,
+  RunKinds,
+  RunStatuses,
+  RunTriggers,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from './gbp-summary.js'
@@ -76,6 +103,30 @@ function isOnProjectDomain(url: string, projectDomain: string): boolean {
   const urlHost = hostOf(url)
   const projectHost = hostOf(projectDomain)
   return urlHost !== null && projectHost !== null && urlHost === projectHost
+}
+
+function isIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00.000Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+}
+
+function parseQueryInteger(
+  value: string | undefined,
+  name: 'limit' | 'offset',
+  fallback: number,
+  minimum: number,
+  maximum?: number,
+): number {
+  if (value === undefined) return fallback
+  if (!/^\d+$/.test(value)) {
+    throw validationError(`${name} must be an integer greater than or equal to ${minimum}`)
+  }
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < minimum) {
+    throw validationError(`${name} must be an integer greater than or equal to ${minimum}`)
+  }
+  return maximum === undefined ? parsed : Math.min(parsed, maximum)
 }
 
 /**
@@ -160,6 +211,7 @@ export interface GoogleRoutesOptions {
   googleStateSecret?: string
   publicUrl?: string
   onGscSyncRequested?: (runId: string, projectId: string, opts?: { days?: number; full?: boolean }) => void
+  onGscPlatformSyncRequested?: (runId: string, projectId: string, opts: { sourceId: string; days?: number; full?: boolean }) => void
   onInspectSitemapRequested?: (runId: string, projectId: string, opts?: { sitemapUrl?: string }) => void
   onGbpSyncRequested?: (runId: string, projectId: string, opts?: { locationNames?: string[]; daysOfMetrics?: number; monthsOfKeywords?: number }) => void
   /** API route prefix (default: '/api/v1') */
@@ -716,6 +768,374 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
 
     const run = app.db.select().from(runs).where(eq(runs.id, runId)).get()
     return run
+  })
+
+  // Explicitly-enrolled social/video properties are separate from the
+  // project's website property. They reuse the GSC OAuth grant, never its
+  // selected site or its storage tables.
+  app.get<{ Params: { name: string } }>('/projects/:name/google/gsc/platform-properties', async (request) => {
+    const project = resolveProject(app.db, request.params.name)
+    const properties = app.db
+      .select()
+      .from(gscPlatformProperties)
+      .where(eq(gscPlatformProperties.projectId, project.id))
+      .orderBy(asc(gscPlatformProperties.platform), asc(gscPlatformProperties.siteUrl))
+      .all()
+    return gscPlatformPropertyListResponseDtoSchema.parse({ properties })
+  })
+
+  app.put<{ Params: { name: string }; Body: unknown }>('/projects/:name/google/gsc/platform-properties', async (request) => {
+    const parsed = gscPlatformPropertyUpsertRequestDtoSchema.safeParse(request.body)
+    if (!parsed.success) {
+      throw validationError(
+        parsed.error.issues[0]?.message ?? 'Invalid platform property request',
+        { issues: parsed.error.issues },
+      )
+    }
+    const body = parsed.data
+    const project = resolveProject(app.db, request.params.name)
+    const { clientId, clientSecret } = getAuthConfig()
+    if (!clientId || !clientSecret) {
+      throw validationError('Google OAuth is not configured')
+    }
+
+    const store = requireConnectionStore()
+    let sites
+    try {
+      const { accessToken, propertyId: websitePropertyId } = await getValidToken(
+        store,
+        project.canonicalDomain,
+        'gsc',
+        clientId,
+        clientSecret,
+      )
+      if (websitePropertyId === body.siteUrl) {
+        throw validationError(
+          'The primary website property cannot be bound as a social or video property',
+        )
+      }
+      sites = await listSites(accessToken)
+    } catch (error) {
+      throw gscErrorToAppError(error, 'Failed to list Search Console properties')
+    }
+
+    const verified = sites.find((site) => (
+      site.siteUrl === body.siteUrl
+      && site.permissionLevel !== 'siteUnverifiedUser'
+    ))
+    if (!verified) {
+      throw validationError(
+        'The requested platform property is not available with read access to this Google account',
+      )
+    }
+
+    const now = new Date().toISOString()
+    const existing = app.db
+      .select()
+      .from(gscPlatformProperties)
+      .where(and(
+        eq(gscPlatformProperties.projectId, project.id),
+        eq(gscPlatformProperties.siteUrl, body.siteUrl),
+      ))
+      .get()
+
+    const property = app.db.transaction((tx) => {
+      if (existing) {
+        tx.update(gscPlatformProperties)
+          .set({
+            displayName: body.displayName ?? null,
+            platform: body.platform,
+            kind: body.kind,
+            permissionLevel: verified.permissionLevel,
+            status: GscPlatformPropertyStatuses.active,
+            lastError: null,
+            updatedAt: now,
+          })
+          .where(and(
+            eq(gscPlatformProperties.id, existing.id),
+            eq(gscPlatformProperties.projectId, project.id),
+          ))
+          .run()
+      } else {
+        tx.insert(gscPlatformProperties)
+          .values({
+            id: crypto.randomUUID(),
+            projectId: project.id,
+            siteUrl: body.siteUrl,
+            displayName: body.displayName ?? null,
+            platform: body.platform,
+            kind: body.kind,
+            permissionLevel: verified.permissionLevel,
+            status: GscPlatformPropertyStatuses.active,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run()
+      }
+
+      const row = tx
+        .select()
+        .from(gscPlatformProperties)
+        .where(and(
+          eq(gscPlatformProperties.projectId, project.id),
+          eq(gscPlatformProperties.siteUrl, body.siteUrl),
+        ))
+        .get()!
+      writeAuditLog(tx, {
+        projectId: project.id,
+        actor: 'api',
+        action: existing
+          ? 'google.gsc-platform-property.updated'
+          : 'google.gsc-platform-property.created',
+        entityType: 'gsc_platform_property',
+        entityId: row.id,
+      })
+      return row
+    })
+
+    return gscPlatformPropertyDtoSchema.parse(property)
+  })
+
+  app.delete<{ Params: { name: string; id: string } }>('/projects/:name/google/gsc/platform-properties/:id', async (request, reply) => {
+    const project = resolveProject(app.db, request.params.name)
+    const property = app.db
+      .select()
+      .from(gscPlatformProperties)
+      .where(and(
+        eq(gscPlatformProperties.id, request.params.id),
+        eq(gscPlatformProperties.projectId, project.id),
+      ))
+      .get()
+    if (!property) {
+      throw notFound('GSC platform property', request.params.id)
+    }
+
+    app.db.transaction((tx) => {
+      tx.delete(gscPlatformProperties)
+        .where(and(
+          eq(gscPlatformProperties.id, property.id),
+          eq(gscPlatformProperties.projectId, project.id),
+        ))
+        .run()
+      writeAuditLog(tx, {
+        projectId: project.id,
+        actor: 'api',
+        action: 'google.gsc-platform-property.deleted',
+        entityType: 'gsc_platform_property',
+        entityId: property.id,
+      })
+    })
+
+    return reply.status(204).send()
+  })
+
+  app.post<{ Params: { name: string; id: string } }>('/projects/:name/google/gsc/platform-properties/:id/sync', async (request) => {
+    const project = resolveProject(app.db, request.params.name)
+    const property = app.db
+      .select()
+      .from(gscPlatformProperties)
+      .where(and(
+        eq(gscPlatformProperties.id, request.params.id),
+        eq(gscPlatformProperties.projectId, project.id),
+      ))
+      .get()
+    if (!property) {
+      throw notFound('GSC platform property', request.params.id)
+    }
+
+    const inFlight = app.db
+      .select()
+      .from(runs)
+      .where(and(
+        eq(runs.projectId, project.id),
+        eq(runs.kind, RunKinds['gsc-sync']),
+        eq(runs.sourceId, property.id),
+        inArray(runs.status, [RunStatuses.queued, RunStatuses.running]),
+      ))
+      .orderBy(desc(runs.createdAt))
+      .get()
+    if (inFlight) return inFlight
+
+    const now = new Date().toISOString()
+    const id = crypto.randomUUID()
+    app.db.insert(runs).values({
+      id,
+      projectId: project.id,
+      kind: RunKinds['gsc-sync'],
+      sourceId: property.id,
+      status: RunStatuses.queued,
+      trigger: RunTriggers.manual,
+      createdAt: now,
+    }).run()
+    opts.onGscPlatformSyncRequested?.(id, project.id, { sourceId: property.id })
+    return app.db.select().from(runs).where(eq(runs.id, id)).get()
+  })
+
+  app.get<{
+    Params: { name: string }
+    Querystring: {
+      propertyId?: string
+      dimension?: string
+      startDate?: string
+      endDate?: string
+      window?: string
+      limit?: string
+      offset?: string
+    }
+  }>('/projects/:name/google/gsc/platform-performance', async (request) => {
+    const project = resolveProject(app.db, request.params.name)
+    const { propertyId, startDate, endDate, window } = request.query
+    const dimension = request.query.dimension ?? 'page'
+    if (dimension !== 'page' && dimension !== 'query') {
+      throw validationError('dimension must be "page" or "query"')
+    }
+    if (window !== undefined && !['7d', '30d', '90d', 'all'].includes(window)) {
+      throw validationError('window must be "7d", "30d", "90d", or "all"')
+    }
+    if (startDate !== undefined && !isIsoDate(startDate)) {
+      throw validationError('startDate must use YYYY-MM-DD')
+    }
+    if (endDate !== undefined && !isIsoDate(endDate)) {
+      throw validationError('endDate must use YYYY-MM-DD')
+    }
+
+    const selected = propertyId
+      ? app.db
+        .select()
+        .from(gscPlatformProperties)
+        .where(and(
+          eq(gscPlatformProperties.id, propertyId),
+          eq(gscPlatformProperties.projectId, project.id),
+        ))
+        .get()
+      : undefined
+    if (propertyId && !selected) {
+      throw notFound('GSC platform property', propertyId)
+    }
+
+    const properties = app.db
+      .select()
+      .from(gscPlatformProperties)
+      .where(eq(gscPlatformProperties.projectId, project.id))
+      .orderBy(asc(gscPlatformProperties.platform), asc(gscPlatformProperties.siteUrl))
+      .all()
+    const resolvedStart = startDate
+      ?? windowCutoff(parseWindow(window))?.slice(0, 10)
+      ?? ''
+    const resolvedEnd = endDate ?? '9999-12-31'
+    if (resolvedStart && resolvedStart > resolvedEnd) {
+      throw validationError('startDate must be on or before endDate')
+    }
+    const limit = parseQueryInteger(request.query.limit, 'limit', 50, 1, 500)
+    const offset = parseQueryInteger(request.query.offset, 'offset', 0, 0)
+
+    const totalConditions = [
+      eq(gscPlatformDailyTotals.projectId, project.id),
+      sql`${gscPlatformDailyTotals.date} >= ${resolvedStart}`,
+      sql`${gscPlatformDailyTotals.date} <= ${resolvedEnd}`,
+    ]
+    if (propertyId) {
+      totalConditions.push(eq(gscPlatformDailyTotals.propertyId, propertyId))
+    }
+    const totals = app.db
+      .select({
+        clicks: sql<number>`COALESCE(SUM(${gscPlatformDailyTotals.clicks}), 0)`,
+        impressions: sql<number>`COALESCE(SUM(${gscPlatformDailyTotals.impressions}), 0)`,
+        positionNumerator: sql<number>`COALESCE(SUM(CAST(${gscPlatformDailyTotals.position} AS REAL) * ${gscPlatformDailyTotals.impressions}), 0)`,
+      })
+      .from(gscPlatformDailyTotals)
+      .where(and(...totalConditions))
+      .get()!
+    const daily = app.db
+      .select({
+        date: gscPlatformDailyTotals.date,
+        clicks: sql<number>`COALESCE(SUM(${gscPlatformDailyTotals.clicks}), 0)`,
+        impressions: sql<number>`COALESCE(SUM(${gscPlatformDailyTotals.impressions}), 0)`,
+        positionNumerator: sql<number>`COALESCE(SUM(CAST(${gscPlatformDailyTotals.position} AS REAL) * ${gscPlatformDailyTotals.impressions}), 0)`,
+      })
+      .from(gscPlatformDailyTotals)
+      .where(and(...totalConditions))
+      .groupBy(gscPlatformDailyTotals.date)
+      .orderBy(gscPlatformDailyTotals.date)
+      .all()
+      .map((row) => ({
+        date: row.date,
+        clicks: row.clicks,
+        impressions: row.impressions,
+        ctr: row.impressions ? row.clicks / row.impressions : 0,
+        position: row.impressions ? row.positionNumerator / row.impressions : 0,
+      }))
+
+    const table = dimension === 'query'
+      ? gscPlatformQueryDailyTotals
+      : gscPlatformSearchData
+    const value = dimension === 'query'
+      ? gscPlatformQueryDailyTotals.query
+      : gscPlatformSearchData.page
+    const detailConditions = [
+      eq(table.projectId, project.id),
+      sql`${table.date} >= ${resolvedStart}`,
+      sql`${table.date} <= ${resolvedEnd}`,
+    ]
+    if (propertyId) {
+      detailConditions.push(eq(table.propertyId, propertyId))
+    }
+    const allRows = app.db
+      .select({
+        propertyId: table.propertyId,
+        value,
+        clicks: sql<number>`COALESCE(SUM(${table.clicks}), 0)`,
+        impressions: sql<number>`COALESCE(SUM(${table.impressions}), 0)`,
+        positionNumerator: sql<number>`COALESCE(SUM(CAST(${table.position} AS REAL) * ${table.impressions}), 0)`,
+      })
+      .from(table)
+      .where(and(...detailConditions))
+      .groupBy(table.propertyId, value)
+      .orderBy(
+        desc(sql`SUM(${table.clicks})`),
+        asc(table.propertyId),
+        asc(value),
+      )
+      .limit(limit + 1)
+      .offset(offset)
+      .all()
+
+    const propertyById = new Map(properties.map((property) => [property.id, property]))
+    const rows = allRows.slice(0, limit).flatMap((row) => {
+      const property = propertyById.get(row.propertyId)
+      if (!property) return []
+      return [{
+        propertyId: row.propertyId,
+        siteUrl: property.siteUrl,
+        displayName: property.displayName,
+        platform: property.platform,
+        dimension,
+        value: row.value,
+        clicks: row.clicks,
+        impressions: row.impressions,
+        ctr: row.impressions ? row.clicks / row.impressions : 0,
+        position: row.impressions ? row.positionNumerator / row.impressions : 0,
+      }]
+    })
+
+    return gscPlatformPerformanceDtoSchema.parse({
+      properties,
+      selectedPropertyId: propertyId ?? null,
+      window: { startDate: resolvedStart, endDate: resolvedEnd },
+      totals: {
+        clicks: totals.clicks,
+        impressions: totals.impressions,
+        ctr: totals.impressions ? totals.clicks / totals.impressions : 0,
+        position: totals.impressions ? totals.positionNumerator / totals.impressions : 0,
+      },
+      daily,
+      rows,
+      pagination: {
+        limit,
+        offset,
+        hasMore: allRows.length > limit,
+      },
+    })
   })
 
   // GET /projects/:name/google/gsc/performance

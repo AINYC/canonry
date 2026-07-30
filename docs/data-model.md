@@ -39,6 +39,10 @@ erDiagram
   projects ||--o{ gsc_search_data : has
   projects ||--o{ gsc_daily_totals : has
   projects ||--o{ gsc_query_daily_totals : has
+  projects ||--o{ gsc_platform_properties : has
+  gsc_platform_properties ||--o{ gsc_platform_search_data : has
+  gsc_platform_properties ||--o{ gsc_platform_daily_totals : has
+  gsc_platform_properties ||--o{ gsc_platform_query_daily_totals : has
   projects ||--o{ gsc_url_inspections : has
   projects ||--o{ gsc_coverage_snapshots : has
 
@@ -134,6 +138,10 @@ configuration value into an observation. Treat NULL as unknown.
 | **gsc_search_data** | GSC search analytics data synced per run (query × page × country × device × date) |
 | **gsc_daily_totals** | GSC property-level daily totals (no query/page dimensions). Headline clicks/impressions/CTR/position + daily trend source. Unique: `(project_id, date)` |
 | **gsc_query_daily_totals** | Per-QUERY daily totals fetched with `dimensions: ['date','query']` (no `page`). Summing `gsc_search_data` by query fans one SERP into one row per ranking page, inflating impressions ~0% for single-page queries but ~500% for terms where several pages rank together. Complete for queries Google NAMES; anonymized rare queries are still absent, so it does not sum to the property total. Unique: `(project_id, date, query)` |
+| **gsc_platform_properties** | Project-scoped Google Search Console social/video platform properties. `site_url` preserves the exact GSC property identifier (including numeric identifiers). Unique: `(project_id, site_url)`; platform is Instagram, TikTok, X, or YouTube. |
+| **gsc_platform_search_data** | Dimensioned platform-property GSC rows, isolated from website property data. Composite FKs `(project_id, property_id)` and `(project_id, sync_run_id)` prevent cross-project child rows. |
+| **gsc_platform_daily_totals** | Un-dimensioned daily platform-property totals and the only source for headline totals/trends. Unique: `(property_id, date)`; composite project/property and project/run FKs. |
+| **gsc_platform_query_daily_totals** | Per-query daily platform-property totals. Unique: `(property_id, date, query)`; composite project/property and project/run FKs. |
 | **gsc_url_inspections** | URL inspection results from GSC |
 | **gsc_coverage_snapshots** | Index coverage snapshots from GSC |
 

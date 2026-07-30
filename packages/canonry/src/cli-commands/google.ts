@@ -1,3 +1,4 @@
+import type { GscPlatform, MetricsWindow } from '@ainyc/canonry-contracts'
 import {
   googleConnect,
   googleCoverage,
@@ -11,6 +12,11 @@ import {
   googleListSitemaps,
   googlePerformance,
   googlePerformanceDaily,
+  googlePlatformAdd,
+  googlePlatformList,
+  googlePlatformPerformance,
+  googlePlatformRemove,
+  googlePlatformSync,
   googleProperties,
   googleRefresh,
   googleRequestIndexing,
@@ -31,6 +37,37 @@ import {
   unknownSubcommand,
 } from '../cli-command-helpers.js'
 import { usageError } from '../cli-error.js'
+
+function parsePlatform(value: string | undefined, usage: string): GscPlatform {
+  switch (value) {
+    case 'instagram':
+    case 'tiktok':
+    case 'x':
+    case 'youtube':
+      return value
+    default:
+      throw usageError('Error: --platform must be instagram, tiktok, x, or youtube', {
+        message: '--platform must be instagram, tiktok, x, or youtube',
+        details: { command: 'google.platform.add', usage },
+      })
+  }
+}
+
+function parseMetricsWindow(value: string | undefined, usage: string): MetricsWindow | undefined {
+  if (value === undefined) return undefined
+  switch (value) {
+    case '7d':
+    case '30d':
+    case '90d':
+    case 'all':
+      return value
+    default:
+      throw usageError('Error: --window must be 7d, 30d, 90d, or all', {
+        message: '--window must be 7d, 30d, 90d, or all',
+        details: { command: 'google.platform.performance', usage },
+      })
+  }
+}
 
 export const GOOGLE_CLI_COMMANDS: readonly CliCommandSpec[] = [
   {
@@ -90,6 +127,112 @@ export const GOOGLE_CLI_COMMANDS: readonly CliCommandSpec[] = [
         message: 'project name and property URL are required',
       })
       await googleSetProperty(project, propertyUrl, input.format)
+    },
+  },
+  {
+    path: ['google', 'platform', 'list'],
+    usage: 'canonry google platform list <project> [--format json|jsonl]',
+    run: async (input) => {
+      const project = requireProject(input, 'google.platform.list', 'canonry google platform list <project> [--format json|jsonl]')
+      await googlePlatformList(project, input.format)
+    },
+  },
+  {
+    path: ['google', 'platform', 'add'],
+    usage: 'canonry google platform add <project> <site-url> --platform instagram|tiktok|x|youtube [--label <name>] [--format json]',
+    options: {
+      platform: stringOption(),
+      label: stringOption(),
+    },
+    run: async (input) => {
+      const usage = 'canonry google platform add <project> <site-url> --platform instagram|tiktok|x|youtube [--label <name>] [--format json]'
+      const project = requireProject(input, 'google.platform.add', usage)
+      const siteUrl = requirePositional(input, 1, {
+        command: 'google.platform.add',
+        usage,
+        message: 'project name and Search Console property identifier are required',
+      })
+      await googlePlatformAdd(project, siteUrl, {
+        platform: parsePlatform(getString(input.values, 'platform'), usage),
+        displayName: getString(input.values, 'label'),
+        format: input.format,
+      })
+    },
+  },
+  {
+    path: ['google', 'platform', 'remove'],
+    usage: 'canonry google platform remove <project> <property-id> [--format json]',
+    run: async (input) => {
+      const usage = 'canonry google platform remove <project> <property-id> [--format json]'
+      const project = requireProject(input, 'google.platform.remove', usage)
+      const propertyId = requirePositional(input, 1, {
+        command: 'google.platform.remove',
+        usage,
+        message: 'project name and bound property id are required',
+      })
+      await googlePlatformRemove(project, propertyId, input.format)
+    },
+  },
+  {
+    path: ['google', 'platform', 'sync'],
+    usage: 'canonry google platform sync <project> <property-id> [--wait] [--format json]',
+    options: {
+      wait: { type: 'boolean', default: false },
+    },
+    run: async (input) => {
+      const usage = 'canonry google platform sync <project> <property-id> [--wait] [--format json]'
+      const project = requireProject(input, 'google.platform.sync', usage)
+      const propertyId = requirePositional(input, 1, {
+        command: 'google.platform.sync',
+        usage,
+        message: 'project name and bound property id are required',
+      })
+      await googlePlatformSync(project, propertyId, {
+        wait: getBoolean(input.values, 'wait'),
+        format: input.format,
+      })
+    },
+  },
+  {
+    path: ['google', 'platform', 'performance'],
+    usage: 'canonry google platform performance <project> [--property <id>] [--dimension page|query] [--window 7d|30d|90d|all] [--start <date>] [--end <date>] [--limit <n>] [--offset <n>] [--format json|jsonl]',
+    options: {
+      property: stringOption(),
+      dimension: stringOption(),
+      window: stringOption(),
+      start: stringOption(),
+      end: stringOption(),
+      limit: stringOption(),
+      offset: stringOption(),
+    },
+    run: async (input) => {
+      const usage = 'canonry google platform performance <project> [--property <id>] [--dimension page|query] [--window 7d|30d|90d|all] [--start <date>] [--end <date>] [--limit <n>] [--offset <n>] [--format json|jsonl]'
+      const project = requireProject(input, 'google.platform.performance', usage)
+      const dimension = getString(input.values, 'dimension')
+      if (dimension !== undefined && dimension !== 'page' && dimension !== 'query') {
+        throw usageError('Error: --dimension must be page or query', {
+          message: '--dimension must be page or query',
+          details: { command: 'google.platform.performance', usage },
+        })
+      }
+      await googlePlatformPerformance(project, {
+        propertyId: getString(input.values, 'property'),
+        dimension,
+        window: parseMetricsWindow(getString(input.values, 'window'), usage),
+        startDate: getString(input.values, 'start'),
+        endDate: getString(input.values, 'end'),
+        limit: parseIntegerOption(input, 'limit', {
+          command: 'google.platform.performance',
+          usage,
+          message: '--limit must be an integer',
+        }),
+        offset: parseIntegerOption(input, 'offset', {
+          command: 'google.platform.performance',
+          usage,
+          message: '--offset must be an integer',
+        }),
+        format: input.format,
+      })
     },
   },
   {

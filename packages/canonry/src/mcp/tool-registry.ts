@@ -26,6 +26,7 @@ import {
   keywordGenerateRequestSchema,
   gaMeasurementAnalysisWindowSchema,
   gaMeasurementHostScopeSchema,
+  gscPlatformPropertyUpsertRequestDtoSchema,
   queryGenerateRequestSchema,
   queryBatchRequestSchema,
   notificationCreateRequestSchema,
@@ -176,6 +177,27 @@ const gscPerformanceDailyInputSchema = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   window: analyticsWindowSchema.optional(),
+})
+
+const gscPlatformPropertyInputSchema = z.object({
+  project: projectNameSchema,
+  propertyId: z.string().min(1).describe('Bound GSC platform property ID.'),
+})
+
+const gscPlatformPropertyUpsertInputSchema = z.object({
+  project: projectNameSchema,
+  request: gscPlatformPropertyUpsertRequestDtoSchema,
+})
+
+const gscPlatformPerformanceInputSchema = z.object({
+  project: projectNameSchema,
+  propertyId: z.string().min(1).optional(),
+  dimension: z.enum(['page', 'query']).default('page'),
+  startDate: z.iso.date().optional(),
+  endDate: z.iso.date().optional(),
+  window: analyticsWindowSchema.optional(),
+  limit: z.number().int().positive().max(500).optional(),
+  offset: z.number().int().nonnegative().optional(),
 })
 
 const gscInspectionsInputSchema = z.object({
@@ -1241,6 +1263,69 @@ export const canonryMcpTools = [
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/google/connections'],
     handler: (client, input) => client.googleConnections(input.project),
+  }),
+  defineTool({
+    name: 'canonry_gsc_platform_properties',
+    title: 'List GSC social and video properties',
+    description: 'List the Instagram, TikTok, X, and YouTube Search Console properties bound to a Canonry project, including sync state and errors.',
+    access: 'read',
+    tier: 'gsc',
+    inputSchema: projectInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/google/gsc/platform-properties'],
+    handler: (client, input) => client.listGscPlatformProperties(input.project),
+  }),
+  defineTool({
+    name: 'canonry_gsc_platform_performance',
+    title: 'Get GSC social and video performance',
+    description: 'Get server-aggregated Search Console clicks, impressions, CTR, average position, daily trend, and content or query rows across all bound social/video properties or one property.',
+    access: 'read',
+    tier: 'gsc',
+    inputSchema: gscPlatformPerformanceInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/google/gsc/platform-performance'],
+    handler: (client, input) => client.getGscPlatformPerformance(input.project, {
+      propertyId: input.propertyId,
+      dimension: input.dimension,
+      startDate: input.startDate,
+      endDate: input.endDate,
+      window: input.window,
+      limit: input.limit,
+      offset: input.offset,
+    }),
+  }),
+  defineTool({
+    name: 'canonry_gsc_platform_property_upsert',
+    title: 'Bind a GSC social or video property',
+    description: 'Idempotently bind an authorized Instagram, TikTok, X, or YouTube Search Console property to a Canonry project. The property must already exist in the connected Google account.',
+    access: 'write',
+    tier: 'gsc',
+    inputSchema: gscPlatformPropertyUpsertInputSchema,
+    annotations: writeAnnotations({ idempotentHint: true, openWorldHint: true }),
+    openApiOperations: ['PUT /api/v1/projects/{name}/google/gsc/platform-properties'],
+    handler: (client, input) => client.upsertGscPlatformProperty(input.project, input.request),
+  }),
+  defineTool({
+    name: 'canonry_gsc_platform_property_remove',
+    title: 'Remove a GSC social or video property',
+    description: 'Remove a bound Search Console platform property and its stored platform-only performance rows from the Canonry project.',
+    access: 'write',
+    tier: 'gsc',
+    inputSchema: gscPlatformPropertyInputSchema,
+    annotations: writeAnnotations({ idempotentHint: false, destructiveHint: true }),
+    openApiOperations: ['DELETE /api/v1/projects/{name}/google/gsc/platform-properties/{id}'],
+    handler: (client, input) => client.deleteGscPlatformProperty(input.project, input.propertyId),
+  }),
+  defineTool({
+    name: 'canonry_gsc_platform_property_sync',
+    title: 'Sync a GSC social or video property',
+    description: 'Queue an isolated Search Console performance sync for one bound social/video property. It does not inspect URLs, submit sitemaps, or alter website GSC data.',
+    access: 'write',
+    tier: 'gsc',
+    inputSchema: gscPlatformPropertyInputSchema,
+    annotations: writeAnnotations({ idempotentHint: false, openWorldHint: true }),
+    openApiOperations: ['POST /api/v1/projects/{name}/google/gsc/platform-properties/{id}/sync'],
+    handler: (client, input) => client.syncGscPlatformProperty(input.project, input.propertyId),
   }),
   defineTool({
     name: 'canonry_gsc_performance',

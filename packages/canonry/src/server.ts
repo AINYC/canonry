@@ -106,6 +106,7 @@ import { checkLatestVersionForServer } from "./update-check.js";
 import { JobRunner } from "./job-runner.js";
 import { maybeShowActivationNotice } from './activation-notice.js'
 import { executeGscSync } from "./gsc-sync.js";
+import { executeGscPlatformSync } from "./gsc-platform-sync.js";
 import { executeGbpSync } from "./gbp-sync.js";
 import {
   executeAdsSync,
@@ -2025,6 +2026,17 @@ export async function createServer(opts: {
         .catch((err: unknown) => {
           app.log.error({ runId, err }, "GSC sync failed");
         });
+    },
+    onGscPlatformSyncRequested: (
+      runId: string,
+      projectId: string,
+      platformOpts: { sourceId: string; days?: number; full?: boolean },
+    ) => {
+      executeGscPlatformSync(opts.db, runId, projectId, platformOpts.sourceId, {
+        days: platformOpts.days,
+        full: platformOpts.full,
+        config: opts.config,
+      }).catch((err: unknown) => app.log.error({ runId, err }, 'GSC platform sync failed'))
     },
     onInspectSitemapRequested: (
       runId: string,

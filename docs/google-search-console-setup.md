@@ -157,6 +157,61 @@ canonry google set-property <project> https://example.com/
 
 ---
 
+## Social and Video Platform Properties (Experimental)
+
+Google's July 2026 rollout lets an operator create Instagram, TikTok, X, and
+YouTube properties in the Search Console UI. Google has not documented a
+platform-specific API resource or schema: creation and verification remain in
+Search Console, while Canonry uses the existing
+[`sites.list`](https://developers.google.com/webmaster-tools/v1/sites/list) and
+[`searchanalytics.query`](https://developers.google.com/webmaster-tools/v1/searchanalytics/query)
+methods on a best-effort basis.
+
+Canonry only binds an exact, verified property identifier returned for the
+connected Google account. API compatibility must therefore be proven for each
+enrolled account during this gradual rollout. A failed sync marks only that
+bound property and run as failed; website Search Console rows, URL inspections,
+coverage, and sitemaps are stored and operated separately.
+
+### Web UI
+
+1. Create and verify the property in Google Search Console.
+2. Open the project **Search Console** tab and select **Social & video**.
+3. Refresh the available properties, choose the exact identifier, label its
+   platform, and bind it.
+4. Sync one property, then inspect all-platform or per-property performance.
+
+### CLI
+
+```bash
+canonry google platform list <project>
+canonry google platform add <project> <site-url> --platform youtube --label "Main channel"
+canonry google platform sync <project> <property-id> --wait
+canonry google platform performance <project> --window 30d
+canonry google platform performance <project> --property <property-id> --dimension query
+canonry google platform remove <project> <property-id>
+```
+
+`<site-url>` is the exact identifier returned by Google. `<property-id>` is the
+Canonry ID returned after binding.
+
+### Public API and MCP
+
+| Capability | HTTP API | MCP tool |
+| --- | --- | --- |
+| List bindings | `GET /api/v1/projects/{name}/google/gsc/platform-properties` | `canonry_gsc_platform_properties` |
+| Bind or update | `PUT /api/v1/projects/{name}/google/gsc/platform-properties` | `canonry_gsc_platform_property_upsert` |
+| Remove and delete imported rows | `DELETE /api/v1/projects/{name}/google/gsc/platform-properties/{id}` | `canonry_gsc_platform_property_remove` |
+| Queue an isolated sync | `POST /api/v1/projects/{name}/google/gsc/platform-properties/{id}/sync` | `canonry_gsc_platform_property_sync` |
+| Read aggregate or per-property performance | `GET /api/v1/projects/{name}/google/gsc/platform-performance` | `canonry_gsc_platform_performance` |
+
+The performance read accepts `propertyId`, `dimension=page|query`,
+`window=7d|30d|90d|all`, explicit `startDate` / `endDate`, `limit`, and
+`offset`. Headline totals and the daily trend come from un-dimensioned
+property totals; paginated page/query rows never drive those metrics.
+
+---
+
 ## Step 6 — Configure Sitemaps (Optional)
 
 `list-sitemaps` reads the sitemap registrations already in Google Search Console.

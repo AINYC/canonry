@@ -13,7 +13,7 @@ import {
   useClientTable,
 } from '../shared/DataTableControls.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
-import { CHART_NEUTRAL, CHART_TONE, CHART_SERIES_COLORS } from '../shared/ChartPrimitives.js'
+import { CHART_AXIS_STROKE, CHART_AXIS_TICK, CHART_GRID_STROKE, CHART_NEUTRAL, CHART_TONE, CHART_SERIES_COLORS, CHART_TOOLTIP_STYLE, CartesianGrid, ComposedChart, Line, RechartsTooltip, ResponsiveContainer, XAxis, YAxis } from '../shared/ChartPrimitives.js'
 import { formatTimestamp, formatBooleanState, SearchMetric, SEARCH_METRIC_LABELS } from '../../lib/format-helpers.js'
 import { addToast } from '../../lib/toast-store.js'
 import { asyncHandler } from '../../lib/async-handler.js'
@@ -38,6 +38,13 @@ import {
   type ApiGscInspection,
   type ApiGscDeindexedRow,
   type ApiGscCoverageSummary,
+  type ApiGscPlatformPerformance,
+  type ApiGscPlatformProperty,
+  fetchGscPlatformPerformance,
+  fetchGscPlatformProperties,
+  saveGscPlatformProperty,
+  deleteGscPlatformProperty,
+  syncGscPlatformProperty,
 } from '../../api.js'
 import {
   getApiV1ProjectsByNameGoogleConnectionsOptions,
@@ -64,6 +71,238 @@ const GOOGLE_OAUTH_COMPLETE_MESSAGE = 'canonry:google-oauth-complete'
 
 function sitemapDiscoveredUrlCount(sitemap: ApiGscSitemap): number {
   return sitemap.contents?.reduce((total, content) => total + Number(content.submitted || 0), 0) ?? 0
+}
+
+function PlatformWorkspace({
+  authorized,
+  websitePropertyId,
+  rawProperties,
+  properties,
+  performance,
+  selectedPropertyId,
+  dimension,
+  loading,
+  loaded,
+  binding,
+  action,
+  siteUrl,
+  platform,
+  displayName,
+  onPropertyChange,
+  onDimensionChange,
+  onSiteUrlChange,
+  onPlatformChange,
+  onDisplayNameChange,
+  onRefresh,
+  onBind,
+  onSync,
+  onDelete,
+  onPageChange,
+  error,
+  notice,
+}: {
+  authorized: boolean
+  websitePropertyId: string | null
+  rawProperties: ApiGoogleProperty[]
+  properties: ApiGscPlatformProperty[]
+  performance: ApiGscPlatformPerformance | null
+  selectedPropertyId: string
+  dimension: 'page' | 'query'
+  loading: boolean
+  loaded: boolean
+  binding: boolean
+  action: { id: string; kind: 'sync' | 'delete' } | null
+  siteUrl: string
+  platform: ApiGscPlatformProperty['platform']
+  displayName: string
+  onPropertyChange: (value: string) => void
+  onDimensionChange: (value: 'page' | 'query') => void
+  onSiteUrlChange: (value: string) => void
+  onPlatformChange: (value: ApiGscPlatformProperty['platform']) => void
+  onDisplayNameChange: (value: string) => void
+  onRefresh: () => void
+  onBind: () => void
+  onSync: (id: string) => void
+  onDelete: (id: string) => void
+  onPageChange: (offset: number) => void
+  error: string | null
+  notice: string | null
+}) {
+  const totals = performance?.totals
+  const formatInteger = (value: number | undefined) => (value ?? 0).toLocaleString()
+  const formatPercent = (value: number | undefined) => `${((value ?? 0) * 100).toFixed(1)}%`
+  const contentLabel = dimension === 'page' ? 'Content' : 'Query'
+  const boundSiteUrls = new Set(properties.map((property) => property.siteUrl))
+  const availableProperties = rawProperties.filter((property) => (
+    property.permissionLevel !== 'siteUnverifiedUser'
+    && property.siteUrl !== websitePropertyId
+    && !boundSiteUrls.has(property.siteUrl)
+  ))
+  const windowLabel = performance?.window.startDate && performance.window.endDate !== '9999-12-31'
+    ? `${performance.window.startDate} to ${performance.window.endDate}`
+    : 'All available data'
+
+  return (
+    <div className="space-y-5">
+      {error && <p role="alert" className="border border-negative-800/40 bg-negative-950/20 px-3 py-2 text-sm text-negative">{error}</p>}
+      {notice && <p className="border border-positive-800/40 bg-positive-950/20 px-3 py-2 text-sm text-positive">{notice}</p>}
+      <div className="flex flex-wrap items-center gap-3 border-b border-subtle pb-3 text-sm">
+        <span className={`inline-flex items-center gap-2 ${authorized ? 'text-positive' : 'text-caution'}`}><span className={`h-1.5 w-1.5 rounded-full ${authorized ? 'bg-positive-500' : 'bg-caution-500'}`} />{authorized ? 'Connected' : 'Connection needed'}</span>
+        <span className="text-muted">{properties.length} bound</span>
+        <Button type="button" variant="outline" size="sm" className="ml-auto" disabled={loading} onClick={onRefresh}>{loading ? 'Refreshing…' : 'Refresh'}</Button>
+      </div>
+      <p className="border-l-2 border-mono-600 pl-3 text-xs leading-5 text-muted">
+        Experimental integration. Google has not published a platform-specific API; Canonry uses the standard Search Analytics API and confirms compatibility when a sync runs.
+      </p>
+
+      {!loaded ? (
+        <p className="border border-default bg-surface-subtle px-3 py-6 text-sm text-muted">
+          {loading ? 'Loading social and video properties…' : 'Social and video properties are unavailable. Retry the request.'}
+        </p>
+      ) : properties.length === 0 ? (
+        <div className="border border-default bg-surface-subtle p-4">
+          <h3 className="text-sm font-semibold text-heading">Bind a social or video property</h3>
+          <p className="mt-1 max-w-2xl text-sm text-secondary">Create and verify the property in Google Search Console first, then bind it here for this project.</p>
+          <a href="https://search.google.com/search-console" target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-sm font-medium text-link underline underline-offset-2">Open Search Console</a>
+          <PlatformBindForm rawProperties={availableProperties} siteUrl={siteUrl} platform={platform} displayName={displayName} binding={binding} onSiteUrlChange={onSiteUrlChange} onPlatformChange={onPlatformChange} onDisplayNameChange={onDisplayNameChange} onBind={onBind} />
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-xs font-medium text-muted" htmlFor="gsc-platform-property">Property</label>
+            <select id="gsc-platform-property" aria-label="Platform property" value={selectedPropertyId} onChange={(event) => onPropertyChange(event.target.value)} className="min-w-52 rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong focus:border-mono-500 focus:outline-none">
+              <option value="">All platforms</option>
+              {properties.map((property) => <option key={property.id} value={property.id}>{property.displayName ?? property.siteUrl}</option>)}
+            </select>
+          </div>
+
+          <div className="overflow-x-auto border border-default">
+            <table className="w-full min-w-[720px] text-left text-sm">
+              <thead className="border-b border-default bg-surface-subtle text-xs text-muted">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Platform</th>
+                  <th className="px-3 py-2 font-medium">Property</th>
+                  <th className="px-3 py-2 font-medium">Status</th>
+                  <th className="px-3 py-2 font-medium">Last sync</th>
+                  <th className="px-3 py-2 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {properties.map((property) => {
+                  const label = property.displayName ?? property.siteUrl
+                  const syncing = action?.id === property.id && action.kind === 'sync'
+                  const deleting = action?.id === property.id && action.kind === 'delete'
+                  return <tr key={property.id} className="border-b border-subtle last:border-0">
+                    <td className="px-3 py-2 font-medium capitalize text-heading">{property.platform}</td>
+                    <td className="px-3 py-2">
+                      <p className="font-medium text-heading">{label}</p>
+                      {property.displayName && <p className="mt-0.5 max-w-[360px] truncate text-xs text-muted" title={property.siteUrl}>{property.siteUrl}</p>}
+                    </td>
+                    <td className="px-3 py-2">
+                      <ToneBadge tone={property.status === 'error' ? 'negative' : 'positive'}>{property.status === 'error' ? 'Error' : 'Active'}</ToneBadge>
+                      {property.lastError && <p className="mt-1 max-w-[260px] truncate text-xs text-negative" title={property.lastError}>{property.lastError}</p>}
+                    </td>
+                    <td className="px-3 py-2 text-secondary">{property.lastSyncedAt ? formatTimestamp(property.lastSyncedAt) : 'Never'}</td>
+                    <td className="px-3 py-2 text-right">
+                      <div className="inline-flex items-center gap-3">
+                        <button type="button" className="text-link hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400" disabled={Boolean(action)} onClick={() => onSync(property.id)}>{syncing ? 'Syncing…' : 'Sync'}</button>
+                        <button type="button" className="text-negative hover:text-negative-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400" disabled={Boolean(action)} onClick={() => onDelete(property.id)}>{deleting ? 'Unbinding…' : 'Unbind'}</button>
+                      </div>
+                    </td>
+                  </tr>
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="grid divide-y divide-default border-y border-default sm:grid-cols-4 sm:divide-x sm:divide-y-0">
+            {[
+              ['Clicks', formatInteger(totals?.clicks)],
+              ['Impressions', formatInteger(totals?.impressions)],
+              ['CTR', formatPercent(totals?.ctr)],
+              ['Avg. position', (totals?.position ?? 0).toFixed(1)],
+            ].map(([label, value]) => <div key={label} className="px-3 py-3"><p className="text-xs text-muted">{label}</p><p className="mt-1 text-lg font-semibold tabular-nums text-heading">{value}</p></div>)}
+          </div>
+
+          <div className="border border-default bg-surface-subtle p-3">
+            <div className="mb-2 flex items-center gap-4 text-xs text-muted">
+              <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-3 bg-positive-500" />Clicks</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-3" style={{ backgroundColor: CHART_SERIES_COLORS[1] }} />Impressions</span>
+            </div>
+            <div className="h-40">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={performance?.daily ?? []}>
+                  <CartesianGrid stroke={CHART_GRID_STROKE} vertical={false} />
+                  <XAxis dataKey="date" tick={CHART_AXIS_TICK} axisLine={{ stroke: CHART_AXIS_STROKE }} tickLine={false} />
+                  <YAxis yAxisId="clicks" tick={CHART_AXIS_TICK} axisLine={false} tickLine={false} width={36} />
+                  <YAxis yAxisId="impressions" orientation="right" tick={CHART_AXIS_TICK} axisLine={false} tickLine={false} width={42} />
+                  <RechartsTooltip {...CHART_TOOLTIP_STYLE} />
+                  <Line yAxisId="clicks" type="monotone" dataKey="clicks" stroke={CHART_TONE.positive} strokeWidth={2} dot={false} />
+                  <Line yAxisId="impressions" type="monotone" dataKey="impressions" stroke={CHART_SERIES_COLORS[1]} strokeWidth={2} dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div role="tablist" aria-label="Platform performance dimension" className="flex rounded-lg border border-default p-1">
+              <button type="button" role="tab" aria-selected={dimension === 'page'} onClick={() => onDimensionChange('page')} className={`rounded-md px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400 ${dimension === 'page' ? 'bg-bg-elevated text-heading' : 'text-secondary hover:text-heading'}`}>Content</button>
+              <button type="button" role="tab" aria-selected={dimension === 'query'} onClick={() => onDimensionChange('query')} className={`rounded-md px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400 ${dimension === 'query' ? 'bg-bg-elevated text-heading' : 'text-secondary hover:text-heading'}`}>Search queries</button>
+            </div>
+            <span className="text-xs text-muted">{windowLabel}</span>
+          </div>
+
+          <div className="overflow-x-auto border border-default">
+            <table className="w-full min-w-[700px] text-left text-sm">
+              <thead className="border-b border-default bg-surface-subtle text-xs text-muted"><tr><th className="px-3 py-2 font-medium">Platform</th><th className="px-3 py-2 font-medium">{contentLabel}</th><th className="px-3 py-2 text-right font-medium">Clicks</th><th className="px-3 py-2 text-right font-medium">Impressions</th><th className="px-3 py-2 text-right font-medium">CTR</th><th className="px-3 py-2 text-right font-medium">Position</th></tr></thead>
+              <tbody>{(performance?.rows ?? []).map((row) => <tr key={`${row.propertyId}-${row.dimension}-${row.value}`} className="border-b border-subtle last:border-0"><td className="px-3 py-2 font-medium text-heading">{row.platform}</td><td className="max-w-[420px] truncate px-3 py-2 text-secondary" title={row.value}>{row.value}</td><td className="px-3 py-2 text-right tabular-nums">{formatInteger(row.clicks)}</td><td className="px-3 py-2 text-right tabular-nums">{formatInteger(row.impressions)}</td><td className="px-3 py-2 text-right tabular-nums">{formatPercent(row.ctr)}</td><td className="px-3 py-2 text-right tabular-nums">{row.position.toFixed(1)}</td></tr>)}</tbody>
+            </table>
+            {!loading && (performance?.rows.length ?? 0) === 0 && <p className="px-3 py-6 text-sm text-muted">No platform performance is available for this selection yet.</p>}
+            <div className="flex items-center justify-between border-t border-default px-3 py-2">
+              <span className="text-xs text-muted">
+                {performance?.rows.length
+                  ? `${performance.pagination.offset + 1}–${performance.pagination.offset + performance.rows.length}`
+                  : '0 results'}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button type="button" variant="outline" size="sm" aria-label="Previous platform results" disabled={loading || !performance || performance.pagination.offset === 0} onClick={() => onPageChange(Math.max(0, (performance?.pagination.offset ?? 0) - (performance?.pagination.limit ?? 50)))}>Previous</Button>
+                <Button type="button" variant="outline" size="sm" aria-label="Next platform results" disabled={loading || !performance?.pagination.hasMore} onClick={() => onPageChange((performance?.pagination.offset ?? 0) + (performance?.pagination.limit ?? 50))}>Next</Button>
+              </div>
+            </div>
+          </div>
+
+          <div className="border border-default bg-surface-subtle p-4">
+            <h3 className="text-sm font-semibold text-heading">Bind another property</h3>
+            <p className="mt-1 text-sm text-secondary">The property must already be created and verified in Google Search Console.</p>
+            <PlatformBindForm rawProperties={availableProperties} siteUrl={siteUrl} platform={platform} displayName={displayName} binding={binding} onSiteUrlChange={onSiteUrlChange} onPlatformChange={onPlatformChange} onDisplayNameChange={onDisplayNameChange} onBind={onBind} />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function PlatformBindForm({ rawProperties, siteUrl, platform, displayName, binding, onSiteUrlChange, onPlatformChange, onDisplayNameChange, onBind }: {
+  rawProperties: ApiGoogleProperty[]
+  siteUrl: string
+  platform: ApiGscPlatformProperty['platform']
+  displayName: string
+  binding: boolean
+  onSiteUrlChange: (value: string) => void
+  onPlatformChange: (value: ApiGscPlatformProperty['platform']) => void
+  onDisplayNameChange: (value: string) => void
+  onBind: () => void
+}) {
+  if (rawProperties.length === 0) {
+    return <p className="mt-3 text-sm text-muted">No unbound Search Console properties are available to this Google account.</p>
+  }
+
+  return <div className="mt-4 grid gap-3 border-t border-default pt-4 md:grid-cols-4">
+    <label className="text-xs font-medium text-muted">Search Console property<select aria-label="Search Console property" value={siteUrl} onChange={(event) => onSiteUrlChange(event.target.value)} className="mt-1 block w-full rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong focus:border-mono-500 focus:outline-none"><option value="">Select a property</option>{rawProperties.map((property) => <option key={property.siteUrl} value={property.siteUrl}>{property.siteUrl}</option>)}</select></label>
+    <label className="text-xs font-medium text-muted">Platform<select aria-label="Platform" value={platform} onChange={(event) => onPlatformChange(event.target.value as ApiGscPlatformProperty['platform'])} className="mt-1 block w-full rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong focus:border-mono-500 focus:outline-none"><option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="x">X</option><option value="youtube">YouTube</option></select></label>
+    <label className="text-xs font-medium text-muted">Display label (optional)<input aria-label="Display label" value={displayName} onChange={(event) => onDisplayNameChange(event.target.value)} className="mt-1 block w-full rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none" /></label>
+    <div className="flex items-end"><Button type="button" size="sm" disabled={!siteUrl || binding} onClick={onBind}>{binding ? 'Binding…' : 'Bind property'}</Button></div>
+  </div>
 }
 
 function sitemapIssueText(sitemap: ApiGscSitemap): string {
@@ -142,6 +381,22 @@ export function GscSection({
   const [coverageHistoryExpanded, setCoverageHistoryExpanded] = useState(false)
   const [coverageTab, setCoverageTab] = useState<'indexed' | 'notIndexed' | 'deindexed'>('indexed')
   const [perfSort, setPerfSort] = useState<{ key: SearchMetric; dir: 'asc' | 'desc' } | null>(null)
+  const [workspace, setWorkspace] = useState<'website' | 'platform'>('website')
+  const [platformProperties, setPlatformProperties] = useState<ApiGscPlatformProperty[]>([])
+  const [platformPerformance, setPlatformPerformance] = useState<ApiGscPlatformPerformance | null>(null)
+  const [selectedPlatformPropertyId, setSelectedPlatformPropertyId] = useState('')
+  const [platformDimension, setPlatformDimension] = useState<'page' | 'query'>('page')
+  const [platformLoading, setPlatformLoading] = useState(false)
+  const [platformLoaded, setPlatformLoaded] = useState(false)
+  const [platformBinding, setPlatformBinding] = useState(false)
+  const [platformAction, setPlatformAction] = useState<{ id: string; kind: 'sync' | 'delete' } | null>(null)
+  const [platformOffset, setPlatformOffset] = useState(0)
+  const [platformSiteUrl, setPlatformSiteUrl] = useState('')
+  const [platformKind, setPlatformKind] = useState<ApiGscPlatformProperty['platform']>('instagram')
+  const [platformDisplayName, setPlatformDisplayName] = useState('')
+  const [platformError, setPlatformError] = useState<string | null>(null)
+  const [platformNotice, setPlatformNotice] = useState<string | null>(null)
+  const platformRequestId = useRef(0)
 
   // Expanded mode: when any filter or sort is active, fetch up to EXPANDED_PERFORMANCE_LIMIT
   // rows so client-side sort/filter operates over the full matching set instead of one page.
@@ -820,6 +1075,125 @@ export function GscSection({
     }
   }
 
+  async function loadPlatformWorkspace(
+    propertyId = selectedPlatformPropertyId,
+    offset = platformOffset,
+    refreshSites = false,
+  ) {
+    const requestId = ++platformRequestId.current
+    setPlatformLoading(true)
+    try {
+      const [propertiesResult, result, sitesResult] = await Promise.all([
+        fetchGscPlatformProperties(projectName),
+        fetchGscPlatformPerformance(projectName, {
+          ...(propertyId ? { propertyId } : {}),
+          dimension: platformDimension,
+          window: gscWindow,
+          limit: 50,
+          offset,
+        }),
+        refreshSites && gscConn
+          ? queryClient.fetchQuery({
+              ...getApiV1ProjectsByNameGooglePropertiesOptions({
+                client: heyClient,
+                path: { name: projectName },
+              }),
+              staleTime: 0,
+            })
+          : Promise.resolve(null),
+      ])
+      if (requestId !== platformRequestId.current) return
+      setPlatformProperties(propertiesResult.properties)
+      setPlatformPerformance(result)
+      if (sitesResult) setProperties(sitesResult.sites)
+      setPlatformLoaded(true)
+      setPlatformError(null)
+    } catch (err) {
+      if (requestId !== platformRequestId.current) return
+      setPlatformError(err instanceof Error ? err.message : 'Failed to load social and video performance')
+    } finally {
+      if (requestId === platformRequestId.current) setPlatformLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (workspace === 'platform') void loadPlatformWorkspace(selectedPlatformPropertyId, platformOffset)
+  }, [workspace, projectName, refreshNonce, selectedPlatformPropertyId, platformDimension, gscWindow, platformOffset])
+
+  useEffect(() => {
+    setPlatformOffset(0)
+  }, [gscWindow])
+
+  useEffect(() => {
+    platformRequestId.current += 1
+    setPlatformProperties([])
+    setPlatformPerformance(null)
+    setSelectedPlatformPropertyId('')
+    setPlatformOffset(0)
+    setPlatformLoaded(false)
+    setPlatformError(null)
+    setPlatformNotice(null)
+  }, [projectName])
+
+  async function handleBindPlatformProperty() {
+    if (!platformSiteUrl) return
+    setPlatformBinding(true)
+    setPlatformError(null)
+    setPlatformNotice(null)
+    try {
+      const property = await saveGscPlatformProperty(projectName, {
+        siteUrl: platformSiteUrl,
+        platform: platformKind,
+        kind: 'social-video',
+        ...(platformDisplayName.trim() ? { displayName: platformDisplayName.trim() } : {}),
+      })
+      setSelectedPlatformPropertyId(property.id)
+      setPlatformOffset(0)
+      setPlatformSiteUrl('')
+      setPlatformDisplayName('')
+      setPlatformNotice('Property bound. Sync it when you are ready.')
+      await loadPlatformWorkspace(property.id, 0)
+    } catch (err) {
+      setPlatformError(err instanceof Error ? err.message : 'Failed to bind Search Console property')
+    } finally {
+      setPlatformBinding(false)
+    }
+  }
+
+  async function handleSyncPlatformProperty(id: string) {
+    setPlatformAction({ id, kind: 'sync' })
+    setPlatformError(null)
+    setPlatformNotice(null)
+    try {
+      await syncGscPlatformProperty(projectName, id)
+      setPlatformNotice('Social and video sync queued.')
+      await loadPlatformWorkspace(selectedPlatformPropertyId, platformOffset)
+    } catch (err) {
+      setPlatformError(err instanceof Error ? err.message : 'Failed to sync property')
+    } finally {
+      setPlatformAction(null)
+    }
+  }
+
+  async function handleDeletePlatformProperty(id: string) {
+    if (!window.confirm('Unbind this social or video property and delete its imported performance from this project?')) return
+    setPlatformAction({ id, kind: 'delete' })
+    setPlatformError(null)
+    setPlatformNotice(null)
+    try {
+      await deleteGscPlatformProperty(projectName, id)
+      const nextPropertyId = selectedPlatformPropertyId === id ? '' : selectedPlatformPropertyId
+      setSelectedPlatformPropertyId(nextPropertyId)
+      setPlatformOffset(0)
+      setPlatformNotice('Property unbound.')
+      await loadPlatformWorkspace(nextPropertyId, 0)
+    } catch (err) {
+      setPlatformError(err instanceof Error ? err.message : 'Failed to unbind property')
+    } finally {
+      setPlatformAction(null)
+    }
+  }
+
   return (
     <section className="page-section-divider">
       <div className="section-head section-head-inline">
@@ -829,6 +1203,12 @@ export function GscSection({
         </div>
       </div>
 
+      <div role="tablist" aria-label="Search Console workspace" className="mb-4 flex w-fit rounded-lg border border-default bg-surface-subtle p-1">
+        <button type="button" role="tab" aria-selected={workspace === 'website'} onClick={() => setWorkspace('website')} className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400 ${workspace === 'website' ? 'bg-bg-elevated text-heading' : 'text-secondary hover:text-heading'}`}>Website</button>
+        <button type="button" role="tab" aria-selected={workspace === 'platform'} onClick={() => setWorkspace('platform')} className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400 ${workspace === 'platform' ? 'bg-bg-elevated text-heading' : 'text-secondary hover:text-heading'}`}>Social &amp; video</button>
+      </div>
+
+      {workspace === 'website' ? <>
       {actionNeeded && (
         <div className="mb-3 rounded-lg border border-caution-800/40 bg-caution-950/20 px-3 py-2.5 text-sm text-caution-200">
           <div className="flex items-start justify-between gap-2">
@@ -1918,6 +2298,42 @@ export function GscSection({
             </>
           )}
         </div>
+      )}
+      </> : (
+        <PlatformWorkspace
+          authorized={Boolean(gscConn)}
+          websitePropertyId={gscConn?.propertyId ?? null}
+          rawProperties={properties}
+          properties={platformProperties}
+          performance={platformPerformance}
+          selectedPropertyId={selectedPlatformPropertyId}
+          dimension={platformDimension}
+          loading={platformLoading}
+          loaded={platformLoaded}
+          binding={platformBinding}
+          action={platformAction}
+          siteUrl={platformSiteUrl}
+          platform={platformKind}
+          displayName={platformDisplayName}
+          onPropertyChange={(value) => {
+            setSelectedPlatformPropertyId(value)
+            setPlatformOffset(0)
+          }}
+          onDimensionChange={(value) => {
+            setPlatformDimension(value)
+            setPlatformOffset(0)
+          }}
+          onSiteUrlChange={setPlatformSiteUrl}
+          onPlatformChange={setPlatformKind}
+          onDisplayNameChange={setPlatformDisplayName}
+          onRefresh={() => void loadPlatformWorkspace(selectedPlatformPropertyId, platformOffset, true)}
+          onBind={() => void handleBindPlatformProperty()}
+          onSync={(id) => void handleSyncPlatformProperty(id)}
+          onDelete={(id) => void handleDeletePlatformProperty(id)}
+          onPageChange={setPlatformOffset}
+          error={platformError}
+          notice={platformNotice}
+        />
       )}
     </section>
   )

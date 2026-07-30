@@ -2576,6 +2576,97 @@ export type GscUrlInspectionDto = {
     inspectedAt: string;
 };
 
+export type GscPlatformPropertyDto = {
+    id: string;
+    projectId: string;
+    siteUrl: string;
+    displayName: string | null;
+    platform: 'instagram' | 'tiktok' | 'x' | 'youtube';
+    kind: 'social-video';
+    permissionLevel: string | null;
+    status: 'active' | 'error';
+    lastSyncedAt: string | null;
+    lastError: string | null;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type GscPlatformPropertyListResponseDto = {
+    properties: Array<{
+        id: string;
+        projectId: string;
+        siteUrl: string;
+        displayName: string | null;
+        platform: 'instagram' | 'tiktok' | 'x' | 'youtube';
+        kind: 'social-video';
+        permissionLevel: string | null;
+        status: 'active' | 'error';
+        lastSyncedAt: string | null;
+        lastError: string | null;
+        createdAt: string;
+        updatedAt: string;
+    }>;
+};
+
+export type GscPlatformPropertyUpsertRequestDto = {
+    siteUrl: string;
+    displayName?: string | null;
+    platform: 'instagram' | 'tiktok' | 'x' | 'youtube';
+    kind: 'social-video';
+};
+
+export type GscPlatformPerformanceDto = {
+    properties: Array<{
+        id: string;
+        projectId: string;
+        siteUrl: string;
+        displayName: string | null;
+        platform: 'instagram' | 'tiktok' | 'x' | 'youtube';
+        kind: 'social-video';
+        permissionLevel: string | null;
+        status: 'active' | 'error';
+        lastSyncedAt: string | null;
+        lastError: string | null;
+        createdAt: string;
+        updatedAt: string;
+    }>;
+    selectedPropertyId: string | null;
+    window: {
+        startDate: string;
+        endDate: string;
+    };
+    totals: {
+        clicks: number;
+        impressions: number;
+        ctr: number;
+        position: number;
+    };
+    daily: Array<{
+        date: string;
+        clicks: number;
+        impressions: number;
+        ctr: number;
+        position: number;
+    }>;
+    rows: Array<{
+        propertyId: string;
+        siteUrl: string;
+        displayName: string | null;
+        platform: 'instagram' | 'tiktok' | 'x' | 'youtube';
+        dimension: 'page' | 'query';
+        value: string;
+        clicks: number;
+        impressions: number;
+        ctr: number;
+        position: number;
+    }>;
+    pagination: {
+        limit: number;
+        offset: number;
+        hasMore: boolean;
+    };
+};
+
 export type HealthSnapshotDto = {
     id: string;
     projectId: string;
@@ -5125,6 +5216,188 @@ export type PutApiV1ProjectsByNameResponses = {
 };
 
 export type PutApiV1ProjectsByNameResponse = PutApiV1ProjectsByNameResponses[keyof PutApiV1ProjectsByNameResponses];
+
+export type GetApiV1ProjectsByNameGoogleGscPlatformPropertiesData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/google/gsc/platform-properties';
+};
+
+export type GetApiV1ProjectsByNameGoogleGscPlatformPropertiesResponses = {
+    /**
+     * Platform properties returned.
+     */
+    200: GscPlatformPropertyListResponseDto;
+};
+
+export type GetApiV1ProjectsByNameGoogleGscPlatformPropertiesResponse = GetApiV1ProjectsByNameGoogleGscPlatformPropertiesResponses[keyof GetApiV1ProjectsByNameGoogleGscPlatformPropertiesResponses];
+
+export type PutApiV1ProjectsByNameGoogleGscPlatformPropertiesData = {
+    body: GscPlatformPropertyUpsertRequestDto;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/google/gsc/platform-properties';
+};
+
+export type PutApiV1ProjectsByNameGoogleGscPlatformPropertiesErrors = {
+    /**
+     * Invalid or unavailable Search Console property.
+     */
+    400: ErrorEnvelope;
+};
+
+export type PutApiV1ProjectsByNameGoogleGscPlatformPropertiesError = PutApiV1ProjectsByNameGoogleGscPlatformPropertiesErrors[keyof PutApiV1ProjectsByNameGoogleGscPlatformPropertiesErrors];
+
+export type PutApiV1ProjectsByNameGoogleGscPlatformPropertiesResponses = {
+    /**
+     * Platform property saved.
+     */
+    200: GscPlatformPropertyDto;
+};
+
+export type PutApiV1ProjectsByNameGoogleGscPlatformPropertiesResponse = PutApiV1ProjectsByNameGoogleGscPlatformPropertiesResponses[keyof PutApiV1ProjectsByNameGoogleGscPlatformPropertiesResponses];
+
+export type DeleteApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Platform property ID.
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/google/gsc/platform-properties/{id}';
+};
+
+export type DeleteApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdErrors = {
+    /**
+     * Platform property not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type DeleteApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdError = DeleteApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdErrors[keyof DeleteApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdErrors];
+
+export type DeleteApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdResponses = {
+    /**
+     * Platform property deleted.
+     */
+    204: void;
+};
+
+export type DeleteApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdResponse = DeleteApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdResponses[keyof DeleteApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdResponses];
+
+export type PostApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSyncData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Platform property ID.
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/google/gsc/platform-properties/{id}/sync';
+};
+
+export type PostApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSyncErrors = {
+    /**
+     * Platform property not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSyncError = PostApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSyncErrors[keyof PostApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSyncErrors];
+
+export type PostApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSyncResponses = {
+    /**
+     * Platform sync run returned.
+     */
+    200: RunDto;
+};
+
+export type PostApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSyncResponse = PostApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSyncResponses[keyof PostApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSyncResponses];
+
+export type GetApiV1ProjectsByNameGoogleGscPlatformPerformanceData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Optional enrolled property ID.
+         */
+        propertyId?: string;
+        /**
+         * Aggregate by page or query.
+         */
+        dimension?: 'page' | 'query';
+        /**
+         * Filter by start date.
+         */
+        startDate?: string;
+        /**
+         * Filter by end date.
+         */
+        endDate?: string;
+        /**
+         * Time window for analytics queries.
+         */
+        window?: '7d' | '30d' | '90d' | 'all';
+        /**
+         * Maximum number of dimension rows to return.
+         */
+        limit?: number;
+        /**
+         * Number of records to skip.
+         */
+        offset?: number;
+    };
+    url: '/api/v1/projects/{name}/google/gsc/platform-performance';
+};
+
+export type GetApiV1ProjectsByNameGoogleGscPlatformPerformanceErrors = {
+    /**
+     * Invalid performance query.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project or platform property not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGoogleGscPlatformPerformanceError = GetApiV1ProjectsByNameGoogleGscPlatformPerformanceErrors[keyof GetApiV1ProjectsByNameGoogleGscPlatformPerformanceErrors];
+
+export type GetApiV1ProjectsByNameGoogleGscPlatformPerformanceResponses = {
+    /**
+     * Platform performance returned.
+     */
+    200: GscPlatformPerformanceDto;
+};
+
+export type GetApiV1ProjectsByNameGoogleGscPlatformPerformanceResponse = GetApiV1ProjectsByNameGoogleGscPlatformPerformanceResponses[keyof GetApiV1ProjectsByNameGoogleGscPlatformPerformanceResponses];
 
 export type GetApiV1ProjectsData = {
     body?: never;

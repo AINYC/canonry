@@ -91,6 +91,10 @@ import type {
   GbpSummaryDto,
   GscSearchDataDto,
   GscPerformanceDailyDto,
+  GscPlatformPerformanceDto,
+  GscPlatformPropertyDto,
+  GscPlatformPropertyListResponseDto,
+  GscPlatformPropertyUpsertRequestDto,
   GscUrlInspectionDto,
   GscCoverageSummaryDto,
   GscCoverageSnapshotDto,
@@ -243,6 +247,11 @@ import {
   getApiV1ProjectsByNameGoogleProperties,
   putApiV1ProjectsByNameGoogleConnectionsByTypeProperty,
   putApiV1ProjectsByNameGoogleConnectionsByTypeSitemap,
+  deleteApiV1ProjectsByNameGoogleGscPlatformPropertiesById,
+  getApiV1ProjectsByNameGoogleGscPlatformPerformance,
+  getApiV1ProjectsByNameGoogleGscPlatformProperties,
+  postApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSync,
+  putApiV1ProjectsByNameGoogleGscPlatformProperties,
   // Google Business Profile
   getApiV1ProjectsByNameGbpAccounts,
   postApiV1ProjectsByNameGbpLocationsDiscover,
@@ -1369,6 +1378,67 @@ export class ApiClient {
         client: this.heyClient,
         path: { name: project, type } as never,
         body: { sitemapUrl },
+      }),
+    )
+  }
+
+  async listGscPlatformProperties(project: string): Promise<GscPlatformPropertyListResponseDto> {
+    return this.invoke<GscPlatformPropertyListResponseDto>(() =>
+      getApiV1ProjectsByNameGoogleGscPlatformProperties({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async upsertGscPlatformProperty(
+    project: string,
+    request: GscPlatformPropertyUpsertRequestDto,
+  ): Promise<GscPlatformPropertyDto> {
+    return this.invoke<GscPlatformPropertyDto>(() =>
+      putApiV1ProjectsByNameGoogleGscPlatformProperties({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+      }),
+    )
+  }
+
+  async deleteGscPlatformProperty(project: string, propertyId: string): Promise<void> {
+    await this.invoke<void>(() =>
+      deleteApiV1ProjectsByNameGoogleGscPlatformPropertiesById({
+        client: this.heyClient,
+        path: { name: project, id: propertyId },
+      }),
+    )
+  }
+
+  async syncGscPlatformProperty(project: string, propertyId: string): Promise<RunDto> {
+    return this.invoke<RunDto>(() =>
+      postApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSync({
+        client: this.heyClient,
+        path: { name: project, id: propertyId },
+      }),
+    )
+  }
+
+  async getGscPlatformPerformance(
+    project: string,
+    query?: {
+      propertyId?: string
+      dimension?: 'page' | 'query'
+      startDate?: string
+      endDate?: string
+      window?: '7d' | '30d' | '90d' | 'all'
+      limit?: number
+      offset?: number
+    },
+  ): Promise<GscPlatformPerformanceDto> {
+    return this.invoke<GscPlatformPerformanceDto>(() =>
+      getApiV1ProjectsByNameGoogleGscPlatformPerformance({
+        client: this.heyClient,
+        path: { name: project },
+        query,
       }),
     )
   }

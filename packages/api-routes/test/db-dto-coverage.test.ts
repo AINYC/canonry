@@ -39,6 +39,7 @@ import {
   googleConnectionDtoSchema,
   gscCoverageSnapshotDtoSchema,
   gscSearchDataDtoSchema,
+  gscPlatformPropertyDtoSchema,
   gscUrlInspectionDtoSchema,
   notificationDtoSchema,
   projectDtoSchema,
@@ -335,6 +336,23 @@ const COVERAGE: Record<string, CoverageEntry> = {
       syncRunId: 'Internal join key.',
       createdAt: 'Row creation timestamp.',
     },
+  },
+  gscPlatformProperties: {
+    kind: 'dto',
+    dto: gscPlatformPropertyDtoSchema,
+    internal: {},
+  },
+  gscPlatformSearchData: {
+    kind: 'internal-only',
+    reason: 'Dimensioned platform GSC rows are aggregated into the platform-performance response rather than exposed as raw storage rows.',
+  },
+  gscPlatformDailyTotals: {
+    kind: 'internal-only',
+    reason: 'Platform property daily totals back the aggregate response and have no direct row DTO.',
+  },
+  gscPlatformQueryDailyTotals: {
+    kind: 'internal-only',
+    reason: 'Platform query daily totals back the aggregate response and have no direct row DTO.',
   },
   gscDailyTotals: {
     kind: 'internal-only',

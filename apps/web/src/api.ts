@@ -1,4 +1,4 @@
-import type { EmbedClientConfig, ErrorCode, GroundingSource, ProjectOverviewDto, ScheduleDto, NotificationDto, GscCoverageSummaryDto, GscCoverageSnapshotDto, GscPerformanceDailyDto, IndexingRequestResultDto, MetricsWindow, BrandMetricsDto, GA4AiReferralDailyDto, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry, InsightDto, ProjectReportDto, ReportAudience, ResultsExportFormat, CitationVisibilityResponse, BacklinkSource, BacklinkSourcesResponseDto, BacklinkSummaryDto, BacklinkDomainDto, BacklinkListResponse, BacklinkHistoryEntry, BacklinksInstallStatusDto, BacklinksInstallResultDto, CcAvailableRelease, CcCachedRelease, CcReleaseSyncDto, TrafficSourceDto, TrafficSourceDetailDto, TrafficSourceListResponse, TrafficStatusResponse, TrafficEventsResponse, TrafficConnectCloudRunRequest, TrafficConnectWordpressRequest, TrafficConnectVercelRequest, TrafficSyncResponse, TrafficBackfillResponse, DiscoveryRunRequest, DiscoverySessionDto, DiscoverySessionDetailDto, DiscoveryPromotePreview, DiscoveryPromoteRequest, DiscoveryPromoteResult, ProjectDto, ProjectUpsertRequest, QueryDto, CompetitorDto, LocationContext, GoogleConnectionDto, GscUrlInspectionDto, GscDeindexedRowDto, BingUrlInspectionDto, BingCoverageSummaryDto, BingKeywordStatsDto, BingStatusDto, BingConnectResponseDto, BingSetSiteResponseDto, BingSitesResponseDto, GscSearchDataDto, ContentTargetDismissalDto, ContentTargetDismissRequest, SiteAuditRunResponseDto, GscSitemapDto, GscSitemapListResponseDto, GscSubmitSitemapsResponseDto, GscDiscoverSitemapsResponseDto, OnboardingTelemetryEvent, TelemetryEventAcceptedDto } from '@ainyc/canonry-contracts'
+import type { EmbedClientConfig, ErrorCode, GroundingSource, ProjectOverviewDto, ScheduleDto, NotificationDto, GscCoverageSummaryDto, GscCoverageSnapshotDto, GscPerformanceDailyDto, IndexingRequestResultDto, MetricsWindow, BrandMetricsDto, GA4AiReferralDailyDto, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry, InsightDto, ProjectReportDto, ReportAudience, ResultsExportFormat, CitationVisibilityResponse, BacklinkSource, BacklinkSourcesResponseDto, BacklinkSummaryDto, BacklinkDomainDto, BacklinkListResponse, BacklinkHistoryEntry, BacklinksInstallStatusDto, BacklinksInstallResultDto, CcAvailableRelease, CcCachedRelease, CcReleaseSyncDto, TrafficSourceDto, TrafficSourceDetailDto, TrafficSourceListResponse, TrafficStatusResponse, TrafficEventsResponse, TrafficConnectCloudRunRequest, TrafficConnectWordpressRequest, TrafficConnectVercelRequest, TrafficSyncResponse, TrafficBackfillResponse, DiscoveryRunRequest, DiscoverySessionDto, DiscoverySessionDetailDto, DiscoveryPromotePreview, DiscoveryPromoteRequest, DiscoveryPromoteResult, ProjectDto, ProjectUpsertRequest, QueryDto, CompetitorDto, LocationContext, GoogleConnectionDto, GscUrlInspectionDto, GscDeindexedRowDto, BingUrlInspectionDto, BingCoverageSummaryDto, BingKeywordStatsDto, BingStatusDto, BingConnectResponseDto, BingSetSiteResponseDto, BingSitesResponseDto, GscSearchDataDto, ContentTargetDismissalDto, ContentTargetDismissRequest, SiteAuditRunResponseDto, GscSitemapDto, GscSitemapListResponseDto, GscSubmitSitemapsResponseDto, GscDiscoverSitemapsResponseDto, GscPlatformPropertyDto, GscPlatformPropertyListResponseDto, GscPlatformPropertyUpsertRequestDto, GscPlatformPerformanceDto, OnboardingTelemetryEvent, TelemetryEventAcceptedDto } from '@ainyc/canonry-contracts'
 import {
   createClient as createHeyClient,
   // Projects + queries + competitors + locations + runs + apply + settings + telemetry
@@ -53,6 +53,11 @@ import {
   putApiV1ProjectsByNameGoogleConnectionsByTypeProperty,
   putApiV1ProjectsByNameGoogleConnectionsByTypeSitemap,
   postApiV1ProjectsByNameGoogleGscSync,
+  getApiV1ProjectsByNameGoogleGscPlatformProperties,
+  putApiV1ProjectsByNameGoogleGscPlatformProperties,
+  deleteApiV1ProjectsByNameGoogleGscPlatformPropertiesById,
+  postApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSync,
+  getApiV1ProjectsByNameGoogleGscPlatformPerformance,
   getApiV1ProjectsByNameGoogleGscPerformance,
   getApiV1ProjectsByNameGoogleGscPerformanceDaily,
   postApiV1ProjectsByNameGoogleGscInspect,
@@ -1141,6 +1146,39 @@ export function triggerGscSync(project: string, opts?: { days?: number; full?: b
       path: { name: project },
       body: opts ?? {},
     }),
+  )
+}
+
+export type ApiGscPlatformProperty = GscPlatformPropertyDto
+export type ApiGscPlatformPerformance = GscPlatformPerformanceDto
+
+export function fetchGscPlatformProperties(project: string): Promise<GscPlatformPropertyListResponseDto> {
+  return invokeWeb<GscPlatformPropertyListResponseDto>(() =>
+    getApiV1ProjectsByNameGoogleGscPlatformProperties({ client: heyClient, path: { name: project } }),
+  )
+}
+
+export function saveGscPlatformProperty(project: string, body: GscPlatformPropertyUpsertRequestDto): Promise<ApiGscPlatformProperty> {
+  return invokeWeb<ApiGscPlatformProperty>(() =>
+    putApiV1ProjectsByNameGoogleGscPlatformProperties({ client: heyClient, path: { name: project }, body }),
+  )
+}
+
+export function deleteGscPlatformProperty(project: string, id: string): Promise<void> {
+  return invokeWeb<void>(() =>
+    deleteApiV1ProjectsByNameGoogleGscPlatformPropertiesById({ client: heyClient, path: { name: project, id } }),
+  )
+}
+
+export function syncGscPlatformProperty(project: string, id: string): Promise<RunDto> {
+  return invokeWeb<RunDto>(() =>
+    postApiV1ProjectsByNameGoogleGscPlatformPropertiesByIdSync({ client: heyClient, path: { name: project, id } }),
+  )
+}
+
+export function fetchGscPlatformPerformance(project: string, params: { propertyId?: string; dimension: 'page' | 'query'; window?: MetricsWindow; startDate?: string; endDate?: string; limit?: number; offset?: number }): Promise<ApiGscPlatformPerformance> {
+  return invokeWeb<ApiGscPlatformPerformance>(() =>
+    getApiV1ProjectsByNameGoogleGscPlatformPerformance({ client: heyClient, path: { name: project }, query: params }),
   )
 }
 
