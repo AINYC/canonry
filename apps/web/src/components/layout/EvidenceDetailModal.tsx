@@ -1,19 +1,28 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import * as Dialog from '@radix-ui/react-dialog'
-import { Search, X } from 'lucide-react'
-import { brandKeyFromText, brandLabelFromDomain, effectiveDomains, normalizeProjectDomain } from '@ainyc/canonry-contracts'
-
-import { InfoTooltip } from '../shared/InfoTooltip.js'
+import { Search } from 'lucide-react'
 import {
-  buildRecentRecordedDays,
-  EvidenceHistoryMatrix,
-} from '../project/EvidenceHistoryMatrix.js'
+  brandLabelFromDomain,
+  effectiveDomains,
+  normalizeProjectDomain,
+} from '@ainyc/canonry-contracts'
+
+import { Drawer } from './Drawer.js'
+import { Button } from '../ui/button.js'
+import { InfoTooltip } from '../shared/InfoTooltip.js'
+import { ProviderBadge } from '../shared/ProviderBadge.js'
+import {
+  QueryEvidenceHistory,
+  type QueryHistorySelection,
+  type QueryHistorySeries,
+  type QueryHistorySignal,
+} from '../project/QueryEvidenceHistory.js'
 import { highlightTermsInText, type HighlightTermGroup } from '../../lib/highlight.js'
 import { safeExternalUrl } from '../../lib/safe-url.js'
 import {
   fetchRunDetail,
   fetchTimeline,
+  type ApiTimelineEntry,
   type ApiTimelineRunEntry,
   type GroundingSource,
 } from '../../api.js'
@@ -23,13 +32,11 @@ import type {
   RunHistoryPoint,
 } from '../../view-models.js'
 
-/** Shape of snapshot data used for display — works for both current evidence and fetched historical snapshots. */
 export interface EvidenceDisplayData {
   citationState: string
   answerMentioned?: boolean
   mentionState?: string
   visibilityState?: string
-  visibilityTransition?: string
   provider: string
   model: string | null
   answerSnippet: string
@@ -40,14 +47,13 @@ export interface EvidenceDisplayData {
   groundingSources: GroundingSource[]
   searchQueries: string[]
   evidenceUrls: string[]
-  changeLabel: string
   summary: string
 }
 
 export type MentionResult = 'mentioned' | 'not-mentioned' | 'pending' | 'unknown'
+type CitationResult = 'cited' | 'not-cited' | 'pending' | 'unknown'
+type DetailTab = 'mentions' | 'sources'
 
-/** Resolve answer-text presence without using citation state as a fallback.
- * A cited source does not prove that the brand appeared in the answer. */
 export function resolveMentionResult(
   input: Pick<EvidenceDisplayData, 'answerMentioned' | 'mentionState' | 'visibilityState'>,
 ): MentionResult {
@@ -62,38 +68,33 @@ export function resolveMentionResult(
   return 'unknown'
 }
 
-function mentionResultLabel(result: MentionResult): string {
-  switch (result) {
-    case 'mentioned': return 'mentioned'
-    case 'not-mentioned': return 'not mentioned'
-    case 'pending': return 'mention pending'
-    case 'unknown': return 'no mention result'
-  }
+function resolveCitationResult(state: string): CitationResult {
+  if (state === 'cited' || state === 'emerging') return 'cited'
+  if (state === 'not-cited' || state === 'lost') return 'not-cited'
+  if (state === 'pending') return 'pending'
+  return 'unknown'
 }
 
-export function resolveMentionTransitionLabel(
-  result: MentionResult,
-  transition?: string,
-): 'first mention' | 'mention lost' | null {
-  if (result === 'mentioned' && transition === 'emerging') return 'first mention'
-  if (result === 'not-mentioned' && transition === 'lost') return 'mention lost'
-  return null
+function mentionLabel(result: MentionResult): string {
+  if (result === 'mentioned') return 'Mentioned'
+  if (result === 'not-mentioned') return 'Not mentioned'
+  if (result === 'pending') return 'Pending'
+  return 'Not recorded'
 }
 
-function describeMentionChange(transition?: string, mentionState?: string): string {
-  switch (transition) {
-    case 'new': return 'First observation'
-    case 'emerging': return 'First mention'
-    case 'lost': return 'Lost since last run'
-    default:
-      // Accept both the canonical 'mentioned' / 'not-mentioned' values and
-      // the legacy 'visible' / 'not-visible' aliases so consumers can pass
-      // either while the API and DTO migration rolls out.
-      if (mentionState === 'mentioned' || mentionState === 'visible') return 'Mentioned in latest run'
-      if (mentionState === 'pending') return 'Awaiting first run'
-      if (mentionState == null) return 'No mention result'
-      return 'Not mentioned in latest run'
-  }
+function citationLabel(result: CitationResult): string {
+  if (result === 'cited') return 'Cited'
+  if (result === 'not-cited') return 'Not cited'
+  if (result === 'pending') return 'Pending'
+  return 'Not recorded'
+}
+
+function normalizeLocation(location?: string | null): string | null {
+  return location?.trim() || null
+}
+
+function seriesKey(provider: string, location?: string | null): string {
+  return `${provider.trim().toLocaleLowerCase()}::${normalizeLocation(location) ?? ''}`
 }
 
 function toRunHistoryPoint(run: ApiTimelineRunEntry): RunHistoryPoint {
@@ -110,162 +111,419 @@ function toRunHistoryPoint(run: ApiTimelineRunEntry): RunHistoryPoint {
   }
 }
 
+function sortedUniqueHistory(history: RunHistoryPoint[]): RunHistoryPoint[] {
+  const byRun = new Map<string, RunHistoryPoint>()
+  for (const run of history) {
+    byRun.set(`${run.runId}::${run.createdAt}`, run)
+  }
+  return [...byRun.values()].sort((left, right) => (
+    Date.parse(left.createdAt) - Date.parse(right.createdAt)
+  ))
+}
+
+function recentSeries(items: CitationInsightVm[]): QueryHistorySeries[] {
+  const bySeries = new Map<string, QueryHistorySeries>()
+  for (const item of items) {
+    if (!item.provider.trim()) continue
+    if (item.runHistory.length === 0) {
+      const location = normalizeLocation(item.location)
+      const key = seriesKey(item.provider, location)
+      if (!bySeries.has(key)) {
+        bySeries.set(key, {
+          key,
+          provider: item.provider,
+          location,
+          history: [],
+        })
+      }
+      continue
+    }
+    for (const run of item.runHistory) {
+      const location = normalizeLocation(run.location)
+      const key = seriesKey(item.provider, location)
+      const existing = bySeries.get(key)
+      if (existing) {
+        existing.history = sortedUniqueHistory([...existing.history, run])
+      } else {
+        bySeries.set(key, {
+          key,
+          provider: item.provider,
+          location,
+          history: [run],
+        })
+      }
+    }
+  }
+  return [...bySeries.values()].sort((left, right) => (
+    left.provider.localeCompare(right.provider)
+    || (left.location ?? '').localeCompare(right.location ?? '')
+  ))
+}
+
+function fullSeries(entry: ApiTimelineEntry): QueryHistorySeries[] {
+  const bySeries = new Map<string, QueryHistorySeries>()
+  for (const [provider, runs] of Object.entries(entry.providerRuns ?? {})) {
+    for (const apiRun of runs) {
+      const run = toRunHistoryPoint(apiRun)
+      const location = normalizeLocation(run.location)
+      const key = seriesKey(provider, location)
+      const existing = bySeries.get(key)
+      if (existing) {
+        existing.history.push(run)
+      } else {
+        bySeries.set(key, {
+          key,
+          provider,
+          location,
+          history: [run],
+        })
+      }
+    }
+  }
+  return [...bySeries.values()]
+    .map(series => ({ ...series, history: sortedUniqueHistory(series.history) }))
+    .sort((left, right) => (
+      left.provider.localeCompare(right.provider)
+      || (left.location ?? '').localeCompare(right.location ?? '')
+    ))
+}
+
+function latestRun(history: RunHistoryPoint[]): RunHistoryPoint | null {
+  return [...history]
+    .filter(run => Number.isFinite(Date.parse(run.createdAt)))
+    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))
+    .at(-1) ?? null
+}
+
+function latestRunForLocation(
+  history: RunHistoryPoint[],
+  location: string | null,
+): RunHistoryPoint | null {
+  return latestRun(history.filter(
+    run => normalizeLocation(run.location) === normalizeLocation(location),
+  ))
+}
+
+function displayFromEvidence(evidence: CitationInsightVm): EvidenceDisplayData {
+  return {
+    citationState: evidence.citationState,
+    answerMentioned: evidence.answerMentioned,
+    visibilityState: evidence.visibilityState,
+    provider: evidence.provider,
+    model: evidence.model,
+    answerSnippet: evidence.answerSnippet,
+    citedDomains: evidence.citedDomains,
+    competitorDomains: evidence.competitorDomains,
+    recommendedCompetitors: evidence.recommendedCompetitors ?? [],
+    matchedTerms: evidence.matchedTerms ?? [],
+    groundingSources: evidence.groundingSources,
+    searchQueries: evidence.searchQueries ?? [],
+    evidenceUrls: evidence.evidenceUrls,
+    summary: evidence.summary,
+  }
+}
+
+function emptyDisplay(
+  provider: string,
+  run: RunHistoryPoint,
+  summary: string,
+): EvidenceDisplayData {
+  return {
+    citationState: run.citationState,
+    answerMentioned: run.answerMentioned,
+    mentionState: run.mentionState,
+    visibilityState: run.visibilityState,
+    provider,
+    model: run.model ?? null,
+    answerSnippet: '',
+    citedDomains: [],
+    competitorDomains: [],
+    recommendedCompetitors: [],
+    matchedTerms: [],
+    groundingSources: [],
+    searchQueries: [],
+    evidenceUrls: [],
+    summary,
+  }
+}
+
+function utcDateTime(value: string): string {
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return 'Date not recorded'
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
+  }).format(date)
+}
+
+function utcTime(value: string): string {
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return 'Time not recorded'
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
+  }).format(date)
+}
+
+function runDateKey(run: RunHistoryPoint): string {
+  const timestamp = Date.parse(run.createdAt)
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString().slice(0, 10) : ''
+}
+
+function evidenceForSeries(
+  items: CitationInsightVm[],
+  provider: string,
+  location: string | null,
+): CitationInsightVm | null {
+  return items.find(item => (
+    item.provider.toLocaleLowerCase() === provider.toLocaleLowerCase()
+    && normalizeLocation(item.location) === normalizeLocation(location)
+  )) ?? null
+}
+
+function signalStateClass(value: MentionResult | CitationResult): string {
+  if (value === 'mentioned' || value === 'cited') return 'evidence-signal-result--present'
+  if (value === 'not-mentioned' || value === 'not-cited') return 'evidence-signal-result--absent'
+  return 'evidence-signal-result--missing'
+}
+
 export function EvidenceDetailModal({
   evidence,
+  evidenceGroup: evidenceGroupProp,
+  initialSignal = 'citations',
+  locationScope,
   project,
   onClose,
 }: {
   evidence: CitationInsightVm
+  evidenceGroup?: CitationInsightVm[]
+  initialSignal?: QueryHistorySignal
+  locationScope?: string
   project: ProjectCommandCenterVm
   onClose: () => void
 }) {
-  const [showFullAnswer, setShowFullAnswer] = useState(false)
-  const [sidebarTab, setSidebarTab] = useState<'mentions' | 'sources'>('mentions')
-  const [selectedRunIdx, setSelectedRunIdx] = useState(-1) // -1 = latest (current)
-  const [historicalSnapshot, setHistoricalSnapshot] = useState<EvidenceDisplayData | null>(null)
-  const [loadingHistory, setLoadingHistory] = useState(false)
-  const [scopedHistory, setScopedHistory] = useState<RunHistoryPoint[] | null>(null)
-  // Cache fetched run details so re-clicking a dot is instant
-  const [runCache, setRunCache] = useState<Record<string, EvidenceDisplayData>>({})
-
-  const projectDomains = effectiveDomains(project.project)
-  const myDomains = new Set(projectDomains.map(normalizeProjectDomain))
-  const historyLocation = evidence.location?.trim() || null
-  const history = scopedHistory ?? evidence.runHistory
-  const hasHistory = history.length > 1
-  const recordedDayHistory = buildRecentRecordedDays(
-    history,
-    evidence.location ?? null,
-    12,
+  const evidenceGroup = useMemo(
+    () => evidenceGroupProp ?? [evidence],
+    [evidenceGroupProp, evidence],
   )
+  const initialSeries = useMemo(() => recentSeries(evidenceGroup), [evidenceGroup])
+  const initialRun = latestRunForLocation(
+    evidence.runHistory,
+    normalizeLocation(evidence.location),
+  ) ?? latestRun(evidence.runHistory)
+  const initialLocation = initialRun
+    ? normalizeLocation(initialRun.location)
+    : normalizeLocation(evidence.location)
+  const initialSeriesKey = seriesKey(evidence.provider, initialLocation)
+
+  const [signal, setSignal] = useState<QueryHistorySignal>(initialSignal)
+  const [detailTab, setDetailTab] = useState<DetailTab>(
+    initialSignal === 'citations' ? 'sources' : 'mentions',
+  )
+  const [series, setSeries] = useState<QueryHistorySeries[]>(initialSeries)
+  const [selectedSeriesKey, setSelectedSeriesKey] = useState(initialSeriesKey)
+  const [selectedProvider, setSelectedProvider] = useState(evidence.provider)
+  const [selectedLocation, setSelectedLocation] = useState<string | null>(initialLocation)
+  const [selectedRun, setSelectedRun] = useState<RunHistoryPoint | null>(initialRun)
+  const [selectedDateKey, setSelectedDateKey] = useState(
+    initialRun ? runDateKey(initialRun) : '',
+  )
+  const [display, setDisplay] = useState<EvidenceDisplayData>(() => displayFromEvidence(evidence))
+  const [runLoading, setRunLoading] = useState(false)
+  const [runError, setRunError] = useState<string | null>(null)
+  const [runErrorTone, setRunErrorTone] = useState<'notice' | 'error'>('error')
+  const [runLoadAttempt, setRunLoadAttempt] = useState(0)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const [fullHistoryLoaded, setFullHistoryLoaded] = useState(false)
+  const [showFullAnswer, setShowFullAnswer] = useState(false)
 
   useEffect(() => {
-    let cancelled = false
-    setScopedHistory(null)
-    if (!historyLocation || !project.project.name || !evidence.provider) return
+    const nextSeries = recentSeries(evidenceGroup)
+    const nextRun = latestRunForLocation(
+      evidence.runHistory,
+      normalizeLocation(evidence.location),
+    ) ?? latestRun(evidence.runHistory)
+    const nextLocation = nextRun
+      ? normalizeLocation(nextRun.location)
+      : normalizeLocation(evidence.location)
+    setSignal(initialSignal)
+    setDetailTab(initialSignal === 'citations' ? 'sources' : 'mentions')
+    setSeries(nextSeries)
+    setSelectedSeriesKey(seriesKey(evidence.provider, nextLocation))
+    setSelectedProvider(evidence.provider)
+    setSelectedLocation(nextLocation)
+    setSelectedRun(nextRun)
+    setSelectedDateKey(nextRun ? runDateKey(nextRun) : '')
+    setDisplay(displayFromEvidence(evidence))
+    setRunError(null)
+    setRunErrorTone('error')
+    setRunLoadAttempt(0)
+    setHistoryError(null)
+    setFullHistoryLoaded(false)
+    setShowFullAnswer(false)
+  }, [evidence.id, evidence, evidenceGroup, initialSignal])
 
-    fetchTimeline(project.project.name, historyLocation, 20)
-      .then(entries => {
+  useEffect(() => {
+    if (!selectedRun) return
+    let cancelled = false
+    const matchingEvidence = evidenceForSeries(
+      evidenceGroup,
+      selectedProvider,
+      selectedLocation,
+    )
+    const isMatchingLatest = matchingEvidence
+      ? latestRunForLocation(
+        matchingEvidence.runHistory,
+        selectedLocation,
+      )?.runId === selectedRun.runId
+      : false
+    if (matchingEvidence && isMatchingLatest) {
+      setDisplay(displayFromEvidence(matchingEvidence))
+    }
+    setRunLoading(true)
+    setRunError(null)
+    setRunErrorTone('error')
+
+    fetchRunDetail(selectedRun.runId)
+      .then(runDetail => {
         if (cancelled) return
-        const entry = entries.find(candidate => candidate.query === evidence.query)
-        if (!entry) return
-        const providerRuns = Object.entries(entry.providerRuns ?? {})
-          .find(([provider]) => provider.toLowerCase() === evidence.provider.toLowerCase())
-          ?.[1]
-        const runs = providerRuns
-          ?? (Object.keys(entry.providerRuns ?? {}).length === 0 ? entry.runs : undefined)
-        if (runs) {
-          setSelectedRunIdx(-1)
-          setHistoricalSnapshot(null)
-          setScopedHistory(runs.map(toRunHistoryPoint))
+        const snapshot = runDetail.snapshots?.find(candidate => (
+          candidate.query === evidence.query
+          && candidate.provider.toLocaleLowerCase() === selectedProvider.toLocaleLowerCase()
+          && normalizeLocation(candidate.location) === selectedLocation
+        ))
+        if (!snapshot) {
+          setDisplay(emptyDisplay(
+            selectedProvider,
+            selectedRun,
+            'No answer was recorded for this engine and run.',
+          ))
+          return
+        }
+        setDisplay({
+          citationState: snapshot.citationState,
+          answerMentioned: snapshot.answerMentioned,
+          mentionState: snapshot.mentionState,
+          visibilityState: snapshot.visibilityState,
+          provider: snapshot.provider,
+          model: snapshot.model ?? null,
+          answerSnippet: snapshot.answerText ?? '',
+          citedDomains: snapshot.citedDomains ?? [],
+          competitorDomains: snapshot.competitorOverlap ?? [],
+          recommendedCompetitors: snapshot.recommendedCompetitors ?? [],
+          matchedTerms: snapshot.matchedTerms ?? [],
+          groundingSources: snapshot.groundingSources ?? [],
+          searchQueries: snapshot.searchQueries ?? [],
+          evidenceUrls: [],
+          summary: '',
+        })
+      })
+      .catch(() => {
+        if (cancelled) return
+        setRunError(isMatchingLatest
+          ? 'Showing the saved answer. A fresh copy could not be loaded.'
+          : 'The exact answer could not be loaded. The recorded signal is still shown.')
+        setRunErrorTone(isMatchingLatest ? 'notice' : 'error')
+        if (!isMatchingLatest) {
+          setDisplay(emptyDisplay(
+            selectedProvider,
+            selectedRun,
+            'The exact answer could not be loaded for this run.',
+          ))
         }
       })
-      .catch(() => { /* Keep the evidence history as a truthful fallback. */ })
+      .finally(() => {
+        if (!cancelled) setRunLoading(false)
+      })
 
     return () => {
       cancelled = true
     }
   }, [
-    evidence.id,
-    evidence.provider,
     evidence.query,
-    historyLocation,
-    project.project.name,
+    evidenceGroup,
+    selectedLocation,
+    selectedProvider,
+    selectedRun,
+    runLoadAttempt,
   ])
 
-  // Auto-fetch answer text when the initial evidence has none (e.g. latest run
-  // was a single-provider run that didn't include this provider).
-  const [autoFetchedDisplay, setAutoFetchedDisplay] = useState<EvidenceDisplayData | null>(null)
-  const autoFetchedRef = useRef(false)
-  useEffect(() => {
-    if (autoFetchedRef.current) return
-    if (evidence.answerSnippet && (evidence.visibilityState != null || evidence.answerMentioned != null)) return
-    // Find the most recent history entry for this provider that might have data
-    const latestHistoryRun = history.at(-1)
-    if (!latestHistoryRun) return
-    autoFetchedRef.current = true
-    fetchRunDetail(latestHistoryRun.runId).then(runDetail => {
-      const snap = runDetail.snapshots?.find(
-        s => s.query === evidence.query && s.provider === evidence.provider,
-      )
-      if (snap) {
-        setAutoFetchedDisplay({
-          citationState: snap.citationState,
-          answerMentioned: snap.answerMentioned,
-          mentionState: snap.mentionState,
-          visibilityState: snap.visibilityState,
-          visibilityTransition: latestHistoryRun.mentionTransition ?? latestHistoryRun.visibilityTransition,
-          provider: snap.provider,
-          model: snap.model ?? evidence.model,
-          answerSnippet: snap.answerText ?? evidence.answerSnippet,
-          citedDomains: snap.citedDomains ?? evidence.citedDomains,
-          competitorDomains: snap.competitorOverlap ?? evidence.competitorDomains,
-          recommendedCompetitors: snap.recommendedCompetitors ?? evidence.recommendedCompetitors ?? [],
-          matchedTerms: snap.matchedTerms ?? evidence.matchedTerms ?? [],
-          groundingSources: snap.groundingSources ?? evidence.groundingSources,
-          searchQueries: snap.searchQueries,
-          evidenceUrls: [],
-          changeLabel: evidence.visibilityChangeLabel ?? evidence.changeLabel,
-          summary: evidence.summary,
-        })
+  const loadFullHistory = async () => {
+    setHistoryLoading(true)
+    setHistoryError(null)
+    try {
+      const entries = locationScope === undefined
+        ? await fetchTimeline(project.project.name)
+        : await fetchTimeline(project.project.name, locationScope)
+      const entry = entries.find(candidate => candidate.query === evidence.query)
+      if (!entry) {
+        setHistoryError('No additional history was found for this query.')
+        return
       }
-    }).catch(() => { /* ignore */ })
-  }, [evidence, history])
-
-  // Current display data — from historical snapshot when viewing past runs, otherwise from latest evidence
-  const isViewingHistory = selectedRunIdx >= 0 && historicalSnapshot !== null
-  const display: EvidenceDisplayData = isViewingHistory ? historicalSnapshot
-    : autoFetchedDisplay ? autoFetchedDisplay
-    : {
-      citationState: evidence.citationState,
-      answerMentioned: evidence.answerMentioned,
-      visibilityState: evidence.visibilityState,
-      visibilityTransition: history.at(-1)?.mentionTransition ?? history.at(-1)?.visibilityTransition,
-      provider: evidence.provider,
-      model: evidence.model,
-      answerSnippet: evidence.answerSnippet,
-      citedDomains: evidence.citedDomains,
-      competitorDomains: evidence.competitorDomains,
-      recommendedCompetitors: evidence.recommendedCompetitors ?? [],
-      matchedTerms: evidence.matchedTerms ?? [],
-      groundingSources: evidence.groundingSources,
-      searchQueries: evidence.searchQueries ?? [],
-      evidenceUrls: evidence.evidenceUrls,
-      changeLabel: evidence.visibilityChangeLabel ?? evidence.changeLabel,
-      summary: evidence.summary,
+      const loadedSeries = fullSeries(entry)
+      if (loadedSeries.length === 0) {
+        setHistoryError('No additional engine history was found for this query.')
+        return
+      }
+      setSeries(loadedSeries)
+      setFullHistoryLoaded(true)
+    } catch {
+      setHistoryError('Full history could not be loaded. Recent results remain available.')
+    } finally {
+      setHistoryLoading(false)
     }
+  }
+
+  const selectHistory = (selection: QueryHistorySelection) => {
+    setSelectedSeriesKey(selection.seriesKey)
+    setSelectedProvider(selection.provider)
+    setSelectedLocation(selection.location)
+    setSelectedDateKey(selection.dateKey)
+    setSelectedRun(selection.run)
+    setDisplay(emptyDisplay(
+      selection.provider,
+      selection.run,
+      'Loading the exact answer for this result.',
+    ))
+    setRunLoading(true)
+    setRunError(null)
+    setShowFullAnswer(false)
+  }
+
+  const selectedSeries = series.find(item => item.key === selectedSeriesKey) ?? null
+  const sameDayRuns = selectedSeries
+    ? selectedSeries.history
+      .filter(run => runDateKey(run) === selectedDateKey)
+      .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))
+    : []
 
   const mentionResult = resolveMentionResult(display)
-  const hasMentionData = mentionResult !== 'unknown'
-  const isMentionUnknown = mentionResult === 'unknown'
-  const isPending = mentionResult === 'pending' || isMentionUnknown
-  const isVisible = mentionResult === 'mentioned'
-  const hasSourceData = display.citedDomains.length > 0
-    || display.groundingSources.length > 0
-    || display.evidenceUrls.length > 0
+  const citationResult = resolveCitationResult(display.citationState)
 
-  // Terms to highlight in the AI answer
+  const projectDomains = effectiveDomains(project.project)
+  const myDomains = new Set(projectDomains.map(normalizeProjectDomain))
   const projectDisplayName = project.project.displayName || project.project.name
   const brandTerms = [
     ...projectDomains.map(normalizeProjectDomain),
     projectDisplayName,
     projectDisplayName.split(' ').slice(0, 2).join(' '),
-    // Include matchedTerms so token-based matches are highlighted in the answer body
     ...display.matchedTerms,
-  ].filter(t => t.trim().length > 2)
-
-  // Build competitor highlight terms from overlap domains + recommended competitor names.
-  // Source the brand from the registrable domain — taking the leftmost label of
-  // a stored subdomain (e.g. `offers.roofle.com` → `offers`) would highlight
-  // arbitrary words like "offers" in the prose. Use `roofle` instead.
+  ].filter(term => term.trim().length > 2)
   const competitorHighlightTerms = [
-    ...display.competitorDomains.flatMap(d => {
-      const brand = brandLabelFromDomain(d)
+    ...display.competitorDomains.flatMap(domain => {
+      const brand = brandLabelFromDomain(domain)
       return brand.length >= 4 ? [brand] : []
     }),
     ...display.recommendedCompetitors,
-  ].filter(t => t.trim().length > 2)
-
+  ].filter(term => term.trim().length > 2)
   const highlightTermGroups: HighlightTermGroup[] = [
     { terms: brandTerms, className: 'answer-highlight-brand' },
     ...(competitorHighlightTerms.length > 0
@@ -273,180 +531,16 @@ export function EvidenceDetailModal({
       : []),
   ]
 
-  // CSS variant key. The legacy values 'cited' / 'not-cited' were misleading
-  // because the hero card represents the mention signal (brand in the answer
-  // text), not the citation signal. Renamed to match the data source.
-  const stateKey: 'mentioned' | 'not-mentioned' | 'lost' | 'pending' =
-    isPending ? 'pending' :
-    display.visibilityTransition === 'lost' ? 'lost' :
-    isVisible ? 'mentioned' : 'not-mentioned'
-
-  // Guard against out-of-order async completions when clicking dots quickly
-  const activeRequestRef = useRef(0)
-
-  // Fetch historical run data when a dot is clicked
-  const selectHistoricalRun = useCallback(async (idx: number) => {
-    const requestId = ++activeRequestRef.current
-
-    if (idx === -1 || idx === history.length - 1) {
-      setLoadingHistory(false)
-      setSelectedRunIdx(-1)
-      setHistoricalSnapshot(null)
-      setShowFullAnswer(false)
-      return
-    }
-    setSelectedRunIdx(idx)
-    setShowFullAnswer(false)
-
-    const run = history[idx]
-    // Check cache first
-    const cacheKey = `${run.runId}::${evidence.query}::${evidence.provider}`
-    if (runCache[cacheKey]) {
-      setLoadingHistory(false)
-      setHistoricalSnapshot(runCache[cacheKey])
-      return
-    }
-
-    setLoadingHistory(true)
-    try {
-      const runDetail = await fetchRunDetail(run.runId)
-      // Discard result if a newer request was fired while we were fetching
-      if (requestId !== activeRequestRef.current) return
-
-      // Find the snapshot matching this query + provider
-      const snap = runDetail.snapshots?.find(
-        s => s.query === evidence.query && s.provider === evidence.provider,
-      ) ?? runDetail.snapshots?.find(
-        s => s.query === evidence.query,
-      )
-
-      const data: EvidenceDisplayData = snap ? {
-        citationState: snap.citationState,
-        answerMentioned: snap.answerMentioned,
-        mentionState: snap.mentionState,
-        visibilityState: snap.visibilityState,
-        visibilityTransition: run.mentionTransition ?? run.visibilityTransition,
-        provider: snap.provider,
-        model: snap.model ?? null,
-        answerSnippet: snap.answerText ?? '',
-        citedDomains: snap.citedDomains,
-        competitorDomains: snap.competitorOverlap,
-        recommendedCompetitors: snap.recommendedCompetitors ?? [],
-        matchedTerms: snap.matchedTerms ?? [],
-        groundingSources: snap.groundingSources,
-        searchQueries: snap.searchQueries,
-        evidenceUrls: [],
-        changeLabel: describeMentionChange(run.mentionTransition ?? run.visibilityTransition, run.mentionState ?? run.visibilityState),
-        summary: '',
-      } : {
-        citationState: run.citationState,
-        answerMentioned: run.answerMentioned,
-        mentionState: run.mentionState,
-        visibilityState: run.visibilityState,
-        visibilityTransition: run.mentionTransition ?? run.visibilityTransition,
-        provider: evidence.provider,
-        model: run.model ?? null,
-        answerSnippet: '',
-        citedDomains: [],
-        competitorDomains: [],
-        recommendedCompetitors: [],
-        matchedTerms: [],
-        groundingSources: [],
-        searchQueries: [],
-        evidenceUrls: [],
-        changeLabel: describeMentionChange(run.mentionTransition ?? run.visibilityTransition, run.mentionState ?? run.visibilityState),
-        summary: 'Snapshot data not available for this run.',
-      }
-
-      setRunCache(prev => ({ ...prev, [cacheKey]: data }))
-      setHistoricalSnapshot(data)
-    } catch {
-      if (requestId !== activeRequestRef.current) return
-      setHistoricalSnapshot({
-        citationState: run.citationState,
-        answerMentioned: run.answerMentioned,
-        mentionState: run.mentionState,
-        visibilityState: run.visibilityState,
-        visibilityTransition: run.mentionTransition ?? run.visibilityTransition,
-        provider: evidence.provider,
-        model: run.model ?? null,
-        answerSnippet: '',
-        citedDomains: [],
-        competitorDomains: [],
-        recommendedCompetitors: [],
-        matchedTerms: [],
-        groundingSources: [],
-        searchQueries: [],
-        evidenceUrls: [],
-        changeLabel: describeMentionChange(run.mentionTransition ?? run.visibilityTransition, run.mentionState ?? run.visibilityState),
-        summary: 'Failed to load historical run data.',
-      })
-    } finally {
-      if (requestId === activeRequestRef.current) {
-        setLoadingHistory(false)
-      }
-    }
-  }, [history, evidence.query, evidence.provider, runCache])
-
-  // Hero copy
-  const showModelInHeadline = isViewingHistory || evidence.historyScope !== 'provider'
-  const providerMeta = showModelInHeadline && display.model
-    ? `${display.provider} (${display.model}) \u00b7 ${display.changeLabel.toLowerCase()}`
-    : `${display.provider} \u00b7 ${display.changeLabel.toLowerCase()}`
-  const providerMetaNote = !isViewingHistory && evidence.historyScope === 'provider'
-    ? [
-        evidence.model ? `Current model: ${evidence.model}` : null,
-        evidence.modelsSeen && evidence.modelsSeen.length > 1 ? `History spans ${evidence.modelsSeen.length} models` : null,
-      ].filter(Boolean).join(' \u00b7 ')
-    : ''
-  const heroCopy = (() => {
-    if (isVisible) {
-      return {
-        label: 'Mentioned in answer',
-        title: 'Your brand or domain is mentioned in this answer',
-        meta: providerMeta,
-      }
-    }
-    if (isPending) {
-      if (isMentionUnknown) {
-        return {
-          label: 'No mention result',
-          title: 'This run did not report answer-text mention data',
-          meta: providerMeta,
-        }
-      }
-      return {
-        label: 'Pending',
-        title: 'Awaiting first run',
-        meta: 'No provider data yet',
-      }
-    }
-    if (display.visibilityTransition === 'lost') {
-      return {
-        label: 'Mention lost',
-        title: 'Your brand no longer appears in this answer',
-        meta: providerMeta,
-      }
-    }
-    return {
-      label: 'Not mentioned in answer',
-      title: 'Your brand or domain was not mentioned in this answer',
-      meta: providerMeta,
-    }
-  })()
-
-  // Review the snapshot payload for any XSS vectors from the model.
-  // Note: highlightTermsInText returns ReactNode[], which is safe as it uses React.createElement.
   const renderHighlightedAnswer = () => {
     if (!display.answerSnippet) return null
     const lines = display.answerSnippet.split('\n')
     const elements: ReactNode[] = []
-    let paraLines: string[] = []
+    let paragraph: string[] = []
     let key = 0
 
-    const flushPara = () => {
-      if (paraLines.length === 0) return
-      const text = paraLines.join(' ').trim()
+    const flushParagraph = () => {
+      if (paragraph.length === 0) return
+      const text = paragraph.join(' ').trim()
       if (text) {
         elements.push(
           <p key={key++} className={elements.length > 0 ? 'mt-2.5' : ''}>
@@ -454,446 +548,321 @@ export function EvidenceDetailModal({
           </p>,
         )
       }
-      paraLines = []
+      paragraph = []
     }
 
     for (const raw of lines) {
       const line = raw.trim()
-      if (/^[-\u2013\u2014]{3,}$/.test(line)) {
-        flushPara()
-        elements.push(<hr key={key++} className="border-default my-3" />)
-        continue
-      }
-      const headingMatch = line.match(/^(#{1,3})\s+(\S.*)$/)
-      if (headingMatch) {
-        flushPara()
-        const level = headingMatch[1].length
-        const text = headingMatch[2].replace(/^[\p{Emoji}\p{Emoji_Component}\s]+/u, '').trim() || headingMatch[2]
-        const cls = level === 1
-          ? 'text-[13px] font-semibold text-heading mt-4 mb-1'
-          : level === 2
-            ? 'text-xs font-semibold text-strong mt-3 mb-0.5'
-            : 'text-xs font-medium text-neutral mt-2'
+      const heading = line.match(/^#{1,3}\s+(\S.*)$/)
+      if (heading) {
+        flushParagraph()
         elements.push(
-          <p key={key++} className={cls}>
-            {highlightTermsInText(text, highlightTermGroups)}
+          <p key={key++} className="mt-3 text-xs font-semibold text-strong">
+            {highlightTermsInText(heading[1], highlightTermGroups)}
           </p>,
         )
-        continue
+      } else if (line === '') {
+        flushParagraph()
+      } else {
+        paragraph.push(line)
       }
-      if (line === '') {
-        flushPara()
-        continue
-      }
-      paraLines.push(line)
     }
-    flushPara()
+    flushParagraph()
     return elements
   }
 
+  const competitorEvidence = [...new Set([
+    ...display.recommendedCompetitors,
+    ...display.competitorDomains.map(domain => domain.replace(/^www\./, '')),
+  ])]
+
   return (
-    <Dialog.Root open onOpenChange={(open) => { if (!open) onClose() }}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-overlay-scrim/80 backdrop-blur-sm" />
-        <Dialog.Content
-          className="evidence-modal"
-          aria-describedby={undefined}
-        >
-          {/* ── Header ── */}
-          <div className="evidence-modal-header">
-            <div className="min-w-0 flex-1">
-              <p className="eyebrow eyebrow-soft">{project.project.name} {'\u00b7'} {display.provider || 'All providers'}</p>
-              <Dialog.Title className="text-lg font-semibold text-primary truncate">{evidence.query}</Dialog.Title>
-            </div>
-            <Dialog.Close className="inline-flex size-8 items-center justify-center rounded-md text-muted transition hover:bg-mono-800 hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400 shrink-0">
-              <X className="size-4" />
-              <span className="sr-only">Close</span>
-            </Dialog.Close>
+    <Drawer
+      open
+      title={evidence.query}
+      subtitle={`${project.project.name} · Query evidence`}
+      onClose={onClose}
+      className="query-evidence-drawer"
+    >
+      <section className="query-evidence-history" aria-labelledby="query-history-heading">
+        <div className="query-evidence-history-head">
+          <div>
+            <p id="query-history-heading" className="drawer-section-label mb-1">History</p>
+            <p className="text-xs text-secondary">
+              Compare engines on the same dated axis. Times are shown in UTC.
+            </p>
           </div>
-
-          {recordedDayHistory.status !== 'empty' && (
-            <div className="evidence-modal-timeline">
-              <EvidenceHistoryMatrix
-                id={`recorded-day-trend-${evidence.id}`}
-                provider={display.provider || evidence.provider}
-                data={recordedDayHistory}
-                title="Recorded-day trend"
-              />
-            </div>
-          )}
-
-          {/* ── Raw answer snapshot selector ── */}
-          {hasHistory && (
-            <div className="evidence-modal-timeline">
-              <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <p className="drawer-section-label mb-0">Answer snapshots</p>
-                <p className="text-[10px] text-secondary">Select a run to inspect the exact answer.</p>
-              </div>
-              <div className="flex items-center gap-1 overflow-x-auto pb-1">
-                {history.map((run, i) => {
-                  const isSelected = (selectedRunIdx === -1 && i === history.length - 1) || selectedRunIdx === i
-                  const runMentionResult = resolveMentionResult(run)
-                  const visibilityTransition = run.mentionTransition ?? run.visibilityTransition
-                  const mentionTransitionLabel = resolveMentionTransitionLabel(
-                    runMentionResult,
-                    visibilityTransition,
-                  )
-                  const dotColor = runMentionResult === 'unknown' || runMentionResult === 'pending'
-                    ? 'bg-mono-600'
-                    : visibilityTransition === 'lost'
-                      ? 'bg-negative-400'
-                      : visibilityTransition === 'emerging'
-                        ? 'bg-caution-400'
-                        : runMentionResult === 'mentioned'
-                          ? 'bg-positive-400'
-                          : 'bg-mono-600'
-                  const date = new Date(run.createdAt)
-                  const label = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-                  const modelChanged = Boolean(run.model && i > 0 && history[i - 1]?.model && history[i - 1]!.model !== run.model)
-                  return (
-                    <button
-                      key={i}
-                      type="button"
-                      className={`evidence-run-dot ${isSelected ? 'evidence-run-dot--selected' : ''}`}
-                      onClick={() => { void selectHistoricalRun(i === history.length - 1 ? -1 : i) }}
-                      aria-label={[
-                        `Run ${label}: ${mentionResultLabel(runMentionResult)}`,
-                        mentionTransitionLabel,
-                        run.model ? `model ${run.model}` : null,
-                        modelChanged ? 'model changed' : null,
-                      ].filter(Boolean).join(' \u2014 ')}
-                      aria-pressed={isSelected}
-                    >
-                      <span className="flex items-center gap-1" aria-hidden="true">
-                        <span
-                          className={`size-2 rounded-full ${dotColor} ${modelChanged ? 'ring-1 ring-caution-300/80 ring-offset-2 ring-offset-bg' : ''}`}
-                        />
-                        {mentionTransitionLabel ? (
-                          <span className="text-[9px] font-semibold uppercase tracking-wide text-secondary">
-                            {mentionTransitionLabel === 'mention lost' ? 'Lost' : 'New'}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="text-[10px] text-muted">{label}</span>
-                    </button>
-                  )
-                })}
-              </div>
-              {selectedRunIdx >= 0 && selectedRunIdx < history.length && (
-                <p className="text-[11px] text-muted mt-1">
-                  Viewing run from {new Date(history[selectedRunIdx].createdAt).toLocaleString()} {'\u2014'} <span>{mentionResultLabel(resolveMentionResult(history[selectedRunIdx]))}</span>
-                  <button type="button" className="text-secondary hover:text-strong ml-2" onClick={() => { void selectHistoricalRun(-1) }}>{'\u2190'} Back to latest</button>
-                </p>
-              )}
-              {!isViewingHistory && (evidence.modelTransitions?.length ?? 0) > 0 && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {evidence.modelTransitions!.map((transition) => (
-                    <span
-                      key={`${transition.runId}:${transition.toModel ?? 'unknown'}`}
-                      className="inline-flex items-center rounded-full border border-caution-400/30 bg-caution-400/10 px-2 py-1 text-[10px] text-caution-100"
-                    >
-                      {`${transition.fromModel ?? 'unknown'} -> ${transition.toModel ?? 'unknown'} on ${new Date(transition.createdAt).toLocaleDateString()}`}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── Two-column body ── */}
-          <div className="evidence-modal-body" aria-busy={loadingHistory}>
-            {loadingHistory && (
-              <div
-                className="md:col-span-2 flex items-center justify-center py-12 text-muted text-sm"
-                role="status"
-                aria-live="polite"
+          <div className="query-signal-selector" role="group" aria-label="History signal">
+            {(['citations', 'mentions'] as const).map(nextSignal => (
+              <button
+                key={nextSignal}
+                type="button"
+                className={`query-signal-option ${signal === nextSignal ? 'query-signal-option--active' : ''}`}
+                aria-pressed={signal === nextSignal}
+                onClick={() => {
+                  setSignal(nextSignal)
+                }}
               >
-                Loading historical run data{'\u2026'}
+                {nextSignal === 'citations' ? 'Citation history' : 'Mention history'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <QueryEvidenceHistory
+          series={series}
+          signal={signal}
+          maxDays={12}
+          canNavigateHistory={fullHistoryLoaded}
+          selectedSeriesKey={selectedSeriesKey}
+          selectedRunId={selectedRun?.runId ?? null}
+          onSelect={selectHistory}
+        />
+
+        <div className="query-history-actions">
+          {!fullHistoryLoaded ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={historyLoading}
+              onClick={() => { void loadFullHistory() }}
+            >
+              {historyLoading ? 'Loading full history…' : 'Load full history'}
+            </Button>
+          ) : (
+            <span className="text-xs text-secondary">Full history loaded</span>
+          )}
+          {historyError ? (
+            <span className="text-xs text-negative" role="alert">{historyError}</span>
+          ) : null}
+        </div>
+      </section>
+
+      {sameDayRuns.length > 1 ? (
+        <section className="same-day-runs" aria-label="Runs recorded on selected date">
+          <span className="same-day-runs-label">Runs on this date</span>
+          {sameDayRuns.map(run => (
+            <button
+              key={`${run.runId}:${run.createdAt}`}
+              type="button"
+              className={`same-day-run ${selectedRun?.runId === run.runId ? 'same-day-run--active' : ''}`}
+              aria-pressed={selectedRun?.runId === run.runId}
+              onClick={() => {
+                setSelectedRun(run)
+                setDisplay(emptyDisplay(
+                  selectedProvider,
+                  run,
+                  'Loading the exact answer for this result.',
+                ))
+                setRunLoading(true)
+                setRunError(null)
+                setShowFullAnswer(false)
+              }}
+            >
+              {utcTime(run.createdAt)}
+            </button>
+          ))}
+        </section>
+      ) : null}
+
+      <section className="query-evidence-selection" aria-busy={runLoading}>
+        <div className="query-evidence-selection-head">
+          <div className="flex min-w-0 items-center gap-2">
+            <ProviderBadge provider={selectedProvider} />
+            <span className="truncate text-xs text-secondary">
+              {[
+                display.model,
+                selectedLocation,
+                selectedRun ? utcDateTime(selectedRun.createdAt) : null,
+              ].filter(Boolean).join(' · ')}
+            </span>
+          </div>
+          {runLoading ? (
+            <span className="text-xs text-secondary" role="status">Loading exact answer…</span>
+          ) : null}
+        </div>
+
+        {runError ? (
+          <div
+            className={runErrorTone === 'notice'
+              ? 'query-evidence-inline-notice'
+              : 'query-evidence-inline-error'}
+            role={runErrorTone === 'notice' ? 'status' : 'alert'}
+          >
+            <span>{runError}</span>
+            <button type="button" onClick={() => setRunLoadAttempt(previous => previous + 1)}>
+              Retry
+            </button>
+          </div>
+        ) : null}
+
+        <div className="query-evidence-detail-grid">
+          <div className="query-evidence-answer">
+            <p className="drawer-section-label">Full answer</p>
+            {runLoading ? (
+              <div className="query-evidence-no-answer" role="status">
+                Loading exact answer…
+              </div>
+            ) : display.answerSnippet ? (
+              <>
+                <div className={`answer-snippet-block ${showFullAnswer ? 'evidence-answer-expanded' : 'evidence-answer-collapsed'}`}>
+                  {renderHighlightedAnswer()}
+                </div>
+                {display.answerSnippet.length > 280 ? (
+                  <button
+                    type="button"
+                    className="mt-2 text-xs text-secondary transition-colors hover:text-strong"
+                    onClick={() => setShowFullAnswer(previous => !previous)}
+                  >
+                    {showFullAnswer ? 'Collapse answer' : 'Show full answer'}
+                  </button>
+                ) : null}
+              </>
+            ) : (
+              <div className="query-evidence-no-answer">
+                No answer recorded for this engine and run.
               </div>
             )}
 
-            {!loadingHistory && (
-              <>
-                {/* Left: status + AI answer */}
-                <div className="evidence-modal-main">
-                  {/* Position hero */}
-                  <div className={`evidence-position-hero evidence-position-hero--${stateKey}`}>
-                    <p className={`evidence-position-label evidence-position-label--${stateKey}`}>
-                      {heroCopy.label}
-                    </p>
-                    <p className={`evidence-position-title evidence-position-title--${stateKey}`}>
-                      {heroCopy.title}
-                    </p>
-                    <p className="evidence-position-meta">{heroCopy.meta}</p>
-                    {providerMetaNote && (
-                      <p className="mt-1 text-[11px] text-muted">{providerMetaNote}</p>
-                    )}
-                  </div>
-
-                  {/* AI answer */}
-                  {display.answerSnippet && (
-                    <div>
-                      <p className="drawer-section-label">What the AI said</p>
-                      <div className={`answer-snippet-block ${showFullAnswer ? 'evidence-answer-expanded' : 'evidence-answer-collapsed'}`}>
-                        {renderHighlightedAnswer()}
-                      </div>
-                      {display.answerSnippet.length > 280 && (
-                        <button
-                          type="button"
-                          className="mt-1.5 text-xs text-muted hover:text-neutral transition-colors"
-                          onClick={() => setShowFullAnswer(!showFullAnswer)}
-                        >
-                          {showFullAnswer ? '\u2191 Collapse' : '\u2193 Show full answer'}
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {!display.answerSnippet && !loadingHistory && (
-                    <div className="rounded-lg border border-subtle bg-surface-subtle px-4 py-8 text-center text-faint text-sm">
-                      No answer text recorded for this run
-                    </div>
-                  )}
-
-                  {/* Web searches the model ran while researching the prompt */}
-                  {display.searchQueries.length > 0 && (
-                    <div>
-                      <div className="drawer-section-label flex items-center">
-                        <span>Web searches the model ran</span>
-                        <InfoTooltip text="The search queries this AI model issued while researching your prompt. They reveal how the model reformulated the question — the phrasings worth optimizing your content for. Distinct from grounding sources (what it found) and citations (what it linked)." />
-                      </div>
-                      <ul className="grid gap-1">
-                        {display.searchQueries.map((q, i) => (
-                          <li key={`${i}-${q}`} className="flex items-start gap-2 text-sm text-neutral">
-                            <Search className="size-3.5 mt-0.5 shrink-0 text-faint" aria-hidden="true" />
-                            <span className="break-words">{q}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Action items — only for latest run */}
-                  {!isViewingHistory && !isPending && evidence.relatedTechnicalSignals.length > 0 && (
-                    <div>
-                      <p className="drawer-section-label">
-                        {isVisible ? 'Why you\'re visible' : 'What to fix'}
-                      </p>
-                      <div className="action-items-list">
-                        {evidence.relatedTechnicalSignals.map((signal, i) => (
-                          <div key={i} className="action-item">
-                            <svg
-                              className={`action-item-icon ${isVisible ? 'text-positive-400' : 'text-caution-400'}`}
-                              viewBox="0 0 16 16" fill="none" aria-hidden="true"
-                            >
-                              {isVisible
-                                ? <path d="M3 8l3.5 3.5L13 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                                : (
-                                  <>
-                                    <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
-                                    <path d="M8 5v3.5M8 10.5v0" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                                  </>
-                                )
-                              }
-                            </svg>
-                            <span className="action-item-text">{signal}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Summary */}
-                  {display.summary && (
-                    <p className="text-xs text-faint border-t border-subtle pt-3 mt-1">{display.summary}</p>
-                  )}
+            {display.searchQueries.length > 0 ? (
+              <div className="query-evidence-searches">
+                <div className="drawer-section-label flex items-center">
+                  <span>Web searches used</span>
+                  <InfoTooltip text="Searches this engine issued while researching the query." />
                 </div>
-
-                {/* Right: leaderboard + sources */}
-                <div className="evidence-modal-sidebar">
-                  {/* Tabbed sidebar navigation */}
-                  {(hasMentionData || hasSourceData) && (
-                    <div className="sidebar-tabs">
-                      <button
-                        className={`sidebar-tab ${sidebarTab === 'mentions' ? 'sidebar-tab--active' : ''}`}
-                        onClick={() => setSidebarTab('mentions')}
-                        type="button"
-                        title="Canonry's answer-level visibility assessment and any company names extracted from the answer text."
-                      >
-                        Mentions
-                      </button>
-                      <button
-                        className={`sidebar-tab ${sidebarTab === 'sources' ? 'sidebar-tab--active' : ''}`}
-                        onClick={() => setSidebarTab('sources')}
-                        type="button"
-                        title="Grounding links the model used to build the answer. These are supporting sources, not the primary visibility signal."
-                      >
-                        Sources
-                      </button>
-                    </div>
-                  )}
-
-                  {sidebarTab === 'mentions' && (
-                    <>
-                      <div>
-                        <div className="drawer-section-label flex items-center">
-                          <span>Mention in answer</span>
-                          <InfoTooltip text="Canonry scans the AI answer for your owned domains and project name. This is independent from grounding or citation sources." />
-                        </div>
-                        <div className={`mention-status mention-status--${isVisible ? 'mentioned' : 'not-mentioned'}`}>
-                          <span className="mention-status-icon">{isPending ? '…' : isVisible ? '✓' : '—'}</span>
-                          <span className="mention-status-label">
-                            {isMentionUnknown ? 'No result' : isPending ? 'Pending' : isVisible ? 'Mentioned' : 'Not mentioned'}
-                          </span>
-                        </div>
-
-                        {/* Matched terms chips */}
-                        {display.matchedTerms.length > 0 && (
-                          <div className="mt-2">
-                            <p className="text-[10px] uppercase tracking-wide text-muted mb-1.5">Matched in answer</p>
-                            <div className="flex flex-wrap gap-1.5">
-                              {display.matchedTerms.map(term => (
-                                <span key={term} className="mention-chip mention-chip--brand">{term}</span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* When not visible, show what was searched for */}
-                        {!isPending && !isVisible && display.matchedTerms.length === 0 && (
-                          <div className="mt-2">
-                            <p className="text-[10px] uppercase tracking-wide text-muted mb-1.5">Searched for</p>
-                            <div className="flex flex-wrap gap-1.5">
-                              {brandTerms.map(term => (
-                                <span key={term} className="mention-chip mention-chip--muted">{term}</span>
-                              ))}
-                            </div>
-                            <p className="text-[11px] text-faint mt-1.5">None of these appear in the answer text.</p>
-                          </div>
-                        )}
-                      </div>
-
-                      {(display.recommendedCompetitors.length > 0 || display.competitorDomains.length > 0) && (
-                        <div>
-                          <div className="drawer-section-label flex items-center">
-                            <span>Competitor evidence</span>
-                            <InfoTooltip text="Competitors detected in the answer text or source links. Includes both tracked competitors and names extracted by Canonry." />
-                          </div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {(() => {
-                              const domainChips = display.competitorDomains.map(d => d.replace(/^www\./, ''))
-                              const domainKeys = new Set(domainChips.map(d => brandKeyFromText(d.replace(/\.[^.]+$/, ''))))
-                              const filteredNames = display.recommendedCompetitors.filter(
-                                name => !domainKeys.has(brandKeyFromText(name))
-                              )
-                              return [...filteredNames, ...domainChips].map(name => (
-                                <span key={name} className="mention-chip mention-chip--competitor">{name}</span>
-                              ))
-                            })()}
-                          </div>
-                        </div>
-                      )}
-
-                    </>
-                  )}
-
-                  {sidebarTab === 'sources' && (
-                    <>
-                      {display.citedDomains.length > 0 && (
-                        <div>
-                          <div className="drawer-section-label flex items-center">
-                            <span>Domains from source links</span>
-                            <InfoTooltip text="These domains were extracted from grounding or citation URLs. They are supporting-source metadata, not proof that the answer text mentioned them." />
-                          </div>
-                          <div className="citation-leaderboard">
-                            {display.citedDomains.map((domain, i) => {
-                              const norm = domain.toLowerCase().replace(/^www\./, '')
-                              const isYou = myDomains.has(norm)
-                              const isCompetitor = !isYou && display.competitorDomains.some(
-                                c => c.toLowerCase().replace(/^www\./, '') === norm,
-                              )
-                              const variant = isYou ? 'you' : isCompetitor ? 'competitor' : 'other'
-                              return (
-                                <div key={domain} className={`citation-leaderboard-item citation-leaderboard-item--${variant}`}>
-                                  <span className="citation-leaderboard-rank">#{i + 1}</span>
-                                  <span className="citation-leaderboard-domain">{domain}</span>
-                                  {isYou && <span className="citation-leaderboard-tag">You</span>}
-                                  {isCompetitor && <span className="citation-leaderboard-tag">Competitor</span>}
-                                </div>
-                              )
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {display.groundingSources.length > 0 && (
-                        <div>
-                          <div className="drawer-section-label flex items-center">
-                            <span>Grounding source links ({display.groundingSources.length})</span>
-                            <InfoTooltip text="Links the model used as grounding or supporting context while producing the answer. These are not the same thing as answer visibility." />
-                          </div>
-                          <ul className="grid gap-0.5">
-                            {display.groundingSources.map((src, i) => {
-                              const href = safeExternalUrl(src.uri)
-                              const label = src.title || src.uri
-                              return (
-                                <li key={i} className="truncate text-sm">
-                                  {href ? (
-                                    <a href={href} target="_blank" rel="noopener noreferrer" className="text-secondary hover:text-strong transition-colors">
-                                      {label}
-                                    </a>
-                                  ) : (
-                                    <span className="text-secondary">{label}</span>
-                                  )}
-                                </li>
-                              )
-                            })}
-                          </ul>
-                        </div>
-                      )}
-
-                      {display.evidenceUrls.length > 0 && (
-                        <div>
-                          <p className="drawer-section-label">Evidence URLs</p>
-                          <ul className="grid gap-1">
-                            {display.evidenceUrls.map((url) => {
-                              const href = safeExternalUrl(url)
-                              return (
-                                <li key={url} className="truncate text-sm">
-                                  {href ? (
-                                    <a href={href} target="_blank" rel="noopener noreferrer" className="text-secondary hover:text-strong transition-colors">
-                                      {url}
-                                    </a>
-                                  ) : (
-                                    <span className="text-secondary">{url}</span>
-                                  )}
-                                </li>
-                              )
-                            })}
-                          </ul>
-                        </div>
-                      )}
-
-                      {display.citedDomains.length === 0 && display.groundingSources.length === 0 && display.evidenceUrls.length === 0 && (
-                        <div className="flex items-center justify-center h-24 text-faint text-sm">
-                          No source data {isViewingHistory ? 'for this run' : 'yet'}
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {/* No data state */}
-                  {!hasMentionData && !hasSourceData && (
-                    <div className="flex items-center justify-center h-24 text-faint text-sm">
-                      No answer visibility data {isViewingHistory ? 'for this run' : 'yet'}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
+                <ul>
+                  {display.searchQueries.map((query, index) => (
+                    <li key={`${index}:${query}`}>
+                      <Search className="mt-0.5 size-3.5 shrink-0 text-faint" aria-hidden="true" />
+                      <span>{query}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+
+          <aside className="query-evidence-breakdown" aria-label="Selected answer breakdown">
+            <div>
+              <p className="drawer-section-label">Signal results</p>
+              <dl className="evidence-signal-results">
+                <div>
+                  <dt>Mention</dt>
+                  <dd className={signalStateClass(mentionResult)}>
+                    {mentionLabel(mentionResult)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Citation</dt>
+                  <dd className={signalStateClass(citationResult)}>
+                    {citationLabel(citationResult)}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+
+            <div className="evidence-detail-tabs" role="group" aria-label="Evidence breakdown">
+              <button
+                type="button"
+                aria-pressed={detailTab === 'mentions'}
+                className={`evidence-detail-tab ${detailTab === 'mentions' ? 'evidence-detail-tab--active' : ''}`}
+                onClick={() => setDetailTab('mentions')}
+              >
+                Answer mentions
+              </button>
+              <button
+                type="button"
+                aria-pressed={detailTab === 'sources'}
+                className={`evidence-detail-tab ${detailTab === 'sources' ? 'evidence-detail-tab--active' : ''}`}
+                onClick={() => setDetailTab('sources')}
+              >
+                Source links
+              </button>
+            </div>
+
+            {detailTab === 'mentions' ? (
+              <div className="query-evidence-tab-panel">
+                {display.matchedTerms.length > 0 ? (
+                  <>
+                    <p className="drawer-section-label">Matched in answer</p>
+                    <ul className="query-evidence-simple-list">
+                      {display.matchedTerms.map(term => <li key={term}>{term}</li>)}
+                    </ul>
+                  </>
+                ) : (
+                  <p className="text-xs leading-relaxed text-secondary">
+                    {mentionResult === 'not-mentioned'
+                      ? 'No tracked brand or owned-domain term was found in this answer.'
+                      : mentionResult === 'unknown'
+                        ? 'Mention data was not recorded for this run.'
+                        : 'No matched terms were recorded.'}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="query-evidence-tab-panel">
+                {display.citedDomains.length > 0 ? (
+                  <>
+                    <p className="drawer-section-label">Domains from source links</p>
+                    <ol className="query-evidence-domain-list">
+                      {display.citedDomains.map((domain, index) => {
+                        const normalized = normalizeProjectDomain(domain)
+                        return (
+                          <li key={`${index}:${domain}`}>
+                            <span>{domain}</span>
+                            {myDomains.has(normalized) ? <span className="text-positive">Your domain</span> : null}
+                          </li>
+                        )
+                      })}
+                    </ol>
+                  </>
+                ) : null}
+
+                {display.groundingSources.length > 0 ? (
+                  <>
+                    <p className="drawer-section-label mt-4">Source links</p>
+                    <ul className="query-evidence-source-list">
+                      {display.groundingSources.map((source, index) => {
+                        const href = safeExternalUrl(source.uri)
+                        const label = source.title || source.uri
+                        return (
+                          <li key={`${index}:${source.uri}`}>
+                            {href ? (
+                              <a href={href} target="_blank" rel="noopener noreferrer">{label}</a>
+                            ) : (
+                              <span>{label}</span>
+                            )}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </>
+                ) : null}
+
+                {display.citedDomains.length === 0 && display.groundingSources.length === 0 ? (
+                  <p className="text-xs leading-relaxed text-secondary">
+                    No source links were recorded for this engine and run.
+                  </p>
+                ) : null}
+              </div>
+            )}
+
+            {competitorEvidence.length > 0 ? (
+              <div>
+                <p className="drawer-section-label">Competitor evidence</p>
+                <ul className="query-evidence-simple-list">
+                  {competitorEvidence.map(item => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            ) : null}
+          </aside>
+        </div>
+
+        {display.summary ? (
+          <p className="border-t border-subtle pt-3 text-xs text-secondary">{display.summary}</p>
+        ) : null}
+      </section>
+    </Drawer>
   )
 }

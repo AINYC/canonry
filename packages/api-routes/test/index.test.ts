@@ -756,6 +756,58 @@ describe('api-routes', () => {
     expect(historyBody.snapshots[0]?.visibilityState).toBe('not-visible')
   })
 
+  it('run detail keeps the denormalized query text after a tracked query is removed', async () => {
+    const projectId = crypto.randomUUID()
+    const queryId = crypto.randomUUID()
+    const runId = crypto.randomUUID()
+    const createdAt = new Date(Date.now() + 35_000).toISOString()
+    const queryText = 'legacy answer engine query'
+
+    db.insert(projects).values({
+      id: projectId,
+      name: 'detached-snapshot-project',
+      displayName: 'Detached Snapshot Project',
+      canonicalDomain: 'example.com',
+      country: 'US',
+      language: 'en',
+      providers: '[]',
+      createdAt,
+      updatedAt: createdAt,
+    }).run()
+    db.insert(queries).values({
+      id: queryId,
+      projectId,
+      query: queryText,
+      createdAt,
+    }).run()
+    db.insert(runs).values({
+      id: runId,
+      projectId,
+      status: 'completed',
+      createdAt,
+      finishedAt: createdAt,
+    }).run()
+    db.insert(querySnapshots).values({
+      id: crypto.randomUUID(),
+      runId,
+      queryId,
+      queryText,
+      provider: 'gemini',
+      citationState: 'cited',
+      answerText: 'A retained historical answer.',
+      createdAt,
+    }).run()
+
+    db.delete(queries).where(eq(queries.id, queryId)).run()
+
+    const response = await app.inject({ method: 'GET', url: `/api/v1/runs/${runId}` })
+    expect(response.statusCode).toBe(200)
+    const body = JSON.parse(response.payload) as {
+      snapshots: Array<{ query?: string }>
+    }
+    expect(body.snapshots[0]?.query).toBe(queryText)
+  })
+
   it('project timeline exposes answer visibility states and transitions', async () => {
     const projectId = crypto.randomUUID()
     const queryId = crypto.randomUUID()

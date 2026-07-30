@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 const drawer = vi.hoisted(() => ({
   openEvidence: vi.fn(),
@@ -23,15 +23,16 @@ function point(
   runId: string,
   citationState: RunHistoryPoint['citationState'],
   answerMentioned: boolean | undefined,
+  createdAt = `2026-07-${runId === 'r1' ? '01' : '02'}T12:00:00.000Z`,
 ): RunHistoryPoint {
   return {
     runId,
-    createdAt: `2026-07-${runId === 'r1' ? '01' : '02'}T12:00:00.000Z`,
+    createdAt,
     citationState,
     answerMentioned,
-    visibilityState: answerMentioned == null
+    mentionState: answerMentioned == null
       ? 'pending'
-      : answerMentioned ? 'visible' : 'not-visible',
+      : answerMentioned ? 'mentioned' : 'not-mentioned',
   }
 }
 
@@ -40,22 +41,26 @@ function evidenceItem({
   query,
   provider,
   history,
+  location = null,
 }: {
   id: string
   query: string
   provider: string
   history: RunHistoryPoint[]
+  location?: string | null
 }): CitationInsightVm {
-  const latest = history.at(-1)!
+  const latest = history.at(-1)
   return {
     id,
     query,
     provider,
-    model: `${provider}-model`,
-    location: null,
-    citationState: latest.citationState,
-    answerMentioned: latest.answerMentioned,
-    visibilityState: latest.visibilityState,
+    model: provider ? `${provider}-model` : null,
+    location,
+    citationState: (latest?.citationState ?? 'pending') as CitationInsightVm['citationState'],
+    answerMentioned: latest?.answerMentioned,
+    visibilityState: latest?.answerMentioned == null
+      ? 'pending'
+      : latest.answerMentioned ? 'visible' : 'not-visible',
     changeLabel: '',
     answerSnippet: 'Answer text',
     citedDomains: [],
@@ -65,7 +70,7 @@ function evidenceItem({
     groundingSources: [],
     summary: '',
     runHistory: history,
-  } as CitationInsightVm
+  }
 }
 
 function fixture(): CitationInsightVm[] {
@@ -84,196 +89,101 @@ function fixture(): CitationInsightVm[] {
     }),
     evidenceItem({
       id: 'never',
-      query: 'charlie never query',
+      query: 'charlie stable query',
       provider: 'claude',
       history: [point('r1', 'not-cited', false), point('r2', 'not-cited', false)],
     }),
     evidenceItem({
-      id: 'stable',
-      query: 'delta stable query',
+      id: 'first',
+      query: 'delta first query',
       provider: 'perplexity',
-      history: [point('r1', 'cited', true), point('r2', 'cited', true)],
+      history: [point('r2', 'cited', true)],
     }),
   ]
 }
 
-function parentRowText(container: HTMLElement): string[] {
-  return [...container.querySelectorAll('tbody > tr.evidence-phrase-row')]
+function rowText(container: HTMLElement): string[] {
+  return [...container.querySelectorAll('tbody > tr.query-change-row')]
     .map(row => row.textContent ?? '')
 }
 
-test('shows mention and citation evidence together with explicit quick views', () => {
-  render(<EvidenceTable evidence={fixture()} />)
-
-  expect(screen.getByRole('columnheader', { name: /Mentioned/ })).toBeTruthy()
-  expect(screen.getByRole('columnheader', { name: /Cited/ })).toBeTruthy()
-  expect(screen.getByRole('columnheader', { name: /Change \/ recent history/ })).toBeTruthy()
-  expect(screen.queryByRole('tab')).toBeNull()
-  expect(screen.queryByText('Density')).toBeNull()
-  expect(screen.queryByText('Latest run')).toBeNull()
-  expect(screen.getByText('1–4 of 4 queries with evidence')).toBeTruthy()
-
-  expect(screen.getByRole('button', { name: 'Changed vs prior recorded day, 2 queries' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Mention lost vs prior recorded day, 1 query' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Citation lost vs prior recorded day, 1 query' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'No recent mentions, 1 query' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'No recent citations, 1 query' })).toBeTruthy()
-
-  fireEvent.click(screen.getByRole('button', {
-    name: 'Mention lost vs prior recorded day, 1 query',
-  }))
-
-  expect(screen.getByText('alpha lost query')).toBeTruthy()
-  expect(screen.queryByText('bravo gained query')).toBeNull()
-  expect(screen.queryByText('charlie never query')).toBeNull()
-})
-
-test('sorts losses first by default and exposes sortable evidence columns', () => {
+test('renders a flat query-change inbox without duplicate current-coverage columns', () => {
   const { container } = render(<EvidenceTable evidence={fixture()} />)
 
-  expect(parentRowText(container)[0]).toContain('alpha lost query')
-
-  fireEvent.click(screen.getByRole('button', { name: 'Sort by Query' }))
-  expect(parentRowText(container).map(text => text.match(/(alpha|bravo|charlie|delta)/)?.[0])).toEqual([
-    'alpha',
-    'bravo',
-    'charlie',
-    'delta',
-  ])
-
-  fireEvent.click(screen.getByRole('button', { name: /Sort by Query, currently ascending/ }))
-  expect(parentRowText(container).map(text => text.match(/(alpha|bravo|charlie|delta)/)?.[0])).toEqual([
-    'delta',
-    'charlie',
-    'bravo',
-    'alpha',
-  ])
+  expect(screen.getByRole('columnheader', { name: 'Query' })).toBeTruthy()
+  expect(screen.getByRole('columnheader', { name: 'What changed' })).toBeTruthy()
+  expect(screen.getByRole('columnheader', { name: 'Latest result' })).toBeTruthy()
+  expect(screen.queryByRole('columnheader', { name: /Mentioned/ })).toBeNull()
+  expect(screen.queryByRole('columnheader', { name: /Cited/ })).toBeNull()
+  expect(container.querySelectorAll('tbody > tr')).toHaveLength(4)
+  expect(container.querySelector('.evidence-engine-row')).toBeNull()
+  expect(screen.getByText('1–4 of 4 queries with evidence')).toBeTruthy()
 })
 
-test('distinguishes missing prior-day history from a stable comparison', () => {
-  render(<EvidenceTable evidence={[
+test('uses natural change copy and only shows non-empty views', () => {
+  render(<EvidenceTable evidence={fixture()} />)
+
+  expect(screen.getByText('Gemini no longer cites your site')).toBeTruthy()
+  expect(screen.getByText('OpenAI now cites your site')).toBeTruthy()
+  expect(screen.getByText('No change from previous result')).toBeTruthy()
+  expect(screen.getByText('First recorded result')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Changed, 2 queries' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Mention/citation losses, 1 query' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /0 queries/ })).toBeNull()
+})
+
+test('sorts by latest result by default instead of promoting losses', () => {
+  const items = [
     evidenceItem({
-      id: 'first-observation',
-      query: 'first observed query',
+      id: 'older-loss',
+      query: 'alpha older loss',
       provider: 'gemini',
-      history: [point('r1', 'cited', true)],
-    }),
-    evidenceItem({
-      id: 'stable-comparison',
-      query: 'stable compared query',
-      provider: 'openai',
       history: [
-        point('r1', 'cited', true),
-        point('r2', 'cited', true),
+        point('old-1', 'cited', true, '2026-07-01T12:00:00Z'),
+        point('old-2', 'not-cited', false, '2026-07-02T12:00:00Z'),
       ],
     }),
-  ]} />)
-
-  expect(screen.getByText('No prior-day comparison')).toBeTruthy()
-  expect(screen.getByText('No change')).toBeTruthy()
-  expect(screen.getByRole('button', {
-    name: "No mention or citation changes when each engine's latest result was compared with its most recent result from an earlier UTC day at the same location.",
-  })).toBeTruthy()
-})
-
-test('aligns engine results as table rows with passive history and one detail action', () => {
-  const items = [
     evidenceItem({
-      id: 'gemini-evidence',
-      query: 'best solar installer',
-      provider: 'gemini',
-      history: [point('r1', 'not-cited', false), point('r2', 'cited', true)],
-    }),
-    evidenceItem({
-      id: 'openai-evidence',
-      query: 'best solar installer',
+      id: 'newer-stable',
+      query: 'zulu newer stable',
       provider: 'openai',
-      history: [point('r1', 'cited', true), point('r2', 'cited', true)],
+      history: [
+        point('new-1', 'cited', true, '2026-07-03T12:00:00Z'),
+        point('new-2', 'cited', true, '2026-07-04T12:00:00Z'),
+      ],
     }),
   ]
   const { container } = render(<EvidenceTable evidence={items} />)
 
-  const parentRow = container.querySelector('tbody > tr.evidence-phrase-row')
-  expect(parentRow?.getAttribute('role')).toBeNull()
-  expect(parentRow?.getAttribute('tabindex')).toBeNull()
-  expect(screen.getByRole('rowheader', { name: /best solar installer/ })).toBeTruthy()
-
-  const disclosure = screen.getByRole('button', { name: 'Review engines for best solar installer' })
-  expect(disclosure.getAttribute('aria-expanded')).toBe('false')
-  fireEvent.click(disclosure)
-  expect(disclosure.getAttribute('aria-expanded')).toBe('true')
-
-  const geminiRow = screen.getByRole('row', {
-    name: 'Gemini result for best solar installer',
-  })
-  const openaiRow = screen.getByRole('row', {
-    name: 'OpenAI result for best solar installer',
-  })
-  const geminiCells = [...geminiRow.querySelectorAll(':scope > th, :scope > td')]
-  expect(geminiCells).toHaveLength(5)
-  expect(geminiCells[0]?.textContent).toContain('gemini')
-  expect(geminiCells[1]?.textContent).toBe('Yes')
-  expect(geminiCells[2]?.textContent).toBe('Yes')
-  expect(within(geminiRow).getByRole('img', { name: /Recent recorded days for Gemini/ })).toBeTruthy()
-  expect(within(openaiRow).getByRole('img', { name: /Recent recorded days for OpenAI/ })).toBeTruthy()
-  expect(within(geminiRow).queryByRole('button', { name: /recent history/i })).toBeNull()
-  expect(screen.getAllByText('Citation gained on Gemini')).toHaveLength(1)
-
-  fireEvent.click(screen.getByRole('button', {
-    name: 'Review Gemini answer and history for best solar installer',
-  }))
-  expect(drawer.openEvidence).toHaveBeenCalledWith('gemini-evidence')
+  expect(rowText(container)[0]).toContain('zulu newer stable')
+  fireEvent.click(screen.getByRole('button', { name: 'Sort by Query' }))
+  expect(rowText(container)[0]).toContain('alpha older loss')
+  fireEvent.click(screen.getByRole('button', { name: /Sort by Query, currently ascending/ }))
+  expect(rowText(container)[0]).toContain('zulu newer stable')
 })
 
-test('uses plain text quick views and engine states instead of pill indicators', () => {
-  const items = [
-    evidenceItem({
-      id: 'independent-signals',
-      query: 'independent signal query',
-      provider: 'gemini',
-      history: [point('r1', 'not-cited', true), point('r2', 'not-cited', true)],
-    }),
-    evidenceItem({
-      id: 'pending-signals',
-      query: 'independent signal query',
-      provider: 'openai',
-      history: [point('r2', 'pending', undefined)],
-    }),
-  ]
-  const { container } = render(<EvidenceTable evidence={items} />)
-
-  const allView = screen.getByRole('button', { name: 'All, 1 query' })
-  expect(allView.className).toContain('evidence-quick-view')
-  expect(allView.className).not.toContain('filter-chip')
+test('opens one query-level evidence view with the triggering signal', () => {
+  render(<EvidenceTable evidence={fixture()} />)
 
   fireEvent.click(screen.getByRole('button', {
-    name: 'Review engines for independent signal query',
+    name: 'Review evidence for alpha lost query',
   }))
 
-  const engineStates = [...container.querySelectorAll('.evidence-signal-value')]
-  const geminiRow = screen.getByRole('row', {
-    name: 'Gemini result for independent signal query',
-  })
-  const openaiRow = screen.getByRole('row', {
-    name: 'OpenAI result for independent signal query',
-  })
-  expect(engineStates).toHaveLength(4)
-  expect(engineStates.every(state => !state.className.includes('badge'))).toBe(true)
-  expect(engineStates.every(state => state.querySelector('svg') === null)).toBe(true)
-  expect(within(geminiRow).getByLabelText('Mention status: Mentioned').textContent).toBe('Yes')
-  expect(within(openaiRow).getByLabelText('Mention status: No result').textContent).toBe('No result')
-  expect(within(geminiRow).getByLabelText('Citation status: Not cited').textContent).toBe('No')
-  expect(within(openaiRow).getByLabelText('Citation status: No result').textContent).toBe('No result')
-  expect([...geminiRow.querySelectorAll('.evidence-signal-value'), ...openaiRow.querySelectorAll('.evidence-signal-value')]
-    .filter(state => state.textContent?.includes('No result'))).toHaveLength(2)
+  expect(drawer.openEvidence).toHaveBeenCalledWith('lost', 'citations')
 })
 
-test('search and empty states explain how to recover', () => {
+test('search updates visible filter counts and omits dead filters', () => {
   render(<EvidenceTable evidence={fixture()} />)
 
   const search = screen.getByRole('searchbox', { name: 'Search queries, locations, or engines' })
-  fireEvent.change(search, { target: { value: 'does-not-exist' } })
+  fireEvent.change(search, { target: { value: 'charlie stable' } })
 
+  expect(screen.getByRole('button', { name: 'All, 1 query' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /Changed/ })).toBeNull()
+  expect(screen.queryByRole('button', { name: /Mention\/citation losses/ })).toBeNull()
+  expect(screen.getByText('charlie stable query')).toBeTruthy()
+
+  fireEvent.change(search, { target: { value: 'does-not-exist' } })
   expect(screen.getByText('No queries match this view')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
   expect(screen.getByText('alpha lost query')).toBeTruthy()
@@ -282,61 +192,27 @@ test('search and empty states explain how to recover', () => {
 test('labels pagination as query locations when comparison expands rows', () => {
   render(<EvidenceTable
     evidence={[
-      {
-        ...evidenceItem({
-          id: 'florida',
-          query: 'local dentist',
-          provider: 'gemini',
-          history: [point('r1', 'cited', true)],
-        }),
+      evidenceItem({
+        id: 'florida',
+        query: 'local dentist',
+        provider: 'gemini',
         location: 'Florida',
-      },
-      {
-        ...evidenceItem({
-          id: 'michigan',
-          query: 'local dentist',
-          provider: 'gemini',
-          history: [point('r1', 'cited', true)],
-        }),
+        history: [point('r1', 'cited', true)],
+      }),
+      evidenceItem({
+        id: 'michigan',
+        query: 'local dentist',
+        provider: 'gemini',
         location: 'Michigan',
-      },
+        history: [point('r1', 'cited', true)],
+      }),
     ]}
     compareLocations
   />)
 
   expect(screen.getByText('1–2 of 2 query locations with evidence')).toBeTruthy()
-})
-
-test('quick-view counts follow the search query and active view', () => {
-  render(<EvidenceTable evidence={fixture()} />)
-
-  const search = screen.getByRole('searchbox', { name: 'Search queries, locations, or engines' })
-  fireEvent.change(search, { target: { value: 'delta stable' } })
-
-  expect(screen.getByRole('button', { name: 'All, 1 query' })).toBeTruthy()
-  const changedZero = screen.getByRole('button', {
-    name: 'Changed vs prior recorded day, 0 queries',
-  })
-  const mentionLostZero = screen.getByRole('button', {
-    name: 'Mention lost vs prior recorded day, 0 queries',
-  })
-  const citationLostZero = screen.getByRole('button', {
-    name: 'Citation lost vs prior recorded day, 0 queries',
-  })
-  expect(changedZero.hasAttribute('disabled')).toBe(true)
-  expect(mentionLostZero.hasAttribute('disabled')).toBe(true)
-  expect(citationLostZero.hasAttribute('disabled')).toBe(true)
-  expect(screen.getByText('delta stable query')).toBeTruthy()
-
-  fireEvent.click(changedZero)
-  expect(screen.getByText('delta stable query')).toBeTruthy()
-
-  fireEvent.change(search, { target: { value: 'alpha lost' } })
-  expect(screen.getByRole('button', { name: 'All, 1 query' })).toBeTruthy()
-  expect(screen.getByRole('button', {
-    name: 'Changed vs prior recorded day, 1 query',
-  })).toBeTruthy()
-  expect(screen.getByText('alpha lost query')).toBeTruthy()
+  fireEvent.click(screen.getAllByRole('button', { name: 'Review evidence for local dentist' })[0]!)
+  expect(drawer.openEvidence).toHaveBeenCalledWith('florida', 'citations', 'Florida')
 })
 
 test('shows an instructive state before any queries are tracked', () => {
@@ -348,9 +224,16 @@ test('shows an instructive state before any queries are tracked', () => {
 })
 
 test('distinguishes externally filtered evidence from an unconfigured project', () => {
-  render(<EvidenceTable evidence={[]} hasTrackedQueries />)
+  render(<EvidenceTable evidence={[]} hasTrackedQueries isFiltered />)
 
   expect(screen.getByText('No query evidence matches these filters')).toBeTruthy()
   expect(screen.queryByText('No queries tracked yet')).toBeNull()
   expect(screen.getByText(/Choose another location/)).toBeTruthy()
+})
+
+test('distinguishes tracked queries awaiting their first sweep', () => {
+  render(<EvidenceTable evidence={[]} hasTrackedQueries />)
+
+  expect(screen.getByText('Waiting for the first query results')).toBeTruthy()
+  expect(screen.getByText(/Run a sweep/)).toBeTruthy()
 })

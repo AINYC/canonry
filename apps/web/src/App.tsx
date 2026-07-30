@@ -296,7 +296,13 @@ export function RootLayout() {
 
   // ── Router state ──
   const location = useLocation()
-  const { runId, evidenceId, closeDrawer } = useDrawer()
+  const {
+    runId,
+    evidenceId,
+    evidenceSignal,
+    evidenceLocation,
+    closeDrawer,
+  } = useDrawer()
 
   // ── UI state ──
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -431,8 +437,8 @@ export function RootLayout() {
   // the slim portfolio hook — its per-project `visibilityEvidence` is
   // intentionally empty (see use-dashboard-overview.ts). The full evidence
   // list is only built by `useProjectDashboard`, which the ProjectPage uses
-  // to render the table whose "View" button writes `?evidenceId=…` into the
-  // URL. Without this second lookup the modal silently never opens on a
+  // to render the table whose "Review evidence" button writes `?evidenceId=…` into the
+  // URL. Without this second lookup the evidence drawer silently never opens on a
   // project route.
   //
   // Subscribing to `useProjectDashboard` here is free in steady state — its
@@ -448,6 +454,17 @@ export function RootLayout() {
     if (!evidenceId) return undefined
     return findEvidenceForModal(currentProjectCommandCenter, safeDashboard, evidenceId)
   }, [evidenceId, currentProjectCommandCenter, safeDashboard])
+
+  const selectedEvidenceGroup = useMemo(() => {
+    if (!selectedEvidenceContext) return []
+    return selectedEvidenceContext.project.visibilityEvidence.filter(candidate => (
+      candidate.query === selectedEvidenceContext.evidence.query
+      && (
+        evidenceLocation === null
+        || (candidate.location?.trim() ?? '') === evidenceLocation
+      )
+    ))
+  }, [evidenceLocation, selectedEvidenceContext])
 
   // Derive breadcrumb label from current location
   const breadcrumbLabel = (() => {
@@ -957,7 +974,15 @@ export function RootLayout() {
       ) : null}
 
       {selectedEvidenceContext ? (
-        <EvidenceDetailModal evidence={selectedEvidenceContext.evidence} project={selectedEvidenceContext.project} onClose={closeDrawer} />
+        <EvidenceDetailModal
+          key={selectedEvidenceContext.evidence.id}
+          evidence={selectedEvidenceContext.evidence}
+          evidenceGroup={selectedEvidenceGroup}
+          initialSignal={evidenceSignal ?? 'citations'}
+          locationScope={evidenceLocation ?? undefined}
+          project={selectedEvidenceContext.project}
+          onClose={closeDrawer}
+        />
       ) : null}
 
       <RunNotificationObserver />

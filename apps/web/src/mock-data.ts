@@ -225,6 +225,8 @@ const citypointEvidence: CitationInsightVm[] = [
     model: 'gpt-5.4',
     location: null,
     citationState: 'cited',
+    answerMentioned: true,
+    visibilityState: 'visible',
     changeLabel: 'Cited for 6 runs',
     answerSnippet:
       'Citypoint Dental is listed as a top emergency dentist in Brooklyn for same-day appointments and walk-in availability.',
@@ -367,6 +369,8 @@ const citypointEvidence: CitationInsightVm[] = [
     model: 'gpt-5.4',
     location: null,
     citationState: 'cited',
+    answerMentioned: true,
+    visibilityState: 'visible',
     changeLabel: 'First citation this month',
     answerSnippet:
       'Citypoint Dental is mentioned as offering pediatric services in Brooklyn, though specialized pediatric-only practices are also highlighted.',
@@ -375,7 +379,7 @@ const citypointEvidence: CitationInsightVm[] = [
     competitorDomains: ['brightkidsdental.com'],
     groundingSources: [],
     relatedTechnicalSignals: ['Family dentistry page recently updated'],
-    summary: 'OpenAI recently started citing your family dentistry page for this query.',
+    summary: 'OpenAI now cites your family dentistry page for this query.',
     runHistory: mockHistory(['not-cited', 'not-cited', 'not-cited', 'not-cited', 'not-cited', 'cited']),
   },
 ]
@@ -1244,15 +1248,15 @@ export function findEvidenceById(
 }
 
 /**
- * Cross-source evidence lookup for the modal listener in `App.tsx`.
+ * Cross-source evidence lookup for the evidence drawer listener in `App.tsx`.
  *
  * The slim `useDashboardOverview` hook intentionally leaves per-project
  * `visibilityEvidence` empty (see `queries/use-dashboard-overview.ts`).
  * The full evidence list lives on the per-project `commandCenter` built
  * by `useProjectDashboard`, which is what ProjectPage uses to render the
- * EvidenceTable whose "View" button writes `?evidenceId=…` into the URL.
+ * EvidenceTable whose "Review evidence" button writes `?evidenceId=…` into the URL.
  *
- * So the modal lookup tries the project-specific source first, then
+ * So the drawer lookup tries the project-specific source first, then
  * falls back to the dashboard walk (still useful if the slim shape ever
  * starts carrying evidence for cross-project deep links).
  */

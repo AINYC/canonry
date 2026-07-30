@@ -144,11 +144,11 @@ test('embed defaults client-value overview disclosures open and omits run histor
   const embedDoc = parseHtml(await renderAt('/projects/project_citypoint', { enabled: true, views: ['project'] }))
   const operatorDoc = parseHtml(await renderAt('/projects/project_citypoint'))
 
-  expect(detailsForTitle(operatorDoc, 'Query evidence')?.hasAttribute('open')).toBe(false)
+  expect(detailsForTitle(operatorDoc, 'Query changes')?.hasAttribute('open')).toBe(false)
   expect(detailsForTitle(operatorDoc, 'Citation and engine diagnostics')?.hasAttribute('open')).toBe(false)
   expect(detailsForTitle(operatorDoc, 'Recent execution history')).not.toBeNull()
 
-  expect(detailsForTitle(embedDoc, 'Query evidence')?.hasAttribute('open')).toBe(true)
+  expect(detailsForTitle(embedDoc, 'Query changes')?.hasAttribute('open')).toBe(true)
   expect(detailsForTitle(embedDoc, 'Citation and engine diagnostics')?.hasAttribute('open')).toBe(true)
   expect(detailsForTitle(embedDoc, 'Recent execution history')).toBeNull()
 })

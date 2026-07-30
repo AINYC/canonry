@@ -66,6 +66,8 @@ export interface RouterContext {
 type SearchParams = {
   runId?: string
   evidenceId?: string
+  evidenceSignal?: 'mentions' | 'citations'
+  evidenceLocation?: string
   runStatus?: string
   runKind?: string
   runProject?: string
@@ -86,6 +88,12 @@ export const rootRoute = createRootRouteWithContext<RouterContext>()({
   validateSearch: (search: Record<string, unknown>): SearchParams => ({
     runId: typeof search.runId === 'string' ? search.runId : undefined,
     evidenceId: typeof search.evidenceId === 'string' ? search.evidenceId : undefined,
+    evidenceSignal: search.evidenceSignal === 'mentions' || search.evidenceSignal === 'citations'
+      ? search.evidenceSignal
+      : undefined,
+    evidenceLocation: typeof search.evidenceLocation === 'string'
+      ? search.evidenceLocation
+      : undefined,
     runStatus: typeof search.runStatus === 'string' ? search.runStatus : undefined,
     runKind: typeof search.runKind === 'string' ? search.runKind : undefined,
     runProject: typeof search.runProject === 'string' ? search.runProject : undefined,
