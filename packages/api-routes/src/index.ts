@@ -76,6 +76,7 @@ declare module 'fastify' {
   }
 }
 
+export { resolveVercelSyncDeadlineMs, VERCEL_MAX_SYNC_WINDOW_MS, DEFAULT_VERCEL_SYNC_DEADLINE_MS, TRAFFIC_SOURCE_MAX_CATCHUP_MS } from './traffic-limits.js'
 export interface ApiRoutesOptions {
   db: DatabaseClient
   openApiInfo?: OpenApiInfo

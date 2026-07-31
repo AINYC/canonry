@@ -969,6 +969,14 @@ export const trafficSources = sqliteTable('traffic_sources', {
   // observed in the most recent successful sync. Bounded ring buffer used to
   // dedupe across sync runs at the boundary timestamp where lastSyncedAt
   // clamping alone leaves a small overlap window.
+  /**
+   * Newest instant whose traffic a sync clamped past instead of ingesting.
+   * Set when the single-sync reach cap fires; cleared only by a backfill that
+   * covers the span. Without it the loss is unobservable a cycle later: the
+   * watermark advances, current lag returns to normal, and a health check that
+   * only reads lag reports `ok` on a source with a permanent hole in it.
+   */
+  skippedThroughAt: text('skipped_through_at'),
   lastEventIds: text('last_event_ids', { mode: 'json' }).$type<string[]>(),
   archivedAt: text('archived_at'),
   configJson: text('config_json', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),

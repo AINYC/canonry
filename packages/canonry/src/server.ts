@@ -12,7 +12,7 @@ const { version: PKG_VERSION } = _require("../package.json") as {
 import Fastify from "fastify";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { SetHeadersResponse } from "@fastify/static";
-import { apiRoutes } from "@ainyc/canonry-api-routes";
+import { apiRoutes, resolveVercelSyncDeadlineMs } from "@ainyc/canonry-api-routes";
 import {
   apiKeys,
   auditLog,
@@ -1984,6 +1984,11 @@ export async function createServer(opts: {
     // installer; cloud deployments inherit the secure default of `false` by
     // not passing this option. Override with CANONRY_ALLOW_LOOPBACK_WEBHOOKS=0.
     allowLoopbackWebhooks: process.env.CANONRY_ALLOW_LOOPBACK_WEBHOOKS !== "0",
+    // Wall-clock budget for one incremental Vercel drain. This is the only lever
+    // that decides whether a source catches up or falls further behind, and it
+    // was previously reachable only from tests, so a source losing ground could
+    // not be rescued without shipping code. Unset keeps the built-in default.
+    vercelSyncDeadlineMs: resolveVercelSyncDeadlineMs(process.env),
     // Local-only Aero agent routes. Registered here so they inherit api-routes'
     // auth plugin — bare `registerAgentRoutes(app, ...)` would skip auth.
     registerAuthenticatedRoutes: async (scope) => {

@@ -155,6 +155,14 @@ export const trafficSourceDtoSchema = z.object({
   lastSyncedAt: z.string().nullable(),
   lastCursor: z.string().nullable(),
   lastError: z.string().nullable(),
+  /**
+   * Newest instant a sync clamped past instead of ingesting, or null when no
+   * skip is outstanding. Non-null means this source has a known gap in its
+   * history that only a backfill covering the span will close — it does not
+   * clear when the watermark catches up, because catching up is exactly what
+   * the skipping sync did.
+   */
+  skippedThroughAt: z.string().nullable(),
   archivedAt: z.string().nullable(),
   config: z.record(z.string(), z.unknown()),
   createdAt: z.string(),

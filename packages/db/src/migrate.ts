@@ -2508,6 +2508,16 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE query_snapshots ADD COLUMN retrieval_contract TEXT`,
     ],
   },
+  {
+    // Records the newest instant a sync clamped past instead of ingesting, so
+    // the loss survives the watermark moving on. Purely additive: existing rows
+    // read NULL, which means "no known skipped span", not "no loss ever".
+    version: 113,
+    name: 'traffic-source-skipped-span',
+    statements: [
+      `ALTER TABLE traffic_sources ADD COLUMN skipped_through_at TEXT`,
+    ],
+  },
 ]
 
 /**
