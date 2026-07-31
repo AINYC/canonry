@@ -13,7 +13,7 @@ import {
 // rest from an answer that searched and did not mention the brand, while sitting
 // in the denominator of every visibility rate.
 //
-// These tests pin the behavioural boundary of the search-required.v1 contract:
+// These tests pin the behavioural boundary of the search-required-v1 contract:
 // retrieval is guaranteed by tool_choice, and retrieval is recorded separately
 // from citation so the two populations never merge.
 
@@ -21,7 +21,7 @@ const quotaPolicy = { maxConcurrency: 2, maxRequestsPerMinute: 10, maxRequestsPe
 const CONFIG = { provider: 'claude' as const, apiKey: 'k', model: 'claude-sonnet-5', quotaPolicy }
 const QUERY = { query: 'commercial roof restoration', canonicalDomains: ['example.com'], competitorDomains: [] }
 
-// `retrieved` and `retrievalContract` are provider-local for now: the shared
+// `retrievalStatus` and `retrievalContract` are provider-local for now: the shared
 // RawQueryResult/NormalizedQueryResult contracts in contracts/src/run.ts are
 // being edited by #879, so threading them through the pipeline (and persisting
 // them on query_snapshots) lands on top of that PR rather than conflicting with
@@ -88,8 +88,8 @@ const SEARCHED_AND_CITED = [
 
 /**
  * Searched, but the answer cites nothing. This is the case that must not collapse
- * into the unsearched one: both yield zero cited domains, and only `retrieved`
- * separates them.
+ * into the unsearched one: both yield zero cited domains, and only
+ * `retrievalStatus` separates them.
  */
 const SEARCHED_AND_UNCITED = [
   searchCall,
@@ -97,7 +97,7 @@ const SEARCHED_AND_UNCITED = [
   { type: 'text', text: 'Restoration coats an existing roof.' },
 ]
 
-/** Never searched. Under search-required.v1 this means the contract did not hold. */
+/** Never searched. Under search-required-v1 this means the contract did not hold. */
 const UNSEARCHED = [{ type: 'text', text: 'Restoration coats an existing roof.' }]
 
 test('retrieval is required by tool_choice, not coaxed by a system prompt', async () => {
@@ -123,9 +123,9 @@ test('a server_tool_use web_search block records retrieval', async () => {
   captureRequest(message(SEARCHED_AND_CITED))
   try {
     const raw = await executeTrackedQuery(CLAUDE_INPUT)
-    expect(raw.retrieved).toBe(true)
+    expect(raw.retrievalStatus).toBe('used')
     expect(raw.retrievalContract).toBe(CLAUDE_RETRIEVAL_CONTRACT)
-    expect(normalizeResult(raw).retrieved).toBe(true)
+    expect(normalizeResult(raw).retrievalStatus).toBe('used')
   } finally {
     vi.unstubAllGlobals()
   }
@@ -153,10 +153,41 @@ test('searched-but-uncited stays distinct from unsearched though both cite nothi
   expect(unsearched.citedDomains).toEqual([])
   expect(searchedUncited.answerText).toEqual(unsearched.answerText)
 
-  // `retrieved` is the only thing that separates them, so it carries the whole
-  // distinction between a genuine miss and an answer that never had a chance.
-  expect(searchedUncited.retrieved).toBe(true)
-  expect(unsearched.retrieved).toBe(false)
+  // `retrievalStatus` is the only thing that separates them, so it carries the
+  // whole distinction between a genuine miss and an answer that never had a chance.
+  expect(searchedUncited.retrievalStatus).toBe('used')
+  expect(unsearched.retrievalStatus).toBe('not-used')
+})
+
+test('an undeterminable response is unknown, never not-used', async () => {
+  // A response carrying no content is not evidence that retrieval did not run.
+  // Reporting `not-used` here would assert an absence never observed and would
+  // let the row be counted as a genuine miss, which is the exact failure the
+  // status exists to prevent. `unknown` keeps it out of both populations.
+  captureRequest(message([]))
+  try {
+    const raw = await executeTrackedQuery(CLAUDE_INPUT)
+    expect(raw.retrievalStatus).toBe('unknown')
+    expect(normalizeResult(raw).retrievalStatus).toBe('unknown')
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('the adapter boundary reports unknown rather than inventing a status', async () => {
+  // The shared RawQueryResult cannot carry retrieval until #879 lands, so a
+  // result reconstructed from it has genuinely lost the observation. It must say
+  // so rather than default to a value that reads as a real measurement.
+  captureRequest(message(SEARCHED_AND_CITED))
+  try {
+    const viaAdapter = await claudeAdapter.executeTrackedQuery(QUERY, CONFIG)
+    // Proves the gap this PR must close before merging: the provider observed a
+    // search, and nothing downstream can see that.
+    expect('retrievalStatus' in viaAdapter).toBe(false)
+    expect(claudeAdapter.normalizeResult(viaAdapter)).not.toHaveProperty('retrievalStatus')
+  } finally {
+    vi.unstubAllGlobals()
+  }
 })
 
 test('retrieval is read from the search call, not from recovered query text', async () => {
@@ -166,7 +197,7 @@ test('retrieval is read from the search call, not from recovered query text', as
   try {
     const normalized = normalizeResult(await executeTrackedQuery(CLAUDE_INPUT))
     expect(normalized.searchQueries).toEqual([])
-    expect(normalized.retrieved).toBe(true)
+    expect(normalized.retrievalStatus).toBe('used')
   } finally {
     vi.unstubAllGlobals()
   }
@@ -176,10 +207,10 @@ test('an unsearched response is marked as not retrieved so the contract breach i
   captureRequest(message(UNSEARCHED))
   try {
     const raw = await executeTrackedQuery(CLAUDE_INPUT)
-    // search-required.v1 promises retrieval. When the response carries no search
+    // search-required-v1 promises retrieval. When the response carries no search
     // call the promise did not hold, and the row must be identifiable as such
     // rather than pooled with retrieved answers.
-    expect(raw.retrieved).toBe(false)
+    expect(raw.retrievalStatus).toBe('not-used')
     expect(raw.retrievalContract).toBe(CLAUDE_RETRIEVAL_CONTRACT)
   } finally {
     vi.unstubAllGlobals()

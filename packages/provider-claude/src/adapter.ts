@@ -86,12 +86,14 @@ export const claudeAdapter: ProviderAdapter = {
       model: raw.model,
       groundingSources: raw.groundingSources,
       searchQueries: raw.searchQueries,
-      // The shared RawQueryResult does not carry retrieval yet — threading it
-      // through contracts/src/run.ts waits on #879, which owns that file. This
-      // value is only a floor: normalizeResult recomputes retrieval from
-      // rawResponse whenever the response has content, and an empty response is
-      // correctly no evidence of a search.
-      retrieved: false,
+      // The shared RawQueryResult does not carry retrieval yet; threading it
+      // through contracts/src/run.ts waits on #879, which owns that file.
+      // `unknown` is the only honest value here: this reconstruction has lost
+      // whatever the provider observed. normalizeResult recomputes the real
+      // status from rawResponse whenever the response has content, so this
+      // survives only for responses that carry none, where retrieval genuinely
+      // is not determinable.
+      retrievalStatus: 'unknown' as const,
       retrievalContract: CLAUDE_RETRIEVAL_CONTRACT,
     }
     const normalized = claudeNormalizeResult(claudeRaw)

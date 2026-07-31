@@ -10,6 +10,8 @@ import {
 import { withRetry } from "./utils.js";
 import type {
   ClaudeConfig,
+  RetrievalContract,
+  RetrievalStatus,
   ClaudeHealthcheckResult,
   ClaudeNormalizedResult,
   ClaudeRawResult,
@@ -24,7 +26,7 @@ const VALIDATION_PATTERN = /^claude-/;
  * The measurement contract this provider executes, recorded alongside every
  * result so trends cannot silently mix methods.
  *
- * `search-required.v1` means: the unmodified user query, no system prompt, and
+ * `search-required-v1` means: the unmodified user query, no system prompt, and
  * `tool_choice` pinned to `web_search` so retrieval is guaranteed by an API
  * control rather than coaxed. It measures a search-grounded answer. It is NOT a
  * reproduction of Claude.ai, whose system instructions, routing, and search
@@ -54,7 +56,7 @@ const VALIDATION_PATTERN = /^claude-/;
  * https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
  * https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
  */
-export const CLAUDE_RETRIEVAL_CONTRACT = "search-required.v1";
+export const CLAUDE_RETRIEVAL_CONTRACT: RetrievalContract = "search-required-v1";
 
 /**
  * Resolve the effective model name, validating that it is a recognised Claude
@@ -153,7 +155,7 @@ export async function executeTrackedQuery(
         model,
         max_tokens: 4096,
         tools: [webSearchTool as unknown as WebSearchTool20250305],
-        // search-required.v1: retrieval is guaranteed by the API control, so the
+        // search-required-v1: retrieval is guaranteed by the API control, so the
         // query text and answer substance stay untouched. See the contract note.
         tool_choice: { type: "tool", name: "web_search" },
         messages: [{ role: "user", content: input.query }],
@@ -173,7 +175,7 @@ export async function executeTrackedQuery(
       servedModel: extractServedModel(rawResponse),
       groundingSources: parsed.groundingSources,
       searchQueries: parsed.searchQueries,
-      retrieved: parsed.retrieved,
+      retrievalStatus: parsed.retrievalStatus,
       retrievalContract: CLAUDE_RETRIEVAL_CONTRACT,
     };
   } catch (err: unknown) {
@@ -197,7 +199,7 @@ export function normalizeResult(raw: ClaudeRawResult): ClaudeNormalizedResult {
     citedDomains,
     groundingSources,
     searchQueries,
-    retrieved: useParsed ? parsed.retrieved : raw.retrieved,
+    retrievalStatus: useParsed ? parsed.retrievalStatus : raw.retrievalStatus,
   };
 }
 
@@ -231,7 +233,7 @@ export function reparseStoredResult(
     citedDomains: extractCitedDomainsFromSources(groundingSources),
     groundingSources,
     searchQueries,
-    retrieved: extractRetrievedFromRaw(rawResponse),
+    retrievalStatus: extractRetrievalStatusFromRaw(rawResponse),
     ...(providerErrors.length > 0
       ? { providerError: `web_search tool error: ${providerErrors.join(", ")}` }
       : {}),
@@ -301,24 +303,31 @@ function extractGroundingSourcesFromRaw(
 }
 
 /**
- * Whether Claude invoked web_search, read from the presence of a
- * `server_tool_use` block rather than from `searchQueries`. A search whose query
- * string is absent or unparseable still counts as retrieval, so the two must not
- * be conflated: retrieval is the denominator question, the query text is only
+ * Read retrieval from the presence of a `server_tool_use` block rather than from
+ * `searchQueries`. A search whose query string is absent or unparseable still
+ * counts: retrieval is the denominator question, the query text is only
  * telemetry.
+ *
+ * A response with no usable content array yields `unknown`, never `not-used`.
+ * Collapsing the two would assert an absence we never observed, which is exactly
+ * the unmarked-snapshot failure this field exists to prevent.
  */
-function extractRetrievedFromRaw(rawResponse: Record<string, unknown>): boolean {
+function extractRetrievalStatusFromRaw(
+  rawResponse: Record<string, unknown>,
+): RetrievalStatus {
   try {
     const content = rawResponse.content as
       | Array<{ type?: string; name?: string }>
       | undefined;
-    if (!content) return false;
+    if (!Array.isArray(content) || content.length === 0) return "unknown";
     return content.some(
       (block) =>
         block.type === "server_tool_use" && block.name === "web_search",
-    );
+    )
+      ? "used"
+      : "not-used";
   } catch {
-    return false;
+    return "unknown";
   }
 }
 
