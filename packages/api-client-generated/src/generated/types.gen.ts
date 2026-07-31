@@ -2689,7 +2689,7 @@ export type LocationContext = {
 export type NotificationDto = {
     id: string;
     projectId: string;
-    channel: 'webhook' | 'discord';
+    channel: 'webhook';
     url: string;
     urlDisplay: string;
     urlHost: string;
