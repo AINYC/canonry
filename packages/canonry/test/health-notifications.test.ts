@@ -38,7 +38,7 @@ function harness() {
   return { db, projectId, notifier: new Notifier(db, 'https://canonry.test') }
 }
 
-const check = (id: string, status: string, code: string, summary = 'x') => ({ id, status, code, summary })
+const check = (id: string, status: string, code: string, summary = 'x', category?: string) => ({ id, status, code, summary, category })
 const at = (iso: string) => ({ checkedAt: iso })
 
 test('a first pass that is already degraded notifies once', async () => {
@@ -195,20 +195,59 @@ test('worst status wins when several checks are unhappy', async () => {
   expect(stored.code).toBe('b.fail.code')
 })
 
-test('a subscriber that did not opt into health events is not sent one', async () => {
+test('the headline leads with the broken instrument, not the alphabetically first check', async () => {
+  // Sorting equally-severe checks by id put `content.*` ahead of `traffic.*`,
+  // so a source silently discarding traffic was headlined as a content-coverage
+  // note. Severity is equal here; only meaning separates them.
+  const { notifier, projectId, db } = harness()
+  vi.spyOn(notifier as never, 'sendWebhook').mockImplementation(async () => {})
+
+  await notifier.onHealthChecked(projectId, {
+    checks: [
+      check('content.winnability', 'warn', 'content.winnability.low-coverage', 'advice', 'content'),
+      check('traffic.source.sync-lag', 'warn', 'traffic.sync-lag.behind', 'ingestion is behind', 'integrations'),
+    ],
+    ...at('2026-07-31T05:00:00.000Z'),
+  })
+
+  const stored = db.select().from(doctorHealthState).where(eq(doctorHealthState.projectId, projectId)).get()!
+  expect(stored.code).toBe('traffic.sync-lag.behind')
+})
+
+test('health reaches a webhook that never subscribed to health events', async () => {
+  // Requiring opt-in guaranteed the one alarm that matters is the one nobody
+  // subscribed to. It shipped, no subscription named it, and every degradation
+  // was computed then dropped at delivery.
   const { db, notifier, projectId } = harness()
   db.update(notifications)
     .set({ config: { url: 'https://hooks.example/runs', events: ['run.completed', 'run.failed'] } } as never)
     .where(eq(notifications.projectId, projectId)).run()
   const sent: unknown[] = []
-  vi.spyOn(notifier as never, 'sendWebhook').mockImplementation(async (...a: unknown[]) => { sent.push(a) })
+  vi.spyOn(notifier as never, 'sendWebhook').mockImplementation(async (...a: unknown[]) => { sent.push(a[1]) })
 
   const event = await notifier.onHealthChecked(projectId, {
     checks: [check('traffic.source.sync-lag', 'fail', 'traffic.sync-lag.discarding')],
     ...at('2026-07-31T05:00:00.000Z'),
   })
 
-  // The transition still happened and is still recorded; only delivery is filtered.
   expect(event).toBe('health.degraded')
-  expect(sent).toHaveLength(0)
+  expect(sent).toHaveLength(1)
+})
+
+test('notifiedAt records delivery, not intent', async () => {
+  const { db, notifier, projectId } = harness()
+  // No enabled webhook at all: the observation must still be stored, but
+  // nothing was delivered, so notifiedAt stays null.
+  db.update(notifications).set({ enabled: false } as never)
+    .where(eq(notifications.projectId, projectId)).run()
+
+  const event = await notifier.onHealthChecked(projectId, {
+    checks: [check('traffic.source.sync-lag', 'fail', 'traffic.sync-lag.discarding')],
+    ...at('2026-07-31T05:00:00.000Z'),
+  })
+
+  expect(event).toBe('health.degraded')
+  const stored = db.select().from(doctorHealthState).where(eq(doctorHealthState.projectId, projectId)).get()!
+  expect(stored.status).toBe('fail')
+  expect(stored.notifiedAt).toBeNull()
 })

@@ -118,7 +118,7 @@ export class Notifier {
   async onHealthChecked(
     projectId: string,
     report: {
-      checks: Array<{ id: string; status: string; code: string; summary: string; remediation?: string | null }>
+      checks: Array<{ id: string; status: string; code: string; summary: string; remediation?: string | null; category?: string }>
       checkedAt: string
     },
   ): Promise<'health.degraded' | 'health.recovered' | null> {
@@ -131,10 +131,30 @@ export class Notifier {
     // `skipped` is not a health signal — a check that could not run tells us
     // nothing about the instrument and must never look like a clean bill.
     const rank = (status: string): number => (status === 'fail' ? 2 : status === 'warn' ? 1 : 0)
+
+    // Among equally severe checks, lead with the one that says the measurement
+    // is broken rather than the one offering advice about the site. Sorting by
+    // id put `content.*` ahead of `traffic.*` purely alphabetically, so a
+    // source silently discarding traffic was headlined as a content-coverage
+    // note. Everything still travels in `failing`; this only picks the headline.
+    const categoryRank = (category: string | undefined): number => {
+      switch (category) {
+        case 'database': return 6
+        case 'integrations': return 5
+        case 'providers': return 4
+        case 'auth': return 3
+        case 'schedules': return 2
+        case 'config': return 1
+        default: return 0
+      }
+    }
     const graded = report.checks.filter(c => c.status === 'fail' || c.status === 'warn' || c.status === 'ok')
     const failing = graded
       .filter(c => c.status !== 'ok')
-      .sort((a, b) => rank(b.status) - rank(a.status) || a.id.localeCompare(b.id))
+      .sort((a, b) =>
+        rank(b.status) - rank(a.status)
+        || categoryRank(b.category) - categoryRank(a.category)
+        || a.id.localeCompare(b.id))
     const worst = failing.at(0) ?? null
 
     // No gradeable check ran at all. Reporting `ok` here would be the exact
@@ -167,16 +187,16 @@ export class Notifier {
     }
 
     const now = report.checkedAt
-    const row = {
-      projectId,
-      status,
-      code,
-      summary,
-      checkedAt: now,
-      notifiedAt: event ? now : (previous?.notifiedAt ?? null),
+    // Write the observation first so a delivery failure cannot lose it, but
+    // leave `notifiedAt` alone until something is actually sent — it previously
+    // recorded "decided to notify", which read as delivered even when zero
+    // webhooks matched.
+    const observation = { projectId, status, code, summary, checkedAt: now }
+    if (previous === undefined) {
+      this.db.insert(doctorHealthState).values({ ...observation, notifiedAt: null }).run()
+    } else {
+      this.db.update(doctorHealthState).set(observation).where(eq(doctorHealthState.projectId, projectId)).run()
     }
-    if (previous === undefined) this.db.insert(doctorHealthState).values(row).run()
-    else this.db.update(doctorHealthState).set(row).where(eq(doctorHealthState.projectId, projectId)).run()
 
     if (!event) {
       log.info('health.unchanged', { projectId, status, code })
@@ -202,12 +222,26 @@ export class Notifier {
       dashboardUrl: `${this.serverUrl}/projects/${project.name}`,
     }
 
+    // Health events reach every enabled webhook, whether or not the subscription
+    // lists them. They report that the measurement itself is untrustworthy, so
+    // requiring opt-in guarantees the one alarm that matters is the one nobody
+    // subscribed to — which is exactly what happened: the events shipped, no
+    // existing subscription named them, and degradation was computed and then
+    // dropped at delivery. They are edge-triggered and therefore rare, and
+    // `canonry apply` rewriting a project's event list can no longer silence
+    // them.
+    let delivered = 0
     for (const notif of notifs) {
       const config = notif.config as { url: string; events?: string[] }
-      if (config.events && !config.events.includes(event)) continue
+      if (!config.url) continue
       await this.sendWebhook(config.url, payload as unknown as WebhookPayload, notif.id, projectId, notif.webhookSecret ?? null)
+      delivered += 1
     }
-    log.info('health.notified', { projectId, event, status, code, subscribers: notifs.length })
+    if (delivered > 0) {
+      this.db.update(doctorHealthState).set({ notifiedAt: now })
+        .where(eq(doctorHealthState.projectId, projectId)).run()
+    }
+    log.info('health.notified', { projectId, event, status, code, subscribers: notifs.length, delivered })
     return event
   }
 

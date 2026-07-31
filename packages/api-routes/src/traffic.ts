@@ -1871,7 +1871,20 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         // them and they'd be lost. effectiveWindowEnd equals windowEnd on a full
         // sync; for a Vercel drain that stopped at its deadline it is the partial
         // boundary, so the next sync resumes exactly where this one left off.
-        lastSyncedAt: effectiveWindowEnd.toISOString(),
+        //
+        // Never move the watermark BACKWARD. A sync already in flight when the
+        // cursor is advanced out from under it (an operator reset, or a backfill
+        // committing a later window) would otherwise commit its own older
+        // window end and undo that advance — the source silently resumes from
+        // the past and re-walks ground that was deliberately skipped. Backfill
+        // has always guarded this; the incremental path did not, so a reset only
+        // stuck if you first disabled the schedule and drained the in-flight run.
+        lastSyncedAt: new Date(
+          Math.max(
+            sourceRow.lastSyncedAt ? new Date(sourceRow.lastSyncedAt).getTime() : Number.NEGATIVE_INFINITY,
+            effectiveWindowEnd.getTime(),
+          ),
+        ).toISOString(),
         lastError: null,
         lastEventIds: nextEventIds,
         updatedAt: finishedAt,
