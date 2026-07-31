@@ -3,7 +3,7 @@ import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Plus, RefreshCw } from 'lucide-react'
 
-import { TrafficSourceStatuses, type TrafficSourceDto } from '@ainyc/canonry-contracts'
+import type { TrafficSourceDto } from '@ainyc/canonry-contracts'
 
 import { heyClient, isEmbed, type ApiProject, type ApiTrafficSourceDetail } from '../api.js'
 import {
@@ -58,7 +58,7 @@ export function TrafficPage() {
         <div className="page-header-left">
           <h1 className="page-title">Server traffic</h1>
           <p className="page-subtitle">
-            Bulk crawler hits, AI user fetches (ChatGPT-User, Perplexity-User), and AI referral sessions pulled directly from your server logs. Independent of GA — useful when you need server-side evidence that an AI engine actually hit a page.
+            AI crawler hits and referral sessions from your server logs.
           </p>
         </div>
         {!isEmbed() && (
@@ -78,19 +78,23 @@ export function TrafficPage() {
       </div>
 
       <section>
-        <div className="filter-row" role="toolbar" aria-label="Project picker">
-          {projects.map((project) => (
-            <button
-              key={project.id}
-              type="button"
-              className={`filter-chip ${activeProject === project.name ? 'filter-chip-active' : ''}`}
-              aria-pressed={activeProject === project.name}
-              onClick={() => setSelectedProject(project.name)}
+        {projects.length > 1 && (
+          <label className="mb-4 flex w-fit items-center gap-2 text-xs font-medium text-secondary" htmlFor="traffic-project">
+            Project
+            <select
+              id="traffic-project"
+              className="h-8 min-w-44 rounded-md border border-base bg-bg px-2 text-sm text-heading outline-none transition focus:border-mono-500 focus:ring-1 focus:ring-mono-500"
+              value={activeProject}
+              onChange={(event) => setSelectedProject(event.target.value)}
             >
-              {project.displayName ?? project.name}
-            </button>
-          ))}
-        </div>
+              {projects.map((project) => (
+                <option key={project.id} value={project.name}>
+                  {project.displayName ?? project.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
 
         {!activeProject ? (
           <Card className="p-6 text-center text-sm text-muted">No projects yet.</Card>
@@ -101,7 +105,7 @@ export function TrafficPage() {
             <p className="text-sm text-neutral">No traffic sources connected for {activeProject}.</p>
             {!isEmbed() && (
               <>
-                <p className="mt-1 text-xs text-muted">Connect a traffic source to start ingesting crawler hits and AI-referral sessions from your server logs.</p>
+                <p className="mt-1 text-sm text-secondary">Connect a source to start collecting traffic.</p>
                 <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
                   <Button type="button" variant="outline" size="sm" onClick={() => setConnectOpen(true)}>
                     <Plus className="size-3.5" />
@@ -154,10 +158,10 @@ function SourcesTable({ projectName, sources }: { projectName: string; sources: 
             <th className="px-4 py-2 text-left">Source</th>
             <th className="px-4 py-2 text-left">Status</th>
             <th className="px-4 py-2 text-left">Last sync</th>
-            <th className="px-4 py-2 text-right">24h content</th>
-            <th className="px-4 py-2 text-right">24h infra</th>
-            <th className="px-4 py-2 text-right">24h AI hits</th>
-            <th className="px-4 py-2 text-right">24h AI sessions</th>
+            <th className="px-4 py-2 text-right">Content crawls</th>
+            <th className="px-4 py-2 text-right">Infra crawls</th>
+            <th className="px-4 py-2 text-right">AI fetches</th>
+            <th className="px-4 py-2 text-right">AI referrals</th>
             <th className="px-4 py-2 text-right" />
           </tr>
         </thead>
@@ -166,7 +170,6 @@ function SourcesTable({ projectName, sources }: { projectName: string; sources: 
             <tr key={source.id} className="hover:bg-bg-elevated/40 transition-colors">
               <td className="px-4 py-3">
                 <div className="font-medium text-heading">{source.displayName}</div>
-                <div className="text-[11px] text-muted font-mono">{source.sourceType} · {source.id.slice(0, 8)}</div>
               </td>
               <td className="px-4 py-3">
                 <ToneBadge tone={toneFromTrafficSourceStatus(source.status)}>
@@ -208,10 +211,6 @@ function SourcesTable({ projectName, sources }: { projectName: string; sources: 
           ))}
         </tbody>
       </table>
-      <p className="border-t border-default px-4 py-2 text-[11px] text-faint">
-        Showing {sources.filter((s) => s.status !== TrafficSourceStatuses.archived).length} active source{sources.length === 1 ? '' : 's'} for {projectName}.
-        Same shape as <code className="text-secondary">canonry traffic status {projectName} --format json</code>.
-      </p>
     </div>
   )
 }

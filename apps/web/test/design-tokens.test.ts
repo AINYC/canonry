@@ -205,9 +205,6 @@ test('gauge, highlight, and effect primitives consume tokens', async () => {
   expect(ruleFor(css, '.toast-card')).toContain('var(--color-shadow-panel)')
   expect(ruleFor(css, '.toast-action')).toContain('var(--color-overlay-hover)')
   expect(css).toContain('background: var(--color-scrollbar-thumb)')
-  // the info (sky) accent — real consumers
-  expect(ruleFor(css, '.opportunity-card-track')).toContain('var(--color-info-950)')
-  expect(ruleFor(css, '.suggested-query-add')).toContain('var(--color-info-300)')
 })
 
 test('styles.css carries no literal palette utilities or raw hex outside the @theme block', async () => {

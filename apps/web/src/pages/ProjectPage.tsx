@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, RefreshCw, Trash2 } from 'lucide-react'
+import { ChevronDown, RefreshCw, Trash2 } from 'lucide-react'
 import { useParams, useNavigate } from '@tanstack/react-router'
 import { Link } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
@@ -7,7 +7,6 @@ import { RunKinds, RunStatuses } from '@ainyc/canonry-contracts'
 
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
-import { CitationBadge } from '../components/shared/CitationBadge.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
 import { ProviderBadge } from '../components/shared/ProviderBadge.js'
 import { RunRow } from '../components/shared/RunRow.js'
@@ -77,14 +76,13 @@ import {
   getApiV1ProjectsByNameQueryKey,
   getApiV1SettingsOptions,
 } from '@ainyc/canonry-api-client/react-query'
-import { useAppendQueries, useTriggerRun } from '../queries/mutations.js'
+import { useTriggerRun } from '../queries/mutations.js'
 import { GSC_STALE_MS } from '../queries/query-client.js'
 import { invalidateProjectQueryDomain } from '../queries/query-invalidation.js'
 import { useQuery } from '@tanstack/react-query'
 import { getApiV1ProjectsOptions } from '@ainyc/canonry-api-client/react-query'
 import { useProjectDashboard } from '../queries/use-project-dashboard.js'
 import { useInitialDashboard } from '../contexts/dashboard-context.js'
-import { useDrawer } from '../hooks/use-drawer.js'
 import type { ProjectCommandCenterVm, RunHistoryPoint } from '../view-models.js'
 
 export type ProjectPageTab = 'overview' | 'search-console' | 'local' | 'discovery' | 'report' | 'activity' | 'backlinks' | 'technical-aeo' | 'history' | 'settings'
@@ -1065,12 +1063,6 @@ function SearchConsoleSection({
   )
 }
 
-function formatQueryList(queries: string[], max = 4): string {
-  if (queries.length <= max) return queries.map(q => `"${q}"`).join(', ')
-  const shown = queries.slice(0, max).map(q => `"${q}"`).join(', ')
-  return `${shown}, and ${queries.length - max} more`
-}
-
 function OverviewMetricRow({
   label,
   summary,
@@ -1115,24 +1107,14 @@ function OverviewMetricRow({
 function OverviewBrief({
   model,
   sweepRunning,
-  onJumpToEvidence,
-  onJumpToActions,
 }: {
   model: ProjectCommandCenterVm
   sweepRunning: boolean
-  onJumpToEvidence: () => void
-  onJumpToActions: () => void
 }) {
   const citationMovement = model.citationMovement
   const mentionMovement = model.mentionMovement
   const comparison = model.movementComparison
   const latestSweep = model.recentRuns.find(run => run.kind === RunKinds['answer-visibility'])
-  const primaryAction = model.insights.find(insight => insight.actionGroup === 'investigate')
-    ?? model.insights.find(insight => insight.actionGroup === 'write')
-    ?? model.insights.at(0)
-  const suggestedQuery = model.suggestedQueries.rows.at(0)
-  const engineCount = new Set(model.providerScores.map(score => score.provider)).size
-  const locationCount = model.project.locations.length
 
   const movementDirection = (movement: ProjectCommandCenterVm['mentionMovement']) => {
     if (movement.tone === 'positive') return 'improved'
@@ -1165,33 +1147,23 @@ function OverviewBrief({
     return `${mentionPhrase}; ${citationPhrase}`
   })()
 
-  const movedQueries = [...new Set([
-    ...(mentionMovement.lostQueries ?? []),
-    ...(citationMovement.lostQueries ?? []),
-    ...(mentionMovement.gainedQueries ?? []),
-    ...(citationMovement.gainedQueries ?? []),
-  ])]
-
-  const scope = `${model.queryCounts.total} ${model.queryCounts.total === 1 ? 'query' : 'queries'} across ${engineCount} ${engineCount === 1 ? 'engine' : 'engines'}`
-  const locationScope = locationCount > 0
-    ? `${locationCount} ${locationCount === 1 ? 'location' : 'locations'}`
-    : 'project-wide'
+  const scopeChange = [
+    comparison.addedQueryCount > 0 && `${comparison.addedQueryCount} ${comparison.addedQueryCount === 1 ? 'query' : 'queries'} added`,
+    comparison.removedQueryCount > 0 && `${comparison.removedQueryCount} ${comparison.removedQueryCount === 1 ? 'query' : 'queries'} removed`,
+  ].filter(Boolean).join(', ')
 
   return (
     <section className="overview-brief" aria-labelledby="overview-brief-title">
       <div className="overview-brief-head">
         <div>
           <p className="eyebrow eyebrow-soft">
-            Operator brief
+            Visibility
             <InfoTooltip text="Each sweep records two independent signals: answer mentions (your brand named in the answer text) and source citations (your domain in the engine's source list). They move separately." />
           </p>
           <h2 id="overview-brief-title" className="overview-brief-title">{headline}</h2>
-          <p className="overview-brief-scope">
-            Tracking {scope}, {locationScope}.
-          </p>
         </div>
         <p className="overview-brief-updated">
-          {latestSweep ? `Latest sweep ${latestSweep.startedAt}` : 'No sweep completed yet'}
+          {latestSweep ? `Updated ${latestSweep.startedAt}` : 'No completed sweep'}
         </p>
       </div>
 
@@ -1208,7 +1180,7 @@ function OverviewBrief({
         </div>
 
         <div className="overview-brief-panel">
-          <p className="overview-brief-label">Since previous sweep</p>
+          <p className="overview-brief-label">Since last sweep</p>
           {!comparison.hasPreviousRun ? (
             <>
               <p className="overview-brief-panel-title">No comparison yet</p>
@@ -1219,52 +1191,32 @@ function OverviewBrief({
               <div className="overview-signal-change-list">
                 <div className="overview-signal-change-row">
                   <span className="overview-signal-change-label">Mentioned</span>
-                  <span className="text-positive-400">+{mentionMovement.gained}</span>
-                  <span className="text-negative-400">-{mentionMovement.lost}</span>
+                  {mentionMovement.gained === 0 && mentionMovement.lost === 0 ? (
+                    <span className="text-secondary">No change</span>
+                  ) : (
+                    <span className="flex gap-3 tabular-nums">
+                      {mentionMovement.gained > 0 && <span className="text-positive-400">+{mentionMovement.gained}</span>}
+                      {mentionMovement.lost > 0 && <span className="text-negative-400">-{mentionMovement.lost}</span>}
+                    </span>
+                  )}
                 </div>
                 <div className="overview-signal-change-row">
                   <span className="overview-signal-change-label">Cited</span>
-                  <span className="text-positive-400">+{citationMovement.gained}</span>
-                  <span className="text-negative-400">-{citationMovement.lost}</span>
+                  {citationMovement.gained === 0 && citationMovement.lost === 0 ? (
+                    <span className="text-secondary">No change</span>
+                  ) : (
+                    <span className="flex gap-3 tabular-nums">
+                      {citationMovement.gained > 0 && <span className="text-positive-400">+{citationMovement.gained}</span>}
+                      {citationMovement.lost > 0 && <span className="text-negative-400">-{citationMovement.lost}</span>}
+                    </span>
+                  )}
                 </div>
               </div>
               <p className={`overview-brief-panel-copy ${comparison.querySetChanged ? 'text-caution-400/80' : ''}`}>
                 {comparison.querySetChanged
-                  ? `Query basket changed: +${comparison.addedQueryCount} added, -${comparison.removedQueryCount} removed. Movement compares ${comparison.comparableQueryCount} shared queries.`
-                  : `Same ${comparison.comparableQueryCount}-query basket${comparison.previousRunAt ? ` since ${formatTimestamp(comparison.previousRunAt)}` : ''}.`}
+                  ? scopeChange || 'Query set changed.'
+                  : `${comparison.comparableQueryCount} comparable queries.`}
               </p>
-              {movedQueries.length > 0 && (
-                <p className="overview-brief-panel-copy">Affected: {formatQueryList(movedQueries, 2)}</p>
-              )}
-              <button type="button" className="overview-brief-link" onClick={onJumpToEvidence}>
-                Review query evidence
-              </button>
-            </>
-          )}
-        </div>
-
-        <div className="overview-brief-panel">
-          <p className="overview-brief-label">Next action</p>
-          {primaryAction ? (
-            <>
-              <p className="overview-brief-panel-title">{primaryAction.title}</p>
-              {primaryAction.detail && <p className="overview-brief-panel-copy">{primaryAction.detail}</p>}
-              <button type="button" className="overview-brief-link" onClick={onJumpToActions}>
-                Open action queue
-              </button>
-            </>
-          ) : suggestedQuery ? (
-            <>
-              <p className="overview-brief-panel-title">Consider tracking “{suggestedQuery.query}”</p>
-              <p className="overview-brief-panel-copy">{suggestedQuery.reason}</p>
-              <button type="button" className="overview-brief-link" onClick={onJumpToActions}>
-                Review query suggestions
-              </button>
-            </>
-          ) : (
-            <>
-              <p className="overview-brief-panel-title">No outstanding action</p>
-              <p className="overview-brief-panel-copy">{isEmbed() ? 'Keep monitoring. Regressions and new query opportunities will surface here.' : 'Keep monitoring. Canonry will surface regressions and new query opportunities here.'}</p>
             </>
           )}
         </div>
@@ -1349,244 +1301,6 @@ function MentionShareBreakdown({
           )
         })}
       </ul>
-    </div>
-  )
-}
-
-const ACTION_GROUP_META: Record<'write' | 'investigate' | 'monitor', { title: string; subtitle: string }> = {
-  write: {
-    title: 'Write or update content',
-    subtitle: 'Queries with no answer, persistent gaps, or competitors winning the spot',
-  },
-  investigate: {
-    title: 'Investigate what changed',
-    subtitle: 'Citations or mentions you lost since the previous run',
-  },
-  monitor: {
-    title: 'Keep monitoring',
-    subtitle: 'Gains, new providers picking you up, holding ground',
-  },
-}
-
-function InsightSignals({
-  insights,
-  suggestedQueries,
-  projectName,
-}: {
-  insights: ProjectCommandCenterVm['insights']
-  suggestedQueries: ProjectCommandCenterVm['suggestedQueries']
-  projectName: string
-}) {
-  const { openEvidence } = useDrawer()
-  const [expandedId, setExpandedId] = useState<string | null>(null)
-
-  const hasSuggestions = suggestedQueries.rows.length > 0
-  if (insights.length === 0 && !hasSuggestions) {
-    return (
-      <p className="text-sm text-muted">
-        No outstanding opportunities. Trigger a sweep to surface fresh signals.
-      </p>
-    )
-  }
-
-  const groups: Array<'write' | 'investigate' | 'monitor'> = ['investigate', 'write', 'monitor']
-  const grouped = new Map<string, typeof insights>()
-  for (const ins of insights) {
-    const bucket = grouped.get(ins.actionGroup) ?? []
-    bucket.push(ins)
-    grouped.set(ins.actionGroup, bucket)
-  }
-
-  return (
-    <div className="opportunities-grid">
-      {groups.map(group => {
-        const items = grouped.get(group)
-        if (!items || items.length === 0) return null
-        const meta = ACTION_GROUP_META[group]
-        const itemRows = (
-          <div className="opportunity-card-list">
-            {items.map((insight) => {
-                const isExpanded = expandedId === insight.id
-                const hasAffected = insight.affectedPhrases.length > 0
-                return (
-                  <div key={insight.id}>
-                    <div
-                      className={`opportunity-item opportunity-item-${insight.tone} ${hasAffected ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400' : ''}`}
-                      onClick={hasAffected ? () => setExpandedId(isExpanded ? null : insight.id) : undefined}
-                      onKeyDown={hasAffected ? (e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault()
-                          setExpandedId(isExpanded ? null : insight.id)
-                        }
-                      } : undefined}
-                      tabIndex={hasAffected ? 0 : undefined}
-                      role={hasAffected ? 'button' : undefined}
-                      aria-expanded={hasAffected ? isExpanded : undefined}
-                    >
-                      <div className="flex items-start gap-1.5 min-w-0">
-                        {hasAffected && (
-                          <ChevronRight
-                            size={12}
-                            className={`mt-1 shrink-0 text-muted transition-transform duration-150 ${isExpanded ? 'rotate-90' : ''}`}
-                          />
-                        )}
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-heading leading-snug">{insight.title}</p>
-                          {insight.detail && <p className="text-[11px] text-muted mt-0.5 leading-snug">{insight.detail}</p>}
-                        </div>
-                      </div>
-                    </div>
-                    {isExpanded && (
-                      <div className="opportunity-item-detail">
-                        {insight.affectedPhrases.map((ap, i) => (
-                          <div
-                            key={ap.evidenceId || `${insight.id}-${i}`}
-                            className="flex items-center justify-between gap-2"
-                          >
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <CitationBadge state={ap.citationState} />
-                              <span className="text-xs text-neutral truncate">{ap.query}</span>
-                              {ap.provider && <ProviderBadge provider={ap.provider} />}
-                            </div>
-                            {ap.evidenceId && (
-                              <button
-                                type="button"
-                                className="text-[11px] text-secondary hover:text-strong whitespace-nowrap"
-                                onClick={(e) => { e.stopPropagation(); void openEvidence(ap.evidenceId) }}
-                              >
-                                View →
-                              </button>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )
-            })}
-          </div>
-        )
-
-        if (group === 'monitor') {
-          return (
-            <details key={group} className="opportunity-card opportunity-card-monitor opportunity-monitor">
-              <summary className="opportunity-monitor-summary">
-                <span>
-                  <span className="opportunity-card-title">{meta.title}</span>
-                  <span className="opportunity-card-subtitle mt-1 block">{meta.subtitle}</span>
-                </span>
-                <span className="flex items-center gap-2">
-                  <span className="opportunity-card-count">{items.length}</span>
-                  <ChevronDown className="opportunity-monitor-icon text-muted" size={14} aria-hidden="true" />
-                </span>
-              </summary>
-              {itemRows}
-            </details>
-          )
-        }
-
-        return (
-          <div key={group} className={`opportunity-card opportunity-card-${group}`}>
-            <div className="opportunity-card-head">
-              <p className="opportunity-card-title">{meta.title}</p>
-              <span className="opportunity-card-count">{items.length}</span>
-            </div>
-            <p className="opportunity-card-subtitle">{meta.subtitle}</p>
-            {itemRows}
-          </div>
-        )
-      })}
-      {hasSuggestions && (
-        <SuggestedQueriesCard suggestedQueries={suggestedQueries} projectName={projectName} />
-      )}
-    </div>
-  )
-}
-
-function SuggestedQueriesCard({
-  suggestedQueries,
-  projectName,
-}: {
-  suggestedQueries: ProjectCommandCenterVm['suggestedQueries']
-  projectName: string
-}) {
-  const appendQueries = useAppendQueries()
-  // Track per-row pending state so users can add several at once without
-  // each click disabling the whole card. Cleared after invalidation refetches
-  // the dashboard and the suggestion drops off the list.
-  const [pending, setPending] = useState<Set<string>>(new Set())
-
-  const handleAdd = (query: string) => {
-    setPending(prev => new Set(prev).add(query))
-    appendQueries.mutate(
-      { projectName, queries: [query] },
-      {
-        // Clear pending on BOTH success and error. The mutation's
-        // invalidation refetches the dashboard, but the suggestion row may
-        // still appear in the next payload (GSC suggestions don't drop off
-        // instantly), so relying on unmount-on-refetch to clear `pending`
-        // leaves the button stuck on "Adding…" indefinitely. The explicit
-        // clears here are the source of truth for per-row UI state.
-        onSuccess: () => {
-          addToast({ tone: 'positive', title: `Tracking "${query}"` })
-          setPending(prev => {
-            const next = new Set(prev)
-            next.delete(query)
-            return next
-          })
-        },
-        onError: (err) => {
-          addToast({ tone: 'negative', title: `Couldn't add "${query}"`, detail: String(err) })
-          setPending(prev => {
-            const next = new Set(prev)
-            next.delete(query)
-            return next
-          })
-        },
-      },
-    )
-  }
-
-  const { rows, totalCandidates, skippedAlreadyTracked } = suggestedQueries
-  const subtitle = skippedAlreadyTracked > 0
-    ? `GSC queries you're getting impressions for · ${skippedAlreadyTracked} already tracked`
-    : `GSC queries you're getting impressions for but aren't tracking yet`
-
-  return (
-    <div className="opportunity-card opportunity-card-track">
-      <div className="opportunity-card-head">
-        <p className="opportunity-card-title">Track new queries</p>
-        <span className="opportunity-card-count">
-          {totalCandidates > rows.length ? `${rows.length} of ${totalCandidates}` : rows.length}
-        </span>
-      </div>
-      <p className="opportunity-card-subtitle">{subtitle}</p>
-      <div className="opportunity-card-list">
-        {rows.map(suggestion => {
-          const isPending = pending.has(suggestion.query)
-          return (
-            <div
-              key={suggestion.query}
-              className="opportunity-item opportunity-item-neutral flex items-center justify-between gap-2"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-heading leading-snug truncate" title={suggestion.query}>
-                  {suggestion.query}
-                </p>
-                <p className="text-[11px] text-muted mt-0.5 leading-snug">{suggestion.reason}</p>
-              </div>
-              <button
-                type="button"
-                className="suggested-query-add"
-                disabled={isPending}
-                onClick={() => handleAdd(suggestion.query)}
-              >
-                {isPending ? 'Adding…' : '+ Track'}
-              </button>
-            </div>
-          )
-        })}
-      </div>
     </div>
   )
 }
@@ -2335,8 +2049,6 @@ function ProjectPageContent({
           <OverviewBrief
             model={model}
             sweepRunning={hasActiveVisibilitySweep}
-            onJumpToEvidence={() => focusOverviewSection('evidence-section', true)}
-            onJumpToActions={() => focusOverviewSection('action-queue')}
           />
 
           <section className="page-section-divider">
@@ -2580,20 +2292,6 @@ function ProjectPageContent({
               </div>
             </OverviewDisclosure>
           )}
-
-          <section id="action-queue" className="page-section-divider scroll-mt-24 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60" tabIndex={-1}>
-            <div className="section-head section-head-inline">
-              <div>
-                <p className="eyebrow eyebrow-soft">Action queue</p>
-                <h2>What needs your attention</h2>
-              </div>
-            </div>
-            <InsightSignals
-              insights={model.insights}
-              suggestedQueries={model.suggestedQueries}
-              projectName={projectName}
-            />
-          </section>
 
         </>
       ) : tab === 'settings' ? (
