@@ -6,7 +6,7 @@ import { and, eq, inArray, ne, sql } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { runs, queries, competitors, projects, querySnapshots, usageCounters } from '@ainyc/canonry-db'
 import type { ProviderName, LocationContext } from '@ainyc/canonry-contracts'
-import { ONBOARDING_FLOW_VERSION, bucketOnboardingCount, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, serializeRunError } from '@ainyc/canonry-contracts'
+import { CITED_URL_CAPTURE_VERSION, ONBOARDING_FLOW_VERSION, bucketOnboardingCount, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, serializeRunError } from '@ainyc/canonry-contracts'
 import type { ProviderRegistry, RegisteredProvider } from './provider-registry.js'
 import { trackEvent } from './telemetry.js'
 import { buildRunCompletedProps, hashDomain, type RunPhaseTimings } from './run-telemetry.js'
@@ -18,7 +18,7 @@ import {
   determineCitationState,
   extractRecommendedCompetitors,
 } from './citation-utils.js'
-import { captureCitedUrls } from './cited-url-capture.js'
+import { captureCitedUrls, type CitedUrlCapture } from './cited-url-capture.js'
 
 const log = createLogger('JobRunner')
 
@@ -380,8 +380,30 @@ export class JobRunner {
 
             this.throwIfRunCancelled(runId)
 
-            const normalized = adapter.normalizeResult(raw)
-            const citedUrlCapture = await captureCitedUrls(providerName, normalized.groundingSources)
+            const providerResult = adapter.normalizeResult(raw)
+            const rawGroundingSources = providerResult.groundingSources
+            const normalized = {
+              ...providerResult,
+              groundingSources: Array.isArray(rawGroundingSources) ? rawGroundingSources : [],
+            }
+            let citedUrlCapture: CitedUrlCapture
+            try {
+              citedUrlCapture = await captureCitedUrls(providerName, rawGroundingSources)
+            } catch (err: unknown) {
+              citedUrlCapture = {
+                citedUrls: [],
+                captureStatus: 'failed',
+                sourceCount: normalized.groundingSources.length,
+                resolvedCount: 0,
+                captureVersion: CITED_URL_CAPTURE_VERSION,
+              }
+              log.warn('query.cited-url-capture-failed', {
+                runId,
+                provider: providerName,
+                query: q.query,
+                error: err instanceof Error ? err.message : String(err),
+              })
+            }
             this.throwIfRunCancelled(runId)
 
             log.info('query.result', { runId, provider: providerName, query: q.query, citedDomains: normalized.citedDomains, groundingSources: normalized.groundingSources.map(s => s.uri), matchDomains: allDomains })

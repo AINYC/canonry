@@ -15,6 +15,12 @@ import type {
 import { createClient, migrate, queries, projects, querySnapshots, runs } from '@ainyc/canonry-db'
 import { JobRunner } from '../src/job-runner.js'
 import { ProviderRegistry } from '../src/provider-registry.js'
+import { captureCitedUrls } from '../src/cited-url-capture.js'
+
+vi.mock('../src/cited-url-capture.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/cited-url-capture.js')>()
+  return { ...actual, captureCitedUrls: vi.fn(actual.captureCitedUrls) }
+})
 
 // Persistence guard for the served-model wiring. `extractServedModel` is pinned in
 // each provider package, but nothing proved the value survived the JobRunner insert —
@@ -32,6 +38,7 @@ const SERVED_MODEL = 'gpt-5.6-2026-03-05'
 interface StubOptions {
   servedModel?: string
   groundingUri?: string
+  malformedGroundingSources?: boolean
   /** When set, the adapter reports this path so the screenshot insert branch runs. */
   screenshotPath?: string
 }
@@ -61,7 +68,9 @@ function stubAdapter(opts: StubOptions): ProviderAdapter {
         provider: 'openai',
         answerText: 'stub answer',
         citedDomains: [],
-        groundingSources: [{ uri: opts.groundingUri ?? 'https://publisher.example/guides/answer#citation', title: 'Publisher' }],
+        groundingSources: opts.malformedGroundingSources
+          ? null as unknown as NormalizedQueryResult['groundingSources']
+          : [{ uri: opts.groundingUri ?? 'https://publisher.example/guides/answer#citation', title: 'Publisher' }],
         searchQueries: [],
       }
     },
@@ -210,4 +219,38 @@ test('JobRunner persists a route-capable query when Vertex resolution fails', as
   expect(snapshot.resolvedCount).toBe(0)
   expect(snapshot.captureVersion).toBe(1)
   expect(run.status).toBe('completed')
+})
+
+test('JobRunner fails open when cited URL capture throws', async () => {
+  vi.mocked(captureCitedUrls).mockRejectedValueOnce(new Error('capture dependency fault'))
+
+  const { snapshot, run } = await runWithStub('canonry-cited-url-capture-throws-', {
+    servedModel: SERVED_MODEL,
+  })
+
+  expect(snapshot).toBeDefined()
+  expect(snapshot.citedUrls).toEqual([])
+  expect(snapshot.captureStatus).toBe('failed')
+  expect(snapshot.sourceCount).toBe(1)
+  expect(snapshot.resolvedCount).toBe(0)
+  expect(snapshot.captureVersion).toBe(1)
+  expect(run.status).toBe('completed')
+})
+
+test('JobRunner sanitizes malformed grounding sources after capture fails open', async () => {
+  const { snapshot, run } = await runWithStub('canonry-malformed-grounding-sources-', {
+    servedModel: SERVED_MODEL,
+    malformedGroundingSources: true,
+  })
+
+  expect(snapshot).toBeDefined()
+  expect(snapshot.citedUrls).toEqual([])
+  expect(snapshot.captureStatus).toBe('failed')
+  expect(snapshot.sourceCount).toBe(0)
+  expect(snapshot.resolvedCount).toBe(0)
+  expect(snapshot.captureVersion).toBe(1)
+  expect(run.status).toBe('completed')
+
+  const envelope = JSON.parse(snapshot.rawResponse ?? '{}') as Record<string, unknown>
+  expect(envelope.groundingSources).toEqual([])
 })

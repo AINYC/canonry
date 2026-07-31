@@ -89,17 +89,19 @@ export async function captureCitedUrls(
   sources: readonly GroundingSource[],
   opts: CitedUrlCaptureOptions = {},
 ): Promise<CitedUrlCapture> {
+  const sourceCount = sources.length
   if (!isRouteCapableProvider(provider)) {
     return {
       citedUrls: null,
       captureStatus: 'unsupported',
-      sourceCount: 0,
+      sourceCount,
       resolvedCount: 0,
       captureVersion: CITED_URL_CAPTURE_VERSION,
     }
   }
 
   const candidates = deriveCitedUrlCandidates(sources)
+  const candidateCount = candidates.length
   let resolved: Array<string | undefined>
   try {
     resolved = await mapWithConcurrency(candidates, RESOLUTION_CONCURRENCY, async (candidate) => {
@@ -115,8 +117,7 @@ export async function captureCitedUrls(
   }
   const acceptedPerSource = resolved.map((value): string | undefined => filterCapturedCitedUrls([value]).at(0))
   const resolvedCount = acceptedPerSource.filter((value) => value !== undefined).length
-  const sourceCount = candidates.length
-  const captureStatus: CitedUrlCaptureStatus = resolvedCount === sourceCount
+  const captureStatus: CitedUrlCaptureStatus = resolvedCount === candidateCount
     ? 'complete'
     : resolvedCount > 0
       ? 'partial'

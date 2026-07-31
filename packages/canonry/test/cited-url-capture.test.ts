@@ -92,9 +92,21 @@ test('capture reports complete direct and zero cases, preserves counts before de
   })
 
   await expect(captureCitedUrls('local', [source('https://publisher.example/a')])).resolves.toEqual({
-    citedUrls: null, captureStatus: 'unsupported', sourceCount: 0, resolvedCount: 0, captureVersion: 1,
+    citedUrls: null, captureStatus: 'unsupported', sourceCount: 1, resolvedCount: 0, captureVersion: 1,
   })
   await expect(captureCitedUrls('future-adapter', [source('https://publisher.example/a')])).resolves.toMatchObject({ captureStatus: 'unsupported' })
+})
+
+test('counts raw grounding sources while completing over capture-eligible candidates', async () => {
+  await expect(captureCitedUrls('openai', [
+    source('https://chatgpt.com/share/only-provider-self-link'),
+  ])).resolves.toEqual({
+    citedUrls: [], captureStatus: 'complete', sourceCount: 1, resolvedCount: 0, captureVersion: 1,
+  })
+
+  await expect(captureCitedUrls('openai', [])).resolves.toEqual({
+    citedUrls: [], captureStatus: 'complete', sourceCount: 0, resolvedCount: 0, captureVersion: 1,
+  })
 })
 
 test('a timeout fails open without changing the capture result shape', async () => {
