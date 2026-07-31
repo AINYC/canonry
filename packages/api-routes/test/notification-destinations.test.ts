@@ -147,3 +147,34 @@ test('run events render too, so this is not health-only', () => {
   expect(renderDiscord(view).embeds[0]!.title).toContain('azcoatings')
   expect(renderSlack(view).attachments[0]!.title).toContain('azcoatings')
 })
+
+// The test route used to POST the payload verbatim regardless of destination,
+// so `cnry notify test` against a Discord webhook always returned 400 — a
+// healthy destination reported as broken. These pin that the test route and the
+// real notifier now make the same decision from the same registry.
+
+test('the test route renders for the destination, exactly as a real send does', () => {
+  const testPayload: WebhookPayload = {
+    source: 'canonry',
+    event: 'run.completed',
+    project: { name: 'demo', canonicalDomain: 'demo.example' },
+    run: { id: 'test-run-id', status: 'completed', finishedAt: '2026-07-31T18:00:00.000Z' },
+    transitions: [{ query: 'test query', from: 'not-cited', to: 'cited', provider: 'gemini' }],
+    dashboardUrl: '/projects/demo',
+  }
+
+  const discord = resolveDestination('https://discord.com/api/webhooks/1/a')
+  const body = discord.render!(toAlertView(testPayload)) as { embeds?: unknown[] }
+  // Discord rejects a body without content/embeds/file with a 400.
+  expect(body.embeds).toBeDefined()
+  expect(body).not.toHaveProperty('source')
+
+  const slack = resolveDestination('https://hooks.slack.com/services/T/B/x')
+  const slackBody = slack.render!(toAlertView(testPayload)) as { text?: string }
+  expect(slackBody.text).toBeTruthy()
+
+  // First-party still receives the payload verbatim, signed.
+  const own = resolveDestination('https://hooks.example.com/canonry')
+  expect(own.render).toBeUndefined()
+  expect(own.signed).toBe(true)
+})

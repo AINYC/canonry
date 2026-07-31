@@ -7,6 +7,8 @@ import { validationError, notFound, deliveryFailed } from '@ainyc/canonry-contra
 import { resolveProject, writeAuditLog } from './helpers.js'
 import { redactNotificationUrl } from './notification-redaction.js'
 import { deliverWebhook, resolveWebhookTarget } from './webhooks.js'
+import { toAlertView } from './notifications/alert.js'
+import { resolveDestination } from './notifications/destinations.js'
 
 const VALID_EVENTS: NotificationEvent[] = ['citation.lost', 'citation.gained', 'run.completed', 'run.failed', 'insight.critical', 'insight.high', 'health.degraded', 'health.recovered']
 
@@ -130,9 +132,20 @@ export async function notificationRoutes(app: FastifyInstance, opts: Notificatio
       dashboardUrl: `/projects/${project.name}`,
     }
 
+    // Send exactly what a real notification would send. This route used to POST
+    // the payload verbatim regardless of destination, so testing a Discord or
+    // Slack webhook always returned 400 — the receiver rejects arbitrary JSON.
+    // A test that cannot succeed against a working destination is worse than no
+    // test: it reports a healthy path as broken.
+    const destination = resolveDestination(config.url)
+    const body = destination.render
+      ? destination.render(toAlertView(payload as never))
+      : payload
+    const signingSecret = destination.signed ? notification.webhookSecret ?? null : null
+
     const targetLabel = redactNotificationUrl(config.url).urlDisplay
-    request.log.info(`[Notification test] POST ${targetLabel}`)
-    const { status, error } = await deliverWebhook(urlCheck.target, payload, notification.webhookSecret ?? null)
+    request.log.info(`[Notification test] POST ${targetLabel} (${destination.destination})`)
+    const { status, error } = await deliverWebhook(urlCheck.target, body as never, signingSecret)
     request.log.info(`[Notification test] Response: HTTP ${status} from ${targetLabel}`)
 
     writeAuditLog(app.db, {
