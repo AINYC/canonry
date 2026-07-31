@@ -66,8 +66,8 @@
 
     <!-- Positioning -->
     <text x="500" y="274" font-family="'Manrope', 'Inter', system-ui, -apple-system, sans-serif" font-size="32" font-weight="700" fill="#e4e4e7" letter-spacing="-0.5">Agent-first AEO operating platform</text>
-    <text x="500" y="318" font-family="'Manrope', 'Inter', system-ui, -apple-system, sans-serif" font-size="21" font-weight="400" fill="#a1a1aa">Track citation + mention coverage across answer engines,</text>
-    <text x="500" y="349" font-family="'Manrope', 'Inter', system-ui, -apple-system, sans-serif" font-size="21" font-weight="400" fill="#a1a1aa">diagnose regressions, and act with Aero.</text>
+    <text x="500" y="318" font-family="'Manrope', 'Inter', system-ui, -apple-system, sans-serif" font-size="21" font-weight="400" fill="#a1a1aa">Your entire AEO + web analytics stack, agent-first:</text>
+    <text x="500" y="349" font-family="'Manrope', 'Inter', system-ui, -apple-system, sans-serif" font-size="21" font-weight="400" fill="#a1a1aa">AI visibility, traffic, local signals, and integrations.</text>
 
     <!-- Platform surface pills -->
     <g transform="translate(500, 392)">
