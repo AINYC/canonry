@@ -21,6 +21,31 @@ const DEFAULT_MODEL = "claude-sonnet-4-6";
 const VALIDATION_PATTERN = /^claude-/;
 
 /**
+ * Claude decides for itself whether a query warrants a search, and answers
+ * stable-knowledge questions from training data instead. That judgement tightened
+ * between Sonnet 4.6 and Sonnet 5: over a 60-day window Sonnet 4.6 searched on all
+ * 136 tracked answers, while Sonnet 5 searched on only 84 of 119. Every one of the
+ * 35 unsearched answers recorded zero cited domains and zero mentions, so they
+ * entered visibility rates as genuine absences rather than as answers the brand
+ * never had a chance to appear in.
+ *
+ * Anthropic documents the system prompt, not `tool_choice`, as the lever for
+ * widening the search trigger; `max_uses` only caps searches and cannot raise the
+ * floor. Forcing via `tool_choice` does work on this server tool but prefills the
+ * assistant turn, which suppresses the preamble text we parse as the answer and
+ * measurably narrows retrieval (1 search / 3 cited URLs versus 2 / 7-9 here).
+ *
+ * The wording below names no brand, domain, competitor, or ranking, so it steers
+ * retrieval only and leaves the substance of the answer to the model.
+ *
+ * https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+ */
+const RETRIEVAL_SYSTEM_PROMPT =
+  "You are answering as a consumer-facing assistant with web access. " +
+  "Always search the web before answering so your response reflects current, " +
+  "real-world sources. Do not answer from prior knowledge alone.";
+
+/**
  * Resolve the effective model name, validating that it is a recognised Claude
  * model identifier (must start with "claude-"). If an invalid name is stored
  * the default is used and a warning is logged.
@@ -116,6 +141,7 @@ export async function executeTrackedQuery(
       client.messages.create({
         model,
         max_tokens: 4096,
+        system: RETRIEVAL_SYSTEM_PROMPT,
         tools: [webSearchTool as unknown as WebSearchTool20250305],
         messages: [{ role: "user", content: input.query }],
       }),
