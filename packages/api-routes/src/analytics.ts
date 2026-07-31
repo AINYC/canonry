@@ -819,6 +819,19 @@ function computeBuckets(
 
       const metric = computeProviderMetric(usable)
       const queryCount = new Set(usable.map(s => s.queryId)).size
+      // The comparable set drives the trend line, because a bucket whose query
+      // set differs from its neighbour is not a trend. But excluding a query
+      // silently hid REAL visibility: a branded query added mid-window carried
+      // mentions on three engines while the chart read 0% for two of them, and
+      // nothing on screen said the denominator had moved.
+      //
+      // So report both. `metric` stays the comparable view; `allQueries` is
+      // every query actually swept in this bucket, and `excludedQueryCount` is
+      // the gap between them. A reader can see that a number is a subset
+      // without having to infer it.
+      const allQueries = computeProviderMetric(inBucket)
+      const excludedQueryCount =
+        new Set(inBucket.map(s => s.queryId)).size - queryCount
       // Per-provider breakdown over the SAME normalized `usable` set, so the
       // dashboard can plot a line per provider over time. Reusing
       // computeProviderMetric inherits the 4dp rounding and probe exclusion,
@@ -849,6 +862,21 @@ function computeBuckets(
         queryCount,
         mentionRate: metric.mentionRate,
         mentionedCount: metric.mentionedCount,
+        // Queries swept in this bucket but excluded from the comparable set
+        // because they were added after the bucket began. Zero means the
+        // headline covers everything that ran.
+        excludedQueryCount,
+        // The same bucket over EVERY query that ran, comparability aside. When
+        // this diverges from the headline, the difference is entirely the
+        // excluded queries — which is exactly the thing that was invisible.
+        allQueries: {
+          mentionRate: allQueries.mentionRate,
+          mentionedCount: allQueries.mentionedCount,
+          citationRate: allQueries.citationRate,
+          cited: allQueries.cited,
+          total: allQueries.total,
+          queryCount: new Set(inBucket.map(s => s.queryId)).size,
+        },
         mentionShare: computeMentionShareBucketMetric(usable, mentionShareCompetitors),
         byProvider,
         modelEvidenceByProvider,

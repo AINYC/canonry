@@ -1051,6 +1051,20 @@ describe('analytics routes', () => {
       const lastBucket = body.buckets[body.buckets.length - 1]
       expect(lastBucket.citationRate).toBe(1) // 2/2 = 100%
       expect(lastBucket.queryCount).toBe(2)
+      // The comparable headline is a SUBSET, and the bucket now says so. Before
+      // this, a query added mid-window was dropped from the rate with nothing
+      // on screen indicating the denominator had moved — a branded query
+      // carrying real mentions could read as 0%.
+      expect(lastBucket.excludedQueryCount).toBe(3)
+      expect(lastBucket.allQueries).toEqual({
+        // Every query that actually ran: 2 of 5 cited.
+        citationRate: 0.4,
+        cited: 2,
+        total: 5,
+        mentionRate: 0,
+        mentionedCount: 0,
+        queryCount: 5,
+      })
       // Per-provider rides the SAME normalized `usable` set — gemini's bucket
       // slice excludes the 3 newly-added queries too (total 2, not 5).
       expect(lastBucket.byProvider.gemini.total).toBe(2)

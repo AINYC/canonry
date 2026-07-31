@@ -1249,6 +1249,15 @@ export type BrandMetricsDto = {
         queryCount: number;
         mentionRate: number;
         mentionedCount: number;
+        excludedQueryCount: number;
+        allQueries?: {
+            mentionRate: number;
+            mentionedCount: number;
+            citationRate: number;
+            cited: number;
+            total: number;
+            queryCount: number;
+        };
         mentionShare: {
             rate: number | null;
             projectMentionSnapshots: number;

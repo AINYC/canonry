@@ -235,9 +235,35 @@ export const timeBucketSchema = z.object({
   citationRate: z.number(),
   cited: z.number().int(),
   total: z.number().int(),
+  /** Queries in the COMPARABLE set — those that existed before the bucket began. */
   queryCount: z.number().int(),
   mentionRate: z.number(),
   mentionedCount: z.number().int(),
+  /**
+   * Queries swept in this bucket but held out of the comparable set because
+   * they were added after it began. Zero means the headline covers everything
+   * that ran; non-zero means the headline is a subset and `allQueries` shows
+   * the rest.
+   */
+  excludedQueryCount: z.number().int().nonnegative().default(0),
+  /**
+   * The same bucket computed over EVERY query that ran, comparability aside.
+   *
+   * The trend line has to hold its query set constant or it is not a trend, but
+   * excluding a query silently hid real visibility: a branded query added
+   * mid-window carried mentions on three engines while the chart read 0% for
+   * two of them, with nothing on screen saying the denominator had moved.
+   * Reporting both lets a reader see that the headline is a subset instead of
+   * having to infer it.
+   */
+  allQueries: z.object({
+    mentionRate: z.number(),
+    mentionedCount: z.number().int(),
+    citationRate: z.number(),
+    cited: z.number().int(),
+    total: z.number().int(),
+    queryCount: z.number().int(),
+  }).optional(),
   mentionShare: mentionShareBucketMetricSchema,
   byProvider: z.record(z.string(), providerMetricSchema),
   /** Evidence from the exact normalized snapshots that produced each provider rate. */
