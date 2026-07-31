@@ -946,18 +946,13 @@ export function GscSection({
                     <h3>Search performance</h3>
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className="inline-flex rounded-md border border-base p-0.5" role="tablist" aria-label="Performance window">
+                    <div className="segmented" role="group" aria-label="Performance time period">
                       {GSC_WINDOWS.map(w => (
                         <button
                           key={w}
                           type="button"
-                          role="tab"
-                          aria-selected={gscWindow === w}
-                          className={`rounded px-2.5 py-1 text-sm transition-colors ${
-                            gscWindow === w
-                              ? 'bg-bg-elevated text-primary'
-                              : 'text-secondary hover:text-neutral'
-                          }`}
+                          aria-pressed={gscWindow === w}
+                          className={`segmented-option ${gscWindow === w ? 'segmented-option-active' : ''}`}
                           onClick={() => {
                             setGscWindow(w)
                             setPerformanceOffset(0)

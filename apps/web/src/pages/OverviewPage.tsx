@@ -197,23 +197,28 @@ export function OverviewPage() {
           </div>
         </div>
         <div className="divide-y divide-default border-y border-default">
-          {systemHealth.map((item) => (
-            <div key={item.id} className="flex items-center justify-between gap-4 py-3">
-              <p className="text-sm font-medium text-heading">{item.label}</p>
-              <ToneBadge
-                tone={item.tone}
-                title={
-                  item.id === 'api'
-                    ? serviceStatusTooltip(healthSnapshot.apiStatus)
-                    : item.id === 'worker'
-                      ? serviceStatusTooltip(healthSnapshot.workerStatus)
-                      : item.meta
-                }
-              >
-                {item.detail}
-              </ToneBadge>
-            </div>
-          ))}
+          {systemHealth.map((item) => {
+            const serviceStatus = item.id === 'api'
+              ? healthSnapshot.apiStatus
+              : item.id === 'worker'
+                ? healthSnapshot.workerStatus
+                : undefined
+            const visibleDetail = serviceStatus
+              ? serviceStatus.state === 'ok' ? undefined : serviceStatusTooltip(serviceStatus)
+              : item.tone === 'positive' ? undefined : item.meta
+
+            return (
+              <div key={item.id} className="flex items-start justify-between gap-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-heading">{item.label}</p>
+                  {visibleDetail && <p className="mt-1 text-sm text-secondary">{visibleDetail}</p>}
+                </div>
+                <ToneBadge tone={item.tone} title={serviceStatus ? serviceStatusTooltip(serviceStatus) : item.meta}>
+                  {item.detail}
+                </ToneBadge>
+              </div>
+            )
+          })}
         </div>
       </section>
     </div>

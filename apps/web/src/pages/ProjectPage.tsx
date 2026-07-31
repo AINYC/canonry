@@ -8,6 +8,7 @@ import { RunKinds, RunStatuses } from '@ainyc/canonry-contracts'
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
+import { CitationBadge } from '../components/shared/CitationBadge.js'
 import { ProviderBadge } from '../components/shared/ProviderBadge.js'
 import { RunRow } from '../components/shared/RunRow.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
@@ -73,13 +74,14 @@ import {
   getApiV1ProjectsByNameQueryKey,
   getApiV1SettingsOptions,
 } from '@ainyc/canonry-api-client/react-query'
-import { useTriggerRun } from '../queries/mutations.js'
+import { useAppendQueries, useTriggerRun } from '../queries/mutations.js'
 import { GSC_STALE_MS } from '../queries/query-client.js'
 import { invalidateProjectQueryDomain } from '../queries/query-invalidation.js'
 import { useQuery } from '@tanstack/react-query'
 import { getApiV1ProjectsOptions } from '@ainyc/canonry-api-client/react-query'
 import { useProjectDashboard } from '../queries/use-project-dashboard.js'
 import { useInitialDashboard } from '../contexts/dashboard-context.js'
+import { useDrawer } from '../hooks/use-drawer.js'
 import type { ProjectCommandCenterVm, RunHistoryPoint } from '../view-models.js'
 
 export type ProjectPageTab = 'overview' | 'search-console' | 'local' | 'discovery' | 'report' | 'activity' | 'backlinks' | 'technical-aeo' | 'history' | 'settings'
@@ -1124,6 +1126,7 @@ function OverviewBrief({
     comparison.addedQueryCount > 0 && `${comparison.addedQueryCount} ${comparison.addedQueryCount === 1 ? 'query' : 'queries'} added`,
     comparison.removedQueryCount > 0 && `${comparison.removedQueryCount} ${comparison.removedQueryCount === 1 ? 'query' : 'queries'} removed`,
   ].filter(Boolean).join(', ')
+  const comparableScope = `${comparison.comparableQueryCount} comparable ${comparison.comparableQueryCount === 1 ? 'query' : 'queries'}`
 
   return (
     <section className="overview-brief" aria-labelledby="overview-brief-title">
@@ -1187,8 +1190,8 @@ function OverviewBrief({
               </div>
               <p className={`overview-brief-panel-copy ${comparison.querySetChanged ? 'text-caution-400/80' : ''}`}>
                 {comparison.querySetChanged
-                  ? scopeChange || 'Query set changed.'
-                  : `${comparison.comparableQueryCount} comparable queries.`}
+                  ? `${scopeChange || 'Query set changed'} · ${comparableScope}.`
+                  : `${comparableScope}.`}
               </p>
             </>
           )}
@@ -1275,6 +1278,136 @@ function MentionShareBreakdown({
         })}
       </ul>
     </div>
+  )
+}
+
+function OverviewSignals({
+  insights,
+  suggestedQueries,
+  projectName,
+}: {
+  insights: ProjectCommandCenterVm['insights']
+  suggestedQueries: ProjectCommandCenterVm['suggestedQueries']
+  projectName: string
+}) {
+  const { openEvidence } = useDrawer()
+  const appendQueries = useAppendQueries()
+  const [pendingQueries, setPendingQueries] = useState<Set<string>>(new Set())
+
+  if (insights.length === 0 && suggestedQueries.rows.length === 0) return null
+
+  const clearPending = (query: string) => {
+    setPendingQueries(current => {
+      const next = new Set(current)
+      next.delete(query)
+      return next
+    })
+  }
+
+  const handleTrackQuery = (query: string) => {
+    setPendingQueries(current => new Set(current).add(query))
+    appendQueries.mutate(
+      { projectName, queries: [query] },
+      {
+        onSuccess: () => {
+          addToast({ tone: 'positive', title: `Tracking "${query}"` })
+          clearPending(query)
+        },
+        onError: (error) => {
+          addToast({ tone: 'negative', title: `Could not track "${query}"`, detail: String(error) })
+          clearPending(query)
+        },
+      },
+    )
+  }
+
+  const renderInsight = (insight: ProjectCommandCenterVm['insights'][number]) => (
+    <div key={insight.id} className="py-3">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-heading">{insight.title}</p>
+          {insight.detail ? <p className="mt-1 max-w-3xl text-sm leading-6 text-secondary">{insight.detail}</p> : null}
+        </div>
+        <ToneBadge tone={insight.tone}>{insight.actionLabel}</ToneBadge>
+      </div>
+
+      {insight.affectedPhrases.length > 0 ? (
+        <details className="mt-2">
+          <summary className="w-fit cursor-pointer text-sm font-medium text-secondary transition-colors hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60">
+            Evidence · {insight.affectedPhrases.length} affected {insight.affectedPhrases.length === 1 ? 'query' : 'queries'}
+          </summary>
+          <ul className="mt-2 divide-y divide-subtle border-y border-subtle">
+            {insight.affectedPhrases.map((phrase, index) => (
+              <li key={phrase.evidenceId || `${insight.id}-${index}`} className="flex flex-wrap items-center gap-2 py-2">
+                <CitationBadge state={phrase.citationState} />
+                <span className="min-w-0 flex-1 text-sm text-strong">{phrase.query}</span>
+                {phrase.provider ? <ProviderBadge provider={phrase.provider} /> : null}
+                {!isEmbed() && phrase.evidenceId ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={() => { void openEvidence(phrase.evidenceId) }}>
+                    View evidence
+                  </Button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </div>
+  )
+
+  const renderSuggestion = (suggestion: ProjectCommandCenterVm['suggestedQueries']['rows'][number]) => {
+    const isPending = pendingQueries.has(suggestion.query)
+    return (
+      <div key={suggestion.query} className="flex items-center justify-between gap-4 py-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted">Suggested query</p>
+          <p className="mt-1 text-sm font-medium text-strong">{suggestion.query}</p>
+          <p className="mt-0.5 text-sm text-secondary">{suggestion.reason}</p>
+        </div>
+        {!isEmbed() ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={isPending}
+            aria-label={`Track query "${suggestion.query}"`}
+            onClick={() => handleTrackQuery(suggestion.query)}
+          >
+            {isPending ? 'Tracking…' : 'Track'}
+          </Button>
+        ) : null}
+      </div>
+    )
+  }
+
+  const primaryInsights = insights.slice(0, 1)
+  const primarySuggestions = suggestedQueries.rows.slice(0, 1)
+  const remainingInsights = insights.slice(1)
+  const remainingSuggestions = suggestedQueries.rows.slice(1)
+  const remainingCount = remainingInsights.length + remainingSuggestions.length
+
+  return (
+    <section className="page-section-divider" aria-labelledby="overview-signals-title">
+      <div className="section-head">
+        <h2 id="overview-signals-title">Latest signals</h2>
+      </div>
+
+      <div className="divide-y divide-default border-y border-default">
+        {primaryInsights.map(renderInsight)}
+        {primarySuggestions.map(renderSuggestion)}
+      </div>
+      {remainingCount > 0 ? (
+        <details className="mt-2">
+          <summary className="w-fit cursor-pointer text-sm font-medium text-secondary transition-colors hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60">
+            {remainingCount} more {remainingCount === 1 ? 'signal' : 'signals'}
+          </summary>
+          <div className="mt-2 divide-y divide-default border-y border-default">
+            {remainingInsights.map(renderInsight)}
+            {remainingSuggestions.map(renderSuggestion)}
+          </div>
+        </details>
+      ) : null}
+    </section>
   )
 }
 
@@ -1861,6 +1994,12 @@ function ProjectPageContent({
           <OverviewBrief
             model={model}
             sweepRunning={hasActiveVisibilitySweep}
+          />
+
+          <OverviewSignals
+            insights={model.insights}
+            suggestedQueries={model.suggestedQueries}
+            projectName={model.project.name}
           />
 
           <section className="page-section-divider">

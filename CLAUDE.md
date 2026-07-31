@@ -59,7 +59,7 @@ The web dashboard follows a dark, professional analytics aesthetic inspired by *
 
 ### Components & Patterns
 - **AEO performance hero + metric cards:** the project overview leads with the AEO performance hero — three paired Mention / Cited / Mention-share rows with linear progress bars (stacking below `480px`) — followed by secondary metric cards in a `sm:grid-cols-2 lg:grid-cols-3` grid. Linear bars beat stacked radials when several numbers are read against each other. Keep a single `.metric-grid` / `.metric-card` definition; a duplicate once overrode the column count.
-- **Score gauges** (`ScoreGauge`): SVG radial progress rings only for a real bounded score. Raw hits, sessions, totals, and other unbounded counts use flat KPI rows.
+- **Progress visuals:** use linear progress only for a real bounded target. Raw hits, sessions, totals, and other unbounded counts use flat KPI rows.
 - **Data tables** for evidence, findings, and competitors (not card grids). Tables are more scanable for analysts.
 - **Insight cards** with left-border accent color based on tone (`insight-card-positive`, `insight-card-caution`, `insight-card-negative`).
 - **Sparklines** for inline trend visualization in overview project rows.

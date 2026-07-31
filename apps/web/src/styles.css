@@ -974,85 +974,6 @@
     @apply text-sm text-negative;
   }
 
-  /* ── Score gauge ── */
-
-  .gauge-row {
-    @apply grid gap-3 sm:grid-cols-2 lg:grid-cols-5;
-  }
-
-  .score-gauge {
-    @apply flex flex-col items-center rounded-xl border border-default bg-surface px-3 py-5 min-w-0 overflow-visible;
-  }
-
-  .gauge-ring-wrapper {
-    @apply relative size-24;
-  }
-
-  .gauge-ring {
-    @apply size-full;
-  }
-
-  .gauge-bg {
-    fill: none;
-    stroke: var(--chart-neutral-grid-line);
-  }
-
-  .gauge-fill {
-    fill: none;
-    stroke-linecap: round;
-    transition: stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .gauge-fill {
-      transition: none;
-    }
-  }
-
-  .gauge-fill-positive {
-    stroke: var(--chart-tone-positive);
-  }
-
-  .gauge-fill-caution {
-    stroke: var(--chart-tone-caution);
-  }
-
-  .gauge-fill-negative {
-    stroke: var(--chart-tone-negative);
-  }
-
-  .gauge-fill-neutral {
-    stroke: var(--chart-tone-neutral);
-  }
-
-  .gauge-center {
-    @apply absolute inset-0 flex items-center justify-center;
-  }
-
-  .gauge-value {
-    @apply text-xl font-bold tracking-tight text-primary;
-  }
-
-  .gauge-value-text {
-    @apply text-sm font-bold tracking-tight text-primary;
-  }
-
-  .gauge-label {
-    @apply mt-3 text-center text-[10px] font-medium uppercase tracking-[0.12em] text-muted w-full;
-  }
-
-  .gauge-delta {
-    @apply mt-1.5 text-center text-[11px] text-secondary;
-  }
-
-  .gauge-provider-coverage {
-    @apply mt-1 text-center text-[10px] font-medium text-caution-400/80;
-  }
-
-  .gauge-description {
-    @apply mt-2.5 text-center text-[11px] leading-[1.45] text-muted w-full;
-  }
-
   /* ── Visibility trend (citations & mentions over time) ── */
 
   .visibility-trend {
@@ -2204,7 +2125,7 @@
   }
 
   .filter-chip {
-    @apply min-h-8 rounded-md border border-base bg-bg px-3 py-1 text-xs font-medium text-secondary transition hover:bg-bg-elevated hover:text-heading;
+    @apply min-h-11 rounded-md border border-base bg-bg px-3 py-1 text-sm font-medium text-secondary transition hover:bg-bg-elevated hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60;
   }
 
   .filter-chip-active {

@@ -276,13 +276,23 @@ export function SettingsPage() {
           </div>
           <div className="compact-stack">
             <div className="health-row">
-              <p className="run-row-title">API</p>
+              <div>
+                <p className="run-row-title">API</p>
+                {healthSnapshot.apiStatus.state !== 'ok' && (
+                  <p className="mt-1 text-sm text-secondary">{serviceStatusTooltip(healthSnapshot.apiStatus)}</p>
+                )}
+              </div>
               <ToneBadge tone={toneFromService(healthSnapshot.apiStatus)} title={serviceStatusTooltip(healthSnapshot.apiStatus)}>
                 {healthSnapshot.apiStatus.state === 'ok' ? 'Healthy' : 'Attention'}
               </ToneBadge>
             </div>
             <div className="health-row">
-              <p className="run-row-title">Worker</p>
+              <div>
+                <p className="run-row-title">Worker</p>
+                {healthSnapshot.workerStatus.state !== 'ok' && (
+                  <p className="mt-1 text-sm text-secondary">{serviceStatusTooltip(healthSnapshot.workerStatus)}</p>
+                )}
+              </div>
               <ToneBadge tone={toneFromService(healthSnapshot.workerStatus)} title={serviceStatusTooltip(healthSnapshot.workerStatus)}>
                 {healthSnapshot.workerStatus.state === 'ok' ? 'Healthy' : 'Attention'}
               </ToneBadge>

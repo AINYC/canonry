@@ -592,16 +592,13 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
               <InfoTooltip text={`Aggregated traffic metrics from Google Analytics 4. Sessions and users are summed across the selected period.${traffic?.periodStart && traffic?.periodEnd ? ` Data available: ${new Date(traffic.periodStart + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} – ${new Date(traffic.periodEnd + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}.` : ''} Organic sessions are Google organic search sessions specifically.`} />
             </h2>
           </div>
-          <div className="inline-flex rounded-md border border-base p-0.5">
+          <div className="segmented" role="group" aria-label="Traffic time period">
             {TRAFFIC_WINDOWS.map(w => (
               <button
                 key={w}
                 type="button"
-                className={`rounded px-3 py-1 text-xs transition-colors ${
-                  trafficWindow === w
-                    ? 'bg-bg-elevated text-primary'
-                    : 'text-secondary hover:text-neutral'
-                }`}
+                aria-pressed={trafficWindow === w}
+                className={`segmented-option ${trafficWindow === w ? 'segmented-option-active' : ''}`}
                 onClick={() => setTrafficWindow(w)}
               >
                 {w === 'all' ? 'All' : w}

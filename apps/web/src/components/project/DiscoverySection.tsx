@@ -220,7 +220,7 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
         <div>
           <p className="eyebrow eyebrow-soft">Step 1</p>
           <h2>Generate and check questions</h2>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-secondary">
             {isEmbed()
               ? 'Generate customer questions and check whether your site is already visible.'
               : 'Generate customer questions, check current visibility, then choose what to track.'}
@@ -312,7 +312,7 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
                       <ToneBadge tone={toneForSession(session.status)}>{session.status}</ToneBadge>
                     </div>
                     <div className="mt-2 grid grid-cols-3 gap-2 text-sm text-secondary">
-                      <span>Visible now {session.citedCount ?? 0}</span>
+                      <span>Cited queries {session.citedCount ?? 0}</span>
                       <span>Worth tracking {session.aspirationalCount ?? 0}</span>
                       <span>Skip {session.wastedCount ?? 0}</span>
                     </div>
@@ -339,7 +339,7 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
               <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-4">
                   <DiscoveryMetric label="Questions tested" value={activeSession.probeCount ?? 0} />
-                  <DiscoveryMetric label="Visible now" value={activeSession.citedCount ?? 0} tone="positive" />
+                  <DiscoveryMetric label="Cited queries" value={activeSession.citedCount ?? 0} tone="positive" />
                   <DiscoveryMetric label="Worth tracking" value={activeSession.aspirationalCount ?? 0} tone="caution" />
                   <DiscoveryMetric label="Skip" value={activeSession.wastedCount ?? 0} tone="negative" />
                 </div>
@@ -383,8 +383,8 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
             <Card className="surface-card">
               <div className="section-head section-head-inline">
                 <div>
-                <p className="eyebrow eyebrow-soft">Step 2</p>
-                <h3>Choose queries to track</h3>
+                  <p className="eyebrow eyebrow-soft">Step 2</p>
+                  <h3>Choose queries to track</h3>
                 </div>
                 {!isEmbed() && (
                   <Button
@@ -404,12 +404,12 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
                 <div className="space-y-4">
                   <div className="grid gap-3 sm:grid-cols-4">
                     <DiscoveryMetric label="Queries to add" value={safeDefaultCount} tone="positive" />
-                    <DiscoveryMetric label="Visible now" value={preview.queriesByBucket.cited.length} tone="positive" />
+                    <DiscoveryMetric label="Cited queries" value={preview.queriesByBucket.cited.length} tone="positive" />
                     <DiscoveryMetric label="Worth tracking" value={preview.queriesByBucket.aspirational.length} tone="caution" />
                     <DiscoveryMetric label="Skip" value={preview.queriesByBucket['wasted-surface'].length} tone="negative" />
                   </div>
-                  <p className="text-xs leading-5 text-muted">
-                    Adds Visible now and Worth tracking queries, plus recurring competitor sites. Skip items remain available for review only.
+                  <p className="text-sm leading-6 text-secondary">
+                    Adds Cited queries and Worth tracking queries, plus recurring competitor sites. Skip items remain available for review only.
                   </p>
                   {preview.suggestedCompetitors.length > 0 && (
                     <div>
@@ -507,7 +507,7 @@ function toneForBucket(bucket: DiscoveryBucket | null) {
 }
 
 const BUCKET_LABELS: Record<DiscoveryBucket, string> = {
-  cited: 'Visible now',
+  cited: 'Cited queries',
   aspirational: 'Worth tracking',
   'wasted-surface': 'Skip',
 }

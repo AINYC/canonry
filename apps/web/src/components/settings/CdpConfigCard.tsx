@@ -7,6 +7,12 @@ import { addToast } from '../../lib/toast-store.js'
 import { asyncHandler } from '../../lib/async-handler.js'
 import { fetchCdpStatus, configureCdp, type ApiCdpStatus } from '../../api.js'
 
+function shortCdpError(error: string): string {
+  const summary = error.replace(/^Error:\s*/, '').replace(/\s+/g, ' ').trim()
+  if (!summary) return 'Unknown error'
+  return summary.length > 140 ? `${summary.slice(0, 137)}...` : summary
+}
+
 export function CdpConfigCard() {
   const [cdpStatus, setCdpStatus] = useState<ApiCdpStatus | null>(null)
   const [cdpStatusError, setCdpStatusError] = useState<string | null>(null)
@@ -17,7 +23,10 @@ export function CdpConfigCard() {
 
   useEffect(() => {
     fetchCdpStatus()
-      .then(setCdpStatus)
+      .then((status) => {
+        setCdpStatus(status)
+        setCdpStatusError(null)
+      })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err)
         if (!msg.includes('501')) setCdpStatusError(msg)
@@ -35,7 +44,16 @@ export function CdpConfigCard() {
           {cdpStatus?.connected ? 'Connected' : 'Not connected'}
         </ToneBadge>
       </div>
-      <p className="mt-2 text-sm text-secondary">{cdpStatus?.connected ? 'Chrome is available for this provider.' : 'Connect Chrome to enable this provider.'}</p>
+      <p
+        className={`mt-2 text-sm ${cdpStatusError ? 'text-negative' : 'text-secondary'}`}
+        role={cdpStatusError ? 'alert' : undefined}
+      >
+        {cdpStatusError ? (
+          <>
+            Could not check Chrome: {shortCdpError(cdpStatusError)}. Check that Chrome is running with remote debugging, then configure the endpoint.
+          </>
+        ) : cdpStatus?.connected ? 'Chrome is available for this provider.' : 'Connect Chrome to enable this provider.'}
+      </p>
       <details className="mt-3">
         <summary className="cursor-pointer text-sm text-secondary hover:text-strong">Advanced</summary>
         <dl className="definition-list mt-2">
@@ -64,9 +82,6 @@ export function CdpConfigCard() {
             </div>
           )}
         </dl>
-        <p className={`mt-2 text-sm ${cdpStatusError ? 'text-negative' : 'text-secondary'}`}>
-          {cdpStatusError ?? 'Configure the browser debugging endpoint when needed.'}
-        </p>
       </details>
       <div className="mt-2">
         <Button
@@ -86,8 +101,9 @@ export function CdpConfigCard() {
             setCdpSaving(true)
             try {
               await configureCdp(cdpHost, parseInt(cdpPort, 10) || 9222)
-              const status = await fetchCdpStatus().catch(() => null)
-              if (status) setCdpStatus(status)
+              const status = await fetchCdpStatus()
+              setCdpStatus(status)
+              setCdpStatusError(null)
               setConfiguringCdp(false)
               addToast({
                 title: 'CDP endpoint saved',

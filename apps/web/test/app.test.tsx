@@ -78,7 +78,14 @@ test('project route renders a concise visibility summary with progressive detail
   expect(html).toMatch(/Since last sweep/)
   expect(html).toMatch(/Mentioned/)
   expect(html).toMatch(/Cited/)
-  expect(html).toMatch(/1 query added/)
+  expect(html).toMatch(/1 query added · 8 comparable queries\./)
+  expect(html).toMatch(/Latest signals/)
+  expect(html).toMatch(/Lost citation on 1 query/)
+  expect(html).toMatch(/Emergency-intent prompts stopped grounding Citypoint/)
+  expect(html).toMatch(/Evidence · 1 affected query/)
+  expect(html).toMatch(/Suggested query/)
+  expect(html).toMatch(/emergency dentist near me/)
+  expect(html).toMatch(/aria-label="Track query &quot;emergency dentist near me&quot;"/)
   expect(html).not.toMatch(/Next action/)
   expect(html).not.toMatch(/Action queue/)
   expect(html).not.toMatch(/What needs your attention/)
@@ -227,10 +234,23 @@ test('runs route renders failed runs clearly', async () => {
   expect(html).toMatch(/Worker could not reach the provider after repeated retry exhaustion/)
 })
 
-test('project route omits visibility-drop action queue items', async () => {
-  const html = await renderApp('/projects/project_citypoint', { visibilityDropProjectId: 'project_citypoint' })
+test('project route renders server attention without restoring the action queue', async () => {
+  const html = await renderApp('/projects/project_citypoint', { visibilityDropProjectId: 'project_citypoint' }, (fixture) => {
+    fixture.dashboard.projects[0]!.insights.unshift({
+      id: 'stale_visibility',
+      tone: 'caution',
+      title: 'Visibility data needs refresh',
+      detail: 'A newer integration sync landed after the latest visibility sweep.',
+      actionLabel: 'Stale',
+      actionGroup: 'investigate',
+      affectedPhrases: [],
+    })
+  })
 
-  expect(html).not.toMatch(/Sharp citation drop detected/)
+  expect(html).toMatch(/Sharp citation drop detected/)
+  expect(html).toMatch(/Visibility data needs refresh/)
+  expect(html).toMatch(/A newer integration sync landed after the latest visibility sweep/)
+  expect(html).not.toMatch(/Action queue/)
   expect(html).not.toMatch(/What needs your attention/)
 })
 

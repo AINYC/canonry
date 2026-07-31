@@ -186,14 +186,9 @@ test('neutral, tone, and info scale utilities compile through CSS variables', as
   expect(css).toContain('--chart-neutral-track-subtle: rgb(255 255 255 / 0.04)')
 })
 
-test('gauge, highlight, and effect primitives consume tokens', async () => {
+test('highlight and effect primitives consume tokens', async () => {
   const css = await compileAppStyles([])
 
-  // gauges/sparklines consume the CHART tone tokens (shared with ChartPrimitives,
-  // Phase 4) so they can't drift from the charts
-  expect(ruleFor(css, '.gauge-bg')).toContain('stroke: var(--chart-neutral-grid-line)')
-  expect(ruleFor(css, '.gauge-fill-positive')).toContain('stroke: var(--chart-tone-positive)')
-  expect(ruleFor(css, '.gauge-fill-neutral')).toContain('stroke: var(--chart-tone-neutral)')
   expect(ruleFor(css, '.answer-highlight-brand')).toContain('var(--color-positive-400)')
   expect(ruleFor(css, '.brand-icon')).toContain('var(--color-shadow-drop)')
   // both glow layers must be present — assert each distinctly so the outer-glow
@@ -205,6 +200,17 @@ test('gauge, highlight, and effect primitives consume tokens', async () => {
   expect(ruleFor(css, '.toast-card')).toContain('var(--color-shadow-panel)')
   expect(ruleFor(css, '.toast-action')).toContain('var(--color-overlay-hover)')
   expect(css).toContain('background: var(--color-scrollbar-thumb)')
+})
+
+test('filter chips preserve a 44px touch target and visible keyboard focus', async () => {
+  const css = await compileAppStyles([])
+  const chip = ruleFor(css, '.filter-chip')
+
+  expect(chip).toContain('min-height: calc(var(--spacing) * 11)')
+  expect(chip).toContain('font-size: var(--text-sm)')
+  expect(chip).toContain('&:focus-visible')
+  expect(chip).toContain('outline-style: none')
+  expect(chip).toContain('--tw-ring-shadow:')
 })
 
 test('styles.css carries no literal palette utilities or raw hex outside the @theme block', async () => {

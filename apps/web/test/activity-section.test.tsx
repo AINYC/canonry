@@ -131,6 +131,9 @@ test('loads connected GA4 data without changing hook order', async () => {
     expect(screen.getByText('AI vs. total sessions')).toBeTruthy()
   })
 
+  const trafficPeriod = screen.getByRole('group', { name: 'Traffic time period' })
+  expect(within(trafficPeriod).getByRole('button', { name: '30d' }).getAttribute('aria-pressed')).toBe('true')
+
   expect(screen.getByText(/Top AI referrer:/)).toBeTruthy()
   expect(
     consoleErrorSpy.mock.calls.flat().some((arg) =>
