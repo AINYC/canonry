@@ -1,11 +1,11 @@
 import { and, desc, eq, gte, inArray, lt } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
-import { filterTrackedSnapshots, groupRunsByCreatedAt, pickGroupRepresentative, querySnapshots, runs, queries, competitors, domainClassifications, parseJsonColumn } from '@ainyc/canonry-db'
+import { filterTrackedSnapshots, groupRunsByCreatedAt, pickGroupRepresentative, querySnapshots, runs, queries, queryBasketVersions, competitors, domainClassifications, parseJsonColumn } from '@ainyc/canonry-db'
 import {
   AI_PROVIDER_INFRA_DOMAINS, brandLabelFromDomain, categorizeSource, categoryLabel, CitationStates,
   classifySurfaceFromCategory, surfaceClassFromCompetitorType, surfaceClassLabel,
   effectiveDomains, evaluateModelPointerExposure, normalizeProjectDomain, parseWindow, RunKinds, RunStatuses,
-  windowCutoff, validationError, hostMatchesAnyDomain,
+  windowCutoff, validationError, hostMatchesAnyDomain, normalizeQueryText,
 } from '@ainyc/canonry-contracts'
 import type {
   BrandMetricsDto, GapAnalysisDto, SourceBreakdownDto,
@@ -55,6 +55,8 @@ export async function analyticsRoutes(app: FastifyInstance) {
         trend: 'stable',
         mentionTrend: 'stable',
         queryChanges: [],
+        basketChanges: [],
+        referenceBasketRevision: null,
         modelAttribution: {},
         servedModelAttribution: {},
         modelServiceMismatch: {},
@@ -70,6 +72,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
       .select({
         runId: querySnapshots.runId,
         queryId: querySnapshots.queryId,
+        queryText: querySnapshots.queryText,
         provider: querySnapshots.provider,
         model: querySnapshots.model,
         servedModel: querySnapshots.servedModel,
@@ -81,21 +84,45 @@ export async function analyticsRoutes(app: FastifyInstance) {
       .where(inArray(querySnapshots.runId, runIds))
       .all())
 
-    // Resolve answerMentioned for each snapshot (handles null/legacy data)
-    const runCreatedAt = new Map(projectRuns.map(run => [run.id, run.createdAt]))
-    const allSnapshots = rawSnapshots.map(s => ({
-      ...s,
-      runCreatedAt: runCreatedAt.get(s.runId)!,
-      resolvedMentioned: resolveSnapshotAnswerMentioned(s, project),
-    }))
-
-    // Fetch query creation dates for normalization
+    // Fetch query creation dates for the pre-basket fallback, and text so a
+    // snapshot whose `query_id` was nulled by a delete still resolves an identity.
     const projectQueries = app.db
-      .select({ id: queries.id, createdAt: queries.createdAt })
+      .select({ id: queries.id, query: queries.query, createdAt: queries.createdAt })
       .from(queries)
       .where(eq(queries.projectId, project.id))
       .all()
     const queryCreatedAt = new Map(projectQueries.map(q => [q.id, q.createdAt]))
+    const queryTextById = new Map(projectQueries.map(q => [q.id, q.query]))
+
+    // Recorded query-set versions. The reference basket is the current one:
+    // the set the project is measuring now, which is what the trend line has to
+    // hold constant to be a trend at all.
+    const basketRevisions = app.db
+      .select()
+      .from(queryBasketVersions)
+      .where(eq(queryBasketVersions.projectId, project.id))
+      .orderBy(queryBasketVersions.revision)
+      .all()
+      .map(row => ({
+        revision: row.revision,
+        createdAt: row.createdAt,
+        members: JSON.parse(row.membersJson) as string[],
+      }))
+    const latestBasket = basketRevisions.at(-1) ?? null
+    const referenceBasket = latestBasket ? new Set(latestBasket.members) : undefined
+
+    // Resolve answerMentioned for each snapshot (handles null/legacy data)
+    const runCreatedAt = new Map(projectRuns.map(run => [run.id, run.createdAt]))
+    const runBasketRevision = new Map(projectRuns.map(run => [run.id, run.queryBasketRevision ?? null]))
+    const allSnapshots = rawSnapshots.map(s => ({
+      ...s,
+      runCreatedAt: runCreatedAt.get(s.runId)!,
+      resolvedMentioned: resolveSnapshotAnswerMentioned(s, project),
+      // Falls back to the id if no text resolves, so two distinct queries can
+      // never collapse into one member on an empty key.
+      basketKey: normalizeQueryText(s.queryText ?? queryTextById.get(s.queryId) ?? '') || s.queryId,
+      runBasketRevision: runBasketRevision.get(s.runId) ?? null,
+    }))
     const mentionShareCompetitors = app.db
       .select({ domain: competitors.domain })
       .from(competitors)
@@ -121,7 +148,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
     const latest = new Date(projectRuns[projectRuns.length - 1]!.createdAt)
     const spanDays = Math.max(1, Math.ceil((latest.getTime() - earliest.getTime()) / 86_400_000))
     const bucketSize = bucketSizeForSpan(spanDays)
-    const buckets = computeBuckets(allSnapshots, projectRuns, bucketSize, queryCreatedAt, mentionShareCompetitors)
+    const buckets = computeBuckets(allSnapshots, projectRuns, bucketSize, queryCreatedAt, mentionShareCompetitors, referenceBasket)
 
     // Model observations are evidence, not configuration. To avoid a false
     // "first seen" transition at the start of a bounded window, anchor each
@@ -365,8 +392,25 @@ export async function analyticsRoutes(app: FastifyInstance) {
 
     // Query change annotations
     const queryChanges = computeQueryChanges(projectQueries, cutoff)
+    // A real change event, diffed between consecutive recorded revisions rather
+    // than inferred from row timestamps. Revision 1 is not a change — it is the
+    // first observation of a set that already existed — so the diff starts at 2.
+    const basketChanges = basketRevisions
+      .slice(1)
+      .map((rev, i) => {
+        const previous = new Set(basketRevisions[i]!.members)
+        const current = new Set(rev.members)
+        return {
+          revision: rev.revision,
+          at: rev.createdAt,
+          added: rev.members.filter(m => !previous.has(m)),
+          removed: basketRevisions[i]!.members.filter(m => !current.has(m)),
+        }
+      })
+      // A null cutoff is the all-time window, where every recorded change is in scope.
+      .filter(change => !cutoff || change.at >= cutoff)
 
-    return reply.send({ window, buckets, overall, byProvider, trend, mentionTrend, queryChanges, modelAttribution, servedModelAttribution, modelServiceMismatch, modelPointerChanges } satisfies BrandMetricsDto)
+    return reply.send({ window, buckets, overall, byProvider, trend, mentionTrend, queryChanges, basketChanges, referenceBasketRevision: latestBasket?.revision ?? null, modelAttribution, servedModelAttribution, modelServiceMismatch, modelPointerChanges } satisfies BrandMetricsDto)
   })
 
   // GET /projects/:name/analytics/gaps — brand gap analysis
@@ -756,6 +800,15 @@ interface SnapshotLike {
   answerText: string | null
   /** Canonical observation time: the parent run's logical sweep timestamp. */
   runCreatedAt: string
+  /**
+   * Normalized query text — the identity basket membership is tested against.
+   * Text rather than `queryId` on purpose: deleting a query nulls the snapshot's
+   * `query_id`, and re-adding it mints a new one, so an id comparison loses the
+   * history of exactly the queries most likely to move.
+   */
+  basketKey: string
+  /** Query-set version the parent run measured, null when the run was never stamped. */
+  runBasketRevision: number | null
 }
 
 interface MentionShareCompetitorInput {
@@ -782,6 +835,19 @@ function computeBuckets(
   bucketDays: number,
   queryCreatedAt?: Map<string, string>,
   mentionShareCompetitors: MentionShareCompetitorInput[] = [],
+  /**
+   * Normalized membership of the project's CURRENT query basket. When present it
+   * replaces the `createdAt < bucketStart` heuristic outright: comparability is a
+   * recorded fact rather than a date proxy that mistook a rename for a new query.
+   *
+   * Note this restates history — a query removed today leaves the comparable line
+   * in every past bucket too. That is deliberate. The alternative (each bucket
+   * judged against its own revision) keeps old points frozen but makes any two
+   * points incomparable across a basket change, which is the failure the chart
+   * already had. Holding one set of identities across the series is what makes it
+   * a trend, and `basketChanges` keeps the restatement visible rather than silent.
+   */
+  referenceBasket?: Set<string>,
 ): TimeBucket[] {
   if (projectRuns.length === 0) return []
 
@@ -806,19 +872,29 @@ function computeBuckets(
 
     // Only emit buckets that contain actual sweep data
     if (inBucket.length > 0) {
-      // Normalize: only include queries that existed before this bucket started
+      // Hold the query set still, so consecutive points are a comparison rather
+      // than two different measurements plotted next to each other.
       let usable = inBucket
-      if (queryCreatedAt) {
+      if (referenceBasket) {
+        const eligible = inBucket.filter(s => referenceBasket.has(s.basketKey))
+        if (eligible.length > 0) usable = eligible
+      } else if (queryCreatedAt) {
+        // No recorded basket (project has not run since versioning shipped).
+        // Fall back to the date heuristic so existing charts keep their shape
+        // instead of silently widening the moment this deploys.
         const eligible = inBucket.filter(s => {
           const qCreated = queryCreatedAt.get(s.queryId)
           return qCreated !== undefined && qCreated < startISO
         })
-        // Fallback: if ALL queries are new (e.g. first bucket), use full set
         if (eligible.length > 0) usable = eligible
       }
 
       const metric = computeProviderMetric(usable)
-      const queryCount = new Set(usable.map(s => s.queryId)).size
+      const queryCount = new Set(usable.map(s => s.basketKey)).size
+      // One revision or none. A bucket spanning a basket change has no single
+      // set to name, and picking either end would assert something untrue.
+      const revisions = new Set(inBucket.map(s => s.runBasketRevision))
+      const basketRevision = revisions.size === 1 ? [...revisions][0]! : null
       // Per-provider breakdown over the SAME normalized `usable` set, so the
       // dashboard can plot a line per provider over time. Reusing
       // computeProviderMetric inherits the 4dp rounding and probe exclusion,
@@ -852,6 +928,7 @@ function computeBuckets(
         mentionShare: computeMentionShareBucketMetric(usable, mentionShareCompetitors),
         byProvider,
         modelEvidenceByProvider,
+        basketRevision,
       })
     }
 

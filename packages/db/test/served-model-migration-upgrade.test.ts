@@ -7,7 +7,6 @@ import { sql } from 'drizzle-orm'
 import {
   createClient,
   migrate,
-  runs,
   MIGRATION_VERSIONS,
   type MigrationVersion,
 } from '../src/index.js'
@@ -47,10 +46,14 @@ function seedRun(db: Db): string {
     VALUES
       (${projectId}, ${`p-${projectId.slice(0, 8)}`}, 'p', 'example.com', 'US', 'en', ${now}, ${now})
   `)
-  db.insert(runs).values({
-    id: runId, projectId, kind: 'answer-visibility', status: 'completed',
-    trigger: 'manual', startedAt: now, createdAt: now,
-  }).run()
+  // Raw SQL for the same reason the snapshot seed below uses it: drizzle's
+  // `runs` declares columns added by LATER migrations (v115's
+  // `query_basket_revision`), and its INSERT names every declared column, so it
+  // cannot write into the pre-v105 table this test deliberately starts from.
+  db.run(sql`
+    INSERT INTO runs (id, project_id, kind, status, trigger, started_at, created_at)
+    VALUES (${runId}, ${projectId}, 'answer-visibility', 'completed', 'manual', ${now}, ${now})
+  `)
   return runId
 }
 

@@ -132,6 +132,7 @@ describe('drizzle-zod derived row schemas', () => {
       startedAt: '2026-05-17T00:00:00Z',
       finishedAt: '2026-05-17T00:01:00Z',
       error: null,
+      queryBasketRevision: null,
       createdAt: '2026-05-17T00:00:00Z',
     }
     const parsed = runRowSchema.parse(row)
@@ -151,6 +152,7 @@ describe('drizzle-zod derived row schemas', () => {
       startedAt: '2026-05-17T00:00:00Z',
       finishedAt: '2026-05-17T00:01:00Z',
       error: null,
+      queryBasketRevision: null,
       createdAt: '2026-05-17T00:00:00Z',
     }
     const parsed = runRowSchema.parse(row)

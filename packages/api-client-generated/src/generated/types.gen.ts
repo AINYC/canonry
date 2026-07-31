@@ -1275,6 +1275,7 @@ export type BrandMetricsDto = {
                 includesUnknown: boolean;
             };
         };
+        basketRevision: number | null;
     }>;
     overall: {
         citationRate: number;
@@ -1299,6 +1300,13 @@ export type BrandMetricsDto = {
         delta: number;
         label: string;
     }>;
+    basketChanges: Array<{
+        revision: number;
+        at: string;
+        added: Array<string>;
+        removed: Array<string>;
+    }>;
+    referenceBasketRevision: number | null;
     modelAttribution: {
         [key: string]: {
             latestObservation: {
@@ -2641,6 +2649,7 @@ export type LatestProjectRunDto = {
                 };
             };
         } | null;
+        queryBasketRevision?: number | null;
         createdAt: string;
         snapshots?: Array<{
             id: string;
@@ -3161,6 +3170,7 @@ export type ProjectOverviewDto = {
                     };
                 };
             } | null;
+            queryBasketRevision?: number | null;
             createdAt: string;
             snapshots?: Array<{
                 id: string;
@@ -4060,6 +4070,7 @@ export type RunDetailDto = {
             };
         };
     } | null;
+    queryBasketRevision?: number | null;
     createdAt: string;
     snapshots?: Array<{
         id: string;
@@ -4115,6 +4126,7 @@ export type RunDto = {
             };
         };
     } | null;
+    queryBasketRevision?: number | null;
     createdAt: string;
 };
 
