@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useState, type ReactNode } from 'react'
-import { Download, ExternalLink, HelpCircle, Play, Trash2, CheckCircle2, AlertCircle, AlertTriangle } from 'lucide-react'
+import { Download, ExternalLink, HelpCircle, Play, Trash2, AlertTriangle } from 'lucide-react'
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
@@ -201,70 +201,10 @@ export function BacklinksPage() {
     <div className="page-container">
       <div className="page-header">
         <div className="page-header-left">
-          <h1 className="page-title">Backlinks</h1>
-          <p className="page-subtitle">
-            Find domains that link to your projects, computed from the open Common Crawl web graph. Runs entirely on your machine — nothing is sent to third parties.
-          </p>
+          <h1 className="page-title">Backlink data</h1>
+          <p className="page-subtitle">Manage the shared backlink source and review its latest data.</p>
         </div>
       </div>
-
-      <Card className="surface-card p-4 mb-6 border-caution-800/60">
-        <div className="flex items-start gap-3">
-          <AlertTriangle className="h-5 w-5 text-caution-400 shrink-0 mt-0.5" aria-hidden />
-          <div className="text-sm text-neutral leading-relaxed">
-            <p className="font-medium text-caution-200">Heads up — a release sync is a large download.</p>
-            <ul className="mt-1.5 space-y-1 text-secondary">
-              <li>
-                <span className="text-strong">~16 GB</span> of gzipped vertex + edge files per release, stored at{' '}
-                <code className="text-neutral">~/.canonry/cache/commoncrawl/</code>.
-              </li>
-              <li>
-                <span className="text-strong">10–20 min on a fast connection</span> for the download, then ~5 min for the DuckDB query.
-              </li>
-              <li>
-                One sync covers every project in this workspace. Releases are immutable, so the download only happens once per release.
-              </li>
-            </ul>
-          </div>
-        </div>
-      </Card>
-
-      <section className="page-section-divider">
-        <div className="section-head section-head-inline">
-          <div>
-            <p className="eyebrow eyebrow-soft">About</p>
-            <h2>How it works</h2>
-          </div>
-        </div>
-        <Card className="surface-card p-5">
-          <p className="text-sm text-secondary leading-relaxed max-w-3xl mb-4">
-            Common Crawl publishes a quarterly snapshot of the public web&rsquo;s hyperlink graph. Canonry downloads one{' '}
-            <span className="text-strong">release</span> at a time and extracts backlinks for every project in this
-            workspace in a single pass.
-          </p>
-          <ol className="space-y-3 text-sm text-secondary max-w-3xl">
-            <li className="flex gap-3">
-              <span className="shrink-0 inline-flex h-6 w-6 items-center justify-center rounded-full border border-strong bg-bg-elevated text-xs font-semibold text-neutral tabular-nums">1</span>
-              <span>
-                <span className="text-strong font-medium">Download (one-time, ~16 GB)</span> — vertex + edge files cached to{' '}
-                <code className="text-neutral">~/.canonry/cache/commoncrawl/</code>. Runs once per release; subsequent operations reuse the cache.
-              </span>
-            </li>
-            <li className="flex gap-3">
-              <span className="shrink-0 inline-flex h-6 w-6 items-center justify-center rounded-full border border-strong bg-bg-elevated text-xs font-semibold text-neutral tabular-nums">2</span>
-              <span>
-                <span className="text-strong font-medium">Query (~5 min)</span> — one DuckDB pass scans the cached files and extracts referring domains for every project&rsquo;s canonical domain. DuckDB is only used to <span className="text-strong">read</span> these dumps; it doesn&rsquo;t store any canonry state.
-              </span>
-            </li>
-            <li className="flex gap-3">
-              <span className="shrink-0 inline-flex h-6 w-6 items-center justify-center rounded-full border border-strong bg-bg-elevated text-xs font-semibold text-neutral tabular-nums">3</span>
-              <span>
-                <span className="text-strong font-medium">Persist</span> — results land in the same SQLite database the rest of canonry uses. After the first sync, per-project reads (and re-run extracts against the cached release) are instant.
-              </span>
-            </li>
-          </ol>
-        </Card>
-      </section>
 
       {error && (
         <Card className="surface-card p-4 mb-4 border-negative-800/60">
@@ -280,21 +220,8 @@ export function BacklinksPage() {
       <section className="page-section-divider">
         <div className="section-head section-head-inline">
           <div>
-            <p className="eyebrow eyebrow-soft">Dependency</p>
-            <h2 className="flex items-center gap-2">
-              DuckDB install status
-              <Hint label="Why DuckDB?">
-                <span className="block">
-                  DuckDB is a query engine canonry uses to scan the ~16 GB Common Crawl dumps and pull out your referring domains.
-                </span>
-                <span className="mt-2 block text-secondary">
-                  It does <span className="text-strong">not</span> store any canonry data — your backlink results live in SQLite alongside the rest of your projects. DuckDB is purely a tool for processing the raw CSV files.
-                </span>
-                <span className="mt-2 block text-muted">
-                  Installed on demand (not bundled) into <code className="text-neutral">~/.canonry/plugins/</code> so users who never run backlinks don&rsquo;t pay the ~40 MB install cost.
-                </span>
-              </Hint>
-            </h2>
+            <p className="eyebrow eyebrow-soft">Readiness</p>
+            <h2>Backlink source</h2>
           </div>
           {status?.duckdbInstalled ? (
             <ToneBadge tone="positive">Installed</ToneBadge>
@@ -302,44 +229,15 @@ export function BacklinksPage() {
             <ToneBadge tone="caution">Not installed</ToneBadge>
           )}
         </div>
-        <Card className="surface-card p-5">
+        <Card className="surface-card p-4">
           {loading ? (
             <p className="text-sm text-muted">Checking…</p>
           ) : status?.duckdbInstalled ? (
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="h-5 w-5 text-positive-400 shrink-0 mt-0.5" aria-hidden />
-              <div>
-                <p className="text-sm text-strong">
-                  Version {status.duckdbVersion ?? 'unknown'} installed at{' '}
-                  <code className="text-neutral">{status.pluginDir}</code>
-                </p>
-                <p className="text-xs text-muted mt-1">Required spec: {status.duckdbSpec}</p>
-              </div>
-            </div>
+            <p className="text-sm text-secondary">Ready to sync a Common Crawl release.</p>
           ) : (
-            <div className="flex items-start gap-3">
-              <AlertCircle className="h-5 w-5 text-caution-400 shrink-0 mt-0.5" aria-hidden />
-              <div className="flex-1">
-                <p className="text-sm text-strong">
-                  DuckDB is not installed. It&rsquo;s the query engine canonry uses to scan Common Crawl dumps — required before you can run a release sync or per-project extract.
-                </p>
-                <p className="text-xs text-muted mt-1">
-                  Installing doesn&rsquo;t touch your project data. DuckDB only reads the downloaded CSV files; backlink results are written to the same SQLite database canonry already uses.
-                </p>
-                {status && (
-                  <p className="text-xs text-muted mt-1">
-                    Will be installed into <code className="text-neutral">{status.pluginDir}</code> (~40 MB).
-                  </p>
-                )}
-                {!isEmbed() && (
-                  <div className="mt-3">
-                    <Button type="button" size="sm" disabled={installing} onClick={asyncHandler(handleInstall)}>
-                      <Download className="h-4 w-4 mr-1.5" aria-hidden />
-                      {installing ? 'Installing…' : 'Install DuckDB'}
-                    </Button>
-                  </div>
-                )}
-              </div>
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-sm text-secondary">Install the local query engine to enable release syncs.</p>
+              {!isEmbed() && <Button type="button" size="sm" disabled={installing} onClick={asyncHandler(handleInstall)}><Download className="h-4 w-4 mr-1.5" aria-hidden />{installing ? 'Installing…' : 'Install DuckDB'}</Button>}
             </div>
           )}
         </Card>
@@ -359,16 +257,13 @@ export function BacklinksPage() {
           {latest && <ToneBadge tone={syncStatusTone(latest.status)}>{latest.status}</ToneBadge>}
         </div>
         <Card className="surface-card p-5">
-          <p className="text-xs text-muted max-w-3xl mb-4">
-            A release is one Common Crawl dump (e.g. <code className="text-secondary">cc-main-2026-jan-feb-mar</code>). Syncing it downloads the graph and populates backlinks for every project in this workspace.
-          </p>
           {latest ? (
             <div className="space-y-2 text-sm">
               <p className="text-strong">
                 Release <code className="text-neutral">{latest.release}</code>
               </p>
               {latest.phaseDetail && (
-                <p className="text-muted">{latest.phaseDetail}</p>
+                <p className="text-secondary">{latest.phaseDetail}</p>
               )}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-muted pt-2">
                 <div>
@@ -404,11 +299,10 @@ export function BacklinksPage() {
             <div className="mt-4 rounded border border-caution-800/60 bg-caution-950/20 p-3">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="h-4 w-4 text-caution-400 shrink-0 mt-0.5" aria-hidden />
-                <div className="text-xs text-neutral leading-relaxed">
+                <div className="text-sm text-neutral leading-relaxed">
                   <p className="font-medium text-caution-200">Cached files for this release are missing.</p>
                   <p className="mt-1 text-secondary">
-                    The sync record in the database says this release finished successfully, but the ~16 GB dump at{' '}
-                    <code className="text-neutral">~/.canonry/cache/commoncrawl/{latest?.release}/</code> isn&rsquo;t on disk. Your backlink data is still intact (it lives in SQLite), but per-project re-run extracts will fail until you either re-sync this release or start a new one.
+                    Sync this release again, or sync the newest release, before refreshing individual projects.
                   </p>
                 </div>
               </div>
@@ -424,12 +318,12 @@ export function BacklinksPage() {
                   <p className="text-sm text-strong mt-0.5">
                     <code className="text-heading">{latestAvailable.release}</code>
                     <span className="ml-2 text-xs text-muted">
-                      — vertex {formatBytes(latestAvailable.vertexBytes)}, edges {formatBytes(latestAvailable.edgesBytes)}
+                      Vertex {formatBytes(latestAvailable.vertexBytes)}, edges {formatBytes(latestAvailable.edgesBytes)}
                     </span>
                   </p>
                 ) : (
                   <p className="text-sm text-muted mt-0.5">
-                    {loading ? 'Probing Common Crawl…' : 'Could not auto-detect — pass an explicit release below.'}
+                    {loading ? 'Checking Common Crawl…' : 'Could not find a release. Choose one below.'}
                   </p>
                 )}
                 <a
@@ -468,7 +362,7 @@ export function BacklinksPage() {
             {isEmbed() ? null : !showOverride ? (
               <button
                 type="button"
-                className="text-xs text-muted hover:text-neutral focus:text-neutral focus:outline-none focus-visible:ring-1 focus-visible:ring-mono-500 rounded"
+                className="text-sm text-secondary hover:text-neutral focus:text-neutral focus:outline-none focus-visible:ring-1 focus-visible:ring-mono-500 rounded"
                 onClick={() => setShowOverride(true)}
                 disabled={syncing}
               >
@@ -487,7 +381,7 @@ export function BacklinksPage() {
                 />
                 <button
                   type="button"
-                  className="text-xs text-muted hover:text-neutral focus:text-neutral focus:outline-none focus-visible:ring-1 focus-visible:ring-mono-500 rounded"
+                  className="text-sm text-secondary hover:text-neutral focus:text-neutral focus:outline-none focus-visible:ring-1 focus-visible:ring-mono-500 rounded"
                   onClick={() => { setReleaseInput(''); setShowOverride(false) }}
                   disabled={syncing}
                 >
@@ -497,32 +391,15 @@ export function BacklinksPage() {
             )}
           </div>
           {!status?.duckdbInstalled && (
-            <p className="text-xs text-faint mt-2">Install DuckDB first to enable sync.</p>
+            <p className="text-sm text-secondary mt-2">Install DuckDB first to enable sync.</p>
           )}
         </Card>
       </section>
 
-      <section className="page-section-divider">
-        <div className="section-head section-head-inline">
-          <div>
-            <p className="eyebrow eyebrow-soft">Cached releases</p>
-            <h2 className="flex items-center gap-2">
-              Local disk cache
-              <Hint label="What is this?">
-                <span className="block">
-                  Raw Common Crawl dumps stored at{' '}
-                  <code className="text-neutral">~/.canonry/cache/commoncrawl/&lt;release&gt;/</code>. Each release takes ~16 GB.
-                </span>
-                <span className="mt-2 block text-secondary">
-                  These files are needed to re-run per-project extracts against a release without re-downloading. Pruning here <span className="text-strong">does not delete your backlink data</span> — that lives in SQLite.
-                </span>
-              </Hint>
-            </h2>
-          </div>
-        </div>
-        <p className="text-xs text-muted mb-3 max-w-3xl">
-          Each cached release is a ~16 GB pair of gzipped files. They&rsquo;re needed to re-query the graph (e.g. for a newly-added project) without re-downloading. Safe to prune — backlink results persist in SQLite.
-        </p>
+      <details className="page-section-divider group">
+        <summary className="cursor-pointer text-sm font-medium text-secondary hover:text-strong focus:outline-none focus-visible:ring-1 focus-visible:ring-mono-500 rounded">Technical details and cache</summary>
+        <div className="mt-4">
+          <p className="text-sm text-secondary mb-3">Cached releases support project re-extracts. Pruning a release does not remove saved backlink results.</p>
         <Card className="surface-card overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -570,7 +447,9 @@ export function BacklinksPage() {
             </tbody>
           </table>
         </Card>
-      </section>
+          <p className="mt-3 text-xs text-muted">Common Crawl files are stored locally. DuckDB reads them; Canonry stores results in its normal database.</p>
+        </div>
+      </details>
 
       {history.length > 1 && (
         <section className="page-section-divider">

@@ -354,8 +354,10 @@ test('shows a location scope selector when multiple locations are tracked', asyn
 
   // Two tracked locations → the scope selector renders with an "All" option + each location.
   await waitFor(() => expect(screen.getByText('All locations')).toBeTruthy())
-  expect(screen.getByRole('tab', { name: 'Gjelina Venice' })).toBeTruthy()
-  expect(screen.getByRole('tab', { name: 'AZ Coatings' })).toBeTruthy()
+  const selector = screen.getByRole('combobox', { name: 'Location' })
+  expect(selector).toBeTruthy()
+  expect(screen.getByRole('option', { name: 'Gjelina Venice' })).toBeTruthy()
+  expect(screen.getByRole('option', { name: 'AZ Coatings' })).toBeTruthy()
 })
 
 test('falls back to the aggregate scope when the scoped location is untracked', async () => {
@@ -396,8 +398,8 @@ test('falls back to the aggregate scope when the scoped location is untracked', 
   renderGbpSection()
 
   // Scope to the second location → reads re-fetch with ?locationName=.
-  await waitFor(() => expect(screen.getByRole('tab', { name: 'AZ Coatings' })).toBeTruthy())
-  fireEvent.click(screen.getByRole('tab', { name: 'AZ Coatings' }))
+  const selector = await screen.findByRole('combobox', { name: 'Location' })
+  fireEvent.change(selector, { target: { value: 'locations/456' } })
   await waitFor(() => expect(summaryScopes).toContain('scoped'))
 
   // Untrack that same location via the Manage locations panel.

@@ -570,7 +570,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
             <h2>Per-page breakdown</h2>
           </div>
           {hasErrors ? (
-            <div className="inline-flex items-center gap-1 rounded-full border border-default p-0.5" role="group" aria-label="Filter pages">
+            <div className="segmented" role="group" aria-label="Filter pages">
               <button
                 type="button"
                 onClick={() => {
@@ -578,7 +578,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
                   pagesTable.setPage(1)
                 }}
                 aria-pressed={!showErrorsOnly}
-                className={`min-h-11 rounded-full px-3 py-1 text-xs font-medium tabular-nums transition-colors ${!showErrorsOnly ? 'bg-mono-800 text-heading' : 'text-muted hover:text-neutral'}`}
+                className={`segmented-option min-h-11 tabular-nums ${!showErrorsOnly ? 'segmented-option-active' : ''}`}
               >
                 All {score.pagesAudited}
               </button>
@@ -589,7 +589,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
                   pagesTable.setPage(1)
                 }}
                 aria-pressed={showErrorsOnly}
-                className={`min-h-11 rounded-full px-3 py-1 text-xs font-medium tabular-nums transition-colors ${showErrorsOnly ? 'bg-negative-500/15 text-negative' : 'text-muted hover:text-neutral'}`}
+                className={`segmented-option min-h-11 tabular-nums ${showErrorsOnly ? 'segmented-option-active text-negative' : ''}`}
               >
                 Errors {score.pagesErrored}
               </button>

@@ -149,9 +149,7 @@ export function ReportPage({ projectName }: { projectName: string }) {
   )
 }
 
-// Time-window selector. Re-fetches the report scoped to the chosen window
-// (the API recomputes every section + comparison for it). Pill/filter-chip
-// styling per the design system.
+// Time-window selector. Re-fetches the report scoped to the chosen window.
 function PeriodToggle({
   period,
   onChange,
@@ -160,11 +158,7 @@ function PeriodToggle({
   onChange: (p: ReportPeriodDays) => void
 }) {
   return (
-    <div
-      className="inline-flex items-center gap-0.5 rounded-full border border-default bg-bg-elevated/40 p-0.5"
-      role="group"
-      aria-label="Report time period"
-    >
+    <div className="segmented" role="group" aria-label="Report time period">
       {REPORT_PERIOD_OPTIONS.map((opt) => {
         const active = opt === period
         return (
@@ -173,9 +167,7 @@ function PeriodToggle({
             type="button"
             onClick={() => onChange(opt)}
             aria-pressed={active}
-            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-              active ? 'bg-mono-200 text-mono-900' : 'text-secondary hover:text-heading'
-            }`}
+            className={`segmented-option ${active ? 'segmented-option-active' : ''}`}
           >
             {opt}d
           </button>

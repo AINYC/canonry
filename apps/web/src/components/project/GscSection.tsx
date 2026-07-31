@@ -946,17 +946,17 @@ export function GscSection({
                     <h3>Search performance</h3>
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className="flex gap-1" role="tablist" aria-label="Performance window">
+                    <div className="inline-flex rounded-md border border-base p-0.5" role="tablist" aria-label="Performance window">
                       {GSC_WINDOWS.map(w => (
                         <button
                           key={w}
                           type="button"
                           role="tab"
                           aria-selected={gscWindow === w}
-                          className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                          className={`rounded px-2.5 py-1 text-sm transition-colors ${
                             gscWindow === w
-                              ? 'bg-mono-700 border-mono-600 text-primary'
-                              : 'border-base text-secondary hover:border-strong hover:text-neutral'
+                              ? 'bg-bg-elevated text-primary'
+                              : 'text-secondary hover:text-neutral'
                           }`}
                           onClick={() => {
                             setGscWindow(w)
@@ -1308,8 +1308,7 @@ export function GscSection({
                     </div>
 
 
-                    {/* Tab pills */}
-                    <div className="mt-3 flex gap-1">
+                    <div className="mt-3 flex border-b border-default" role="tablist" aria-label="Coverage status">
                       {(['indexed', 'notIndexed', 'deindexed'] as const).map((tab) => {
                         const count = tab === 'indexed' ? coverage.indexed.length
                           : tab === 'notIndexed' ? coverage.notIndexed.length
@@ -1319,10 +1318,12 @@ export function GscSection({
                           <button
                             key={tab}
                             type="button"
-                            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                            role="tab"
+                            aria-selected={coverageTab === tab}
+                            className={`border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
                               coverageTab === tab
-                                ? 'bg-mono-700 text-heading'
-                                : 'text-secondary hover:bg-mono-800 hover:text-strong'
+                                ? 'border-mono-300 text-heading'
+                                : 'border-transparent text-secondary hover:border-mono-600 hover:text-strong'
                             }`}
                             onClick={() => { setCoverageTab(tab); setSelectedReason(null) }}
                           >

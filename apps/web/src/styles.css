@@ -30,8 +30,8 @@
   --color-text-heading: var(--color-zinc-100);
   --color-text-strong: var(--color-zinc-200);
   --color-text-secondary: var(--color-zinc-400);
-  --color-text-muted: var(--color-zinc-500);
-  --color-text-faint: var(--color-zinc-600);
+  --color-text-muted: rgb(139 139 148);
+  --color-text-faint: rgb(124 124 133);
 
   --color-accent: var(--color-zinc-50);
   --color-accent-fg: var(--color-zinc-950);
@@ -193,8 +193,8 @@
   --color-text-heading: var(--color-zinc-900);
   --color-text-strong: var(--color-zinc-800);
   --color-text-secondary: var(--color-zinc-600);
-  --color-text-muted: var(--color-zinc-500);
-  --color-text-faint: var(--color-zinc-400);
+  --color-text-muted: rgb(98 98 107);
+  --color-text-faint: var(--color-zinc-500);
 
   --color-accent: var(--color-zinc-900);
   --color-accent-fg: var(--color-zinc-50);
@@ -935,7 +935,7 @@
   }
 
   .page-subtitle {
-    @apply mt-0.5 text-[13px] font-normal text-muted;
+    @apply mt-0.5 text-[13px] font-normal text-secondary;
   }
 
   .page-header-right {
@@ -967,7 +967,7 @@
   }
 
   .supporting-copy {
-    @apply text-sm leading-6 text-muted;
+    @apply text-sm leading-6 text-secondary;
   }
 
   .blocking-copy {

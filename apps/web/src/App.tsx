@@ -400,8 +400,8 @@ export function RootLayout() {
   const safeDashboard = dashboard ?? contextDashboard?.dashboard ?? null
 
   // First-run focus mode: hide the sidebar on /setup when the user has zero
-  // projects. The sidebar's nav items (Overview / Projects / Runs / Server
-  // traffic / Backlinks / Settings) point at surfaces that don't have any
+  // projects. The sidebar's nav items (Portfolio / Projects / Runs / Traffic
+  // sources / Backlink data / Settings) point at surfaces that don't have any
   // data yet — showing them adds visual noise + shrinks the wizard's
   // available real estate. Once they create their first project the
   // sidebar comes back automatically (intentional "you've made it into the
@@ -458,9 +458,9 @@ export function RootLayout() {
     if (path === '/history') return 'History'
     if (path === '/settings') return 'Settings'
     if (path === '/setup') return 'Setup'
-    if (path === '/backlinks') return 'Backlinks'
-    if (path === '/traffic') return 'Server traffic'
-    if (path.startsWith('/traffic/')) return 'Server traffic'
+    if (path === '/backlinks') return 'Backlink data'
+    if (path === '/traffic') return 'Traffic sources'
+    if (path.startsWith('/traffic/')) return 'Traffic sources'
     if (path.startsWith('/projects/')) {
       // Try to find project name
       const segments = path.split('/').filter(Boolean)
@@ -542,7 +542,7 @@ export function RootLayout() {
             activeOptions={{ exact: true }}
           >
             <LayoutDashboard className="sidebar-icon" />
-            <span>Overview</span>
+            <span>Portfolio</span>
           </Link>
           <Link
             to="/projects"
@@ -578,7 +578,7 @@ export function RootLayout() {
             activeOptions={{ exact: false }}
           >
             <Radar className="sidebar-icon" />
-            <span>Server traffic</span>
+            <span>Traffic sources</span>
           </Link>
           <Link
             to="/backlinks"
@@ -587,7 +587,7 @@ export function RootLayout() {
             activeOptions={{ exact: true }}
           >
             <Link2 className="sidebar-icon" />
-            <span>Backlinks</span>
+            <span>Backlink data</span>
           </Link>
           <Link
             to="/settings"
@@ -601,7 +601,7 @@ export function RootLayout() {
 
           {isLoading ? (
             <>
-              <p className="sidebar-section-title">Projects</p>
+              <p className="sidebar-section-title">Tracked projects</p>
               {[1, 2, 3].map((i) => (
                 <div key={i} className="sidebar-skeleton-item">
                   <span className="skeleton-circle size-2" />
@@ -611,7 +611,7 @@ export function RootLayout() {
             </>
           ) : safeDashboard && safeDashboard.projects.length > 0 ? (
             <>
-              <p className="sidebar-section-title">Projects</p>
+              <p className="sidebar-section-title">Tracked projects</p>
               {safeDashboard.projects.map((projectVm) => {
                 const visibilityTone = projectVm.visibilitySummary.tone
                 return (
@@ -742,7 +742,7 @@ export function RootLayout() {
             <span className="sr-only">Close navigation</span>
           </Button>
           <Link to="/" className="mobile-nav-link" activeProps={{ className: 'mobile-nav-link mobile-nav-link-active' }} activeOptions={{ exact: true }}>
-            Overview
+            Portfolio
           </Link>
           <Link to="/projects" className="mobile-nav-link" activeProps={{ className: 'mobile-nav-link mobile-nav-link-active' }} activeOptions={{ exact: false }}>
             Projects
@@ -754,14 +754,17 @@ export function RootLayout() {
             History
           </Link>
           <Link to="/traffic" className="mobile-nav-link" activeProps={{ className: 'mobile-nav-link mobile-nav-link-active' }} activeOptions={{ exact: false }}>
-            Server traffic
+            Traffic sources
+          </Link>
+          <Link to="/backlinks" className="mobile-nav-link" activeProps={{ className: 'mobile-nav-link mobile-nav-link-active' }} activeOptions={{ exact: true }}>
+            Backlink data
           </Link>
           <Link to="/settings" className="mobile-nav-link" activeProps={{ className: 'mobile-nav-link mobile-nav-link-active' }} activeOptions={{ exact: true }}>
             Settings
           </Link>
           {safeDashboard && safeDashboard.projects.length > 0 ? (
             <div className="mobile-nav-section">
-              <p className="mobile-nav-section-title">Projects</p>
+              <p className="mobile-nav-section-title">Tracked projects</p>
               {safeDashboard.projects.map((projectVm) => (
                 <Link
                   key={projectVm.project.id}

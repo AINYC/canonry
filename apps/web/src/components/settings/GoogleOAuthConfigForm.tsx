@@ -50,12 +50,12 @@ export function GoogleOAuthConfigForm({ onSaved }: { onSaved: () => void }) {
     <div className="mt-3 rounded-lg border border-base bg-bg-elevated/40 p-3 space-y-2">
       <div>
         <div className="flex items-center justify-between">
-          <label className="text-xs text-muted" htmlFor="google-client-id">Client ID</label>
+          <label className="text-sm text-secondary" htmlFor="google-client-id">Client ID</label>
           <a
             href="https://console.cloud.google.com/apis/credentials"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[10px] text-muted hover:text-neutral underline underline-offset-2"
+            className="text-sm text-secondary hover:text-neutral underline underline-offset-2"
           >
             Google Cloud {'\u2197'}
           </a>
@@ -70,7 +70,7 @@ export function GoogleOAuthConfigForm({ onSaved }: { onSaved: () => void }) {
         />
       </div>
       <div>
-        <label className="text-xs text-muted" htmlFor="google-client-secret">Client secret</label>
+        <label className="text-sm text-secondary" htmlFor="google-client-secret">Client secret</label>
         <input
           id="google-client-secret"
           type="password"
@@ -80,17 +80,14 @@ export function GoogleOAuthConfigForm({ onSaved }: { onSaved: () => void }) {
           onChange={(e) => setClientSecret(e.target.value)}
         />
       </div>
-      <p className="text-[11px] text-muted">
-        These credentials are stored in <code>~/.canonry/config.yaml</code>. Project-level Search Console connections are created separately per canonical domain.
-      </p>
       {redirectUri && (
         <div className="rounded border border-default bg-surface px-3 py-2">
-          <p className="text-[11px] text-muted">Authorized redirect URI</p>
+          <p className="text-sm text-secondary">Authorized redirect URI</p>
           <code className="mt-1 block break-all text-xs text-strong">{redirectUri}</code>
         </div>
       )}
-      {error && <p className="text-xs text-negative-400">{error}</p>}
-      {success && <p className="text-xs text-positive-400">Google OAuth credentials updated.</p>}
+      {error && <p className="text-sm text-negative-400">{error}</p>}
+      {success && <p className="text-sm text-positive-400">Google OAuth credentials updated.</p>}
       <Button type="button" size="sm" disabled={!canSave || saving} onClick={asyncHandler(handleSave)}>
         {saving ? 'Saving...' : 'Save Google OAuth app'}
       </Button>

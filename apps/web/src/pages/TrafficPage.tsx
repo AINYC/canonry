@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { Plus, RefreshCw } from 'lucide-react'
+import { ArrowRight, Plus } from 'lucide-react'
 
 import type { TrafficSourceDto } from '@ainyc/canonry-contracts'
 
@@ -56,7 +56,7 @@ export function TrafficPage() {
     <div className="page-container">
       <div className="page-header">
         <div className="page-header-left">
-          <h1 className="page-title">Server traffic</h1>
+          <h1 className="page-title">Traffic sources</h1>
           <p className="page-subtitle">
             AI crawler hits and referral sessions from your server logs.
           </p>
@@ -79,7 +79,7 @@ export function TrafficPage() {
 
       <section>
         {projects.length > 1 && (
-          <label className="mb-4 flex w-fit items-center gap-2 text-xs font-medium text-secondary" htmlFor="traffic-project">
+          <label className="mb-4 flex w-fit items-center gap-2 text-sm font-medium text-secondary" htmlFor="traffic-project">
             Project
             <select
               id="traffic-project"
@@ -176,7 +176,7 @@ function SourcesTable({ projectName, sources }: { projectName: string; sources: 
                   {source.status}
                 </ToneBadge>
                 {source.lastError ? (
-                  <p className="mt-1 max-w-[18rem] truncate text-[11px] text-negative-400/80" title={source.lastError}>
+                  <p className="mt-1 max-w-[18rem] truncate text-sm text-negative-400" title={source.lastError}>
                     {source.lastError}
                   </p>
                 ) : null}
@@ -201,10 +201,10 @@ function SourcesTable({ projectName, sources }: { projectName: string; sources: 
                 <Link
                   to="/traffic/$projectName/$sourceId"
                   params={{ projectName, sourceId: source.id }}
-                  className="inline-flex items-center gap-1 text-xs text-neutral hover:text-heading"
+                  className="inline-flex items-center gap-1 text-sm text-secondary hover:text-heading"
                 >
-                  <RefreshCw className="size-3" />
                   View
+                  <ArrowRight className="size-3.5" />
                 </Link>
               </td>
             </tr>

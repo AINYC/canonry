@@ -73,62 +73,53 @@ const STARTER_PROMPTS: Array<{ label: string; prompt: string }> = [
  * sets exactly one of `prompt` or `action`.
  */
 type SlashCommand =
-  | { command: string; label: string; hint: string; prompt: string; action?: undefined }
-  | { command: string; label: string; hint: string; action: 'clear'; prompt?: undefined }
+  | { command: string; label: string; prompt: string; action?: undefined }
+  | { command: string; label: string; action: 'clear'; prompt?: undefined }
 
 const SLASH_COMMANDS: Array<SlashCommand> = [
   {
     command: '/status',
     label: 'Status',
-    hint: 'Latest runs, health, anything unusual',
     prompt: 'Quick status overview for this project — latest runs, current health, anything unusual.',
   },
   {
     command: '/insights',
     label: 'Top insights',
-    hint: 'Walk through the most severe active insights',
     prompt: 'Walk me through the 3 most severe active insights and what to do about each.',
   },
   {
     command: '/last-run',
     label: 'Last run',
-    hint: 'Summarize the latest sweep',
     prompt: 'Summarize the latest run for this project — provider mix, visibility changes, and anything that moved.',
   },
   {
     command: '/last-failed',
     label: 'Last failed run',
-    hint: 'Diagnose the most recent failure',
     prompt: 'If the latest run failed, dig into it and tell me what went wrong plus how to fix it.',
   },
   {
     command: '/run-sweep',
     label: 'Run sweep now',
-    hint: 'Trigger a new visibility sweep',
     prompt: 'Run a new answer-visibility sweep for this project now and tell me when it lands.',
   },
   {
     command: '/schedule',
     label: 'Schedule',
-    hint: 'Review the sweep schedule',
     prompt: 'What is the current sweep schedule, and is it appropriate given recent volatility?',
   },
   {
     command: '/queries',
     label: 'Queries',
-    hint: 'List tracked queries',
     prompt: 'List the tracked queries for this project and flag any that are obvious duplicates or underperformers.',
   },
   {
     command: '/competitors',
     label: 'Competitors',
-    hint: 'List tracked competitors',
     prompt: 'List this project\'s tracked competitors and call out which ones are showing up in answer citations.',
   },
   {
     command: '/clear',
     label: 'Clear conversation',
-    hint: 'Wipe transcript and start fresh',
     action: 'clear',
   },
 ]
@@ -458,8 +449,8 @@ export function AeroBar({ projectName }: AeroBarProps) {
               )}
               {conversationIsEmpty && !streaming && (
                 <div className="flex flex-col gap-3 py-2">
-                  <p className="text-xs text-muted">
-                    Ask anything about <span className="text-neutral">{projectName}</span>, or start with:
+                  <p className="text-sm text-secondary">
+                    Ask about <span className="text-strong">{projectName}</span> or choose a starting point.
                   </p>
                   <div className="flex flex-wrap gap-1.5">
                     {STARTER_PROMPTS.map((s) => (
@@ -467,7 +458,7 @@ export function AeroBar({ projectName }: AeroBarProps) {
                         key={s.label}
                         type="button"
                         onClick={() => { void send(s.prompt) }}
-                        className="rounded-full border border-base bg-bg-elevated/70 px-3 py-1 text-xs text-neutral transition hover:border-strong hover:bg-mono-800/70 hover:text-heading"
+                        className="rounded-md border border-base bg-bg-elevated/70 px-3 py-1.5 text-sm text-neutral transition hover:border-strong hover:bg-mono-800/70 hover:text-heading"
                       >
                         {s.label}
                       </button>
@@ -589,13 +580,12 @@ export function AeroBar({ projectName }: AeroBarProps) {
           <button
             type="button"
             onClick={() => setOpen(true)}
-            className="flex w-full items-center justify-between rounded-full border border-mono-800/80 bg-bg/95 px-4 py-2 text-left text-sm text-secondary shadow-lg backdrop-blur transition hover:border-strong hover:bg-bg-elevated/90 hover:text-strong"
+            className="flex w-full items-center justify-between rounded-lg border border-mono-800/80 bg-bg/95 px-4 py-2 text-left text-sm text-secondary shadow-lg transition hover:border-strong hover:bg-bg-elevated/90 hover:text-strong"
           >
             <span className="flex items-center gap-2">
               <Radio className="h-4 w-4 text-positive-400" aria-hidden="true" />
               Ask Aero about {projectName}…
             </span>
-            <span className="text-[10px] uppercase tracking-wider text-faint">Enter</span>
           </button>
         )}
       </div>
@@ -605,8 +595,8 @@ export function AeroBar({ projectName }: AeroBarProps) {
 
 /**
  * Header popover for switching Aero's active LLM provider. Configured
- * providers are clickable; unconfigured entries render disabled with the
- * env-var hint so the user knows how to turn them on. The selection lives
+ * providers are clickable; unconfigured entries render a concise setup state.
+ * The selection lives
  * in AeroBar state + localStorage so it survives refreshes and per-project
  * context switches; clearing the override falls back to the server's
  * auto-detected default.
@@ -646,22 +636,19 @@ function ProviderPicker({
   if (providers.length === 0) return null
 
   const label = active?.label.replace(/\s+\(.+\)$/, '') ?? 'No provider'
-  const model = active?.defaultModel
-
   return (
     <div ref={containerRef} className="relative">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={disabled}
-        className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-secondary transition hover:bg-surface-inset hover:text-strong disabled:opacity-50"
+        className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-secondary transition hover:bg-surface-inset hover:text-strong disabled:opacity-50"
         aria-label="Switch agent model"
         aria-haspopup="listbox"
         aria-expanded={open}
         title={active ? `${active.label} · ${active.defaultModel}` : 'Pick a provider'}
       >
         <span className="font-medium text-strong">{label}</span>
-        {model && <span className="hidden font-mono text-[10px] text-muted sm:inline">{model}</span>}
         <ChevronDown className="h-3 w-3" aria-hidden="true" />
       </button>
       {open && (
@@ -669,8 +656,8 @@ function ProviderPicker({
           role="listbox"
           className="absolute right-0 top-full z-50 mt-1 w-64 overflow-hidden rounded-lg border border-base bg-bg shadow-xl"
         >
-          <div className="border-b border-default px-3 py-2 text-[10px] uppercase tracking-wider text-muted">
-            Aero provider
+          <div className="border-b border-default px-3 py-2 text-sm font-medium text-secondary">
+            Answer engine
           </div>
           <ul className="max-h-72 overflow-y-auto py-1">
             {providers.map((p) => {
@@ -688,38 +675,15 @@ function ProviderPicker({
                       onPick(isOverride ? null : p.id)
                       setOpen(false)
                     }}
-                    className="flex w-full items-start gap-2 px-3 py-2 text-left text-xs transition enabled:hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+                    className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm transition enabled:hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-60"
+                    title={!p.configured ? `Add ${envVarHint(p.id)} in Settings or your environment` : p.defaultModel}
                   >
-                    <span className="mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                    <span className="flex h-4 w-4 shrink-0 items-center justify-center">
                       {isActive ? <Check className="h-3 w-3 text-positive-400" aria-hidden="true" /> : null}
                     </span>
-                    <span className="flex-1">
-                      <span className="flex items-center gap-1.5">
-                        <span className="font-medium text-heading">{p.label}</span>
-                        {isOverride && (
-                          <span className="rounded-full border border-positive-800/60 bg-positive-950/60 px-1.5 text-[9px] uppercase tracking-wider text-positive">
-                            Pinned
-                          </span>
-                        )}
-                        {!p.configured && (
-                          <span className="rounded-full border border-base px-1.5 text-[9px] uppercase tracking-wider text-muted">
-                            Key missing
-                          </span>
-                        )}
-                      </span>
-                      <span className="mt-0.5 block font-mono text-[10px] text-muted">
-                        {p.defaultModel}
-                      </span>
-                      {p.keySource === 'env' && (
-                        <span className="mt-0.5 block text-[10px] text-faint">via env var</span>
-                      )}
-                      {!p.configured && (
-                        <span className="mt-0.5 block text-[10px] text-faint">
-                          Add key in config.yaml or export{' '}
-                          <code className="font-mono text-secondary">{envVarHint(p.id)}</code>
-                        </span>
-                      )}
-                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium text-heading">{p.label.replace(/\s+\(.+\)$/, '')}</span>
+                    {isOverride && <span className="rounded-md border border-positive-800/60 bg-positive-950/60 px-2 py-0.5 text-[11px] text-positive">Pinned</span>}
+                    {!p.configured && <span className="rounded-md border border-base px-2 py-0.5 text-[11px] text-secondary">Needs setup</span>}
                   </button>
                 </li>
               )
@@ -744,11 +708,7 @@ function ProviderPicker({
 }
 
 /**
- * Row of context chips sitting between the transcript and the composer.
- * Gives the user a single glance at who Aero is acting as (project), which
- * model is answering (provider), and what surface area it can touch (scope).
- * Scope is the only interactive chip — toggling between `read-only` and
- * `all` changes what tools Aero is allowed to call on the next turn.
+ * Compact context bar between the transcript and composer.
  */
 function ContextPills({
   projectName,
@@ -766,22 +726,16 @@ function ContextPills({
   const providerLabel = activeProvider?.label.replace(/\s+\(.+\)$/, '') ?? null
   const writeMode = scope === 'all'
   return (
-    <div className="flex flex-wrap items-center gap-1.5 border-t border-mono-800/70 bg-bg/80 px-3 pt-2">
-      <span className="inline-flex items-center gap-1 rounded-full border border-base bg-bg-elevated/70 px-2 py-0.5 text-[10px] text-secondary">
-        <span className="text-faint">project</span>
-        <span className="font-medium text-strong">{projectName}</span>
-      </span>
+    <div className="flex flex-wrap items-center gap-2 border-t border-mono-800/70 bg-bg/80 px-3 pt-2 text-sm text-secondary">
+      <span className="font-medium text-strong">{projectName}</span>
       {providerLabel && (
-        <span className="inline-flex items-center gap-1 rounded-full border border-base bg-bg-elevated/70 px-2 py-0.5 text-[10px] text-secondary">
-          <span className="text-faint">model</span>
-          <span className="font-medium text-strong">{providerLabel}</span>
-        </span>
+        <><span aria-hidden="true">·</span><span>{providerLabel}</span></>
       )}
       <button
         type="button"
         onClick={onToggleScope}
         disabled={disabled}
-        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition disabled:opacity-50 ${
+        className={`ml-auto inline-flex items-center rounded-md border px-2 py-1 text-sm font-medium transition disabled:opacity-50 ${
           writeMode
             ? 'border-caution-800/60 bg-caution-950/40 text-caution hover:border-caution-700 hover:text-caution-200'
             : 'border-base bg-bg-elevated/70 text-secondary hover:border-strong hover:text-strong'
@@ -792,8 +746,7 @@ function ContextPills({
             : 'Aero is restricted to read-only tools. Click to allow writes.'
         }
       >
-        <span className={writeMode ? 'text-caution-500' : 'text-faint'}>scope</span>
-        <span className="font-medium">{writeMode ? 'all tools' : 'read-only'}</span>
+        {writeMode ? 'Can make changes' : 'Read only'}
       </button>
     </div>
   )
@@ -833,23 +786,17 @@ function SlashPalette({
                 aria-selected={active}
                 onMouseEnter={() => onHover(i)}
                 onClick={() => onPick(cmd)}
-                className={`flex w-full items-center gap-3 px-3 py-1.5 text-left text-xs transition ${
+                className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition ${
                   active ? 'bg-bg-elevated text-heading' : 'text-neutral hover:bg-bg-elevated/60'
                 }`}
               >
-                <span className="font-mono text-[11px] text-positive-400">{cmd.command}</span>
                 <span className="font-medium">{cmd.label}</span>
-                <span className="ml-auto text-[10px] text-muted">{cmd.hint}</span>
+                <span className="ml-auto font-mono text-[11px] text-secondary">{cmd.command}</span>
               </button>
             </li>
           )
         })}
       </ul>
-      <div className="border-t border-default px-3 py-1.5 text-[10px] text-faint">
-        <span className="mr-3">↑↓ to select</span>
-        <span className="mr-3">Enter to run</span>
-        <span>Tab to autocomplete</span>
-      </div>
     </div>
   )
 }

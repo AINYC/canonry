@@ -131,9 +131,7 @@ export function RunsPage() {
       <div className="page-header">
         <div className="page-header-left">
           <h1 className="page-title">Runs</h1>
-          <p className="page-subtitle">
-            Status, type, project, duration, and the shortest explanation that makes the outcome trustworthy.
-          </p>
+          <p className="page-subtitle">Recent jobs across all projects.</p>
         </div>
         {!isEmbed() && (
           <Button type="button" variant="outline" size="sm" disabled={triggerAllRunsMutation.isPending} onClick={() => void handleTriggerAll()}>

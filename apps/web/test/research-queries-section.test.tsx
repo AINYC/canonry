@@ -49,7 +49,7 @@ test('switches to research, deduplicates query lines, gates exact model choice, 
     </QueryClientProvider>,
   )
 
-  expect(screen.getByText('Find new queries to track')).toBeTruthy()
+  expect(screen.getByText('Discover or research queries')).toBeTruthy()
   fireEvent.click(screen.getByRole('tab', { name: 'Research queries' }))
 
   const model = await screen.findByLabelText(/Exact model/)

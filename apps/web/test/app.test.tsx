@@ -58,7 +58,7 @@ test('overview route renders the premium portfolio dashboard', async () => {
   const html = await renderApp('/')
 
   expect(html).toMatch(/Portfolio/)
-  expect(html).toMatch(/Visibility and execution state/)
+  expect(html).toMatch(/Visibility across all projects/)
   expect(html).toMatch(/Infrastructure/)
   expect(html).toMatch(/Citypoint Dental NYC/)
   expect(html).toMatch(/Harbor Legal Group/)
@@ -109,7 +109,7 @@ test('settings route renders provider state, quota summary, and service health',
 test('traffic route offers a source-agnostic connect entry point', async () => {
   const html = await renderApp('/traffic')
 
-  expect(html).toMatch(/Server traffic/)
+  expect(html).toMatch(/Traffic sources/)
   expect(html).toMatch(/Connect a source/)
   expect(html).toMatch(/AI crawler hits and referral sessions from your server logs/)
   expect(html).not.toMatch(/Cloud Run logs or the WordPress Traffic Logger plugin/)

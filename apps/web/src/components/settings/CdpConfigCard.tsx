@@ -35,39 +35,39 @@ export function CdpConfigCard() {
           {cdpStatus?.connected ? 'Connected' : 'Not connected'}
         </ToneBadge>
       </div>
-      <dl className="definition-list mt-3">
-        {cdpStatus?.endpoint && (
-          <div>
-            <dt>Endpoint</dt>
-            <dd className="font-mono text-xs">{cdpStatus.endpoint}</dd>
-          </div>
-        )}
-        {cdpStatus?.browserVersion && (
-          <div>
-            <dt>Browser</dt>
-            <dd className="text-xs">{cdpStatus.browserVersion}</dd>
-          </div>
-        )}
-        {cdpStatus?.targets && cdpStatus.targets.length > 0 && (
-          <div>
-            <dt>Tabs</dt>
-            <dd>
-              {cdpStatus.targets.map(t => (
-                <span key={t.name} className="mr-2">
-                  {t.name}: {t.alive ? '● alive' : '○ idle'}
-                </span>
-              ))}
-            </dd>
-          </div>
-        )}
-      </dl>
-      <p className="mt-2 text-sm text-muted">
-        {cdpStatus?.connected
-          ? `Connected to Chrome via CDP. Launch Chrome with --remote-debugging-port to use this provider.`
-          : cdpStatusError
-            ? cdpStatusError
-            : 'Not configured. Set an endpoint below or run: canonry cdp connect --host localhost --port 9222'}
-      </p>
+      <p className="mt-2 text-sm text-secondary">{cdpStatus?.connected ? 'Chrome is available for this provider.' : 'Connect Chrome to enable this provider.'}</p>
+      <details className="mt-3">
+        <summary className="cursor-pointer text-sm text-secondary hover:text-strong">Advanced</summary>
+        <dl className="definition-list mt-2">
+          {cdpStatus?.endpoint && (
+            <div>
+              <dt>Endpoint</dt>
+              <dd className="font-mono text-xs">{cdpStatus.endpoint}</dd>
+            </div>
+          )}
+          {cdpStatus?.browserVersion && (
+            <div>
+              <dt>Browser</dt>
+              <dd className="text-xs">{cdpStatus.browserVersion}</dd>
+            </div>
+          )}
+          {cdpStatus?.targets && cdpStatus.targets.length > 0 && (
+            <div>
+              <dt>Tabs</dt>
+              <dd>
+                {cdpStatus.targets.map(t => (
+                  <span key={t.name} className="mr-2">
+                    {t.name}: {t.alive ? '● alive' : '○ idle'}
+                  </span>
+                ))}
+              </dd>
+            </div>
+          )}
+        </dl>
+        <p className={`mt-2 text-sm ${cdpStatusError ? 'text-negative' : 'text-secondary'}`}>
+          {cdpStatusError ?? 'Configure the browser debugging endpoint when needed.'}
+        </p>
+      </details>
       <div className="mt-2">
         <Button
           type="button"

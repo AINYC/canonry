@@ -13,7 +13,6 @@ import { RunRow } from '../components/shared/RunRow.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
 import { EvidenceTable } from '../components/project/EvidenceTable.js'
 import { CompetitorTable } from '../components/project/CompetitorTable.js'
-import { SearchConsoleSummaryCard } from '../components/project/SearchConsoleSummaryCard.js'
 import { BingSummaryMetric } from '../components/project/BingSummaryMetric.js'
 import { ActivitySection } from '../components/project/ActivitySection.js'
 import { GscSection } from '../components/project/GscSection.js'
@@ -40,8 +39,6 @@ import {
   removeQueries as apiRemoveQueries,
   appendCompetitors as apiAppendCompetitors,
   removeCompetitorById as apiRemoveCompetitorById,
-  updateOwnedDomains as apiUpdateOwnedDomains,
-  updateAliases as apiUpdateAliases,
   updateProject as apiUpdateProject,
   bingConnect as apiBingConnect,
   bingDisconnect as apiBingDisconnect,
@@ -362,7 +359,7 @@ function BingSection({
               Connect
             </Button>
           </div>
-          <p className="mt-1 text-[11px] text-muted">
+          <p className="mt-1 text-sm text-secondary">
             Get your API key from{' '}
             <a
               href="https://www.bing.com/webmasters/"
@@ -469,9 +466,7 @@ function BingSection({
               <span className="text-sm text-strong">Authorized for this project domain</span>
               <span className="text-xs text-muted">{connection.domain}</span>
             </div>
-            <p className="mt-2 text-xs text-muted">
-              {isEmbed() ? <>This project is currently mapped to <code>{connection.siteUrl}</code>.</> : <>Canonry stores Bing connections per canonical domain. This project is currently mapped to <code>{connection.siteUrl}</code>.</>}
-            </p>
+            <p className="mt-2 text-sm text-secondary">This project uses <code>{connection.siteUrl}</code>.</p>
           </div>
           <div className="grid gap-3 lg:grid-cols-2">
             <div className="rounded-lg border border-default bg-surface-subtle p-3">
@@ -549,7 +544,7 @@ function BingSection({
                           {!isEmbed() && (
                             <td className="py-1.5 px-3 text-right">
                               <button
-                                className="text-[10px] text-secondary hover:text-strong underline underline-offset-2"
+                                className="text-sm text-secondary hover:text-strong underline underline-offset-2"
                                 disabled={requestingIndexing}
                                 onClick={() => { void handleSubmitUrl(row.url) }}
                               >
@@ -568,7 +563,7 @@ function BingSection({
             {(coverage.unknown ?? []).length > 0 && (
               <div>
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <h4 className="text-xs font-medium text-secondary">Unknown — not yet confirmed ({(coverage.unknown ?? []).length})</h4>
+                  <h4 className="text-sm font-medium text-secondary">Unknown, not yet confirmed ({(coverage.unknown ?? []).length})</h4>
                   {!isEmbed() && (
                     <Button size="sm" variant="ghost" disabled={requestingIndexing} onClick={asyncHandler(handleSubmitAllUnindexed)}>
                       {requestingIndexing ? 'Submitting…' : 'Submit all to Bing'}
@@ -592,7 +587,7 @@ function BingSection({
                           {!isEmbed() && (
                             <td className="py-1.5 px-3 text-right">
                               <button
-                                className="text-[10px] text-secondary hover:text-strong underline underline-offset-2"
+                                className="text-sm text-secondary hover:text-strong underline underline-offset-2"
                                 disabled={requestingIndexing}
                                 onClick={() => { void handleSubmitUrl(row.url) }}
                               >
@@ -950,7 +945,6 @@ function SearchConsoleSection({
       : googleConfigured
         ? 'Connect Search Console for this domain'
         : 'Add Google OAuth credentials in Settings'
-  const googleUpdatedAt = googleCoverage?.lastSyncedAt ?? googleCoverage?.lastInspectedAt ?? googleConnection?.updatedAt ?? null
 
   const bingTone = bingConnection?.connected ? 'positive' : bingConfigured ? 'caution' : 'negative'
   const bingStatus = bingConnection?.connected ? 'Connected' : bingConfigured ? 'Ready to connect' : 'Needs setup'
@@ -969,7 +963,6 @@ function SearchConsoleSection({
       : bingConfigured
         ? 'Connect Bing Webmaster Tools for this domain'
         : 'Add a Bing API key in Settings'
-  const bingUpdatedAt = bingCoverage?.lastInspectedAt ?? bingConnection?.updatedAt ?? null
 
   return (
     <div className="space-y-6">
@@ -977,10 +970,7 @@ function SearchConsoleSection({
         <div className="section-head section-head-inline">
           <div>
             <p className="eyebrow eyebrow-soft">Search engines</p>
-            <h2>Coverage &amp; performance</h2>
-            <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
-              Scan both engines at a glance, then open the Google or Bing workspace when you need to inspect coverage or take action.
-            </p>
+            <h2>Coverage and performance</h2>
           </div>
           {!isEmbed() && (
             <Button type="button" variant="outline" size="sm" disabled={loading || refreshState !== 'idle'} onClick={() => void handleRefresh()}>
@@ -996,33 +986,16 @@ function SearchConsoleSection({
           </div>
         )}
 
-        <div className="grid gap-3 lg:grid-cols-2">
-          <SearchConsoleSummaryCard
-            eyebrow="Google"
-            title="Google Search Console"
-            status={loading ? 'Loading…' : googleStatus}
-            tone={loading ? 'neutral' : googleTone}
-            targetLabel="Selected property"
-            targetValue={googleConnection?.propertyId ?? 'No property selected'}
-            coverageValue={loading ? 'Loading…' : googleCoverageValue}
-            note={loading ? 'Loading overview…' : googleNote}
-            updatedAt={googleUpdatedAt}
-            active={workspace === 'google'}
-            onClick={() => setWorkspace('google')}
-          />
-          <SearchConsoleSummaryCard
-            eyebrow="Bing"
-            title="Bing Webmaster Tools"
-            status={loading ? 'Loading…' : bingStatus}
-            tone={loading ? 'neutral' : bingTone}
-            targetLabel="Selected site"
-            targetValue={bingConnection?.siteUrl ?? 'No site selected'}
-            coverageValue={loading ? 'Loading…' : bingCoverageValue}
-            note={loading ? 'Loading overview…' : bingNote}
-            updatedAt={bingUpdatedAt}
-            active={workspace === 'bing'}
-            onClick={() => setWorkspace('bing')}
-          />
+        <div className="mt-4 divide-y divide-default border-y border-default">
+          {[
+            ['Google Search Console', loading ? 'Loading…' : googleStatus, loading ? 'neutral' : googleTone, loading ? 'Loading overview…' : googleNote, googleCoverageValue],
+            ['Bing Webmaster Tools', loading ? 'Loading…' : bingStatus, loading ? 'neutral' : bingTone, loading ? 'Loading overview…' : bingNote, bingCoverageValue],
+          ].map(([name, status, tone, note, coverage]) => (
+            <div key={name} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
+              <div><span className="font-medium text-heading">{name}</span><span className="ml-2 text-secondary">{note}</span></div>
+              <div className="flex items-center gap-3"><span className="tabular-nums text-secondary">{coverage}</span><ToneBadge tone={tone as 'positive' | 'caution' | 'negative' | 'neutral'}>{status}</ToneBadge></div>
+            </div>
+          ))}
         </div>
       </Card>
 
@@ -1495,12 +1468,6 @@ function ProjectPageContent({
   const [addingCompetitor, setAddingCompetitor] = useState(false)
   const [newCompetitorDomain, setNewCompetitorDomain] = useState('')
   const [competitorSaving, setCompetitorSaving] = useState(false)
-  const [addingOwnedDomain, setAddingOwnedDomain] = useState(false)
-  const [newOwnedDomain, setNewOwnedDomain] = useState('')
-  const [ownedDomainSaving, setOwnedDomainSaving] = useState(false)
-  const [addingAlias, setAddingAlias] = useState(false)
-  const [newAlias, setNewAlias] = useState('')
-  const [aliasSaving, setAliasSaving] = useState(false)
   const [locationFilter, setLocationFilter] = useState<string | undefined>(undefined)
   const [compareLocations, setCompareLocations] = useState(false)
   const [competitorFilter, setCompetitorFilter] = useState<string | null>(null)
@@ -1729,66 +1696,6 @@ function ProjectPageContent({
     }
   }
 
-  async function handleAddOwnedDomain() {
-    const domain = newOwnedDomain.trim()
-    if (!domain) return
-    setOwnedDomainSaving(true)
-    try {
-      const current = model?.project.ownedDomains ?? []
-      await apiUpdateOwnedDomains(projectName, [...current, domain])
-      void refetch()
-      setNewOwnedDomain('')
-      setAddingOwnedDomain(false)
-    } finally {
-      setOwnedDomainSaving(false)
-    }
-  }
-
-  async function handleRemoveOwnedDomain(domain: string) {
-    setOwnedDomainSaving(true)
-    try {
-      const current = model?.project.ownedDomains ?? []
-      await apiUpdateOwnedDomains(projectName, current.filter(d => d !== domain))
-      void refetch()
-    } finally {
-      setOwnedDomainSaving(false)
-    }
-  }
-
-  async function handleAddAlias() {
-    const alias = newAlias.trim()
-    if (!alias) return
-    setAliasSaving(true)
-    try {
-      const current = model?.project.aliases ?? []
-      // Case-insensitive dedupe in the UI so the user gets immediate
-      // feedback if they type a duplicate; the server normalizes again on save.
-      const key = alias.toLowerCase()
-      if (current.some(a => a.toLowerCase() === key)) {
-        setNewAlias('')
-        setAddingAlias(false)
-        return
-      }
-      await apiUpdateAliases(projectName, [...current, alias])
-      void refetch()
-      setNewAlias('')
-      setAddingAlias(false)
-    } finally {
-      setAliasSaving(false)
-    }
-  }
-
-  async function handleRemoveAlias(alias: string) {
-    setAliasSaving(true)
-    try {
-      const current = model?.project.aliases ?? []
-      await apiUpdateAliases(projectName, current.filter(a => a !== alias))
-      void refetch()
-    } finally {
-      setAliasSaving(false)
-    }
-  }
-
   async function handleUpdateProject(pName: string, updates: { displayName?: string; canonicalDomain?: string; ownedDomains?: string[]; aliases?: string[]; country?: string; language?: string; locations?: Array<{ label: string; city: string; region: string; country: string; timezone?: string }>; defaultLocation?: string | null; providers?: string[]; providerModels?: Record<string, string> }) {
     const updated = await apiUpdateProject(pName, updates)
     // Invalidate the whole 'projects' branch (prefix match) so every consumer
@@ -1878,15 +1785,7 @@ function ProjectPageContent({
         <div className="page-header-left">
           <h1 className="page-title">{model.project.displayName || model.project.name}</h1>
           <p className="page-subtitle">
-            {model.project.canonicalDomain}
-            {!isEmbed() && (model.project.ownedDomains ?? []).length === 0 && !addingOwnedDomain && (
-              <button
-                type="button"
-                className="ml-2 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-secondary hover:text-strong hover:bg-surface-inset transition-colors"
-                onClick={() => setAddingOwnedDomain(true)}
-              >+ add domain</button>
-            )}
-            {' '} · {model.contextLabel}
+            {model.project.canonicalDomain} · {model.contextLabel}
           </p>
           {!isEmbed() && (
             <div className="tag-row">
@@ -1898,93 +1797,6 @@ function ProjectPageContent({
                 </span>
               ))}
             </div>
-          )}
-          {((model.project.ownedDomains ?? []).length > 0 || addingOwnedDomain) && (
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] uppercase tracking-wide text-muted mr-1">Also tracking</span>
-              {(model.project.ownedDomains ?? []).map((d) => (
-                <span key={d} className="inline-flex items-center gap-1 rounded-full border border-strong/60 bg-surface-inset-hover px-2 py-0.5 text-xs text-neutral">
-                  {d}
-                  {!isEmbed() && (
-                    <button
-                      type="button"
-                      className="-mr-1 ml-0.5 inline-flex items-center justify-center rounded p-1 leading-none text-muted hover:bg-mono-700/40 hover:text-strong transition-colors"
-                      disabled={ownedDomainSaving}
-                      onClick={() => { void handleRemoveOwnedDomain(d) }}
-                      aria-label={`Remove ${d}`}
-                    >×</button>
-                  )}
-                </span>
-              ))}
-              {isEmbed() ? null : addingOwnedDomain ? (
-                <span className="inline-flex items-center gap-1">
-                  <input
-                    className="rounded border border-strong bg-transparent px-1.5 py-0.5 text-xs text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none w-40"
-                    type="text"
-                    placeholder="docs.example.com"
-                    value={newOwnedDomain}
-                    onChange={(e) => setNewOwnedDomain(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { void handleAddOwnedDomain() } }}
-                    autoFocus
-                  />
-                  <Button type="button" size="sm" disabled={!newOwnedDomain.trim() || ownedDomainSaving} onClick={asyncHandler(handleAddOwnedDomain)}>
-                    {ownedDomainSaving ? '...' : 'Add'}
-                  </Button>
-                  <button type="button" className="text-xs text-muted hover:text-neutral" onClick={() => { setAddingOwnedDomain(false); setNewOwnedDomain('') }}>Cancel</button>
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  className="rounded-full border border-dashed border-strong px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted hover:text-neutral hover:border-mono-500 transition-colors"
-                  onClick={() => setAddingOwnedDomain(true)}
-                >+ domain</button>
-              )}
-            </div>
-          )}
-          {(!isEmbed() || (model.project.aliases ?? []).length > 0) && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted mr-1">
-              Also known as
-              <InfoTooltip text="Extra brand names checked against LLM answer text alongside the project name. Use for product names, prior names, or DBAs (e.g. add Meta as an alias to facebook.com). Changing these recomputes mentions on historical runs." />
-            </span>
-            {(model.project.aliases ?? []).map((a) => (
-              <span key={a} className="inline-flex items-center gap-1 rounded-full border border-strong/60 bg-surface-inset-hover px-2 py-0.5 text-xs text-neutral">
-                {a}
-                {!isEmbed() && (
-                  <button
-                    type="button"
-                    className="-mr-1 ml-0.5 inline-flex items-center justify-center rounded p-1 leading-none text-muted hover:bg-mono-700/40 hover:text-strong transition-colors"
-                    disabled={aliasSaving}
-                    onClick={() => { void handleRemoveAlias(a) }}
-                    aria-label={`Remove ${a}`}
-                  >×</button>
-                )}
-              </span>
-            ))}
-            {isEmbed() ? null : addingAlias ? (
-              <span className="inline-flex items-center gap-1">
-                <input
-                  className="rounded border border-strong bg-transparent px-1.5 py-0.5 text-xs text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none w-40"
-                  type="text"
-                  placeholder="LlamaParse"
-                  value={newAlias}
-                  onChange={(e) => setNewAlias(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { void handleAddAlias() } }}
-                  autoFocus
-                />
-                <Button type="button" size="sm" disabled={!newAlias.trim() || aliasSaving} onClick={asyncHandler(handleAddAlias)}>
-                  {aliasSaving ? '...' : 'Add'}
-                </Button>
-                <button type="button" className="text-xs text-muted hover:text-neutral" onClick={() => { setAddingAlias(false); setNewAlias('') }}>Cancel</button>
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="rounded-full border border-dashed border-strong px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted hover:text-neutral hover:border-mono-500 transition-colors"
-                onClick={() => setAddingAlias(true)}
-              >+ alias</button>
-            )}
-          </div>
           )}
         </div>
         <div className="page-header-right">

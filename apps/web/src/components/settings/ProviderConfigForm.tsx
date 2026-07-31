@@ -75,7 +75,7 @@ export function ProviderConfigForm({ providerName, keyUrl, modelHint, onSaved }:
     <div className="mt-3 rounded-lg border border-base bg-bg-elevated/40 p-3 space-y-2">
       {isLocal && (
         <div>
-          <label className="text-xs text-muted" htmlFor={`base-url-${providerName}`}>Base URL</label>
+          <label className="text-sm text-secondary" htmlFor={`base-url-${providerName}`}>Base URL</label>
           <input
             id={`base-url-${providerName}`}
             type="text"
@@ -84,20 +84,20 @@ export function ProviderConfigForm({ providerName, keyUrl, modelHint, onSaved }:
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
           />
-          <p className="mt-0.5 text-[10px] text-faint">Any OpenAI-compatible endpoint — Ollama, LM Studio, llama.cpp, vLLM</p>
+          <p className="mt-1 text-sm text-secondary">Use any OpenAI-compatible endpoint, such as Ollama or vLLM.</p>
         </div>
       )}
       <div>
         <div className="flex items-center justify-between">
-          <label className="text-xs text-muted" htmlFor={`api-key-${providerName}`}>
-            API Key{isLocal ? ' (optional)' : ''}
+          <label className="text-sm text-secondary" htmlFor={`api-key-${providerName}`}>
+            API key{isLocal ? ' (optional)' : ''}
           </label>
           {keyUrl && (
             <a
               href={keyUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[10px] text-muted hover:text-neutral underline underline-offset-2"
+              className="text-sm text-secondary hover:text-neutral underline underline-offset-2"
             >
               Get API key {'\u2197'}
             </a>
@@ -107,13 +107,13 @@ export function ProviderConfigForm({ providerName, keyUrl, modelHint, onSaved }:
           id={`api-key-${providerName}`}
           type="password"
           className="mt-0.5 w-full rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
-          placeholder={isLocal ? 'Optional \u2014 most local servers don\'t need one' : `Enter ${providerName} API key`}
+          placeholder={isLocal ? 'Optional. Most local servers do not need one.' : `Enter ${providerName} API key`}
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
         />
       </div>
       <div>
-        <label className="text-xs text-muted" htmlFor={`model-${providerName}`}>Model (optional)</label>
+        <label className="text-sm text-secondary" htmlFor={`model-${providerName}`}>Model (optional)</label>
         <input
           id={`model-${providerName}`}
           type="text"
@@ -124,7 +124,7 @@ export function ProviderConfigForm({ providerName, keyUrl, modelHint, onSaved }:
         />
       </div>
       <div>
-        <label className="text-xs text-muted">Quota (optional)</label>
+        <label className="text-sm text-secondary">Quota (optional)</label>
         <div className="mt-0.5 grid grid-cols-3 gap-1.5">
           <div>
             <input
@@ -135,7 +135,7 @@ export function ProviderConfigForm({ providerName, keyUrl, modelHint, onSaved }:
               value={maxConcurrency}
               onChange={(e) => setMaxConcurrency(e.target.value)}
             />
-            <p className="mt-0.5 text-[10px] text-faint">Max concurrent</p>
+            <p className="mt-1 text-sm text-secondary">Max concurrent</p>
           </div>
           <div>
             <input
@@ -146,7 +146,7 @@ export function ProviderConfigForm({ providerName, keyUrl, modelHint, onSaved }:
               value={maxPerMinute}
               onChange={(e) => setMaxPerMinute(e.target.value)}
             />
-            <p className="mt-0.5 text-[10px] text-faint">Per minute</p>
+            <p className="mt-1 text-sm text-secondary">Per minute</p>
           </div>
           <div>
             <input
@@ -157,12 +157,12 @@ export function ProviderConfigForm({ providerName, keyUrl, modelHint, onSaved }:
               value={maxPerDay}
               onChange={(e) => setMaxPerDay(e.target.value)}
             />
-            <p className="mt-0.5 text-[10px] text-faint">Per day</p>
+            <p className="mt-1 text-sm text-secondary">Per day</p>
           </div>
         </div>
       </div>
-      {error && <p className="text-xs text-negative-400">{error}</p>}
-      {success && <p className="text-xs text-positive-400">Provider updated.</p>}
+      {error && <p className="text-sm text-negative-400">{error}</p>}
+      {success && <p className="text-sm text-positive-400">Provider updated.</p>}
       <Button type="button" size="sm" disabled={!canSave || saving} onClick={asyncHandler(handleSave)}>
         {saving ? 'Saving...' : 'Save'}
       </Button>

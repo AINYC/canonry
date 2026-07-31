@@ -54,7 +54,7 @@ describe('AuthGate', () => {
       })
 
       render(<AuthGate />)
-      expect(await screen.findByText('Portfolio')).toBeTruthy()
+      expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeTruthy()
     })
 
     test('shows connecting state while session check is pending', async () => {
@@ -86,7 +86,7 @@ describe('AuthGate', () => {
       })
 
       render(<AuthGate />)
-      expect(await screen.findByText('Portfolio')).toBeTruthy()
+      expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeTruthy()
 
       await act(async () => {
         handleAuthExpired()
@@ -103,7 +103,7 @@ describe('AuthGate', () => {
       })
 
       render(<AuthGate />)
-      expect(await screen.findByText('Portfolio')).toBeTruthy()
+      expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeTruthy()
 
       await act(async () => {
         handleAuthExpired()
@@ -127,7 +127,7 @@ describe('AuthGate', () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
 
       render(<AuthGate />)
-      expect(await screen.findByText('Portfolio')).toBeTruthy()
+      expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeTruthy()
 
       // Change the session state to unauthenticated
       sessionState.authenticated = false
@@ -162,7 +162,7 @@ describe('AuthGate', () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
 
       render(<AuthGate />)
-      expect(await screen.findByText('Portfolio')).toBeTruthy()
+      expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeTruthy()
 
       shouldThrow = true
 
