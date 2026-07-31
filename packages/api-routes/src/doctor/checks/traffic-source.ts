@@ -11,6 +11,7 @@ import {
   crawlerEventsHourly,
   trafficSources,
 } from '@ainyc/canonry-db'
+import { TRAFFIC_SOURCE_MAX_CATCHUP_MS } from '../../traffic-limits.js'
 import type { CheckDefinition, CheckOutput, DoctorContext, TrafficSourceProbe } from '../types.js'
 
 /**
@@ -411,9 +412,134 @@ const cacheBlindSpotCheck: CheckDefinition = {
   },
 }
 
+/**
+ * How far a watermark may fall behind before the source is judged not to be
+ * keeping up. Traffic syncs run on schedules measured in minutes, so a source
+ * hours behind is losing ground every cycle even while it reports success.
+ */
+const SYNC_LAG_WARN_MS = 3 * 60 * 60_000
+
+function formatLag(ms: number): string {
+  const hours = Math.floor(ms / 3_600_000)
+  const minutes = Math.round((ms % 3_600_000) / 60_000)
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`
+}
+
+/**
+ * Watermark lag, which `traffic.source.recent-data` structurally cannot see.
+ *
+ * That check asks whether any events landed in the last 7 days. A source that
+ * is 24h behind still has a full week of older data, so it reports `ok` while
+ * ingestion is falling further behind every cycle. Worse, a source whose
+ * adaptive drain advances less wall-clock per sync than the gap between syncs
+ * keeps completing successfully with `status: connected` and an empty
+ * `lastError` — nothing about the run surfaces the drift.
+ *
+ * For adapters with a bounded catch-up window (see TRAFFIC_SOURCE_MAX_CATCHUP_MS)
+ * that drift is not merely stale data: once the watermark falls past the window,
+ * every subsequent sync clamps its start forward and the skipped span is lost
+ * until backfilled. This check fails at that boundary and warns well before it,
+ * so the condition is caught while the data is still recoverable.
+ */
+const syncLagCheck: CheckDefinition = {
+  id: 'traffic.source.sync-lag',
+  category: CheckCategories.integrations,
+  scope: CheckScopes.project,
+  title: 'Traffic source sync lag',
+  run: (ctx) => {
+    if (!ctx.project) return skippedNoProject()
+    const sources = loadProbes(ctx)
+    if (sources.length === 0) {
+      return {
+        status: CheckStatuses.skipped,
+        code: 'traffic.sync-lag.no-source',
+        summary: 'No traffic source connected — sync lag check skipped.',
+      }
+    }
+
+    const now = Date.now()
+    const measured = sources.map((source) => {
+      const syncedMs = source.lastSyncedAt ? Date.parse(source.lastSyncedAt) : Number.NaN
+      const lagMs = Number.isFinite(syncedMs) ? now - syncedMs : null
+      const catchUpMs = TRAFFIC_SOURCE_MAX_CATCHUP_MS[source.sourceType as keyof typeof TRAFFIC_SOURCE_MAX_CATCHUP_MS]
+      return {
+        id: source.id,
+        sourceType: source.sourceType,
+        displayName: source.displayName,
+        lastSyncedAt: source.lastSyncedAt,
+        lagMs,
+        // Only adapters with a bounded catch-up window can lose data to lag.
+        discarding: catchUpMs !== undefined && lagMs !== null && lagMs >= catchUpMs,
+        catchUpMs: catchUpMs ?? null,
+      }
+    })
+
+    const details = {
+      sources: measured.map((m) => ({
+        id: m.id,
+        sourceType: m.sourceType,
+        displayName: m.displayName,
+        lastSyncedAt: m.lastSyncedAt,
+        lagMs: m.lagMs,
+        maxCatchUpMs: m.catchUpMs,
+        discardingOlderTraffic: m.discarding,
+      })),
+    }
+
+    const discarding = measured.filter((m) => m.discarding)
+    if (discarding.length > 0) {
+      return {
+        status: CheckStatuses.fail,
+        code: 'traffic.sync-lag.discarding',
+        summary:
+          `${discarding.length} traffic source(s) are further behind than a single sync can reach, so each sync now skips the oldest traffic instead of ingesting it: `
+          + `${discarding.map((m) => `${m.displayName} (${formatLag(m.lagMs!)} behind)`).join(', ')}.`,
+        remediation:
+          'Data is being lost now. Raise the per-sync drain budget (CANONRY_VERCEL_SYNC_DEADLINE_MS) and/or shorten the sync schedule so the source advances faster than wall-clock, then run `canonry traffic backfill <project> --source <id>` to recover the skipped span.',
+        details,
+      }
+    }
+
+    const lagging = measured.filter((m) => m.lagMs !== null && m.lagMs >= SYNC_LAG_WARN_MS)
+    if (lagging.length > 0) {
+      return {
+        status: CheckStatuses.warn,
+        code: 'traffic.sync-lag.behind',
+        summary:
+          `${lagging.length} traffic source(s) are more than ${formatLag(SYNC_LAG_WARN_MS)} behind: `
+          + `${lagging.map((m) => `${m.displayName} (${formatLag(m.lagMs!)} behind)`).join(', ')}. `
+          + 'Syncs are completing, but the watermark is not keeping up with wall-clock.',
+        remediation:
+          'Shorten the sync schedule (`canonry schedule set <project> --kind traffic-sync --cron "*/10 * * * *"`) or raise the per-sync drain budget (CANONRY_VERCEL_SYNC_DEADLINE_MS) so each cycle advances further than the gap between cycles.',
+        details,
+      }
+    }
+
+    const neverSynced = measured.filter((m) => m.lagMs === null)
+    if (neverSynced.length === measured.length) {
+      return {
+        status: CheckStatuses.warn,
+        code: 'traffic.sync-lag.never-synced',
+        summary: `${neverSynced.length} traffic source(s) have never recorded a successful sync.`,
+        remediation: 'Run `canonry traffic sync <project> --source <id>` and confirm the source has a schedule.',
+        details,
+      }
+    }
+
+    const worst = measured.reduce((a, b) => ((b.lagMs ?? -1) > (a.lagMs ?? -1) ? b : a))
+    return {
+      status: CheckStatuses.ok,
+      code: 'traffic.sync-lag.current',
+      summary: `Traffic sources are current — furthest behind is ${worst.displayName} at ${worst.lagMs === null ? 'never synced' : formatLag(worst.lagMs)}.`,
+      details,
+    }
+  },
+}
+
 export const TRAFFIC_SOURCE_CHECKS: readonly CheckDefinition[] = [
   sourceConnectedCheck,
   recentDataCheck,
+  syncLagCheck,
   credentialsCheck,
   scopesCheck,
   cacheBlindSpotCheck,

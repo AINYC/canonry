@@ -14,13 +14,18 @@ import {
 import { TRAFFIC_SOURCE_CHECKS } from '../src/doctor/checks/traffic-source.js'
 import type { CheckOutput, DoctorContext, ProjectInfo, TrafficSourceProbe, TrafficSourceValidator } from '../src/doctor/types.js'
 
-const [
-  sourceConnectedCheck,
-  recentDataCheck,
-  credentialsCheck,
-  scopesCheck,
-  cacheBlindSpotCheck,
-] = TRAFFIC_SOURCE_CHECKS
+// Bind by id, not position: positional destructuring silently rebinds every
+// check to the wrong assertions the moment one is inserted into the array.
+const checkById = (id: string) => {
+  const found = TRAFFIC_SOURCE_CHECKS.find(check => check.id === id)
+  if (!found) throw new Error(`No traffic source check registered with id "${id}"`)
+  return found
+}
+const sourceConnectedCheck = checkById('traffic.source.connected')
+const recentDataCheck = checkById('traffic.source.recent-data')
+const credentialsCheck = checkById('traffic.source.credentials')
+const scopesCheck = checkById('traffic.source.scopes')
+const cacheBlindSpotCheck = checkById('traffic.source.cache-blindspot')
 
 interface Harness {
   db: ReturnType<typeof createClient>
@@ -360,11 +365,12 @@ describe('traffic.source.cache-blindspot', () => {
 })
 
 describe('check definitions', () => {
-  it('exports five checks at well-known IDs', () => {
+  it('exports the checks at well-known IDs', () => {
     const ids = TRAFFIC_SOURCE_CHECKS.map((c) => c.id)
     expect(ids).toEqual([
       'traffic.source.connected',
       'traffic.source.recent-data',
+      'traffic.source.sync-lag',
       'traffic.source.credentials',
       'traffic.source.scopes',
       'traffic.source.cache-blindspot',

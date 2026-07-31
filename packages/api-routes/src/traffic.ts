@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import { Agent as UndiciAgent } from 'undici'
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
+import { DEFAULT_VERCEL_SYNC_DEADLINE_MS, VERCEL_MAX_SYNC_WINDOW_MS } from './traffic-limits.js'
 import {
   trafficSources,
   crawlerEventsHourly,
@@ -260,21 +261,13 @@ const DEFAULT_VERCEL_MAX_PAGES = 50
 // gives up. This bounds provider calls for pathological windows while still
 // leaving room for bursty minutes to drain through one-second slices.
 const VERCEL_MAX_SUB_WINDOWS = 5_000
-// Cap how far back a single incremental Vercel sync reaches. A watermark that
-// has drifted — the source idled while its schedule was paused or missing —
-// would otherwise request a pull back to DEFAULT_SYNC_WINDOW_MINUTES (30 days)
-// and make the adaptive drain grind through days of sub-windows on one sync.
-// Clamp the start to at most this far before the sync instant; the skipped
-// pre-cap span is surfaced (warn), never silently dropped — a backfill recovers
-// it. The per-sync deadline below bounds the drain even within this window.
-const VERCEL_MAX_SYNC_WINDOW_MS = 24 * 60 * 60_000
-// Wall-clock budget for a single incremental Vercel sync's adaptive drain. The
-// drain checks this before each sub-window pull; on hit it stops and reports how
-// far it got, and the route commits that partial window + advances `lastSyncedAt`
-// to it. Without this bound a dense or slow window runs for many minutes — timing
-// out the caller and leaving an orphaned 'running' run. Override via
-// `vercelSyncDeadlineMs`; a fully-drained window never approaches it.
-const DEFAULT_VERCEL_SYNC_DEADLINE_MS = 4 * 60_000
+// VERCEL_MAX_SYNC_WINDOW_MS caps how far back one incremental sync reaches, and
+// DEFAULT_VERCEL_SYNC_DEADLINE_MS bounds the adaptive drain's wall-clock budget
+// within that window. Both live in traffic-limits.ts so the doctor sync-lag check
+// reads the same numbers this route enforces; a duplicated literal would drift
+// and make the health check wrong about when data starts being discarded.
+// The deadline is overridable via `vercelSyncDeadlineMs`
+// (env: CANONRY_VERCEL_SYNC_DEADLINE_MS).
 // Vercel request-logs uses page-number pagination inside a fixed time window.
 // Backfill large ranges as independent hour chunks so each chunk gets the full
 // adaptive sub-window budget and one dense hour cannot make a multi-day
