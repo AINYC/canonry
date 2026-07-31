@@ -6,7 +6,7 @@ import type { NotificationEvent, WebhookPayload, InsightWebhookPayload, HealthWe
 import type { AnalysisResult } from '@ainyc/canonry-intelligence'
 import crypto from 'node:crypto'
 import { createLogger } from './logger.js'
-import { toDiscordWebhookBody } from './discord-payload.js'
+import { isDiscordWebhookUrl, toDiscordWebhookBody } from './discord-payload.js'
 
 const log = createLogger('Notifier')
 
@@ -98,7 +98,7 @@ export class Notifier {
           dashboardUrl: `${this.serverUrl}/projects/${project.name}`,
         }
 
-        await this.sendWebhook(config.url, payload, notif.id, projectId, notif.webhookSecret ?? null, notif.channel)
+        await this.sendWebhook(config.url, payload, notif.id, projectId, notif.webhookSecret ?? null)
       }
     }
   }
@@ -235,7 +235,7 @@ export class Notifier {
     for (const notif of notifs) {
       const config = notif.config as { url: string; events?: string[] }
       if (!config.url) continue
-      await this.sendWebhook(config.url, payload as unknown as WebhookPayload, notif.id, projectId, notif.webhookSecret ?? null, notif.channel)
+      await this.sendWebhook(config.url, payload as unknown as WebhookPayload, notif.id, projectId, notif.webhookSecret ?? null)
       delivered += 1
     }
     if (delivered > 0) {
@@ -295,7 +295,7 @@ export class Notifier {
           })),
           dashboardUrl: `${this.serverUrl}/projects/${project.name}`,
         }
-        await this.sendWebhook(config.url, payload, notif.id, projectId, notif.webhookSecret ?? null, notif.channel)
+        await this.sendWebhook(config.url, payload, notif.id, projectId, notif.webhookSecret ?? null)
       }
     }
   }
@@ -469,16 +469,16 @@ export class Notifier {
     return transitions
   }
 
-  private async sendWebhook(url: string, payload: WebhookPayload | InsightWebhookPayload, notificationId: string, projectId: string, webhookSecret: string | null, channel: string = 'webhook'): Promise<void> {
-    // Discord rejects arbitrary JSON with a 400, so a Discord-bound
-    // notification is reshaped into an embed here. Still a plain HTTP POST —
-    // no agent in the path, nothing per-message beyond the request.
-    const body = channel === 'discord'
-      ? toDiscordWebhookBody(payload as never)
-      : payload
-    // Discord does not verify our HMAC, and signing a body it never checks only
-    // leaks that a secret exists. Sign first-party receivers only.
-    const signingSecret = channel === 'discord' ? null : webhookSecret
+  private async sendWebhook(url: string, payload: WebhookPayload | InsightWebhookPayload, notificationId: string, projectId: string, webhookSecret: string | null): Promise<void> {
+    // A Discord webhook is just a webhook whose body has to look a particular
+    // way, so it is detected from the URL rather than declared as its own
+    // channel. Discord rejects arbitrary JSON with a 400; everything else about
+    // the send is unchanged.
+    const discord = isDiscordWebhookUrl(url)
+    const body = discord ? toDiscordWebhookBody(payload as never) : payload
+    // Discord never verifies our HMAC, and signing a body the receiver ignores
+    // only advertises that a secret exists. Sign first-party receivers only.
+    const signingSecret = discord ? null : webhookSecret
     const targetLabel = redactNotificationUrl(url).urlDisplay
     const targetCheck = await resolveWebhookTarget(url)
     if (!targetCheck.ok) {

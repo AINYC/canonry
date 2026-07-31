@@ -1,6 +1,6 @@
 import { addNotification, listEvents, listNotifications, removeNotification, testNotification } from '../commands/notify.js'
 import type { CliCommandSpec } from '../cli-dispatch.js'
-import { getString, requirePositional, requireProject, requireStringOption, stringOption, unknownSubcommand } from '../cli-command-helpers.js'
+import { requirePositional, requireProject, requireStringOption, stringOption, unknownSubcommand } from '../cli-command-helpers.js'
 
 export const NOTIFY_CLI_COMMANDS: readonly CliCommandSpec[] = [
   {
@@ -12,32 +12,26 @@ export const NOTIFY_CLI_COMMANDS: readonly CliCommandSpec[] = [
   },
   {
     path: ['notify', 'add'],
-    usage: 'canonry notify add <project> --webhook <url> --events <list> [--channel webhook|discord] [--format json]',
+    usage: 'canonry notify add <project> --webhook <url> --events <list> [--format json]',
     options: {
       webhook: stringOption(),
       events: stringOption(),
-      channel: stringOption(),
     },
     run: async (input) => {
-      const project = requireProject(input, 'notify.add', 'canonry notify add <project> --webhook <url> --events <list> [--channel webhook|discord] [--format json]')
+      const project = requireProject(input, 'notify.add', 'canonry notify add <project> --webhook <url> --events <list> [--format json]')
       const webhook = requireStringOption(input, 'webhook', {
         command: 'notify.add',
-        usage: 'canonry notify add <project> --webhook <url> --events <list> [--channel webhook|discord] [--format json]',
+        usage: 'canonry notify add <project> --webhook <url> --events <list> [--format json]',
         message: '--webhook is required',
       })
       const events = requireStringOption(input, 'events', {
         command: 'notify.add',
-        usage: 'canonry notify add <project> --webhook <url> --events <list> [--channel webhook|discord] [--format json]',
+        usage: 'canonry notify add <project> --webhook <url> --events <list> [--format json]',
         message: '--events is required (comma-separated). Use "canonry notify events" to see valid events.',
       })
-      const channel = getString(input.values, 'channel')?.trim()
-      if (channel !== undefined && channel !== 'webhook' && channel !== 'discord') {
-        throw new Error('--channel must be "webhook" or "discord"')
-      }
       await addNotification(project, {
         webhook,
         events: events.split(',').map(entry => entry.trim()).filter(Boolean),
-        ...(channel ? { channel } : {}),
         format: input.format,
       })
     },

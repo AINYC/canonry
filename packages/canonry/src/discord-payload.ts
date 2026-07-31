@@ -7,15 +7,32 @@ import type {
 /**
  * Reshape a canonry notification into a Discord embed.
  *
- * Discord webhooks accept only their own envelope and reject arbitrary JSON
- * with a 400, so a notification aimed at Discord cannot be the same bytes we
- * send to a first-party receiver. Delivery is still a plain HTTP POST: no
- * agent, no model, nothing per-message beyond the request itself.
+ * A Discord webhook IS a webhook, so it needs no channel type of its own — the
+ * URL identifies it unambiguously and the only difference is the body Discord
+ * will accept. Discord rejects arbitrary JSON with a 400, so the payload is
+ * reshaped at send time; everything else (SSRF guard, retries, delivery log) is
+ * the ordinary webhook path.
  *
  * The health events get the most structure because they are the ones read
  * under pressure: an operator seeing this at 3am needs the project, what broke,
  * and the next command, without opening a dashboard.
  */
+
+/**
+ * A Discord webhook endpoint, by host. Matching the host (not a substring)
+ * keeps `discord.com.evil.test` from being handed an embed, and keeps a
+ * first-party receiver that merely mentions discord in its path on the normal
+ * signed path.
+ */
+export function isDiscordWebhookUrl(rawUrl: string): boolean {
+  let url: URL
+  try { url = new URL(rawUrl) } catch { return false }
+  if (url.protocol !== 'https:') return false
+  const host = url.hostname.toLowerCase()
+  const discordHost = host === 'discord.com' || host === 'discordapp.com'
+    || host.endsWith('.discord.com') || host.endsWith('.discordapp.com')
+  return discordHost && url.pathname.startsWith('/api/webhooks/')
+}
 
 /** Discord rejects embeds whose description exceeds 4096 characters. */
 const MAX_DESCRIPTION = 3800

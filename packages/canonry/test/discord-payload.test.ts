@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { toDiscordWebhookBody } from '../src/discord-payload.js'
+import { isDiscordWebhookUrl, toDiscordWebhookBody } from '../src/discord-payload.js'
 import type { HealthWebhookPayload, WebhookPayload } from '@ainyc/canonry-contracts'
 
 // Discord rejects arbitrary JSON with a 400, so a notification aimed at Discord
@@ -80,4 +80,18 @@ test('run events also reshape rather than being posted raw', () => {
   const embed = toDiscordWebhookBody(payload).embeds[0]!
   expect(embed.title).toContain('azcoatings')
   expect(embed.fields!.some(f => f.name.startsWith('Changes'))).toBe(true)
+})
+
+test('a Discord webhook is recognised by its URL, and lookalikes are not', () => {
+  expect(isDiscordWebhookUrl('https://discord.com/api/webhooks/123/abc')).toBe(true)
+  expect(isDiscordWebhookUrl('https://discordapp.com/api/webhooks/123/abc')).toBe(true)
+  expect(isDiscordWebhookUrl('https://ptb.discord.com/api/webhooks/123/abc')).toBe(true)
+
+  // A lookalike host must never be handed an embed.
+  expect(isDiscordWebhookUrl('https://discord.com.evil.test/api/webhooks/1/a')).toBe(false)
+  // A first-party receiver that merely mentions discord stays on the signed path.
+  expect(isDiscordWebhookUrl('https://hooks.example.com/relay/discord')).toBe(false)
+  expect(isDiscordWebhookUrl('http://discord.com/api/webhooks/123/abc')).toBe(false)
+  expect(isDiscordWebhookUrl('https://discord.com/api/other/123')).toBe(false)
+  expect(isDiscordWebhookUrl('not a url')).toBe(false)
 })
