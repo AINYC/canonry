@@ -145,6 +145,12 @@ export const cdpChatgptAdapter: ProviderAdapter = {
         model: 'chatgpt-web',
         groundingSources,
         searchQueries: [input.query],
+        // This surface is scraped from the rendered web UI, which exposes no
+        // reliable signal for whether a retrieval step ran behind the answer.
+        // `searchQueries` here is the query we submitted, not evidence of a
+        // search the product performed.
+        retrievalStatus: 'unknown' as const,
+        retrievalContract: 'native-auto-v1' as const,
         screenshotPath: capturedScreenshotPath,
       }
     } catch (err: unknown) {

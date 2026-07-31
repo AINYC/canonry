@@ -128,6 +128,11 @@ export async function backfillAnswerVisibilityCommand(opts?: {
               citedDomains: reparsedResult.citedDomains,
               groundingSources: reparsedResult.groundingSources,
               searchQueries: reparsedResult.searchQueries,
+              // Backfill recomputes mention and citation state from stored
+              // rows; it never observes retrieval and never writes it back
+              // (nextPatch carries no retrieval field). `unknown` keeps this
+              // reconstruction from asserting anything about a search.
+              retrievalStatus: 'unknown',
             }
 
             const nextCitationState = determineCitationState(normalized, projectDomains)
@@ -548,6 +553,9 @@ export function backfillProjectAnswerMentions(
         answerText,
         citedDomains,
         groundingSources,
+        // See the note above: retrieval is not observed or written here.
+        retrievalStatus: 'unknown',
+
         searchQueries: [],
       }
 

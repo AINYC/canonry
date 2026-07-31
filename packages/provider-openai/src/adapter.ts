@@ -79,6 +79,13 @@ export const openaiAdapter: ProviderAdapter = {
       servedModel: raw.servedModel,
       groundingSources: raw.groundingSources,
       searchQueries: raw.searchQueries,
+      // Retrieval detection is not implemented for this provider. Its candidate
+      // marker is present on 100% of stored rows, so it has never been shown to
+      // discriminate a non-retrieving answer and wiring it up would hardcode
+      // `used`. `unknown` states what we actually know. The contract is a
+      // declaration about how we build the request, so it is always knowable.
+      retrievalStatus: 'unknown' as const,
+      retrievalContract: 'native-auto-v1' as const,
     }
   },
 
@@ -97,6 +104,7 @@ export const openaiAdapter: ProviderAdapter = {
       citedDomains: normalized.citedDomains,
       groundingSources: normalized.groundingSources,
       searchQueries: normalized.searchQueries,
+      retrievalStatus: 'unknown' as const,
     }
   },
 

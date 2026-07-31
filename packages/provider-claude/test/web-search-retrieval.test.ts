@@ -174,17 +174,27 @@ test('an undeterminable response is unknown, never not-used', async () => {
   }
 })
 
-test('the adapter boundary reports unknown rather than inventing a status', async () => {
-  // The shared RawQueryResult cannot carry retrieval until #879 lands, so a
-  // result reconstructed from it has genuinely lost the observation. It must say
-  // so rather than default to a value that reads as a real measurement.
+test('retrieval survives the adapter boundary so the snapshot can record it', async () => {
+  // The shared RawQueryResult carries retrieval, so what the provider observed
+  // reaches the job runner intact. Without this the forced-search behaviour
+  // would change search policy while writing snapshots whose contract could
+  // never be reconstructed, which is the failure this PR exists to prevent.
   captureRequest(message(SEARCHED_AND_CITED))
   try {
     const viaAdapter = await claudeAdapter.executeTrackedQuery(QUERY, CONFIG)
-    // Proves the gap this PR must close before merging: the provider observed a
-    // search, and nothing downstream can see that.
-    expect('retrievalStatus' in viaAdapter).toBe(false)
-    expect(claudeAdapter.normalizeResult(viaAdapter)).not.toHaveProperty('retrievalStatus')
+    expect(viaAdapter.retrievalStatus).toBe('used')
+    expect(viaAdapter.retrievalContract).toBe('search-required-v1')
+    expect(claudeAdapter.normalizeResult(viaAdapter).retrievalStatus).toBe('used')
+  } finally {
+    vi.unstubAllGlobals()
+  }
+
+  // And an answer that did not search stays marked as such across the boundary.
+  captureRequest(message(UNSEARCHED))
+  try {
+    const viaAdapter = await claudeAdapter.executeTrackedQuery(QUERY, CONFIG)
+    expect(viaAdapter.retrievalStatus).toBe('not-used')
+    expect(claudeAdapter.normalizeResult(viaAdapter).retrievalStatus).toBe('not-used')
   } finally {
     vi.unstubAllGlobals()
   }

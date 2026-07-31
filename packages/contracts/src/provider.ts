@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { GroundingSource } from './run.js'
 import type { ProviderModelRegistry } from './models.js'
+import type { RetrievalContract, RetrievalStatus } from './retrieval.js'
 
 export const providerQuotaPolicySchema = z.object({
   maxConcurrency: z.number().int().positive(),
@@ -179,6 +180,15 @@ export interface RawQueryResult {
   servedModel?: string
   groundingSources: GroundingSource[]
   searchQueries: string[]
+  /**
+   * Whether this provider retrieved for this answer. Required, not optional:
+   * a search-policy change must never be able to produce an unmarked snapshot,
+   * so every adapter is forced to state a value rather than silently omit one.
+   * `unknown` is the correct answer where detection is not implemented.
+   */
+  retrievalStatus: RetrievalStatus
+  /** The search policy this request was constructed under. */
+  retrievalContract: RetrievalContract
   /** Filesystem path to cropped screenshot PNG (CDP providers only) */
   screenshotPath?: string
 }
@@ -204,6 +214,8 @@ export interface NormalizedQueryResult {
   citedDomains: string[]
   groundingSources: GroundingSource[]
   searchQueries: string[]
+  /** See {@link RawQueryResult.retrievalStatus}. */
+  retrievalStatus: RetrievalStatus
 }
 
 export interface ProviderHealthcheckResult {
