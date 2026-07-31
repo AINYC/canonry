@@ -1,31 +1,31 @@
 import { expect, test } from 'vitest'
 
 import {
-  summarizeSignalHistory,
-  summarizeSignalsForItems,
-} from '../src/components/project/EvidenceTable.js'
+  historyObservation,
+  queryHistoryDateAxis,
+} from '../src/components/project/QueryEvidenceHistory.js'
+import {
+  buildQueryEvidenceGroups,
+} from '../src/components/project/query-evidence-model.js'
 import type { CitationInsightVm, RunHistoryPoint } from '../src/view-models.js'
 
-function point(overrides: Partial<RunHistoryPoint>): RunHistoryPoint {
+function point(overrides: Partial<RunHistoryPoint> = {}): RunHistoryPoint {
   return {
     runId: overrides.runId ?? 'run',
-    createdAt: overrides.createdAt ?? '2026-06-01T00:00:00Z',
+    createdAt: overrides.createdAt ?? '2026-06-01T12:00:00Z',
     citationState: overrides.citationState ?? 'not-cited',
-    answerMentioned: overrides.answerMentioned,
-    visibilityState: overrides.visibilityState,
     ...overrides,
   }
 }
 
-function item(history: RunHistoryPoint[]): CitationInsightVm {
+function item(history: RunHistoryPoint[], overrides: Partial<CitationInsightVm> = {}): CitationInsightVm {
   return {
-    id: crypto.randomUUID(),
-    query: 'test query',
-    provider: 'gemini',
+    id: overrides.id ?? 'evidence',
+    query: overrides.query ?? 'best local dentist',
+    provider: overrides.provider ?? 'gemini',
     model: null,
-    location: null,
-    citationState: 'not-cited',
-    answerMentioned: history.at(-1)?.answerMentioned,
+    location: overrides.location ?? null,
+    citationState: overrides.citationState ?? 'not-cited',
     changeLabel: '',
     answerSnippet: '',
     citedDomains: [],
@@ -35,41 +35,142 @@ function item(history: RunHistoryPoint[]): CitationInsightVm {
     groundingSources: [],
     summary: '',
     runHistory: history,
+    ...overrides,
   } as CitationInsightVm
 }
 
-test('summarizeSignalHistory detects a new mention independently from citation state', () => {
-  const history = [
-    point({ runId: 'r1', createdAt: '2026-06-01T00:00:00Z', citationState: 'not-cited', answerMentioned: false }),
-    point({ runId: 'r2', createdAt: '2026-06-02T00:00:00Z', citationState: 'not-cited', answerMentioned: true }),
-  ]
+test('history keeps mention and citation observations independent', () => {
+  const run = point({
+    citationState: 'cited',
+    mentionState: 'not-mentioned',
+    answerMentioned: false,
+  })
 
-  expect(summarizeSignalHistory(history, 'mentions')).toMatchObject({ label: 'New mention', tone: 'positive' })
-  expect(summarizeSignalHistory(history, 'citations')).toMatchObject({ label: 'No citation', tone: 'neutral' })
+  expect(historyObservation(run, 'citations')).toBe('present')
+  expect(historyObservation(run, 'mentions')).toBe('absent')
 })
 
-test('summarizeSignalHistory detects a new citation without treating it as a mention', () => {
-  const history = [
-    point({ runId: 'r1', createdAt: '2026-06-01T00:00:00Z', citationState: 'not-cited', answerMentioned: false }),
-    point({ runId: 'r2', createdAt: '2026-06-02T00:00:00Z', citationState: 'cited', answerMentioned: false }),
-  ]
+test('missing mention data is not coerced into pending or absent', () => {
+  const run = point({ citationState: 'cited' })
 
-  expect(summarizeSignalHistory(history, 'mentions')).toMatchObject({ label: 'No mention', tone: 'neutral' })
-  expect(summarizeSignalHistory(history, 'citations')).toMatchObject({ label: 'New citation', tone: 'positive' })
+  expect(historyObservation(run, 'mentions')).toBe('not-recorded')
+  expect(historyObservation(run, 'citations')).toBe('present')
 })
 
-test('summarizeSignalsForItems aggregates provider rows into latest-run chips', () => {
-  const stableProvider = item([
-    point({ runId: 'r1', createdAt: '2026-06-01T00:00:00Z', citationState: 'not-cited', answerMentioned: false }),
-    point({ runId: 'r2', createdAt: '2026-06-02T00:00:00Z', citationState: 'not-cited', answerMentioned: false }),
-  ])
-  const gainingProvider = item([
-    point({ runId: 'r1', createdAt: '2026-06-01T00:00:00Z', citationState: 'not-cited', answerMentioned: false }),
-    point({ runId: 'r2', createdAt: '2026-06-02T00:00:00Z', citationState: 'cited', answerMentioned: true }),
+test('explicit pending data remains pending', () => {
+  const run = point({
+    citationState: 'pending',
+    mentionState: 'pending',
+  })
+
+  expect(historyObservation(run, 'mentions')).toBe('pending')
+  expect(historyObservation(run, 'citations')).toBe('pending')
+})
+
+test('shared history axis aligns engines and retains only the requested recent dates', () => {
+  const axis = queryHistoryDateAxis([
+    {
+      key: 'gemini',
+      provider: 'gemini',
+      location: null,
+      history: [
+        point({ runId: 'g1', createdAt: '2026-06-01T12:00:00Z' }),
+        point({ runId: 'g3', createdAt: '2026-06-03T12:00:00Z' }),
+      ],
+    },
+    {
+      key: 'openai',
+      provider: 'openai',
+      location: null,
+      history: [
+        point({ runId: 'o2', createdAt: '2026-06-02T12:00:00Z' }),
+        point({ runId: 'o3', createdAt: '2026-06-03T18:00:00Z' }),
+      ],
+    },
+  ], 2)
+
+  expect(axis).toEqual({
+    dateKeys: ['2026-06-02', '2026-06-03'],
+    hiddenDayCount: 1,
+    hiddenEarlierDayCount: 1,
+    hiddenLaterDayCount: 0,
+    totalDayCount: 3,
+  })
+
+  expect(queryHistoryDateAxis([
+    {
+      key: 'gemini',
+      provider: 'gemini',
+      location: null,
+      history: [
+        point({ runId: 'g1', createdAt: '2026-06-01T12:00:00Z' }),
+        point({ runId: 'g2', createdAt: '2026-06-02T12:00:00Z' }),
+        point({ runId: 'g3', createdAt: '2026-06-03T12:00:00Z' }),
+      ],
+    },
+  ], 2, 2)).toMatchObject({
+    dateKeys: ['2026-06-01'],
+    hiddenEarlierDayCount: 0,
+    hiddenLaterDayCount: 2,
+  })
+})
+
+test.each([
+  ['unscoped to scoped', null, 'florida'],
+  ['scoped to unscoped', 'florida', null],
+] as const)('%s history never creates a false change', (_label, from, to) => {
+  const groups = buildQueryEvidenceGroups([
+    item([
+      point({
+        runId: 'prior',
+        citationState: 'cited',
+        mentionState: 'mentioned',
+        location: from,
+      }),
+      point({
+        runId: 'latest',
+        createdAt: '2026-06-02T12:00:00Z',
+        citationState: 'not-cited',
+        mentionState: 'not-mentioned',
+        location: to,
+      }),
+    ]),
   ])
 
-  expect(summarizeSignalsForItems([stableProvider, gainingProvider])).toEqual([
-    { key: 'mentions', label: 'New mention', tone: 'positive' },
-    { key: 'citations', label: 'New citation', tone: 'positive' },
+  expect(groups[0]).toMatchObject({
+    changed: false,
+    hasPriorComparison: false,
+    eventCopy: 'First recorded result',
+  })
+})
+
+test('the latest result is compared with an earlier UTC day, not a same-day rerun', () => {
+  const groups = buildQueryEvidenceGroups([
+    item([
+      point({
+        runId: 'prior-day',
+        createdAt: '2026-06-01T17:39:00Z',
+        citationState: 'not-cited',
+        mentionState: 'not-mentioned',
+      }),
+      point({
+        runId: 'same-day-gain',
+        createdAt: '2026-06-02T17:39:00Z',
+        citationState: 'cited',
+        mentionState: 'mentioned',
+      }),
+      point({
+        runId: 'same-day-latest',
+        createdAt: '2026-06-02T17:51:00Z',
+        citationState: 'not-cited',
+        mentionState: 'not-mentioned',
+      }),
+    ]),
   ])
+
+  expect(groups[0]).toMatchObject({
+    changed: false,
+    hasPriorComparison: true,
+    eventCopy: 'No change from previous result',
+  })
 })

@@ -2121,6 +2121,42 @@
 
   /* ── Evidence table ── */
 
+  .evidence-quick-views {
+    @apply flex items-end gap-5 overflow-x-auto border-b border-subtle;
+  }
+
+  .evidence-quick-views-label {
+    @apply shrink-0 pb-2.5 text-[10px] font-medium uppercase tracking-wide text-secondary;
+  }
+
+  .evidence-quick-view-list {
+    @apply flex min-w-max items-end gap-5;
+  }
+
+  .evidence-quick-view {
+    @apply -mb-px inline-flex min-h-9 items-center gap-1.5 rounded-sm border-b-2 border-transparent px-0.5 pb-2.5 pt-1 text-xs font-medium text-secondary transition-colors hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg;
+  }
+
+  .evidence-quick-view--active {
+    @apply border-accent text-heading;
+  }
+
+  .evidence-quick-view:disabled {
+    @apply cursor-not-allowed text-faint opacity-50;
+  }
+
+  .evidence-quick-view-count {
+    @apply font-mono text-[10px] tabular-nums text-secondary;
+  }
+
+  .evidence-quick-view--active .evidence-quick-view-count {
+    @apply text-strong;
+  }
+
+  .evidence-quick-view:disabled .evidence-quick-view-count {
+    @apply text-faint;
+  }
+
   .evidence-table-wrap {
     @apply overflow-x-auto rounded-xl border border-default;
   }
@@ -2133,8 +2169,8 @@
     @apply border-b border-default bg-bg-elevated/50;
   }
 
-  .evidence-table th {
-    @apply px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-muted;
+  .evidence-table thead th {
+    @apply px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-secondary;
   }
 
   .evidence-table tbody tr {
@@ -2145,7 +2181,8 @@
     @apply border-b-0;
   }
 
-  .evidence-table td {
+  .evidence-table td,
+  .evidence-table tbody th {
     @apply px-4 py-3 text-neutral;
   }
 
@@ -2153,8 +2190,115 @@
     @apply font-medium text-heading;
   }
 
-  .evidence-change-cell {
-    @apply text-xs text-muted;
+  /* ── Query change inbox ── */
+
+  .query-change-controls {
+    @apply mb-4 grid gap-3;
+  }
+
+  .query-change-filter-row {
+    @apply flex flex-wrap items-end justify-between gap-3;
+  }
+
+  .query-change-comparison-note {
+    @apply inline-flex items-center gap-1 text-[11px] leading-relaxed text-secondary;
+  }
+
+  .query-change-empty {
+    @apply rounded-xl border border-default bg-surface/30 px-5 py-8 text-center;
+  }
+
+  .query-change-table-wrap {
+    @apply overflow-hidden rounded-xl border border-default;
+  }
+
+  .query-change-table {
+    @apply w-full table-fixed text-sm;
+  }
+
+  .query-change-table thead {
+    @apply border-b border-default bg-bg-elevated/50;
+  }
+
+  .query-change-table thead th {
+    @apply px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-secondary;
+  }
+
+  .query-change-table thead th:nth-child(1) {
+    width: 34%;
+  }
+
+  .query-change-table thead th:nth-child(2) {
+    width: 35%;
+  }
+
+  .query-change-table thead th:nth-child(3) {
+    width: 17%;
+  }
+
+  .query-change-table thead th:nth-child(4) {
+    width: 14%;
+  }
+
+  .query-change-row {
+    @apply border-b border-mono-800/30 transition-colors hover:bg-surface;
+  }
+
+  .query-change-row:last-child {
+    @apply border-b-0;
+  }
+
+  .query-change-row > th,
+  .query-change-row > td {
+    @apply px-4 py-3.5 align-middle;
+  }
+
+  .query-change-query {
+    @apply text-left font-medium leading-snug text-heading;
+  }
+
+  .query-change-query > span:first-child {
+    @apply block break-words;
+  }
+
+  .query-change-query-meta {
+    @apply mt-1 block text-[11px] font-normal text-secondary;
+  }
+
+  .query-change-copy {
+    @apply text-xs leading-relaxed;
+  }
+
+  .query-change-copy > span:first-child {
+    @apply block;
+  }
+
+  .query-change-copy--loss {
+    @apply text-negative;
+  }
+
+  .query-change-copy--gain {
+    @apply text-positive;
+  }
+
+  .query-change-copy--neutral {
+    @apply text-secondary;
+  }
+
+  .query-change-more {
+    @apply mt-0.5 block text-[11px] text-secondary;
+  }
+
+  .query-change-observed {
+    @apply text-xs tabular-nums text-secondary;
+  }
+
+  .query-change-action {
+    @apply text-right;
+  }
+
+  .query-change-sort {
+    @apply inline-flex min-h-6 items-center gap-1 rounded text-left hover:text-strong focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-mono-400;
   }
 
   /* ── Findings table ── */
@@ -2688,6 +2832,347 @@
 
   .evidence-run-dot--selected {
     @apply bg-mono-800 ring-1 ring-mono-600;
+  }
+
+  /* ── Query evidence drawer ── */
+
+  .query-evidence-drawer {
+    @apply md:max-w-[min(92vw,1200px)];
+  }
+
+  .query-evidence-history {
+    @apply grid gap-3 rounded-xl border border-default bg-surface-subtle p-3;
+  }
+
+  .query-evidence-history-head {
+    @apply flex flex-wrap items-end justify-between gap-3;
+  }
+
+  .query-signal-selector {
+    @apply flex items-end gap-4 border-b border-subtle;
+  }
+
+  .query-signal-option {
+    @apply -mb-px min-h-9 border-b-2 border-transparent px-0.5 pb-2 text-xs font-medium text-secondary transition-colors hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent;
+  }
+
+  .query-signal-option--active {
+    @apply border-accent text-heading;
+  }
+
+  .query-history-table-wrap {
+    @apply overflow-x-auto rounded-lg border border-default bg-bg;
+    scrollbar-gutter: stable;
+  }
+
+  .query-history-table {
+    @apply w-max min-w-full border-separate border-spacing-0 text-xs;
+  }
+
+  .query-history-table thead th {
+    @apply sticky top-0 z-10 min-w-28 border-b border-r border-default bg-bg-elevated px-2 py-2 text-center font-medium text-secondary;
+  }
+
+  .query-history-table thead th:first-child {
+    @apply sticky left-0 z-20 min-w-32 text-left;
+  }
+
+  .query-history-table thead th:last-child {
+    @apply border-r-0;
+  }
+
+  .query-history-timezone {
+    @apply ml-1 text-[9px] font-normal text-faint;
+  }
+
+  .query-history-table tbody th {
+    @apply sticky left-0 z-10 min-w-32 border-b border-r border-default bg-bg px-2 py-2 text-left font-normal;
+  }
+
+  .query-history-table tbody td {
+    @apply min-w-28 border-b border-r border-default bg-bg p-1.5 text-center;
+  }
+
+  .query-history-table tbody tr:last-child th,
+  .query-history-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+
+  .query-history-table tbody td:last-child {
+    @apply border-r-0;
+  }
+
+  .query-history-location {
+    @apply mt-1 block max-w-28 truncate font-mono text-[9px] text-secondary;
+  }
+
+  .query-history-value {
+    @apply flex min-h-11 w-full flex-col items-center justify-center gap-0.5 rounded-md border border-transparent px-1.5 py-1 text-[11px] leading-tight transition-colors;
+  }
+
+  button.query-history-value {
+    @apply hover:border-strong hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent;
+  }
+
+  .query-history-value--present {
+    @apply text-positive;
+  }
+
+  .query-history-value--absent {
+    @apply text-secondary;
+  }
+
+  .query-history-value--pending,
+  .query-history-value--not-recorded {
+    @apply text-faint;
+  }
+
+  .query-history-value--selected {
+    @apply border-strong bg-surface-inset text-heading ring-1 ring-mono-600;
+  }
+
+  .query-history-run-count {
+    @apply text-[9px] text-secondary;
+  }
+
+  .query-history-empty {
+    @apply rounded-lg border border-dashed border-default px-4 py-8 text-center text-xs text-secondary;
+  }
+
+  .query-history-actions {
+    @apply flex min-h-8 flex-wrap items-center gap-2;
+  }
+
+  .query-history-pagination {
+    @apply sticky left-0 flex min-w-full items-center justify-between gap-3 border-t border-subtle bg-bg px-2 py-2 text-[10px] text-secondary;
+  }
+
+  .query-history-pagination button {
+    @apply min-h-9 rounded-md px-2 text-xs font-medium text-secondary transition-colors hover:bg-surface hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-35;
+  }
+
+  .same-day-runs {
+    @apply flex flex-wrap items-center gap-2 rounded-lg border border-default bg-surface-subtle px-3 py-2;
+  }
+
+  .same-day-runs-label {
+    @apply mr-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-secondary;
+  }
+
+  .same-day-run {
+    @apply min-h-9 border-b-2 border-transparent px-1.5 text-xs text-secondary transition-colors hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent;
+  }
+
+  .same-day-run--active {
+    @apply border-accent text-heading;
+  }
+
+  .query-evidence-selection {
+    @apply grid gap-4 rounded-xl border border-default bg-surface-subtle p-4;
+  }
+
+  .query-evidence-selection-head {
+    @apply flex flex-wrap items-center justify-between gap-2 border-b border-subtle pb-3;
+  }
+
+  .query-evidence-inline-error {
+    @apply flex items-center gap-3 rounded-md border border-negative-border bg-negative-bg-soft px-3 py-2 text-xs text-negative;
+  }
+
+  .query-evidence-inline-notice {
+    @apply flex items-center gap-3 rounded-md border border-default bg-surface-inset px-3 py-2 text-xs text-secondary;
+  }
+
+  .query-evidence-inline-error button,
+  .query-evidence-inline-notice button {
+    @apply ml-auto shrink-0 rounded px-2 py-1 font-medium text-strong transition-colors hover:bg-overlay-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent;
+  }
+
+  .query-evidence-detail-grid {
+    @apply grid min-w-0 gap-5;
+    grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+  }
+
+  .query-evidence-answer {
+    @apply min-w-0;
+  }
+
+  .query-evidence-no-answer {
+    @apply rounded-lg border border-dashed border-default px-4 py-8 text-center text-sm text-secondary;
+  }
+
+  .query-evidence-searches {
+    @apply mt-5;
+  }
+
+  .query-evidence-searches ul {
+    @apply grid gap-1.5;
+  }
+
+  .query-evidence-searches li {
+    @apply flex items-start gap-2 break-words text-sm text-secondary;
+  }
+
+  .query-evidence-breakdown {
+    @apply grid content-start gap-4 border-l border-subtle pl-5;
+  }
+
+  .evidence-signal-results {
+    @apply divide-y divide-mono-800/50 border-y border-subtle;
+  }
+
+  .evidence-signal-results > div {
+    @apply flex items-center justify-between gap-4 py-2 text-xs;
+  }
+
+  .evidence-signal-results dt {
+    @apply text-secondary;
+  }
+
+  .evidence-signal-results dd {
+    @apply text-right font-medium;
+  }
+
+  .evidence-signal-result--present {
+    @apply text-positive;
+  }
+
+  .evidence-signal-result--absent {
+    @apply text-strong;
+  }
+
+  .evidence-signal-result--missing {
+    @apply text-faint;
+  }
+
+  .evidence-detail-tabs {
+    @apply flex gap-4 border-b border-subtle;
+  }
+
+  .evidence-detail-tab {
+    @apply -mb-px min-h-9 border-b-2 border-transparent px-0.5 pb-2 text-xs font-medium text-secondary transition-colors hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent;
+  }
+
+  .evidence-detail-tab--active {
+    @apply border-accent text-heading;
+  }
+
+  .query-evidence-tab-panel {
+    @apply min-h-20;
+  }
+
+  .query-evidence-simple-list {
+    @apply divide-y divide-mono-800/50 border-y border-subtle text-xs text-secondary;
+  }
+
+  .query-evidence-simple-list li {
+    @apply break-words py-1.5;
+  }
+
+  .query-evidence-domain-list {
+    @apply grid gap-1;
+  }
+
+  .query-evidence-domain-list li {
+    @apply flex items-start justify-between gap-3 border-b border-subtle py-1.5 text-xs text-secondary last:border-b-0;
+  }
+
+  .query-evidence-source-list {
+    @apply grid gap-1.5 text-xs;
+  }
+
+  .query-evidence-source-list li {
+    @apply break-words text-secondary;
+  }
+
+  .query-evidence-source-list a {
+    @apply text-link transition-colors hover:text-strong;
+  }
+
+  @media (max-width: 700px) {
+    .query-change-table {
+      @apply block;
+    }
+
+    .query-change-table thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .query-change-table tbody {
+      @apply block;
+    }
+
+    .query-change-row {
+      @apply grid gap-x-3 gap-y-2 px-4 py-4;
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .query-change-row > th,
+    .query-change-row > td {
+      @apply p-0;
+    }
+
+    .query-change-query,
+    .query-change-copy {
+      grid-column: 1 / -1;
+    }
+
+    .query-change-observed {
+      @apply self-center;
+      grid-column: 1;
+    }
+
+    .query-change-observed::before {
+      content: 'Latest result ';
+      @apply mr-1 font-medium text-faint;
+    }
+
+    .query-change-action {
+      grid-column: 2;
+    }
+
+    .query-change-action .inline-flex {
+      @apply pr-0;
+    }
+
+    .query-change-comparison-note {
+      @apply w-full;
+    }
+
+    .query-evidence-detail-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .query-evidence-breakdown {
+      @apply border-l-0 border-t border-subtle pl-0 pt-4;
+    }
+  }
+
+  @media (max-width: 767px) {
+    .query-evidence-drawer {
+      inset: 0 !important;
+      width: 100vw !important;
+      height: 100dvh !important;
+      max-height: none !important;
+      border-radius: 0 !important;
+      border: 0 !important;
+    }
+
+    .query-evidence-history-head {
+      @apply items-start;
+    }
+
+    .query-signal-selector {
+      @apply w-full;
+    }
   }
 
   /* ── Drawer section label ── */

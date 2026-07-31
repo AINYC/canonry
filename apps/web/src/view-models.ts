@@ -104,6 +104,7 @@ export interface RunHistoryPoint {
   runId: string
   citationState: string
   createdAt: string
+  location?: string | null
   model?: string | null
   answerMentioned?: boolean
   /** @deprecated legacy alias for `mentionState`. */

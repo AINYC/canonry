@@ -1854,6 +1854,7 @@ function ProjectPageContent({
           runId: r.runId,
           citationState: r.citationState,
           createdAt: r.createdAt,
+          location: r.location ?? null,
           answerMentioned: r.answerMentioned,
           visibilityState: r.visibilityState as RunHistoryPoint['visibilityState'] | undefined,
           visibilityTransition: r.visibilityTransition,
@@ -1867,6 +1868,7 @@ function ProjectPageContent({
           runId: r.runId,
           citationState: r.citationState,
           createdAt: r.createdAt,
+          location: r.location ?? null,
           answerMentioned: r.answerMentioned,
           visibilityState: r.visibilityState as RunHistoryPoint['visibilityState'] | undefined,
           visibilityTransition: r.visibilityTransition,
@@ -2418,9 +2420,9 @@ function ProjectPageContent({
 
           <OverviewDisclosure
             id="evidence-section"
-            eyebrow="Tracked coverage"
-            title="Query evidence"
-            meta={`${model.queryCounts.total} ${model.queryCounts.total === 1 ? 'query' : 'queries'}`}
+            eyebrow="Change review"
+            title="Query changes"
+            meta={`Evidence for ${new Set(filteredEvidence.map(item => item.query)).size} of ${model.queryCounts.total} tracked ${model.queryCounts.total === 1 ? 'query' : 'queries'}`}
             defaultOpen={isEmbed()}
           >
             {!isEmbed() && (
@@ -2528,6 +2530,9 @@ function ProjectPageContent({
             <EvidenceTable
               evidence={filteredEvidence}
               compareLocations={compareLocations}
+              hasTrackedQueries={model.queryCounts.total > 0}
+              isFiltered={locationFilter !== undefined || competitorFilter !== null}
+              locationScope={locationFilter}
             />
           </OverviewDisclosure>
 

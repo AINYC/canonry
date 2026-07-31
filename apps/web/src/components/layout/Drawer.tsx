@@ -8,19 +8,21 @@ export function Drawer({
   children,
   open,
   onClose,
+  className,
 }: {
   title: string
   subtitle: string
   children: ReactNode
   open: boolean
   onClose: () => void
+  className?: string
 }) {
   return (
     <Sheet open={open} onOpenChange={(nextOpen) => (nextOpen ? undefined : onClose())}>
-      <SheetContent>
+      <SheetContent className={className}>
         <SheetHeader className="drawer-head">
           <p className="eyebrow eyebrow-soft">{subtitle}</p>
-          <SheetTitle id="drawer-title">{title}</SheetTitle>
+          <SheetTitle>{title}</SheetTitle>
           <SheetDescription className="sr-only">{subtitle}</SheetDescription>
         </SheetHeader>
         <div className="drawer-body">{children}</div>
