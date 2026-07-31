@@ -1,4 +1,4 @@
-import { test, expect, onTestFinished } from 'vitest'
+import { test, expect, onTestFinished, vi } from 'vitest'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -15,6 +15,12 @@ import type {
 import { createClient, migrate, queries, projects, querySnapshots, runs } from '@ainyc/canonry-db'
 import { JobRunner } from '../src/job-runner.js'
 import { ProviderRegistry } from '../src/provider-registry.js'
+import { captureCitedUrls } from '../src/cited-url-capture.js'
+
+vi.mock('../src/cited-url-capture.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/cited-url-capture.js')>()
+  return { ...actual, captureCitedUrls: vi.fn(actual.captureCitedUrls) }
+})
 
 // Persistence guard for the served-model wiring. `extractServedModel` is pinned in
 // each provider package, but nothing proved the value survived the JobRunner insert —
@@ -31,6 +37,8 @@ const SERVED_MODEL = 'gpt-5.6-2026-03-05'
 
 interface StubOptions {
   servedModel?: string
+  groundingUri?: string
+  malformedGroundingSources?: boolean
   /** When set, the adapter reports this path so the screenshot insert branch runs. */
   screenshotPath?: string
 }
@@ -51,7 +59,7 @@ function stubAdapter(opts: StubOptions): ProviderAdapter {
         model: CONFIGURED_MODEL,
         ...(opts.servedModel === undefined ? {} : { servedModel: opts.servedModel }),
         ...(opts.screenshotPath === undefined ? {} : { screenshotPath: opts.screenshotPath }),
-        groundingSources: [],
+        groundingSources: [{ uri: opts.groundingUri ?? 'https://publisher.example/guides/answer#citation', title: 'Publisher' }],
         searchQueries: [],
       }
     },
@@ -60,7 +68,9 @@ function stubAdapter(opts: StubOptions): ProviderAdapter {
         provider: 'openai',
         answerText: 'stub answer',
         citedDomains: [],
-        groundingSources: [],
+        groundingSources: opts.malformedGroundingSources
+          ? null as unknown as NormalizedQueryResult['groundingSources']
+          : [{ uri: opts.groundingUri ?? 'https://publisher.example/guides/answer#citation', title: 'Publisher' }],
         searchQueries: [],
       }
     },
@@ -118,7 +128,8 @@ async function runWithStub(prefix: string, opts: StubOptions) {
   await new JobRunner(db, registry).executeRun(runId, projectId)
 
   const [snapshot] = db.select().from(querySnapshots).where(eq(querySnapshots.runId, runId)).all()
-  return { snapshot, tmpDir }
+  const run = db.select().from(runs).where(eq(runs.id, runId)).get()!
+  return { snapshot, tmpDir, run }
 }
 
 test('JobRunner persists servedModel to the column and the raw_response envelope (no-screenshot branch)', async () => {
@@ -131,6 +142,12 @@ test('JobRunner persists servedModel to the column and the raw_response envelope
   expect(snapshot.servedModel).toBe(SERVED_MODEL)
   expect(snapshot.model).toBe(CONFIGURED_MODEL)
   expect(snapshot.servedModel).not.toBe(snapshot.model)
+  expect(snapshot.citationState).toBe('not-cited')
+  expect(snapshot.citedUrls).toEqual(['https://publisher.example/guides/answer'])
+  expect(snapshot.captureStatus).toBe('complete')
+  expect(snapshot.sourceCount).toBe(1)
+  expect(snapshot.resolvedCount).toBe(1)
+  expect(snapshot.captureVersion).toBe(1)
 
   // ...and the stored envelope carries both, so a re-read of an archived row can tell
   // the requested and served identities apart without joining the column back in.
@@ -156,6 +173,12 @@ test('JobRunner persists servedModel on the screenshot insert branch too', async
 
   expect(snapshot.servedModel).toBe(SERVED_MODEL)
   expect(snapshot.model).toBe(CONFIGURED_MODEL)
+  expect(snapshot.citationState).toBe('not-cited')
+  expect(snapshot.citedUrls).toEqual(['https://publisher.example/guides/answer'])
+  expect(snapshot.captureStatus).toBe('complete')
+  expect(snapshot.sourceCount).toBe(1)
+  expect(snapshot.resolvedCount).toBe(1)
+  expect(snapshot.captureVersion).toBe(1)
 
   const envelope = JSON.parse(snapshot.rawResponse ?? '{}') as Record<string, unknown>
   expect(envelope.servedModel).toBe(SERVED_MODEL)
@@ -174,4 +197,60 @@ test('JobRunner persists an undisclosed servedModel as NULL, never as the config
   const envelope = JSON.parse(snapshot.rawResponse ?? '{}') as Record<string, unknown>
   expect(envelope.servedModel).toBeNull()
   expect(envelope.model).toBe(CONFIGURED_MODEL)
+})
+
+test('JobRunner persists a route-capable query when Vertex resolution fails', async () => {
+  const fetchImpl = vi.fn(async () => {
+    throw new Error('redirect unavailable')
+  })
+  vi.stubGlobal('fetch', fetchImpl)
+  onTestFinished(() => vi.unstubAllGlobals())
+
+  const { snapshot, run } = await runWithStub('canonry-cited-url-failure-', {
+    servedModel: SERVED_MODEL,
+    groundingUri: 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/failing',
+  })
+
+  expect(fetchImpl).toHaveBeenCalledTimes(1)
+  expect(snapshot.citationState).toBe('not-cited')
+  expect(snapshot.citedUrls).toEqual([])
+  expect(snapshot.captureStatus).toBe('failed')
+  expect(snapshot.sourceCount).toBe(1)
+  expect(snapshot.resolvedCount).toBe(0)
+  expect(snapshot.captureVersion).toBe(1)
+  expect(run.status).toBe('completed')
+})
+
+test('JobRunner fails open when cited URL capture throws', async () => {
+  vi.mocked(captureCitedUrls).mockRejectedValueOnce(new Error('capture dependency fault'))
+
+  const { snapshot, run } = await runWithStub('canonry-cited-url-capture-throws-', {
+    servedModel: SERVED_MODEL,
+  })
+
+  expect(snapshot).toBeDefined()
+  expect(snapshot.citedUrls).toEqual([])
+  expect(snapshot.captureStatus).toBe('failed')
+  expect(snapshot.sourceCount).toBe(1)
+  expect(snapshot.resolvedCount).toBe(0)
+  expect(snapshot.captureVersion).toBe(1)
+  expect(run.status).toBe('completed')
+})
+
+test('JobRunner sanitizes malformed grounding sources after capture fails open', async () => {
+  const { snapshot, run } = await runWithStub('canonry-malformed-grounding-sources-', {
+    servedModel: SERVED_MODEL,
+    malformedGroundingSources: true,
+  })
+
+  expect(snapshot).toBeDefined()
+  expect(snapshot.citedUrls).toEqual([])
+  expect(snapshot.captureStatus).toBe('failed')
+  expect(snapshot.sourceCount).toBe(0)
+  expect(snapshot.resolvedCount).toBe(0)
+  expect(snapshot.captureVersion).toBe(1)
+  expect(run.status).toBe('completed')
+
+  const envelope = JSON.parse(snapshot.rawResponse ?? '{}') as Record<string, unknown>
+  expect(envelope.groundingSources).toEqual([])
 })

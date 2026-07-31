@@ -35,6 +35,8 @@ import {
   brandLabelFromDomain,
   locationContextSchema,
   resolveLocations,
+  resultsExportRecordSchema,
+  projectSearchSnapshotHitSchema,
 } from '../src/index.js'
 
 import type { LocationContext } from '../src/index.js'
@@ -54,6 +56,29 @@ test('projectDtoSchema applies defaults for tags, labels, configSource, configRe
   expect(project.providerModels).toEqual({})
   expect(project.configSource).toBe('cli')
   expect(project.configRevision).toBe(1)
+})
+
+test('results export records preserve cited URL capture and legacy nulls', () => {
+  const record = resultsExportRecordSchema.parse({
+    runId: 'run_1', runKind: 'answer-visibility', runStatus: 'completed', runTrigger: 'manual',
+    runCreatedAt: '2026-07-01T00:00:00.000Z', runStartedAt: null, runFinishedAt: null,
+    snapshotId: 'snapshot_1', snapshotCreatedAt: '2026-07-01T00:00:00.000Z', queryId: 'query_1', query: 'query',
+    provider: 'gemini', model: null, location: null, citationState: 'not-cited', cited: false,
+    answerMentioned: null, mentionState: null, citedDomains: [], competitorOverlap: [], recommendedCompetitors: [],
+    answerText: null, groundingSources: [], searchQueries: [],
+    citedUrls: null, captureStatus: null, sourceCount: null, resolvedCount: null, captureVersion: null,
+  })
+  expect(record).toMatchObject({
+    citedUrls: null, captureStatus: null, sourceCount: null, resolvedCount: null, captureVersion: null,
+  })
+})
+
+test('project search snapshot hits classify cited URL matches', () => {
+  expect(projectSearchSnapshotHitSchema.parse({
+    kind: 'snapshot', id: 'snapshot_1', runId: 'run_1', query: 'query', provider: 'gemini', model: null,
+    citationState: 'not-cited', matchedField: 'citedUrls', snippet: 'https://publisher.example/guides/cited-url-needle-path',
+    createdAt: '2026-07-01T00:00:00.000Z',
+  }).matchedField).toBe('citedUrls')
 })
 
 test('normalizeProjectDomain strips scheme and www prefix', () => {
@@ -372,6 +397,11 @@ test('querySnapshotDtoSchema applies defaults', () => {
 
   expect(snapshot.provider).toBe('gemini')
   expect(snapshot.citedDomains).toEqual([])
+  expect(snapshot.citedUrls).toBeNull()
+  expect(snapshot.captureStatus).toBeNull()
+  expect(snapshot.sourceCount).toBeNull()
+  expect(snapshot.resolvedCount).toBeNull()
+  expect(snapshot.captureVersion).toBeNull()
   expect(snapshot.competitorOverlap).toEqual([])
   expect(snapshot.recommendedCompetitors).toEqual([])
   expect(snapshot.matchedTerms).toEqual([])

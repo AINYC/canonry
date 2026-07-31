@@ -6,6 +6,7 @@ import {
   runStatusSchema,
   runTriggerSchema,
 } from './run.js'
+import { citedUrlCaptureStatusSchema } from './cited-urls.js'
 
 /** Download format for the historical answer-engine results export. */
 export const resultsExportFormatSchema = z.enum(['json', 'csv'])
@@ -39,6 +40,12 @@ export const resultsExportRecordSchema = z.object({
   // A union keeps OpenAPI generators from dropping `null` on this enum.
   mentionState: z.union([mentionStateSchema, z.null()]),
   citedDomains: z.array(z.string()),
+  /** NULL means the snapshot predates cited-URL capture; [] means captured with zero URLs. */
+  citedUrls: z.array(z.string()).nullable(),
+  captureStatus: z.union([citedUrlCaptureStatusSchema, z.null()]),
+  sourceCount: z.number().int().nonnegative().nullable(),
+  resolvedCount: z.number().int().nonnegative().nullable(),
+  captureVersion: z.number().int().positive().nullable(),
   competitorOverlap: z.array(z.string()),
   recommendedCompetitors: z.array(z.string()),
   answerText: z.string().nullable(),

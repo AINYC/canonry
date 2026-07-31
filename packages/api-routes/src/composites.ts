@@ -345,6 +345,7 @@ export async function compositeRoutes(app: FastifyInstance) {
         citationState: querySnapshots.citationState,
         answerText: querySnapshots.answerText,
         citedDomains: querySnapshots.citedDomains,
+        citedUrls: querySnapshots.citedUrls,
         rawResponse: querySnapshots.rawResponse,
         createdAt: querySnapshots.createdAt,
       })
@@ -356,6 +357,7 @@ export async function compositeRoutes(app: FastifyInstance) {
           or(
             sql`${querySnapshots.answerText} LIKE ${pattern} ESCAPE '\\'`,
             sql`${querySnapshots.citedDomains} LIKE ${pattern} ESCAPE '\\'`,
+            sql`${querySnapshots.citedUrls} LIKE ${pattern} ESCAPE '\\'`,
             sql`${querySnapshots.rawResponse} LIKE ${pattern} ESCAPE '\\'`,
             like(queries.query, pattern),
           ),
@@ -1028,6 +1030,7 @@ function buildSnapshotHit(
     citationState: string
     answerText: string | null
     citedDomains: string[]
+    citedUrls: string[] | null
     rawResponse: string | null
     createdAt: string
   },
@@ -1037,6 +1040,7 @@ function buildSnapshotHit(
   const query = row.queryText ?? ''
   const answer = row.answerText ?? ''
   const citedJoined = row.citedDomains.join(',')
+  const citedUrlsJoined = row.citedUrls?.join(',') ?? ''
   const raw = row.rawResponse ?? ''
   let matchedField: SnapshotMatchedField
   let snippet: string
@@ -1046,6 +1050,9 @@ function buildSnapshotHit(
   } else if (citedJoined.toLowerCase().includes(lower)) {
     matchedField = 'citedDomains'
     snippet = makeSnippet(citedJoined, searchTerm)
+  } else if (citedUrlsJoined.toLowerCase().includes(lower)) {
+    matchedField = 'citedUrls'
+    snippet = makeSnippet(citedUrlsJoined, searchTerm)
   } else if (raw.toLowerCase().includes(lower)) {
     matchedField = 'searchQueries'
     snippet = makeSnippet(raw, searchTerm)

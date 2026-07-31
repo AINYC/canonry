@@ -2481,6 +2481,19 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE research_run_queries ADD COLUMN cited_competitor_domains TEXT NOT NULL DEFAULT '[]'`,
     ],
   },
+  {
+    // New live rows capture source URLs; historical snapshots intentionally
+    // stay NULL so readers can distinguish absent capture from zero sources.
+    version: 111,
+    name: 'query-snapshot-cited-url-capture',
+    statements: [
+      `ALTER TABLE query_snapshots ADD COLUMN cited_urls TEXT`,
+      `ALTER TABLE query_snapshots ADD COLUMN capture_status TEXT`,
+      `ALTER TABLE query_snapshots ADD COLUMN source_count INTEGER`,
+      `ALTER TABLE query_snapshots ADD COLUMN resolved_count INTEGER`,
+      `ALTER TABLE query_snapshots ADD COLUMN capture_version INTEGER`,
+    ],
+  },
 ]
 
 /**

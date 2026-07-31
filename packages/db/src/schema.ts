@@ -94,6 +94,13 @@ export const querySnapshots = sqliteTable('query_snapshots', {
   answerMentioned: integer('answer_mentioned', { mode: 'boolean' }),
   answerText: text('answer_text'),
   citedDomains: text('cited_domains', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  // Flat capture fields are deliberately nullable: historical rows are not
+  // backfilled, so all-null means this observation predates URL capture.
+  citedUrls: text('cited_urls', { mode: 'json' }).$type<string[]>(),
+  captureStatus: text('capture_status').$type<import('@ainyc/canonry-contracts').CitedUrlCaptureStatus>(),
+  sourceCount: integer('source_count'),
+  resolvedCount: integer('resolved_count'),
+  captureVersion: integer('capture_version'),
   competitorOverlap: text('competitor_overlap', { mode: 'json' }).$type<string[]>().notNull().default([]),
   recommendedCompetitors: text('recommended_competitors', { mode: 'json' }).$type<string[]>().notNull().default([]),
   location: text('location'),

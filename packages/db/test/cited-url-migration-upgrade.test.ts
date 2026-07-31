@@ -1,0 +1,32 @@
+import { expect, onTestFinished, test } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import crypto from 'node:crypto'
+import { sql } from 'drizzle-orm'
+import { createClient, migrate, MIGRATION_VERSIONS, projects, runs } from '../src/index.js'
+
+const V111 = 111
+
+test('v111 adds nullable cited-URL capture columns without backfilling historical snapshots', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-cited-url-upgrade-'))
+  onTestFinished(() => fs.rmSync(tmpDir, { recursive: true, force: true }))
+  const db = createClient(path.join(tmpDir, 'test.db'))
+  migrate(db, MIGRATION_VERSIONS.filter((mv) => mv.version < V111))
+
+  const projectId = crypto.randomUUID()
+  const runId = crypto.randomUUID()
+  const snapshotId = crypto.randomUUID()
+  const now = new Date().toISOString()
+  db.insert(projects).values({ id: projectId, name: 'legacy-capture', displayName: 'Legacy capture', canonicalDomain: 'example.com', country: 'US', language: 'en', createdAt: now, updatedAt: now }).run()
+  db.insert(runs).values({ id: runId, projectId, status: 'completed', createdAt: now }).run()
+  db.run(sql`INSERT INTO query_snapshots (id, run_id, provider, citation_state, created_at)
+    VALUES (${snapshotId}, ${runId}, 'gemini', 'not-cited', ${now})`)
+
+  migrate(db)
+
+  const columns = (db.all(sql`PRAGMA table_info(query_snapshots)`) as Array<{ name: string }>).map((row) => row.name)
+  expect(columns).toEqual(expect.arrayContaining(['cited_urls', 'capture_status', 'source_count', 'resolved_count', 'capture_version']))
+  expect(db.get(sql`SELECT cited_urls, capture_status, source_count, resolved_count, capture_version
+    FROM query_snapshots WHERE id = ${snapshotId}`)).toEqual({ cited_urls: null, capture_status: null, source_count: null, resolved_count: null, capture_version: null })
+})

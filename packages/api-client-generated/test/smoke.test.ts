@@ -4,6 +4,7 @@ import type {
   AdsCampaignListResponse,
   AdsOperationReconcileResponse,
   AdsUnresolvedOperationListResponse,
+  GetApiV1ProjectsByNameSearchResponse,
 } from '../src/index.js'
 
 /**
@@ -34,6 +35,17 @@ describe('canonry-api-client', () => {
     expectTypeOf<Operation['reconcileStrategy']>()
       .toEqualTypeOf<'known_entity' | 'create_fingerprint' | 'manual_only' | null>()
     expectTypeOf<AdsOperationReconcileResponse['resolved']>().toEqualTypeOf<boolean>()
+  })
+
+  it('generates cited URL search hits', () => {
+    type SnapshotHit = Extract<
+      GetApiV1ProjectsByNameSearchResponse['hits'][number],
+      { kind: 'snapshot' }
+    >
+
+    expectTypeOf<SnapshotHit['matchedField']>().toEqualTypeOf<
+      'answerText' | 'citedDomains' | 'citedUrls' | 'searchQueries' | 'query'
+    >()
   })
 
   it('createClient applies bearer auth + base URL to generated operations', async () => {

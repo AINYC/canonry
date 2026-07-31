@@ -4216,7 +4216,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/search',
     summary: 'Search query snapshots and insights for text',
     description:
-      'Returns the most recent snapshots and insights whose answer text, cited domains, raw response, or insight title/query/recommendation/cause matches the query. Use to find anything mentioning a competitor, term, or URL without paginating snapshots.',
+      'Returns the most recent snapshots and insights whose answer text, cited domains, captured cited URLs, raw response, or insight title/query/recommendation/cause matches the query. Use to find anything mentioning a competitor, term, or URL without paginating snapshots.',
     tags: ['intelligence'],
     parameters: [
       nameParameter,
@@ -4224,8 +4224,7 @@ const routeCatalog: OpenApiOperation[] = [
       { name: 'limit', in: 'query', description: 'Max combined hits (1-50, default 25).', schema: stringSchema },
     ],
     responses: {
-      // TODO: Add `ProjectSearchResponseDto` Zod schema in contracts (projectSearchResponseSchema exists).
-      200: rawJsonResponse('Search hits returned.', looseObjectSchema),
+      200: jsonResponse('Search hits returned.', 'ProjectSearchResponseDto'),
       400: errorResponse('Query string missing or too short.'),
       404: errorResponse('Project not found.'),
     },
