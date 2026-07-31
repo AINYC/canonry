@@ -21,29 +21,40 @@ const DEFAULT_MODEL = "claude-sonnet-4-6";
 const VALIDATION_PATTERN = /^claude-/;
 
 /**
- * Claude decides for itself whether a query warrants a search, and answers
- * stable-knowledge questions from training data instead. That judgement tightened
- * between Sonnet 4.6 and Sonnet 5: over a 60-day window Sonnet 4.6 searched on all
- * 136 tracked answers, while Sonnet 5 searched on only 84 of 119. Every one of the
- * 35 unsearched answers recorded zero cited domains and zero mentions, so they
- * entered visibility rates as genuine absences rather than as answers the brand
- * never had a chance to appear in.
+ * The measurement contract this provider executes, recorded alongside every
+ * result so trends cannot silently mix methods.
  *
- * Anthropic documents the system prompt, not `tool_choice`, as the lever for
- * widening the search trigger; `max_uses` only caps searches and cannot raise the
- * floor. Forcing via `tool_choice` does work on this server tool but prefills the
- * assistant turn, which suppresses the preamble text we parse as the answer and
- * measurably narrows retrieval (1 search / 3 cited URLs versus 2 / 7-9 here).
+ * `search-required.v1` means: the unmodified user query, no system prompt, and
+ * `tool_choice` pinned to `web_search` so retrieval is guaranteed by an API
+ * control rather than coaxed. It measures a search-grounded answer. It is NOT a
+ * reproduction of Claude.ai, whose system instructions, routing, and search
+ * policy are not public and cannot be replicated through this API.
  *
- * The wording below names no brand, domain, competitor, or ranking, so it steers
- * retrieval only and leaves the substance of the answer to the model.
+ * Why the contract has to be explicit at all: Claude decides for itself whether
+ * a query warrants a search, and Sonnet 5 decides far more conservatively than
+ * Sonnet 4.6. Over a 60-day window Sonnet 4.6 searched on all 136 tracked
+ * answers; Sonnet 5 on 84 of 119. All 35 unsearched answers stored zero cited
+ * domains and zero mentions, indistinguishable at rest from an answer that
+ * searched and did not mention the brand, while sitting in the denominator of
+ * every visibility rate.
  *
+ * Why `tool_choice` and not a system prompt: a system prompt is probabilistic
+ * and steers persona, tone, and source policy as well as retrieval, which
+ * contaminates the substance being measured. `tool_choice` is the documented
+ * API control for requiring a tool invocation and changes nothing else.
+ * `max_uses` is a ceiling and cannot raise the retrieval floor.
+ *
+ * Measured on the five queries that lost retrieval in production
+ * (claude-sonnet-5, n=5 per mode): native 1/5 retrieval, 1.4 cited domains,
+ * 2920 answer chars; this contract 5/5, 5.0 cited domains, 4520 answer chars,
+ * `end_turn` on every response. Forcing prefills the assistant turn, so no
+ * preamble is emitted before the tool call, but the final answer we parse is
+ * unaffected.
+ *
+ * https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
  * https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
  */
-const RETRIEVAL_SYSTEM_PROMPT =
-  "You are answering as a consumer-facing assistant with web access. " +
-  "Always search the web before answering so your response reflects current, " +
-  "real-world sources. Do not answer from prior knowledge alone.";
+export const CLAUDE_RETRIEVAL_CONTRACT = "search-required.v1";
 
 /**
  * Resolve the effective model name, validating that it is a recognised Claude
@@ -141,8 +152,10 @@ export async function executeTrackedQuery(
       client.messages.create({
         model,
         max_tokens: 4096,
-        system: RETRIEVAL_SYSTEM_PROMPT,
         tools: [webSearchTool as unknown as WebSearchTool20250305],
+        // search-required.v1: retrieval is guaranteed by the API control, so the
+        // query text and answer substance stay untouched. See the contract note.
+        tool_choice: { type: "tool", name: "web_search" },
         messages: [{ role: "user", content: input.query }],
       }),
     );
@@ -160,6 +173,8 @@ export async function executeTrackedQuery(
       servedModel: extractServedModel(rawResponse),
       groundingSources: parsed.groundingSources,
       searchQueries: parsed.searchQueries,
+      retrieved: parsed.retrieved,
+      retrievalContract: CLAUDE_RETRIEVAL_CONTRACT,
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -182,6 +197,7 @@ export function normalizeResult(raw: ClaudeRawResult): ClaudeNormalizedResult {
     citedDomains,
     groundingSources,
     searchQueries,
+    retrieved: useParsed ? parsed.retrieved : raw.retrieved,
   };
 }
 
@@ -215,6 +231,7 @@ export function reparseStoredResult(
     citedDomains: extractCitedDomainsFromSources(groundingSources),
     groundingSources,
     searchQueries,
+    retrieved: extractRetrievedFromRaw(rawResponse),
     ...(providerErrors.length > 0
       ? { providerError: `web_search tool error: ${providerErrors.join(", ")}` }
       : {}),
@@ -281,6 +298,28 @@ function extractGroundingSourcesFromRaw(
     // Ignore extraction errors
   }
   return sources;
+}
+
+/**
+ * Whether Claude invoked web_search, read from the presence of a
+ * `server_tool_use` block rather than from `searchQueries`. A search whose query
+ * string is absent or unparseable still counts as retrieval, so the two must not
+ * be conflated: retrieval is the denominator question, the query text is only
+ * telemetry.
+ */
+function extractRetrievedFromRaw(rawResponse: Record<string, unknown>): boolean {
+  try {
+    const content = rawResponse.content as
+      | Array<{ type?: string; name?: string }>
+      | undefined;
+    if (!content) return false;
+    return content.some(
+      (block) =>
+        block.type === "server_tool_use" && block.name === "web_search",
+    );
+  } catch {
+    return false;
+  }
 }
 
 function extractSearchQueriesFromRaw(

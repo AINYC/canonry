@@ -12,6 +12,7 @@ import {
   executeTrackedQuery as claudeExecuteTrackedQuery,
   normalizeResult as claudeNormalizeResult,
   generateText as claudeGenerateText,
+  CLAUDE_RETRIEVAL_CONTRACT,
 } from './normalize.js'
 import type { ClaudeConfig } from './types.js'
 
@@ -85,6 +86,13 @@ export const claudeAdapter: ProviderAdapter = {
       model: raw.model,
       groundingSources: raw.groundingSources,
       searchQueries: raw.searchQueries,
+      // The shared RawQueryResult does not carry retrieval yet — threading it
+      // through contracts/src/run.ts waits on #879, which owns that file. This
+      // value is only a floor: normalizeResult recomputes retrieval from
+      // rawResponse whenever the response has content, and an empty response is
+      // correctly no evidence of a search.
+      retrieved: false,
+      retrievalContract: CLAUDE_RETRIEVAL_CONTRACT,
     }
     const normalized = claudeNormalizeResult(claudeRaw)
     return {

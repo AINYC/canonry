@@ -1,16 +1,33 @@
 import { test, expect, vi } from 'vitest'
 
 import { claudeAdapter } from '../src/adapter.js'
+import {
+  CLAUDE_RETRIEVAL_CONTRACT,
+  executeTrackedQuery,
+  normalizeResult,
+} from '../src/normalize.js'
 
-// Claude answers stable-knowledge queries from training data unless steered, and
-// Sonnet 5 does so far more readily than Sonnet 4.6. Unsearched answers land in
-// the store as zero citations and zero mentions, indistinguishable from a real
-// absence, so the retrieval instruction is load-bearing for measurement validity
-// rather than cosmetic. See the note on RETRIEVAL_SYSTEM_PROMPT in normalize.ts.
+// Claude decides for itself whether a query warrants a search, and Sonnet 5
+// decides far more conservatively than Sonnet 4.6 did. An answer written without
+// retrieval stores as zero cited domains and zero mentions, indistinguishable at
+// rest from an answer that searched and did not mention the brand, while sitting
+// in the denominator of every visibility rate.
+//
+// These tests pin the behavioural boundary of the search-required.v1 contract:
+// retrieval is guaranteed by tool_choice, and retrieval is recorded separately
+// from citation so the two populations never merge.
 
 const quotaPolicy = { maxConcurrency: 2, maxRequestsPerMinute: 10, maxRequestsPerDay: 1000 }
 const CONFIG = { provider: 'claude' as const, apiKey: 'k', model: 'claude-sonnet-5', quotaPolicy }
 const QUERY = { query: 'commercial roof restoration', canonicalDomains: ['example.com'], competitorDomains: [] }
+
+// `retrieved` and `retrievalContract` are provider-local for now: the shared
+// RawQueryResult/NormalizedQueryResult contracts in contracts/src/run.ts are
+// being edited by #879, so threading them through the pipeline (and persisting
+// them on query_snapshots) lands on top of that PR rather than conflicting with
+// it. Until then the adapter boundary drops them, so retrieval is asserted
+// against the provider functions that own it.
+const CLAUDE_INPUT = { ...QUERY, config: { apiKey: 'k', model: 'claude-sonnet-5', quotaPolicy } }
 
 /** Stub the Messages API and capture the request body the SDK sent. */
 function captureRequest(body: Record<string, unknown>): () => Record<string, unknown> {
@@ -38,18 +55,23 @@ function message(content: unknown[]): Record<string, unknown> {
   }
 }
 
-const searchedResponse = [
-  {
-    type: 'server_tool_use',
-    id: 'srvtoolu_1',
-    name: 'web_search',
-    input: { query: 'commercial roof restoration' },
-  },
-  {
-    type: 'web_search_tool_result',
-    tool_use_id: 'srvtoolu_1',
-    content: [{ type: 'web_search_result', url: 'https://roofingcontractor.example/guide', title: 'Guide' }],
-  },
+const searchCall = {
+  type: 'server_tool_use',
+  id: 'srvtoolu_1',
+  name: 'web_search',
+  input: { query: 'commercial roof restoration' },
+}
+
+const searchResult = {
+  type: 'web_search_tool_result',
+  tool_use_id: 'srvtoolu_1',
+  content: [{ type: 'web_search_result', url: 'https://roofingcontractor.example/guide', title: 'Guide' }],
+}
+
+/** Searched, and the answer cites a source. */
+const SEARCHED_AND_CITED = [
+  searchCall,
+  searchResult,
   {
     type: 'text',
     text: 'Restoration coats an existing roof.',
@@ -64,51 +86,101 @@ const searchedResponse = [
   },
 ]
 
-test('the tracked-query request instructs Claude to search rather than leaving retrieval to its judgement', async () => {
-  const sent = captureRequest(message(searchedResponse))
+/**
+ * Searched, but the answer cites nothing. This is the case that must not collapse
+ * into the unsearched one: both yield zero cited domains, and only `retrieved`
+ * separates them.
+ */
+const SEARCHED_AND_UNCITED = [
+  searchCall,
+  searchResult,
+  { type: 'text', text: 'Restoration coats an existing roof.' },
+]
+
+/** Never searched. Under search-required.v1 this means the contract did not hold. */
+const UNSEARCHED = [{ type: 'text', text: 'Restoration coats an existing roof.' }]
+
+test('retrieval is required by tool_choice, not coaxed by a system prompt', async () => {
+  const sent = captureRequest(message(SEARCHED_AND_CITED))
   try {
     await claudeAdapter.executeTrackedQuery(QUERY, CONFIG)
 
-    const system = sent().system
-    expect(typeof system).toBe('string')
-    expect(system as string).toMatch(/search the web before answering/i)
-
-    // The instruction must steer retrieval only. A system prompt that named a
-    // brand, competitor, or ranking would contaminate the mention measurement
-    // it exists to protect.
-    expect(system as string).not.toMatch(/recommend|best|top|rank|prefer/i)
-
-    // web_search stays offered on `auto`. Forcing it via tool_choice prefills the
-    // assistant turn, which suppresses the preamble text parsed as the answer.
-    expect(sent().tool_choice).toBeUndefined()
+    expect(sent().tool_choice).toEqual({ type: 'tool', name: 'web_search' })
     expect(sent().tools).toMatchObject([{ type: 'web_search_20250305', name: 'web_search' }])
+
+    // No system prompt. One would steer persona, tone, and source policy as well
+    // as retrieval, contaminating the answer substance being measured.
+    expect(sent().system).toBeUndefined()
+
+    // The query reaches Claude verbatim.
+    expect(sent().messages).toEqual([{ role: 'user', content: 'commercial roof restoration' }])
   } finally {
     vi.unstubAllGlobals()
   }
 })
 
-test('an answer produced without retrieval is distinguishable from one that searched and cited nothing', async () => {
-  // Both shapes yield zero cited domains. searchQueries is what separates them,
-  // and is the signal a follow-up should persist on query_snapshots so visibility
-  // rates can exclude answers the brand never had a chance to appear in.
-  const unsearched = captureRequest(message([{ type: 'text', text: 'Restoration coats an existing roof.' }]))
+test('a server_tool_use web_search block records retrieval', async () => {
+  captureRequest(message(SEARCHED_AND_CITED))
   try {
-    const noRetrieval = await claudeAdapter.executeTrackedQuery(QUERY, CONFIG)
-    const normalizedNoRetrieval = claudeAdapter.normalizeResult(noRetrieval)
-    expect(normalizedNoRetrieval.searchQueries).toEqual([])
-    expect(normalizedNoRetrieval.citedDomains).toEqual([])
-    expect(normalizedNoRetrieval.answerText).toContain('Restoration coats')
-    expect(unsearched().system).toBeDefined()
+    const raw = await executeTrackedQuery(CLAUDE_INPUT)
+    expect(raw.retrieved).toBe(true)
+    expect(raw.retrievalContract).toBe(CLAUDE_RETRIEVAL_CONTRACT)
+    expect(normalizeResult(raw).retrieved).toBe(true)
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('searched-but-uncited stays distinct from unsearched though both cite nothing', async () => {
+  captureRequest(message(SEARCHED_AND_UNCITED))
+  let searchedUncited
+  try {
+    searchedUncited = normalizeResult(await executeTrackedQuery(CLAUDE_INPUT))
   } finally {
     vi.unstubAllGlobals()
   }
 
-  captureRequest(message(searchedResponse))
+  captureRequest(message(UNSEARCHED))
+  let unsearched
   try {
-    const retrieved = await claudeAdapter.executeTrackedQuery(QUERY, CONFIG)
-    const normalizedRetrieved = claudeAdapter.normalizeResult(retrieved)
-    expect(normalizedRetrieved.searchQueries).toEqual(['commercial roof restoration'])
-    expect(normalizedRetrieved.citedDomains).toEqual(['roofingcontractor.example'])
+    unsearched = normalizeResult(await executeTrackedQuery(CLAUDE_INPUT))
+  } finally {
+    vi.unstubAllGlobals()
+  }
+
+  // Indistinguishable on every field the store keeps today.
+  expect(searchedUncited.citedDomains).toEqual([])
+  expect(unsearched.citedDomains).toEqual([])
+  expect(searchedUncited.answerText).toEqual(unsearched.answerText)
+
+  // `retrieved` is the only thing that separates them, so it carries the whole
+  // distinction between a genuine miss and an answer that never had a chance.
+  expect(searchedUncited.retrieved).toBe(true)
+  expect(unsearched.retrieved).toBe(false)
+})
+
+test('retrieval is read from the search call, not from recovered query text', async () => {
+  // A search whose query string is missing still counts: retrieval answers the
+  // denominator question, while searchQueries is only telemetry.
+  captureRequest(message([{ type: 'server_tool_use', id: 's1', name: 'web_search', input: {} }, searchResult]))
+  try {
+    const normalized = normalizeResult(await executeTrackedQuery(CLAUDE_INPUT))
+    expect(normalized.searchQueries).toEqual([])
+    expect(normalized.retrieved).toBe(true)
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('an unsearched response is marked as not retrieved so the contract breach is visible', async () => {
+  captureRequest(message(UNSEARCHED))
+  try {
+    const raw = await executeTrackedQuery(CLAUDE_INPUT)
+    // search-required.v1 promises retrieval. When the response carries no search
+    // call the promise did not hold, and the row must be identifiable as such
+    // rather than pooled with retrieved answers.
+    expect(raw.retrieved).toBe(false)
+    expect(raw.retrievalContract).toBe(CLAUDE_RETRIEVAL_CONTRACT)
   } finally {
     vi.unstubAllGlobals()
   }
