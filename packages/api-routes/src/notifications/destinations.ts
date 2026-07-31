@@ -67,6 +67,25 @@ function clamp(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`
 }
 
+/**
+ * Chat receivers require an ABSOLUTE http(s) link and reject the whole message
+ * when given anything else — Discord answers a relative `embed.url` with a 400
+ * and `{"embeds": ["0"]}`, discarding the entire alert over the one field.
+ *
+ * A link the reader cannot click is worth less than no link, and it must never
+ * cost them the message it was attached to. Callers that build a relative
+ * dashboard path still get their alert delivered, minus the link.
+ */
+function absoluteLink(url: string | undefined): string | undefined {
+  if (!url) return undefined
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? url : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export interface DiscordWebhookBody {
   username: string
   embeds: Array<{
@@ -92,7 +111,7 @@ export function renderDiscord(view: AlertView): DiscordWebhookBody {
         value: clamp(field.value, DISCORD_MAX_FIELD),
         ...(field.compact ? { inline: true } : {}),
       })),
-      url: view.url,
+      ...(absoluteLink(view.url) ? { url: absoluteLink(view.url) } : {}),
       ...(view.timestamp ? { timestamp: view.timestamp } : {}),
       ...(view.footer ? { footer: { text: view.footer } } : {}),
     }],
@@ -134,7 +153,7 @@ export function renderSlack(view: AlertView): SlackWebhookBody {
     attachments: [{
       color: SLACK_COLORS[view.severity],
       title: headline,
-      title_link: view.url,
+      ...(absoluteLink(view.url) ? { title_link: absoluteLink(view.url) } : {}),
       ...(view.body ? { text: clamp(view.body, SLACK_MAX_TEXT) } : {}),
       fields: view.fields.map(field => ({
         title: field.label,

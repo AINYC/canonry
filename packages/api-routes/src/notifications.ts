@@ -129,7 +129,10 @@ export async function notificationRoutes(app: FastifyInstance, opts: Notificatio
       transitions: [
         { query: 'test query', from: 'not-cited', to: 'cited', provider: 'gemini' },
       ],
-      dashboardUrl: `/projects/${project.name}`,
+      // Absolute where possible: a chat receiver rejects a relative link.
+      // The renderers drop an unusable one rather than failing the message,
+      // but a test that exercises the real shape should carry a real link.
+      dashboardUrl: `${request.protocol}://${request.hostname}/projects/${project.name}`,
     }
 
     // Send exactly what a real notification would send. This route used to POST

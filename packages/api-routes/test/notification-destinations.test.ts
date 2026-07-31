@@ -178,3 +178,26 @@ test('the test route renders for the destination, exactly as a real send does', 
   expect(own.render).toBeUndefined()
   expect(own.signed).toBe(true)
 })
+
+test('an unusable link is dropped, never allowed to fail the whole message', () => {
+  // Discord answers a relative `embed.url` with 400 `{"embeds": ["0"]}` and
+  // discards the entire alert over that one field. Losing the link is a far
+  // smaller loss than losing the alert.
+  const relative = toAlertView({ ...healthPayloadFor('/projects/demo') })
+  const discord = renderDiscord(relative)
+  expect(discord.embeds[0]).not.toHaveProperty('url')
+  expect(discord.embeds[0]!.title).toBeTruthy()  // the message still stands
+
+  const slack = renderSlack(relative)
+  expect(slack.attachments[0]).not.toHaveProperty('title_link')
+  expect(slack.text).toBeTruthy()
+
+  // An absolute link is kept.
+  const absolute = toAlertView({ ...healthPayloadFor('https://canonry.test/projects/demo') })
+  expect(renderDiscord(absolute).embeds[0]!.url).toBe('https://canonry.test/projects/demo')
+  expect(renderSlack(absolute).attachments[0]!.title_link).toBe('https://canonry.test/projects/demo')
+})
+
+function healthPayloadFor(dashboardUrl: string): HealthWebhookPayload {
+  return { ...health(), dashboardUrl }
+}
