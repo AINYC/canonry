@@ -30,9 +30,14 @@ const MAX_VERCEL_SYNC_DEADLINE_MS = 15 * 60_000
  * whose watermark falls past this stops being able to catch up: each sync
  * clamps its start forward and the skipped span is lost until backfilled.
  *
- * Only adapters with a bounded catch-up window appear here. Cursor-resumable
- * adapters (cloud-run, wordpress) can always resume from where they left off,
- * so they have no cliff and are absent by design rather than by omission.
+ * Absence from this map means only that the adapter has no TIME-BASED cliff.
+ * It is not a claim that the adapter cannot lose data. Of the current
+ * adapters only WordPress persists a resumable cursor (`lastCursor`); Cloud Run
+ * paginates with `nextPageToken` WITHIN a single pull and never stores it, so a
+ * pull truncated by its page budget still advances `lastSyncedAt` past the
+ * unfetched remainder. Lag on such a source is therefore not provably harmless,
+ * and the sync-lag check must report it as lag rather than as "no loss
+ * possible".
  */
 export const TRAFFIC_SOURCE_MAX_CATCHUP_MS: Partial<Record<TrafficSourceType, number>> = {
   [TrafficSourceTypes.vercel]: VERCEL_MAX_SYNC_WINDOW_MS,

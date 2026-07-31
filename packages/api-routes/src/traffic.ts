@@ -351,6 +351,7 @@ function rowToDto(row: typeof trafficSources.$inferSelect): TrafficSourceDto {
     lastSyncedAt: row.lastSyncedAt ?? null,
     lastCursor: row.lastCursor ?? null,
     lastError: row.lastError ?? null,
+    skippedThroughAt: row.skippedThroughAt ?? null,
     archivedAt: row.archivedAt ?? null,
     config: parseSourceConfig(row),
     createdAt: row.createdAt,
@@ -654,6 +655,13 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
           .run()
       }
 
+      // A backfill that reached back to or past the recorded skip has recovered
+      // it, so clear the marker. Cleared only when the window actually covers
+      // the span: a shorter backfill leaves it set, which is the point — the
+      // source keeps reporting unrecovered loss until someone really recovers it.
+      const recordedSkipMs = sourceRow.skippedThroughAt ? Date.parse(sourceRow.skippedThroughAt) : Number.NaN
+      const skipRecovered = Number.isFinite(recordedSkipMs) && windowStart.getTime() <= recordedSkipMs
+
       tx
         .update(trafficSources)
         .set({
@@ -661,6 +669,7 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
           lastSyncedAt: nextLastSyncedAt,
           lastError: null,
           lastEventIds: newRingBuffer,
+          ...(skipRecovered ? { skippedThroughAt: null } : {}),
           updatedAt: finishedAt,
         })
         .where(eq(trafficSources.id, sourceRow.id))
@@ -1512,6 +1521,20 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       // Skipping the pre-cap span is surfaced, not silent — a backfill recovers it.
       const cappedStartMs = Math.max(clampedStartMs, windowEnd.getTime() - VERCEL_MAX_SYNC_WINDOW_MS)
       if (cappedStartMs > clampedStartMs) {
+        // Persist the skip. The warning alone is not enough: once the sync
+        // commits, the watermark advances and current lag looks normal again,
+        // so a check that reads only lag would call this source healthy a cycle
+        // later while a hole in its history stays unrecovered. Keep the NEWEST
+        // skipped instant so repeated skips do not understate the gap.
+        const previousSkip = sourceRow.skippedThroughAt ? Date.parse(sourceRow.skippedThroughAt) : Number.NaN
+        const skippedThrough = Number.isFinite(previousSkip)
+          ? new Date(Math.max(previousSkip, cappedStartMs))
+          : new Date(cappedStartMs)
+        app.db
+          .update(trafficSources)
+          .set({ skippedThroughAt: skippedThrough.toISOString() })
+          .where(eq(trafficSources.id, sourceRow.id))
+          .run()
         request.log.warn(
           {
             sourceId: sourceRow.id,

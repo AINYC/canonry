@@ -22,7 +22,7 @@ import type { DoctorContext } from '../src/doctor/types.js'
 const syncLagCheck = TRAFFIC_SOURCE_CHECKS.find(c => c.id === 'traffic.source.sync-lag')!
 const recentDataCheck = TRAFFIC_SOURCE_CHECKS.find(c => c.id === 'traffic.source.recent-data')!
 
-function seed(opts: { lagMs: number | null; sourceType?: string; withRecentEvents?: boolean }) {
+function seed(opts: { lagMs: number | null; sourceType?: string; withRecentEvents?: boolean; skippedThroughAt?: string | null }) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cnry-lag-'))
   const db = createClient(path.join(tmp, 'test.db'))
   migrate(db)
@@ -43,6 +43,7 @@ function seed(opts: { lagMs: number | null; sourceType?: string; withRecentEvent
     status: 'connected',
     lastSyncedAt: opts.lagMs === null ? null : new Date(now.getTime() - opts.lagMs).toISOString(),
     lastError: null,
+    skippedThroughAt: opts.skippedThroughAt ?? null,
     createdAt: iso, updatedAt: iso,
   }).run()
 
@@ -122,6 +123,65 @@ describe('traffic sync lag', () => {
       const lag = await syncLagCheck.run(ctx)
       expect(lag.status).toBe('fail')
     } finally { cleanup() }
+  })
+})
+
+describe('unrecovered skips', () => {
+  it('keeps failing after the watermark recovers, because a skip does not heal itself', async () => {
+    // The regression this exists for: the sync that clamps past traffic also
+    // advances the watermark, so one cycle later current lag looks perfectly
+    // healthy while the source has a permanent hole. Reading lag alone let the
+    // loss state clear itself.
+    const { ctx, cleanup } = seed({
+      lagMs: 5 * 60_000, // fully caught up right now
+      skippedThroughAt: '2026-07-30T04:00:00.000Z',
+    })
+    try {
+      const out = await syncLagCheck.run(ctx)
+      expect(out.status).toBe('fail')
+      expect(out.code).toBe('traffic.sync-lag.unrecovered-skip')
+      expect(out.remediation).toMatch(/--days N/)
+      const first = (out.details as { sources: { skippedThroughAt: string | null }[] }).sources[0]!
+      expect(first.skippedThroughAt).toBe('2026-07-30T04:00:00.000Z')
+    } finally { cleanup() }
+  })
+
+  it('returns to ok once the skip marker is cleared', async () => {
+    const { ctx, cleanup } = seed({ lagMs: 5 * 60_000, skippedThroughAt: null })
+    try {
+      const out = await syncLagCheck.run(ctx)
+      expect(out.status).toBe('ok')
+    } finally { cleanup() }
+  })
+})
+
+describe('never-synced siblings', () => {
+  it('reports a never-synced source even when another is current', async () => {
+    // A current sibling used to mask this: the warn required EVERY source to be
+    // null, so a half-instrumented project reported ok.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cnry-lag-mixed-'))
+    const db = createClient(path.join(tmp, 'test.db'))
+    migrate(db)
+    const now = new Date()
+    const iso = now.toISOString()
+    const projectId = crypto.randomUUID()
+    db.insert(projects).values({
+      id: projectId, name: 'mixedproj', displayName: 'Mixed', canonicalDomain: 'example.com',
+      country: 'US', language: 'en', providers: [], createdAt: iso, updatedAt: iso,
+    }).run()
+    for (const [name, lastSyncedAt] of [['current', new Date(now.getTime() - 60_000).toISOString()], ['never', null]] as const) {
+      db.insert(trafficSources).values({
+        id: crypto.randomUUID(), projectId, sourceType: 'vercel', displayName: name,
+        status: 'connected', lastSyncedAt, lastError: null, skippedThroughAt: null,
+        createdAt: iso, updatedAt: iso,
+      }).run()
+    }
+    try {
+      const out = await syncLagCheck.run({ db, project: { id: projectId, name: 'mixedproj' } } as never)
+      expect(out.status).toBe('warn')
+      expect(out.code).toBe('traffic.sync-lag.never-synced')
+      expect(out.summary).toContain('never')
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
   })
 })
 

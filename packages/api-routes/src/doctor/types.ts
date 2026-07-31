@@ -21,6 +21,8 @@ export interface TrafficSourceProbe {
   displayName: string
   status: string
   lastSyncedAt: string | null
+  /** Newest instant a sync clamped past without ingesting; null when none known. */
+  skippedThroughAt?: string | null
   lastError: string | null
   configJson: Record<string, unknown>
 }

@@ -57,6 +57,7 @@ function loadProbes(ctx: DoctorContext): TrafficSourceProbe[] {
     displayName: r.displayName,
     status: r.status,
     lastSyncedAt: r.lastSyncedAt,
+    skippedThroughAt: r.skippedThroughAt,
     lastError: r.lastError,
     configJson: r.configJson,
   }))
@@ -468,8 +469,13 @@ const syncLagCheck: CheckDefinition = {
         displayName: source.displayName,
         lastSyncedAt: source.lastSyncedAt,
         lagMs,
-        // Only adapters with a bounded catch-up window can lose data to lag.
+        // Discarding NOW: lag has passed what one sync can reach.
         discarding: catchUpMs !== undefined && lagMs !== null && lagMs >= catchUpMs,
+        // Discarded EARLIER and not yet recovered. Kept separate from current
+        // lag because a skip is not self-healing: the sync that skipped also
+        // advanced the watermark, so lag looks fine on the very next pass while
+        // the hole remains. Only a backfill covering the span clears this.
+        skippedThroughAt: source.skippedThroughAt ?? null,
         catchUpMs: catchUpMs ?? null,
       }
     })
@@ -483,7 +489,28 @@ const syncLagCheck: CheckDefinition = {
         lagMs: m.lagMs,
         maxCatchUpMs: m.catchUpMs,
         discardingOlderTraffic: m.discarding,
+        skippedThroughAt: m.skippedThroughAt,
       })),
+    }
+
+    // An unrecovered skip fails regardless of current lag. Checking lag alone
+    // let the loss state clear itself: the clamping sync advanced the watermark,
+    // so the next pass saw normal lag and reported `ok` on a source with a
+    // permanent gap.
+    const unrecovered = measured.filter((m) => m.skippedThroughAt !== null)
+    if (unrecovered.length > 0) {
+      return {
+        status: CheckStatuses.fail,
+        code: 'traffic.sync-lag.unrecovered-skip',
+        summary:
+          `${unrecovered.length} traffic source(s) previously skipped traffic that has not been backfilled: `
+          + `${unrecovered.map((m) => `${m.displayName} (skipped through ${m.skippedThroughAt})`).join(', ')}. `
+          + 'Current lag may look healthy; the gap does not close on its own.',
+        remediation:
+          'Recover the gap with `canonry traffic backfill <project> --source <id> --days N --wait`, choosing N so the window reaches back past the skipped instant and stays inside the provider\'s log retention. '
+          + 'This clears only when a backfill actually covers the span.',
+        details,
+      }
     }
 
     const discarding = measured.filter((m) => m.discarding)
@@ -495,7 +522,8 @@ const syncLagCheck: CheckDefinition = {
           `${discarding.length} traffic source(s) are further behind than a single sync can reach, so each sync now skips the oldest traffic instead of ingesting it: `
           + `${discarding.map((m) => `${m.displayName} (${formatLag(m.lagMs!)} behind)`).join(', ')}.`,
         remediation:
-          'Data is being lost now. Raise the per-sync drain budget (CANONRY_VERCEL_SYNC_DEADLINE_MS) and/or shorten the sync schedule so the source advances faster than wall-clock, then run `canonry traffic backfill <project> --source <id>` to recover the skipped span.',
+          'Data is being lost now. Raise the per-sync drain budget (CANONRY_VERCEL_SYNC_DEADLINE_MS) and/or shorten the sync schedule so the source advances faster than wall-clock. '
+          + 'Then recover the skipped span with `canonry traffic backfill <project> --source <id> --days N --wait`, choosing N to cover the gap without exceeding the provider\'s log retention — a bare backfill defaults to 30 days, which is past typical Vercel request-log retention and is rejected rather than silently truncated.',
         details,
       }
     }
@@ -510,17 +538,23 @@ const syncLagCheck: CheckDefinition = {
           + `${lagging.map((m) => `${m.displayName} (${formatLag(m.lagMs!)} behind)`).join(', ')}. `
           + 'Syncs are completing, but the watermark is not keeping up with wall-clock.',
         remediation:
-          'Shorten the sync schedule (`canonry schedule set <project> --kind traffic-sync --cron "*/10 * * * *"`) or raise the per-sync drain budget (CANONRY_VERCEL_SYNC_DEADLINE_MS) so each cycle advances further than the gap between cycles.',
+          'Shorten the sync schedule (`canonry schedule set <project> --kind traffic-sync --source <id> --cron "*/10 * * * *"` — `--source` is required for traffic-sync and the call is rejected without it) '
+          + 'or raise the per-sync drain budget (CANONRY_VERCEL_SYNC_DEADLINE_MS), so each cycle advances further than the gap between cycles.',
         details,
       }
     }
 
+    // Any never-synced source is reported, even alongside healthy siblings.
+    // Requiring ALL of them to be null let one current source mask a sibling
+    // that had never ingested anything — the check would return `ok` for a
+    // project that was only half-instrumented.
     const neverSynced = measured.filter((m) => m.lagMs === null)
-    if (neverSynced.length === measured.length) {
+    if (neverSynced.length > 0) {
       return {
         status: CheckStatuses.warn,
         code: 'traffic.sync-lag.never-synced',
-        summary: `${neverSynced.length} traffic source(s) have never recorded a successful sync.`,
+        summary: `${neverSynced.length} of ${measured.length} traffic source(s) have never recorded a successful sync: `
+          + `${neverSynced.map((m) => m.displayName).join(', ')}.`,
         remediation: 'Run `canonry traffic sync <project> --source <id>` and confirm the source has a schedule.',
         details,
       }
