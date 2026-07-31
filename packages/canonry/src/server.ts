@@ -1193,6 +1193,35 @@ export async function createServer(opts: {
       // The scheduler already created the ads-sync run row; run the worker.
       runAdsSync(runId, projectId);
     },
+    onDoctorRequested: (projectName) => {
+      // Run the health checks and notify only on a transition. This is the loop
+      // that was missing: the checks existed and nothing executed them, so a
+      // degraded instrument kept emitting `run.completed` and looked healthy.
+      void (async () => {
+        try {
+          const report = await aeroClient.runDoctor({ project: projectName });
+          const project = opts.db
+            .select()
+            .from(projects)
+            .where(eq(projects.name, projectName))
+            .get();
+          if (!project) {
+            app.log.warn({ projectName }, "doctor schedule fired for an unknown project");
+            return;
+          }
+          await notifier.onHealthChecked(project.id, {
+            checks: report.checks,
+            checkedAt: report.generatedAt,
+          });
+        } catch (err: unknown) {
+          // A health check that cannot run must not take the scheduler down,
+          // but it also must not look like a clean pass — leaving the stored
+          // state untouched means the next successful pass still sees the real
+          // previous status and transitions correctly.
+          app.log.warn({ projectName, err }, "scheduled doctor pass failed");
+        }
+      })();
+    },
     onDataRefreshRequested: (projectName) => {
       // Fan out to every connected data integration (GSC, Bing, GA, GBP) via
       // the same in-process client. refreshAllIntegrations isolates each

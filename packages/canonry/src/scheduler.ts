@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import cron from 'node-cron'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, notExists, sql } from 'drizzle-orm'
 import { queueRunIfProjectIdle, nextRunFromCron } from '@ainyc/canonry-api-routes'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { schedules, projects, runs } from '@ainyc/canonry-db'
@@ -9,6 +9,9 @@ import { SchedulableRunKinds, RunKinds, RunStatuses, RunTriggers } from '@ainyc/
 import { createLogger } from './logger.js'
 
 const log = createLogger('Scheduler')
+
+/** Default cadence for the health schedule seeded on first start. */
+const DEFAULT_HEALTH_CRON = '0 */6 * * *'
 
 export interface SchedulerCallbacks {
   /** Fired when an answer-visibility schedule triggers. Existing canonry callsites wire this to the JobRunner. */
@@ -44,6 +47,14 @@ export interface SchedulerCallbacks {
    * by the host, not the scheduler. Fire-and-forget.
    */
   onDataRefreshRequested?: (projectName: string) => void
+  /**
+   * Fired when a doctor schedule triggers. The host runs the health checks and
+   * decides whether the outcome is worth notifying. No run row: doctor measures
+   * the instrument rather than producing findings, so it has nothing to attach
+   * results to and must never displace a real sweep on the dashboard.
+   * Fire-and-forget.
+   */
+  onDoctorRequested?: (projectName: string) => void
   /**
    * Fired when a backlinks-sync schedule triggers. The host re-probes Common
    * Crawl for the latest hyperlink-graph release and, when a newer rolling
@@ -82,8 +93,56 @@ export class Scheduler {
     this.callbacks = callbacks
   }
 
+  /**
+   * Give every project a health schedule if it has never had one.
+   *
+   * Ships the schedule with the feature. The six checks that existed before
+   * this had never run on a live instance because nothing scheduled them, and
+   * a health check nobody enables is indistinguishable from no health check.
+   *
+   * Keyed on the row EXISTING, not on it being enabled, so an operator who
+   * deliberately turns this off keeps it off across restarts. Seeded here
+   * rather than in a migration because migrations must stay additive to remain
+   * downgrade-safe, and inserting rows is a data mutation.
+   *
+   * Every 6h, not daily: the cadence has to be shorter than the time-to-damage
+   * it guards. A Vercel source begins discarding traffic once it is 24h behind,
+   * so a daily pass could only ever observe the loss after it started.
+   */
+  private ensureHealthSchedules(): void {
+    const projectsWithoutHealth = this.db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(notExists(
+        this.db.select({ one: sql`1` }).from(schedules).where(and(
+          eq(schedules.projectId, projects.id),
+          eq(schedules.kind, SchedulableRunKinds.doctor),
+        )),
+      ))
+      .all()
+    if (projectsWithoutHealth.length === 0) return
+    const now = new Date().toISOString()
+    for (const project of projectsWithoutHealth) {
+      this.db.insert(schedules).values({
+        id: crypto.randomUUID(),
+        projectId: project.id,
+        kind: SchedulableRunKinds.doctor,
+        cronExpr: DEFAULT_HEALTH_CRON,
+        timezone: 'UTC',
+        enabled: true,
+        providers: [],
+        nextRunAt: nextRunFromCron(DEFAULT_HEALTH_CRON, 'UTC'),
+        createdAt: now,
+        updatedAt: now,
+      }).run()
+    }
+    log.info('health-schedule.seeded', { projectCount: projectsWithoutHealth.length, cron: DEFAULT_HEALTH_CRON })
+  }
+
   /** Load all enabled schedules from DB and register cron jobs. */
   start(): void {
+    this.ensureHealthSchedules()
+
     const allSchedules = this.db
       .select()
       .from(schedules)
@@ -321,6 +380,24 @@ export class Scheduler {
         }).where(eq(schedules.id, currentSchedule.id)).run()
         log.info('data-refresh.triggered', { projectName: project.name })
         this.callbacks.onDataRefreshRequested(project.name)
+        return
+      }
+
+      if (kind === SchedulableRunKinds.doctor) {
+        // Health checks read existing state and emit at most one notification;
+        // they create no run row, so the schedule row itself is the only thing
+        // that advances here.
+        if (!this.callbacks.onDoctorRequested) {
+          log.warn('doctor.no-callback', { scheduleId, projectId, msg: 'host did not register onDoctorRequested' })
+          return
+        }
+        this.db.update(schedules).set({
+          lastRunAt: now,
+          nextRunAt,
+          updatedAt: now,
+        }).where(eq(schedules.id, currentSchedule.id)).run()
+        log.info('doctor.triggered', { projectName: project.name })
+        this.callbacks.onDoctorRequested(project.name)
         return
       }
 

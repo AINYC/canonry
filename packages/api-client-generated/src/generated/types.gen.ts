@@ -2693,7 +2693,7 @@ export type NotificationDto = {
     url: string;
     urlDisplay: string;
     urlHost: string;
-    events: Array<'citation.lost' | 'citation.gained' | 'run.completed' | 'run.failed' | 'insight.critical' | 'insight.high'>;
+    events: Array<'citation.lost' | 'citation.gained' | 'run.completed' | 'run.failed' | 'insight.critical' | 'insight.high' | 'health.degraded' | 'health.recovered'>;
     enabled: boolean;
     source?: string;
     webhookSecret?: string;
@@ -3088,7 +3088,7 @@ export type ProjectConfig = {
         notifications: Array<{
             channel: 'webhook';
             url: string;
-            events: Array<'citation.lost' | 'citation.gained' | 'run.completed' | 'run.failed' | 'insight.critical' | 'insight.high'>;
+            events: Array<'citation.lost' | 'citation.gained' | 'run.completed' | 'run.failed' | 'insight.critical' | 'insight.high' | 'health.degraded' | 'health.recovered'>;
         }>;
         google?: {
             gsc?: {
@@ -4118,7 +4118,7 @@ export type RunDto = {
     createdAt: string;
 };
 
-export type SchedulableRunKind = 'answer-visibility' | 'traffic-sync' | 'gbp-sync' | 'data-refresh' | 'backlinks-sync' | 'site-audit' | 'ads-sync';
+export type SchedulableRunKind = 'answer-visibility' | 'traffic-sync' | 'gbp-sync' | 'data-refresh' | 'backlinks-sync' | 'site-audit' | 'ads-sync' | 'doctor';
 
 export type ScheduleDto = {
     id: string;

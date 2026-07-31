@@ -7,6 +7,18 @@ export const notificationEventSchema = z.enum([
   'run.failed',
   'insight.critical',
   'insight.high',
+  /**
+   * Instrument health, as opposed to findings. Every other event above reports
+   * what the measurement SAW; these two report whether the measurement is
+   * trustworthy at all. They exist because a degraded pipeline keeps emitting
+   * `run.completed` — a success signal — while producing wrong numbers.
+   *
+   * Edge-triggered: emitted when the worst check status changes, never on every
+   * scheduled pass, so a persistent warning does not train the operator to
+   * ignore the channel.
+   */
+  'health.degraded',
+  'health.recovered',
 ])
 export type NotificationEvent = z.infer<typeof notificationEventSchema>
 
@@ -50,6 +62,32 @@ export interface InsightWebhookPayload {
     query: string
     provider: string
   }>
+  dashboardUrl: string
+}
+
+/**
+ * Health events carry no `run`: they report on the measurement apparatus, not
+ * on a sweep. Deliberately a separate payload rather than a run payload with a
+ * null run, because a subscriber that keys off `run.id` should fail loudly on
+ * a health event instead of silently treating it as a finding about the site.
+ */
+export interface HealthWebhookPayload {
+  source: 'canonry'
+  event: 'health.degraded' | 'health.recovered'
+  project: { name: string; canonicalDomain: string }
+  health: {
+    /** Worst check status observed on this pass. */
+    status: 'ok' | 'warn' | 'fail'
+    /** Stable code of the worst check, e.g. "traffic.sync-lag.discarding". */
+    code: string
+    summary: string
+    remediation: string | null
+    checkedAt: string
+    /** What the status was before this pass, so the transition is explicit. */
+    previousStatus: 'ok' | 'warn' | 'fail' | null
+    /** Every non-ok check on this pass, worst first. */
+    failing: Array<{ id: string; status: string; code: string; summary: string }>
+  }
   dashboardUrl: string
 }
 

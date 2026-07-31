@@ -1,8 +1,8 @@
 import { eq, desc, and, inArray, or } from 'drizzle-orm'
 import { deliverWebhook, redactNotificationUrl, resolveWebhookTarget } from '@ainyc/canonry-api-routes'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { auditLog, groupRunsByCreatedAt, notifications, projects, queries, querySnapshots, runs } from '@ainyc/canonry-db'
-import type { NotificationEvent, WebhookPayload, InsightWebhookPayload } from '@ainyc/canonry-contracts'
+import { auditLog, doctorHealthState, groupRunsByCreatedAt, notifications, projects, queries, querySnapshots, runs } from '@ainyc/canonry-db'
+import type { NotificationEvent, WebhookPayload, InsightWebhookPayload, HealthWebhookPayload } from '@ainyc/canonry-contracts'
 import type { AnalysisResult } from '@ainyc/canonry-intelligence'
 import crypto from 'node:crypto'
 import { createLogger } from './logger.js'
@@ -100,6 +100,115 @@ export class Notifier {
         await this.sendWebhook(config.url, payload, notif.id, projectId, notif.webhookSecret ?? null)
       }
     }
+  }
+
+  /**
+   * Record the outcome of a scheduled health pass and notify on transitions.
+   *
+   * Edge-triggered on `(status, code)`. A pass that finds the same problem as
+   * last time is stored but not re-sent: an operator who receives the same
+   * warning every day stops reading the channel, which is how a real
+   * degradation goes unnoticed. A pass whose worst code CHANGES does notify,
+   * even at the same severity, because a different cause is different news.
+   *
+   * Returns the event emitted, or null when nothing changed — the return value
+   * is what tests assert against, so "stayed quiet" is observable rather than
+   * inferred from the absence of a webhook.
+   */
+  async onHealthChecked(
+    projectId: string,
+    report: {
+      checks: Array<{ id: string; status: string; code: string; summary: string; remediation?: string | null }>
+      checkedAt: string
+    },
+  ): Promise<'health.degraded' | 'health.recovered' | null> {
+    const project = this.db.select().from(projects).where(eq(projects.id, projectId)).get()
+    if (!project) {
+      log.error('project.not-found', { projectId, msg: 'skipping health notification' })
+      return null
+    }
+
+    // `skipped` is not a health signal — a check that could not run tells us
+    // nothing about the instrument and must never look like a clean bill.
+    const rank = (status: string): number => (status === 'fail' ? 2 : status === 'warn' ? 1 : 0)
+    const graded = report.checks.filter(c => c.status === 'fail' || c.status === 'warn' || c.status === 'ok')
+    const failing = graded
+      .filter(c => c.status !== 'ok')
+      .sort((a, b) => rank(b.status) - rank(a.status) || a.id.localeCompare(b.id))
+    const worst = failing.at(0) ?? null
+
+    // No gradeable check ran at all. Reporting `ok` here would be the exact
+    // failure this channel exists to catch: a green signal produced by an
+    // instrument that measured nothing. Absence of a signal is not health.
+    const noSignal = graded.length === 0
+    const status: 'ok' | 'warn' | 'fail' = noSignal
+      ? 'warn'
+      : worst
+        ? (worst.status as 'warn' | 'fail')
+        : 'ok'
+    const code = noSignal ? 'health.no-signal' : (worst?.code ?? 'health.ok')
+    const summary = noSignal
+      ? `No health check produced a result (${report.checks.length} skipped) — health is unknown, not confirmed.`
+      : (worst?.summary ?? `All ${graded.length} health check(s) passing.`)
+
+    const previous = this.db.select().from(doctorHealthState)
+      .where(eq(doctorHealthState.projectId, projectId)).get()
+    const previousStatus = (previous?.status ?? null) as 'ok' | 'warn' | 'fail' | null
+
+    // Transition rules: a first observation only speaks up if it is already
+    // bad, so installing this does not announce healthy projects.
+    let event: 'health.degraded' | 'health.recovered' | null = null
+    if (previous === undefined) {
+      if (status !== 'ok') event = 'health.degraded'
+    } else if (status === 'ok' && previousStatus !== 'ok') {
+      event = 'health.recovered'
+    } else if (status !== 'ok' && (previousStatus === 'ok' || previous.code !== code)) {
+      event = 'health.degraded'
+    }
+
+    const now = report.checkedAt
+    const row = {
+      projectId,
+      status,
+      code,
+      summary,
+      checkedAt: now,
+      notifiedAt: event ? now : (previous?.notifiedAt ?? null),
+    }
+    if (previous === undefined) this.db.insert(doctorHealthState).values(row).run()
+    else this.db.update(doctorHealthState).set(row).where(eq(doctorHealthState.projectId, projectId)).run()
+
+    if (!event) {
+      log.info('health.unchanged', { projectId, status, code })
+      return null
+    }
+
+    const notifs = this.db.select().from(notifications)
+      .where(eq(notifications.projectId, projectId)).all().filter(n => n.enabled)
+
+    const payload: HealthWebhookPayload = {
+      source: 'canonry',
+      event,
+      project: { name: project.name, canonicalDomain: project.canonicalDomain },
+      health: {
+        status,
+        code,
+        summary,
+        remediation: worst?.remediation ?? null,
+        checkedAt: now,
+        previousStatus,
+        failing: failing.map(c => ({ id: c.id, status: c.status, code: c.code, summary: c.summary })),
+      },
+      dashboardUrl: `${this.serverUrl}/projects/${project.name}`,
+    }
+
+    for (const notif of notifs) {
+      const config = notif.config as { url: string; events?: string[] }
+      if (config.events && !config.events.includes(event)) continue
+      await this.sendWebhook(config.url, payload as unknown as WebhookPayload, notif.id, projectId, notif.webhookSecret ?? null)
+    }
+    log.info('health.notified', { projectId, event, status, code, subscribers: notifs.length })
+    return event
   }
 
   /** Dispatch insight webhooks for critical/high severity insights after a run. */

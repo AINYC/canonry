@@ -282,6 +282,10 @@ const COVERAGE: Record<string, CoverageEntry> = {
       syncRunId: 'Internal join key.',
     },
   },
+  doctorHealthState: {
+    kind: 'internal-only',
+    reason: 'Last observed doctor outcome per project, kept only so health alerting can fire on transitions rather than on every scheduled pass. It is alerting bookkeeping, not a measurement: the report itself is served live by GET /projects/:name/doctor, and exposing a cached copy would invite readers to trust a stale health verdict.',
+  },
   gbpKeywordMonthly: {
     kind: 'internal-only',
     reason: 'Accumulating per-month keyword series; an internal trend-history aggregate consumed by the intelligence engine (month-over-month keyword-drop insights), not exposed as its own DTO. The current snapshot is served by gbpKeywordImpressions.',
