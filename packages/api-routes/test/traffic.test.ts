@@ -761,6 +761,40 @@ describe('POST /traffic/connect/vercel', () => {
 })
 
 describe('POST /traffic/sources/:id/sync — Vercel', () => {
+  it('never walks lastSyncedAt backward when the cursor moved ahead mid-sync', async () => {
+    // The reset rewind race. A sync already in flight when the cursor is
+    // advanced out from under it (an operator `--advance-to-now`, or a backfill
+    // committing a later window) used to commit its OWN older window end and
+    // silently undo that advance — the source resumed from the past and
+    // re-walked ground that had been deliberately skipped. Backfill always
+    // guarded this; the incremental path did not, so a reset only stuck if you
+    // first disabled the schedule and drained the in-flight run by hand.
+    const h = await buildHarness([])
+    try {
+      const sourceId = await connectVercel(h)
+
+      // Stand in for the advance that lands while this sync is mid-flight: the
+      // stored watermark is already ahead of any window this sync can produce.
+      const ahead = new Date(Date.now() + 60 * 60_000).toISOString()
+      h.db.update(trafficSources)
+        .set({ lastSyncedAt: ahead })
+        .where(eq(trafficSources.id, sourceId))
+        .run()
+
+      const syncRes = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`,
+        payload: {},
+      })
+      expect(syncRes.statusCode).toBe(200)
+
+      const sourceRow = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      expect(new Date(sourceRow.lastSyncedAt!).getTime()).toBeGreaterThanOrEqual(new Date(ahead).getTime())
+    } finally {
+      await h.app.close()
+    }
+  })
+
   const vercelConnectBody = {
     projectId: 'prj_abc',
     teamId: 'team_xyz',
@@ -1474,6 +1508,7 @@ describe('POST /traffic/sources/:id/backfill — Vercel', () => {
 })
 
 describe('POST /traffic/sources/:id/sync', () => {
+
   it('returns 404 when the source does not belong to the project', async () => {
     const h = await buildHarness([])
     try {
