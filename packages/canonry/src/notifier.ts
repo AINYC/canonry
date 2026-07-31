@@ -6,7 +6,8 @@ import type { NotificationEvent, WebhookPayload, InsightWebhookPayload, HealthWe
 import type { AnalysisResult } from '@ainyc/canonry-intelligence'
 import crypto from 'node:crypto'
 import { createLogger } from './logger.js'
-import { isDiscordWebhookUrl, toDiscordWebhookBody } from './discord-payload.js'
+import { toAlertView } from './notifications/alert.js'
+import { resolveDestination } from './notifications/destinations.js'
 
 const log = createLogger('Notifier')
 
@@ -470,15 +471,13 @@ export class Notifier {
   }
 
   private async sendWebhook(url: string, payload: WebhookPayload | InsightWebhookPayload, notificationId: string, projectId: string, webhookSecret: string | null): Promise<void> {
-    // A Discord webhook is just a webhook whose body has to look a particular
-    // way, so it is detected from the URL rather than declared as its own
-    // channel. Discord rejects arbitrary JSON with a 400; everything else about
-    // the send is unchanged.
-    const discord = isDiscordWebhookUrl(url)
-    const body = discord ? toDiscordWebhookBody(payload as never) : payload
-    // Discord never verifies our HMAC, and signing a body the receiver ignores
-    // only advertises that a secret exists. Sign first-party receivers only.
-    const signingSecret = discord ? null : webhookSecret
+    // A chat webhook IS a webhook whose body has to look a particular way, so
+    // the destination is resolved from the URL rather than declared on the
+    // stored notification. Discord and Slack both reject arbitrary JSON;
+    // everything else about the send is identical.
+    const destination = resolveDestination(url)
+    const body = destination.render ? destination.render(toAlertView(payload as never)) : payload
+    const signingSecret = destination.signed ? webhookSecret : null
     const targetLabel = redactNotificationUrl(url).urlDisplay
     const targetCheck = await resolveWebhookTarget(url)
     if (!targetCheck.ok) {
