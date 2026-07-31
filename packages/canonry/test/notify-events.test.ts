@@ -1,3 +1,4 @@
+import { notificationEventSchema } from '@ainyc/canonry-contracts'
 import { it, expect } from 'vitest'
 import { listEvents } from '../src/commands/notify.js'
 
@@ -32,6 +33,6 @@ it('listEvents outputs valid JSON with --format json', () => {
 
   const parsed = JSON.parse(logs.join('\n'))
   expect(Array.isArray(parsed)).toBeTruthy()
-  expect(parsed.length).toBe(6)
+  expect(parsed.length).toBe(notificationEventSchema.options.length)
   expect(parsed.every((e: { event: string; description: string }) => e.event && e.description)).toBeTruthy()
 })

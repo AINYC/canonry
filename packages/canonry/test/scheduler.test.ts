@@ -6,6 +6,19 @@ import { eq } from 'drizzle-orm'
 import { createClient, migrate, projects, schedules, runs } from '@ainyc/canonry-db'
 import { Scheduler } from '../src/scheduler.js'
 
+/**
+ * Count registered cron tasks, ignoring the health schedule the scheduler seeds
+ * for every project on start. These tests are about orphan cleanup and per-kind
+ * keying; an absolute size assertion would couple them to how many schedules
+ * ship by default.
+ */
+function taskCount(scheduler: unknown, opts: { includeHealth?: boolean } = {}): number {
+  const tasks = (scheduler as { tasks: Map<string, unknown> }).tasks
+  if (opts.includeHealth) return tasks.size
+  return [...tasks.keys()].filter(key => !key.endsWith('::doctor')).length
+}
+
+
 function createTempDb() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-scheduler-test-'))
   const dbPath = path.join(tmpDir, 'test.db')
@@ -46,14 +59,14 @@ test('scheduler removes orphaned tasks after project deletion', () => {
   })
 
   scheduler.start()
-  expect((scheduler as unknown as { tasks: Map<string, unknown> }).tasks.size).toBe(1)
+  expect(taskCount(scheduler)).toBe(1)
 
   db.delete(projects).where(eq(projects.id, 'proj_1')).run()
   ;(scheduler as unknown as { triggerRun: (scheduleId: string, projectId: string, kind: 'answer-visibility' | 'traffic-sync') => void })
     .triggerRun('sched_1', 'proj_1', 'answer-visibility')
 
   expect(createdRunIds.length).toBe(0)
-  expect((scheduler as unknown as { tasks: Map<string, unknown> }).tasks.size).toBe(0)
+  expect(taskCount(scheduler)).toBe(0)
 
   scheduler.stop()
   fs.rmSync(tmpDir, { recursive: true, force: true })
@@ -104,15 +117,15 @@ test('scheduler keys tasks by (projectId, kind) — both kinds can register inde
   const scheduler = new Scheduler(db, { onRunCreated: () => {} })
   scheduler.start()
   // Both schedules registered.
-  expect((scheduler as unknown as { tasks: Map<string, unknown> }).tasks.size).toBe(2)
+  expect(taskCount(scheduler)).toBe(2)
 
   // Remove only the traffic-sync one — the answer-visibility task survives.
   scheduler.remove('proj_2', 'traffic-sync')
-  expect((scheduler as unknown as { tasks: Map<string, unknown> }).tasks.size).toBe(1)
+  expect(taskCount(scheduler)).toBe(1)
 
   // removeAllForProject clears both.
   scheduler.removeAllForProject('proj_2')
-  expect((scheduler as unknown as { tasks: Map<string, unknown> }).tasks.size).toBe(0)
+  expect(taskCount(scheduler)).toBe(0)
 
   scheduler.stop()
   fs.rmSync(tmpDir, { recursive: true, force: true })

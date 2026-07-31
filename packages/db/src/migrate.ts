@@ -2518,6 +2518,29 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE traffic_sources ADD COLUMN skipped_through_at TEXT`,
     ],
   },
+  {
+    // Scheduled health checks need somewhere to remember the previous outcome so
+    // alerting fires on transitions rather than on every pass. Fresh installs and
+    // upgrades both start empty, which reads as "no prior observation" and makes
+    // the first degraded pass notify exactly once.
+    //
+    // The default doctor schedule is NOT seeded here. Migrations after v88 must
+    // stay additive so a downgrade is safe, and inserting rows is a data
+    // mutation. Scheduler.start() ensures the schedule instead, which also lets
+    // an operator who disables it keep it disabled.
+    version: 114,
+    name: 'doctor-health-state',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS doctor_health_state (
+        project_id  TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        status      TEXT NOT NULL,
+        code        TEXT NOT NULL,
+        summary     TEXT NOT NULL,
+        checked_at  TEXT NOT NULL,
+        notified_at TEXT
+      )`,
+    ],
+  },
 ]
 
 /**

@@ -201,6 +201,24 @@ export const schedules = sqliteTable('schedules', {
   uniqueIndex('idx_schedules_project_kind').on(table.projectId, table.kind),
 ])
 
+/**
+ * Last observed doctor outcome per project, so health alerting is
+ * edge-triggered. Without this the scheduled pass would re-notify every day a
+ * warning persists, and an operator who learns to ignore the channel is worse
+ * than no channel at all.
+ */
+export const doctorHealthState = sqliteTable('doctor_health_state', {
+  projectId: text('project_id').primaryKey(),
+  /** Worst check status observed on the last pass: ok | warn | fail. */
+  status: text('status').notNull(),
+  /** Stable code of the worst check, so a changed cause re-notifies. */
+  code: text('code').notNull(),
+  summary: text('summary').notNull(),
+  checkedAt: text('checked_at').notNull(),
+  /** When we last emitted for this (status, code). Null until first emit. */
+  notifiedAt: text('notified_at'),
+})
+
 export const notifications = sqliteTable('notifications', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),

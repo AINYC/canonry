@@ -17,7 +17,15 @@ import { providerNameSchema } from './provider.js'
  * - `ads-sync` — OpenAI Advertiser API (ChatGPT ads) pull: entity snapshots + daily paid-performance
  *   rollups for the project's connected ad account. No `sourceId`, no `providers`.
  */
-export const schedulableRunKindSchema = z.enum(['answer-visibility', 'traffic-sync', 'gbp-sync', 'data-refresh', 'backlinks-sync', 'site-audit', 'ads-sync'])
+/**
+ * `doctor` is the only kind here that measures the instrument rather than the
+ * site. Every other kind produces findings; a failure in one of them is visible
+ * because the run itself fails. Instrument degradation is not: a source that
+ * silently discards data, or a provider that quietly stops retrieving, still
+ * reports `run.completed`. Without a scheduled health kind the checks that
+ * detect those conditions only run when a human types `canonry doctor`.
+ */
+export const schedulableRunKindSchema = z.enum(['answer-visibility', 'traffic-sync', 'gbp-sync', 'data-refresh', 'backlinks-sync', 'site-audit', 'ads-sync', 'doctor'])
 export type SchedulableRunKind = z.infer<typeof schedulableRunKindSchema>
 export const SchedulableRunKinds = schedulableRunKindSchema.enum
 
