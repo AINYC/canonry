@@ -12,6 +12,7 @@ import {
   executeTrackedQuery as claudeExecuteTrackedQuery,
   normalizeResult as claudeNormalizeResult,
   generateText as claudeGenerateText,
+  CLAUDE_RETRIEVAL_CONTRACT,
 } from './normalize.js'
 import type { ClaudeConfig } from './types.js'
 
@@ -75,6 +76,8 @@ export const claudeAdapter: ProviderAdapter = {
       servedModel: raw.servedModel,
       groundingSources: raw.groundingSources,
       searchQueries: raw.searchQueries,
+      retrievalStatus: raw.retrievalStatus,
+      retrievalContract: raw.retrievalContract,
     }
   },
 
@@ -85,6 +88,11 @@ export const claudeAdapter: ProviderAdapter = {
       model: raw.model,
       groundingSources: raw.groundingSources,
       searchQueries: raw.searchQueries,
+      // The shared RawQueryResult now carries retrieval, so nothing is lost
+      // across this boundary. A reconstruction that predates the field falls
+      // back to `unknown` rather than asserting an absence.
+      retrievalStatus: raw.retrievalStatus ?? 'unknown',
+      retrievalContract: raw.retrievalContract ?? CLAUDE_RETRIEVAL_CONTRACT,
     }
     const normalized = claudeNormalizeResult(claudeRaw)
     return {
@@ -93,6 +101,7 @@ export const claudeAdapter: ProviderAdapter = {
       citedDomains: normalized.citedDomains,
       groundingSources: normalized.groundingSources,
       searchQueries: normalized.searchQueries,
+      retrievalStatus: normalized.retrievalStatus,
     }
   },
 

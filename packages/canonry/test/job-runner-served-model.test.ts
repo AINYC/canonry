@@ -61,6 +61,8 @@ function stubAdapter(opts: StubOptions): ProviderAdapter {
         ...(opts.screenshotPath === undefined ? {} : { screenshotPath: opts.screenshotPath }),
         groundingSources: [{ uri: opts.groundingUri ?? 'https://publisher.example/guides/answer#citation', title: 'Publisher' }],
         searchQueries: [],
+        retrievalStatus: 'unknown',
+        retrievalContract: 'native-auto-v1',
       }
     },
     normalizeResult(_raw: RawQueryResult): NormalizedQueryResult {
@@ -72,6 +74,7 @@ function stubAdapter(opts: StubOptions): ProviderAdapter {
           ? null as unknown as NormalizedQueryResult['groundingSources']
           : [{ uri: opts.groundingUri ?? 'https://publisher.example/guides/answer#citation', title: 'Publisher' }],
         searchQueries: [],
+        retrievalStatus: 'unknown',
       }
     },
     async generateText(_prompt: string, _config: ProviderConfig): Promise<string> {

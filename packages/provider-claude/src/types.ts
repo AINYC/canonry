@@ -1,6 +1,12 @@
-import type { ProviderQuotaPolicy, GroundingSource, LocationContext } from '@ainyc/canonry-contracts'
+import type {
+  ProviderQuotaPolicy,
+  GroundingSource,
+  LocationContext,
+  RetrievalContract,
+  RetrievalStatus,
+} from '@ainyc/canonry-contracts'
 
-export type { GroundingSource }
+export type { GroundingSource, RetrievalContract, RetrievalStatus }
 
 export interface ClaudeConfig {
   apiKey: string
@@ -31,6 +37,10 @@ export interface ClaudeRawResult {
   servedModel?: string
   groundingSources: GroundingSource[]
   searchQueries: string[]
+  /** See {@link RetrievalStatus}. */
+  retrievalStatus: RetrievalStatus
+  /** See {@link RetrievalContract}. */
+  retrievalContract: RetrievalContract
 }
 
 export interface ClaudeNormalizedResult {
@@ -39,4 +49,6 @@ export interface ClaudeNormalizedResult {
   citedDomains: string[]
   groundingSources: GroundingSource[]
   searchQueries: string[]
+  /** See {@link RetrievalStatus}. */
+  retrievalStatus: RetrievalStatus
 }

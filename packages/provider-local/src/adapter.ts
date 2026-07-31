@@ -72,6 +72,10 @@ export const localAdapter: ProviderAdapter = {
       servedModel: raw.servedModel,
       groundingSources: raw.groundingSources,
       searchQueries: raw.searchQueries,
+      // A plain chat completion with no web access: there is no retrieval step
+      // to report, which is what `not-applicable` means.
+      retrievalStatus: 'not-applicable' as const,
+      retrievalContract: 'native-auto-v1' as const,
     }
   },
 
@@ -90,6 +94,7 @@ export const localAdapter: ProviderAdapter = {
       citedDomains: normalized.citedDomains,
       groundingSources: normalized.groundingSources,
       searchQueries: normalized.searchQueries,
+      retrievalStatus: 'not-applicable' as const,
     }
   },
 

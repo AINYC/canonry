@@ -101,6 +101,12 @@ export const querySnapshots = sqliteTable('query_snapshots', {
   sourceCount: integer('source_count'),
   resolvedCount: integer('resolved_count'),
   captureVersion: integer('capture_version'),
+  // Retrieval is recorded separately from citation capture above: an extraction
+  // that completed having found zero sources says nothing about whether a search
+  // ran. Nullable because historical rows are not backfilled, so null means the
+  // observation predates the field, NOT that retrieval did not happen.
+  retrievalStatus: text('retrieval_status').$type<import('@ainyc/canonry-contracts').RetrievalStatus>(),
+  retrievalContract: text('retrieval_contract').$type<import('@ainyc/canonry-contracts').RetrievalContract>(),
   competitorOverlap: text('competitor_overlap', { mode: 'json' }).$type<string[]>().notNull().default([]),
   recommendedCompetitors: text('recommended_competitors', { mode: 'json' }).$type<string[]>().notNull().default([]),
   location: text('location'),

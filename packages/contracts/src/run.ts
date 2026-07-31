@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { providerNameSchema } from './provider.js'
 import { citedUrlCaptureStatusSchema } from './cited-urls.js'
+import { retrievalContractSchema, retrievalStatusSchema } from './retrieval.js'
 
 export const runStatusSchema = z.enum(['queued', 'running', 'completed', 'partial', 'failed', 'cancelled'])
 export type RunStatus = z.infer<typeof runStatusSchema>
@@ -247,6 +248,13 @@ export const querySnapshotDtoSchema = z.object({
   sourceCount: z.number().int().nonnegative().nullable().default(null),
   resolvedCount: z.number().int().nonnegative().nullable().default(null),
   captureVersion: z.number().int().positive().nullable().default(null),
+  // Whether retrieval ran, and the search policy the request was built under.
+  // Orthogonal to `captureStatus`: extraction can complete having found zero
+  // sources, which says nothing about whether a search happened. Null on rows
+  // written before these were recorded — see RETRIEVAL_CONTRACT_UNRECORDED.
+  // Spelled as unions so the OpenAPI generator preserves null on the enums.
+  retrievalStatus: z.union([retrievalStatusSchema, z.null()]).default(null),
+  retrievalContract: z.union([retrievalContractSchema, z.null()]).default(null),
   competitorOverlap: z.array(z.string()).default([]),
   recommendedCompetitors: z.array(z.string()).default([]),
   matchedTerms: z.array(z.string()).default([]),

@@ -2494,6 +2494,20 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE query_snapshots ADD COLUMN capture_version INTEGER`,
     ],
   },
+  {
+    // Records whether retrieval ran and under which search policy, so a change
+    // in search policy can never produce an unmarked snapshot. Historical rows
+    // stay NULL rather than being backfilled to `native-auto-v1`: they were
+    // produced under provider-native behaviour, but writing that in would
+    // launder an assumption into an observation. Null means "predates the
+    // field", which readers must not treat as `not-used`.
+    version: 112,
+    name: 'query-snapshot-retrieval-contract',
+    statements: [
+      `ALTER TABLE query_snapshots ADD COLUMN retrieval_status TEXT`,
+      `ALTER TABLE query_snapshots ADD COLUMN retrieval_contract TEXT`,
+    ],
+  },
 ]
 
 /**

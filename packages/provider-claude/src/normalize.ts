@@ -10,6 +10,8 @@ import {
 import { withRetry } from "./utils.js";
 import type {
   ClaudeConfig,
+  RetrievalContract,
+  RetrievalStatus,
   ClaudeHealthcheckResult,
   ClaudeNormalizedResult,
   ClaudeRawResult,
@@ -19,6 +21,42 @@ import type {
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 const VALIDATION_PATTERN = /^claude-/;
+
+/**
+ * The measurement contract this provider executes, recorded alongside every
+ * result so trends cannot silently mix methods.
+ *
+ * `search-required-v1` means: the unmodified user query, no system prompt, and
+ * `tool_choice` pinned to `web_search` so retrieval is guaranteed by an API
+ * control rather than coaxed. It measures a search-grounded answer. It is NOT a
+ * reproduction of Claude.ai, whose system instructions, routing, and search
+ * policy are not public and cannot be replicated through this API.
+ *
+ * Why the contract has to be explicit at all: Claude decides for itself whether
+ * a query warrants a search, and Sonnet 5 decides far more conservatively than
+ * Sonnet 4.6. Over a 60-day window Sonnet 4.6 searched on all 136 tracked
+ * answers; Sonnet 5 on 84 of 119. All 35 unsearched answers stored zero cited
+ * domains and zero mentions, indistinguishable at rest from an answer that
+ * searched and did not mention the brand, while sitting in the denominator of
+ * every visibility rate.
+ *
+ * Why `tool_choice` and not a system prompt: a system prompt is probabilistic
+ * and steers persona, tone, and source policy as well as retrieval, which
+ * contaminates the substance being measured. `tool_choice` is the documented
+ * API control for requiring a tool invocation and changes nothing else.
+ * `max_uses` is a ceiling and cannot raise the retrieval floor.
+ *
+ * Measured on the five queries that lost retrieval in production
+ * (claude-sonnet-5, n=5 per mode): native 1/5 retrieval, 1.4 cited domains,
+ * 2920 answer chars; this contract 5/5, 5.0 cited domains, 4520 answer chars,
+ * `end_turn` on every response. Forcing prefills the assistant turn, so no
+ * preamble is emitted before the tool call, but the final answer we parse is
+ * unaffected.
+ *
+ * https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+ * https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+ */
+export const CLAUDE_RETRIEVAL_CONTRACT: RetrievalContract = "search-required-v1";
 
 /**
  * Resolve the effective model name, validating that it is a recognised Claude
@@ -117,6 +155,9 @@ export async function executeTrackedQuery(
         model,
         max_tokens: 4096,
         tools: [webSearchTool as unknown as WebSearchTool20250305],
+        // search-required-v1: retrieval is guaranteed by the API control, so the
+        // query text and answer substance stay untouched. See the contract note.
+        tool_choice: { type: "tool", name: "web_search" },
         messages: [{ role: "user", content: input.query }],
       }),
     );
@@ -134,6 +175,8 @@ export async function executeTrackedQuery(
       servedModel: extractServedModel(rawResponse),
       groundingSources: parsed.groundingSources,
       searchQueries: parsed.searchQueries,
+      retrievalStatus: parsed.retrievalStatus,
+      retrievalContract: CLAUDE_RETRIEVAL_CONTRACT,
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -156,6 +199,7 @@ export function normalizeResult(raw: ClaudeRawResult): ClaudeNormalizedResult {
     citedDomains,
     groundingSources,
     searchQueries,
+    retrievalStatus: useParsed ? parsed.retrievalStatus : raw.retrievalStatus,
   };
 }
 
@@ -189,6 +233,7 @@ export function reparseStoredResult(
     citedDomains: extractCitedDomainsFromSources(groundingSources),
     groundingSources,
     searchQueries,
+    retrievalStatus: extractRetrievalStatusFromRaw(rawResponse),
     ...(providerErrors.length > 0
       ? { providerError: `web_search tool error: ${providerErrors.join(", ")}` }
       : {}),
@@ -255,6 +300,35 @@ function extractGroundingSourcesFromRaw(
     // Ignore extraction errors
   }
   return sources;
+}
+
+/**
+ * Read retrieval from the presence of a `server_tool_use` block rather than from
+ * `searchQueries`. A search whose query string is absent or unparseable still
+ * counts: retrieval is the denominator question, the query text is only
+ * telemetry.
+ *
+ * A response with no usable content array yields `unknown`, never `not-used`.
+ * Collapsing the two would assert an absence we never observed, which is exactly
+ * the unmarked-snapshot failure this field exists to prevent.
+ */
+function extractRetrievalStatusFromRaw(
+  rawResponse: Record<string, unknown>,
+): RetrievalStatus {
+  try {
+    const content = rawResponse.content as
+      | Array<{ type?: string; name?: string }>
+      | undefined;
+    if (!Array.isArray(content) || content.length === 0) return "unknown";
+    return content.some(
+      (block) =>
+        block.type === "server_tool_use" && block.name === "web_search",
+    )
+      ? "used"
+      : "not-used";
+  } catch {
+    return "unknown";
+  }
 }
 
 function extractSearchQueriesFromRaw(

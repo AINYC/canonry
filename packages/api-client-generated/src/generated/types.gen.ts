@@ -2660,6 +2660,8 @@ export type LatestProjectRunDto = {
             sourceCount: number | null;
             resolvedCount: number | null;
             captureVersion: number | null;
+            retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
+            retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
             competitorOverlap: Array<string>;
             recommendedCompetitors: Array<string>;
             matchedTerms: Array<string>;
@@ -3178,6 +3180,8 @@ export type ProjectOverviewDto = {
                 sourceCount: number | null;
                 resolvedCount: number | null;
                 captureVersion: number | null;
+                retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
+                retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
                 competitorOverlap: Array<string>;
                 recommendedCompetitors: Array<string>;
                 matchedTerms: Array<string>;
@@ -4075,6 +4079,8 @@ export type RunDetailDto = {
         sourceCount: number | null;
         resolvedCount: number | null;
         captureVersion: number | null;
+        retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
+        retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
         competitorOverlap: Array<string>;
         recommendedCompetitors: Array<string>;
         matchedTerms: Array<string>;
@@ -4281,6 +4287,8 @@ export type SnapshotListResponse = {
         sourceCount: number | null;
         resolvedCount: number | null;
         captureVersion: number | null;
+        retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
+        retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
         competitorOverlap: Array<string>;
         recommendedCompetitors: Array<string>;
         matchedTerms: Array<string>;

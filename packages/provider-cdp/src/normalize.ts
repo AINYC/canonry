@@ -49,5 +49,6 @@ export function normalizeResult(raw: RawQueryResult): NormalizedQueryResult {
     citedDomains: extractCitedDomains(raw.groundingSources),
     groundingSources: raw.groundingSources,
     searchQueries: raw.searchQueries,
+    retrievalStatus: raw.retrievalStatus ?? 'unknown',
   }
 }

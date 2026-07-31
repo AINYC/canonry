@@ -449,6 +449,11 @@ export class JobRunner {
                 sourceCount: citedUrlCapture.sourceCount,
                 resolvedCount: citedUrlCapture.resolvedCount,
                 captureVersion: citedUrlCapture.captureVersion,
+                // Retrieval is the adapter's own observation, never inferred
+                // from citation counts. Both branches record it so no snapshot
+                // can be written unmarked.
+                retrievalStatus: normalized.retrievalStatus,
+                retrievalContract: raw.retrievalContract,
                 competitorOverlap: overlap,
                 recommendedCompetitors: extractedCompetitors,
                 location: runLocation?.label ?? null,
@@ -480,6 +485,11 @@ export class JobRunner {
                 sourceCount: citedUrlCapture.sourceCount,
                 resolvedCount: citedUrlCapture.resolvedCount,
                 captureVersion: citedUrlCapture.captureVersion,
+                // Retrieval is the adapter's own observation, never inferred
+                // from citation counts. Both branches record it so no snapshot
+                // can be written unmarked.
+                retrievalStatus: normalized.retrievalStatus,
+                retrievalContract: raw.retrievalContract,
                 competitorOverlap: overlap,
                 recommendedCompetitors: extractedCompetitors,
                 location: runLocation?.label ?? null,
