@@ -22,10 +22,24 @@ export const notificationEventSchema = z.enum([
 ])
 export type NotificationEvent = z.infer<typeof notificationEventSchema>
 
+/**
+ * Where a notification is delivered.
+ *
+ * - `webhook`  POST the canonry payload verbatim, HMAC-signed. For your own
+ *              receiver, which can verify the signature and read the fields.
+ * - `discord`  POST a Discord embed to a Discord webhook URL. Discord rejects
+ *              arbitrary JSON with a 400, so the payload is reshaped at send
+ *              time. Delivery is a plain HTTP POST: no agent, no model, no
+ *              per-message cost.
+ */
+export const notificationChannelSchema = z.enum(['webhook', 'discord'])
+export type NotificationChannel = z.infer<typeof notificationChannelSchema>
+export const NotificationChannels = notificationChannelSchema.enum
+
 export const notificationDtoSchema = z.object({
   id: z.string(),
   projectId: z.string(),
-  channel: z.literal('webhook'),
+  channel: notificationChannelSchema,
   url: z.string().url(),
   urlDisplay: z.string(),
   urlHost: z.string(),
@@ -41,7 +55,7 @@ export const notificationDtoSchema = z.object({
 export type NotificationDto = z.infer<typeof notificationDtoSchema>
 
 export const notificationCreateRequestSchema = z.object({
-  channel: z.literal('webhook'),
+  channel: notificationChannelSchema.default('webhook'),
   url: z.string().url(),
   events: z.array(notificationEventSchema).min(1),
   source: z.string().optional(),

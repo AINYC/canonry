@@ -21,11 +21,13 @@ interface NotificationResponse {
 export async function addNotification(project: string, opts: {
   webhook: string
   events: string[]
+  /** `discord` reshapes the payload into an embed; default posts canonry's own JSON. */
+  channel?: 'webhook' | 'discord'
   format?: string
 }): Promise<void> {
   const client = getClient()
   const result = await client.createNotification(project, {
-    channel: 'webhook',
+    channel: opts.channel ?? 'webhook',
     url: opts.webhook,
     events: opts.events,
   }) as NotificationResponse
