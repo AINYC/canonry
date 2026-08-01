@@ -180,7 +180,7 @@ export const getApiV1ProjectsByNameMeasurementPlanOptions = (options: Options<Ge
 /**
  * Publish a measurement-plan revision
  *
- * Validates and canonicalizes the plan against current project domains, locations, and tracked queries. Identical active content is idempotent; restoring older content creates a new immutable revision.
+ * Compares the caller-observed active revision, then validates and canonicalizes the plan against current project domains, locations, and tracked queries. Identical active content is idempotent; restoring older content creates a new immutable revision.
  */
 export const putApiV1ProjectsByNameMeasurementPlanMutation = (options?: Partial<Options<PutApiV1ProjectsByNameMeasurementPlanData>>): UseMutationOptions<PutApiV1ProjectsByNameMeasurementPlanResponse, PutApiV1ProjectsByNameMeasurementPlanError, Options<PutApiV1ProjectsByNameMeasurementPlanData>> => {
     const mutationOptions: UseMutationOptions<PutApiV1ProjectsByNameMeasurementPlanResponse, PutApiV1ProjectsByNameMeasurementPlanError, Options<PutApiV1ProjectsByNameMeasurementPlanData>> = {

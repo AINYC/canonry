@@ -9,6 +9,7 @@ import type {
   MeasurementPlanInput,
   MeasurementPlanCompilePreviewResponse,
   MeasurementPlanDiffPreviewResponse,
+  MeasurementPlanPublishRequest,
   MeasurementPlanResponse,
   MeasurementPlanVersionsResponse,
   MeasurementPlanVersionResponse,
@@ -1121,12 +1122,12 @@ export class ApiClient {
     )
   }
 
-  async publishMeasurementPlan(project: string, plan: MeasurementPlanInput): Promise<MeasurementPlanResponse> {
+  async publishMeasurementPlan(project: string, request: MeasurementPlanPublishRequest): Promise<MeasurementPlanResponse> {
     return this.invoke<MeasurementPlanResponse>(() =>
       putApiV1ProjectsByNameMeasurementPlan({
         client: this.heyClient,
         path: { name: project },
-        body: plan,
+        body: request,
       }),
     )
   }

@@ -44,6 +44,7 @@ import {
   trafficEventKindSchema,
   trafficSeriesGranularitySchema,
   measurementPlanAuthoringSchema,
+  measurementPlanPublishRequestSchema,
   measurementDiscoveryRequestSchema,
   type NotificationEvent,
 } from '@ainyc/canonry-contracts'
@@ -107,7 +108,8 @@ const runTriggerInputSchema = z.object({
   request: runTriggerRequestSchema.optional(),
 })
 const measurementPlanVersionInputSchema = z.object({ project: projectNameSchema, revision: z.number().int().positive() })
-const measurementPlanPublishInputSchema = z.object({ project: projectNameSchema, plan: measurementPlanAuthoringSchema })
+const measurementPlanPreviewInputSchema = z.object({ project: projectNameSchema, plan: measurementPlanAuthoringSchema })
+const measurementPlanPublishInputSchema = measurementPlanPublishRequestSchema.extend({ project: projectNameSchema })
 const measurementPlanRetireInputSchema = z.object({ project: projectNameSchema, stableKey: z.string().min(1) })
 const measurementDiscoveryInputSchema = measurementDiscoveryRequestSchema.extend({ project: projectNameSchema })
 const runsListInputSchema = z.object({
@@ -1827,13 +1829,16 @@ export const canonryMcpTools = [
     name: 'canonry_measurement_plan_version_get', title: 'Get measurement plan revision', description: 'Get one immutable measurement-plan revision.', access: 'read', tier: 'setup', inputSchema: measurementPlanVersionInputSchema, annotations: readAnnotations(), openApiOperations: ['GET /api/v1/projects/{name}/measurement-plan/versions/{revision}'], handler: (client, input) => client.getMeasurementPlanVersion(input.project, input.revision),
   }),
   defineTool({
-    name: 'canonry_measurement_plan_compile_preview', title: 'Compile measurement plan', description: 'Validate and compile a Target/group plan without publishing it.', access: 'write', tier: 'setup', inputSchema: measurementPlanPublishInputSchema, annotations: writeAnnotations({ idempotentHint: true }), openApiOperations: ['POST /api/v1/projects/{name}/measurement-plan/compile-preview'], handler: (client, input) => client.compileMeasurementPlanPreview(input.project, input.plan),
+    name: 'canonry_measurement_plan_compile_preview', title: 'Compile measurement plan', description: 'Validate and compile a Target/group plan without publishing it.', access: 'write', tier: 'setup', inputSchema: measurementPlanPreviewInputSchema, annotations: writeAnnotations({ idempotentHint: true }), openApiOperations: ['POST /api/v1/projects/{name}/measurement-plan/compile-preview'], handler: (client, input) => client.compileMeasurementPlanPreview(input.project, input.plan),
   }),
   defineTool({
-    name: 'canonry_measurement_plan_diff_preview', title: 'Preview measurement plan changes', description: 'Compare a compiled Target/group plan with the active immutable revision without publishing it.', access: 'write', tier: 'setup', inputSchema: measurementPlanPublishInputSchema, annotations: writeAnnotations({ idempotentHint: true }), openApiOperations: ['POST /api/v1/projects/{name}/measurement-plan/diff-preview'], handler: (client, input) => client.diffMeasurementPlanPreview(input.project, input.plan),
+    name: 'canonry_measurement_plan_diff_preview', title: 'Preview measurement plan changes', description: 'Compare a compiled Target/group plan with the active immutable revision without publishing it.', access: 'write', tier: 'setup', inputSchema: measurementPlanPreviewInputSchema, annotations: writeAnnotations({ idempotentHint: true }), openApiOperations: ['POST /api/v1/projects/{name}/measurement-plan/diff-preview'], handler: (client, input) => client.diffMeasurementPlanPreview(input.project, input.plan),
   }),
   defineTool({
-    name: 'canonry_measurement_plan_publish', title: 'Publish measurement plan', description: 'Validate and publish a measurement-plan revision.', access: 'write', tier: 'setup', inputSchema: measurementPlanPublishInputSchema, annotations: writeAnnotations({ idempotentHint: true }), openApiOperations: ['PUT /api/v1/projects/{name}/measurement-plan'], handler: (client, input) => client.publishMeasurementPlan(input.project, input.plan),
+    name: 'canonry_measurement_plan_publish', title: 'Publish measurement plan', description: 'Publish only when the active revision still matches the revision you reviewed. Use null only when you reviewed a planless project.', access: 'write', tier: 'setup', inputSchema: measurementPlanPublishInputSchema, annotations: writeAnnotations({ idempotentHint: true }), openApiOperations: ['PUT /api/v1/projects/{name}/measurement-plan'], handler: (client, input) => client.publishMeasurementPlan(input.project, {
+      expectedActiveRevision: input.expectedActiveRevision,
+      plan: input.plan,
+    }),
   }),
   defineTool({
     name: 'canonry_measurement_plan_segment_retire', title: 'Retire measurement segment', description: 'Permanently retire an inactive Target or group stable key. Publish a revision without it first; there is no unretire.', access: 'write', tier: 'setup', inputSchema: measurementPlanRetireInputSchema, annotations: writeAnnotations({ idempotentHint: true, destructiveHint: true }), openApiOperations: ['POST /api/v1/projects/{name}/measurement-plan/segments/{stableKey}/retire'], handler: (client, input) => client.retireMeasurementPlanSegment(input.project, input.stableKey),

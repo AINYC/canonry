@@ -8,6 +8,7 @@ import { brandLabelFromDomain, hostOf } from './url-normalize.js'
  * upcaster; it must not silently reinterpret a stored v1 revision.
  */
 export const MEASUREMENT_PLAN_SCHEMA_VERSION = 1 as const
+const measurementPlanRevisionSchema = z.number().int().positive()
 
 /** Stable keys are safe to expose in URLs and API scope identifiers. */
 export const measurementStableKeySchema = z.string()
@@ -363,6 +364,17 @@ export const measurementPlanInputSchema = measurementPlanV1InputSchema
 export type MeasurementPlanInput = z.input<typeof measurementPlanInputSchema>
 type ParsedMeasurementPlanInput = z.output<typeof measurementPlanInputSchema>
 
+/**
+ * Publishing is a compare-and-swap over the immutable active revision. `null`
+ * means the caller observed a planless project; a positive revision pins the
+ * exact active plan the caller reviewed.
+ */
+export const measurementPlanPublishRequestSchema = z.object({
+  expectedActiveRevision: measurementPlanRevisionSchema.nullable(),
+  plan: measurementPlanAuthoringSchema,
+}).strict()
+export type MeasurementPlanPublishRequest = z.input<typeof measurementPlanPublishRequestSchema>
+
 export const measurementQuerySnapshotSchema = z.object({
   queryId: measurementQueryIdSchema,
   queryText: z.string().min(1),
@@ -448,7 +460,6 @@ export function parseStoredMeasurementPlan(value: unknown): MeasurementPlan {
   }
 }
 
-const measurementPlanRevisionSchema = z.number().int().positive()
 const measurementPlanChecksumSchema = z.string().regex(/^[a-f0-9]{64}$/)
 const measurementPlanCreatedAtSchema = z.string().datetime()
 

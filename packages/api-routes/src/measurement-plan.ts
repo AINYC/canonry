@@ -8,6 +8,8 @@ import {
   effectiveBrandNames,
   MeasurementPlanValidationError,
   measurementPlanCounts,
+  measurementPlanPublishRequestSchema,
+  measurementPlanRevisionConflict,
   notFound,
   parseStoredMeasurementPlan,
   validationError,
@@ -325,7 +327,12 @@ export async function measurementPlanRoutes(app: FastifyInstance, opts: Measurem
   app.put<{ Params: { name: string } }>('/projects/:name/measurement-plan', async (request, reply) => {
     requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
     const project = resolveProject(app.db, request.params.name)
-    const compiled = compileForProject(app, project, request.body, opts)
+    const parsed = measurementPlanPublishRequestSchema.safeParse(request.body)
+    if (!parsed.success) {
+      throw validationError('Invalid measurement plan publish request', { issues: parsed.error.issues })
+    }
+    const { expectedActiveRevision, plan: candidate } = parsed.data
+    const compiled = compileForProject(app, project, candidate, opts)
     const canonicalJson = canonicalMeasurementPlanJson(compiled)
     const checksum = crypto.createHash('sha256').update(canonicalJson).digest('hex')
     const now = new Date().toISOString()
@@ -342,7 +349,13 @@ export async function measurementPlanRoutes(app: FastifyInstance, opts: Measurem
       if (activePlan && !activeVersion) {
         throw new Error(`Measurement plan ${project.id} points to missing version ${activePlan.activeVersionId}`)
       }
+      // A lost-response retry is safe even when it carries the predecessor
+      // pointer: the exact desired immutable content is already active.
       if (activeVersion && activeVersion.checksum === checksum) return { kind: 'existing' as const, version: activeVersion }
+      const actualActiveRevision = activeVersion?.revision ?? null
+      if (actualActiveRevision !== expectedActiveRevision) {
+        throw measurementPlanRevisionConflict(expectedActiveRevision, actualActiveRevision)
+      }
 
       const revision = (activeVersion?.revision ?? 0) + 1
       const versionId = crypto.randomUUID()

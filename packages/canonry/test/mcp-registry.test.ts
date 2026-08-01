@@ -216,7 +216,12 @@ describe('MCP tool registry', () => {
       ['canonry_measurement_plan_version_get', { project: 'acme', revision: 2 }, 'getMeasurementPlanVersion', ['acme', 2]],
       ['canonry_measurement_plan_compile_preview', { project: 'acme', plan }, 'compileMeasurementPlanPreview', ['acme', plan]],
       ['canonry_measurement_plan_diff_preview', { project: 'acme', plan }, 'diffMeasurementPlanPreview', ['acme', plan]],
-      ['canonry_measurement_plan_publish', { project: 'acme', plan }, 'publishMeasurementPlan', ['acme', plan]],
+      [
+        'canonry_measurement_plan_publish',
+        { project: 'acme', expectedActiveRevision: null, plan },
+        'publishMeasurementPlan',
+        ['acme', { expectedActiveRevision: null, plan }],
+      ],
       ['canonry_measurement_plan_segment_retire', { project: 'acme', stableKey: 'nyc' }, 'retireMeasurementPlanSegment', ['acme', 'nyc']],
       ['canonry_measurement_discovery', {
         project: 'acme',
