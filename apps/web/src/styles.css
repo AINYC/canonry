@@ -1401,6 +1401,10 @@
     @apply grid gap-3 sm:grid-cols-2 lg:grid-cols-3;
   }
 
+  .gauge-row {
+    @apply grid gap-3 sm:grid-cols-2 lg:grid-cols-5;
+  }
+
   /* ── Metric cards (non-gauge) ── */
 
   .metric-card {
@@ -2125,7 +2129,18 @@
   }
 
   .filter-chip {
-    @apply min-h-11 rounded-md border border-base bg-bg px-3 py-1 text-sm font-medium text-secondary transition hover:bg-bg-elevated hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60;
+    @apply min-h-11 rounded-md border border-base bg-bg px-3 py-1 text-sm font-medium text-secondary transition hover:bg-bg-elevated hover:text-heading focus-visible:ring-2 focus-visible:ring-mono-500/60;
+  }
+
+  .filter-chip:focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
+
+  @media (forced-colors: active) {
+    .filter-chip:focus-visible {
+      outline-color: CanvasText;
+    }
   }
 
   .filter-chip-active {

@@ -370,14 +370,29 @@ export function TrafficSourceDetailPage() {
         <div className="rounded-md border border-positive-800/50 bg-positive-950/30 px-3 py-2 text-sm text-positive-200">{syncResult}</div>
       ) : null}
 
-      <section className="grid grid-cols-1 divide-y divide-default border-y border-default sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-        <TrafficKpi label="Content crawls" value={detail.totals24h.crawlerContentHits} />
-        <TrafficKpi label="AI user fetches" value={detail.totals24h.aiUserFetchHits} />
-        <TrafficKpi label="AI referral sessions" value={detail.totals24h.aiReferralHits} />
+      <section aria-labelledby="traffic-24h-heading">
+        <h2 id="traffic-24h-heading" className="mb-3 text-sm font-medium text-heading">Last 24 hours</h2>
+        <div className="grid grid-cols-1 divide-y divide-default border-y border-default sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+          <TrafficKpi
+            label="Content crawls"
+            value={detail.totals24h.crawlerContentHits}
+            tooltip={`Content and document paths only. Excludes sitemap ${detail.totals24h.crawlerSegments.sitemap.toLocaleString('en-US')}, robots ${detail.totals24h.crawlerSegments.robots.toLocaleString('en-US')}, assets ${detail.totals24h.crawlerSegments.asset.toLocaleString('en-US')}, and ${detail.totals24h.crawlerSegments.other.toLocaleString('en-US')} other requests such as feeds, API paths, or downloads. Total crawler hits: ${detail.totals24h.crawlerHits.toLocaleString('en-US')}.`}
+          />
+          <TrafficKpi
+            label="AI user fetches"
+            value={detail.totals24h.aiUserFetchHits}
+            tooltip="ChatGPT-User/Perplexity-User fetches initiated by a real user in an AI surface."
+          />
+          <TrafficKpi
+            label="AI referral sessions"
+            value={detail.totals24h.aiReferralHits}
+            tooltip="Browser click-throughs from AI surfaces, identified by Referer or UTM evidence."
+          />
+        </div>
       </section>
 
       <section>
-        <p className="mb-4 text-[10px] font-semibold uppercase tracking-wider text-muted">Latest sync run</p>
+        <p className="eyebrow eyebrow-soft mb-4">Latest sync run</p>
         {detail.latestRun ? (
           <Card className="p-4 text-sm">
             <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5">
@@ -772,8 +787,24 @@ function SeriesToggle({
   )
 }
 
-function TrafficKpi({ label, value }: { label: string; value: number }) {
-  return <div className="px-4 py-3"><p className="text-xs text-secondary">{label}</p><p className="mt-1 text-2xl font-semibold tabular-nums text-heading">{value.toLocaleString('en-US')}</p></div>
+export function TrafficKpi({
+  label,
+  value,
+  tooltip,
+}: {
+  label: string
+  value: number
+  tooltip?: string
+}) {
+  return (
+    <div className="px-4 py-3">
+      <p className="flex items-center gap-1 text-sm text-secondary">
+        {label}
+        {tooltip ? <InfoTooltip text={tooltip} /> : null}
+      </p>
+      <p className="mt-1 text-2xl font-semibold tabular-nums text-heading">{value.toLocaleString('en-US')}</p>
+    </div>
+  )
 }
 
 function renderKindLabel(kind: TrafficEventEntry['kind']): string {

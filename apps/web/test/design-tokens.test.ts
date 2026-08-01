@@ -205,12 +205,17 @@ test('highlight and effect primitives consume tokens', async () => {
 test('filter chips preserve a 44px touch target and visible keyboard focus', async () => {
   const css = await compileAppStyles([])
   const chip = ruleFor(css, '.filter-chip')
+  const chipFocus = ruleFor(css, '.filter-chip:focus-visible')
 
   expect(chip).toContain('min-height: calc(var(--spacing) * 11)')
   expect(chip).toContain('font-size: var(--text-sm)')
   expect(chip).toContain('&:focus-visible')
-  expect(chip).toContain('outline-style: none')
   expect(chip).toContain('--tw-ring-shadow:')
+  expect(chipFocus).toContain('outline: 2px solid transparent')
+  expect(chipFocus).toContain('outline-offset: 2px')
+  expect(chipFocus).not.toContain('outline-style: none')
+  expect(css).toContain('@media (forced-colors: active)')
+  expect(css).toContain('outline-color: CanvasText')
 })
 
 test('styles.css carries no literal palette utilities or raw hex outside the @theme block', async () => {

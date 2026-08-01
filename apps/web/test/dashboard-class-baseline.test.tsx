@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { beforeAll, expect, test } from 'vitest'
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -8,6 +11,9 @@ import { DashboardProvider } from '../src/contexts/dashboard-context.js'
 import { createDashboardFixture } from '../src/mock-data.js'
 import { createAppRouter } from '../src/router/router.js'
 import { preloadAllLazyRoutes } from '../src/router/routes.js'
+
+const stylesPath = resolve(import.meta.dirname, '../src/styles.css')
+const backlinksSectionPath = resolve(import.meta.dirname, '../src/components/project/BacklinksSection.tsx')
 
 beforeAll(async () => {
   await preloadAllLazyRoutes()
@@ -90,4 +96,12 @@ test('project route keeps the core metric and evidence class baseline stable', a
       "pageTitle": "page-title",
     }
   `)
+})
+
+test('backlinks gauge-row class retains its responsive metric-grid layout', () => {
+  const styles = readFileSync(stylesPath, 'utf8')
+  const backlinksSection = readFileSync(backlinksSectionPath, 'utf8')
+
+  expect(backlinksSection).toContain('className="gauge-row"')
+  expect(styles).toMatch(/\.gauge-row\s*\{\s*@apply grid gap-3 sm:grid-cols-2 lg:grid-cols-5;/)
 })

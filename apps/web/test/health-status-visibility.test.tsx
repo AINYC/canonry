@@ -34,6 +34,13 @@ test('shows degraded worker detail inline on overview and settings', async () =>
     renderDegradedApp('/settings'),
   ])
 
-  expect(overview).toMatch(/<p class="text-sm font-medium text-heading">Worker<\/p><p class="mt-1 text-sm text-secondary">heartbeat stale · last seen 12m ago<\/p>/)
-  expect(settings).toMatch(/<p class="run-row-title">Worker<\/p><p class="mt-1 text-sm text-secondary">heartbeat stale · last seen 12m ago<\/p>/)
+  for (const markup of [overview, settings]) {
+    const document = new DOMParser().parseFromString(markup, 'text/html')
+    const detail = 'heartbeat stale · last seen 12m ago'
+
+    expect(document.body.textContent).toContain(detail)
+    expect(Array.from(document.querySelectorAll('details:not([open])'))).not.toSatisfy(
+      (disclosures) => disclosures.some((disclosure) => disclosure.textContent?.includes(detail)),
+    )
+  }
 })
