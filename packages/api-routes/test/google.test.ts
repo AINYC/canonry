@@ -1422,48 +1422,52 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance offset pagina
     fs.rmSync(context.tmpDir, { recursive: true, force: true })
   })
 
+  // These page through an explicit `orderBy=date` so the assertions stay about
+  // offset, not about which ordering the route defaults to.
   it('paginates rows by offset (issue #470 — drizzle .offset() must apply)', async () => {
     const page1 = await context.app.inject({
       method: 'GET',
-      url: '/projects/perf/google/gsc/performance?limit=2&offset=0',
+      url: '/projects/perf/google/gsc/performance?orderBy=date&limit=2&offset=0',
     })
     expect(page1.statusCode).toBe(200)
-    const rows1 = page1.json() as Array<{ date: string }>
-    expect(rows1.map(r => r.date)).toEqual(['2026-01-06', '2026-01-05'])
+    const body1 = page1.json() as { rows: Array<{ date: string }>; totalMatching: number; truncated: boolean }
+    expect(body1.rows.map(r => r.date)).toEqual(['2026-01-06', '2026-01-05'])
+    expect(body1.totalMatching).toBe(6)
+    expect(body1.truncated).toBe(true)
 
     const page2 = await context.app.inject({
       method: 'GET',
-      url: '/projects/perf/google/gsc/performance?limit=2&offset=2',
+      url: '/projects/perf/google/gsc/performance?orderBy=date&limit=2&offset=2',
     })
     expect(page2.statusCode).toBe(200)
-    const rows2 = page2.json() as Array<{ date: string }>
+    const rows2 = (page2.json() as { rows: Array<{ date: string }> }).rows
     expect(rows2.map(r => r.date)).toEqual(['2026-01-04', '2026-01-03'])
 
     const page3 = await context.app.inject({
       method: 'GET',
-      url: '/projects/perf/google/gsc/performance?limit=2&offset=4',
+      url: '/projects/perf/google/gsc/performance?orderBy=date&limit=2&offset=4',
     })
     expect(page3.statusCode).toBe(200)
-    const rows3 = page3.json() as Array<{ date: string }>
+    const rows3 = (page3.json() as { rows: Array<{ date: string }> }).rows
     expect(rows3.map(r => r.date)).toEqual(['2026-01-02', '2026-01-01'])
 
     // Past the end returns an empty page (not the same first page).
     const page4 = await context.app.inject({
       method: 'GET',
-      url: '/projects/perf/google/gsc/performance?limit=2&offset=6',
+      url: '/projects/perf/google/gsc/performance?orderBy=date&limit=2&offset=6',
     })
     expect(page4.statusCode).toBe(200)
-    expect(page4.json()).toEqual([])
+    expect((page4.json() as { rows: unknown[] }).rows).toEqual([])
   })
 
   it('treats omitted offset as 0 and behaves identically to offset=0', async () => {
     const noOffset = await context.app.inject({
       method: 'GET',
-      url: '/projects/perf/google/gsc/performance?limit=3',
+      url: '/projects/perf/google/gsc/performance?orderBy=date&limit=3',
     })
     const withZero = await context.app.inject({
       method: 'GET',
-      url: '/projects/perf/google/gsc/performance?limit=3&offset=0',
+      url: '/projects/perf/google/gsc/performance?orderBy=date&limit=3&offset=0',
     })
     expect(noOffset.statusCode).toBe(200)
     expect(withZero.statusCode).toBe(200)
@@ -1473,18 +1477,18 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance offset pagina
   it('clamps negative or non-numeric offset to 0', async () => {
     const res = await context.app.inject({
       method: 'GET',
-      url: '/projects/perf/google/gsc/performance?limit=2&offset=-5',
+      url: '/projects/perf/google/gsc/performance?orderBy=date&limit=2&offset=-5',
     })
     expect(res.statusCode).toBe(200)
-    const rows = res.json() as Array<{ date: string }>
+    const rows = (res.json() as { rows: Array<{ date: string }> }).rows
     expect(rows.map(r => r.date)).toEqual(['2026-01-06', '2026-01-05'])
 
     const garbage = await context.app.inject({
       method: 'GET',
-      url: '/projects/perf/google/gsc/performance?limit=2&offset=abc',
+      url: '/projects/perf/google/gsc/performance?orderBy=date&limit=2&offset=abc',
     })
     expect(garbage.statusCode).toBe(200)
-    const garbageRows = garbage.json() as Array<{ date: string }>
+    const garbageRows = (garbage.json() as { rows: Array<{ date: string }> }).rows
     expect(garbageRows.map(r => r.date)).toEqual(['2026-01-06', '2026-01-05'])
   })
 })

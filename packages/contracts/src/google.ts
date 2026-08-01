@@ -28,6 +28,35 @@ export const gscSearchDataDtoSchema = z.object({
 })
 export type GscSearchDataDto = z.infer<typeof gscSearchDataDtoSchema>
 
+export const gscPerformanceOrderBySchema = z.enum(['clicks', 'impressions', 'date'])
+export type GscPerformanceOrderBy = z.infer<typeof gscPerformanceOrderBySchema>
+
+/**
+ * Envelope for the dimensioned GSC performance read.
+ *
+ * `rows` is one page of the dimensioned table, ordered by `orderBy` (clicks
+ * descending by default). Ordering by `date` and then truncating is what made
+ * the old bare-array response return a single day: on a real project the
+ * newest date alone holds more rows than the page limit, so the cap was spent
+ * before the first date boundary. `totalMatching` is the COUNT over the same
+ * WHERE ignoring limit/offset, so a caller can tell a complete answer from a
+ * page. `latestAvailableDate` is MAX(date) for the project ignoring the date
+ * filter, which is what lets a caller distinguish "no data" from "asked past
+ * the GSC reporting lag".
+ *
+ * Never sum `rows` for a property total. The dimensioned table both understates
+ * clicks (Google withholds rare and anonymised queries) and overstates
+ * impressions (one impression fans out across query x page x country x device).
+ * Use /performance/daily for totals.
+ */
+export const gscPerformanceResponseDtoSchema = z.object({
+  rows: z.array(gscSearchDataDtoSchema),
+  totalMatching: z.number(),
+  truncated: z.boolean(),
+  latestAvailableDate: z.string().nullable(),
+})
+export type GscPerformanceResponseDto = z.infer<typeof gscPerformanceResponseDtoSchema>
+
 export const gscPerformanceDailyPointSchema = z.object({
   date: z.string(),
   clicks: z.number(),

@@ -312,7 +312,7 @@ export function GscSection({
       if (performanceFilters.page) queryParams.page = performanceFilters.page
       if (fetchOffset > 0) queryParams.offset = String(fetchOffset)
       if (gscWindow && gscWindow !== 'all' && !performanceFilters.startDate) queryParams.window = gscWindow
-      const rows = await queryClient.fetchQuery({
+      const data = await queryClient.fetchQuery({
         ...getApiV1ProjectsByNameGoogleGscPerformanceOptions({
           client: heyClient,
           path: { name: projectName },
@@ -320,13 +320,16 @@ export function GscSection({
         }),
         staleTime: GSC_STALE_MS,
       })
+      const rows = data.rows
       if (isPerformanceExpanded) {
         setPerformanceHasMore(false)
         setPerformance(rows)
         setPerformanceTotalLoaded(rows.length)
         setPerformanceDisplayedExpanded(true)
       } else {
-        setPerformanceHasMore(rows.length > DEFAULT_TABLE_PAGE_SIZE)
+        // `totalMatching` is the COUNT over the same WHERE, so "has more" no
+        // longer depends on over-fetching a sentinel row.
+        setPerformanceHasMore(fetchOffset + rows.length < data.totalMatching)
         setPerformance(rows.slice(0, DEFAULT_TABLE_PAGE_SIZE))
         setPerformanceTotalLoaded(0)
         setPerformanceDisplayedExpanded(false)

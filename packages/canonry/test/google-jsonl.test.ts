@@ -64,6 +64,16 @@ const perfRows = [
   { date: '2026-05-02', query: 'b', page: 'https://x/2', clicks: 2, impressions: 80, ctr: 0.025, position: 7.1 },
 ]
 
+/** The performance read returns a page envelope, not a bare row array. */
+function perfEnvelope(rows: typeof perfRows) {
+  return {
+    rows,
+    totalMatching: rows.length,
+    truncated: false,
+    latestAvailableDate: rows.length > 0 ? rows[rows.length - 1]!.date : null,
+  }
+}
+
 const dailyEnvelope = {
   daily: [
     { date: '2026-05-01', clicks: 5, impressions: 100, ctr: 0.05 },
@@ -110,7 +120,7 @@ describe('google jsonl output', () => {
 
   describe('googlePerformance', () => {
     it('jsonl emits one self-contained row per line, project-tagged', async () => {
-      mockGscPerformance.mockResolvedValue(perfRows)
+      mockGscPerformance.mockResolvedValue(perfEnvelope(perfRows))
       const cap = captureStdout(() => googlePerformance(PROJECT, { format: 'jsonl' }))
       await cap.run
       const lines = cap.lines()
@@ -124,24 +134,24 @@ describe('google jsonl output', () => {
       const many = Array.from({ length: 73 }, (_, i) => ({
         date: '2026-05-01', query: `q${i}`, page: 'p', clicks: i, impressions: i, ctr: 0, position: 1,
       }))
-      mockGscPerformance.mockResolvedValue(many)
+      mockGscPerformance.mockResolvedValue(perfEnvelope(many))
       const cap = captureStdout(() => googlePerformance(PROJECT, { format: 'jsonl' }))
       await cap.run
       expect(cap.lines()).toHaveLength(73)
     })
 
     it('jsonl on empty collection writes nothing', async () => {
-      mockGscPerformance.mockResolvedValue([])
+      mockGscPerformance.mockResolvedValue(perfEnvelope([]))
       const cap = captureStdout(() => googlePerformance(PROJECT, { format: 'jsonl' }))
       await cap.run
       expect(cap.lines()).toHaveLength(0)
     })
 
-    it('json branch unchanged — prints the raw rows array', async () => {
-      mockGscPerformance.mockResolvedValue(perfRows)
+    it('json branch prints the full page envelope', async () => {
+      mockGscPerformance.mockResolvedValue(perfEnvelope(perfRows))
       const cap = captureLog(() => googlePerformance(PROJECT, { format: 'json' }))
       await cap.run
-      expect(JSON.parse(cap.text())).toEqual(perfRows)
+      expect(JSON.parse(cap.text())).toEqual(perfEnvelope(perfRows))
     })
   })
 

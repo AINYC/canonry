@@ -290,13 +290,24 @@ export async function googlePerformanceDaily(project: string, opts: {
 
 export async function googlePerformance(project: string, opts: {
   days?: number
+  startDate?: string
+  endDate?: string
   keyword?: string
   page?: string
+  limit?: number
+  offset?: number
+  orderBy?: string
   format?: string
 }): Promise<void> {
   const client = getClient()
   const params: Record<string, string> = {}
-  if (opts.days) {
+  // An explicit --start/--end window wins over the relative --days window.
+  // The CLI rejects both being passed, so this is a precedence rule for the
+  // programmatic callers, not a silent pick.
+  if (opts.startDate || opts.endDate) {
+    if (opts.startDate) params.startDate = opts.startDate
+    if (opts.endDate) params.endDate = opts.endDate
+  } else if (opts.days) {
     const end = new Date()
     const start = new Date()
     start.setDate(start.getDate() - opts.days)
@@ -305,19 +316,15 @@ export async function googlePerformance(project: string, opts: {
   }
   if (opts.keyword) params.query = opts.keyword
   if (opts.page) params.page = opts.page
+  if (opts.limit !== undefined) params.limit = String(opts.limit)
+  if (opts.offset !== undefined) params.offset = String(opts.offset)
+  if (opts.orderBy) params.orderBy = opts.orderBy
 
-  const rows = await client.gscPerformance(project, Object.keys(params).length > 0 ? params : undefined) as Array<{
-    date: string
-    query: string
-    page: string
-    clicks: number
-    impressions: number
-    ctr: number
-    position: number
-  }>
+  const data = await client.gscPerformance(project, Object.keys(params).length > 0 ? params : undefined)
+  const { rows, totalMatching, truncated, latestAvailableDate } = data
 
   if (opts.format === 'json') {
-    console.log(JSON.stringify(rows, null, 2))
+    console.log(JSON.stringify(data, null, 2))
     return
   } else if (opts.format === 'jsonl') {
     emitJsonl(rows.map((row) => ({ project, ...row })))
@@ -325,11 +332,20 @@ export async function googlePerformance(project: string, opts: {
   }
 
   if (rows.length === 0) {
+    const requestedEnd = params.endDate
+    // The data exists, the window just sits past what GSC has reported. Saying
+    // "run sync" here sends the operator to a command that cannot help.
+    if (latestAvailableDate && requestedEnd && requestedEnd > latestAvailableDate) {
+      console.log(
+        `No GSC data through ${requestedEnd}. GSC reporting lag: the latest date this project holds is ${latestAvailableDate}. Syncing again will not backfill dates Google has not reported yet.`,
+      )
+      return
+    }
     console.log('No GSC data found. Run "canonry google sync" first.')
     return
   }
 
-  console.log(`GSC performance data (${rows.length} rows):\n`)
+  console.log(`GSC performance data (${rows.length} of ${totalMatching.toLocaleString()} matching rows):\n`)
   console.log(`  ${'DATE'.padEnd(12)}${'QUERY'.padEnd(30)}${'CLICKS'.padEnd(8)}${'IMPR'.padEnd(8)}${'CTR'.padEnd(8)}${'POS'.padEnd(6)}`)
   console.log(`  ${'─'.repeat(12)}${'─'.repeat(30)}${'─'.repeat(8)}${'─'.repeat(8)}${'─'.repeat(8)}${'─'.repeat(6)}`)
   for (const row of rows.slice(0, 50)) {
@@ -339,7 +355,13 @@ export async function googlePerformance(project: string, opts: {
     )
   }
   if (rows.length > 50) {
-    console.log(`\n  ... and ${rows.length - 50} more rows (use --format json for full output)`)
+    console.log(`\n  ... and ${rows.length - 50} more rows on this page (use --format json for full output)`)
+  }
+  if (truncated) {
+    console.log('\n  This is one page. Use --limit / --offset to page through the rest, --order-by to change the ranking.')
+  }
+  if (latestAvailableDate) {
+    console.log(`  Latest date held for this project: ${latestAvailableDate}`)
   }
 }
 

@@ -89,7 +89,7 @@ import type {
   GbpAttributesListResponse,
   GbpPlaceDetailsListResponse,
   GbpSummaryDto,
-  GscSearchDataDto,
+  GscPerformanceResponseDto,
   GscPerformanceDailyDto,
   GscUrlInspectionDto,
   GscCoverageSummaryDto,
@@ -1801,8 +1801,8 @@ export class ApiClient {
     )
   }
 
-  async gscPerformance(project: string, params?: Record<string, string>): Promise<GscSearchDataDto[]> {
-    return this.invoke<GscSearchDataDto[]>(() =>
+  async gscPerformance(project: string, params?: Record<string, string>): Promise<GscPerformanceResponseDto> {
+    return this.invoke<GscPerformanceResponseDto>(() =>
       getApiV1ProjectsByNameGoogleGscPerformance({
         client: this.heyClient,
         path: { name: project },

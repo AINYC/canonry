@@ -2476,16 +2476,21 @@ export type GscPerformanceDailyDto = {
     }>;
 };
 
-export type GscSearchDataDto = {
-    date: string;
-    query: string;
-    page: string;
-    country?: string | null;
-    device?: string | null;
-    clicks: number;
-    impressions: number;
-    ctr: number;
-    position: number;
+export type GscPerformanceResponseDto = {
+    rows: Array<{
+        date: string;
+        query: string;
+        page: string;
+        country?: string | null;
+        device?: string | null;
+        clicks: number;
+        impressions: number;
+        ctr: number;
+        position: number;
+    }>;
+    totalMatching: number;
+    truncated: boolean;
+    latestAvailableDate: string | null;
 };
 
 export type GscDiscoverSitemapsResponseDto = {
@@ -7862,6 +7867,10 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceData = {
          */
         page?: string;
         /**
+         * Row ordering, always descending. Defaults to clicks. Use date for time-series reads.
+         */
+        orderBy?: 'clicks' | 'impressions' | 'date';
+        /**
          * Maximum number of records to return.
          */
         limit?: number;
@@ -7879,6 +7888,10 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceData = {
 
 export type GetApiV1ProjectsByNameGoogleGscPerformanceErrors = {
     /**
+     * Invalid orderBy value.
+     */
+    400: ErrorEnvelope;
+    /**
      * Project not found.
      */
     404: ErrorEnvelope;
@@ -7888,9 +7901,9 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceError = GetApiV1ProjectsBy
 
 export type GetApiV1ProjectsByNameGoogleGscPerformanceResponses = {
     /**
-     * GSC performance rows returned.
+     * GSC performance page plus match count and data freshness.
      */
-    200: Array<GscSearchDataDto>;
+    200: GscPerformanceResponseDto;
 };
 
 export type GetApiV1ProjectsByNameGoogleGscPerformanceResponse = GetApiV1ProjectsByNameGoogleGscPerformanceResponses[keyof GetApiV1ProjectsByNameGoogleGscPerformanceResponses];

@@ -410,6 +410,13 @@ cnry google coverage <project>                         # index coverage summary
 cnry google refresh <project>                         # force-fetch fresh GSC coverage data
 cnry google performance <project>                      # search performance data
 cnry google performance <project> --days 30 --keyword "term" --page "/url"
+cnry google performance <project> --start 2026-06-01 --end 2026-06-30
+cnry google performance <project> --order-by impressions --limit 2000 --offset 2000
+# Rows are ordered by clicks descending by default; --order-by date|impressions
+# changes the ranking. --days and --start/--end are mutually exclusive.
+# One page, not the whole set: the response reports the total number of matching
+# rows, and the CLI prints how many of them you are looking at. Never sum these
+# rows for a property total, use `cnry google performance-daily`.
 
 cnry google inspect <project> <url>                    # inspect specific URL
 cnry google inspect-sitemap <project> --wait           # bulk inspect all sitemap URLs

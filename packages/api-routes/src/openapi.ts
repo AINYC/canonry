@@ -1933,15 +1933,22 @@ const routeCatalog: OpenApiOperation[] = [
       { name: 'endDate', in: 'query', description: 'Filter by end date.', schema: stringSchema },
       { name: 'query', in: 'query', description: 'Filter by search query.', schema: stringSchema },
       { name: 'page', in: 'query', description: 'Filter by page URL.', schema: stringSchema },
+      {
+        name: 'orderBy',
+        in: 'query',
+        description: 'Row ordering, always descending. Defaults to clicks. Use date for time-series reads.',
+        schema: { type: 'string', enum: ['clicks', 'impressions', 'date'] },
+      },
       limitQueryParameter,
       offsetQueryParameter,
       analyticsWindowParameter,
     ],
     responses: {
-      // Handler returns an array of GscSearchDataDto rows (web's
-      // ApiGscPerformanceRow[] confirms). Was incorrectly spec'd as a
-      // single object, which silently truncated client types to one row.
-      200: jsonArrayResponse('GSC performance rows returned.', 'GscSearchDataDto'),
+      // Envelope, not a bare array: `totalMatching` / `truncated` are how a
+      // caller tells a page from a complete answer, and `latestAvailableDate`
+      // is how it tells "no data" from "asked past the GSC reporting lag".
+      200: jsonResponse('GSC performance page plus match count and data freshness.', 'GscPerformanceResponseDto'),
+      400: errorResponse('Invalid orderBy value.'),
       404: errorResponse('Project not found.'),
     },
   },

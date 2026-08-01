@@ -12,6 +12,7 @@ import {
   type GbpLocationDto, type GbpLocationListResponse, type GbpAccountListResponse,
   type GbpPlaceDetailsListResponse,
   gscSubmitSitemapsRequestDtoSchema,
+  gscPerformanceOrderBySchema,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from './gbp-summary.js'
@@ -719,12 +720,28 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
   })
 
   // GET /projects/:name/google/gsc/performance
+  //
+  // Ordering, not the limit, is what made this read return a single day. The
+  // dimensioned table holds hundreds of rows per date (measured: newest day
+  // 671 rows, median day 724), so `ORDER BY date DESC LIMIT 500` spent the
+  // whole page before the first date boundary. The default order is now
+  // clicks descending, `date` stays available for time-series consumers, and
+  // the response reports `totalMatching` / `truncated` so a caller can tell a
+  // page from a complete answer.
   app.get<{
     Params: { name: string }
-    Querystring: { startDate?: string; endDate?: string; query?: string; page?: string; limit?: string; offset?: string; window?: string }
+    Querystring: { startDate?: string; endDate?: string; query?: string; page?: string; limit?: string; offset?: string; window?: string; orderBy?: string }
   }>('/projects/:name/google/gsc/performance', async (request) => {
     const project = resolveProject(app.db, request.params.name)
     const { startDate, endDate, query, page, limit, offset } = request.query
+
+    const parsedOrderBy = gscPerformanceOrderBySchema.safeParse(request.query.orderBy ?? 'clicks')
+    if (!parsedOrderBy.success) {
+      throw validationError(
+        `orderBy must be one of: ${gscPerformanceOrderBySchema.options.join(', ')}`,
+      )
+    }
+    const orderBy = parsedOrderBy.data
 
     // Window-based filtering: when no explicit startDate is provided,
     // use the window param to compute a cutoff date.
@@ -743,6 +760,15 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     const limitVal = Math.max(parseInt(limit ?? '500', 10) || 0, 1)
     const offsetVal = Math.max(parseInt(offset ?? '0', 10) || 0, 0)
 
+    // Every ordering carries `date` as a tiebreaker so a page boundary is
+    // stable across calls when the metric ties (it ties constantly: most rows
+    // have 0 clicks).
+    const orderColumns = {
+      clicks: [desc(gscSearchData.clicks), desc(gscSearchData.date), gscSearchData.query],
+      impressions: [desc(gscSearchData.impressions), desc(gscSearchData.date), gscSearchData.query],
+      date: [desc(gscSearchData.date), desc(gscSearchData.clicks), gscSearchData.query],
+    }[orderBy]
+
     // Always chain `.offset()` in a single expression — drizzle 0.45 on
     // better-sqlite3 silently drops `.offset()` when called separately on a
     // saved query builder (issue #470). The single-expression chain matches
@@ -751,22 +777,42 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       .select()
       .from(gscSearchData)
       .where(and(...conditions))
-      .orderBy(desc(gscSearchData.date))
+      .orderBy(...orderColumns)
       .limit(limitVal)
       .offset(offsetVal)
       .all()
 
-    return rows.map((r) => ({
-      date: r.date,
-      query: r.query,
-      page: r.page,
-      country: r.country,
-      device: r.device,
-      clicks: r.clicks,
-      impressions: r.impressions,
-      ctr: parseFloat(r.ctr),
-      position: parseFloat(r.position),
-    }))
+    // COUNT over the same WHERE, ignoring limit/offset.
+    const totalMatching = app.db
+      .select({ total: sql<number>`COUNT(*)` })
+      .from(gscSearchData)
+      .where(and(...conditions))
+      .get()?.total ?? 0
+
+    // MAX(date) for the project, ignoring the date filter. This is what lets a
+    // caller say "you asked past the GSC reporting lag" instead of "no data".
+    const latestAvailableDate = app.db
+      .select({ latest: sql<string | null>`MAX(${gscSearchData.date})` })
+      .from(gscSearchData)
+      .where(eq(gscSearchData.projectId, project.id))
+      .get()?.latest ?? null
+
+    return {
+      rows: rows.map((r) => ({
+        date: r.date,
+        query: r.query,
+        page: r.page,
+        country: r.country,
+        device: r.device,
+        clicks: r.clicks,
+        impressions: r.impressions,
+        ctr: parseFloat(r.ctr),
+        position: parseFloat(r.position),
+      })),
+      totalMatching,
+      truncated: rows.length < totalMatching,
+      latestAvailableDate,
+    }
   })
 
   // GET /projects/:name/google/gsc/performance/daily

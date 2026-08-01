@@ -32,6 +32,9 @@ import {
 } from '../cli-command-helpers.js'
 import { usageError } from '../cli-error.js'
 
+const GOOGLE_PERFORMANCE_USAGE =
+  'canonry google performance <project> [--days <n> | --start <YYYY-MM-DD> --end <YYYY-MM-DD>] [--keyword <kw>] [--page <url>] [--limit <n>] [--offset <n>] [--order-by clicks|impressions|date] [--format json]'
+
 export const GOOGLE_CLI_COMMANDS: readonly CliCommandSpec[] = [
   {
     path: ['google', 'connect'],
@@ -171,22 +174,54 @@ export const GOOGLE_CLI_COMMANDS: readonly CliCommandSpec[] = [
   },
   {
     path: ['google', 'performance'],
-    usage: 'canonry google performance <project> [--days <n>] [--keyword <kw>] [--page <url>] [--format json]',
+    usage: GOOGLE_PERFORMANCE_USAGE,
     options: {
       days: stringOption(),
+      start: stringOption(),
+      end: stringOption(),
       keyword: stringOption(),
       page: stringOption(),
+      limit: stringOption(),
+      offset: stringOption(),
+      'order-by': stringOption(),
     },
     run: async (input) => {
-      const project = requireProject(input, 'google.performance', 'canonry google performance <project> [--days <n>] [--keyword <kw>] [--page <url>] [--format json]')
+      const project = requireProject(input, 'google.performance', GOOGLE_PERFORMANCE_USAGE)
+      const startDate = getString(input.values, 'start')
+      const endDate = getString(input.values, 'end')
+      const days = parseIntegerOption(input, 'days', {
+        command: 'google.performance',
+        usage: GOOGLE_PERFORMANCE_USAGE,
+        message: '--days must be an integer',
+      })
+      // --start/--end and --days describe the same window two ways. Picking one
+      // silently would hand back a window the caller did not ask for.
+      if (days !== undefined && (startDate || endDate)) {
+        throw usageError(
+          `Error: --days cannot be combined with --start/--end. Pass one window.\nUsage: ${GOOGLE_PERFORMANCE_USAGE}`,
+          {
+            message: '--days cannot be combined with --start/--end',
+            details: { command: 'google.performance', usage: GOOGLE_PERFORMANCE_USAGE },
+          },
+        )
+      }
       await googlePerformance(project, {
-        days: parseIntegerOption(input, 'days', {
-          command: 'google.performance',
-          usage: 'canonry google performance <project> [--days <n>] [--keyword <kw>] [--page <url>] [--format json]',
-          message: '--days must be an integer',
-        }),
+        days,
+        startDate,
+        endDate,
         keyword: getString(input.values, 'keyword'),
         page: getString(input.values, 'page'),
+        limit: parseIntegerOption(input, 'limit', {
+          command: 'google.performance',
+          usage: GOOGLE_PERFORMANCE_USAGE,
+          message: '--limit must be an integer',
+        }),
+        offset: parseIntegerOption(input, 'offset', {
+          command: 'google.performance',
+          usage: GOOGLE_PERFORMANCE_USAGE,
+          message: '--offset must be an integer',
+        }),
+        orderBy: getString(input.values, 'order-by'),
         format: input.format,
       })
     },
