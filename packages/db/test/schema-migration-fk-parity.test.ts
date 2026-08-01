@@ -65,32 +65,31 @@ test('every foreign key declared in schema.ts exists in the migrated database', 
       const actual = db.$client
         .prepare(`PRAGMA foreign_key_list(${config.name})`)
         .all() as SqliteForeignKey[]
-      const actualByColumn = new Map(actual.map((fk) => [fk.from, fk]))
 
       for (const foreignKey of config.foreignKeys) {
         const reference = foreignKey.reference()
-        const column = reference.columns[0]!.name
         const referencedTable = getTableConfig(reference.foreignTable as never).name
-        foreignKeysChecked++
-
-        const found = actualByColumn.get(column)
-        if (!found) {
-          problems.push(
-            `${config.name}.${column}: schema.ts declares REFERENCES ${referencedTable}, but the migration created the column with no foreign key`,
-          )
-          continue
-        }
-        if (found.table !== referencedTable) {
-          problems.push(
-            `${config.name}.${column}: schema.ts references ${referencedTable}, migration references ${found.table}`,
-          )
-        }
         const expectedOnDelete = normalizeAction(foreignKey.onDelete)
-        const actualOnDelete = normalizeAction(found.on_delete)
-        if (expectedOnDelete !== actualOnDelete) {
-          problems.push(
-            `${config.name}.${column}: schema.ts says ON DELETE ${expectedOnDelete}, migration says ON DELETE ${actualOnDelete}`,
-          )
+        for (const [index, sourceColumn] of reference.columns.entries()) {
+          const targetColumn = reference.foreignColumns[index]!
+          foreignKeysChecked++
+          const found = actual.find(candidate => (
+            candidate.from === sourceColumn.name
+            && candidate.table === referencedTable
+            && candidate.to === targetColumn.name
+          ))
+          if (!found) {
+            problems.push(
+              `${config.name}.${sourceColumn.name}: schema.ts declares REFERENCES ${referencedTable}.${targetColumn.name}, but the migration does not`,
+            )
+            continue
+          }
+          const actualOnDelete = normalizeAction(found.on_delete)
+          if (expectedOnDelete !== actualOnDelete) {
+            problems.push(
+              `${config.name}.${sourceColumn.name}: schema.ts says ON DELETE ${expectedOnDelete}, migration says ON DELETE ${actualOnDelete}`,
+            )
+          }
         }
       }
     }

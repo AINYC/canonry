@@ -47,12 +47,14 @@ function seedRun(db: Db): string {
       (${projectId}, ${`p-${projectId.slice(0, 8)}`}, 'p', 'example.com', 'US', 'en', ${now}, ${now})
   `)
   // Raw SQL for the same reason the snapshot seed below uses it: drizzle's
-  // `runs` declares columns added by LATER migrations (v115's
-  // `query_basket_revision`), and its INSERT names every declared column, so it
-  // cannot write into the pre-v105 table this test deliberately starts from.
+  // `runs` declares query-basket and measurement-plan columns added by later
+  // migrations, and its INSERT names every declared column, so it cannot write
+  // into the pre-v105 table this test deliberately starts from.
   db.run(sql`
-    INSERT INTO runs (id, project_id, kind, status, trigger, started_at, created_at)
-    VALUES (${runId}, ${projectId}, 'answer-visibility', 'completed', 'manual', ${now}, ${now})
+    INSERT INTO runs
+      (id, project_id, kind, status, trigger, started_at, created_at)
+    VALUES
+      (${runId}, ${projectId}, 'answer-visibility', 'completed', 'manual', ${now}, ${now})
   `)
   return runId
 }

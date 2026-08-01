@@ -7,7 +7,8 @@ import {
   hostOf,
 } from './url-normalize.js'
 
-const MIN_DOMAIN_BRAND_KEY_LENGTH = 4
+/** Domain-derived labels need enough specificity to be safe as mention identities. */
+export const MIN_DOMAIN_BRAND_KEY_LENGTH = 4
 
 export interface AnswerMentionResult {
   mentioned: boolean

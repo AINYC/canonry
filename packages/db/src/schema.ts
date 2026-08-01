@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import { check, foreignKey, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import type { AdsActivationEntityType, AdsActivationGrantState, AdsActivationManifest, AdsOperationStepState, AdsReconcileFields, BacklinkSource, ContentBriefDto, DiscoveryCompetitorMapEntry, DiscoveryCompetitorType, AiReferralTrafficClass, LocationContext, ProviderModels, ProviderName, SiteAuditCrossCuttingIssueDto, SiteAuditFactorSummaryDto, SiteAuditPageFactorDto, MeasurementConfig, GaLeadAttributionScope, GaMeasurementComponentStatus } from '@ainyc/canonry-contracts'
 
 export const projects = sqliteTable('projects', {
@@ -52,6 +52,50 @@ export const competitors = sqliteTable('competitors', {
   uniqueIndex('idx_competitors_project_domain').on(table.projectId, table.domain),
 ])
 
+// Canonical plan payloads are immutable revisions. The surrogate id gives
+// active-plan and run-scope rows a real FK target; revision remains project-local.
+export const measurementPlanVersions = sqliteTable('measurement_plan_versions', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  canonicalJson: text('canonical_json').notNull(),
+  checksum: text('checksum').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_measurement_plan_versions_project_revision').on(table.projectId, table.revision),
+  uniqueIndex('idx_measurement_plan_versions_project_id').on(table.projectId, table.id),
+])
+
+// Stable identity only. Labels, memberships, aliases and route matchers remain
+// in immutable plan versions so historical attribution cannot drift.
+export const measurementSegments = sqliteTable('measurement_segments', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  stableKey: text('stable_key').notNull(),
+  kind: text('kind').$type<'target' | 'group'>().notNull(),
+  /** An explicitly retired identity can never be reassigned to a new segment. */
+  retiredAt: text('retired_at'),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_measurement_segments_project_key').on(table.projectId, table.stableKey),
+  uniqueIndex('idx_measurement_segments_project_id').on(table.projectId, table.id),
+])
+
+// A project only gets this aggregate row once measurement planning is enabled.
+// The composite FK prevents an active pointer from crossing project boundaries.
+export const measurementPlans = sqliteTable('measurement_plans', {
+  projectId: text('project_id').primaryKey().references(() => projects.id, { onDelete: 'cascade' }),
+  activeVersionId: text('active_version_id').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  foreignKey({
+    name: 'measurement_plans_active_version_fk',
+    columns: [table.projectId, table.activeVersionId],
+    foreignColumns: [measurementPlanVersions.projectId, measurementPlanVersions.id],
+  }).onDelete('restrict'),
+])
+
 export const runs = sqliteTable('runs', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
@@ -68,13 +112,23 @@ export const runs = sqliteTable('runs', {
    * Which version of the project's query set this run measured. Null on runs
    * that predate versioning; analytics treats null as "unversioned" rather than
    * guessing a revision.
-   */
+  */
   queryBasketRevision: integer('query_basket_revision'),
+  // A plan-aware answer-visibility run pins the immutable plan revision used
+  // to materialize its execution graph. Planless runs keep both fields null.
+  measurementPlanVersionId: text('measurement_plan_version_id'),
+  measurementManifest: text('measurement_manifest', { mode: 'json' }).$type<Record<string, unknown>>(),
   createdAt: text('created_at').notNull(),
 }, (table) => [
   index('idx_runs_project').on(table.projectId),
   index('idx_runs_status').on(table.status),
   index('idx_runs_source').on(table.sourceId),
+  index('idx_runs_measurement_plan').on(table.projectId, table.measurementPlanVersionId, table.createdAt),
+  foreignKey({
+    name: 'runs_measurement_plan_version_fk',
+    columns: [table.projectId, table.measurementPlanVersionId],
+    foreignColumns: [measurementPlanVersions.projectId, measurementPlanVersions.id],
+  }),
 ])
 
 /**
@@ -132,6 +186,12 @@ export const querySnapshots = sqliteTable('query_snapshots', {
   competitorOverlap: text('competitor_overlap', { mode: 'json' }).$type<string[]>().notNull().default([]),
   recommendedCompetitors: text('recommended_competitors', { mode: 'json' }).$type<string[]>().notNull().default([]),
   location: text('location'),
+  measurementExecutionId: text('measurement_execution_id'),
+  requestedContext: text('requested_context', { mode: 'json' }).$type<LocationContext>(),
+  supportedContext: text('supported_context', { mode: 'json' }).$type<{
+    status: 'applied' | 'ignored' | 'browser-implicit' | 'unknown'
+    resolved?: LocationContext | null
+  }>(),
   screenshotPath: text('screenshot_path'),
   rawResponse: text('raw_response'),
   createdAt: text('created_at').notNull(),
@@ -141,6 +201,8 @@ export const querySnapshots = sqliteTable('query_snapshots', {
   index('idx_snapshots_citation_state').on(table.citationState),
   index('idx_snapshots_provider_model').on(table.provider, table.model),
   index('idx_snapshots_location').on(table.location),
+  uniqueIndex('idx_snapshots_measurement_slot')
+    .on(table.runId, table.measurementExecutionId, table.provider),
   index('idx_snapshots_created_at').on(table.createdAt),
 ])
 

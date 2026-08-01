@@ -166,6 +166,8 @@ export interface MigrationVersion {
   name: string
   statements: string[]
   run?: (tx: MigrationDb) => void
+  /** SQLite must have FK enforcement off before a referenced table can be rebuilt. */
+  disableForeignKeys?: boolean
 }
 
 /**
@@ -2572,7 +2574,107 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE runs ADD COLUMN query_basket_revision INTEGER`,
     ],
   },
+  {
+    // Measurement plans are optional per-project aggregates with immutable,
+    // project-local revision history. Stable Target/group identities preserve
+    // lifecycle semantics, while a plan-aware ordinary run pins one revision.
+    version: 116,
+    name: 'target-measurement-plan-foundation',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS measurement_plan_versions (
+        id             TEXT PRIMARY KEY,
+        project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        revision       INTEGER NOT NULL,
+        canonical_json TEXT NOT NULL,
+        checksum       TEXT NOT NULL,
+        created_at     TEXT NOT NULL,
+        UNIQUE (project_id, revision),
+        UNIQUE (project_id, id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS measurement_segments (
+        id         TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        stable_key TEXT NOT NULL,
+        kind       TEXT NOT NULL CHECK (kind IN ('target', 'group')),
+        retired_at TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (project_id, stable_key),
+        UNIQUE (project_id, id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS measurement_plans (
+        project_id        TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        active_version_id TEXT NOT NULL,
+        created_at        TEXT NOT NULL,
+        updated_at        TEXT NOT NULL,
+        FOREIGN KEY (project_id, active_version_id)
+          REFERENCES measurement_plan_versions(project_id, id) ON DELETE RESTRICT
+      )`,
+      `ALTER TABLE runs ADD COLUMN measurement_plan_version_id TEXT`,
+      `ALTER TABLE runs ADD COLUMN measurement_manifest TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_runs_measurement_plan
+        ON runs(project_id, measurement_plan_version_id, created_at)`,
+    ],
+  },
+  {
+    // Historical snapshots stay readable: the new execution/context columns
+    // are nullable. Runs are rebuilt once to enforce a same-project composite
+    // FK to the immutable plan version they pin.
+    version: 117,
+    name: 'target-measurement-execution-context',
+    statements: [
+      `ALTER TABLE query_snapshots ADD COLUMN measurement_execution_id TEXT`,
+      `ALTER TABLE query_snapshots ADD COLUMN requested_context TEXT`,
+      `ALTER TABLE query_snapshots ADD COLUMN supported_context TEXT`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_measurement_slot
+        ON query_snapshots(run_id, measurement_execution_id, provider)`,
+    ],
+    run: addRunsMeasurementPlanVersionForeignKey,
+    disableForeignKeys: true,
+  },
 ]
+
+function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {
+  const tableSqlRow = tx.all(sql.raw("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runs'")) as Array<{ sql: string }>
+  const tableSql = tableSqlRow[0]?.sql
+  if (!tableSql) throw new Error('Cannot add measurement plan FK: runs table definition is missing')
+  if (/FOREIGN KEY\s*\(\s*project_id\s*,\s*measurement_plan_version_id\s*\)/i.test(tableSql)) return
+
+  const closingParen = tableSql.lastIndexOf(')')
+  if (closingParen < 0) throw new Error('Cannot add measurement plan FK: unexpected runs table definition')
+  const repairedSql = `${tableSql.slice(0, closingParen)}, FOREIGN KEY (project_id, measurement_plan_version_id) REFERENCES measurement_plan_versions(project_id, id)${tableSql.slice(closingParen)}`
+
+  const columns = tx.all(sql.raw("PRAGMA table_info('runs')")) as Array<{ name: string }>
+  const columnList = columns.map(column => `"${column.name.replaceAll('"', '""')}"`).join(', ')
+  const indexes = tx.all(sql.raw("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'runs' AND sql IS NOT NULL")) as Array<{ name: string; sql: string }>
+
+  rebuildMeasurementTable(tx, 'runs', repairedSql, columnList, indexes)
+  const violations = tx.all(sql.raw('PRAGMA foreign_key_check'))
+  if (violations.length > 0) throw new Error('Measurement-plan migration left foreign-key violations')
+}
+
+function rebuildMeasurementTable(
+  tx: MigrationDb,
+  table: string,
+  createSql: string,
+  suppliedColumnList?: string,
+  suppliedIndexes?: Array<{ name: string; sql: string }>,
+): void {
+  const temporary = `${table}_v116_target_model`
+  const columnList = suppliedColumnList ?? (tx.all(sql.raw(`PRAGMA table_info('${table}')`)) as Array<{ name: string }>)
+    .map(column => `"${column.name.replaceAll('"', '""')}"`).join(', ')
+  const indexes = suppliedIndexes ?? tx.all(sql.raw(`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = '${table}' AND sql IS NOT NULL`)) as Array<{ name: string; sql: string }>
+  const temporaryCreateSql = createSql.replace(
+    new RegExp(`^CREATE TABLE ${table}\\b`, 'i'),
+    `CREATE TABLE ${temporary}`,
+  )
+  if (temporaryCreateSql === createSql) throw new Error(`Cannot rebuild ${table}: unexpected table definition`)
+  for (const index of indexes) tx.run(sql.raw(`DROP INDEX "${index.name.replaceAll('"', '""')}"`))
+  tx.run(sql.raw(temporaryCreateSql))
+  tx.run(sql.raw(`INSERT INTO ${temporary} (${columnList}) SELECT ${columnList} FROM ${table}`))
+  tx.run(sql.raw(`DROP TABLE ${table}`))
+  tx.run(sql.raw(`ALTER TABLE ${temporary} RENAME TO ${table}`))
+  for (const index of indexes) tx.run(sql.raw(index.sql))
+}
 
 /**
  * Rebuilds a backlink table to add the `source` discriminator, make
@@ -2983,17 +3085,22 @@ export function migrate(
     // Each version's statements + its row in _migrations commit atomically.
     // If a non-recoverable error fires mid-version, the whole version is
     // rolled back and not recorded, so the next boot retries it cleanly.
-    db.transaction((tx) => {
-      for (const statement of mv.statements) {
-        try {
-          tx.run(sql.raw(statement))
-        } catch (err: unknown) {
-          if (isDuplicateColumnError(err)) continue
-          throw err
+    if (mv.disableForeignKeys) db.run(sql.raw('PRAGMA foreign_keys = OFF'))
+    try {
+      db.transaction((tx) => {
+        for (const statement of mv.statements) {
+          try {
+            tx.run(sql.raw(statement))
+          } catch (err: unknown) {
+            if (isDuplicateColumnError(err)) continue
+            throw err
+          }
         }
-      }
-      mv.run?.(tx)
-      recordMigration(tx, mv.version, mv.name)
-    })
+        mv.run?.(tx)
+        recordMigration(tx, mv.version, mv.name)
+      })
+    } finally {
+      if (mv.disableForeignKeys) db.run(sql.raw('PRAGMA foreign_keys = ON'))
+    }
   }
 }
