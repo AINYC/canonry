@@ -301,3 +301,111 @@ describe('analytics uses the basket instead of query creation dates', () => {
     expect(last.basketRevision).toBeNull()
   })
 })
+
+describe('deleted-query history rejoins through the basket', () => {
+  let app: ReturnType<typeof Fastify>
+  let db: ReturnType<typeof createClient>
+  let projectId: string
+
+  beforeEach(async () => {
+    const ctx = harness()
+    db = ctx.db
+    projectId = ctx.projectId
+    app = Fastify()
+    app.register(apiRoutes, { db, skipAuth: true })
+    await app.ready()
+  })
+
+  afterEach(async () => { await app.close() })
+
+  function sweep(at: string, texts: Array<{ id: string; text: string }>, revision: number | null) {
+    const runId = crypto.randomUUID()
+    db.insert(runs).values({
+      id: runId, projectId, kind: 'answer-visibility', status: 'completed', trigger: 'manual',
+      location: null, startedAt: at, finishedAt: at, error: null,
+      queryBasketRevision: revision, createdAt: at,
+    } as never).run()
+    for (const q of texts) {
+      for (const provider of ['gemini', 'openai', 'claude']) {
+        db.insert(querySnapshots).values({
+          id: crypto.randomUUID(), runId, queryId: q.id, queryText: q.text, provider,
+          model: `${provider}-model`, citationState: 'cited', answerMentioned: true,
+          answerText: 'Example.com is a good option.', citedDomains: ['example.com'],
+          competitorOverlap: [], location: null, rawResponse: '{}', createdAt: at,
+        } as never).run()
+      }
+    }
+  }
+
+  const metrics = async () => {
+    const res = await app.inject({ method: 'GET', url: `/api/v1/projects/basket-site/analytics/metrics?window=all` })
+    return res.json()
+  }
+
+  it('recovers the history of a query that was deleted and re-added', async () => {
+    // Deleting a query nulls query_id on its historical snapshots, and the
+    // metrics route used to drop those rows before analytics saw them. So a
+    // cleanup that removed and re-added a question erased months of real
+    // measurements from the chart. Identity by text is what makes the old rows
+    // recoverable: same question, same history.
+    const a = addQuery(db, projectId, 'az coatings reviews', '2026-03-01T00:00:00.000Z')
+    ensureCurrentQueryBasketRevision(db, projectId, '2026-03-01T00:00:00.000Z')
+    sweep('2026-03-05T09:00:00.000Z', [{ id: a, text: 'az coatings reviews' }], 1)
+
+    // The cleanup: row deleted, snapshots orphaned. Prove the orphaning
+    // actually happened so this test cannot pass with intact foreign keys.
+    db.delete(queries).where(eq(queries.id, a)).run()
+    const orphans = db.select().from(querySnapshots).all()
+    expect(orphans).toHaveLength(3)
+    for (const o of orphans) expect(o.queryId).toBeNull()
+
+    // Re-added months later under a fresh row id, then swept again.
+    const b = addQuery(db, projectId, 'az coatings reviews', '2026-07-01T00:00:00.000Z')
+    ensureCurrentQueryBasketRevision(db, projectId, '2026-07-01T00:00:00.000Z')
+    sweep('2026-07-05T09:00:00.000Z', [{ id: b, text: 'az coatings reviews' }], 2)
+
+    const body = await metrics()
+    // Both eras are on the chart: March's 3 mentions came back.
+    expect(body.buckets).toHaveLength(2)
+    expect(body.buckets[0]).toMatchObject({ total: 3, mentionedCount: 3, queryCount: 1 })
+    expect(body.buckets.at(-1)).toMatchObject({ total: 3, mentionedCount: 3, queryCount: 1 })
+    expect(body.overall.total).toBe(6)
+    expect(body.overall.mentionedCount).toBe(6)
+  })
+
+  it('keeps a genuinely removed query out, orphaned history included', async () => {
+    // Rejoining is by membership, not by existence of old rows. A query the
+    // operator dropped from measurement stays dropped: resurfacing its history
+    // would un-do the removal.
+    const keep = addQuery(db, projectId, 'kept query', '2026-03-01T00:00:00.000Z')
+    const drop = addQuery(db, projectId, 'dropped query', '2026-03-01T00:00:00.000Z')
+    ensureCurrentQueryBasketRevision(db, projectId, '2026-03-01T00:00:00.000Z')
+    sweep('2026-03-05T09:00:00.000Z', [
+      { id: keep, text: 'kept query' }, { id: drop, text: 'dropped query' },
+    ], 1)
+
+    db.delete(queries).where(eq(queries.id, drop)).run()
+    ensureCurrentQueryBasketRevision(db, projectId, '2026-04-01T00:00:00.000Z')
+
+    const body = await metrics()
+    expect(body.buckets[0].queryCount).toBe(1)
+    expect(body.buckets[0].total).toBe(3)
+    expect(body.overall.total).toBe(3)
+  })
+
+  it('leaves orphans dropped when no basket is recorded, so deploy day changes nothing', async () => {
+    // Without a recorded set there is no membership to test against, and
+    // guessing from text alone would resurrect every deleted query's history
+    // the moment this code ships. Fall back to the old behaviour until the
+    // first revision exists.
+    const a = addQuery(db, projectId, 'some query', '2026-03-01T00:00:00.000Z')
+    sweep('2026-03-05T09:00:00.000Z', [{ id: a, text: 'some query' }], null)
+    db.delete(queries).where(eq(queries.id, a)).run()
+    addQuery(db, projectId, 'some query', '2026-07-01T00:00:00.000Z')
+
+    const body = await metrics()
+    expect(body.referenceBasketRevision).toBeNull()
+    expect(body.buckets).toHaveLength(0)
+    expect(body.overall.total).toBe(0)
+  })
+})

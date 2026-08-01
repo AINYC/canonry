@@ -65,24 +65,6 @@ export async function analyticsRoutes(app: FastifyInstance) {
     }
 
     const runIds = projectRuns.map(r => r.id)
-    // Orphan snapshots (queryId NULL post-v58 — see schema.ts) can't be
-    // grouped by query; drop them at load so downstream `byQuery` keys stay
-    // valid `string`s.
-    const rawSnapshots = filterTrackedSnapshots(app.db
-      .select({
-        runId: querySnapshots.runId,
-        queryId: querySnapshots.queryId,
-        queryText: querySnapshots.queryText,
-        provider: querySnapshots.provider,
-        model: querySnapshots.model,
-        servedModel: querySnapshots.servedModel,
-        citationState: querySnapshots.citationState,
-        answerMentioned: querySnapshots.answerMentioned,
-        answerText: querySnapshots.answerText,
-      })
-      .from(querySnapshots)
-      .where(inArray(querySnapshots.runId, runIds))
-      .all())
 
     // Fetch query creation dates for the pre-basket fallback, and text so a
     // snapshot whose `query_id` was nulled by a delete still resolves an identity.
@@ -111,6 +93,40 @@ export async function analyticsRoutes(app: FastifyInstance) {
     const latestBasket = basketRevisions.at(-1) ?? null
     const referenceBasket = latestBasket ? new Set(latestBasket.members) : undefined
 
+    const loadedSnapshots = app.db
+      .select({
+        runId: querySnapshots.runId,
+        queryId: querySnapshots.queryId,
+        queryText: querySnapshots.queryText,
+        provider: querySnapshots.provider,
+        model: querySnapshots.model,
+        servedModel: querySnapshots.servedModel,
+        citationState: querySnapshots.citationState,
+        answerMentioned: querySnapshots.answerMentioned,
+        answerText: querySnapshots.answerText,
+      })
+      .from(querySnapshots)
+      .where(inArray(querySnapshots.runId, runIds))
+      .all()
+    // Deleting a query nulls `query_id` on its historical snapshots (post-v58,
+    // see schema.ts), and this route used to drop those rows outright — so
+    // removing a query erased its past from the chart even after the same
+    // question was re-added. With a recorded basket the snapshot's own
+    // `query_text` is enough identity to rejoin: if the text is a member of the
+    // set being measured NOW, its history belongs on the trend, whatever
+    // happened to the row id in between. Orphans whose text is not in the
+    // basket stay out — that query was deliberately dropped from measurement.
+    //
+    // Without a basket there is no membership to test against, so orphans are
+    // dropped exactly as before; the deploy changes nothing until a revision is
+    // recorded.
+    const rawSnapshots = referenceBasket
+      ? loadedSnapshots.filter(s =>
+          s.queryId !== null ||
+          (s.queryText !== null && referenceBasket.has(normalizeQueryText(s.queryText))),
+        )
+      : filterTrackedSnapshots(loadedSnapshots)
+
     // Resolve answerMentioned for each snapshot (handles null/legacy data)
     const runCreatedAt = new Map(projectRuns.map(run => [run.id, run.createdAt]))
     const runBasketRevision = new Map(projectRuns.map(run => [run.id, run.queryBasketRevision ?? null]))
@@ -119,8 +135,11 @@ export async function analyticsRoutes(app: FastifyInstance) {
       runCreatedAt: runCreatedAt.get(s.runId)!,
       resolvedMentioned: resolveSnapshotAnswerMentioned(s, project),
       // Falls back to the id if no text resolves, so two distinct queries can
-      // never collapse into one member on an empty key.
-      basketKey: normalizeQueryText(s.queryText ?? queryTextById.get(s.queryId) ?? '') || s.queryId,
+      // never collapse into one member on an empty key. (An orphan only gets
+      // this far when its text matched the basket, so its key is never empty.)
+      basketKey:
+        normalizeQueryText(s.queryText ?? (s.queryId ? queryTextById.get(s.queryId) ?? '' : '')) ||
+        s.queryId || '',
       runBasketRevision: runBasketRevision.get(s.runId) ?? null,
     }))
     const mentionShareCompetitors = app.db
@@ -792,7 +811,8 @@ function bucketSizeForSpan(spanDays: number): number {
 }
 
 interface SnapshotLike {
-  queryId: string
+  /** Null on a rejoined orphan: the query row is gone, `basketKey` carries identity. */
+  queryId: string | null
   provider: string
   model: string | null
   citationState: string
@@ -883,7 +903,7 @@ function computeBuckets(
         // Fall back to the date heuristic so existing charts keep their shape
         // instead of silently widening the moment this deploys.
         const eligible = inBucket.filter(s => {
-          const qCreated = queryCreatedAt.get(s.queryId)
+          const qCreated = s.queryId ? queryCreatedAt.get(s.queryId) : undefined
           return qCreated !== undefined && qCreated < startISO
         })
         if (eligible.length > 0) usable = eligible
