@@ -333,6 +333,14 @@ export async function googlePerformance(project: string, opts: {
 
   if (rows.length === 0) {
     const requestedEnd = params.endDate
+    // Rows exist, this page just starts past the end of them. Neither the lag
+    // message nor the sync message applies: the fix is a smaller offset.
+    if (totalMatching > 0 && opts.offset !== undefined && opts.offset >= totalMatching) {
+      console.log(
+        `Offset ${opts.offset} is past the end of the result set (${totalMatching.toLocaleString()} matching rows). Lower --offset to page through them.`,
+      )
+      return
+    }
     // The data exists, the window just sits past what GSC has reported. Saying
     // "run sync" here sends the operator to a command that cannot help.
     if (latestAvailableDate && requestedEnd && requestedEnd > latestAvailableDate) {

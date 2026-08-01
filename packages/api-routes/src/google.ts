@@ -810,7 +810,11 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
         position: parseFloat(r.position),
       })),
       totalMatching,
-      truncated: rows.length < totalMatching,
+      // Account for the offset: `rows.length < totalMatching` alone reports
+      // truncated=true for a page that sits past the end, where there is
+      // nothing further to fetch. Truncation means "more rows follow this
+      // page", so it has to measure from where this page ends.
+      truncated: offsetVal + rows.length < totalMatching,
       latestAvailableDate,
     }
   })

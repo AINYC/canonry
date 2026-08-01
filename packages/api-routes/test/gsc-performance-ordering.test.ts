@@ -137,6 +137,41 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance ordering', ()
     fs.rmSync(context.tmpDir, { recursive: true, force: true })
   })
 
+  it('does not report truncation for a page that sits past the end', async () => {
+    // `rows.length < totalMatching` alone is wrong here: the page is empty
+    // because it starts past the last row, and there is nothing further to
+    // fetch. Truncation has to be measured from where this page ends.
+    const total = DATES.length === 3 ? NEWEST_DAY_ROWS + 40 + 40 : 0
+    const res = await context.app.inject({
+      method: 'GET',
+      url: `/projects/perf/google/gsc/performance?offset=${total}&limit=10`,
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as PerformanceResponse
+    expect(body.totalMatching).toBe(total)
+    expect(body.rows).toHaveLength(0)
+    expect(body.truncated).toBe(false)
+  })
+
+  it('reports truncation from the end of the current page, not its length', async () => {
+    const total = NEWEST_DAY_ROWS + 40 + 40
+    const lastPage = await context.app.inject({
+      method: 'GET',
+      url: `/projects/perf/google/gsc/performance?offset=${total - 10}&limit=100`,
+    })
+    const lastBody = lastPage.json() as PerformanceResponse
+    expect(lastBody.rows).toHaveLength(10)
+    expect(lastBody.truncated).toBe(false)
+
+    const firstPage = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance?offset=0&limit=100',
+    })
+    const firstBody = firstPage.json() as PerformanceResponse
+    expect(firstBody.rows).toHaveLength(100)
+    expect(firstBody.truncated).toBe(true)
+  })
+
   it('returns rows spanning more than one date on a default call', async () => {
     const res = await context.app.inject({
       method: 'GET',

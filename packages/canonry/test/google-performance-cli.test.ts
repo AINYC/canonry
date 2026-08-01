@@ -79,6 +79,23 @@ describe('canonry google performance CLI', () => {
     expect(output).not.toMatch(/Run "canonry google sync" first/)
   })
 
+  it('names the offset when the page starts past the end, not the lag or a sync', async () => {
+    // Rows exist, this page just begins past the last one. Neither the lag
+    // message nor the sync message applies, and both would send the operator
+    // somewhere that cannot help.
+    gscPerformance.mockResolvedValue({
+      rows: [],
+      totalMatching: 700,
+      truncated: false,
+      latestAvailableDate: '2026-07-25',
+    })
+    const output = await captureLog(() => googlePerformance('demo', { offset: 700 }))
+    expect(output).toMatch(/offset/i)
+    expect(output).toContain('700')
+    expect(output).not.toMatch(/lag/i)
+    expect(output).not.toMatch(/Run "canonry google sync" first/)
+  })
+
   it('still points at sync when the project holds no GSC data at all', async () => {
     gscPerformance.mockResolvedValue({ ...EMPTY_RESPONSE, latestAvailableDate: null })
     const output = await captureLog(() => googlePerformance('demo', {}))
