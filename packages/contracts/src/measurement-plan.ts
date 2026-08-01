@@ -412,6 +412,8 @@ export const measurementPlanV1Schema = z.object({
   schemaVersion: z.literal(MEASUREMENT_PLAN_SCHEMA_VERSION),
   defaultContext: locationContextSchema.nullable(),
   effectiveOwnedHosts: z.array(normalizedHostSchema),
+  /** Revision-frozen project identity used by historical mention and SoV reads. */
+  projectBrandNames: z.array(aliasSchema),
   targets: z.array(compiledMeasurementTargetSchema),
   groups: z.array(measurementGroupSchema),
   targetQuerySelections: z.array(measurementTargetQuerySelectionSchema),
@@ -808,6 +810,12 @@ export function compileMeasurementPlan(input: MeasurementPlanInput, context: Mea
     }
   })
   const effectiveOwnedHosts = canonicalStrings(roots)
+  const projectBrandNames = canonicalAliases([
+    ...(context.brandNames ?? []).filter(name => brandKeyFromText(name).length > 0),
+    ...effectiveOwnedHosts
+      .map(brandLabelFromDomain)
+      .filter(name => brandKeyFromText(name).length >= 4),
+  ])
 
   const configuredLocations: LocationContext[] = []
   context.locations.forEach((location, index) => {
@@ -901,10 +909,7 @@ export function compileMeasurementPlan(input: MeasurementPlanInput, context: Mea
     }
   })
 
-  const projectBrandKeys = new Set([
-    ...(context.brandNames ?? []),
-    ...effectiveOwnedHosts.map(brandLabelFromDomain),
-  ].map(brandKeyFromText).filter(key => key.length >= 4))
+  const projectBrandKeys = new Set(projectBrandNames.map(brandKeyFromText).filter(key => key.length >= 4))
   plan.targets.forEach((target, targetIndex) => {
     target.aliases.forEach((alias, aliasIndex) => {
       const key = brandKeyFromText(alias)
@@ -1019,6 +1024,7 @@ export function compileMeasurementPlan(input: MeasurementPlanInput, context: Mea
     schemaVersion: MEASUREMENT_PLAN_SCHEMA_VERSION,
     defaultContext,
     effectiveOwnedHosts,
+    projectBrandNames,
     targets,
     groups,
     targetQuerySelections,

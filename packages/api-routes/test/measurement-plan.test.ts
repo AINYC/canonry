@@ -221,6 +221,7 @@ describe('Target measurement-plan API', () => {
       revision: 1,
       plan: {
         effectiveOwnedHosts: ['example.com'],
+        projectBrandNames: ['Example'],
         targets: [expect.objectContaining({ stableKey: 'chelsea' }), expect.objectContaining({ stableKey: 'soho', mentionNotApplicable: true })],
         groups: [expect.objectContaining({ stableKey: 'nyc-portfolio', competitors: ['rival.com'] })],
         querySnapshots: expect.arrayContaining([expect.objectContaining({ queryId: tracked[0]!.id, queryText: tracked[0]!.query })]),

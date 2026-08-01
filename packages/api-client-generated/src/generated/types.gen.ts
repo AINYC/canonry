@@ -2735,6 +2735,7 @@ export type MeasurementPlanCompilePreviewResponse = {
             timezone?: string;
         } | null;
         effectiveOwnedHosts: Array<string>;
+        projectBrandNames: Array<string>;
         targets: Array<{
             stableKey: string;
             label: string;
@@ -2887,6 +2888,7 @@ export type MeasurementPlanDiffPreviewResponse = {
             timezone?: string;
         } | null;
         effectiveOwnedHosts: Array<string>;
+        projectBrandNames: Array<string>;
         targets: Array<{
             stableKey: string;
             label: string;
@@ -3308,6 +3310,7 @@ export type MeasurementPlanResponse = {
                 timezone?: string;
             } | null;
             effectiveOwnedHosts: Array<string>;
+            projectBrandNames: Array<string>;
             targets: Array<{
                 stableKey: string;
                 label: string;
@@ -3399,6 +3402,7 @@ export type MeasurementPlanVersionResponse = {
                 timezone?: string;
             } | null;
             effectiveOwnedHosts: Array<string>;
+            projectBrandNames: Array<string>;
             targets: Array<{
                 stableKey: string;
                 label: string;

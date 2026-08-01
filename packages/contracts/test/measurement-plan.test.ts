@@ -189,6 +189,7 @@ describe('Target measurement plan v1 compilation', () => {
   it('freezes query snapshots, unconditional baseline edges, and mention applicability', () => {
     const compiled = compile()
 
+    expect(compiled.projectBrandNames).toEqual(['Northstar Living', 'northstar'])
     expect(compiled.querySnapshots).toEqual([
       { queryId: 'q-best', queryText: 'best apartments in northbridge' },
       { queryId: 'q-harbor', queryText: 'harbor point reviews' },
@@ -255,6 +256,17 @@ describe('Target measurement plan v1 compilation', () => {
       { targetKey: 'northstar-ridge', queryIds: ['q-best'], context: null },
     ]
     expect(canonicalMeasurementPlanJson(compile(fragmented))).toBe(canonicalMeasurementPlanJson(compile()))
+
+    const identityContext = {
+      ...CONTEXT,
+      brandNames: ['Northstar Living', 'Northstar Communities'],
+    }
+    const reorderedIdentity = compileMeasurementPlan(copyPlan(), {
+      ...identityContext,
+      brandNames: [...identityContext.brandNames].reverse(),
+    })
+    expect(canonicalMeasurementPlanJson(reorderedIdentity))
+      .toBe(canonicalMeasurementPlanJson(compileMeasurementPlan(copyPlan(), identityContext)))
   })
 
   it('normalizes known owned hosts, competitors, and metadata into the persisted revision', () => {
