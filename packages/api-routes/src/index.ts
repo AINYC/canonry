@@ -10,6 +10,7 @@ import type { QueryRoutesOptions } from './queries.js'
 import { competitorRoutes } from './competitors.js'
 import { runRoutes } from './runs.js'
 import type { RunRoutesOptions } from './runs.js'
+import { measurementPlanRoutes } from './measurement-plan.js'
 import { applyRoutes } from './apply.js'
 import type { ApplyRoutesOptions } from './apply.js'
 import { historyRoutes } from './history.js'
@@ -363,6 +364,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       validProviderNames: opts.providerAdapters?.map(a => a.name),
       getRunnableProviderNames: opts.getRunnableProviderNames,
     } satisfies RunRoutesOptions)
+    await api.register(measurementPlanRoutes)
     await api.register(applyRoutes, {
       onScheduleUpdated: opts.onScheduleUpdated,
       onProjectUpserted: opts.onProjectUpserted,

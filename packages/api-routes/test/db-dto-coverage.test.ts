@@ -149,6 +149,9 @@ const COVERAGE: Record<string, CoverageEntry> = {
     dto: querySnapshotDtoSchema,
     internal: {
       queryText: 'Renamed to `query` on the DTO (self-describing when queries row is deleted).',
+      measurementExecutionId: 'Reserved for future target-run attribution; no live executor writes it yet.',
+      requestedContext: 'Reserved for future target-run attribution; no live executor writes it yet.',
+      supportedContext: 'Reserved for future target-run attribution; no live executor writes it yet.',
       screenshotPath: 'Debug-only artifact path; not surfaced on the snapshot DTO.',
       rawResponse: 'Raw provider payload; exposed via a separate endpoint, not the snapshot DTO.',
     },
@@ -587,6 +590,18 @@ const COVERAGE: Record<string, CoverageEntry> = {
   apiKeys: {
     kind: 'internal-only',
     reason: 'Auth credentials; only the prefix is ever returned via the dedicated key-management surface.',
+  },
+  measurementPlans: {
+    kind: 'internal-only',
+    reason: 'Active-version pointer; the measurement-plan API returns the compiled aggregate, not this row.',
+  },
+  measurementPlanVersions: {
+    kind: 'internal-only',
+    reason: 'Immutable canonical JSON backing the compiled measurement-plan API, not a direct row DTO.',
+  },
+  measurementSegments: {
+    kind: 'internal-only',
+    reason: 'Stable target/group identity anchor; labels and attribution rules remain in immutable plan JSON.',
   },
   usageCounters: {
     kind: 'internal-only',

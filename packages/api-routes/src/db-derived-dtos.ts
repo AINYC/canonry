@@ -89,6 +89,9 @@ export const runRowSchema = createSelectSchema(runs, {
   // nullable JSON column. createSelectSchema preserves the null on the
   // outer wrapper; the inner array shape needs the refinement.
   queries: z.array(z.string()).nullable(),
+  // Execution is not shipped yet. Keep the future provenance column
+  // structural until a versioned target-run contract is introduced.
+  measurementManifest: z.record(z.string(), z.unknown()).nullable(),
 })
 
 // --- schedules ---

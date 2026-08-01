@@ -1,5 +1,5 @@
 import { createServer, type ServerResponse } from 'node:http'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { buildOpenApiDocument } from '../../api-routes/src/openapi.js'
 import { CliError } from '../src/cli-error.js'
@@ -104,6 +104,13 @@ const expectedToolNames = [
   'canonry_queries_replace',
   'canonry_queries_replace_preview',
   'canonry_keywords_replace',
+  'canonry_measurement_plan_get',
+  'canonry_measurement_plan_versions',
+  'canonry_measurement_plan_version_get',
+  'canonry_measurement_plan_compile_preview',
+  'canonry_measurement_plan_diff_preview',
+  'canonry_measurement_plan_publish',
+  'canonry_measurement_plan_segment_retire',
   'canonry_run_trigger',
   'canonry_run_cancel',
   'canonry_queries_add',
@@ -163,9 +170,61 @@ const expectedToolNames = [
 ] as const
 
 describe('MCP tool registry', () => {
+  it('includes the complete measurement-plan API surface', async () => {
+    const expected = [
+      ['canonry_measurement_plan_get', 'read', 'GET /api/v1/projects/{name}/measurement-plan'],
+      ['canonry_measurement_plan_versions', 'read', 'GET /api/v1/projects/{name}/measurement-plan/versions'],
+      ['canonry_measurement_plan_version_get', 'read', 'GET /api/v1/projects/{name}/measurement-plan/versions/{revision}'],
+      ['canonry_measurement_plan_compile_preview', 'write', 'POST /api/v1/projects/{name}/measurement-plan/compile-preview'],
+      ['canonry_measurement_plan_diff_preview', 'write', 'POST /api/v1/projects/{name}/measurement-plan/diff-preview'],
+      ['canonry_measurement_plan_publish', 'write', 'PUT /api/v1/projects/{name}/measurement-plan'],
+      ['canonry_measurement_plan_segment_retire', 'write', 'POST /api/v1/projects/{name}/measurement-plan/segments/{stableKey}/retire'],
+    ] as const
+
+    for (const [name, access, operation] of expected) {
+      expect(canonryMcpTools.find(tool => tool.name === name), name).toMatchObject({
+        access,
+        openApiOperations: [operation],
+      })
+      expect(MCP_OPENAPI_OPERATION_CLASSIFICATIONS[operation]).toBe('included')
+    }
+  })
+
+  it('forwards measurement-plan inputs to the matching ApiClient methods', async () => {
+    const client = {
+      getMeasurementPlan: vi.fn().mockResolvedValue({ active: null }),
+      listMeasurementPlanVersions: vi.fn().mockResolvedValue({ versions: [] }),
+      getMeasurementPlanVersion: vi.fn().mockResolvedValue({ version: { revision: 2 } }),
+      compileMeasurementPlanPreview: vi.fn().mockResolvedValue({ plan: {}, warnings: [], counts: {} }),
+      diffMeasurementPlanPreview: vi.fn().mockResolvedValue({ plan: {}, warnings: [], counts: {}, diff: {} }),
+      publishMeasurementPlan: vi.fn().mockResolvedValue({ active: { revision: 1 } }),
+      retireMeasurementPlanSegment: vi.fn().mockResolvedValue({ stableKey: 'nyc' }),
+    } as unknown as ApiClient
+    const plan = {
+      schemaVersion: 1,
+      targets: [{ stableKey: 'acme', label: 'Acme', urls: [{ kind: 'host', host: 'acme.com' }], aliases: [] }],
+    }
+    const cases = [
+      ['canonry_measurement_plan_get', { project: 'acme' }, 'getMeasurementPlan', ['acme']],
+      ['canonry_measurement_plan_versions', { project: 'acme' }, 'listMeasurementPlanVersions', ['acme']],
+      ['canonry_measurement_plan_version_get', { project: 'acme', revision: 2 }, 'getMeasurementPlanVersion', ['acme', 2]],
+      ['canonry_measurement_plan_compile_preview', { project: 'acme', plan }, 'compileMeasurementPlanPreview', ['acme', plan]],
+      ['canonry_measurement_plan_diff_preview', { project: 'acme', plan }, 'diffMeasurementPlanPreview', ['acme', plan]],
+      ['canonry_measurement_plan_publish', { project: 'acme', plan }, 'publishMeasurementPlan', ['acme', plan]],
+      ['canonry_measurement_plan_segment_retire', { project: 'acme', stableKey: 'nyc' }, 'retireMeasurementPlanSegment', ['acme', 'nyc']],
+    ] as const
+
+    for (const [name, input, method, args] of cases) {
+      const tool = canonryMcpTools.find(candidate => candidate.name === name)
+      expect(tool, name).toBeTruthy()
+      await tool!.handler(client, input)
+      expect(client[method as keyof typeof client]).toHaveBeenCalledWith(...args)
+    }
+  })
+
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(144)
-    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(92)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(151)
+    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(95)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(readNames)
@@ -202,7 +261,7 @@ describe('MCP tool registry', () => {
       counts.set(tool.tier, (counts.get(tool.tier) ?? 0) + 1)
     }
     expect(counts.get('monitoring')).toBe(28)
-    expect(counts.get('setup')).toBe(24)
+    expect(counts.get('setup')).toBe(31)
     expect(counts.get('gsc')).toBe(9)
     expect(counts.get('ga')).toBe(10)
     expect(counts.get('gbp')).toBe(13)

@@ -2636,6 +2636,10 @@ export type LatestProjectRunDto = {
         kind: 'answer-visibility' | 'site-audit' | 'gsc-sync' | 'inspect-sitemap' | 'ga-sync' | 'bing-inspect' | 'bing-inspect-sitemap' | 'backlink-extract' | 'traffic-sync' | 'aeo-discover-seed' | 'aeo-discover-probe' | 'gbp-sync' | 'ads-sync';
         status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
         trigger: 'manual' | 'scheduled' | 'config-apply' | 'backfill' | 'probe';
+        measurementPlanVersionId?: string | null;
+        measurementManifest?: {
+            [key: string]: unknown;
+        } | null;
         location?: string | null;
         queries?: Array<string> | null;
         startedAt?: string | null;
@@ -2693,6 +2697,724 @@ export type LocationContext = {
     region: string;
     country: string;
     timezone?: string;
+};
+
+export type MeasurementPlanCompilePreviewResponse = {
+    plan: {
+        schemaVersion: 1;
+        defaultContext: {
+            label: string;
+            city: string;
+            region: string;
+            country: string;
+            timezone?: string;
+        } | null;
+        effectiveOwnedHosts: Array<string>;
+        targets: Array<{
+            stableKey: string;
+            label: string;
+            urls: Array<{
+                kind: 'exact';
+                url: string;
+                pathCase: 'sensitive' | 'insensitive';
+            } | {
+                kind: 'prefix';
+                host: string;
+                pathPrefix: string;
+                pathCase: 'sensitive' | 'insensitive';
+            } | {
+                kind: 'host';
+                host: string;
+            }>;
+            aliases: Array<string>;
+            metadata?: {
+                [key: string]: string;
+            };
+            mentionNotApplicable: boolean;
+        }>;
+        groups: Array<{
+            stableKey: string;
+            label: string;
+            targetKeys: Array<string>;
+            competitors?: Array<string>;
+        }>;
+        targetQuerySelections: Array<{
+            targetKey: string;
+            queryIds: Array<string>;
+            context?: {
+                label: string;
+                city: string;
+                region: string;
+                country: string;
+                timezone?: string;
+            } | null;
+        }>;
+        querySnapshots: Array<{
+            queryId: string;
+            queryText: string;
+        }>;
+        executionNodes: Array<{
+            stableKey: string;
+            queryText: string;
+            context: {
+                label: string;
+                city: string;
+                region: string;
+                country: string;
+                timezone?: string;
+            } | null;
+        }>;
+        usageEdges: Array<{
+            kind: 'baseline';
+            executionNodeKey: string;
+            queryId: string;
+        } | {
+            kind: 'target';
+            executionNodeKey: string;
+            queryId: string;
+            targetKey: string;
+        } | {
+            kind: 'group';
+            executionNodeKey: string;
+            queryId: string;
+            targetKey: string;
+            groupKey: string;
+        }>;
+        warnings: Array<{
+            code: 'target-alias-prefix-overlap' | 'target-alias-project-brand-collision';
+            message: string;
+            targetKeys: Array<string>;
+            aliases: Array<string>;
+        }>;
+    };
+    warnings: Array<{
+        code: 'target-alias-prefix-overlap' | 'target-alias-project-brand-collision';
+        message: string;
+        targetKeys: Array<string>;
+        aliases: Array<string>;
+    }>;
+    counts: {
+        targets: number;
+        groups: number;
+        queries: number;
+        executionNodes: number;
+        usageEdges: number;
+        baselineEdges: number;
+        targetEdges: number;
+        groupEdges: number;
+        dedupSavings: number;
+    };
+};
+
+export type MeasurementPlanDiffPreviewResponse = {
+    plan: {
+        schemaVersion: 1;
+        defaultContext: {
+            label: string;
+            city: string;
+            region: string;
+            country: string;
+            timezone?: string;
+        } | null;
+        effectiveOwnedHosts: Array<string>;
+        targets: Array<{
+            stableKey: string;
+            label: string;
+            urls: Array<{
+                kind: 'exact';
+                url: string;
+                pathCase: 'sensitive' | 'insensitive';
+            } | {
+                kind: 'prefix';
+                host: string;
+                pathPrefix: string;
+                pathCase: 'sensitive' | 'insensitive';
+            } | {
+                kind: 'host';
+                host: string;
+            }>;
+            aliases: Array<string>;
+            metadata?: {
+                [key: string]: string;
+            };
+            mentionNotApplicable: boolean;
+        }>;
+        groups: Array<{
+            stableKey: string;
+            label: string;
+            targetKeys: Array<string>;
+            competitors?: Array<string>;
+        }>;
+        targetQuerySelections: Array<{
+            targetKey: string;
+            queryIds: Array<string>;
+            context?: {
+                label: string;
+                city: string;
+                region: string;
+                country: string;
+                timezone?: string;
+            } | null;
+        }>;
+        querySnapshots: Array<{
+            queryId: string;
+            queryText: string;
+        }>;
+        executionNodes: Array<{
+            stableKey: string;
+            queryText: string;
+            context: {
+                label: string;
+                city: string;
+                region: string;
+                country: string;
+                timezone?: string;
+            } | null;
+        }>;
+        usageEdges: Array<{
+            kind: 'baseline';
+            executionNodeKey: string;
+            queryId: string;
+        } | {
+            kind: 'target';
+            executionNodeKey: string;
+            queryId: string;
+            targetKey: string;
+        } | {
+            kind: 'group';
+            executionNodeKey: string;
+            queryId: string;
+            targetKey: string;
+            groupKey: string;
+        }>;
+        warnings: Array<{
+            code: 'target-alias-prefix-overlap' | 'target-alias-project-brand-collision';
+            message: string;
+            targetKeys: Array<string>;
+            aliases: Array<string>;
+        }>;
+    };
+    warnings: Array<{
+        code: 'target-alias-prefix-overlap' | 'target-alias-project-brand-collision';
+        message: string;
+        targetKeys: Array<string>;
+        aliases: Array<string>;
+    }>;
+    counts: {
+        targets: number;
+        groups: number;
+        queries: number;
+        executionNodes: number;
+        usageEdges: number;
+        baselineEdges: number;
+        targetEdges: number;
+        groupEdges: number;
+        dedupSavings: number;
+    };
+    diff: {
+        activeRevision: number | null;
+        targets: {
+            added: Array<{
+                stableKey: string;
+                label: string;
+                urls: Array<{
+                    kind: 'exact';
+                    url: string;
+                    pathCase: 'sensitive' | 'insensitive';
+                } | {
+                    kind: 'prefix';
+                    host: string;
+                    pathPrefix: string;
+                    pathCase: 'sensitive' | 'insensitive';
+                } | {
+                    kind: 'host';
+                    host: string;
+                }>;
+                aliases: Array<string>;
+                metadata?: {
+                    [key: string]: string;
+                };
+                mentionNotApplicable: boolean;
+            }>;
+            removed: Array<{
+                stableKey: string;
+                label: string;
+                urls: Array<{
+                    kind: 'exact';
+                    url: string;
+                    pathCase: 'sensitive' | 'insensitive';
+                } | {
+                    kind: 'prefix';
+                    host: string;
+                    pathPrefix: string;
+                    pathCase: 'sensitive' | 'insensitive';
+                } | {
+                    kind: 'host';
+                    host: string;
+                }>;
+                aliases: Array<string>;
+                metadata?: {
+                    [key: string]: string;
+                };
+                mentionNotApplicable: boolean;
+            }>;
+            changed: Array<{
+                stableKey: string;
+                before: {
+                    stableKey: string;
+                    label: string;
+                    urls: Array<{
+                        kind: 'exact';
+                        url: string;
+                        pathCase: 'sensitive' | 'insensitive';
+                    } | {
+                        kind: 'prefix';
+                        host: string;
+                        pathPrefix: string;
+                        pathCase: 'sensitive' | 'insensitive';
+                    } | {
+                        kind: 'host';
+                        host: string;
+                    }>;
+                    aliases: Array<string>;
+                    metadata?: {
+                        [key: string]: string;
+                    };
+                    mentionNotApplicable: boolean;
+                };
+                after: {
+                    stableKey: string;
+                    label: string;
+                    urls: Array<{
+                        kind: 'exact';
+                        url: string;
+                        pathCase: 'sensitive' | 'insensitive';
+                    } | {
+                        kind: 'prefix';
+                        host: string;
+                        pathPrefix: string;
+                        pathCase: 'sensitive' | 'insensitive';
+                    } | {
+                        kind: 'host';
+                        host: string;
+                    }>;
+                    aliases: Array<string>;
+                    metadata?: {
+                        [key: string]: string;
+                    };
+                    mentionNotApplicable: boolean;
+                };
+            }>;
+            unchanged: Array<string>;
+        };
+        groups: {
+            added: Array<{
+                stableKey: string;
+                label: string;
+                targetKeys: Array<string>;
+                competitors?: Array<string>;
+            }>;
+            removed: Array<{
+                stableKey: string;
+                label: string;
+                targetKeys: Array<string>;
+                competitors?: Array<string>;
+            }>;
+            changed: Array<{
+                stableKey: string;
+                before: {
+                    stableKey: string;
+                    label: string;
+                    targetKeys: Array<string>;
+                    competitors?: Array<string>;
+                };
+                after: {
+                    stableKey: string;
+                    label: string;
+                    targetKeys: Array<string>;
+                    competitors?: Array<string>;
+                };
+            }>;
+            unchanged: Array<string>;
+        };
+        querySelections: {
+            added: Array<{
+                targetKey: string;
+                context: {
+                    label: string;
+                    city: string;
+                    region: string;
+                    country: string;
+                    timezone?: string;
+                } | null;
+                queryIds: Array<string>;
+            }>;
+            removed: Array<{
+                targetKey: string;
+                context: {
+                    label: string;
+                    city: string;
+                    region: string;
+                    country: string;
+                    timezone?: string;
+                } | null;
+                queryIds: Array<string>;
+            }>;
+            changed: Array<{
+                targetKey: string;
+                before: {
+                    targetKey: string;
+                    context: {
+                        label: string;
+                        city: string;
+                        region: string;
+                        country: string;
+                        timezone?: string;
+                    } | null;
+                    queryIds: Array<string>;
+                };
+                after: {
+                    targetKey: string;
+                    context: {
+                        label: string;
+                        city: string;
+                        region: string;
+                        country: string;
+                        timezone?: string;
+                    } | null;
+                    queryIds: Array<string>;
+                };
+            }>;
+            unchanged: Array<{
+                targetKey: string;
+                context: {
+                    label: string;
+                    city: string;
+                    region: string;
+                    country: string;
+                    timezone?: string;
+                } | null;
+            }>;
+        };
+        execution: {
+            addedNodeKeys: Array<string>;
+            removedNodeKeys: Array<string>;
+            addedUsageEdges: Array<{
+                kind: 'baseline';
+                executionNodeKey: string;
+                queryId: string;
+            } | {
+                kind: 'target';
+                executionNodeKey: string;
+                queryId: string;
+                targetKey: string;
+            } | {
+                kind: 'group';
+                executionNodeKey: string;
+                queryId: string;
+                targetKey: string;
+                groupKey: string;
+            }>;
+            removedUsageEdges: Array<{
+                kind: 'baseline';
+                executionNodeKey: string;
+                queryId: string;
+            } | {
+                kind: 'target';
+                executionNodeKey: string;
+                queryId: string;
+                targetKey: string;
+            } | {
+                kind: 'group';
+                executionNodeKey: string;
+                queryId: string;
+                targetKey: string;
+                groupKey: string;
+            }>;
+            counts: {
+                before: {
+                    targets: number;
+                    groups: number;
+                    queries: number;
+                    executionNodes: number;
+                    usageEdges: number;
+                    baselineEdges: number;
+                    targetEdges: number;
+                    groupEdges: number;
+                    dedupSavings: number;
+                } | null;
+                after: {
+                    targets: number;
+                    groups: number;
+                    queries: number;
+                    executionNodes: number;
+                    usageEdges: number;
+                    baselineEdges: number;
+                    targetEdges: number;
+                    groupEdges: number;
+                    dedupSavings: number;
+                };
+                delta: {
+                    targets: number;
+                    groups: number;
+                    queries: number;
+                    executionNodes: number;
+                    usageEdges: number;
+                    baselineEdges: number;
+                    targetEdges: number;
+                    groupEdges: number;
+                    dedupSavings: number;
+                } | null;
+            };
+        };
+    };
+};
+
+export type MeasurementPlanInput = {
+    schemaVersion: 1;
+    targets: Array<{
+        stableKey: string;
+        label: string;
+        urls: Array<{
+            kind: 'exact';
+            url: string;
+            pathCase: 'sensitive' | 'insensitive';
+        } | {
+            kind: 'prefix';
+            host: string;
+            pathPrefix: string;
+            pathCase: 'sensitive' | 'insensitive';
+        } | {
+            kind: 'host';
+            host: string;
+        }>;
+        aliases: Array<string>;
+        metadata?: {
+            [key: string]: string;
+        };
+    }>;
+    groups?: Array<{
+        stableKey: string;
+        label: string;
+        targetKeys: Array<string>;
+        competitors?: Array<string>;
+    }>;
+    targetQuerySelections?: Array<{
+        targetKey: string;
+        queryIds: Array<string>;
+        context?: {
+            label: string;
+            city: string;
+            region: string;
+            country: string;
+            timezone?: string;
+        } | null;
+    }>;
+};
+
+export type MeasurementSegmentRetirementResponse = {
+    stableKey: string;
+    retiredAt: string;
+};
+
+export type MeasurementPlanResponse = {
+    active: {
+        revision: number;
+        checksum: string;
+        createdAt: string;
+        plan: {
+            schemaVersion: 1;
+            defaultContext: {
+                label: string;
+                city: string;
+                region: string;
+                country: string;
+                timezone?: string;
+            } | null;
+            effectiveOwnedHosts: Array<string>;
+            targets: Array<{
+                stableKey: string;
+                label: string;
+                urls: Array<{
+                    kind: 'exact';
+                    url: string;
+                    pathCase: 'sensitive' | 'insensitive';
+                } | {
+                    kind: 'prefix';
+                    host: string;
+                    pathPrefix: string;
+                    pathCase: 'sensitive' | 'insensitive';
+                } | {
+                    kind: 'host';
+                    host: string;
+                }>;
+                aliases: Array<string>;
+                metadata?: {
+                    [key: string]: string;
+                };
+                mentionNotApplicable: boolean;
+            }>;
+            groups: Array<{
+                stableKey: string;
+                label: string;
+                targetKeys: Array<string>;
+                competitors?: Array<string>;
+            }>;
+            targetQuerySelections: Array<{
+                targetKey: string;
+                queryIds: Array<string>;
+                context?: {
+                    label: string;
+                    city: string;
+                    region: string;
+                    country: string;
+                    timezone?: string;
+                } | null;
+            }>;
+            querySnapshots: Array<{
+                queryId: string;
+                queryText: string;
+            }>;
+            executionNodes: Array<{
+                stableKey: string;
+                queryText: string;
+                context: {
+                    label: string;
+                    city: string;
+                    region: string;
+                    country: string;
+                    timezone?: string;
+                } | null;
+            }>;
+            usageEdges: Array<{
+                kind: 'baseline';
+                executionNodeKey: string;
+                queryId: string;
+            } | {
+                kind: 'target';
+                executionNodeKey: string;
+                queryId: string;
+                targetKey: string;
+            } | {
+                kind: 'group';
+                executionNodeKey: string;
+                queryId: string;
+                targetKey: string;
+                groupKey: string;
+            }>;
+            warnings: Array<{
+                code: 'target-alias-prefix-overlap' | 'target-alias-project-brand-collision';
+                message: string;
+                targetKeys: Array<string>;
+                aliases: Array<string>;
+            }>;
+        };
+    } | null;
+};
+
+export type MeasurementPlanVersionResponse = {
+    version: {
+        revision: number;
+        checksum: string;
+        createdAt: string;
+        active: boolean;
+        plan: {
+            schemaVersion: 1;
+            defaultContext: {
+                label: string;
+                city: string;
+                region: string;
+                country: string;
+                timezone?: string;
+            } | null;
+            effectiveOwnedHosts: Array<string>;
+            targets: Array<{
+                stableKey: string;
+                label: string;
+                urls: Array<{
+                    kind: 'exact';
+                    url: string;
+                    pathCase: 'sensitive' | 'insensitive';
+                } | {
+                    kind: 'prefix';
+                    host: string;
+                    pathPrefix: string;
+                    pathCase: 'sensitive' | 'insensitive';
+                } | {
+                    kind: 'host';
+                    host: string;
+                }>;
+                aliases: Array<string>;
+                metadata?: {
+                    [key: string]: string;
+                };
+                mentionNotApplicable: boolean;
+            }>;
+            groups: Array<{
+                stableKey: string;
+                label: string;
+                targetKeys: Array<string>;
+                competitors?: Array<string>;
+            }>;
+            targetQuerySelections: Array<{
+                targetKey: string;
+                queryIds: Array<string>;
+                context?: {
+                    label: string;
+                    city: string;
+                    region: string;
+                    country: string;
+                    timezone?: string;
+                } | null;
+            }>;
+            querySnapshots: Array<{
+                queryId: string;
+                queryText: string;
+            }>;
+            executionNodes: Array<{
+                stableKey: string;
+                queryText: string;
+                context: {
+                    label: string;
+                    city: string;
+                    region: string;
+                    country: string;
+                    timezone?: string;
+                } | null;
+            }>;
+            usageEdges: Array<{
+                kind: 'baseline';
+                executionNodeKey: string;
+                queryId: string;
+            } | {
+                kind: 'target';
+                executionNodeKey: string;
+                queryId: string;
+                targetKey: string;
+            } | {
+                kind: 'group';
+                executionNodeKey: string;
+                queryId: string;
+                targetKey: string;
+                groupKey: string;
+            }>;
+            warnings: Array<{
+                code: 'target-alias-prefix-overlap' | 'target-alias-project-brand-collision';
+                message: string;
+                targetKeys: Array<string>;
+                aliases: Array<string>;
+            }>;
+        };
+    };
+};
+
+export type MeasurementPlanVersionsResponse = {
+    versions: Array<{
+        revision: number;
+        checksum: string;
+        createdAt: string;
+        active: boolean;
+    }>;
 };
 
 export type NotificationDto = {
@@ -3158,6 +3880,10 @@ export type ProjectOverviewDto = {
             kind: 'answer-visibility' | 'site-audit' | 'gsc-sync' | 'inspect-sitemap' | 'ga-sync' | 'bing-inspect' | 'bing-inspect-sitemap' | 'backlink-extract' | 'traffic-sync' | 'aeo-discover-seed' | 'aeo-discover-probe' | 'gbp-sync' | 'ads-sync';
             status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
             trigger: 'manual' | 'scheduled' | 'config-apply' | 'backfill' | 'probe';
+            measurementPlanVersionId?: string | null;
+            measurementManifest?: {
+                [key: string]: unknown;
+            } | null;
             location?: string | null;
             queries?: Array<string> | null;
             startedAt?: string | null;
@@ -4058,6 +4784,10 @@ export type RunDetailDto = {
     kind: 'answer-visibility' | 'site-audit' | 'gsc-sync' | 'inspect-sitemap' | 'ga-sync' | 'bing-inspect' | 'bing-inspect-sitemap' | 'backlink-extract' | 'traffic-sync' | 'aeo-discover-seed' | 'aeo-discover-probe' | 'gbp-sync' | 'ads-sync';
     status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
     trigger: 'manual' | 'scheduled' | 'config-apply' | 'backfill' | 'probe';
+    measurementPlanVersionId?: string | null;
+    measurementManifest?: {
+        [key: string]: unknown;
+    } | null;
     location?: string | null;
     queries?: Array<string> | null;
     startedAt?: string | null;
@@ -4114,6 +4844,10 @@ export type RunDto = {
     kind: 'answer-visibility' | 'site-audit' | 'gsc-sync' | 'inspect-sitemap' | 'ga-sync' | 'bing-inspect' | 'bing-inspect-sitemap' | 'backlink-extract' | 'traffic-sync' | 'aeo-discover-seed' | 'aeo-discover-probe' | 'gbp-sync' | 'ads-sync';
     status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
     trigger: 'manual' | 'scheduled' | 'config-apply' | 'backfill' | 'probe';
+    measurementPlanVersionId?: string | null;
+    measurementManifest?: {
+        [key: string]: unknown;
+    } | null;
     location?: string | null;
     queries?: Array<string> | null;
     startedAt?: string | null;
@@ -5206,6 +5940,260 @@ export type PutApiV1ProjectsByNameResponses = {
 };
 
 export type PutApiV1ProjectsByNameResponse = PutApiV1ProjectsByNameResponses[keyof PutApiV1ProjectsByNameResponses];
+
+export type GetApiV1ProjectsByNameMeasurementPlanData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan';
+};
+
+export type GetApiV1ProjectsByNameMeasurementPlanErrors = {
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPlanError = GetApiV1ProjectsByNameMeasurementPlanErrors[keyof GetApiV1ProjectsByNameMeasurementPlanErrors];
+
+export type GetApiV1ProjectsByNameMeasurementPlanResponses = {
+    /**
+     * Active measurement plan returned.
+     */
+    200: MeasurementPlanResponse;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPlanResponse = GetApiV1ProjectsByNameMeasurementPlanResponses[keyof GetApiV1ProjectsByNameMeasurementPlanResponses];
+
+export type PutApiV1ProjectsByNameMeasurementPlanData = {
+    body: MeasurementPlanInput;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan';
+};
+
+export type PutApiV1ProjectsByNameMeasurementPlanErrors = {
+    /**
+     * The measurement plan is invalid or stale.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The API key lacks measurement-plan.write.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type PutApiV1ProjectsByNameMeasurementPlanError = PutApiV1ProjectsByNameMeasurementPlanErrors[keyof PutApiV1ProjectsByNameMeasurementPlanErrors];
+
+export type PutApiV1ProjectsByNameMeasurementPlanResponses = {
+    /**
+     * The identical active revision was returned.
+     */
+    200: MeasurementPlanResponse;
+    /**
+     * A new immutable revision was published.
+     */
+    201: MeasurementPlanResponse;
+};
+
+export type PutApiV1ProjectsByNameMeasurementPlanResponse = PutApiV1ProjectsByNameMeasurementPlanResponses[keyof PutApiV1ProjectsByNameMeasurementPlanResponses];
+
+export type PostApiV1ProjectsByNameMeasurementPlanCompilePreviewData = {
+    body: MeasurementPlanInput;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan/compile-preview';
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanCompilePreviewErrors = {
+    /**
+     * The measurement plan is invalid or stale.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The API key lacks measurement-plan.write.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanCompilePreviewError = PostApiV1ProjectsByNameMeasurementPlanCompilePreviewErrors[keyof PostApiV1ProjectsByNameMeasurementPlanCompilePreviewErrors];
+
+export type PostApiV1ProjectsByNameMeasurementPlanCompilePreviewResponses = {
+    /**
+     * Compiled measurement-plan preview returned.
+     */
+    200: MeasurementPlanCompilePreviewResponse;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanCompilePreviewResponse = PostApiV1ProjectsByNameMeasurementPlanCompilePreviewResponses[keyof PostApiV1ProjectsByNameMeasurementPlanCompilePreviewResponses];
+
+export type PostApiV1ProjectsByNameMeasurementPlanDiffPreviewData = {
+    body: MeasurementPlanInput;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan/diff-preview';
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDiffPreviewErrors = {
+    /**
+     * The measurement plan is invalid or stale.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The API key lacks measurement-plan.write.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDiffPreviewError = PostApiV1ProjectsByNameMeasurementPlanDiffPreviewErrors[keyof PostApiV1ProjectsByNameMeasurementPlanDiffPreviewErrors];
+
+export type PostApiV1ProjectsByNameMeasurementPlanDiffPreviewResponses = {
+    /**
+     * Semantic measurement-plan diff returned.
+     */
+    200: MeasurementPlanDiffPreviewResponse;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDiffPreviewResponse = PostApiV1ProjectsByNameMeasurementPlanDiffPreviewResponses[keyof PostApiV1ProjectsByNameMeasurementPlanDiffPreviewResponses];
+
+export type GetApiV1ProjectsByNameMeasurementPlanVersionsData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan/versions';
+};
+
+export type GetApiV1ProjectsByNameMeasurementPlanVersionsErrors = {
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPlanVersionsError = GetApiV1ProjectsByNameMeasurementPlanVersionsErrors[keyof GetApiV1ProjectsByNameMeasurementPlanVersionsErrors];
+
+export type GetApiV1ProjectsByNameMeasurementPlanVersionsResponses = {
+    /**
+     * Measurement-plan revision metadata returned.
+     */
+    200: MeasurementPlanVersionsResponse;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPlanVersionsResponse = GetApiV1ProjectsByNameMeasurementPlanVersionsResponses[keyof GetApiV1ProjectsByNameMeasurementPlanVersionsResponses];
+
+export type PostApiV1ProjectsByNameMeasurementPlanSegmentsByStableKeyRetireData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Stable Target or group key to retire.
+         */
+        stableKey: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan/segments/{stableKey}/retire';
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanSegmentsByStableKeyRetireErrors = {
+    /**
+     * The segment remains in the active measurement-plan revision.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The API key lacks measurement-plan.write.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project or measurement segment not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanSegmentsByStableKeyRetireError = PostApiV1ProjectsByNameMeasurementPlanSegmentsByStableKeyRetireErrors[keyof PostApiV1ProjectsByNameMeasurementPlanSegmentsByStableKeyRetireErrors];
+
+export type PostApiV1ProjectsByNameMeasurementPlanSegmentsByStableKeyRetireResponses = {
+    /**
+     * Segment retirement state returned.
+     */
+    200: MeasurementSegmentRetirementResponse;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanSegmentsByStableKeyRetireResponse = PostApiV1ProjectsByNameMeasurementPlanSegmentsByStableKeyRetireResponses[keyof PostApiV1ProjectsByNameMeasurementPlanSegmentsByStableKeyRetireResponses];
+
+export type GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Immutable project-local measurement-plan revision.
+         */
+        revision: number;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan/versions/{revision}';
+};
+
+export type GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionErrors = {
+    /**
+     * Project or revision not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionError = GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionErrors[keyof GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionErrors];
+
+export type GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionResponses = {
+    /**
+     * Immutable measurement-plan revision returned.
+     */
+    200: MeasurementPlanVersionResponse;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionResponse = GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionResponses[keyof GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionResponses];
 
 export type GetApiV1ProjectsData = {
     body?: never;

@@ -488,7 +488,7 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
   })
 }
 
-function answerVisibilityPreflightError(input: {
+export function answerVisibilityPreflightError(input: {
   projectName: string
   projectProviders: readonly string[]
   requestedProviders?: readonly string[]
@@ -586,7 +586,7 @@ function parseListSince(raw: string | undefined): string {
   return date.toISOString()
 }
 
-function formatRun(row: {
+export function formatRun(row: {
   id: string
   projectId: string
   kind: string
@@ -598,7 +598,14 @@ function formatRun(row: {
   finishedAt: string | null
   error: string | null
   createdAt: string
+  measurementPlanVersionId?: string | null
+  measurementManifest?: unknown
 }) {
+  const measurementManifest = row.measurementManifest !== null
+    && typeof row.measurementManifest === 'object'
+    && !Array.isArray(row.measurementManifest)
+    ? row.measurementManifest as Record<string, unknown>
+    : null
   return {
     id: row.id,
     projectId: row.projectId,
@@ -610,6 +617,8 @@ function formatRun(row: {
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
     error: parseRunError(row.error),
+    measurementPlanVersionId: row.measurementPlanVersionId ?? null,
+    measurementManifest,
     createdAt: row.createdAt,
   }
 }
