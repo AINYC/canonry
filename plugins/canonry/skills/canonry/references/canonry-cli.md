@@ -410,6 +410,16 @@ cnry google coverage <project>                         # index coverage summary
 cnry google refresh <project>                         # force-fetch fresh GSC coverage data
 cnry google performance <project>                      # search performance data
 cnry google performance <project> --days 30 --keyword "term" --page "/url"
+cnry google performance <project> --start 2026-06-01 --end 2026-06-30
+cnry google performance <project> --order-by impressions --limit 2000 --offset 2000
+# Rows are ordered by clicks descending by default; --order-by date|impressions
+# changes the ranking. --days and --start/--end are mutually exclusive.
+# One page, not the whole set: the response reports the total number of matching
+# rows, and the CLI prints how many of them you are looking at. Never sum these
+# rows for a property total, use `cnry google performance-daily`.
+cnry google performance-daily <project>                # per-day series + property-level window totals
+cnry google top-pages <project>                        # pages ranked by clicks, aggregated in SQL
+cnry google top-pages <project> --start 2026-06-01 --end 2026-06-30 --limit 20
 
 cnry google inspect <project> <url>                    # inspect specific URL
 cnry google inspect-sitemap <project> --wait           # bulk inspect all sitemap URLs
@@ -420,6 +430,17 @@ cnry google deindexed <project>                        # pages that lost indexin
 cnry google request-indexing <project> <url>           # push URL to Google
 cnry google request-indexing <project> --all-unindexed # push all unknown pages
 ```
+
+**The dimensioned search-data table is valid for RANKING and invalid for TOTALS.** Read
+any clicks/impressions total from the property-level daily figures (`performance-daily`
+totals, or the `totals` block on `top-pages`), never by summing per-query or per-page rows.
+
+Why: Google withholds rare/anonymised queries, so the dimensioned sum UNDER-counts clicks,
+and one impression fans out across every query x page x country x device combination, so it
+OVER-counts impressions. Measured on one real property-month: 792 summed clicks against
+1,142 actual (31% under) and 45,266 summed impressions against 34,916 actual (30% over).
+`top-pages` labels its total `totalsSource: "property-daily"` and returns `null` when no
+property-level figure covers the window: a missing total, not a wrong one.
 
 ## Discovery (Tracked-Basket Expansion)
 

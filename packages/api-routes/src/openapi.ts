@@ -1933,15 +1933,22 @@ const routeCatalog: OpenApiOperation[] = [
       { name: 'endDate', in: 'query', description: 'Filter by end date.', schema: stringSchema },
       { name: 'query', in: 'query', description: 'Filter by search query.', schema: stringSchema },
       { name: 'page', in: 'query', description: 'Filter by page URL.', schema: stringSchema },
+      {
+        name: 'orderBy',
+        in: 'query',
+        description: 'Row ordering, always descending. Defaults to clicks. Use date for time-series reads.',
+        schema: { type: 'string', enum: ['clicks', 'impressions', 'date'] },
+      },
       limitQueryParameter,
       offsetQueryParameter,
       analyticsWindowParameter,
     ],
     responses: {
-      // Handler returns an array of GscSearchDataDto rows (web's
-      // ApiGscPerformanceRow[] confirms). Was incorrectly spec'd as a
-      // single object, which silently truncated client types to one row.
-      200: jsonArrayResponse('GSC performance rows returned.', 'GscSearchDataDto'),
+      // Envelope, not a bare array: `totalMatching` / `truncated` are how a
+      // caller tells a page from a complete answer, and `latestAvailableDate`
+      // is how it tells "no data" from "asked past the GSC reporting lag".
+      200: jsonResponse('GSC performance page plus match count and data freshness.', 'GscPerformanceResponseDto'),
+      400: errorResponse('Invalid orderBy value.'),
       404: errorResponse('Project not found.'),
     },
   },
@@ -1958,6 +1965,24 @@ const routeCatalog: OpenApiOperation[] = [
     ],
     responses: {
       200: jsonResponse('Daily aggregate (date → clicks/impressions/ctr) plus window totals.', 'GscPerformanceDailyDto'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/google/gsc/top-pages',
+    summary: 'Get top GSC pages ranked by clicks',
+    description: 'One row per page, aggregated in SQL and ranked by summed clicks descending. The rows are a RANKING built from the dimensioned search-data table; `totals` is NOT their sum. Google withholds rare queries (summed clicks under-count) and fans one impression across every query/page/country/device combination (summed impressions over-count), so `totals` is read from the un-dimensioned property-level daily table and labelled `totalsSource: property-daily`. It is null when that table has no rows in the window.',
+    tags: ['google'],
+    parameters: [
+      nameParameter,
+      { name: 'startDate', in: 'query', description: 'Filter by start date.', schema: stringSchema },
+      { name: 'endDate', in: 'query', description: 'Filter by end date.', schema: stringSchema },
+      limitQueryParameter,
+      analyticsWindowParameter,
+    ],
+    responses: {
+      200: jsonResponse('Ranked pages plus the property-level window total.', 'GscTopPagesDto'),
       404: errorResponse('Project not found.'),
     },
   },

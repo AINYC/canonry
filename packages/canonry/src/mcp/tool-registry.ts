@@ -48,6 +48,7 @@ import {
 import { z } from 'zod'
 import type { ApiClient } from '../client.js'
 import { CliError, EXIT_SYSTEM_ERROR } from '../cli-error.js'
+import { gscPerformanceOrderBySchema } from '@ainyc/canonry-contracts'
 import {
   analyticsWindowSchema,
   compactStringParams,
@@ -167,7 +168,9 @@ const gscPerformanceInputSchema = z.object({
   endDate: z.string().optional(),
   query: z.string().optional(),
   page: z.string().optional(),
-  limit: z.number().int().positive().max(500).optional(),
+  limit: z.number().int().positive().max(5000).optional(),
+  offset: z.number().int().nonnegative().optional(),
+  orderBy: gscPerformanceOrderBySchema.optional(),
   window: analyticsWindowSchema.optional(),
 })
 
@@ -175,6 +178,14 @@ const gscPerformanceDailyInputSchema = z.object({
   project: projectNameSchema,
   startDate: z.string().optional(),
   endDate: z.string().optional(),
+  window: analyticsWindowSchema.optional(),
+})
+
+const gscTopPagesInputSchema = z.object({
+  project: projectNameSchema,
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  limit: z.number().int().positive().max(500).optional(),
   window: analyticsWindowSchema.optional(),
 })
 
@@ -1245,13 +1256,13 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_gsc_performance',
     title: 'Get GSC performance',
-    description: 'Get stored Google Search Console performance rows for a Canonry project.',
+    description: 'Get stored Google Search Console performance rows for a Canonry project. Rows are ordered by clicks descending unless orderBy says otherwise, and the response reports totalMatching / truncated / latestAvailableDate. Never sum these rows for a property total, use canonry_gsc_performance_daily.',
     access: 'read',
     tier: 'gsc',
     inputSchema: gscPerformanceInputSchema,
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/google/gsc/performance'],
-    handler: (client, input) => client.gscPerformance(input.project, compactStringParams(input, ['startDate', 'endDate', 'query', 'page', 'limit', 'window'])),
+    handler: (client, input) => client.gscPerformance(input.project, compactStringParams(input, ['startDate', 'endDate', 'query', 'page', 'limit', 'offset', 'orderBy', 'window'])),
   }),
   defineTool({
     name: 'canonry_gsc_performance_daily',
@@ -1263,6 +1274,17 @@ export const canonryMcpTools = [
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/google/gsc/performance/daily'],
     handler: (client, input) => client.gscPerformanceDaily(input.project, compactStringParams(input, ['startDate', 'endDate', 'window'])),
+  }),
+  defineTool({
+    name: 'canonry_gsc_top_pages',
+    title: 'Get top GSC pages',
+    description: 'Get the project\'s pages ranked by summed GSC clicks, aggregated in SQL. The rows are a RANKING and their clicks/impressions do NOT add up to the site total: Google withholds rare queries and repeats one impression per ranking page. Read the window total from the returned `totals` block (labelled totalsSource "property-daily"), which is null when no property-level figure covers the window. Never sum the rows.',
+    access: 'read',
+    tier: 'gsc',
+    inputSchema: gscTopPagesInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/google/gsc/top-pages'],
+    handler: (client, input) => client.gscTopPages(input.project, compactStringParams(input, ['startDate', 'endDate', 'limit', 'window'])),
   }),
   defineTool({
     name: 'canonry_gsc_inspections',

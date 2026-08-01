@@ -2476,16 +2476,42 @@ export type GscPerformanceDailyDto = {
     }>;
 };
 
-export type GscSearchDataDto = {
-    date: string;
-    query: string;
-    page: string;
-    country?: string | null;
-    device?: string | null;
-    clicks: number;
-    impressions: number;
-    ctr: number;
-    position: number;
+export type GscPerformanceResponseDto = {
+    rows: Array<{
+        date: string;
+        query: string;
+        page: string;
+        country?: string | null;
+        device?: string | null;
+        clicks: number;
+        impressions: number;
+        ctr: number;
+        position: number;
+    }>;
+    totalMatching: number;
+    truncated: boolean;
+    latestAvailableDate: string | null;
+};
+
+export type GscTopPagesDto = {
+    rows: Array<{
+        page: string;
+        clicks: number;
+        impressions: number;
+        ctr: number;
+    }>;
+    totals: {
+        clicks: number;
+        impressions: number;
+        ctr: number;
+        days: number;
+        coveredFrom: string | null;
+        coveredThrough: string | null;
+        complete: boolean;
+    } | null;
+    totalsSource: 'property-daily';
+    rankedFrom: string | null;
+    rankedThrough: string | null;
 };
 
 export type GscDiscoverSitemapsResponseDto = {
@@ -7862,6 +7888,10 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceData = {
          */
         page?: string;
         /**
+         * Row ordering, always descending. Defaults to clicks. Use date for time-series reads.
+         */
+        orderBy?: 'clicks' | 'impressions' | 'date';
+        /**
          * Maximum number of records to return.
          */
         limit?: number;
@@ -7879,6 +7909,10 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceData = {
 
 export type GetApiV1ProjectsByNameGoogleGscPerformanceErrors = {
     /**
+     * Invalid orderBy value.
+     */
+    400: ErrorEnvelope;
+    /**
      * Project not found.
      */
     404: ErrorEnvelope;
@@ -7888,9 +7922,9 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceError = GetApiV1ProjectsBy
 
 export type GetApiV1ProjectsByNameGoogleGscPerformanceResponses = {
     /**
-     * GSC performance rows returned.
+     * GSC performance page plus match count and data freshness.
      */
-    200: Array<GscSearchDataDto>;
+    200: GscPerformanceResponseDto;
 };
 
 export type GetApiV1ProjectsByNameGoogleGscPerformanceResponse = GetApiV1ProjectsByNameGoogleGscPerformanceResponses[keyof GetApiV1ProjectsByNameGoogleGscPerformanceResponses];
@@ -7937,6 +7971,53 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceDailyResponses = {
 };
 
 export type GetApiV1ProjectsByNameGoogleGscPerformanceDailyResponse = GetApiV1ProjectsByNameGoogleGscPerformanceDailyResponses[keyof GetApiV1ProjectsByNameGoogleGscPerformanceDailyResponses];
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Filter by start date.
+         */
+        startDate?: string;
+        /**
+         * Filter by end date.
+         */
+        endDate?: string;
+        /**
+         * Maximum number of records to return.
+         */
+        limit?: number;
+        /**
+         * Time window for analytics queries.
+         */
+        window?: '7d' | '30d' | '90d' | 'all';
+    };
+    url: '/api/v1/projects/{name}/google/gsc/top-pages';
+};
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesErrors = {
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesError = GetApiV1ProjectsByNameGoogleGscTopPagesErrors[keyof GetApiV1ProjectsByNameGoogleGscTopPagesErrors];
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesResponses = {
+    /**
+     * Ranked pages plus the property-level window total.
+     */
+    200: GscTopPagesDto;
+};
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesResponse = GetApiV1ProjectsByNameGoogleGscTopPagesResponses[keyof GetApiV1ProjectsByNameGoogleGscTopPagesResponses];
 
 export type PostApiV1ProjectsByNameGoogleGscInspectData = {
     body: {
