@@ -747,6 +747,12 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
             date: row.date,
             sessions: row.sessions,
             users: row.users,
+            // Stored as given, nulls included: an absent reading is not a 0%
+            // engagement day. `returningUsers` is deliberately NOT stored —
+            // it is derived from `users - newUsers` at read time so the stored
+            // row keeps only what GA4 actually reported.
+            engagementRate: row.engagementRate,
+            newUsers: row.newUsers,
             syncedAt: now,
             syncRunId: runId,
             createdAt: now,

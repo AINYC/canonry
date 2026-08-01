@@ -250,8 +250,8 @@ describe('GA4 routes', () => {
     // Deduplicated per-day users. Deliberately BELOW the landing-page sums
     // (40 / 25) — that gap is the bug this table exists to close.
     const fetchDailyTotalsSpy = vi.spyOn(gaModule, 'fetchDailyTotals').mockResolvedValue([
-      { date: '2026-03-19', sessions: 50, users: 33 },
-      { date: '2026-03-20', sessions: 30, users: 21 },
+      { date: '2026-03-19', sessions: 50, users: 33, engagementRate: 0.62, newUsers: 20, returningUsers: 13 },
+      { date: '2026-03-20', sessions: 30, users: 21, engagementRate: 0.58, newUsers: 12, returningUsers: 9 },
     ])
     const fetchAiReferralsSpy = vi.spyOn(gaModule, 'fetchAiReferrals').mockResolvedValue([
       { date: '2026-03-20', source: 'chatgpt.com', medium: 'referral', trafficClass: 'organic', channelGroup: 'Referral', landingPage: '/pricing?utm_source=chatgpt.com', sessions: 12, users: 9, sourceDimension: 'session' },
@@ -498,7 +498,7 @@ describe('GA4 routes', () => {
       totalUsers: 22000,
     }))
     const fetchDailyTotalsSpy = vi.spyOn(gaModule, 'fetchDailyTotals').mockResolvedValue([
-      { date: today, sessions: 30000, users: 22000 },
+      { date: today, sessions: 30000, users: 22000, engagementRate: 0.66, newUsers: 14000, returningUsers: 8000 },
     ])
     const fetchAiReferralsSpy = vi.spyOn(gaModule, 'fetchAiReferrals').mockResolvedValue([])
     const fetchSocialReferralsSpy = vi.spyOn(gaModule, 'fetchSocialReferrals').mockResolvedValue([

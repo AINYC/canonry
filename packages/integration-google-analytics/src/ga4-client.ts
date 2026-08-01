@@ -754,6 +754,48 @@ export interface GA4DailyTotalRow {
   date: string
   sessions: number
   users: number
+  /**
+   * GA4's `engagementRate` for the day (0-1). `null` when the response carried
+   * no value for the metric — an unavailable reading is never reported as 0,
+   * which would render as a real "nobody engaged" day.
+   */
+  engagementRate: number | null
+  /** GA4's `newUsers` for the day. `null` when the response omitted it. */
+  newUsers: number | null
+  /**
+   * Returning users for the day, derived as `totalUsers - newUsers`.
+   *
+   * GA4 exposes no `returningUsers` metric. The alternative is the
+   * `newVsReturning` dimension, which multiplies the row count of the whole
+   * sync and breaks this report's date-only grain. Because the report carries
+   * `date` as its ONLY dimension, GA4 has already deduplicated `totalUsers`
+   * and `newUsers` inside the day and every user in that day is either new or
+   * returning, so the subtraction is exact at this grain (it is only a sum
+   * ACROSS dimension combinations that is unsafe for user counts).
+   *
+   * `null` when `newUsers` is unavailable. Floored at 0: GA4 estimates the two
+   * counts independently and can report `newUsers > totalUsers` on a
+   * low-volume day, which is not a negative population.
+   */
+  returningUsers: number | null
+}
+
+/**
+ * Parses a GA4 metric value, returning `null` for an absent (not zero) reading.
+ *
+ * The empty-string guard is load-bearing: `Number('')` is 0, so without it an
+ * omitted value would land as a real zero measurement.
+ */
+function parseOptionalMetric(value: string | undefined): number | null {
+  if (value === undefined || value.trim() === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+/** As `parseOptionalMetric`, for a count that must stay a whole number. */
+function parseOptionalCountMetric(value: string | undefined): number | null {
+  const parsed = parseOptionalMetric(value)
+  return parsed === null ? null : Math.round(parsed)
 }
 
 /**
@@ -789,15 +831,27 @@ export async function fetchDailyTotals(
   const res = await runReport(accessToken, propertyId, {
     dateRanges: [{ startDate: formatDate(startDate), endDate: formatDate(endDate) }],
     dimensions: [{ name: DIM.date }],
-    metrics: [{ name: MET.sessions }, { name: MET.totalUsers }],
+    metrics: [
+      { name: MET.sessions },
+      { name: MET.totalUsers },
+      { name: MET.engagementRate },
+      { name: MET.newUsers },
+    ],
     limit: syncDays + 1,
   })
 
-  const rows: GA4DailyTotalRow[] = (res.rows ?? []).map((row) => ({
-    date: compactDateToIso(row.dimensionValues[0]?.value ?? ''),
-    sessions: parseInt(row.metricValues[0]?.value ?? '0', 10) || 0,
-    users: parseInt(row.metricValues[1]?.value ?? '0', 10) || 0,
-  })).filter((row) => row.date.length > 0)
+  const rows: GA4DailyTotalRow[] = (res.rows ?? []).map((row) => {
+    const users = parseInt(row.metricValues[1]?.value ?? '0', 10) || 0
+    const newUsers = parseOptionalCountMetric(row.metricValues[3]?.value)
+    return {
+      date: compactDateToIso(row.dimensionValues[0]?.value ?? ''),
+      sessions: parseInt(row.metricValues[0]?.value ?? '0', 10) || 0,
+      users,
+      engagementRate: parseOptionalMetric(row.metricValues[2]?.value),
+      newUsers,
+      returningUsers: newUsers === null ? null : Math.max(0, users - newUsers),
+    }
+  }).filter((row) => row.date.length > 0)
 
   ga4Log('info', 'fetch-daily-totals.done', { propertyId, days: syncDays, rows: rows.length })
   return rows

@@ -102,7 +102,7 @@ async function mockLegacyGa() {
     totalUsers: 8,
   }))
   vi.spyOn(ga, 'fetchDailyTotals').mockResolvedValue([
-    { date: dateDaysAgo(1), sessions: 10, users: 8 },
+    { date: dateDaysAgo(1), sessions: 10, users: 8, engagementRate: 0.7, newUsers: 6, returningUsers: 2 },
   ])
   vi.spyOn(ga, 'fetchTrafficByLandingPage').mockResolvedValue([
     {

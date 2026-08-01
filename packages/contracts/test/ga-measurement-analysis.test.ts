@@ -51,6 +51,24 @@ describe('GA measurement analysis contract', () => {
           periods: [{ ...period, eventCount: 3 }],
         }],
       },
+      engagement: {
+        status: 'ready',
+        availableFromDate: '2026-07-21',
+        latestDate: '2026-07-22',
+        periods: [{
+          ...period,
+          sessions: 400,
+          engagementRate: 0.675,
+          dailyTotalUsers: 280,
+          dailyNewUsers: 170,
+          dailyReturningUsers: 110,
+          returningUserShare: 110 / 280,
+          metricsAvailable: true,
+          daysInPeriod: 2,
+          daysWithEngagementRate: 2,
+          daysWithUserSplit: 2,
+        }],
+      },
       searchDemand: {
         status: 'ready',
         periods: [{
@@ -122,6 +140,12 @@ describe('GA measurement analysis contract', () => {
         hostAndPathFiltersApplied: false,
         periods: [],
         channels: [],
+      },
+      engagement: {
+        status: 'unavailable',
+        availableFromDate: null,
+        latestDate: null,
+        periods: [],
       },
       searchDemand: {
         status: 'ready',

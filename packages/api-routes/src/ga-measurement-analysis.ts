@@ -2,6 +2,7 @@ import { and, eq, gte, lte, or, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import {
   gaAcquisitionDaily,
+  gaDailyTotals,
   gaLeadEventsDaily,
   gaMeasurementSyncStates,
   gscDailyTotals,
@@ -106,6 +107,59 @@ function clickPeriods(periods: Period[], clicks: number[], impressions: number[]
     clicks: clicks[index] ?? 0,
     impressions: impressions[index] ?? 0,
   }))
+}
+
+type EngagementRow = typeof gaDailyTotals.$inferSelect
+
+/**
+ * Rolls the property-level daily series up into one bucket per period.
+ *
+ * Two aggregation rules, both load-bearing:
+ *
+ * 1. `engagementRate` is a RATE, so it is weighted by sessions rather than
+ *    averaged. GA4's engagementRate is engagedSessions / sessions and sessions
+ *    ARE additive, so the weighted mean equals the bucket's true rate. A plain
+ *    mean would let a 3-session day outvote a 3,000-session one.
+ * 2. Every metric stays `null` when no day in the bucket carries a reading.
+ *    Days written before the metrics existed hold NULL, and reporting those as
+ *    0 would draw a real "nobody engaged, nobody returned" line for the whole
+ *    pre-migration span.
+ */
+function engagementPeriods(periods: Period[], rows: EngagementRow[]) {
+  return periods.map((period) => {
+    const inPeriod = rows.filter(row => row.date >= period.startDate && row.date <= period.endDate)
+
+    const rateDays = inPeriod.filter(row => row.engagementRate !== null)
+    const weight = rateDays.reduce((sum, row) => sum + row.sessions, 0)
+    const weighted = rateDays.reduce((sum, row) => sum + row.engagementRate! * row.sessions, 0)
+
+    const splitDays = inPeriod.filter(row => row.newUsers !== null)
+    const dailyTotalUsers = splitDays.reduce((sum, row) => sum + row.users, 0)
+    const dailyNewUsers = splitDays.reduce((sum, row) => sum + row.newUsers!, 0)
+    // Floored for the same reason the client floors it: GA4 estimates the two
+    // counts independently and can report more new users than total users on a
+    // low-volume day, which is not a negative population.
+    const dailyReturningUsers = Math.max(0, dailyTotalUsers - dailyNewUsers)
+
+    return {
+      ...period,
+      sessions: inPeriod.reduce((sum, row) => sum + row.sessions, 0),
+      // A bucket whose reading-days had no sessions has no rate to report; the
+      // weighted mean would be 0/0.
+      engagementRate: rateDays.length > 0 && weight > 0 ? weighted / weight : null,
+      dailyTotalUsers: splitDays.length > 0 ? dailyTotalUsers : null,
+      dailyNewUsers: splitDays.length > 0 ? dailyNewUsers : null,
+      dailyReturningUsers: splitDays.length > 0 ? dailyReturningUsers : null,
+      // Null on a zero denominator too: a share of no users is not 0%.
+      returningUserShare: splitDays.length > 0 && dailyTotalUsers > 0
+        ? dailyReturningUsers / dailyTotalUsers
+        : null,
+      metricsAvailable: rateDays.length > 0 || splitDays.length > 0,
+      daysInPeriod: inPeriod.length,
+      daysWithEngagementRate: rateDays.length,
+      daysWithUserSplit: splitDays.length,
+    }
+  })
 }
 
 function rankEntries(entries: Iterable<[string, number[]]>): Array<[string, number[]]> {
@@ -256,6 +310,34 @@ export function buildGaMeasurementAnalysis(
   const gaStartDate = gaPeriods[0]?.startDate
   const acquisitionRows = gaStartDate ? db.select().from(gaAcquisitionDaily).where(and(eq(gaAcquisitionDaily.projectId, project.id), gte(gaAcquisitionDaily.date, gaStartDate), lte(gaAcquisitionDaily.date, gaAnchor!))).all() : []
   const leadRows = gaStartDate ? db.select().from(gaLeadEventsDaily).where(and(eq(gaLeadEventsDaily.projectId, project.id), gte(gaLeadEventsDaily.date, gaStartDate), lte(gaLeadEventsDaily.date, gaAnchor!))).all() : []
+  // The engagement series is anchored on its OWN table rather than on the
+  // acquisition/lead anchor: `ga_daily_totals` is written by every GA sync,
+  // while acquisition and leads are a separate measurement sync that may never
+  // have run. Same pattern `searchDemand` already uses for the GSC anchor.
+  const engagementAnchor = db.select({ date: sql<string | null>`max(${gaDailyTotals.date})` })
+    .from(gaDailyTotals).where(eq(gaDailyTotals.projectId, project.id)).get()?.date ?? null
+  const engagementPeriodWindow = engagementAnchor ? buildPeriods(engagementAnchor, days) : []
+  const engagementStartDate = engagementPeriodWindow[0]?.startDate
+  const engagementRows = engagementStartDate
+    ? db.select().from(gaDailyTotals).where(and(
+        eq(gaDailyTotals.projectId, project.id),
+        gte(gaDailyTotals.date, engagementStartDate),
+        lte(gaDailyTotals.date, engagementAnchor!),
+      )).all()
+    : []
+  // Ignores the requested window on purpose: this is the date the metric began
+  // existing for the project, which is what tells a caller that an earlier gap
+  // is unmeasured rather than empty.
+  const engagementAvailableFrom = db.select({
+    date: sql<string | null>`min(${gaDailyTotals.date})`,
+  }).from(gaDailyTotals).where(and(
+    eq(gaDailyTotals.projectId, project.id),
+    or(
+      sql`${gaDailyTotals.engagementRate} is not null`,
+      sql`${gaDailyTotals.newUsers} is not null`,
+    ),
+  )).get()?.date ?? null
+
   const gscAnchor = db.select({ date: sql<string | null>`max(${gscDailyTotals.date})` })
     .from(gscDailyTotals).where(eq(gscDailyTotals.projectId, project.id)).get()?.date ?? null
   const gscPeriods = gscAnchor ? buildPeriods(gscAnchor, days) : []
@@ -434,6 +516,12 @@ export function buildGaMeasurementAnalysis(
         channelGroup,
         periods: eventPeriods(gaPeriods, values),
       })),
+    },
+    engagement: {
+      status: engagementAnchor === null ? 'unavailable' : 'ready',
+      availableFromDate: engagementAvailableFrom,
+      latestDate: engagementAnchor,
+      periods: engagementPeriods(engagementPeriodWindow, engagementRows),
     },
     searchDemand: gscAnchor === null
       ? {

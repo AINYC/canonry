@@ -110,6 +110,43 @@ const analysisDemandPeriodSchema = analysisPeriodSchema.extend({
   unreportedImpressions: z.number().int().nonnegative(),
 })
 
+/**
+ * GA4 engagement + returning users for one 30-day bucket.
+ *
+ * Every metric is nullable, and `metricsAvailable` says which of the two
+ * readings a null means: absent (the days in this bucket predate the metrics)
+ * versus a real measured value that happens to be 0. A client report must
+ * render the absent case as "not measured", never as a zero.
+ *
+ * `dailyTotalUsers` / `dailyNewUsers` / `dailyReturningUsers` are named for
+ * what they are: sums of per-day, GA4-deduplicated counts. A visitor who
+ * returns on three days contributes to three of them, so these are NOT
+ * period-unique user counts and must never be labelled as such.
+ * `returningUserShare` is the ratio of the two sums, which IS meaningful at
+ * that grain since both sides count the same way.
+ */
+const analysisEngagementPeriodSchema = analysisPeriodSchema.extend({
+  /** Sessions over the bucket. Additive, so this is a plain sum. */
+  sessions: z.number().int().nonnegative(),
+  /**
+   * Sessions-weighted engagement rate over the days that carry a reading.
+   * A rate is not additive; sessions are, and GA4's engagementRate is
+   * engagedSessions / sessions, so the weighted mean reconstructs the bucket
+   * rate exactly. `null` when no day in the bucket carries a reading.
+   */
+  engagementRate: z.number().min(0).max(1).nullable(),
+  dailyTotalUsers: z.number().int().nonnegative().nullable(),
+  dailyNewUsers: z.number().int().nonnegative().nullable(),
+  /** Derived as `dailyTotalUsers - dailyNewUsers`; GA4 has no such metric. */
+  dailyReturningUsers: z.number().int().nonnegative().nullable(),
+  returningUserShare: z.number().min(0).max(1).nullable(),
+  /** False when the bucket has no engagement reading at all. */
+  metricsAvailable: z.boolean(),
+  daysInPeriod: z.number().int().nonnegative(),
+  daysWithEngagementRate: z.number().int().nonnegative(),
+  daysWithUserSplit: z.number().int().nonnegative(),
+})
+
 export const gaMeasurementAnalysisDtoSchema = z.object({
   window: gaMeasurementAnalysisWindowSchema,
   bucketDays: z.literal(30),
@@ -146,6 +183,18 @@ export const gaMeasurementAnalysisDtoSchema = z.object({
       channelGroup: z.string(),
       periods: z.array(analysisEventPeriodSchema),
     })),
+  }),
+  engagement: z.object({
+    status: z.enum(['ready', 'unavailable']),
+    /**
+     * Earliest date the project holds ANY engagement reading for, ignoring the
+     * requested window. Everything before it is unmeasured, not zero — this is
+     * the field a client report reads to label (or truncate) the pre-migration
+     * span instead of drawing a flat zero line across it.
+     */
+    availableFromDate: analysisDateSchema.nullable(),
+    latestDate: analysisDateSchema.nullable(),
+    periods: z.array(analysisEngagementPeriodSchema),
   }),
   searchDemand: z.object({
     status: z.enum(['ready', 'unavailable']),

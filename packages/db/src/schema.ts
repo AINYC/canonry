@@ -575,6 +575,21 @@ export const gaDailyTotals = sqliteTable('ga_daily_totals', {
   date: text('date').notNull(),
   sessions: integer('sessions').notNull().default(0),
   users: integer('users').notNull().default(0),
+  /**
+   * GA4's `engagementRate` for the day (0-1), requested directly from the Data
+   * API. Nullable, with no default: every row written before the metric was
+   * added has no reading, and defaulting to 0 would report a real "nobody
+   * engaged" day for the whole pre-migration period.
+   */
+  engagementRate: real('engagement_rate'),
+  /**
+   * GA4's `newUsers` for the day. Returning users are DERIVED from it as
+   * `users - newUsers` rather than stored: GA4 has no `returningUsers` metric,
+   * and because this report carries `date` as its only dimension GA4 has
+   * already deduplicated both counts inside the day, so the subtraction is
+   * exact at this grain. Nullable for the same reason as `engagementRate`.
+   */
+  newUsers: integer('new_users'),
   syncedAt: text('synced_at').notNull(),
   syncRunId: text('sync_run_id').references(() => runs.id, { onDelete: 'cascade' }),
   createdAt: text('created_at').notNull(),
