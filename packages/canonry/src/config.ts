@@ -220,6 +220,13 @@ export interface DashboardConfigEntry {
    * and the engine is not directly internet-reachable.
    */
   requirePassword?: boolean
+
+  /**
+   * Whether the dashboard sidebar and page footer show the Canonry GitHub,
+   * documentation, and changelog links. Defaults to true. Disable for a
+   * quieter branded UI.
+   */
+  showResourceLinks?: boolean
 }
 
 /**

@@ -227,6 +227,12 @@ function resolveDashboardRequirePassword(env: NodeJS.ProcessEnv, config: Canonry
     ?? true;
 }
 
+function resolveDashboardShowResourceLinks(env: NodeJS.ProcessEnv, config: CanonryConfig): boolean {
+  return parseBooleanEnv(env.CANONRY_DASHBOARD_SHOW_RESOURCE_LINKS)
+    ?? config.dashboard?.showResourceLinks
+    ?? true;
+}
+
 /** All known API adapters — add new providers here */
 const API_ADAPTERS: ProviderAdapter[] = [
   geminiAdapter,
@@ -1612,6 +1618,7 @@ export async function createServer(opts: {
     );
   }
   const dashboardRequirePassword = resolveDashboardRequirePassword(process.env, opts.config);
+  const dashboardShowResourceLinks = resolveDashboardShowResourceLinks(process.env, opts.config);
   app.log.info(
     { dashboardRequirePassword },
     "Dashboard password gate resolved",
@@ -2600,6 +2607,11 @@ export async function createServer(opts: {
     ): string => {
       const clientConfig: Record<string, unknown> = {};
       if (basePath) clientConfig.basePath = basePath;
+      // Keep the default client config byte-for-byte unchanged. Only inject the
+      // dashboard block when the operator opts out of the resource links.
+      if (!dashboardShowResourceLinks) {
+        clientConfig.dashboard = { showResourceLinks: false };
+      }
       // Embed block is appended LAST and only when enabled, so the default
       // (non-embed) serve emits byte-for-byte the same `{}` / `{basePath}`.
       // `projectTabs` + `theme` may be overridden PER REQUEST by the

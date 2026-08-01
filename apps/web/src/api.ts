@@ -167,6 +167,10 @@ declare global {
        * Example: '/canonry/' → API calls go to '/canonry/api/v1/...'
        */
       basePath?: string
+      /** Present only when dashboard chrome differs from its defaults. */
+      dashboard?: {
+        showResourceLinks?: boolean
+      }
       /**
        * Read-only embed block injected by `canonry serve --embed` (#716). Present
        * only when embed mode is enabled; drives the chromeless render + the
@@ -240,6 +244,12 @@ export function getEmbedConfig(): EmbedClientConfig | null {
   if (typeof window === 'undefined') return null
   const embed = window.__CANONRY_CONFIG__?.embed
   return embed?.enabled ? embed : null
+}
+
+/** Whether the optional GitHub, documentation, and changelog links render. */
+export function shouldShowDashboardResourceLinks(): boolean {
+  if (typeof window === 'undefined') return true
+  return window.__CANONRY_CONFIG__?.dashboard?.showResourceLinks !== false
 }
 
 /**
