@@ -249,13 +249,19 @@ export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOption
           .from(schedules)
           .where(and(eq(schedules.projectId, projectId), eq(schedules.kind, AV_KIND)))
           .get()
+        // `enabled` is only written when the spec says so. Omitting it leaves a
+        // paused schedule paused: someone disabled it from the dashboard or the
+        // API for a reason, and an apply that touches the cron expression is not
+        // a request to resume the sweeps. A schedule this apply creates has no
+        // prior state to preserve, so it defaults to enabled.
+        const specEnabled = config.spec.schedule?.enabled
         if (existingSched) {
           tx.update(schedules).set({
             cronExpr: resolvedSchedule.cronExpr,
             preset: resolvedSchedule.preset,
             timezone: resolvedSchedule.timezone,
             providers: config.spec.schedule?.providers ?? [],
-            enabled: true,
+            ...(specEnabled === undefined ? {} : { enabled: specEnabled }),
             updatedAt: now,
           }).where(eq(schedules.id, existingSched.id)).run()
         } else {
@@ -266,7 +272,7 @@ export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOption
             cronExpr: resolvedSchedule.cronExpr,
             preset: resolvedSchedule.preset,
             timezone: resolvedSchedule.timezone,
-            enabled: true,
+            enabled: specEnabled ?? true,
             providers: config.spec.schedule?.providers ?? [],
             createdAt: now,
             updatedAt: now,

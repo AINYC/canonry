@@ -16,6 +16,14 @@ export const configScheduleSchema = z.object({
   cron: z.string().optional(),
   timezone: z.string().optional().default('UTC'),
   providers: z.array(providerNameSchema).optional().default([]),
+  /**
+   * Whether the schedule fires. Omit to leave an existing schedule's state
+   * alone — a schedule paused from the dashboard or the API stays paused
+   * across an apply, so config-as-code does not silently resume billing work
+   * someone deliberately stopped. A schedule created by this apply defaults
+   * to enabled.
+   */
+  enabled: z.boolean().optional(),
 }).refine(
   (data) => (data.preset && !data.cron) || (!data.preset && data.cron),
   { message: 'Exactly one of "preset" or "cron" must be provided' },
