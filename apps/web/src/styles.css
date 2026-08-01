@@ -361,6 +361,18 @@
   border-color: var(--color-border-strong);
 }
 
+@utility divide-default {
+  & > :not(:last-child) {
+    border-color: var(--color-border);
+  }
+}
+
+@utility divide-subtle {
+  & > :not(:last-child) {
+    border-color: var(--color-border-subtle);
+  }
+}
+
 @utility text-primary {
   color: var(--color-text-primary);
 }

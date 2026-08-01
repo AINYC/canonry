@@ -1317,7 +1317,7 @@ export function GscSection({
                             aria-selected={coverageTab === tab}
                             className={`border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
                               coverageTab === tab
-                                ? 'border-mono-300 text-heading'
+                                ? 'border-accent text-heading'
                                 : 'border-transparent text-secondary hover:border-mono-600 hover:text-strong'
                             }`}
                             onClick={() => { setCoverageTab(tab); setSelectedReason(null) }}

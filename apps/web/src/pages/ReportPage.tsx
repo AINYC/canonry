@@ -580,7 +580,7 @@ function ActionPlanSection({ report, audience, projectName }: { report: ProjectR
                     <button
                       type="button"
                       onClick={() => handleDismiss(action)}
-                      className="rounded-md border border-strong/60 bg-bg-elevated/50 px-2.5 py-1 text-[11px] font-medium text-neutral hover:border-mono-600 hover:bg-mono-800/70 hover:text-heading"
+                      className="rounded-md border border-default bg-bg-elevated/50 px-2.5 py-1 text-[11px] font-medium text-neutral hover:border-mono-600 hover:bg-mono-800/70 hover:text-heading"
                       title="Stop showing this recommendation. The page-detection logic relies on GSC/GA syncs that lag by days — if you've already addressed it, dismissing keeps the report current."
                     >
                       Mark addressed

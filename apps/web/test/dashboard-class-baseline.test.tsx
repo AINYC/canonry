@@ -1,11 +1,13 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { readFileSync, readdirSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 
 import { beforeAll, expect, test } from 'vitest'
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { compile } from 'tailwindcss'
+import ts from 'typescript'
 
 import { DashboardProvider } from '../src/contexts/dashboard-context.js'
 import { createDashboardFixture } from '../src/mock-data.js'
@@ -13,7 +15,8 @@ import { createAppRouter } from '../src/router/router.js'
 import { preloadAllLazyRoutes } from '../src/router/routes.js'
 
 const stylesPath = resolve(import.meta.dirname, '../src/styles.css')
-const backlinksSectionPath = resolve(import.meta.dirname, '../src/components/project/BacklinksSection.tsx')
+const sourceRoot = resolve(import.meta.dirname, '../src')
+const tailwindRoot = resolve(import.meta.dirname, '../node_modules/tailwindcss')
 
 beforeAll(async () => {
   await preloadAllLazyRoutes()
@@ -98,10 +101,111 @@ test('project route keeps the core metric and evidence class baseline stable', a
   `)
 })
 
-test('backlinks gauge-row class retains its responsive metric-grid layout', () => {
-  const styles = readFileSync(stylesPath, 'utf8')
-  const backlinksSection = readFileSync(backlinksSectionPath, 'utf8')
+function sourceFiles(path: string): string[] {
+  return readdirSync(path, { withFileTypes: true }).flatMap((entry) => {
+    const child = join(path, entry.name)
+    return entry.isDirectory()
+      ? sourceFiles(child)
+      : /\.[jt]sx?$/.test(entry.name) ? [child] : []
+  })
+}
 
-  expect(backlinksSection).toContain('className="gauge-row"')
-  expect(styles).toMatch(/\.gauge-row\s*\{\s*@apply grid gap-3 sm:grid-cols-2 lg:grid-cols-5;/)
+function staticClassNames() {
+  const classes = new Set<string>()
+
+  const add = (value: string) => {
+    for (const token of value.split(/\s+/)) if (token) classes.add(token)
+  }
+  const addChunk = (value: string, startsAtBoundary: boolean, endsAtBoundary: boolean) => {
+    for (const match of value.matchAll(/\S+/g)) {
+      const start = match.index ?? 0
+      const end = start + match[0].length
+      if ((start > 0 || startsAtBoundary) && (end < value.length || endsAtBoundary)) add(match[0])
+    }
+  }
+  const collect = (expression: ts.Expression): void => {
+    if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+      add(expression.text)
+    } else if (ts.isTemplateExpression(expression)) {
+      addChunk(expression.head.text, true, false)
+      expression.templateSpans.forEach((span, index) => {
+        const previous = index === 0 ? expression.head.text : expression.templateSpans[index - 1].literal.text
+        const next = span.literal.text
+        if ((previous.length === 0 || /\s$/.test(previous)) && (next.length === 0 || /^\s/.test(next))) {
+          collect(span.expression)
+        }
+        addChunk(span.literal.text, false, index === expression.templateSpans.length - 1)
+      })
+    } else if (ts.isConditionalExpression(expression)) {
+      collect(expression.whenTrue)
+      collect(expression.whenFalse)
+    } else if (ts.isArrayLiteralExpression(expression)) {
+      expression.elements.forEach((element) => {
+        if (!ts.isSpreadElement(element)) collect(element)
+      })
+    } else if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression)
+      || ts.isTypeAssertionExpression(expression) || ts.isNonNullExpression(expression)
+      || ts.isSatisfiesExpression(expression)) {
+      collect(expression.expression)
+    } else if (ts.isBinaryExpression(expression)
+      && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(expression.operatorToken.kind)) {
+      collect(expression.right)
+    } else if (ts.isCallExpression(expression)) {
+      expression.arguments.forEach((argument) => collect(argument))
+    }
+  }
+  const visit = (node: ts.Node): void => {
+    if (ts.isJsxAttribute(node) && node.name.text === 'className') {
+      if (node.initializer && ts.isStringLiteral(node.initializer)) add(node.initializer.text)
+      if (node.initializer && ts.isJsxExpression(node.initializer) && node.initializer.expression) collect(node.initializer.expression)
+    } else if (ts.isPropertyAssignment(node)) {
+      const name = ts.isComputedPropertyName(node.name) ? node.name.expression : node.name
+      if ((ts.isIdentifier(name) || ts.isStringLiteral(name)) && name.text === 'className') collect(node.initializer)
+    }
+    ts.forEachChild(node, visit)
+  }
+
+  for (const file of sourceFiles(sourceRoot)) {
+    const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : file.endsWith('.jsx') ? ts.ScriptKind.JSX : ts.ScriptKind.TS
+    visit(ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, kind))
+  }
+  return [...classes]
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function cssClassSelector(token: string) {
+  const escaped = token.replace(/(^-?\d)|[^\w-]/g, (character, leadingDigit) => (
+    leadingDigit ? `\\${character.codePointAt(0)?.toString(16)} ` : `\\${character}`
+  ))
+  return new RegExp(`\\.${escapeRegExp(escaped)}(?=$|[\\s,.:#>+~{}\\[\\]])`)
+}
+
+function isTailwindMarker(token: string) {
+  return token === 'group' || token.startsWith('group/') || token === 'peer' || token.startsWith('peer/')
+}
+
+async function loadTailwindStylesheet(id: string) {
+  if (id !== 'tailwindcss' && !id.startsWith('tailwindcss/')) {
+    throw new Error(`Unexpected stylesheet import: ${id}`)
+  }
+  const filename = id === 'tailwindcss' ? 'index.css' : `${id.slice('tailwindcss/'.length)}.css`
+  const path = resolve(tailwindRoot, filename)
+  return { path, base: dirname(path), content: readFileSync(path, 'utf8') }
+}
+
+test('every static className token has a stylesheet selector or Tailwind utility', async () => {
+  const styles = readFileSync(stylesPath, 'utf8')
+  const classNames = staticClassNames().sort()
+  const compiler = await compile(styles, {
+    from: stylesPath,
+    base: dirname(stylesPath),
+    loadStylesheet: loadTailwindStylesheet,
+  })
+  const css = compiler.build(classNames)
+  const missing = classNames.filter((token) => !isTailwindMarker(token) && !cssClassSelector(token).test(css))
+
+  expect(missing).toEqual([])
 })

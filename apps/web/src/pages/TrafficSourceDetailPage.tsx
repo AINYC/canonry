@@ -392,7 +392,7 @@ export function TrafficSourceDetailPage() {
       </section>
 
       <section>
-        <p className="eyebrow eyebrow-soft mb-4">Latest sync run</p>
+        <p className="eyebrow mb-4">Latest sync run</p>
         {detail.latestRun ? (
           <Card className="p-4 text-sm">
             <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5">

@@ -864,7 +864,7 @@ export function RootLayout() {
             <span className="text-faint">{selectedRun.triggerLabel}</span>
           </div>
           {selectedRun.status === 'failed' && selectedRun.statusDetail && (
-            <p className="text-sm text-negative/80 mt-2">{selectedRun.statusDetail}</p>
+            <p className="mt-2 text-sm text-negative">{selectedRun.statusDetail}</p>
           )}
 
           {/* Run activity log */}
@@ -950,7 +950,7 @@ export function RootLayout() {
             ) : runDetail && runDetail.error ? (
               <div className="rounded-lg border border-negative-800/40 bg-negative-950/20 p-3">
                 <p className="text-sm font-medium text-negative mb-2">Run failed</p>
-                <pre className="text-xs text-negative/80 whitespace-pre-wrap break-words max-h-48 overflow-y-auto font-mono leading-5">{formatErrorLog(runDetail.error)}</pre>
+                <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-negative">{formatErrorLog(runDetail.error)}</pre>
               </div>
             ) : (
               <p className="text-sm text-muted">No snapshot data available.</p>

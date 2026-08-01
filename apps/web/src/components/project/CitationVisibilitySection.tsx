@@ -262,7 +262,7 @@ function describeIndicator(provider: CitationCoverageProvider): string {
 
 function IndicatorDot({ active, tone }: { active: boolean; tone: 'cited' | 'mentioned' }) {
   if (!active) {
-    return <span className="inline-block h-2 w-2 rounded-full border border-strong/80 bg-transparent" aria-hidden="true" />
+    return <span className="inline-block h-2 w-2 rounded-full border border-strong bg-transparent" aria-hidden="true" />
   }
   const className = tone === 'cited'
     ? 'inline-block h-2 w-2 rounded-full bg-positive-400 shadow-[0_0_0_1px_rgba(16,185,129,0.25)]'

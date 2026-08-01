@@ -441,7 +441,7 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
               onClick={() => pickSource(s.source)}
               className={`inline-flex items-center gap-2 border-b-2 px-3 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-mono-500 ${
                 active
-                  ? 'border-mono-300 text-heading'
+                  ? 'border-accent text-heading'
                   : 'border-transparent text-secondary hover:border-mono-600 hover:text-strong'
               }`}
             >

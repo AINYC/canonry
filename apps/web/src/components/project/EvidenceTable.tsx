@@ -365,7 +365,7 @@ export function EvidenceTable({
               return (
                 <Fragment key={groupKey}>
                   <tr
-                    className="evidence-phrase-row cursor-pointer hover:bg-mono-800/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
+                    className="cursor-pointer hover:bg-mono-800/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
                     onClick={() => toggleRow(groupKey)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {

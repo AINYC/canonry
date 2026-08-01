@@ -90,7 +90,7 @@ function SetupStepIndicator({ current, labels }: { current: number; labels: read
         return (
           <div key={s.label} className={`setup-step ${done ? 'setup-step-done' : ''} ${active ? 'setup-step-active' : ''}`} role="listitem" aria-current={active ? 'step' : undefined}>
             <span className="setup-step-number">{done ? '\u2713' : i + 1}</span>
-            <span className="setup-step-label">{s.label}</span>
+            <span>{s.label}</span>
           </div>
         )
       })}

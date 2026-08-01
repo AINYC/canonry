@@ -540,7 +540,7 @@ function BingSection({
                     </thead>
                     <tbody>
                       {coverage.notIndexed.map((row) => (
-                        <tr key={row.id} className="border-b border-base/50">
+                        <tr key={row.id} className="border-b border-subtle">
                           <td className="py-1.5 px-3 text-neutral truncate max-w-[480px]">{row.url}</td>
                           <td className="py-1.5 px-3 text-secondary">{row.httpCode ?? '\u2014'}</td>
                           {!isEmbed() && (
@@ -583,7 +583,7 @@ function BingSection({
                     </thead>
                     <tbody>
                       {(coverage.unknown ?? []).map((row) => (
-                        <tr key={row.id} className="border-b border-base/50">
+                        <tr key={row.id} className="border-b border-subtle">
                           <td className="py-1.5 px-3 text-neutral truncate max-w-[480px]">{row.url}</td>
                           <td className="py-1.5 px-3 text-secondary">{row.lastCrawledDate ? formatTimestamp(row.lastCrawledDate) : '\u2014'}</td>
                           {!isEmbed() && (
@@ -618,7 +618,7 @@ function BingSection({
                     </thead>
                     <tbody>
                       {coverage.indexed.map((row) => (
-                        <tr key={row.id} className="border-b border-base/50">
+                        <tr key={row.id} className="border-b border-subtle">
                           <td className="py-1.5 px-3 text-neutral truncate max-w-[480px]">{row.url}</td>
                           <td className="py-1.5 px-3 text-secondary">{row.lastCrawledDate ? formatTimestamp(row.lastCrawledDate) : '\u2014'}</td>
                         </tr>
@@ -679,7 +679,7 @@ function BingSection({
                   </thead>
                   <tbody>
                     {inspections.map((row) => (
-                      <tr key={row.id} className="border-b border-base/50">
+                      <tr key={row.id} className="border-b border-subtle">
                         <td className="py-1.5 px-3 text-neutral truncate max-w-[480px]">{row.url}</td>
                         <td className="py-1.5 px-3">
                           <ToneBadge tone={row.inIndex ? 'positive' : 'negative'}>{row.inIndex ? 'Yes' : 'No'}</ToneBadge>
@@ -713,7 +713,7 @@ function BingSection({
                   </thead>
                   <tbody>
                     {performance.map((row, i) => (
-                      <tr key={i} className="border-b border-base/50">
+                      <tr key={i} className="border-b border-subtle">
                         <td className="py-1.5 px-3 text-neutral truncate max-w-[480px]">{row.query}</td>
                         <td className="py-1.5 px-3 text-right text-strong">{row.clicks}</td>
                         <td className="py-1.5 px-3 text-right text-secondary">{row.impressions}</td>

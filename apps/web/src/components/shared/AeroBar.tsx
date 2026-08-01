@@ -1106,7 +1106,7 @@ function formatJsonPreview(value: unknown): string {
  */
 function AeroMarkdown({ content }: { content: string }) {
   return (
-    <div className="aero-markdown text-heading">
+    <div className="text-heading">
       <ReactMarkdown
         components={{
           h1: (props) => <h1 {...props} className="mt-3 mb-2 text-base font-semibold text-primary" />,
