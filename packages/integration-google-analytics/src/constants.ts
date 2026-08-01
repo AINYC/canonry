@@ -57,9 +57,11 @@ export const GA4_METRICS = {
   /** Share of sessions that were engaged. A real GA4 metric — request it directly. */
   engagementRate: 'engagementRate',
   /**
-   * First-time users. GA4 has NO `returningUsers` metric: returning users are
-   * derived as `totalUsers - newUsers` on a report whose only dimension is
-   * `date`, where GA4 has already deduplicated both counts inside the day.
+   * First-time users, a real GA4 metric requested directly.
+   *
+   * Not an input to a returning-users figure: a visitor can be first-seen and
+   * return inside the same range, so subtracting this from totalUsers does not
+   * reconstruct one.
    */
   newUsers: 'newUsers',
 } as const

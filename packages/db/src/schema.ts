@@ -583,11 +583,13 @@ export const gaDailyTotals = sqliteTable('ga_daily_totals', {
    */
   engagementRate: real('engagement_rate'),
   /**
-   * GA4's `newUsers` for the day. Returning users are DERIVED from it as
-   * `users - newUsers` rather than stored: GA4 has no `returningUsers` metric,
-   * and because this report carries `date` as its only dimension GA4 has
-   * already deduplicated both counts inside the day, so the subtraction is
-   * exact at this grain. Nullable for the same reason as `engagementRate`.
+   * GA4's `newUsers` for the day. Nullable: rows written before this column
+   * existed have no reading, and a 0 would read as a real "no new users" day.
+   *
+   * Stored on its own merit. It is NOT an input to a returning-users figure:
+   * a visitor can be first-seen and return inside the same range, so
+   * `users - newUsers` does not reconstruct one. That needs the
+   * `newVsReturning` dimension.
    */
   newUsers: integer('new_users'),
   syncedAt: text('synced_at').notNull(),

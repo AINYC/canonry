@@ -2573,20 +2573,17 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
     ],
   },
   {
-    // GA4 engagement + returning users on the property-level daily series.
+    // GA4 engagement metrics on the property-level daily series.
     //
-    // `engagement_rate` is a real GA4 metric and is requested directly.
-    // `new_users` is stored because GA4 has NO `returningUsers` metric —
-    // returning users are derived as `users - new_users`, which is exact here
-    // because the daily-totals report carries `date` as its ONLY dimension, so
-    // GA4 has already deduplicated both counts inside the day. The alternative
-    // (a `newVsReturning` dimension) would multiply this table's rows and break
-    // the unique (project_id, date) grain the table exists to hold.
+    // `engagement_rate` and `new_users` are both real GA4 metrics, requested
+    // directly. No returning-users column: GA4 exposes no such metric, and
+    // `users - new_users` does not reconstruct one because a visitor can be
+    // first-seen AND return inside the same range. That needs the
+    // `newVsReturning` dimension, which changes the row shape of the sync.
     //
     // Both columns are NULLABLE with no default. Every row written before this
-    // migration has no reading for them, and NOT NULL DEFAULT 0 would turn that
-    // absence into a real "0% engaged, 0 returning users" day — a flat zero
-    // line across the entire pre-migration period on any client report.
+    // migration has no reading, and NOT NULL DEFAULT 0 would turn that absence
+    // into a real "0% engaged" day.
     version: 116,
     name: 'ga-daily-totals-engagement',
     statements: [

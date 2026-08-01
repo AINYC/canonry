@@ -18,7 +18,6 @@ import {
   hostMatchesAnyDomain,
   normalizeUrlPath,
   validationError,
-  deriveReturningUsers,
 } from '@ainyc/canonry-contracts'
 import type {
   GaMeasurementAnalysisDto,
@@ -137,9 +136,6 @@ function engagementPeriods(periods: Period[], rows: EngagementRow[]) {
     const splitDays = inPeriod.filter(row => row.newUsers !== null)
     const dailyTotalUsers = splitDays.reduce((sum, row) => sum + row.users, 0)
     const dailyNewUsers = splitDays.reduce((sum, row) => sum + row.newUsers!, 0)
-    // One shared formula with the GA4 client. Two copies of a subtraction plus
-    // a clamp drift the moment one side changes.
-    const dailyReturningUsers = deriveReturningUsers(dailyTotalUsers, dailyNewUsers) ?? 0
 
     return {
       ...period,
@@ -149,11 +145,7 @@ function engagementPeriods(periods: Period[], rows: EngagementRow[]) {
       engagementRate: rateDays.length > 0 && weight > 0 ? weighted / weight : null,
       dailyTotalUsers: splitDays.length > 0 ? dailyTotalUsers : null,
       dailyNewUsers: splitDays.length > 0 ? dailyNewUsers : null,
-      dailyReturningUsers: splitDays.length > 0 ? dailyReturningUsers : null,
       // Null on a zero denominator too: a share of no users is not 0%.
-      returningUserShare: splitDays.length > 0 && dailyTotalUsers > 0
-        ? dailyReturningUsers / dailyTotalUsers
-        : null,
       metricsAvailable: rateDays.length > 0 || splitDays.length > 0,
       daysInPeriod: inPeriod.length,
       daysWithEngagementRate: rateDays.length,

@@ -419,27 +419,6 @@ export function compactDateToIso(value: string): string {
 }
 
 /**
- * Derive returning users from GA4's `totalUsers` and `newUsers`.
- *
- * GA4 exposes no `returningUsers` metric. The two ways to get it are this
- * subtraction, or adding the `newVsReturning` dimension (which multiplies the
- * row count of the whole report and changes every existing aggregate). We take
- * the subtraction, and it is EXACT at date-only grain because GA has already
- * deduplicated both counts inside the day.
- *
- * The clamp is not cosmetic: `totalUsers` and `newUsers` are estimated
- * independently, so a sparse day can report more new users than total users and
- * a bare subtraction would emit a negative count.
- *
- * This lives here because it is derived in two places (the GA4 client's daily
- * row and the measurement-analysis read) and two copies of one formula drift.
- */
-export function deriveReturningUsers(totalUsers: number, newUsers: number | null): number | null {
-  if (newUsers === null) return null
-  return Math.max(0, totalUsers - newUsers)
-}
-
-/**
  * Parse a GA4 rate metric that the contract bounds to 0..1.
  *
  * `parseOptionalMetric` accepts any finite number, so an out-of-range value

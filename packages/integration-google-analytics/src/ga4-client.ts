@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { AI_ENGINE_DOMAINS, classifyAiReferralTrafficClass, compactDateToIso, deriveReturningUsers, parseBoundedRate, withRetry } from '@ainyc/canonry-contracts'
+import { AI_ENGINE_DOMAINS, classifyAiReferralTrafficClass, compactDateToIso, parseBoundedRate, withRetry } from '@ainyc/canonry-contracts'
 import {
   GA4_DATA_API_BASE,
   GA4_SCOPE,
@@ -762,22 +762,6 @@ export interface GA4DailyTotalRow {
   engagementRate: number | null
   /** GA4's `newUsers` for the day. `null` when the response omitted it. */
   newUsers: number | null
-  /**
-   * Returning users for the day, derived as `totalUsers - newUsers`.
-   *
-   * GA4 exposes no `returningUsers` metric. The alternative is the
-   * `newVsReturning` dimension, which multiplies the row count of the whole
-   * sync and breaks this report's date-only grain. Because the report carries
-   * `date` as its ONLY dimension, GA4 has already deduplicated `totalUsers`
-   * and `newUsers` inside the day and every user in that day is either new or
-   * returning, so the subtraction is exact at this grain (it is only a sum
-   * ACROSS dimension combinations that is unsafe for user counts).
-   *
-   * `null` when `newUsers` is unavailable. Floored at 0: GA4 estimates the two
-   * counts independently and can report `newUsers > totalUsers` on a
-   * low-volume day, which is not a negative population.
-   */
-  returningUsers: number | null
 }
 
 /**
@@ -849,7 +833,6 @@ export async function fetchDailyTotals(
       users,
       engagementRate: parseBoundedRate(parseOptionalMetric(row.metricValues[2]?.value)),
       newUsers,
-      returningUsers: deriveReturningUsers(users, newUsers),
     }
   }).filter((row) => row.date.length > 0)
 

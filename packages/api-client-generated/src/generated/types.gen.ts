@@ -2072,8 +2072,6 @@ export type Ga4MeasurementAnalysisDto = {
             engagementRate: number | null;
             dailyTotalUsers: number | null;
             dailyNewUsers: number | null;
-            dailyReturningUsers: number | null;
-            returningUserShare: number | null;
             metricsAvailable: boolean;
             daysInPeriod: number;
             daysWithEngagementRate: number;
@@ -2936,8 +2934,6 @@ export type OrganicEvidenceDto = {
                 engagementRate: number | null;
                 dailyTotalUsers: number | null;
                 dailyNewUsers: number | null;
-                dailyReturningUsers: number | null;
-                returningUserShare: number | null;
                 metricsAvailable: boolean;
                 daysInPeriod: number;
                 daysWithEngagementRate: number;

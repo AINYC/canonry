@@ -118,12 +118,17 @@ const analysisDemandPeriodSchema = analysisPeriodSchema.extend({
  * versus a real measured value that happens to be 0. A client report must
  * render the absent case as "not measured", never as a zero.
  *
- * `dailyTotalUsers` / `dailyNewUsers` / `dailyReturningUsers` are named for
- * what they are: sums of per-day, GA4-deduplicated counts. A visitor who
- * returns on three days contributes to three of them, so these are NOT
- * period-unique user counts and must never be labelled as such.
- * `returningUserShare` is the ratio of the two sums, which IS meaningful at
- * that grain since both sides count the same way.
+ * `dailyTotalUsers` / `dailyNewUsers` are named for what they are: sums of
+ * per-day, GA4-deduplicated counts. A visitor who returns on three days
+ * contributes to three of them, so these are NOT period-unique user counts and
+ * must never be labelled as such.
+ *
+ * There is deliberately no returning-users figure here. GA4 exposes no such
+ * metric, and `totalUsers - newUsers` does not reconstruct one: a visitor can
+ * be first-seen AND return inside the same range, so they are counted on both
+ * sides and the subtraction understates the result. The only correct source is
+ * the `newVsReturning` dimension, which changes the row shape of the whole sync
+ * and belongs in its own change.
  */
 const analysisEngagementPeriodSchema = analysisPeriodSchema.extend({
   /** Sessions over the bucket. Additive, so this is a plain sum. */
@@ -137,9 +142,6 @@ const analysisEngagementPeriodSchema = analysisPeriodSchema.extend({
   engagementRate: z.number().min(0).max(1).nullable(),
   dailyTotalUsers: z.number().int().nonnegative().nullable(),
   dailyNewUsers: z.number().int().nonnegative().nullable(),
-  /** Derived as `dailyTotalUsers - dailyNewUsers`; GA4 has no such metric. */
-  dailyReturningUsers: z.number().int().nonnegative().nullable(),
-  returningUserShare: z.number().min(0).max(1).nullable(),
   /** False when the bucket has no engagement reading at all. */
   metricsAvailable: z.boolean(),
   daysInPeriod: z.number().int().nonnegative(),

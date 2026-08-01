@@ -3,22 +3,16 @@ import { fetchDailyTotals } from '../src/ga4-client.js'
 import { GA4_METRICS } from '../src/constants.js'
 
 /**
- * `engagementRate` and returning users on the property-level daily series.
+ * Engagement metrics on the property-level daily series.
  *
- * The daily-totals report carries `date` as its ONLY dimension, so GA4
- * deduplicates every user metric inside the day. That is what makes
- * `totalUsers - newUsers` an exact returning-user count for that day rather
- * than an approximation: within one day a user is either new or returning,
- * and there is no second dimension for the counts to fan out across.
- *
- * `returningUsers` is NOT a GA4 metric. The alternative — adding the
- * `newVsReturning` dimension — would multiply the row count and break the
- * date-only grain this table exists to hold, so it is deliberately not used.
+ * No returning-users figure is derived. GA4 exposes no such metric, and
+ * subtracting newUsers from totalUsers does not reconstruct one, because a
+ * visitor can be first-seen AND return inside the same range.
  */
 
 type FetchArgs = { url: string; body: { metrics?: Array<{ name: string }> } }
 
-describe('fetchDailyTotals engagement + returning users', () => {
+describe('fetchDailyTotals engagement metrics', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>
   let calls: FetchArgs[]
 
@@ -56,41 +50,7 @@ describe('fetchDailyTotals engagement + returning users', () => {
     expect(GA4_METRICS.newUsers).toBe('newUsers')
   })
 
-  it('derives returningUsers as totalUsers minus newUsers', async () => {
-    mockReport([
-      {
-        dimensionValues: [{ value: '20260731' }],
-        metricValues: [{ value: '1420' }, { value: '500' }, { value: '0.6234' }, { value: '180' }],
-      },
-    ])
 
-    const rows = await fetchDailyTotals('fake-token', '123456', 7)
-
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({
-      date: '2026-07-31',
-      sessions: 1420,
-      users: 500,
-      engagementRate: 0.6234,
-      newUsers: 180,
-      returningUsers: 320,
-    })
-  })
-
-  it('clamps returningUsers at zero when GA4 reports more new users than total users', async () => {
-    // GA4 can report newUsers > totalUsers on a low-volume day because the two
-    // metrics are estimated independently. A negative returning-user count is
-    // never a real reading, so it floors at 0 rather than propagating.
-    mockReport([
-      {
-        dimensionValues: [{ value: '20260731' }],
-        metricValues: [{ value: '4' }, { value: '3' }, { value: '0.5' }, { value: '5' }],
-      },
-    ])
-
-    const rows = await fetchDailyTotals('fake-token', '123456', 7)
-    expect(rows[0]!.returningUsers).toBe(0)
-  })
 
   it('parses newUsers as a whole number and rejects an empty metric value', async () => {
     // Two contract details the DTO depends on. `newUsers` feeds an INTEGER
@@ -109,7 +69,6 @@ describe('fetchDailyTotals engagement + returning users', () => {
     expect(rows[0]!.engagementRate).toBeNull()
     expect(rows[0]!.newUsers).toBe(12)
     expect(Number.isInteger(rows[0]!.newUsers)).toBe(true)
-    expect(rows[0]!.returningUsers).toBe(28)
   })
 
   it('reports the new metrics as null, not zero, when GA4 omits them', async () => {
@@ -129,6 +88,5 @@ describe('fetchDailyTotals engagement + returning users', () => {
     expect(rows[0]!.users).toBe(40)
     expect(rows[0]!.engagementRate).toBeNull()
     expect(rows[0]!.newUsers).toBeNull()
-    expect(rows[0]!.returningUsers).toBeNull()
   })
 })

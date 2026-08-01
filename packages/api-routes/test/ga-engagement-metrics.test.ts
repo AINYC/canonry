@@ -105,7 +105,7 @@ async function analysis(ctx: Context, query = '?window=90d') {
   return gaMeasurementAnalysisDtoSchema.parse(JSON.parse(response.body))
 }
 
-describe('GA4 engagement + returning users', () => {
+describe('GA4 engagement metrics', () => {
   let ctx: Context
 
   beforeEach(async () => {
@@ -148,8 +148,8 @@ describe('GA4 engagement + returning users', () => {
       startDate: '2026-06-22', endDate: ANCHOR, attributionScope: 'landing-page', rows: [],
     })
     vi.spyOn(gaModule, 'fetchDailyTotals').mockResolvedValue([
-      { date: '2026-07-21', sessions: 100, users: 80, engagementRate: 0.6, newUsers: 50, returningUsers: 30 },
-      { date: ANCHOR, sessions: 300, users: 200, engagementRate: null, newUsers: null, returningUsers: null },
+      { date: '2026-07-21', sessions: 100, users: 80, engagementRate: 0.6, newUsers: 50},
+      { date: ANCHOR, sessions: 300, users: 200, engagementRate: null, newUsers: null},
     ])
 
     const response = await ctx.app.inject({
@@ -170,7 +170,7 @@ describe('GA4 engagement + returning users', () => {
     ])
   })
 
-  it('reports engagement per period with a sessions-weighted rate and a returning-user split', async () => {
+  it('reports engagement per period with a sessions-weighted rate', async () => {
     // Latest period. The weighted rate is the only correct aggregation: a rate
     // is not additive, but sessions are, and engagementRate = engagedSessions
     // / sessions, so weighting by sessions reconstructs the period rate exactly.
@@ -191,15 +191,15 @@ describe('GA4 engagement + returning users', () => {
     expect(latest.engagementRate).toBeCloseTo(0.675, 10)
     expect(latest.dailyTotalUsers).toBe(280)
     expect(latest.dailyNewUsers).toBe(170)
-    expect(latest.dailyReturningUsers).toBe(110)
-    expect(latest.returningUserShare).toBeCloseTo(110 / 280, 10)
     expect(latest.metricsAvailable).toBe(true)
     expect(latest.daysInPeriod).toBe(2)
     expect(latest.daysWithEngagementRate).toBe(2)
     expect(latest.daysWithUserSplit).toBe(2)
 
-    // The invariant the split claims: new + returning is the total.
-    expect(latest.dailyNewUsers! + latest.dailyReturningUsers!).toBe(latest.dailyTotalUsers)
+    // No returning-users invariant to assert: the figure is deliberately not
+    // derived here, because a visitor can be first-seen and return inside the
+    // same range, so new + returning does not reconcile to the total.
+    expect(latest).not.toHaveProperty('dailyReturningUsers')
   })
 
   it('marks pre-migration periods unavailable instead of reporting zero', async () => {
@@ -219,8 +219,6 @@ describe('GA4 engagement + returning users', () => {
     expect(earliest.engagementRate).toBeNull()
     expect(earliest.dailyTotalUsers).toBeNull()
     expect(earliest.dailyNewUsers).toBeNull()
-    expect(earliest.dailyReturningUsers).toBeNull()
-    expect(earliest.returningUserShare).toBeNull()
     expect(earliest.daysWithEngagementRate).toBe(0)
     expect(earliest.daysWithUserSplit).toBe(0)
 
@@ -230,7 +228,6 @@ describe('GA4 engagement + returning users', () => {
     expect(middle.daysInPeriod).toBe(0)
     expect(middle.metricsAvailable).toBe(false)
     expect(middle.engagementRate).toBeNull()
-    expect(middle.dailyReturningUsers).toBeNull()
 
     // And the DTO states the boundary outright, so a client report can label
     // the pre-migration span rather than plotting it as a zero line.
@@ -247,8 +244,6 @@ describe('GA4 engagement + returning users', () => {
     expect(latest.engagementRate).toBe(0)
     expect(latest.engagementRate).not.toBeNull()
     // Every user that day was new, so returning is a real 0 too.
-    expect(latest.dailyReturningUsers).toBe(0)
-    expect(latest.returningUserShare).toBe(0)
   })
 
   it('is unavailable, not empty-with-zeros, when the project has no daily totals', async () => {

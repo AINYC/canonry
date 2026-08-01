@@ -61,8 +61,6 @@ describe('GA measurement analysis contract', () => {
           engagementRate: 0.675,
           dailyTotalUsers: 280,
           dailyNewUsers: 170,
-          dailyReturningUsers: 110,
-          returningUserShare: 110 / 280,
           metricsAvailable: true,
           daysInPeriod: 2,
           daysWithEngagementRate: 2,
