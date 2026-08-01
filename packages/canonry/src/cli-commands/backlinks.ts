@@ -1,5 +1,4 @@
 import {
-  backlinksBingSync,
   backlinksCachePrune,
   backlinksDoctor,
   backlinksExtract,
@@ -101,22 +100,6 @@ export const BACKLINKS_CLI_COMMANDS: readonly CliCommandSpec[] = [
       await backlinksSources({
         project,
         excludeCrawlers: getBoolean(input.values, 'exclude-crawlers'),
-        format: input.format,
-      })
-    },
-  },
-  {
-    path: ['backlinks', 'bing-sync'],
-    usage: 'canonry backlinks bing-sync <project> [--wait] [--format json]',
-    options: {
-      wait: { type: 'boolean' },
-    },
-    run: async (input) => {
-      const project = requireProject(input, 'backlinks bing-sync',
-        'canonry backlinks bing-sync <project> [--wait]')
-      await backlinksBingSync({
-        project,
-        wait: getBoolean(input.values, 'wait'),
         format: input.format,
       })
     },

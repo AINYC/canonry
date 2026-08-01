@@ -15,7 +15,6 @@ import {
   runs,
 } from '@ainyc/canonry-db'
 import { backlinksRoutes, type BacklinksRoutesOptions } from '../src/backlinks.js'
-import type { BingConnectionStore } from '../src/bing.js'
 import type { BacklinkSource, BacklinkSourcesResponseDto } from '@ainyc/canonry-contracts'
 
 function buildApp(overrides: Partial<BacklinksRoutesOptions> = {}) {
@@ -91,18 +90,6 @@ function seedSourceData(
       source: opts.source, release: opts.release, targetDomain: target,
       linkingDomain: linking, numHosts: hosts, createdAt: now,
     }).run()
-  }
-}
-
-function fakeBingStore(connected: Record<string, { siteUrl?: string }>): BingConnectionStore {
-  return {
-    getConnection: (domain) =>
-      connected[domain]
-        ? { domain, apiKey: 'k', siteUrl: connected[domain].siteUrl ?? `https://${domain}/`, createdAt: 'x', updatedAt: 'x' }
-        : undefined,
-    upsertConnection: (c) => c,
-    updateConnection: () => undefined,
-    deleteConnection: () => false,
   }
 }
 
@@ -743,7 +730,7 @@ describe('Backlinks routes', () => {
   })
 
   describe('source-aware reads', () => {
-    it('summary defaults to commoncrawl and ?source=bing-webmaster returns the bing window', async () => {
+    it('summary defaults to commoncrawl and ?source=bing-webmaster reads a historical window', async () => {
       insertProject(db, 'p1', 'roots', 'roots.io')
       seedSourceData(db, { projectId: 'p1', source: 'commoncrawl', release: 'cc-main-2026-jan-feb-mar', domains: [['cc-a.com', 10]] })
       seedSourceData(db, { projectId: 'p1', source: 'bing-webmaster', release: 'bing-2026-06-15', domains: [['bing-a.com', 5], ['bing-b.com', 3]] })
@@ -842,20 +829,17 @@ describe('Backlinks routes', () => {
       expect(body.sources.find((s) => s.source === 'commoncrawl')!.connected).toBe(false)
     })
 
-    it('reports Bing connected when the connection store resolves the domain', async () => {
-      const { app: custom, db: customDb } = buildApp({ bingConnectionStore: fakeBingStore({ 'roots.io': {} }) })
-      await custom.ready()
-      insertProject(customDb, 'p1', 'roots', 'roots.io')
-      seedSourceData(customDb, { projectId: 'p1', source: 'bing-webmaster', release: 'bing-2026-06-15', domains: [['bing-a.com', 5]] })
+    it('keeps historical Bing data readable without reporting it as connected', async () => {
+      insertProject(db, 'p1', 'roots', 'roots.io')
+      seedSourceData(db, { projectId: 'p1', source: 'bing-webmaster', release: 'bing-2026-06-15', domains: [['bing-a.com', 5]] })
 
-      const res = await custom.inject({ method: 'GET', url: '/projects/roots/backlinks/sources' })
+      const res = await app.inject({ method: 'GET', url: '/projects/roots/backlinks/sources' })
       const body = res.json() as BacklinkSourcesResponseDto
       const bing = body.sources.find((s) => s.source === 'bing-webmaster')!
-      expect(bing.connected).toBe(true)
+      expect(bing.connected).toBe(false)
       expect(bing.hasData).toBe(true)
       expect(bing.lastSyncedAt).not.toBeNull()
-      expect(body.anyConnected).toBe(true)
-      await custom.close()
+      expect(body.anyConnected).toBe(false)
     })
 
     it('totalLinkingDomains is raw by default and crawler-filtered with ?excludeCrawlers=1', async () => {
@@ -876,42 +860,6 @@ describe('Backlinks routes', () => {
       const filtered = await app.inject({ method: 'GET', url: '/projects/roots/backlinks/sources?excludeCrawlers=1' })
       const ccFiltered = (filtered.json() as BacklinkSourcesResponseDto).sources.find((s) => s.source === 'commoncrawl')!
       expect(ccFiltered.totalLinkingDomains).toBe(1)
-    })
-  })
-
-  describe('POST /projects/:name/backlinks/bing-sync', () => {
-    it('422 when the sync callback is not wired (cloud)', async () => {
-      insertProject(db, 'p1', 'roots', 'roots.io')
-      const res = await app.inject({ method: 'POST', url: '/projects/roots/backlinks/bing-sync' })
-      expect(res.statusCode).toBe(422)
-      expect((res.json() as { error: { code: string } }).error.code).toBe('MISSING_DEPENDENCY')
-    })
-
-    it('400 when no Bing connection exists for the project', async () => {
-      const spy = vi.fn()
-      const { app: custom, db: customDb } = buildApp({ onBingBacklinkSyncRequested: spy, bingConnectionStore: fakeBingStore({}) })
-      await custom.ready()
-      insertProject(customDb, 'p1', 'roots', 'roots.io')
-      const res = await custom.inject({ method: 'POST', url: '/projects/roots/backlinks/bing-sync' })
-      expect(res.statusCode).toBe(400)
-      expect((res.json() as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR')
-      expect(spy).not.toHaveBeenCalled()
-      await custom.close()
-    })
-
-    it('creates a run and fires onBingBacklinkSyncRequested when connected', async () => {
-      const spy = vi.fn()
-      const { app: custom, db: customDb } = buildApp({ onBingBacklinkSyncRequested: spy, bingConnectionStore: fakeBingStore({ 'roots.io': {} }) })
-      await custom.ready()
-      insertProject(customDb, 'p1', 'roots', 'roots.io')
-      const res = await custom.inject({ method: 'POST', url: '/projects/roots/backlinks/bing-sync' })
-      expect(res.statusCode).toBe(201)
-      const body = res.json() as { id: string; projectId: string; kind: string }
-      expect(body.projectId).toBe('p1')
-      expect(spy).toHaveBeenCalledWith(body.id, 'p1')
-      const stored = customDb.select().from(runs).where(eq(runs.id, body.id)).get()
-      expect(stored).toBeDefined()
-      await custom.close()
     })
   })
 

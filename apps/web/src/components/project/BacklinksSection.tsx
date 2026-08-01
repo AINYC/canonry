@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react'
 import { summarizeRunError } from '../../lib/format-helpers.js'
 import { HelpCircle, Link2, Play, Download, Loader2, CheckCircle2 } from 'lucide-react'
 import { RunKinds } from '@ainyc/canonry-contracts'
@@ -29,7 +29,7 @@ import { asyncHandler } from '../../lib/async-handler.js'
 /**
  * The x value on the referring-domains chart is a history entry's `queriedAt` —
  * the moment the backlink sync actually ran (`deps.now().toISOString()` in
- * `commoncrawl-sync` / `bing-backlinks-sync`), not a day stamp. It is a real
+ * `commoncrawl-sync`), not a day stamp. It is a real
  * instant, so it localizes to the viewer: a sync at 2026-07-20T01:52Z reads
  * "Jul 19" in New York, the day that viewer was actually on when it ran.
  * Recharts hands its formatters the raw axis value, so the brand is restored
@@ -89,13 +89,11 @@ import { isTerminalRunStatus } from '../../lib/run-tracker-store.js'
 import {
   fetchBacklinkDomains,
   fetchBacklinkHistory,
-  fetchBacklinkSources,
   fetchBacklinkSummary,
   fetchLatestReleaseSync,
   fetchProjectRuns,
   fetchRunDetail,
   triggerBacklinkExtract,
-  triggerBingBacklinkSync,
   isEmbed,
   ApiError,
 } from '../../api.js'
@@ -104,18 +102,11 @@ import type {
   BacklinkDomainDto,
   BacklinkHistoryEntry,
   BacklinkListResponse,
-  BacklinkSource,
-  BacklinkSourcesResponseDto,
   BacklinkSummaryDto,
   CcReleaseSyncDto,
 } from '../../api.js'
 
 const PAGE_SIZE = DEFAULT_TABLE_PAGE_SIZE
-
-const SOURCE_LABELS: Record<BacklinkSource, string> = {
-  commoncrawl: 'Common Crawl',
-  'bing-webmaster': 'Bing Webmaster',
-}
 
 function publicPath(path: string): string {
   if (typeof window === 'undefined') return path
@@ -162,80 +153,50 @@ function formatElapsed(startedAt: string | null, createdAt: string): string {
 }
 
 export function BacklinksSection({ projectName }: { projectName: string }) {
-  const [sources, setSources] = useState<BacklinkSourcesResponseDto | null>(null)
-  const [selectedSource, setSelectedSource] = useState<BacklinkSource>('commoncrawl')
   const [summary, setSummary] = useState<BacklinkSummaryDto | null>(null)
   const [list, setList] = useState<BacklinkListResponse | null>(null)
   const [history, setHistory] = useState<BacklinkHistoryEntry[]>([])
   const [latestSync, setLatestSync] = useState<CcReleaseSyncDto | null>(null)
   const [activeRun, setActiveRun] = useState<ApiRun | null>(null)
-  // Which source the active/just-completed run belongs to. Bing syncs reuse the
-  // backlink-extract run kind, so the run row alone can't say — track it here so
-  // the progress banner shows the right (Bing vs Common Crawl) copy.
-  const [syncSource, setSyncSource] = useState<BacklinkSource>('commoncrawl')
   const [justCompletedRun, setJustCompletedRun] = useState<ApiRun | null>(null)
   const [now, setNow] = useState(Date.now())
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [extracting, setExtracting] = useState(false)
-  const [bingSyncing, setBingSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const lastActiveIdRef = useRef<string | null>(null)
-  const userPickedSourceRef = useRef(false)
 
   const loadData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [avail, sync, sum, rows, hist, runs] = await Promise.all([
-        fetchBacklinkSources(projectName, { excludeCrawlers: true }).catch(() => null),
+      const [sync, sum, rows, hist, runs] = await Promise.all([
         fetchLatestReleaseSync().catch(() => null),
-        fetchBacklinkSummary(projectName, { excludeCrawlers: true, source: selectedSource }).catch(() => null),
+        fetchBacklinkSummary(projectName, { excludeCrawlers: true }).catch(() => null),
         fetchBacklinkDomains(projectName, {
           limit: PAGE_SIZE,
           offset,
           excludeCrawlers: true,
-          source: selectedSource,
         }).catch((err: unknown) => {
           if (err instanceof ApiError && err.code === 'NOT_FOUND') return null
           throw err
         }),
-        fetchBacklinkHistory(projectName, { source: selectedSource }).catch(() => [] as BacklinkHistoryEntry[]),
+        fetchBacklinkHistory(projectName).catch(() => [] as BacklinkHistoryEntry[]),
         fetchProjectRuns(projectName).catch(() => [] as ApiRun[]),
       ])
-      setSources(avail)
       setLatestSync(sync)
       setSummary(sum)
       setList(rows)
       setHistory(hist)
       const active = findActiveExtractRun(runs)
       setActiveRun(active)
-      lastActiveIdRef.current = active?.id ?? null
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load backlinks')
     } finally {
       setLoading(false)
     }
-  }, [projectName, offset, selectedSource])
+  }, [projectName, offset])
 
   useEffect(() => { void loadData() }, [loadData])
-
-  // Auto-select a sensible default source once availability loads — prefer a
-  // source that actually has data, else a connected one, else leave it on
-  // Common Crawl. Runs only until the operator picks a source themselves.
-  useEffect(() => {
-    if (!sources || userPickedSourceRef.current) return
-    const withData = sources.sources.find((s) => s.hasData)
-    const connected = sources.sources.find((s) => s.connected)
-    const next = withData?.source ?? connected?.source
-    if (next && next !== selectedSource) setSelectedSource(next)
-  }, [sources, selectedSource])
-
-  function pickSource(source: BacklinkSource) {
-    userPickedSourceRef.current = true
-    setOffset(0)
-    setSelectedSource(source)
-  }
 
   // Poll the active extract run until it reaches a terminal state.
   useEffect(() => {
@@ -283,9 +244,7 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
     setError(null)
     try {
       const run = await triggerBacklinkExtract(projectName)
-      setSyncSource('commoncrawl')
       setActiveRun(run)
-      lastActiveIdRef.current = run.id
     } catch (err) {
       if (err instanceof ApiError && err.code === 'MISSING_DEPENDENCY') {
         setError('DuckDB is not installed. Visit the Backlinks admin page to install it.')
@@ -294,23 +253,6 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
       }
     } finally {
       setExtracting(false)
-    }
-  }
-
-  async function handleBingSync() {
-    setBingSyncing(true)
-    setError(null)
-    try {
-      const run = await triggerBingBacklinkSync(projectName)
-      // Bing sync runs reuse the backlink-extract kind, so the existing
-      // active-run poller picks them up and refreshes the table on completion.
-      setSyncSource('bing-webmaster')
-      setActiveRun(run)
-      lastActiveIdRef.current = run.id
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to trigger Bing sync')
-    } finally {
-      setBingSyncing(false)
     }
   }
 
@@ -354,7 +296,7 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <p className="text-sm font-medium text-heading">
-                  {syncSource === 'bing-webmaster' ? 'Bing sync running' : 'Extract running'}
+                  Extract running
                 </p>
                 <ToneBadge tone="neutral">{activeRun.status}</ToneBadge>
                 <span className="text-sm text-secondary tabular-nums">
@@ -362,14 +304,7 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
                 </span>
                 <span className="sr-only">now={now}</span>
               </div>
-              {syncSource === 'bing-webmaster' ? (
-                <p className="text-sm text-secondary mt-1">
-                  Pulling inbound links live from Bing Webmaster for{' '}
-                  <span className="text-neutral">{projectName}</span>. Time depends on how many pages link to your site.
-                </p>
-              ) : (
-                <p className="text-sm text-secondary mt-1">Refreshing this project from the current Common Crawl release.</p>
-              )}
+              <p className="text-sm text-secondary mt-1">Refreshing this project from the current Common Crawl release.</p>
             </div>
           </div>
         </Card>
@@ -384,18 +319,12 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
             )}
             <div className="flex-1">
               <p className={`text-sm font-medium ${justCompletedRun.status === 'failed' ? 'text-negative' : 'text-positive'}`}>
-                {syncSource === 'bing-webmaster'
-                  ? (justCompletedRun.status === 'failed' ? 'Bing sync failed' : 'Bing sync complete')
-                  : (justCompletedRun.status === 'failed' ? 'Extract failed' : 'Extract complete')}
+                {justCompletedRun.status === 'failed' ? 'Extract failed' : 'Extract complete'}
               </p>
               {justCompletedRun.error
                 ? <p className="text-sm text-secondary mt-1">{summarizeRunError(justCompletedRun.error)}</p>
                 : justCompletedRun.status !== 'failed'
-                  ? <p className="text-sm text-secondary mt-1">
-                      {syncSource === 'bing-webmaster'
-                        ? 'Inbound links refreshed live from Bing Webmaster.'
-                        : 'Backlinks refreshed from the cached release.'}
-                    </p>
+                  ? <p className="text-sm text-secondary mt-1">Backlinks refreshed from the cached release.</p>
                   : null}
             </div>
           </div>
@@ -407,192 +336,14 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
   )
 
   function renderBody() {
-    if (loading || !sources) {
+    if (loading) {
       return (
         <Card className="surface-card p-6">
           <p className="text-sm text-muted">Loading backlinks…</p>
         </Card>
       )
     }
-    // Neither source set up → the instructive onboarding state.
-    if (!sources.anyConnected && !sources.anyData) {
-      return renderOnboarding()
-    }
-    return (
-      <>
-        {renderSourceSwitcher(sources)}
-        {selectedSource === 'bing-webmaster' ? renderBingBody() : renderCommonCrawlBody()}
-      </>
-    )
-  }
-
-  function renderSourceSwitcher(avail: BacklinkSourcesResponseDto) {
-    return (
-      <div className="flex items-center gap-2 mb-4 flex-wrap" role="tablist" aria-label="Backlink source">
-        {avail.sources.map((s) => {
-          const active = s.source === selectedSource
-          const dot = s.hasData ? 'bg-positive-500' : s.connected ? 'bg-caution-500' : 'bg-mono-600'
-          return (
-            <button
-              key={s.source}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => pickSource(s.source)}
-              className={`inline-flex items-center gap-2 border-b-2 px-3 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-mono-500 ${
-                active
-                  ? 'border-accent text-heading'
-                  : 'border-transparent text-secondary hover:border-mono-600 hover:text-strong'
-              }`}
-            >
-              <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden />
-              {SOURCE_LABELS[s.source]}
-              {s.hasData && <span className="text-muted tabular-nums">{formatNumber(s.totalLinkingDomains)}</span>}
-            </button>
-          )
-        })}
-      </div>
-    )
-  }
-
-  function renderOnboarding() {
-    return (
-      <Card className="surface-card p-6">
-        <div className="flex items-start gap-4">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-bg-elevated text-secondary">
-            <Link2 className="h-5 w-5" aria-hidden />
-          </div>
-          <div className="flex-1">
-            <h3 className="text-base font-semibold text-heading">No backlink source set up yet</h3>
-            <p className="text-sm text-muted mt-1 max-w-2xl">
-              Connect at least one source to see which domains link to{' '}
-              <code className="text-neutral">{projectName}</code>:
-            </p>
-            <ul className="mt-3 space-y-2 text-sm text-secondary">
-              <li>
-                <span className="text-strong">Common Crawl</span> — free public hyperlink graph, refreshes ~monthly.
-                Enable backlinks and run a workspace release sync.
-              </li>
-              <li>
-                <span className="text-strong">Bing Webmaster</span> — live inbound links from your verified site.
-                Connect a Bing Webmaster account, then sync.
-              </li>
-            </ul>
-            {!isEmbed() && (
-              <>
-                <div className="mt-4 flex items-center gap-3 flex-wrap">
-                  <Button asChild type="button" size="sm">
-                    <a href={publicPath('/backlinks')}>Set up Common Crawl</a>
-                  </Button>
-                </div>
-                <p className="mt-3 text-xs text-muted">
-                  Connect Bing with{' '}
-                  <code className="text-secondary">canonry bing connect {projectName} --api-key &lt;key&gt;</code>.
-                </p>
-              </>
-            )}
-          </div>
-        </div>
-      </Card>
-    )
-  }
-
-  function renderBingBody() {
-    const bing = sources?.sources.find((s) => s.source === 'bing-webmaster')
-    const connected = bing?.connected ?? false
-    // `bing.hasData` is true once any sync has stored a summary; `summary` here is
-    // crawler-filtered, so its count can be 0 even after a successful sync. Tell
-    // those apart so an all-crawler window doesn't show the "run a sync" prompt.
-    const everSynced = bing?.hasData ?? false
-    const hasData = summary !== null && summary.totalLinkingDomains > 0
-
-    if (!hasData) {
-      return (
-        <Card className="surface-card p-6">
-          <div className="flex items-start gap-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-bg-elevated text-secondary">
-              <Link2 className="h-5 w-5" aria-hidden />
-            </div>
-            <div className="flex-1">
-              {connected && everSynced ? (
-                hiddenCount > 0 ? (
-                  <>
-                    <h3 className="text-base font-semibold text-heading">No non-crawler referring domains</h3>
-                    <p className="text-sm text-muted mt-1">
-                      Bing Webmaster synced for <code className="text-neutral">{projectName}</code>, but {formatNumber(hiddenCount)} crawler/proxy referring domain{hiddenCount === 1 ? '' : 's'} are excluded. Re-sync to check for new links.
-                    </p>
-                    {!isEmbed() && (
-                      <div className="mt-4">
-                        <Button type="button" variant="outline" size="sm" disabled={bingSyncing || activeRun !== null} onClick={asyncHandler(handleBingSync)}>
-                          <Download className="h-4 w-4 mr-1.5" aria-hidden />
-                          {activeRun ? 'Sync running…' : bingSyncing ? 'Queuing…' : 'Re-sync Bing inbound links'}
-                        </Button>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <h3 className="text-base font-semibold text-heading">No Bing inbound links returned</h3>
-                    <p className="text-sm text-muted mt-1">
-                      Bing Webmaster synced for <code className="text-neutral">{projectName}</code>, but the Bing
-                      backlink API returned <span className="text-neutral">0 inbound-link rows</span> in the latest
-                      window. There were no referring domains to filter.
-                    </p>
-                    <p className="text-xs text-muted mt-2">
-                      Re-sync later or compare against the Bing Webmaster Tools backlink export for this verified site.
-                    </p>
-                    {!isEmbed() && (
-                      <div className="mt-4">
-                        <Button type="button" variant="outline" size="sm" disabled={bingSyncing || activeRun !== null} onClick={asyncHandler(handleBingSync)}>
-                          <Download className="h-4 w-4 mr-1.5" aria-hidden />
-                          {activeRun ? 'Sync running…' : bingSyncing ? 'Queuing…' : 'Re-sync Bing inbound links'}
-                        </Button>
-                      </div>
-                    )}
-                  </>
-                )
-              ) : connected ? (
-                <>
-                  <h3 className="text-base font-semibold text-heading">No Bing inbound links yet</h3>
-                  <p className="text-sm text-muted mt-1">
-                    Bing Webmaster is connected for <code className="text-neutral">{projectName}</code> but no inbound
-                    links have been synced yet. Run a sync to pull them live from your account.
-                  </p>
-                  {!isEmbed() && (
-                    <div className="mt-4">
-                      <Button type="button" size="sm" disabled={bingSyncing || activeRun !== null} onClick={asyncHandler(handleBingSync)}>
-                        <Play className="h-4 w-4 mr-1.5" aria-hidden />
-                        {activeRun ? 'Sync running…' : bingSyncing ? 'Queuing…' : 'Sync Bing inbound links'}
-                      </Button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <h3 className="text-base font-semibold text-heading">Bing Webmaster not connected</h3>
-                  <p className="text-sm text-muted mt-1">
-                    Connect a Bing Webmaster account for <code className="text-neutral">{projectName}</code> to pull
-                    live inbound links, then sync.
-                  </p>
-                  <pre className="mt-3 rounded bg-bg-elevated border border-base px-3 py-2 text-xs text-neutral overflow-x-auto">
-                    canonry bing connect {projectName} --api-key &lt;key&gt;
-                  </pre>
-                </>
-              )}
-            </div>
-          </div>
-        </Card>
-      )
-    }
-
-    return renderDataView(
-      isEmbed() ? null : (
-        <Button type="button" variant="outline" size="sm" disabled={bingSyncing || activeRun !== null} onClick={asyncHandler(handleBingSync)}>
-          <Download className="h-4 w-4 mr-1.5" aria-hidden />
-          {activeRun ? 'Sync running…' : bingSyncing ? 'Queuing…' : 'Re-sync Bing'}
-        </Button>
-      ),
-    )
+    return renderCommonCrawlBody()
   }
 
   function renderCommonCrawlBody() {
@@ -736,15 +487,12 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
     )
   }
 
-  // Shared summary + chart + table for whichever source is selected. `summary`,
-  // `list`, and `history` are already source-filtered by loadData; only the
-  // labels/freshness note and the action buttons vary per source.
+  // Common Crawl summary, history, and referring-domain table.
   function renderDataView(actions: ReactNode) {
     if (!summary) return null
-    const isBing = selectedSource === 'bing-webmaster'
-    const countLabel = isBing ? 'Inbound links' : 'Linking hosts'
-    const countNoun = isBing ? 'inbound links' : 'linking hosts'
-    const windowNoun = isBing ? 'window' : 'release'
+    const countLabel = 'Linking hosts'
+    const countNoun = 'linking hosts'
+    const windowNoun = 'release'
     return (
       <>
         <div className="gauge-row">
@@ -772,7 +520,7 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
         </div>
 
         <p className="text-xs text-muted mt-2">
-          <span className="text-secondary">{SOURCE_LABELS[selectedSource]}</span> · {windowNoun}{' '}
+          <span className="text-secondary">Common Crawl</span> · {windowNoun}{' '}
           <code className="text-secondary">{summary.release}</code> · queried {relativeTime(summary.queriedAt)}
           {hiddenCount > 0 && <> · {hiddenCount} excluded domain{hiddenCount === 1 ? '' : 's'}</>}
         </p>

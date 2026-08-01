@@ -35,7 +35,6 @@ import {
 import { isValidReleaseId } from '@ainyc/canonry-integration-commoncrawl'
 import { resolveProject } from './helpers.js'
 import { backlinkCrawlerExclusionClause } from './backlinks-filter.js'
-import type { BingConnectionStore } from './bing.js'
 
 export interface BacklinksRoutesOptions {
   /**
@@ -51,19 +50,6 @@ export interface BacklinksRoutesOptions {
   onReleaseSyncRequested?: (syncId: string, release: string) => void
   /** Fired after a `runs` row with `kind='backlink-extract'` is created. */
   onBacklinkExtractRequested?: (runId: string, projectId: string, release?: string) => void
-  /**
-   * Resolves the Bing Webmaster connection for a project's canonical domain.
-   * Used to report Bing availability and to gate the per-project Bing inbound-
-   * links sync. Omit in deployments that don't host Bing connections (Bing then
-   * reports as not connected and the surface degrades gracefully).
-   */
-  bingConnectionStore?: BingConnectionStore
-  /**
-   * Fired after a `runs` row is created for a per-project Bing inbound-links
-   * sync. The handler pulls inbound links live from the connected Bing account
-   * and writes `source='bing-webmaster'` backlink rows.
-   */
-  onBingBacklinkSyncRequested?: (runId: string, projectId: string) => void
   /** Fired when the user asks to prune a cached release. */
   onBacklinksPruneCache?: (release: string) => void
   /** Reports cached-release metadata from the filesystem. */
@@ -237,11 +223,8 @@ function computeFilteredSummary(
   }
 }
 
-// Per-source availability for a project's backlinks surface — drives the
-// onboarding/empty state and the source switcher. Connectivity rules differ:
-// Common Crawl is "available" when auto-extract is on AND a release sync has
-// reached `ready`; Bing is "available" when a Bing Webmaster connection exists
-// for the project's canonical domain.
+// Stored-source availability. Common Crawl is the only active source. Retired
+// sources can still report historical rows, but never report as connected.
 function buildSourceAvailability(
   db: DatabaseClient,
   projectId: string,
@@ -287,7 +270,6 @@ function buildSourceAvailability(
 function computeSourceAvailability(
   db: DatabaseClient,
   project: { id: string; canonicalDomain: string; autoExtractBacklinks: boolean },
-  bingStore: BingConnectionStore | undefined,
   excludeCrawlers: boolean,
 ): BacklinkSourcesResponseDto {
   const ccReadySync = db
@@ -297,11 +279,10 @@ function computeSourceAvailability(
     .limit(1)
     .get()
   const ccConnected = project.autoExtractBacklinks === true && !!ccReadySync
-  const bingConnected = !!bingStore?.getConnection(project.canonicalDomain)
 
   const sources = [
     buildSourceAvailability(db, project.id, BacklinkSources.commoncrawl, ccConnected, excludeCrawlers),
-    buildSourceAvailability(db, project.id, BacklinkSources['bing-webmaster'], bingConnected, excludeCrawlers),
+    buildSourceAvailability(db, project.id, BacklinkSources['bing-webmaster'], false, excludeCrawlers),
   ]
   return {
     projectId: project.id,
@@ -586,8 +567,8 @@ export async function backlinksRoutes(app: FastifyInstance, opts: BacklinksRoute
     },
   )
 
-  // Per-source availability — lets the UI/CLI/agent see which backlink sources
-  // are set up (CC-only / Bing-only / both / neither) and degrade gracefully.
+  // Availability includes inert historical sources so older data remains
+  // inspectable, while Common Crawl is the only source that can be connected.
   app.get<{
     Params: { name: string }
     Querystring: { excludeCrawlers?: string }
@@ -596,45 +577,8 @@ export async function backlinksRoutes(app: FastifyInstance, opts: BacklinksRoute
     async (request, reply) => {
       const project = resolveProject(app.db, request.params.name)
       const excludeCrawlers = parseExcludeCrawlers(request.query.excludeCrawlers)
-      const response = computeSourceAvailability(app.db, project, opts.bingConnectionStore, excludeCrawlers)
+      const response = computeSourceAvailability(app.db, project, excludeCrawlers)
       return reply.send(response)
-    },
-  )
-
-  // Manual per-project Bing inbound-links sync. Creates a tracking run (reusing
-  // the `backlink-extract` kind — the work is "extract this project's backlinks"
-  // and `source` on the rows is the source of truth) and fires the executor.
-  app.post<{ Params: { name: string } }>(
-    '/projects/:name/backlinks/bing-sync',
-    async (request, reply) => {
-      const project = resolveProject(app.db, request.params.name)
-      if (!opts.onBingBacklinkSyncRequested) {
-        throw missingDependency(
-          'Bing backlinks sync is only available from a local canonry install with Bing Webmaster connected.',
-        )
-      }
-      const conn = opts.bingConnectionStore?.getConnection(project.canonicalDomain)
-      if (!conn) {
-        throw validationError(
-          `No Bing Webmaster connection for "${project.name}". Run \`canonry bing connect ${project.name} --api-key <key>\` first.`,
-        )
-      }
-
-      const now = new Date().toISOString()
-      const runId = crypto.randomUUID()
-      app.db.insert(runs).values({
-        id: runId,
-        projectId: project.id,
-        kind: RunKinds['backlink-extract'],
-        status: RunStatuses.queued,
-        trigger: RunTriggers.manual,
-        createdAt: now,
-      }).run()
-
-      opts.onBingBacklinkSyncRequested(runId, project.id)
-
-      const run = app.db.select().from(runs).where(eq(runs.id, runId)).get()
-      return reply.status(201).send(mapRunRow(run!))
     },
   )
 }

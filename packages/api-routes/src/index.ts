@@ -219,7 +219,6 @@ export interface ApiRoutesOptions {
   onInstallBacklinks?: BacklinksRoutesOptions['onInstallBacklinks']
   onReleaseSyncRequested?: BacklinksRoutesOptions['onReleaseSyncRequested']
   onBacklinkExtractRequested?: BacklinksRoutesOptions['onBacklinkExtractRequested']
-  onBingBacklinkSyncRequested?: BacklinksRoutesOptions['onBingBacklinkSyncRequested']
   onBacklinksPruneCache?: BacklinksRoutesOptions['onBacklinksPruneCache']
   listCachedReleases?: BacklinksRoutesOptions['listCachedReleases']
   discoverLatestRelease?: BacklinksRoutesOptions['discoverLatestRelease']
@@ -487,8 +486,6 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       onInstallBacklinks: opts.onInstallBacklinks,
       onReleaseSyncRequested: opts.onReleaseSyncRequested,
       onBacklinkExtractRequested: opts.onBacklinkExtractRequested,
-      onBingBacklinkSyncRequested: opts.onBingBacklinkSyncRequested,
-      bingConnectionStore: opts.bingConnectionStore,
       onBacklinksPruneCache: opts.onBacklinksPruneCache,
       listCachedReleases: opts.listCachedReleases,
       discoverLatestRelease: opts.discoverLatestRelease,

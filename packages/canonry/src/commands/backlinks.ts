@@ -75,7 +75,7 @@ export function formatSummaryAndDomains(
   lines.push(`Source:  ${response.source}`)
   if (!response.summary) {
     const hint = response.source === BacklinkSources['bing-webmaster']
-      ? 'No Bing inbound links yet — run `canonry backlinks bing-sync <project>` (Bing must be connected).'
+      ? 'No stored Bing backlink history.'
       : 'No ready release — run `canonry backlinks sync --release <id>` first.'
     lines.push(hint)
     return lines.join('\n')
@@ -272,8 +272,8 @@ export function formatSourceAvailability(res: BacklinkSourcesResponseDto): strin
   }
   if (!res.anyConnected) {
     lines.push('')
-    lines.push('No backlink source is set up. Enable Common Crawl (`canonry project … autoExtractBacklinks`')
-    lines.push('+ `canonry backlinks sync`) or connect Bing (`canonry bing connect <project> --api-key <key>`).')
+    lines.push('No active backlink source is set up. Enable Common Crawl on the project,')
+    lines.push('then run `canonry backlinks sync`.')
   }
   return lines.join('\n')
 }
@@ -293,21 +293,6 @@ export async function backlinksSources(opts: FormatOptions & {
     return
   }
   console.log(formatSourceAvailability(res))
-}
-
-export async function backlinksBingSync(opts: FormatOptions & {
-  project: string
-  wait?: boolean
-}): Promise<void> {
-  const client = getClient()
-  const run = await client.backlinksBingSync(opts.project)
-  const final = opts.wait ? await pollRun(run.id, opts.format) : run
-  if (isMachineFormat(opts.format)) {
-    printJson(final)
-    return
-  }
-  if (opts.wait) process.stderr.write('\n')
-  console.log(`Bing sync run ${final.id} (${final.status})${final.error ? ' — ' + formatRunErrorOneLine(final.error) : ''}`)
 }
 
 export async function backlinksReleases(opts: FormatOptions = {}): Promise<void> {
