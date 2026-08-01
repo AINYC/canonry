@@ -2060,6 +2060,24 @@ export type Ga4MeasurementAnalysisDto = {
             }>;
         }>;
     };
+    engagement: {
+        status: 'ready' | 'unavailable';
+        availableFromDate: string | null;
+        latestDate: string | null;
+        periods: Array<{
+            label: 'earliest' | 'middle' | 'previous' | 'latest';
+            startDate: string;
+            endDate: string;
+            sessions: number;
+            engagementRate: number | null;
+            dailyTotalUsers: number | null;
+            dailyNewUsers: number | null;
+            metricsAvailable: boolean;
+            daysInPeriod: number;
+            daysWithEngagementRate: number;
+            daysWithUserSplit: number;
+        }>;
+    };
     searchDemand: {
         status: 'ready' | 'unavailable';
         periods: Array<{
@@ -2928,6 +2946,24 @@ export type OrganicEvidenceDto = {
                     endDate: string;
                     eventCount: number;
                 }>;
+            }>;
+        };
+        engagement: {
+            status: 'ready' | 'unavailable';
+            availableFromDate: string | null;
+            latestDate: string | null;
+            periods: Array<{
+                label: 'earliest' | 'middle' | 'previous' | 'latest';
+                startDate: string;
+                endDate: string;
+                sessions: number;
+                engagementRate: number | null;
+                dailyTotalUsers: number | null;
+                dailyNewUsers: number | null;
+                metricsAvailable: boolean;
+                daysInPeriod: number;
+                daysWithEngagementRate: number;
+                daysWithUserSplit: number;
             }>;
         };
         searchDemand: {
