@@ -591,6 +591,11 @@ export type {
 } from './content.js'
 export { buildOpenApiDocument } from './openapi.js'
 export type { OpenApiInfo } from './openapi.js'
+// Pure Target-model engines. They are intentionally network- and DB-free so
+// callers can reuse deterministic discovery and historical attribution
+// without implying that a read performs sitemap or provider I/O.
+export * from './measurement-discovery.js'
+export * from './measurement-report.js'
 
 /**
  * Build the per-source-type validator map consumed by the generic
