@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { backlinkSummaries, ccReleaseSyncs, createClient, migrate, projects } from '@ainyc/canonry-db'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { BACKLINKS_CHECKS } from '../src/doctor/checks/backlinks.js'
-import type { BingConnectionStore } from '../src/bing.js'
 import type { DoctorContext, ProjectInfo } from '../src/doctor/types.js'
 
 const check = BACKLINKS_CHECKS.find((c) => c.id === 'backlinks.source.connected')!
@@ -40,18 +39,6 @@ function seedCcSummary(db: DatabaseClient, projectId: string): void {
   }).run()
 }
 
-function bingStore(connectedDomains: string[]): BingConnectionStore {
-  return {
-    getConnection: (domain) =>
-      connectedDomains.includes(domain)
-        ? { domain, apiKey: 'k', siteUrl: `https://${domain}/`, createdAt: 'x', updatedAt: 'x' }
-        : undefined,
-    upsertConnection: (c) => c,
-    updateConnection: () => undefined,
-    deleteConnection: () => false,
-  }
-}
-
 describe('backlinks.source.connected', () => {
   let tmpDir: string
   let db: DatabaseClient
@@ -66,8 +53,8 @@ describe('backlinks.source.connected', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  function ctx(project: ProjectInfo | null, store?: BingConnectionStore): DoctorContext {
-    return { db, project, bingConnectionStore: store }
+  function ctx(project: ProjectInfo | null): DoctorContext {
+    return { db, project }
   }
 
   it('skips without project context', async () => {
@@ -76,13 +63,13 @@ describe('backlinks.source.connected', () => {
     expect(result.code).toBe('backlinks.source.no-project')
   })
 
-  it('warns when neither source is set up', async () => {
+  it('warns when Common Crawl is not set up', async () => {
     const project = seedProject(db, false)
     const result = await check.run(ctx(project))
     expect(result.status).toBe('warn')
     expect(result.code).toBe('backlinks.source.none')
-    expect(result.details).toMatchObject({ commoncrawl: false, bingWebmaster: false })
-    expect(result.remediation).toMatch(/canonry bing connect/)
+    expect(result.details).toMatchObject({ commoncrawl: false })
+    expect(result.remediation).toMatch(/canonry backlinks sync/)
   })
 
   it('reports OK when Common Crawl is fully set up (autoExtract + ready sync)', async () => {
@@ -91,7 +78,7 @@ describe('backlinks.source.connected', () => {
     const result = await check.run(ctx(project))
     expect(result.status).toBe('ok')
     expect(result.code).toBe('backlinks.source.connected')
-    expect(result.details).toMatchObject({ commoncrawl: true, bingWebmaster: false })
+    expect(result.details).toMatchObject({ commoncrawl: true })
     expect(result.details!.connected).toEqual(['commoncrawl'])
   })
 
@@ -121,21 +108,5 @@ describe('backlinks.source.connected', () => {
     const result = await check.run(ctx(project))
     expect(result.status).toBe('warn')
     expect(result.code).toBe('backlinks.source.none')
-  })
-
-  it('reports OK when Bing Webmaster is connected for the domain', async () => {
-    const project = seedProject(db, false)
-    const result = await check.run(ctx(project, bingStore(['roots.io'])))
-    expect(result.status).toBe('ok')
-    expect(result.details).toMatchObject({ commoncrawl: false, bingWebmaster: true })
-    expect(result.details!.connected).toEqual(['bing-webmaster'])
-  })
-
-  it('lists both sources when both are set up', async () => {
-    const project = seedProject(db, true)
-    seedReadySync(db)
-    const result = await check.run(ctx(project, bingStore(['roots.io'])))
-    expect(result.status).toBe('ok')
-    expect(result.details!.connected).toEqual(['commoncrawl', 'bing-webmaster'])
   })
 })

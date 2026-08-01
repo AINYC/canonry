@@ -1,10 +1,9 @@
 import { z } from 'zod'
 
 /**
- * Which source produced a backlink row. The two sources have different refresh
- * cadences and data shapes (Common Crawl is a ~monthly public hyperlink-graph
- * release; Bing Webmaster is a live first-party inbound-link feed), so every
- * backlink surface is source-aware end to end. Never conflate them.
+ * Stored backlink origin. Common Crawl is the only active ingestion source.
+ * `bing-webmaster` remains readable so databases created by older Canonry
+ * versions do not lose access to their historical rows.
  */
 export const backlinkSourceSchema = z.enum(['commoncrawl', 'bing-webmaster'])
 export type BacklinkSource = z.infer<typeof backlinkSourceSchema>
@@ -18,10 +17,8 @@ export interface BacklinkSummaryMetrics {
 }
 
 /**
- * Headline backlink-summary math shared by every extractor (Common Crawl and
- * Bing): linking-domain count, aggregate host weight, and the concentration
- * share of the 10 strongest linking domains. Pure — one source of truth so the
- * Common Crawl and Bing paths can never drift apart.
+ * Headline Common Crawl backlink-summary math: linking-domain count, aggregate
+ * host weight, and the concentration share of the 10 strongest linking domains.
  */
 export function computeBacklinkSummaryMetrics(
   rows: ReadonlyArray<{ numHosts: number }>,
@@ -69,9 +66,6 @@ export type CcReleaseSyncDto = z.infer<typeof ccReleaseSyncDtoSchema>
 
 export const backlinkDomainDtoSchema = z.object({
   linkingDomain: z.string(),
-  // For Common Crawl this is the count of distinct hosts within the linking
-  // domain; for Bing Webmaster it is the count of distinct linking pages (URLs)
-  // from that linking host. Read alongside `source` — the unit differs per source.
   numHosts: z.number().int(),
   source: backlinkSourceSchema,
 })
@@ -79,9 +73,6 @@ export type BacklinkDomainDto = z.infer<typeof backlinkDomainDtoSchema>
 
 export const backlinkSummaryDtoSchema = z.object({
   projectId: z.string(),
-  // Window identifier. Common Crawl uses the release slug
-  // (`cc-main-YYYY-<mon>-<mon>-<mon>`); Bing Webmaster uses a synthetic
-  // per-sync-day window (`bing-YYYY-MM-DD`).
   release: z.string(),
   targetDomain: z.string(),
   totalLinkingDomains: z.number().int(),
@@ -98,8 +89,6 @@ export const backlinkSummaryDtoSchema = z.object({
 export type BacklinkSummaryDto = z.infer<typeof backlinkSummaryDtoSchema>
 
 export const backlinkListResponseSchema = z.object({
-  // The source this response was filtered to (defaults to commoncrawl when the
-  // caller omits `?source`).
   source: backlinkSourceSchema,
   summary: backlinkSummaryDtoSchema.nullable(),
   total: z.number().int(),
@@ -118,30 +107,15 @@ export const backlinkHistoryEntrySchema = z.object({
 export type BacklinkHistoryEntry = z.infer<typeof backlinkHistoryEntrySchema>
 
 /**
- * Per-source availability for a project's backlinks surface. Lets the UI/CLI
- * degrade gracefully across CC-only / Bing-only / both / neither without
- * erroring when a source is absent.
+ * Availability for a stored backlink source. Common Crawl can be connected and
+ * refreshed; retired sources may report historical data but are never connected.
  */
 export const backlinkSourceAvailabilityDtoSchema = z.object({
   source: backlinkSourceSchema,
-  /**
-   * The source is set up for this project:
-   *  - commoncrawl: `autoExtractBacklinks` enabled AND a `ready` release sync exists.
-   *  - bing-webmaster: a Bing Webmaster connection exists for the project domain.
-   */
   connected: z.boolean(),
-  /** Backlink rows exist for this project + source. */
   hasData: z.boolean(),
-  /** Latest window id with data for this source, null when none. */
   latestRelease: z.string().nullable(),
-  /**
-   * Linking-domain count in the latest window. Excludes crawler/proxy hosts only
-   * when the request sets `?excludeCrawlers=1` (default off, matching the summary
-   * and domains endpoints); the dashboard passes it so the switcher pill matches
-   * the metric card.
-   */
   totalLinkingDomains: z.number().int(),
-  /** Freshness: `queriedAt` of the latest summary for this source, null when none. */
   lastSyncedAt: z.string().nullable(),
 })
 export type BacklinkSourceAvailabilityDto = z.infer<typeof backlinkSourceAvailabilityDtoSchema>
@@ -149,7 +123,6 @@ export type BacklinkSourceAvailabilityDto = z.infer<typeof backlinkSourceAvailab
 export const backlinkSourcesResponseSchema = z.object({
   projectId: z.string(),
   targetDomain: z.string(),
-  /** Availability for every known source, in a stable order. */
   sources: z.array(backlinkSourceAvailabilityDtoSchema),
   anyConnected: z.boolean(),
   anyData: z.boolean(),

@@ -12936,7 +12936,7 @@ export type GetApiV1ProjectsByNameBacklinksSummaryData = {
          */
         release?: string;
         /**
-         * Backlink source: commoncrawl (default) or bing-webmaster.
+         * Stored source. Common Crawl is active; bing-webmaster is historical-only.
          */
         source?: string;
     };
@@ -12983,7 +12983,7 @@ export type GetApiV1ProjectsByNameBacklinksDomainsData = {
          */
         offset?: string;
         /**
-         * Backlink source: commoncrawl (default) or bing-webmaster.
+         * Stored source. Common Crawl is active; bing-webmaster is historical-only.
          */
         source?: string;
     };
@@ -13018,7 +13018,7 @@ export type GetApiV1ProjectsByNameBacklinksHistoryData = {
     };
     query?: {
         /**
-         * Backlink source: commoncrawl (default) or bing-webmaster.
+         * Stored source. Common Crawl is active; bing-webmaster is historical-only.
          */
         source?: string;
     };
@@ -13077,44 +13077,6 @@ export type GetApiV1ProjectsByNameBacklinksSourcesResponses = {
 };
 
 export type GetApiV1ProjectsByNameBacklinksSourcesResponse = GetApiV1ProjectsByNameBacklinksSourcesResponses[keyof GetApiV1ProjectsByNameBacklinksSourcesResponses];
-
-export type PostApiV1ProjectsByNameBacklinksBingSyncData = {
-    body?: never;
-    path: {
-        /**
-         * Project name.
-         */
-        name: string;
-    };
-    query?: never;
-    url: '/api/v1/projects/{name}/backlinks/bing-sync';
-};
-
-export type PostApiV1ProjectsByNameBacklinksBingSyncErrors = {
-    /**
-     * No Bing Webmaster connection for this project.
-     */
-    400: ErrorEnvelope;
-    /**
-     * Project not found.
-     */
-    404: ErrorEnvelope;
-    /**
-     * Bing backlinks sync is not available on this deployment.
-     */
-    422: ErrorEnvelope;
-};
-
-export type PostApiV1ProjectsByNameBacklinksBingSyncError = PostApiV1ProjectsByNameBacklinksBingSyncErrors[keyof PostApiV1ProjectsByNameBacklinksBingSyncErrors];
-
-export type PostApiV1ProjectsByNameBacklinksBingSyncResponses = {
-    /**
-     * Bing sync run queued.
-     */
-    201: RunDto;
-};
-
-export type PostApiV1ProjectsByNameBacklinksBingSyncResponse = PostApiV1ProjectsByNameBacklinksBingSyncResponses[keyof PostApiV1ProjectsByNameBacklinksBingSyncResponses];
 
 export type PostApiV1ProjectsByNameTrafficConnectCloudRunData = {
     body: {

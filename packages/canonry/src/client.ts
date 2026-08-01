@@ -408,7 +408,6 @@ import {
   getApiV1BacklinksReleases,
   deleteApiV1BacklinksCacheByRelease,
   postApiV1ProjectsByNameBacklinksExtract,
-  postApiV1ProjectsByNameBacklinksBingSync,
   getApiV1ProjectsByNameBacklinksSummary,
   getApiV1ProjectsByNameBacklinksDomains,
   getApiV1ProjectsByNameBacklinksHistory,
@@ -2883,15 +2882,6 @@ export class ApiClient {
         client: this.heyClient,
         path: { name: project },
         body: release ? { release } : {},
-      }),
-    )
-  }
-
-  async backlinksBingSync(project: string): Promise<RunDto> {
-    return this.invoke<RunDto>(() =>
-      postApiV1ProjectsByNameBacklinksBingSync({
-        client: this.heyClient,
-        path: { name: project },
       }),
     )
   }

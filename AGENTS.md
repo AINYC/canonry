@@ -98,7 +98,7 @@ canonry schedule set <project> --preset daily                                   
 canonry schedule set <project> --kind traffic-sync --cron "*/15 * * * *" --source <id>       # traffic-sync (sourceId required)
 canonry schedule set <project> --kind gbp-sync --preset daily                                # gbp-sync (no source; syncs selected locations)
 canonry schedule set <project> --kind data-refresh --preset daily                            # data-refresh (refreshes connected GSC/Bing/GA/GBP; no source)
-canonry schedule set <project> --kind backlinks-sync --preset weekly                         # backlinks-sync (re-probe Common Crawl + pull Bing inbound links for connected projects; sync CC only when a newer rolling window is published; no source/providers)
+canonry schedule set <project> --kind backlinks-sync --preset weekly                         # backlinks-sync (re-probe Common Crawl; sync only when a newer rolling window is published; no source/providers)
 canonry schedule set <project> --kind site-audit --preset weekly                             # site-audit / Technical AEO (crawl the sitemap + audit every page; no source/providers)
 canonry schedule show <project> [--kind answer-visibility|traffic-sync|gbp-sync|data-refresh|backlinks-sync|site-audit] # default kind is answer-visibility
 canonry schedule enable  <project> [--kind ...]
@@ -290,7 +290,7 @@ Each check returns `status: ok | warn | fail | skipped`, a stable machine-readab
 | auth | `traffic.source.scopes` | project | Per-source-type scope validation (skipped where the adapter has no explicit scope check — e.g. WordPress Application Passwords, Vercel API tokens) |
 | integrations | `traffic.source.connected` | project | At least one non-archived server-side traffic source exists for the project |
 | integrations | `traffic.source.recent-data` | project | Connected sources have crawler/AI-referral events in the last 7d (warn) or 30d (fail) |
-| integrations | `backlinks.source.connected` | project | At least one backlink source is set up — Common Crawl (`autoExtractBacklinks` + a `ready` release sync) OR Bing Webmaster (a connection for the domain); warns when a project has neither |
+| integrations | `backlinks.source.connected` | project | Common Crawl is ready (`autoExtractBacklinks` + a `ready` release sync); warns when it is not set up |
 | integrations | `content.winnability.coverage` | project | Discovery classification coverage for cited-surface domains behind the content winnability gate; warns when discovery has not classified the domains that make ownable/ceded decisions meaningful |
 | providers | `config.providers` | global | At least one answer-engine provider key configured |
 | providers | `config.agent-providers` | global | At least one agent LLM provider (claude / openai / gemini / zai / deepinfra) has a usable key — warns when none do (the built-in Aero agent can't run); skipped on deployments that don't run the agent |

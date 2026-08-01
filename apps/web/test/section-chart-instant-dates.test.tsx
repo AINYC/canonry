@@ -102,44 +102,32 @@ function renderedDates(dateKey = 'date') {
 
 function backlinkHistory() {
   return [
-    { release: 'bing-2026-07-14', totalLinkingDomains: 10, totalHosts: 20, top10HostsShare: '0.5', queriedAt: EARLIER_INSTANT, source: 'bing-webmaster' },
-    { release: 'bing-2026-07-20', totalLinkingDomains: 12, totalHosts: 25, top10HostsShare: '0.5', queriedAt: INSTANT, source: 'bing-webmaster' },
+    { release: 'cc-main-2026-apr-may-jun', totalLinkingDomains: 10, totalHosts: 20, top10HostsShare: '0.5', queriedAt: EARLIER_INSTANT, source: 'commoncrawl' },
+    { release: 'cc-main-2026-may-jun-jul', totalLinkingDomains: 12, totalHosts: 25, top10HostsShare: '0.5', queriedAt: INSTANT, source: 'commoncrawl' },
   ]
 }
 
 function installBacklinksApi() {
   const restore = mockFetch((url) => {
     const path = pathOf(url).split('?')[0]!
-    if (path === '/api/v1/projects/test-project/backlinks/sources') {
-      return jsonResponse({
-        projectId: 'p1',
-        targetDomain: 'example.com',
-        anyConnected: true,
-        anyData: true,
-        sources: [
-          { source: 'commoncrawl', connected: false, hasData: false, latestRelease: null, totalLinkingDomains: 0, lastSyncedAt: null },
-          { source: 'bing-webmaster', connected: true, hasData: true, latestRelease: 'bing-2026-07-20', totalLinkingDomains: 12, lastSyncedAt: INSTANT },
-        ],
-      })
-    }
     if (path === '/api/v1/backlinks/syncs/latest') return jsonResponse(null)
     if (path === '/api/v1/projects/test-project/runs') return jsonResponse([])
     if (path === '/api/v1/projects/test-project/backlinks/history') return jsonResponse(backlinkHistory())
     if (path === '/api/v1/projects/test-project/backlinks/summary') {
       return jsonResponse({
         projectId: 'p1',
-        release: 'bing-2026-07-20',
+        release: 'cc-main-2026-may-jun-jul',
         targetDomain: 'example.com',
         totalLinkingDomains: 12,
         totalHosts: 25,
         top10HostsShare: '0.5',
         queriedAt: INSTANT,
-        source: 'bing-webmaster',
+        source: 'commoncrawl',
       })
     }
     if (path === '/api/v1/projects/test-project/backlinks/domains') {
       return jsonResponse({
-        source: 'bing-webmaster',
+        source: 'commoncrawl',
         summary: null,
         total: 1,
         rows: [{ linkingDomain: 'linker.com', numHosts: 3 }],

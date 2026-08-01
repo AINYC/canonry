@@ -62,7 +62,7 @@ describe('backlinks formatters', () => {
     expect(out).toContain('Source:  commoncrawl')
   })
 
-  it('renders a Bing-specific empty hint when the bing source has no data', () => {
+  it('renders a historical-source empty hint without suggesting a retired sync', () => {
     const out = formatSummaryAndDomains('roots', {
       source: 'bing-webmaster',
       summary: null,
@@ -70,7 +70,8 @@ describe('backlinks formatters', () => {
       rows: [],
     })
     expect(out).toContain('Source:  bing-webmaster')
-    expect(out).toContain('backlinks bing-sync')
+    expect(out).toContain('No stored Bing backlink history')
+    expect(out).not.toContain('backlinks bing-sync')
     expect(out).not.toContain('No ready release')
   })
 
@@ -132,7 +133,7 @@ describe('parseSourceFlag', () => {
 })
 
 describe('formatSourceAvailability', () => {
-  it('shows both sources and an onboarding hint when neither is connected', () => {
+  it('shows stored sources and a Common Crawl onboarding hint when none is active', () => {
     const out = formatSourceAvailability({
       projectId: 'roots',
       targetDomain: 'roots.io',
@@ -145,8 +146,9 @@ describe('formatSourceAvailability', () => {
     })
     expect(out).toContain('commoncrawl')
     expect(out).toContain('bing-webmaster')
-    expect(out).toContain('No backlink source is set up')
-    expect(out).toContain('canonry bing connect')
+    expect(out).toContain('No active backlink source is set up')
+    expect(out).toContain('canonry backlinks sync')
+    expect(out).not.toContain('canonry bing connect')
   })
 
   it('shows connected + data and no onboarding hint when a source is set up', () => {
@@ -162,6 +164,6 @@ describe('formatSourceAvailability', () => {
     })
     expect(out).toContain('cc-main-2026-jan-feb-mar')
     expect(out).toContain('42')
-    expect(out).not.toContain('No backlink source is set up')
+    expect(out).not.toContain('No active backlink source is set up')
   })
 })

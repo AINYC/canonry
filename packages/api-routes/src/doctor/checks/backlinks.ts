@@ -42,12 +42,8 @@ export const BACKLINKS_CHECKS: readonly CheckDefinition[] = [
         .get()
       const ccConnected = projectRow?.autoExtract === true && !!readySync
 
-      // Bing is available when a Bing Webmaster connection exists for the domain.
-      const bingConnected = !!ctx.bingConnectionStore?.getConnection(ctx.project.canonicalDomain)
-
       const connected: BacklinkSource[] = []
       if (ccConnected) connected.push(BacklinkSources.commoncrawl)
-      if (bingConnected) connected.push(BacklinkSources['bing-webmaster'])
 
       if (connected.length === 0) {
         return {
@@ -55,10 +51,8 @@ export const BACKLINKS_CHECKS: readonly CheckDefinition[] = [
           code: 'backlinks.source.none',
           summary: `No backlink source is set up for ${ctx.project.name}.`,
           remediation:
-            `Enable Common Crawl (set autoExtractBacklinks on the project + run \`canonry backlinks sync\`) ` +
-            `or connect Bing Webmaster (\`canonry bing connect ${ctx.project.name} --api-key <key>\` then ` +
-            `\`canonry backlinks bing-sync ${ctx.project.name}\`).`,
-          details: { commoncrawl: ccConnected, bingWebmaster: bingConnected },
+            'Enable Common Crawl by setting autoExtractBacklinks on the project, then run `canonry backlinks sync`.',
+          details: { commoncrawl: ccConnected },
         }
       }
 
@@ -80,11 +74,11 @@ export const BACKLINKS_CHECKS: readonly CheckDefinition[] = [
       return {
         status: CheckStatuses.ok,
         code: 'backlinks.source.connected',
-        summary: `${connected.length} backlink source${connected.length === 1 ? '' : 's'} set up: ${connected.join(', ')}.`,
+        summary: 'Common Crawl backlink source is set up.',
         remediation: ccConnected && !ccHasData
           ? `Common Crawl is ready but no backlinks have been extracted for ${ctx.project.name} yet — run \`canonry backlinks extract ${ctx.project.name}\`.`
           : null,
-        details: { commoncrawl: ccConnected, bingWebmaster: bingConnected, connected, commoncrawlHasData: ccHasData },
+        details: { commoncrawl: ccConnected, connected, commoncrawlHasData: ccHasData },
       }
     },
   },
