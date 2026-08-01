@@ -606,6 +606,10 @@ export function formatRun(row: {
     && !Array.isArray(row.measurementManifest)
     ? row.measurementManifest as Record<string, unknown>
     : null
+  // These fields were added after the original run DTO. Keep legacy responses
+  // byte-for-byte compatible until a run actually carries measurement-plan
+  // provenance; clients that never opt into plans must not see new null keys.
+  const hasMeasurementProvenance = row.measurementPlanVersionId != null || measurementManifest !== null
   return {
     id: row.id,
     projectId: row.projectId,
@@ -617,8 +621,12 @@ export function formatRun(row: {
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
     error: parseRunError(row.error),
-    measurementPlanVersionId: row.measurementPlanVersionId ?? null,
-    measurementManifest,
+    ...(hasMeasurementProvenance
+      ? {
+          measurementPlanVersionId: row.measurementPlanVersionId ?? null,
+          measurementManifest,
+        }
+      : {}),
     createdAt: row.createdAt,
   }
 }
