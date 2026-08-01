@@ -330,12 +330,20 @@ describe('GSC read paths never report a dimensioned sum as a total', () => {
     expect(body.totals!.impressions).toBe(PROPERTY_ACTUAL.impressions)
   })
 
-  it('performance returns raw rows and no totals block at all', async () => {
-    // The paged row endpoint must not grow a totals block: it only ever covers
-    // one page of the dimensioned table, so any total it computed would be
-    // wrong twice over.
+  it('performance reports a row count but never a clicks or impressions total', async () => {
+    // The paged row endpoint must not grow a METRIC totals block: it only ever
+    // covers one page of the dimensioned table, so any clicks/impressions total
+    // it computed would be wrong twice over (under on clicks, over on
+    // impressions). `totalMatching` is a ROW COUNT, not a metric, and is the
+    // whole point of the envelope, so it is expected here.
     const res = await context.app.inject({ method: 'GET', url: '/projects/pages/google/gsc/performance' })
-    const body = res.json() as unknown
-    expect(Array.isArray(body)).toBe(true)
+    const body = res.json() as Record<string, unknown>
+    expect(Array.isArray(body.rows)).toBe(true)
+    expect(typeof body.totalMatching).toBe('number')
+    expect(body).not.toHaveProperty('totals')
+    // Belt and braces: nothing in the envelope may equal the dimensioned sum.
+    const values = Object.values(body).filter((v) => typeof v === 'number')
+    expect(values).not.toContain(DIMENSIONED_SUM.clicks)
+    expect(values).not.toContain(DIMENSIONED_SUM.impressions)
   })
 })
