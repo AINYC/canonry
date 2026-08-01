@@ -107,8 +107,24 @@ export const gscTopPagesDtoSchema = z.object({
     impressions: z.number(),
     ctr: z.number(),
     days: z.number(),
+    /** First date the property-level totals actually cover. */
+    coveredFrom: z.string().nullable(),
+    /** Last date the property-level totals actually cover. */
+    coveredThrough: z.string().nullable(),
+    /**
+     * False when the totals span less than the ranked rows above.
+     *
+     * The dimensioned and property-level tables sync independently, so a
+     * 30-day totals sync can sit next to months of dimensioned rows. Printing
+     * both as one period would misstate the window the totals belong to.
+     */
+    complete: z.boolean(),
   }).nullable(),
   totalsSource: z.literal('property-daily'),
+  /** First date the ranked rows cover, so a caller can compare spans. */
+  rankedFrom: z.string().nullable(),
+  /** Last date the ranked rows cover. */
+  rankedThrough: z.string().nullable(),
 })
 export type GscTopPagesDto = z.infer<typeof gscTopPagesDtoSchema>
 

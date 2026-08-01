@@ -935,6 +935,26 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     const totalClicks = dailyTotals.reduce((sum, d) => sum + d.clicks, 0)
     const totalImpressions = dailyTotals.reduce((sum, d) => sum + d.impressions, 0)
 
+    // The two tables are synced independently and can cover different spans:
+    // a normal 30-day sync leaves months of dimensioned rows next to 30 days of
+    // property-level totals. Reporting those totals beside a ranking drawn from
+    // a longer span reads as one period when it is two, so the covered range is
+    // disclosed and `complete` says whether it matches the ranked data.
+    const rankedSpan = app.db
+      .select({
+        first: sql<string | null>`MIN(${gscSearchData.date})`,
+        last: sql<string | null>`MAX(${gscSearchData.date})`,
+      })
+      .from(gscSearchData)
+      .where(and(...conditions))
+      .get()
+    const coveredFrom = dailyTotals.length > 0 ? dailyTotals[0]!.date : null
+    const coveredThrough = dailyTotals.length > 0 ? dailyTotals[dailyTotals.length - 1]!.date : null
+    const totalsComplete = Boolean(
+      coveredFrom && coveredThrough && rankedSpan?.first && rankedSpan?.last
+      && coveredFrom <= rankedSpan.first && coveredThrough >= rankedSpan.last,
+    )
+
     return {
       rows: rows.map((r) => ({
         page: r.page,
@@ -948,9 +968,15 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
           impressions: totalImpressions,
           ctr: totalImpressions > 0 ? totalClicks / totalImpressions : 0,
           days: dailyTotals.length,
+          coveredFrom,
+          coveredThrough,
+          // False when the property-level totals span less than the rows above.
+          complete: totalsComplete,
         }
         : null,
       totalsSource: 'property-daily' as const,
+      rankedFrom: rankedSpan?.first ?? null,
+      rankedThrough: rankedSpan?.last ?? null,
     }
   })
 

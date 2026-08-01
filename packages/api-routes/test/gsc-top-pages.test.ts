@@ -75,6 +75,8 @@ const PROPERTY_DAILY_ROWS = [
 ]
 
 interface TopPagesBody {
+  rankedFrom: string | null
+  rankedThrough: string | null
   rows: Array<{ page: string; clicks: number; impressions: number; ctr: number }>
   totals: { clicks: number; impressions: number; ctr: number; days: number } | null
   totalsSource: 'property-daily'
@@ -207,6 +209,9 @@ describe('googleRoutes: GET /projects/:name/google/gsc/top-pages', () => {
       impressions: PROPERTY_ACTUAL.impressions,
       ctr: PROPERTY_ACTUAL.clicks / PROPERTY_ACTUAL.impressions,
       days: PROPERTY_DAILY_ROWS.length,
+      coveredFrom: '2026-06-01',
+      coveredThrough: '2026-06-16',
+      complete: true,
     })
 
     // The regression guard: the dimensioned sum is 31% under on clicks and 30%
@@ -242,7 +247,34 @@ describe('googleRoutes: GET /projects/:name/google/gsc/top-pages', () => {
       impressions: 17_916,
       ctr: 562 / 17_916,
       days: 2,
+      coveredFrom: '2026-06-15',
+      coveredThrough: '2026-06-16',
+      complete: true,
     })
+  })
+
+  it('flags totals as incomplete when they cover less than the ranked rows', async () => {
+    // The real shape of this: a routine 30-day totals sync sitting next to
+    // months of dimensioned rows. Ranking spans the longer period, totals span
+    // the shorter one, and printing both as one period misstates the window.
+    const now = '2026-07-01T00:00:00.000Z'
+    context.db.insert(gscDailyTotals).values({
+      id: crypto.randomUUID(),
+      projectId,
+      date: '2026-06-16',
+      clicks: 250,
+      impressions: 8_000,
+      position: '5',
+      createdAt: now,
+    }).run()
+
+    const res = await context.app.inject({ method: 'GET', url: '/projects/pages/google/gsc/top-pages' })
+    const body = res.json() as TopPagesBody
+    expect(body.rankedFrom).toBe('2026-06-01')
+    expect(body.rankedThrough).toBe('2026-06-16')
+    expect(body.totals!.coveredFrom).toBe('2026-06-16')
+    expect(body.totals!.coveredThrough).toBe('2026-06-16')
+    expect(body.totals!.complete).toBe(false)
   })
 
   it('returns 404 for an unknown project', async () => {

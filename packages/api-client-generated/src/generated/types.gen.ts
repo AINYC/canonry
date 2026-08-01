@@ -2505,8 +2505,13 @@ export type GscTopPagesDto = {
         impressions: number;
         ctr: number;
         days: number;
+        coveredFrom: string | null;
+        coveredThrough: string | null;
+        complete: boolean;
     } | null;
     totalsSource: 'property-daily';
+    rankedFrom: string | null;
+    rankedThrough: string | null;
 };
 
 export type GscDiscoverSitemapsResponseDto = {
