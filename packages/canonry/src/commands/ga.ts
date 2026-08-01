@@ -7,6 +7,33 @@ function getClient() {
   return createApiClient()
 }
 
+/** Options every date-scoped GA read accepts. */
+export interface GaRangeOptions {
+  window?: string
+  startDate?: string
+  endDate?: string
+  format?: string
+}
+
+/**
+ * Build the query params for a date-scoped GA read. Explicit dates win over the
+ * rolling window server-side, so both are forwarded verbatim and the server is
+ * the single place that decides. Returns undefined when nothing was asked for,
+ * keeping the request byte-identical to an unfiltered one.
+ */
+function rangeParams(opts?: GaRangeOptions, extra?: Record<string, string>): Record<string, string> | undefined {
+  const params: Record<string, string> = { ...extra }
+  if (opts?.window) params.window = opts.window
+  if (opts?.startDate) params.startDate = opts.startDate
+  if (opts?.endDate) params.endDate = opts.endDate
+  return Object.keys(params).length > 0 ? params : undefined
+}
+
+/** True when the read was scoped at all, so an empty result can say why. */
+function isRangeScoped(opts?: GaRangeOptions): boolean {
+  return Boolean(opts?.window || opts?.startDate || opts?.endDate)
+}
+
 export async function gaConnect(project: string, opts: {
   propertyId: string
   keyFile?: string
@@ -131,13 +158,11 @@ export async function gaSync(project: string, opts?: { days?: number; only?: str
   console.log(`  Synced at:   ${result.syncedAt}`)
 }
 
-export async function gaTraffic(project: string, opts?: { limit?: number; window?: string; format?: string }): Promise<void> {
+export async function gaTraffic(project: string, opts?: GaRangeOptions & { limit?: number }): Promise<void> {
   const client = getClient()
-  const params: Record<string, string> = {}
-  if (opts?.limit) params.limit = String(opts.limit)
-  if (opts?.window) params.window = opts.window
+  const params = rangeParams(opts, opts?.limit ? { limit: String(opts.limit) } : undefined)
 
-  const result: GaTrafficResponse = await client.gaTraffic(project, Object.keys(params).length > 0 ? params : undefined)
+  const result: GaTrafficResponse = await client.gaTraffic(project, params)
 
   if (isMachineFormat(opts?.format)) {
     console.log(JSON.stringify(result, null, 2))
@@ -148,7 +173,7 @@ export async function gaTraffic(project: string, opts?: { limit?: number; window
     if (!result.lastSyncedAt) {
       console.log('No GA4 traffic data. Run "canonry ga sync <project>" first.')
     } else {
-      console.log(`No GA4 traffic data for the selected period.${opts?.window ? ` Try a wider window or omit --window.` : ''}`)
+      console.log(`No GA4 traffic data for the selected period.${isRangeScoped(opts) ? ' Try a wider range, or omit --window / --start / --end.' : ''}`)
     }
     return
   }
@@ -291,22 +316,22 @@ export async function gaMeasurementAnalysis(project: string, opts?: {
   }
 }
 
-export async function gaAiReferralHistory(project: string, opts?: { window?: string; format?: string }): Promise<void> {
+export async function gaAiReferralHistory(project: string, opts?: GaRangeOptions): Promise<void> {
   const client = getClient()
-  const result: GA4AiReferralHistoryEntry[] = await client.gaAiReferralHistory(project, opts?.window ? { window: opts.window } : undefined)
+  const result: GA4AiReferralHistoryEntry[] = await client.gaAiReferralHistory(project, rangeParams(opts))
 
   if (opts?.format === 'json') {
     console.log(JSON.stringify(result, null, 2))
     return
   } else if (opts?.format === 'jsonl') {
     // One self-contained referral-day per line; prepend the envelope context
-    // (project + resolved window) so a line lifted out still says what it covers.
-    emitJsonl(result.map(row => ({ project, window: opts?.window, ...row })))
+    // (project + the range asked for) so a line lifted out still says what it covers.
+    emitJsonl(result.map(row => ({ project, window: opts?.window, startDate: opts?.startDate, endDate: opts?.endDate, ...row })))
     return
   }
 
   if (result.length === 0) {
-    console.log(`No AI referral history.${opts?.window ? ' Try a wider window or omit --window.' : ' Run "canonry ga sync <project>" first.'}`)
+    console.log(`No AI referral history.${isRangeScoped(opts) ? ' Try a wider range, or omit --window / --start / --end.' : ' Run "canonry ga sync <project>" first.'}`)
     return
   }
 
@@ -324,22 +349,22 @@ export async function gaAiReferralHistory(project: string, opts?: { window?: str
   }
 }
 
-export async function gaAiReferralDaily(project: string, opts?: { window?: string; format?: string }): Promise<void> {
+export async function gaAiReferralDaily(project: string, opts?: GaRangeOptions): Promise<void> {
   const client = getClient()
-  const result: GA4AiReferralDailyDto = await client.gaAiReferralDaily(project, opts?.window ? { window: opts.window } : undefined)
+  const result: GA4AiReferralDailyDto = await client.gaAiReferralDaily(project, rangeParams(opts))
 
   if (opts?.format === 'json') {
     console.log(JSON.stringify(result, null, 2))
     return
   } else if (opts?.format === 'jsonl') {
     // One self-contained day per line; prepend the envelope context (project +
-    // resolved window) so a line lifted out still says what it covers.
-    emitJsonl(result.days.map(day => ({ project, window: opts?.window, ...day })))
+    // the range asked for) so a line lifted out still says what it covers.
+    emitJsonl(result.days.map(day => ({ project, window: opts?.window, startDate: opts?.startDate, endDate: opts?.endDate, ...day })))
     return
   }
 
   if (result.days.length === 0) {
-    console.log(`No AI referral sessions.${opts?.window ? ' Try a wider window or omit --window.' : ' Run "canonry ga sync <project>" first.'}`)
+    console.log(`No AI referral sessions.${isRangeScoped(opts) ? ' Try a wider range, or omit --window / --start / --end.' : ' Run "canonry ga sync <project>" first.'}`)
     return
   }
 
@@ -361,22 +386,22 @@ export async function gaAiReferralDaily(project: string, opts?: { window?: strin
   console.log(`\n  Total: ${result.totalSessions} sessions (${result.totalPaidSessions} paid, ${result.totalOrganicSessions} organic)`)
 }
 
-export async function gaSocialReferralHistory(project: string, opts?: { window?: string; format?: string }): Promise<void> {
+export async function gaSocialReferralHistory(project: string, opts?: GaRangeOptions): Promise<void> {
   const client = getClient()
-  const result: GA4SocialReferralHistoryEntry[] = await client.gaSocialReferralHistory(project, opts?.window ? { window: opts.window } : undefined)
+  const result: GA4SocialReferralHistoryEntry[] = await client.gaSocialReferralHistory(project, rangeParams(opts))
 
   if (opts?.format === 'json') {
     console.log(JSON.stringify(result, null, 2))
     return
   } else if (opts?.format === 'jsonl') {
     // One self-contained referral-day per line; prepend the envelope context
-    // (project + resolved window) so a line lifted out still says what it covers.
-    emitJsonl(result.map(row => ({ project, window: opts?.window, ...row })))
+    // (project + the range asked for) so a line lifted out still says what it covers.
+    emitJsonl(result.map(row => ({ project, window: opts?.window, startDate: opts?.startDate, endDate: opts?.endDate, ...row })))
     return
   }
 
   if (result.length === 0) {
-    console.log(`No social referral history.${opts?.window ? ' Try a wider window or omit --window.' : ' Run "canonry ga sync <project>" first.'}`)
+    console.log(`No social referral history.${isRangeScoped(opts) ? ' Try a wider range, or omit --window / --start / --end.' : ' Run "canonry ga sync <project>" first.'}`)
     return
   }
 
@@ -394,22 +419,22 @@ export async function gaSocialReferralHistory(project: string, opts?: { window?:
   }
 }
 
-export async function gaSessionHistory(project: string, opts?: { window?: string; format?: string }): Promise<void> {
+export async function gaSessionHistory(project: string, opts?: GaRangeOptions): Promise<void> {
   const client = getClient()
-  const result: GA4SessionHistoryEntry[] = await client.gaSessionHistory(project, opts?.window ? { window: opts.window } : undefined)
+  const result: GA4SessionHistoryEntry[] = await client.gaSessionHistory(project, rangeParams(opts))
 
   if (opts?.format === 'json') {
     console.log(JSON.stringify(result, null, 2))
     return
   } else if (opts?.format === 'jsonl') {
     // One self-contained session-day per line; prepend the envelope context
-    // (project + resolved window) so a line lifted out still says what it covers.
-    emitJsonl(result.map(row => ({ project, window: opts?.window, ...row })))
+    // (project + the range asked for) so a line lifted out still says what it covers.
+    emitJsonl(result.map(row => ({ project, window: opts?.window, startDate: opts?.startDate, endDate: opts?.endDate, ...row })))
     return
   }
 
   if (result.length === 0) {
-    console.log(`No session history.${opts?.window ? ' Try a wider window or omit --window.' : ' Run "canonry ga sync <project>" first.'}`)
+    console.log(`No session history.${isRangeScoped(opts) ? ' Try a wider range, or omit --window / --start / --end.' : ' Run "canonry ga sync <project>" first.'}`)
     return
   }
 
