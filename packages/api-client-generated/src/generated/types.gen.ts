@@ -3084,6 +3084,7 @@ export type ProjectConfig = {
             cron?: string;
             timezone: string;
             providers: Array<string>;
+            enabled?: boolean;
         };
         notifications: Array<{
             channel: 'webhook';
