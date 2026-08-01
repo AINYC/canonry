@@ -6507,7 +6507,7 @@ export type GetApiV1ProjectsByNameAnalyticsMetricsData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
     };
@@ -6542,7 +6542,7 @@ export type GetApiV1ProjectsByNameAnalyticsGapsData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
     };
@@ -6579,7 +6579,7 @@ export type GetApiV1ProjectsByNameAnalyticsSourcesData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
         /**
@@ -7900,7 +7900,7 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceData = {
          */
         offset?: number;
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
     };
@@ -7947,7 +7947,7 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceDailyData = {
          */
         endDate?: string;
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
     };
@@ -11609,9 +11609,17 @@ export type GetApiV1ProjectsByNameGaTrafficData = {
          */
         limit?: number;
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
+        /**
+         * Inclusive lower bound as a calendar date (YYYY-MM-DD). Takes precedence over "window", which is rolling from now and cannot name a calendar month.
+         */
+        startDate?: string;
+        /**
+         * Inclusive upper bound as a calendar date (YYYY-MM-DD).
+         */
+        endDate?: string;
     };
     url: '/api/v1/projects/{name}/ga/traffic';
 };
@@ -11650,9 +11658,17 @@ export type GetApiV1ProjectsByNameGaAiReferralHistoryData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
+        /**
+         * Inclusive lower bound as a calendar date (YYYY-MM-DD). Takes precedence over "window", which is rolling from now and cannot name a calendar month.
+         */
+        startDate?: string;
+        /**
+         * Inclusive upper bound as a calendar date (YYYY-MM-DD).
+         */
+        endDate?: string;
     };
     url: '/api/v1/projects/{name}/ga/ai-referral-history';
 };
@@ -11689,9 +11705,17 @@ export type GetApiV1ProjectsByNameGaAiReferralDailyData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
+        /**
+         * Inclusive lower bound as a calendar date (YYYY-MM-DD). Takes precedence over "window", which is rolling from now and cannot name a calendar month.
+         */
+        startDate?: string;
+        /**
+         * Inclusive upper bound as a calendar date (YYYY-MM-DD).
+         */
+        endDate?: string;
     };
     url: '/api/v1/projects/{name}/ga/ai-referral-daily';
 };
@@ -11728,9 +11752,17 @@ export type GetApiV1ProjectsByNameGaSocialReferralHistoryData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
+        /**
+         * Inclusive lower bound as a calendar date (YYYY-MM-DD). Takes precedence over "window", which is rolling from now and cannot name a calendar month.
+         */
+        startDate?: string;
+        /**
+         * Inclusive upper bound as a calendar date (YYYY-MM-DD).
+         */
+        endDate?: string;
     };
     url: '/api/v1/projects/{name}/ga/social-referral-history';
 };
@@ -11839,9 +11871,17 @@ export type GetApiV1ProjectsByNameGaSessionHistoryData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
+        /**
+         * Inclusive lower bound as a calendar date (YYYY-MM-DD). Takes precedence over "window", which is rolling from now and cannot name a calendar month.
+         */
+        startDate?: string;
+        /**
+         * Inclusive upper bound as a calendar date (YYYY-MM-DD).
+         */
+        endDate?: string;
     };
     url: '/api/v1/projects/{name}/ga/session-history';
 };

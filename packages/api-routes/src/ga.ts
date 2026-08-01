@@ -1,9 +1,10 @@
 import crypto from 'node:crypto'
 import { eq, desc, and, sql } from 'drizzle-orm'
+import type { SQL, SQLWrapper } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { gaTrafficSnapshots, gaTrafficSummaries, gaTrafficWindowSummaries, gaDailyTotals, gaAiReferrals, gaSocialReferrals, gaAcquisitionDaily, gaLeadEventsDaily, gaMeasurementSyncStates, runs } from '@ainyc/canonry-db'
-import { classifyAiReferralTrafficClass, validationError, notFound, RunKinds, RunStatuses, RunTriggers, parseWindow, windowCutoff, normalizeUrlPath } from '@ainyc/canonry-contracts'
-import type { GA4ChannelBreakdownDto } from '@ainyc/canonry-contracts'
+import { classifyAiReferralTrafficClass, validationError, notFound, RunKinds, RunStatuses, RunTriggers, resolveDateRange, normalizeUrlPath } from '@ainyc/canonry-contracts'
+import type { GA4ChannelBreakdownDto, ResolvedDateRange } from '@ainyc/canonry-contracts'
 import { resolveProject, writeAuditLog } from './helpers.js'
 import { buildSessionHistory } from './ga-session-history.js'
 import { buildAiReferralDailySeries, normalizeAiTrafficClass, summarizeAiReferralCounts } from './ga-ai-referral-aggregation.js'
@@ -45,6 +46,16 @@ function formatSharePct(numerator: number, total: number): string {
   const rounded = Math.round(pct)
   if (rounded === 0) return '<1%'
   return `${rounded}%`
+}
+
+// Inclusive `date >= start` / `date <= end` predicates for a resolved range.
+// Every GA read stores its date as a `YYYY-MM-DD` TEXT column, so the same two
+// comparisons work verbatim on each of them.
+function dateRangeConditions(column: SQLWrapper, range: ResolvedDateRange): SQL[] {
+  const conditions: SQL[] = []
+  if (range.startDate) conditions.push(sql`${column} >= ${range.startDate}`)
+  if (range.endDate) conditions.push(sql`${column} <= ${range.endDate}`)
+  return conditions
 }
 
 const SOCIAL_CHANNEL_GROUPS = new Set(['Organic Social', 'Paid Social'])
@@ -976,24 +987,18 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
   // GET /projects/:name/ga/traffic
   app.get<{
     Params: { name: string }
-    Querystring: { limit?: string; days?: string; window?: string }
+    Querystring: { limit?: string; days?: string; window?: string; startDate?: string; endDate?: string }
   }>('/projects/:name/ga/traffic', async (request, _reply) => {
     const project = resolveProject(app.db, request.params.name)
     requireGa4Connection(opts, project.name, project.canonicalDomain)
 
     const limit = Math.max(1, Math.min(parseInt(request.query.limit ?? '50', 10) || 50, 500))
-    const window = parseWindow(request.query.window)
-    const cutoff = windowCutoff(window)
-    const cutoffDate = cutoff?.slice(0, 10) ?? null
+    const range = resolveDateRange(request.query)
+    const dateFiltered = range.startDate !== null || range.endDate !== null
 
-    const snapshotConditions = [eq(gaTrafficSnapshots.projectId, project.id)]
-    if (cutoffDate) snapshotConditions.push(sql`${gaTrafficSnapshots.date} >= ${cutoffDate}`)
-
-    const aiConditions = [eq(gaAiReferrals.projectId, project.id)]
-    if (cutoffDate) aiConditions.push(sql`${gaAiReferrals.date} >= ${cutoffDate}`)
-
-    const socialConditions = [eq(gaSocialReferrals.projectId, project.id)]
-    if (cutoffDate) socialConditions.push(sql`${gaSocialReferrals.date} >= ${cutoffDate}`)
+    const snapshotConditions = [eq(gaTrafficSnapshots.projectId, project.id), ...dateRangeConditions(gaTrafficSnapshots.date, range)]
+    const aiConditions = [eq(gaAiReferrals.projectId, project.id), ...dateRangeConditions(gaAiReferrals.date, range)]
+    const socialConditions = [eq(gaSocialReferrals.projectId, project.id), ...dateRangeConditions(gaSocialReferrals.date, range)]
 
     // When filtering by window, prefer the per-window summary row populated by
     // /ga/sync — it carries deduplicated totalUsers (no landing-page dimension).
@@ -1001,7 +1006,11 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     // on multiple pages (one row per landing page). Falls back to the
     // snapshot SUM for backwards compatibility (projects that haven't synced
     // since the windowed-summary table was introduced).
-    const windowSummaryRow = cutoffDate
+    //
+    // A precomputed row answers exactly one rolling window, so it can only be
+    // used when the range IS that window. An explicit calendar range (or a
+    // window paired with an endDate) has no precomputed row and must be summed.
+    const windowSummaryRow = range.startDate && !range.explicitDates
       ? app.db
           .select({
             totalSessions: gaTrafficWindowSummaries.totalSessions,
@@ -1013,13 +1022,13 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
           .where(
             and(
               eq(gaTrafficWindowSummaries.projectId, project.id),
-              eq(gaTrafficWindowSummaries.windowKey, window),
+              eq(gaTrafficWindowSummaries.windowKey, range.window),
             ),
           )
           .get()
       : null
 
-    const snapshotTotalsRow = cutoffDate && !windowSummaryRow
+    const snapshotTotalsRow = dateFiltered && !windowSummaryRow
       ? app.db
           .select({
             totalSessions: sql<number>`COALESCE(SUM(${gaTrafficSnapshots.sessions}), 0)`,
@@ -1031,7 +1040,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
           .get()
       : null
 
-    const summaryRow = cutoffDate
+    const summaryRow = dateFiltered
       ? windowSummaryRow ?? snapshotTotalsRow
       : app.db
           .select({
@@ -1273,14 +1282,16 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       directSharePctDisplay: formatSharePct(totalDirectSessions, total),
       socialSharePctDisplay: formatSharePct(socialSessions, total),
       lastSyncedAt: latestSync?.syncedAt ?? null,
+      // Report the range that was actually measured, so a caller can tell which
+      // period the totals above belong to.
       periodStart: (() => {
-        const start = cutoffDate ?? summaryMeta?.periodStart ?? null
-        const end = summaryMeta?.periodEnd ?? null
+        const start = range.startDate ?? summaryMeta?.periodStart ?? null
+        const end = range.endDate ?? summaryMeta?.periodEnd ?? null
         // Clamp: if the cutoff is after the last synced date, use the synced start instead
         if (start && end && start > end) return summaryMeta?.periodStart ?? null
         return start
       })(),
-      periodEnd: summaryMeta?.periodEnd ?? null,
+      periodEnd: range.endDate ?? summaryMeta?.periodEnd ?? null,
     }
   })
 
@@ -1292,14 +1303,13 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
   // /ga/ai-referral-daily below exists for.
   app.get<{
     Params: { name: string }
-    Querystring: { window?: string }
+    Querystring: { window?: string; startDate?: string; endDate?: string }
   }>('/projects/:name/ga/ai-referral-history', async (request, _reply) => {
     const project = resolveProject(app.db, request.params.name)
     requireGa4Connection(opts, project.name, project.canonicalDomain)
 
-    const cutoffDate = windowCutoff(parseWindow(request.query.window))?.slice(0, 10) ?? null
-    const conditions = [eq(gaAiReferrals.projectId, project.id)]
-    if (cutoffDate) conditions.push(sql`${gaAiReferrals.date} >= ${cutoffDate}`)
+    const range = resolveDateRange(request.query)
+    const conditions = [eq(gaAiReferrals.projectId, project.id), ...dateRangeConditions(gaAiReferrals.date, range)]
 
     const rows = app.db
       .select({
@@ -1337,14 +1347,13 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
   // reproduces that window's `aiSessionsDeduped` exactly.
   app.get<{
     Params: { name: string }
-    Querystring: { window?: string }
+    Querystring: { window?: string; startDate?: string; endDate?: string }
   }>('/projects/:name/ga/ai-referral-daily', async (request, _reply) => {
     const project = resolveProject(app.db, request.params.name)
     requireGa4Connection(opts, project.name, project.canonicalDomain)
 
-    const cutoffDate = windowCutoff(parseWindow(request.query.window))?.slice(0, 10) ?? null
-    const conditions = [eq(gaAiReferrals.projectId, project.id)]
-    if (cutoffDate) conditions.push(sql`${gaAiReferrals.date} >= ${cutoffDate}`)
+    const range = resolveDateRange(request.query)
+    const conditions = [eq(gaAiReferrals.projectId, project.id), ...dateRangeConditions(gaAiReferrals.date, range)]
 
     // Deliberately unaggregated in SQL. Landing pages must be summed inside a
     // dimension and dimensions must not be summed at all, which is not a single
@@ -1374,14 +1383,13 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
   // GET /projects/:name/ga/social-referral-history
   app.get<{
     Params: { name: string }
-    Querystring: { window?: string }
+    Querystring: { window?: string; startDate?: string; endDate?: string }
   }>('/projects/:name/ga/social-referral-history', async (request, _reply) => {
     const project = resolveProject(app.db, request.params.name)
     requireGa4Connection(opts, project.name, project.canonicalDomain)
 
-    const cutoffDate = windowCutoff(parseWindow(request.query.window))?.slice(0, 10) ?? null
-    const conditions = [eq(gaSocialReferrals.projectId, project.id)]
-    if (cutoffDate) conditions.push(sql`${gaSocialReferrals.date} >= ${cutoffDate}`)
+    const range = resolveDateRange(request.query)
+    const conditions = [eq(gaSocialReferrals.projectId, project.id), ...dateRangeConditions(gaSocialReferrals.date, range)]
 
     const rows = app.db
       .select({
@@ -1621,14 +1629,13 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
   // GET /projects/:name/ga/session-history
   app.get<{
     Params: { name: string }
-    Querystring: { window?: string }
+    Querystring: { window?: string; startDate?: string; endDate?: string }
   }>('/projects/:name/ga/session-history', async (request, _reply) => {
     const project = resolveProject(app.db, request.params.name)
     requireGa4Connection(opts, project.name, project.canonicalDomain)
 
-    const cutoffDate = windowCutoff(parseWindow(request.query.window))?.slice(0, 10) ?? null
-    const conditions = [eq(gaTrafficSnapshots.projectId, project.id)]
-    if (cutoffDate) conditions.push(sql`${gaTrafficSnapshots.date} >= ${cutoffDate}`)
+    const range = resolveDateRange(request.query)
+    const conditions = [eq(gaTrafficSnapshots.projectId, project.id), ...dateRangeConditions(gaTrafficSnapshots.date, range)]
 
     const rows = app.db
       .select({
@@ -1645,8 +1652,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
 
     // Deduplicated per-day users, where synced. See `buildSessionHistory` for
     // why the landing-page sum cannot be trusted for this metric.
-    const totalConditions = [eq(gaDailyTotals.projectId, project.id)]
-    if (cutoffDate) totalConditions.push(sql`${gaDailyTotals.date} >= ${cutoffDate}`)
+    const totalConditions = [eq(gaDailyTotals.projectId, project.id), ...dateRangeConditions(gaDailyTotals.date, range)]
     const totals = app.db
       .select({ date: gaDailyTotals.date, users: gaDailyTotals.users })
       .from(gaDailyTotals)
