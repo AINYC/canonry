@@ -8030,7 +8030,7 @@ export type GetApiV1ProjectsByNameGoogleGscTopPagesData = {
          */
         limit?: number;
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
     };
