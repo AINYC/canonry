@@ -24,7 +24,13 @@ import {
 import { CitationStates, formatRunErrorOneLine } from '@ainyc/canonry-contracts'
 
 import { formatErrorLog } from './lib/format-helpers.js'
-import { getEmbedConfig, heyClient, type ApiProject, type ApiRun } from './api.js'
+import {
+  getEmbedConfig,
+  heyClient,
+  shouldShowDashboardResourceLinks,
+  type ApiProject,
+  type ApiRun,
+} from './api.js'
 import { embedThemeFontHref, embedThemeMode, embedThemeStyle, embedViewIdForPath } from './embed.js'
 import { getApiV1ProjectsOptions, getApiV1RunsOptions } from '@ainyc/canonry-api-client/react-query'
 import { serviceStatusTooltip } from './lib/health-helpers.js'
@@ -287,6 +293,7 @@ export function RootLayout() {
   // not fetch instance settings just to build nav/settings state it will not
   // render. The server-side embed tab policy intentionally blocks /settings.
   const embed = useMemo(() => getEmbedConfig(), [])
+  const resourceLinksVisible = useMemo(shouldShowDashboardResourceLinks, [])
 
   // ── Data fetching via TanStack Query ──
   const { dashboard, isLoading, refetch: refreshData } = useDashboard(undefined, { includeSettings: !embed })
@@ -644,21 +651,23 @@ export function RootLayout() {
           ) : null}
         </nav>
 
-        <div className="sidebar-footer">
-          {resources.map(({ label, href, Icon }) => (
-            <a
-              key={href}
-              className="sidebar-footer-icon"
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={label}
-              aria-label={label}
-            >
-              <Icon className="size-4" />
-            </a>
-          ))}
-        </div>
+        {resourceLinksVisible ? (
+          <div className="sidebar-footer">
+            {resources.map(({ label, href, Icon }) => (
+              <a
+                key={href}
+                className="sidebar-footer-icon"
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={label}
+                aria-label={label}
+              >
+                <Icon className="size-4" />
+              </a>
+            ))}
+          </div>
+        ) : null}
       </aside>
       )}
 
@@ -821,21 +830,23 @@ export function RootLayout() {
               <span className="footer-version">v{healthSnapshot.apiStatus.version}</span>
             ) : null}
           </span>
-          <div className="footer-links">
-            {resources.map(({ label, href, Icon }) => (
-              <a
-                key={href}
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={label}
-                aria-label={label}
-                className="footer-icon"
-              >
-                <Icon className="size-3.5" />
-              </a>
-            ))}
-          </div>
+          {resourceLinksVisible ? (
+            <div className="footer-links">
+              {resources.map(({ label, href, Icon }) => (
+                <a
+                  key={href}
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={label}
+                  aria-label={label}
+                  className="footer-icon"
+                >
+                  <Icon className="size-3.5" />
+                </a>
+              ))}
+            </div>
+          ) : null}
         </footer>
       </div>
 

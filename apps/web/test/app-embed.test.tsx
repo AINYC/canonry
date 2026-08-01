@@ -10,6 +10,7 @@ import { DashboardProvider } from '../src/contexts/dashboard-context.js'
 import { preloadAllLazyRoutes } from '../src/router/routes.js'
 
 type EmbedBlock = { enabled: boolean; views?: string[]; theme?: Record<string, string> }
+type DashboardBlock = { showResourceLinks?: boolean }
 
 beforeAll(async () => {
   await preloadAllLazyRoutes()
@@ -22,9 +23,15 @@ afterEach(() => {
   delete window.__CANONRY_CONFIG__
 })
 
-async function renderAt(pathname: string, embed?: EmbedBlock): Promise<string> {
-  if (embed) window.__CANONRY_CONFIG__ = { embed }
-  else delete window.__CANONRY_CONFIG__
+async function renderAt(pathname: string, embed?: EmbedBlock, dashboard?: DashboardBlock): Promise<string> {
+  if (embed || dashboard) {
+    window.__CANONRY_CONFIG__ = {
+      ...(embed ? { embed } : {}),
+      ...(dashboard ? { dashboard } : {}),
+    }
+  } else {
+    delete window.__CANONRY_CONFIG__
+  }
 
   const fixture = createDashboardFixture({})
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -52,10 +59,27 @@ function detailsForTitle(doc: Document, title: string): HTMLDetailsElement | nul
 test('without embed config the full application chrome renders', async () => {
   const html = await renderAt('/')
   expect(html).toContain('class="sidebar"')
+  expect(html).toContain('class="sidebar-footer"')
+  expect(html).toContain('class="footer-links"')
+  expect(html).toContain('aria-label="GitHub"')
+  expect(html).toContain('aria-label="Docs"')
+  expect(html).toContain('aria-label="Changelog"')
   expect(html).toContain('class="topbar"')
   expect(html).toContain('class="footer"')
   expect(html).toContain('id="mobile-nav"')
   expect(html).not.toContain('app-shell-embed')
+})
+
+test('dashboard resource-link opt-out removes the sidebar and footer icon clusters', async () => {
+  const html = await renderAt('/', undefined, { showResourceLinks: false })
+  expect(html).toContain('class="sidebar"')
+  expect(html).toContain('class="footer"')
+  expect(html).toContain('class="footer-brand"')
+  expect(html).not.toContain('class="sidebar-footer"')
+  expect(html).not.toContain('class="footer-links"')
+  expect(html).not.toContain('aria-label="GitHub"')
+  expect(html).not.toContain('aria-label="Docs"')
+  expect(html).not.toContain('aria-label="Changelog"')
 })
 
 test('embed mode renders chromeless: no nav / topbar / footer / toaster, only the view', async () => {

@@ -17,6 +17,7 @@ const EMBED_ENV = [
   'CANONRY_EMBED_VIEWS',
   'CANONRY_EMBED_PROJECT_TABS',
   'CANONRY_DASHBOARD_REQUIRE_PASSWORD',
+  'CANONRY_DASHBOARD_SHOW_RESOURCE_LINKS',
 ] as const
 
 interface Built {
@@ -155,6 +156,37 @@ describe('server embed mode (#716)', () => {
     try {
       const res = await app.inject({ method: 'GET', url: '/api/v1/session' })
       expect(JSON.parse(res.body)).toEqual({ authenticated: true, setupRequired: false })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('dashboard.showResourceLinks=false injects the resource-link opt-out', async () => {
+    const { app, cleanup } = await buildServer(undefined, true, {
+      dashboard: { showResourceLinks: false },
+    })
+    try {
+      for (const url of ['/', '/projects/acme']) {
+        const res = await app.inject({ method: 'GET', url })
+        expect(res.body).toContain(
+          '<script>window.__CANONRY_CONFIG__={"dashboard":{"showResourceLinks":false}}</script>',
+        )
+      }
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('CANONRY_DASHBOARD_SHOW_RESOURCE_LINKS overrides config for container deploys', async () => {
+    process.env.CANONRY_DASHBOARD_SHOW_RESOURCE_LINKS = '0'
+    const { app, cleanup } = await buildServer(undefined, true, {
+      dashboard: { showResourceLinks: true },
+    })
+    try {
+      const res = await app.inject({ method: 'GET', url: '/' })
+      expect(res.body).toContain(
+        '<script>window.__CANONRY_CONFIG__={"dashboard":{"showResourceLinks":false}}</script>',
+      )
     } finally {
       await cleanup()
     }
