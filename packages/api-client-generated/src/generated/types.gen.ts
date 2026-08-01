@@ -2493,6 +2493,27 @@ export type GscPerformanceResponseDto = {
     latestAvailableDate: string | null;
 };
 
+export type GscTopPagesDto = {
+    rows: Array<{
+        page: string;
+        clicks: number;
+        impressions: number;
+        ctr: number;
+    }>;
+    totals: {
+        clicks: number;
+        impressions: number;
+        ctr: number;
+        days: number;
+        coveredFrom: string | null;
+        coveredThrough: string | null;
+        complete: boolean;
+    } | null;
+    totalsSource: 'property-daily';
+    rankedFrom: string | null;
+    rankedThrough: string | null;
+};
+
 export type GscDiscoverSitemapsResponseDto = {
     sitemaps: Array<{
         path: string;
@@ -7950,6 +7971,53 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceDailyResponses = {
 };
 
 export type GetApiV1ProjectsByNameGoogleGscPerformanceDailyResponse = GetApiV1ProjectsByNameGoogleGscPerformanceDailyResponses[keyof GetApiV1ProjectsByNameGoogleGscPerformanceDailyResponses];
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Filter by start date.
+         */
+        startDate?: string;
+        /**
+         * Filter by end date.
+         */
+        endDate?: string;
+        /**
+         * Maximum number of records to return.
+         */
+        limit?: number;
+        /**
+         * Time window for analytics queries.
+         */
+        window?: '7d' | '30d' | '90d' | 'all';
+    };
+    url: '/api/v1/projects/{name}/google/gsc/top-pages';
+};
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesErrors = {
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesError = GetApiV1ProjectsByNameGoogleGscTopPagesErrors[keyof GetApiV1ProjectsByNameGoogleGscTopPagesErrors];
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesResponses = {
+    /**
+     * Ranked pages plus the property-level window total.
+     */
+    200: GscTopPagesDto;
+};
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesResponse = GetApiV1ProjectsByNameGoogleGscTopPagesResponses[keyof GetApiV1ProjectsByNameGoogleGscTopPagesResponses];
 
 export type PostApiV1ProjectsByNameGoogleGscInspectData = {
     body: {

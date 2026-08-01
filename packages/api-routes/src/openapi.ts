@@ -1969,6 +1969,24 @@ const routeCatalog: OpenApiOperation[] = [
     },
   },
   {
+    method: 'get',
+    path: '/api/v1/projects/{name}/google/gsc/top-pages',
+    summary: 'Get top GSC pages ranked by clicks',
+    description: 'One row per page, aggregated in SQL and ranked by summed clicks descending. The rows are a RANKING built from the dimensioned search-data table; `totals` is NOT their sum. Google withholds rare queries (summed clicks under-count) and fans one impression across every query/page/country/device combination (summed impressions over-count), so `totals` is read from the un-dimensioned property-level daily table and labelled `totalsSource: property-daily`. It is null when that table has no rows in the window.',
+    tags: ['google'],
+    parameters: [
+      nameParameter,
+      { name: 'startDate', in: 'query', description: 'Filter by start date.', schema: stringSchema },
+      { name: 'endDate', in: 'query', description: 'Filter by end date.', schema: stringSchema },
+      limitQueryParameter,
+      analyticsWindowParameter,
+    ],
+    responses: {
+      200: jsonResponse('Ranked pages plus the property-level window total.', 'GscTopPagesDto'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
     method: 'post',
     path: '/api/v1/projects/{name}/google/gsc/inspect',
     summary: 'Inspect a URL through Google Search Console',

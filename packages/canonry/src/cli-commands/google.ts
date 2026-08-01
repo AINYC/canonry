@@ -11,6 +11,7 @@ import {
   googleListSitemaps,
   googlePerformance,
   googlePerformanceDaily,
+  googleTopPages,
   googleProperties,
   googleRefresh,
   googleRequestIndexing,
@@ -240,6 +241,31 @@ export const GOOGLE_CLI_COMMANDS: readonly CliCommandSpec[] = [
         window: getString(input.values, 'window'),
         startDate: getString(input.values, 'start'),
         endDate: getString(input.values, 'end'),
+        format: input.format,
+      })
+    },
+  },
+  {
+    path: ['google', 'top-pages'],
+    usage: 'canonry google top-pages <project> [--window 7d|30d|90d|all] [--start <YYYY-MM-DD>] [--end <YYYY-MM-DD>] [--limit <n>] [--format json]',
+    options: {
+      window: stringOption(),
+      start: stringOption(),
+      end: stringOption(),
+      limit: stringOption(),
+    },
+    run: async (input) => {
+      const usage = 'canonry google top-pages <project> [--window 7d|30d|90d|all] [--start <YYYY-MM-DD>] [--end <YYYY-MM-DD>] [--limit <n>] [--format json]'
+      const project = requireProject(input, 'google.top-pages', usage)
+      await googleTopPages(project, {
+        window: getString(input.values, 'window'),
+        startDate: getString(input.values, 'start'),
+        endDate: getString(input.values, 'end'),
+        limit: parseIntegerOption(input, 'limit', {
+          command: 'google.top-pages',
+          usage,
+          message: '--limit must be an integer',
+        }),
         format: input.format,
       })
     },

@@ -886,6 +886,100 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     }
   })
 
+  // GET /projects/:name/google/gsc/top-pages
+  //
+  // One row per page, ranked by summed clicks descending. The aggregation runs
+  // in SQL (`GROUP BY page`) so the response is bounded by the number of
+  // distinct pages, not by the number of dimensioned rows behind them: the
+  // previous workaround pulled 18,014 rows over the wire to produce 31.
+  //
+  // TOTALS ARE NOT A SUM OF THE ROWS. The dimensioned table is valid for
+  // RANKING and invalid for TOTALS: Google withholds rare/anonymised queries
+  // (clicks under-count) and one impression fans out across every query x page
+  // x country x device combination (impressions over-count). Measured on one
+  // real property-month: 792 summed clicks vs 1,142 actual, 45,266 summed
+  // impressions vs 34,916 actual. `totals` therefore reads the un-dimensioned
+  // property-level daily table and says so via `totalsSource`; when that table
+  // has no rows in the window it is `null` rather than a plausible wrong number.
+  app.get<{
+    Params: { name: string }
+    Querystring: { startDate?: string; endDate?: string; limit?: string; window?: string }
+  }>('/projects/:name/google/gsc/top-pages', async (request) => {
+    const project = resolveProject(app.db, request.params.name)
+    const { startDate, endDate, limit } = request.query
+    const cutoffDate = !startDate ? windowCutoff(parseWindow(request.query.window))?.slice(0, 10) ?? null : null
+
+    const conditions = [eq(gscSearchData.projectId, project.id)]
+    if (startDate) conditions.push(sql`${gscSearchData.date} >= ${startDate}`)
+    else if (cutoffDate) conditions.push(sql`${gscSearchData.date} >= ${cutoffDate}`)
+    if (endDate) conditions.push(sql`${gscSearchData.date} <= ${endDate}`)
+
+    const limitVal = Math.max(parseInt(limit ?? '50', 10) || 0, 1)
+
+    const rows = app.db
+      .select({
+        page: gscSearchData.page,
+        clicks: sql<number>`COALESCE(SUM(${gscSearchData.clicks}), 0)`,
+        impressions: sql<number>`COALESCE(SUM(${gscSearchData.impressions}), 0)`,
+      })
+      .from(gscSearchData)
+      .where(and(...conditions))
+      .groupBy(gscSearchData.page)
+      .orderBy(desc(sql`SUM(${gscSearchData.clicks})`), desc(sql`SUM(${gscSearchData.impressions})`))
+      .limit(limitVal)
+      .all()
+
+    const windowStart = startDate ?? cutoffDate ?? ''
+    const windowEnd = endDate ?? '9999-12-31'
+    const dailyTotals = readGscDailyTotals(app.db, project.id, windowStart, windowEnd)
+    const totalClicks = dailyTotals.reduce((sum, d) => sum + d.clicks, 0)
+    const totalImpressions = dailyTotals.reduce((sum, d) => sum + d.impressions, 0)
+
+    // The two tables are synced independently and can cover different spans:
+    // a normal 30-day sync leaves months of dimensioned rows next to 30 days of
+    // property-level totals. Reporting those totals beside a ranking drawn from
+    // a longer span reads as one period when it is two, so the covered range is
+    // disclosed and `complete` says whether it matches the ranked data.
+    const rankedSpan = app.db
+      .select({
+        first: sql<string | null>`MIN(${gscSearchData.date})`,
+        last: sql<string | null>`MAX(${gscSearchData.date})`,
+      })
+      .from(gscSearchData)
+      .where(and(...conditions))
+      .get()
+    const coveredFrom = dailyTotals.length > 0 ? dailyTotals[0]!.date : null
+    const coveredThrough = dailyTotals.length > 0 ? dailyTotals[dailyTotals.length - 1]!.date : null
+    const totalsComplete = Boolean(
+      coveredFrom && coveredThrough && rankedSpan?.first && rankedSpan?.last
+      && coveredFrom <= rankedSpan.first && coveredThrough >= rankedSpan.last,
+    )
+
+    return {
+      rows: rows.map((r) => ({
+        page: r.page,
+        clicks: r.clicks,
+        impressions: r.impressions,
+        ctr: r.impressions > 0 ? r.clicks / r.impressions : 0,
+      })),
+      totals: dailyTotals.length > 0
+        ? {
+          clicks: totalClicks,
+          impressions: totalImpressions,
+          ctr: totalImpressions > 0 ? totalClicks / totalImpressions : 0,
+          days: dailyTotals.length,
+          coveredFrom,
+          coveredThrough,
+          // False when the property-level totals span less than the rows above.
+          complete: totalsComplete,
+        }
+        : null,
+      totalsSource: 'property-daily' as const,
+      rankedFrom: rankedSpan?.first ?? null,
+      rankedThrough: rankedSpan?.last ?? null,
+    }
+  })
+
   // POST /projects/:name/google/gsc/inspect
   app.post<{
     Params: { name: string }
