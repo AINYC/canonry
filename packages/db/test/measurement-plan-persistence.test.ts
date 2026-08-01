@@ -103,16 +103,16 @@ test('Target and group identities share a project-local stable-key namespace', (
 
   db.$client.prepare(`
     INSERT INTO measurement_segments (id, project_id, stable_key, kind, retired_at, created_at)
-    VALUES ('target-a', 'project-a', 'm-line', 'target', NULL, ?)
+    VALUES ('target-a', 'project-a', 'shared-key', 'target', NULL, ?)
   `).run(NOW)
   db.$client.prepare(`
     INSERT INTO measurement_segments (id, project_id, stable_key, kind, retired_at, created_at)
-    VALUES ('group-b', 'project-b', 'm-line', 'group', NULL, ?)
+    VALUES ('group-b', 'project-b', 'shared-key', 'group', NULL, ?)
   `).run(NOW)
 
   expect(() => db.$client.prepare(`
     INSERT INTO measurement_segments (id, project_id, stable_key, kind, retired_at, created_at)
-    VALUES ('duplicate', 'project-a', 'm-line', 'group', NULL, ?)
+    VALUES ('duplicate', 'project-a', 'shared-key', 'group', NULL, ?)
   `).run(NOW)).toThrow(/UNIQUE/i)
   expect(() => db.$client.prepare(`
     INSERT INTO measurement_segments (id, project_id, stable_key, kind, retired_at, created_at)
@@ -171,7 +171,7 @@ test('execution context is nullable for legacy rows and unique per run, executio
        requested_context, supported_context, created_at)
     VALUES
       ('target-snapshot', 'legacy-run', 'best apartments', 'gemini', 'cited', 'execution-1',
-       '{"label":"Dallas","city":"Dallas","region":"TX","country":"US"}',
+       '{"label":"Northbridge","city":"Northbridge","region":"NB","country":"US"}',
        '{"status":"applied"}', ?)
   `).run(NOW)
   expect(() => db.$client.prepare(`
@@ -183,7 +183,7 @@ test('execution context is nullable for legacy rows and unique per run, executio
   expect(db.$client.prepare(`
     SELECT requested_context, supported_context FROM query_snapshots WHERE id = 'target-snapshot'
   `).get()).toEqual({
-    requested_context: '{"label":"Dallas","city":"Dallas","region":"TX","country":"US"}',
+    requested_context: '{"label":"Northbridge","city":"Northbridge","region":"NB","country":"US"}',
     supported_context: '{"status":"applied"}',
   })
 })

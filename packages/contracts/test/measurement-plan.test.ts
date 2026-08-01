@@ -11,18 +11,18 @@ import {
   type MeasurementPlanInput,
 } from '../src/measurement-plan.js'
 
-const ATLANTA = { label: 'atlanta', city: 'Atlanta', region: 'GA', country: 'US' }
+const NORTHBRIDGE = { label: 'northbridge', city: 'Northbridge', region: 'NB', country: 'US' }
 
 const CONTEXT = {
-  canonicalDomain: 'https://www.cortland.com/',
-  ownedDomains: ['ava-decatur.cortland.com'],
-  brandNames: ['Cortland'],
-  defaultContext: ATLANTA,
-  locations: [ATLANTA],
+  canonicalDomain: 'https://www.northstar.example/',
+  ownedDomains: ['harbor-point.northstar.example'],
+  brandNames: ['Northstar Living'],
+  defaultContext: NORTHBRIDGE,
+  locations: [NORTHBRIDGE],
   trackedQueries: [
-    { id: 'q-ava', query: 'ava decatur reviews' },
-    { id: 'q-best', query: 'best apartments in atlanta' },
-    { id: 'q-cortland', query: 'cortland apartments' },
+    { id: 'q-harbor', query: 'harbor point reviews' },
+    { id: 'q-best', query: 'best apartments in northbridge' },
+    { id: 'q-northstar', query: 'northstar apartments' },
   ],
 }
 
@@ -30,31 +30,31 @@ const PLAN: MeasurementPlanInput = {
   schemaVersion: 1,
   targets: [
     {
-      stableKey: 'ava-decatur',
-      label: 'AVA Decatur',
+      stableKey: 'harbor-point',
+      label: 'Harbor Point',
       urls: [
-        { kind: 'prefix', host: 'cortland.com', pathPrefix: '/apartments/ava-decatur', pathCase: 'insensitive' },
-        { kind: 'host', host: 'ava-decatur.cortland.com' },
+        { kind: 'prefix', host: 'northstar.example', pathPrefix: '/apartments/harbor-point', pathCase: 'insensitive' },
+        { kind: 'host', host: 'harbor-point.northstar.example' },
       ],
-      aliases: ['AVA Decatur'],
-      metadata: { market: 'Atlanta', state: 'GA' },
+      aliases: ['Harbor Point'],
+      metadata: { market: 'Northbridge', state: 'NB' },
     },
     {
-      stableKey: 'cortland-decatur',
-      label: 'Cortland Decatur',
-      urls: [{ kind: 'prefix', host: 'cortland.com', pathPrefix: '/apartments/cortland-decatur', pathCase: 'sensitive' }],
+      stableKey: 'northstar-ridge',
+      label: 'Northstar Ridge',
+      urls: [{ kind: 'prefix', host: 'northstar.example', pathPrefix: '/apartments/northstar-ridge', pathCase: 'sensitive' }],
       aliases: [],
     },
   ],
   groups: [{
-    stableKey: 'atlanta',
-    label: 'Atlanta portfolio',
-    targetKeys: ['ava-decatur'],
-    competitors: ['Greystar.com'],
+    stableKey: 'northbridge',
+    label: 'Northbridge portfolio',
+    targetKeys: ['harbor-point'],
+    competitors: ['rival.example'],
   }],
   targetQuerySelections: [
-    { targetKey: 'ava-decatur', queryIds: ['q-ava', 'q-best'] },
-    { targetKey: 'cortland-decatur', queryIds: ['q-best'], context: null },
+    { targetKey: 'harbor-point', queryIds: ['q-harbor', 'q-best'] },
+    { targetKey: 'northstar-ridge', queryIds: ['q-best'], context: null },
   ],
 }
 
@@ -77,14 +77,14 @@ function validationError(action: () => unknown): MeasurementPlanValidationError 
 }
 
 describe('Target measurement plan v1 authoring', () => {
-  it('accepts a generic Cortland-like target plan without cohort or lane concepts', () => {
+  it('accepts a generic synthetic target plan without cohort or lane concepts', () => {
     const parsed = measurementPlanInputSchema.parse(PLAN)
 
     expect(parsed).toEqual(expect.objectContaining({
       schemaVersion: 1,
-      targets: expect.arrayContaining([expect.objectContaining({ stableKey: 'ava-decatur' })]),
-      groups: expect.arrayContaining([expect.objectContaining({ stableKey: 'atlanta' })]),
-      targetQuerySelections: expect.arrayContaining([expect.objectContaining({ targetKey: 'ava-decatur' })]),
+      targets: expect.arrayContaining([expect.objectContaining({ stableKey: 'harbor-point' })]),
+      groups: expect.arrayContaining([expect.objectContaining({ stableKey: 'northbridge' })]),
+      targetQuerySelections: expect.arrayContaining([expect.objectContaining({ targetKey: 'harbor-point' })]),
     }))
     expect(JSON.stringify(parsed)).not.toContain('branded')
     expect(JSON.stringify(parsed)).not.toContain('generic')
@@ -104,7 +104,7 @@ describe('Target measurement plan v1 authoring', () => {
       groups: [{
         ...copyPlan().groups![0]!,
         queryIds: ['q-best'],
-        context: ATLANTA,
+        context: NORTHBRIDGE,
       }],
     }
 
@@ -136,30 +136,30 @@ describe('Target measurement plan v1 authoring', () => {
 })
 
 describe('Target measurement plan v1 compilation', () => {
-  it('compiles a 194-Target portfolio into one deduplicated execution graph', () => {
+  it('compiles a 200-Target portfolio into one deduplicated execution graph', () => {
     const trackedQueries = Array.from({ length: 5 }, (_, index) => ({
       id: `q-${index}`,
       query: `portfolio query ${index}`,
     }))
-    const targets = Array.from({ length: 194 }, (_, index) => {
+    const targets = Array.from({ length: 200 }, (_, index) => {
       const stableKey = `property-${String(index + 1).padStart(3, '0')}`
       return {
         stableKey,
         label: `Property ${index + 1}`,
         urls: [{
           kind: 'prefix' as const,
-          host: 'cortland.com',
+          host: 'northstar.example',
           pathPrefix: `/apartments/${stableKey}`,
           pathCase: 'insensitive' as const,
         }],
         aliases: [`Property ${index + 1}`],
       }
     })
-    const groups = Array.from({ length: 19 }, (_, index) => ({
+    const groups = Array.from({ length: 20 }, (_, index) => ({
       stableKey: `market-${String(index + 1).padStart(2, '0')}`,
       label: `Market ${index + 1}`,
       targetKeys: targets
-        .filter((_, targetIndex) => targetIndex % 19 === index)
+        .filter((_, targetIndex) => targetIndex % 20 === index)
         .map(target => target.stableKey),
     }))
     const input: MeasurementPlanInput = {
@@ -174,52 +174,52 @@ describe('Target measurement plan v1 compilation', () => {
 
     const compiled = compileMeasurementPlan(input, { ...CONTEXT, trackedQueries })
 
-    expect(compiled.targets).toHaveLength(194)
-    expect(compiled.groups).toHaveLength(19)
+    expect(compiled.targets).toHaveLength(200)
+    expect(compiled.groups).toHaveLength(20)
     expect(compiled.executionNodes).toHaveLength(5)
-    expect(compiled.usageEdges).toHaveLength(5 + (194 * 2) + (194 * 2))
+    expect(compiled.usageEdges).toHaveLength(5 + (200 * 2) + (200 * 2))
     expect(compiled.usageEdges.filter(edge => edge.kind === 'baseline')).toHaveLength(5)
-    expect(compiled.usageEdges.filter(edge => edge.kind === 'group')).toHaveLength(194 * 2)
+    expect(compiled.usageEdges.filter(edge => edge.kind === 'group')).toHaveLength(200 * 2)
   })
 
   it('freezes query snapshots, unconditional baseline edges, and mention applicability', () => {
     const compiled = compile()
 
     expect(compiled.querySnapshots).toEqual([
-      { queryId: 'q-ava', queryText: 'ava decatur reviews' },
-      { queryId: 'q-best', queryText: 'best apartments in atlanta' },
-      { queryId: 'q-cortland', queryText: 'cortland apartments' },
+      { queryId: 'q-best', queryText: 'best apartments in northbridge' },
+      { queryId: 'q-harbor', queryText: 'harbor point reviews' },
+      { queryId: 'q-northstar', queryText: 'northstar apartments' },
     ])
     expect(compiled.usageEdges.filter(edge => edge.kind === 'baseline')).toEqual([
-      expect.objectContaining({ kind: 'baseline', queryId: 'q-ava' }),
       expect.objectContaining({ kind: 'baseline', queryId: 'q-best' }),
-      expect.objectContaining({ kind: 'baseline', queryId: 'q-cortland' }),
+      expect.objectContaining({ kind: 'baseline', queryId: 'q-harbor' }),
+      expect.objectContaining({ kind: 'baseline', queryId: 'q-northstar' }),
     ])
-    const baseline = compiled.usageEdges.find(edge => edge.kind === 'baseline' && edge.queryId === 'q-cortland')!
-    expect(compiled.executionNodes.find(node => node.stableKey === baseline.executionNodeKey)?.context).toEqual(ATLANTA)
-    expect(compiled.targets.find(target => target.stableKey === 'cortland-decatur')?.mentionNotApplicable).toBe(true)
+    const baseline = compiled.usageEdges.find(edge => edge.kind === 'baseline' && edge.queryId === 'q-northstar')!
+    expect(compiled.executionNodes.find(node => node.stableKey === baseline.executionNodeKey)?.context).toEqual(NORTHBRIDGE)
+    expect(compiled.targets.find(target => target.stableKey === 'northstar-ridge')?.mentionNotApplicable).toBe(true)
   })
 
   it('dedupes identical query/context executions while preserving separate usage edges', () => {
     const compiled = compile()
-    const nodes = compiled.executionNodes.filter(node => node.queryText === 'best apartments in atlanta')
-    const atlantaNode = nodes.find(node => node.context?.label === 'atlanta')!
-    const sharedEdges = compiled.usageEdges.filter(edge => edge.executionNodeKey === atlantaNode.stableKey)
+    const nodes = compiled.executionNodes.filter(node => node.queryText === 'best apartments in northbridge')
+    const northbridgeNode = nodes.find(node => node.context?.label === 'northbridge')!
+    const sharedEdges = compiled.usageEdges.filter(edge => edge.executionNodeKey === northbridgeNode.stableKey)
 
     expect(nodes).toHaveLength(2)
     expect(sharedEdges).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'baseline', queryId: 'q-best' }),
-      expect.objectContaining({ kind: 'target', targetKey: 'ava-decatur', queryId: 'q-best' }),
-      expect.objectContaining({ kind: 'group', groupKey: 'atlanta', targetKey: 'ava-decatur', queryId: 'q-best' }),
+      expect.objectContaining({ kind: 'target', targetKey: 'harbor-point', queryId: 'q-best' }),
+      expect.objectContaining({ kind: 'group', groupKey: 'northbridge', targetKey: 'harbor-point', queryId: 'q-best' }),
     ]))
   })
 
   it('splits execution nodes by resolved context and rejects conflicting Target/query contexts', () => {
     const compiled = compile()
-    expect(compiled.executionNodes.filter(node => node.queryText === 'best apartments in atlanta')).toHaveLength(2)
+    expect(compiled.executionNodes.filter(node => node.queryText === 'best apartments in northbridge')).toHaveLength(2)
 
     const conflict = copyPlan()
-    conflict.targetQuerySelections!.push({ targetKey: 'ava-decatur', queryIds: ['q-best'], context: null })
+    conflict.targetQuerySelections!.push({ targetKey: 'harbor-point', queryIds: ['q-best'], context: null })
     const error = validationError(() => compile(conflict))
     expect(error.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ message: 'Target/query assignment has conflicting resolved contexts' }),
@@ -245,9 +245,9 @@ describe('Target measurement plan v1 compilation', () => {
 
     const fragmented = copyPlan()
     fragmented.targetQuerySelections = [
-      { targetKey: 'ava-decatur', queryIds: ['q-best'], context: ATLANTA },
-      { targetKey: 'ava-decatur', queryIds: ['q-ava'] },
-      { targetKey: 'cortland-decatur', queryIds: ['q-best'], context: null },
+      { targetKey: 'harbor-point', queryIds: ['q-best'], context: NORTHBRIDGE },
+      { targetKey: 'harbor-point', queryIds: ['q-harbor'] },
+      { targetKey: 'northstar-ridge', queryIds: ['q-best'], context: null },
     ]
     expect(canonicalMeasurementPlanJson(compile(fragmented))).toBe(canonicalMeasurementPlanJson(compile()))
   })
@@ -255,18 +255,18 @@ describe('Target measurement plan v1 compilation', () => {
   it('normalizes known owned hosts, competitors, and metadata into the persisted revision', () => {
     const input = copyPlan()
     input.targets[0]!.urls[0] = {
-      kind: 'prefix', host: 'HTTPS://WWW.CORTLAND.COM/', pathPrefix: '//apartments///ava-decatur/', pathCase: 'insensitive',
+      kind: 'prefix', host: 'HTTPS://WWW.NORTHSTAR.EXAMPLE/', pathPrefix: '//apartments///harbor-point/', pathCase: 'insensitive',
     }
-    input.groups![0]!.competitors = ['GREYSTAR.COM', 'greystar.com']
-    input.targets[0]!.metadata = { state: 'GA', market: 'Atlanta' }
+    input.groups![0]!.competitors = ['RIVAL.EXAMPLE', 'rival.example']
+    input.targets[0]!.metadata = { state: 'NB', market: 'Northbridge' }
     const compiled = compile(input)
 
-    expect(compiled.effectiveOwnedHosts).toEqual(['ava-decatur.cortland.com', 'cortland.com'])
-    expect(compiled.groups[0]?.competitors).toEqual(['greystar.com'])
-    expect(compiled.targets[0]?.metadata).toEqual({ market: 'Atlanta', state: 'GA' })
-    expect(compiled.targets.find(target => target.stableKey === 'ava-decatur')?.urls)
+    expect(compiled.effectiveOwnedHosts).toEqual(['harbor-point.northstar.example', 'northstar.example'])
+    expect(compiled.groups[0]?.competitors).toEqual(['rival.example'])
+    expect(compiled.targets[0]?.metadata).toEqual({ market: 'Northbridge', state: 'NB' })
+    expect(compiled.targets.find(target => target.stableKey === 'harbor-point')?.urls)
       .toEqual(expect.arrayContaining([
-        expect.objectContaining({ kind: 'prefix', host: 'cortland.com', pathPrefix: '/apartments/ava-decatur' }),
+        expect.objectContaining({ kind: 'prefix', host: 'northstar.example', pathPrefix: '/apartments/harbor-point' }),
       ]))
   })
 
@@ -276,47 +276,47 @@ describe('Target measurement plan v1 compilation', () => {
     expect(() => compile(unownedTarget)).toThrow('Measurement plan validation failed')
 
     const ownedCompetitor = copyPlan()
-    ownedCompetitor.groups![0]!.competitors = ['apartments.cortland.com']
+    ownedCompetitor.groups![0]!.competitors = ['apartments.northstar.example']
     expect(() => compile(ownedCompetitor)).toThrow('Measurement plan validation failed')
   })
 })
 
 describe('Target URL ownership', () => {
   const TARGETS = [
-    { stableKey: 'host', urls: [{ kind: 'host' as const, host: 'cortland.com' }] },
-    { stableKey: 'prefix', urls: [{ kind: 'prefix' as const, host: 'cortland.com', pathPrefix: '/apartments', pathCase: 'insensitive' as const }] },
-    { stableKey: 'nested', urls: [{ kind: 'prefix' as const, host: 'cortland.com', pathPrefix: '/apartments/ava-decatur', pathCase: 'insensitive' as const }] },
-    { stableKey: 'exact', urls: [{ kind: 'exact' as const, url: 'https://cortland.com/apartments/ava-decatur/unit-1', pathCase: 'insensitive' as const }] },
+    { stableKey: 'host', urls: [{ kind: 'host' as const, host: 'northstar.example' }] },
+    { stableKey: 'prefix', urls: [{ kind: 'prefix' as const, host: 'northstar.example', pathPrefix: '/apartments', pathCase: 'insensitive' as const }] },
+    { stableKey: 'nested', urls: [{ kind: 'prefix' as const, host: 'northstar.example', pathPrefix: '/apartments/harbor-point', pathCase: 'insensitive' as const }] },
+    { stableKey: 'exact', urls: [{ kind: 'exact' as const, url: 'https://northstar.example/apartments/harbor-point/unit-1', pathCase: 'insensitive' as const }] },
   ]
 
   it('applies exact, longest prefix, then host-only precedence', () => {
-    expect(resolveMeasurementTarget('https://cortland.com/apartments/ava-decatur/unit-1', TARGETS))
+    expect(resolveMeasurementTarget('https://northstar.example/apartments/harbor-point/unit-1', TARGETS))
       .toMatchObject({ status: 'matched', targetKey: 'exact', matcher: { kind: 'exact' } })
-    expect(resolveMeasurementTarget('https://cortland.com/apartments/ava-decatur/unit-2', TARGETS))
+    expect(resolveMeasurementTarget('https://northstar.example/apartments/harbor-point/unit-2', TARGETS))
       .toMatchObject({ status: 'matched', targetKey: 'nested', matcher: { kind: 'prefix' } })
-    expect(resolveMeasurementTarget('https://cortland.com/apartments/other', TARGETS))
+    expect(resolveMeasurementTarget('https://northstar.example/apartments/other', TARGETS))
       .toMatchObject({ status: 'matched', targetKey: 'prefix' })
-    expect(resolveMeasurementTarget('https://cortland.com/about', TARGETS))
+    expect(resolveMeasurementTarget('https://northstar.example/about', TARGETS))
       .toMatchObject({ status: 'matched', targetKey: 'host' })
   })
 
   it('allows nested prefixes, preserves path boundaries, and normalizes URL paths safely', () => {
-    expect(normalizeMeasurementPathPrefix('///apartments////ava-decatur///')).toBe('/apartments/ava-decatur')
+    expect(normalizeMeasurementPathPrefix('///apartments////harbor-point///')).toBe('/apartments/harbor-point')
     expect(() => normalizeMeasurementPathPrefix('/apartments/%2e%2e/admin')).toThrow()
-    expect(matchesMeasurementTargetUrl('https://cortland.com//APARTMENTS//AVA-DECATUR/unit-2', TARGETS[2]!.urls[0]!)).toBe(true)
-    expect(matchesMeasurementTargetUrl('https://cortland.com/apartments/ava-decatur-north', TARGETS[2]!.urls[0]!)).toBe(false)
+    expect(matchesMeasurementTargetUrl('https://northstar.example//APARTMENTS//HARBOR-POINT/unit-2', TARGETS[2]!.urls[0]!)).toBe(true)
+    expect(matchesMeasurementTargetUrl('https://northstar.example/apartments/harbor-point-north', TARGETS[2]!.urls[0]!)).toBe(false)
   })
 
   it('returns ambiguity rather than lexicographically choosing equal target matches', () => {
     const ambiguousTargets = [
-      { stableKey: 'zebra', urls: [{ kind: 'prefix' as const, host: 'cortland.com', pathPrefix: '/apartments', pathCase: 'sensitive' as const }] },
-      { stableKey: 'alpha', urls: [{ kind: 'prefix' as const, host: 'cortland.com', pathPrefix: '/apartments', pathCase: 'sensitive' as const }] },
+      { stableKey: 'zebra', urls: [{ kind: 'prefix' as const, host: 'northstar.example', pathPrefix: '/apartments', pathCase: 'sensitive' as const }] },
+      { stableKey: 'alpha', urls: [{ kind: 'prefix' as const, host: 'northstar.example', pathPrefix: '/apartments', pathCase: 'sensitive' as const }] },
     ]
-    expect(resolveMeasurementTarget('https://cortland.com/apartments/a', ambiguousTargets))
+    expect(resolveMeasurementTarget('https://northstar.example/apartments/a', ambiguousTargets))
       .toMatchObject({ status: 'ambiguous', candidates: [expect.objectContaining({ targetKey: 'alpha' }), expect.objectContaining({ targetKey: 'zebra' })] })
 
     const plan = copyPlan()
-    plan.targets[1]!.urls = [{ kind: 'prefix', host: 'cortland.com', pathPrefix: '/apartments/ava-decatur', pathCase: 'insensitive' }]
+    plan.targets[1]!.urls = [{ kind: 'prefix', host: 'northstar.example', pathPrefix: '/apartments/harbor-point', pathCase: 'insensitive' }]
     const error = validationError(() => compile(plan))
     expect(error.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ message: 'Target URL matcher has an equal-specificity cross-target tie' }),
@@ -334,21 +334,21 @@ describe('Target URL ownership', () => {
 describe('Target aliases and frozen storage', () => {
   it('rejects mention-equivalent alias collisions, warns on prefix overlap, and marks alias-less targets N/A', () => {
     const collision = copyPlan()
-    collision.targets[1]!.aliases = ['ava-decatur']
+    collision.targets[1]!.aliases = ['harbor-point']
     expect(measurementPlanInputSchema.safeParse(collision).success).toBe(false)
 
     const overlap = copyPlan()
-    overlap.targets[1]!.aliases = ['AVA Decatur Heights']
+    overlap.targets[1]!.aliases = ['Harbor Point Heights']
     const compiled = compile(overlap)
     expect(compiled.warnings).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'target-alias-prefix-overlap' }),
     ]))
-    expect(compiled.targets.find(target => target.stableKey === 'cortland-decatur')?.mentionNotApplicable).toBe(false)
+    expect(compiled.targets.find(target => target.stableKey === 'northstar-ridge')?.mentionNotApplicable).toBe(false)
   })
 
   it('warns instead of rejecting project-brand collisions with a four-character floor', () => {
     const input = copyPlan()
-    input.targets[0]!.aliases = ['Cortland']
+    input.targets[0]!.aliases = ['Northstar Living']
     const compiled = compile(input)
     expect(compiled.warnings).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'target-alias-project-brand-collision' }),
