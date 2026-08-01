@@ -8,6 +8,8 @@ const listMeasurementPlanVersions = vi.fn()
 const getMeasurementPlanVersion = vi.fn()
 const publishMeasurementPlan = vi.fn()
 const retireMeasurementPlanSegment = vi.fn()
+const discoverMeasurementTargets = vi.fn()
+const getMeasurementReport = vi.fn()
 
 vi.mock('../src/client.js', () => ({
   createApiClient: () => ({
@@ -16,6 +18,8 @@ vi.mock('../src/client.js', () => ({
     getMeasurementPlanVersion,
     publishMeasurementPlan,
     retireMeasurementPlanSegment,
+    discoverMeasurementTargets,
+    getMeasurementReport,
   }),
 }))
 
@@ -50,6 +54,8 @@ describe('measurement-plan CLI commands', () => {
     getMeasurementPlanVersion.mockResolvedValue({ version: { revision: 1 } })
     publishMeasurementPlan.mockResolvedValue({ active: { revision: 1 } })
     retireMeasurementPlanSegment.mockResolvedValue({ stableKey: 'nyc', retiredAt: '2026-07-31T00:00:00.000Z' })
+    discoverMeasurementTargets.mockResolvedValue({ proposed: [], aliases: [], shared: [], unmatched: [], excluded: [], diagnostics: [] })
+    getMeasurementReport.mockResolvedValue({ revision: 1, run: null, groups: [], targets: [], evidence: [], diagnostics: {} })
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-measurement-plan-cli-'))
   })
 
@@ -67,6 +73,10 @@ describe('measurement-plan CLI commands', () => {
       .toBe('canonry measurement-plan publish <project> <yaml|json|-> [--format json]')
     expect(command('measurement-plan retire').usage)
       .toBe('canonry measurement-plan retire <project> <stable-key> [--format json]')
+    expect(command('measurement-plan discover').usage)
+      .toBe('canonry measurement-plan discover <project> --sitemap-url <url> --rule <yaml|json|-> [--max-urls N] [--format json]')
+    expect(command('measurement-plan report').usage)
+      .toBe('canonry measurement-plan report <project> --revision N [--format json]')
   })
 
   it('retires a stable measurement segment key', async () => {
@@ -114,5 +124,74 @@ describe('measurement-plan CLI commands', () => {
 
     expect(readFile).toHaveBeenCalledWith(0, 'utf8')
     expect(publishMeasurementPlan).toHaveBeenCalledWith('acme', PLAN)
+  })
+
+  it.each([
+    ['JSON', 'rule.json', JSON.stringify({
+      primary: { host: 'example.com', pathTemplate: '/locations/{slug}' },
+      aliases: [{ host: 'directory.example', pathTemplate: '/{slug}' }],
+    })],
+    ['YAML', 'rule.yaml', [
+      'primary:',
+      '  host: example.com',
+      '  pathTemplate: /locations/{slug}',
+      'aliases:',
+      '  - host: directory.example',
+      '    pathTemplate: /{slug}',
+      '',
+    ].join('\n')],
+  ])('discovers targets from a sitemap using a validated %s rule', async (_label, filename, contents) => {
+    const rulePath = path.join(tmpDir, filename)
+    fs.writeFileSync(rulePath, contents)
+
+    await command('measurement-plan discover').run({
+      positionals: ['acme'],
+      values: {
+        'sitemap-url': 'https://example.com/sitemap.xml',
+        rule: rulePath,
+        'max-urls': '250',
+      },
+      format: 'json',
+      dryRun: false,
+    })
+
+    expect(discoverMeasurementTargets).toHaveBeenCalledWith('acme', {
+      sitemapUrl: 'https://example.com/sitemap.xml',
+      maxUrls: 250,
+      rule: {
+        primary: { host: 'example.com', pathTemplate: '/locations/{slug}' },
+        aliases: [{ host: 'directory.example', pathTemplate: '/{slug}' }],
+      },
+    })
+  })
+
+  it('requires a positive discovery cap and report revision', async () => {
+    const rulePath = path.join(tmpDir, 'rule.json')
+    fs.writeFileSync(rulePath, JSON.stringify({
+      primary: { host: 'example.com', pathTemplate: '/locations/{slug}' },
+    }))
+
+    expect(() => command('measurement-plan discover').run({
+      positionals: ['acme'],
+      values: {
+        'sitemap-url': 'https://example.com/sitemap.xml',
+        rule: rulePath,
+        'max-urls': '0',
+      },
+      format: 'json',
+      dryRun: false,
+    })).toThrow('--max-urls must be an integer from 1 to 10000')
+
+    expect(() => command('measurement-plan report').run({
+      positionals: ['acme'], values: { revision: 'nope' }, format: 'json', dryRun: false,
+    })).toThrow('--revision must be a positive integer')
+  })
+
+  it('reads a revision-pinned measurement report', async () => {
+    await command('measurement-plan report').run({
+      positionals: ['acme'], values: { revision: '3' }, format: 'json', dryRun: false,
+    })
+
+    expect(getMeasurementReport).toHaveBeenCalledWith('acme', 3)
   })
 })

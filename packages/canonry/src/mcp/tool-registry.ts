@@ -44,6 +44,7 @@ import {
   trafficEventKindSchema,
   trafficSeriesGranularitySchema,
   measurementPlanAuthoringSchema,
+  measurementDiscoveryRequestSchema,
   type NotificationEvent,
 } from '@ainyc/canonry-contracts'
 import { z } from 'zod'
@@ -108,6 +109,7 @@ const runTriggerInputSchema = z.object({
 const measurementPlanVersionInputSchema = z.object({ project: projectNameSchema, revision: z.number().int().positive() })
 const measurementPlanPublishInputSchema = z.object({ project: projectNameSchema, plan: measurementPlanAuthoringSchema })
 const measurementPlanRetireInputSchema = z.object({ project: projectNameSchema, stableKey: z.string().min(1) })
+const measurementDiscoveryInputSchema = measurementDiscoveryRequestSchema.extend({ project: projectNameSchema })
 const runsListInputSchema = z.object({
   project: projectNameSchema,
   limit: z.number().int().positive().max(500).optional(),
@@ -1801,6 +1803,21 @@ export const canonryMcpTools = [
     },
   }),
   defineTool({
+    name: 'canonry_measurement_discovery',
+    title: 'Discover measurement Targets',
+    description: 'Fetch a public sitemap under bounded network policy and deterministically classify project-owned URLs into Target proposals, aliases, shared paths, unmatched paths, and exclusions. Does not publish a plan.',
+    access: 'write',
+    tier: 'setup',
+    inputSchema: measurementDiscoveryInputSchema,
+    annotations: writeAnnotations({ idempotentHint: false, openWorldHint: true }),
+    openApiOperations: ['POST /api/v1/projects/{name}/measurement-discovery'],
+    handler: (client, input) => client.discoverMeasurementTargets(input.project, {
+      sitemapUrl: input.sitemapUrl,
+      rule: input.rule,
+      ...(input.maxUrls === undefined ? {} : { maxUrls: input.maxUrls }),
+    }),
+  }),
+  defineTool({
     name: 'canonry_measurement_plan_get', title: 'Get measurement plan', description: 'Get the active measurement plan for a project.', access: 'read', tier: 'setup', inputSchema: projectInputSchema, annotations: readAnnotations(), openApiOperations: ['GET /api/v1/projects/{name}/measurement-plan'], handler: (client, input) => client.getMeasurementPlan(input.project),
   }),
   defineTool({
@@ -1820,6 +1837,17 @@ export const canonryMcpTools = [
   }),
   defineTool({
     name: 'canonry_measurement_plan_segment_retire', title: 'Retire measurement segment', description: 'Permanently retire an inactive Target or group stable key. Publish a revision without it first; there is no unretire.', access: 'write', tier: 'setup', inputSchema: measurementPlanRetireInputSchema, annotations: writeAnnotations({ idempotentHint: true, destructiveHint: true }), openApiOperations: ['POST /api/v1/projects/{name}/measurement-plan/segments/{stableKey}/retire'], handler: (client, input) => client.retireMeasurementPlanSegment(input.project, input.stableKey),
+  }),
+  defineTool({
+    name: 'canonry_measurement_report',
+    title: 'Get measurement report',
+    description: 'Get a revision-pinned Target and group measurement report from stored runs. Never starts live provider work.',
+    access: 'read',
+    tier: 'setup',
+    inputSchema: measurementPlanVersionInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-report'],
+    handler: (client, input) => client.getMeasurementReport(input.project, input.revision),
   }),
   defineTool({
     name: 'canonry_run_trigger',

@@ -12,6 +12,8 @@ import { runRoutes } from './runs.js'
 import type { RunRoutesOptions } from './runs.js'
 import { measurementPlanRoutes } from './measurement-plan.js'
 import type { MeasurementPlanRoutesOptions } from './measurement-plan.js'
+import { measurementServiceRoutes } from './measurement-service.js'
+import type { MeasurementServiceRoutesOptions } from './measurement-service.js'
 import { applyRoutes } from './apply.js'
 import type { ApplyRoutesOptions } from './apply.js'
 import { historyRoutes } from './history.js'
@@ -96,6 +98,8 @@ export interface ApiRoutesOptions {
   onRunCreated?: (runId: string, projectId: string, providers?: string[], location?: import('@ainyc/canonry-contracts').LocationContext | null) => void
   /** Returns providers currently registered and runnable by the host worker. */
   getRunnableProviderNames?: () => readonly string[]
+  /** Optional deterministic sitemap-fetch seam for Target discovery tests/hosts. */
+  fetchMeasurementSitemap?: MeasurementServiceRoutesOptions['fetchSitemap']
   /** Provider configuration summary for settings endpoint */
   providerSummary?: ProviderSummaryEntry[]
   /** Resolves agent LLM provider key status for the `config.agent-providers` doctor check. See `DoctorContext.getAgentProviderSummary`. */
@@ -368,6 +372,9 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
     await api.register(measurementPlanRoutes, {
       getRunnableProviderNames: opts.getRunnableProviderNames,
     } satisfies MeasurementPlanRoutesOptions)
+    await api.register(measurementServiceRoutes, {
+      fetchSitemap: opts.fetchMeasurementSitemap,
+    } satisfies MeasurementServiceRoutesOptions)
     await api.register(applyRoutes, {
       onScheduleUpdated: opts.onScheduleUpdated,
       onProjectUpserted: opts.onProjectUpserted,

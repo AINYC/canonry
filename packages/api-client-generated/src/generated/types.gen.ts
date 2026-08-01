@@ -2699,6 +2699,69 @@ export type LocationContext = {
     timezone?: string;
 };
 
+export type MeasurementDiscoveryRequest = {
+    sitemapUrl: string;
+    rule: {
+        primary: {
+            host: string;
+            pathTemplate: string;
+        };
+        aliases?: Array<{
+            host: string;
+            pathTemplate: string;
+        }>;
+        excludedSlugSuffixes?: Array<string>;
+        excludedSlugPatterns?: Array<{
+            kind: 'exact' | 'prefix' | 'suffix' | 'contains';
+            value: string;
+        }>;
+    };
+    maxUrls?: number;
+};
+
+export type MeasurementDiscoveryResponse = {
+    proposed: Array<{
+        classification: 'proposed';
+        reason: 'primary-match';
+        stableKey: string;
+        slug: string;
+        label: string;
+        primaryUrl: string;
+        aliasCoverageUrls: Array<string>;
+    }>;
+    aliases: Array<{
+        classification: 'alias';
+        reason: 'exact-slug-match';
+        slug: string;
+        url: string;
+        targetStableKey: string;
+    }>;
+    shared: Array<{
+        url: string;
+        canonicalUrl: string | null;
+        classification: 'shared' | 'unmatched' | 'excluded';
+        reason: 'excluded-slug' | 'shared-path' | 'unmatched-path' | 'alias-without-primary' | 'unsupported-slug';
+    }>;
+    unmatched: Array<{
+        url: string;
+        canonicalUrl: string | null;
+        classification: 'shared' | 'unmatched' | 'excluded';
+        reason: 'excluded-slug' | 'shared-path' | 'unmatched-path' | 'alias-without-primary' | 'unsupported-slug';
+    }>;
+    excluded: Array<{
+        url: string;
+        canonicalUrl: string | null;
+        classification: 'shared' | 'unmatched' | 'excluded';
+        reason: 'excluded-slug' | 'shared-path' | 'unmatched-path' | 'alias-without-primary' | 'unsupported-slug';
+    }>;
+    diagnostics: Array<{
+        kind: 'invalid-url' | 'unowned-host' | 'duplicate-url' | 'url-cap-reached';
+        url: string;
+        canonicalUrl: string | null;
+        duplicateOf?: string;
+    }>;
+};
+
 export type MeasurementPlanCompilePreviewResponse = {
     ok: true;
     checks: Array<{
@@ -3292,11 +3355,6 @@ export type MeasurementPlanInput = {
     }>;
 };
 
-export type MeasurementSegmentRetirementResponse = {
-    stableKey: string;
-    retiredAt: string;
-};
-
 export type MeasurementPlanResponse = {
     active: {
         revision: number;
@@ -3489,6 +3547,189 @@ export type MeasurementPlanVersionsResponse = {
         createdAt: string;
         active: boolean;
     }>;
+};
+
+export type MeasurementReportResponse = {
+    revision: number;
+    run: {
+        id: string;
+        status: 'completed' | 'partial';
+        createdAt: string;
+        startedAt: string | null;
+        finishedAt: string | null;
+    } | null;
+    groups: Array<{
+        id: string;
+        label: string;
+        targetIds: Array<string>;
+        completeness: {
+            executed: number;
+            expected: number;
+            complete: boolean;
+            sourceComplete: boolean;
+            answerComplete: boolean;
+        };
+        answerCoverage: {
+            numerator: number;
+            denominator: number;
+            rate: number;
+        } | {
+            numerator: null;
+            denominator: null;
+            rate: null;
+            reason: 'incomplete' | 'evidence-incomplete' | 'no-population' | 'aliasless' | 'no-competitors' | 'no-project-aliases';
+        };
+        targetCoverage: {
+            numerator: number;
+            denominator: number;
+            rate: number;
+        } | {
+            numerator: null;
+            denominator: null;
+            rate: null;
+            reason: 'incomplete' | 'evidence-incomplete' | 'no-population' | 'aliasless' | 'no-competitors' | 'no-project-aliases';
+        };
+        sov: {
+            domains: Array<{
+                domain: string;
+                own: boolean;
+                presentIn: number;
+                of: number;
+            } | {
+                domain: string;
+                own: boolean;
+                presentIn: null;
+                of: null;
+                reason: 'incomplete' | 'evidence-incomplete' | 'no-population' | 'aliasless' | 'no-competitors' | 'no-project-aliases';
+            }>;
+            providers: Array<{
+                provider: string;
+                domains: Array<{
+                    domain: string;
+                    own: boolean;
+                    presentIn: number;
+                    of: number;
+                } | {
+                    domain: string;
+                    own: boolean;
+                    presentIn: null;
+                    of: null;
+                    reason: 'incomplete' | 'evidence-incomplete' | 'no-population' | 'aliasless' | 'no-competitors' | 'no-project-aliases';
+                }>;
+            }>;
+        };
+        providers: Array<{
+            provider: string;
+            completeness: {
+                executed: number;
+                expected: number;
+                complete: boolean;
+                sourceComplete: boolean;
+                answerComplete: boolean;
+            };
+            answerCoverage: {
+                numerator: number;
+                denominator: number;
+                rate: number;
+            } | {
+                numerator: null;
+                denominator: null;
+                rate: null;
+                reason: 'incomplete' | 'evidence-incomplete' | 'no-population' | 'aliasless' | 'no-competitors' | 'no-project-aliases';
+            };
+        }>;
+    }>;
+    targets: Array<{
+        id: string;
+        label: string;
+        completeness: {
+            executed: number;
+            expected: number;
+            complete: boolean;
+            sourceComplete: boolean;
+            answerComplete: boolean;
+        };
+        citationCoverage: {
+            numerator: number;
+            denominator: number;
+            rate: number;
+        } | {
+            numerator: null;
+            denominator: null;
+            rate: null;
+            reason: 'incomplete' | 'evidence-incomplete' | 'no-population' | 'aliasless' | 'no-competitors' | 'no-project-aliases';
+        };
+        mentionCoverage: {
+            numerator: number;
+            denominator: number;
+            rate: number;
+        } | {
+            numerator: null;
+            denominator: null;
+            rate: null;
+            reason: 'incomplete' | 'evidence-incomplete' | 'no-population' | 'aliasless' | 'no-competitors' | 'no-project-aliases';
+        };
+        providers: Array<{
+            provider: string;
+            completeness: {
+                executed: number;
+                expected: number;
+                complete: boolean;
+                sourceComplete: boolean;
+                answerComplete: boolean;
+            };
+            citationCoverage: {
+                numerator: number;
+                denominator: number;
+                rate: number;
+            } | {
+                numerator: null;
+                denominator: null;
+                rate: null;
+                reason: 'incomplete' | 'evidence-incomplete' | 'no-population' | 'aliasless' | 'no-competitors' | 'no-project-aliases';
+            };
+            mentionCoverage: {
+                numerator: number;
+                denominator: number;
+                rate: number;
+            } | {
+                numerator: null;
+                denominator: null;
+                rate: null;
+                reason: 'incomplete' | 'evidence-incomplete' | 'no-population' | 'aliasless' | 'no-competitors' | 'no-project-aliases';
+            };
+        }>;
+    }>;
+    evidence: Array<{
+        observationId: string;
+        expectedSlotId: string;
+        executionId: string;
+        usageEdgeId: string;
+        usageEdgeType: 'baseline' | 'target';
+        provider: string;
+        queryText: string;
+        location: string | null;
+        sourceUrl: string;
+        bridged: boolean;
+        historical: boolean;
+        evidenceComplete: boolean;
+        classification: 'assigned' | 'sibling' | 'ownedUnmapped' | 'external' | 'ambiguous' | 'invalid';
+        normalizedUrl: string | null;
+        matchedTargetIds: Array<string>;
+        matchedUrlIds: Array<string>;
+    }>;
+    diagnostics: {
+        bridgedObservationIds: Array<string>;
+        historicalObservationIds: Array<string>;
+        evidenceIncompleteObservationIds: Array<string>;
+        ambiguousObservationIds: Array<string>;
+        unmatchedObservationIds: Array<string>;
+    };
+};
+
+export type MeasurementSegmentRetirementResponse = {
+    stableKey: string;
+    retiredAt: string;
 };
 
 export type NotificationDto = {
@@ -6015,6 +6256,48 @@ export type PutApiV1ProjectsByNameResponses = {
 
 export type PutApiV1ProjectsByNameResponse = PutApiV1ProjectsByNameResponses[keyof PutApiV1ProjectsByNameResponses];
 
+export type PostApiV1ProjectsByNameMeasurementDiscoveryData = {
+    body: MeasurementDiscoveryRequest;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-discovery';
+};
+
+export type PostApiV1ProjectsByNameMeasurementDiscoveryErrors = {
+    /**
+     * The sitemap URL or discovery rule is invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The API key lacks measurement-plan.write.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The sitemap could not be fetched safely.
+     */
+    502: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameMeasurementDiscoveryError = PostApiV1ProjectsByNameMeasurementDiscoveryErrors[keyof PostApiV1ProjectsByNameMeasurementDiscoveryErrors];
+
+export type PostApiV1ProjectsByNameMeasurementDiscoveryResponses = {
+    /**
+     * Deterministic sitemap classification returned.
+     */
+    200: MeasurementDiscoveryResponse;
+};
+
+export type PostApiV1ProjectsByNameMeasurementDiscoveryResponse = PostApiV1ProjectsByNameMeasurementDiscoveryResponses[keyof PostApiV1ProjectsByNameMeasurementDiscoveryResponses];
+
 export type GetApiV1ProjectsByNameMeasurementPlanData = {
     body?: never;
     path: {
@@ -6260,6 +6543,45 @@ export type GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionResponses = {
 };
 
 export type GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionResponse = GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionResponses[keyof GetApiV1ProjectsByNameMeasurementPlanVersionsByRevisionResponses];
+
+export type GetApiV1ProjectsByNameMeasurementReportData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query: {
+        /**
+         * Immutable project-local measurement-plan revision to report.
+         */
+        revision: number;
+    };
+    url: '/api/v1/projects/{name}/measurement-report';
+};
+
+export type GetApiV1ProjectsByNameMeasurementReportErrors = {
+    /**
+     * The revision query parameter is invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project or measurement-plan revision not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameMeasurementReportError = GetApiV1ProjectsByNameMeasurementReportErrors[keyof GetApiV1ProjectsByNameMeasurementReportErrors];
+
+export type GetApiV1ProjectsByNameMeasurementReportResponses = {
+    /**
+     * Revision-pinned measurement report returned.
+     */
+    200: MeasurementReportResponse;
+};
+
+export type GetApiV1ProjectsByNameMeasurementReportResponse = GetApiV1ProjectsByNameMeasurementReportResponses[keyof GetApiV1ProjectsByNameMeasurementReportResponses];
 
 export type GetApiV1ProjectsData = {
     body?: never;

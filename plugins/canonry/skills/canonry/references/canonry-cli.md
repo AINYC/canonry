@@ -302,6 +302,39 @@ cnry competitor add <project> competitor1.com competitor2.com
 cnry competitor list <project>
 ```
 
+## Target Measurement Plans
+
+```bash
+cnry measurement-plan discover <project> --sitemap-url https://example.com/sitemap.xml --rule discovery-rule.yaml
+cnry measurement-plan discover <project> --sitemap-url https://example.com/sitemap.xml --rule discovery-rule.json --max-urls 500
+cnry measurement-plan show <project>                    # active immutable revision
+cnry measurement-plan show <project> --revision 2       # one historical revision
+cnry measurement-plan versions <project>
+cnry measurement-plan publish <project> plan.yaml
+cnry measurement-plan report <project> --revision 2     # stored evidence only; never starts provider work
+cnry measurement-plan retire <project> <stable-key>
+```
+
+`discover` fetches a public sitemap and applies an operator-supplied deterministic
+route rule to project-owned URLs. It returns explicit proposed, alias, shared, unmatched, and excluded
+buckets; it does not infer queries or publish a plan. A rule file uses this
+shape:
+
+```yaml
+primary:
+  host: example.com
+  pathTemplate: /locations/{slug}
+aliases:
+  - host: directory.example
+    pathTemplate: /{slug}
+excludedSlugSuffixes:
+  - blog
+```
+
+Review discovery output, author the plan, and publish it as a separate action.
+`report` is pinned to one immutable revision and reads stored run evidence. It
+does not execute providers.
+
 ## Scheduling & Notifications
 
 ```bash

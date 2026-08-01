@@ -156,6 +156,14 @@ const measurementPlanRevisionParameter: OpenApiParameter = {
   schema: { type: 'integer', minimum: 1 },
 }
 
+const measurementReportRevisionParameter: OpenApiParameter = {
+  name: 'revision',
+  in: 'query',
+  required: true,
+  description: 'Immutable project-local measurement-plan revision to report.',
+  schema: { type: 'integer', minimum: 1 },
+}
+
 const runIdParameter: OpenApiParameter = {
   name: 'id',
   in: 'path',
@@ -467,6 +475,29 @@ const routeCatalog: OpenApiOperation[] = [
     },
   },
   {
+    method: 'post',
+    path: '/api/v1/projects/{name}/measurement-discovery',
+    summary: 'Discover measurement Targets from a sitemap',
+    description: 'Fetches a public sitemap under bounded network policy and applies the supplied deterministic route rule to project-owned URLs. Every accepted URL is classified as proposed, alias, shared, unmatched, or excluded; no plan is published.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/MeasurementDiscoveryRequest' },
+        },
+      },
+    },
+    responses: {
+      200: jsonResponse('Deterministic sitemap classification returned.', 'MeasurementDiscoveryResponse'),
+      400: errorResponse('The sitemap URL or discovery rule is invalid.'),
+      403: errorResponse('The API key lacks measurement-plan.write.'),
+      404: errorResponse('Project not found.'),
+      502: errorResponse('The sitemap could not be fetched safely.'),
+    },
+  },
+  {
     method: 'get',
     path: '/api/v1/projects/{name}/measurement-plan',
     summary: 'Get the active measurement plan',
@@ -577,6 +608,19 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('Immutable measurement-plan revision returned.', 'MeasurementPlanVersionResponse'),
       404: errorResponse('Project or revision not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-report',
+    summary: 'Get a revision-pinned measurement report',
+    description: 'Builds the Target, group, and evidence report from the immutable plan revision and its latest eligible stored run. Missing run population remains explicit and never triggers live provider execution.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter, measurementReportRevisionParameter],
+    responses: {
+      200: jsonResponse('Revision-pinned measurement report returned.', 'MeasurementReportResponse'),
+      400: errorResponse('The revision query parameter is invalid.'),
+      404: errorResponse('Project or measurement-plan revision not found.'),
     },
   },
   {

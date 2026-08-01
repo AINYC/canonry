@@ -144,6 +144,7 @@ describe('report kernel', () => {
     const report = buildMeasurementReport(baseInput())
     const group = report.groups.find(candidate => candidate.id === 'harbor-region')!
 
+    expect(group.targetIds).toEqual(['harbor', 'north'])
     expect(group.completeness).toEqual({ executed: 2, expected: 2, complete: true, sourceComplete: true, answerComplete: true })
     expect(group.answerCoverage).toEqual({ numerator: 2, denominator: 2, rate: 1 })
     expect(group.targetCoverage).toEqual({ numerator: 2, denominator: 2, rate: 1 })
