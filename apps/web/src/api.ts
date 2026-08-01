@@ -170,6 +170,7 @@ declare global {
       /** Present only when dashboard chrome differs from its defaults. */
       dashboard?: {
         showResourceLinks?: boolean
+        showUpdateNotification?: boolean
       }
       /**
        * Read-only embed block injected by `canonry serve --embed` (#716). Present
@@ -250,6 +251,12 @@ export function getEmbedConfig(): EmbedClientConfig | null {
 export function shouldShowDashboardResourceLinks(): boolean {
   if (typeof window === 'undefined') return true
   return window.__CANONRY_CONFIG__?.dashboard?.showResourceLinks !== false
+}
+
+/** Whether the available-version notification renders in the sidebar. */
+export function shouldShowDashboardUpdateNotification(): boolean {
+  if (typeof window === 'undefined') return true
+  return window.__CANONRY_CONFIG__?.dashboard?.showUpdateNotification !== false
 }
 
 /**

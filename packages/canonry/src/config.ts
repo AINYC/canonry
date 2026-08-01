@@ -227,6 +227,13 @@ export interface DashboardConfigEntry {
    * quieter branded UI.
    */
   showResourceLinks?: boolean
+
+  /**
+   * Whether the dashboard sidebar shows the available-version notification.
+   * Defaults to true. Disable without turning off the underlying update check
+   * or CLI update notice.
+   */
+  showUpdateNotification?: boolean
 }
 
 /**
