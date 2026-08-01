@@ -59,7 +59,7 @@ test('reopening the drawer after closing from a form step returns to the source 
   expect(screen.getByText('Connect a traffic source')).toBeTruthy()
 
   // Pick WordPress — step 2 shows the WordPress form.
-  fireEvent.click(screen.getByText('WordPress site'))
+  fireEvent.click(screen.getByText('WordPress'))
   expect(screen.getByText('Connect a WordPress site')).toBeTruthy()
 
   // Close via the form's own footer Close button (next to Connect).
@@ -90,7 +90,7 @@ test('connecting a Vercel source closes the drawer and kicks off a backfill', as
 
   renderDrawer()
 
-  fireEvent.click(screen.getByText('Vercel project'))
+  fireEvent.click(screen.getByText('Vercel'))
   expect(screen.getByText('Connect a Vercel project')).toBeTruthy()
 
   fireEvent.change(screen.getByPlaceholderText(/prj_/i), { target: { value: '  prj_abc  ' } })
@@ -131,7 +131,7 @@ test('connecting a WordPress source closes the drawer and kicks off a backfill',
 
   renderDrawer()
 
-  fireEvent.click(screen.getByText('WordPress site'))
+  fireEvent.click(screen.getByText('WordPress'))
   expect(screen.getByText('Connect a WordPress site')).toBeTruthy()
 
   fireEvent.change(screen.getByPlaceholderText('https://example.com'), {
@@ -191,7 +191,7 @@ test('a failed connect keeps the drawer open and surfaces the error', async () =
 
   renderDrawer()
 
-  fireEvent.click(screen.getByText('Vercel project'))
+  fireEvent.click(screen.getByText('Vercel'))
   fireEvent.change(screen.getByPlaceholderText(/prj_/i), { target: { value: 'prj_abc' } })
   fireEvent.change(screen.getByLabelText(/team \/ account id/i), { target: { value: 'org_xyz' } })
   fireEvent.change(screen.getByLabelText(/personal access token/i), { target: { value: 'vcp_secret' } })
@@ -211,7 +211,7 @@ test('a failed connect keeps the drawer open and surfaces the error', async () =
 test('a whitespace-only required field shows a validation error without connecting', async () => {
   renderDrawer()
 
-  fireEvent.click(screen.getByText('Vercel project'))
+  fireEvent.click(screen.getByText('Vercel'))
   // Whitespace passes the HTML `required` attribute but fails the trimmed check.
   fireEvent.change(screen.getByPlaceholderText(/prj_/i), { target: { value: '   ' } })
   fireEvent.change(screen.getByLabelText(/team \/ account id/i), { target: { value: 'org_xyz' } })
@@ -228,7 +228,7 @@ test('a whitespace-only required field shows a validation error without connecti
 test('a whitespace-only team ID is caught by the validation chain', async () => {
   renderDrawer()
 
-  fireEvent.click(screen.getByText('Vercel project'))
+  fireEvent.click(screen.getByText('Vercel'))
   fireEvent.change(screen.getByPlaceholderText(/prj_/i), { target: { value: 'prj_abc' } })
   // teamId is whitespace-only; projectId is valid, so this exercises the
   // second link in the validation chain.
@@ -249,7 +249,7 @@ test('a backfill kickoff failure keeps the drawer open and surfaces the error', 
 
   renderDrawer()
 
-  fireEvent.click(screen.getByText('Vercel project'))
+  fireEvent.click(screen.getByText('Vercel'))
   fireEvent.change(screen.getByPlaceholderText(/prj_/i), { target: { value: 'prj_abc' } })
   fireEvent.change(screen.getByLabelText(/team \/ account id/i), { target: { value: 'org_xyz' } })
   fireEvent.change(screen.getByLabelText(/personal access token/i), { target: { value: 'vcp_secret' } })

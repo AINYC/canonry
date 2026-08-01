@@ -451,7 +451,7 @@ describe('POST /traffic/connect/wordpress', () => {
   afterEach(async () => { await h.close() })
 
   const validBody = {
-    baseUrl: 'https://example.com',
+    baseUrl: 'https://8.8.8.8',
     username: 'canonry-bot',
     applicationPassword: 'xxxx xxxx xxxx xxxx xxxx xxxx',
   }
@@ -513,7 +513,7 @@ describe('POST /traffic/connect/wordpress', () => {
     expect(dto.sourceType).toBe(TrafficSourceTypes.wordpress)
     expect(dto.status).toBe(TrafficSourceStatuses.connected)
     expect(dto.displayName).toBe('Example WP')
-    expect(dto.config.baseUrl).toBe('https://example.com')
+    expect(dto.config.baseUrl).toBe('https://8.8.8.8')
     expect(dto.config.username).toBe('canonry-bot')
     // Application password must never leak into the row config; it lives in
     // ~/.canonry/config.yaml only.
@@ -522,7 +522,7 @@ describe('POST /traffic/connect/wordpress', () => {
     // Probe ran once before any persistence.
     const probes = h.getWpProbeInvocations()
     expect(probes.length).toBe(1)
-    expect(probes[0]!.baseUrl).toBe('https://example.com')
+    expect(probes[0]!.baseUrl).toBe('https://8.8.8.8')
     expect(probes[0]!.pageSize).toBe(1)
 
     const stored = h.wpCredentials.get('test-project')
@@ -560,7 +560,7 @@ describe('POST /traffic/connect/wordpress', () => {
     const second = await h.app.inject({
       method: 'POST',
       url: '/api/v1/projects/test-project/traffic/connect/wordpress',
-      payload: { ...validBody, baseUrl: 'https://example.com', username: 'new-bot' },
+      payload: { ...validBody, baseUrl: 'https://8.8.8.8', username: 'new-bot' },
     })
     expect(second.statusCode).toBe(200)
     const sources = h.db.select().from(trafficSources).all()

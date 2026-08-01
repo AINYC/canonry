@@ -135,10 +135,9 @@ function ServerActivityPanel({ projectName }: { projectName: string }) {
       <div className="flex items-baseline justify-between mb-3">
         <div>
           <div className="eyebrow">Server activity (last 24h)</div>
-          <h2 className="text-lg font-semibold text-primary">Crawler hits, AI fetches &amp; AI referral sessions</h2>
-          <p className="text-xs text-muted mt-1">
-            Server-side log evidence of bulk crawlers, on-demand AI user fetches (ChatGPT-User, Perplexity-User),
-            and AI referral sessions — orthogonal to GA4 click-through traffic below.{' '}
+          <h2 className="text-lg font-semibold text-primary">Server activity</h2>
+          <p className="text-sm text-secondary mt-1">
+            Crawler, AI fetch, and referral activity from connected sources.{' '}
             {!isEmbed() && <Link to="/traffic" className="text-link hover:underline">Manage sources →</Link>}
           </p>
         </div>
@@ -593,16 +592,13 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
               <InfoTooltip text={`Aggregated traffic metrics from Google Analytics 4. Sessions and users are summed across the selected period.${traffic?.periodStart && traffic?.periodEnd ? ` Data available: ${new Date(traffic.periodStart + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} – ${new Date(traffic.periodEnd + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}.` : ''} Organic sessions are Google organic search sessions specifically.`} />
             </h2>
           </div>
-          <div className="flex gap-1">
+          <div className="segmented" role="group" aria-label="Traffic time period">
             {TRAFFIC_WINDOWS.map(w => (
               <button
                 key={w}
                 type="button"
-                className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-                  trafficWindow === w
-                    ? 'bg-mono-700 border-mono-600 text-primary'
-                    : 'border-base text-secondary hover:border-strong hover:text-neutral'
-                }`}
+                aria-pressed={trafficWindow === w}
+                className={`segmented-option ${trafficWindow === w ? 'segmented-option-active' : ''}`}
                 onClick={() => setTrafficWindow(w)}
               >
                 {w === 'all' ? 'All' : w}
@@ -1133,7 +1129,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
                         <button
                           type="button"
                           onClick={() => setSocialTableExpanded((v) => !v)}
-                          className="text-xs text-secondary hover:text-strong px-3 py-1 rounded-full border border-base hover:border-strong transition-colors"
+                          className="rounded-md border border-base px-3 py-1.5 text-xs text-secondary transition-colors hover:border-strong hover:text-strong"
                         >
                           {socialTableExpanded
                             ? `Show top ${SOCIAL_TABLE_DEFAULT_LIMIT}`

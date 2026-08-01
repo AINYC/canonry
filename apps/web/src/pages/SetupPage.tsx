@@ -90,7 +90,7 @@ function SetupStepIndicator({ current, labels }: { current: number; labels: read
         return (
           <div key={s.label} className={`setup-step ${done ? 'setup-step-done' : ''} ${active ? 'setup-step-active' : ''}`} role="listitem" aria-current={active ? 'step' : undefined}>
             <span className="setup-step-number">{done ? '\u2713' : i + 1}</span>
-            <span className="setup-step-label">{s.label}</span>
+            <span>{s.label}</span>
           </div>
         )
       })}
@@ -728,10 +728,10 @@ function ReadySetupPage({
                             <p>Check that the key is complete, then retry Save.</p>
                           </div>
                         )}
-                        <p className="text-[11px] text-faint">
-                          Other providers (OpenAI, Claude, Perplexity) configurable later via{' '}
-                          <Link to="/settings" className="text-muted hover:text-neutral underline underline-offset-2">
-                            /settings
+                        <p className="text-sm text-secondary">
+                          Connect more answer engines later in{' '}
+                          <Link to="/settings" className="text-link hover:underline">
+                            Settings
                           </Link>
                           .
                         </p>
@@ -1143,23 +1143,23 @@ function ReadySetupPage({
                 </p>
                 <div className="grid grid-cols-3 gap-2 mt-1">
                   <div className="rounded-md border border-default bg-surface p-3">
-                    <p className="text-[10px] uppercase tracking-wide text-muted">Mentioned</p>
+                    <p className="text-xs font-medium text-secondary">Mentioned</p>
                     <p className="text-2xl font-bold tabular-nums text-primary mt-1">{mentioned}<span className="text-faint text-lg"> / {totalQueries}</span></p>
-                    <p className="text-[11px] text-muted mt-0.5">queries with brand in answer</p>
+                    <p className="mt-0.5 text-sm text-secondary">queries naming your brand</p>
                   </div>
                   <div className="rounded-md border border-default bg-surface p-3">
-                    <p className="text-[10px] uppercase tracking-wide text-muted">Cited</p>
+                    <p className="text-xs font-medium text-secondary">Cited</p>
                     <p className="text-2xl font-bold tabular-nums text-primary mt-1">{cited}<span className="text-faint text-lg"> / {totalQueries}</span></p>
-                    <p className="text-[11px] text-muted mt-0.5">queries with domain in sources</p>
+                    <p className="mt-0.5 text-sm text-secondary">queries citing your site</p>
                   </div>
                   <div className="rounded-md border border-default bg-surface p-3">
-                    <p className="text-[10px] uppercase tracking-wide text-muted">Snapshots</p>
+                    <p className="text-xs font-medium text-secondary">Results</p>
                     <p className="text-2xl font-bold tabular-nums text-primary mt-1">{snapshots.length}</p>
-                    <p className="text-[11px] text-muted mt-0.5">total (query × provider)</p>
+                    <p className="mt-0.5 text-sm text-secondary">completed engine checks</p>
                   </div>
                 </div>
-                <p className="text-[11px] text-muted mt-1">
-                  Full evidence, per-provider breakdown, and suggested next queries on the project dashboard.
+                <p className="mt-1 text-sm text-secondary">
+                  Open the project to review the evidence.
                 </p>
                 <div className="setup-nav">
                   <span />
@@ -1183,7 +1183,7 @@ function ReadySetupPage({
       <div className="page-header">
         <div className="page-header-left">
           <h1 className="page-title">Setup</h1>
-          <p className="page-subtitle">Create a project, add queries, add competitors, and launch the first run.</p>
+          <p className="page-subtitle">Create a project and run its first visibility check.</p>
         </div>
       </div>
 

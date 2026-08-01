@@ -12,7 +12,6 @@ import { isEmbed } from '../api.js'
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
-import { ScoreGauge } from '../components/shared/ScoreGauge.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
 import { extractErrorMessage } from '../lib/extract-error-message.js'
 import {
@@ -345,10 +344,7 @@ export function TrafficSourceDetailPage() {
         <div className="page-header-left">
           <BackLink canGoBack={canGoBack} className="text-xs text-muted hover:text-strong" />
           <h1 className="page-title mt-2">{detail.displayName}</h1>
-          <p className="page-subtitle">
-            {detail.sourceType} · project <span className="text-neutral">{projectName}</span> ·
-            <span className="ml-1 font-mono text-secondary">{detail.id}</span>
-          </p>
+          <p className="page-subtitle">{detail.sourceType} source for {projectName}</p>
         </div>
         <div className="flex items-center gap-2">
           <ToneBadge tone={toneFromTrafficSourceStatus(detail.status)}>{detail.status}</ToneBadge>
@@ -368,45 +364,35 @@ export function TrafficSourceDetailPage() {
       </div>
 
       {syncError ? (
-        <div className="rounded-md border border-negative-800/50 bg-negative-950/30 px-3 py-2 text-xs text-negative-200">{syncError}</div>
+        <div className="rounded-md border border-negative-800/50 bg-negative-950/30 px-3 py-2 text-sm text-negative-200">{syncError}</div>
       ) : null}
       {syncResult ? (
-        <div className="rounded-md border border-positive-800/50 bg-positive-950/30 px-3 py-2 text-xs text-positive-200">{syncResult}</div>
+        <div className="rounded-md border border-positive-800/50 bg-positive-950/30 px-3 py-2 text-sm text-positive-200">{syncResult}</div>
       ) : null}
 
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <ScoreGauge
-          label="24h content crawls"
-          value={String(detail.totals24h.crawlerContentHits)}
-          delta={detail.lastSyncedAt ? `last sync ${formatRelative(detail.lastSyncedAt)}` : 'never synced'}
-          tone={detail.totals24h.crawlerContentHits > 0 ? 'positive' : 'neutral'}
-          description={`Pages crawled — ${detail.totals24h.crawlerInfraHits.toLocaleString('en-US')} sitemap/robots/asset fetches excluded.`}
-          tooltip={`Content-page crawls by GPTBot, OAI-SearchBot, PerplexityBot, Googlebot, etc. Infrastructure fetches (sitemap ${detail.totals24h.crawlerSegments.sitemap.toLocaleString('en-US')}, robots ${detail.totals24h.crawlerSegments.robots.toLocaleString('en-US')}, assets ${detail.totals24h.crawlerSegments.asset.toLocaleString('en-US')}) are tracked separately so polling doesn't inflate this number. Total crawler hits: ${detail.totals24h.crawlerHits.toLocaleString('en-US')}.`}
-          isNumeric
-          progress={Math.min(100, Math.round((detail.totals24h.crawlerContentHits / 1000) * 100))}
-        />
-        <ScoreGauge
-          label="24h AI user fetches"
-          value={String(detail.totals24h.aiUserFetchHits)}
-          delta={detail.lastSyncedAt ? `last sync ${formatRelative(detail.lastSyncedAt)}` : 'never synced'}
-          tone={detail.totals24h.aiUserFetchHits > 0 ? 'positive' : 'neutral'}
-          description="ChatGPT-User, Perplexity-User — fetches initiated by a real user inside an AI surface (citation click, URL read)."
-          isNumeric
-          progress={Math.min(100, Math.round((detail.totals24h.aiUserFetchHits / 1000) * 100))}
-        />
-        <ScoreGauge
-          label="24h AI referral sessions"
-          value={String(detail.totals24h.aiReferralHits)}
-          delta={detail.lastSyncedAt ? `last sync ${formatRelative(detail.lastSyncedAt)}` : 'never synced'}
-          tone={detail.totals24h.aiReferralHits > 0 ? 'positive' : 'neutral'}
-          description="Browser click-throughs from chatgpt.com, perplexity.ai, etc. (Referer / UTM evidence)."
-          isNumeric
-          progress={Math.min(100, Math.round((detail.totals24h.aiReferralHits / 1000) * 100))}
-        />
+      <section aria-labelledby="traffic-24h-heading">
+        <h2 id="traffic-24h-heading" className="mb-3 text-sm font-medium text-heading">Last 24 hours</h2>
+        <div className="grid grid-cols-1 divide-y divide-default border-y border-default sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+          <TrafficKpi
+            label="Content crawls"
+            value={detail.totals24h.crawlerContentHits}
+            tooltip={`Content and document paths only. Excludes sitemap ${detail.totals24h.crawlerSegments.sitemap.toLocaleString('en-US')}, robots ${detail.totals24h.crawlerSegments.robots.toLocaleString('en-US')}, assets ${detail.totals24h.crawlerSegments.asset.toLocaleString('en-US')}, and ${detail.totals24h.crawlerSegments.other.toLocaleString('en-US')} other requests such as feeds, API paths, or downloads. Total crawler hits: ${detail.totals24h.crawlerHits.toLocaleString('en-US')}.`}
+          />
+          <TrafficKpi
+            label="AI user fetches"
+            value={detail.totals24h.aiUserFetchHits}
+            tooltip="ChatGPT-User/Perplexity-User fetches initiated by a real user in an AI surface."
+          />
+          <TrafficKpi
+            label="AI referral sessions"
+            value={detail.totals24h.aiReferralHits}
+            tooltip="Browser click-throughs from AI surfaces, identified by Referer or UTM evidence."
+          />
+        </div>
       </section>
 
       <section>
-        <p className="mb-4 text-[10px] font-semibold uppercase tracking-wider text-muted">Latest sync run</p>
+        <p className="eyebrow mb-4">Latest sync run</p>
         {detail.latestRun ? (
           <Card className="p-4 text-sm">
             <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5">
@@ -415,8 +401,11 @@ export function TrafficSourceDetailPage() {
               {detail.latestRun.finishedAt ? (
                 <span className="text-muted">Finished: {formatRelative(detail.latestRun.finishedAt)}</span>
               ) : null}
-              <span className="font-mono text-[11px] text-faint">{detail.latestRun.runId}</span>
             </div>
+            <details className="mt-3">
+              <summary className="cursor-pointer text-sm text-secondary hover:text-strong">Run details</summary>
+              <code className="mt-2 block text-xs text-muted">{detail.latestRun.runId}</code>
+            </details>
             {detail.latestRun.error ? (
               <p className="mt-2 rounded border border-negative-900/40 bg-negative-950/30 px-3 py-2 text-xs text-negative">
                 {detail.latestRun.error}
@@ -444,12 +433,12 @@ export function TrafficSourceDetailPage() {
               </p>
             ) : null}
           </div>
-          <div className="filter-row mb-0" role="toolbar" aria-label="Window">
+          <div className="inline-flex rounded-md border border-base p-0.5" role="toolbar" aria-label="Window">
             {WINDOW_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
                 type="button"
-                className={`filter-chip ${windowMinutes === opt.value ? 'filter-chip-active' : ''}`}
+                className={`rounded px-2.5 py-1 text-xs ${windowMinutes === opt.value ? 'bg-bg-elevated text-heading' : 'text-secondary hover:text-strong'}`}
                 aria-pressed={windowMinutes === opt.value}
                 onClick={() => {
                   setWindowMinutes(opt.value)
@@ -708,6 +697,10 @@ export function TrafficSourceDetailPage() {
           </div>
         ) : null}
       </section>
+      <details className="border-t border-default pt-4">
+        <summary className="cursor-pointer text-sm text-secondary hover:text-strong">How traffic is classified</summary>
+        <p className="mt-2 max-w-3xl text-sm text-secondary">Crawler requests, AI user fetches, and referrals are recorded separately. Filters expose the underlying evidence.</p>
+      </details>
     </div>
   )
 }
@@ -743,13 +736,13 @@ function labelForVerification(value: VerificationFilter): string {
 
 function ActiveFilterPill({ label, onClear }: { label: string; onClear: () => void }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-strong bg-surface-inset px-2.5 py-1 text-[11px] text-strong">
+    <span className="inline-flex items-center gap-1.5 rounded border border-strong bg-surface-inset px-2.5 py-1 text-sm text-strong">
       {label}
       <button
         type="button"
         onClick={onClear}
         aria-label={`Clear ${label}`}
-        className="rounded-full p-0.5 text-secondary hover:bg-mono-700/60 hover:text-heading"
+        className="rounded p-0.5 text-secondary hover:bg-mono-700/60 hover:text-heading"
       >
         <X className="size-3" />
       </button>
@@ -775,7 +768,7 @@ function SeriesToggle({
       type="button"
       onClick={onToggle}
       aria-pressed={active}
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium transition ${
+      className={`inline-flex items-center gap-2 rounded border px-3 py-1.5 text-xs font-medium transition ${
         active
           ? 'border-strong bg-surface-inset text-heading'
           : 'border-base bg-transparent text-muted hover:text-neutral'
@@ -783,14 +776,34 @@ function SeriesToggle({
     >
       <span
         aria-hidden="true"
-        className={`size-2 rounded-full transition-opacity ${active ? 'opacity-100' : 'opacity-30'}`}
-        style={{ backgroundColor: color }}
-      />
+        className={`flex size-3 items-center justify-center rounded-sm border transition-opacity ${active ? 'border-transparent opacity-100' : 'border-strong opacity-60'}`}
+        style={active ? { backgroundColor: color } : undefined}
+      >{active ? '✓' : ''}</span>
       <span>{label}</span>
       <span className={`tabular-nums ${active ? 'text-secondary' : 'text-faint'}`}>
         {count.toLocaleString('en-US')}
       </span>
     </button>
+  )
+}
+
+export function TrafficKpi({
+  label,
+  value,
+  tooltip,
+}: {
+  label: string
+  value: number
+  tooltip?: string
+}) {
+  return (
+    <div className="px-4 py-3">
+      <p className="flex items-center gap-1 text-sm text-secondary">
+        {label}
+        {tooltip ? <InfoTooltip text={tooltip} /> : null}
+      </p>
+      <p className="mt-1 text-2xl font-semibold tabular-nums text-heading">{value.toLocaleString('en-US')}</p>
+    </div>
   )
 }
 

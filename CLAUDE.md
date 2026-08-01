@@ -2,6 +2,10 @@
 
 ## UI Design System
 
+Read `PRODUCT.md` and `DESIGN.md` first. They are the durable product and UI
+contract. The rules below provide implementation details and must not override
+their hierarchy, copy, accessibility, or control standards.
+
 The web dashboard follows a dark, professional analytics aesthetic inspired by **Vercel's design system** — clean, minimal, high-contrast, and information-dense. Rival tools like Semrush, Ahrefs, and Profound for data richness, but match Vercel for polish: generous whitespace, sharp typography, subtle borders, no visual noise. Follow these conventions for all UI work:
 
 ### Layout
@@ -55,12 +59,12 @@ The web dashboard follows a dark, professional analytics aesthetic inspired by *
 
 ### Components & Patterns
 - **AEO performance hero + metric cards:** the project overview leads with the AEO performance hero — three paired Mention / Cited / Mention-share rows with linear progress bars (stacking below `480px`) — followed by secondary metric cards in a `sm:grid-cols-2 lg:grid-cols-3` grid. Linear bars beat stacked radials when several numbers are read against each other. Keep a single `.metric-grid` / `.metric-card` definition; a duplicate once overrode the column count.
-- **Score gauges** (`ScoreGauge`): SVG radial progress rings for a single numeric/text metric (e.g. traffic-source detail). Don't rebuild the overview header as a gauge cluster.
+- **Progress visuals:** use linear progress only for a real bounded target. Raw hits, sessions, totals, and other unbounded counts use flat KPI rows.
 - **Data tables** for evidence, findings, and competitors (not card grids). Tables are more scanable for analysts.
 - **Insight cards** with left-border accent color based on tone (`insight-card-positive`, `insight-card-caution`, `insight-card-negative`).
 - **Sparklines** for inline trend visualization in overview project rows.
 - **ToneBadge** for all status/state indicators. Map tones through helper functions (`toneFromRunStatus`, `toneFromCitationState`, etc.).
-- **Filter chips** use `rounded-full` pill style.
+- **Filter controls** use compact rectangular controls. Pills are reserved for statuses and tags.
 - **Health pills** in topbar use `rounded-full` with tone-colored borders.
 
 ### Sidebar
@@ -73,7 +77,7 @@ The web dashboard follows a dark, professional analytics aesthetic inspired by *
 - Prioritize information density. Analysts want to scan, not scroll through cards.
 - Use tables for any list of 3+ structured items (evidence, findings, competitors).
 - Use cards only for insights/interpretations where narrative matters.
-- Keep eyebrow labels (`text-[10px]`, uppercase, tracking-wide) for section context.
+- Keep 10-11px eyebrow labels only for nonessential section context. Meaningful supporting copy is at least 13px and uses `text-secondary` or stronger.
 
 ### Text & Tooltips
 - **Heavy text belongs in tooltips, not inline.** A data surface shows values, one-line captions, and eyebrow labels — not prose. Multi-sentence explanations (methodology, "what this means", the evidence behind a finding) push the numbers down and break the analyst's scan, so they move into an `InfoTooltip` (`components/shared/InfoTooltip.tsx`) on the relevant heading, label, or row title. The trigger is a real keyboard-reachable button and the copy rides its `aria-label`, so nothing is lost for assistive tech or for tests (`getByRole('button', { name })`).

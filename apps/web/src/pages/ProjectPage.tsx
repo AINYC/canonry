@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, RefreshCw, Trash2 } from 'lucide-react'
+import { ChevronDown, RefreshCw, Trash2 } from 'lucide-react'
 import { useParams, useNavigate } from '@tanstack/react-router'
 import { Link } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
@@ -7,14 +7,13 @@ import { RunKinds, RunStatuses } from '@ainyc/canonry-contracts'
 
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
-import { CitationBadge } from '../components/shared/CitationBadge.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
+import { CitationBadge } from '../components/shared/CitationBadge.js'
 import { ProviderBadge } from '../components/shared/ProviderBadge.js'
 import { RunRow } from '../components/shared/RunRow.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
 import { EvidenceTable } from '../components/project/EvidenceTable.js'
 import { CompetitorTable } from '../components/project/CompetitorTable.js'
-import { SearchConsoleSummaryCard } from '../components/project/SearchConsoleSummaryCard.js'
 import { BingSummaryMetric } from '../components/project/BingSummaryMetric.js'
 import { ActivitySection } from '../components/project/ActivitySection.js'
 import { GscSection } from '../components/project/GscSection.js'
@@ -41,8 +40,6 @@ import {
   removeQueries as apiRemoveQueries,
   appendCompetitors as apiAppendCompetitors,
   removeCompetitorById as apiRemoveCompetitorById,
-  updateOwnedDomains as apiUpdateOwnedDomains,
-  updateAliases as apiUpdateAliases,
   updateProject as apiUpdateProject,
   bingConnect as apiBingConnect,
   bingDisconnect as apiBingDisconnect,
@@ -364,7 +361,7 @@ function BingSection({
               Connect
             </Button>
           </div>
-          <p className="mt-1 text-[11px] text-muted">
+          <p className="mt-1 text-sm text-secondary">
             Get your API key from{' '}
             <a
               href="https://www.bing.com/webmasters/"
@@ -471,9 +468,7 @@ function BingSection({
               <span className="text-sm text-strong">Authorized for this project domain</span>
               <span className="text-xs text-muted">{connection.domain}</span>
             </div>
-            <p className="mt-2 text-xs text-muted">
-              {isEmbed() ? <>This project is currently mapped to <code>{connection.siteUrl}</code>.</> : <>Canonry stores Bing connections per canonical domain. This project is currently mapped to <code>{connection.siteUrl}</code>.</>}
-            </p>
+            <p className="mt-2 text-sm text-secondary">This project uses <code>{connection.siteUrl}</code>.</p>
           </div>
           <div className="grid gap-3 lg:grid-cols-2">
             <div className="rounded-lg border border-default bg-surface-subtle p-3">
@@ -545,13 +540,13 @@ function BingSection({
                     </thead>
                     <tbody>
                       {coverage.notIndexed.map((row) => (
-                        <tr key={row.id} className="border-b border-base/50">
+                        <tr key={row.id} className="border-b border-subtle">
                           <td className="py-1.5 px-3 text-neutral truncate max-w-[480px]">{row.url}</td>
                           <td className="py-1.5 px-3 text-secondary">{row.httpCode ?? '\u2014'}</td>
                           {!isEmbed() && (
                             <td className="py-1.5 px-3 text-right">
                               <button
-                                className="text-[10px] text-secondary hover:text-strong underline underline-offset-2"
+                                className="text-sm text-secondary hover:text-strong underline underline-offset-2"
                                 disabled={requestingIndexing}
                                 onClick={() => { void handleSubmitUrl(row.url) }}
                               >
@@ -570,7 +565,7 @@ function BingSection({
             {(coverage.unknown ?? []).length > 0 && (
               <div>
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <h4 className="text-xs font-medium text-secondary">Unknown — not yet confirmed ({(coverage.unknown ?? []).length})</h4>
+                  <h4 className="text-sm font-medium text-secondary">Unknown, not yet confirmed ({(coverage.unknown ?? []).length})</h4>
                   {!isEmbed() && (
                     <Button size="sm" variant="ghost" disabled={requestingIndexing} onClick={asyncHandler(handleSubmitAllUnindexed)}>
                       {requestingIndexing ? 'Submitting…' : 'Submit all to Bing'}
@@ -588,13 +583,13 @@ function BingSection({
                     </thead>
                     <tbody>
                       {(coverage.unknown ?? []).map((row) => (
-                        <tr key={row.id} className="border-b border-base/50">
+                        <tr key={row.id} className="border-b border-subtle">
                           <td className="py-1.5 px-3 text-neutral truncate max-w-[480px]">{row.url}</td>
                           <td className="py-1.5 px-3 text-secondary">{row.lastCrawledDate ? formatTimestamp(row.lastCrawledDate) : '\u2014'}</td>
                           {!isEmbed() && (
                             <td className="py-1.5 px-3 text-right">
                               <button
-                                className="text-[10px] text-secondary hover:text-strong underline underline-offset-2"
+                                className="text-sm text-secondary hover:text-strong underline underline-offset-2"
                                 disabled={requestingIndexing}
                                 onClick={() => { void handleSubmitUrl(row.url) }}
                               >
@@ -623,7 +618,7 @@ function BingSection({
                     </thead>
                     <tbody>
                       {coverage.indexed.map((row) => (
-                        <tr key={row.id} className="border-b border-base/50">
+                        <tr key={row.id} className="border-b border-subtle">
                           <td className="py-1.5 px-3 text-neutral truncate max-w-[480px]">{row.url}</td>
                           <td className="py-1.5 px-3 text-secondary">{row.lastCrawledDate ? formatTimestamp(row.lastCrawledDate) : '\u2014'}</td>
                         </tr>
@@ -684,7 +679,7 @@ function BingSection({
                   </thead>
                   <tbody>
                     {inspections.map((row) => (
-                      <tr key={row.id} className="border-b border-base/50">
+                      <tr key={row.id} className="border-b border-subtle">
                         <td className="py-1.5 px-3 text-neutral truncate max-w-[480px]">{row.url}</td>
                         <td className="py-1.5 px-3">
                           <ToneBadge tone={row.inIndex ? 'positive' : 'negative'}>{row.inIndex ? 'Yes' : 'No'}</ToneBadge>
@@ -718,7 +713,7 @@ function BingSection({
                   </thead>
                   <tbody>
                     {performance.map((row, i) => (
-                      <tr key={i} className="border-b border-base/50">
+                      <tr key={i} className="border-b border-subtle">
                         <td className="py-1.5 px-3 text-neutral truncate max-w-[480px]">{row.query}</td>
                         <td className="py-1.5 px-3 text-right text-strong">{row.clicks}</td>
                         <td className="py-1.5 px-3 text-right text-secondary">{row.impressions}</td>
@@ -952,7 +947,6 @@ function SearchConsoleSection({
       : googleConfigured
         ? 'Connect Search Console for this domain'
         : 'Add Google OAuth credentials in Settings'
-  const googleUpdatedAt = googleCoverage?.lastSyncedAt ?? googleCoverage?.lastInspectedAt ?? googleConnection?.updatedAt ?? null
 
   const bingTone = bingConnection?.connected ? 'positive' : bingConfigured ? 'caution' : 'negative'
   const bingStatus = bingConnection?.connected ? 'Connected' : bingConfigured ? 'Ready to connect' : 'Needs setup'
@@ -971,7 +965,6 @@ function SearchConsoleSection({
       : bingConfigured
         ? 'Connect Bing Webmaster Tools for this domain'
         : 'Add a Bing API key in Settings'
-  const bingUpdatedAt = bingCoverage?.lastInspectedAt ?? bingConnection?.updatedAt ?? null
 
   return (
     <div className="space-y-6">
@@ -979,10 +972,7 @@ function SearchConsoleSection({
         <div className="section-head section-head-inline">
           <div>
             <p className="eyebrow eyebrow-soft">Search engines</p>
-            <h2>Coverage &amp; performance</h2>
-            <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
-              Scan both engines at a glance, then open the Google or Bing workspace when you need to inspect coverage or take action.
-            </p>
+            <h2>Coverage and performance</h2>
           </div>
           {!isEmbed() && (
             <Button type="button" variant="outline" size="sm" disabled={loading || refreshState !== 'idle'} onClick={() => void handleRefresh()}>
@@ -998,33 +988,16 @@ function SearchConsoleSection({
           </div>
         )}
 
-        <div className="grid gap-3 lg:grid-cols-2">
-          <SearchConsoleSummaryCard
-            eyebrow="Google"
-            title="Google Search Console"
-            status={loading ? 'Loading…' : googleStatus}
-            tone={loading ? 'neutral' : googleTone}
-            targetLabel="Selected property"
-            targetValue={googleConnection?.propertyId ?? 'No property selected'}
-            coverageValue={loading ? 'Loading…' : googleCoverageValue}
-            note={loading ? 'Loading overview…' : googleNote}
-            updatedAt={googleUpdatedAt}
-            active={workspace === 'google'}
-            onClick={() => setWorkspace('google')}
-          />
-          <SearchConsoleSummaryCard
-            eyebrow="Bing"
-            title="Bing Webmaster Tools"
-            status={loading ? 'Loading…' : bingStatus}
-            tone={loading ? 'neutral' : bingTone}
-            targetLabel="Selected site"
-            targetValue={bingConnection?.siteUrl ?? 'No site selected'}
-            coverageValue={loading ? 'Loading…' : bingCoverageValue}
-            note={loading ? 'Loading overview…' : bingNote}
-            updatedAt={bingUpdatedAt}
-            active={workspace === 'bing'}
-            onClick={() => setWorkspace('bing')}
-          />
+        <div className="mt-4 divide-y divide-default border-y border-default">
+          {[
+            ['Google Search Console', loading ? 'Loading…' : googleStatus, loading ? 'neutral' : googleTone, loading ? 'Loading overview…' : googleNote, googleCoverageValue],
+            ['Bing Webmaster Tools', loading ? 'Loading…' : bingStatus, loading ? 'neutral' : bingTone, loading ? 'Loading overview…' : bingNote, bingCoverageValue],
+          ].map(([name, status, tone, note, coverage]) => (
+            <div key={name} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
+              <div><span className="font-medium text-heading">{name}</span><span className="ml-2 text-secondary">{note}</span></div>
+              <div className="flex items-center gap-3"><span className="tabular-nums text-secondary">{coverage}</span><ToneBadge tone={tone as 'positive' | 'caution' | 'negative' | 'neutral'}>{status}</ToneBadge></div>
+            </div>
+          ))}
         </div>
       </Card>
 
@@ -1063,12 +1036,6 @@ function SearchConsoleSection({
       )}
     </div>
   )
-}
-
-function formatQueryList(queries: string[], max = 4): string {
-  if (queries.length <= max) return queries.map(q => `"${q}"`).join(', ')
-  const shown = queries.slice(0, max).map(q => `"${q}"`).join(', ')
-  return `${shown}, and ${queries.length - max} more`
 }
 
 function OverviewMetricRow({
@@ -1115,24 +1082,14 @@ function OverviewMetricRow({
 function OverviewBrief({
   model,
   sweepRunning,
-  onJumpToEvidence,
-  onJumpToActions,
 }: {
   model: ProjectCommandCenterVm
   sweepRunning: boolean
-  onJumpToEvidence: () => void
-  onJumpToActions: () => void
 }) {
   const citationMovement = model.citationMovement
   const mentionMovement = model.mentionMovement
   const comparison = model.movementComparison
   const latestSweep = model.recentRuns.find(run => run.kind === RunKinds['answer-visibility'])
-  const primaryAction = model.insights.find(insight => insight.actionGroup === 'investigate')
-    ?? model.insights.find(insight => insight.actionGroup === 'write')
-    ?? model.insights.at(0)
-  const suggestedQuery = model.suggestedQueries.rows.at(0)
-  const engineCount = new Set(model.providerScores.map(score => score.provider)).size
-  const locationCount = model.project.locations.length
 
   const movementDirection = (movement: ProjectCommandCenterVm['mentionMovement']) => {
     if (movement.tone === 'positive') return 'improved'
@@ -1165,33 +1122,24 @@ function OverviewBrief({
     return `${mentionPhrase}; ${citationPhrase}`
   })()
 
-  const movedQueries = [...new Set([
-    ...(mentionMovement.lostQueries ?? []),
-    ...(citationMovement.lostQueries ?? []),
-    ...(mentionMovement.gainedQueries ?? []),
-    ...(citationMovement.gainedQueries ?? []),
-  ])]
-
-  const scope = `${model.queryCounts.total} ${model.queryCounts.total === 1 ? 'query' : 'queries'} across ${engineCount} ${engineCount === 1 ? 'engine' : 'engines'}`
-  const locationScope = locationCount > 0
-    ? `${locationCount} ${locationCount === 1 ? 'location' : 'locations'}`
-    : 'project-wide'
+  const scopeChange = [
+    comparison.addedQueryCount > 0 && `${comparison.addedQueryCount} ${comparison.addedQueryCount === 1 ? 'query' : 'queries'} added`,
+    comparison.removedQueryCount > 0 && `${comparison.removedQueryCount} ${comparison.removedQueryCount === 1 ? 'query' : 'queries'} removed`,
+  ].filter(Boolean).join(', ')
+  const comparableScope = `${comparison.comparableQueryCount} comparable ${comparison.comparableQueryCount === 1 ? 'query' : 'queries'}`
 
   return (
     <section className="overview-brief" aria-labelledby="overview-brief-title">
       <div className="overview-brief-head">
         <div>
           <p className="eyebrow eyebrow-soft">
-            Operator brief
+            Visibility
             <InfoTooltip text="Each sweep records two independent signals: answer mentions (your brand named in the answer text) and source citations (your domain in the engine's source list). They move separately." />
           </p>
           <h2 id="overview-brief-title" className="overview-brief-title">{headline}</h2>
-          <p className="overview-brief-scope">
-            Tracking {scope}, {locationScope}.
-          </p>
         </div>
         <p className="overview-brief-updated">
-          {latestSweep ? `Latest sweep ${latestSweep.startedAt}` : 'No sweep completed yet'}
+          {latestSweep ? `Updated ${latestSweep.startedAt}` : 'No completed sweep'}
         </p>
       </div>
 
@@ -1208,7 +1156,7 @@ function OverviewBrief({
         </div>
 
         <div className="overview-brief-panel">
-          <p className="overview-brief-label">Since previous sweep</p>
+          <p className="overview-brief-label">Since last sweep</p>
           {!comparison.hasPreviousRun ? (
             <>
               <p className="overview-brief-panel-title">No comparison yet</p>
@@ -1219,52 +1167,32 @@ function OverviewBrief({
               <div className="overview-signal-change-list">
                 <div className="overview-signal-change-row">
                   <span className="overview-signal-change-label">Mentioned</span>
-                  <span className="text-positive-400">+{mentionMovement.gained}</span>
-                  <span className="text-negative-400">-{mentionMovement.lost}</span>
+                  {mentionMovement.gained === 0 && mentionMovement.lost === 0 ? (
+                    <span className="text-secondary">No change</span>
+                  ) : (
+                    <span className="flex gap-3 tabular-nums">
+                      {mentionMovement.gained > 0 && <span className="text-positive-400">+{mentionMovement.gained}</span>}
+                      {mentionMovement.lost > 0 && <span className="text-negative-400">-{mentionMovement.lost}</span>}
+                    </span>
+                  )}
                 </div>
                 <div className="overview-signal-change-row">
                   <span className="overview-signal-change-label">Cited</span>
-                  <span className="text-positive-400">+{citationMovement.gained}</span>
-                  <span className="text-negative-400">-{citationMovement.lost}</span>
+                  {citationMovement.gained === 0 && citationMovement.lost === 0 ? (
+                    <span className="text-secondary">No change</span>
+                  ) : (
+                    <span className="flex gap-3 tabular-nums">
+                      {citationMovement.gained > 0 && <span className="text-positive-400">+{citationMovement.gained}</span>}
+                      {citationMovement.lost > 0 && <span className="text-negative-400">-{citationMovement.lost}</span>}
+                    </span>
+                  )}
                 </div>
               </div>
               <p className={`overview-brief-panel-copy ${comparison.querySetChanged ? 'text-caution-400/80' : ''}`}>
                 {comparison.querySetChanged
-                  ? `Query basket changed: +${comparison.addedQueryCount} added, -${comparison.removedQueryCount} removed. Movement compares ${comparison.comparableQueryCount} shared queries.`
-                  : `Same ${comparison.comparableQueryCount}-query basket${comparison.previousRunAt ? ` since ${formatTimestamp(comparison.previousRunAt)}` : ''}.`}
+                  ? `${scopeChange || 'Query set changed'} · ${comparableScope}.`
+                  : `${comparableScope}.`}
               </p>
-              {movedQueries.length > 0 && (
-                <p className="overview-brief-panel-copy">Affected: {formatQueryList(movedQueries, 2)}</p>
-              )}
-              <button type="button" className="overview-brief-link" onClick={onJumpToEvidence}>
-                Review query evidence
-              </button>
-            </>
-          )}
-        </div>
-
-        <div className="overview-brief-panel">
-          <p className="overview-brief-label">Next action</p>
-          {primaryAction ? (
-            <>
-              <p className="overview-brief-panel-title">{primaryAction.title}</p>
-              {primaryAction.detail && <p className="overview-brief-panel-copy">{primaryAction.detail}</p>}
-              <button type="button" className="overview-brief-link" onClick={onJumpToActions}>
-                Open action queue
-              </button>
-            </>
-          ) : suggestedQuery ? (
-            <>
-              <p className="overview-brief-panel-title">Consider tracking “{suggestedQuery.query}”</p>
-              <p className="overview-brief-panel-copy">{suggestedQuery.reason}</p>
-              <button type="button" className="overview-brief-link" onClick={onJumpToActions}>
-                Review query suggestions
-              </button>
-            </>
-          ) : (
-            <>
-              <p className="overview-brief-panel-title">No outstanding action</p>
-              <p className="overview-brief-panel-copy">{isEmbed() ? 'Keep monitoring. Regressions and new query opportunities will surface here.' : 'Keep monitoring. Canonry will surface regressions and new query opportunities here.'}</p>
             </>
           )}
         </div>
@@ -1353,22 +1281,7 @@ function MentionShareBreakdown({
   )
 }
 
-const ACTION_GROUP_META: Record<'write' | 'investigate' | 'monitor', { title: string; subtitle: string }> = {
-  write: {
-    title: 'Write or update content',
-    subtitle: 'Queries with no answer, persistent gaps, or competitors winning the spot',
-  },
-  investigate: {
-    title: 'Investigate what changed',
-    subtitle: 'Citations or mentions you lost since the previous run',
-  },
-  monitor: {
-    title: 'Keep monitoring',
-    subtitle: 'Gains, new providers picking you up, holding ground',
-  },
-}
-
-function InsightSignals({
+function OverviewSignals({
   insights,
   suggestedQueries,
   projectName,
@@ -1378,216 +1291,123 @@ function InsightSignals({
   projectName: string
 }) {
   const { openEvidence } = useDrawer()
-  const [expandedId, setExpandedId] = useState<string | null>(null)
-
-  const hasSuggestions = suggestedQueries.rows.length > 0
-  if (insights.length === 0 && !hasSuggestions) {
-    return (
-      <p className="text-sm text-muted">
-        No outstanding opportunities. Trigger a sweep to surface fresh signals.
-      </p>
-    )
-  }
-
-  const groups: Array<'write' | 'investigate' | 'monitor'> = ['investigate', 'write', 'monitor']
-  const grouped = new Map<string, typeof insights>()
-  for (const ins of insights) {
-    const bucket = grouped.get(ins.actionGroup) ?? []
-    bucket.push(ins)
-    grouped.set(ins.actionGroup, bucket)
-  }
-
-  return (
-    <div className="opportunities-grid">
-      {groups.map(group => {
-        const items = grouped.get(group)
-        if (!items || items.length === 0) return null
-        const meta = ACTION_GROUP_META[group]
-        const itemRows = (
-          <div className="opportunity-card-list">
-            {items.map((insight) => {
-                const isExpanded = expandedId === insight.id
-                const hasAffected = insight.affectedPhrases.length > 0
-                return (
-                  <div key={insight.id}>
-                    <div
-                      className={`opportunity-item opportunity-item-${insight.tone} ${hasAffected ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400' : ''}`}
-                      onClick={hasAffected ? () => setExpandedId(isExpanded ? null : insight.id) : undefined}
-                      onKeyDown={hasAffected ? (e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault()
-                          setExpandedId(isExpanded ? null : insight.id)
-                        }
-                      } : undefined}
-                      tabIndex={hasAffected ? 0 : undefined}
-                      role={hasAffected ? 'button' : undefined}
-                      aria-expanded={hasAffected ? isExpanded : undefined}
-                    >
-                      <div className="flex items-start gap-1.5 min-w-0">
-                        {hasAffected && (
-                          <ChevronRight
-                            size={12}
-                            className={`mt-1 shrink-0 text-muted transition-transform duration-150 ${isExpanded ? 'rotate-90' : ''}`}
-                          />
-                        )}
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-heading leading-snug">{insight.title}</p>
-                          {insight.detail && <p className="text-[11px] text-muted mt-0.5 leading-snug">{insight.detail}</p>}
-                        </div>
-                      </div>
-                    </div>
-                    {isExpanded && (
-                      <div className="opportunity-item-detail">
-                        {insight.affectedPhrases.map((ap, i) => (
-                          <div
-                            key={ap.evidenceId || `${insight.id}-${i}`}
-                            className="flex items-center justify-between gap-2"
-                          >
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <CitationBadge state={ap.citationState} />
-                              <span className="text-xs text-neutral truncate">{ap.query}</span>
-                              {ap.provider && <ProviderBadge provider={ap.provider} />}
-                            </div>
-                            {ap.evidenceId && (
-                              <button
-                                type="button"
-                                className="text-[11px] text-secondary hover:text-strong whitespace-nowrap"
-                                onClick={(e) => { e.stopPropagation(); void openEvidence(ap.evidenceId) }}
-                              >
-                                View →
-                              </button>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )
-            })}
-          </div>
-        )
-
-        if (group === 'monitor') {
-          return (
-            <details key={group} className="opportunity-card opportunity-card-monitor opportunity-monitor">
-              <summary className="opportunity-monitor-summary">
-                <span>
-                  <span className="opportunity-card-title">{meta.title}</span>
-                  <span className="opportunity-card-subtitle mt-1 block">{meta.subtitle}</span>
-                </span>
-                <span className="flex items-center gap-2">
-                  <span className="opportunity-card-count">{items.length}</span>
-                  <ChevronDown className="opportunity-monitor-icon text-muted" size={14} aria-hidden="true" />
-                </span>
-              </summary>
-              {itemRows}
-            </details>
-          )
-        }
-
-        return (
-          <div key={group} className={`opportunity-card opportunity-card-${group}`}>
-            <div className="opportunity-card-head">
-              <p className="opportunity-card-title">{meta.title}</p>
-              <span className="opportunity-card-count">{items.length}</span>
-            </div>
-            <p className="opportunity-card-subtitle">{meta.subtitle}</p>
-            {itemRows}
-          </div>
-        )
-      })}
-      {hasSuggestions && (
-        <SuggestedQueriesCard suggestedQueries={suggestedQueries} projectName={projectName} />
-      )}
-    </div>
-  )
-}
-
-function SuggestedQueriesCard({
-  suggestedQueries,
-  projectName,
-}: {
-  suggestedQueries: ProjectCommandCenterVm['suggestedQueries']
-  projectName: string
-}) {
   const appendQueries = useAppendQueries()
-  // Track per-row pending state so users can add several at once without
-  // each click disabling the whole card. Cleared after invalidation refetches
-  // the dashboard and the suggestion drops off the list.
-  const [pending, setPending] = useState<Set<string>>(new Set())
+  const [pendingQueries, setPendingQueries] = useState<Set<string>>(new Set())
 
-  const handleAdd = (query: string) => {
-    setPending(prev => new Set(prev).add(query))
+  if (insights.length === 0 && suggestedQueries.rows.length === 0) return null
+
+  const clearPending = (query: string) => {
+    setPendingQueries(current => {
+      const next = new Set(current)
+      next.delete(query)
+      return next
+    })
+  }
+
+  const handleTrackQuery = (query: string) => {
+    setPendingQueries(current => new Set(current).add(query))
     appendQueries.mutate(
       { projectName, queries: [query] },
       {
-        // Clear pending on BOTH success and error. The mutation's
-        // invalidation refetches the dashboard, but the suggestion row may
-        // still appear in the next payload (GSC suggestions don't drop off
-        // instantly), so relying on unmount-on-refetch to clear `pending`
-        // leaves the button stuck on "Adding…" indefinitely. The explicit
-        // clears here are the source of truth for per-row UI state.
         onSuccess: () => {
           addToast({ tone: 'positive', title: `Tracking "${query}"` })
-          setPending(prev => {
-            const next = new Set(prev)
-            next.delete(query)
-            return next
-          })
+          clearPending(query)
         },
-        onError: (err) => {
-          addToast({ tone: 'negative', title: `Couldn't add "${query}"`, detail: String(err) })
-          setPending(prev => {
-            const next = new Set(prev)
-            next.delete(query)
-            return next
-          })
+        onError: (error) => {
+          addToast({ tone: 'negative', title: `Could not track "${query}"`, detail: String(error) })
+          clearPending(query)
         },
       },
     )
   }
 
-  const { rows, totalCandidates, skippedAlreadyTracked } = suggestedQueries
-  const subtitle = skippedAlreadyTracked > 0
-    ? `GSC queries you're getting impressions for · ${skippedAlreadyTracked} already tracked`
-    : `GSC queries you're getting impressions for but aren't tracking yet`
+  const renderInsight = (insight: ProjectCommandCenterVm['insights'][number]) => (
+    <div key={insight.id} className="py-3">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-heading">{insight.title}</p>
+          {insight.detail ? <p className="mt-1 max-w-3xl text-sm leading-6 text-secondary">{insight.detail}</p> : null}
+        </div>
+        <ToneBadge tone={insight.tone}>{insight.actionLabel}</ToneBadge>
+      </div>
+
+      {insight.affectedPhrases.length > 0 ? (
+        <details className="mt-2">
+          <summary className="w-fit cursor-pointer text-sm font-medium text-secondary transition-colors hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60">
+            Evidence · {insight.affectedPhrases.length} affected {insight.affectedPhrases.length === 1 ? 'query' : 'queries'}
+          </summary>
+          <ul className="mt-2 divide-y divide-subtle border-y border-subtle">
+            {insight.affectedPhrases.map((phrase, index) => (
+              <li key={phrase.evidenceId || `${insight.id}-${index}`} className="flex flex-wrap items-center gap-2 py-2">
+                <CitationBadge state={phrase.citationState} />
+                <span className="min-w-0 flex-1 text-sm text-strong">{phrase.query}</span>
+                {phrase.provider ? <ProviderBadge provider={phrase.provider} /> : null}
+                {!isEmbed() && phrase.evidenceId ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={() => { void openEvidence(phrase.evidenceId) }}>
+                    View evidence
+                  </Button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </div>
+  )
+
+  const renderSuggestion = (suggestion: ProjectCommandCenterVm['suggestedQueries']['rows'][number]) => {
+    const isPending = pendingQueries.has(suggestion.query)
+    return (
+      <div key={suggestion.query} className="flex items-center justify-between gap-4 py-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted">Suggested query</p>
+          <p className="mt-1 text-sm font-medium text-strong">{suggestion.query}</p>
+          <p className="mt-0.5 text-sm text-secondary">{suggestion.reason}</p>
+        </div>
+        {!isEmbed() ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={isPending}
+            aria-label={`Track query "${suggestion.query}"`}
+            onClick={() => handleTrackQuery(suggestion.query)}
+          >
+            {isPending ? 'Tracking…' : 'Track'}
+          </Button>
+        ) : null}
+      </div>
+    )
+  }
+
+  const primaryInsights = insights.slice(0, 1)
+  const primarySuggestions = suggestedQueries.rows.slice(0, 1)
+  const remainingInsights = insights.slice(1)
+  const remainingSuggestions = suggestedQueries.rows.slice(1)
+  const remainingCount = remainingInsights.length + remainingSuggestions.length
 
   return (
-    <div className="opportunity-card opportunity-card-track">
-      <div className="opportunity-card-head">
-        <p className="opportunity-card-title">Track new queries</p>
-        <span className="opportunity-card-count">
-          {totalCandidates > rows.length ? `${rows.length} of ${totalCandidates}` : rows.length}
-        </span>
+    <section className="page-section-divider" aria-labelledby="overview-signals-title">
+      <div className="section-head">
+        <h2 id="overview-signals-title">Latest signals</h2>
       </div>
-      <p className="opportunity-card-subtitle">{subtitle}</p>
-      <div className="opportunity-card-list">
-        {rows.map(suggestion => {
-          const isPending = pending.has(suggestion.query)
-          return (
-            <div
-              key={suggestion.query}
-              className="opportunity-item opportunity-item-neutral flex items-center justify-between gap-2"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-heading leading-snug truncate" title={suggestion.query}>
-                  {suggestion.query}
-                </p>
-                <p className="text-[11px] text-muted mt-0.5 leading-snug">{suggestion.reason}</p>
-              </div>
-              <button
-                type="button"
-                className="suggested-query-add"
-                disabled={isPending}
-                onClick={() => handleAdd(suggestion.query)}
-              >
-                {isPending ? 'Adding…' : '+ Track'}
-              </button>
-            </div>
-          )
-        })}
+
+      <div className="divide-y divide-default border-y border-default">
+        {primaryInsights.map(renderInsight)}
+        {primarySuggestions.map(renderSuggestion)}
       </div>
-    </div>
+      {remainingCount > 0 ? (
+        <details className="mt-2">
+          <summary className="w-fit cursor-pointer text-sm font-medium text-secondary transition-colors hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60">
+            {remainingCount} more {remainingCount === 1 ? 'signal' : 'signals'}
+          </summary>
+          <div className="mt-2 divide-y divide-default border-y border-default">
+            {remainingInsights.map(renderInsight)}
+            {remainingSuggestions.map(renderSuggestion)}
+          </div>
+        </details>
+      ) : null}
+    </section>
   )
 }
 
@@ -1781,12 +1601,6 @@ function ProjectPageContent({
   const [addingCompetitor, setAddingCompetitor] = useState(false)
   const [newCompetitorDomain, setNewCompetitorDomain] = useState('')
   const [competitorSaving, setCompetitorSaving] = useState(false)
-  const [addingOwnedDomain, setAddingOwnedDomain] = useState(false)
-  const [newOwnedDomain, setNewOwnedDomain] = useState('')
-  const [ownedDomainSaving, setOwnedDomainSaving] = useState(false)
-  const [addingAlias, setAddingAlias] = useState(false)
-  const [newAlias, setNewAlias] = useState('')
-  const [aliasSaving, setAliasSaving] = useState(false)
   const [locationFilter, setLocationFilter] = useState<string | undefined>(undefined)
   const [compareLocations, setCompareLocations] = useState(false)
   const [competitorFilter, setCompetitorFilter] = useState<string | null>(null)
@@ -2015,66 +1829,6 @@ function ProjectPageContent({
     }
   }
 
-  async function handleAddOwnedDomain() {
-    const domain = newOwnedDomain.trim()
-    if (!domain) return
-    setOwnedDomainSaving(true)
-    try {
-      const current = model?.project.ownedDomains ?? []
-      await apiUpdateOwnedDomains(projectName, [...current, domain])
-      void refetch()
-      setNewOwnedDomain('')
-      setAddingOwnedDomain(false)
-    } finally {
-      setOwnedDomainSaving(false)
-    }
-  }
-
-  async function handleRemoveOwnedDomain(domain: string) {
-    setOwnedDomainSaving(true)
-    try {
-      const current = model?.project.ownedDomains ?? []
-      await apiUpdateOwnedDomains(projectName, current.filter(d => d !== domain))
-      void refetch()
-    } finally {
-      setOwnedDomainSaving(false)
-    }
-  }
-
-  async function handleAddAlias() {
-    const alias = newAlias.trim()
-    if (!alias) return
-    setAliasSaving(true)
-    try {
-      const current = model?.project.aliases ?? []
-      // Case-insensitive dedupe in the UI so the user gets immediate
-      // feedback if they type a duplicate; the server normalizes again on save.
-      const key = alias.toLowerCase()
-      if (current.some(a => a.toLowerCase() === key)) {
-        setNewAlias('')
-        setAddingAlias(false)
-        return
-      }
-      await apiUpdateAliases(projectName, [...current, alias])
-      void refetch()
-      setNewAlias('')
-      setAddingAlias(false)
-    } finally {
-      setAliasSaving(false)
-    }
-  }
-
-  async function handleRemoveAlias(alias: string) {
-    setAliasSaving(true)
-    try {
-      const current = model?.project.aliases ?? []
-      await apiUpdateAliases(projectName, current.filter(a => a !== alias))
-      void refetch()
-    } finally {
-      setAliasSaving(false)
-    }
-  }
-
   async function handleUpdateProject(pName: string, updates: { displayName?: string; canonicalDomain?: string; ownedDomains?: string[]; aliases?: string[]; country?: string; language?: string; locations?: Array<{ label: string; city: string; region: string; country: string; timezone?: string }>; defaultLocation?: string | null; providers?: string[]; providerModels?: Record<string, string> }) {
     const updated = await apiUpdateProject(pName, updates)
     // Invalidate the whole 'projects' branch (prefix match) so every consumer
@@ -2164,15 +1918,7 @@ function ProjectPageContent({
         <div className="page-header-left">
           <h1 className="page-title">{model.project.displayName || model.project.name}</h1>
           <p className="page-subtitle">
-            {model.project.canonicalDomain}
-            {!isEmbed() && (model.project.ownedDomains ?? []).length === 0 && !addingOwnedDomain && (
-              <button
-                type="button"
-                className="ml-2 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-secondary hover:text-strong hover:bg-surface-inset transition-colors"
-                onClick={() => setAddingOwnedDomain(true)}
-              >+ add domain</button>
-            )}
-            {' '} · {model.contextLabel}
+            {model.project.canonicalDomain} · {model.contextLabel}
           </p>
           {!isEmbed() && (
             <div className="tag-row">
@@ -2184,93 +1930,6 @@ function ProjectPageContent({
                 </span>
               ))}
             </div>
-          )}
-          {((model.project.ownedDomains ?? []).length > 0 || addingOwnedDomain) && (
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] uppercase tracking-wide text-muted mr-1">Also tracking</span>
-              {(model.project.ownedDomains ?? []).map((d) => (
-                <span key={d} className="inline-flex items-center gap-1 rounded-full border border-strong/60 bg-surface-inset-hover px-2 py-0.5 text-xs text-neutral">
-                  {d}
-                  {!isEmbed() && (
-                    <button
-                      type="button"
-                      className="-mr-1 ml-0.5 inline-flex items-center justify-center rounded p-1 leading-none text-muted hover:bg-mono-700/40 hover:text-strong transition-colors"
-                      disabled={ownedDomainSaving}
-                      onClick={() => { void handleRemoveOwnedDomain(d) }}
-                      aria-label={`Remove ${d}`}
-                    >×</button>
-                  )}
-                </span>
-              ))}
-              {isEmbed() ? null : addingOwnedDomain ? (
-                <span className="inline-flex items-center gap-1">
-                  <input
-                    className="rounded border border-strong bg-transparent px-1.5 py-0.5 text-xs text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none w-40"
-                    type="text"
-                    placeholder="docs.example.com"
-                    value={newOwnedDomain}
-                    onChange={(e) => setNewOwnedDomain(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { void handleAddOwnedDomain() } }}
-                    autoFocus
-                  />
-                  <Button type="button" size="sm" disabled={!newOwnedDomain.trim() || ownedDomainSaving} onClick={asyncHandler(handleAddOwnedDomain)}>
-                    {ownedDomainSaving ? '...' : 'Add'}
-                  </Button>
-                  <button type="button" className="text-xs text-muted hover:text-neutral" onClick={() => { setAddingOwnedDomain(false); setNewOwnedDomain('') }}>Cancel</button>
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  className="rounded-full border border-dashed border-strong px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted hover:text-neutral hover:border-mono-500 transition-colors"
-                  onClick={() => setAddingOwnedDomain(true)}
-                >+ domain</button>
-              )}
-            </div>
-          )}
-          {(!isEmbed() || (model.project.aliases ?? []).length > 0) && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted mr-1">
-              Also known as
-              <InfoTooltip text="Extra brand names checked against LLM answer text alongside the project name. Use for product names, prior names, or DBAs (e.g. add Meta as an alias to facebook.com). Changing these recomputes mentions on historical runs." />
-            </span>
-            {(model.project.aliases ?? []).map((a) => (
-              <span key={a} className="inline-flex items-center gap-1 rounded-full border border-strong/60 bg-surface-inset-hover px-2 py-0.5 text-xs text-neutral">
-                {a}
-                {!isEmbed() && (
-                  <button
-                    type="button"
-                    className="-mr-1 ml-0.5 inline-flex items-center justify-center rounded p-1 leading-none text-muted hover:bg-mono-700/40 hover:text-strong transition-colors"
-                    disabled={aliasSaving}
-                    onClick={() => { void handleRemoveAlias(a) }}
-                    aria-label={`Remove ${a}`}
-                  >×</button>
-                )}
-              </span>
-            ))}
-            {isEmbed() ? null : addingAlias ? (
-              <span className="inline-flex items-center gap-1">
-                <input
-                  className="rounded border border-strong bg-transparent px-1.5 py-0.5 text-xs text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none w-40"
-                  type="text"
-                  placeholder="LlamaParse"
-                  value={newAlias}
-                  onChange={(e) => setNewAlias(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { void handleAddAlias() } }}
-                  autoFocus
-                />
-                <Button type="button" size="sm" disabled={!newAlias.trim() || aliasSaving} onClick={asyncHandler(handleAddAlias)}>
-                  {aliasSaving ? '...' : 'Add'}
-                </Button>
-                <button type="button" className="text-xs text-muted hover:text-neutral" onClick={() => { setAddingAlias(false); setNewAlias('') }}>Cancel</button>
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="rounded-full border border-dashed border-strong px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted hover:text-neutral hover:border-mono-500 transition-colors"
-                onClick={() => setAddingAlias(true)}
-              >+ alias</button>
-            )}
-          </div>
           )}
         </div>
         <div className="page-header-right">
@@ -2335,8 +1994,12 @@ function ProjectPageContent({
           <OverviewBrief
             model={model}
             sweepRunning={hasActiveVisibilitySweep}
-            onJumpToEvidence={() => focusOverviewSection('evidence-section', true)}
-            onJumpToActions={() => focusOverviewSection('action-queue')}
+          />
+
+          <OverviewSignals
+            insights={model.insights}
+            suggestedQueries={model.suggestedQueries}
+            projectName={model.project.name}
           />
 
           <section className="page-section-divider">
@@ -2580,20 +2243,6 @@ function ProjectPageContent({
               </div>
             </OverviewDisclosure>
           )}
-
-          <section id="action-queue" className="page-section-divider scroll-mt-24 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60" tabIndex={-1}>
-            <div className="section-head section-head-inline">
-              <div>
-                <p className="eyebrow eyebrow-soft">Action queue</p>
-                <h2>What needs your attention</h2>
-              </div>
-            </div>
-            <InsightSignals
-              insights={model.insights}
-              suggestedQueries={model.suggestedQueries}
-              projectName={projectName}
-            />
-          </section>
 
         </>
       ) : tab === 'settings' ? (

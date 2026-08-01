@@ -41,7 +41,7 @@ async function renderRoute(pathname: string, options: Parameters<typeof createDa
 
 test('/ renders the overview page', async () => {
   const { container } = await renderRoute('/')
-  expect(container.innerHTML).toMatch(/Visibility and execution state/)
+  expect(container.innerHTML).toMatch(/Visibility across all projects/)
 })
 
 test('/projects renders the projects page', async () => {
@@ -126,7 +126,7 @@ test('/projects/$id/local renders the local presence tab', async () => {
 
 test('/projects/$id/discovery renders the discovery tab with plain-language copy', async () => {
   const { container } = await renderRoute('/projects/project_citypoint/discovery')
-  expect(container.innerHTML).toMatch(/Find new queries to track/)
+  expect(container.innerHTML).toMatch(/Generate and check questions/)
   expect(container.innerHTML).toMatch(/Describe your customer/)
 })
 
@@ -210,7 +210,7 @@ test('back/forward navigation works via router history', async () => {
     await router.navigate({ to: '/settings' })
   })
   await waitFor(() => {
-    expect(container.innerHTML).toMatch(/Provider state/)
+    expect(container.innerHTML).toMatch(/Connections and answer engines/)
   })
 
   // Go back to /runs

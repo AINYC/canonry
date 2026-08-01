@@ -44,70 +44,94 @@ export function SettingsPage() {
       <div className="page-header">
         <div className="page-header-left">
           <h1 className="page-title">Settings</h1>
-          <p className="page-subtitle">Provider state, Google OAuth, Bing WMT setup, and service health.</p>
+          <p className="page-subtitle">Connections and answer engines.</p>
         </div>
       </div>
 
-      <section className="settings-grid">
-        {settings.providerStatuses.map((provider) => (
-          <Card key={provider.name} className="surface-card">
-            <div className="section-head">
-              <div>
-                <p className="eyebrow eyebrow-soft">Provider</p>
-                <h2>{provider.displayName ?? provider.name}</h2>
-              </div>
-              <ToneBadge tone={provider.state === 'ready' ? 'positive' : 'caution'}>
-                {provider.state === 'ready' ? 'Ready' : 'Needs config'}
-              </ToneBadge>
+      <section className="space-y-6">
+        <section>
+          <div className="section-head">
+            <div>
+              <p className="eyebrow eyebrow-soft">Answer engines</p>
+              <h2>Providers</h2>
             </div>
-            <dl className="definition-list mt-3">
-              <div>
-                <dt>Model</dt>
-                <dd className="font-mono text-xs">
-                  {provider.model ?? provider.defaultModel ?? 'unknown'}
-                  {!provider.model && provider.defaultModel && (
-                    <span className="ml-1 font-sans text-muted">(default)</span>
-                  )}
-                </dd>
+          </div>
+          <div className="divide-y divide-default border-y border-default">
+            {settings.providerStatuses.map((provider) => (
+              <div key={provider.name} className="py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-medium text-heading">{provider.displayName ?? provider.name}</p>
+                    <p className="text-sm text-secondary">{provider.detail}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <ToneBadge tone={provider.state === 'ready' ? 'positive' : 'caution'}>
+                      {provider.state === 'ready' ? 'Ready' : 'Needs config'}
+                    </ToneBadge>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setConfiguringProvider(configuringProvider === provider.name ? null : provider.name)}
+                    >
+                      {configuringProvider === provider.name
+                        ? 'Cancel'
+                        : provider.state === 'ready'
+                          ? 'Update'
+                          : 'Configure'}
+                    </Button>
+                  </div>
+                </div>
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-sm text-secondary hover:text-strong">Advanced</summary>
+                  <dl className="definition-list mt-2">
+                    <div>
+                      <dt>Model</dt>
+                      <dd className="font-mono text-xs">
+                        {provider.model ?? provider.defaultModel ?? 'unknown'}
+                        {!provider.model && provider.defaultModel && (
+                          <span className="ml-1 font-sans text-muted">(default)</span>
+                        )}
+                      </dd>
+                    </div>
+                    {provider.quota && (
+                      <>
+                        <div>
+                          <dt>Concurrency</dt>
+                          <dd>{provider.quota.maxConcurrency}</dd>
+                        </div>
+                        <div>
+                          <dt>Rate limit</dt>
+                          <dd>{provider.quota.maxRequestsPerMinute}/min · {provider.quota.maxRequestsPerDay}/day</dd>
+                        </div>
+                      </>
+                    )}
+                  </dl>
+                </details>
+                {configuringProvider === provider.name && (
+                  <ProviderConfigForm
+                    providerName={provider.name}
+                    keyUrl={provider.keyUrl}
+                    modelHint={provider.modelHint}
+                    onSaved={() => {
+                      setConfiguringProvider(null)
+                    }}
+                  />
+                )}
               </div>
-              {provider.quota && (
-                <>
-                  <div>
-                    <dt>Concurrency</dt>
-                    <dd>{provider.quota.maxConcurrency}</dd>
-                  </div>
-                  <div>
-                    <dt>Rate limit</dt>
-                    <dd>{provider.quota.maxRequestsPerMinute}/min · {provider.quota.maxRequestsPerDay}/day</dd>
-                  </div>
-                </>
-              )}
-            </dl>
-            <p className="mt-2 text-sm text-muted">{provider.detail}</p>
-            <div className="mt-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setConfiguringProvider(configuringProvider === provider.name ? null : provider.name)}
-              >
-                {configuringProvider === provider.name ? 'Cancel' : provider.state === 'ready' ? (provider.name.toLowerCase() === 'local' ? 'Update config' : 'Update key') : 'Configure'}
-              </Button>
-            </div>
-            {configuringProvider === provider.name && (
-              <ProviderConfigForm
-                providerName={provider.name}
-                keyUrl={provider.keyUrl}
-                modelHint={provider.modelHint}
-                onSaved={() => {
-                  setConfiguringProvider(null)
-                }}
-              />
-            )}
-          </Card>
-        ))}
+            ))}
+          </div>
+        </section>
 
-        <Card className="surface-card">
+        <section>
+          <div className="section-head">
+            <div>
+              <p className="eyebrow eyebrow-soft">Connections</p>
+              <h2>Search and browser</h2>
+            </div>
+          </div>
+          <div className="settings-grid">
+            <Card className="surface-card">
           <div className="section-head">
             <div>
               <p className="eyebrow eyebrow-soft">Google</p>
@@ -117,17 +141,20 @@ export function SettingsPage() {
               {settings.google.state === 'ready' ? 'Ready' : 'Needs config'}
             </ToneBadge>
           </div>
-          <dl className="definition-list mt-3">
-            <div>
-              <dt>Auth model</dt>
-              <dd>One app credential set, then one OAuth connection per project domain</dd>
-            </div>
-            <div>
-              <dt>Storage</dt>
-              <dd className="font-mono text-xs">~/.canonry/config.yaml</dd>
-            </div>
-          </dl>
-          <p className="mt-2 text-sm text-muted">{settings.google.detail}</p>
+          <p className="mt-2 text-sm text-secondary">{settings.google.detail}</p>
+          <details className="mt-3">
+            <summary className="cursor-pointer text-sm text-secondary hover:text-strong">Advanced</summary>
+            <dl className="definition-list mt-2">
+              <div>
+                <dt>Auth model</dt>
+                <dd>One app credential set, then one OAuth connection per project domain</dd>
+              </div>
+              <div>
+                <dt>Storage</dt>
+                <dd className="font-mono text-xs">~/.canonry/config.yaml</dd>
+              </div>
+            </dl>
+          </details>
           <div className="mt-2">
             <Button
               type="button"
@@ -147,7 +174,7 @@ export function SettingsPage() {
           )}
         </Card>
 
-        <Card className="surface-card">
+            <Card className="surface-card">
           <div className="section-head">
             <div>
               <p className="eyebrow eyebrow-soft">Bing</p>
@@ -157,17 +184,20 @@ export function SettingsPage() {
               {settings.bing.state === 'ready' ? 'Ready' : 'Needs config'}
             </ToneBadge>
           </div>
-          <dl className="definition-list mt-3">
-            <div>
-              <dt>Auth model</dt>
-              <dd>API key authentication — no OAuth needed</dd>
-            </div>
-            <div>
-              <dt>Storage</dt>
-              <dd className="font-mono text-xs">~/.canonry/config.yaml</dd>
-            </div>
-          </dl>
-          <p className="mt-2 text-sm text-muted">{settings.bing.detail}</p>
+          <p className="mt-2 text-sm text-secondary">{settings.bing.detail}</p>
+          <details className="mt-3">
+            <summary className="cursor-pointer text-sm text-secondary hover:text-strong">Advanced</summary>
+            <dl className="definition-list mt-2">
+              <div>
+                <dt>Auth model</dt>
+                <dd>API key authentication. OAuth is not required.</dd>
+              </div>
+              <div>
+                <dt>Storage</dt>
+                <dd className="font-mono text-xs">~/.canonry/config.yaml</dd>
+              </div>
+            </dl>
+          </details>
           <div className="mt-2">
             <Button
               type="button"
@@ -182,12 +212,12 @@ export function SettingsPage() {
             <div className="mt-3 rounded-lg border border-base bg-bg-elevated/40 p-3 space-y-2">
               <div>
                 <div className="flex items-center justify-between">
-                  <label className="text-xs text-muted" htmlFor="bing-api-key">API Key</label>
+                  <label className="text-sm text-secondary" htmlFor="bing-api-key">API key</label>
                   <a
                     href="https://www.bing.com/webmasters/"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[10px] text-muted hover:text-neutral underline underline-offset-2"
+                    className="text-sm text-secondary hover:text-neutral underline underline-offset-2"
                   >
                     Bing Webmaster Tools
                   </a>
@@ -201,11 +231,9 @@ export function SettingsPage() {
                   onChange={(e) => setBingApiKey(e.target.value)}
                 />
               </div>
-              <p className="text-[11px] text-muted">
-                This key is stored in <code>~/.canonry/config.yaml</code>. Project-level Bing connections are created separately per canonical domain.
-              </p>
-              {bingError && <p className="text-xs text-negative-400">{bingError}</p>}
-              {bingSuccess && <p className="text-xs text-positive-400">Bing API key updated.</p>}
+              <p className="text-sm text-secondary">Used for project-level Bing connections.</p>
+              {bingError && <p className="text-sm text-negative-400">{bingError}</p>}
+              {bingSuccess && <p className="text-sm text-positive-400">Bing API key updated.</p>}
               <Button type="button" size="sm" disabled={!bingApiKey.trim() || bingSaving} onClick={asyncHandler(async () => {
                 if (!bingApiKey.trim()) return
                 setBingSaving(true)
@@ -235,7 +263,9 @@ export function SettingsPage() {
           )}
         </Card>
 
-        <CdpConfigCard />
+            <CdpConfigCard />
+          </div>
+        </section>
 
         <Card className="surface-card">
           <div className="section-head">
@@ -248,7 +278,9 @@ export function SettingsPage() {
             <div className="health-row">
               <div>
                 <p className="run-row-title">API</p>
-                <p className="supporting-copy">{healthSnapshot.apiStatus.detail}</p>
+                {healthSnapshot.apiStatus.state !== 'ok' && (
+                  <p className="mt-1 text-sm text-secondary">{serviceStatusTooltip(healthSnapshot.apiStatus)}</p>
+                )}
               </div>
               <ToneBadge tone={toneFromService(healthSnapshot.apiStatus)} title={serviceStatusTooltip(healthSnapshot.apiStatus)}>
                 {healthSnapshot.apiStatus.state === 'ok' ? 'Healthy' : 'Attention'}
@@ -257,7 +289,9 @@ export function SettingsPage() {
             <div className="health-row">
               <div>
                 <p className="run-row-title">Worker</p>
-                <p className="supporting-copy">{healthSnapshot.workerStatus.detail}</p>
+                {healthSnapshot.workerStatus.state !== 'ok' && (
+                  <p className="mt-1 text-sm text-secondary">{serviceStatusTooltip(healthSnapshot.workerStatus)}</p>
+                )}
               </div>
               <ToneBadge tone={toneFromService(healthSnapshot.workerStatus)} title={serviceStatusTooltip(healthSnapshot.workerStatus)}>
                 {healthSnapshot.workerStatus.state === 'ok' ? 'Healthy' : 'Attention'}
@@ -267,14 +301,9 @@ export function SettingsPage() {
         </Card>
       </section>
 
-      <section className="page-section">
-        <Card className="surface-card">
-          <div className="section-head">
-            <div>
-              <p className="eyebrow eyebrow-soft">Self-host notes</p>
-              <h2>Operational guidance</h2>
-            </div>
-          </div>
+      <details className="page-section">
+        <summary className="cursor-pointer text-sm font-medium text-secondary hover:text-strong">Self-hosting details</summary>
+        <Card className="surface-card mt-3">
           <ul className="detail-list">
             {settings.selfHostNotes.map((note) => (
               <li key={note}>{note}</li>
@@ -282,7 +311,7 @@ export function SettingsPage() {
           </ul>
           <p className="supporting-copy">{settings.bootstrapNote}</p>
         </Card>
-      </section>
+      </details>
     </div>
   )
 }

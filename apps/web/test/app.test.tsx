@@ -58,14 +58,14 @@ test('overview route renders the premium portfolio dashboard', async () => {
   const html = await renderApp('/')
 
   expect(html).toMatch(/Portfolio/)
-  expect(html).toMatch(/Visibility and execution state/)
+  expect(html).toMatch(/Visibility across all projects/)
   expect(html).toMatch(/Infrastructure/)
   expect(html).toMatch(/Citypoint Dental NYC/)
   expect(html).toMatch(/Harbor Legal Group/)
   expect(html).toMatch(/src="\.\/favicon\.svg"/)
 })
 
-test('project route renders an operator brief with progressive detail', async () => {
+test('project route renders a concise visibility summary with progressive detail', async () => {
   const html = await renderApp('/projects/project_citypoint')
 
   expect(html).toMatch(/Citypoint Dental NYC/)
@@ -73,14 +73,22 @@ test('project route renders an operator brief with progressive detail', async ()
   expect(html).toMatch(/Search Engines/)
   expect(html).toMatch(/Technical AEO/)
   expect(html).toMatch(/Query Discovery/)
-  expect(html).toMatch(/Operator brief/)
+  expect(html).toMatch(/Visibility/)
   expect(html).toMatch(/Coverage now/)
-  expect(html).toMatch(/Since previous sweep/)
+  expect(html).toMatch(/Since last sweep/)
   expect(html).toMatch(/Mentioned/)
   expect(html).toMatch(/Cited/)
-  expect(html).toMatch(/Query basket changed: \+1 added, -0 removed/)
-  expect(html).toMatch(/Movement compares 8 shared queries/)
-  expect(html).toMatch(/What needs your attention/)
+  expect(html).toMatch(/1 query added · 8 comparable queries\./)
+  expect(html).toMatch(/Latest signals/)
+  expect(html).toMatch(/Lost citation on 1 query/)
+  expect(html).toMatch(/Emergency-intent prompts stopped grounding Citypoint/)
+  expect(html).toMatch(/Evidence · 1 affected query/)
+  expect(html).toMatch(/Suggested query/)
+  expect(html).toMatch(/emergency dentist near me/)
+  expect(html).toMatch(/aria-label="Track query &quot;emergency dentist near me&quot;"/)
+  expect(html).not.toMatch(/Next action/)
+  expect(html).not.toMatch(/Action queue/)
+  expect(html).not.toMatch(/What needs your attention/)
   expect(html).toMatch(/<details id="evidence-section"/)
   expect(html).toMatch(/Query evidence/)
   expect(html).toMatch(/Citation and engine diagnostics/)
@@ -108,9 +116,9 @@ test('settings route renders provider state, quota summary, and service health',
 test('traffic route offers a source-agnostic connect entry point', async () => {
   const html = await renderApp('/traffic')
 
-  expect(html).toMatch(/Server traffic/)
+  expect(html).toMatch(/Traffic sources/)
   expect(html).toMatch(/Connect a source/)
-  expect(html).toMatch(/pulled directly from your server logs/)
+  expect(html).toMatch(/AI crawler hits and referral sessions from your server logs/)
   expect(html).not.toMatch(/Cloud Run logs or the WordPress Traffic Logger plugin/)
 })
 
@@ -226,10 +234,24 @@ test('runs route renders failed runs clearly', async () => {
   expect(html).toMatch(/Worker could not reach the provider after repeated retry exhaustion/)
 })
 
-test('project route renders visibility drop insights', async () => {
-  const html = await renderApp('/projects/project_citypoint', { visibilityDropProjectId: 'project_citypoint' })
+test('project route renders server attention without restoring the action queue', async () => {
+  const html = await renderApp('/projects/project_citypoint', { visibilityDropProjectId: 'project_citypoint' }, (fixture) => {
+    fixture.dashboard.projects[0]!.insights.unshift({
+      id: 'stale_visibility',
+      tone: 'caution',
+      title: 'Visibility data needs refresh',
+      detail: 'A newer integration sync landed after the latest visibility sweep.',
+      actionLabel: 'Stale',
+      actionGroup: 'investigate',
+      affectedPhrases: [],
+    })
+  })
 
   expect(html).toMatch(/Sharp citation drop detected/)
+  expect(html).toMatch(/Visibility data needs refresh/)
+  expect(html).toMatch(/A newer integration sync landed after the latest visibility sweep/)
+  expect(html).not.toMatch(/Action queue/)
+  expect(html).not.toMatch(/What needs your attention/)
 })
 
 test('project search console route renders the Search Engines section', async () => {

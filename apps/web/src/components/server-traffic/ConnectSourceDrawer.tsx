@@ -82,32 +82,25 @@ export function ConnectSourceDrawer({
 const SOURCE_TYPES: Array<{
   type: SourceType
   name: string
-  tagline: string
-  description: string
+  action: string
   icon: typeof Globe
 }> = [
   {
     type: 'wordpress',
-    name: 'WordPress site',
-    tagline: 'Easiest if you run WordPress',
-    description:
-      'Install the Canonry Traffic Logger plugin and connect with an Application Password. No cloud account needed.',
+    name: 'WordPress',
+    action: 'Install the traffic plugin',
     icon: Globe,
   },
   {
     type: 'cloud-run',
     name: 'Google Cloud Run',
-    tagline: 'For apps hosted on Cloud Run',
-    description:
-      'Connect a Google Cloud service account so Canonry can read your Cloud Run request logs.',
+    action: 'Read request logs',
     icon: Cloud,
   },
   {
     type: 'vercel',
-    name: 'Vercel project',
-    tagline: 'For sites hosted on Vercel',
-    description:
-      'Connect a Vercel personal access token so Canonry can pull request logs straight from Vercel, no in-app instrumentation needed.',
+    name: 'Vercel',
+    action: 'Read request logs',
     icon: Triangle,
   },
 ]
@@ -117,29 +110,23 @@ function SourceTypePicker({ onPick }: { onPick: (type: SourceType) => void }) {
     <>
       <SheetHeader>
         <SheetTitle>Connect a traffic source</SheetTitle>
-        <SheetDescription>
-          Canonry reads your server logs to see when AI crawlers and AI-referred visitors hit your
-          site. Pick where your site is hosted to get started.
-        </SheetDescription>
+        <SheetDescription>Choose where Canonry should read traffic logs.</SheetDescription>
       </SheetHeader>
 
       <div className="mt-6 flex flex-col gap-3">
-        {SOURCE_TYPES.map(({ type, name, tagline, description, icon: Icon }) => (
+        {SOURCE_TYPES.map(({ type, name, action, icon: Icon }) => (
           <button
             key={type}
             type="button"
             onClick={() => onPick(type)}
-            className="group flex items-start gap-4 rounded-lg border border-base bg-bg-elevated/30 p-4 text-left transition-colors hover:border-mono-600 hover:bg-bg-elevated/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
+            className="group flex items-center gap-3 rounded-md border border-base bg-bg-elevated/30 px-3 py-3 text-left transition-colors hover:border-mono-600 hover:bg-bg-elevated/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
           >
             <span className="mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-base bg-bg text-neutral group-hover:text-heading">
               <Icon className="size-4" />
             </span>
-            <span className="flex flex-col gap-0.5">
-              <span className="flex flex-wrap items-baseline gap-x-2">
-                <span className="text-sm font-medium text-heading">{name}</span>
-                <span className="text-[11px] text-muted">{tagline}</span>
-              </span>
-              <span className="text-xs leading-5 text-muted">{description}</span>
+            <span className="flex min-w-0 flex-1 items-baseline justify-between gap-3">
+              <span className="text-sm font-medium text-heading">{name}</span>
+              <span className="text-sm text-secondary">{action}</span>
             </span>
           </button>
         ))}
@@ -162,7 +149,7 @@ function WizardHeader({
       <button
         type="button"
         onClick={onBack}
-        className="mb-1 inline-flex w-fit items-center gap-1 rounded text-xs text-muted transition-colors hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
+        className="mb-1 inline-flex w-fit items-center gap-1 rounded text-sm text-secondary transition-colors hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
       >
         <ArrowLeft className="size-3" />
         Choose a different source
@@ -553,11 +540,11 @@ function CloudRunSourceForm({
           rows={6}
           spellCheck={false}
           autoComplete="off"
-          className="w-full rounded border border-strong bg-transparent px-2 py-1.5 font-mono text-[11px] text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
+          className="w-full rounded border border-strong bg-transparent px-2 py-1.5 font-mono text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
           placeholder='{"type":"service_account","project_id":"…","private_key":"…"}'
           required
         />
-        <label className="mt-2 inline-flex cursor-pointer items-center gap-2 text-xs text-secondary hover:text-strong">
+        <label className="mt-2 inline-flex cursor-pointer items-center gap-2 text-sm text-secondary hover:text-strong">
           <input
             type="file"
             accept="application/json,.json"
@@ -715,12 +702,12 @@ function Field({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs font-medium text-strong">
+      <span className="text-sm font-medium text-strong">
         {label}
         {required ? <span className="ml-1 text-negative-400">*</span> : null}
       </span>
       {children}
-      <span className="text-[11px] text-muted">{description}</span>
+      <span className="text-[13px] leading-5 text-secondary">{description}</span>
     </label>
   )
 }

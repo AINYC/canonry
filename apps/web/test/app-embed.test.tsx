@@ -116,20 +116,19 @@ test('embed hides the page-header write cluster (delete / run) that leaks on eve
   expect(embed).toContain('Mention share')
 })
 
-test('embed hides the overview competitor + query managers and the identity editors', async () => {
+test('embed hides the overview competitor and query managers', async () => {
   const embed = await renderAt('/projects/project_citypoint', { enabled: true })
   const operator = await renderAt('/projects/project_citypoint')
 
-  // Operator sees the overview write affordances + the alias editor row…
-  expect(operator).toContain('+ add domain')
+  // Operator sees the overview write affordances. Identity editing now lives
+  // in project Settings instead of the overview header.
   expect(operator).toContain('+ Add competitor')
   expect(operator).toContain('Manage queries')
-  expect(operator).toContain('Also known as')
-  // …none of which render in the embed.
-  expect(embed).not.toContain('+ add domain')
+  expect(operator).not.toContain('+ add domain')
+  expect(operator).not.toContain('Also known as')
+  // The write affordances do not render in the embed.
   expect(embed).not.toContain('+ Add competitor')
   expect(embed).not.toContain('Manage queries')
-  expect(embed).not.toContain('Also known as')
 
   // The locale tag-row (US/EN pills) duplicates the "· US/EN" subtitle, so the
   // embed drops it while the operator keeps it. The locale still shows once in
@@ -172,12 +171,12 @@ test('embed hides the operator write controls on the top-level admin pages (defa
   const trafficOperator = await renderAt('/traffic')
   expect(trafficOperator).toContain('Connect a source')
   expect(trafficEmbed).not.toContain('Connect a source')
-  expect(trafficEmbed).toContain('Server traffic') // the read-only page still renders
+  expect(trafficEmbed).toContain('Traffic sources') // the read-only page still renders
 
   // /backlinks — "Run sync" downloads + queries a Common Crawl release.
   const backlinksEmbed = await renderAt('/backlinks', { enabled: true })
   const backlinksOperator = await renderAt('/backlinks')
   expect(backlinksOperator).toContain('Run sync')
   expect(backlinksEmbed).not.toContain('Run sync')
-  expect(backlinksEmbed).toContain('Backlinks') // the read-only page still renders
+  expect(backlinksEmbed).toContain('Backlink data') // the read-only page still renders
 })

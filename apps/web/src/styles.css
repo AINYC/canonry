@@ -30,8 +30,8 @@
   --color-text-heading: var(--color-zinc-100);
   --color-text-strong: var(--color-zinc-200);
   --color-text-secondary: var(--color-zinc-400);
-  --color-text-muted: var(--color-zinc-500);
-  --color-text-faint: var(--color-zinc-600);
+  --color-text-muted: rgb(139 139 148);
+  --color-text-faint: rgb(124 124 133);
 
   --color-accent: var(--color-zinc-50);
   --color-accent-fg: var(--color-zinc-950);
@@ -193,8 +193,8 @@
   --color-text-heading: var(--color-zinc-900);
   --color-text-strong: var(--color-zinc-800);
   --color-text-secondary: var(--color-zinc-600);
-  --color-text-muted: var(--color-zinc-500);
-  --color-text-faint: var(--color-zinc-400);
+  --color-text-muted: rgb(98 98 107);
+  --color-text-faint: var(--color-zinc-500);
 
   --color-accent: var(--color-zinc-900);
   --color-accent-fg: var(--color-zinc-50);
@@ -359,6 +359,18 @@
 
 @utility border-strong {
   border-color: var(--color-border-strong);
+}
+
+@utility divide-default {
+  & > :not(:last-child) {
+    border-color: var(--color-border);
+  }
+}
+
+@utility divide-subtle {
+  & > :not(:last-child) {
+    border-color: var(--color-border-subtle);
+  }
 }
 
 @utility text-primary {
@@ -935,7 +947,7 @@
   }
 
   .page-subtitle {
-    @apply mt-0.5 text-[13px] font-normal text-muted;
+    @apply mt-0.5 text-[13px] font-normal text-secondary;
   }
 
   .page-header-right {
@@ -967,90 +979,11 @@
   }
 
   .supporting-copy {
-    @apply text-sm leading-6 text-muted;
+    @apply text-sm leading-6 text-secondary;
   }
 
   .blocking-copy {
     @apply text-sm text-negative;
-  }
-
-  /* ── Score gauge ── */
-
-  .gauge-row {
-    @apply grid gap-3 sm:grid-cols-2 lg:grid-cols-5;
-  }
-
-  .score-gauge {
-    @apply flex flex-col items-center rounded-xl border border-default bg-surface px-3 py-5 min-w-0 overflow-visible;
-  }
-
-  .gauge-ring-wrapper {
-    @apply relative size-24;
-  }
-
-  .gauge-ring {
-    @apply size-full;
-  }
-
-  .gauge-bg {
-    fill: none;
-    stroke: var(--chart-neutral-grid-line);
-  }
-
-  .gauge-fill {
-    fill: none;
-    stroke-linecap: round;
-    transition: stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .gauge-fill {
-      transition: none;
-    }
-  }
-
-  .gauge-fill-positive {
-    stroke: var(--chart-tone-positive);
-  }
-
-  .gauge-fill-caution {
-    stroke: var(--chart-tone-caution);
-  }
-
-  .gauge-fill-negative {
-    stroke: var(--chart-tone-negative);
-  }
-
-  .gauge-fill-neutral {
-    stroke: var(--chart-tone-neutral);
-  }
-
-  .gauge-center {
-    @apply absolute inset-0 flex items-center justify-center;
-  }
-
-  .gauge-value {
-    @apply text-xl font-bold tracking-tight text-primary;
-  }
-
-  .gauge-value-text {
-    @apply text-sm font-bold tracking-tight text-primary;
-  }
-
-  .gauge-label {
-    @apply mt-3 text-center text-[10px] font-medium uppercase tracking-[0.12em] text-muted w-full;
-  }
-
-  .gauge-delta {
-    @apply mt-1.5 text-center text-[11px] text-secondary;
-  }
-
-  .gauge-provider-coverage {
-    @apply mt-1 text-center text-[10px] font-medium text-caution-400/80;
-  }
-
-  .gauge-description {
-    @apply mt-2.5 text-center text-[11px] leading-[1.45] text-muted w-full;
   }
 
   /* ── Visibility trend (citations & mentions over time) ── */
@@ -1344,7 +1277,7 @@
     @apply text-[11px] text-secondary mt-4;
   }
 
-  /* ── Project overview operator brief ── */
+  /* ── Project overview ── */
 
   .overview-brief {
     @apply overflow-hidden rounded-xl border border-default bg-surface-subtle;
@@ -1358,16 +1291,12 @@
     @apply mt-1 max-w-3xl text-xl font-semibold tracking-[-0.02em] text-primary sm:text-2xl;
   }
 
-  .overview-brief-scope {
-    @apply mt-2 max-w-3xl text-[13px] leading-5 text-secondary;
-  }
-
   .overview-brief-updated {
-    @apply shrink-0 text-[11px] tabular-nums text-muted sm:pt-5;
+    @apply shrink-0 text-[13px] tabular-nums text-secondary sm:pt-2;
   }
 
   .overview-brief-grid {
-    @apply grid border-t border-mono-800/50 lg:grid-cols-[1.35fr_0.825fr_0.825fr];
+    @apply grid border-t border-mono-800/50 lg:grid-cols-[1.35fr_0.825fr];
   }
 
   .overview-brief-panel {
@@ -1379,7 +1308,7 @@
   }
 
   .overview-brief-label {
-    @apply mb-3 text-[10px] font-medium uppercase tracking-[0.14em] text-muted;
+    @apply mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-muted;
   }
 
   .overview-brief-panel-title {
@@ -1387,11 +1316,7 @@
   }
 
   .overview-brief-panel-copy {
-    @apply mt-1.5 text-[12px] leading-[1.5] text-muted;
-  }
-
-  .overview-brief-link {
-    @apply mt-3 inline-flex rounded text-[11px] font-medium text-neutral underline decoration-mono-700 underline-offset-4 transition-colors hover:text-primary hover:decoration-mono-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60;
+    @apply mt-1.5 text-[13px] leading-5 text-secondary;
   }
 
   .overview-signal-change-list {
@@ -1399,7 +1324,7 @@
   }
 
   .overview-signal-change-row {
-    @apply grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-3 text-sm font-semibold tabular-nums;
+    @apply grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3 text-sm font-semibold;
   }
 
   .overview-signal-change-label {
@@ -1407,7 +1332,7 @@
   }
 
   .overview-brief-note {
-    @apply mt-3 text-[11px] text-caution-400/80;
+    @apply mt-3 text-xs text-caution-400/80;
   }
 
   .overview-brief-coverage .aeo-hero-rows {
@@ -1486,6 +1411,10 @@
 
   .metric-grid {
     @apply grid gap-3 sm:grid-cols-2 lg:grid-cols-3;
+  }
+
+  .gauge-row {
+    @apply grid gap-3 sm:grid-cols-2 lg:grid-cols-5;
   }
 
   /* ── Metric cards (non-gauge) ── */
@@ -1971,102 +1900,6 @@
     @apply opacity-50 cursor-not-allowed;
   }
 
-  /* ── Action queue ── */
-
-  .opportunities-grid {
-    @apply overflow-hidden rounded-xl border border-default bg-surface-subtle divide-y divide-mono-800/40;
-  }
-
-  .opportunity-card {
-    @apply flex min-w-0 flex-col gap-2 p-4;
-  }
-
-  .opportunity-card-write {
-    @apply bg-caution-950/5;
-  }
-
-  .opportunity-card-investigate {
-    @apply bg-negative-950/10;
-  }
-
-  .opportunity-card-monitor {
-    @apply bg-positive-950/5;
-  }
-
-  .opportunity-card-track {
-    @apply bg-info-950/5;
-  }
-
-  .opportunity-monitor-summary {
-    @apply flex cursor-pointer list-none items-center justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60;
-  }
-
-  .opportunity-monitor-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .opportunity-monitor-icon {
-    @apply transition-transform duration-150;
-  }
-
-  .opportunity-monitor[open] .opportunity-monitor-icon {
-    @apply rotate-180;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .opportunity-monitor-icon {
-      transition: none;
-    }
-  }
-
-  .suggested-query-add {
-    @apply text-[11px] font-medium rounded-md px-2.5 py-1 bg-info-500/10 text-info-300 border border-info-500/30 transition-colors hover:bg-info-500/20 hover:text-info-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap;
-  }
-
-  .opportunity-card-head {
-    @apply flex items-center justify-between;
-  }
-
-  .opportunity-card-title {
-    @apply text-sm font-semibold text-heading;
-  }
-
-  .opportunity-card-count {
-    @apply text-[11px] font-medium rounded-full px-2 py-0.5 bg-surface-inset text-neutral tabular-nums;
-  }
-
-  .opportunity-card-subtitle {
-    @apply text-[11px] text-muted leading-snug;
-  }
-
-  .opportunity-card-list {
-    @apply flex flex-col gap-1.5 mt-1;
-  }
-
-  .opportunity-item {
-    @apply rounded-md bg-transparent px-2.5 py-2 transition-colors hover:bg-mono-800/30;
-  }
-
-  .opportunity-item-positive {
-    @apply bg-positive-950/10;
-  }
-
-  .opportunity-item-caution {
-    @apply bg-caution-950/10;
-  }
-
-  .opportunity-item-negative {
-    @apply bg-negative-950/15;
-  }
-
-  .opportunity-item-neutral {
-    @apply bg-surface-subtle;
-  }
-
-  .opportunity-item-detail {
-    @apply mt-1 px-2.5 py-2 bg-bg/40 rounded-md border border-mono-800/30 flex flex-col gap-1.5;
-  }
-
   /* ── Insight rows (compact signal list) — legacy, kept for any external pages ── */
 
   .insight-list {
@@ -2304,15 +2137,26 @@
   /* ── Filter chips ── */
 
   .filter-row {
-    @apply mb-3 flex flex-wrap gap-2;
+    @apply mb-3 flex flex-wrap gap-1.5;
   }
 
   .filter-chip {
-    @apply min-h-11 rounded-full border border-base bg-bg px-3 py-1.5 text-sm text-muted transition hover:bg-bg-elevated hover:text-heading;
+    @apply min-h-11 rounded-md border border-base bg-bg px-3 py-1 text-sm font-medium text-secondary transition hover:bg-bg-elevated hover:text-heading focus-visible:ring-2 focus-visible:ring-mono-500/60;
+  }
+
+  .filter-chip:focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
+
+  @media (forced-colors: active) {
+    .filter-chip:focus-visible {
+      outline-color: CanvasText;
+    }
   }
 
   .filter-chip-active {
-    @apply border-mono-600 bg-mono-800 text-heading;
+    @apply border-mono-600 bg-bg-elevated text-heading;
   }
 
   /* ── Health / settings ── */

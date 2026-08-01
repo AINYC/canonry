@@ -305,16 +305,19 @@ export function GbpSection({ projectName, projectId }: { projectName: string; pr
 
         {/* Location scope selector — only when more than one location is tracked. */}
         {trackedLocations.length > 1 && (
-          <div className="mb-5 flex flex-wrap gap-1.5" role="tablist" aria-label="Location">
-            <ScopeChip label="All locations" active={scopeLocation === null} onClick={() => setScopeLocation(null)} />
-            {trackedLocations.map((loc) => (
-              <ScopeChip
-                key={loc.id}
-                label={loc.displayName}
-                active={scopeLocation === loc.locationName}
-                onClick={() => setScopeLocation(loc.locationName)}
-              />
-            ))}
+          <div className="mb-5 max-w-xs">
+            <label htmlFor="local-presence-location" className="mb-1 block text-sm font-medium text-secondary">Location</label>
+            <select
+              id="local-presence-location"
+              value={scopeLocation ?? ''}
+              onChange={(event) => setScopeLocation(event.target.value || null)}
+              className="w-full rounded-md border border-base bg-bg px-3 py-2 text-sm text-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-mono-500/60"
+            >
+              <option value="">All locations</option>
+              {trackedLocations.map((loc) => (
+                <option key={loc.id} value={loc.locationName}>{loc.displayName}</option>
+              ))}
+            </select>
           </div>
         )}
 
@@ -475,24 +478,6 @@ export function GbpSection({ projectName, projectId }: { projectName: string; pr
         </div>
       </Card>
     </section>
-  )
-}
-
-function ScopeChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={`rounded-full border px-3 py-1 text-xs transition-colors ${
-        active
-          ? 'border-mono-500 bg-mono-800 text-heading'
-          : 'border-mono-700/60 text-secondary hover:border-mono-600 hover:text-strong'
-      }`}
-    >
-      {label}
-    </button>
   )
 }
 

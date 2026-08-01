@@ -16,7 +16,7 @@ export function ProviderBadge({ provider }: { provider: string }) {
     : 'border-zinc-700 bg-zinc-800 text-zinc-300'
   return (
     <span
-      className={`provider-badge inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${tone}`}
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${tone}`}
     >
       {provider}
     </span>

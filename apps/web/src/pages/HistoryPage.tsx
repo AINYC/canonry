@@ -6,7 +6,7 @@ export function HistoryPage() {
       <div className="page-header">
         <div className="page-header-left">
           <h1 className="page-title">History</h1>
-          <p className="page-subtitle">Instance-wide configuration changes, including retained evidence for deleted projects.</p>
+          <p className="page-subtitle">Changes to projects and settings.</p>
         </div>
       </div>
       <AuditHistoryPanel />

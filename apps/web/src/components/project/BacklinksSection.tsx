@@ -117,13 +117,6 @@ const SOURCE_LABELS: Record<BacklinkSource, string> = {
   'bing-webmaster': 'Bing Webmaster',
 }
 
-// One-line freshness/methodology note per source — Common Crawl is a ~monthly
-// public hyperlink-graph release; Bing is a live first-party inbound-link feed.
-const SOURCE_FRESHNESS: Record<BacklinkSource, string> = {
-  commoncrawl: 'Common Crawl hyperlink graph · refreshes ~monthly when a release sync completes',
-  'bing-webmaster': 'Bing Webmaster Tools · live inbound links from your connected account',
-}
-
 function publicPath(path: string): string {
   if (typeof window === 'undefined') return path
   const base = window.__CANONRY_CONFIG__?.basePath?.replace(/\/$/, '') ?? ''
@@ -346,12 +339,6 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
         <div>
           <p className="eyebrow eyebrow-soft">Backlinks</p>
           <h2>Referring domains</h2>
-          <p className="text-sm text-muted mt-1 max-w-2xl">
-            Domains linking to {' '}
-            <span className="text-neutral">{projectName}</span>, from whichever source you have set up — the{' '}
-            <span className="text-neutral">Common Crawl</span> hyperlink graph (~monthly) and{' '}
-            <span className="text-neutral">Bing Webmaster</span> inbound links (live).
-          </p>
         </div>
       </div>
 
@@ -370,22 +357,18 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
                   {syncSource === 'bing-webmaster' ? 'Bing sync running' : 'Extract running'}
                 </p>
                 <ToneBadge tone="neutral">{activeRun.status}</ToneBadge>
-                <span className="text-xs text-muted tabular-nums">
+                <span className="text-sm text-secondary tabular-nums">
                   {formatElapsed(activeRun.startedAt ?? null, activeRun.createdAt)} elapsed · refreshing every 3s
                 </span>
                 <span className="sr-only">now={now}</span>
               </div>
               {syncSource === 'bing-webmaster' ? (
-                <p className="text-xs text-muted mt-1">
+                <p className="text-sm text-secondary mt-1">
                   Pulling inbound links live from Bing Webmaster for{' '}
                   <span className="text-neutral">{projectName}</span>. Time depends on how many pages link to your site.
                 </p>
               ) : (
-                <p className="text-xs text-muted mt-1">
-                  Re-querying the cached Common Crawl release for{' '}
-                  <span className="text-neutral">{projectName}</span>. No re-download — the ~16&nbsp;GB dump already lives at{' '}
-                  <code className="text-secondary">~/.canonry/cache/commoncrawl/</code>. Typically takes ~5 minutes.
-                </p>
+                <p className="text-sm text-secondary mt-1">Refreshing this project from the current Common Crawl release.</p>
               )}
             </div>
           </div>
@@ -406,9 +389,9 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
                   : (justCompletedRun.status === 'failed' ? 'Extract failed' : 'Extract complete')}
               </p>
               {justCompletedRun.error
-                ? <p className="text-xs text-muted mt-1">{summarizeRunError(justCompletedRun.error)}</p>
+                ? <p className="text-sm text-secondary mt-1">{summarizeRunError(justCompletedRun.error)}</p>
                 : justCompletedRun.status !== 'failed'
-                  ? <p className="text-xs text-muted mt-1">
+                  ? <p className="text-sm text-secondary mt-1">
                       {syncSource === 'bing-webmaster'
                         ? 'Inbound links refreshed live from Bing Webmaster.'
                         : 'Backlinks refreshed from the cached release.'}
@@ -456,10 +439,10 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
               role="tab"
               aria-selected={active}
               onClick={() => pickSource(s.source)}
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-mono-500 ${
+              className={`inline-flex items-center gap-2 border-b-2 px-3 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-mono-500 ${
                 active
-                  ? 'border-mono-500 bg-mono-800 text-heading'
-                  : 'border-base bg-bg-elevated/40 text-secondary hover:text-strong'
+                  ? 'border-accent text-heading'
+                  : 'border-transparent text-secondary hover:border-mono-600 hover:text-strong'
               }`}
             >
               <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden />
@@ -536,9 +519,7 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
                   <>
                     <h3 className="text-base font-semibold text-heading">No non-crawler referring domains</h3>
                     <p className="text-sm text-muted mt-1">
-                      Bing Webmaster synced for <code className="text-neutral">{projectName}</code>, but{' '}
-                      {formatNumber(hiddenCount)} crawler/proxy referring domain{hiddenCount === 1 ? '' : 's'} in
-                      the latest window {hiddenCount === 1 ? 'is' : 'are'} hidden by default. Re-sync to check for new links.
+                      Bing Webmaster synced for <code className="text-neutral">{projectName}</code>, but {formatNumber(hiddenCount)} crawler/proxy referring domain{hiddenCount === 1 ? '' : 's'} are excluded. Re-sync to check for new links.
                     </p>
                     {!isEmbed() && (
                       <div className="mt-4">
@@ -679,25 +660,14 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
               {hasReadySync && !hasRunningSync && !hasEmptySummary && !justFailed && (
                 <>
                   <h3 className="text-base font-semibold text-heading">No backlinks yet for this project</h3>
-                  <p className="text-sm text-muted mt-1">
-                    Release <code className="text-neutral">{latestSync.release}</code> is ready but no backlinks have been extracted for{' '}
-                    <code className="text-neutral">{projectName}</code>. Run an extract to populate data using the cached release.
-                  </p>
+                  <p className="text-sm text-secondary mt-1">Release <code className="text-neutral">{latestSync.release}</code> is ready. Run an extract for this project.</p>
                   {!isEmbed() && (
                     <div className="mt-4 flex items-center gap-3 flex-wrap">
                       <Button type="button" size="sm" disabled={extracting || activeRun !== null} onClick={asyncHandler(handleExtract)}>
                         <Play className="h-4 w-4 mr-1.5" aria-hidden />
                         {activeRun ? 'Extract running…' : extracting ? 'Queuing…' : 'Run extract'}
                       </Button>
-                      <Hint label="What does Run extract do?">
-                        <span className="block">
-                          Runs a DuckDB query against the <span className="text-strong">cached release files</span> at{' '}
-                          <code className="text-neutral">~/.canonry/cache/commoncrawl/</code> to find referring domains for <span className="text-strong">{projectName}</span>.
-                        </span>
-                        <span className="mt-2 block text-secondary">
-                          No re-download. Typically takes <span className="text-strong">~5 min</span>.
-                        </span>
-                      </Hint>
+                      <Hint label="About extraction">Queries the current release for this project without downloading it again.</Hint>
                     </div>
                   )}
                 </>
@@ -705,10 +675,7 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
               {justFailed && (
                 <>
                   <h3 className="text-base font-semibold text-heading">Last extract failed</h3>
-                  <p className="text-sm text-muted mt-1">
-                    See the error above for details. If the cache files for release{' '}
-                    <code className="text-neutral">{latestSync?.release}</code> are missing, re-sync the release from the Backlinks admin to restore the ~16 GB dump, then re-run the extract.
-                  </p>
+                  <p className="text-sm text-secondary mt-1">See the error above, then check the workspace source before retrying.</p>
                   {!isEmbed() && (
                     <div className="mt-4 flex items-center gap-3 flex-wrap">
                       <Button asChild type="button" size="sm">
@@ -721,19 +688,7 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
               {hasEmptySummary && (
                 <>
                   <h3 className="text-base font-semibold text-heading">No referring domains found</h3>
-                  <p className="text-sm text-muted mt-1">
-                    The last extract against release <code className="text-neutral">{summary!.release}</code> found{' '}
-                    <span className="text-neutral">0 referring domains</span> for{' '}
-                    <code className="text-neutral">{summary!.targetDomain}</code>. This can happen when:
-                  </p>
-                  <ul className="mt-2 space-y-1 text-xs text-muted list-disc list-inside">
-                    <li>the domain is newer than the release&rsquo;s crawl window</li>
-                    <li>the Common Crawl snapshot didn&rsquo;t capture pages that link to it</li>
-                    <li>the extract ran against a cache that was missing or incomplete</li>
-                  </ul>
-                  <p className="text-sm text-muted mt-3">
-                    Try syncing a newer release — each Common Crawl dump is a different snapshot of the web graph.
-                  </p>
+                  <p className="text-sm text-secondary mt-1">The latest release found no referring domains for {summary!.targetDomain}. Try a newer release or re-run this extract.</p>
                   {!isEmbed() && (
                     <div className="mt-4 flex items-center gap-3 flex-wrap">
                       <Button asChild type="button" size="sm">
@@ -769,15 +724,7 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
               <Download className="h-4 w-4 mr-1.5" aria-hidden />
               {activeRun ? 'Extract running…' : extracting ? 'Queuing…' : 'Re-run extract'}
             </Button>
-            <Hint label="What does Re-run extract do?">
-              <span className="block">
-                Re-queries the <span className="text-strong">cached release files</span> at{' '}
-                <code className="text-neutral">~/.canonry/cache/commoncrawl/</code> for <span className="text-strong">{projectName}</span>. Replaces existing backlink rows for this project under the current release.
-              </span>
-              <span className="mt-2 block text-secondary">
-                <span className="text-strong">No re-download</span> of the ~16 GB dump. Typically <span className="text-strong">~5 min</span>.
-              </span>
-            </Hint>
+            <Hint label="About re-running">Re-queries the current release for this project without downloading it again.</Hint>
           </>
         )}
         {!isEmbed() && (
@@ -824,15 +771,11 @@ export function BacklinksSection({ projectName }: { projectName: string }) {
           </div>
         </div>
 
-        <p className="text-xs text-faint mt-2">
+        <p className="text-xs text-muted mt-2">
           <span className="text-secondary">{SOURCE_LABELS[selectedSource]}</span> · {windowNoun}{' '}
           <code className="text-secondary">{summary.release}</code> · queried {relativeTime(summary.queriedAt)}
-          {hiddenCount > 0 && (
-            <> · <span className="text-muted">{hiddenCount} crawler/proxy domain{hiddenCount === 1 ? '' : 's'} hidden</span></>
-          )}
+          {hiddenCount > 0 && <> · {hiddenCount} excluded domain{hiddenCount === 1 ? '' : 's'}</>}
         </p>
-        <p className="text-[11px] text-faint mt-0.5">{SOURCE_FRESHNESS[selectedSource]}</p>
-
         {chartData.length >= 2 && (
           <Card className="surface-card p-4 mt-4">
             <p className="eyebrow eyebrow-soft">Referring domains over time</p>

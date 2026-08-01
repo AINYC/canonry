@@ -40,7 +40,7 @@ function OverviewProjectCard({
           <p className="metric-inline-label">Mentioned</p>
           <p className={`metric-inline-value ${project.mentionTone === 'caution' ? 'text-caution-400' : ''}`}>{project.mentionScore}</p>
           <p className="metric-inline-delta">{project.mentionDelta}</p>
-          {project.providerCoverage && <p className="text-[10px] font-medium text-caution-400/80">{project.providerCoverage}</p>}
+          {project.providerCoverage && <p className="text-[13px] font-medium text-caution">{project.providerCoverage}</p>}
         </div>
       </div>
       <div className="project-row-stat">
@@ -99,7 +99,7 @@ export function OverviewPage() {
       <div className="page-header">
         <div className="page-header-left">
           <h1 className="page-title">Portfolio</h1>
-          <p className="page-subtitle">Visibility and execution state across all projects</p>
+          <p className="page-subtitle">Visibility across all projects.</p>
         </div>
         <div className="page-header-right">
           <p className="text-[11px] text-faint">{model.lastUpdatedAt}</p>
@@ -196,30 +196,29 @@ export function OverviewPage() {
             <h2 className="section-title-sm">Infrastructure</h2>
           </div>
         </div>
-        <div className="health-grid">
-          {systemHealth.map((item) => (
-            <Card key={item.id} className="surface-card compact-card">
-              <div className="section-head">
+        <div className="divide-y divide-default border-y border-default">
+          {systemHealth.map((item) => {
+            const serviceStatus = item.id === 'api'
+              ? healthSnapshot.apiStatus
+              : item.id === 'worker'
+                ? healthSnapshot.workerStatus
+                : undefined
+            const visibleDetail = serviceStatus
+              ? serviceStatus.state === 'ok' ? undefined : serviceStatusTooltip(serviceStatus)
+              : item.tone === 'positive' ? undefined : item.meta
+
+            return (
+              <div key={item.id} className="flex items-start justify-between gap-4 py-3">
                 <div>
-                  <p className="eyebrow eyebrow-soft">{item.label}</p>
-                  <h3>{item.detail}</h3>
+                  <p className="text-sm font-medium text-heading">{item.label}</p>
+                  {visibleDetail && <p className="mt-1 text-sm text-secondary">{visibleDetail}</p>}
                 </div>
-                <ToneBadge
-                  tone={item.tone}
-                  title={
-                    item.id === 'api'
-                      ? serviceStatusTooltip(healthSnapshot.apiStatus)
-                      : item.id === 'worker'
-                        ? serviceStatusTooltip(healthSnapshot.workerStatus)
-                        : undefined
-                  }
-                >
-                  {item.label}
+                <ToneBadge tone={item.tone} title={serviceStatus ? serviceStatusTooltip(serviceStatus) : item.meta}>
+                  {item.detail}
                 </ToneBadge>
               </div>
-              <p className="supporting-copy">{item.meta}</p>
-            </Card>
-          ))}
+            )
+          })}
         </div>
       </section>
     </div>

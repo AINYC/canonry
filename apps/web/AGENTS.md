@@ -4,6 +4,12 @@
 
 Vite SPA (React 19 + TanStack Router/Query + Tailwind CSS 4) for the analytics dashboard. Built and bundled into `packages/canonry/assets/` for distribution. This is the lowest-priority surface — never block a release on UI work.
 
+## Product and design context
+
+Read the repository-root `PRODUCT.md` and `DESIGN.md` before UI work. They are
+the durable product and interaction contract. This file owns implementation
+constraints; `DESIGN.md` owns hierarchy, copy, typography, and control choices.
+
 ## Key Files
 
 | File | Role |
@@ -226,6 +232,10 @@ Token migration guardrails:
 - Use **data tables** for lists of 3+ structured items (evidence, findings, competitors).
 - Use **cards** only for insights/interpretations where narrative matters.
 - Use **ToneBadge** for all status indicators. Map tones through helper functions.
+- Do not use radial/progress gauges for unbounded counts. They require a real
+  bounded scale.
+- Pills are status/tag indicators only. Use tabs, selects, segmented controls,
+  checkboxes, or shared rectangular buttons for interactive choices.
 
 ## Common Mistakes
 

@@ -34,10 +34,7 @@ export function DiscoverySection({ projectName }: { projectName: string }) {
       <div className="section-head section-head-inline">
         <div>
           <p className="eyebrow eyebrow-soft">Query discovery</p>
-          <h2>Explore the questions that matter</h2>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
-            Find query ideas from an ideal customer profile, or run a focused research batch without changing what this project tracks.
-          </p>
+          <h2>Discover or research queries</h2>
         </div>
       </div>
       <div className="inline-flex rounded-md border border-default bg-surface p-1" role="tablist" aria-label="Query discovery workflow">
@@ -221,12 +218,12 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
     <>
       <div className="section-head section-head-inline">
         <div>
-          <p className="eyebrow eyebrow-soft">Find queries</p>
-          <h2>Find new queries to track</h2>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
+          <p className="eyebrow eyebrow-soft">Step 1</p>
+          <h2>Generate and check questions</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-secondary">
             {isEmbed()
-              ? 'Generated questions your ideal customers would ask an AI engine, with a check of which ones already cite your site.'
-              : 'Describe your ideal customer and Canonry generates the questions they would ask an AI engine, checks which ones already cite your site, then lets you add the promising ones to your tracked queries.'}
+              ? 'Generate customer questions and check whether your site is already visible.'
+              : 'Generate customer questions, check current visibility, then choose what to track.'}
           </p>
         </div>
         <Button
@@ -253,7 +250,7 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
             </div>
             <div className="space-y-3">
               <label className="block">
-                <span className="text-xs text-muted">Who is your ideal customer?</span>
+                <span className="text-sm text-secondary">Who is your ideal customer?</span>
                 <textarea
                   className="mt-1 min-h-24 w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
                   placeholder="e.g. Small e-commerce stores that want AI-powered customer support. Leave blank to use the customer profile saved on this project."
@@ -262,14 +259,14 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
                 />
               </label>
               <label className="block">
-                <span className="text-xs text-muted">How many questions to test</span>
+                <span className="text-sm text-secondary">How many questions to test</span>
                 <input
                   className="mt-1 w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
                   inputMode="numeric"
                   value={maxProbes}
                   onChange={(event) => setMaxProbes(event.target.value)}
                 />
-                <span className="mt-1 block text-[11px] text-faint">
+                <span className="mt-1 block text-sm text-secondary">
                   More questions means broader coverage but a longer run. 100 is a good default.
                 </span>
               </label>
@@ -296,7 +293,7 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
               {sessionsQuery.isFetching && <ToneBadge tone="neutral">Loading</ToneBadge>}
             </div>
             {sessions.length === 0 ? (
-              <p className="text-sm text-muted">No discovery runs yet. Describe your customer above to start your first one.</p>
+              <p className="text-sm text-secondary">No discovery runs yet. Describe your customer above to start your first one.</p>
             ) : (
               <div className="space-y-2">
                 {sessions.map(session => (
@@ -314,10 +311,10 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
                       <span className="text-sm font-medium text-heading">{shortId(session.id)}</span>
                       <ToneBadge tone={toneForSession(session.status)}>{session.status}</ToneBadge>
                     </div>
-                    <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] text-muted">
-                      <span>Cited {session.citedCount ?? 0}</span>
-                      <span>Opportunity {session.aspirationalCount ?? 0}</span>
-                      <span>Low value {session.wastedCount ?? 0}</span>
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-sm text-secondary">
+                      <span>Cited queries {session.citedCount ?? 0}</span>
+                      <span>Worth tracking {session.aspirationalCount ?? 0}</span>
+                      <span>Skip {session.wastedCount ?? 0}</span>
                     </div>
                   </button>
                 ))}
@@ -337,14 +334,14 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
             </div>
 
             {!activeSession ? (
-              <p className="text-sm text-muted">Start a run above, or pick one from Recent runs to see its progress.</p>
+              <p className="text-sm text-secondary">Start a run above, or pick one from Recent runs to see its progress.</p>
             ) : (
               <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-4">
                   <DiscoveryMetric label="Questions tested" value={activeSession.probeCount ?? 0} />
-                  <DiscoveryMetric label="Already cited" value={activeSession.citedCount ?? 0} tone="positive" />
-                  <DiscoveryMetric label="Opportunities" value={activeSession.aspirationalCount ?? 0} tone="caution" />
-                  <DiscoveryMetric label="Low value" value={activeSession.wastedCount ?? 0} tone="negative" />
+                  <DiscoveryMetric label="Cited queries" value={activeSession.citedCount ?? 0} tone="positive" />
+                  <DiscoveryMetric label="Worth tracking" value={activeSession.aspirationalCount ?? 0} tone="caution" />
+                  <DiscoveryMetric label="Skip" value={activeSession.wastedCount ?? 0} tone="negative" />
                 </div>
 
                 {activeSession.error && (
@@ -368,7 +365,7 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
 
                 {activeSession.competitorMap.length > 0 && (
                   <div>
-                    <p className="mb-2 text-xs font-medium text-secondary">Sites that keep getting cited</p>
+                    <p className="mb-2 text-sm font-medium text-secondary">Sites that keep getting cited</p>
                     <div className="flex flex-wrap gap-2">
                       {activeSession.competitorMap.slice(0, 8).map(entry => (
                         <span key={entry.domain} className="rounded-md border border-default bg-bg px-2 py-1 text-xs text-neutral">
@@ -387,7 +384,7 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
               <div className="section-head section-head-inline">
                 <div>
                   <p className="eyebrow eyebrow-soft">Step 2</p>
-                  <h3>Add queries to your project</h3>
+                  <h3>Choose queries to track</h3>
                 </div>
                 {!isEmbed() && (
                   <Button
@@ -407,12 +404,12 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
                 <div className="space-y-4">
                   <div className="grid gap-3 sm:grid-cols-4">
                     <DiscoveryMetric label="Queries to add" value={safeDefaultCount} tone="positive" />
-                    <DiscoveryMetric label="Already cited" value={preview.queriesByBucket.cited.length} tone="positive" />
-                    <DiscoveryMetric label="Opportunities" value={preview.queriesByBucket.aspirational.length} tone="caution" />
-                    <DiscoveryMetric label="Low value (skipped)" value={preview.queriesByBucket['wasted-surface'].length} tone="negative" />
+                    <DiscoveryMetric label="Cited queries" value={preview.queriesByBucket.cited.length} tone="positive" />
+                    <DiscoveryMetric label="Worth tracking" value={preview.queriesByBucket.aspirational.length} tone="caution" />
+                    <DiscoveryMetric label="Skip" value={preview.queriesByBucket['wasted-surface'].length} tone="negative" />
                   </div>
-                  <p className="text-xs leading-5 text-muted">
-                    Adding queries starts tracking the “already cited” and “opportunity” questions, plus any competitor sites that kept showing up. “Low value” questions are listed below for reference only and are not added.
+                  <p className="text-sm leading-6 text-secondary">
+                    Adds Cited queries and Worth tracking queries, plus recurring competitor sites. Skip items remain available for review only.
                   </p>
                   {preview.suggestedCompetitors.length > 0 && (
                     <div>
@@ -510,9 +507,9 @@ function toneForBucket(bucket: DiscoveryBucket | null) {
 }
 
 const BUCKET_LABELS: Record<DiscoveryBucket, string> = {
-  cited: 'Already cited',
-  aspirational: 'Opportunity',
-  'wasted-surface': 'Low value',
+  cited: 'Cited queries',
+  aspirational: 'Worth tracking',
+  'wasted-surface': 'Skip',
 }
 
 function bucketLabel(bucket: DiscoveryBucket | null): string {

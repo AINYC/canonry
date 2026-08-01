@@ -219,7 +219,7 @@ export function ProjectSettingsSection({
     JSON.stringify(aliases) !== JSON.stringify(project.aliases ?? [])
 
   const inputClass = 'w-full rounded border border-strong bg-transparent px-2 py-1.5 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none'
-  const labelClass = 'block text-xs font-medium text-secondary mb-1'
+  const labelClass = 'mb-1 block text-sm font-medium text-secondary'
   const newLocValid = newLocLabel.trim() && newLocCity.trim() && newLocRegion.trim() && newLocCountry.trim()
 
   return (
@@ -269,7 +269,7 @@ export function ProjectSettingsSection({
             <label className={labelClass}>Owned domains</label>
             <div className="flex flex-wrap gap-1.5 mb-2">
               {ownedDomains.map((d) => (
-                <span key={d} className="inline-flex items-center gap-1 rounded-full border border-mono-700/60 bg-mono-800/40 px-2 py-0.5 text-xs text-neutral">
+                <span key={d} className="inline-flex items-center gap-1 rounded-md border border-mono-700/60 bg-mono-800/40 px-2 py-1 text-xs text-neutral">
                   {d}
                   <button type="button" className="ml-0.5 text-muted hover:text-strong transition-colors" onClick={() => handleRemoveDomain(d)} aria-label={`Remove ${d}`}>×</button>
                 </span>
@@ -292,13 +292,12 @@ export function ProjectSettingsSection({
 
           <div>
             <label className={labelClass}>Aliases</label>
-            <p className="text-[11px] text-muted mb-1.5">
-              Additional brand names checked against LLM answer text. Use for product names,
-              prior names, or DBAs (e.g. add "Meta" as an alias to facebook.com).
+            <p className="mb-1.5 text-sm text-secondary">
+              Other brand names that may appear in answers.
             </p>
             <div className="flex flex-wrap gap-1.5 mb-2">
               {aliases.map((a) => (
-                <span key={a} className="inline-flex items-center gap-1 rounded-full border border-mono-700/60 bg-mono-800/40 px-2 py-0.5 text-xs text-neutral">
+                <span key={a} className="inline-flex items-center gap-1 rounded-md border border-mono-700/60 bg-mono-800/40 px-2 py-1 text-xs text-neutral">
                   {a}
                   <button type="button" className="ml-0.5 text-muted hover:text-strong transition-colors" onClick={() => handleRemoveAlias(a)} aria-label={`Remove ${a}`}>×</button>
                 </span>
@@ -346,7 +345,7 @@ export function ProjectSettingsSection({
                   {(project.ownedDomains ?? []).length > 0 ? (
                     <div className="flex flex-wrap gap-1.5">
                       {project.ownedDomains.map((d) => (
-                        <span key={d} className="rounded-full border border-mono-700/60 bg-mono-800/40 px-2 py-0.5 text-xs text-neutral">{d}</span>
+                        <span key={d} className="rounded-md border border-mono-700/60 bg-mono-800/40 px-2 py-1 text-xs text-neutral">{d}</span>
                       ))}
                     </div>
                   ) : (
@@ -360,7 +359,7 @@ export function ProjectSettingsSection({
                   {(project.aliases ?? []).length > 0 ? (
                     <div className="flex flex-wrap gap-1.5">
                       {project.aliases.map((a) => (
-                        <span key={a} className="rounded-full border border-mono-700/60 bg-mono-800/40 px-2 py-0.5 text-xs text-neutral">{a}</span>
+                        <span key={a} className="rounded-md border border-mono-700/60 bg-mono-800/40 px-2 py-1 text-xs text-neutral">{a}</span>
                       ))}
                     </div>
                   ) : (
@@ -401,7 +400,7 @@ export function ProjectSettingsSection({
                         {project.locations.map((loc) => (
                           <tr key={loc.label} className="border-t border-mono-800/30">
                             <td className="py-1.5 pr-3">
-                              <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${loc.label === project.defaultLocation ? 'border-positive-700/60 bg-positive-950/30 text-positive' : 'border-mono-700/60 bg-mono-800/40 text-neutral'}`}>
+                              <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium ${loc.label === project.defaultLocation ? 'border-positive-700/60 bg-positive-950/30 text-positive' : 'border-mono-700/60 bg-mono-800/40 text-neutral'}`}>
                                 {loc.label}{loc.label === project.defaultLocation ? ' \u2605' : ''}
                               </span>
                             </td>
@@ -416,7 +415,7 @@ export function ProjectSettingsSection({
                                     type="button"
                                     disabled={locationWorking}
                                     onClick={() => { void handleSetDefaultLocation(loc.label) }}
-                                    className="text-[10px] text-muted hover:text-positive-400 transition-colors disabled:opacity-40"
+                                    className="text-sm text-secondary hover:text-positive-400 transition-colors disabled:opacity-40"
                                     aria-label={`Set ${loc.label} as default location`}
                                   >
                                     Set default
@@ -427,7 +426,7 @@ export function ProjectSettingsSection({
                                     type="button"
                                     disabled={locationWorking}
                                     onClick={() => { void handleRemoveLocation(loc.label) }}
-                                    className="text-[10px] text-muted hover:text-negative-400 transition-colors disabled:opacity-40"
+                                    className="text-sm text-secondary hover:text-negative-400 transition-colors disabled:opacity-40"
                                     aria-label={`Remove location ${loc.label}`}
                                   >
                                     Remove
@@ -444,26 +443,26 @@ export function ProjectSettingsSection({
                   )}
                   {isEmbed() ? null : showAddLocation ? (
                     <div className="mt-2 rounded border border-base bg-bg-elevated/50 p-3 space-y-2">
-                      <p className="text-[10px] font-medium uppercase tracking-wide text-muted">Add location</p>
+                      <p className="text-sm font-medium text-secondary">Add location</p>
                       <div className="grid grid-cols-2 gap-2">
                         <div>
-                          <label className="block text-[10px] text-muted mb-0.5">Label *</label>
+                          <label className="mb-1 block text-sm text-secondary">Label *</label>
                           <input className={inputClass} type="text" value={newLocLabel} onChange={(e) => setNewLocLabel(e.target.value)} placeholder="nyc" />
                         </div>
                         <div>
-                          <label className="block text-[10px] text-muted mb-0.5">City *</label>
+                          <label className="mb-1 block text-sm text-secondary">City *</label>
                           <input className={inputClass} type="text" value={newLocCity} onChange={(e) => setNewLocCity(e.target.value)} placeholder="New York" />
                         </div>
                         <div>
-                          <label className="block text-[10px] text-muted mb-0.5">Region *</label>
+                          <label className="mb-1 block text-sm text-secondary">Region *</label>
                           <input className={inputClass} type="text" value={newLocRegion} onChange={(e) => setNewLocRegion(e.target.value)} placeholder="NY" />
                         </div>
                         <div>
-                          <label className="block text-[10px] text-muted mb-0.5">Country *</label>
+                          <label className="mb-1 block text-sm text-secondary">Country *</label>
                           <input className={inputClass} type="text" value={newLocCountry} onChange={(e) => setNewLocCountry(e.target.value)} placeholder="US" maxLength={2} />
                         </div>
                         <div className="col-span-2">
-                          <label className="block text-[10px] text-muted mb-0.5">Timezone (optional)</label>
+                          <label className="mb-1 block text-sm text-secondary">Timezone (optional)</label>
                           <input className={inputClass} type="text" value={newLocTimezone} onChange={(e) => setNewLocTimezone(e.target.value)} placeholder="America/New_York" />
                         </div>
                       </div>
