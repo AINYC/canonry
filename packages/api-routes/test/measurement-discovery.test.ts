@@ -5,308 +5,214 @@ import {
   type MeasurementDiscoveryInput,
 } from '../src/measurement-discovery.js'
 
-const exampleLivingRules: MeasurementDiscoveryInput['rules'] = {
-  primary: { host: 'example.test', pathTemplate: '/apartments/{slug}' },
-  aliases: [{ host: 'homes.example.test', pathTemplate: '/{slug}' }],
-  excludedSlugSuffixes: ['-metro'],
+const rules: MeasurementDiscoveryInput['rules'] = {
+  primary: { host: 'northstar.example', pathTemplate: '/locations/{slug}' },
+  aliases: [{ host: 'homes.northstar.example', pathTemplate: '/{slug}' }],
+  excludedSlugSuffixes: ['-region'],
 }
 
 function classify(urls: readonly string[], overrides: Partial<MeasurementDiscoveryInput> = {}) {
   return classifyMeasurementSitemapUrls({
-    ownedHosts: ['example.test'],
-    rules: exampleLivingRules,
+    ownedHosts: ['northstar.example'],
+    rules,
     urls,
-    maxUrls: 500,
+    maxUrls: 50,
     ...overrides,
   })
 }
 
-describe('classifyMeasurementSitemapUrls — synthetic property fixtures', () => {
-  it('groups an exact primary slug with its exact-slug apartment-host coverage only', () => {
+describe('classifyMeasurementSitemapUrls', () => {
+  it('uses the five-class review taxonomy with one reason per classified item', () => {
     const result = classify([
-      'https://homes.example.test/example-living-harbor/',
-      'https://example.test/apartments/example-living-harbor/',
-      'https://homes.example.test/example-living-harbor/floorplans/',
-      'https://homes.example.test/example-living-park/',
-      'https://example.test/apartments/example-living-north/',
+      'https://northstar.example/locations/harbor/',
+      'https://homes.northstar.example/harbor/',
+      'https://northstar.example/locations/lake-region/',
+      'https://northstar.example/locations/',
+      'https://northstar.example/about/',
     ])
 
-    expect(result.candidates).toEqual([
+    expect(result.proposed).toEqual([
       {
-        stableKey: 'target-example-living-harbor',
-        slug: 'example-living-harbor',
-        label: 'Example Living Harbor',
-        primaryUrl: 'https://example.test/apartments/example-living-harbor',
-        aliasCoverageUrls: ['https://homes.example.test/example-living-harbor'],
-        status: 'proposed',
-        reasonCodes: ['primary-match', 'alias-coverage'],
-      },
-      {
-        stableKey: 'target-example-living-north',
-        slug: 'example-living-north',
-        label: 'Example Living North',
-        primaryUrl: 'https://example.test/apartments/example-living-north',
-        aliasCoverageUrls: [],
-        status: 'proposed',
-        reasonCodes: ['primary-match'],
+        classification: 'proposed',
+        reason: 'primary-match',
+        stableKey: 'target-harbor',
+        slug: 'harbor',
+        label: 'Harbor',
+        primaryUrl: 'https://northstar.example/locations/harbor',
+        aliasCoverageUrls: ['https://homes.northstar.example/harbor'],
       },
     ])
+    expect(result.aliases).toEqual([
+      {
+        classification: 'alias',
+        reason: 'exact-slug-match',
+        slug: 'harbor',
+        url: 'https://homes.northstar.example/harbor',
+        targetStableKey: 'target-harbor',
+      },
+    ])
+    expect(result.excluded).toEqual([
+      expect.objectContaining({ classification: 'excluded', reason: 'excluded-slug' }),
+    ])
+    expect(result.shared).toEqual([
+      expect.objectContaining({ classification: 'shared', reason: 'shared-path' }),
+    ])
     expect(result.unmatched).toEqual([
-      {
-        url: 'https://homes.example.test/example-living-harbor/floorplans',
-        canonicalUrl: 'https://homes.example.test/example-living-harbor/floorplans',
-        reasonCodes: ['unmatched-path'],
-      },
-      {
-        url: 'https://homes.example.test/example-living-park',
-        canonicalUrl: 'https://homes.example.test/example-living-park',
-        reasonCodes: ['alias-without-primary'],
-      },
+      expect.objectContaining({ classification: 'unmatched', reason: 'unmatched-path' }),
+    ])
+
+    for (const item of [...result.proposed, ...result.aliases, ...result.excluded, ...result.shared, ...result.unmatched]) {
+      expect(item).toHaveProperty('reason')
+      expect(item).not.toHaveProperty('reasonCodes')
+    }
+  })
+
+  it('attaches aliases only when an exact primary slug exists', () => {
+    const result = classify([
+      'https://homes.northstar.example/harbor/',
+      'https://homes.northstar.example/ridge/',
+      'https://northstar.example/locations/harbor/',
+      'https://homes.northstar.example/harbor/floorplans/',
+    ])
+
+    expect(result.proposed[0]?.aliasCoverageUrls).toEqual(['https://homes.northstar.example/harbor'])
+    expect(result.aliases).toHaveLength(1)
+    expect(result.unmatched).toEqual([
+      expect.objectContaining({ url: 'https://homes.northstar.example/harbor/floorplans', reason: 'unmatched-path' }),
+      expect.objectContaining({ url: 'https://homes.northstar.example/ridge', reason: 'alias-without-primary' }),
     ])
   })
 
-  it('emits contract-valid candidates that compile directly into a Target plan', () => {
+  it('turns proposed Targets and exact aliases directly into a compiled plan', () => {
     const discovered = classify([
-      'https://example.test/apartments/example-living-harbor/',
-      'https://homes.example.test/example-living-harbor/',
+      'https://northstar.example/locations/harbor/',
+      'https://homes.northstar.example/harbor/',
     ])
     const compiled = compileMeasurementPlan({
       schemaVersion: 1,
-      targets: discovered.candidates.map((candidate) => ({
-        stableKey: candidate.stableKey,
-        label: candidate.label,
-        urls: [candidate.primaryUrl, ...candidate.aliasCoverageUrls].map((url) => ({
+      targets: discovered.proposed.map((target) => ({
+        stableKey: target.stableKey,
+        label: target.label,
+        urls: [target.primaryUrl, ...target.aliasCoverageUrls].map((url) => ({
           kind: 'exact' as const,
           url,
           pathCase: 'insensitive' as const,
         })),
         aliases: [],
       })),
+      targetQuerySelections: [{ targetKey: 'target-harbor', queryIds: ['q-1'] }],
     }, {
-      canonicalDomain: 'example.test',
-      ownedDomains: [],
-      trackedQueries: [],
+      canonicalDomain: 'northstar.example',
+      ownedDomains: ['homes.northstar.example'],
+      trackedQueries: [{ id: 'q-1', query: 'harbor homes' }],
       locations: [],
+      expectedSnapshots: 2,
     })
 
-    expect(compiled.targets.map((target) => target.stableKey)).toEqual(['target-example-living-harbor'])
+    expect(compiled.targets.map((target) => target.stableKey)).toEqual(['target-harbor'])
+    expect(compiled.executionNodes).toEqual([expect.objectContaining({ expectedSnapshots: 2 })])
   })
 
-  it('folds www consistently with Target host normalization', () => {
-    const result = classify([
-      'https://www.example.test/apartments/example-living-harbor/',
-      'https://www.homes.example.test/example-living-harbor/',
+  it('normalizes www hosts and keeps ported URLs out of classified lanes', () => {
+    const normalized = classify([
+      'https://www.northstar.example/locations/harbor/',
+      'https://www.homes.northstar.example/harbor/',
     ])
+    expect(normalized.proposed[0]).toEqual(expect.objectContaining({
+      primaryUrl: 'https://northstar.example/locations/harbor',
+      aliasCoverageUrls: ['https://homes.northstar.example/harbor'],
+    }))
 
-    expect(result.candidates).toEqual([
-      expect.objectContaining({
-        stableKey: 'target-example-living-harbor',
-        primaryUrl: 'https://example.test/apartments/example-living-harbor',
-        aliasCoverageUrls: ['https://homes.example.test/example-living-harbor'],
-      }),
-    ])
-  })
-
-  it('rejects ported sitemap URLs instead of emitting exact matchers that cannot compile', () => {
-    const result = classify(['https://example.test:8443/apartments/example-living-harbor/'])
-
-    expect(result.candidates).toEqual([])
-    expect(result.invalid).toEqual([
-      expect.objectContaining({
-        url: 'https://example.test:8443/apartments/example-living-harbor/',
-        canonicalUrl: null,
-        reasonCodes: ['invalid-url'],
-      }),
+    const ported = classify(['https://northstar.example:8443/locations/harbor/'])
+    expect(ported.proposed).toEqual([])
+    expect(ported.diagnostics).toEqual([
+      { kind: 'invalid-url', url: 'https://northstar.example:8443/locations/harbor/', canonicalUrl: null },
     ])
   })
 
   it.each([
-    'example-living%20harbor',
-    'example-living-%E2%98%83',
-    `example-living-${'x'.repeat(121)}`,
-  ])('surfaces an unsupported slug for review instead of emitting an invalid stable key: %s', (slug) => {
-    const result = classify([`https://example.test/apartments/${slug}/`])
-
-    expect(result.candidates).toEqual([])
+    'harbor%20point',
+    'harbor-%E2%98%83',
+    `harbor-${'x'.repeat(121)}`,
+  ])('keeps unsupported slug %s unmatched for review', (slug) => {
+    const result = classify([`https://northstar.example/locations/${slug}/`])
     expect(result.unmatched).toEqual([
-      expect.objectContaining({ reasonCodes: ['unsupported-slug'] }),
+      expect.objectContaining({ classification: 'unmatched', reason: 'unsupported-slug' }),
     ])
   })
 
-  it('never creates targets from metro roots, shared pages, unowned lookalikes, or malformed URLs', () => {
+  it('keeps invalid, unowned, duplicate, and cap outcomes as deterministic diagnostics', () => {
     const result = classify([
-      'https://example.test/apartments/sample-city-metro/',
-      'https://example.test/apartments/',
-      'https://example.test/about/',
-      'https://evil-example.test/apartments/example-living-harbor/',
+      'https://northstar.example/locations/zeta/?ref=one',
+      'https://northstar.example/locations/alpha/',
+      'https://northstar.example/locations/zeta',
+      'https://outside.example/locations/omega/',
+      'https://zebra.example/locations/peak/',
       'not a url',
-    ])
+    ], { maxUrls: 3 })
 
-    expect(result.candidates).toEqual([])
-    expect(result.shared).toEqual([
-      {
-        url: 'https://example.test/apartments/sample-city-metro',
-        canonicalUrl: 'https://example.test/apartments/sample-city-metro',
-        reasonCodes: ['excluded-slug', 'shared-path'],
-      },
-    ])
-    expect(result.unmatched).toEqual([
-      {
-        url: 'https://example.test/about',
-        canonicalUrl: 'https://example.test/about',
-        reasonCodes: ['unmatched-path'],
-      },
-      {
-        url: 'https://example.test/apartments',
-        canonicalUrl: 'https://example.test/apartments',
-        reasonCodes: ['unmatched-path'],
-      },
-    ])
-    expect(result.invalid).toEqual([
-      {
-        url: 'https://evil-example.test/apartments/example-living-harbor',
-        canonicalUrl: 'https://evil-example.test/apartments/example-living-harbor',
-        reasonCodes: ['unowned-host'],
-      },
-      { url: 'not a url', canonicalUrl: null, reasonCodes: ['invalid-url'] },
+    expect(result.proposed.map((item) => item.slug)).toEqual(['alpha', 'zeta'])
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ kind: 'duplicate-url', url: 'https://northstar.example/locations/zeta/?ref=one' }),
+      expect.objectContaining({ kind: 'invalid-url', url: 'not a url' }),
+      expect.objectContaining({ kind: 'unowned-host', url: 'https://outside.example/locations/omega' }),
+      expect.objectContaining({ kind: 'url-cap-reached', url: 'https://zebra.example/locations/peak' }),
     ])
   })
-})
-describe('classifyMeasurementSitemapUrls — generic declarative rules', () => {
-  it('accepts only a single whole `{slug}` path segment, never caller-provided matcher syntax', () => {
-    expect(() =>
-      classifyMeasurementSitemapUrls({
-        ownedHosts: ['example.com'],
-        rules: { primary: { host: 'example.com', pathTemplate: '/customers/{slug}-{region}' } },
-        urls: [],
-        maxUrls: 1,
-      }),
-    ).toThrow('exactly one {slug} path segment')
-    expect(() =>
-      classifyMeasurementSitemapUrls({
-        ownedHosts: ['example.com'],
-        rules: { primary: { host: 'example.com', pathTemplate: '/customers/{slug}/{slug}' } },
-        urls: [],
-        maxUrls: 1,
-      }),
-    ).toThrow('exactly one {slug} path segment')
+
+  it('is order-independent and validates literal template rules', () => {
+    const urls = [
+      'https://northstar.example/locations/bravo/',
+      'https://northstar.example/locations/alpha/',
+      'https://homes.northstar.example/alpha/',
+    ]
+    expect(classify(urls)).toEqual(classify([...urls].reverse()))
+    expect(() => classify([], {
+      rules: { primary: { host: 'northstar.example', pathTemplate: '/locations/{slug}-{kind}' } },
+    })).toThrow('exactly one {slug} path segment')
   })
 
-  it('supports a subdomain primary and an owned SaaS alias without caller-provided regexes', () => {
+  it('supports generic subdomain rules and literal exclusion patterns', () => {
     const result = classifyMeasurementSitemapUrls({
-      ownedHosts: ['example.com'],
+      ownedHosts: ['saas.example'],
       rules: {
-        primary: { host: 'app.example.com', pathTemplate: '/customers/{slug}' },
-        aliases: [{ host: 'www.example.com', pathTemplate: '/customers/{slug}' }],
+        primary: { host: 'app.saas.example', pathTemplate: '/customers/{slug}' },
+        aliases: [{ host: 'www.saas.example', pathTemplate: '/customers/{slug}' }],
         excludedSlugPatterns: [
-          { kind: 'suffix', value: '-template' },
           { kind: 'exact', value: 'all-customers' },
+          { kind: 'suffix', value: '-template' },
         ],
       },
       urls: [
-        'https://www.example.com/customers/acme/',
-        'https://app.example.com/customers/acme/',
-        'https://app.example.com/customers/all-customers/',
-        'https://app.example.com/customers/invoice-template/',
-        'https://notexample.com/customers/acme/',
+        'https://app.saas.example/customers/harbor/',
+        'https://www.saas.example/customers/harbor/',
+        'https://app.saas.example/customers/all-customers/',
+        'https://app.saas.example/customers/invoice-template/',
       ],
-      maxUrls: 50,
+      maxUrls: 20,
     })
 
-    expect(result.candidates).toEqual([
-      {
-        stableKey: 'target-acme',
-        slug: 'acme',
-        label: 'Acme',
-        primaryUrl: 'https://app.example.com/customers/acme',
-        aliasCoverageUrls: ['https://example.com/customers/acme'],
-        status: 'proposed',
-        reasonCodes: ['primary-match', 'alias-coverage'],
-      },
-    ])
-    expect(result.shared.map((item) => [item.url, item.reasonCodes])).toEqual([
-      ['https://app.example.com/customers/all-customers', ['excluded-slug', 'shared-path']],
-      ['https://app.example.com/customers/invoice-template', ['excluded-slug', 'shared-path']],
-    ])
-    expect(result.invalid[0]?.reasonCodes).toEqual(['unowned-host'])
+    expect(result.proposed).toEqual([expect.objectContaining({ stableKey: 'target-harbor' })])
+    expect(result.aliases).toEqual([expect.objectContaining({ slug: 'harbor', targetStableKey: 'target-harbor' })])
+    expect(result.excluded.map((item) => item.reason)).toEqual(['excluded-slug', 'excluded-slug'])
   })
 
-  it('deduplicates canonical URL variants and caps the stable sorted input before classification', () => {
-    const result = classify(
-      [
-        'https://example.test/apartments/zeta/?utm_source=sitemap#top',
-        'https://example.test/apartments/alpha/',
-        'https://example.test/apartments/zeta',
-        'https://example.test/apartments/beta/',
-      ],
-      { maxUrls: 3 },
-    )
-
-    expect(result.candidates.map((candidate) => candidate.slug)).toEqual(['alpha', 'beta', 'zeta'])
-    expect(result.duplicates).toEqual([
-      {
-        url: 'https://example.test/apartments/zeta/?utm_source=sitemap#top',
-        canonicalUrl: 'https://example.test/apartments/zeta',
-        duplicateOf: 'https://example.test/apartments/zeta',
-        reasonCodes: ['duplicate-url'],
-      },
-    ])
-    expect(result.truncated).toEqual([])
-  })
-
-  it('reports deterministically skipped URLs when a bounded run reaches its cap', () => {
-    const result = classify(
-      [
-        'https://example.test/apartments/charlie/',
-        'https://example.test/apartments/alpha/',
-        'https://example.test/apartments/bravo/',
-      ],
-      { maxUrls: 2 },
-    )
-
-    expect(result.candidates.map((candidate) => candidate.slug)).toEqual(['alpha', 'bravo'])
-    expect(result.truncated).toEqual([
-      {
-        url: 'https://example.test/apartments/charlie',
-        canonicalUrl: 'https://example.test/apartments/charlie',
-        reasonCodes: ['url-cap-reached'],
-      },
-    ])
-  })
-})
-
-describe('classifyMeasurementSitemapUrls — scale and canonical order', () => {
-  it('turns 213 synthetic roots into 194 targets: 19 metro exclusions and 190 exact aliases', () => {
-    const aliasMisses = [
-      'example-living-sample-one',
-      'example-living-sample-two',
-      'example-living-sample-three',
-      'example-living-sample-four',
-    ]
-    const propertySlugs = [
-      ...aliasMisses,
-      ...Array.from({ length: 190 }, (_, index) => `community-${String(190 - index).padStart(3, '0')}`),
-    ]
-    const metroSlugs = Array.from({ length: 19 }, (_, index) => `market-${String(index + 1).padStart(2, '0')}-metro`)
+  it('classifies a deterministic large sitemap with exclusions and exact alias coverage', () => {
+    const targetSlugs = Array.from({ length: 180 }, (_, index) => `location-${String(index + 1).padStart(3, '0')}`)
+    const excludedSlugs = Array.from({ length: 20 }, (_, index) => `region-${String(index + 1).padStart(2, '0')}-region`)
+    const aliasSlugs = targetSlugs.slice(0, 160)
     const urls = [
-      ...[...propertySlugs, ...metroSlugs].map((slug) => `https://example.test/apartments/${slug}/`),
-      ...propertySlugs
-        .filter((slug) => !aliasMisses.includes(slug))
-        .map((slug) => `https://homes.example.test/${slug}/`),
+      ...targetSlugs.map((slug) => `https://northstar.example/locations/${slug}/`),
+      ...excludedSlugs.map((slug) => `https://northstar.example/locations/${slug}/`),
+      ...aliasSlugs.map((slug) => `https://homes.northstar.example/${slug}/`),
     ]
 
-    const forward = classify(urls)
-    const reverse = classify([...urls].reverse())
-
+    const forward = classify(urls, { maxUrls: 500 })
+    const reverse = classify([...urls].reverse(), { maxUrls: 500 })
     expect(forward).toEqual(reverse)
-    expect(forward.candidates).toHaveLength(194)
-    expect(forward.shared).toHaveLength(19)
-    expect(forward.candidates.reduce((total, candidate) => total + candidate.aliasCoverageUrls.length, 0)).toBe(190)
-    expect(forward.candidates.map((candidate) => candidate.slug)).toEqual(
-      [...forward.candidates.map((candidate) => candidate.slug)].sort(),
-    )
-    for (const slug of aliasMisses) {
-      expect(forward.candidates.find((candidate) => candidate.slug === slug)?.aliasCoverageUrls).toEqual([])
-    }
+    expect(forward.proposed).toHaveLength(180)
+    expect(forward.excluded).toHaveLength(20)
+    expect(forward.aliases).toHaveLength(160)
+    expect(forward.proposed.reduce((total, target) => total + target.aliasCoverageUrls.length, 0)).toBe(160)
   })
 })

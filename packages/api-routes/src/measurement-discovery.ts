@@ -5,18 +5,18 @@
 
 import { measurementStableKeySchema, normalizeMeasurementHost } from '@ainyc/canonry-contracts'
 
-export type MeasurementDiscoveryReasonCode =
+export type MeasurementDiscoveryClassification = 'proposed' | 'alias' | 'shared' | 'unmatched' | 'excluded'
+
+export type MeasurementDiscoveryReason =
   | 'primary-match'
-  | 'alias-coverage'
+  | 'exact-slug-match'
   | 'excluded-slug'
   | 'shared-path'
   | 'unmatched-path'
   | 'alias-without-primary'
   | 'unsupported-slug'
-  | 'invalid-url'
-  | 'unowned-host'
-  | 'duplicate-url'
-  | 'url-cap-reached'
+
+export type MeasurementDiscoveryDiagnosticKind = 'invalid-url' | 'unowned-host' | 'duplicate-url' | 'url-cap-reached'
 
 export type MeasurementDiscoverySlugPatternKind = 'exact' | 'prefix' | 'suffix' | 'contains'
 
@@ -55,30 +55,42 @@ export interface MeasurementDiscoveryItem {
   /** Canonical URL when it could be parsed; otherwise the original input string. */
   url: string
   canonicalUrl: string | null
-  reasonCodes: MeasurementDiscoveryReasonCode[]
+  classification: Exclude<MeasurementDiscoveryClassification, 'proposed' | 'alias'>
+  reason: Exclude<MeasurementDiscoveryReason, 'primary-match' | 'exact-slug-match'>
 }
 
-export interface MeasurementDiscoveryDuplicateItem extends MeasurementDiscoveryItem {
-  duplicateOf: string
+export interface MeasurementDiscoveryDiagnostic {
+  kind: MeasurementDiscoveryDiagnosticKind
+  url: string
+  canonicalUrl: string | null
+  duplicateOf?: string
 }
 
 export interface MeasurementDiscoveryCandidate {
+  classification: 'proposed'
+  reason: 'primary-match'
   stableKey: string
   slug: string
   label: string
   primaryUrl: string
   aliasCoverageUrls: string[]
-  status: 'proposed'
-  reasonCodes: MeasurementDiscoveryReasonCode[]
+}
+
+export interface MeasurementDiscoveryAlias {
+  classification: 'alias'
+  reason: 'exact-slug-match'
+  slug: string
+  url: string
+  targetStableKey: string
 }
 
 export interface MeasurementDiscoveryResult {
-  candidates: MeasurementDiscoveryCandidate[]
+  proposed: MeasurementDiscoveryCandidate[]
+  aliases: MeasurementDiscoveryAlias[]
   shared: MeasurementDiscoveryItem[]
   unmatched: MeasurementDiscoveryItem[]
-  invalid: MeasurementDiscoveryItem[]
-  duplicates: MeasurementDiscoveryDuplicateItem[]
-  truncated: MeasurementDiscoveryItem[]
+  excluded: MeasurementDiscoveryItem[]
+  diagnostics: MeasurementDiscoveryDiagnostic[]
 }
 
 export class MeasurementDiscoveryConfigurationError extends Error {
@@ -299,8 +311,12 @@ function stableKeyForSlug(slug: string): string | null {
   return measurementStableKeySchema.safeParse(stableKey).success ? stableKey : null
 }
 
-function item(url: string, reasonCodes: MeasurementDiscoveryReasonCode[]): MeasurementDiscoveryItem {
-  return { url, canonicalUrl: url, reasonCodes }
+function item(
+  url: string,
+  classification: MeasurementDiscoveryItem['classification'],
+  reason: MeasurementDiscoveryItem['reason'],
+): MeasurementDiscoveryItem {
+  return { url, canonicalUrl: url, classification, reason }
 }
 
 /**
@@ -315,11 +331,11 @@ export function classifyMeasurementSitemapUrls(input: MeasurementDiscoveryInput)
   const { ownedHosts, rules } = compileRules(input)
 
   const canonicalGroups = new Map<string, ParsedSitemapUrl[]>()
-  const invalid: MeasurementDiscoveryItem[] = []
+  const diagnostics: MeasurementDiscoveryDiagnostic[] = []
   for (const sourceUrl of input.urls) {
     const parsed = parseSitemapUrl(sourceUrl)
     if (!parsed) {
-      invalid.push({ url: sourceUrl, canonicalUrl: null, reasonCodes: ['invalid-url'] })
+      diagnostics.push({ kind: 'invalid-url', url: sourceUrl, canonicalUrl: null })
       continue
     }
     const group = canonicalGroups.get(parsed.canonicalUrl)
@@ -331,8 +347,7 @@ export function classifyMeasurementSitemapUrls(input: MeasurementDiscoveryInput)
   const aliasesBySlug = new Map<string, AliasMatch[]>()
   const shared: MeasurementDiscoveryItem[] = []
   const unmatched: MeasurementDiscoveryItem[] = []
-  const duplicates: MeasurementDiscoveryDuplicateItem[] = []
-  const truncated: MeasurementDiscoveryItem[] = []
+  const excluded: MeasurementDiscoveryItem[] = []
   const canonicalEntries = [...canonicalGroups.entries()].sort(([a], [b]) => compareText(a, b))
   let classifiedUrlCount = 0
 
@@ -340,31 +355,32 @@ export function classifyMeasurementSitemapUrls(input: MeasurementDiscoveryInput)
     const orderedGroup = [...group].sort((a, b) => compareText(a.sourceUrl, b.sourceUrl))
     const representative = orderedGroup[0]!
     for (let index = 1; index < orderedGroup.length; index += 1) {
-      duplicates.push({
-        ...item(orderedGroup[index]!.sourceUrl, ['duplicate-url']),
+      diagnostics.push({
+        kind: 'duplicate-url',
+        url: orderedGroup[index]!.sourceUrl,
         canonicalUrl,
         duplicateOf: canonicalUrl,
       })
     }
 
     if (classifiedUrlCount >= input.maxUrls) {
-      truncated.push(item(canonicalUrl, ['url-cap-reached']))
+      diagnostics.push({ kind: 'url-cap-reached', url: canonicalUrl, canonicalUrl })
       continue
     }
     classifiedUrlCount += 1
     if (!isOwnedHost(representative.host, ownedHosts)) {
-      invalid.push(item(canonicalUrl, ['unowned-host']))
+      diagnostics.push({ kind: 'unowned-host', url: canonicalUrl, canonicalUrl })
       continue
     }
 
     const primarySlug = slugForRule(representative, rules.primary)
     if (primarySlug !== null) {
       if (isExcludedSlug(primarySlug, rules)) {
-        shared.push(item(canonicalUrl, ['excluded-slug', 'shared-path']))
+        excluded.push(item(canonicalUrl, 'excluded', 'excluded-slug'))
       } else {
         const stableKey = stableKeyForSlug(primarySlug)
         if (!stableKey) {
-          unmatched.push(item(canonicalUrl, ['unsupported-slug']))
+          unmatched.push(item(canonicalUrl, 'unmatched', 'unsupported-slug'))
         } else if (!candidatesBySlug.has(primarySlug)) {
           candidatesBySlug.set(primarySlug, { slug: primarySlug, stableKey, url: canonicalUrl })
         }
@@ -382,9 +398,9 @@ export function classifyMeasurementSitemapUrls(input: MeasurementDiscoveryInput)
     }
     if (aliasSlug !== null) {
       if (isExcludedSlug(aliasSlug, rules)) {
-        shared.push(item(canonicalUrl, ['excluded-slug', 'shared-path']))
+        excluded.push(item(canonicalUrl, 'excluded', 'excluded-slug'))
       } else if (!stableKeyForSlug(aliasSlug)) {
-        unmatched.push(item(canonicalUrl, ['unsupported-slug']))
+        unmatched.push(item(canonicalUrl, 'unmatched', 'unsupported-slug'))
       } else {
         const matches = aliasesBySlug.get(aliasSlug) ?? []
         matches.push({ slug: aliasSlug, url: canonicalUrl })
@@ -393,39 +409,55 @@ export function classifyMeasurementSitemapUrls(input: MeasurementDiscoveryInput)
       continue
     }
 
-    unmatched.push(item(canonicalUrl, ['unmatched-path']))
+    const isSharedRoot =
+      representative.host === rules.primary.host &&
+      representative.pathSegments.length === rules.primary.segments.length - 1 &&
+      rules.primary.segments.slice(0, -1).every((segment, index) => representative.pathSegments[index] === segment)
+    if (isSharedRoot) shared.push(item(canonicalUrl, 'shared', 'shared-path'))
+    else unmatched.push(item(canonicalUrl, 'unmatched', 'unmatched-path'))
   }
 
-  const candidates = [...candidatesBySlug.values()]
+  const proposed = [...candidatesBySlug.values()]
     .map(({ slug, stableKey, url }) => {
       const aliasCoverageUrls = sortedUnique((aliasesBySlug.get(slug) ?? []).map((match) => match.url))
-      const reasonCodes: MeasurementDiscoveryReasonCode[] =
-        aliasCoverageUrls.length > 0 ? ['primary-match', 'alias-coverage'] : ['primary-match']
       return {
+        classification: 'proposed' as const,
+        reason: 'primary-match' as const,
         stableKey,
         slug,
         label: labelForSlug(slug),
         primaryUrl: url,
         aliasCoverageUrls,
-        status: 'proposed' as const,
-        reasonCodes,
       }
     })
     .sort((a, b) => compareText(a.stableKey, b.stableKey))
 
+  const aliases: MeasurementDiscoveryAlias[] = []
   for (const [slug, matches] of aliasesBySlug) {
-    if (candidatesBySlug.has(slug)) continue
-    for (const match of matches) unmatched.push(item(match.url, ['alias-without-primary']))
+    const target = candidatesBySlug.get(slug)
+    if (target) {
+      for (const match of matches) {
+        aliases.push({
+          classification: 'alias',
+          reason: 'exact-slug-match',
+          slug,
+          url: match.url,
+          targetStableKey: target.stableKey,
+        })
+      }
+      continue
+    }
+    for (const match of matches) unmatched.push(item(match.url, 'unmatched', 'alias-without-primary'))
   }
 
   const sortItems = <T extends MeasurementDiscoveryItem>(items: T[]): T[] =>
     items.sort((a, b) => compareText(a.url, b.url))
   return {
-    candidates,
+    proposed,
+    aliases: aliases.sort((a, b) => compareText(a.url, b.url)),
     shared: sortItems(shared),
     unmatched: sortItems(unmatched),
-    invalid: sortItems(invalid),
-    duplicates: sortItems(duplicates),
-    truncated: sortItems(truncated),
+    excluded: sortItems(excluded),
+    diagnostics: diagnostics.sort((a, b) => compareText(`${a.kind}:${a.url}`, `${b.kind}:${b.url}`)),
   }
 }

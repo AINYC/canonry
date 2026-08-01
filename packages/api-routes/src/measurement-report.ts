@@ -10,14 +10,14 @@
 import { normalizeMeasurementHost } from '@ainyc/canonry-contracts'
 
 export type MeasurementAttributionClass =
-  | 'assigned-target'
-  | 'sibling-target'
-  | 'owned-unmapped'
+  | 'assigned'
+  | 'sibling'
+  | 'ownedUnmapped'
   | 'external'
   | 'ambiguous'
   | 'invalid'
 
-export type MeasurementUsageEdgeType = 'baseline' | 'target' | 'group'
+export type MeasurementUsageEdgeType = 'baseline' | 'target'
 export type MeasurementUrlMatchMode = 'exact' | 'prefix' | 'host'
 export type MeasurementMetricReason =
   | 'incomplete'
@@ -26,7 +26,6 @@ export type MeasurementMetricReason =
   | 'aliasless'
   | 'no-competitors'
   | 'no-project-aliases'
-  | 'no-brand-mentions'
 
 export interface MeasurementTargetUrlInput {
   id: string
@@ -44,8 +43,8 @@ export interface MeasurementTargetInput {
 }
 
 export interface MeasurementCompetitorInput {
-  id: string
-  label: string
+  /** Revision-pinned domain used for a comparable SoV row. */
+  domain: string
   aliases: readonly string[]
 }
 
@@ -65,14 +64,18 @@ export interface MeasurementExpectedSlotInput {
   requestedModel?: string | null
 }
 
-export interface MeasurementUsageEdgeInput {
-  id: string
-  type: MeasurementUsageEdgeType
-  executionId: string
-  targetIds: readonly string[]
-  targetId?: string
-  groupId?: string
-}
+export type MeasurementUsageEdgeInput =
+  | {
+      id: string
+      type: 'baseline'
+      executionId: string
+    }
+  | {
+      id: string
+      type: 'target'
+      executionId: string
+      targetId: string
+    }
 
 export interface MeasurementObservationInput {
   id: string
@@ -92,7 +95,10 @@ export interface MeasurementObservationInput {
 export interface MeasurementReportInput {
   revision: number
   ownedHosts: readonly string[]
-  projectAliases: readonly string[]
+  /** Revision-pinned project identity. Never derive this from current project state. */
+  projectBrandNames: readonly string[]
+  /** Revision-pinned canonical project domain for the symmetric SoV output. */
+  projectDomain: string
   targets: readonly MeasurementTargetInput[]
   groups: readonly MeasurementGroupInput[]
   expectedSlots: readonly MeasurementExpectedSlotInput[]
@@ -122,12 +128,9 @@ export interface MeasurementAttributionEvidence extends MeasurementAttributionRe
   evidenceComplete: boolean
 }
 
-export interface MeasurementRate {
-  numerator: number
-  denominator: number
-  rate: number | null
-  reason?: MeasurementMetricReason
-}
+export type MeasurementRate =
+  | { numerator: number; denominator: number; rate: number; reason?: never }
+  | { numerator: null; denominator: null; rate: null; reason: MeasurementMetricReason }
 
 export interface MeasurementCompleteness {
   executed: number
@@ -143,23 +146,14 @@ export interface MeasurementProviderCoverage {
   answerCoverage: MeasurementRate
 }
 
-export interface MeasurementSovProvider {
-  provider: string
-  projectMentions: number
-  competitorMentions: number
-  denominator: number
-  rate: number | null
-  reason?: MeasurementMetricReason
-}
+export type MeasurementSovDomain =
+  | { domain: string; own: boolean; presentIn: number; of: number; reason?: never }
+  | { domain: string; own: boolean; presentIn: null; of: null; reason: MeasurementMetricReason }
 
 export interface MeasurementSov {
-  projectMentions: number
-  competitorMentions: number
-  denominator: number
-  rate: number | null
-  reason?: MeasurementMetricReason
-  competitors: Array<{ id: string; label: string; mentions: number }>
-  providers: MeasurementSovProvider[]
+  /** One frozen project row and one row per competitor domain. */
+  domains: MeasurementSovDomain[]
+  providers: Array<{ provider: string; domains: MeasurementSovDomain[] }>
 }
 
 export interface MeasurementGroupReport {
@@ -342,7 +336,7 @@ export function classifyCitedUrl(
   const best = claims.at(0)
   if (!best) {
     return {
-      classification: ownedBy(source.host, ownedHosts.map(normalizedHost)) ? 'owned-unmapped' : 'external',
+      classification: ownedBy(source.host, ownedHosts.map(normalizedHost)) ? 'ownedUnmapped' : 'external',
       normalizedUrl: source.normalizedUrl,
       matchedTargetIds: [],
       matchedUrlIds: [],
@@ -356,7 +350,9 @@ export function classifyCitedUrl(
   }
 
   return {
-    classification: usageEdge.targetIds.includes(matchedTargetIds[0]!) ? 'assigned-target' : 'sibling-target',
+    classification: usageEdge.type === 'target' && usageEdge.targetId === matchedTargetIds[0]
+      ? 'assigned'
+      : 'sibling',
     normalizedUrl: source.normalizedUrl,
     matchedTargetIds,
     matchedUrlIds,
@@ -574,12 +570,12 @@ function coverageRate(
   const status = completeness(slots, prepared)
   const edgeIds = new Set(edges.map(edge => edge.id))
   const assignedSlots = new Set(prepared.evidence
-    .filter(row => edgeIds.has(row.usageEdgeId) && row.classification === 'assigned-target')
+    .filter(row => edgeIds.has(row.usageEdgeId) && row.classification === 'assigned')
     .map(row => row.expectedSlotId))
   const numerator = slots.filter(slot => assignedSlots.has(slot.id)).length
-  if (slots.length === 0) return { numerator, denominator: 0, rate: null, reason: 'no-population' }
-  if (!status.complete) return { numerator, denominator: slots.length, rate: null, reason: 'incomplete' }
-  if (!status.sourceComplete) return { numerator, denominator: slots.length, rate: null, reason: 'evidence-incomplete' }
+  if (slots.length === 0) return { numerator: null, denominator: null, rate: null, reason: 'no-population' }
+  if (!status.complete) return { numerator: null, denominator: null, rate: null, reason: 'incomplete' }
+  if (!status.sourceComplete) return { numerator: null, denominator: null, rate: null, reason: 'evidence-incomplete' }
   return { numerator, denominator: slots.length, rate: numerator / slots.length }
 }
 
@@ -592,13 +588,13 @@ function targetCoverageRate(
   const status = completeness(slots, prepared)
   const edgeIds = new Set(edges.map(edge => edge.id))
   const citedTargets = new Set(prepared.evidence
-    .filter(row => edgeIds.has(row.usageEdgeId) && row.classification === 'assigned-target')
+    .filter(row => edgeIds.has(row.usageEdgeId) && row.classification === 'assigned')
     .flatMap(row => row.matchedTargetIds))
   const denominator = sortedUnique(targetIds).length
   const numerator = sortedUnique(targetIds).filter(id => citedTargets.has(id)).length
-  if (denominator === 0 || slots.length === 0) return { numerator, denominator, rate: null, reason: 'no-population' }
-  if (!status.complete) return { numerator, denominator, rate: null, reason: 'incomplete' }
-  if (!status.sourceComplete) return { numerator, denominator, rate: null, reason: 'evidence-incomplete' }
+  if (denominator === 0 || slots.length === 0) return { numerator: null, denominator: null, rate: null, reason: 'no-population' }
+  if (!status.complete) return { numerator: null, denominator: null, rate: null, reason: 'incomplete' }
+  if (!status.sourceComplete) return { numerator: null, denominator: null, rate: null, reason: 'evidence-incomplete' }
   return { numerator, denominator, rate: numerator / denominator }
 }
 
@@ -609,12 +605,12 @@ function mentionRate(
 ): MeasurementRate {
   const numerator = slots.filter(slot => prepared.observationsBySlot.get(slot.id)?.mentionedTargetIds.has(target.id)).length
   if (target.aliases.every(alias => words(alias).length === 0)) {
-    return { numerator: 0, denominator: slots.length, rate: null, reason: 'aliasless' }
+    return { numerator: null, denominator: null, rate: null, reason: 'aliasless' }
   }
-  if (slots.length === 0) return { numerator, denominator: 0, rate: null, reason: 'no-population' }
+  if (slots.length === 0) return { numerator: null, denominator: null, rate: null, reason: 'no-population' }
   const status = completeness(slots, prepared)
   if (!status.complete || !status.answerComplete) {
-    return { numerator, denominator: slots.length, rate: null, reason: 'incomplete' }
+    return { numerator: null, denominator: null, rate: null, reason: 'incomplete' }
   }
   return { numerator, denominator: slots.length, rate: numerator / slots.length }
 }
@@ -626,50 +622,46 @@ function providersFor(slots: readonly MeasurementExpectedSlotInput[]): string[] 
 function buildSovForSlots(
   slots: readonly MeasurementExpectedSlotInput[],
   competitors: readonly MeasurementCompetitorInput[],
-  projectAliases: readonly string[],
+  projectBrandNames: readonly string[],
+  projectDomain: string,
   prepared: PreparedReport,
 ): MeasurementSov {
-  const sortedCompetitors = [...competitors].sort((left, right) => compareText(left.id, right.id))
-  const calculate = (selected: readonly MeasurementExpectedSlotInput[]): Omit<MeasurementSovProvider, 'provider'> => {
+  const sortedCompetitors = [...competitors].sort((left, right) => compareText(left.domain, right.domain))
+  const rows = [
+    { domain: projectDomain, own: true, aliases: projectBrandNames },
+    ...sortedCompetitors.map(competitor => ({
+      domain: competitor.domain,
+      own: false,
+      aliases: competitor.aliases,
+    })),
+  ]
+
+  const calculate = (selected: readonly MeasurementExpectedSlotInput[]): MeasurementSovDomain[] => {
     const status = completeness(selected, prepared)
-    let projectMentions = 0
-    const competitorMentions = new Map(sortedCompetitors.map(competitor => [competitor.id, 0]))
-    for (const slot of selected) {
-      const answer = prepared.observationsBySlot.get(slot.id)?.input.answerText
-      if (answer === null || answer === undefined) continue
-      if (containsAnyAlias(answer, projectAliases)) projectMentions++
-      for (const competitor of sortedCompetitors) {
-        if (containsAnyAlias(answer, competitor.aliases)) {
-          competitorMentions.set(competitor.id, (competitorMentions.get(competitor.id) ?? 0) + 1)
-        }
+    let reason: MeasurementMetricReason | null = null
+    if (selected.length === 0) reason = 'no-population'
+    else if (!status.complete || !status.answerComplete) reason = 'incomplete'
+    else if (projectBrandNames.every(alias => words(alias).length === 0)) reason = 'no-project-aliases'
+    else if (sortedCompetitors.length === 0) reason = 'no-competitors'
+
+    return rows.map(row => {
+      if (reason !== null) return { domain: row.domain, own: row.own, presentIn: null, of: null, reason }
+      if (row.aliases.every(alias => words(alias).length === 0)) {
+        return { domain: row.domain, own: row.own, presentIn: null, of: null, reason: 'aliasless' }
       }
-    }
-    const competitorTotal = [...competitorMentions.values()].reduce((total, count) => total + count, 0)
-    const denominator = projectMentions + competitorTotal
-    const base = { projectMentions, competitorMentions: competitorTotal, denominator }
-    if (selected.length === 0) return { ...base, rate: null, reason: 'no-population' }
-    if (!status.complete || !status.answerComplete) return { ...base, rate: null, reason: 'incomplete' }
-    if (projectAliases.every(alias => words(alias).length === 0)) return { ...base, rate: null, reason: 'no-project-aliases' }
-    if (sortedCompetitors.length === 0) return { ...base, rate: null, reason: 'no-competitors' }
-    if (denominator === 0) return { ...base, rate: null, reason: 'no-brand-mentions' }
-    return { ...base, rate: projectMentions / denominator }
+      const presentIn = selected.filter(slot => {
+        const answer = prepared.observationsBySlot.get(slot.id)?.input.answerText
+        return answer !== null && answer !== undefined && containsAnyAlias(answer, row.aliases)
+      }).length
+      return { domain: row.domain, own: row.own, presentIn, of: selected.length }
+    })
   }
 
-  const overall = calculate(slots)
-  const competitorRows = sortedCompetitors.map(competitor => ({
-    id: competitor.id,
-    label: competitor.label,
-    mentions: slots.filter(slot => {
-      const answer = prepared.observationsBySlot.get(slot.id)?.input.answerText
-      return answer !== null && answer !== undefined && containsAnyAlias(answer, competitor.aliases)
-    }).length,
-  }))
   return {
-    ...overall,
-    competitors: competitorRows,
+    domains: calculate(slots),
     providers: providersFor(slots).map(provider => ({
       provider,
-      ...calculate(slots.filter(slot => slot.provider === provider)),
+      domains: calculate(slots.filter(slot => slot.provider === provider)),
     })),
   }
 }
@@ -679,7 +671,12 @@ function buildGroupReport(
   input: MeasurementReportInput,
   prepared: PreparedReport,
 ): MeasurementGroupReport {
-  const edges = input.usageEdges.filter(edge => edge.type === 'group' && edge.groupId === group.id)
+  const targetIds = new Set(group.targetIds)
+  // Groups are reporting lenses only. Their population is the unique slot set
+  // reached by member target edges; shared executions are counted once.
+  const edges = input.usageEdges.filter((edge): edge is Extract<MeasurementUsageEdgeInput, { type: 'target' }> => (
+    edge.type === 'target' && targetIds.has(edge.targetId)
+  ))
   const slots = slotsForEdges(input.expectedSlots, edges)
   return {
     id: group.id,
@@ -687,7 +684,7 @@ function buildGroupReport(
     completeness: completeness(slots, prepared),
     answerCoverage: coverageRate(slots, edges, prepared),
     targetCoverage: targetCoverageRate(group.targetIds, slots, edges, prepared),
-    sov: buildSovForSlots(slots, group.competitors, input.projectAliases, prepared),
+    sov: buildSovForSlots(slots, group.competitors, input.projectBrandNames, input.projectDomain, prepared),
     providers: providersFor(slots).map(provider => {
       const providerSlots = slots.filter(slot => slot.provider === provider)
       return {
@@ -704,7 +701,9 @@ function buildTargetReport(
   input: MeasurementReportInput,
   prepared: PreparedReport,
 ): MeasurementTargetReport {
-  const edges = input.usageEdges.filter(edge => edge.type === 'target' && edge.targetId === target.id)
+  const edges = input.usageEdges.filter((edge): edge is Extract<MeasurementUsageEdgeInput, { type: 'target' }> => (
+    edge.type === 'target' && edge.targetId === target.id
+  ))
   const slots = slotsForEdges(input.expectedSlots, edges)
   return {
     id: target.id,
