@@ -242,8 +242,30 @@ export const timeBucketSchema = z.object({
   byProvider: z.record(z.string(), providerMetricSchema),
   /** Evidence from the exact normalized snapshots that produced each provider rate. */
   modelEvidenceByProvider: z.record(z.string(), modelEvidenceStateSchema).default({}),
+  /**
+   * Which query-set version the runs in this bucket measured. `null` when the
+   * bucket's runs predate basket versioning, were scoped to a subset, or span
+   * more than one revision — in each case there is no single set to name, and
+   * naming one anyway would be the guess this field exists to remove.
+   */
+  basketRevision: z.number().int().nullable().default(null),
 })
 export type TimeBucket = z.infer<typeof timeBucketSchema>
+
+/**
+ * A point where the measured query set actually changed, derived from recorded
+ * basket revisions rather than from query row timestamps. Unlike
+ * `queryChangeEvent` this survives a rename or a remove-then-re-add, because
+ * membership is compared by normalized query text.
+ */
+export const basketChangeEventSchema = z.object({
+  revision: z.number().int(),
+  /** When the new revision was first recorded. A real instant, safe to render. */
+  at: z.string(),
+  added: z.array(z.string()),
+  removed: z.array(z.string()),
+})
+export type BasketChangeEvent = z.infer<typeof basketChangeEventSchema>
 
 export const queryChangeEventSchema = z.object({
   date: z.string(),
@@ -260,6 +282,18 @@ export const brandMetricsDtoSchema = z.object({
   trend: trendDirectionSchema,
   mentionTrend: trendDirectionSchema,
   queryChanges: z.array(queryChangeEventSchema),
+  /**
+   * Recorded changes to the measured query set inside this window, newest last.
+   * Empty for a project whose basket never moved, and for one that has not run
+   * since versioning shipped.
+   */
+  basketChanges: z.array(basketChangeEventSchema).default([]),
+  /**
+   * The query-set version the comparable trend line is measured against —
+   * the project's current basket. Null when no basket has been recorded yet,
+   * which is also when the buckets fall back to the older date heuristic.
+   */
+  referenceBasketRevision: z.number().int().nullable().default(null),
   /** Window-scoped historical evidence, distinct from any configured provider model. */
   modelAttribution: modelAttributionSchema.default({}),
   /**

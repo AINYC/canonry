@@ -2541,6 +2541,37 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       )`,
     ],
   },
+  {
+    // A trend is only a trend if the query set held still. Analytics used to
+    // approximate that with `query.created_at < bucket_start`, which is a date
+    // proxy for measurement-set membership and gets it wrong whenever a query is
+    // re-added or renamed (both mint a fresh row that reads as brand new).
+    //
+    // Recording the basket makes membership a fact instead of an inference, and
+    // turns a basket change into a visible event on the chart.
+    //
+    // Nothing is backfilled. A revision is minted lazily the next time each
+    // project runs, and rows written before that stamp keep a NULL revision that
+    // analytics reads as "unversioned" and falls back to the date rule for. A
+    // synthesised revision-1 covering today's queries would claim historical runs
+    // measured a set they did not measure, which is the precise error this table
+    // exists to stop.
+    version: 115,
+    name: 'query-basket-versions',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS query_basket_versions (
+        project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        revision     INTEGER NOT NULL,
+        members_json TEXT NOT NULL,
+        checksum     TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        PRIMARY KEY (project_id, revision)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_query_basket_checksum
+         ON query_basket_versions(project_id, checksum)`,
+      `ALTER TABLE runs ADD COLUMN query_basket_revision INTEGER`,
+    ],
+  },
 ]
 
 /**

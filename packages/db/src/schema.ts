@@ -64,11 +64,33 @@ export const runs = sqliteTable('runs', {
   startedAt: text('started_at'),
   finishedAt: text('finished_at'),
   error: text('error'),
+  /**
+   * Which version of the project's query set this run measured. Null on runs
+   * that predate versioning; analytics treats null as "unversioned" rather than
+   * guessing a revision.
+   */
+  queryBasketRevision: integer('query_basket_revision'),
   createdAt: text('created_at').notNull(),
 }, (table) => [
   index('idx_runs_project').on(table.projectId),
   index('idx_runs_status').on(table.status),
   index('idx_runs_source').on(table.sourceId),
+])
+
+/**
+ * Immutable snapshots of a project's query set, one row per distinct set.
+ * Membership is stored as normalized query text so a query that is removed and
+ * re-added rejoins its own history instead of looking new.
+ */
+export const queryBasketVersions = sqliteTable('query_basket_versions', {
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  membersJson: text('members_json').notNull(),
+  checksum: text('checksum').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.projectId, table.revision] }),
+  index('idx_query_basket_checksum').on(table.projectId, table.checksum),
 ])
 
 export const querySnapshots = sqliteTable('query_snapshots', {

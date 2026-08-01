@@ -282,6 +282,10 @@ const COVERAGE: Record<string, CoverageEntry> = {
       syncRunId: 'Internal join key.',
     },
   },
+  queryBasketVersions: {
+    kind: 'internal-only',
+    reason: 'Immutable snapshots of a project\'s tracked query set, recorded so analytics can compare like-for-like instead of inferring measurement-set membership from query row timestamps. Consumed only by the analytics response, which surfaces the parts a reader needs (`referenceBasketRevision`, per-bucket `basketRevision`, and `basketChanges`); the raw membership blob is an internal comparison key.',
+  },
   doctorHealthState: {
     kind: 'internal-only',
     reason: 'Last observed doctor outcome per project, kept only so health alerting can fire on transitions rather than on every scheduled pass. It is alerting bookkeeping, not a measurement: the report itself is served live by GET /projects/:name/doctor, and exposing a cached copy would invite readers to trust a stale health verdict.',

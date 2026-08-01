@@ -128,6 +128,12 @@ export const runDtoSchema = z.object({
   startedAt: z.string().nullable().optional(),
   finishedAt: z.string().nullable().optional(),
   error: runErrorSchema.nullable().optional(),
+  /**
+   * Which version of the project's query set this run measured. Null on runs
+   * that predate basket versioning and on runs scoped to a subset of queries,
+   * neither of which measured a whole recorded set.
+   */
+  queryBasketRevision: z.number().int().nullable().optional(),
   createdAt: z.string(),
 })
 
