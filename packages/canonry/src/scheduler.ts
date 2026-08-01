@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import cron from 'node-cron'
 import { and, eq, inArray, notExists, sql } from 'drizzle-orm'
-import { queueRunIfProjectIdle, nextRunFromCron } from '@ainyc/canonry-api-routes'
+import { queueRunIfProjectIdle, nextRunFromCron, ensureCurrentQueryBasketRevision, latestQueryBasketRevision } from '@ainyc/canonry-api-routes'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { schedules, projects, runs } from '@ainyc/canonry-db'
 import type { ProviderName, LocationContext, SchedulableRunKind } from '@ainyc/canonry-contracts'
@@ -139,9 +139,37 @@ export class Scheduler {
     log.info('health-schedule.seeded', { projectCount: projectsWithoutHealth.length, cron: DEFAULT_HEALTH_CRON })
   }
 
+  /**
+   * Record each project's current query set as basket revision 1 if it has
+   * never been recorded. Minting normally happens when a sweep is queued, but a
+   * project whose sweeps are manual (the common cadence: twice a month) would
+   * otherwise keep its analytics on the pre-basket date heuristic for weeks
+   * after the feature ships — with the chart still hiding exactly the history
+   * the basket exists to recover. Boot is the moment the current set is known
+   * and nothing has to be guessed, and ensureCurrentQueryBasketRevision is
+   * idempotent, so restarts are no-ops and an unchanged set never churns
+   * revisions. Runs are NOT stamped retroactively: the revision describes the
+   * set as of now, and historical runs keep their null stamp.
+   */
+  private ensureQueryBaskets(): void {
+    const allProjects = this.db.select({ id: projects.id }).from(projects).all()
+    let minted = 0
+    for (const project of allProjects) {
+      try {
+        const previous = latestQueryBasketRevision(this.db, project.id)?.revision ?? null
+        const current = ensureCurrentQueryBasketRevision(this.db, project.id)
+        if (current !== null && current.revision !== previous) minted += 1
+      } catch (err) {
+        log.warn('query-basket.mint-failed', { projectId: project.id, err: String(err) })
+      }
+    }
+    if (minted > 0) log.info('query-basket.ensured', { projectCount: minted })
+  }
+
   /** Load all enabled schedules from DB and register cron jobs. */
   start(): void {
     this.ensureHealthSchedules()
+    this.ensureQueryBaskets()
 
     const allSchedules = this.db
       .select()
