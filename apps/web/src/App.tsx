@@ -28,6 +28,7 @@ import {
   getEmbedConfig,
   heyClient,
   shouldShowDashboardResourceLinks,
+  shouldShowDashboardUpdateNotification,
   type ApiProject,
   type ApiRun,
 } from './api.js'
@@ -294,6 +295,7 @@ export function RootLayout() {
   // render. The server-side embed tab policy intentionally blocks /settings.
   const embed = useMemo(() => getEmbedConfig(), [])
   const resourceLinksVisible = useMemo(shouldShowDashboardResourceLinks, [])
+  const updateNotificationVisible = useMemo(shouldShowDashboardUpdateNotification, [])
 
   // ── Data fetching via TanStack Query ──
   const { dashboard, isLoading, refetch: refreshData } = useDashboard(undefined, { includeSettings: !embed })
@@ -343,7 +345,7 @@ export function RootLayout() {
         upgradeCommand: 'npm install -g @canonry/canonry',
       }
     : healthSnapshot.apiStatus.updateAvailable
-  const showUpdatePill = updateAvailable && updateAvailable.latest !== dismissedUpdateVersion
+  const showUpdatePill = updateNotificationVisible && updateAvailable && updateAvailable.latest !== dismissedUpdateVersion
   const dismissUpdatePill = () => {
     if (!updateAvailable) return
     try {

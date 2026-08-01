@@ -10,7 +10,7 @@ import { DashboardProvider } from '../src/contexts/dashboard-context.js'
 import { preloadAllLazyRoutes } from '../src/router/routes.js'
 
 type EmbedBlock = { enabled: boolean; views?: string[]; theme?: Record<string, string> }
-type DashboardBlock = { showResourceLinks?: boolean }
+type DashboardBlock = { showResourceLinks?: boolean; showUpdateNotification?: boolean }
 
 beforeAll(async () => {
   await preloadAllLazyRoutes()
@@ -23,7 +23,12 @@ afterEach(() => {
   delete window.__CANONRY_CONFIG__
 })
 
-async function renderAt(pathname: string, embed?: EmbedBlock, dashboard?: DashboardBlock): Promise<string> {
+async function renderAt(
+  pathname: string,
+  embed?: EmbedBlock,
+  dashboard?: DashboardBlock,
+  withUpdateNotification = false,
+): Promise<string> {
   if (embed || dashboard) {
     window.__CANONRY_CONFIG__ = {
       ...(embed ? { embed } : {}),
@@ -34,6 +39,14 @@ async function renderAt(pathname: string, embed?: EmbedBlock, dashboard?: Dashbo
   }
 
   const fixture = createDashboardFixture({})
+  if (withUpdateNotification) {
+    fixture.health.apiStatus.updateAvailable = {
+      current: '4.139.0',
+      latest: '4.139.1',
+      url: 'https://www.npmjs.com/package/@canonry/canonry',
+      upgradeCommand: 'npm install -g @canonry/canonry',
+    }
+  }
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const router = createAppRouter(queryClient, { initialEntries: [pathname] })
   await router.load()
@@ -80,6 +93,17 @@ test('dashboard resource-link opt-out removes the sidebar and footer icon cluste
   expect(html).not.toContain('aria-label="GitHub"')
   expect(html).not.toContain('aria-label="Docs"')
   expect(html).not.toContain('aria-label="Changelog"')
+})
+
+test('dashboard update-notification opt-out removes the version badge without disabling the static version', async () => {
+  const visible = await renderAt('/', undefined, undefined, true)
+  const hidden = await renderAt('/', undefined, { showUpdateNotification: false }, true)
+
+  expect(visible).toContain('New version v4.139.1 available')
+  expect(visible).toContain('brand-update-bubble')
+  expect(hidden).not.toContain('New version v4.139.1 available')
+  expect(hidden).not.toContain('brand-update-bubble')
+  expect(hidden).toContain('vphase-1')
 })
 
 test('embed mode renders chromeless: no nav / topbar / footer / toaster, only the view', async () => {
