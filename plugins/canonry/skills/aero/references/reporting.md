@@ -7,13 +7,34 @@ description: Weekly and monthly report templates with metric tables, regression/
 
 ## Month-over-month AEO (do this right)
 
-For ANY month-over-month AEO claim, use `cnry visibility-compare <project> --from <YYYY-MM> --to <YYYY-MM>` — never diff two `visibility-stats --month` calls by hand. It returns the statistically honest comparison. **Share of voice is the primary metric** (less exposed to an engine's broad naming propensity than an absolute rate), but it does **not** bypass model continuity. The comparison is restricted to the query/provider PAIRS present in BOTH months, then to providers with one known, identical configured model id in both months. Every figure carries a Wilson interval and a `verdict`:
+For ANY month-over-month AEO claim, use `cnry visibility-compare <project> --from <YYYY-MM> --to <YYYY-MM>` — never diff two `visibility-stats --month` calls by hand. It returns the statistically honest comparison. **Share of voice is less exposed to an engine's broad naming propensity than an absolute rate**, but read the branded-question caveat below before leading with it, and note it does **not** bypass model continuity. The comparison is restricted to the query/provider PAIRS present in BOTH months, then to providers with one known, identical configured model id in both months. Every figure carries a Wilson interval and a `verdict`:
 
 - **`within-noise`** — the periods' intervals overlap. **No confirmed change; never report it as a rise or a decline.**
 - **`moved`** — disjoint intervals; a real directional move (the point sign is the direction).
 - **`model-discontinuous` / `model-unknown`** — the engine's configured model changed, was mixed within a month, or is unrecorded (legacy rows). **No directional call is made for that comparison; never attribute the swing to the site.** Read `continuity` (its `status` plus the per-provider evidence) for what was excluded and why — `continuity` is the enforcement decision, `modelChanges` is advisory context only.
 
 A silent upstream version bump under an unchanged configured id is undetectable; the tool does not pretend otherwise. Honor `lowRunCount` (a month under 5 sweeps → intervals too wide to resolve a move; recommend raising the sweep schedule). Report the point with its interval, not a bare number.
+
+## Branded and non-brand questions are different instruments
+
+Never pool them into one headline. A branded question ("<brand> reviews") measures demand the brand already created: the answer names the brand because the question did, so a near-100% mention rate is the expected floor, not an achievement. A non-brand question ("best <category> for <use case>") measures demand to win, and it is the number that says whether the work is landing. A pooled figure mostly measures how famous the brand already is and hides whether anything moved.
+
+**This matters most for share of voice.** Share is computed across the attributed snapshot set, branded questions included, so every branded question added to a project raises it without any competitive ground being won. A real project measured 100% self-mention across its branded questions against roughly 20% on non-brand; pooled, it reported 55.6% and read as market leadership. Until a branded filter exists, treat share of voice as an internal directional signal, decompose it before quoting it, and do not put the pooled number in front of a client.
+
+Classifying is cheap and does not need a new heuristic: run the project's own identity (display name, aliases, domain labels) against the QUERY text with the same exact-identity matcher that decides whether an ANSWER mentions the brand. Complete-adjacent-word matching means presentation variants fold and near-misses never match, so a project whose identity is two words is not matched by a bare one-word term that belongs to someone else.
+
+## The measured question set is versioned
+
+Runs are stamped with a query basket revision, and the analytics payload carries `referenceBasketRevision` plus a `basketChanges` list of real add/remove events with dates. Membership is compared by normalized query text, so removing and re-adding the same question rejoins its own history instead of reading as a brand new query.
+
+Two consequences for any report:
+
+- **Check `basketChanges` before presenting a month-over-month delta.** If the set moved inside the window, the comparison covers only the questions present in both periods. State that in one plain sentence rather than showing a clean delta.
+- **A question added mid-window is no longer silently dropped.** Analytics used to hold out any query created after a bucket started, which quietly removed real mentions from both numerator and denominator and could read as 0% on an engine that was in fact naming the brand. Reports built against older engines may show that artifact.
+
+## A partial run is not a low reading
+
+A sweep crippled by a provider outage captures fewer questions and looks identical to a collapse in visibility. Before narrating any drop, check whether the latest run is `partial` and what its capture count was against the project's basket size. Report a capture failure as a capture failure.
 
 ## One-Command HTML Report
 
