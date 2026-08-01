@@ -299,7 +299,11 @@ export function GscSection({
       // Expanded mode (filter or sort active) fetches up to EXPANDED_PERFORMANCE_LIMIT
       // so client-side sort/filter sees the full matching set, not just one page.
       // Paged mode fetches pageSize+1 to detect "has more" without a COUNT query.
-      const fetchLimit = isPerformanceExpanded ? EXPANDED_PERFORMANCE_LIMIT : DEFAULT_TABLE_PAGE_SIZE + 1
+      // No sentinel row: `totalMatching` answers "is there more" exactly, so
+      // fetching PAGE_SIZE + 1 and then rendering PAGE_SIZE made the last row
+      // of an exactly-PAGE_SIZE+1 result set unreachable (fetched, counted
+      // toward "no more pages", never displayed).
+      const fetchLimit = isPerformanceExpanded ? EXPANDED_PERFORMANCE_LIMIT : DEFAULT_TABLE_PAGE_SIZE
       const fetchOffset = isPerformanceExpanded ? 0 : offset
       // URL-string query params per the spec — empty strings stripped so the
       // generated cache key only varies on values the server actually sees.
@@ -330,7 +334,7 @@ export function GscSection({
         // `totalMatching` is the COUNT over the same WHERE, so "has more" no
         // longer depends on over-fetching a sentinel row.
         setPerformanceHasMore(fetchOffset + rows.length < data.totalMatching)
-        setPerformance(rows.slice(0, DEFAULT_TABLE_PAGE_SIZE))
+        setPerformance(rows)
         setPerformanceTotalLoaded(0)
         setPerformanceDisplayedExpanded(false)
       }

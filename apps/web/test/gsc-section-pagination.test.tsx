@@ -86,7 +86,11 @@ function renderSection() {
         })
       }
       const offset = Number(query.get('offset') ?? 0)
-      const rows = pagedRows.slice(offset, offset + 26)
+      // Honour the requested limit. Hardcoding a page size here let the mock
+      // return more rows than the component asked for, which is exactly the
+      // over-fetch the component no longer does.
+      const limit = Number(query.get('limit') ?? 25)
+      const rows = pagedRows.slice(offset, offset + limit)
       return jsonResponse({
         rows,
         totalMatching: pagedRows.length,
