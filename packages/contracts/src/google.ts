@@ -76,6 +76,42 @@ export const gscPerformanceDailyDtoSchema = z.object({
 })
 export type GscPerformanceDailyDto = z.infer<typeof gscPerformanceDailyDtoSchema>
 
+export const gscTopPageRowSchema = z.object({
+  page: z.string(),
+  clicks: z.number(),
+  impressions: z.number(),
+  ctr: z.number(),
+})
+export type GscTopPageRow = z.infer<typeof gscTopPageRowSchema>
+
+/**
+ * Ranked pages plus an OPTIONAL window total.
+ *
+ * The rows are a ranking, aggregated from the dimensioned `gsc_search_data`
+ * table. That table is valid for ranking and INVALID for totals: Google
+ * withholds rare/anonymised queries, so summing it under-counts clicks, and one
+ * impression fans out across every query x page x country x device combination,
+ * so summing it over-counts impressions. On one real property-month the sum
+ * read 792 clicks against 1,142 actual and 45,266 impressions against 34,916.
+ *
+ * `totals` is therefore never the sum of `rows`. It is read from the
+ * un-dimensioned property-level daily table and carries the explicit
+ * `totalsSource` discriminator so a consumer can tell where it came from. When
+ * that table has no rows in the window, `totals` is `null`: the honest answer
+ * is "no property-level total available", not a plausible wrong number.
+ */
+export const gscTopPagesDtoSchema = z.object({
+  rows: z.array(gscTopPageRowSchema),
+  totals: z.object({
+    clicks: z.number(),
+    impressions: z.number(),
+    ctr: z.number(),
+    days: z.number(),
+  }).nullable(),
+  totalsSource: z.literal('property-daily'),
+})
+export type GscTopPagesDto = z.infer<typeof gscTopPagesDtoSchema>
+
 export const gscUrlInspectionDtoSchema = z.object({
   id: z.string(),
   url: z.string(),

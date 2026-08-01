@@ -166,6 +166,12 @@ canonry technical-aeo pages <project> [--status success|error] [--sort score-asc
 canonry technical-aeo trend <project> [--limit <n>] [--format json|jsonl]            # aggregate-score history across past audits
 # Schedule it: canonry schedule set <project> --kind site-audit --preset weekly
 
+# Google Search Console reads. The dimensioned search-data table is valid for RANKING and
+# invalid for TOTALS. Read any clicks/impressions total from the property-level daily
+# figures; summing per-query / per-page rows under-counts clicks (Google withholds rare
+# queries) and over-counts impressions (one impression fans out per ranking page).
+canonry google top-pages <project> [--start <d>] [--end <d>] [--limit <n>] [--window 7d|30d|90d|all] [--format json|jsonl]  # pages ranked by summed clicks, aggregated in SQL; the `totals` block is sourced from the property-level daily table (`totalsSource: "property-daily"`) and is null when no property figure covers the window
+
 # Google Search Console sitemaps — list, store a local default, or submit/resubmit to Google
 canonry google submit-sitemap <project> (<url...>|--configured|--all|--all-files) [--format json|jsonl]
 

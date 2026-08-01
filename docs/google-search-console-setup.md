@@ -225,6 +225,10 @@ canonry google performance <project> --days 30 --keyword "best widgets"
 canonry google performance <project> --start 2026-06-01 --end 2026-06-30 --order-by date
 canonry google performance <project> --limit 2000 --offset 2000
 
+# Top pages ranked by clicks (aggregated in SQL, one row per page)
+canonry google top-pages <project>
+canonry google top-pages <project> --start 2026-06-01 --end 2026-06-30 --limit 20
+
 # Index coverage summary
 canonry google coverage <project>
 canonry google coverage-history <project>

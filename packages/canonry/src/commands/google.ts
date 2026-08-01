@@ -288,6 +288,62 @@ export async function googlePerformanceDaily(project: string, opts: {
   }
 }
 
+export async function googleTopPages(project: string, opts: {
+  window?: string
+  startDate?: string
+  endDate?: string
+  limit?: number
+  format?: string
+}): Promise<void> {
+  const client = getClient()
+  const params: Record<string, string> = {}
+  if (opts.window) params.window = opts.window
+  if (opts.startDate) params.startDate = opts.startDate
+  if (opts.endDate) params.endDate = opts.endDate
+  if (opts.limit) params.limit = String(opts.limit)
+
+  const data = await client.gscTopPages(project, Object.keys(params).length > 0 ? params : undefined)
+
+  if (opts.format === 'json') {
+    console.log(JSON.stringify(data, null, 2))
+    return
+  } else if (opts.format === 'jsonl') {
+    emitJsonl(data.rows.map((row) => ({ project, ...row })))
+    return
+  }
+
+  if (data.rows.length === 0) {
+    console.log('No GSC page data found in this window. Run "canonry google sync" first.')
+    return
+  }
+
+  console.log(`Top pages by clicks (${data.rows.length} page${data.rows.length === 1 ? '' : 's'}):\n`)
+  const pageWidth = Math.min(60, Math.max(20, ...data.rows.map((row) => row.page.length)))
+  console.log(`  ${'PAGE'.padEnd(pageWidth)}${'CLICKS'.padStart(10)}${'IMPR'.padStart(12)}${'CTR'.padStart(10)}`)
+  console.log(`  ${'─'.repeat(pageWidth)}${'─'.repeat(10)}${'─'.repeat(12)}${'─'.repeat(10)}`)
+  for (const row of data.rows) {
+    const page = row.page.length > pageWidth ? row.page.slice(0, pageWidth - 3) + '...' : row.page
+    console.log(
+      `  ${page.padEnd(pageWidth)}${row.clicks.toLocaleString().padStart(10)}${row.impressions.toLocaleString().padStart(12)}${(row.ctr * 100).toFixed(2).padStart(9)}%`,
+    )
+  }
+
+  console.log()
+  if (data.totals) {
+    const { clicks, impressions, ctr, days } = data.totals
+    console.log(`Property total (${days} day${days === 1 ? '' : 's'}, source: ${data.totalsSource}):`)
+    console.log(`  Clicks:      ${clicks.toLocaleString()}`)
+    console.log(`  Impressions: ${impressions.toLocaleString()}`)
+    console.log(`  CTR:         ${(ctr * 100).toFixed(2)}%`)
+    console.log()
+    console.log('  The page rows above are a ranking. They do not add up to this total:')
+    console.log('  Google withholds rare queries and repeats an impression per page.')
+  } else {
+    console.log('Property total: not available for this window.')
+    console.log('  Adding up the page rows would not give it. Run "canonry google sync" to fetch it.')
+  }
+}
+
 export async function googlePerformance(project: string, opts: {
   days?: number
   startDate?: string
