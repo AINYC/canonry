@@ -180,7 +180,7 @@ export const putApiV1ProjectsByNameMeasurementPlanMutation = (options?: Partial<
 /**
  * Compile a measurement plan without publishing
  *
- * Validates and compiles a candidate Target/group plan, returning warnings, execution counts, and deduplication savings without writing state.
+ * Validates and compiles a candidate Target/group plan without writing state. Invalid authoring returns HTTP 200 with ok=false and typed checks; valid authoring returns frozen execution counts, expected snapshot slots, deduplication savings, and warnings.
  */
 export const postApiV1ProjectsByNameMeasurementPlanCompilePreviewMutation = (options?: Partial<Options<PostApiV1ProjectsByNameMeasurementPlanCompilePreviewData>>): UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanCompilePreviewResponse, PostApiV1ProjectsByNameMeasurementPlanCompilePreviewError, Options<PostApiV1ProjectsByNameMeasurementPlanCompilePreviewData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanCompilePreviewResponse, PostApiV1ProjectsByNameMeasurementPlanCompilePreviewError, Options<PostApiV1ProjectsByNameMeasurementPlanCompilePreviewData>> = {
@@ -199,7 +199,7 @@ export const postApiV1ProjectsByNameMeasurementPlanCompilePreviewMutation = (opt
 /**
  * Preview a measurement-plan change
  *
- * Compiles a candidate plan and compares its Targets, groups, query selections, and execution graph with the active immutable revision without writing state.
+ * Compiles a candidate plan and compares its Targets, groups, query selections, and execution graph with the active immutable revision without writing state. Invalid authoring returns HTTP 200 with ok=false, typed checks, and a null diff.
  */
 export const postApiV1ProjectsByNameMeasurementPlanDiffPreviewMutation = (options?: Partial<Options<PostApiV1ProjectsByNameMeasurementPlanDiffPreviewData>>): UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanDiffPreviewResponse, PostApiV1ProjectsByNameMeasurementPlanDiffPreviewError, Options<PostApiV1ProjectsByNameMeasurementPlanDiffPreviewData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanDiffPreviewResponse, PostApiV1ProjectsByNameMeasurementPlanDiffPreviewError, Options<PostApiV1ProjectsByNameMeasurementPlanDiffPreviewData>> = {

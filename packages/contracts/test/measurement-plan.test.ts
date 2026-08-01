@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   canonicalMeasurementPlanJson,
   compileMeasurementPlan,
+  compileMeasurementPlanPreview,
   MeasurementPlanValidationError,
   matchesMeasurementTargetUrl,
   measurementPlanInputSchema,
+  measurementPlanCompilePreviewResponseSchema,
+  measurementPlanDiffPreviewResponseSchema,
   normalizeMeasurementPathPrefix,
   parseStoredMeasurementPlan,
   resolveMeasurementTarget,
@@ -15,7 +18,7 @@ const NORTHBRIDGE = { label: 'northbridge', city: 'Northbridge', region: 'NB', c
 
 const CONTEXT = {
   canonicalDomain: 'https://www.northstar.example/',
-  ownedDomains: ['harbor-point.northstar.example'],
+  ownedDomains: ['residences.northstar.example'],
   brandNames: ['Northstar Living'],
   defaultContext: NORTHBRIDGE,
   locations: [NORTHBRIDGE],
@@ -24,6 +27,7 @@ const CONTEXT = {
     { id: 'q-best', query: 'best apartments in northbridge' },
     { id: 'q-northstar', query: 'northstar apartments' },
   ],
+  expectedSnapshots: 2,
 }
 
 const PLAN: MeasurementPlanInput = {
@@ -34,7 +38,7 @@ const PLAN: MeasurementPlanInput = {
       label: 'Harbor Point',
       urls: [
         { kind: 'prefix', host: 'northstar.example', pathPrefix: '/apartments/harbor-point', pathCase: 'insensitive' },
-        { kind: 'host', host: 'harbor-point.northstar.example' },
+        { kind: 'host', host: 'residences.northstar.example' },
       ],
       aliases: ['Harbor Point'],
       metadata: { market: 'Northbridge', state: 'NB' },
@@ -177,9 +181,9 @@ describe('Target measurement plan v1 compilation', () => {
     expect(compiled.targets).toHaveLength(200)
     expect(compiled.groups).toHaveLength(20)
     expect(compiled.executionNodes).toHaveLength(5)
-    expect(compiled.usageEdges).toHaveLength(5 + (200 * 2) + (200 * 2))
+    expect(compiled.usageEdges).toHaveLength(5 + (200 * 2))
     expect(compiled.usageEdges.filter(edge => edge.kind === 'baseline')).toHaveLength(5)
-    expect(compiled.usageEdges.filter(edge => edge.kind === 'group')).toHaveLength(200 * 2)
+    expect(compiled.usageEdges.every(edge => edge.kind === 'baseline' || edge.kind === 'target')).toBe(true)
   })
 
   it('freezes query snapshots, unconditional baseline edges, and mention applicability', () => {
@@ -198,6 +202,7 @@ describe('Target measurement plan v1 compilation', () => {
     const baseline = compiled.usageEdges.find(edge => edge.kind === 'baseline' && edge.queryId === 'q-northstar')!
     expect(compiled.executionNodes.find(node => node.stableKey === baseline.executionNodeKey)?.context).toEqual(NORTHBRIDGE)
     expect(compiled.targets.find(target => target.stableKey === 'northstar-ridge')?.mentionNotApplicable).toBe(true)
+    expect(compiled.executionNodes.every(node => node.expectedSnapshots === 2)).toBe(true)
   })
 
   it('dedupes identical query/context executions while preserving separate usage edges', () => {
@@ -210,8 +215,8 @@ describe('Target measurement plan v1 compilation', () => {
     expect(sharedEdges).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'baseline', queryId: 'q-best' }),
       expect.objectContaining({ kind: 'target', targetKey: 'harbor-point', queryId: 'q-best' }),
-      expect.objectContaining({ kind: 'group', groupKey: 'northbridge', targetKey: 'harbor-point', queryId: 'q-best' }),
     ]))
+    expect(sharedEdges).toHaveLength(2)
   })
 
   it('splits execution nodes by resolved context and rejects conflicting Target/query contexts', () => {
@@ -261,7 +266,7 @@ describe('Target measurement plan v1 compilation', () => {
     input.targets[0]!.metadata = { state: 'NB', market: 'Northbridge' }
     const compiled = compile(input)
 
-    expect(compiled.effectiveOwnedHosts).toEqual(['harbor-point.northstar.example', 'northstar.example'])
+    expect(compiled.effectiveOwnedHosts).toEqual(['northstar.example', 'residences.northstar.example'])
     expect(compiled.groups[0]?.competitors).toEqual(['rival.example'])
     expect(compiled.targets[0]?.metadata).toEqual({ market: 'Northbridge', state: 'NB' })
     expect(compiled.targets.find(target => target.stableKey === 'harbor-point')?.urls)
@@ -346,18 +351,35 @@ describe('Target aliases and frozen storage', () => {
     expect(compiled.targets.find(target => target.stableKey === 'northstar-ridge')?.mentionNotApplicable).toBe(false)
   })
 
-  it('warns instead of rejecting project-brand collisions with a four-character floor', () => {
+  it('rejects exact project-brand collisions with a four-character floor', () => {
     const input = copyPlan()
     input.targets[0]!.aliases = ['Northstar Living']
-    const compiled = compile(input)
-    expect(compiled.warnings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'target-alias-project-brand-collision' }),
+    const error = validationError(() => compile(input))
+    expect(error.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ message: 'Target alias must not equal an effective project brand term' }),
     ]))
 
     const short = copyPlan()
     short.targets[0]!.aliases = ['ABC']
     const shortCompiled = compileMeasurementPlan(short, { ...CONTEXT, brandNames: ['ABC'] })
-    expect(shortCompiled.warnings.some(warning => warning.code === 'target-alias-project-brand-collision')).toBe(false)
+    expect(shortCompiled.targets.find(target => target.stableKey === 'harbor-point')?.aliases).toContain('ABC')
+  })
+
+  it('includes effective owned-domain labels in the project-brand collision guard', () => {
+    const input = copyPlan()
+    input.targets[0]!.aliases = ['Harbor Point']
+
+    const preview = compileMeasurementPlanPreview(input, {
+      ...CONTEXT,
+      ownedDomains: [...CONTEXT.ownedDomains, 'harbor-point.example'],
+    })
+    expect(preview).toMatchObject({
+      ok: false,
+      checks: [expect.objectContaining({
+        id: 'target-alias-project-brand-collision',
+        severity: 'fail',
+      })],
+    })
   })
 
   it('decodes only the frozen stored v1 shape explicitly', () => {
@@ -368,5 +390,72 @@ describe('Target aliases and frozen storage', () => {
       'Unsupported stored measurement plan schema version: 2',
     )
     expect(() => parseStoredMeasurementPlan({ schemaVersion: 1, cohorts: [] })).toThrow('Stored measurement plan v1 is invalid')
+  })
+})
+
+describe('Target measurement plan compile preview', () => {
+  it('returns a typed success with frozen execution and usage counts', () => {
+    const preview = compileMeasurementPlanPreview(copyPlan(), CONTEXT)
+
+    expect(measurementPlanCompilePreviewResponseSchema.parse(preview)).toEqual(preview)
+    expect(preview).toMatchObject({
+      ok: true,
+      dedupSaved: expect.any(Number),
+      usageEdges: { baseline: 3, target: 3 },
+      estCostUsd: null,
+    })
+    if (preview.ok) {
+      expect(preview.executionNodes.every(node => node.expectedSnapshots === 2)).toBe(true)
+    }
+  })
+
+  it('returns typed FAIL checks instead of throwing and preserves WARN direction', () => {
+    const conflict = copyPlan()
+    conflict.targetQuerySelections!.push({ targetKey: 'harbor-point', queryIds: ['q-best'], context: null })
+    const invalid = compileMeasurementPlanPreview(conflict, CONTEXT)
+    expect(measurementPlanCompilePreviewResponseSchema.parse(invalid)).toEqual(invalid)
+    expect(invalid).toMatchObject({
+      ok: false,
+      checks: [expect.objectContaining({ id: 'target-query-context-conflict', severity: 'fail' })],
+      executionNodes: [],
+      dedupSaved: 0,
+      usageEdges: { baseline: 0, target: 0 },
+      estCostUsd: null,
+    })
+    expect(measurementPlanDiffPreviewResponseSchema.parse({ ...invalid, diff: null }))
+      .toEqual({ ...invalid, diff: null })
+
+    const overlap = copyPlan()
+    overlap.targets[1]!.aliases = ['Harbor Point Heights']
+    const valid = compileMeasurementPlanPreview(overlap, CONTEXT)
+    expect(valid).toMatchObject({
+      ok: true,
+      checks: [expect.objectContaining({
+        id: 'target-alias-prefix-overlap',
+        severity: 'warn',
+        path: ['targets'],
+      })],
+    })
+  })
+
+  it('names cross-target URL and alias ownership failures', () => {
+    const routeTie = copyPlan()
+    routeTie.targets[1]!.urls = [{
+      kind: 'prefix',
+      host: 'northstar.example',
+      pathPrefix: '/apartments/harbor-point',
+      pathCase: 'insensitive',
+    }]
+    expect(compileMeasurementPlanPreview(routeTie, CONTEXT)).toMatchObject({
+      ok: false,
+      checks: [expect.objectContaining({ id: 'target-url-ownership-tie', severity: 'fail' })],
+    })
+
+    const aliasCollision = copyPlan()
+    aliasCollision.targets[1]!.aliases = ['harbor-point']
+    expect(compileMeasurementPlanPreview(aliasCollision, CONTEXT)).toMatchObject({
+      ok: false,
+      checks: [expect.objectContaining({ id: 'target-alias-cross-target-collision', severity: 'fail' })],
+    })
   })
 })

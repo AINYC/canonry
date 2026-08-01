@@ -29,6 +29,8 @@ import { hashApiKey } from '../src/auth.js'
 const ROOT_KEY = 'cnry_target_root'
 const PLAN_KEY = 'cnry_target_plan'
 const RUNS_KEY = 'cnry_target_runs'
+const SCOPED_PLAN_KEY = 'cnry_target_scoped'
+const READ_ONLY_KEY = 'cnry_target_read'
 
 let tmpDir: string
 let db: DatabaseClient
@@ -42,13 +44,14 @@ type TestPlan = {
   targetQuerySelections: MeasurementTargetQuerySelection[]
 }
 
-function seedKey(name: string, token: string, scopes: string[]) {
+function seedKey(name: string, token: string, scopes: string[], projectId?: string) {
   db.insert(apiKeys).values({
     id: crypto.randomUUID(),
     name,
     keyHash: hashApiKey(token),
     keyPrefix: token.slice(0, 9),
     scopes,
+    projectId: projectId ?? null,
     createdAt: new Date().toISOString(),
   }).run()
 }
@@ -102,7 +105,7 @@ beforeEach(async () => {
   seedKey('plan-writer', PLAN_KEY, ['measurement-plan.write'])
   seedKey('run-writer', RUNS_KEY, ['runs.write'])
   app = Fastify()
-  app.register(apiRoutes, { db })
+  app.register(apiRoutes, { db, getRunnableProviderNames: () => ['gemini', 'openai'] })
   await app.ready()
 
   const created = await request('PUT', '/api/v1/projects/example', ROOT_KEY, {
@@ -126,6 +129,42 @@ afterEach(async () => {
 })
 
 describe('Target measurement-plan API', () => {
+  it('enforces project scope and read-only access across the complete plan lifecycle', async () => {
+    const ownProject = db.select().from(projects).where(eq(projects.name, 'example')).get()!
+    seedKey('scoped-plan-writer', SCOPED_PLAN_KEY, ['measurement-plan.write'], ownProject.id)
+    seedKey('scoped-reader', READ_ONLY_KEY, ['read'], ownProject.id)
+
+    expect((await request('PUT', '/api/v1/projects/example/measurement-plan', ROOT_KEY, plan())).statusCode).toBe(201)
+    expect((await request('PUT', '/api/v1/projects/sibling', ROOT_KEY, {
+      displayName: 'Sibling',
+      canonicalDomain: 'sibling.example',
+      country: 'US',
+      language: 'en',
+    })).statusCode).toBe(201)
+
+    const foreignRequests: Array<Promise<{ statusCode: number }>> = [
+      request('GET', '/api/v1/projects/sibling/measurement-plan', SCOPED_PLAN_KEY),
+      request('POST', '/api/v1/projects/sibling/measurement-plan/compile-preview', SCOPED_PLAN_KEY, plan()),
+      request('POST', '/api/v1/projects/sibling/measurement-plan/diff-preview', SCOPED_PLAN_KEY, plan()),
+      request('PUT', '/api/v1/projects/sibling/measurement-plan', SCOPED_PLAN_KEY, plan()),
+      request('POST', '/api/v1/projects/sibling/measurement-plan/segments/missing/retire', SCOPED_PLAN_KEY),
+      request('GET', '/api/v1/projects/sibling/measurement-plan/versions', SCOPED_PLAN_KEY),
+      request('GET', '/api/v1/projects/sibling/measurement-plan/versions/1', SCOPED_PLAN_KEY),
+    ]
+    for (const response of await Promise.all(foreignRequests)) expect(response.statusCode).toBe(403)
+
+    expect((await request('GET', '/api/v1/projects/example/measurement-plan', READ_ONLY_KEY)).statusCode).toBe(200)
+    expect((await request('GET', '/api/v1/projects/example/measurement-plan/versions', READ_ONLY_KEY)).statusCode).toBe(200)
+    expect((await request('GET', '/api/v1/projects/example/measurement-plan/versions/1', READ_ONLY_KEY)).statusCode).toBe(200)
+    const readOnlyWrites = [
+      request('POST', '/api/v1/projects/example/measurement-plan/compile-preview', READ_ONLY_KEY, plan()),
+      request('POST', '/api/v1/projects/example/measurement-plan/diff-preview', READ_ONLY_KEY, plan()),
+      request('PUT', '/api/v1/projects/example/measurement-plan', READ_ONLY_KEY, plan()),
+      request('POST', '/api/v1/projects/example/measurement-plan/segments/chelsea/retire', READ_ONLY_KEY),
+    ]
+    for (const response of await Promise.all(readOnlyWrites)) expect(response.statusCode).toBe(403)
+  })
+
   it('returns planless state and keeps previews pure while requiring plan-write scope', async () => {
     const empty = await request('GET', '/api/v1/projects/example/measurement-plan')
     expect(empty.statusCode).toBe(200)
@@ -138,6 +177,11 @@ describe('Target measurement-plan API', () => {
     expect(compiled.statusCode).toBe(200)
     expect(measurementPlanCompilePreviewResponseSchema.safeParse(compiled.json()).success).toBe(true)
     expect(compiled.json()).toMatchObject({
+      ok: true,
+      checks: [],
+      usageEdges: { baseline: 3, target: 3 },
+      estCostUsd: null,
+      executionNodes: expect.arrayContaining([expect.objectContaining({ expectedSnapshots: 2 })]),
       plan: {
         defaultContext: { label: 'nyc' },
         targets: expect.arrayContaining([expect.objectContaining({ stableKey: 'chelsea' })]),
@@ -149,7 +193,6 @@ describe('Target measurement-plan API', () => {
         queries: 3,
         baselineEdges: 3,
         targetEdges: 3,
-        groupEdges: 2,
       },
     })
     expect(db.select().from(measurementPlanVersions).all()).toHaveLength(0)
@@ -181,6 +224,8 @@ describe('Target measurement-plan API', () => {
         targets: [expect.objectContaining({ stableKey: 'chelsea' }), expect.objectContaining({ stableKey: 'soho', mentionNotApplicable: true })],
         groups: [expect.objectContaining({ stableKey: 'nyc-portfolio', competitors: ['rival.com'] })],
         querySnapshots: expect.arrayContaining([expect.objectContaining({ queryId: tracked[0]!.id, queryText: tracked[0]!.query })]),
+        executionNodes: expect.arrayContaining([expect.objectContaining({ expectedSnapshots: 2 })]),
+        usageEdges: expect.not.arrayContaining([expect.objectContaining({ kind: 'group' })]),
       },
     })
     expect(body.active.checksum).toMatch(/^[a-f0-9]{64}$/)
@@ -240,28 +285,52 @@ describe('Target measurement-plan API', () => {
     expect(db.select().from(measurementPlanVersions).all()).toHaveLength(1)
   })
 
-  it('passes compiler warnings through previews and publication without treating them as validation errors', async () => {
+  it('passes prefix-overlap warnings through previews and publication', async () => {
     const warningPlan = plan()
-    warningPlan.targets[0]!.aliases = ['Example']
+    warningPlan.targets[1]!.aliases = ['Example Chelsea Heights']
 
     const preview = await request('POST', '/api/v1/projects/example/measurement-plan/compile-preview', PLAN_KEY, warningPlan)
     expect(preview.statusCode).toBe(200)
     expect(preview.json()).toMatchObject({
-      warnings: [expect.objectContaining({ code: 'target-alias-project-brand-collision' })],
+      ok: true,
+      checks: [expect.objectContaining({ id: 'target-alias-prefix-overlap', severity: 'warn' })],
+      warnings: [expect.objectContaining({ code: 'target-alias-prefix-overlap' })],
     })
 
     const published = await request('PUT', '/api/v1/projects/example/measurement-plan', PLAN_KEY, warningPlan)
     expect(published.statusCode).toBe(201)
     expect((published.json() as { active: { plan: { warnings: Array<{ code: string }> } } }).active.plan.warnings)
-      .toEqual(expect.arrayContaining([expect.objectContaining({ code: 'target-alias-project-brand-collision' })]))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ code: 'target-alias-prefix-overlap' })]))
   })
 
-  it('returns standard validation errors for unknown queries, unowned hosts, and invalid contexts', async () => {
+  it('returns typed preview checks for invalid plans while publication still rejects them', async () => {
+    const brandCollision = plan()
+    brandCollision.targets[0]!.aliases = ['Example']
+    const brandPreview = await request('POST', '/api/v1/projects/example/measurement-plan/compile-preview', PLAN_KEY, brandCollision)
+    expect(brandPreview.statusCode).toBe(200)
+    expect(brandPreview.json()).toMatchObject({
+      ok: false,
+      checks: [expect.objectContaining({ id: 'target-alias-project-brand-collision', severity: 'fail' })],
+      executionNodes: [],
+      dedupSaved: 0,
+      usageEdges: { baseline: 0, target: 0 },
+      estCostUsd: null,
+    })
+    expect((brandPreview.json() as Record<string, unknown>).error).toBeUndefined()
+    expect((await request('PUT', '/api/v1/projects/example/measurement-plan', PLAN_KEY, brandCollision)).statusCode).toBe(400)
+
     const unknownQuery = plan()
     unknownQuery.targetQuerySelections[0]!.queryIds = ['gone']
     const unknown = await request('POST', '/api/v1/projects/example/measurement-plan/compile-preview', PLAN_KEY, unknownQuery)
-    expect(unknown.statusCode).toBe(400)
-    expect(JSON.stringify(unknown.json())).toContain('Unknown tracked query: gone')
+    expect(unknown.statusCode).toBe(200)
+    expect(unknown.json()).toMatchObject({
+      ok: false,
+      checks: [expect.objectContaining({ id: 'unknown-query', severity: 'fail', message: 'Unknown tracked query: gone' })],
+    })
+    const invalidDiff = await request('POST', '/api/v1/projects/example/measurement-plan/diff-preview', PLAN_KEY, unknownQuery)
+    expect(invalidDiff.statusCode).toBe(200)
+    expect(measurementPlanDiffPreviewResponseSchema.safeParse(invalidDiff.json()).success).toBe(true)
+    expect(invalidDiff.json()).toMatchObject({ ok: false, diff: null })
 
     const unownedHost = plan()
     unownedHost.targets[0]!.urls = [{ kind: 'host', host: 'evil.test' }]
@@ -319,6 +388,25 @@ describe('Target measurement-plan API', () => {
     const repeated = await request('POST', '/api/v1/projects/example/measurement-plan/segments/chelsea/retire', PLAN_KEY)
     expect(repeated.statusCode).toBe(200)
     expect(repeated.json()).toEqual(first)
+
+    const reuse = await request('PUT', '/api/v1/projects/example/measurement-plan', ROOT_KEY, plan())
+    expect(reuse.statusCode).toBe(400)
+    expect(JSON.stringify(reuse.json())).toContain('retired and cannot be reused')
+  })
+
+  it('retires an inactive Group idempotently and permanently reserves its key', async () => {
+    await request('PUT', '/api/v1/projects/example/measurement-plan', ROOT_KEY, plan())
+    const active = await request('POST', '/api/v1/projects/example/measurement-plan/segments/nyc-portfolio/retire', PLAN_KEY)
+    expect(active.statusCode).toBe(400)
+
+    const withoutGroup = plan({ groups: [] })
+    expect((await request('PUT', '/api/v1/projects/example/measurement-plan', ROOT_KEY, withoutGroup)).statusCode).toBe(201)
+
+    const retired = await request('POST', '/api/v1/projects/example/measurement-plan/segments/nyc-portfolio/retire', PLAN_KEY)
+    expect(retired.statusCode).toBe(200)
+    const first = retired.json()
+    expect(first).toMatchObject({ stableKey: 'nyc-portfolio' })
+    expect((await request('POST', '/api/v1/projects/example/measurement-plan/segments/nyc-portfolio/retire', PLAN_KEY)).json()).toEqual(first)
 
     const reuse = await request('PUT', '/api/v1/projects/example/measurement-plan', ROOT_KEY, plan())
     expect(reuse.statusCode).toBe(400)

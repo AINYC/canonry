@@ -2700,6 +2700,31 @@ export type LocationContext = {
 };
 
 export type MeasurementPlanCompilePreviewResponse = {
+    ok: true;
+    checks: Array<{
+        id: 'invalid-authoring' | 'duplicate-identity' | 'unknown-target' | 'unknown-query' | 'invalid-project-context' | 'unowned-target-url' | 'owned-competitor' | 'target-query-context-conflict' | 'target-url-ownership-tie' | 'target-alias-cross-target-collision' | 'target-alias-project-brand-collision' | 'target-alias-prefix-overlap';
+        severity: 'fail' | 'warn';
+        message: string;
+        path: Array<string | number>;
+    }>;
+    executionNodes: Array<{
+        stableKey: string;
+        queryText: string;
+        context: {
+            label: string;
+            city: string;
+            region: string;
+            country: string;
+            timezone?: string;
+        } | null;
+        expectedSnapshots: number;
+    }>;
+    dedupSaved: number;
+    usageEdges: {
+        baseline: number;
+        target: number;
+    };
+    estCostUsd: null;
     plan: {
         schemaVersion: 1;
         defaultContext: {
@@ -2763,6 +2788,7 @@ export type MeasurementPlanCompilePreviewResponse = {
                 country: string;
                 timezone?: string;
             } | null;
+            expectedSnapshots: number;
         }>;
         usageEdges: Array<{
             kind: 'baseline';
@@ -2773,22 +2799,16 @@ export type MeasurementPlanCompilePreviewResponse = {
             executionNodeKey: string;
             queryId: string;
             targetKey: string;
-        } | {
-            kind: 'group';
-            executionNodeKey: string;
-            queryId: string;
-            targetKey: string;
-            groupKey: string;
         }>;
         warnings: Array<{
-            code: 'target-alias-prefix-overlap' | 'target-alias-project-brand-collision';
+            code: 'target-alias-prefix-overlap';
             message: string;
             targetKeys: Array<string>;
             aliases: Array<string>;
         }>;
     };
     warnings: Array<{
-        code: 'target-alias-prefix-overlap' | 'target-alias-project-brand-collision';
+        code: 'target-alias-prefix-overlap';
         message: string;
         targetKeys: Array<string>;
         aliases: Array<string>;
@@ -2801,12 +2821,62 @@ export type MeasurementPlanCompilePreviewResponse = {
         usageEdges: number;
         baselineEdges: number;
         targetEdges: number;
-        groupEdges: number;
         dedupSavings: number;
     };
+} | {
+    ok: false;
+    checks: Array<{
+        id: 'invalid-authoring' | 'duplicate-identity' | 'unknown-target' | 'unknown-query' | 'invalid-project-context' | 'unowned-target-url' | 'owned-competitor' | 'target-query-context-conflict' | 'target-url-ownership-tie' | 'target-alias-cross-target-collision' | 'target-alias-project-brand-collision' | 'target-alias-prefix-overlap';
+        severity: 'fail' | 'warn';
+        message: string;
+        path: Array<string | number>;
+    }>;
+    executionNodes: Array<{
+        stableKey: string;
+        queryText: string;
+        context: {
+            label: string;
+            city: string;
+            region: string;
+            country: string;
+            timezone?: string;
+        } | null;
+        expectedSnapshots: number;
+    }>;
+    dedupSaved: 0;
+    usageEdges: {
+        baseline: 0;
+        target: 0;
+    };
+    estCostUsd: null;
 };
 
 export type MeasurementPlanDiffPreviewResponse = {
+    ok: true;
+    checks: Array<{
+        id: 'invalid-authoring' | 'duplicate-identity' | 'unknown-target' | 'unknown-query' | 'invalid-project-context' | 'unowned-target-url' | 'owned-competitor' | 'target-query-context-conflict' | 'target-url-ownership-tie' | 'target-alias-cross-target-collision' | 'target-alias-project-brand-collision' | 'target-alias-prefix-overlap';
+        severity: 'fail' | 'warn';
+        message: string;
+        path: Array<string | number>;
+    }>;
+    executionNodes: Array<{
+        stableKey: string;
+        queryText: string;
+        context: {
+            label: string;
+            city: string;
+            region: string;
+            country: string;
+            timezone?: string;
+        } | null;
+        expectedSnapshots: number;
+    }>;
+    dedupSaved: number;
+    usageEdges: {
+        baseline: number;
+        target: number;
+    };
+    estCostUsd: null;
     plan: {
         schemaVersion: 1;
         defaultContext: {
@@ -2870,6 +2940,7 @@ export type MeasurementPlanDiffPreviewResponse = {
                 country: string;
                 timezone?: string;
             } | null;
+            expectedSnapshots: number;
         }>;
         usageEdges: Array<{
             kind: 'baseline';
@@ -2880,22 +2951,16 @@ export type MeasurementPlanDiffPreviewResponse = {
             executionNodeKey: string;
             queryId: string;
             targetKey: string;
-        } | {
-            kind: 'group';
-            executionNodeKey: string;
-            queryId: string;
-            targetKey: string;
-            groupKey: string;
         }>;
         warnings: Array<{
-            code: 'target-alias-prefix-overlap' | 'target-alias-project-brand-collision';
+            code: 'target-alias-prefix-overlap';
             message: string;
             targetKeys: Array<string>;
             aliases: Array<string>;
         }>;
     };
     warnings: Array<{
-        code: 'target-alias-prefix-overlap' | 'target-alias-project-brand-collision';
+        code: 'target-alias-prefix-overlap';
         message: string;
         targetKeys: Array<string>;
         aliases: Array<string>;
@@ -2908,7 +2973,6 @@ export type MeasurementPlanDiffPreviewResponse = {
         usageEdges: number;
         baselineEdges: number;
         targetEdges: number;
-        groupEdges: number;
         dedupSavings: number;
     };
     diff: {
@@ -3108,12 +3172,6 @@ export type MeasurementPlanDiffPreviewResponse = {
                 executionNodeKey: string;
                 queryId: string;
                 targetKey: string;
-            } | {
-                kind: 'group';
-                executionNodeKey: string;
-                queryId: string;
-                targetKey: string;
-                groupKey: string;
             }>;
             removedUsageEdges: Array<{
                 kind: 'baseline';
@@ -3124,12 +3182,6 @@ export type MeasurementPlanDiffPreviewResponse = {
                 executionNodeKey: string;
                 queryId: string;
                 targetKey: string;
-            } | {
-                kind: 'group';
-                executionNodeKey: string;
-                queryId: string;
-                targetKey: string;
-                groupKey: string;
             }>;
             counts: {
                 before: {
@@ -3140,7 +3192,6 @@ export type MeasurementPlanDiffPreviewResponse = {
                     usageEdges: number;
                     baselineEdges: number;
                     targetEdges: number;
-                    groupEdges: number;
                     dedupSavings: number;
                 } | null;
                 after: {
@@ -3151,7 +3202,6 @@ export type MeasurementPlanDiffPreviewResponse = {
                     usageEdges: number;
                     baselineEdges: number;
                     targetEdges: number;
-                    groupEdges: number;
                     dedupSavings: number;
                 };
                 delta: {
@@ -3162,12 +3212,38 @@ export type MeasurementPlanDiffPreviewResponse = {
                     usageEdges: number;
                     baselineEdges: number;
                     targetEdges: number;
-                    groupEdges: number;
                     dedupSavings: number;
                 } | null;
             };
         };
     };
+} | {
+    ok: false;
+    checks: Array<{
+        id: 'invalid-authoring' | 'duplicate-identity' | 'unknown-target' | 'unknown-query' | 'invalid-project-context' | 'unowned-target-url' | 'owned-competitor' | 'target-query-context-conflict' | 'target-url-ownership-tie' | 'target-alias-cross-target-collision' | 'target-alias-project-brand-collision' | 'target-alias-prefix-overlap';
+        severity: 'fail' | 'warn';
+        message: string;
+        path: Array<string | number>;
+    }>;
+    executionNodes: Array<{
+        stableKey: string;
+        queryText: string;
+        context: {
+            label: string;
+            city: string;
+            region: string;
+            country: string;
+            timezone?: string;
+        } | null;
+        expectedSnapshots: number;
+    }>;
+    dedupSaved: 0;
+    usageEdges: {
+        baseline: 0;
+        target: 0;
+    };
+    estCostUsd: null;
+    diff: null;
 };
 
 export type MeasurementPlanInput = {
@@ -3285,6 +3361,7 @@ export type MeasurementPlanResponse = {
                     country: string;
                     timezone?: string;
                 } | null;
+                expectedSnapshots: number;
             }>;
             usageEdges: Array<{
                 kind: 'baseline';
@@ -3295,15 +3372,9 @@ export type MeasurementPlanResponse = {
                 executionNodeKey: string;
                 queryId: string;
                 targetKey: string;
-            } | {
-                kind: 'group';
-                executionNodeKey: string;
-                queryId: string;
-                targetKey: string;
-                groupKey: string;
             }>;
             warnings: Array<{
-                code: 'target-alias-prefix-overlap' | 'target-alias-project-brand-collision';
+                code: 'target-alias-prefix-overlap';
                 message: string;
                 targetKeys: Array<string>;
                 aliases: Array<string>;
@@ -3381,6 +3452,7 @@ export type MeasurementPlanVersionResponse = {
                     country: string;
                     timezone?: string;
                 } | null;
+                expectedSnapshots: number;
             }>;
             usageEdges: Array<{
                 kind: 'baseline';
@@ -3391,15 +3463,9 @@ export type MeasurementPlanVersionResponse = {
                 executionNodeKey: string;
                 queryId: string;
                 targetKey: string;
-            } | {
-                kind: 'group';
-                executionNodeKey: string;
-                queryId: string;
-                targetKey: string;
-                groupKey: string;
             }>;
             warnings: Array<{
-                code: 'target-alias-prefix-overlap' | 'target-alias-project-brand-collision';
+                code: 'target-alias-prefix-overlap';
                 message: string;
                 targetKeys: Array<string>;
                 aliases: Array<string>;
@@ -6027,10 +6093,6 @@ export type PostApiV1ProjectsByNameMeasurementPlanCompilePreviewData = {
 
 export type PostApiV1ProjectsByNameMeasurementPlanCompilePreviewErrors = {
     /**
-     * The measurement plan is invalid or stale.
-     */
-    400: ErrorEnvelope;
-    /**
      * The API key lacks measurement-plan.write.
      */
     403: ErrorEnvelope;
@@ -6064,10 +6126,6 @@ export type PostApiV1ProjectsByNameMeasurementPlanDiffPreviewData = {
 };
 
 export type PostApiV1ProjectsByNameMeasurementPlanDiffPreviewErrors = {
-    /**
-     * The measurement plan is invalid or stale.
-     */
-    400: ErrorEnvelope;
     /**
      * The API key lacks measurement-plan.write.
      */

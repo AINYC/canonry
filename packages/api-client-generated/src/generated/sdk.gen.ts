@@ -147,7 +147,7 @@ export const putApiV1ProjectsByNameMeasurementPlan = <ThrowOnError extends boole
 /**
  * Compile a measurement plan without publishing
  *
- * Validates and compiles a candidate Target/group plan, returning warnings, execution counts, and deduplication savings without writing state.
+ * Validates and compiles a candidate Target/group plan without writing state. Invalid authoring returns HTTP 200 with ok=false and typed checks; valid authoring returns frozen execution counts, expected snapshot slots, deduplication savings, and warnings.
  */
 export const postApiV1ProjectsByNameMeasurementPlanCompilePreview = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameMeasurementPlanCompilePreviewData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameMeasurementPlanCompilePreviewResponses, PostApiV1ProjectsByNameMeasurementPlanCompilePreviewErrors, ThrowOnError>({
@@ -169,7 +169,7 @@ export const postApiV1ProjectsByNameMeasurementPlanCompilePreview = <ThrowOnErro
 /**
  * Preview a measurement-plan change
  *
- * Compiles a candidate plan and compares its Targets, groups, query selections, and execution graph with the active immutable revision without writing state.
+ * Compiles a candidate plan and compares its Targets, groups, query selections, and execution graph with the active immutable revision without writing state. Invalid authoring returns HTTP 200 with ok=false, typed checks, and a null diff.
  */
 export const postApiV1ProjectsByNameMeasurementPlanDiffPreview = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameMeasurementPlanDiffPreviewData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameMeasurementPlanDiffPreviewResponses, PostApiV1ProjectsByNameMeasurementPlanDiffPreviewErrors, ThrowOnError>({

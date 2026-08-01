@@ -505,7 +505,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'post',
     path: '/api/v1/projects/{name}/measurement-plan/compile-preview',
     summary: 'Compile a measurement plan without publishing',
-    description: 'Validates and compiles a candidate Target/group plan, returning warnings, execution counts, and deduplication savings without writing state.',
+    description: 'Validates and compiles a candidate Target/group plan without writing state. Invalid authoring returns HTTP 200 with ok=false and typed checks; valid authoring returns frozen execution counts, expected snapshot slots, deduplication savings, and warnings.',
     tags: ['measurement-plans'],
     parameters: [nameParameter],
     requestBody: {
@@ -518,7 +518,6 @@ const routeCatalog: OpenApiOperation[] = [
     },
     responses: {
       200: jsonResponse('Compiled measurement-plan preview returned.', 'MeasurementPlanCompilePreviewResponse'),
-      400: errorResponse('The measurement plan is invalid or stale.'),
       403: errorResponse('The API key lacks measurement-plan.write.'),
       404: errorResponse('Project not found.'),
     },
@@ -527,7 +526,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'post',
     path: '/api/v1/projects/{name}/measurement-plan/diff-preview',
     summary: 'Preview a measurement-plan change',
-    description: 'Compiles a candidate plan and compares its Targets, groups, query selections, and execution graph with the active immutable revision without writing state.',
+    description: 'Compiles a candidate plan and compares its Targets, groups, query selections, and execution graph with the active immutable revision without writing state. Invalid authoring returns HTTP 200 with ok=false, typed checks, and a null diff.',
     tags: ['measurement-plans'],
     parameters: [nameParameter],
     requestBody: {
@@ -540,7 +539,6 @@ const routeCatalog: OpenApiOperation[] = [
     },
     responses: {
       200: jsonResponse('Semantic measurement-plan diff returned.', 'MeasurementPlanDiffPreviewResponse'),
-      400: errorResponse('The measurement plan is invalid or stale.'),
       403: errorResponse('The API key lacks measurement-plan.write.'),
       404: errorResponse('Project not found.'),
     },

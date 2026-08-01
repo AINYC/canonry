@@ -4,13 +4,17 @@ import type { FastifyInstance } from 'fastify'
 import {
   canonicalMeasurementPlanJson,
   compileMeasurementPlan,
+  compileMeasurementPlanPreview,
   effectiveBrandNames,
   MeasurementPlanValidationError,
-  measurementPlanInputSchema,
+  measurementPlanCounts,
   notFound,
   parseStoredMeasurementPlan,
   validationError,
   type MeasurementPlan,
+  type MeasurementPlanContext,
+  type MeasurementPlanCounts,
+  type MeasurementPlanInput,
 } from '@ainyc/canonry-contracts'
 import {
   measurementPlans,
@@ -24,17 +28,11 @@ import { resolveProject, writeAuditLog } from './helpers.js'
 
 export const MEASUREMENT_PLAN_WRITE_SCOPE = 'measurement-plan.write'
 
-type PlanCounts = {
-  targets: number
-  groups: number
-  queries: number
-  executionNodes: number
-  usageEdges: number
-  baselineEdges: number
-  targetEdges: number
-  groupEdges: number
-  dedupSavings: number
+export interface MeasurementPlanRoutesOptions {
+  getRunnableProviderNames?: () => readonly string[]
 }
+
+type PlanCounts = MeasurementPlanCounts
 
 type StableKeyed = { stableKey: string }
 type SemanticSelection = {
@@ -82,24 +80,44 @@ function activePlanVersion(app: FastifyInstance, projectId: string) {
   return { plan, version }
 }
 
-function compileForProject(app: FastifyInstance, project: typeof projects.$inferSelect, input: unknown): MeasurementPlan {
-  const parsed = measurementPlanInputSchema.safeParse(input)
-  if (!parsed.success) throw validationError('Invalid measurement plan', { issues: parsed.error.issues })
+function normalizedProviderNames(values: readonly string[]): string[] {
+  return [...new Set(values.map(value => value.trim().toLowerCase()).filter(Boolean))].sort()
+}
+
+function compileContextForProject(
+  app: FastifyInstance,
+  project: typeof projects.$inferSelect,
+  opts: MeasurementPlanRoutesOptions,
+): MeasurementPlanContext {
   const trackedQueries = app.db.select({ id: queries.id, query: queries.query })
     .from(queries).where(eq(queries.projectId, project.id)).all()
   const defaultContext = project.defaultLocation
     ? project.locations.find(location => location.label === project.defaultLocation) ?? null
     : null
+  const projectProviders = normalizedProviderNames(project.providers)
+  const selectedProviders = projectProviders.length > 0
+    ? projectProviders
+    : normalizedProviderNames(opts.getRunnableProviderNames?.() ?? [])
 
+  return {
+    canonicalDomain: project.canonicalDomain,
+    ownedDomains: project.ownedDomains,
+    brandNames: effectiveBrandNames(project),
+    expectedSnapshots: selectedProviders.length,
+    defaultContext,
+    locations: project.locations,
+    trackedQueries,
+  }
+}
+
+function compileForProject(
+  app: FastifyInstance,
+  project: typeof projects.$inferSelect,
+  input: unknown,
+  opts: MeasurementPlanRoutesOptions,
+): MeasurementPlan {
   try {
-    return compileMeasurementPlan(parsed.data, {
-      canonicalDomain: project.canonicalDomain,
-      ownedDomains: project.ownedDomains,
-      brandNames: effectiveBrandNames(project),
-      defaultContext,
-      locations: project.locations,
-      trackedQueries,
-    })
+    return compileMeasurementPlan(input as MeasurementPlanInput, compileContextForProject(app, project, opts))
   } catch (error) {
     if (error instanceof MeasurementPlanValidationError) {
       throw validationError(error.message, { issues: error.issues })
@@ -109,20 +127,7 @@ function compileForProject(app: FastifyInstance, project: typeof projects.$infer
 }
 
 function planCounts(plan: MeasurementPlan): PlanCounts {
-  const baselineEdges = plan.usageEdges.filter(edge => edge.kind === 'baseline').length
-  const targetEdges = plan.usageEdges.filter(edge => edge.kind === 'target').length
-  const groupEdges = plan.usageEdges.filter(edge => edge.kind === 'group').length
-  return {
-    targets: plan.targets.length,
-    groups: plan.groups.length,
-    queries: plan.querySnapshots.length,
-    executionNodes: plan.executionNodes.length,
-    usageEdges: plan.usageEdges.length,
-    baselineEdges,
-    targetEdges,
-    groupEdges,
-    dedupSavings: Math.max(0, plan.usageEdges.length - plan.executionNodes.length),
-  }
+  return measurementPlanCounts(plan)
 }
 
 function stableJson(value: unknown): string {
@@ -291,7 +296,7 @@ function activePlanContainsKey(plan: MeasurementPlan, stableKey: string): boolea
 }
 
 /** Immutable Target/group measurement-plan persistence. */
-export async function measurementPlanRoutes(app: FastifyInstance, _opts?: unknown) {
+export async function measurementPlanRoutes(app: FastifyInstance, opts: MeasurementPlanRoutesOptions) {
   app.get<{ Params: { name: string } }>('/projects/:name/measurement-plan', async request => {
     const project = resolveProject(app.db, request.params.name)
     const active = activePlanVersion(app, project.id)
@@ -301,28 +306,26 @@ export async function measurementPlanRoutes(app: FastifyInstance, _opts?: unknow
   app.post<{ Params: { name: string } }>('/projects/:name/measurement-plan/compile-preview', async request => {
     requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
     const project = resolveProject(app.db, request.params.name)
-    const plan = compileForProject(app, project, request.body)
-    return { plan, warnings: plan.warnings, counts: planCounts(plan) }
+    return compileMeasurementPlanPreview(request.body, compileContextForProject(app, project, opts))
   })
 
   app.post<{ Params: { name: string } }>('/projects/:name/measurement-plan/diff-preview', async request => {
     requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
     const project = resolveProject(app.db, request.params.name)
-    const plan = compileForProject(app, project, request.body)
+    const preview = compileMeasurementPlanPreview(request.body, compileContextForProject(app, project, opts))
+    if (!preview.ok) return { ...preview, diff: null }
     const active = activePlanVersion(app, project.id)
     const activePlan = active ? parseStoredPlan(active.version.canonicalJson) : null
     return {
-      plan,
-      warnings: plan.warnings,
-      counts: planCounts(plan),
-      diff: planDiff(activePlan, plan, active?.version.revision ?? null),
+      ...preview,
+      diff: planDiff(activePlan, preview.plan, active?.version.revision ?? null),
     }
   })
 
   app.put<{ Params: { name: string } }>('/projects/:name/measurement-plan', async (request, reply) => {
     requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
     const project = resolveProject(app.db, request.params.name)
-    const compiled = compileForProject(app, project, request.body)
+    const compiled = compileForProject(app, project, request.body, opts)
     const canonicalJson = canonicalMeasurementPlanJson(compiled)
     const checksum = crypto.createHash('sha256').update(canonicalJson).digest('hex')
     const now = new Date().toISOString()

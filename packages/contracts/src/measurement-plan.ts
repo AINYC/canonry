@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { brandKeyFromText } from './brand-matching.js'
 import { locationContextSchema, type LocationContext } from './provider.js'
-import { hostOf } from './url-normalize.js'
+import { brandLabelFromDomain, hostOf } from './url-normalize.js'
 
 /**
  * v1 is intentionally frozen. A future shape gets a new version and an
@@ -373,6 +373,7 @@ export const measurementExecutionNodeSchema = z.object({
   stableKey: z.string().min(1),
   queryText: z.string().min(1),
   context: locationContextSchema.nullable(),
+  expectedSnapshots: z.number().int().nonnegative(),
 }).strict()
 export type MeasurementExecutionNode = z.output<typeof measurementExecutionNodeSchema>
 
@@ -387,22 +388,14 @@ const targetUsageEdgeSchema = z.object({
   queryId: measurementQueryIdSchema,
   targetKey: measurementStableKeySchema,
 }).strict()
-const groupUsageEdgeSchema = z.object({
-  kind: z.literal('group'),
-  executionNodeKey: z.string().min(1),
-  queryId: measurementQueryIdSchema,
-  targetKey: measurementStableKeySchema,
-  groupKey: measurementStableKeySchema,
-}).strict()
 export const measurementUsageEdgeSchema = z.discriminatedUnion('kind', [
   baselineUsageEdgeSchema,
   targetUsageEdgeSchema,
-  groupUsageEdgeSchema,
 ])
 export type MeasurementUsageEdge = z.output<typeof measurementUsageEdgeSchema>
 
 export const measurementPlanWarningSchema = z.object({
-  code: z.enum(['target-alias-prefix-overlap', 'target-alias-project-brand-collision']),
+  code: z.literal('target-alias-prefix-overlap'),
   message: z.string().min(1),
   targetKeys: z.array(measurementStableKeySchema).min(1),
   aliases: z.array(z.string().min(1)).min(1),
@@ -504,16 +497,67 @@ export const measurementPlanCountsSchema = z.object({
   usageEdges: z.number().int(),
   baselineEdges: z.number().int(),
   targetEdges: z.number().int(),
-  groupEdges: z.number().int(),
   dedupSavings: z.number().int(),
 }).strict()
 export type MeasurementPlanCounts = z.output<typeof measurementPlanCountsSchema>
 
-export const measurementPlanCompilePreviewResponseSchema = z.object({
+export const measurementPlanCompileCheckIdSchema = z.enum([
+  'invalid-authoring',
+  'duplicate-identity',
+  'unknown-target',
+  'unknown-query',
+  'invalid-project-context',
+  'unowned-target-url',
+  'owned-competitor',
+  'target-query-context-conflict',
+  'target-url-ownership-tie',
+  'target-alias-cross-target-collision',
+  'target-alias-project-brand-collision',
+  'target-alias-prefix-overlap',
+])
+export type MeasurementPlanCompileCheckId = z.output<typeof measurementPlanCompileCheckIdSchema>
+
+export const measurementPlanCompileCheckSchema = z.object({
+  id: measurementPlanCompileCheckIdSchema,
+  severity: z.enum(['fail', 'warn']),
+  message: z.string().min(1),
+  path: z.array(z.union([z.string(), z.number().int()])),
+}).strict()
+export type MeasurementPlanCompileCheck = z.output<typeof measurementPlanCompileCheckSchema>
+
+const measurementPlanPreviewUsageCountsSchema = z.object({
+  baseline: z.number().int().nonnegative(),
+  target: z.number().int().nonnegative(),
+}).strict()
+
+export const measurementPlanCompilePreviewSuccessSchema = z.object({
+  ok: z.literal(true),
+  checks: z.array(measurementPlanCompileCheckSchema),
+  executionNodes: z.array(measurementExecutionNodeSchema),
+  dedupSaved: z.number().int().nonnegative(),
+  usageEdges: measurementPlanPreviewUsageCountsSchema,
+  estCostUsd: z.null(),
   plan: measurementPlanSchema,
   warnings: z.array(measurementPlanWarningSchema),
   counts: measurementPlanCountsSchema,
 }).strict()
+
+export const measurementPlanCompilePreviewInvalidSchema = z.object({
+  ok: z.literal(false),
+  checks: z.array(measurementPlanCompileCheckSchema).min(1),
+  executionNodes: z.array(measurementExecutionNodeSchema).length(0),
+  dedupSaved: z.literal(0),
+  usageEdges: z.object({
+    baseline: z.literal(0),
+    target: z.literal(0),
+  }).strict(),
+  estCostUsd: z.null(),
+}).strict()
+
+export const measurementPlanCompilePreviewResponseSchema = z.discriminatedUnion('ok', [
+  measurementPlanCompilePreviewSuccessSchema,
+  measurementPlanCompilePreviewInvalidSchema,
+])
 export type MeasurementPlanCompilePreviewResponse = z.output<typeof measurementPlanCompilePreviewResponseSchema>
 
 const measurementSemanticSelectionSchema = z.object({
@@ -535,7 +579,7 @@ function keyedMeasurementDiffSchema<T extends z.ZodType>(valueSchema: T) {
   }).strict()
 }
 
-export const measurementPlanDiffPreviewResponseSchema = measurementPlanCompilePreviewResponseSchema.extend({
+export const measurementPlanDiffPreviewSuccessSchema = measurementPlanCompilePreviewSuccessSchema.extend({
   diff: z.object({
     activeRevision: measurementPlanRevisionSchema.nullable(),
     targets: keyedMeasurementDiffSchema(compiledMeasurementTargetSchema),
@@ -566,26 +610,44 @@ export const measurementPlanDiffPreviewResponseSchema = measurementPlanCompilePr
     }).strict(),
   }).strict(),
 }).strict()
+export const measurementPlanDiffPreviewInvalidSchema = measurementPlanCompilePreviewInvalidSchema.extend({
+  diff: z.null(),
+}).strict()
+export const measurementPlanDiffPreviewResponseSchema = z.discriminatedUnion('ok', [
+  measurementPlanDiffPreviewSuccessSchema,
+  measurementPlanDiffPreviewInvalidSchema,
+])
 export type MeasurementPlanDiffPreviewResponse = z.output<typeof measurementPlanDiffPreviewResponseSchema>
 
 export interface MeasurementPlanContext {
   canonicalDomain: string
   ownedDomains: readonly string[]
-  /** Effective project-brand names (for warning only, never a schema block). */
+  /** Explicit project display names and aliases; effective domain labels are added by the compiler. */
   brandNames?: readonly string[]
+  /** Frozen expected provider/model snapshots per unique execution node. */
+  expectedSnapshots: number
   /** Baseline edges always use this context; null means project-wide/default provider context. */
   defaultContext?: LocationContext | null
   trackedQueries: readonly { id: string; query: string }[]
   locations: readonly LocationContext[]
 }
 
+export interface MeasurementPlanValidationIssue {
+  id: MeasurementPlanCompileCheckId
+  path: (string | number)[]
+  message: string
+}
+
 export class MeasurementPlanValidationError extends Error {
-  readonly issues: { path: (string | number)[]; message: string }[]
+  readonly issues: MeasurementPlanValidationIssue[]
 
   constructor(issues: { path: (string | number)[]; message: string }[]) {
     super('Measurement plan validation failed')
     this.name = 'MeasurementPlanValidationError'
-    this.issues = issues
+    this.issues = issues.map(issue => ({
+      ...issue,
+      id: compileCheckIdForIssue(issue.message),
+    }))
   }
 }
 
@@ -666,24 +728,22 @@ interface PendingUsage {
   kind: MeasurementUsageEdge['kind']
   queryId: string
   targetKey?: string
-  groupKey?: string
   context: LocationContext | null
   nodeSignature: string
 }
 
 function usageEdgeKey(edge: PendingUsage): string {
-  return [edge.kind, edge.targetKey ?? '', edge.groupKey ?? '', edge.queryId, edge.nodeSignature].join('\u0000')
+  return [edge.kind, edge.targetKey ?? '', edge.queryId, edge.nodeSignature].join('\u0000')
 }
 
 function compareUsageEdges(left: MeasurementUsageEdge, right: MeasurementUsageEdge): number {
   return compareText(left.kind, right.kind)
     || compareText('targetKey' in left ? left.targetKey : '', 'targetKey' in right ? right.targetKey : '')
-    || compareText('groupKey' in left ? left.groupKey : '', 'groupKey' in right ? right.groupKey : '')
     || compareText(left.queryId, right.queryId)
     || compareText(left.executionNodeKey, right.executionNodeKey)
 }
 
-function warningsForAliases(targets: readonly CompiledMeasurementTarget[], brandNames: readonly string[]): MeasurementPlanWarning[] {
+function warningsForAliases(targets: readonly CompiledMeasurementTarget[]): MeasurementPlanWarning[] {
   const warnings: MeasurementPlanWarning[] = []
   const targetAliases = targets.flatMap(target => target.aliases.map(alias => ({
     targetKey: target.stableKey,
@@ -701,21 +761,6 @@ function warningsForAliases(targets: readonly CompiledMeasurementTarget[], brand
           message: 'Target aliases overlap by mention prefix',
           targetKeys: canonicalStrings([left.targetKey, right.targetKey]),
           aliases: canonicalStrings([left.alias, right.alias]),
-        })
-      }
-    }
-  }
-
-  const projectBrandKeys = new Set(brandNames.map(brandKeyFromText).filter(key => key.length >= 4))
-  for (const target of targets) {
-    for (const alias of target.aliases) {
-      const key = brandKeyFromText(alias)
-      if (key.length >= 4 && projectBrandKeys.has(key)) {
-        warnings.push({
-          code: 'target-alias-project-brand-collision',
-          message: 'Target alias collides with an effective project brand name',
-          targetKeys: [target.stableKey],
-          aliases: [alias],
         })
       }
     }
@@ -748,6 +793,10 @@ export function compileMeasurementPlan(input: MeasurementPlanInput, context: Mea
   }
   const plan: ParsedMeasurementPlanInput = parsed.data
   const issues: { path: (string | number)[]; message: string }[] = []
+
+  if (!Number.isInteger(context.expectedSnapshots) || context.expectedSnapshots < 0) {
+    issues.push({ path: ['context', 'expectedSnapshots'], message: 'Expected snapshots must be a nonnegative integer' })
+  }
 
   const roots: string[] = []
   const rootValues = [context.canonicalDomain, ...context.ownedDomains]
@@ -851,6 +900,22 @@ export function compileMeasurementPlan(input: MeasurementPlanInput, context: Mea
       noteTargetQueryAssignment(selection.targetKey, queryId, resolved, ['targetQuerySelections', selectionIndex, 'context'])
     }
   })
+
+  const projectBrandKeys = new Set([
+    ...(context.brandNames ?? []),
+    ...effectiveOwnedHosts.map(brandLabelFromDomain),
+  ].map(brandKeyFromText).filter(key => key.length >= 4))
+  plan.targets.forEach((target, targetIndex) => {
+    target.aliases.forEach((alias, aliasIndex) => {
+      const key = brandKeyFromText(alias)
+      if (key.length >= 4 && projectBrandKeys.has(key)) {
+        issues.push({
+          path: ['targets', targetIndex, 'aliases', aliasIndex],
+          message: 'Target alias must not equal an effective project brand term',
+        })
+      }
+    })
+  })
   if (issues.length) throwValidation(issues)
 
   const targets: CompiledMeasurementTarget[] = plan.targets.map(target => {
@@ -913,13 +978,12 @@ export function compileMeasurementPlan(input: MeasurementPlanInput, context: Mea
     queryId: string,
     resolvedContext: LocationContext | null,
     targetKey?: string,
-    groupKey?: string,
   ): void => {
     const query = knownQueries.get(queryId)
     if (!query) return
     const nodeSignature = `${query.executionQueryText}\u0000${contextKey(resolvedContext)}`
     nodeSeeds.set(nodeSignature, { queryText: query.executionQueryText, context: resolvedContext })
-    const pending: PendingUsage = { kind, queryId, context: resolvedContext, nodeSignature, ...(targetKey ? { targetKey } : {}), ...(groupKey ? { groupKey } : {}) }
+    const pending: PendingUsage = { kind, queryId, context: resolvedContext, nodeSignature, ...(targetKey ? { targetKey } : {}) }
     pendingUsages.set(usageEdgeKey(pending), pending)
   }
 
@@ -928,25 +992,13 @@ export function compileMeasurementPlan(input: MeasurementPlanInput, context: Mea
     const resolved = resolveContext(selection.context, defaultContext)
     for (const queryId of canonicalStrings(selection.queryIds)) addUsage('target', queryId, resolved, selection.targetKey)
   })
-  // Groups are reporting projections, not query owners. Derive their usage
-  // edges from the Target assignments of their members so a market/tag can
-  // never silently change query intent or execution context.
-  groups.forEach((group) => {
-    for (const targetKey of group.targetKeys) {
-      for (const selection of targetQuerySelections) {
-        if (selection.targetKey !== targetKey) continue
-        const resolved = resolveContext(selection.context, defaultContext)
-        for (const queryId of selection.queryIds) addUsage('group', queryId, resolved, targetKey, group.stableKey)
-      }
-    }
-  })
-
   const executionNodes: MeasurementExecutionNode[] = [...nodeSeeds.entries()]
     .sort(([left], [right]) => compareText(left, right))
     .map(([signature, node]) => ({
       stableKey: `execution-${base64UrlEncode(signature)}`,
       queryText: node.queryText,
       context: node.context,
+      expectedSnapshots: context.expectedSnapshots,
     }))
   const executionNodeKeys = new Map<string, string>()
   executionNodes.forEach(node => {
@@ -960,14 +1012,6 @@ export function compileMeasurementPlan(input: MeasurementPlanInput, context: Mea
         return { kind: 'baseline', executionNodeKey, queryId: pending.queryId }
       case 'target':
         return { kind: 'target', executionNodeKey, queryId: pending.queryId, targetKey: pending.targetKey! }
-      case 'group':
-        return {
-          kind: 'group',
-          executionNodeKey,
-          queryId: pending.queryId,
-          targetKey: pending.targetKey!,
-          groupKey: pending.groupKey!,
-        }
     }
   }).sort(compareUsageEdges)
 
@@ -981,7 +1025,98 @@ export function compileMeasurementPlan(input: MeasurementPlanInput, context: Mea
     querySnapshots,
     executionNodes,
     usageEdges,
-    warnings: warningsForAliases(targets, context.brandNames ?? []),
+    warnings: warningsForAliases(targets),
+  }
+}
+
+function compileCheckIdForIssue(message: string): MeasurementPlanCompileCheckId {
+  if (message.includes('must not equal an effective project brand term')) return 'target-alias-project-brand-collision'
+  if (message.includes('equal-specificity cross-target tie')) return 'target-url-ownership-tie'
+  if (message.includes('already assigned to target')) return 'target-alias-cross-target-collision'
+  if (message.startsWith('Duplicate ') || message.includes('globally unique')) return 'duplicate-identity'
+  if (message.includes('Unknown target')) return 'unknown-target'
+  if (message.includes('Unknown tracked query')) return 'unknown-query'
+  if (message.includes('conflicting resolved contexts')) return 'target-query-context-conflict'
+  if (message.includes('owned host or its dot-boundary subdomain')) return 'unowned-target-url'
+  if (message.includes('competitor must be independent')) return 'owned-competitor'
+  if (message.includes('context') || message.includes('location') || message.includes('Expected snapshots')) return 'invalid-project-context'
+  return 'invalid-authoring'
+}
+
+/** Converts compiler validation into stable, transport-safe checks. */
+export function measurementPlanValidationChecks(error: MeasurementPlanValidationError): MeasurementPlanCompileCheck[] {
+  return error.issues.map(issue => ({
+    id: issue.id,
+    severity: 'fail',
+    message: issue.message,
+    path: issue.path,
+  }))
+}
+
+export function measurementPlanCounts(plan: MeasurementPlan): MeasurementPlanCounts {
+  const baselineEdges = plan.usageEdges.filter(edge => edge.kind === 'baseline').length
+  const targetEdges = plan.usageEdges.filter(edge => edge.kind === 'target').length
+  return {
+    targets: plan.targets.length,
+    groups: plan.groups.length,
+    queries: plan.querySnapshots.length,
+    executionNodes: plan.executionNodes.length,
+    usageEdges: plan.usageEdges.length,
+    baselineEdges,
+    targetEdges,
+    dedupSavings: Math.max(0, plan.usageEdges.length - plan.executionNodes.length),
+  }
+}
+
+/** Non-throwing compile boundary used by HTTP preview adapters. */
+export function compileMeasurementPlanPreview(
+  input: unknown,
+  context: MeasurementPlanContext,
+): MeasurementPlanCompilePreviewResponse {
+  try {
+    const plan = compileMeasurementPlan(input as MeasurementPlanInput, context)
+    const counts = measurementPlanCounts(plan)
+    const checks: MeasurementPlanCompileCheck[] = plan.warnings.map(warning => ({
+      id: 'target-alias-prefix-overlap',
+      severity: 'warn',
+      message: warning.message,
+      path: ['targets'],
+    }))
+    return {
+      ok: true,
+      checks,
+      executionNodes: plan.executionNodes,
+      dedupSaved: counts.dedupSavings,
+      usageEdges: { baseline: counts.baselineEdges, target: counts.targetEdges },
+      estCostUsd: null,
+      plan,
+      warnings: plan.warnings,
+      counts,
+    }
+  } catch (error) {
+    if (error instanceof MeasurementPlanValidationError) {
+      return {
+        ok: false,
+        checks: measurementPlanValidationChecks(error),
+        executionNodes: [],
+        dedupSaved: 0,
+        usageEdges: { baseline: 0, target: 0 },
+        estCostUsd: null,
+      }
+    }
+    return {
+      ok: false,
+      checks: [{
+        id: 'invalid-authoring',
+        severity: 'fail',
+        message: error instanceof Error ? error.message : 'Measurement plan compilation failed',
+        path: [],
+      }],
+      executionNodes: [],
+      dedupSaved: 0,
+      usageEdges: { baseline: 0, target: 0 },
+      estCostUsd: null,
+    }
   }
 }
 
