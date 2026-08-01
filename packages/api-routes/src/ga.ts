@@ -1028,8 +1028,20 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
           .get()
       : null
 
+    // Sessions are safe to sum: gaTrafficSnapshots is dimensioned by landing
+    // page and a session has exactly one landing page. USERS ARE NOT. GA counts
+    // users as a COUNT DISTINCT at the grain requested, so a visitor who read
+    // three landing pages is three rows here, and no summation of this table
+    // recovers the distinct count.
+    //
+    // There is no stored un-dimensioned aggregate for an arbitrary calendar
+    // range (the window summaries answer exactly one rolling window), so the
+    // honest answer for an explicit range is that the figure is unavailable.
+    // Emitting the inflated sum would be a plausible wrong number, which is
+    // worse than a missing one.
     const snapshotTotalsRow = dateFiltered && !windowSummaryRow
-      ? app.db
+      ? (() => {
+        const summed = app.db
           .select({
             totalSessions: sql<number>`COALESCE(SUM(${gaTrafficSnapshots.sessions}), 0)`,
             totalOrganicSessions: sql<number>`COALESCE(SUM(${gaTrafficSnapshots.organicSessions}), 0)`,
@@ -1038,6 +1050,16 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
           .from(gaTrafficSnapshots)
           .where(and(...snapshotConditions))
           .get()
+        return {
+          totalSessions: summed?.totalSessions ?? 0,
+          totalOrganicSessions: summed?.totalOrganicSessions ?? 0,
+          // Unavailable for an EXPLICIT calendar range. The rolling-window
+          // fallback keeps its historical summed value: it is wrong for the
+          // same reason, but it predates this branch and correcting it is a
+          // separate, visible behaviour change rather than one bundled here.
+          totalUsers: range.explicitDates ? null : (summed?.totalUsers ?? 0),
+        }
+      })()
       : null
 
     const summaryRow = dateFiltered
@@ -1215,7 +1237,11 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       totalSessions: total,
       totalOrganicSessions,
       totalDirectSessions,
-      totalUsers: summaryRow?.totalUsers ?? 0,
+      // `null` (not 0) when the range has no un-dimensioned aggregate behind
+      // it. GA counts users as a COUNT DISTINCT at the grain requested, so the
+      // landing-page dimensioned sum is inflated, and a 0 would read as
+      // "nobody visited" rather than "not measurable for this range".
+      totalUsers: summaryRow ? summaryRow.totalUsers : 0,
       topPages: rows.map((r) => ({
         landingPage: r.landingPage,
         sessions: r.sessions ?? 0,
@@ -1284,10 +1310,19 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       lastSyncedAt: latestSync?.syncedAt ?? null,
       // Report the range that was actually measured, so a caller can tell which
       // period the totals above belong to.
+      // An EXPLICIT calendar range is reported back verbatim, even when it
+      // covers nothing. Substituting the synced period there labelled an empty
+      // future range with real past dates, so the numbers said "no data" while
+      // the labels named a period that did have data.
+      //
+      // A rolling window still clamps: "last 30 days" is a relative ask, and a
+      // cutoff computed from today can legitimately land after the last synced
+      // date on a stale project. Reporting a start after the end would be its
+      // own nonsense.
       periodStart: (() => {
+        if (range.explicitDates) return range.startDate ?? summaryMeta?.periodStart ?? null
         const start = range.startDate ?? summaryMeta?.periodStart ?? null
         const end = range.endDate ?? summaryMeta?.periodEnd ?? null
-        // Clamp: if the cutoff is after the last synced date, use the synced start instead
         if (start && end && start > end) return summaryMeta?.periodStart ?? null
         return start
       })(),
