@@ -41,6 +41,12 @@ const ANALYSIS: GaMeasurementAnalysisDto = {
     periods: [],
     channels: [],
   },
+  engagement: {
+    status: 'ready',
+    availableFromDate: '2026-07-21',
+    latestDate: '2026-07-22',
+    periods: [],
+  },
   searchDemand: {
     status: 'ready',
     periods: [],

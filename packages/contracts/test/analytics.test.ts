@@ -14,7 +14,10 @@ import {
   surfaceClassCountSchema,
   rankedSourceListSchema,
   sourceBreakdownDtoSchema,
+  parseWindow,
+  resolveDateRange,
 } from '../src/analytics.js'
+import { AppError } from '../src/errors.js'
 
 const providerMetric = {
   citationRate: 0.5,
@@ -387,5 +390,109 @@ describe('normalizeModelId', () => {
   it('treats a dated snapshot as equivalent and a tier as different', () => {
     expect(modelIdsEquivalent('gpt-5.4', 'gpt-5.4-2026-03-05')).toBe(true)
     expect(modelIdsEquivalent('gpt-5.6', 'gpt-5.6-sol')).toBe(false)
+  })
+})
+
+describe('parseWindow', () => {
+  it('accepts every supported window value unchanged', () => {
+    expect(parseWindow('7d')).toBe('7d')
+    expect(parseWindow('30d')).toBe('30d')
+    expect(parseWindow('90d')).toBe('90d')
+    expect(parseWindow('all')).toBe('all')
+  })
+
+  it('defaults to "all" when no window was supplied', () => {
+    expect(parseWindow(undefined)).toBe('all')
+    expect(parseWindow()).toBe('all')
+    // An absent query param can arrive as an empty string; that is still "no
+    // window asked for", not an unrecognised one.
+    expect(parseWindow('')).toBe('all')
+  })
+
+  it('REJECTS an unrecognised window instead of silently widening to all history', () => {
+    // The silent fallback was worse than a missing feature: "--window 60d"
+    // returned every row ever stored, labelled as the 60-day window the caller
+    // asked for, with no way for the caller to tell.
+    expect(() => parseWindow('60d')).toThrow(AppError)
+    expect(() => parseWindow('60d')).toThrow(/60d/)
+    expect(() => parseWindow('1y')).toThrow(AppError)
+    expect(() => parseWindow('7D')).toThrow(AppError)
+    expect(() => parseWindow('last-month')).toThrow(AppError)
+  })
+
+  it('surfaces the rejection as a clean 400 validation error', () => {
+    let thrown: unknown
+    try {
+      parseWindow('60d')
+    } catch (e) {
+      thrown = e
+    }
+    expect(thrown).toBeInstanceOf(AppError)
+    const err = thrown as AppError
+    expect(err.code).toBe('VALIDATION_ERROR')
+    expect(err.statusCode).toBe(400)
+    expect(err.message).toMatch(/7d/)
+    expect(err.message).toMatch(/30d/)
+    expect(err.message).toMatch(/90d/)
+    expect(err.message).toMatch(/all/)
+  })
+})
+
+describe('resolveDateRange', () => {
+  it('returns an explicit calendar month exactly as asked', () => {
+    const range = resolveDateRange({ startDate: '2026-05-01', endDate: '2026-05-31' })
+    expect(range.startDate).toBe('2026-05-01')
+    expect(range.endDate).toBe('2026-05-31')
+    expect(range.explicitDates).toBe(true)
+  })
+
+  it('computes a rolling cutoff from the window when no startDate is given', () => {
+    const range = resolveDateRange({ window: '7d' })
+    const expected = new Date()
+    expected.setDate(expected.getDate() - 7)
+    expect(range.startDate).toBe(expected.toISOString().slice(0, 10))
+    expect(range.endDate).toBeNull()
+    expect(range.window).toBe('7d')
+    expect(range.explicitDates).toBe(false)
+  })
+
+  it('leaves both bounds open when nothing is supplied', () => {
+    const range = resolveDateRange({})
+    expect(range.startDate).toBeNull()
+    expect(range.endDate).toBeNull()
+    expect(range.window).toBe('all')
+    expect(range.explicitDates).toBe(false)
+  })
+
+  it('lets explicit dates win over a window supplied alongside them', () => {
+    const range = resolveDateRange({ startDate: '2026-05-01', endDate: '2026-05-31', window: '7d' })
+    expect(range.startDate).toBe('2026-05-01')
+    expect(range.endDate).toBe('2026-05-31')
+    expect(range.explicitDates).toBe(true)
+  })
+
+  it('applies the window cutoff when only an endDate is given', () => {
+    const range = resolveDateRange({ endDate: '2026-05-31', window: '7d' })
+    const expected = new Date()
+    expected.setDate(expected.getDate() - 7)
+    expect(range.startDate).toBe(expected.toISOString().slice(0, 10))
+    expect(range.endDate).toBe('2026-05-31')
+    expect(range.explicitDates).toBe(true)
+  })
+
+  it('rejects a malformed date rather than comparing garbage in SQL', () => {
+    expect(() => resolveDateRange({ startDate: '05/01/2026' })).toThrow(AppError)
+    expect(() => resolveDateRange({ startDate: '2026-5-1' })).toThrow(AppError)
+    expect(() => resolveDateRange({ endDate: 'yesterday' })).toThrow(AppError)
+    expect(() => resolveDateRange({ startDate: '2026-13-01' })).toThrow(AppError)
+    expect(() => resolveDateRange({ endDate: '2026-02-30' })).toThrow(AppError)
+  })
+
+  it('rejects an inverted range', () => {
+    expect(() => resolveDateRange({ startDate: '2026-05-31', endDate: '2026-05-01' })).toThrow(/before/i)
+  })
+
+  it('rejects an unrecognised window even when dates are also supplied', () => {
+    expect(() => resolveDateRange({ startDate: '2026-05-01', window: '60d' })).toThrow(AppError)
   })
 })

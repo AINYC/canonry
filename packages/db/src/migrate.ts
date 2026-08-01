@@ -2572,6 +2572,25 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE runs ADD COLUMN query_basket_revision INTEGER`,
     ],
   },
+  {
+    // GA4 engagement metrics on the property-level daily series.
+    //
+    // `engagement_rate` and `new_users` are both real GA4 metrics, requested
+    // directly. No returning-users column: GA4 exposes no such metric, and
+    // `users - new_users` does not reconstruct one because a visitor can be
+    // first-seen AND return inside the same range. That needs the
+    // `newVsReturning` dimension, which changes the row shape of the sync.
+    //
+    // Both columns are NULLABLE with no default. Every row written before this
+    // migration has no reading, and NOT NULL DEFAULT 0 would turn that absence
+    // into a real "0% engaged" day.
+    version: 116,
+    name: 'ga-daily-totals-engagement',
+    statements: [
+      `ALTER TABLE ga_daily_totals ADD COLUMN engagement_rate REAL`,
+      `ALTER TABLE ga_daily_totals ADD COLUMN new_users INTEGER`,
+    ],
+  },
 ]
 
 /**

@@ -302,8 +302,22 @@ const reportAudienceQueryParameter: OpenApiParameter = {
 const analyticsWindowParameter: OpenApiParameter = {
   name: 'window',
   in: 'query',
-  description: 'Time window for analytics queries.',
+  description: 'Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.',
   schema: { type: 'string', enum: ['7d', '30d', '90d', 'all'] },
+}
+
+const analyticsStartDateParameter: OpenApiParameter = {
+  name: 'startDate',
+  in: 'query',
+  description: 'Inclusive lower bound as a calendar date (YYYY-MM-DD). Takes precedence over "window", which is rolling from now and cannot name a calendar month.',
+  schema: stringSchema,
+}
+
+const analyticsEndDateParameter: OpenApiParameter = {
+  name: 'endDate',
+  in: 'query',
+  description: 'Inclusive upper bound as a calendar date (YYYY-MM-DD).',
+  schema: stringSchema,
 }
 
 const organicEvidencePeriodQueryParameter: OpenApiParameter = {
@@ -3777,7 +3791,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/ga/traffic',
     summary: 'Get GA4 landing page traffic, channel breakdown, and AI referral landing pages',
     tags: ['ga4'],
-    parameters: [nameParameter, limitQueryParameter, analyticsWindowParameter],
+    parameters: [nameParameter, limitQueryParameter, analyticsWindowParameter, analyticsStartDateParameter, analyticsEndDateParameter],
     responses: {
       // TODO: Add `GaTrafficResponse` Zod schema in contracts.
       200: rawJsonResponse('GA4 traffic data returned.', looseObjectSchema),
@@ -3791,7 +3805,7 @@ const routeCatalog: OpenApiOperation[] = [
     summary: 'Get raw AI referral detail rows per day, landing page, and attribution dimension',
     description: 'Detail rows, not totals. One row per landing page per attribution dimension, so a single day of one source is many rows and each is commonly worth one session. Use /ga/ai-referral-daily for per-date or per-source session counts.',
     tags: ['ga4'],
-    parameters: [nameParameter, analyticsWindowParameter],
+    parameters: [nameParameter, analyticsWindowParameter, analyticsStartDateParameter, analyticsEndDateParameter],
     responses: {
       200: jsonArrayResponse('AI referral history returned.', 'GA4AiReferralHistoryEntry'),
       400: errorResponse('GA4 is not connected.'),
@@ -3804,7 +3818,7 @@ const routeCatalog: OpenApiOperation[] = [
     summary: 'Get AI referral sessions per day and per source',
     description: 'Sums landing pages within one attribution dimension and never across dimensions, so totalSessions equals the aiSessionsDeduped reported by /ga/traffic for the same window. Sessions only: GA counts users as a distinct count at the grain requested, so an AI-referral user total cannot be summed from these rows and no un-dimensioned AI-referral fetch exists to supply one.',
     tags: ['ga4'],
-    parameters: [nameParameter, analyticsWindowParameter],
+    parameters: [nameParameter, analyticsWindowParameter, analyticsStartDateParameter, analyticsEndDateParameter],
     responses: {
       200: jsonResponse('AI referral daily series returned.', 'GA4AiReferralDailyDto'),
       400: errorResponse('GA4 is not connected.'),
@@ -3816,7 +3830,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/ga/social-referral-history',
     summary: 'Get social media referral sessions per day grouped by source',
     tags: ['ga4'],
-    parameters: [nameParameter, analyticsWindowParameter],
+    parameters: [nameParameter, analyticsWindowParameter, analyticsStartDateParameter, analyticsEndDateParameter],
     responses: {
       200: jsonArrayResponse('Social referral history returned.', 'GA4SocialReferralHistoryEntry'),
       400: errorResponse('GA4 is not connected.'),
@@ -3854,7 +3868,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/ga/session-history',
     summary: 'Get total sessions per day for the project',
     tags: ['ga4'],
-    parameters: [nameParameter, analyticsWindowParameter],
+    parameters: [nameParameter, analyticsWindowParameter, analyticsStartDateParameter, analyticsEndDateParameter],
     responses: {
       200: jsonArrayResponse('Session history returned.', 'GA4SessionHistoryEntry'),
       400: errorResponse('GA4 is not connected.'),

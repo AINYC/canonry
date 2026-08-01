@@ -308,10 +308,17 @@ async function submitGscSitemapsFromMcp(
   return aggregate
 }
 
+// `window` is rolling from now and cannot name a calendar month, so every
+// date-scoped GA read also takes explicit YYYY-MM-DD bounds. Explicit dates win
+// over `window` server-side.
 const gaWindowInputSchema = z.object({
   project: projectNameSchema,
   window: analyticsWindowSchema.optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
 })
+
+const GA_RANGE_PARAMS = ['window', 'startDate', 'endDate'] as const
 
 const gaTrafficInputSchema = gaWindowInputSchema.extend({
   limit: z.number().int().positive().max(500).optional(),
@@ -1386,7 +1393,7 @@ export const canonryMcpTools = [
     inputSchema: gaTrafficInputSchema,
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/ga/traffic'],
-    handler: (client, input) => client.gaTraffic(input.project, compactStringParams(input, ['limit', 'window'])),
+    handler: (client, input) => client.gaTraffic(input.project, compactStringParams(input, ['limit', ...GA_RANGE_PARAMS])),
   }),
   defineTool({
     name: 'canonry_ga_coverage',
@@ -1408,7 +1415,7 @@ export const canonryMcpTools = [
     inputSchema: gaWindowInputSchema,
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/ga/ai-referral-history'],
-    handler: (client, input) => client.gaAiReferralHistory(input.project, compactStringParams(input, ['window'])),
+    handler: (client, input) => client.gaAiReferralHistory(input.project, compactStringParams(input, GA_RANGE_PARAMS)),
   }),
   defineTool({
     name: 'canonry_ga_ai_referral_daily',
@@ -1419,7 +1426,7 @@ export const canonryMcpTools = [
     inputSchema: gaWindowInputSchema,
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/ga/ai-referral-daily'],
-    handler: (client, input) => client.gaAiReferralDaily(input.project, compactStringParams(input, ['window'])),
+    handler: (client, input) => client.gaAiReferralDaily(input.project, compactStringParams(input, GA_RANGE_PARAMS)),
   }),
   defineTool({
     name: 'canonry_ga_social_referral_history',
@@ -1430,7 +1437,7 @@ export const canonryMcpTools = [
     inputSchema: gaWindowInputSchema,
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/ga/social-referral-history'],
-    handler: (client, input) => client.gaSocialReferralHistory(input.project, compactStringParams(input, ['window'])),
+    handler: (client, input) => client.gaSocialReferralHistory(input.project, compactStringParams(input, GA_RANGE_PARAMS)),
   }),
   defineTool({
     name: 'canonry_ga_social_referral_trend',
@@ -1463,7 +1470,7 @@ export const canonryMcpTools = [
     inputSchema: gaWindowInputSchema,
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/ga/session-history'],
-    handler: (client, input) => client.gaSessionHistory(input.project, compactStringParams(input, ['window'])),
+    handler: (client, input) => client.gaSessionHistory(input.project, compactStringParams(input, GA_RANGE_PARAMS)),
   }),
   // ----- Google Business Profile (Phase 1: auth + discovery) -----
   defineTool({
