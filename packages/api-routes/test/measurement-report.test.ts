@@ -10,60 +10,60 @@ import {
 
 const targets: MeasurementTargetInput[] = [
   {
-    id: 'raven',
-    label: 'Cortland at Raven',
-    aliases: ['Raven'],
-    urls: [{ id: 'raven-exact', mode: 'exact', host: 'cortland.com', path: '/apartments/cortland-at-raven' }],
+    id: 'central',
+    label: 'Example Living Central',
+    aliases: ['Central'],
+    urls: [{ id: 'central-exact', mode: 'exact', host: 'example.test', path: '/apartments/example-living-central' }],
   },
   {
-    id: 'rosslyn',
-    label: 'Cortland Rosslyn',
-    aliases: ['Rosslyn'],
-    urls: [{ id: 'rosslyn-prefix', mode: 'prefix', host: 'cortland.com', path: '/apartments/cortland-rosslyn' }],
+    id: 'north',
+    label: 'Example Living North',
+    aliases: ['North'],
+    urls: [{ id: 'north-prefix', mode: 'prefix', host: 'example.test', path: '/apartments/example-living-north' }],
   },
   {
-    id: 'west',
-    label: 'Cortland at West Village',
-    aliases: ['West Village', 'Cortland at West Village'],
+    id: 'harbor',
+    label: 'Example Living Harbor',
+    aliases: ['Harbor', 'Example Living Harbor'],
     urls: [
-      { id: 'west-primary', mode: 'prefix', host: 'cortland.com', path: '/apartments/cortland-at-west-village' },
-      { id: 'west-alias', mode: 'prefix', host: 'apartments.cortland.com', path: '/cortland-at-west-village' },
+      { id: 'harbor-primary', mode: 'prefix', host: 'example.test', path: '/apartments/example-living-harbor' },
+      { id: 'harbor-alias', mode: 'prefix', host: 'homes.example.test', path: '/example-living-harbor' },
     ],
   },
   {
     id: 'ambiguous-a',
     label: 'Ambiguous A',
     aliases: ['Ambiguous A'],
-    urls: [{ id: 'ambiguous-a-prefix', mode: 'prefix', host: 'cortland.com', path: '/shared' }],
+    urls: [{ id: 'ambiguous-a-prefix', mode: 'prefix', host: 'example.test', path: '/shared' }],
   },
   {
     id: 'ambiguous-b',
     label: 'Ambiguous B',
     aliases: ['Ambiguous B'],
-    urls: [{ id: 'ambiguous-b-prefix', mode: 'prefix', host: 'cortland.com', path: '/shared' }],
+    urls: [{ id: 'ambiguous-b-prefix', mode: 'prefix', host: 'example.test', path: '/shared' }],
   },
 ]
 
 function baseInput(overrides: Partial<MeasurementReportInput> = {}): MeasurementReportInput {
   return {
     revision: 7,
-    ownedHosts: ['cortland.com'],
-    projectAliases: ['Cortland'],
+    ownedHosts: ['example.test'],
+    projectAliases: ['Example Living'],
     targets,
     groups: [
       {
-        id: 'arlington',
-        label: 'Arlington',
-        targetIds: ['rosslyn'],
-        competitors: [{ id: 'greystar', label: 'Greystar', aliases: ['Greystar'] }],
+        id: 'north-district',
+        label: 'North District',
+        targetIds: ['north'],
+        competitors: [{ id: 'rival-one', label: 'Rival One', aliases: ['Rival One'] }],
       },
       {
-        id: 'dallas',
-        label: 'Dallas',
-        targetIds: ['raven', 'west'],
+        id: 'harbor-city',
+        label: 'Harbor City',
+        targetIds: ['central', 'harbor'],
         competitors: [
-          { id: 'camden', label: 'Camden', aliases: ['Camden'] },
-          { id: 'greystar', label: 'Greystar', aliases: ['Greystar'] },
+          { id: 'rival-two', label: 'Rival Two', aliases: ['Rival Two'] },
+          { id: 'rival-one', label: 'Rival One', aliases: ['Rival One'] },
         ],
       },
     ],
@@ -73,20 +73,20 @@ function baseInput(overrides: Partial<MeasurementReportInput> = {}): Measurement
         executionId: 'exec-shared',
         queryText: 'best apartments near downtown',
         provider: 'openai',
-        location: 'Dallas, TX',
+        location: 'Harbor City, EX',
       },
       {
         id: 'slot-gemini',
         executionId: 'exec-shared',
         queryText: 'best apartments near downtown',
         provider: 'gemini',
-        location: 'Dallas, TX',
+        location: 'Harbor City, EX',
       },
     ],
     usageEdges: [
-      { id: 'edge-arlington', type: 'group', executionId: 'exec-shared', groupId: 'arlington', targetIds: ['rosslyn'] },
-      { id: 'edge-dallas', type: 'group', executionId: 'exec-shared', groupId: 'dallas', targetIds: ['raven', 'west'] },
-      { id: 'edge-west', type: 'target', executionId: 'exec-shared', targetId: 'west', targetIds: ['west'] },
+      { id: 'edge-north-district', type: 'group', executionId: 'exec-shared', groupId: 'north-district', targetIds: ['north'] },
+      { id: 'edge-harbor-city', type: 'group', executionId: 'exec-shared', groupId: 'harbor-city', targetIds: ['central', 'harbor'] },
+      { id: 'edge-harbor', type: 'target', executionId: 'exec-shared', targetId: 'harbor', targetIds: ['harbor'] },
     ],
     observations: [
       {
@@ -94,9 +94,9 @@ function baseInput(overrides: Partial<MeasurementReportInput> = {}): Measurement
         executionId: 'exec-shared',
         queryText: 'best apartments near downtown',
         provider: 'openai',
-        location: 'Dallas, TX',
-        answerText: 'Cortland at West Village and Greystar are common options.',
-        citedUrls: ['https://cortland.com/apartments/cortland-at-west-village/floorplans'],
+        location: 'Harbor City, EX',
+        answerText: 'Example Living Harbor and Rival One are common options.',
+        citedUrls: ['https://example.test/apartments/example-living-harbor/floorplans'],
         citedUrlsComplete: true,
         historicalCitedUrls: ['https://external.example/ignored-because-direct-wins'],
         historicalCitedUrlsComplete: true,
@@ -106,11 +106,11 @@ function baseInput(overrides: Partial<MeasurementReportInput> = {}): Measurement
         executionId: null,
         queryText: 'best apartments near downtown',
         provider: 'gemini',
-        location: '  dallas,   tx ',
-        answerText: 'Greystar and Camden are also discussed.',
+        location: '  harbor city,   ex ',
+        answerText: 'Rival One and Rival Two are also discussed.',
         citedUrls: null,
         citedUrlsComplete: false,
-        historicalCitedUrls: ['https://cortland.com/apartments/cortland-rosslyn'],
+        historicalCitedUrls: ['https://example.test/apartments/example-living-north'],
         historicalCitedUrlsComplete: true,
       },
     ],
@@ -120,38 +120,37 @@ function baseInput(overrides: Partial<MeasurementReportInput> = {}): Measurement
 
 describe('classifyCitedUrl', () => {
   it('resolves all six classes against every target before applying the usage edge', () => {
-    const edge = { id: 'west-edge', type: 'target' as const, executionId: 'exec', targetId: 'west', targetIds: ['west'] }
+    const edge = { id: 'harbor-edge', type: 'target' as const, executionId: 'exec', targetId: 'harbor', targetIds: ['harbor'] }
     const cases = [
-      ['https://cortland.com/apartments/cortland-at-west-village/floorplans', 'assigned-target'],
-      ['https://www.cortland.com/apartments/cortland-at-west-village/floorplans', 'assigned-target'],
-      ['https://cortland.com/apartments/cortland-rosslyn', 'sibling-target'],
-      ['https://cortland.com/blog/summer', 'owned-unmapped'],
+      ['https://example.test/apartments/example-living-harbor/floorplans', 'assigned-target'],
+      ['https://www.example.test/apartments/example-living-harbor/floorplans', 'assigned-target'],
+      ['https://example.test/apartments/example-living-north', 'sibling-target'],
+      ['https://example.test/blog/summer', 'owned-unmapped'],
       ['https://external.example/article', 'external'],
-      ['https://cortland.com/shared/article', 'ambiguous'],
+      ['https://example.test/shared/article', 'ambiguous'],
       ['not a URL', 'invalid'],
     ] as const
 
-    expect(cases.map(([url]) => classifyCitedUrl(url, targets, ['cortland.com'], edge).classification))
+    expect(cases.map(([url]) => classifyCitedUrl(url, targets, ['example.test'], edge).classification))
       .toEqual(cases.map(([, classification]) => classification))
   })
 
   it('classifies the same owned route relative to each usage edge', () => {
-    const url = 'https://cortland.com/apartments/cortland-rosslyn'
-    const assigned = classifyCitedUrl(url, targets, ['cortland.com'], {
-      id: 'rosslyn-edge', type: 'target', executionId: 'exec', targetId: 'rosslyn', targetIds: ['rosslyn'],
+    const url = 'https://example.test/apartments/example-living-north'
+    const assigned = classifyCitedUrl(url, targets, ['example.test'], {
+      id: 'north-edge', type: 'target', executionId: 'exec', targetId: 'north', targetIds: ['north'],
     })
-    const sibling = classifyCitedUrl(url, targets, ['cortland.com'], {
-      id: 'west-edge', type: 'target', executionId: 'exec', targetId: 'west', targetIds: ['west'],
+    const sibling = classifyCitedUrl(url, targets, ['example.test'], {
+      id: 'harbor-edge', type: 'target', executionId: 'exec', targetId: 'harbor', targetIds: ['harbor'],
     })
 
-    expect(assigned).toMatchObject({ classification: 'assigned-target', matchedTargetIds: ['rosslyn'] })
-    expect(sibling).toMatchObject({ classification: 'sibling-target', matchedTargetIds: ['rosslyn'] })
+    expect(assigned).toMatchObject({ classification: 'assigned-target', matchedTargetIds: ['north'] })
+    expect(sibling).toMatchObject({ classification: 'sibling-target', matchedTargetIds: ['north'] })
   })
 })
-
 describe('legacy execution bridging', () => {
   it('normalizes location and bridges only a unique query/provider/location slot', () => {
-    expect(normalizeMeasurementLocation('  Dallas,   TX ')).toBe('dallas, tx')
+    expect(normalizeMeasurementLocation('  Harbor City,   EX ')).toBe('harbor city, ex')
     const report = buildMeasurementReport(baseInput())
 
     expect(report.diagnostics.bridgedObservationIds).toEqual(['observation-gemini'])
@@ -165,17 +164,17 @@ describe('legacy execution bridging', () => {
 
   it('withholds duplicate and multiply-matched legacy observations', () => {
     const duplicateSlot = {
-      id: 'slot-gemini-duplicate', executionId: 'exec-duplicate', queryText: 'best apartments near downtown', provider: 'gemini', location: 'Dallas, TX',
+      id: 'slot-gemini-duplicate', executionId: 'exec-duplicate', queryText: 'best apartments near downtown', provider: 'gemini', location: 'Harbor City, EX',
     }
     const ambiguous = buildMeasurementReport(baseInput({
       expectedSlots: [...baseInput().expectedSlots, duplicateSlot],
       usageEdges: [
         ...baseInput().usageEdges,
-        { id: 'edge-duplicate', type: 'group', executionId: 'exec-duplicate', groupId: 'dallas', targetIds: ['west'] },
+        { id: 'edge-duplicate', type: 'group', executionId: 'exec-duplicate', groupId: 'harbor-city', targetIds: ['harbor'] },
       ],
     }))
     expect(ambiguous.diagnostics.ambiguousObservationIds).toEqual(['observation-gemini'])
-    expect(ambiguous.groups.find(group => group.id === 'dallas')?.completeness).toMatchObject({ executed: 1, expected: 3, complete: false })
+    expect(ambiguous.groups.find(group => group.id === 'harbor-city')?.completeness).toMatchObject({ executed: 1, expected: 3, complete: false })
 
     const duplicateObservation = {
       ...baseInput().observations[1]!,
@@ -195,28 +194,28 @@ describe('legacy execution bridging', () => {
 describe('buildMeasurementReport', () => {
   it('keeps group and target populations separate while preserving cross-wired drill-down evidence', () => {
     const report = buildMeasurementReport(baseInput())
-    const arlington = report.groups.find(group => group.id === 'arlington')!
-    const dallas = report.groups.find(group => group.id === 'dallas')!
-    const west = report.targets.find(target => target.id === 'west')!
+    const northDistrict = report.groups.find(group => group.id === 'north-district')!
+    const harborCity = report.groups.find(group => group.id === 'harbor-city')!
+    const harbor = report.targets.find(target => target.id === 'harbor')!
 
-    expect(dallas.completeness).toMatchObject({ executed: 2, expected: 2, complete: true, sourceComplete: true })
-    expect(dallas.answerCoverage).toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
-    expect(dallas.targetCoverage).toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
-    expect(arlington.answerCoverage).toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
-    expect(west.citationCoverage).toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
+    expect(harborCity.completeness).toMatchObject({ executed: 2, expected: 2, complete: true, sourceComplete: true })
+    expect(harborCity.answerCoverage).toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
+    expect(harborCity.targetCoverage).toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
+    expect(northDistrict.answerCoverage).toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
+    expect(harbor.citationCoverage).toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
 
     expect(report.evidence).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        observationId: 'observation-gemini', usageEdgeId: 'edge-arlington',
-        classification: 'assigned-target', matchedTargetIds: ['rosslyn'],
+        observationId: 'observation-gemini', usageEdgeId: 'edge-north-district',
+        classification: 'assigned-target', matchedTargetIds: ['north'],
       }),
       expect.objectContaining({
-        observationId: 'observation-gemini', usageEdgeId: 'edge-dallas',
-        classification: 'sibling-target', matchedTargetIds: ['rosslyn'],
+        observationId: 'observation-gemini', usageEdgeId: 'edge-harbor-city',
+        classification: 'sibling-target', matchedTargetIds: ['north'],
       }),
     ]))
 
-    expect(dallas.providers).toEqual([
+    expect(harborCity.providers).toEqual([
       expect.objectContaining({ provider: 'gemini', answerCoverage: { numerator: 0, denominator: 1, rate: 0 } }),
       expect.objectContaining({ provider: 'openai', answerCoverage: { numerator: 1, denominator: 1, rate: 1 } }),
     ])
@@ -224,7 +223,7 @@ describe('buildMeasurementReport', () => {
 
   it('withholds URL rates for missing slots or incomplete source evidence', () => {
     const missing = buildMeasurementReport(baseInput({ observations: [baseInput().observations[0]!] }))
-    expect(missing.groups.find(group => group.id === 'dallas')).toMatchObject({
+    expect(missing.groups.find(group => group.id === 'harbor-city')).toMatchObject({
       completeness: { executed: 1, expected: 2, complete: false },
       answerCoverage: { numerator: 1, denominator: 2, rate: null, reason: 'incomplete' },
     })
@@ -234,7 +233,7 @@ describe('buildMeasurementReport', () => {
         ? { ...observation, historicalCitedUrlsComplete: false }
         : observation),
     }))
-    expect(evidenceIncomplete.groups.find(group => group.id === 'dallas')).toMatchObject({
+    expect(evidenceIncomplete.groups.find(group => group.id === 'harbor-city')).toMatchObject({
       completeness: { executed: 2, expected: 2, complete: true, sourceComplete: false },
       answerCoverage: { numerator: 1, denominator: 2, rate: null, reason: 'evidence-incomplete' },
     })
@@ -243,15 +242,15 @@ describe('buildMeasurementReport', () => {
 
   it('uses longest token-aware aliases, supports multiple mentions, and returns N/A for alias-less targets', () => {
     const mentionTargets: MeasurementTargetInput[] = [
-      { id: 'long', label: 'Long', aliases: ['Cortland at West Village'], urls: [] },
-      { id: 'short', label: 'Short', aliases: ['West Village'], urls: [] },
-      { id: 'rosslyn', label: 'Rosslyn', aliases: ['Rosslyn'], urls: [] },
+      { id: 'long', label: 'Long', aliases: ['Example Living Harbor'], urls: [] },
+      { id: 'short', label: 'Short', aliases: ['Harbor'], urls: [] },
+      { id: 'north', label: 'North', aliases: ['North'], urls: [] },
       { id: 'aliasless', label: 'Aliasless', aliases: [], urls: [] },
     ]
     const report = buildMeasurementReport({
       revision: 1,
-      ownedHosts: ['cortland.com'],
-      projectAliases: ['Cortland'],
+      ownedHosts: ['example.test'],
+      projectAliases: ['Example Living'],
       targets: mentionTargets,
       groups: [],
       expectedSlots: [{ id: 'slot', executionId: 'exec', queryText: 'query', provider: 'openai', location: null }],
@@ -260,13 +259,13 @@ describe('buildMeasurementReport', () => {
       })),
       observations: [{
         id: 'observation', executionId: 'exec', queryText: 'query', provider: 'openai', location: null,
-        answerText: 'Cortland at West Village is compared with Rosslyn.', citedUrls: [], citedUrlsComplete: true,
+        answerText: 'Example Living Harbor is compared with North.', citedUrls: [], citedUrlsComplete: true,
       }],
     })
 
     expect(report.targets.find(target => target.id === 'long')?.mentionCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 })
     expect(report.targets.find(target => target.id === 'short')?.mentionCoverage).toEqual({ numerator: 0, denominator: 1, rate: 0 })
-    expect(report.targets.find(target => target.id === 'rosslyn')?.mentionCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 })
+    expect(report.targets.find(target => target.id === 'north')?.mentionCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 })
     expect(report.targets.find(target => target.id === 'aliasless')?.mentionCoverage).toEqual({
       numerator: 0, denominator: 1, rate: null, reason: 'aliasless',
     })
@@ -274,16 +273,16 @@ describe('buildMeasurementReport', () => {
 
   it('computes revision-frozen competitor SoV with provider breakdown', () => {
     const report = buildMeasurementReport(baseInput())
-    const dallas = report.groups.find(group => group.id === 'dallas')!
+    const harborCity = report.groups.find(group => group.id === 'harbor-city')!
 
-    expect(dallas.sov).toMatchObject({
+    expect(harborCity.sov).toMatchObject({
       projectMentions: 1,
       competitorMentions: 3,
       denominator: 4,
       rate: 0.25,
       competitors: [
-        { id: 'camden', label: 'Camden', mentions: 1 },
-        { id: 'greystar', label: 'Greystar', mentions: 2 },
+        { id: 'rival-one', label: 'Rival One', mentions: 2 },
+        { id: 'rival-two', label: 'Rival Two', mentions: 1 },
       ],
       providers: [
         { provider: 'gemini', projectMentions: 0, competitorMentions: 2, denominator: 2, rate: 0 },

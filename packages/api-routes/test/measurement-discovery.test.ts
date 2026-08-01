@@ -5,47 +5,47 @@ import {
   type MeasurementDiscoveryInput,
 } from '../src/measurement-discovery.js'
 
-const cortlandRules: MeasurementDiscoveryInput['rules'] = {
-  primary: { host: 'cortland.com', pathTemplate: '/apartments/{slug}' },
-  aliases: [{ host: 'apartments.cortland.com', pathTemplate: '/{slug}' }],
+const exampleLivingRules: MeasurementDiscoveryInput['rules'] = {
+  primary: { host: 'example.test', pathTemplate: '/apartments/{slug}' },
+  aliases: [{ host: 'homes.example.test', pathTemplate: '/{slug}' }],
   excludedSlugSuffixes: ['-metro'],
 }
 
 function classify(urls: readonly string[], overrides: Partial<MeasurementDiscoveryInput> = {}) {
   return classifyMeasurementSitemapUrls({
-    ownedHosts: ['cortland.com'],
-    rules: cortlandRules,
+    ownedHosts: ['example.test'],
+    rules: exampleLivingRules,
     urls,
     maxUrls: 500,
     ...overrides,
   })
 }
 
-describe('classifyMeasurementSitemapUrls — Cortland property fixtures', () => {
+describe('classifyMeasurementSitemapUrls — synthetic property fixtures', () => {
   it('groups an exact primary slug with its exact-slug apartment-host coverage only', () => {
     const result = classify([
-      'https://apartments.cortland.com/cortland-m-line/',
-      'https://cortland.com/apartments/cortland-m-line/',
-      'https://apartments.cortland.com/cortland-m-line/floorplans/',
-      'https://apartments.cortland.com/cortland-park/',
-      'https://cortland.com/apartments/cortland-north/',
+      'https://homes.example.test/example-living-harbor/',
+      'https://example.test/apartments/example-living-harbor/',
+      'https://homes.example.test/example-living-harbor/floorplans/',
+      'https://homes.example.test/example-living-park/',
+      'https://example.test/apartments/example-living-north/',
     ])
 
     expect(result.candidates).toEqual([
       {
-        stableKey: 'target-cortland-m-line',
-        slug: 'cortland-m-line',
-        label: 'Cortland M Line',
-        primaryUrl: 'https://cortland.com/apartments/cortland-m-line',
-        aliasCoverageUrls: ['https://apartments.cortland.com/cortland-m-line'],
+        stableKey: 'target-example-living-harbor',
+        slug: 'example-living-harbor',
+        label: 'Example Living Harbor',
+        primaryUrl: 'https://example.test/apartments/example-living-harbor',
+        aliasCoverageUrls: ['https://homes.example.test/example-living-harbor'],
         status: 'proposed',
         reasonCodes: ['primary-match', 'alias-coverage'],
       },
       {
-        stableKey: 'target-cortland-north',
-        slug: 'cortland-north',
-        label: 'Cortland North',
-        primaryUrl: 'https://cortland.com/apartments/cortland-north',
+        stableKey: 'target-example-living-north',
+        slug: 'example-living-north',
+        label: 'Example Living North',
+        primaryUrl: 'https://example.test/apartments/example-living-north',
         aliasCoverageUrls: [],
         status: 'proposed',
         reasonCodes: ['primary-match'],
@@ -53,13 +53,13 @@ describe('classifyMeasurementSitemapUrls — Cortland property fixtures', () => 
     ])
     expect(result.unmatched).toEqual([
       {
-        url: 'https://apartments.cortland.com/cortland-m-line/floorplans',
-        canonicalUrl: 'https://apartments.cortland.com/cortland-m-line/floorplans',
+        url: 'https://homes.example.test/example-living-harbor/floorplans',
+        canonicalUrl: 'https://homes.example.test/example-living-harbor/floorplans',
         reasonCodes: ['unmatched-path'],
       },
       {
-        url: 'https://apartments.cortland.com/cortland-park',
-        canonicalUrl: 'https://apartments.cortland.com/cortland-park',
+        url: 'https://homes.example.test/example-living-park',
+        canonicalUrl: 'https://homes.example.test/example-living-park',
         reasonCodes: ['alias-without-primary'],
       },
     ])
@@ -67,8 +67,8 @@ describe('classifyMeasurementSitemapUrls — Cortland property fixtures', () => 
 
   it('emits contract-valid candidates that compile directly into a Target plan', () => {
     const discovered = classify([
-      'https://cortland.com/apartments/cortland-m-line/',
-      'https://apartments.cortland.com/cortland-m-line/',
+      'https://example.test/apartments/example-living-harbor/',
+      'https://homes.example.test/example-living-harbor/',
     ])
     const compiled = compileMeasurementPlan({
       schemaVersion: 1,
@@ -83,37 +83,37 @@ describe('classifyMeasurementSitemapUrls — Cortland property fixtures', () => 
         aliases: [],
       })),
     }, {
-      canonicalDomain: 'cortland.com',
+      canonicalDomain: 'example.test',
       ownedDomains: [],
       trackedQueries: [],
       locations: [],
     })
 
-    expect(compiled.targets.map((target) => target.stableKey)).toEqual(['target-cortland-m-line'])
+    expect(compiled.targets.map((target) => target.stableKey)).toEqual(['target-example-living-harbor'])
   })
 
   it('folds www consistently with Target host normalization', () => {
     const result = classify([
-      'https://www.cortland.com/apartments/cortland-m-line/',
-      'https://www.apartments.cortland.com/cortland-m-line/',
+      'https://www.example.test/apartments/example-living-harbor/',
+      'https://www.homes.example.test/example-living-harbor/',
     ])
 
     expect(result.candidates).toEqual([
       expect.objectContaining({
-        stableKey: 'target-cortland-m-line',
-        primaryUrl: 'https://cortland.com/apartments/cortland-m-line',
-        aliasCoverageUrls: ['https://apartments.cortland.com/cortland-m-line'],
+        stableKey: 'target-example-living-harbor',
+        primaryUrl: 'https://example.test/apartments/example-living-harbor',
+        aliasCoverageUrls: ['https://homes.example.test/example-living-harbor'],
       }),
     ])
   })
 
   it('rejects ported sitemap URLs instead of emitting exact matchers that cannot compile', () => {
-    const result = classify(['https://cortland.com:8443/apartments/cortland-m-line/'])
+    const result = classify(['https://example.test:8443/apartments/example-living-harbor/'])
 
     expect(result.candidates).toEqual([])
     expect(result.invalid).toEqual([
       expect.objectContaining({
-        url: 'https://cortland.com:8443/apartments/cortland-m-line/',
+        url: 'https://example.test:8443/apartments/example-living-harbor/',
         canonicalUrl: null,
         reasonCodes: ['invalid-url'],
       }),
@@ -121,11 +121,11 @@ describe('classifyMeasurementSitemapUrls — Cortland property fixtures', () => 
   })
 
   it.each([
-    'cortland%20m-line',
-    'cortland-%E2%98%83',
-    `cortland-${'x'.repeat(121)}`,
+    'example-living%20harbor',
+    'example-living-%E2%98%83',
+    `example-living-${'x'.repeat(121)}`,
   ])('surfaces an unsupported slug for review instead of emitting an invalid stable key: %s', (slug) => {
-    const result = classify([`https://cortland.com/apartments/${slug}/`])
+    const result = classify([`https://example.test/apartments/${slug}/`])
 
     expect(result.candidates).toEqual([])
     expect(result.unmatched).toEqual([
@@ -135,44 +135,43 @@ describe('classifyMeasurementSitemapUrls — Cortland property fixtures', () => 
 
   it('never creates targets from metro roots, shared pages, unowned lookalikes, or malformed URLs', () => {
     const result = classify([
-      'https://cortland.com/apartments/austin-metro/',
-      'https://cortland.com/apartments/',
-      'https://cortland.com/about/',
-      'https://evilcortland.com/apartments/cortland-m-line/',
+      'https://example.test/apartments/sample-city-metro/',
+      'https://example.test/apartments/',
+      'https://example.test/about/',
+      'https://evil-example.test/apartments/example-living-harbor/',
       'not a url',
     ])
 
     expect(result.candidates).toEqual([])
     expect(result.shared).toEqual([
       {
-        url: 'https://cortland.com/apartments/austin-metro',
-        canonicalUrl: 'https://cortland.com/apartments/austin-metro',
+        url: 'https://example.test/apartments/sample-city-metro',
+        canonicalUrl: 'https://example.test/apartments/sample-city-metro',
         reasonCodes: ['excluded-slug', 'shared-path'],
       },
     ])
     expect(result.unmatched).toEqual([
       {
-        url: 'https://cortland.com/about',
-        canonicalUrl: 'https://cortland.com/about',
+        url: 'https://example.test/about',
+        canonicalUrl: 'https://example.test/about',
         reasonCodes: ['unmatched-path'],
       },
       {
-        url: 'https://cortland.com/apartments',
-        canonicalUrl: 'https://cortland.com/apartments',
+        url: 'https://example.test/apartments',
+        canonicalUrl: 'https://example.test/apartments',
         reasonCodes: ['unmatched-path'],
       },
     ])
     expect(result.invalid).toEqual([
       {
-        url: 'https://evilcortland.com/apartments/cortland-m-line',
-        canonicalUrl: 'https://evilcortland.com/apartments/cortland-m-line',
+        url: 'https://evil-example.test/apartments/example-living-harbor',
+        canonicalUrl: 'https://evil-example.test/apartments/example-living-harbor',
         reasonCodes: ['unowned-host'],
       },
       { url: 'not a url', canonicalUrl: null, reasonCodes: ['invalid-url'] },
     ])
   })
 })
-
 describe('classifyMeasurementSitemapUrls — generic declarative rules', () => {
   it('accepts only a single whole `{slug}` path segment, never caller-provided matcher syntax', () => {
     expect(() =>
@@ -235,10 +234,10 @@ describe('classifyMeasurementSitemapUrls — generic declarative rules', () => {
   it('deduplicates canonical URL variants and caps the stable sorted input before classification', () => {
     const result = classify(
       [
-        'https://cortland.com/apartments/zeta/?utm_source=sitemap#top',
-        'https://cortland.com/apartments/alpha/',
-        'https://cortland.com/apartments/zeta',
-        'https://cortland.com/apartments/beta/',
+        'https://example.test/apartments/zeta/?utm_source=sitemap#top',
+        'https://example.test/apartments/alpha/',
+        'https://example.test/apartments/zeta',
+        'https://example.test/apartments/beta/',
       ],
       { maxUrls: 3 },
     )
@@ -246,9 +245,9 @@ describe('classifyMeasurementSitemapUrls — generic declarative rules', () => {
     expect(result.candidates.map((candidate) => candidate.slug)).toEqual(['alpha', 'beta', 'zeta'])
     expect(result.duplicates).toEqual([
       {
-        url: 'https://cortland.com/apartments/zeta/?utm_source=sitemap#top',
-        canonicalUrl: 'https://cortland.com/apartments/zeta',
-        duplicateOf: 'https://cortland.com/apartments/zeta',
+        url: 'https://example.test/apartments/zeta/?utm_source=sitemap#top',
+        canonicalUrl: 'https://example.test/apartments/zeta',
+        duplicateOf: 'https://example.test/apartments/zeta',
         reasonCodes: ['duplicate-url'],
       },
     ])
@@ -258,9 +257,9 @@ describe('classifyMeasurementSitemapUrls — generic declarative rules', () => {
   it('reports deterministically skipped URLs when a bounded run reaches its cap', () => {
     const result = classify(
       [
-        'https://cortland.com/apartments/charlie/',
-        'https://cortland.com/apartments/alpha/',
-        'https://cortland.com/apartments/bravo/',
+        'https://example.test/apartments/charlie/',
+        'https://example.test/apartments/alpha/',
+        'https://example.test/apartments/bravo/',
       ],
       { maxUrls: 2 },
     )
@@ -268,8 +267,8 @@ describe('classifyMeasurementSitemapUrls — generic declarative rules', () => {
     expect(result.candidates.map((candidate) => candidate.slug)).toEqual(['alpha', 'bravo'])
     expect(result.truncated).toEqual([
       {
-        url: 'https://cortland.com/apartments/charlie',
-        canonicalUrl: 'https://cortland.com/apartments/charlie',
+        url: 'https://example.test/apartments/charlie',
+        canonicalUrl: 'https://example.test/apartments/charlie',
         reasonCodes: ['url-cap-reached'],
       },
     ])
@@ -277,12 +276,12 @@ describe('classifyMeasurementSitemapUrls — generic declarative rules', () => {
 })
 
 describe('classifyMeasurementSitemapUrls — scale and canonical order', () => {
-  it('turns 213 Cortland roots into 194 targets: 19 metro exclusions and 190 exact aliases', () => {
+  it('turns 213 synthetic roots into 194 targets: 19 metro exclusions and 190 exact aliases', () => {
     const aliasMisses = [
-      'cortland-at-colliers-yard',
-      'cortland-broad-st',
-      'cortland-cassiobury',
-      'cortland-reunion-kissimmee',
+      'example-living-sample-one',
+      'example-living-sample-two',
+      'example-living-sample-three',
+      'example-living-sample-four',
     ]
     const propertySlugs = [
       ...aliasMisses,
@@ -290,10 +289,10 @@ describe('classifyMeasurementSitemapUrls — scale and canonical order', () => {
     ]
     const metroSlugs = Array.from({ length: 19 }, (_, index) => `market-${String(index + 1).padStart(2, '0')}-metro`)
     const urls = [
-      ...[...propertySlugs, ...metroSlugs].map((slug) => `https://cortland.com/apartments/${slug}/`),
+      ...[...propertySlugs, ...metroSlugs].map((slug) => `https://example.test/apartments/${slug}/`),
       ...propertySlugs
         .filter((slug) => !aliasMisses.includes(slug))
-        .map((slug) => `https://apartments.cortland.com/${slug}/`),
+        .map((slug) => `https://homes.example.test/${slug}/`),
     ]
 
     const forward = classify(urls)
