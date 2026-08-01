@@ -18,6 +18,7 @@ import {
   hostMatchesAnyDomain,
   normalizeUrlPath,
   validationError,
+  deriveReturningUsers,
 } from '@ainyc/canonry-contracts'
 import type {
   GaMeasurementAnalysisDto,
@@ -136,10 +137,9 @@ function engagementPeriods(periods: Period[], rows: EngagementRow[]) {
     const splitDays = inPeriod.filter(row => row.newUsers !== null)
     const dailyTotalUsers = splitDays.reduce((sum, row) => sum + row.users, 0)
     const dailyNewUsers = splitDays.reduce((sum, row) => sum + row.newUsers!, 0)
-    // Floored for the same reason the client floors it: GA4 estimates the two
-    // counts independently and can report more new users than total users on a
-    // low-volume day, which is not a negative population.
-    const dailyReturningUsers = Math.max(0, dailyTotalUsers - dailyNewUsers)
+    // One shared formula with the GA4 client. Two copies of a subtraction plus
+    // a clamp drift the moment one side changes.
+    const dailyReturningUsers = deriveReturningUsers(dailyTotalUsers, dailyNewUsers) ?? 0
 
     return {
       ...period,

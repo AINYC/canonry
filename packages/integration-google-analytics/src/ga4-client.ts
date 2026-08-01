@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { AI_ENGINE_DOMAINS, classifyAiReferralTrafficClass, compactDateToIso, withRetry } from '@ainyc/canonry-contracts'
+import { AI_ENGINE_DOMAINS, classifyAiReferralTrafficClass, compactDateToIso, deriveReturningUsers, parseBoundedRate, withRetry } from '@ainyc/canonry-contracts'
 import {
   GA4_DATA_API_BASE,
   GA4_SCOPE,
@@ -847,9 +847,9 @@ export async function fetchDailyTotals(
       date: compactDateToIso(row.dimensionValues[0]?.value ?? ''),
       sessions: parseInt(row.metricValues[0]?.value ?? '0', 10) || 0,
       users,
-      engagementRate: parseOptionalMetric(row.metricValues[2]?.value),
+      engagementRate: parseBoundedRate(parseOptionalMetric(row.metricValues[2]?.value)),
       newUsers,
-      returningUsers: newUsers === null ? null : Math.max(0, users - newUsers),
+      returningUsers: deriveReturningUsers(users, newUsers),
     }
   }).filter((row) => row.date.length > 0)
 

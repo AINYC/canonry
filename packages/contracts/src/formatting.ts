@@ -417,3 +417,37 @@ export function compactDateToIso(value: string): string {
   if (value.length !== 8 || !/^\d{8}$/.test(value)) return value
   return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`
 }
+
+/**
+ * Derive returning users from GA4's `totalUsers` and `newUsers`.
+ *
+ * GA4 exposes no `returningUsers` metric. The two ways to get it are this
+ * subtraction, or adding the `newVsReturning` dimension (which multiplies the
+ * row count of the whole report and changes every existing aggregate). We take
+ * the subtraction, and it is EXACT at date-only grain because GA has already
+ * deduplicated both counts inside the day.
+ *
+ * The clamp is not cosmetic: `totalUsers` and `newUsers` are estimated
+ * independently, so a sparse day can report more new users than total users and
+ * a bare subtraction would emit a negative count.
+ *
+ * This lives here because it is derived in two places (the GA4 client's daily
+ * row and the measurement-analysis read) and two copies of one formula drift.
+ */
+export function deriveReturningUsers(totalUsers: number, newUsers: number | null): number | null {
+  if (newUsers === null) return null
+  return Math.max(0, totalUsers - newUsers)
+}
+
+/**
+ * Parse a GA4 rate metric that the contract bounds to 0..1.
+ *
+ * `parseOptionalMetric` accepts any finite number, so an out-of-range value
+ * from GA4 would pass the client and only fail at the Zod boundary, throwing
+ * instead of degrading. An out-of-range rate is not a usable measurement, so it
+ * is reported as unavailable rather than as a wrong number or an exception.
+ */
+export function parseBoundedRate(value: number | null): number | null {
+  if (value === null) return null
+  return value >= 0 && value <= 1 ? value : null
+}
