@@ -189,6 +189,7 @@ describe('Target measurement plan v1 compilation', () => {
   it('freezes query snapshots, unconditional baseline edges, and mention applicability', () => {
     const compiled = compile()
 
+    expect(compiled.projectCanonicalHost).toBe('northstar.example')
     expect(compiled.projectBrandNames).toEqual(['Northstar Living', 'northstar'])
     expect(compiled.querySnapshots).toEqual([
       { queryId: 'q-best', queryText: 'best apartments in northbridge' },
