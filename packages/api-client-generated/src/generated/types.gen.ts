@@ -1306,6 +1306,17 @@ export type BrandMetricsDto = {
         added: Array<string>;
         removed: Array<string>;
     }>;
+    executionIdentityChanges: Array<{
+        at: string;
+        identity: {
+            schemaVersion: 1;
+            providers: Array<string>;
+            models: {
+                [key: string]: string;
+            };
+            checksum: string;
+        };
+    }>;
     referenceBasketRevision: number | null;
     modelAttribution: {
         [key: string]: {
@@ -2744,6 +2755,23 @@ export type LatestProjectRunDto = {
             model?: string | null;
             servedModel?: string | null;
             location?: string | null;
+            requestedContext?: {
+                label: string;
+                city: string;
+                region: string;
+                country: string;
+                timezone?: string;
+            } | null;
+            supportedContext?: {
+                status: 'applied' | 'ignored' | 'browser-implicit' | 'unknown';
+                resolved?: {
+                    label: string;
+                    city: string;
+                    region: string;
+                    country: string;
+                    timezone?: string;
+                } | null;
+            } | null;
             createdAt: string;
         }>;
     } | null;
@@ -4384,6 +4412,23 @@ export type ProjectOverviewDto = {
                 model?: string | null;
                 servedModel?: string | null;
                 location?: string | null;
+                requestedContext?: {
+                    label: string;
+                    city: string;
+                    region: string;
+                    country: string;
+                    timezone?: string;
+                } | null;
+                supportedContext?: {
+                    status: 'applied' | 'ignored' | 'browser-implicit' | 'unknown';
+                    resolved?: {
+                        label: string;
+                        city: string;
+                        region: string;
+                        country: string;
+                        timezone?: string;
+                    } | null;
+                } | null;
                 createdAt: string;
             }>;
         } | null;
@@ -5302,6 +5347,23 @@ export type RunDetailDto = {
         model?: string | null;
         servedModel?: string | null;
         location?: string | null;
+        requestedContext?: {
+            label: string;
+            city: string;
+            region: string;
+            country: string;
+            timezone?: string;
+        } | null;
+        supportedContext?: {
+            status: 'applied' | 'ignored' | 'browser-implicit' | 'unknown';
+            resolved?: {
+                label: string;
+                city: string;
+                region: string;
+                country: string;
+                timezone?: string;
+            } | null;
+        } | null;
         createdAt: string;
     }>;
 };
@@ -5529,6 +5591,23 @@ export type SnapshotListResponse = {
         model?: string | null;
         servedModel?: string | null;
         location?: string | null;
+        requestedContext?: {
+            label: string;
+            city: string;
+            region: string;
+            country: string;
+            timezone?: string;
+        } | null;
+        supportedContext?: {
+            status: 'applied' | 'ignored' | 'browser-implicit' | 'unknown';
+            resolved?: {
+                label: string;
+                city: string;
+                region: string;
+                country: string;
+                timezone?: string;
+            } | null;
+        } | null;
         createdAt: string;
     }>;
     total: number;
