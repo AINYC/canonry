@@ -1044,6 +1044,14 @@ export type AuditLogEntry = {
     createdAt: string;
 };
 
+export type AuthSessionDto = {
+    authRequired: boolean;
+    user: {
+        name: string;
+        role: 'admin' | 'viewer';
+    } | null;
+};
+
 export type BacklinkHistoryEntry = {
     release: string;
     totalLinkingDomains: number;
@@ -5978,6 +5986,35 @@ export type TrafficSyncResponse = {
     windowEnd: string;
 };
 
+export type UserDto = {
+    id: string;
+    name: string;
+    role: 'admin' | 'viewer';
+    createdAt: string;
+    lastLoginAt: string | null;
+};
+
+export type UserListDto = {
+    users: Array<{
+        id: string;
+        name: string;
+        role: 'admin' | 'viewer';
+        createdAt: string;
+        lastLoginAt: string | null;
+    }>;
+};
+
+export type CreateUserRequest = {
+    name: string;
+    password: string;
+    role: 'admin' | 'viewer';
+};
+
+export type LoginRequest = {
+    name: string;
+    password: string;
+};
+
 export type VisibilityCompareDto = {
     project: string;
     from: {
@@ -8569,6 +8606,225 @@ export type PostApiV1KeysByIdRevokeResponses = {
 };
 
 export type PostApiV1KeysByIdRevokeResponse = PostApiV1KeysByIdRevokeResponses[keyof PostApiV1KeysByIdRevokeResponses];
+
+export type GetApiV1AuthSessionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/session';
+};
+
+export type GetApiV1AuthSessionResponses = {
+    /**
+     * Sign-in state returned.
+     */
+    200: AuthSessionDto;
+};
+
+export type GetApiV1AuthSessionResponse = GetApiV1AuthSessionResponses[keyof GetApiV1AuthSessionResponses];
+
+export type PostApiV1AuthLoginData = {
+    body: LoginRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/login';
+};
+
+export type PostApiV1AuthLoginErrors = {
+    /**
+     * Name or password missing.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Incorrect name or password.
+     */
+    401: ErrorEnvelope;
+    /**
+     * Too many failed attempts for this name.
+     */
+    429: ErrorEnvelope;
+};
+
+export type PostApiV1AuthLoginError = PostApiV1AuthLoginErrors[keyof PostApiV1AuthLoginErrors];
+
+export type PostApiV1AuthLoginResponses = {
+    /**
+     * Signed in. The session cookie is set on this response.
+     */
+    200: AuthSessionDto;
+};
+
+export type PostApiV1AuthLoginResponse = PostApiV1AuthLoginResponses[keyof PostApiV1AuthLoginResponses];
+
+export type PostApiV1AuthLogoutData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/logout';
+};
+
+export type PostApiV1AuthLogoutResponses = {
+    /**
+     * Signed out.
+     */
+    204: void;
+};
+
+export type PostApiV1AuthLogoutResponse = PostApiV1AuthLogoutResponses[keyof PostApiV1AuthLogoutResponses];
+
+export type DeleteApiV1AuthSessionsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/sessions';
+};
+
+export type DeleteApiV1AuthSessionsErrors = {
+    /**
+     * Not signed in.
+     */
+    401: ErrorEnvelope;
+    /**
+     * The request did not come from the dashboard.
+     */
+    403: ErrorEnvelope;
+};
+
+export type DeleteApiV1AuthSessionsError = DeleteApiV1AuthSessionsErrors[keyof DeleteApiV1AuthSessionsErrors];
+
+export type DeleteApiV1AuthSessionsResponses = {
+    /**
+     * Every session ended.
+     */
+    204: void;
+};
+
+export type DeleteApiV1AuthSessionsResponse = DeleteApiV1AuthSessionsResponses[keyof DeleteApiV1AuthSessionsResponses];
+
+export type GetApiV1AuthSessionsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/sessions';
+};
+
+export type GetApiV1AuthSessionsErrors = {
+    /**
+     * Not signed in.
+     */
+    401: ErrorEnvelope;
+};
+
+export type GetApiV1AuthSessionsError = GetApiV1AuthSessionsErrors[keyof GetApiV1AuthSessionsErrors];
+
+export type GetApiV1AuthSessionsResponses = {
+    /**
+     * Your sessions.
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetApiV1AuthSessionsResponse = GetApiV1AuthSessionsResponses[keyof GetApiV1AuthSessionsResponses];
+
+export type GetApiV1UsersData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/users';
+};
+
+export type GetApiV1UsersErrors = {
+    /**
+     * View-only accounts cannot list accounts.
+     */
+    403: ErrorEnvelope;
+};
+
+export type GetApiV1UsersError = GetApiV1UsersErrors[keyof GetApiV1UsersErrors];
+
+export type GetApiV1UsersResponses = {
+    /**
+     * Accounts returned.
+     */
+    200: UserListDto;
+};
+
+export type GetApiV1UsersResponse = GetApiV1UsersResponses[keyof GetApiV1UsersResponses];
+
+export type PostApiV1UsersData = {
+    body: CreateUserRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/users';
+};
+
+export type PostApiV1UsersErrors = {
+    /**
+     * Invalid name, password, or role.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Not permitted to create accounts.
+     */
+    403: ErrorEnvelope;
+    /**
+     * That name is already taken.
+     */
+    409: ErrorEnvelope;
+};
+
+export type PostApiV1UsersError = PostApiV1UsersErrors[keyof PostApiV1UsersErrors];
+
+export type PostApiV1UsersResponses = {
+    /**
+     * Account created.
+     */
+    201: UserDto;
+};
+
+export type PostApiV1UsersResponse = PostApiV1UsersResponses[keyof PostApiV1UsersResponses];
+
+export type DeleteApiV1UsersByNameData = {
+    body?: never;
+    path: {
+        /**
+         * Account name. Matched without regard to letter case.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/users/{name}';
+};
+
+export type DeleteApiV1UsersByNameErrors = {
+    /**
+     * This is the only administrator account.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Not permitted to delete accounts.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Account not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type DeleteApiV1UsersByNameError = DeleteApiV1UsersByNameErrors[keyof DeleteApiV1UsersByNameErrors];
+
+export type DeleteApiV1UsersByNameResponses = {
+    /**
+     * Account deleted.
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type DeleteApiV1UsersByNameResponse = DeleteApiV1UsersByNameResponses[keyof DeleteApiV1UsersByNameResponses];
 
 export type PostApiV1SnapshotData = {
     body: {

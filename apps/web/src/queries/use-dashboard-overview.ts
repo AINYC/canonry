@@ -13,6 +13,7 @@ import { buildDashboard } from '../build-dashboard.js'
 import type { ProjectData } from '../build-dashboard.js'
 import type { DashboardVm } from '../view-models.js'
 import { PROJECTS_REFRESH_MS, RUNS_STALE_MS, STATIC_VISIBILITY_STALE_MS } from './query-client.js'
+import { useAccount } from '../contexts/account-context.js'
 import { useInitialDashboard } from '../contexts/dashboard-context.js'
 
 /**
@@ -52,6 +53,7 @@ export function useDashboardOverview(initialDashboard?: DashboardVm | null, opti
   const contextDashboard = useInitialDashboard()
   const effectiveInitial = initialDashboard ?? contextDashboard?.dashboard ?? null
   const includeSettings = options.includeSettings ?? true
+  const { isAdmin } = useAccount()
 
   const projectsQuery = useQuery({
     ...getApiV1ProjectsOptions({ client: heyClient }),
@@ -72,9 +74,14 @@ export function useDashboardOverview(initialDashboard?: DashboardVm | null, opti
     },
   })
 
+  // Instance settings carry provider credentials, so the server refuses that
+  // read to a view-only account. Skipping it here — rather than at each of the
+  // four call sites — keeps a viewer's dashboard free of a request that was
+  // always going to come back refused. `buildDashboard` already accepts a null
+  // settings (the embed path does the same), so the dashboard still renders.
   const settingsQuery = useQuery({
     ...getApiV1SettingsOptions({ client: heyClient }),
-    enabled: !effectiveInitial && includeSettings,
+    enabled: !effectiveInitial && includeSettings && isAdmin,
   })
 
   const projects = projectsQuery.data ?? []

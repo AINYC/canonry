@@ -14,6 +14,7 @@ import {
 
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
+import { WriteButton } from '../components/shared/AccessControls.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
 import { CitationBadge } from '../components/shared/CitationBadge.js'
 import { ProviderBadge } from '../components/shared/ProviderBadge.js'
@@ -370,9 +371,9 @@ function BingSection({
               onChange={(e) => setApiKeyInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') { void handleConnect() } }}
             />
-            <Button size="sm" disabled={!apiKeyInput.trim()} onClick={asyncHandler(handleConnect)}>
+            <WriteButton size="sm" disabled={!apiKeyInput.trim()} onClick={asyncHandler(handleConnect)}>
               Connect
-            </Button>
+            </WriteButton>
           </div>
           <p className="mt-1 text-sm text-secondary">
             Get your API key from{' '}
@@ -401,7 +402,7 @@ function BingSection({
           </div>
           <div className="flex items-center gap-2">
             <ToneBadge tone="positive">Connected</ToneBadge>
-            {!isEmbed() && <Button size="sm" variant="ghost" onClick={asyncHandler(handleDisconnect)}>Disconnect</Button>}
+            {!isEmbed() && <WriteButton size="sm" variant="ghost" onClick={asyncHandler(handleDisconnect)}>Disconnect</WriteButton>}
           </div>
         </div>
         <div className="space-y-3">
@@ -439,7 +440,7 @@ function BingSection({
                     <option key={s.url} value={s.url}>{s.url}{s.verified ? ' (verified)' : ''}</option>
                   ))}
                 </select>
-                {!isEmbed() && <Button size="sm" disabled={!selectedSite} onClick={asyncHandler(handleSetSite)}>Set Site</Button>}
+                {!isEmbed() && <WriteButton size="sm" disabled={!selectedSite} onClick={asyncHandler(handleSetSite)}>Set Site</WriteButton>}
               </div>
             ) : (
               <p className="mt-3 text-xs text-muted">
@@ -470,7 +471,7 @@ function BingSection({
           </div>
           <div className="flex items-center gap-2">
             <ToneBadge tone="positive">Connected</ToneBadge>
-            {!isEmbed() && <Button size="sm" variant="ghost" onClick={asyncHandler(handleDisconnect)}>Disconnect</Button>}
+            {!isEmbed() && <WriteButton size="sm" variant="ghost" onClick={asyncHandler(handleDisconnect)}>Disconnect</WriteButton>}
           </div>
         </div>
         {error && <p className="mb-3 text-xs text-negative-400">{error}</p>}
@@ -537,9 +538,9 @@ function BingSection({
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <h4 className="text-xs font-medium text-secondary">Not Indexed ({coverage.notIndexed.length})</h4>
                   {!isEmbed() && (
-                    <Button size="sm" variant="ghost" disabled={requestingIndexing} onClick={asyncHandler(handleSubmitAllUnindexed)}>
+                    <WriteButton size="sm" variant="ghost" disabled={requestingIndexing} onClick={asyncHandler(handleSubmitAllUnindexed)}>
                       {requestingIndexing ? 'Submitting…' : 'Submit all to Bing'}
-                    </Button>
+                    </WriteButton>
                   )}
                 </div>
                 <div className="overflow-x-auto rounded-lg border border-default">
@@ -580,9 +581,9 @@ function BingSection({
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <h4 className="text-sm font-medium text-secondary">Unknown, not yet confirmed ({(coverage.unknown ?? []).length})</h4>
                   {!isEmbed() && (
-                    <Button size="sm" variant="ghost" disabled={requestingIndexing} onClick={asyncHandler(handleSubmitAllUnindexed)}>
+                    <WriteButton size="sm" variant="ghost" disabled={requestingIndexing} onClick={asyncHandler(handleSubmitAllUnindexed)}>
                       {requestingIndexing ? 'Submitting…' : 'Submit all to Bing'}
-                    </Button>
+                    </WriteButton>
                   )}
                 </div>
                 <div className="overflow-x-auto rounded-lg border border-default">
@@ -660,9 +661,9 @@ function BingSection({
                   onChange={(e) => setInspectionUrl(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') { void handleInspect() } }}
                 />
-                <Button size="sm" disabled={!inspectionUrl.trim()} onClick={asyncHandler(handleInspect)}>
+                <WriteButton size="sm" disabled={!inspectionUrl.trim()} onClick={asyncHandler(handleInspect)}>
                   Inspect
-                </Button>
+                </WriteButton>
               </div>
             )}
 
@@ -988,10 +989,10 @@ function SearchConsoleSection({
             <h2>Coverage and performance</h2>
           </div>
           {!isEmbed() && (
-            <Button type="button" variant="outline" size="sm" disabled={loading || refreshState !== 'idle'} onClick={() => void handleRefresh()}>
+            <WriteButton type="button" variant="outline" size="sm" disabled={loading || refreshState !== 'idle'} onClick={() => void handleRefresh()}>
               <RefreshCw className={`h-3.5 w-3.5 ${refreshState !== 'idle' ? 'animate-spin' : ''}`} aria-hidden="true" />
               {loading ? 'Loading…' : refreshState === 'syncing' ? 'Refreshing Google & Bing…' : refreshState === 'reloading' ? 'Reloading workspaces…' : 'Refresh all'}
-            </Button>
+            </WriteButton>
           )}
         </div>
 
@@ -2036,10 +2037,10 @@ function ProjectPageContent({
           <p className="text-sm text-muted">{model.dateRangeLabel}</p>
           {!isEmbed() && (
             <div className="flex items-center gap-2">
-              <Button type="button" variant="outline" size="icon" onClick={() => setShowDeleteConfirm(true)} aria-label="Delete project">
+              <WriteButton type="button" variant="outline" size="icon" onClick={() => setShowDeleteConfirm(true)} aria-label="Delete project">
                 <Trash2 className="h-4 w-4 text-secondary" />
-              </Button>
-              <Button
+              </WriteButton>
+              <WriteButton
                 type="button"
                 disabled={triggerRunMutation.isPending || hasActiveVisibilitySweep}
                 onClick={asyncHandler(handleTriggerRun)}
@@ -2049,7 +2050,7 @@ function ProjectPageContent({
                   : hasActiveVisibilitySweep
                     ? 'Sweep running…'
                     : 'Run now'}
-              </Button>
+              </WriteButton>
             </div>
           )}
         </div>
@@ -2134,9 +2135,9 @@ function ProjectPageContent({
               <div className="flex items-center gap-3">
                 <p className="supporting-copy">{model.competitors.length} tracked</p>
                 {!isEmbed() && (
-                  <Button type="button" variant="outline" size="sm" onClick={() => setAddingCompetitor(!addingCompetitor)}>
+                  <WriteButton type="button" variant="outline" size="sm" onClick={() => setAddingCompetitor(!addingCompetitor)}>
                     {addingCompetitor ? 'Cancel' : '+ Add competitor'}
-                  </Button>
+                  </WriteButton>
                 )}
               </div>
             </div>
@@ -2178,9 +2179,9 @@ function ProjectPageContent({
                   onChange={(e) => setNewCompetitorDomain(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') { void handleAddCompetitor() } }}
                 />
-                <Button type="button" size="sm" disabled={!newCompetitorDomain.trim() || competitorSaving} onClick={asyncHandler(handleAddCompetitor)}>
+                <WriteButton type="button" size="sm" disabled={!newCompetitorDomain.trim() || competitorSaving} onClick={asyncHandler(handleAddCompetitor)}>
                   {competitorSaving ? 'Adding...' : 'Add'}
-                </Button>
+                </WriteButton>
               </div>
             )}
 
@@ -2211,9 +2212,9 @@ function ProjectPageContent({
           >
             {!isEmbed() && (
               <div className="mb-3 flex items-center justify-end">
-                <Button type="button" variant="outline" size="sm" onClick={() => setManagingQueries(!managingQueries)}>
+                <WriteButton type="button" variant="outline" size="sm" onClick={() => setManagingQueries(!managingQueries)}>
                   {managingQueries ? 'Done' : 'Manage queries'}
-                </Button>
+                </WriteButton>
               </div>
             )}
             {!isEmbed() && managingQueries && (
@@ -2248,9 +2249,9 @@ function ProjectPageContent({
                 />
                 <div className="mt-2 flex items-center justify-between">
                   <p className="text-xs text-muted">{newQueryText.split('\n').filter(k => k.trim()).length} to add</p>
-                  <Button type="button" size="sm" disabled={!newQueryText.trim() || querySaving} onClick={asyncHandler(handleAddQueries)}>
+                  <WriteButton type="button" size="sm" disabled={!newQueryText.trim() || querySaving} onClick={asyncHandler(handleAddQueries)}>
                     {querySaving ? 'Adding...' : 'Add queries'}
-                  </Button>
+                  </WriteButton>
                 </div>
               </div>
             )}

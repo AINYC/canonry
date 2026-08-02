@@ -755,6 +755,24 @@
     @apply bg-negative-400;
   }
 
+  /* Who is signed in, and the way out. Only rendered on an install that has
+     named accounts — an install without them has nobody to name. */
+  .sidebar-account {
+    @apply flex items-center justify-between gap-2 border-t border-default px-4 py-2.5;
+  }
+
+  .sidebar-account-identity {
+    @apply flex min-w-0 flex-col;
+  }
+
+  .sidebar-account-name {
+    @apply truncate text-sm text-strong;
+  }
+
+  .sidebar-account-role {
+    @apply text-xs text-muted;
+  }
+
   .sidebar-footer {
     @apply flex items-center gap-1 border-t border-default px-4 py-3;
   }

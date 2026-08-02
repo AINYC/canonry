@@ -10,6 +10,7 @@ import {
 
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
+import { AdminOnly } from '../components/shared/AccessControls.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
 import { addToast } from '../lib/toast-store.js'
 import {
@@ -98,7 +99,19 @@ function SetupStepIndicator({ current, labels }: { current: number; labels: read
   )
 }
 
+/**
+ * The setup wizard exists to CREATE things — a project, its questions, its
+ * first sweep. There is nothing in it for a view-only account.
+ */
 export function SetupPage() {
+  return (
+    <AdminOnly title="Setup">
+      <SetupPageBody />
+    </AdminOnly>
+  )
+}
+
+function SetupPageBody() {
   const contextDashboard = useInitialDashboard()
   const { dashboard, isLoading, refetch } = useDashboard()
   const safeDashboard = dashboard ?? contextDashboard?.dashboard

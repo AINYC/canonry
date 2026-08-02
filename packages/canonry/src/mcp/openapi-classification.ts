@@ -90,6 +90,20 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'GET /api/v1/keys/self': 'deferred',
   'POST /api/v1/keys': 'deferred',
   'POST /api/v1/keys/{id}/revoke': 'deferred',
+  // The sign-in surface is how a PERSON reaches the dashboard in a browser. An
+  // agent already holds an API key, which is the credential meant for it, so
+  // there is nothing here for an agent to sign in to.
+  'GET /api/v1/auth/session': 'excluded-protocol',
+  'POST /api/v1/auth/login': 'excluded-protocol',
+  'POST /api/v1/auth/logout': 'excluded-protocol',
+  'GET /api/v1/auth/sessions': 'excluded-protocol',
+  'DELETE /api/v1/auth/sessions': 'excluded-protocol',
+  // Creating and deleting accounts hands out (or cuts off) a way into this
+  // install, which is the same privilege-granting class as minting a key.
+  // Deliberately CLI + API only.
+  'GET /api/v1/users': 'deferred',
+  'POST /api/v1/users': 'deferred',
+  'DELETE /api/v1/users/{name}': 'deferred',
   'PUT /api/v1/projects/{name}/schedule': 'included',
   'GET /api/v1/projects/{name}/schedule': 'included',
   'DELETE /api/v1/projects/{name}/schedule': 'included',

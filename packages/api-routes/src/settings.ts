@@ -5,7 +5,7 @@ import {
   notImplemented,
   internalError,
 } from '@ainyc/canonry-contracts'
-import { requireScope } from './auth.js'
+import { requireAdminSession, requireScope } from './auth.js'
 
 /**
  * Scope required to mutate any global setting — provider API keys,
@@ -66,24 +66,31 @@ export interface SettingsRoutesOptions {
 }
 
 export async function settingsRoutes(app: FastifyInstance, opts: SettingsRoutesOptions) {
-  app.get('/settings', async () => ({
-    providers: opts.providerSummary ?? [],
-    providerCatalog: (opts.providerAdapters ?? []).map(adapter => ({
-      name: adapter.name,
-      displayName: adapter.displayName,
-      mode: adapter.mode,
-      modelConfigurable: adapter.modelConfigurable,
-      defaultModel: adapter.defaultModel,
-      knownModels: adapter.knownModels,
-      modelValidationPattern: {
-        source: adapter.modelValidationPattern.source,
-        flags: adapter.modelValidationPattern.flags,
-      },
-      modelValidationHint: adapter.modelValidationHint,
-    })),
-    google: opts.google ?? { configured: false },
-    bing: opts.bing ?? { configured: false },
-  }))
+  // Settings describe which credentials this install holds and where its
+  // providers point. That is administrator territory even to read, so a
+  // view-only account is refused here at the server rather than merely being
+  // shown no link to it.
+  app.get('/settings', async (request) => {
+    requireAdminSession(request)
+    return {
+      providers: opts.providerSummary ?? [],
+      providerCatalog: (opts.providerAdapters ?? []).map(adapter => ({
+        name: adapter.name,
+        displayName: adapter.displayName,
+        mode: adapter.mode,
+        modelConfigurable: adapter.modelConfigurable,
+        defaultModel: adapter.defaultModel,
+        knownModels: adapter.knownModels,
+        modelValidationPattern: {
+          source: adapter.modelValidationPattern.source,
+          flags: adapter.modelValidationPattern.flags,
+        },
+        modelValidationHint: adapter.modelValidationHint,
+      })),
+      google: opts.google ?? { configured: false },
+      bing: opts.bing ?? { configured: false },
+    }
+  })
 
   app.put<{
     Params: { name: string }

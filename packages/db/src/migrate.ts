@@ -2674,6 +2674,34 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
         ON runs(project_id, measurement_plan_version_id, measurement_execution_identity)`,
     ],
   },
+  {
+    // Named sign-in accounts. Both tables start empty on every existing
+    // install, and empty is exactly the historical behavior: nobody is asked
+    // to sign in until the first account is created. Nothing is backfilled -
+    // there is no account to infer from an API key, and inventing one would
+    // turn sign-in on for installs that never asked for it.
+    version: 121,
+    name: 'user-accounts-and-sessions',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS users (
+        id            TEXT PRIMARY KEY,
+        name          TEXT NOT NULL,
+        name_key      TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role          TEXT NOT NULL CHECK (role IN ('admin', 'viewer')),
+        created_at    TEXT NOT NULL,
+        last_login_at TEXT
+      )`,
+      `CREATE TABLE IF NOT EXISTS user_sessions (
+        token_hash TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

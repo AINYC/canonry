@@ -52,6 +52,7 @@ import {
   siteAuditScoreSchema,
   siteAuditPageSchema,
   trafficSourceDtoSchema,
+  userDtoSchema,
 } from '@ainyc/canonry-contracts'
 
 /**
@@ -588,6 +589,18 @@ const COVERAGE: Record<string, CoverageEntry> = {
   apiKeys: {
     kind: 'internal-only',
     reason: 'Auth credentials; only the prefix is ever returned via the dedicated key-management surface.',
+  },
+  users: {
+    kind: 'dto',
+    dto: userDtoSchema,
+    internal: {
+      passwordHash: 'Salted password digest; never leaves the server under any circumstance.',
+      nameKey: 'Lower-cased name used only to keep near-duplicate accounts from existing.',
+    },
+  },
+  userSessions: {
+    kind: 'internal-only',
+    reason: 'Live sign-in sessions; the row id IS the cookie value and is never returned in a response body.',
   },
   measurementPlans: {
     kind: 'internal-only',

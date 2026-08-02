@@ -1,0 +1,560 @@
+/**
+ * Sign-in sessions for named accounts.
+ *
+ * The whole feature hangs off one question: does this install have any accounts
+ * yet? While the answer is no, nothing here engages — the dashboard opens
+ * without a sign-in and the API key is still the only credential, exactly as
+ * before. The moment the first account exists, the answer flips for every
+ * request at once.
+ *
+ * Sessions live in the database rather than in memory so that signing out, or
+ * deleting an account, actually ends access instead of asking a browser to
+ * forget something. It also means a restart does not sign everybody out.
+ */
+import crypto from 'node:crypto'
+import { eq, lte } from 'drizzle-orm'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import type { DatabaseClient } from '@ainyc/canonry-db'
+import { users, userSessions } from '@ainyc/canonry-db'
+import {
+  AppError,
+  authRequired,
+  LOGIN_FAILED_MESSAGE,
+  loginRequestSchema,
+  normalizeUserName,
+  validationError,
+  type AuthSessionDto,
+  type UserRole,
+} from '@ainyc/canonry-contracts'
+import { verifyUserPassword } from './user-password.js'
+import { resolveCallerKey } from './trust-proxy.js'
+import { assertCookieWriteOrigin } from './same-origin.js'
+
+/** Cookie carrying a sign-in session. Distinct from the older dashboard-password cookie. */
+export const USER_SESSION_COOKIE_NAME = 'canonry_user_session'
+
+/** How long a session lasts without being used. */
+export const USER_SESSION_TTL_MS = 12 * 60 * 60 * 1000
+
+/**
+ * A session is renewed on use once it is past its halfway point. Renewing on
+ * every single request would write to the database constantly; renewing only
+ * at the very end would sign people out mid-task.
+ */
+const RENEW_AFTER_MS = USER_SESSION_TTL_MS / 2
+
+/**
+ * The longest a single sign-in can live, no matter how much it is used.
+ *
+ * Sliding renewal on its own has no end: a cookie that keeps being presented
+ * keeps being extended, so a stolen one never expires and the only way to end
+ * it is to delete the account. This ceiling is measured from when the session
+ * was CREATED and renewal cannot move it, which is what makes it a ceiling
+ * rather than a longer window.
+ */
+export const USER_SESSION_ABSOLUTE_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Failed sign-ins tolerated for one name FROM ONE SOURCE before that pairing is
+ * paused.
+ *
+ * The pairing is the whole point. Counting per name alone meant an attacker who
+ * had read an account name off the list could hold that account out of its own
+ * dashboard forever, at about one request every ninety seconds — the person
+ * denied was the administrator, and the moment they are denied is exactly the
+ * incident during which they need in. Counting per (name, source) keeps
+ * guessing slow for whoever is guessing, and leaves everybody else alone.
+ *
+ * The per-source budget below still bounds an attacker who cycles names, and
+ * the per-name-and-source budget bounds one who hammers a single name. What no
+ * longer exists is a way for one caller's failures to deny a different caller.
+ */
+const LOGIN_MAX_FAILURES = 10
+
+/**
+ * Failed sign-ins tolerated from one caller, across ALL names. Higher than the
+ * per-name budget because a shared office address is one caller with many
+ * people behind it, but far below the point where the derivations start to
+ * matter.
+ */
+const LOGIN_MAX_FAILURES_PER_CALLER = 30
+
+/** How long a failure count is remembered. */
+const LOGIN_FAILURE_WINDOW_MS = 15 * 60 * 1000
+
+/**
+ * Password verifications allowed to be in flight at once, across the whole
+ * server. The derivation runs on the threadpool, which is small and shared with
+ * every other piece of file and crypto work the process does; without a ceiling
+ * a burst of sign-in attempts monopolizes it and slows everything else down.
+ * Over the ceiling, callers are turned away immediately rather than queued.
+ */
+const LOGIN_MAX_IN_FLIGHT = 8
+
+/**
+ * Verifications one identified caller may have running at once.
+ *
+ * The global ceiling alone is identity-blind: whoever fills it turns everybody
+ * else away, which is the same denial it was meant to prevent. Bounding each
+ * caller first means the global number is only ever reached by genuinely many
+ * different callers.
+ */
+const LOGIN_MAX_IN_FLIGHT_PER_CALLER = 2
+
+export interface UserSessionCookieOptions {
+  /** Cookie path. Matches the install's base path so a sub-path mount works. */
+  path?: string
+  /**
+   * Force the Secure attribute on or off. Leave unset and it is decided per
+   * request from how the request actually arrived — see `cookieIsSecure`. A
+   * host that knows better (it has the configured public URL in hand) can say
+   * so explicitly.
+   */
+  secure?: boolean
+}
+
+/**
+ * Whether this session cookie should be marked Secure.
+ *
+ * An explicit setting always wins. Otherwise the request decides: a request
+ * that arrived over https, or that a proxy forwarded as https, gets a Secure
+ * cookie. Defaulting to "not secure" would ship an https deployment a cookie
+ * a network attacker can strip; defaulting to "secure" would break plain-http
+ * local installs, where this feature is most likely to be tried first.
+ */
+export function cookieIsSecure(request: FastifyRequest, configured: boolean | undefined): boolean {
+  if (configured !== undefined) return configured
+  const forwarded = request.headers['x-forwarded-proto']
+  const firstHop = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim()
+  if (firstHop) return firstHop === 'https'
+  return request.protocol === 'https'
+}
+
+export interface ResolvedUser {
+  id: string
+  name: string
+  role: UserRole
+}
+
+/**
+ * Whether this install has any accounts.
+ *
+ * Deliberately read per request rather than cached: the answer is a security
+ * boundary, and a cached copy would keep a second process (the split HTTP and
+ * worker roles, for instance) serving the pre-account behavior after the first
+ * account was created. The read is a single indexed row lookup against a table
+ * that holds a handful of rows.
+ */
+export function anyUsersExist(db: DatabaseClient): boolean {
+  return db.select({ id: users.id }).from(users).limit(1).get() !== undefined
+}
+
+export function parseCookieHeader(header: string | undefined): Record<string, string> {
+  if (!header) return {}
+
+  return header
+    .split(';')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .reduce<Record<string, string>>((cookies, part) => {
+      const eqIdx = part.indexOf('=')
+      if (eqIdx <= 0) return cookies
+      const name = part.slice(0, eqIdx).trim()
+      const value = part.slice(eqIdx + 1).trim()
+      if (!name) return cookies
+      try {
+        cookies[name] = decodeURIComponent(value)
+      } catch {
+        cookies[name] = value
+      }
+      return cookies
+    }, {})
+}
+
+/**
+ * Serialize the sign-in cookie. `value: null` is the sign-out form — an empty
+ * value with `Max-Age=0`, which is how a browser is told to drop it.
+ *
+ * `HttpOnly` keeps page scripts from reading it, and `SameSite=Lax` keeps
+ * another site from riding it: a cross-site form post carries no cookie, so a
+ * signed-in browser cannot be steered into changing anything here.
+ */
+export function serializeUserSessionCookie(opts: {
+  value: string | null
+  path?: string
+  secure?: boolean
+}): string {
+  const parts = [
+    `${USER_SESSION_COOKIE_NAME}=${opts.value ? encodeURIComponent(opts.value) : ''}`,
+    `Path=${opts.path ?? '/'}`,
+    'HttpOnly',
+    'SameSite=Lax',
+    opts.value ? `Max-Age=${Math.floor(USER_SESSION_TTL_MS / 1000)}` : 'Max-Age=0',
+  ]
+  if (opts.secure) parts.push('Secure')
+  return parts.join('; ')
+}
+
+/** Drop sessions that can no longer authenticate anything. */
+function pruneExpiredSessions(db: DatabaseClient, nowIso: string): void {
+  db.delete(userSessions).where(lte(userSessions.expiresAt, nowIso)).run()
+}
+
+/**
+ * The value actually stored for a session token.
+ *
+ * Plain SHA-256 is the right choice here, and deliberately NOT the slow
+ * derivation the passwords use: the token is 256 bits of randomness this server
+ * generated, so there is no guessing to slow down. What it buys is that the
+ * table holds a record of a session rather than a working copy of one.
+ */
+export function hashSessionToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex')
+}
+
+/**
+ * Mint a session and return the token for the COOKIE. The token itself is never
+ * written down — only its digest — so this is the one and only moment it exists.
+ */
+export function createUserSession(db: DatabaseClient, userId: string, now = new Date()): string {
+  const nowIso = now.toISOString()
+  pruneExpiredSessions(db, nowIso)
+  const token = crypto.randomBytes(32).toString('hex')
+  db.insert(userSessions).values({
+    tokenHash: hashSessionToken(token),
+    userId,
+    createdAt: nowIso,
+    expiresAt: new Date(now.getTime() + USER_SESSION_TTL_MS).toISOString(),
+  }).run()
+  return token
+}
+
+export function deleteUserSession(db: DatabaseClient, token: string): void {
+  db.delete(userSessions).where(eq(userSessions.tokenHash, hashSessionToken(token))).run()
+}
+
+export interface ResolvedSession {
+  user: ResolvedUser
+  /** Set when the session was extended on this request and the cookie must be re-sent. */
+  renewedExpiresAt?: string
+}
+
+/**
+ * Resolve a session cookie to the person it belongs to, extending the session
+ * when it is past its halfway point. An expired session is deleted rather than
+ * merely refused, so the table does not accumulate dead rows on a busy install.
+ */
+export function resolveUserSession(
+  db: DatabaseClient,
+  token: string,
+  now = new Date(),
+): ResolvedSession | null {
+  const tokenHash = hashSessionToken(token)
+  const session = db.select().from(userSessions).where(eq(userSessions.tokenHash, tokenHash)).get()
+  if (!session) return null
+
+  const expiresAtMs = Date.parse(session.expiresAt)
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime()) {
+    deleteUserSession(db, token)
+    return null
+  }
+
+  // The ceiling, checked independently of the sliding window. Constant use
+  // moves `expiresAt` forever but cannot move `createdAt`.
+  const createdAtMs = Date.parse(session.createdAt)
+  if (!Number.isFinite(createdAtMs) || now.getTime() - createdAtMs >= USER_SESSION_ABSOLUTE_TTL_MS) {
+    deleteUserSession(db, token)
+    return null
+  }
+
+  const user = db.select().from(users).where(eq(users.id, session.userId)).get()
+  if (!user) {
+    deleteUserSession(db, token)
+    return null
+  }
+
+  const resolved: ResolvedSession = {
+    user: { id: user.id, name: user.name, role: user.role },
+  }
+
+  if (expiresAtMs - now.getTime() < RENEW_AFTER_MS) {
+    const renewed = new Date(now.getTime() + USER_SESSION_TTL_MS).toISOString()
+    db.update(userSessions).set({ expiresAt: renewed }).where(eq(userSessions.tokenHash, tokenHash)).run()
+    resolved.renewedExpiresAt = renewed
+  }
+
+  return resolved
+}
+
+/**
+ * Failed sign-in counter.
+ *
+ * In-process and keyed by whatever it is handed — a name, or a caller's
+ * address. Two instances of it do two different jobs:
+ *
+ *   - keyed by NAME, it slows password guessing against a specific account;
+ *   - keyed by CALLER, it stops the far cheaper attack of never repeating a
+ *     name at all. Every attempt costs a full key derivation whether or not the
+ *     name exists, so an attacker who cycles names pays nothing and the server
+ *     pays everything. The per-name counter cannot see that; this one can.
+ *
+ * Neither is a replacement for a real password. They are what make a weak one
+ * take years instead of minutes, and what keeps a public route from being a
+ * lever on the whole server.
+ */
+class LoginAttemptLimiter {
+  private readonly failures = new Map<string, number[]>()
+
+  constructor(
+    private readonly maxFailures: number,
+    private readonly windowMs: number,
+  ) {}
+
+  /** True when this key has spent its allowance and must wait. */
+  isBlocked(nameKey: string, nowMs: number): boolean {
+    return this.recent(nameKey, nowMs).length >= this.maxFailures
+  }
+
+  recordFailure(nameKey: string, nowMs: number): void {
+    const recent = this.recent(nameKey, nowMs)
+    recent.push(nowMs)
+    this.failures.set(nameKey, recent)
+    this.prune(nowMs)
+  }
+
+  clear(nameKey: string): void {
+    this.failures.delete(nameKey)
+  }
+
+  private recent(nameKey: string, nowMs: number): number[] {
+    const all = this.failures.get(nameKey) ?? []
+    return all.filter(at => nowMs - at < this.windowMs)
+  }
+
+  /** Keep the map bounded to the keys that failed inside one window. */
+  private prune(nowMs: number): void {
+    for (const [key, times] of this.failures) {
+      const recent = times.filter(at => nowMs - at < this.windowMs)
+      if (recent.length === 0) this.failures.delete(key)
+      else this.failures.set(key, recent)
+    }
+  }
+}
+
+export interface UserSessionRoutesOptions {
+  cookie?: UserSessionCookieOptions
+  /** See `ApiRoutesOptions.trustProxyConfigured`. */
+  trustProxyConfigured?: boolean
+}
+
+export async function userSessionRoutes(app: FastifyInstance, opts: UserSessionRoutesOptions = {}) {
+  const cookiePath = opts.cookie?.path ?? '/'
+  const perNameLimiter = new LoginAttemptLimiter(LOGIN_MAX_FAILURES, LOGIN_FAILURE_WINDOW_MS)
+  const perCallerLimiter = new LoginAttemptLimiter(LOGIN_MAX_FAILURES_PER_CALLER, LOGIN_FAILURE_WINDOW_MS)
+  let verificationsInFlight = 0
+  const callerVerificationsInFlight = new Map<string, number>()
+
+  const setSessionCookie = (request: FastifyRequest, reply: FastifyReply, sessionId: string) => {
+    reply.header('set-cookie', serializeUserSessionCookie({
+      value: sessionId,
+      path: cookiePath,
+      secure: cookieIsSecure(request, opts.cookie?.secure),
+    }))
+  }
+
+  const clearSessionCookie = (request: FastifyRequest, reply: FastifyReply) => {
+    reply.header('set-cookie', serializeUserSessionCookie({
+      value: null,
+      path: cookiePath,
+      secure: cookieIsSecure(request, opts.cookie?.secure),
+    }))
+  }
+
+  const cookieSessionId = (request: FastifyRequest): string | undefined =>
+    parseCookieHeader(request.headers.cookie)[USER_SESSION_COOKIE_NAME]
+
+  // What the dashboard asks before it draws anything. Public on purpose: the
+  // sign-in screen cannot ask whether a sign-in is needed while holding a
+  // credential it does not have yet.
+  app.get('/auth/session', async (request, reply): Promise<AuthSessionDto> => {
+    if (!anyUsersExist(app.db)) return { authRequired: false, user: null }
+
+    const token = cookieSessionId(request)
+    const resolved = token ? resolveUserSession(app.db, token) : null
+    // The dashboard polls this every minute, which means this route is where
+    // most renewals actually happen. Extending the row without re-issuing the
+    // cookie would leave the browser dropping a credential the server still
+    // considers live — the session would die at its ORIGINAL expiry no matter
+    // how long somebody kept working.
+    if (token && resolved?.renewedExpiresAt) setSessionCookie(request, reply, token)
+    return {
+      authRequired: true,
+      user: resolved ? { name: resolved.user.name, role: resolved.user.role } : null,
+    }
+  })
+
+  app.post('/auth/login', async (request, reply) => {
+    const parsed = loginRequestSchema.safeParse(request.body)
+    if (!parsed.success) {
+      throw validationError('Enter a name and a password.', { issues: parsed.error.issues })
+    }
+
+    const nameKey = normalizeUserName(parsed.data.name)
+    // Null when a proxy is in front and has not been declared trusted: the
+    // address in hand is the proxy's, shared by everyone, so budgeting against
+    // it would let one attacker lock out the whole install. The per-name budget
+    // and the in-flight ceiling still apply in that case.
+    const caller = resolveCallerKey(request, opts.trustProxyConfigured ?? false)
+    const nowMs = Date.now()
+
+    // Three budgets, and they answer three different questions. Per name: is
+    // somebody guessing at ONE account. Per caller: is somebody spending this
+    // server's key derivations, which cycling names would otherwise make free.
+    // In flight: is the threadpool already saturated right now, whoever is
+    // asking. All three are checked BEFORE any derivation is paid for.
+    // Keyed by name AND source: a stranger's failures must never be able to
+    // lock the real owner of the account out of it.
+    const nameFromCaller = `${nameKey}\u0000${caller ?? 'unidentified'}`
+    if (perNameLimiter.isBlocked(nameFromCaller, nowMs)) {
+      throw new AppError(
+        'QUOTA_EXCEEDED',
+        'Too many failed sign-in attempts for this name. Wait a few minutes and try again.',
+        429,
+      )
+    }
+    if (caller !== null && perCallerLimiter.isBlocked(caller, nowMs)) {
+      throw new AppError(
+        'QUOTA_EXCEEDED',
+        'Too many failed sign-in attempts. Wait a few minutes and try again.',
+        429,
+      )
+    }
+    // Per caller first: one identified caller can never be the reason another
+    // is turned away. The global ceiling below only bounds the threadpool.
+    if (caller !== null && (callerVerificationsInFlight.get(caller) ?? 0) >= LOGIN_MAX_IN_FLIGHT_PER_CALLER) {
+      throw new AppError(
+        'QUOTA_EXCEEDED',
+        'A sign-in for this caller is already being checked. Try again in a moment.',
+        429,
+      )
+    }
+    if (verificationsInFlight >= LOGIN_MAX_IN_FLIGHT) {
+      throw new AppError(
+        'QUOTA_EXCEEDED',
+        'The server is busy checking sign-ins. Try again in a moment.',
+        429,
+      )
+    }
+
+    const account = app.db.select().from(users).where(eq(users.nameKey, nameKey)).get()
+    // Verify against a throwaway digest when the name is unknown so a missing
+    // account and a wrong password take the same amount of time to refuse.
+    const storedHash = account?.passwordHash ?? UNKNOWN_ACCOUNT_DIGEST
+    verificationsInFlight++
+    if (caller !== null) {
+      callerVerificationsInFlight.set(caller, (callerVerificationsInFlight.get(caller) ?? 0) + 1)
+    }
+    let passwordMatches: boolean
+    try {
+      passwordMatches = await verifyUserPassword(parsed.data.password, storedHash)
+    } finally {
+      verificationsInFlight--
+      if (caller !== null) {
+        const remaining = (callerVerificationsInFlight.get(caller) ?? 1) - 1
+        if (remaining <= 0) callerVerificationsInFlight.delete(caller)
+        else callerVerificationsInFlight.set(caller, remaining)
+      }
+    }
+
+    if (!account || !passwordMatches) {
+      perNameLimiter.recordFailure(nameFromCaller, nowMs)
+      if (caller !== null) perCallerLimiter.recordFailure(caller, nowMs)
+      const err = authRequired(LOGIN_FAILED_MESSAGE)
+      return reply.status(err.statusCode).send(err.toJSON())
+    }
+
+    perNameLimiter.clear(nameFromCaller)
+    if (caller !== null) perCallerLimiter.clear(caller)
+    const now = new Date()
+    const sessionId = createUserSession(app.db, account.id, now)
+    app.db.update(users).set({ lastLoginAt: now.toISOString() }).where(eq(users.id, account.id)).run()
+    setSessionCookie(request, reply, sessionId)
+
+    return reply.send({
+      authRequired: true,
+      user: { name: account.name, role: account.role },
+    } satisfies AuthSessionDto)
+  })
+
+  // Where this account is currently signed in. Only ever the caller's own
+  // sessions — an admin cannot enumerate somebody else's from here.
+  app.get('/auth/sessions', async (request, reply) => {
+    const token = cookieSessionId(request)
+    const resolved = token ? resolveUserSession(app.db, token) : null
+    if (!token || !resolved) {
+      const err = authRequired('Sign in to see where you are signed in.')
+      return reply.status(err.statusCode).send(err.toJSON())
+    }
+
+    const currentHash = hashSessionToken(token)
+    const rows = app.db.select().from(userSessions)
+      .where(eq(userSessions.userId, resolved.user.id)).all()
+    return reply.send({
+      sessions: rows.map(row => ({
+        // Never the token or its digest — a list of your own sessions must not
+        // itself become a way to become one of them.
+        current: row.tokenHash === currentHash,
+        createdAt: row.createdAt,
+        expiresAt: row.expiresAt,
+      })),
+    })
+  })
+
+  // End every session this account has, including the one asking.
+  //
+  // This is the answer to "I think my laptop was stolen": without it, ending a
+  // leaked cookie means finding somebody with the root key to delete the whole
+  // account. Signing out only the current browser is what `/auth/logout` does.
+  app.delete('/auth/sessions', async (request, reply) => {
+    const token = cookieSessionId(request)
+    const resolved = token ? resolveUserSession(app.db, token) : null
+    if (!token || !resolved) {
+      const err = authRequired('Sign in to end your sessions.')
+      return reply.status(err.statusCode).send(err.toJSON())
+    }
+    // This route is on the auth skip-list so it keeps working from a session the
+    // rest of the API might refuse, which means the same-origin rule it would
+    // normally inherit has to be applied here by hand. Without it, any site
+    // could sign this person out of everything.
+    assertCookieWriteOrigin(request)
+
+    app.db.delete(userSessions).where(eq(userSessions.userId, resolved.user.id)).run()
+    clearSessionCookie(request, reply)
+    return reply.status(204).send()
+  })
+
+  // Signing out always succeeds, including from an already-dead session: the
+  // point is that the browser ends up holding nothing.
+  //
+  // It is still origin-checked, for the same reason its sibling above is: this
+  // route is on the auth skip-list, so it inherits nothing, and a same-site
+  // sibling could otherwise sign a person out at will. Being annoying rather
+  // than dangerous is not a reason to leave it open.
+  app.post('/auth/logout', async (request, reply) => {
+    assertCookieWriteOrigin(request)
+    const sessionId = cookieSessionId(request)
+    if (sessionId) deleteUserSession(app.db, sessionId)
+    clearSessionCookie(request, reply)
+    return reply.status(204).send()
+  })
+}
+
+/**
+ * A fixed, valid digest of a value nobody can supply. Verifying against it
+ * costs the same as verifying a real account, which is the point: without it,
+ * an unknown name would answer noticeably faster than a known one and the
+ * sign-in form would quietly become an account-name oracle.
+ */
+export const UNKNOWN_ACCOUNT_DIGEST =
+  'scrypt$1$AAAAAAAAAAAAAAAAAAAAAA==$'
+  + Buffer.alloc(64, 0).toString('base64')

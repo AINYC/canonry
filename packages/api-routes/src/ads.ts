@@ -91,7 +91,7 @@ import type {
   AdsActivationEntityType,
 } from '@ainyc/canonry-contracts'
 import { adsConnections, adsCampaigns, adsAdGroups, adsAds, adsInsightsDaily, adsOperations, projects, runs } from '@ainyc/canonry-db'
-import { requireScope } from './auth.js'
+import { requireAdminSession, requirePaidReadScope, requireScope } from './auth.js'
 import { registerAdsActivationRoutes } from './ads-activation-routes.js'
 import {
   buildLiveEntityComparison,
@@ -3037,11 +3037,12 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
    * Live passthrough read: what the provider says RIGHT NOW, the corresponding
    * local snapshot values, and the per-entity delta between them.
    *
-   * Read-only: the injected `AdsLiveDeliveryReader` exposes list/insight GETs
-   * only, so this route cannot create, update, pause, or activate anything. It
-   * is deliberately NOT scope-gated beyond the auth plugin's read-only method
-   * gate: it mutates no Canonry state either (unlike `POST /ads/sync`, whose
-   * `ads.write` scope covers the run row it inserts).
+   * It mutates no Canonry state, but "changes nothing" is not the same as
+   * "costs nothing": one call fans out into thousands of BILLED provider
+   * requests. The method-based gate cannot see that — it is a GET — so this
+   * route is gated explicitly. A view-only account and a read-only key are both
+   * refused, because the credential handed to an embed or a reporting job must
+   * not be able to spend the operator's provider budget on a timer.
    *
    * `fetchedAt` is the instant the read was ISSUED, and it is frozen for the
    * whole walk: every insight call is handed that same anchor, so entities read
@@ -3073,6 +3074,10 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
     Params: { name: string }
     Querystring: { campaignId?: string; lookbackDays?: string | number }
   }>('/projects/:name/ads/live-delivery', async (request) => {
+    // Before anything else, including validation: a caller who may not spend
+    // the budget should not be able to make the server do work either.
+    requireAdminSession(request)
+    requirePaidReadScope(request)
     const project = resolveProject(app.db, request.params.name)
     const parsed = adsLiveDeliveryQuerySchema.safeParse(request.query)
     if (!parsed.success) {
@@ -3092,7 +3097,11 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
     }
 
     const fetchedAtMs = Date.now()
-    const lastAttemptAtMs = liveDeliveryLastAttemptAtMs.get(project.id)
+    // Keyed by principal as well as project: keyed by project alone, any one
+    // caller's walk blocks every other caller of the same project, which is a
+    // denial lever pointed at colleagues rather than at the provider.
+    const throttleKey = `${project.id}::${request.principal?.id ?? 'anonymous'}`
+    const lastAttemptAtMs = liveDeliveryLastAttemptAtMs.get(throttleKey)
     const remainingIntervalMs = liveDeliveryMinIntervalMs > 0 && lastAttemptAtMs !== undefined
       ? lastAttemptAtMs + liveDeliveryMinIntervalMs - fetchedAtMs
       : 0
@@ -3101,7 +3110,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
     // interval is. This is what the interval alone could not express, because a
     // walk can outlive any interval and the timestamp would then expire while
     // the first walk was still upstream.
-    if (liveDeliveryInFlight.has(project.id)) {
+    if (liveDeliveryInFlight.has(project.id) || liveDeliveryInFlight.has(throttleKey)) {
       throw quotaExceeded('OpenAI Ads live delivery reads', {
         reason: 'read-in-flight',
         minIntervalMs: liveDeliveryMinIntervalMs,
@@ -3125,6 +3134,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
     // cannot both pass the check above; released in the `finally` below however
     // the walk ends, so neither a throw nor a rejection can wedge the project.
     liveDeliveryInFlight.add(project.id)
+    liveDeliveryInFlight.add(throttleKey)
 
     /**
      * Spend the attempt against the rate limit. Called once, immediately before
@@ -3148,6 +3158,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       if (liveDeliveryMinIntervalMs <= 0) return
       pruneLiveDeliveryAttempts(fetchedAtMs)
       liveDeliveryLastAttemptAtMs.set(project.id, fetchedAtMs)
+      liveDeliveryLastAttemptAtMs.set(throttleKey, fetchedAtMs)
     }
 
     try {
@@ -3409,6 +3420,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       return response
     } finally {
       liveDeliveryInFlight.delete(project.id)
+      liveDeliveryInFlight.delete(throttleKey)
     }
   })
 

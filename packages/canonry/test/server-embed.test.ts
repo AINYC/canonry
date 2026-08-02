@@ -641,8 +641,17 @@ describe('server embed mode (#716)', () => {
     }
   })
 
-  it('ON + per-request tabs: X-Canonry-Embed-Tabs can allow report reads server-side', async () => {
-    const { app, apiKey, db, cleanup } = await buildServer({ enabled: true, allowOrigins: ['https://host.example'] })
+  it('ON + per-request tabs: X-Canonry-Embed-Tabs narrows the configured allowlist to report', async () => {
+    // The per-request header only ever NARROWS what the operator configured —
+    // it cannot grant a tab the operator did not allow. `projectTabs` names
+    // all three here so the header has something to narrow FROM; see the
+    // "cannot widen past the overview-only default" test below for what
+    // happens when the operator never configured `projectTabs` at all.
+    const { app, apiKey, db, cleanup } = await buildServer({
+      enabled: true,
+      allowOrigins: ['https://host.example'],
+      projectTabs: ['overview', 'technical-aeo', 'report'],
+    })
     try {
       const { name } = seedProject(db)
       const auth = {
@@ -672,8 +681,12 @@ describe('server embed mode (#716)', () => {
     }
   })
 
-  it('ON + per-request tabs: X-Canonry-Embed-Tabs can allow technical-AEO reads server-side', async () => {
-    const { app, apiKey, db, cleanup } = await buildServer({ enabled: true, allowOrigins: ['https://host.example'] })
+  it('ON + per-request tabs: X-Canonry-Embed-Tabs narrows the configured allowlist to technical-AEO', async () => {
+    const { app, apiKey, db, cleanup } = await buildServer({
+      enabled: true,
+      allowOrigins: ['https://host.example'],
+      projectTabs: ['overview', 'technical-aeo', 'report'],
+    })
     try {
       const { name } = seedProject(db)
       const res = await app.inject({
@@ -685,6 +698,30 @@ describe('server embed mode (#716)', () => {
         },
       })
       expect(res.statusCode).not.toBe(403)
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('ON, no explicit projectTabs config: X-Canonry-Embed-Tabs cannot widen past the overview-only default', async () => {
+    // Before this fix, a header naming a server-enforced tab (`report`,
+    // `technical-aeo`) was honored even when the operator never configured
+    // `projectTabs` and the install silently defaulted to overview-only — the
+    // header REPLACED the allowlist instead of narrowing it. A caller-settable
+    // header must never grant more than the operator configured, defaulted or
+    // not.
+    const { app, apiKey, db, cleanup } = await buildServer({ enabled: true, allowOrigins: ['https://host.example'] })
+    try {
+      const { name } = seedProject(db)
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/${name}/technical-aeo`,
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          'x-canonry-embed-tabs': 'overview,technical-aeo',
+        },
+      })
+      expect(res.statusCode).toBe(403)
     } finally {
       await cleanup()
     }

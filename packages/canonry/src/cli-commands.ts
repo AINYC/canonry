@@ -14,6 +14,7 @@ import { TRAFFIC_CLI_COMMANDS } from './cli-commands/traffic.js'
 import { COMPETITOR_CLI_COMMANDS } from './cli-commands/competitor.js'
 import { GOOGLE_CLI_COMMANDS } from './cli-commands/google.js'
 import { KEYS_CLI_COMMANDS } from './cli-commands/keys.js'
+import { USERS_CLI_COMMANDS } from './cli-commands/users.js'
 import { KEYWORD_CLI_COMMANDS } from './cli-commands/keyword.js'
 import { QUERY_CLI_COMMANDS } from './cli-commands/query.js'
 import { MCP_CLI_COMMANDS } from './cli-commands/mcp.js'
@@ -46,6 +47,7 @@ export const REGISTERED_CLI_COMMANDS: readonly CliCommandSpec[] = [
   ...QUERY_CLI_COMMANDS,
   ...KEYWORD_CLI_COMMANDS,
   ...KEYS_CLI_COMMANDS,
+  ...USERS_CLI_COMMANDS,
   ...COMPETITOR_CLI_COMMANDS,
   ...SETTINGS_CLI_COMMANDS,
   ...SKILLS_CLI_COMMANDS,

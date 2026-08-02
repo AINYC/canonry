@@ -33,7 +33,14 @@ function messageOf(error: unknown): string {
 
 /** Network and persistence adapters around the pure Target discovery/report kernels. */
 export async function measurementServiceRoutes(app: FastifyInstance, opts: MeasurementServiceRoutesOptions) {
-  app.post<{ Params: { name: string } }>('/projects/:name/measurement-discovery', async request => {
+  // A POST only because the rules it classifies against are too large for a
+  // URL. It fetches a sitemap and sorts the URLs; it writes nothing and starts
+  // nothing, so a view-only account can run it — see `readSemantic` in
+  // `auth.ts`. This is the first step of the setup wizard, and a viewer who
+  // could not run it could not look at the plan at all.
+  app.post<{ Params: { name: string } }>('/projects/:name/measurement-discovery', {
+    config: { readSemantic: true },
+  }, async request => {
     requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
     const project = resolveProject(app.db, request.params.name)
     const parsed = measurementDiscoveryRequestSchema.safeParse(request.body)

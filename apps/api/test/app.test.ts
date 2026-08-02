@@ -1,4 +1,4 @@
-import { test, expect, onTestFinished } from 'vitest'
+import { test, expect, onTestFinished, beforeEach, afterEach } from 'vitest'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -14,6 +14,21 @@ import { loadApiEnv } from '../src/plugins/env.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.join(__dirname, '..', '..', '..')
+
+const ORIGINAL_CANONRY_TRUST_PROXY = process.env.CANONRY_TRUST_PROXY
+
+beforeEach(() => {
+  // Every test below exercises `buildApp` over `.inject()`, which never
+  // touches a real socket — declare this deployment has nothing in front of
+  // it so those tests stay about what they say they're about. The one test
+  // that IS about this requirement removes it again itself.
+  process.env.CANONRY_TRUST_PROXY = 'false'
+})
+
+afterEach(() => {
+  if (ORIGINAL_CANONRY_TRUST_PROXY === undefined) delete process.env.CANONRY_TRUST_PROXY
+  else process.env.CANONRY_TRUST_PROXY = ORIGINAL_CANONRY_TRUST_PROXY
+})
 
 /**
  * The provider names in `API_ADAPTERS` + `BROWSER_ADAPTERS`
@@ -73,6 +88,17 @@ function registeredAdapterNames(): string[] {
     return name![1]!
   })
 }
+
+test('buildApp refuses to start when CANONRY_TRUST_PROXY is not set', () => {
+  // A cloud deployment always sits behind at least one load balancer, so
+  // leaving this unset does not mean "no proxy" — it means every caller
+  // resolves to the load balancer's own address and every per-caller
+  // rate-limit / login budget collapses into one shared bucket. That must be
+  // an explicit operator decision, not a silent default.
+  delete process.env.CANONRY_TRUST_PROXY
+  const env = getPlatformEnv({})
+  expect(() => buildApp(env)).toThrow(/CANONRY_TRUST_PROXY/)
+})
 
 test('buildApp registers health and API routes', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'api-test-'))

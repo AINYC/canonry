@@ -13,8 +13,33 @@ export const RUNS_STALE_MS = 30_000
 // end-to-end. Trade-off: ~30 req/min from one tab to a SQLite SELECT.
 export const PROJECTS_REFRESH_MS = 2_000
 
+/**
+ * The cache the app is currently rendering from.
+ *
+ * Tracked so that "who is signed in" and "what is cached" can be shown to be
+ * the same lifetime. A cache that outlives a sign-out is one account reading
+ * another's data out of memory.
+ */
+let activeQueryClient: QueryClient | null = null
+
+/**
+ * What the app currently holds cached, as readable strings.
+ *
+ * Only entries that actually carry a RESULT are listed. A registered-but-empty
+ * entry is what a disabled `useQuery` leaves behind and holds nothing; what
+ * matters for one account inheriting another's view is stored data.
+ */
+export function activeQueryCacheKeys(): string[] {
+  if (!activeQueryClient) return []
+  return activeQueryClient
+    .getQueryCache()
+    .getAll()
+    .filter(query => query.state.data !== undefined)
+    .map(query => JSON.stringify(query.queryKey))
+}
+
 export function createQueryClient() {
-  return new QueryClient({
+  const client = new QueryClient({
     defaultOptions: {
       queries: {
         staleTime: DEFAULT_QUERY_STALE_MS,
@@ -37,4 +62,6 @@ export function createQueryClient() {
       },
     }),
   })
+  activeQueryClient = client
+  return client
 }

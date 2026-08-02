@@ -31,6 +31,9 @@ import type { OpenApiInfo } from './openapi.js'
 import { settingsRoutes } from './settings.js'
 import type { SettingsRoutesOptions, ProviderSummaryEntry, ProviderAdapterInfo } from './settings.js'
 import { keysRoutes } from './keys.js'
+import { userRoutes } from './users.js'
+import { userSessionRoutes } from './user-session.js'
+import type { UserSessionCookieOptions } from './user-session.js'
 import { snapshotRoutes } from './snapshot.js'
 import type { SnapshotRoutesOptions } from './snapshot.js'
 import { telemetryRoutes } from './telemetry.js'
@@ -91,6 +94,22 @@ export interface ApiRoutesOptions {
   /** Optional cookie-backed browser session support */
   sessionCookieName?: string
   resolveSessionApiKeyId?: (sessionId: string) => string | null | Promise<string | null>
+  /**
+   * Cookie attributes for named-account sign-in sessions. Point `path` at the
+   * install's base path when it is mounted under a sub-path. Leave `secure`
+   * unset unless you KNOW the install is https-only: unset means it is decided
+   * per request from how that request arrived, which is the only thing that
+   * gets a TLS-terminating proxy right.
+   */
+  userSessionCookie?: UserSessionCookieOptions
+  /**
+   * True when this host has declared which proxy hops to believe (its Fastify
+   * instance was built with `trustProxy`). Everything that budgets per caller
+   * needs this: without it a forwarded header is just a string the caller
+   * chose, and treating it as evidence of a proxy lets an attacker opt out of
+   * its own rate limit. Defaults to false — say so explicitly when you mean it.
+   */
+  trustProxyConfigured?: boolean
   /** Effective project-tab allowlist when the host runs the API in embed mode. */
   embedProjectTabs?: readonly string[]
 
@@ -354,9 +373,20 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       await authPlugin(api, {
         sessionCookieName: opts.sessionCookieName,
         resolveSessionApiKeyId: opts.resolveSessionApiKeyId,
+        userSessionCookie: opts.userSessionCookie,
         embedProjectTabs: opts.embedProjectTabs,
       })
     }
+
+    // Sign-in surface. Registered inside the authenticated scope so it shares
+    // the error handler and prefix, but each of its routes is on the auth
+    // skip-list — a sign-in screen cannot present a credential it has not been
+    // given yet.
+    await api.register(userSessionRoutes, {
+      cookie: opts.userSessionCookie,
+      trustProxyConfigured: opts.trustProxyConfigured ?? false,
+    })
+    await api.register(userRoutes)
 
     await api.register(openApiRoutes, { ...opts.openApiInfo, routePrefix: opts.routePrefix })
     await api.register(projectRoutes, {
@@ -547,6 +577,18 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
 }
 
 export type { DatabaseClient } from '@ainyc/canonry-db'
+// Whether this install has named accounts. The host needs the same answer the
+// auth layer uses, so it is exported rather than reimplemented.
+export { anyUsersExist, USER_SESSION_COOKIE_NAME, USER_SESSION_TTL_MS } from './user-session.js'
+export type { UserSessionCookieOptions } from './user-session.js'
+export { requireAdminSession, requireBroadInstanceKey, requirePaidReadScope } from './auth.js'
+export { assertSameOriginWrite, assertCookieWriteOrigin, FOREIGN_ORIGIN_MESSAGE } from './same-origin.js'
+// How a host decides which proxy hops may be believed about who is calling.
+export { resolveTrustProxy, resolveCallerKey, hasForwardedHeaders } from './trust-proxy.js'
+// Password storage, exported so a host can seed an account without
+// reimplementing the derivation that `auth` verifies against.
+export { hashUserPassword, verifyUserPassword } from './user-password.js'
+export type { AuthPrincipal } from './auth.js'
 export { hasActiveMeasurementPlan, queueRunIfProjectIdle } from './run-queue.js'
 export { ensureCurrentQueryBasketRevision, latestQueryBasketRevision } from './query-basket.js'
 export { nextRunFromCron } from './schedule-utils.js'

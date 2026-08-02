@@ -12,7 +12,7 @@ const { version: PKG_VERSION } = _require("../package.json") as {
 import Fastify from "fastify";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { SetHeadersResponse } from "@fastify/static";
-import { apiRoutes, resolveVercelSyncDeadlineMs } from "@ainyc/canonry-api-routes";
+import { anyUsersExist, apiRoutes, resolveTrustProxy, resolveVercelSyncDeadlineMs } from "@ainyc/canonry-api-routes";
 import {
   apiKeys,
   auditLog,
@@ -38,6 +38,7 @@ import { perplexityAdapter } from "@ainyc/canonry-provider-perplexity";
 import {
   authInvalid,
   authRequired,
+  forbidden,
   notFound,
   validationError,
   embedClientConfigForRequest,
@@ -562,8 +563,17 @@ export async function createServer(opts: {
           }
         : true;
 
+  // Which hops in front of this server may be believed about who is calling.
+  // Everything that budgets per caller — the sign-in limiter above all — reads
+  // `request.ip`, and behind an unconfigured proxy that is the PROXY for
+  // everybody, collapsing every caller into one shared bucket. Unset means
+  // trust nothing, which is right for the default localhost bind; an operator
+  // behind an edge proxy sets CANONRY_TRUST_PROXY to the hop count or the
+  // proxy's address.
+  const trustProxy = resolveTrustProxy(process.env.CANONRY_TRUST_PROXY);
   const app = Fastify({
     logger,
+    trustProxy,
   });
 
   // Build provider registry from config (with legacy field migration)
@@ -1780,7 +1790,19 @@ export async function createServer(opts: {
     return Boolean(key && !key.revokedAt);
   };
 
+  // Once this install has named accounts, the single shared dashboard password
+  // is no longer a way in: it carries the root key's authority and would hand
+  // everyone the same access the roles were just created to separate. These
+  // three routes therefore step aside and point at the sign-in form instead of
+  // half-working.
+  const namedAccountsInUse = () => anyUsersExist(opts.db);
+  const NAMED_ACCOUNTS_MESSAGE =
+    "This install uses named accounts. Sign in with your name and password.";
+
   app.get(apiPrefix + "/session", async (request, reply) => {
+    if (namedAccountsInUse()) {
+      return reply.send({ authenticated: false, setupRequired: false });
+    }
     if (!dashboardRequirePassword) {
       return reply.send({ authenticated: true, setupRequired: false });
     }
@@ -1795,6 +1817,10 @@ export async function createServer(opts: {
   app.post<{
     Body: { password?: string };
   }>(apiPrefix + "/session/setup", async (request, reply) => {
+    if (namedAccountsInUse()) {
+      const err = forbidden(NAMED_ACCOUNTS_MESSAGE);
+      return reply.status(err.statusCode).send(err.toJSON());
+    }
     if (!dashboardRequirePassword) {
       return reply.send({ authenticated: true, setupRequired: false });
     }
@@ -1835,6 +1861,10 @@ export async function createServer(opts: {
   app.post<{
     Body: { password?: string; apiKey?: string };
   }>(apiPrefix + "/session", async (request, reply) => {
+    if (namedAccountsInUse()) {
+      const err = forbidden(NAMED_ACCOUNTS_MESSAGE);
+      return reply.status(err.statusCode).send(err.toJSON());
+    }
     if (!dashboardRequirePassword) {
       return reply.send({ authenticated: true, setupRequired: false });
     }
@@ -1982,6 +2012,21 @@ export async function createServer(opts: {
     skipAuth: false,
     sessionCookieName: SESSION_COOKIE_NAME,
     resolveSessionApiKeyId,
+    // Named-account sessions ride the same cookie path as the older dashboard
+    // cookie, so a sub-path mount behaves the same for both. `secure` is only
+    // forced ON: the config flag knows an https public URL when there is one,
+    // but it cannot see a reverse proxy terminating TLS in front of a
+    // plain-http bind. Passing `false` there would mark the cookie insecure on
+    // exactly the deployment that needs it most, so an unset flag defers to
+    // how the request actually arrived.
+    userSessionCookie: {
+      path: sessionCookiePath,
+      ...(sessionCookieSecure ? { secure: true } : {}),
+    },
+    // Whether an operator has declared which hops to believe. The per-caller
+    // sign-in budget depends on this being the truth rather than something
+    // inferred from a header the caller controls.
+    trustProxyConfigured: trustProxy !== false,
     ...(embed.enabled && embed.projectTabs ? { embedProjectTabs: embed.projectTabs } : {}),
     explainContentRecommendation,
     briefContentRecommendation,

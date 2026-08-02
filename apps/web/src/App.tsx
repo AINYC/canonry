@@ -23,15 +23,18 @@ import {
 
 import { CitationStates, formatRunErrorOneLine } from '@ainyc/canonry-contracts'
 
+import { asyncHandler } from './lib/async-handler.js'
 import { formatErrorLog } from './lib/format-helpers.js'
 import {
   getEmbedConfig,
   heyClient,
   shouldShowDashboardResourceLinks,
   shouldShowDashboardUpdateNotification,
+  signOutOfAccount,
   type ApiProject,
   type ApiRun,
 } from './api.js'
+import { useAccount } from './contexts/account-context.js'
 import { embedThemeFontHref, embedThemeMode, embedThemeStyle, embedViewIdForPath } from './embed.js'
 import { getApiV1ProjectsOptions, getApiV1RunsOptions } from '@ainyc/canonry-api-client/react-query'
 import { serviceStatusTooltip } from './lib/health-helpers.js'
@@ -287,6 +290,11 @@ export function RunNotificationObserver() {
    ──────────────────────────────────────────── */
 
 export function RootLayout() {
+  // ── Who is signed in ──
+  // Full access on an install with no accounts, which is what every screen
+  // already assumed before accounts existed.
+  const { account, isAdmin } = useAccount()
+
   // ── Context-based initial data (tests inject via DashboardProvider) ──
   const contextDashboard = useInitialDashboard()
   // Read-only embed mode (#716). Resolved once (the injected config is fixed for
@@ -598,15 +606,17 @@ export function RootLayout() {
             <Link2 className="sidebar-icon" />
             <span>Backlink data</span>
           </Link>
-          <Link
-            to="/settings"
-            className="sidebar-link"
-            activeProps={{ className: 'sidebar-link sidebar-link-active' }}
-            activeOptions={{ exact: true }}
-          >
-            <Settings className="sidebar-icon" />
-            <span>Settings</span>
-          </Link>
+          {isAdmin && (
+            <Link
+              to="/settings"
+              className="sidebar-link"
+              activeProps={{ className: 'sidebar-link sidebar-link-active' }}
+              activeOptions={{ exact: true }}
+            >
+              <Settings className="sidebar-icon" />
+              <span>Settings</span>
+            </Link>
+          )}
 
           {isLoading ? (
             <>
@@ -640,18 +650,42 @@ export function RootLayout() {
           ) : !isLoading ? (
             <>
               <p className="sidebar-section-title">Resources</p>
-              <Link
-                to="/setup"
-                className="sidebar-link"
-                activeProps={{ className: 'sidebar-link sidebar-link-active' }}
-                activeOptions={{ exact: true }}
-              >
-                <Rocket className="sidebar-icon" />
-                <span>Setup</span>
-              </Link>
+              {isAdmin && (
+                <Link
+                  to="/setup"
+                  className="sidebar-link"
+                  activeProps={{ className: 'sidebar-link sidebar-link-active' }}
+                  activeOptions={{ exact: true }}
+                >
+                  <Rocket className="sidebar-icon" />
+                  <span>Setup</span>
+                </Link>
+              )}
             </>
           ) : null}
         </nav>
+
+        {account && (
+          <div className="sidebar-account">
+            <div className="sidebar-account-identity">
+              <span className="sidebar-account-name">{account.name}</span>
+              {account.role === 'viewer' ? (
+                <span className="sidebar-account-role">View only</span>
+              ) : null}
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={asyncHandler(async () => {
+                await signOutOfAccount()
+                window.location.reload()
+              })}
+            >
+              Sign out
+            </Button>
+          </div>
+        )}
 
         {resourceLinksVisible ? (
           <div className="sidebar-footer">
@@ -770,9 +804,11 @@ export function RootLayout() {
           <Link to="/backlinks" className="mobile-nav-link" activeProps={{ className: 'mobile-nav-link mobile-nav-link-active' }} activeOptions={{ exact: true }}>
             Backlink data
           </Link>
-          <Link to="/settings" className="mobile-nav-link" activeProps={{ className: 'mobile-nav-link mobile-nav-link-active' }} activeOptions={{ exact: true }}>
-            Settings
-          </Link>
+          {isAdmin && (
+            <Link to="/settings" className="mobile-nav-link" activeProps={{ className: 'mobile-nav-link mobile-nav-link-active' }} activeOptions={{ exact: true }}>
+              Settings
+            </Link>
+          )}
           {safeDashboard && safeDashboard.projects.length > 0 ? (
             <div className="mobile-nav-section">
               <p className="mobile-nav-section-title">Tracked projects</p>
@@ -788,6 +824,36 @@ export function RootLayout() {
               ))}
             </div>
           ) : null}
+
+          {/* The sidebar carrying identity and sign-out is hidden below the
+              large breakpoint, so on a phone this is the only way to see who
+              is signed in and the only way to sign out — on the device most
+              likely to be shared or left somewhere. */}
+          {account && (
+            <div className="mobile-nav-section">
+              <p className="mobile-nav-section-title">Signed in</p>
+              <div className="sidebar-account">
+                <div className="sidebar-account-identity">
+                  <span className="sidebar-account-name">{account.name}</span>
+                  {account.role === 'viewer' ? (
+                    <span className="sidebar-account-role">View only</span>
+                  ) : null}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  data-testid="mobile-sign-out"
+                  onClick={asyncHandler(async () => {
+                    await signOutOfAccount()
+                    window.location.reload()
+                  })}
+                >
+                  Sign out
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Page content */}

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { eq } from 'drizzle-orm'
-import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { apiKeys, projects, runs } from '@ainyc/canonry-db'
 import {
   ADS_ACTIVATE_SCOPE,
@@ -11,9 +11,23 @@ import {
   forbidden,
   isReadOnlyKey,
   normalizeIdTokens,
+  READ_ONLY_SCOPE,
   RunKinds,
   splitList,
+  UserRoles,
+  WILDCARD_SCOPE,
+  type UserRole,
 } from '@ainyc/canonry-contracts'
+import { assertSameOriginWrite } from './same-origin.js'
+import {
+  anyUsersExist,
+  cookieIsSecure,
+  parseCookieHeader,
+  resolveUserSession,
+  serializeUserSessionCookie,
+  USER_SESSION_COOKIE_NAME,
+  type UserSessionCookieOptions,
+} from './user-session.js'
 
 /**
  * HTTP methods that mutate state. A read-only key is rejected on these; the
@@ -59,6 +73,39 @@ export interface AuthedApiKey {
   projectId?: string | null
 }
 
+/**
+ * Whoever is making this request.
+ *
+ * There are exactly two kinds and they are peers: an API key, and a person
+ * signed in with a named account. Neither one gates the other, and both are
+ * expressed in the SAME currency — a scope list — so every existing gate keeps
+ * working unchanged instead of growing a second permission model beside it.
+ *
+ * An admin carries `['*']`: precisely the authority the install already had,
+ * now behind a sign-in. A viewer carries `['read']`, which the global write
+ * gate below already understands.
+ */
+export interface AuthPrincipal {
+  kind: 'api-key' | 'user'
+  id: string
+  name: string
+  scopes: string[]
+  projectId?: string | null
+  /** Present only for a signed-in person. */
+  role?: UserRole
+  /**
+   * The credential arrived in a COOKIE, so a browser attaches it automatically
+   * and another origin can therefore cause it to be sent.
+   *
+   * This is deliberately separate from `kind`. The install's older shared
+   * dashboard password also arrives in a cookie and resolves to a wildcard API
+   * key — so a rule written against `kind` would exempt a full-authority
+   * browser session from the very check that exists to protect browser
+   * sessions. What matters is the carrier, not what it resolves to.
+   */
+  viaCookie: boolean
+}
+
 declare module 'fastify' {
   interface FastifyRequest {
     /**
@@ -66,29 +113,155 @@ declare module 'fastify' {
      * request that passed `authPlugin` (i.e. everything not in the
      * skip-paths list). Routes that need scope checks should call
      * `requireScope(request, '<scope>')`.
+     *
+     * Absent when the request was authenticated by a signed-in person — see
+     * `principal`, which covers both cases.
      */
     apiKey?: AuthedApiKey
+    /** Whoever authenticated this request: an API key or a signed-in person. */
+    principal?: AuthPrincipal
+    /**
+     * Set when a viewer reached a route whose config declares `readSemantic`.
+     * Only ever true for a signed-in viewer, so API-key behavior is untouched
+     * by the annotation.
+     */
+    readSemanticGrant?: boolean
+  }
+  interface FastifyContextConfig {
+    /**
+     * This route's POST does not change anything.
+     *
+     * A few routes are reads that have to be POSTs because the thing being read
+     * is described by a body too large for a URL — compiling a proposed plan to
+     * see what it would do, for instance. The blanket "no write methods for a
+     * viewer" rule would otherwise refuse them, leaving a viewer unable to look
+     * at the very previews that exist to be looked at.
+     *
+     * Set this ONLY on a route that performs no writes at all. It is the entire
+     * allowance; every other write method stays refused for a viewer. It also
+     * changes nothing for an API key — a read-only key is refused here exactly
+     * as it was before.
+     */
+    readSemantic?: boolean
+  }
+}
+
+function principalScopes(request: FastifyRequest): string[] | undefined {
+  return request.principal?.scopes ?? request.apiKey?.scopes
+}
+
+/** True when the route this request landed on declared itself a pure read. */
+function isReadSemanticRoute(request: FastifyRequest): boolean {
+  return request.routeOptions.config.readSemantic === true
+}
+
+/**
+ * Reject the request unless the caller carries the named scope (or the
+ * wildcard `'*'`). The wildcard is what `canonry init` writes for the
+ * install's root key, and it is also what an admin account carries —
+ * operators don't have to opt in to existing capabilities. Created delegate
+ * keys must declare their scopes explicitly to satisfy this gate.
+ */
+export function requireScope(request: FastifyRequest, scope: string): void {
+  // A viewer on a route that only reads is allowed through — see the
+  // `readSemantic` route config above.
+  if (request.readSemanticGrant) return
+
+  const scopes = principalScopes(request)
+  // No principal on the request means the auth plugin didn't run — happens when
+  // `apiRoutes` is mounted with `skipAuth: true` (test harnesses, fixtures).
+  // The deployable code path always registers `authPlugin` before routes,
+  // so a real request without one would have been rejected upstream.
+  // Treat the absence as "auth not enforced" rather than as a deny — this
+  // keeps the test harness ergonomic without weakening the prod gate.
+  if (!scopes) return
+  if (scopes.includes('*') || scopes.includes(scope)) return
+  if (request.principal?.kind === 'user') {
+    throw forbidden(VIEWER_DENIED_MESSAGE)
+  }
+  throw forbidden(`This action requires the "${scope}" scope on your API key.`)
+}
+
+/** What a viewer is told when they reach something only an admin can do. */
+export const VIEWER_DENIED_MESSAGE =
+  'Your account has view-only access, so it cannot make this change.'
+
+/** What a viewer is told when they reach an administrator-only screen. */
+export const ADMIN_ONLY_MESSAGE =
+  'Only an administrator account can use this.'
+
+/**
+ * Reject a signed-in VIEWER outright, whatever the HTTP method.
+ *
+ * The name says session on purpose: this asks about the role on a sign-in and
+ * nothing else. An API key passes straight through, because this function never
+ * reads a key's scopes — so it is NOT sufficient on its own for a surface a
+ * narrow key should not reach. Pair it with `requireBroadInstanceKey` there.
+ */
+export function requireAdminSession(request: FastifyRequest): void {
+  const principal = request.principal
+  if (!principal || principal.kind !== 'user') return
+  if (principal.role === UserRoles.admin) return
+  throw forbidden(ADMIN_ONLY_MESSAGE)
+}
+
+/**
+ * Reject a credential that must not be able to SPEND on the operator's behalf.
+ *
+ * Some reads are not free: they fan out into billed provider calls. The
+ * method-based gate only sees the HTTP verb, so a GET that costs money looks
+ * exactly like one that does not.
+ *
+ * Stated as an ALLOW list on purpose, mirroring `requireBroadInstanceKey`. The
+ * previous version asked one DENY question — "is this key read-only" — and a
+ * key that was merely narrow (scoped to something unrelated, e.g.
+ * `users.read`) sailed straight through: it never opted into the `read` token,
+ * so `isReadOnlyKey` said no, and "not read-only" was treated as "may spend."
+ * Deny lists silently widen every time a new scope is invented; an allow list
+ * does not.
+ *
+ * So: the wildcard, or a scope explicitly about ads. Nothing else — including
+ * a key that merely isn't marked read-only, and including an empty scope
+ * list. "Read-only" is a statement about Canonry's own data; it was never a
+ * licence to spend, and now neither is silence.
+ */
+export function requirePaidReadScope(request: FastifyRequest): void {
+  const principal = request.principal
+  if (!principal || principal.kind !== 'api-key') return
+  const grantsAdsAccess = principal.scopes.some(scope =>
+    scope === WILDCARD_SCOPE
+    || scope === ADS_WRITE_SCOPE
+    || scope === ADS_APPROVE_SCOPE
+    || scope === ADS_ACTIVATE_SCOPE)
+  if (!grantsAdsAccess) {
+    throw forbidden('This API key was not granted access to OpenAI Ads paid reads.')
   }
 }
 
 /**
- * Reject the request unless the authenticated key carries the named scope
- * (or the wildcard `'*'`). The wildcard is what `canonry init` writes for
- * the install's root key — operators don't have to opt in to existing
- * capabilities. Created delegate keys (when a key-management UI lands)
- * must declare their scopes explicitly to satisfy this gate.
+ * Require a key that was actually granted account administration.
+ *
+ * Stated as an ALLOW list on purpose. The previous version asked two deny
+ * questions — "is it read-only" and "is it project-scoped" — and a key that was
+ * neither sailed through: `['ads.write']`, or even `[]`, could enumerate every
+ * account name, role and last sign-in. Deny lists silently widen every time a
+ * new scope is invented; an allow list does not.
+ *
+ * So: the wildcard, or a scope explicitly about accounts. Nothing else. A
+ * project-scoped key is refused whatever its scopes, because the install's
+ * access list is not a single project's business.
  */
-export function requireScope(request: FastifyRequest, scope: string): void {
-  const key = request.apiKey
-  // No key on the request means the auth plugin didn't run — happens when
-  // `apiRoutes` is mounted with `skipAuth: true` (test harnesses, fixtures).
-  // The deployable code path always registers `authPlugin` before routes,
-  // so a real request without a key would have been rejected upstream.
-  // Treat the absence as "auth not enforced" rather than as a deny — this
-  // keeps the test harness ergonomic without weakening the prod gate.
-  if (!key) return
-  if (key.scopes.includes('*') || key.scopes.includes(scope)) return
-  throw forbidden(`This action requires the "${scope}" scope on your API key.`)
+export function requireBroadInstanceKey(request: FastifyRequest): void {
+  const principal = request.principal
+  if (!principal || principal.kind !== 'api-key') return
+  if (principal.projectId) {
+    throw forbidden('This API key is limited to one project, and this is an instance-wide surface.')
+  }
+  const grantsAccountAccess = principal.scopes.some(scope =>
+    scope === WILDCARD_SCOPE || scope === USERS_READ_SCOPE || scope === USERS_WRITE_SCOPE)
+  if (!grantsAccountAccess) {
+    throw forbidden('This API key was not granted access to accounts on this install.')
+  }
 }
 
 /**
@@ -128,12 +301,35 @@ function shouldSkipAuth(url: string): boolean {
   // `/google/callback/anything` — does not silently become unauthenticated.
   if (url.endsWith('/google/callback')) return true
   if (url.endsWith('/session') || url.endsWith('/session/setup')) return true
+  // The sign-in surface. It cannot require a credential: the sign-in screen has
+  // to be able to ask whether a sign-in is needed, offer the form, and clear a
+  // dead session, none of which it can do while holding something it does not
+  // have yet. Each of the three does its own resolution.
+  if (url.endsWith('/auth/session') || url.endsWith('/auth/login') || url.endsWith('/auth/logout')) return true
+  // Seeing and ending your own sessions is part of the sign-in surface: it has
+  // to work from a session that the rest of the API might already be refusing.
+  // Both routes resolve the cookie themselves, and the DELETE runs its own
+  // same-origin check below.
+  if (url.endsWith('/auth/sessions')) return true
   return false
+}
+
+/** Reading the install's account list. */
+export const USERS_READ_SCOPE = 'users.read'
+
+/** Creating or deleting accounts. Also satisfies the read gate. */
+export const USERS_WRITE_SCOPE = 'users.write'
+
+/** Scopes a role carries. Admin is exactly today's authority, behind a sign-in. */
+function scopesForRole(role: UserRole): string[] {
+  return role === UserRoles.admin ? [WILDCARD_SCOPE] : [READ_ONLY_SCOPE]
 }
 
 export interface AuthPluginOptions {
   sessionCookieName?: string
   resolveSessionApiKeyId?: (sessionId: string) => string | null | Promise<string | null>
+  /** Cookie attributes for named-account sessions. Must match the sign-in routes. */
+  userSessionCookie?: UserSessionCookieOptions
   /**
    * When set, the server is running in embed mode and this is the effective
    * project-tab allowlist. It is a server-side data boundary layered on top of
@@ -143,28 +339,6 @@ export interface AuthPluginOptions {
   embedProjectTabs?: readonly string[]
 }
 
-function parseCookies(header: string | undefined): Record<string, string> {
-  if (!header) return {}
-
-  return header
-    .split(';')
-    .map(part => part.trim())
-    .filter(Boolean)
-    .reduce<Record<string, string>>((cookies, part) => {
-      const eqIdx = part.indexOf('=')
-      if (eqIdx <= 0) return cookies
-      const name = part.slice(0, eqIdx).trim()
-      const value = part.slice(eqIdx + 1).trim()
-      if (!name) return cookies
-      try {
-        cookies[name] = decodeURIComponent(value)
-      } catch {
-        cookies[name] = value
-      }
-      return cookies
-    }, {})
-}
-
 function queryValue(request: FastifyRequest, key: string): string | undefined {
   const raw = (request.query as Record<string, unknown> | undefined)?.[key]
   if (typeof raw === 'string') return raw
@@ -172,10 +346,30 @@ function queryValue(request: FastifyRequest, key: string): string | undefined {
   return undefined
 }
 
-function requestEmbedProjectTabs(request: FastifyRequest, fallback: readonly string[] | undefined): string[] | undefined {
+/**
+ * The effective tab set to enforce for this request, or `undefined` when
+ * nothing restricts it at all.
+ *
+ * A caller-supplied header may only NARROW the server's configured allowlist,
+ * never replace or widen it — the header comes from the Embed v2 fronting
+ * proxy scoping ONE embedded dashboard down to a subset of what the install
+ * allows overall, not from a party trusted to name the install's allowlist
+ * itself. When a configured allowlist exists, the result is its intersection
+ * with the header (or the allowlist verbatim when there is no header) — this
+ * can legitimately be `[]` when the header names no tab the install permits,
+ * and `[]` must still be treated as an ACTIVE (maximally narrow) restriction
+ * by the caller, not as "nothing to enforce".
+ */
+function requestEmbedProjectTabs(
+  request: FastifyRequest,
+  configuredTabs: readonly string[] | undefined,
+): string[] | undefined {
   const headerTabs = normalizeIdTokens(splitList(request.headers['x-canonry-embed-tabs']))
-  if (headerTabs) return headerTabs
-  return fallback && fallback.length > 0 ? [...fallback] : undefined
+  const configured = configuredTabs && configuredTabs.length > 0 ? configuredTabs : undefined
+
+  if (!configured) return headerTabs
+  if (!headerTabs) return [...configured]
+  return headerTabs.filter((tab) => configured.includes(tab))
 }
 
 function projectRouteRest(url: string): string | null {
@@ -247,7 +441,12 @@ function isReportRead(url: string): boolean {
 
 function enforceEmbedProjectTabs(request: FastifyRequest, configuredTabs: readonly string[] | undefined): void {
   const tabs = requestEmbedProjectTabs(request, configuredTabs)
-  if (!tabs || tabs.length === 0) return
+  // `undefined` is the only "nothing to enforce" value now. An empty ARRAY is
+  // a real, maximally-narrow restriction (a header that named no tab the
+  // install permits) and must fall through to the checks below, where an
+  // empty `tabs.includes(...)` never matches and the request is refused
+  // rather than waved through as if no allowlist applied.
+  if (tabs === undefined) return
   if (request.method === 'OPTIONS') return
 
   // In embed mode with a tab allowlist, the public iframe is a read surface.
@@ -266,13 +465,82 @@ function enforceEmbedProjectTabs(request: FastifyRequest, configuredTabs: readon
   throw forbidden('This endpoint is not available for the configured embed tabs.')
 }
 
+/**
+ * Resolve a sign-in cookie to a principal, or return false.
+ *
+ * Returns false — rather than refusing — when there is no cookie or the cookie
+ * is dead, so the caller decides what "not signed in" means for this install.
+ * Extending a session re-sends the cookie, which is what keeps somebody working
+ * all day from being signed out at hour twelve.
+ */
+function resolveSignedInPerson(
+  app: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  cookie: UserSessionCookieOptions | undefined,
+): boolean {
+  const sessionId = parseCookieHeader(request.headers.cookie)[USER_SESSION_COOKIE_NAME]
+  if (!sessionId) return false
+
+  const resolved = resolveUserSession(app.db, sessionId)
+  if (!resolved) return false
+
+  request.principal = {
+    kind: 'user',
+    id: resolved.user.id,
+    name: resolved.user.name,
+    scopes: scopesForRole(resolved.user.role),
+    projectId: null,
+    role: resolved.user.role,
+    viaCookie: true,
+  }
+
+  if (resolved.renewedExpiresAt) {
+    reply.header('set-cookie', serializeUserSessionCookie({
+      value: sessionId,
+      path: cookie?.path,
+      secure: cookieIsSecure(request, cookie?.secure),
+    }))
+  }
+
+  return true
+}
+
+/**
+ * The one place a signed-in person's role turns into a yes or a no.
+ *
+ * A viewer is refused every write method, which is the same gate a read-only
+ * API key already goes through — there is no second permission model here, only
+ * a second way to arrive at the same scope list. The single exception is a route
+ * that has declared itself a read (the `readSemantic` route config).
+ */
+function applyRoleGates(request: FastifyRequest): void {
+  const principal = request.principal
+  if (!principal || principal.kind !== 'user') return
+
+  request.readSemanticGrant = principal.role === UserRoles.viewer && isReadSemanticRoute(request)
+
+  if (
+    isReadOnlyKey(principal.scopes)
+    && WRITE_METHODS.has(request.method)
+    && !request.readSemanticGrant
+  ) {
+    throw forbidden(VIEWER_DENIED_MESSAGE)
+  }
+}
+
 export async function authPlugin(app: FastifyInstance, opts: AuthPluginOptions = {}) {
-  app.addHook('onRequest', async (request) => {
+  app.addHook('onRequest', async (request, reply) => {
     const url = request.url.split('?')[0]!
     if (shouldSkipAuth(url)) return
 
     const header = request.headers.authorization
     let key: typeof apiKeys.$inferSelect | undefined
+    // Tracks the CARRIER, which is what decides whether a browser could have
+    // been made to send this request. The older shared dashboard password
+    // resolves to a key but arrives in a cookie, and that is the case the
+    // origin rule exists for.
+    let keyArrivedInCookie = false
 
     if (header) {
       const parts = header.split(' ')
@@ -292,8 +560,24 @@ export async function authPlugin(app: FastifyInstance, opts: AuthPluginOptions =
       if (!key || key.revokedAt) {
         throw authInvalid()
       }
+    } else if (resolveSignedInPerson(app, request, reply, opts.userSessionCookie)) {
+      // Signed in with a named account. Handled entirely inside the helper,
+      // which attaches the principal and re-sends the cookie when the session
+      // was extended. Nothing below this point applies: an account is not a
+      // key, so there is no key row to touch and no key-shaped gate to run.
+      applyRoleGates(request)
+      assertSameOriginWrite(request)
+      enforceEmbedProjectTabs(request, opts.embedProjectTabs)
+      return
+    } else if (anyUsersExist(app.db)) {
+      // This install has accounts, so a request with no API key and no valid
+      // session is simply not signed in. The older shared-password session is
+      // deliberately NOT consulted here: once there are named accounts, a
+      // shared password would hand everyone the authority of the root key and
+      // quietly undo the roles that were just set up.
+      throw authRequired()
     } else if (opts.resolveSessionApiKeyId && opts.sessionCookieName) {
-      const sessionId = parseCookies(request.headers.cookie)[opts.sessionCookieName]
+      const sessionId = parseCookieHeader(request.headers.cookie)[opts.sessionCookieName]
       if (sessionId) {
         const apiKeyId = await opts.resolveSessionApiKeyId(sessionId)
         if (apiKeyId) {
@@ -308,6 +592,7 @@ export async function authPlugin(app: FastifyInstance, opts: AuthPluginOptions =
       if (!key || key.revokedAt) {
         throw authRequired()
       }
+      keyArrivedInCookie = true
     } else {
       throw authRequired()
     }
@@ -323,6 +608,16 @@ export async function authPlugin(app: FastifyInstance, opts: AuthPluginOptions =
     // JSON column; the type assertion mirrors what Drizzle returns.
     const scopes = Array.isArray(key.scopes) ? key.scopes : []
     request.apiKey = { id: key.id, name: key.name, scopes, projectId: key.projectId ?? null }
+    request.principal = {
+      kind: 'api-key',
+      id: key.id,
+      name: key.name,
+      scopes,
+      projectId: key.projectId ?? null,
+      viaCookie: keyArrivedInCookie,
+    }
+
+    assertSameOriginWrite(request)
 
     // Global read-only gate. A key that opted into read-only (`['read']`)
     // cannot perform any write — keyed off the HTTP method, NOT per-route
