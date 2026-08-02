@@ -310,8 +310,22 @@ const reportAudienceQueryParameter: OpenApiParameter = {
 const analyticsWindowParameter: OpenApiParameter = {
   name: 'window',
   in: 'query',
-  description: 'Time window for analytics queries.',
+  description: 'Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.',
   schema: { type: 'string', enum: ['7d', '30d', '90d', 'all'] },
+}
+
+const analyticsStartDateParameter: OpenApiParameter = {
+  name: 'startDate',
+  in: 'query',
+  description: 'Inclusive lower bound as a calendar date (YYYY-MM-DD). Takes precedence over "window", which is rolling from now and cannot name a calendar month.',
+  schema: stringSchema,
+}
+
+const analyticsEndDateParameter: OpenApiParameter = {
+  name: 'endDate',
+  in: 'query',
+  description: 'Inclusive upper bound as a calendar date (YYYY-MM-DD).',
+  schema: stringSchema,
 }
 
 const organicEvidencePeriodQueryParameter: OpenApiParameter = {
@@ -2054,15 +2068,22 @@ const routeCatalog: OpenApiOperation[] = [
       { name: 'endDate', in: 'query', description: 'Filter by end date.', schema: stringSchema },
       { name: 'query', in: 'query', description: 'Filter by search query.', schema: stringSchema },
       { name: 'page', in: 'query', description: 'Filter by page URL.', schema: stringSchema },
+      {
+        name: 'orderBy',
+        in: 'query',
+        description: 'Row ordering, always descending. Defaults to clicks. Use date for time-series reads.',
+        schema: { type: 'string', enum: ['clicks', 'impressions', 'date'] },
+      },
       limitQueryParameter,
       offsetQueryParameter,
       analyticsWindowParameter,
     ],
     responses: {
-      // Handler returns an array of GscSearchDataDto rows (web's
-      // ApiGscPerformanceRow[] confirms). Was incorrectly spec'd as a
-      // single object, which silently truncated client types to one row.
-      200: jsonArrayResponse('GSC performance rows returned.', 'GscSearchDataDto'),
+      // Envelope, not a bare array: `totalMatching` / `truncated` are how a
+      // caller tells a page from a complete answer, and `latestAvailableDate`
+      // is how it tells "no data" from "asked past the GSC reporting lag".
+      200: jsonResponse('GSC performance page plus match count and data freshness.', 'GscPerformanceResponseDto'),
+      400: errorResponse('Invalid orderBy value.'),
       404: errorResponse('Project not found.'),
     },
   },
@@ -2079,6 +2100,24 @@ const routeCatalog: OpenApiOperation[] = [
     ],
     responses: {
       200: jsonResponse('Daily aggregate (date → clicks/impressions/ctr) plus window totals.', 'GscPerformanceDailyDto'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/google/gsc/top-pages',
+    summary: 'Get top GSC pages ranked by clicks',
+    description: 'One row per page, aggregated in SQL and ranked by summed clicks descending. The rows are a RANKING built from the dimensioned search-data table; `totals` is NOT their sum. Google withholds rare queries (summed clicks under-count) and fans one impression across every query/page/country/device combination (summed impressions over-count), so `totals` is read from the un-dimensioned property-level daily table and labelled `totalsSource: property-daily`. It is null when that table has no rows in the window.',
+    tags: ['google'],
+    parameters: [
+      nameParameter,
+      { name: 'startDate', in: 'query', description: 'Filter by start date.', schema: stringSchema },
+      { name: 'endDate', in: 'query', description: 'Filter by end date.', schema: stringSchema },
+      limitQueryParameter,
+      analyticsWindowParameter,
+    ],
+    responses: {
+      200: jsonResponse('Ranked pages plus the property-level window total.', 'GscTopPagesDto'),
       404: errorResponse('Project not found.'),
     },
   },
@@ -3873,7 +3912,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/ga/traffic',
     summary: 'Get GA4 landing page traffic, channel breakdown, and AI referral landing pages',
     tags: ['ga4'],
-    parameters: [nameParameter, limitQueryParameter, analyticsWindowParameter],
+    parameters: [nameParameter, limitQueryParameter, analyticsWindowParameter, analyticsStartDateParameter, analyticsEndDateParameter],
     responses: {
       // TODO: Add `GaTrafficResponse` Zod schema in contracts.
       200: rawJsonResponse('GA4 traffic data returned.', looseObjectSchema),
@@ -3887,7 +3926,7 @@ const routeCatalog: OpenApiOperation[] = [
     summary: 'Get raw AI referral detail rows per day, landing page, and attribution dimension',
     description: 'Detail rows, not totals. One row per landing page per attribution dimension, so a single day of one source is many rows and each is commonly worth one session. Use /ga/ai-referral-daily for per-date or per-source session counts.',
     tags: ['ga4'],
-    parameters: [nameParameter, analyticsWindowParameter],
+    parameters: [nameParameter, analyticsWindowParameter, analyticsStartDateParameter, analyticsEndDateParameter],
     responses: {
       200: jsonArrayResponse('AI referral history returned.', 'GA4AiReferralHistoryEntry'),
       400: errorResponse('GA4 is not connected.'),
@@ -3900,7 +3939,7 @@ const routeCatalog: OpenApiOperation[] = [
     summary: 'Get AI referral sessions per day and per source',
     description: 'Sums landing pages within one attribution dimension and never across dimensions, so totalSessions equals the aiSessionsDeduped reported by /ga/traffic for the same window. Sessions only: GA counts users as a distinct count at the grain requested, so an AI-referral user total cannot be summed from these rows and no un-dimensioned AI-referral fetch exists to supply one.',
     tags: ['ga4'],
-    parameters: [nameParameter, analyticsWindowParameter],
+    parameters: [nameParameter, analyticsWindowParameter, analyticsStartDateParameter, analyticsEndDateParameter],
     responses: {
       200: jsonResponse('AI referral daily series returned.', 'GA4AiReferralDailyDto'),
       400: errorResponse('GA4 is not connected.'),
@@ -3912,7 +3951,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/ga/social-referral-history',
     summary: 'Get social media referral sessions per day grouped by source',
     tags: ['ga4'],
-    parameters: [nameParameter, analyticsWindowParameter],
+    parameters: [nameParameter, analyticsWindowParameter, analyticsStartDateParameter, analyticsEndDateParameter],
     responses: {
       200: jsonArrayResponse('Social referral history returned.', 'GA4SocialReferralHistoryEntry'),
       400: errorResponse('GA4 is not connected.'),
@@ -3950,7 +3989,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/ga/session-history',
     summary: 'Get total sessions per day for the project',
     tags: ['ga4'],
-    parameters: [nameParameter, analyticsWindowParameter],
+    parameters: [nameParameter, analyticsWindowParameter, analyticsStartDateParameter, analyticsEndDateParameter],
     responses: {
       200: jsonArrayResponse('Session history returned.', 'GA4SessionHistoryEntry'),
       400: errorResponse('GA4 is not connected.'),

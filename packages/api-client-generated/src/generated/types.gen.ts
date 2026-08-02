@@ -2060,6 +2060,24 @@ export type Ga4MeasurementAnalysisDto = {
             }>;
         }>;
     };
+    engagement: {
+        status: 'ready' | 'unavailable';
+        availableFromDate: string | null;
+        latestDate: string | null;
+        periods: Array<{
+            label: 'earliest' | 'middle' | 'previous' | 'latest';
+            startDate: string;
+            endDate: string;
+            sessions: number;
+            engagementRate: number | null;
+            dailyTotalUsers: number | null;
+            dailyNewUsers: number | null;
+            metricsAvailable: boolean;
+            daysInPeriod: number;
+            daysWithEngagementRate: number;
+            daysWithUserSplit: number;
+        }>;
+    };
     searchDemand: {
         status: 'ready' | 'unavailable';
         periods: Array<{
@@ -2476,16 +2494,42 @@ export type GscPerformanceDailyDto = {
     }>;
 };
 
-export type GscSearchDataDto = {
-    date: string;
-    query: string;
-    page: string;
-    country?: string | null;
-    device?: string | null;
-    clicks: number;
-    impressions: number;
-    ctr: number;
-    position: number;
+export type GscPerformanceResponseDto = {
+    rows: Array<{
+        date: string;
+        query: string;
+        page: string;
+        country?: string | null;
+        device?: string | null;
+        clicks: number;
+        impressions: number;
+        ctr: number;
+        position: number;
+    }>;
+    totalMatching: number;
+    truncated: boolean;
+    latestAvailableDate: string | null;
+};
+
+export type GscTopPagesDto = {
+    rows: Array<{
+        page: string;
+        clicks: number;
+        impressions: number;
+        ctr: number;
+    }>;
+    totals: {
+        clicks: number;
+        impressions: number;
+        ctr: number;
+        days: number;
+        coveredFrom: string | null;
+        coveredThrough: string | null;
+        complete: boolean;
+    } | null;
+    totalsSource: 'property-daily';
+    rankedFrom: string | null;
+    rankedThrough: string | null;
 };
 
 export type GscDiscoverSitemapsResponseDto = {
@@ -3698,6 +3742,24 @@ export type OrganicEvidenceDto = {
                     endDate: string;
                     eventCount: number;
                 }>;
+            }>;
+        };
+        engagement: {
+            status: 'ready' | 'unavailable';
+            availableFromDate: string | null;
+            latestDate: string | null;
+            periods: Array<{
+                label: 'earliest' | 'middle' | 'previous' | 'latest';
+                startDate: string;
+                endDate: string;
+                sessions: number;
+                engagementRate: number | null;
+                dailyTotalUsers: number | null;
+                dailyNewUsers: number | null;
+                metricsAvailable: boolean;
+                daysInPeriod: number;
+                daysWithEngagementRate: number;
+                daysWithUserSplit: number;
             }>;
         };
         searchDemand: {
@@ -7535,7 +7597,7 @@ export type GetApiV1ProjectsByNameAnalyticsMetricsData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
     };
@@ -7570,7 +7632,7 @@ export type GetApiV1ProjectsByNameAnalyticsGapsData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
     };
@@ -7607,7 +7669,7 @@ export type GetApiV1ProjectsByNameAnalyticsSourcesData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
         /**
@@ -8916,6 +8978,10 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceData = {
          */
         page?: string;
         /**
+         * Row ordering, always descending. Defaults to clicks. Use date for time-series reads.
+         */
+        orderBy?: 'clicks' | 'impressions' | 'date';
+        /**
          * Maximum number of records to return.
          */
         limit?: number;
@@ -8924,7 +8990,7 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceData = {
          */
         offset?: number;
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
     };
@@ -8932,6 +8998,10 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceData = {
 };
 
 export type GetApiV1ProjectsByNameGoogleGscPerformanceErrors = {
+    /**
+     * Invalid orderBy value.
+     */
+    400: ErrorEnvelope;
     /**
      * Project not found.
      */
@@ -8942,9 +9012,9 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceError = GetApiV1ProjectsBy
 
 export type GetApiV1ProjectsByNameGoogleGscPerformanceResponses = {
     /**
-     * GSC performance rows returned.
+     * GSC performance page plus match count and data freshness.
      */
-    200: Array<GscSearchDataDto>;
+    200: GscPerformanceResponseDto;
 };
 
 export type GetApiV1ProjectsByNameGoogleGscPerformanceResponse = GetApiV1ProjectsByNameGoogleGscPerformanceResponses[keyof GetApiV1ProjectsByNameGoogleGscPerformanceResponses];
@@ -8967,7 +9037,7 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceDailyData = {
          */
         endDate?: string;
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
     };
@@ -8991,6 +9061,53 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceDailyResponses = {
 };
 
 export type GetApiV1ProjectsByNameGoogleGscPerformanceDailyResponse = GetApiV1ProjectsByNameGoogleGscPerformanceDailyResponses[keyof GetApiV1ProjectsByNameGoogleGscPerformanceDailyResponses];
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Filter by start date.
+         */
+        startDate?: string;
+        /**
+         * Filter by end date.
+         */
+        endDate?: string;
+        /**
+         * Maximum number of records to return.
+         */
+        limit?: number;
+        /**
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
+         */
+        window?: '7d' | '30d' | '90d' | 'all';
+    };
+    url: '/api/v1/projects/{name}/google/gsc/top-pages';
+};
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesErrors = {
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesError = GetApiV1ProjectsByNameGoogleGscTopPagesErrors[keyof GetApiV1ProjectsByNameGoogleGscTopPagesErrors];
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesResponses = {
+    /**
+     * Ranked pages plus the property-level window total.
+     */
+    200: GscTopPagesDto;
+};
+
+export type GetApiV1ProjectsByNameGoogleGscTopPagesResponse = GetApiV1ProjectsByNameGoogleGscTopPagesResponses[keyof GetApiV1ProjectsByNameGoogleGscTopPagesResponses];
 
 export type PostApiV1ProjectsByNameGoogleGscInspectData = {
     body: {
@@ -12582,9 +12699,17 @@ export type GetApiV1ProjectsByNameGaTrafficData = {
          */
         limit?: number;
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
+        /**
+         * Inclusive lower bound as a calendar date (YYYY-MM-DD). Takes precedence over "window", which is rolling from now and cannot name a calendar month.
+         */
+        startDate?: string;
+        /**
+         * Inclusive upper bound as a calendar date (YYYY-MM-DD).
+         */
+        endDate?: string;
     };
     url: '/api/v1/projects/{name}/ga/traffic';
 };
@@ -12623,9 +12748,17 @@ export type GetApiV1ProjectsByNameGaAiReferralHistoryData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
+        /**
+         * Inclusive lower bound as a calendar date (YYYY-MM-DD). Takes precedence over "window", which is rolling from now and cannot name a calendar month.
+         */
+        startDate?: string;
+        /**
+         * Inclusive upper bound as a calendar date (YYYY-MM-DD).
+         */
+        endDate?: string;
     };
     url: '/api/v1/projects/{name}/ga/ai-referral-history';
 };
@@ -12662,9 +12795,17 @@ export type GetApiV1ProjectsByNameGaAiReferralDailyData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
+        /**
+         * Inclusive lower bound as a calendar date (YYYY-MM-DD). Takes precedence over "window", which is rolling from now and cannot name a calendar month.
+         */
+        startDate?: string;
+        /**
+         * Inclusive upper bound as a calendar date (YYYY-MM-DD).
+         */
+        endDate?: string;
     };
     url: '/api/v1/projects/{name}/ga/ai-referral-daily';
 };
@@ -12701,9 +12842,17 @@ export type GetApiV1ProjectsByNameGaSocialReferralHistoryData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
+        /**
+         * Inclusive lower bound as a calendar date (YYYY-MM-DD). Takes precedence over "window", which is rolling from now and cannot name a calendar month.
+         */
+        startDate?: string;
+        /**
+         * Inclusive upper bound as a calendar date (YYYY-MM-DD).
+         */
+        endDate?: string;
     };
     url: '/api/v1/projects/{name}/ga/social-referral-history';
 };
@@ -12812,9 +12961,17 @@ export type GetApiV1ProjectsByNameGaSessionHistoryData = {
     };
     query?: {
         /**
-         * Time window for analytics queries.
+         * Time window for analytics queries. An unrecognised value is rejected with 400; it is never widened to the full history.
          */
         window?: '7d' | '30d' | '90d' | 'all';
+        /**
+         * Inclusive lower bound as a calendar date (YYYY-MM-DD). Takes precedence over "window", which is rolling from now and cannot name a calendar month.
+         */
+        startDate?: string;
+        /**
+         * Inclusive upper bound as a calendar date (YYYY-MM-DD).
+         */
+        endDate?: string;
     };
     url: '/api/v1/projects/{name}/ga/session-history';
 };

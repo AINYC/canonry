@@ -30,8 +30,9 @@ cnry google sync <project> --full --wait      # full re-sync
 
 ### Check search performance
 ```bash
-cnry google performance <project>                        # default 28 days
+cnry google performance <project>                        # top rows by clicks
 cnry google performance <project> --days 90 --keyword "term"
+cnry google performance <project> --start 2026-06-01 --end 2026-06-30 --order-by date
 ```
 
 ### Discover and inspect sitemaps

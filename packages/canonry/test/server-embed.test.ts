@@ -18,6 +18,7 @@ const EMBED_ENV = [
   'CANONRY_EMBED_PROJECT_TABS',
   'CANONRY_DASHBOARD_REQUIRE_PASSWORD',
   'CANONRY_DASHBOARD_SHOW_RESOURCE_LINKS',
+  'CANONRY_DASHBOARD_SHOW_UPDATE_NOTIFICATION',
 ] as const
 
 interface Built {
@@ -186,6 +187,37 @@ describe('server embed mode (#716)', () => {
       const res = await app.inject({ method: 'GET', url: '/' })
       expect(res.body).toContain(
         '<script>window.__CANONRY_CONFIG__={"dashboard":{"showResourceLinks":false}}</script>',
+      )
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('dashboard.showUpdateNotification=false injects the update-notification opt-out', async () => {
+    const { app, cleanup } = await buildServer(undefined, true, {
+      dashboard: { showUpdateNotification: false },
+    })
+    try {
+      for (const url of ['/', '/projects/acme']) {
+        const res = await app.inject({ method: 'GET', url })
+        expect(res.body).toContain(
+          '<script>window.__CANONRY_CONFIG__={"dashboard":{"showUpdateNotification":false}}</script>',
+        )
+      }
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('CANONRY_DASHBOARD_SHOW_UPDATE_NOTIFICATION overrides config for container deploys', async () => {
+    process.env.CANONRY_DASHBOARD_SHOW_UPDATE_NOTIFICATION = '0'
+    const { app, cleanup } = await buildServer(undefined, true, {
+      dashboard: { showUpdateNotification: true },
+    })
+    try {
+      const res = await app.inject({ method: 'GET', url: '/' })
+      expect(res.body).toContain(
+        '<script>window.__CANONRY_CONFIG__={"dashboard":{"showUpdateNotification":false}}</script>',
       )
     } finally {
       await cleanup()

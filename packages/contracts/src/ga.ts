@@ -104,7 +104,15 @@ export const ga4TrafficSummaryDtoSchema = z.object({
   totalOrganicSessions: z.number(),
   /** Direct-channel sessions (sessions with no source — bookmarks, typed URLs, AI-driven traffic with stripped referrer). 0 for legacy rows from before the column was added. */
   totalDirectSessions: z.number(),
-  totalUsers: z.number(),
+  /**
+   * Null when the range has no un-dimensioned aggregate behind it.
+   *
+   * GA counts users as a COUNT DISTINCT at the grain requested, so users cannot
+   * be recovered by summing the landing-page dimensioned table. The rolling
+   * windows have a precomputed deduplicated row; an explicit calendar range does
+   * not, and reports the figure as unavailable rather than as an inflated sum.
+   */
+  totalUsers: z.number().nullable(),
   topPages: z.array(z.object({
     landingPage: z.string(),
     sessions: z.number(),

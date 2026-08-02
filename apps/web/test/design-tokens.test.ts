@@ -202,6 +202,17 @@ test('highlight and effect primitives consume tokens', async () => {
   expect(css).toContain('background: var(--color-scrollbar-thumb)')
 })
 
+test('update notification fits the sidebar and wraps long version strings', async () => {
+  const css = await compileAppStyles([])
+
+  expect(ruleFor(css, '.brand-lockup-wrapper')).toContain('max-width: 100%')
+  expect(ruleFor(css, '.brand-update-bubble')).toContain('grid-column: span 2 / span 2')
+  expect(ruleFor(css, '.brand-update-bubble')).toContain('width: 100%')
+  expect(ruleFor(css, '.brand-update-bubble-link')).toContain('flex-wrap: wrap')
+  expect(ruleFor(css, '.brand-update-bubble-from')).toContain('overflow-wrap: anywhere')
+  expect(ruleFor(css, '.brand-update-bubble-to')).toContain('overflow-wrap: anywhere')
+})
+
 test('filter chips preserve a 44px touch target and visible keyboard focus', async () => {
   const css = await compileAppStyles([])
   const chip = ruleFor(css, '.filter-chip')

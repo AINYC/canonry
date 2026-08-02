@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { validationError } from './errors.js'
 import { modelPointerChangeDisclosureSchema } from './model-pointers.js'
 import { sourceCategorySchema } from './source-categories.js'
 import { surfaceClassSchema } from './surface-class.js'
@@ -423,9 +424,24 @@ export const sourceBreakdownDtoSchema = z.object({
 })
 export type SourceBreakdownDto = z.infer<typeof sourceBreakdownDtoSchema>
 
+/**
+ * Resolve a caller-supplied window label. An absent (or empty) value means the
+ * caller asked for no window at all and gets the full history.
+ *
+ * An UNRECOGNISED value is rejected. It used to fall back to `all`, which meant
+ * `--window 60d` returned every row ever stored while the caller believed it
+ * had a 60-day window: a wrong number with no signal attached to it. Failing
+ * loudly is the only way the caller can tell.
+ */
 export function parseWindow(value?: string): MetricsWindow {
-  if (value === '7d' || value === '30d' || value === '90d' || value === 'all') return value
-  return 'all'
+  if (value === undefined || value === '') return 'all'
+  const parsed = metricsWindowSchema.safeParse(value)
+  if (!parsed.success) {
+    throw validationError(
+      `Invalid window "${value}". Must be one of: ${metricsWindowSchema.options.join(', ')}.`,
+    )
+  }
+  return parsed.data
 }
 
 export function windowCutoff(window: MetricsWindow): string | null {
@@ -434,4 +450,75 @@ export function windowCutoff(window: MetricsWindow): string | null {
   const d = new Date()
   d.setDate(d.getDate() - days)
   return d.toISOString()
+}
+
+/** A `YYYY-MM-DD` calendar date. Anything else is not a date this API accepts. */
+const CALENDAR_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Validate one range boundary. Both the shape and the date itself are checked:
+ * a stored `date` column is compared as TEXT, so `2026-02-30` would not error,
+ * it would silently define a range nobody asked for.
+ */
+function parseBoundaryDate(value: string | undefined, field: 'startDate' | 'endDate'): string | null {
+  if (value === undefined || value === '') return null
+  const trimmed = value.trim()
+  const invalid = () => validationError(`Invalid ${field} "${value}". Expected a calendar date as YYYY-MM-DD.`)
+  if (!CALENDAR_DATE_PATTERN.test(trimmed)) throw invalid()
+  const parsed = new Date(`${trimmed}T00:00:00Z`)
+  // `2026-02-30` parses by rolling over into March, so round-tripping is what
+  // separates a real date from a well-shaped impossible one.
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== trimmed) throw invalid()
+  return trimmed
+}
+
+export interface DateRangeInput {
+  /** Inclusive lower bound as `YYYY-MM-DD`. Wins over `window`. */
+  startDate?: string
+  /** Inclusive upper bound as `YYYY-MM-DD`. */
+  endDate?: string
+  /** Rolling window label, applied only when no `startDate` was supplied. */
+  window?: string
+}
+
+export interface ResolvedDateRange {
+  /**
+   * Inclusive lower bound as `YYYY-MM-DD`, or null for an open lower bound.
+   * The explicit `startDate` when one was supplied, otherwise the window's
+   * rolling cutoff.
+   */
+  startDate: string | null
+  /** Inclusive upper bound as `YYYY-MM-DD`, or null for an open upper bound. */
+  endDate: string | null
+  /** The parsed window. Only reflected in `startDate` when no explicit `startDate` was given. */
+  window: MetricsWindow
+  /**
+   * True when the caller named at least one boundary itself. Callers that keep
+   * per-window precomputed rollups need this: such a rollup answers a rolling
+   * window, never an arbitrary calendar range.
+   */
+  explicitDates: boolean
+}
+
+/**
+ * Resolve `startDate` / `endDate` / `window` into one inclusive date range.
+ *
+ * Explicit dates win: `window` only computes a cutoff when no `startDate` was
+ * supplied. A rolling window cannot name a calendar month, which is why every
+ * monthly total previously had to be hand-filtered out of a wider pull.
+ */
+export function resolveDateRange(input: DateRangeInput): ResolvedDateRange {
+  const window = parseWindow(input.window)
+  const startDate = parseBoundaryDate(input.startDate, 'startDate')
+  const endDate = parseBoundaryDate(input.endDate, 'endDate')
+  if (startDate && endDate && startDate > endDate) {
+    throw validationError(`Invalid date range: startDate "${startDate}" must be on or before endDate "${endDate}".`)
+  }
+  const cutoff = startDate ? null : windowCutoff(window)?.slice(0, 10) ?? null
+  return {
+    startDate: startDate ?? cutoff,
+    endDate,
+    window,
+    explicitDates: startDate !== null || endDate !== null,
+  }
 }
