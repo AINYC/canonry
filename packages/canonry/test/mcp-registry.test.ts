@@ -278,7 +278,11 @@ describe('MCP tool registry', () => {
         cursor: 'next-page',
         limit: 25,
       }]],
-      ['canonry_measurement_report', { project: 'acme', revision: 2 }, 'getMeasurementReport', ['acme', 2]],
+      ['canonry_measurement_report', {
+        project: 'acme',
+        revision: 2,
+        runId: 'run-7',
+      }, 'getMeasurementReport', ['acme', 2, 'run-7']],
     ] as const
 
     for (const [name, input, method, args] of cases) {

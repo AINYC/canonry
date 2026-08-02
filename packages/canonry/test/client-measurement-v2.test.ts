@@ -107,6 +107,15 @@ describe('ApiClient Advanced Measurement v2 reads', () => {
       },
     },
     {
+      name: 'report pinned to a run',
+      invoke: (api: ApiClient) => api.getMeasurementReport(PROJECT, 2, 'run-7'),
+      expected: {
+        method: 'GET',
+        pathname: `/api/v1/projects/${PROJECT}/measurement-report`,
+        query: { revision: '2', runId: 'run-7' },
+      },
+    },
+    {
       name: 'draft',
       invoke: (api: ApiClient) => api.getMeasurementPlanDraft(PROJECT),
       expected: { method: 'GET', pathname: `/api/v1/projects/${PROJECT}/measurement-plan/draft` },

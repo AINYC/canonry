@@ -132,6 +132,9 @@ const runTriggerInputSchema = z.object({
   request: runTriggerRequestSchema.optional(),
 })
 const measurementPlanVersionInputSchema = z.object({ project: projectNameSchema, revision: z.number().int().positive() })
+const measurementReportInputSchema = measurementPlanVersionInputSchema.extend({
+  runId: runIdSchema.optional().describe('Exact eligible full measurement run to reconstruct. Omit for the latest run in the revision.'),
+})
 const measurementPlanPreviewInputSchema = z.object({ project: projectNameSchema, plan: measurementPlanAuthoringSchema })
 const measurementPlanPublishInputSchema = measurementPlanPublishRequestSchema.extend({ project: projectNameSchema })
 const measurementPlanRetireInputSchema = z.object({ project: projectNameSchema, stableKey: z.string().min(1) })
@@ -2271,13 +2274,13 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_measurement_report',
     title: 'Get measurement report',
-    description: 'Get a revision-pinned Target and group measurement report from stored runs. Never starts live provider work.',
+    description: 'Get a revision-pinned Target and group measurement report from stored runs. Optionally pin the evidence to an exact eligible full run. Never starts live provider work.',
     access: 'read',
     tier: 'setup',
-    inputSchema: measurementPlanVersionInputSchema,
+    inputSchema: measurementReportInputSchema,
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/measurement-report'],
-    handler: (client, input) => client.getMeasurementReport(input.project, input.revision),
+    handler: (client, input) => client.getMeasurementReport(input.project, input.revision, input.runId),
   }),
   defineTool({
     name: 'canonry_run_trigger',
