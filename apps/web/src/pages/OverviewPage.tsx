@@ -101,9 +101,6 @@ export function OverviewPage() {
           <h1 className="page-title">Portfolio</h1>
           <p className="page-subtitle">Visibility across all projects.</p>
         </div>
-        <div className="page-header-right">
-          <p className="text-[11px] text-faint">{model.lastUpdatedAt}</p>
-        </div>
       </div>
 
       {model.projects.length > 0 ? (
