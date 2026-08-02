@@ -430,7 +430,7 @@ type SdkResult = {
  * fire the handler twice for every expired-session request that flows through
  * this wrapper.
  */
-async function invokeWeb<T>(call: () => Promise<SdkResult>): Promise<T> {
+export async function invokeWeb<T>(call: () => Promise<SdkResult>): Promise<T> {
   const result = await call()
   if (result.error !== undefined && result.error !== null) {
     const status = result.response.status

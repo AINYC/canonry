@@ -24,6 +24,7 @@ interface SetupBaseProps {
   hasDraft: boolean
   canEdit: boolean
   onDiscard?: () => void
+  onStepChange?: (step: AdvancedMeasurementSetupStep) => void
   onManageProjectQueries?: () => void
 }
 
@@ -66,6 +67,7 @@ export function AdvancedMeasurementSetup(props: AdvancedMeasurementSetupProps) {
       hasDraft={props.hasDraft}
       canEdit={props.canEdit}
       onDiscard={props.onDiscard}
+      onStepChange={props.onStepChange}
     >
       {stepContent(props)}
     </AdvancedMeasurementSetupWizard>

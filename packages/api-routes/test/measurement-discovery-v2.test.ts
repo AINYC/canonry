@@ -289,6 +289,46 @@ describe('selection', () => {
     ])
   })
 
+  test('applies the complete reviewed Property selection and cleanup in one draft commit', async () => {
+    await importSitemap()
+    const imported = storedAuthoring()
+    const [harbour, north] = imported.targets
+    seedDraft({
+      ...imported,
+      assignments: [
+        { targetKey: harbour!.stableKey, queryId: 'qry_1', queryClass: 'non-brand', classificationSource: 'operator' },
+        { targetKey: north!.stableKey, queryId: 'qry_1', queryClass: 'non-brand', classificationSource: 'operator' },
+      ],
+      groups: [{
+        stableKey: 'group-metro',
+        label: 'Metro',
+        targetKeys: [harbour!.stableKey, north!.stableKey],
+        competitors: [],
+      }],
+    }, 2)
+
+    const response = await post('apply-sitemap-selection', {
+      selections: imported.targets.map(target => ({ discoveryIdentity: target.discoveryIdentity, action: 'create' })),
+      selectedTargetKeys: [north!.stableKey],
+    }, { 'if-match': '"mpd_2"' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ etag: '"mpd_3"', counts: { includedTargets: 1, assignments: 1 } })
+    expect(storedAuthoring().targets.map(target => [target.stableKey, target.status])).toEqual([
+      [harbour!.stableKey, 'excluded'],
+      [north!.stableKey, 'included'],
+    ])
+    expect(storedAuthoring().assignments.map(assignment => assignment.targetKey)).toEqual([north!.stableKey])
+    expect(storedAuthoring().groups[0]!.targetKeys).toEqual([north!.stableKey])
+
+    const reinclude = await post('apply-sitemap-selection', {
+      selections: [],
+      selectedTargetKeys: [harbour!.stableKey, north!.stableKey],
+    }, { 'if-match': '"mpd_3"' })
+    expect(reinclude.statusCode).toBe(200)
+    expect(storedAuthoring().targets.every(target => target.status === 'included')).toBe(true)
+  })
+
   test('rebinds without disturbing the stable key, its assignments or its group membership', async () => {
     await seedIncludedNorthPark()
     const withWork = storedAuthoring()

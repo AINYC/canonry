@@ -224,6 +224,16 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.getByText('6 of 8 (75%)')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Show details for Uptown Office' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Show details for Downtown Office' })).toBeNull()
+    expect(screen.queryByText('Flagged results (1)')).toBeNull()
+  })
+
+  it('withholds stale report content while a server view changes', () => {
+    renderOverview({ isViewLoading: true })
+
+    expect(screen.getByText('Updating results…')).toBeTruthy()
+    expect(screen.queryByText('Complete')).toBeNull()
+    expect(screen.queryByText('No action needed.')).toBeNull()
+    expect(screen.queryByText('Downtown Office')).toBeNull()
   })
 
   it('reveals inline drill-down evidence with customer-facing labels', () => {

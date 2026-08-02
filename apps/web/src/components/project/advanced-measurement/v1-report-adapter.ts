@@ -8,6 +8,7 @@ import type {
 } from './AdvancedMeasurementOverview.js'
 
 type ActivePlan = NonNullable<MeasurementPlanResponse['active']>
+type PlanV1 = Extract<ActivePlan['plan'], { schemaVersion: 1 }>
 type ReportTarget = MeasurementReportResponse['targets'][number]
 type ReportEvidence = MeasurementReportResponse['evidence'][number]
 
@@ -17,7 +18,7 @@ const unavailableMetric: AdvancedMeasurementMetric = {
   reason: 'plan_v1',
 }
 
-function matcherLabel(matcher: ActivePlan['plan']['targets'][number]['urls'][number]): string {
+function matcherLabel(matcher: PlanV1['targets'][number]['urls'][number]): string {
   if (matcher.kind === 'exact') return matcher.url
   if (matcher.kind === 'prefix') return `https://${matcher.host}${matcher.pathPrefix}`
   return `https://${matcher.host}`
@@ -62,10 +63,12 @@ export function adaptVersionOneMeasurementReport(
   active: ActivePlan,
   report: MeasurementReportResponse,
 ): AdvancedMeasurementOverviewReport {
-  const targetConfig = new Map(active.plan.targets.map(target => [target.stableKey, target]))
-  const queryText = new Map(active.plan.querySnapshots.map(query => [query.queryId, query.queryText]))
+  if (active.plan.schemaVersion !== 1) throw new Error('Version-one report adapter received a different setup version.')
+  const plan = active.plan
+  const targetConfig = new Map(plan.targets.map(target => [target.stableKey, target]))
+  const queryText = new Map(plan.querySnapshots.map(query => [query.queryId, query.queryText]))
   const selections = new Map<string, string[]>()
-  for (const selection of active.plan.targetQuerySelections) {
+  for (const selection of plan.targetQuerySelections) {
     const current = selections.get(selection.targetKey) ?? []
     current.push(...selection.queryIds.map(queryId => queryText.get(queryId)).filter((value): value is string => Boolean(value)))
     selections.set(selection.targetKey, [...new Set(current)])
@@ -104,7 +107,7 @@ export function adaptVersionOneMeasurementReport(
     }
   })
   const propertyById = new Map(properties.map(property => [property.id, property]))
-  const groupConfig = new Map(active.plan.groups.map(group => [group.stableKey, group]))
+  const groupConfig = new Map(plan.groups.map(group => [group.stableKey, group]))
 
   return {
     classReporting: 'plan-v1',

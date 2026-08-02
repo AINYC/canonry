@@ -466,6 +466,23 @@ export function latestMeasurementRun(
     .orderBy(desc(runs.createdAt), desc(runs.id)).get()
 }
 
+function pinnedMeasurementRun(
+  db: DatabaseClient,
+  projectId: string,
+  versionId: string,
+  runId: string,
+): typeof runs.$inferSelect | undefined {
+  return db.select().from(runs).where(and(
+    eq(runs.id, runId),
+    eq(runs.projectId, projectId),
+    eq(runs.measurementPlanVersionId, versionId),
+    eq(runs.kind, RunKinds['answer-visibility']),
+    inArray(runs.status, [RunStatuses.completed, RunStatuses.partial]),
+    ne(runs.trigger, RunTriggers.probe),
+    isNull(runs.measurementScope),
+  )).get()
+}
+
 /**
  * The expected work one stored run actually promised, checked against the
  * revision it was pinned to. A run with no manifest measured nothing this
@@ -485,8 +502,11 @@ function storedMeasurementPlanV2Report(
   projectId: string,
   version: typeof measurementPlanVersions.$inferSelect,
   plan: MeasurementPlanV2,
+  runId?: string,
 ): StoredMeasurementReport {
-  const run = latestMeasurementRun(db, projectId, version.id, [RunStatuses.completed, RunStatuses.partial])
+  const run = runId
+    ? pinnedMeasurementRun(db, projectId, version.id, runId)
+    : latestMeasurementRun(db, projectId, version.id, [RunStatuses.completed, RunStatuses.partial])
   if (!run) {
     const empty = buildMeasurementPlanV2ReportInput(version.revision, plan, { schemaVersion: 1, expectedSlots: [] }, [])
     return {
@@ -510,7 +530,12 @@ function storedMeasurementPlanV2Report(
   }
 }
 
-export function buildStoredMeasurementReport(db: DatabaseClient, projectId: string, revision: number): StoredMeasurementReport {
+export function buildStoredMeasurementReport(
+  db: DatabaseClient,
+  projectId: string,
+  revision: number,
+  runId?: string,
+): StoredMeasurementReport {
   const version = db.select().from(measurementPlanVersions).where(and(
     eq(measurementPlanVersions.projectId, projectId),
     eq(measurementPlanVersions.revision, revision),
@@ -519,24 +544,26 @@ export function buildStoredMeasurementReport(db: DatabaseClient, projectId: stri
 
   const stored = parseStoredMeasurementPlanAnyVersion(version.canonicalJson)
   if (stored.schemaVersion === MEASUREMENT_PLAN_V2_SCHEMA_VERSION) {
-    return storedMeasurementPlanV2Report(db, projectId, version, stored)
+    return storedMeasurementPlanV2Report(db, projectId, version, stored, runId)
   }
   const plan = stored
 
-  const run = db.select().from(runs).where(and(
-    eq(runs.projectId, projectId),
-    eq(runs.measurementPlanVersionId, version.id),
-    eq(runs.kind, RunKinds['answer-visibility']),
-    inArray(runs.status, [RunStatuses.completed, RunStatuses.partial]),
-    ne(runs.trigger, RunTriggers.probe),
-  )).orderBy(desc(runs.createdAt), desc(runs.id)).get()
+  const run = runId
+    ? pinnedMeasurementRun(db, projectId, version.id, runId)
+    : db.select().from(runs).where(and(
+        eq(runs.projectId, projectId),
+        eq(runs.measurementPlanVersionId, version.id),
+        eq(runs.kind, RunKinds['answer-visibility']),
+        inArray(runs.status, [RunStatuses.completed, RunStatuses.partial]),
+        ne(runs.trigger, RunTriggers.probe),
+      )).orderBy(desc(runs.createdAt), desc(runs.id)).get()
   let selectedRun = run
   let manifest: MeasurementRunManifestV1
   let legacy = false
   if (selectedRun) {
     if (selectedRun.measurementManifest === null) manifestFailure(`missing for run ${selectedRun.id}`)
     manifest = parseManifest(selectedRun.measurementManifest, frozenExecutionNodes(plan))
-  } else {
+  } else if (runId === undefined) {
     // A revision with no plan-aware measurement may display the latest completed
     // pre-plan run. Its provider roster is safe to infer only from a completed
     // run, and must satisfy every frozen execution node's expected slot count.
@@ -561,6 +588,9 @@ export function buildStoredMeasurementReport(db: DatabaseClient, projectId: stri
       return { kind: 'no-population', reason: 'no-run', report: responseFromReport(version.revision, report, null) }
     }
     legacy = true
+  } else {
+    const report = buildMeasurementReport(reportInput(version.revision, plan, { schemaVersion: 1, expectedSlots: [] }, [], false))
+    return { kind: 'no-population', reason: 'no-run', report: responseFromReport(version.revision, report, null) }
   }
   const snapshots = db.select().from(querySnapshots).where(eq(querySnapshots.runId, selectedRun.id)).all()
   const report = buildMeasurementReport(reportInput(version.revision, plan, manifest, snapshots, legacy))

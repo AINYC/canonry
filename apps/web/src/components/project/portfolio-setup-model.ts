@@ -476,6 +476,7 @@ function matcherUrl(url: DraftTargetUrl): string {
 }
 
 export function stateFromActivePlan(plan: ActivePlan): PortfolioSetupDraft {
+  if (plan.schemaVersion !== 1) throw new Error('The compatibility setup model only supports version-one plans.')
   const assignments: DraftQueryAssignment[] = []
   for (const selection of plan.targetQuerySelections) {
     for (const queryId of selection.queryIds) {

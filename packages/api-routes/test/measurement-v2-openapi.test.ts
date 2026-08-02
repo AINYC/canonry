@@ -100,6 +100,10 @@ describe('advanced measurement v2 openapi surface', () => {
 
     expect(headers('publish')).toEqual(['Idempotency-Key:true', 'If-Match:true'])
     expect(headers('upsert-target')).toEqual(['Idempotency-Key:true', 'If-Match:true'])
+    // Creating a draft has no draft ETag yet, but it is still idempotent.
+    expect(headers('create')).toEqual(['Idempotency-Key:true'])
+    expect(document.paths[`${DRAFT}/actions/create`]?.post?.responses?.['412']).toBeUndefined()
+    expect(document.paths[`${DRAFT}/actions/create`]?.post?.responses?.['428']).toBeUndefined()
     // Compiling the stored draft writes nothing, so it carries neither guard.
     expect(headers('compile-preview')).toEqual([])
     expect(headers('diff-preview')).toEqual([])
@@ -123,6 +127,17 @@ describe('advanced measurement v2 openapi surface', () => {
     expect.soft(errorStatuses('upsert-target')).toEqual(['400', '403', '404', '409', '412', '428'])
   })
 
+  it('types active and revision-detail plan reads as schema v1 or v2', async () => {
+    const document = await spec()
+    const active = JSON.stringify(document.components?.schemas?.MeasurementPlanResponse)
+    const detail = JSON.stringify(document.components?.schemas?.MeasurementPlanVersionResponse)
+
+    for (const schema of [active, detail]) {
+      expect(schema).toContain('"enum":[1]')
+      expect(schema).toContain('"enum":[2]')
+    }
+  })
+
   it('publishes the compiled checksum on every contract that reviews or guards content', async () => {
     const document = await spec()
     const compile = document.components?.schemas?.MeasurementDraftCompilePreviewResponse
@@ -134,6 +149,21 @@ describe('advanced measurement v2 openapi surface', () => {
       expect.arrayContaining(['expectedActiveRevision', 'expectedCompiledChecksum']),
     )
     expect(JSON.stringify(publishResponse)).toContain('compiledChecksum')
+  })
+
+  it('documents atomic Property cleanup and complete group replacement', async () => {
+    const document = await spec()
+    const excludeSchema = document.components?.schemas?.MeasurementDraftExcludeTargetRequest
+    const groupSchema = document.components?.schemas?.MeasurementDraftUpsertGroupRequest
+    const group = groupSchema?.properties?.group as {
+      properties?: Record<string, unknown>
+      required?: string[]
+    } | undefined
+
+    expect(JSON.stringify(excludeSchema)).toContain('assignments-and-group-memberships')
+    expect(excludeSchema?.required).not.toContain('cleanup')
+    expect(group?.properties).toHaveProperty('competitors')
+    expect(group?.required).not.toContain('competitors')
   })
 
   it('emits brandPresence and documents sov as its deprecated alias', async () => {

@@ -403,6 +403,60 @@ test('shows reviewed sitemap URLs behind a concise disclosure before confirming 
   expect(onResolve).toHaveBeenCalledTimes(1)
 })
 
+test('keeps large review lists bounded and reveals them fifty at a time', () => {
+  const count = 75
+  renderReview({
+    flaggedExceptions: Array.from({ length: count }, (_, index) => ({
+      id: `flag-${index + 1}`,
+      title: `Flag ${index + 1}`,
+      detail: `Flag detail ${index + 1}`,
+    })),
+    sitemapReview: {
+      exceptionCount: count,
+      coverageReviewCount: count,
+      coverageResolution: 'keep-existing',
+      items: Array.from({ length: count }, (_, index) => ({
+        url: `https://example.com/unmatched/${index + 1}`,
+        reason: `Reason ${index + 1}`,
+      })),
+      coverageItems: Array.from({ length: count }, (_, index) => ({
+        property: `Property ${index + 1}`,
+        savedUrls: [`https://example.com/saved/${index + 1}`],
+        currentSitemapUrls: [`https://example.com/current/${index + 1}`],
+      })),
+      onCoverageResolutionChange: vi.fn(),
+      onResolve: vi.fn(),
+    },
+  })
+
+  expect(screen.getAllByText('Showing 20 of 75')).toHaveLength(3)
+  expect(screen.getByText('https://example.com/unmatched/20')).toBeTruthy()
+  expect(screen.queryByText('https://example.com/unmatched/21')).toBeNull()
+  expect(screen.getByText('Property 20')).toBeTruthy()
+  expect(screen.queryByText('Property 21')).toBeNull()
+  expect(screen.getByText('Flag 20')).toBeTruthy()
+  expect(screen.queryByText('Flag 21')).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Show next 50 URLs' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Show next 50 URL changes' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Show next 50 exceptions' }))
+
+  expect(screen.getAllByText('Showing 70 of 75')).toHaveLength(3)
+  expect(screen.getByText('https://example.com/unmatched/70')).toBeTruthy()
+  expect(screen.getByText('Property 70')).toBeTruthy()
+  expect(screen.getByText('Flag 70')).toBeTruthy()
+  expect(screen.queryByText('Flag 71')).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Show next 50 URLs' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Show next 50 URL changes' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Show next 50 exceptions' }))
+
+  expect(screen.getAllByText('Showing 75 of 75')).toHaveLength(3)
+  expect(screen.getByText('https://example.com/unmatched/75')).toBeTruthy()
+  expect(screen.getByText('Property 75')).toBeTruthy()
+  expect(screen.getByText('Flag 75')).toBeTruthy()
+})
+
 test('leaves the single unpublished-changes banner to the surrounding setup shell', () => {
   renderReview()
 

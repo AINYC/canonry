@@ -174,6 +174,14 @@ const measurementReportRevisionParameter: OpenApiParameter = {
   schema: { type: 'integer', minimum: 1 },
 }
 
+const measurementReportRunParameter: OpenApiParameter = {
+  name: 'runId',
+  in: 'query',
+  required: false,
+  description: 'Eligible full measurement run to reconstruct. Omit to use the latest run for the revision.',
+  schema: stringSchema,
+}
+
 const runIdParameter: OpenApiParameter = {
   name: 'id',
   in: 'path',
@@ -788,13 +796,13 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'get',
     path: '/api/v1/projects/{name}/measurement-report',
     summary: 'Get a revision-pinned measurement report',
-    description: 'Builds the Target, group, and evidence report from the immutable plan revision and its latest eligible stored run. Missing run population remains explicit and never triggers live provider execution.',
+    description: 'Builds the Target, group, and evidence report from the immutable plan revision and either its latest eligible stored run or the exact eligible runId supplied by the caller. Missing run population remains explicit and never triggers live provider execution.',
     tags: ['measurement-plans'],
-    parameters: [nameParameter, measurementReportRevisionParameter],
+    parameters: [nameParameter, measurementReportRevisionParameter, measurementReportRunParameter],
     responses: {
       200: jsonResponse('Revision-pinned measurement report returned.', 'MeasurementReportResponse'),
       400: errorResponse('The revision query parameter is invalid.'),
-      404: errorResponse('Project or measurement-plan revision not found.'),
+      404: errorResponse('Project, measurement-plan revision, or requested run not found.'),
     },
   },
   {
@@ -873,7 +881,7 @@ const routeCatalog: OpenApiOperation[] = [
   measurementDraftAction({
     action: 'apply-sitemap-selection',
     summary: 'Apply the operator selection from discovery',
-    description: 'Turns reviewed discovery proposals into new or rebound Targets. Ambiguity is never resolved automatically.',
+    description: 'Turns reviewed discovery proposals into new or rebound Targets. An optional complete Property selection also applies inclusion, assignment cleanup and group cleanup in the same ETag-guarded commit. Ambiguity is never resolved automatically.',
     request: 'MeasurementDraftApplySitemapSelectionRequest',
   }),
   measurementDraftAction({
@@ -896,7 +904,7 @@ const routeCatalog: OpenApiOperation[] = [
   measurementDraftAction({
     action: 'exclude-target',
     summary: 'Exclude a draft Target',
-    description: 'Excluded Targets stay in the draft for review but never compile.',
+    description: 'Excluded Targets stay in the draft for review but never compile. The optional `assignments-and-group-memberships` cleanup removes that Target\'s query assignments and every group membership in the same ETag-guarded mutation; omitting it preserves the reversible legacy behavior.',
     request: 'MeasurementDraftExcludeTargetRequest',
   }),
   measurementDraftAction({
@@ -907,13 +915,14 @@ const routeCatalog: OpenApiOperation[] = [
   }),
   measurementDraftAction({
     action: 'apply-assignments',
-    summary: 'Assign project queries to a draft Target',
+    summary: 'Assign project queries to draft Targets',
+    description: 'Accepts the compatible singular `targetKey` or a bulk `targetKeys` selection. The server validates the full selection and writes one canonical draft mutation.',
     request: 'MeasurementDraftApplyAssignmentsRequest',
   }),
   measurementDraftAction({
     action: 'remove-assignment',
-    summary: 'Remove one assignment from a draft Target',
-    description: 'Removes the assignment only. The project query behind it is never deleted.',
+    summary: 'Remove one query assignment from draft Targets',
+    description: 'Accepts the compatible singular `targetKey` or a bulk `targetKeys` selection. It removes assignments only; the project query behind them is never deleted.',
     request: 'MeasurementDraftRemoveAssignmentRequest',
   }),
   measurementDraftAction({
@@ -930,7 +939,7 @@ const routeCatalog: OpenApiOperation[] = [
   measurementDraftAction({
     action: 'upsert-group',
     summary: 'Add or update a draft group',
-    description: 'Reporting membership only. A payload carrying queries, providers, locations or models is rejected.',
+    description: 'Reporting membership only. When `competitors` is present it replaces the complete competitor list atomically; omission preserves the existing list for backward compatibility. A payload carrying queries, providers, locations or models is rejected.',
     request: 'MeasurementDraftUpsertGroupRequest',
   }),
   measurementDraftAction({

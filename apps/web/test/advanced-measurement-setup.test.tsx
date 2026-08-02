@@ -103,4 +103,21 @@ describe('advanced measurement setup composition', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Manage project queries' }))
     expect(onManageProjectQueries).toHaveBeenCalledTimes(1)
   })
+
+  it('forwards optional step navigation without changing the active step content', () => {
+    const onStepChange = vi.fn()
+    render(
+      <AdvancedMeasurementSetup
+        currentStep="review"
+        canEdit={false}
+        hasDraft
+        onStepChange={onStepChange}
+        review={review}
+      />,
+    )
+
+    expect(screen.getByText('Flagged exceptions')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Queries' }))
+    expect(onStepChange).toHaveBeenCalledWith('queries')
+  })
 })

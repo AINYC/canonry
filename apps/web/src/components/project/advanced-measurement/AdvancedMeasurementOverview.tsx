@@ -27,6 +27,7 @@ export interface AdvancedMeasurementProperty {
   assignedQueries: readonly string[]
   urls: readonly string[]
   evidence: readonly AdvancedMeasurementEvidence[]
+  evidenceState?: 'ready' | 'loading' | 'error'
   historical?: boolean
 }
 
@@ -34,6 +35,8 @@ export interface AdvancedMeasurementEvidence {
   id: string
   kind: AdvancedMeasurementEvidenceKind
   query: string
+  provider?: string
+  location?: string | null
   url: string
   tone: MetricTone
   historical?: boolean
@@ -73,6 +76,8 @@ export interface AdvancedMeasurementFlaggedResult {
   property: string
   summary: string
   tone: MetricTone
+  /** Number of underlying results represented by this Property-level summary. */
+  count?: number
 }
 
 export interface AdvancedMeasurementOverviewReport {
@@ -86,13 +91,32 @@ export interface AdvancedMeasurementOverviewReport {
     date: string
   }
   /** The active plan's aggregate, used for the version-one fallback. */
-  overall: AdvancedMeasurementScope
+  overall?: AdvancedMeasurementScope
   /** Each scope is calculated upstream. The component never recomputes an aggregate. */
   classScopes?: {
     nonBrand: AdvancedMeasurementScope
     branded: AdvancedMeasurementScope
   }
+  /** One server-computed scope/class view. Other views must be fetched, never reconstructed here. */
+  currentView?: {
+    scope: { kind: 'all' | 'group'; key?: string }
+    queryClass: AdvancedMeasurementClass
+    aggregate: AdvancedMeasurementAggregate
+    propertyTotal: number
+    nextCursor: string | null
+  }
+  availableGroups?: readonly { id: string; label: string }[]
+  nextActionText?: string
+  /** Server total, including results on Property pages that are not loaded yet. */
+  flaggedResultsTotal?: number
   flaggedResults: readonly AdvancedMeasurementFlaggedResult[]
+}
+
+export interface AdvancedMeasurementViewRequest {
+  scope: 'all' | 'group'
+  groupKey?: string
+  queryClass: AdvancedMeasurementClass
+  search?: string
 }
 
 export interface AdvancedMeasurementOverviewProps {
@@ -103,11 +127,20 @@ export interface AdvancedMeasurementOverviewProps {
   onRepublishSetup?: () => void | Promise<void>
   isRunningMeasurement?: boolean
   isRepublishingSetup?: boolean
+  isViewLoading?: boolean
+  isLoadingMore?: boolean
+  viewSearch?: string
+  onViewChange?: (view: AdvancedMeasurementViewRequest) => void
+  onLoadMore?: (cursor: string) => void
+  onPropertyExpand?: (propertyId: string) => void
+  onRetryEvidence?: () => void
 }
 
 const ALL_PROPERTIES = '__all_properties__'
 const PROPERTY_LIST_LIMIT = 50
 const DETAIL_LIST_LIMIT = 50
+const FLAGGED_RESULTS_INITIAL_LIMIT = 20
+const FLAGGED_RESULTS_INCREMENT = 50
 
 const evidenceLabels: Record<AdvancedMeasurementEvidenceKind, string> = {
   'this-property': 'Matches this Property',
@@ -120,6 +153,10 @@ const evidenceLabels: Record<AdvancedMeasurementEvidenceKind, string> = {
 
 const metricReasons: Record<string, string> = {
   plan_v1: 'Setup update required.',
+  no_completed_run: 'Not measured yet.',
+  no_population: 'No matching queries.',
+  evidence_incomplete: 'Evidence incomplete.',
+  not_applicable: 'Not applicable.',
   incomplete: 'The latest measurement is incomplete.',
   'evidence-incomplete': 'Some source evidence is incomplete.',
   'no-population': 'No measurements are available for this selection.',
@@ -240,14 +277,29 @@ function CappedStringList({
   )
 }
 
-function CappedEvidenceList({ evidence }: { evidence: readonly AdvancedMeasurementEvidence[] }) {
+function CappedEvidenceList({
+  evidence,
+  state = 'ready',
+  onRetry,
+}: {
+  evidence: readonly AdvancedMeasurementEvidence[]
+  state?: 'ready' | 'loading' | 'error'
+  onRetry?: () => void
+}) {
   const [limit, setLimit] = useState(DETAIL_LIST_LIMIT)
   const shown = evidence.slice(0, limit)
 
   return (
     <section aria-label="Evidence">
       <h4 className="text-sm font-medium text-heading">Evidence</h4>
-      {evidence.length === 0 ? <p className="mt-2 text-sm text-secondary">No source evidence is available.</p> : (
+      {state === 'loading' ? <p className="mt-2 text-sm text-secondary">Loading evidence…</p>
+        : state === 'error' ? (
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-secondary">
+              <span>Evidence could not be loaded.</span>
+              {onRetry ? <Button type="button" size="sm" variant="outline" onClick={onRetry}>Retry evidence</Button> : null}
+            </div>
+          )
+          : evidence.length === 0 ? <p className="mt-2 text-sm text-secondary">No source evidence is available.</p> : (
         <>
           <div className="mt-2 overflow-x-auto rounded-md border border-default">
             <table className="evidence-table min-w-[640px]">
@@ -260,7 +312,14 @@ function CappedEvidenceList({ evidence }: { evidence: readonly AdvancedMeasureme
                       {item.historical ? <ToneBadge tone="caution">Historical</ToneBadge> : null}
                     </span>
                   </td>
-                  <td className="text-secondary">{item.query}</td>
+                  <td className="text-secondary">
+                    <span className="block">{item.query}</span>
+                    {item.provider || item.location ? (
+                      <span className="mt-1 block text-xs text-muted">
+                        {[item.provider, item.location].filter(Boolean).join(' · ')}
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="break-all text-secondary">{item.url}</td>
                 </tr>
               ))}</tbody>
@@ -278,12 +337,12 @@ function CappedEvidenceList({ evidence }: { evidence: readonly AdvancedMeasureme
   )
 }
 
-function PropertyDetails({ property }: { property: AdvancedMeasurementProperty }) {
+function PropertyDetails({ property, onRetryEvidence }: { property: AdvancedMeasurementProperty; onRetryEvidence?: () => void }) {
   return (
     <div className="space-y-5 py-2">
       <CappedStringList title="Assigned queries" values={property.assignedQueries} emptyLabel="No queries are assigned." />
       <CappedStringList title="URLs" values={property.urls} emptyLabel="No URLs are assigned." valueClassName="break-all text-secondary" />
-      <CappedEvidenceList evidence={property.evidence} />
+      <CappedEvidenceList evidence={property.evidence} state={property.evidenceState} onRetry={onRetryEvidence} />
     </div>
   )
 }
@@ -314,41 +373,66 @@ export function AdvancedMeasurementOverview({
   onRepublishSetup,
   isRunningMeasurement = false,
   isRepublishingSetup = false,
+  isViewLoading = false,
+  isLoadingMore = false,
+  viewSearch,
+  onViewChange,
+  onLoadMore,
+  onPropertyExpand,
+  onRetryEvidence,
 }: AdvancedMeasurementOverviewProps) {
-  const classReportingAvailable = report.classReporting === 'available' && report.classScopes != null
-  const [selectedClass, setSelectedClass] = useState<AdvancedMeasurementClass>('non-brand')
-  const [selectedView, setSelectedView] = useState(ALL_PROPERTIES)
-  const [search, setSearch] = useState('')
+  const usesServerView = report.currentView != null
+  const classReportingAvailable = report.classReporting === 'available' && (usesServerView || report.classScopes != null)
+  const [selectedClass, setSelectedClass] = useState<AdvancedMeasurementClass>(report.currentView?.queryClass ?? 'non-brand')
+  const [selectedView, setSelectedView] = useState(report.currentView?.scope.key ?? ALL_PROPERTIES)
+  const [search, setSearch] = useState(viewSearch ?? '')
   const [propertyLimit, setPropertyLimit] = useState(PROPERTY_LIST_LIMIT)
+  const [flaggedLimit, setFlaggedLimit] = useState(FLAGGED_RESULTS_INITIAL_LIMIT)
   const [expandedPropertyIds, setExpandedPropertyIds] = useState<ReadonlySet<string>>(new Set())
 
-  const scope = classReportingAvailable
+  const legacyScope = classReportingAvailable && !usesServerView
     ? selectedClass === 'non-brand' ? report.classScopes!.nonBrand : report.classScopes!.branded
     : report.overall
+  const scope: AdvancedMeasurementScope = usesServerView
+    ? { aggregate: report.currentView!.aggregate, groups: [] }
+    : legacyScope!
 
   useEffect(() => {
-    if (selectedView === ALL_PROPERTIES || scope.groups.some(group => group.id === selectedView)) return
-    setSelectedView(ALL_PROPERTIES)
-  }, [scope, selectedView])
+    if (!report.currentView || isViewLoading) return
+    setSelectedClass(report.currentView.queryClass)
+    setSelectedView(report.currentView.scope.key ?? ALL_PROPERTIES)
+  }, [isViewLoading, report.currentView])
 
-  const selectedGroup = scope.groups.find(group => group.id === selectedView)
+  useEffect(() => {
+    if (viewSearch !== undefined) setSearch(viewSearch)
+  }, [viewSearch])
+
+  useEffect(() => {
+    const groups = report.availableGroups ?? scope.groups
+    if (selectedView === ALL_PROPERTIES || groups.some(group => group.id === selectedView)) return
+    setSelectedView(ALL_PROPERTIES)
+  }, [report.availableGroups, scope, selectedView])
+
+  const selectedGroup = usesServerView ? undefined : scope.groups.find(group => group.id === selectedView)
   const aggregate = selectedGroup?.aggregate ?? scope.aggregate
   const classMetric = (metric: AdvancedMeasurementMetric): AdvancedMeasurementMetric => (
     classReportingAvailable ? metric : planV1Metric
   )
   const normalizedSearch = search.trim().toLocaleLowerCase()
   const filteredProperties = useMemo(() => (
-    normalizedSearch
+    !usesServerView && normalizedSearch
       ? aggregate.properties.filter(property => property.name.toLocaleLowerCase().includes(normalizedSearch))
       : aggregate.properties
-  ), [aggregate.properties, normalizedSearch])
-  const shownProperties = filteredProperties.slice(0, propertyLimit)
-  const showShareOfVoice = selectedGroup != null
+  ), [aggregate.properties, normalizedSearch, usesServerView])
+  const shownProperties = usesServerView ? filteredProperties : filteredProperties.slice(0, propertyLimit)
+  const showShareOfVoice = (usesServerView ? report.currentView?.scope.kind === 'group' : selectedGroup != null)
     && selectedClass === 'non-brand'
     && classReportingAvailable
-    && selectedGroup.confirmedCompetitorCount > 0
+    && (usesServerView || selectedGroup!.confirmedCompetitorCount > 0)
     && (aggregate.shareOfVoice?.length ?? 0) > 0
   const unavailableProperties = classReportingAvailable ? aggregate.unavailablePropertyCount ?? 0 : 0
+  const loadedFlaggedCount = report.flaggedResults.reduce((total, result) => total + (result.count ?? 1), 0)
+  const flaggedResultsTotal = report.flaggedResultsTotal ?? loadedFlaggedCount
   const headlineUnavailableReason = [
     classMetric(aggregate.metrics.propertiesMentioned),
     classMetric(aggregate.metrics.mentionCoverage),
@@ -356,45 +440,62 @@ export function AdvancedMeasurementOverview({
   ].map(metricReason).find(Boolean)
   const statusMessage = !classReportingAvailable
     ? metricReasons.plan_v1
-    : headlineUnavailableReason
+    : report.nextActionText ?? headlineUnavailableReason
       ?? (unavailableProperties > 0
         ? `${unavailableProperties} ${unavailableProperties === 1 ? 'property is' : 'properties are'} unavailable.`
-        : report.flaggedResults.length > 0
-          ? `${report.flaggedResults.length} flagged ${report.flaggedResults.length === 1 ? 'result needs' : 'results need'} review.`
+        : flaggedResultsTotal > 0
+          ? `${flaggedResultsTotal} flagged ${flaggedResultsTotal === 1 ? 'result needs' : 'results need'} review.`
           : 'No action needed.')
   const progressLabel = slotProgressLabel(report.latestMeasurement.completedSlots, report.latestMeasurement.totalSlots)
   const measurementDate = availableLabel(report.latestMeasurement.date)
 
   function toggleProperty(propertyId: string) {
+    const willExpand = !expandedPropertyIds.has(propertyId)
     setExpandedPropertyIds(current => {
       const next = new Set(current)
       if (next.has(propertyId)) next.delete(propertyId)
       else next.add(propertyId)
       return next
     })
+    if (willExpand) onPropertyExpand?.(propertyId)
+  }
+
+  function requestView(next: Partial<AdvancedMeasurementViewRequest>) {
+    if (!usesServerView || !onViewChange) return
+    const nextScope = next.scope ?? (selectedView === ALL_PROPERTIES ? 'all' : 'group')
+    onViewChange({
+      scope: nextScope,
+      ...(nextScope === 'group' ? { groupKey: next.groupKey ?? selectedView } : {}),
+      queryClass: next.queryClass ?? selectedClass,
+      ...((next.search ?? search) ? { search: next.search ?? search } : {}),
+    })
   }
 
   return (
-    <section aria-label="Advanced measurement overview" className="space-y-5">
+    <section aria-label="Advanced measurement overview" aria-busy={isViewLoading} className="space-y-5">
       <header className="border-b border-default pb-4">
         <div role="status" aria-label="Measurement status and next action" className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <ToneBadge tone={report.latestMeasurement.status.tone}>{report.latestMeasurement.status.label}</ToneBadge>
-          {progressLabel ? <span className="text-sm text-secondary tabular-nums">{progressLabel}</span> : null}
-          {measurementDate ? <span className="text-sm text-secondary">{measurementDate}</span> : null}
-          <span className="text-sm text-secondary">{statusMessage}</span>
-          {canEdit && classReportingAvailable && onRunMeasurement ? (
-            <Button className="ml-auto" size="sm" onClick={() => { void onRunMeasurement() }} disabled={isRunningMeasurement}>
-              {isRunningMeasurement ? 'Starting measurement…' : 'Run measurement'}
-            </Button>
-          ) : canEdit && !classReportingAvailable ? (
-            <Button className="ml-auto" size="sm" onClick={() => { void onRepublishSetup?.() }} disabled={!onRepublishSetup || isRepublishingSetup}>
-              {isRepublishingSetup ? 'Opening setup…' : 'Republish setup'}
-            </Button>
-          ) : null}
+          {isViewLoading ? <span className="text-sm text-secondary">Updating results…</span> : (
+            <>
+              <ToneBadge tone={report.latestMeasurement.status.tone}>{report.latestMeasurement.status.label}</ToneBadge>
+              {progressLabel ? <span className="text-sm text-secondary tabular-nums">{progressLabel}</span> : null}
+              {measurementDate ? <span className="text-sm text-secondary">{measurementDate}</span> : null}
+              <span className="text-sm text-secondary">{statusMessage}</span>
+              {canEdit && classReportingAvailable && onRunMeasurement ? (
+                <Button className="ml-auto" size="sm" onClick={() => { void onRunMeasurement() }} disabled={isRunningMeasurement}>
+                  {isRunningMeasurement ? 'Starting measurement…' : 'Run measurement'}
+                </Button>
+              ) : canEdit && !classReportingAvailable ? (
+                <Button className="ml-auto" size="sm" onClick={() => { void onRepublishSetup?.() }} disabled={!onRepublishSetup || isRepublishingSetup}>
+                  {isRepublishingSetup ? 'Opening setup…' : 'Republish setup'}
+                </Button>
+              ) : null}
+            </>
+          )}
         </div>
       </header>
 
-      <dl className="grid gap-4 border-y border-default py-4 md:grid-cols-3">
+      {!isViewLoading ? <dl className="grid gap-4 border-y border-default py-4 md:grid-cols-3">
         <div>
           <dt className="text-sm text-secondary">Properties mentioned</dt>
           <dd className="mt-1"><MetricValue metric={classMetric(aggregate.metrics.propertiesMentioned)} /></dd>
@@ -407,7 +508,7 @@ export function AdvancedMeasurementOverview({
           <dt className="text-sm text-secondary">Citation coverage</dt>
           <dd className="mt-1"><MetricValue metric={classMetric(aggregate.metrics.citationCoverage)} /></dd>
         </div>
-      </dl>
+      </dl> : <div className="h-20 animate-pulse rounded-md bg-surface-subtle" aria-label="Updating measurement results" />}
 
       <div className="flex flex-wrap items-end gap-4 border-b border-default pb-4">
         <div className="space-y-1">
@@ -415,18 +516,22 @@ export function AdvancedMeasurementOverview({
           <select
             id="advanced-measurement-group"
             value={selectedView}
-            onChange={event => setSelectedView(event.target.value)}
+            onChange={event => {
+              const value = event.target.value
+              setSelectedView(value)
+              requestView(value === ALL_PROPERTIES ? { scope: 'all' } : { scope: 'group', groupKey: value })
+            }}
             className="h-9 rounded-md border border-default bg-surface px-3 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-mono-400"
           >
             <option value={ALL_PROPERTIES}>All properties</option>
-            {scope.groups.map(group => <option key={group.id} value={group.id}>{group.label}</option>)}
+            {(report.availableGroups ?? scope.groups).map(group => <option key={group.id} value={group.id}>{group.label}</option>)}
           </select>
         </div>
         <fieldset disabled={!classReportingAvailable} className="space-y-1">
           <legend className="text-sm font-medium text-heading">Query type</legend>
           <div className="flex items-center gap-3 text-sm text-secondary">
-            <label className="flex items-center gap-1.5"><input type="radio" name="advanced-measurement-class" disabled={!classReportingAvailable} checked={selectedClass === 'non-brand'} onChange={() => setSelectedClass('non-brand')} /> Non-brand</label>
-            <label className="flex items-center gap-1.5"><input type="radio" name="advanced-measurement-class" disabled={!classReportingAvailable} checked={selectedClass === 'branded'} onChange={() => setSelectedClass('branded')} /> Branded</label>
+            <label className="flex items-center gap-1.5"><input type="radio" name="advanced-measurement-class" disabled={!classReportingAvailable} checked={selectedClass === 'non-brand'} onChange={() => { setSelectedClass('non-brand'); requestView({ queryClass: 'non-brand' }) }} /> Non-brand</label>
+            <label className="flex items-center gap-1.5"><input type="radio" name="advanced-measurement-class" disabled={!classReportingAvailable} checked={selectedClass === 'branded'} onChange={() => { setSelectedClass('branded'); requestView({ queryClass: 'branded' }) }} /> Branded</label>
           </div>
         </fieldset>
         <div className="min-w-52 flex-1 space-y-1">
@@ -435,19 +540,22 @@ export function AdvancedMeasurementOverview({
             id="advanced-measurement-search"
             type="search"
             value={search}
-            onChange={event => setSearch(event.target.value)}
+            onChange={event => {
+              setSearch(event.target.value)
+              requestView({ search: event.target.value })
+            }}
             placeholder="Search properties"
             className="h-9 w-full rounded-md border border-default bg-surface px-3 text-sm text-primary placeholder-mono-600 focus:outline-none focus:ring-2 focus:ring-mono-400"
           />
         </div>
       </div>
 
-      {showShareOfVoice ? <CompetitorShareOfVoice values={aggregate.shareOfVoice ?? []} /> : null}
+      {!isViewLoading && showShareOfVoice ? <CompetitorShareOfVoice values={aggregate.shareOfVoice ?? []} /> : null}
 
-      <section aria-labelledby="advanced-measurement-properties-title">
+      {!isViewLoading ? <section aria-labelledby="advanced-measurement-properties-title">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 id="advanced-measurement-properties-title" className="text-base font-semibold text-heading">Properties</h2>
-          <span className="text-sm text-secondary">{filteredProperties.length} {filteredProperties.length === 1 ? 'property' : 'properties'}</span>
+          <span className="text-sm text-secondary">{report.currentView?.propertyTotal ?? filteredProperties.length} {(report.currentView?.propertyTotal ?? filteredProperties.length) === 1 ? 'property' : 'properties'}</span>
         </div>
         <div className="overflow-x-auto rounded-md border border-default">
           <table className="evidence-table min-w-[720px]">
@@ -476,7 +584,7 @@ export function AdvancedMeasurementOverview({
                       </td>
                       <td className="text-right"><Button size="sm" variant="ghost" aria-expanded={expanded} onClick={() => toggleProperty(property.id)}>{expanded ? `Hide details for ${property.name}` : `Show details for ${property.name}`}</Button></td>
                     </tr>
-                    {expanded ? <tr key={`${property.id}:details`}><td colSpan={5} className="bg-surface-subtle px-4"><PropertyDetails property={property} /></td></tr> : null}
+                    {expanded ? <tr key={`${property.id}:details`}><td colSpan={5} className="bg-surface-subtle px-4"><PropertyDetails property={property} onRetryEvidence={onRetryEvidence} /></td></tr> : null}
                   </Fragment>
                 )
               })}
@@ -484,20 +592,33 @@ export function AdvancedMeasurementOverview({
             </tbody>
           </table>
         </div>
-        <Truncation
-          shown={shownProperties.length}
-          total={filteredProperties.length}
-          itemLabel="properties"
-          onShowAll={() => setPropertyLimit(Number.MAX_SAFE_INTEGER)}
-        />
-      </section>
+        {usesServerView && report.currentView!.nextCursor && onLoadMore ? (
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-secondary">
+            <span>Showing {shownProperties.length} of {report.currentView!.propertyTotal}</span>
+            <Button size="sm" variant="outline" disabled={isLoadingMore} onClick={() => onLoadMore(report.currentView!.nextCursor!)}>
+              {isLoadingMore ? 'Loading…' : 'Show 50 more'}
+            </Button>
+          </div>
+        ) : usesServerView ? (
+          shownProperties.length < report.currentView!.propertyTotal
+            ? <p className="mt-2 text-sm text-secondary">Showing {shownProperties.length} of {report.currentView!.propertyTotal}</p>
+            : null
+        ) : (
+          <Truncation
+            shown={shownProperties.length}
+            total={filteredProperties.length}
+            itemLabel="properties"
+            onShowAll={() => setPropertyLimit(Number.MAX_SAFE_INTEGER)}
+          />
+        )}
+      </section> : <div className="h-44 animate-pulse rounded-md bg-surface-subtle" aria-label="Updating Property results" />}
 
-      {report.flaggedResults.length > 0 ? (
+      {!isViewLoading && !normalizedSearch && flaggedResultsTotal > 0 ? (
         <section aria-label="Flagged results" className="border-t border-default pt-4">
           <details>
-            <summary className="cursor-pointer text-sm font-medium text-heading">Flagged results ({report.flaggedResults.length})</summary>
+            <summary className="cursor-pointer text-sm font-medium text-heading">Flagged results ({flaggedResultsTotal})</summary>
             <ul className="mt-3 space-y-3">
-              {report.flaggedResults.map(result => (
+              {report.flaggedResults.slice(0, flaggedLimit).map(result => (
                 <li key={result.id} className="flex flex-wrap items-start gap-2 text-sm">
                   <ToneBadge tone={result.tone}>Flagged</ToneBadge>
                   <span className="font-medium text-heading">{result.property}</span>
@@ -505,6 +626,21 @@ export function AdvancedMeasurementOverview({
                 </li>
               ))}
             </ul>
+            {flaggedLimit < report.flaggedResults.length ? (
+              <div className="mt-3 flex items-center gap-3 text-sm text-secondary">
+                <span>Showing details for {report.flaggedResults.slice(0, flaggedLimit).reduce((total, result) => total + (result.count ?? 1), 0)} of {flaggedResultsTotal} flagged results</span>
+                <Button size="sm" variant="outline" onClick={() => setFlaggedLimit(limit => Math.min(report.flaggedResults.length, limit + FLAGGED_RESULTS_INCREMENT))}>Show 50 more</Button>
+              </div>
+            ) : loadedFlaggedCount < flaggedResultsTotal ? (
+              <div className="mt-3 flex items-center gap-3 text-sm text-secondary">
+                <span>Showing details for {loadedFlaggedCount} of {flaggedResultsTotal} flagged results</span>
+                {usesServerView && report.currentView!.nextCursor && onLoadMore ? (
+                  <Button size="sm" variant="outline" disabled={isLoadingMore} onClick={() => onLoadMore(report.currentView!.nextCursor!)}>
+                    {isLoadingMore ? 'Loading…' : 'Load more Properties'}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
           </details>
         </section>
       ) : null}

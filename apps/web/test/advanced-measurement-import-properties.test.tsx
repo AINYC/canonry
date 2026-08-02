@@ -130,18 +130,35 @@ afterEach(() => {
 })
 
 describe('SetupImportProperties import step', () => {
-  test('asks only for the sitemap up front and keeps optional rules behind a plain-language disclosure', () => {
+  test('requires a sitemap and either an example Property page or an explicit path pattern', () => {
+    const onReviewSitemap = vi.fn()
+    render(<ImportHarness onReviewSitemap={onReviewSitemap} />)
+
+    const reviewButton = screen.getByRole('button', { name: 'Review sitemap' })
+    expect(reviewButton).toHaveProperty('disabled', true)
+
+    fireEvent.change(screen.getByLabelText('Sitemap URL'), { target: { value: 'https://example.com/sitemap.xml' } })
+    expect(reviewButton).toHaveProperty('disabled', true)
+    expect(screen.getByText('This shows Canonry the Property URL pattern. Or enter the pattern under More import options.')).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Example Property page'), { target: { value: 'https://example.com/offices/north' } })
+    expect(reviewButton).toHaveProperty('disabled', false)
+  })
+
+  test('keeps the sitemap and an example Property page primary, with advanced rules behind a compact disclosure', () => {
     const onReviewSitemap = vi.fn()
     const { container } = render(<ImportHarness onReviewSitemap={onReviewSitemap} />)
 
     expect(screen.getByRole('heading', { name: 'Import Properties' })).toBeTruthy()
     expect(screen.getByLabelText('Sitemap URL')).toBeTruthy()
+    const examplePropertyPage = screen.getByLabelText('Example Property page')
+    expect(examplePropertyPage.closest('details')).toBeNull()
     expect(screen.getByRole('button', { name: 'Review sitemap' })).toBeTruthy()
 
-    const rules = screen.getByText('Import rules (optional)').closest('details')
+    const rules = screen.getByText('More import options').closest('details')
     expect(rules).not.toBeNull()
     expect(rules?.open).toBe(false)
-    expect(within(rules!).getByLabelText('Example Property page')).toBeTruthy()
+    expect(within(rules!).queryByLabelText('Example Property page')).toBeNull()
     expect(within(rules!).getByLabelText('Use URLs from this domain')).toBeTruthy()
     expect(within(rules!).getByLabelText('Property URL pattern')).toBeTruthy()
     expect(within(rules!).getByLabelText('Additional URL domain')).toBeTruthy()
@@ -149,7 +166,7 @@ describe('SetupImportProperties import step', () => {
     expect(within(rules!).getByLabelText('Ignore these URL paths')).toBeTruthy()
 
     fireEvent.change(screen.getByLabelText('Sitemap URL'), { target: { value: 'https://example.com/sitemap.xml' } })
-    fireEvent.change(within(rules!).getByLabelText('Example Property page'), { target: { value: 'https://example.com/offices/north' } })
+    fireEvent.change(examplePropertyPage, { target: { value: 'https://example.com/offices/north' } })
     fireEvent.change(within(rules!).getByLabelText('Use URLs from this domain'), { target: { value: 'example.com' } })
     fireEvent.change(within(rules!).getByLabelText('Property URL pattern'), { target: { value: '/offices/*' } })
     fireEvent.change(within(rules!).getByLabelText('Additional URL domain'), { target: { value: 'offices.example.com' } })

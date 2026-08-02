@@ -46,6 +46,21 @@ describe('advanced measurement setup shell', () => {
     expect(screen.getByRole('heading', { name: 'Properties' }).getAttribute('tabindex')).toBe('-1')
   })
 
+  it('makes every step an accessible navigation button when step navigation is supplied', () => {
+    const onStepChange = vi.fn()
+    render(
+      <AdvancedMeasurementSetupWizard currentStep="properties" hasDraft={false} canEdit={false} onStepChange={onStepChange}>
+        <p>Read-only setup</p>
+      </AdvancedMeasurementSetupWizard>,
+    )
+
+    expect(screen.getAllByRole('button')).toHaveLength(5)
+    expect(screen.getByRole('button', { name: 'Properties' }).getAttribute('aria-current')).toBe('step')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review and publish' }))
+    expect(onStepChange).toHaveBeenCalledWith('review')
+  })
+
   it('shows draft state and requires an explicit discard confirmation', () => {
     const onDiscard = vi.fn()
     render(

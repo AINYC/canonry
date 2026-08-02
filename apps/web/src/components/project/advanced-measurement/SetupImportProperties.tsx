@@ -86,7 +86,9 @@ function ImportStep({
   reviewState: AdvancedMeasurementReviewState
 }) {
   const inputDisabled = !canEdit || reviewState === 'reviewing'
-  const reviewDisabled = inputDisabled || !draft.sitemapUrl.trim()
+  const reviewDisabled = inputDisabled
+    || !draft.sitemapUrl.trim()
+    || (!draft.examplePropertyUrl.trim() && !draft.propertyPathPattern.trim())
 
   function updateDraft(field: keyof AdvancedMeasurementImportDraft, value: string) {
     onDraftChange({ ...draft, [field]: value })
@@ -100,10 +102,10 @@ function ImportStep({
       </div>
 
       {!canEdit ? (
-        <p className="mt-4 flex items-center gap-2 text-sm text-secondary">
+        <div className="mt-4 flex items-center gap-2 text-sm text-secondary">
           <ToneBadge tone="neutral">Viewer access</ToneBadge>
           <span>You can inspect this setup.</span>
-        </p>
+        </div>
       ) : null}
 
       <form
@@ -127,21 +129,24 @@ function ImportStep({
           />
         </div>
 
+        <div>
+          <label htmlFor="advanced-measurement-example-property-url" className="text-sm font-medium text-heading">Example Property page</label>
+          <input
+            id="advanced-measurement-example-property-url"
+            type="url"
+            required={!draft.propertyPathPattern.trim()}
+            value={draft.examplePropertyUrl}
+            disabled={inputDisabled}
+            onChange={event => updateDraft('examplePropertyUrl', event.target.value)}
+            placeholder="https://example.com/locations/example"
+            className="mt-1 block w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-400 disabled:cursor-not-allowed disabled:opacity-60"
+          />
+          <p className="mt-1 text-xs text-secondary">This shows Canonry the Property URL pattern. Or enter the pattern under More import options.</p>
+        </div>
+
         <details className="rounded-md border border-default bg-surface-subtle p-3">
-          <summary className="cursor-pointer text-sm font-medium text-heading">Import rules (optional)</summary>
+          <summary className="cursor-pointer text-sm font-medium text-heading">More import options</summary>
           <div className="mt-4 space-y-4">
-            <div>
-              <label htmlFor="advanced-measurement-example-property-url" className="text-sm font-medium text-heading">Example Property page</label>
-              <input
-                id="advanced-measurement-example-property-url"
-                type="url"
-                value={draft.examplePropertyUrl}
-                disabled={inputDisabled}
-                onChange={event => updateDraft('examplePropertyUrl', event.target.value)}
-                placeholder="https://example.com/locations/example"
-                className="mt-1 block w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-400 disabled:cursor-not-allowed disabled:opacity-60"
-              />
-            </div>
             <div>
               <label htmlFor="advanced-measurement-preferred-host" className="text-sm font-medium text-heading">Use URLs from this domain</label>
               <input

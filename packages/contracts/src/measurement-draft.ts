@@ -214,8 +214,17 @@ export const measurementDraftSitemapSelectionSchema = z.object({
 }).strict()
 
 export const measurementDraftApplySitemapSelectionRequestSchema = z.object({
-  selections: z.array(measurementDraftSitemapSelectionSchema).min(1),
-}).strict()
+  selections: z.array(measurementDraftSitemapSelectionSchema),
+  /** When present, this is the complete reviewed Property selection after proposals are resolved. */
+  selectedTargetKeys: z.array(measurementV2StableKeySchema).optional(),
+}).strict().superRefine((value, context) => {
+  if (value.selections.length === 0 && value.selectedTargetKeys === undefined) {
+    context.addIssue({ code: 'custom', message: 'A proposal or reviewed Property selection is required.' })
+  }
+  if (value.selectedTargetKeys && new Set(value.selectedTargetKeys).size !== value.selectedTargetKeys.length) {
+    context.addIssue({ code: 'custom', path: ['selectedTargetKeys'], message: 'Property keys must be unique.' })
+  }
+})
 
 export const measurementDraftUpsertTargetRequestSchema = z.object({
   target: measurementDraftTargetSchema,
@@ -234,6 +243,8 @@ export const measurementDraftMergeTargetsRequestSchema = z.object({
 
 export const measurementDraftExcludeTargetRequestSchema = z.object({
   targetKey: measurementV2StableKeySchema,
+  /** Omission preserves the reversible legacy behavior. */
+  cleanup: z.literal('assignments-and-group-memberships').optional(),
 }).strict()
 
 /** Rebinding preserves `targetKey`, assignments and group membership by construction. */
@@ -243,17 +254,31 @@ export const measurementDraftRebindTargetRequestSchema = z.object({
   discoveredUrl: z.string().url(),
 }).strict()
 
-export const measurementDraftApplyAssignmentsRequestSchema = z.object({
-  targetKey: measurementV2StableKeySchema,
-  queryIds: z.array(measurementDraftQueryIdSchema).min(1),
-  contextOverride: measurementDraftContextOverrideSchema.optional(),
-}).strict()
+/** A caller may preserve the singular v2 contract or mutate a reviewed Target selection atomically. */
+export const measurementDraftApplyAssignmentsRequestSchema = z.union([
+  z.object({
+    targetKey: measurementV2StableKeySchema,
+    queryIds: z.array(measurementDraftQueryIdSchema).min(1),
+    contextOverride: measurementDraftContextOverrideSchema.optional(),
+  }).strict(),
+  z.object({
+    targetKeys: z.array(measurementV2StableKeySchema).min(1),
+    queryIds: z.array(measurementDraftQueryIdSchema).min(1),
+    contextOverride: measurementDraftContextOverrideSchema.optional(),
+  }).strict(),
+])
 
-/** Removing an assignment never deletes the project query behind it. */
-export const measurementDraftRemoveAssignmentRequestSchema = z.object({
-  targetKey: measurementV2StableKeySchema,
-  queryId: measurementDraftQueryIdSchema,
-}).strict()
+/** Removing one query from one or many Targets never deletes the project query behind it. */
+export const measurementDraftRemoveAssignmentRequestSchema = z.union([
+  z.object({
+    targetKey: measurementV2StableKeySchema,
+    queryId: measurementDraftQueryIdSchema,
+  }).strict(),
+  z.object({
+    targetKeys: z.array(measurementV2StableKeySchema).min(1),
+    queryId: measurementDraftQueryIdSchema,
+  }).strict(),
+])
 
 export const measurementDraftClearAssignmentsRequestSchema = z.object({
   targetKey: measurementV2StableKeySchema,
@@ -273,6 +298,8 @@ export const measurementDraftUpsertGroupRequestSchema = z.object({
     stableKey: measurementV2StableKeySchema,
     label: z.string().trim().min(1),
     targetKeys: z.array(measurementV2StableKeySchema),
+    /** Omission preserves existing competitors; presence replaces the complete list. */
+    competitors: z.array(measurementDraftCompetitorSchema).optional(),
   }).strict(),
 }).strict()
 

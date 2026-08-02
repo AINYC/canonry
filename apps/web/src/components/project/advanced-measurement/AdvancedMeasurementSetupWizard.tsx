@@ -18,6 +18,7 @@ export interface AdvancedMeasurementSetupWizardProps {
   hasDraft: boolean
   canEdit: boolean
   onDiscard?: () => void
+  onStepChange?: (step: AdvancedMeasurementSetupStep) => void
   children: ReactNode
 }
 
@@ -26,6 +27,7 @@ export function AdvancedMeasurementSetupWizard({
   hasDraft,
   canEdit,
   onDiscard,
+  onStepChange,
   children,
 }: AdvancedMeasurementSetupWizardProps) {
   const previousStepRef = useRef<AdvancedMeasurementSetupStep | null>(null)
@@ -84,16 +86,31 @@ export function AdvancedMeasurementSetupWizard({
         <ol className="flex min-w-max gap-6">
           {setupSteps.map(step => (
             <li key={step.id}>
-              <span
-                aria-current={currentStep === step.id ? 'step' : undefined}
-                className={`block min-h-11 border-b-2 px-1 py-3 text-sm font-medium ${
-                  currentStep === step.id
-                    ? 'border-strong text-heading'
-                    : 'border-transparent text-secondary'
-                }`}
-              >
-                {step.label}
-              </span>
+              {onStepChange ? (
+                <button
+                  type="button"
+                  aria-current={currentStep === step.id ? 'step' : undefined}
+                  onClick={() => onStepChange(step.id)}
+                  className={`block min-h-11 border-b-2 bg-transparent px-1 py-3 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400 ${
+                    currentStep === step.id
+                      ? 'border-strong text-heading'
+                      : 'border-transparent text-secondary hover:text-heading'
+                  }`}
+                >
+                  {step.label}
+                </button>
+              ) : (
+                <span
+                  aria-current={currentStep === step.id ? 'step' : undefined}
+                  className={`block min-h-11 border-b-2 px-1 py-3 text-sm font-medium ${
+                    currentStep === step.id
+                      ? 'border-strong text-heading'
+                      : 'border-transparent text-secondary'
+                  }`}
+                >
+                  {step.label}
+                </span>
+              )}
             </li>
           ))}
         </ol>

@@ -4,6 +4,7 @@ import { Button } from '../../ui/button.js'
 import {
   AdvancedMeasurementOverview,
   type AdvancedMeasurementOverviewReport,
+  type AdvancedMeasurementViewRequest,
 } from './AdvancedMeasurementOverview.js'
 import type { AdvancedMeasurementMode } from './model.js'
 
@@ -16,8 +17,15 @@ export interface AdvancedMeasurementLandingProps {
   onOpenSetup?: () => void
   onRunMeasurement?: () => void | Promise<void>
   onRetryReport?: () => void
+  onViewChange?: (view: AdvancedMeasurementViewRequest) => void
+  onLoadMore?: (cursor: string) => void
+  onPropertyExpand?: (targetKey: string) => void
+  onRetryEvidence?: () => void
   isRunningMeasurement?: boolean
   isOpeningSetup?: boolean
+  isViewLoading?: boolean
+  isLoadingMore?: boolean
+  viewSearch?: string
 }
 
 function setupActionLabel(mode: AdvancedMeasurementMode): string {
@@ -36,8 +44,15 @@ export function AdvancedMeasurementLanding({
   onOpenSetup,
   onRunMeasurement,
   onRetryReport,
+  onViewChange,
+  onLoadMore,
+  onPropertyExpand,
+  onRetryEvidence,
   isRunningMeasurement,
   isOpeningSetup,
+  isViewLoading,
+  isLoadingMore,
+  viewSearch,
 }: AdvancedMeasurementLandingProps) {
   if (mode.surface === 'simple-overview') {
     return (
@@ -76,8 +91,15 @@ export function AdvancedMeasurementLanding({
           canEdit={canEdit}
           onRunMeasurement={onRunMeasurement}
           onRepublishSetup={onOpenSetup}
+          onViewChange={onViewChange}
+          onLoadMore={onLoadMore}
+          onPropertyExpand={onPropertyExpand}
+          onRetryEvidence={onRetryEvidence}
           isRunningMeasurement={isRunningMeasurement}
           isRepublishingSetup={isOpeningSetup}
+          isViewLoading={isViewLoading}
+          isLoadingMore={isLoadingMore}
+          viewSearch={viewSearch}
         />
       ) : (
         <div role="status" className="border-y border-caution-800/40 bg-caution-950/20 py-4 text-sm text-secondary">

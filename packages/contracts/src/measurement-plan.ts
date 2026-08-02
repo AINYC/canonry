@@ -3,7 +3,6 @@ import { brandKeyFromText } from './brand-matching.js'
 import {
   MEASUREMENT_PLAN_V2_SCHEMA_VERSION,
   measurementPlanV2Schema,
-  type MeasurementPlanV2,
 } from './measurement-plan-v2.js'
 import { locationContextSchema, type LocationContext } from './provider.js'
 import { brandLabelFromDomain, hostOf } from './url-normalize.js'
@@ -444,7 +443,11 @@ export const measurementPlanSchema = measurementPlanV1Schema
 export type MeasurementPlan = z.output<typeof measurementPlanSchema>
 
 /** Every stored revision shape, discriminated by `schemaVersion`. */
-export type StoredMeasurementPlan = MeasurementPlan | MeasurementPlanV2
+export const storedMeasurementPlanSchema = z.discriminatedUnion('schemaVersion', [
+  measurementPlanV1Schema,
+  measurementPlanV2Schema,
+])
+export type StoredMeasurementPlan = z.output<typeof storedMeasurementPlanSchema>
 
 /** Explicit version dispatch prevents a future compiler from reinterpreting stored v1 rows. */
 export function parseStoredMeasurementPlanAnyVersion(value: unknown): StoredMeasurementPlan {
@@ -777,7 +780,7 @@ export const measurementPlanResponseSchema = z.object({
     revision: measurementPlanRevisionSchema,
     checksum: measurementPlanChecksumSchema,
     createdAt: measurementPlanCreatedAtSchema,
-    plan: measurementPlanSchema,
+    plan: storedMeasurementPlanSchema,
   }).nullable(),
 })
 export type MeasurementPlanResponse = z.output<typeof measurementPlanResponseSchema>
@@ -798,7 +801,7 @@ export const measurementPlanVersionResponseSchema = z.object({
     checksum: measurementPlanChecksumSchema,
     createdAt: measurementPlanCreatedAtSchema,
     active: z.boolean(),
-    plan: measurementPlanSchema,
+    plan: storedMeasurementPlanSchema,
   }),
 })
 export type MeasurementPlanVersionResponse = z.output<typeof measurementPlanVersionResponseSchema>

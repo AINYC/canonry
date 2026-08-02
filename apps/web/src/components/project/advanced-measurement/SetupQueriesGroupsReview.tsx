@@ -145,6 +145,9 @@ export interface AdvancedMeasurementReviewStepProps {
   onPublish: () => void | Promise<void>
 }
 
+const INITIAL_REVIEW_ITEM_LIMIT = 20
+const REVIEW_ITEM_PAGE_SIZE = 50
+
 const querySourceCopy: Record<AdvancedMeasurementQuerySource, { label: string; description: string }> = {
   'saved-project-queries': {
     label: 'Saved project queries',
@@ -268,7 +271,7 @@ function PropertyChecklist({
 }
 
 function ViewerNotice() {
-  return <p className="flex items-center gap-2 text-sm text-secondary"><ToneBadge tone="neutral">Viewer access</ToneBadge><span>You can inspect this setup.</span></p>
+  return <div className="flex items-center gap-2 text-sm text-secondary"><ToneBadge tone="neutral">Viewer access</ToneBadge><span>You can inspect this setup.</span></div>
 }
 
 function UnavailableState({ message }: { message: string }) {
@@ -621,7 +624,9 @@ export function AdvancedMeasurementReviewStep({
   isPublishing = false,
   onPublish,
 }: AdvancedMeasurementReviewStepProps) {
-  const [coverageItemLimit, setCoverageItemLimit] = useState(20)
+  const [sitemapItemLimit, setSitemapItemLimit] = useState(INITIAL_REVIEW_ITEM_LIMIT)
+  const [coverageItemLimit, setCoverageItemLimit] = useState(INITIAL_REVIEW_ITEM_LIMIT)
+  const [flaggedExceptionLimit, setFlaggedExceptionLimit] = useState(INITIAL_REVIEW_ITEM_LIMIT)
   if (isUnavailable(availability)) {
     return <section aria-label="Review and publish"><UnavailableState message={availability.message} /></section>
   }
@@ -629,7 +634,9 @@ export function AdvancedMeasurementReviewStep({
   const viewer = isViewer(access)
   const sitemapItems = sitemapReview?.items ?? []
   const coverageItems = sitemapReview?.coverageItems ?? []
+  const shownSitemapItems = sitemapItems.slice(0, sitemapItemLimit)
   const shownCoverageItems = coverageItems.slice(0, coverageItemLimit)
+  const shownFlaggedExceptions = flaggedExceptions.slice(0, flaggedExceptionLimit)
   const requiresChangeReview = onReviewChanges !== undefined
   const hasReviewedChanges = reviewedChanges !== null && reviewedChanges !== undefined
 
@@ -657,7 +664,7 @@ export function AdvancedMeasurementReviewStep({
                 <summary className="cursor-pointer text-sm font-medium text-heading">URLs not added to Properties ({sitemapReview.exceptionCount})</summary>
                 {sitemapItems.length > 0 ? (
                   <ul className="mt-3 space-y-3 text-sm">
-                    {sitemapItems.map(item => (
+                    {shownSitemapItems.map(item => (
                       <li key={`${item.url}-${item.reason}`}>
                         <p className="font-medium text-primary">{item.url}</p>
                         <p className="mt-1 text-secondary">{item.reason}</p>
@@ -665,6 +672,12 @@ export function AdvancedMeasurementReviewStep({
                     ))}
                   </ul>
                 ) : <p className="mt-2 text-sm text-secondary">Review the affected sitemap URLs before confirming.</p>}
+                <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-secondary">
+                  <span>Showing {shownSitemapItems.length} of {sitemapItems.length}</span>
+                  {shownSitemapItems.length < sitemapItems.length ? (
+                    <Button type="button" variant="outline" size="sm" onClick={() => setSitemapItemLimit(limit => limit + REVIEW_ITEM_PAGE_SIZE)}>Show next 50 URLs</Button>
+                  ) : null}
+                </div>
               </details>
             ) : null}
             {viewer ? <p className="text-sm text-secondary">An editor must finish this review before publishing.</p> : (
@@ -686,12 +699,12 @@ export function AdvancedMeasurementReviewStep({
                               </div>
                             </section>
                           ))}
-                          {shownCoverageItems.length < coverageItems.length ? (
-                            <div className="flex flex-wrap items-center gap-3 text-sm text-secondary">
-                              <span>Showing {shownCoverageItems.length} of {coverageItems.length}</span>
-                              <Button type="button" variant="outline" size="sm" onClick={() => setCoverageItemLimit(Number.MAX_SAFE_INTEGER)}>Show all URL changes</Button>
-                            </div>
-                          ) : null}
+                          <div className="flex flex-wrap items-center gap-3 text-sm text-secondary">
+                            <span>Showing {shownCoverageItems.length} of {coverageItems.length}</span>
+                            {shownCoverageItems.length < coverageItems.length ? (
+                              <Button type="button" variant="outline" size="sm" onClick={() => setCoverageItemLimit(limit => limit + REVIEW_ITEM_PAGE_SIZE)}>Show next 50 URL changes</Button>
+                            ) : null}
+                          </div>
                         </div>
                       ) : <p className="mt-2 text-sm text-secondary">Review the affected Properties before confirming.</p>}
                     </details>
@@ -743,13 +756,21 @@ export function AdvancedMeasurementReviewStep({
       <div className="space-y-3">
         <h4 className="text-sm font-medium text-heading">Flagged exceptions</h4>
         {flaggedExceptions.length === 0 ? <p className="text-sm text-secondary">No flagged exceptions.</p> : (
-          <div role="alert" aria-atomic="true" className="divide-y divide-default border-y border-default">
-            {flaggedExceptions.map(exception => (
-              <div key={exception.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
-                <div><p className="font-medium text-heading">{exception.title}</p>{exception.detail ? <p className="mt-1 text-sm text-secondary">{exception.detail}</p> : null}</div>
-                <ToneBadge tone={exception.tone ?? 'caution'}>Needs attention</ToneBadge>
-              </div>
-            ))}
+          <div className="space-y-3">
+            <div role="alert" aria-atomic="true" className="divide-y divide-default border-y border-default">
+              {shownFlaggedExceptions.map(exception => (
+                <div key={exception.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
+                  <div><p className="font-medium text-heading">{exception.title}</p>{exception.detail ? <p className="mt-1 text-sm text-secondary">{exception.detail}</p> : null}</div>
+                  <ToneBadge tone={exception.tone ?? 'caution'}>Needs attention</ToneBadge>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-sm text-secondary">
+              <span>Showing {shownFlaggedExceptions.length} of {flaggedExceptions.length}</span>
+              {shownFlaggedExceptions.length < flaggedExceptions.length ? (
+                <Button type="button" variant="outline" size="sm" onClick={() => setFlaggedExceptionLimit(limit => limit + REVIEW_ITEM_PAGE_SIZE)}>Show next 50 exceptions</Button>
+              ) : null}
+            </div>
           </div>
         )}
       </div>
