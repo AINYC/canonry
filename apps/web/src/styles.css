@@ -1905,7 +1905,9 @@
   }
 
   .setup-nav {
-    @apply flex items-center justify-between gap-3 pt-2;
+    /* Three buttons overflow a 320-375px viewport on one line. Wrapping keeps
+       every control reachable instead of pushing the last one off-screen. */
+    @apply flex flex-wrap items-center justify-between gap-3 pt-2;
   }
 
   .setup-field {

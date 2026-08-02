@@ -68,6 +68,8 @@ export function deriveSetupStep(input: {
 }): SetupStep {
   if (!input.launchReady) return 0
   if (!input.hasProject) return 1
+  // Where an operator RESUMES. Skipping is a session choice handled by the step
+  // control itself; this only decides where a reload drops you.
   if (input.queryCount === 0) return 2
   if (input.competitorCount === 0 && !input.hasRunAttempt) return 3
   return 4
@@ -673,6 +675,18 @@ function ReadySetupPage({
     setStep(nextStep)
   }
 
+  const skipQueries = () => {
+    emitOnboardingEvent({
+      flowVersion: ONBOARDING_FLOW_VERSION,
+      onboardingSessionId,
+      event: 'onboarding.step_completed',
+      step: 'queries',
+      method: 'skipped',
+      countBucket: '0',
+    }, 'onboarding.step_completed:queries')
+    setStep(3)
+  }
+
   const skipCompetitors = () => {
     emitOnboardingEvent({
       flowVersion: ONBOARDING_FLOW_VERSION,
@@ -881,7 +895,32 @@ function ReadySetupPage({
                 <ToneBadge tone="neutral">{parsedQueries.length} quer{parsedQueries.length !== 1 ? 'ies' : 'y'}</ToneBadge>
               )}
             </div>
-            <p className="supporting-copy">Enter the search queries you want to track. One per line.</p>
+            <p className="supporting-copy">
+              Enter the questions you want to track, one per line. A rough first list is
+              fine: you can edit them, research more, and add to them at any time from the
+              project.
+            </p>
+            <div className="rounded-md border border-base bg-bg-elevated p-3 text-sm">
+              <p className="m-0 font-medium text-heading">Tracking more than one location or property?</p>
+              <p className="mt-1 mb-2 text-secondary">
+                Questions attach to each property separately in Advanced measurement, so
+                there is nothing useful to add here. Skip this and set it up on the project.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  skipQueries()
+                  // Advanced measurement lives on the portfolio tab. Landing on the
+                  // project root dropped the operator on Overview and made them hunt
+                  // for the thing this button just offered them.
+                  void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}/portfolio` : '/' })
+                }}
+              >
+                Set up Advanced measurement instead
+              </Button>
+            </div>
             {resumeQueriesQuery.isError ? (
               <div className="compact-stack">
                 <div role="alert" className="rounded-md border border-negative bg-negative-soft p-3 text-sm text-negative">
@@ -971,6 +1010,7 @@ function ReadySetupPage({
                 {queriesError ? <p className="text-negative-400 text-sm">{queriesError}</p> : null}
                 <div className="setup-nav">
                   <Button type="button" variant="outline" onClick={goBack}>Back</Button>
+                  <Button type="button" variant="ghost" onClick={skipQueries}>Skip for now</Button>
                   <Button type="button" disabled={parsedQueries.length === 0 || queriesSaving} onClick={asyncHandler(handleSaveQueries)}>
                     {queriesSaving ? 'Saving...' : `Save ${parsedQueries.length} quer${parsedQueries.length !== 1 ? 'ies' : 'y'}`}
                   </Button>
@@ -1090,7 +1130,10 @@ function ReadySetupPage({
             ) : !runTriggered ? (
               <div className="compact-stack">
                 <p className="supporting-copy">
-                  Everything is configured. Launch an answer-visibility sweep to start tracking citations for <span className="text-heading font-medium">{createdProjectName}</span>.
+                  Setup is done. You can run a first sweep now to get a baseline for{' '}
+                  <span className="text-heading font-medium">{createdProjectName}</span>, or
+                  finish and run it later from the project. A sweep calls the answer
+                  engines, so it costs provider usage.
                 </p>
                 {(launchBlockedReason || runError) && (
                   <div role="alert" className="rounded-md border border-negative bg-negative-soft p-3 text-sm text-negative">
@@ -1100,6 +1143,13 @@ function ReadySetupPage({
                 )}
                 <div className="setup-nav">
                   <Button type="button" variant="outline" onClick={goBack}>Back</Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => { void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' }) }}
+                  >
+                    Finish without running
+                  </Button>
                   <Button
                     type="button"
                     disabled={runSaving || !!launchBlockedReason}

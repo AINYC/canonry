@@ -88,7 +88,10 @@ describe('advanced measurement setup composition', () => {
     expect(screen.getAllByText(expectedText).length).toBeGreaterThan(0)
   })
 
-  it('threads the empty-library action into the Queries step', () => {
+  // Renamed from "threads the empty-library action". The button it clicked was
+  // "Manage project queries", the old exit out of the wizard; the escape hatch
+  // is now secondary to creating questions in place, so the label moved with it.
+  it('threads the project-query actions into the Queries step', () => {
     const onManageProjectQueries = vi.fn()
     render(
       <AdvancedMeasurementSetup
@@ -96,11 +99,11 @@ describe('advanced measurement setup composition', () => {
         canEdit
         hasDraft
         onManageProjectQueries={onManageProjectQueries}
-        queries={queries}
+        queries={{ ...queries, onCreateQueries: vi.fn() }}
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Manage project queries' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage all project questions' }))
     expect(onManageProjectQueries).toHaveBeenCalledTimes(1)
   })
 

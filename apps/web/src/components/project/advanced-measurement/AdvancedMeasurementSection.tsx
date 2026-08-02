@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { extractErrorMessage } from '../../../lib/extract-error-message.js'
 import type {
   MeasurementDraftAuthoring,
   MeasurementDraftCompileCheck,
@@ -51,6 +52,8 @@ export interface AdvancedMeasurementSectionProps {
   onRetryQueries?: () => void
   publishedPlan?: MeasurementPlanResponse['active']
   canEdit?: boolean
+  /** Adds tracked questions to the project from inside setup. */
+  onCreateQueries?: (texts: readonly string[]) => Promise<void>
   onManageProjectQueries?: () => void
   onPublished?: () => void
   service?: AdvancedMeasurementService
@@ -755,6 +758,7 @@ export function AdvancedMeasurementSection({
   onRetryQueries,
   publishedPlan,
   canEdit = true,
+  onCreateQueries,
   onManageProjectQueries,
   onPublished,
   service = advancedMeasurementService,
@@ -776,6 +780,7 @@ export function AdvancedMeasurementSection({
   const [groupDraft, setGroupDraft] = useState<AdvancedMeasurementGroupDraft>({ ...DEFAULT_GROUP_DRAFT })
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null)
   const [busyAction, setBusyAction] = useState<string | null>(null)
+  const [createQueriesError, setCreateQueriesError] = useState<string | null>(null)
   const [reviewed, setReviewed] = useState<ReviewedSetup | null>(null)
   const requestVersionRef = useRef(0)
 
@@ -979,6 +984,25 @@ export function AdvancedMeasurementSection({
       setReviewState('idle')
     } else {
       setReviewState('error')
+    }
+  }
+
+  async function addProjectQueries(texts: readonly string[]): Promise<void> {
+    if (!onCreateQueries || texts.length === 0 || busyAction) return
+    setBusyAction('create-queries')
+    setCreateQueriesError(null)
+    try {
+      await onCreateQueries(texts)
+    } catch (error) {
+      // The server says which question was rejected and why. Replacing that with
+      // a house string is what sent an operator round in circles on the sitemap.
+      setCreateQueriesError(extractErrorMessage(error))
+      // Rethrow so the step keeps what the operator typed. Resolving here would
+      // report failure and clear the box in the same breath, and they would have
+      // to retype every question to try again.
+      throw error
+    } finally {
+      setBusyAction(null)
     }
   }
 
@@ -1313,6 +1337,11 @@ export function AdvancedMeasurementSection({
           onDiscard={() => { void discardDraft() }}
           onManageProjectQueries={onManageProjectQueries}
           queries={{
+            onCreateQueries: onCreateQueries
+              ? texts => addProjectQueries(texts)
+              : undefined,
+            isCreatingQueries: busyAction === 'create-queries',
+            createQueriesError: createQueriesError,
             availability: queryAvailability,
             properties: confirmedProperties,
             queries: setupQueries,

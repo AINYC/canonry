@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import {
   AdvancedMeasurementGroupsStep,
@@ -239,29 +239,117 @@ test('shares the bounded, searchable Property picker with group setup', () => {
   expect(screen.getByText('Showing 1 of 1 Properties')).toBeTruthy()
 })
 
-test('gives an empty query library a clear way to manage project queries', () => {
-  const onManageProjectQueries = vi.fn()
+// Previously this asserted the copy "Add queries to this project first. Then
+// return here to apply them to Properties." — an instruction to leave the
+// wizard. On a new project that was a dead end: the step consumed questions and
+// could not create them, so the only way forward was out and back. It now
+// creates them in place, and the assertion moves with the behaviour.
+test('lets an empty query library add questions without leaving setup', () => {
+  const onCreateQueries = vi.fn()
   renderQueries({
     queries: [],
     selectedQueryIds: [],
-    onManageProjectQueries,
+    onCreateQueries,
   })
 
-  expect(screen.getByText('Add queries to this project first. Then return here to apply them to Properties.')).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Manage project queries' }))
-  expect(onManageProjectQueries).toHaveBeenCalledTimes(1)
+  fireEvent.change(screen.getByLabelText('New questions, one per line'), {
+    target: { value: 'best apartments in dallas\nluxury apartments atlanta' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: /Add 2 questions/ }))
+
+  expect(onCreateQueries).toHaveBeenCalledTimes(1)
+  expect(onCreateQueries.mock.calls[0]![0]).toEqual([
+    'best apartments in dallas',
+    'luxury apartments atlanta',
+  ])
 })
 
-test('keeps the empty-library action hidden from viewers', () => {
+// The portfolio shape. Typing one generic question and applying it to 213
+// Properties measures the portfolio; a question per Property measures the
+// Properties. The count is shown before the click because 213 is a surprising
+// number to produce from one line of text.
+test('writes one question per selected Property from a pattern', () => {
+  const onCreateQueries = vi.fn()
+  renderQueries({
+    queries: [],
+    selectedQueryIds: [],
+    onCreateQueries,
+  })
+
+  fireEvent.change(screen.getByLabelText('Question pattern'), {
+    target: { value: 'apartments near {property}' },
+  })
+
+  // The expansion is visible before it is committed.
+  expect(screen.getByText('apartments near Harbor House')).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('button', { name: /Add \d+ questions?/ }))
+
+  const created = onCreateQueries.mock.calls[0]![0] as string[]
+  expect(created.every(text => text.startsWith('apartments near '))).toBe(true)
+  expect(new Set(created).size).toBe(created.length)
+})
+
+test('asks for a placeholder rather than writing the same question repeatedly', () => {
+  renderQueries({ queries: [], selectedQueryIds: [], onCreateQueries: vi.fn() })
+
+  fireEvent.change(screen.getByLabelText('Question pattern'), {
+    target: { value: 'best apartments' },
+  })
+
+  expect(screen.getByText(/Add \{property\} to the pattern/)).toBeTruthy()
+})
+
+// Clearing the box on failure means retyping every question to retry, which is
+// worst for the pattern case where the operator may have written one line that
+// expanded to two hundred.
+test('keeps what was typed when creation fails', async () => {
+  const onCreateQueries = vi.fn().mockRejectedValue(new Error('Query is already tracked.'))
+  renderQueries({ queries: [], selectedQueryIds: [], onCreateQueries })
+
+  const box = screen.getByLabelText('New questions, one per line')
+  fireEvent.change(box, { target: { value: 'best apartments in dallas' } })
+  fireEvent.click(screen.getByRole('button', { name: /Add 1 question/ }))
+
+  await waitFor(() => expect(onCreateQueries).toHaveBeenCalled())
+  expect((box as HTMLTextAreaElement).value).toBe('best apartments in dallas')
+})
+
+test('clears the box only once creation succeeds', async () => {
+  const onCreateQueries = vi.fn().mockResolvedValue(undefined)
+  renderQueries({ queries: [], selectedQueryIds: [], onCreateQueries })
+
+  const box = screen.getByLabelText('New questions, one per line')
+  fireEvent.change(box, { target: { value: 'best apartments in dallas' } })
+  fireEvent.click(screen.getByRole('button', { name: /Add 1 question/ }))
+
+  await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe(''))
+})
+
+test('surfaces the server reason when adding questions fails', () => {
+  renderQueries({
+    queries: [],
+    selectedQueryIds: [],
+    onCreateQueries: vi.fn(),
+    createQueriesError: 'Query "best apartments in dallas" is already tracked.',
+  })
+
+  expect(screen.getByRole('alert').textContent)
+    .toContain('Query "best apartments in dallas" is already tracked.')
+})
+
+test('keeps question creation away from viewers', () => {
   renderQueries({
     access: 'viewer',
     queries: [],
     selectedQueryIds: [],
+    onCreateQueries: vi.fn(),
     onManageProjectQueries: vi.fn(),
   })
 
-  expect(screen.getByText('Add queries to this project first. Then return here to apply them to Properties.')).toBeTruthy()
-  expect(screen.queryByRole('button', { name: 'Manage project queries' })).toBeNull()
+  expect(screen.queryByLabelText('New questions, one per line')).toBeNull()
+  expect(screen.queryByRole('button', { name: /Add .* question/ })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Manage all project questions' })).toBeNull()
 })
 
 test('uses an accessible hit target for each table query checkbox', () => {
