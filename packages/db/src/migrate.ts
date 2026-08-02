@@ -2667,7 +2667,13 @@ function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {
   const indexes = tx.all(sql.raw("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'runs' AND sql IS NOT NULL")) as Array<{ name: string; sql: string }>
 
   rebuildMeasurementTable(tx, 'runs', repairedSql, columnList, indexes)
-  const violations = tx.all(sql.raw('PRAGMA foreign_key_check'))
+  // Scoped to the table this function rebuilt. Unscoped, the pragma walks every
+  // table in the database, so one pre-existing orphan anywhere aborts the
+  // migration and the install can never boot again. Those orphans are not
+  // hypothetical here: v98 exists to relink FK-orphaned query_snapshots, and
+  // migrations run with foreign keys disabled, so older rows can predate any
+  // constraint. This check is meant to catch damage the rebuild itself caused.
+  const violations = tx.all(sql.raw("PRAGMA foreign_key_check('runs')"))
   if (violations.length > 0) throw new Error('Measurement-plan migration left foreign-key violations')
 }
 
