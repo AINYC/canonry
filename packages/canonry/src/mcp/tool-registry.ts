@@ -140,7 +140,35 @@ const idempotencyKeyInputSchema = z.string().trim().min(1).describe('A fresh req
 const measurementDraftEtagInputSchema = z.string().trim().min(1).optional().describe(
   'Current draft ETag from canonry_measurement_draft_get. The API requires it for draft edits, publish, and discard; omit it only to receive the API’s actionable 428 response.',
 )
-const measurementOverviewInputSchema = measurementOverviewQuerySchema.extend({ project: projectNameSchema })
+const measurementOverviewInputSchema = z.object({
+  project: projectNameSchema,
+  scope: measurementOverviewQuerySchema.shape.scope.describe('Read all Properties, one reporting group, or one Property.'),
+  groupKey: measurementOverviewQuerySchema.shape.groupKey.describe('Group stable key. Required only for group scope.'),
+  targetKey: measurementOverviewQuerySchema.shape.targetKey.describe('Property stable key. Required only for property scope.'),
+  queryClass: measurementOverviewQuerySchema.shape.queryClass,
+  provider: measurementOverviewQuerySchema.shape.provider,
+  location: measurementOverviewQuerySchema.shape.location,
+  from: measurementOverviewQuerySchema.shape.from,
+  to: measurementOverviewQuerySchema.shape.to,
+  runId: measurementOverviewQuerySchema.shape.runId,
+  search: measurementOverviewQuerySchema.shape.search,
+  sort: measurementOverviewQuerySchema.shape.sort,
+  cursor: measurementOverviewQuerySchema.shape.cursor,
+  limit: measurementOverviewQuerySchema.shape.limit,
+}).strict().superRefine((input, context) => {
+  if (input.scope === 'group' && !input.groupKey) {
+    context.addIssue({ code: 'custom', path: ['groupKey'], message: 'Group scope requires groupKey.' })
+  }
+  if (input.scope === 'property' && !input.targetKey) {
+    context.addIssue({ code: 'custom', path: ['targetKey'], message: 'Property scope requires targetKey.' })
+  }
+  if (input.scope !== 'group' && input.groupKey) {
+    context.addIssue({ code: 'custom', path: ['groupKey'], message: `${input.scope} scope does not accept groupKey.` })
+  }
+  if (input.scope !== 'property' && input.targetKey) {
+    context.addIssue({ code: 'custom', path: ['targetKey'], message: `${input.scope} scope does not accept targetKey.` })
+  }
+})
 const measurementDraftCollectionInputSchema = measurementDraftCollectionQuerySchema.extend({ project: projectNameSchema })
 const measurementQuerySetInputSchema = z.object({
   project: projectNameSchema,
@@ -2059,7 +2087,7 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_measurement_overview',
     title: 'Get Advanced Measurement overview',
-    description: 'Return stored, revision-pinned Advanced Measurement metrics and a bounded page of Target rows for one scope. It ranks one run snapshot only and never infers a trend or compares across revisions. Choose label-asc (default), label-desc, citationCoverage-asc/desc, or mentionCoverage-asc/desc. For a coverage sort, unavailable rows form the first bucket in either direction; available rows then follow the requested numeric direction. The cursor is sort-aware, pins pagination to the active revision, displayed run, evidence snapshot, and filters even if a newer run completes, and must be reused unchanged with the same sort and filters. Legacy label cursors work only when sort is omitted, while any explicit sort needs a new sort-bound cursor. It never starts provider work or incurs provider cost; page size is at most 100, and it refuses invalid scope keys, cursor combinations, appended evidence, or a run pinned to another revision.',
+    description: 'Return stored, revision-pinned Advanced Measurement metrics and a bounded page of Property rows for all Properties, one reporting group, or one Property. Filter by query class, provider, location, date window, run, or Property search; search filters rows without changing metric denominators. It ranks one run snapshot only and never infers a trend or compares across revisions. Choose label-asc (default), label-desc, citationCoverage-asc/desc, or mentionCoverage-asc/desc. For a coverage sort, unavailable rows form the first bucket in either direction; available rows then follow the requested numeric direction. The cursor is sort-aware, pins pagination to the active revision, displayed run, evidence snapshot, and filters even if a newer run completes, and must be reused unchanged with the same sort and filters. Legacy label cursors work only when sort is omitted, while any explicit sort needs a new sort-bound cursor. It never starts provider work or incurs provider cost; page size is at most 100, and it refuses invalid scope keys, cursor combinations, appended evidence, or a run pinned to another revision.',
     access: 'read',
     tier: 'setup',
     inputSchema: measurementOverviewInputSchema,

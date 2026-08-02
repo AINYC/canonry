@@ -163,7 +163,7 @@ describe('measurement overview', () => {
     expect(status).toBe(200)
     expect(body.mode).toBe('active-v2')
     expect(body.measurement.state).toBe('not_measured')
-    expect(body.measurement).toMatchObject({ completed: 0, expected: 4 })
+    expect(body.measurement).toMatchObject({ completed: 0, expected: 4, includesHistoricalData: false })
     expect(body.measurement.displayedRunId).toBeUndefined()
     expect(Object.values(body.metrics)).toEqual(Array.from(
       { length: 5 },
@@ -214,9 +214,32 @@ describe('measurement overview', () => {
 
     const { body } = await overview('scope=all')
 
-    expect(body.measurement).toMatchObject({ state: 'complete', displayedRunId: runId, completed: 4, expected: 4 })
+    expect(body.measurement).toMatchObject({
+      state: 'complete',
+      displayedRunId: runId,
+      completed: 4,
+      expected: 4,
+      includesHistoricalData: false,
+    })
     expect(body.metrics.brandPresence).toMatchObject({ state: 'available' })
     expect(body.metrics.sov).toEqual(body.metrics.brandPresence)
+  })
+
+  it('reports historical source recovery without requiring evidence rows', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    const runId = seedRun(versionId)
+    seedSnapshot(runId, 'exec-nearby', 'openai', {
+      citedUrls: null,
+      rawResponse: JSON.stringify({ groundingSources: [] }),
+    })
+    seedSnapshot(runId, 'exec-nearby', 'gemini')
+    seedSnapshot(runId, 'exec-brand', 'openai', { answerText: 'Northstar is well reviewed.' })
+    seedSnapshot(runId, 'exec-brand', 'gemini', { answerText: 'Northstar is well reviewed.' })
+
+    const { body } = await overview('scope=all')
+
+    expect(body.measurement.includesHistoricalData).toBe(true)
   })
 
   it('counts a question shared by two Properties once in the denominator', async () => {

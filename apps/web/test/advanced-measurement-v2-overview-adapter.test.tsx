@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   MeasurementOverviewResponse,
@@ -135,6 +135,74 @@ describe('version-two measurement overview adapter', () => {
     expect(screen.getByText('No source evidence is available.')).toBeTruthy()
   })
 
+  it('keeps search typing immediate while sending only the latest server view after a short pause', () => {
+    vi.useFakeTimers()
+    try {
+      const { activePlan, overview } = fixture()
+      const onViewChange = vi.fn()
+      render(
+        <AdvancedMeasurementOverview
+          report={adaptV2MeasurementOverview({ overview, activePlan })}
+          canEdit
+          onViewChange={onViewChange}
+        />,
+      )
+
+      const search = screen.getByRole('searchbox', { name: 'Search properties' }) as HTMLInputElement
+      fireEvent.change(search, { target: { value: 'h' } })
+      fireEvent.change(search, { target: { value: 'har' } })
+      fireEvent.change(search, { target: { value: 'harbor' } })
+
+      expect(search.value).toBe('harbor')
+      expect(onViewChange).not.toHaveBeenCalled()
+      act(() => vi.advanceTimersByTime(249))
+      expect(onViewChange).not.toHaveBeenCalled()
+      act(() => vi.advanceTimersByTime(1))
+      expect(onViewChange).toHaveBeenCalledTimes(1)
+      expect(onViewChange).toHaveBeenLastCalledWith({
+        scope: 'all',
+        queryClass: 'non-brand',
+        search: 'harbor',
+      })
+
+      fireEvent.change(search, { target: { value: 'old' } })
+      act(() => vi.advanceTimersByTime(200))
+      fireEvent.change(search, { target: { value: 'latest' } })
+      act(() => vi.advanceTimersByTime(50))
+      expect(onViewChange).toHaveBeenCalledTimes(1)
+      act(() => vi.advanceTimersByTime(200))
+      expect(onViewChange).toHaveBeenCalledTimes(2)
+      expect(onViewChange).toHaveBeenLastCalledWith({
+        scope: 'all',
+        queryClass: 'non-brand',
+        search: 'latest',
+      })
+
+      onViewChange.mockClear()
+      fireEvent.change(search, { target: { value: 'queued' } })
+      fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'downtown' } })
+      expect(onViewChange).toHaveBeenCalledTimes(1)
+      expect(onViewChange).toHaveBeenLastCalledWith({
+        scope: 'group',
+        groupKey: 'downtown',
+        queryClass: 'non-brand',
+        search: 'queued',
+      })
+      act(() => vi.advanceTimersByTime(250))
+      expect(onViewChange).toHaveBeenCalledTimes(1)
+
+      fireEvent.click(screen.getByRole('radio', { name: 'Branded' }))
+      expect(onViewChange).toHaveBeenLastCalledWith({
+        scope: 'group',
+        groupKey: 'downtown',
+        queryClass: 'branded',
+        search: 'queued',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('indexes evidence once by its assigned Property and translates sibling language', () => {
     const { activePlan, overview } = fixture(2)
     if (activePlan.plan.schemaVersion !== 2) throw new Error('Expected a version-two fixture.')
@@ -171,6 +239,23 @@ describe('version-two measurement overview adapter', () => {
       'https://homes.northstar.example/*',
     ])
     expect(report.currentView?.aggregate.properties[1]?.evidence).toHaveLength(0)
+  })
+
+  it('badges run-level historical provenance before deep evidence is fetched', () => {
+    const { activePlan, overview } = fixture(1)
+    overview.measurement.includesHistoricalData = true
+    overview.measurement.displayedRunId = 'run-historical'
+
+    const report = adaptV2MeasurementOverview({
+      overview,
+      activePlan,
+      reportState: 'loading',
+    })
+    render(<AdvancedMeasurementOverview report={report} canEdit />)
+
+    expect(report.latestMeasurement.includesBridgedHistory).toBe(true)
+    expect(report.currentView?.aggregate.properties[0]?.evidence).toEqual([])
+    expect(screen.getByText('Includes historical data')).toBeTruthy()
   })
 
   it('rejects the API property scope instead of relabeling it as All Properties', () => {

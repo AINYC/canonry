@@ -42,6 +42,7 @@ let tmpDir: string
 let db: DatabaseClient
 let app: ReturnType<typeof Fastify>
 let tracked: Array<{ id: string; query: string }>
+let runnableProviders: string[]
 
 function seedKey(name: string, token: string, scopes: string[]) {
   db.insert(apiKeys).values({
@@ -169,8 +170,9 @@ beforeEach(async () => {
   }
   tracked = db.select({ id: queries.id, query: queries.query }).from(queries).all()
 
+  runnableProviders = ['gemini', 'openai']
   app = Fastify()
-  app.register(apiRoutes, { db })
+  app.register(apiRoutes, { db, getRunnableProviderNames: () => runnableProviders })
   await app.ready()
 })
 
@@ -218,6 +220,24 @@ describe('measurement draft lifecycle', () => {
     expect(loaded.json().draft.authoring.defaultContext).toEqual({
       providers: ['gemini', 'openai'],
       models: { gemini: 'gemini-test', openai: 'gpt-test' },
+      locations: ['nyc'],
+    })
+  })
+
+  it('freezes the runnable provider roster when the project uses all configured providers', async () => {
+    db.update(projects).set({
+      providers: [],
+      providerModels: { gemini: 'gemini-test', openai: 'gpt-test', perplexity: 'sonar-test' },
+    }).where(eq(projects.id, 'prj_northwind')).run()
+    runnableProviders = ['perplexity', ' GEMINI ', 'gemini']
+
+    await createDraft()
+    runnableProviders = ['openai']
+
+    const loaded = await request('GET', '/measurement-plan/draft')
+    expect(loaded.json().draft.authoring.defaultContext).toEqual({
+      providers: ['gemini', 'perplexity'],
+      models: { gemini: 'gemini-test', perplexity: 'sonar-test' },
       locations: ['nyc'],
     })
   })
@@ -643,6 +663,73 @@ describe('measurement draft previews', () => {
       expect.objectContaining({ ruleId: 'target-url-matcher-unowned', severity: 'fail', path: ['targets', 0, 'urlMatchers', 0] }),
     ]))
   })
+
+  it('blocks publish when included sitemap Targets claim the same normalized alias', async () => {
+    const session = await DraftSession.start()
+    await session.run('upsert-target', {
+      target: { ...WIDGETS_TARGET, source: 'sitemap', aliases: ['Northwind Widgets'] },
+    })
+    await session.run('upsert-target', {
+      target: { ...GADGETS_TARGET, source: 'sitemap', aliases: ['northwind-widgets'] },
+    })
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(preview.json()).toMatchObject({
+      ok: false,
+      compiledChecksum: null,
+      checks: expect.arrayContaining([expect.objectContaining({
+        ruleId: 'target-alias-ambiguous',
+        severity: 'fail',
+        path: ['targets', 1, 'aliases', 0],
+      })]),
+    })
+
+    const publish = await action('publish', {
+      payload: { expectedActiveRevision: null, expectedCompiledChecksum: 'a'.repeat(64) },
+      ifMatch: session.etag,
+    })
+    expect(publish.statusCode, publish.body).toBe(400)
+    expect(publish.json().error.details.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: 'target-alias-ambiguous', severity: 'fail' }),
+    ]))
+    expect(db.select().from(measurementPlanVersions).all()).toEqual([])
+    expect(db.select().from(measurementPlanDrafts).all()).toHaveLength(1)
+  })
+
+  it('allows a normalized sitemap alias collision when only one Target is included', async () => {
+    const session = await DraftSession.start()
+    await session.run('upsert-target', {
+      target: { ...WIDGETS_TARGET, source: 'sitemap', aliases: ['Northwind Widgets'] },
+    })
+    await session.run('upsert-target', {
+      target: { ...GADGETS_TARGET, status: 'excluded', source: 'sitemap', aliases: ['northwind-widgets'] },
+    })
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(preview.json()).toMatchObject({ ok: true, plan: { targets: [{ stableKey: 'widgets' }] } })
+    expect(preview.json().checks).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: 'target-alias-ambiguous' }),
+    ]))
+  })
+
+  it('allows aliases with distinct scorer token sequences', async () => {
+    const session = await DraftSession.start()
+    await session.run('upsert-target', {
+      target: { ...WIDGETS_TARGET, source: 'sitemap', aliases: ['North Park'] },
+    })
+    await session.run('upsert-target', {
+      target: { ...GADGETS_TARGET, source: 'sitemap', aliases: ['Northpark'] },
+    })
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(preview.json()).toMatchObject({ ok: true })
+    expect(preview.json().checks).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: 'target-alias-ambiguous' }),
+    ]))
+  })
 })
 
 /** Compiles the current draft and publishes it under both guards the transaction requires. */
@@ -1026,6 +1113,60 @@ describe('measurement draft compiled checksum', () => {
 
     setDefaultContext({ providers: ['gemini'], models: { gemini: 'gemini-next' }, locations: ['nyc'] })
     expect(await compiledChecksum()).not.toBe(remodelled)
+  })
+
+  it('hydrates a pre-fix empty default from the runnable roster and detects roster drift', async () => {
+    const session = await readyDraft()
+    db.update(projects).set({ providers: [] }).where(eq(projects.id, 'prj_northwind')).run()
+    setDefaultContext({ providers: [], locations: ['nyc'] })
+    runnableProviders = ['openai']
+
+    const first = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(first.statusCode, first.body).toBe(200)
+    expect(first.json()).toMatchObject({ ok: true, compiledChecksum: expect.any(String) })
+    expect(first.json().plan.executionNodes.map((node: { context: { providers: string[] } }) => node.context.providers))
+      .toEqual([['openai'], ['openai']])
+
+    runnableProviders = ['gemini', 'openai']
+    const second = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(second.statusCode, second.body).toBe(200)
+    expect(second.json()).toMatchObject({ ok: true, compiledChecksum: expect.any(String) })
+    expect(second.json().compiledChecksum).not.toBe(first.json().compiledChecksum)
+
+    const stalePublish = await action('publish', {
+      payload: {
+        expectedActiveRevision: null,
+        expectedCompiledChecksum: first.json().compiledChecksum,
+      },
+      ifMatch: session.etag,
+    })
+    expect(stalePublish.statusCode).toBe(409)
+    expect(stalePublish.json()).toMatchObject({ error: { code: 'MEASUREMENT_COMPILED_CHECKSUM_CONFLICT' } })
+    expect(db.select().from(measurementPlanDrafts).all()).toHaveLength(1)
+  })
+
+  it('keeps an explicit empty assignment provider override invalid', async () => {
+    const session = await readyDraft()
+    db.update(projects).set({ providers: [] }).where(eq(projects.id, 'prj_northwind')).run()
+    setDefaultContext({ providers: [], locations: ['nyc'] })
+    runnableProviders = ['openai']
+    await session.run('apply-assignments', {
+      targetKey: 'widgets',
+      queryIds: [queryId('best widget supplier')],
+      contextOverride: { providers: [] },
+    })
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(preview.json()).toMatchObject({
+      ok: false,
+      compiledChecksum: null,
+      checks: expect.arrayContaining([expect.objectContaining({
+        ruleId: 'execution-context-no-provider',
+        severity: 'fail',
+        path: ['assignments', expect.any(Number), 'contextOverride', 'providers'],
+      })]),
+    })
   })
 
   it('keys an execution node on the provider map, so two contexts never collapse into one call', async () => {

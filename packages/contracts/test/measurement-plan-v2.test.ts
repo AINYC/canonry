@@ -196,7 +196,7 @@ describe('measurement overview response', () => {
       mode: 'active-v2',
       scope: { kind: 'all', label: 'All Properties' },
       queryClass: 'all',
-      measurement: { state: 'not_measured', completed: 0, expected: 0 },
+      measurement: { state: 'not_measured', completed: 0, expected: 0, includesHistoricalData: false },
       nextAction: { kind: 'run_measurement' },
       metrics: {
         propertiesMentioned: unavailable,
@@ -214,6 +214,7 @@ describe('measurement overview response', () => {
     const parsed = measurementOverviewResponseSchema.parse(overview())
     expect(parsed.metrics.brandPresence).toEqual(unavailable)
     expect(parsed.metrics.sov).toEqual(parsed.metrics.brandPresence)
+    expect(parsed.measurement.includesHistoricalData).toBe(false)
   })
 
   it('refuses a response that drops the deprecated sov alias while the browser still reads it', () => {

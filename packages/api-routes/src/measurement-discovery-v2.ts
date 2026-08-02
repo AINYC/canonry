@@ -2,7 +2,9 @@ import crypto from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import {
+  brandKeyFromText,
   effectiveDomains,
+  MIN_DOMAIN_BRAND_KEY_LENGTH,
   measurementDraftApplySitemapSelectionRequestSchema,
   measurementDraftAuthoringSchema,
   measurementDraftEtag,
@@ -593,7 +595,13 @@ export async function measurementDiscoveryV2Routes(app: FastifyInstance) {
       label: proposal.label,
       // Proposed, never included: discovery reviews and the operator decides.
       status: 'proposed',
-      aliases: [],
+      // The label is deterministic output from the reviewed sitemap rule, so
+      // it is safe to seed as mention identity when it meets the scorer's
+      // specificity floor. A later display-label edit deliberately does not
+      // rewrite this approved identity.
+      aliases: brandKeyFromText(proposal.label).length >= MIN_DOMAIN_BRAND_KEY_LENGTH
+        ? [proposal.label]
+        : [],
       urlMatchers: proposal.urlMatchers,
       source: 'sitemap',
       discoveredUrl: proposal.discoveredUrl,

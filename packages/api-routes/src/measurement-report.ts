@@ -238,6 +238,8 @@ export interface MeasurementNamedShareOfVoice {
 export interface MeasurementOverview {
   eligibleSlots: number
   answeredSlots: number
+  /** Run-level provenance, independent of whether any recovered source URL produced an evidence row. */
+  includesHistoricalData: boolean
   propertiesMentioned: MeasurementRate
   mentionCoverage: MeasurementRate
   citationCoverage: MeasurementRate
@@ -418,6 +420,11 @@ export function normalizeMeasurementLocation(value: string | null): string | nul
 
 function words(value: string): string[] {
   return value.normalize('NFKC').toLocaleLowerCase('en').match(/[\p{L}\p{N}]+/gu) ?? []
+}
+
+/** The exact token identity used when deciding whether two Target aliases are ambiguous. */
+export function measurementMentionAliasKey(value: string): string {
+  return words(value).join('\u0000')
 }
 
 function aliasMatchesAt(textWords: readonly string[], aliasWords: readonly string[], start: number): boolean {
@@ -961,7 +968,7 @@ function ambiguousFlags(
     if (row.classification !== 'ambiguous') continue
     if (!slotIds.has(row.expectedSlotId) || !edgeIds.has(row.usageEdgeId)) continue
     if (!row.matchedTargetIds.includes(targetId)) continue
-    seen.add(`${row.expectedSlotId} ${row.sourceUrl}`)
+    seen.add(`${row.expectedSlotId}\u0000${row.sourceUrl}`)
   }
   return seen.size
 }
@@ -995,6 +1002,8 @@ export function buildMeasurementOverview(input: MeasurementOverviewInput): Measu
   return {
     eligibleSlots: slots.length,
     answeredSlots: answered.length,
+    includesHistoricalData: prepared.diagnostics.bridgedObservationIds.length > 0
+      || prepared.diagnostics.historicalObservationIds.length > 0,
     propertiesMentioned: scopePropertiesMentioned(input, targetIds, slots, answered, prepared),
     mentionCoverage: scopeMentionRate(input, targetIds, slots, answered, prepared),
     citationCoverage: scopeCitationRate(slots, edges, prepared),

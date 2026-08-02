@@ -221,6 +221,7 @@ export function adaptV2MeasurementOverview({
       completedSlots: overview.measurement.completed,
       totalSlots: overview.measurement.expected,
       date: reportDate(overview.measurement.completedAt),
+      includesBridgedHistory: overview.measurement.includesHistoricalData === true,
     },
     currentView: {
       scope: overview.scope.kind === 'group'

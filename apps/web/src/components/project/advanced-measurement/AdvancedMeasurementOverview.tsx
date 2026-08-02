@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MetricTone } from '../../../view-models.js'
 
 import { ToneBadge } from '../../shared/ToneBadge.js'
@@ -87,6 +87,7 @@ export interface AdvancedMeasurementOverviewReport {
     status: { label: string; tone: MetricTone }
     completedSlots: number
     totalSlots: number
+    includesBridgedHistory?: boolean
     /** Already formatted by the caller for the viewer's locale. */
     date: string
   }
@@ -141,6 +142,7 @@ const PROPERTY_LIST_LIMIT = 50
 const DETAIL_LIST_LIMIT = 50
 const FLAGGED_RESULTS_INITIAL_LIMIT = 20
 const FLAGGED_RESULTS_INCREMENT = 50
+const SEARCH_DEBOUNCE_MS = 250
 
 const evidenceLabels: Record<AdvancedMeasurementEvidenceKind, string> = {
   'this-property': 'Matches this Property',
@@ -217,7 +219,10 @@ function MetricValue({
     ? isMeasured(metric) ? 'text-sm font-medium text-primary' : 'text-sm font-medium text-secondary'
     : isMeasured(metric) ? 'text-lg font-semibold text-heading' : 'text-lg font-semibold text-secondary'
   return (
-    <span className="inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-1 tabular-nums">
+    <span
+      className="inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-1 tabular-nums"
+      {...(!isMeasured(metric) ? { title: metricReason(metric) } : {})}
+    >
       <span className={valueClassName}>{metricLabel(metric)}</span>
     </span>
   )
@@ -389,6 +394,7 @@ export function AdvancedMeasurementOverview({
   const [propertyLimit, setPropertyLimit] = useState(PROPERTY_LIST_LIMIT)
   const [flaggedLimit, setFlaggedLimit] = useState(FLAGGED_RESULTS_INITIAL_LIMIT)
   const [expandedPropertyIds, setExpandedPropertyIds] = useState<ReadonlySet<string>>(new Set())
+  const lastRequestedSearch = useRef(viewSearch ?? '')
 
   const legacyScope = classReportingAvailable && !usesServerView
     ? selectedClass === 'non-brand' ? report.classScopes!.nonBrand : report.classScopes!.branded
@@ -397,6 +403,19 @@ export function AdvancedMeasurementOverview({
     ? { aggregate: report.currentView!.aggregate, groups: [] }
     : legacyScope!
 
+  const requestView = useCallback((next: Partial<AdvancedMeasurementViewRequest>) => {
+    if (!usesServerView || !onViewChange) return
+    const nextScope = next.scope ?? (selectedView === ALL_PROPERTIES ? 'all' : 'group')
+    const nextSearch = next.search ?? search
+    lastRequestedSearch.current = nextSearch
+    onViewChange({
+      scope: nextScope,
+      ...(nextScope === 'group' ? { groupKey: next.groupKey ?? selectedView } : {}),
+      queryClass: next.queryClass ?? selectedClass,
+      ...(nextSearch ? { search: nextSearch } : {}),
+    })
+  }, [onViewChange, search, selectedClass, selectedView, usesServerView])
+
   useEffect(() => {
     if (!report.currentView || isViewLoading) return
     setSelectedClass(report.currentView.queryClass)
@@ -404,8 +423,16 @@ export function AdvancedMeasurementOverview({
   }, [isViewLoading, report.currentView])
 
   useEffect(() => {
-    if (viewSearch !== undefined) setSearch(viewSearch)
+    if (viewSearch === undefined) return
+    lastRequestedSearch.current = viewSearch
+    setSearch(viewSearch)
   }, [viewSearch])
+
+  useEffect(() => {
+    if (!usesServerView || !onViewChange || search === lastRequestedSearch.current) return
+    const timer = window.setTimeout(() => requestView({ search }), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [onViewChange, requestView, search, usesServerView])
 
   useEffect(() => {
     const groups = report.availableGroups ?? scope.groups
@@ -460,17 +487,6 @@ export function AdvancedMeasurementOverview({
     if (willExpand) onPropertyExpand?.(propertyId)
   }
 
-  function requestView(next: Partial<AdvancedMeasurementViewRequest>) {
-    if (!usesServerView || !onViewChange) return
-    const nextScope = next.scope ?? (selectedView === ALL_PROPERTIES ? 'all' : 'group')
-    onViewChange({
-      scope: nextScope,
-      ...(nextScope === 'group' ? { groupKey: next.groupKey ?? selectedView } : {}),
-      queryClass: next.queryClass ?? selectedClass,
-      ...((next.search ?? search) ? { search: next.search ?? search } : {}),
-    })
-  }
-
   return (
     <section aria-label="Advanced measurement overview" aria-busy={isViewLoading} className="space-y-5">
       <header className="border-b border-default pb-4">
@@ -478,6 +494,7 @@ export function AdvancedMeasurementOverview({
           {isViewLoading ? <span className="text-sm text-secondary">Updating results…</span> : (
             <>
               <ToneBadge tone={report.latestMeasurement.status.tone}>{report.latestMeasurement.status.label}</ToneBadge>
+              {report.latestMeasurement.includesBridgedHistory ? <ToneBadge tone="caution">Includes historical data</ToneBadge> : null}
               {progressLabel ? <span className="text-sm text-secondary tabular-nums">{progressLabel}</span> : null}
               {measurementDate ? <span className="text-sm text-secondary">{measurementDate}</span> : null}
               <span className="text-sm text-secondary">{statusMessage}</span>
@@ -540,10 +557,7 @@ export function AdvancedMeasurementOverview({
             id="advanced-measurement-search"
             type="search"
             value={search}
-            onChange={event => {
-              setSearch(event.target.value)
-              requestView({ search: event.target.value })
-            }}
+            onChange={event => setSearch(event.target.value)}
             placeholder="Search properties"
             className="h-9 w-full rounded-md border border-default bg-surface px-3 text-sm text-primary placeholder-mono-600 focus:outline-none focus:ring-2 focus:ring-mono-400"
           />

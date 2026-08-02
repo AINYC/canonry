@@ -188,6 +188,80 @@ describe('import', () => {
     expect(db.select().from(runs).all()).toEqual([])
   })
 
+  test('seeds mention-safe generated Property labels as aliases and compiles them without an alias warning', async () => {
+    await importSitemap()
+
+    const imported = storedAuthoring().targets
+    expect(imported.map(target => [target.label, target.aliases])).toEqual([
+      ['Harbour Quay', ['Harbour Quay']],
+      ['North Park', ['North Park']],
+    ])
+
+    const selected = await post('apply-sitemap-selection', {
+      selections: imported.map(target => ({ discoveryIdentity: target.discoveryIdentity, action: 'create' })),
+    }, { 'if-match': '"mpd_2"' })
+    expect(selected.statusCode).toBe(200)
+
+    const compiled = await post('compile-preview', {}, { 'if-match': '"mpd_3"' })
+    expect(compiled.statusCode).toBe(200)
+    expect((compiled.json().checks as Array<{ ruleId: string }>).map(check => check.ruleId))
+      .not.toContain('target-without-aliases')
+  })
+
+  test('refuses to compile included generated aliases that normalize to one Property identity', async () => {
+    fetchSitemap.mockResolvedValue(sitemap('/locations/{slug}', ['north-park', 'north_park']))
+    await importSitemap()
+
+    const imported = storedAuthoring().targets
+    expect(imported.map(target => [target.stableKey, target.aliases])).toEqual([
+      ['target-north-park', ['North Park']],
+      ['target-north_park', ['North Park']],
+    ])
+    const selected = await post('apply-sitemap-selection', {
+      selections: imported.map(target => ({ discoveryIdentity: target.discoveryIdentity, action: 'create' })),
+    }, { 'if-match': '"mpd_2"' })
+    expect(selected.statusCode).toBe(200)
+
+    const compiled = await post('compile-preview', {}, { 'if-match': '"mpd_3"' })
+    expect(compiled.statusCode).toBe(200)
+    expect(compiled.json()).toMatchObject({
+      ok: false,
+      checks: expect.arrayContaining([expect.objectContaining({
+        ruleId: 'target-alias-ambiguous',
+        severity: 'fail',
+        path: ['targets', 1, 'aliases', 0],
+      })]),
+    })
+  })
+
+  test('leaves a short generated Property label aliasless', async () => {
+    fetchSitemap.mockResolvedValue(sitemap('/locations/{slug}', ['inn']))
+
+    await importSitemap()
+
+    expect(storedAuthoring().targets).toEqual([
+      expect.objectContaining({ label: 'Inn', aliases: [] }),
+    ])
+  })
+
+  test('does not rewrite the generated alias when the operator renames the Property', async () => {
+    fetchSitemap.mockResolvedValue(sitemap('/locations/{slug}', ['north-park']))
+    await importSitemap()
+
+    const [proposal] = storedAuthoring().targets
+    const selected = await post('apply-sitemap-selection', {
+      selections: [{
+        discoveryIdentity: proposal!.discoveryIdentity,
+        action: 'create',
+        label: 'North Point',
+      }],
+    }, { 'if-match': '"mpd_2"' })
+    expect(selected.statusCode).toBe(200)
+    expect(storedAuthoring().targets).toEqual([
+      expect.objectContaining({ label: 'North Point', aliases: ['North Park'] }),
+    ])
+  })
+
   test('warns once per proposal so the operator can act on each one', async () => {
     const warnings = (await importSitemap()).json().warnings as Array<{ code: string; path: unknown[] }>
     expect(warnings.map(warning => warning.code)).toEqual([

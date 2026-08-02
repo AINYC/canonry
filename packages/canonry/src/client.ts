@@ -16,6 +16,8 @@ import type {
   MeasurementSegmentRetirementResponse,
   MeasurementDiscoveryRequest,
   MeasurementDiscoveryResponse,
+  MeasurementOverviewQuery,
+  MeasurementOverviewResponse,
   MeasurementReportResponse,
   MeasurementSetupResponse,
   MeasurementOverviewQuery,
@@ -452,6 +454,7 @@ import {
   getApiV1ProjectsByNameMeasurementPlanVersions,
   getApiV1ProjectsByNameMeasurementPlanVersionsByRevision,
   postApiV1ProjectsByNameMeasurementDiscovery,
+  getApiV1ProjectsByNameMeasurementOverview,
   getApiV1ProjectsByNameMeasurementReport,
   getApiV1ProjectsByNameMeasurementSetup,
   getApiV1ProjectsByNameMeasurementPlanDraft,
@@ -1245,6 +1248,19 @@ export class ApiClient {
         client: this.heyClient,
         path: { name: project },
         body: request,
+      }),
+    )
+  }
+
+  async getMeasurementOverview(
+    project: string,
+    query: MeasurementOverviewQuery,
+  ): Promise<MeasurementOverviewResponse> {
+    return this.invoke<MeasurementOverviewResponse>(() =>
+      getApiV1ProjectsByNameMeasurementOverview({
+        client: this.heyClient,
+        path: { name: project },
+        query,
       }),
     )
   }

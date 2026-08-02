@@ -175,6 +175,7 @@ describe('AdvancedMeasurementOverview', () => {
 
     expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
     expect(screen.getAllByText('No complete source evidence is available.')).toHaveLength(1)
+    expect(screen.getAllByTitle('No complete source evidence is available.').length).toBeGreaterThan(0)
     expect(screen.queryByText('0 of 0 (0%)')).toBeNull()
   })
 
@@ -294,6 +295,20 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.getByText('Historical')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Show details for Downtown Office' }))
     expect(screen.getAllByText('Historical')).toHaveLength(2)
+  })
+
+  it('badges bridged history at report level when no cited URL can carry the provenance', () => {
+    renderOverview({
+      report: {
+        ...report(),
+        latestMeasurement: {
+          ...report().latestMeasurement,
+          includesBridgedHistory: true,
+        },
+      },
+    })
+
+    expect(screen.getByText('Includes historical data')).toBeTruthy()
   })
 
   it('shows competitor share of voice only for a selected non-brand group', () => {

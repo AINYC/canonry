@@ -12,7 +12,10 @@ import type {
 import type { QueryDto } from '@ainyc/canonry-api-client'
 
 import { ApiError } from '../src/api.js'
-import { AdvancedMeasurementSection } from '../src/components/project/advanced-measurement/AdvancedMeasurementSection.js'
+import {
+  AdvancedMeasurementSection,
+  sitemapImportInput,
+} from '../src/components/project/advanced-measurement/AdvancedMeasurementSection.js'
 import {
   setupErrorMessage,
   type AdvancedMeasurementService,
@@ -129,16 +132,30 @@ interface FakeServiceOptions {
   initialDraft?: Draft | null
   importedTargets?: DraftTarget[]
   importError?: Error
+  compileChecks?: MeasurementDraftCompilePreviewResponse['checks']
+  diffChecks?: MeasurementDraftDiffPreviewResponse['checks']
   assignmentConflictStatus?: 409 | 412
   discardConflictStatus?: 404
   diffActiveRevision?: number | null
   latestBaseActiveRevision?: number | null
+  setupActiveRevision?: number | null
+  publishConflictRevision?: number
   etagVersion?: number
+  sitemapSelectionGate?: Promise<void>
 }
 
 function createFakeService(options: FakeServiceOptions = {}) {
   let currentDraft = options.initialDraft === undefined ? null : clone(options.initialDraft)
   let currentSetup = setupFixture(currentDraft)
+  if (options.setupActiveRevision !== undefined) {
+    currentSetup = {
+      ...currentSetup,
+      state: 'setup_in_progress',
+      mode: 'active-v2',
+      activeRevision: options.setupActiveRevision,
+      activeSchemaVersion: 2,
+    }
+  }
   let etagVersion = options.etagVersion ?? (currentDraft ? 7 : 0)
   let assignmentConflictStatus = options.assignmentConflictStatus
   let movedDraftDuringDiff = false
@@ -172,7 +189,7 @@ function createFakeService(options: FakeServiceOptions = {}) {
   const preview = (): MeasurementDraftCompilePreviewResponse => ({
     ok: true,
     compiledChecksum: COMPILED_CHECKSUM,
-    checks: [],
+    checks: options.compileChecks ?? [],
     counts: counts(),
     plan: compiledPlan(COMPILED_CHECKSUM),
   })
@@ -198,6 +215,7 @@ function createFakeService(options: FakeServiceOptions = {}) {
       return mutation()
     }),
     applySitemapSelection: vi.fn(async (_projectName, etag, selections: SitemapSelectionInput[], selectedTargetKeys: string[]) => {
+      await options.sitemapSelectionGate
       const draft = requireDraft(etag)
       const byIdentity = new Map(selections.map(selection => [selection.discoveryIdentity, selection]))
       const selected = new Set(selectedTargetKeys)
@@ -309,6 +327,7 @@ function createFakeService(options: FakeServiceOptions = {}) {
         : options.diffActiveRevision
       const response: MeasurementDraftDiffPreviewResponse = {
         ...preview(),
+        checks: options.diffChecks ?? options.compileChecks ?? [],
         diff: {
           activeRevision,
           targets: {
@@ -335,6 +354,16 @@ function createFakeService(options: FakeServiceOptions = {}) {
     }),
     publish: vi.fn(async (_projectName, etag, input) => {
       requireDraft(etag)
+      if (options.publishConflictRevision !== undefined) {
+        currentSetup = {
+          ...currentSetup,
+          state: 'setup_in_progress',
+          mode: 'active-v2',
+          activeRevision: options.publishConflictRevision,
+          activeSchemaVersion: 2,
+        }
+        throw new ApiError('The published setup changed.', 409)
+      }
       const revision = (input.expectedActiveRevision ?? 0) + 1
       const response: MeasurementPlanV2PublishResponse = {
         published: true,
@@ -425,6 +454,25 @@ test('keeps internal setup terminology out of customer-facing errors', () => {
     .toBe('Could not open setup.')
 })
 
+test('turns simple path wildcards into deterministic sitemap exclusions', () => {
+  const input = sitemapImportInput({
+    sitemapUrl: 'https://portfolio.example/sitemap.xml',
+    examplePropertyUrl: 'https://portfolio.example/properties/example-place',
+    preferredHost: '',
+    propertyPathPattern: '',
+    additionalHost: '',
+    additionalPathPattern: '',
+    excludedPaths: 'archive\n*-directory\nformer-*\n*preview*',
+  })
+
+  expect(input.rule.excludedSlugPatterns).toEqual([
+    { kind: 'exact', value: 'archive' },
+    { kind: 'suffix', value: '-directory' },
+    { kind: 'prefix', value: 'former-' },
+    { kind: 'contains', value: 'preview' },
+  ])
+})
+
 describe('AdvancedMeasurementSection server draft controller', () => {
   test('starts an Advanced draft from Simple with the active revision the setup read supplied', async () => {
     const fake = createFakeService()
@@ -446,7 +494,26 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     await reviewSyntheticSitemap()
 
     expect(await screen.findByText('The sitemap contains no Property URLs matching this rule.')).toBeTruthy()
+    expect(screen.queryByText('We could not review this sitemap. Check the URL and try again.')).toBeNull()
     expect(screen.getByRole('heading', { name: 'Import Properties' })).toBeTruthy()
+  })
+
+  test('requires an explicit restart when a draft is based on an older published setup', async () => {
+    const fake = createFakeService({
+      initialDraft: draftFixture({ targets: [property(1)], baseActiveRevision: 4 }),
+      setupActiveRevision: 5,
+    })
+    renderSection(fake)
+
+    expect(await screen.findByText('This draft is based on an older published setup.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Review changes' })).toBeNull()
+    expect(fake.service.discard).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard draft and restart' }))
+
+    await waitFor(() => expect(fake.service.discard).toHaveBeenCalledWith(PROJECT, '"mpd_7"'))
+    await waitFor(() => expect(fake.service.createDraft).toHaveBeenCalledWith(PROJECT, 5))
+    expect(await screen.findByRole('heading', { name: 'Import Properties' })).toBeTruthy()
   })
 
   test('confirms 213 synthetic sitemap proposals with one server selection action', async () => {
@@ -470,6 +537,29 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     expect(vi.mocked(fake.service.applySitemapSelection).mock.calls[0]![3]).toEqual(
       proposals.map(proposal => proposal.stableKey),
     )
+  })
+
+  test('disables Properties Continue with saving feedback while the server selection is pending', async () => {
+    let releaseSelection: (() => void) | undefined
+    const sitemapSelectionGate = new Promise<void>(resolve => { releaseSelection = resolve })
+    const fake = createFakeService({
+      importedTargets: [property(1, 'proposed'), property(2, 'proposed')],
+      sitemapSelectionGate,
+    })
+    renderSection(fake)
+
+    await reviewSyntheticSitemap()
+    await screen.findByRole('heading', { name: 'Properties' })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+
+    const saving = await screen.findByRole('button', { name: 'Saving Properties…' })
+    expect(saving).toHaveProperty('disabled', true)
+    fireEvent.click(saving)
+    expect(fake.service.applySitemapSelection).toHaveBeenCalledTimes(1)
+
+    releaseSelection?.()
+    expect(await screen.findByRole('heading', { name: 'Queries' })).toBeTruthy()
+    expect(fake.service.applySitemapSelection).toHaveBeenCalledTimes(1)
   })
 
   test('applies every selected query to every selected Property in exactly one bulk call', async () => {
@@ -653,6 +743,99 @@ describe('AdvancedMeasurementSection server draft controller', () => {
       expectedCompiledChecksum: COMPILED_CHECKSUM,
     })
     expect(onPublished).toHaveBeenCalledTimes(1)
+  })
+
+  test('groups repeated review checks into concise Property actions while retaining distinct fixes', async () => {
+    const targets = Array.from({ length: 194 }, (_, index) => property(index + 1))
+    const repeatedChecks: MeasurementDraftCompilePreviewResponse['checks'] = [
+      ...targets.map((_, index) => ({
+        ruleId: 'execution-context-no-provider',
+        severity: 'fail' as const,
+        message: 'An execution context must name at least one provider.',
+        path: ['assignments', index, 'contextOverride', 'providers'],
+      })),
+      ...targets.map((_, index) => ({
+        ruleId: 'target-without-aliases',
+        severity: 'warn' as const,
+        message: `Target "Property ${String(index + 1).padStart(3, '0')}" has no aliases, so it can be cited but never mentioned.`,
+        path: ['targets', index, 'aliases'],
+      })),
+      ...targets.map((_, index) => ({
+        ruleId: 'target-without-assignments',
+        severity: 'warn' as const,
+        message: `Target "Property ${String(index + 1).padStart(3, '0')}" has no assigned questions, so nothing will be measured for it.`,
+        path: ['targets', index],
+      })),
+      {
+        ruleId: 'property-url-review',
+        severity: 'warn' as const,
+        message: 'Property 001 needs a URL review.',
+        path: ['targets', 0, 'urlMatchers'],
+      },
+      {
+        ruleId: 'property-url-review',
+        severity: 'warn' as const,
+        message: 'Property 002 needs a URL review.',
+        path: ['targets', 1, 'urlMatchers'],
+      },
+    ]
+    const fake = createFakeService({
+      initialDraft: draftFixture({ targets, assignedQueryIds: ['q-nearby'], baseActiveRevision: 4 }),
+      compileChecks: repeatedChecks,
+    })
+    renderSection(fake)
+    await advanceExistingDraftToReview()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+
+    expect(await screen.findByText('Choose a provider')).toBeTruthy()
+    expect(screen.getByText('Choose at least one provider before publishing. 194 query assignments need a provider.')).toBeTruthy()
+    expect(screen.getByText('Add Property aliases')).toBeTruthy()
+    expect(screen.getByText('Add a name or alias to measure mentions. 194 Properties need aliases.')).toBeTruthy()
+    expect(screen.getByText('Assign queries')).toBeTruthy()
+    expect(screen.getByText('Assign at least one query to measure a Property. 194 Properties need queries.')).toBeTruthy()
+    expect(screen.getByText('Property 001 needs a URL review.')).toBeTruthy()
+    expect(screen.getByText('Property 002 needs a URL review.')).toBeTruthy()
+    expect(screen.getByText('Showing 5 of 5')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('An execution context must name at least one provider.')
+    expect(document.body.textContent).not.toMatch(/\b(?:target|edge|node|manifest|revision|checksum|stableKey)\b/i)
+  })
+
+  test('explains that existing results remain available when updating an older setup', async () => {
+    const fake = createFakeService({
+      initialDraft: draftFixture({ targets: [property(1)], assignedQueryIds: ['q-nearby'], baseActiveRevision: 4 }),
+      diffChecks: [{
+        ruleId: 'active-revision-schema-v1',
+        severity: 'warn',
+        message: 'Active revision 4 is schema v1, which has no assignment model. Everything below reads as added.',
+        path: [],
+      }],
+    })
+    renderSection(fake)
+    await advanceExistingDraftToReview()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+
+    expect(await screen.findByText('Historical results will be kept')).toBeTruthy()
+    expect(screen.getByText('Existing results remain visible after you publish this setup.')).toBeTruthy()
+    expect(screen.getByText('Historical results will be kept').closest('section')?.textContent).not.toContain('Needs attention')
+    expect(document.body.textContent).not.toContain('Return to the earlier setup steps')
+    expect(document.body.textContent).not.toMatch(/\b(?:target|edge|node|manifest|revision|checksum|stableKey)\b/i)
+  })
+
+  test('turns a publish revision conflict into an explicit restart path', async () => {
+    const fake = createFakeService({
+      initialDraft: draftFixture({ targets: [property(1)], assignedQueryIds: ['q-nearby'], baseActiveRevision: 4 }),
+      publishConflictRevision: 5,
+    })
+    renderSection(fake)
+    await advanceExistingDraftToReview()
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish setup' }))
+
+    expect(await screen.findByText('This draft is based on an older published setup.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Discard draft and restart' })).toBeTruthy()
+    expect(fake.service.publish).toHaveBeenCalledTimes(1)
   })
 
   test('discards the server draft only after explicit confirmation', async () => {

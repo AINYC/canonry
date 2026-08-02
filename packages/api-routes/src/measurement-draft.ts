@@ -57,6 +57,7 @@ import {
   proposeQueryClass,
   type MeasurementDraftCompileContext,
 } from './measurement-draft-compile.js'
+import { resolveRunProviderSelection } from './run-queue.js'
 import {
   actorFromRequest,
   activePlanVersionRow,
@@ -81,6 +82,11 @@ import {
 type ProjectRow = typeof projects.$inferSelect
 type TransactionClient = Parameters<Parameters<DatabaseClient['transaction']>[0]>[0]
 
+export interface MeasurementDraftRoutesOptions {
+  /** Current provider registry membership, used when a project means "all configured". */
+  getRunnableProviderNames?: () => readonly string[]
+}
+
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0
 }
@@ -88,10 +94,6 @@ function compareText(left: string, right: string): number {
 /** Key-order-independent identity, so "did this action change anything" never turns on serialization order. */
 function authoringIdentity(authoring: MeasurementDraftAuthoring): string {
   return canonicalJson(authoring)
-}
-
-function normalizedProviderNames(values: readonly string[]): string[] {
-  return [...new Set(values.map(value => value.trim().toLowerCase()).filter(Boolean))].sort(compareText)
 }
 
 function trackedQueriesFor(db: DatabaseClient, projectId: string): Array<{ id: string; query: string }> {
@@ -129,13 +131,25 @@ function formatDraftMatcher(matcher: MeasurementV2UrlMatcher): string {
   }
 }
 
-function emptyAuthoring(project: ProjectRow): MeasurementDraftAuthoring {
-  const providers = normalizedProviderNames(project.providers)
+function draftProviderNames(project: ProjectRow, opts: MeasurementDraftRoutesOptions): string[] {
+  return resolveRunProviderSelection({
+    projectProviders: project.providers,
+    runnableProviders: opts.getRunnableProviderNames?.(),
+  })
+}
+
+function draftModels(project: ProjectRow, providers: readonly string[]): Record<string, string> {
   const models: Record<string, string> = {}
   for (const [provider, model] of Object.entries(project.providerModels)) {
     const normalized = provider.trim().toLowerCase()
     if (providers.includes(normalized) && model) models[normalized] = model
   }
+  return models
+}
+
+function emptyAuthoring(project: ProjectRow, opts: MeasurementDraftRoutesOptions): MeasurementDraftAuthoring {
+  const providers = draftProviderNames(project, opts)
+  const models = draftModels(project, providers)
   return {
     defaultContext: {
       providers,
@@ -161,8 +175,9 @@ function seedAuthoring(
   project: ProjectRow,
   active: StoredMeasurementPlan | null,
   context: DraftActionContext,
+  opts: MeasurementDraftRoutesOptions,
 ): MeasurementDraftAuthoring {
-  const base = emptyAuthoring(project)
+  const base = emptyAuthoring(project, opts)
   if (!active) return base
 
   if (active.schemaVersion === 2) {
@@ -239,6 +254,34 @@ function seedAuthoring(
   }
 }
 
+/**
+ * Drafts created before runnable-provider defaults were frozen can carry an
+ * empty default provider list. Resolve only that inherited default at compile
+ * time: an assignment that explicitly overrides providers with `[]` must keep
+ * failing, and the immutable plan still receives concrete provider arrays.
+ */
+function authoringForCompile(
+  authoring: MeasurementDraftAuthoring,
+  project: ProjectRow,
+  opts: MeasurementDraftRoutesOptions,
+): MeasurementDraftAuthoring {
+  if (authoring.defaultContext.providers.length > 0) return authoring
+  const providers = draftProviderNames(project, opts)
+  if (providers.length === 0) return authoring
+  const models = {
+    ...draftModels(project, providers),
+    ...authoring.defaultContext.models,
+  }
+  return {
+    ...authoring,
+    defaultContext: {
+      ...authoring.defaultContext,
+      providers,
+      ...(Object.keys(models).length > 0 ? { models } : {}),
+    },
+  }
+}
+
 function parseV2Plan(row: PlanVersionRow): MeasurementPlanV2 {
   const plan = parseStoredMeasurementPlanAnyVersion(row.canonicalJson)
   if (plan.schemaVersion !== 2) {
@@ -302,7 +345,7 @@ interface MutationGate {
   replay: unknown | null
 }
 
-export async function measurementDraftRoutes(app: FastifyInstance) {
+export async function measurementDraftRoutes(app: FastifyInstance, opts: MeasurementDraftRoutesOptions = {}) {
   // Nothing on the write path deletes a receipt, so the table is swept once at
   // boot and again before every receipt is written (see `finishMutation`).
   // Registration must not fail over a cleanup: an install whose schema is not
@@ -476,6 +519,7 @@ export async function measurementDraftRoutes(app: FastifyInstance) {
       gate.project,
       active ? parseStoredMeasurementPlanAnyVersion(active.canonicalJson) : null,
       actionContextFor(app.db, gate.project),
+      opts,
     )
     const draftId = crypto.randomUUID()
     const response = mutationResponse(1, true, [], authoring)
@@ -552,7 +596,7 @@ export async function measurementDraftRoutes(app: FastifyInstance) {
   }, async request => {
     requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
     const project = resolveProject(app.db, request.params.name)
-    const authoring = parseStoredAuthoring(requireDraft(project).authoringJson)
+    const authoring = authoringForCompile(parseStoredAuthoring(requireDraft(project).authoringJson), project, opts)
     const compiled = compileMeasurementDraft(authoring, compileContextFor(app.db, project))
     if (!compiled.ok) return { ok: false, compiledChecksum: null, checks: compiled.checks }
     return {
@@ -569,7 +613,7 @@ export async function measurementDraftRoutes(app: FastifyInstance) {
   }, async request => {
     requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
     const project = resolveProject(app.db, request.params.name)
-    const authoring = parseStoredAuthoring(requireDraft(project).authoringJson)
+    const authoring = authoringForCompile(parseStoredAuthoring(requireDraft(project).authoringJson), project, opts)
     const compiled = compileMeasurementDraft(authoring, compileContextFor(app.db, project))
     if (!compiled.ok) return { ok: false, compiledChecksum: null, checks: compiled.checks, diff: null }
     const active = activePlanVersionRow(app.db, project.id)
@@ -636,7 +680,7 @@ export async function measurementDraftRoutes(app: FastifyInstance) {
 
       // Recompiled here rather than trusted from the review: the project's
       // queries, locations or providers may have moved since it was compiled.
-      const authoring = parseStoredAuthoring(row.authoringJson)
+      const authoring = authoringForCompile(parseStoredAuthoring(row.authoringJson), gate.project, opts)
       const compiled = compileMeasurementDraft(authoring, context)
       if (!compiled.ok) {
         throw validationError('The measurement draft does not compile.', { checks: compiled.checks })

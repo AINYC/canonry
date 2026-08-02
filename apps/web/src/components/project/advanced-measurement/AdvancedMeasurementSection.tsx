@@ -120,14 +120,30 @@ function pathTemplateFor(draft: AdvancedMeasurementImportDraft): string {
 }
 
 function excludedSlugPatterns(value: string): NonNullable<SitemapImportInput['rule']['excludedSlugPatterns']> {
-  const slugs = new Set<string>()
+  const patterns: NonNullable<SitemapImportInput['rule']['excludedSlugPatterns']> = []
+  const seen = new Set<string>()
   for (const entry of value.split(/[\n,]+/)) {
     const trimmed = entry.trim().replace(/\/+$/, '')
     if (!trimmed) continue
     const pieces = trimmed.split('/').filter(Boolean)
-    slugs.add(pieces.at(-1) ?? trimmed)
+    const candidate = pieces.at(-1) ?? trimmed
+    const beginsWithWildcard = candidate.startsWith('*')
+    const endsWithWildcard = candidate.endsWith('*')
+    const patternValue = candidate.slice(beginsWithWildcard ? 1 : 0, endsWithWildcard ? -1 : undefined).trim()
+    if (!patternValue) throw new Error('Ignored URL patterns must include text besides *.')
+    const kind = beginsWithWildcard && endsWithWildcard
+      ? 'contains' as const
+      : beginsWithWildcard
+        ? 'suffix' as const
+        : endsWithWildcard
+          ? 'prefix' as const
+          : 'exact' as const
+    const key = `${kind}:${patternValue}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    patterns.push({ kind, value: patternValue })
   }
-  return [...slugs].sort().map(value => ({ kind: 'exact' as const, value }))
+  return patterns
 }
 
 export function sitemapImportInput(draft: AdvancedMeasurementImportDraft): SitemapImportInput {
@@ -200,16 +216,93 @@ function normalizedDomain(value: string): string | null {
   return normalizedHost(value)
 }
 
-function reviewCheckFlag(check: MeasurementDraftCompileCheck, index: number): AdvancedMeasurementFlaggedException {
+interface ReviewCheckMeaning {
+  title: string
+  detail: string
+  tone: AdvancedMeasurementFlaggedException['tone']
+}
+
+function reviewCheckMeaning(check: MeasurementDraftCompileCheck): ReviewCheckMeaning {
+  switch (check.ruleId) {
+    case 'execution-context-no-provider':
+      return {
+        title: 'Choose a provider',
+        detail: 'Choose at least one provider before publishing.',
+        tone: 'negative',
+      }
+    case 'target-without-aliases':
+      return {
+        title: 'Add Property aliases',
+        detail: 'Add a name or alias to measure mentions.',
+        tone: 'caution',
+      }
+    case 'target-without-assignments':
+      return {
+        title: 'Assign queries',
+        detail: 'Assign at least one query to measure a Property.',
+        tone: 'caution',
+      }
+    case 'active-revision-schema-v1':
+      return {
+        title: 'Historical results will be kept',
+        detail: 'Existing results remain visible after you publish this setup.',
+        tone: 'neutral',
+      }
+  }
   const mentionsInternalModel = /\b(?:target|revision|checksum|node|edge|manifest|stable[ -]?key)s?\b/i.test(check.message)
   return {
-    id: `${check.ruleId}-${index}`,
     title: check.severity === 'fail' ? 'Setup needs attention' : 'Review suggested',
     detail: mentionsInternalModel
       ? 'Return to the earlier setup steps and review the affected Property or query.'
       : check.message,
     tone: check.severity === 'fail' ? 'negative' : 'caution',
   }
+}
+
+function pluralized(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
+function reviewCheckDetail(ruleId: string, detail: string, count: number): string {
+  switch (ruleId) {
+    case 'execution-context-no-provider':
+      return `${detail} ${pluralized(count, 'query assignment')} need${count === 1 ? 's' : ''} a provider.`
+    case 'target-without-aliases':
+      return `${detail} ${pluralized(count, 'Property', 'Properties')} need${count === 1 ? 's' : ''} aliases.`
+    case 'target-without-assignments':
+      return `${detail} ${pluralized(count, 'Property', 'Properties')} need${count === 1 ? 's' : ''} queries.`
+    default:
+      return count > 1 ? `${detail} ${pluralized(count, 'item')} need review.` : detail
+  }
+}
+
+function reviewCheckFlags(checks: readonly MeasurementDraftCompileCheck[]): AdvancedMeasurementFlaggedException[] {
+  const grouped = new Map<string, {
+    ruleId: string
+    severity: MeasurementDraftCompileCheck['severity']
+    meaning: ReviewCheckMeaning
+    paths: Set<string>
+  }>()
+
+  for (const check of checks) {
+    const meaning = reviewCheckMeaning(check)
+    const key = [check.ruleId, check.severity, meaning.title, meaning.detail].join('\u0000')
+    const group = grouped.get(key) ?? {
+      ruleId: check.ruleId,
+      severity: check.severity,
+      meaning,
+      paths: new Set<string>(),
+    }
+    group.paths.add(JSON.stringify(check.path))
+    grouped.set(key, group)
+  }
+
+  return [...grouped.values()].map((group, index) => ({
+    id: `${group.ruleId}-${group.severity}-${index}`,
+    title: group.meaning.title,
+    detail: reviewCheckDetail(group.ruleId, group.meaning.detail, group.paths.size),
+    tone: group.meaning.tone,
+  }))
 }
 
 function warningFlag(warning: MeasurementDraftWarning, index: number): AdvancedMeasurementFlaggedException {
@@ -222,7 +315,7 @@ function warningFlag(warning: MeasurementDraftWarning, index: number): AdvancedM
   }
 }
 
-function reviewedChanges(diff: MeasurementDraftDiff): ReviewedSetup['changes'] {
+function reviewedChanges(diff: MeasurementDraftDiff, preservesHistoricalResults = false): ReviewedSetup['changes'] {
   const items: string[] = []
   const targetChanges = diff.targets.added.length + diff.targets.removed.length + diff.targets.changed.length
   const groupChanges = diff.groups.added.length + diff.groups.removed.length + diff.groups.changed.length
@@ -230,8 +323,11 @@ function reviewedChanges(diff: MeasurementDraftDiff): ReviewedSetup['changes'] {
   if (targetChanges > 0) items.push(`${targetChanges} Property ${targetChanges === 1 ? 'change' : 'changes'}`)
   if (assignmentChanges > 0) items.push(`${assignmentChanges} query assignment ${assignmentChanges === 1 ? 'change' : 'changes'}`)
   if (groupChanges > 0) items.push(`${groupChanges} group ${groupChanges === 1 ? 'change' : 'changes'}`)
+  if (preservesHistoricalResults) items.unshift('Existing results remain visible after you publish this setup.')
   return {
-    title: diff.activeRevision === null ? 'New setup ready' : 'Changes ready',
+    title: preservesHistoricalResults
+      ? 'Historical results will be kept'
+      : diff.activeRevision === null ? 'New setup ready' : 'Changes ready',
     items: items.length > 0 ? items : ['No changes from the published setup.'],
   }
 }
@@ -672,7 +768,8 @@ export function AdvancedMeasurementSection({
         service.diffPreview(projectName),
       ])
       const checks = [...compile.checks, ...diff.checks]
-      setServerFlags(checks.map(reviewCheckFlag))
+      const preservesHistoricalResults = checks.some(check => check.ruleId === 'active-revision-schema-v1')
+      setServerFlags(reviewCheckFlags(checks.filter(check => check.ruleId !== 'active-revision-schema-v1')))
       if (!compile.ok || !diff.ok || !diff.diff) return
       if (diff.diff.activeRevision !== draft.baseActiveRevision) {
         await recoverConflict('The published setup changed while you were reviewing. The latest draft is loaded; review it again.')
@@ -686,7 +783,7 @@ export function AdvancedMeasurementSection({
         etag,
         baseActiveRevision: draft.baseActiveRevision,
         compiledChecksum: compile.compiledChecksum,
-        changes: reviewedChanges(diff.diff),
+        changes: reviewedChanges(diff.diff, preservesHistoricalResults),
       })
     } catch (error) {
       setActionError(setupErrorMessage(error, 'Could not review this setup.'))
@@ -737,6 +834,28 @@ export function AdvancedMeasurementSection({
     }
   }
 
+  async function restartStaleDraft(): Promise<void> {
+    if (!draft || !etag || !setup || busyAction) return
+    setBusyAction('restart')
+    setActionError(null)
+    setReviewed(null)
+    try {
+      await service.discard(projectName, etag)
+      await service.createDraft(projectName, setup.activeRevision)
+      setImportDraft({ ...DEFAULT_IMPORT_DRAFT })
+      setPropertiesSearch('')
+      setSelectedQueryIds([])
+      setGroupDraft({ ...DEFAULT_GROUP_DRAFT })
+      setEditingGroupId(null)
+      await loadCurrent(false)
+    } catch (error) {
+      if (isDraftConflict(error)) await recoverConflict('The setup changed again. Reloaded the latest draft and published setup.')
+      else setActionError(setupErrorMessage(error, 'Could not restart this setup.'))
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
   if (isLoading) {
     return (
       <section aria-labelledby="advanced-measurement-loading-title" className="space-y-4">
@@ -763,6 +882,29 @@ export function AdvancedMeasurementSection({
       <section aria-labelledby="advanced-measurement-empty-title" className="space-y-4">
         <div className="section-head"><h2 id="advanced-measurement-empty-title">Advanced measurement setup</h2></div>
         <p className="text-sm text-secondary">{canEdit ? 'Start setup from the project Overview.' : 'No advanced setup is available to review.'}</p>
+      </section>
+    )
+  }
+
+  if (canEdit && draft && setup && draft.baseActiveRevision !== setup.activeRevision) {
+    return (
+      <section aria-labelledby="advanced-measurement-stale-draft-title" className="space-y-4">
+        <div className="section-head"><h2 id="advanced-measurement-stale-draft-title">Advanced measurement setup</h2></div>
+        <div role="alert" className="border-y border-caution-800/40 bg-caution-950/20 py-4">
+          <p className="text-sm font-medium text-heading">This draft is based on an older published setup.</p>
+          <p className="mt-1 text-sm text-secondary">Restart from the latest setup before making more changes.</p>
+          <Button
+            className="mt-3"
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busyAction === 'restart'}
+            onClick={() => { void restartStaleDraft() }}
+          >
+            {busyAction === 'restart' ? 'Restarting…' : 'Discard draft and restart'}
+          </Button>
+        </div>
+        {actionError ? <p role="alert" className="text-sm text-negative">{actionError}</p> : null}
       </section>
     )
   }
@@ -805,6 +947,7 @@ export function AdvancedMeasurementSection({
             selectedPropertyIds,
             onSelectedPropertyIdsChange: ids => setSelectedPropertyIds([...ids]),
             onContinue: ids => { void continueProperties(ids) },
+            isContinuing: busyAction === 'properties',
             onRetryProperties: () => { void refreshDraft() },
             onReturnToImport: () => setStep('import'),
           }}

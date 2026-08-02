@@ -59,6 +59,21 @@ function measuredTargetId(evidence: ReportEvidence): string | null {
   return evidence.usageEdgeId.slice('target:'.length).split(':', 1)[0] ?? null
 }
 
+/** Index legacy evidence once so a large portfolio does not rescan it for every Property. */
+export function indexVersionOneEvidenceByTarget(
+  evidence: readonly ReportEvidence[],
+): ReadonlyMap<string, ReportEvidence[]> {
+  const indexed = new Map<string, ReportEvidence[]>()
+  for (const item of evidence) {
+    const targetId = measuredTargetId(item)
+    if (!targetId) continue
+    const rows = indexed.get(targetId) ?? []
+    rows.push(item)
+    indexed.set(targetId, rows)
+  }
+  return indexed
+}
+
 export function adaptVersionOneMeasurementReport(
   active: ActivePlan,
   report: MeasurementReportResponse,
@@ -73,10 +88,17 @@ export function adaptVersionOneMeasurementReport(
     current.push(...selection.queryIds.map(queryId => queryText.get(queryId)).filter((value): value is string => Boolean(value)))
     selections.set(selection.targetKey, [...new Set(current)])
   }
+  const evidenceByTarget = indexVersionOneEvidenceByTarget(report.evidence)
+  const expectedExecutionSlots = plan.executionNodes.reduce((total, node) => total + node.expectedSnapshots, 0)
+  // A partial v1 report does not expose unique executed slot ids. Property totals cannot be
+  // summed because one deduplicated execution may feed several Properties.
+  const hasExactRunProgress = report.run?.status === 'completed' && expectedExecutionSlots > 0
+  const completedSlots = hasExactRunProgress ? expectedExecutionSlots : 0
+  const totalSlots = hasExactRunProgress ? expectedExecutionSlots : 0
 
   const properties: AdvancedMeasurementProperty[] = report.targets.map(target => {
     const configured = targetConfig.get(target.id)
-    const matchedEvidence = report.evidence.filter(item => measuredTargetId(item) === target.id)
+    const matchedEvidence = evidenceByTarget.get(target.id) ?? []
     const evidence = matchedEvidence.map(item => ({
         id: `${item.observationId}:${item.usageEdgeId}:${item.sourceUrl}`,
         kind: evidenceKind(item.classification),
@@ -89,7 +111,7 @@ export function adaptVersionOneMeasurementReport(
     const status = !report.run
       ? { label: 'Not measured', tone: 'neutral' as const }
       : !target.completeness.complete
-        ? { label: 'Incomplete', tone: 'caution' as const }
+        ? { label: `Incomplete · ${target.completeness.executed} of ${target.completeness.expected}`, tone: 'caution' as const }
         : configured?.mentionNotApplicable
           ? { label: 'No aliases', tone: 'caution' as const }
           : { label: 'Complete', tone: 'positive' as const }
@@ -117,9 +139,11 @@ export function adaptVersionOneMeasurementReport(
         : report.run?.status === 'partial'
           ? { label: 'Partial result', tone: 'caution' }
           : { label: 'Not measured', tone: 'neutral' },
-      completedSlots: 0,
-      totalSlots: 0,
+      completedSlots,
+      totalSlots,
       date: reportDate(report.run?.finishedAt ?? report.run?.createdAt ?? null),
+      includesBridgedHistory: report.diagnostics.bridgedObservationIds.length > 0
+        || report.diagnostics.historicalObservationIds.length > 0,
     },
     overall: {
       aggregate: {

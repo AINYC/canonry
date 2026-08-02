@@ -38,6 +38,7 @@ export interface AdvancedMeasurementImportPropertiesProps {
   selectedPropertyIds: readonly string[]
   onSelectedPropertyIdsChange: (next: readonly string[]) => void
   onContinue: (selectedPropertyIds: readonly string[]) => void
+  isContinuing?: boolean
   onRetryProperties: () => void
   onReturnToImport: () => void
   maxVisibleProperties?: number
@@ -208,11 +209,10 @@ function ImportStep({
                 rows={3}
                 className="mt-1 block w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-400 disabled:cursor-not-allowed disabled:opacity-60"
               />
+              <p className="mt-1 text-xs text-secondary">One path per line. Use * at the beginning or end to match similar pages.</p>
             </div>
           </div>
         </details>
-
-        {reviewState === 'error' ? <p role="alert" className="text-sm text-negative">We could not review this sitemap. Check the URL and try again.</p> : null}
 
         <Button type="submit" disabled={reviewDisabled}>
           {reviewState === 'reviewing' ? 'Reviewing sitemap…' : 'Review sitemap'}
@@ -231,6 +231,7 @@ function PropertiesStep({
   selectedPropertyIds,
   onSelectedPropertyIdsChange,
   onContinue,
+  isContinuing = false,
   onRetryProperties,
   onReturnToImport,
   maxVisibleProperties,
@@ -252,7 +253,7 @@ function PropertiesStep({
   }
 
   function toggleProperty(id: string, selected: boolean) {
-    if (!canEdit) return
+    if (!canEdit || isContinuing) return
     const current = new Set(selectedIds)
     if (selected) current.add(id)
     else current.delete(id)
@@ -260,22 +261,22 @@ function PropertiesStep({
   }
 
   function selectAllShown() {
-    if (!canEdit) return
+    if (!canEdit || isContinuing) return
     updateSelection([...selectedIds, ...visibleProperties.map(property => property.id)])
   }
 
   function clearSelection() {
-    if (!canEdit) return
+    if (!canEdit || isContinuing) return
     onSelectedPropertyIdsChange([])
   }
 
   function continueSetup() {
-    if (!canEdit || selectedIds.length === 0) return
+    if (!canEdit || isContinuing || selectedIds.length === 0) return
     onContinue(selectedIds)
   }
 
   return (
-    <section aria-labelledby="advanced-measurement-properties-heading" aria-busy={propertiesState === 'loading'}>
+    <section aria-labelledby="advanced-measurement-properties-heading" aria-busy={propertiesState === 'loading' || isContinuing}>
       <div>
         <h2 id="advanced-measurement-properties-heading" className="text-lg font-semibold text-heading">Properties</h2>
         <p className="mt-1 max-w-2xl text-sm text-secondary">Choose the Properties to include, then continue.</p>
@@ -314,14 +315,15 @@ function PropertiesStep({
               <input
                 type="search"
                 value={propertiesSearch}
+                disabled={isContinuing}
                 onChange={event => onPropertiesSearchChange(event.target.value)}
                 className="mt-1 block w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-400"
               />
             </label>
             {canEdit ? (
               <div className="flex flex-wrap items-center gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={selectAllShown}>Select all shown</Button>
-                <Button type="button" variant="ghost" size="sm" disabled={selectedIds.length === 0} onClick={clearSelection}>Clear selection</Button>
+                <Button type="button" variant="outline" size="sm" disabled={isContinuing} onClick={selectAllShown}>Select all shown</Button>
+                <Button type="button" variant="ghost" size="sm" disabled={isContinuing || selectedIds.length === 0} onClick={clearSelection}>Clear selection</Button>
               </div>
             ) : null}
           </div>
@@ -362,6 +364,7 @@ function PropertiesStep({
                                 type="checkbox"
                                 aria-label={`Select ${property.name}`}
                                 checked={selectedIds.includes(property.id)}
+                                disabled={isContinuing}
                                 onChange={event => toggleProperty(property.id, event.target.checked)}
                                 className="size-6 accent-accent"
                               />
@@ -373,13 +376,15 @@ function PropertiesStep({
                   </tbody>
                 </table>
               </div>
-              {hasHiddenProperties && onShowAllProperties ? <Button type="button" variant="outline" size="sm" className="mt-3" onClick={onShowAllProperties}>Show all Properties</Button> : null}
+              {hasHiddenProperties && onShowAllProperties ? <Button type="button" variant="outline" size="sm" className="mt-3" disabled={isContinuing} onClick={onShowAllProperties}>Show all Properties</Button> : null}
             </>
           )}
           {canEdit ? (
             <div className="mt-4 flex items-center justify-between gap-3">
-              <Button type="button" variant="ghost" onClick={onReturnToImport}>Back</Button>
-              <Button type="button" disabled={selectedIds.length === 0} onClick={continueSetup}>Continue</Button>
+              <Button type="button" variant="ghost" disabled={isContinuing} onClick={onReturnToImport}>Back</Button>
+              <Button type="button" disabled={isContinuing || selectedIds.length === 0} onClick={continueSetup}>
+                {isContinuing ? 'Saving Properties…' : 'Continue'}
+              </Button>
             </div>
           ) : null}
         </div>

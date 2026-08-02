@@ -625,7 +625,12 @@ function planV2Overview(
       mode: 'active-v2',
       scope: scopeDto(scope),
       queryClass,
-      measurement: { state: 'not_measured', ...currentDto, ...runProgress(db, displayed, plan) },
+      measurement: {
+        state: 'not_measured',
+        ...currentDto,
+        ...runProgress(db, displayed, plan),
+        includesHistoricalData: false,
+      },
       nextAction: nextActionFor(db, projectId, displayed, 0),
       metrics: {
         propertiesMentioned: unavailable('no_completed_run'),
@@ -712,6 +717,7 @@ function planV2Overview(
       displayedRunId: displayed.id,
       ...runProgress(db, displayed, plan),
       ...(displayed.finishedAt ? { completedAt: displayed.finishedAt } : {}),
+      includesHistoricalData: overview.includesHistoricalData,
     },
     nextAction: nextActionFor(db, projectId, displayed, overview.flags),
     metrics: {

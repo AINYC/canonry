@@ -3420,6 +3420,7 @@ export type MeasurementOverviewResponse = {
         completed: number;
         expected: number;
         completedAt?: string;
+        includesHistoricalData?: boolean;
     };
     nextAction: {
         kind: 'run_measurement' | 'review_flags' | 'complete_setup' | 'republish_setup' | 'none';

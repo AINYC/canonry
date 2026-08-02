@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { MeasurementPlanResponse, MeasurementReportResponse } from '@ainyc/canonry-api-client'
 
-import { adaptVersionOneMeasurementReport } from '../src/components/project/advanced-measurement/v1-report-adapter.js'
+import {
+  adaptVersionOneMeasurementReport,
+  indexVersionOneEvidenceByTarget,
+} from '../src/components/project/advanced-measurement/v1-report-adapter.js'
 
 const activePlan = {
   revision: 3,
@@ -22,7 +25,12 @@ const activePlan = {
     groups: [{ stableKey: 'waterfront', label: 'Waterfront', targetKeys: ['harbor-house'], competitors: ['rival.example'] }],
     targetQuerySelections: [{ targetKey: 'harbor-house', queryIds: ['query-1'], context: null }],
     querySnapshots: [{ queryId: 'query-1', queryText: 'event venues near the harbor' }],
-    executionNodes: [],
+    executionNodes: [{
+      stableKey: 'execution-1',
+      queryText: 'event venues near the harbor',
+      context: null,
+      expectedSnapshots: 1,
+    }],
     usageEdges: [],
     warnings: [],
   },
@@ -91,5 +99,66 @@ describe('version-one advanced measurement adapter', () => {
       kind: 'another-property',
       historical: true,
     })
+  })
+
+  it('reports legacy completeness and bridged provenance even without citation evidence', () => {
+    const adapted = adaptVersionOneMeasurementReport(activePlan, {
+      ...report,
+      run: { ...report.run, status: 'partial' },
+      targets: [{
+        ...report.targets[0]!,
+        completeness: {
+          ...report.targets[0]!.completeness,
+          executed: 1,
+          expected: 2,
+          complete: false,
+        },
+      }],
+      evidence: [],
+      diagnostics: {
+        ...report.diagnostics,
+        bridgedObservationIds: ['observation-without-a-citation'],
+      },
+    })
+
+    expect(adapted.latestMeasurement).toMatchObject({
+      completedSlots: 0,
+      totalSlots: 0,
+      includesBridgedHistory: true,
+    })
+    expect(adapted.overall!.aggregate.properties[0]!.status.label).toBe('Incomplete · 1 of 2')
+  })
+
+  it('uses unique execution slots for a completed legacy run instead of summing shared Property totals', () => {
+    const adapted = adaptVersionOneMeasurementReport(activePlan, {
+      ...report,
+      targets: [
+        report.targets[0]!,
+        { ...report.targets[0]!, id: 'second-house', label: 'Second House' },
+      ],
+    })
+
+    expect(adapted.latestMeasurement).toMatchObject({ completedSlots: 1, totalSlots: 1 })
+  })
+
+  it('marks the run as historical when legacy observations were recovered without bridging', () => {
+    const adapted = adaptVersionOneMeasurementReport(activePlan, {
+      ...report,
+      evidence: [],
+      diagnostics: {
+        ...report.diagnostics,
+        bridgedObservationIds: [],
+        historicalObservationIds: ['observation-1'],
+      },
+    })
+
+    expect(adapted.latestMeasurement.includesBridgedHistory).toBe(true)
+  })
+
+  it('indexes each legacy evidence row once before adapting Properties', () => {
+    const indexed = indexVersionOneEvidenceByTarget(report.evidence)
+
+    expect(indexed.get('harbor-house')).toHaveLength(1)
+    expect(indexed.get('missing-property')).toBeUndefined()
   })
 })

@@ -249,9 +249,9 @@ function canonicalJsonValue(value: unknown): unknown {
 
 function matcherOrderKey(matcher: MeasurementV2UrlMatcher): string {
   switch (matcher.kind) {
-    case 'exact': return ['exact', matcher.url, '', matcher.pathCase].join(' ')
-    case 'prefix': return ['prefix', matcher.host, matcher.pathPrefix, matcher.pathCase].join(' ')
-    case 'host': return ['host', matcher.host, '', ''].join(' ')
+    case 'exact': return ['exact', matcher.url, '', matcher.pathCase].join('\u0000')
+    case 'prefix': return ['prefix', matcher.host, matcher.pathPrefix, matcher.pathCase].join('\u0000')
+    case 'host': return ['host', matcher.host, '', ''].join('\u0000')
   }
 }
 
@@ -463,6 +463,8 @@ export const measurementOverviewResponseSchema = z.object({
     completed: z.number().int().nonnegative(),
     expected: z.number().int().nonnegative(),
     completedAt: z.string().datetime().optional(),
+    /** Present for v2 reads. True when the selected run used bridged or recovered historical source data. */
+    includesHistoricalData: z.boolean().optional(),
   }).strict(),
   nextAction: z.object({
     kind: measurementNextActionKindSchema,

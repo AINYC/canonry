@@ -81,6 +81,7 @@ function PropertiesHarness({
   onRetryProperties = vi.fn(),
   onReturnToImport = vi.fn(),
   initialSelectedPropertyIds,
+  isContinuing = false,
 }: {
   canEdit?: boolean
   rows?: readonly AdvancedMeasurementProperty[]
@@ -90,6 +91,7 @@ function PropertiesHarness({
   onRetryProperties?: AdvancedMeasurementImportPropertiesProps['onRetryProperties']
   onReturnToImport?: AdvancedMeasurementImportPropertiesProps['onReturnToImport']
   initialSelectedPropertyIds?: readonly string[]
+  isContinuing?: boolean
 }) {
   const [propertiesSearch, setPropertiesSearch] = useState('')
   const [visiblePropertyLimit, setVisiblePropertyLimit] = useState(maxVisibleProperties)
@@ -113,6 +115,7 @@ function PropertiesHarness({
         onContinue,
         onRetryProperties,
         onReturnToImport,
+        isContinuing,
       })}
     />
   )
@@ -225,6 +228,20 @@ describe('SetupImportProperties Properties step', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }))
     expect(screen.getByRole('button', { name: 'Continue' })).toHaveProperty('disabled', true)
     expect(onContinue).not.toHaveBeenCalled()
+  })
+
+  test('freezes every mutable Property control while the selection is saving', () => {
+    const onReturnToImport = vi.fn()
+    render(<PropertiesHarness isContinuing onReturnToImport={onReturnToImport} />)
+
+    expect(screen.getByRole('searchbox', { name: 'Search Properties' })).toHaveProperty('disabled', true)
+    expect(screen.getByRole('button', { name: 'Select all shown' })).toHaveProperty('disabled', true)
+    expect(screen.getByRole('button', { name: 'Clear selection' })).toHaveProperty('disabled', true)
+    expect(screen.getByLabelText('Select North Office')).toHaveProperty('disabled', true)
+    expect(screen.getByRole('button', { name: 'Back' })).toHaveProperty('disabled', true)
+    expect(screen.getByRole('button', { name: 'Saving Properties…' })).toHaveProperty('disabled', true)
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(onReturnToImport).not.toHaveBeenCalled()
   })
 
   test('filters with compact search and gives every limited list a Showing N of M count', () => {
