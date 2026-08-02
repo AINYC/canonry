@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { providerNameSchema } from './provider.js'
+import { locationContextSchema, providerNameSchema } from './provider.js'
 import { citedUrlCaptureStatusSchema } from './cited-urls.js'
 import { measurementExecutionIdentitySchema, measurementRunScopeRequestSchema, measurementRunScopeSchema } from './measurement-plan.js'
 import { retrievalContractSchema, retrievalStatusSchema } from './retrieval.js'
@@ -252,6 +252,19 @@ export const groundingSourceSchema = z.object({
 
 export type GroundingSource = z.infer<typeof groundingSourceSchema>
 
+/**
+ * Whether a provider actually honoured the `LocationContext` a plan-aware run
+ * requested, per the `query_snapshots.supported_context` column. Null on the
+ * snapshot means the run asked for no location, or the provider does not
+ * forward one at all — see `location` on the same DTO, which only ever
+ * carries the requested label when this is non-null.
+ */
+export const supportedLocationContextSchema = z.object({
+  status: z.enum(['applied', 'ignored', 'browser-implicit', 'unknown']),
+  resolved: locationContextSchema.nullable().optional(),
+})
+export type SupportedLocationContext = z.infer<typeof supportedLocationContextSchema>
+
 export const querySnapshotDtoSchema = z.object({
   id: z.string(),
   runId: z.string(),
@@ -296,6 +309,16 @@ export const querySnapshotDtoSchema = z.object({
    */
   servedModel: z.string().nullable().optional(),
   location: z.string().nullable().optional(),
+  /**
+   * The `LocationContext` a plan-aware run asked this slot to be measured
+   * under. Null on a planless row or a plan slot with no location. Compare
+   * against `supportedContext` to tell "no location was requested" apart
+   * from "one was requested and the provider did not honour it" — `location`
+   * alone cannot make that distinction.
+   */
+  requestedContext: locationContextSchema.nullable().optional(),
+  /** Whether `requestedContext` was actually honoured — see the schema doc. */
+  supportedContext: supportedLocationContextSchema.nullable().optional(),
   createdAt: z.string(),
 })
 

@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, inArray, lt } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
-import { filterTrackedSnapshots, groupRunsByCreatedAt, pickGroupRepresentative, querySnapshots, runs, queries, queryBasketVersions, competitors, domainClassifications, parseJsonColumn } from '@ainyc/canonry-db'
+import { filterTrackedSnapshots, groupRunsByCreatedAt, pickGroupRepresentative, querySnapshots, runs, queries, queryBasketVersions, competitors, domainClassifications, parseJsonColumn, type DatabaseClient } from '@ainyc/canonry-db'
 import {
   AI_PROVIDER_INFRA_DOMAINS, brandLabelFromDomain, categorizeSource, categoryLabel, CitationStates,
   classifySurfaceFromCategory, surfaceClassFromCompetitorType, surfaceClassLabel,
@@ -12,7 +12,7 @@ import type {
   TimeBucket, TrendDirection, GapQuery, GapCategory,
   SourceCategory, SourceCategoryCount, ProviderMetric, QueryChangeEvent,
   RankedSourceList, SourceRankEntry, SurfaceClass, SurfaceClassCount, ModelEvidenceState,
-  ModelExposureWindow, ModelPointerChangeDisclosure, ModelServiceMismatch,
+  ModelExposureWindow, ModelPointerChangeDisclosure, ModelServiceMismatch, ExecutionIdentityChangeEvent,
 } from '@ainyc/canonry-contracts'
 import { buildMentionShare } from '@ainyc/canonry-intelligence'
 import { notProbeRun, resolveProject, resolveSnapshotAnswerMentioned } from './helpers.js'
@@ -20,6 +20,17 @@ import { buildModelAttribution, buildServedModelAttribution } from './analytics-
 import {
   classifyModelEvidence, classifyServedModelEvidence, modelEvidenceMismatched, type ModelEvidenceValue,
 } from './model-evidence.js'
+import { measurementRunCompleteness } from './measurement-run-completeness.js'
+
+// A plan run that did not fill every slot its manifest promised has not
+// measured the plan. Folding its rows into a rate or a "latest sweep"
+// classification anyway would state a conclusion about questions nobody
+// answered — the same partial-denominator error run-coordinator and the
+// notifier already refuse to make. Planless runs (no manifest) are unaffected.
+function measuredWhole(db: DatabaseClient, run: { id: string }): boolean {
+  const completeness = measurementRunCompleteness(db, run.id)
+  return !completeness.planned || completeness.complete
+}
 
 export async function analyticsRoutes(app: FastifyInstance) {
   // GET /projects/:name/analytics/metrics — citation rate trends
@@ -44,6 +55,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
       ))
       .orderBy(desc(runs.createdAt))
       .all()
+      .filter(r => measuredWhole(app.db, r))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 
     if (projectRuns.length === 0) {
@@ -56,6 +68,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
         mentionTrend: 'stable',
         queryChanges: [],
         basketChanges: [],
+        executionIdentityChanges: [],
         referenceBasketRevision: null,
         modelAttribution: {},
         servedModelAttribution: {},
@@ -429,7 +442,26 @@ export async function analyticsRoutes(app: FastifyInstance) {
       // A null cutoff is the all-time window, where every recorded change is in scope.
       .filter(change => !cutoff || change.at >= cutoff)
 
-    return reply.send({ window, buckets, overall, byProvider, trend, mentionTrend, queryChanges, basketChanges, referenceBasketRevision: latestBasket?.revision ?? null, modelAttribution, servedModelAttribution, modelServiceMismatch, modelPointerChanges } satisfies BrandMetricsDto)
+    // Execution-identity change annotations: the read half of the boundary
+    // an engine/model swap promises. `projectRuns` is already ordered oldest
+    // first (see the `.sort()` above), so walking it once and comparing each
+    // plan-aware run's checksum to the last one seen finds every point the
+    // identity actually moved. The first identity observed is not a change —
+    // same rule as basket revision 1 — so the comparison starts on the
+    // second one. Planless runs carry no identity and are skipped rather
+    // than treated as a break: they say nothing about what measured them.
+    const executionIdentityChanges: ExecutionIdentityChangeEvent[] = []
+    let previousExecutionChecksum: string | null = null
+    for (const run of projectRuns) {
+      const identity = run.measurementExecutionIdentity
+      if (!identity) continue
+      if (previousExecutionChecksum !== null && identity.checksum !== previousExecutionChecksum) {
+        executionIdentityChanges.push({ at: run.createdAt, identity })
+      }
+      previousExecutionChecksum = identity.checksum
+    }
+
+    return reply.send({ window, buckets, overall, byProvider, trend, mentionTrend, queryChanges, basketChanges, executionIdentityChanges, referenceBasketRevision: latestBasket?.revision ?? null, modelAttribution, servedModelAttribution, modelServiceMismatch, modelPointerChanges } satisfies BrandMetricsDto)
   })
 
   // GET /projects/:name/analytics/gaps — brand gap analysis
@@ -457,6 +489,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
       .orderBy(desc(runs.createdAt), desc(runs.id))
       .all()
       .filter(r => r.status === 'completed' || r.status === 'partial')
+      .filter(r => measuredWhole(app.db, r))
     const latestGroup = groupRunsByCreatedAt(completedRuns)[0] ?? []
     const latestGroupRunIds = latestGroup.map(r => r.id)
     const latestRun = pickGroupRepresentative(latestGroup)
@@ -473,6 +506,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
       .orderBy(runs.createdAt)
       .all()
       .filter(r => r.status === 'completed' || r.status === 'partial')
+      .filter(r => measuredWhole(app.db, r))
       .filter(r => !cutoff || r.createdAt >= cutoff)
 
     const windowRunIds = windowRuns.map(r => r.id)
@@ -682,6 +716,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
       .orderBy(desc(runs.createdAt), desc(runs.id))
       .all()
       .filter(r => r.status === 'completed' || r.status === 'partial')
+      .filter(r => measuredWhole(app.db, r))
       .filter(r => !cutoff || r.createdAt >= cutoff)
 
     if (windowRuns.length === 0) {

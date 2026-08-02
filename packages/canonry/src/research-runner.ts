@@ -11,7 +11,7 @@ import {
 } from '@ainyc/canonry-contracts'
 import { computeCitedCompetitorDomains, determineCitationState, extractRecommendedCompetitors } from './citation-utils.js'
 import type { ProviderRegistry } from './provider-registry.js'
-import { ProviderExecutionGate } from './provider-execution-gate.js'
+import { getSharedProviderExecutionGate } from './provider-execution-gate.js'
 import { getCurrentUsageDay, releaseDailyQueryQuota, reserveDailyQueryQuota } from './usage-quota.js'
 
 const unfinishedResearchQueryStatuses = [ResearchQueryStatuses.queued, ResearchQueryStatuses.running] as const
@@ -59,7 +59,12 @@ export async function executeResearchRun(db: DatabaseClient, registry: ProviderR
     const domains = effectiveDomains(project)
     const brands = effectiveBrandNames(project)
     const config = { ...provider.config, model: run.resolvedModel }
-    const gate = new ProviderExecutionGate(provider.config.quotaPolicy.maxConcurrency, provider.config.quotaPolicy.maxRequestsPerMinute)
+    // Shared process-wide, one gate per provider name — see NEW-3 in
+    // `provider-execution-gate.ts`. A research batch can run concurrently
+    // with an answer-visibility sweep or another research batch against the
+    // same provider; a gate built fresh here would give this batch its own
+    // independent budget against the same upstream key.
+    const gate = getSharedProviderExecutionGate(run.provider, provider.config.quotaPolicy.maxConcurrency, provider.config.quotaPolicy.maxRequestsPerMinute)
 
     // The worker absorbs every per-query error. That prevents mapWithConcurrency
     // from fail-fast escaping before the parent can be finalized.

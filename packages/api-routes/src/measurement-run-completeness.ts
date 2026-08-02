@@ -24,20 +24,39 @@ export interface MeasurementRunCompleteness {
   complete: boolean
 }
 
+/** Same identity the manifest itself uses to reject duplicate slots. */
+function slotKey(executionId: string, provider: string): string {
+  return [executionId, provider.trim().toLocaleLowerCase('en')].join(' ')
+}
+
 export function measurementRunCompleteness(db: DatabaseClient, runId: string): MeasurementRunCompleteness {
   const run = db.select({ manifest: runs.measurementManifest }).from(runs).where(eq(runs.id, runId)).get()
   if (!run?.manifest) return { planned: false, executed: 0, expected: 0, complete: true }
 
-  let expected: number
+  let expectedSlots: Set<string>
   try {
-    expected = parseMeasurementRunManifestV1(run.manifest).expectedSlots.length
+    expectedSlots = new Set(
+      parseMeasurementRunManifestV1(run.manifest).expectedSlots.map(slot => slotKey(slot.executionId, slot.provider)),
+    )
   } catch {
     // An unreadable manifest is not a licence to treat the run as whole.
     return { planned: true, executed: 0, expected: 0, complete: false }
   }
 
-  const executed = db.select({ id: querySnapshots.id }).from(querySnapshots)
-    .where(eq(querySnapshots.runId, runId)).all().length
+  // A raw row count is a cardinality check, not a slot check: two rows
+  // answering the same expected slot and zero rows answering another would
+  // still clear a `>= expected` bar. Compare against the manifest's own slot
+  // identity instead, so a slot only counts once it is actually filled. Rows
+  // with no execution id predate plan execution and cannot be attributed to
+  // any slot.
+  const rows = db.select({ executionId: querySnapshots.measurementExecutionId, provider: querySnapshots.provider })
+    .from(querySnapshots).where(eq(querySnapshots.runId, runId)).all()
+  const executedSlots = new Set<string>()
+  for (const row of rows) {
+    if (!row.executionId) continue
+    const key = slotKey(row.executionId, row.provider)
+    if (expectedSlots.has(key)) executedSlots.add(key)
+  }
 
-  return { planned: true, executed, expected, complete: executed >= expected }
+  return { planned: true, executed: executedSlots.size, expected: expectedSlots.size, complete: executedSlots.size === expectedSlots.size }
 }

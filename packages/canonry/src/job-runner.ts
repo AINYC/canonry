@@ -11,7 +11,7 @@ import type { ProviderRegistry, RegisteredProvider } from './provider-registry.j
 import { trackEvent } from './telemetry.js'
 import { buildRunCompletedProps, hashDomain, type RunPhaseTimings } from './run-telemetry.js'
 import { createLogger } from './logger.js'
-import { ProviderExecutionGate } from './provider-execution-gate.js'
+import { ProviderExecutionGate, getSharedProviderExecutionGate } from './provider-execution-gate.js'
 import { getCurrentUsageDay, releaseDailyQueryQuota, reserveDailyQueryQuota } from './usage-quota.js'
 import {
   computeCompetitorOverlap,
@@ -336,23 +336,6 @@ export class JobRunner {
         }
       }
 
-      // Resolve which providers to use — honour per-run override, then project config
-      const projectProviders = providerOverride ?? (project.providers as ProviderName[])
-      activeProviders = this.registry.getForProject(projectProviders).map((entry) => {
-        const model = project.providerModels[entry.adapter.name]
-        // Clone the registration instead of mutating the shared registry: two
-        // projects can run different models through the same provider process.
-        return model === undefined
-          ? entry
-          : { ...entry, config: { ...entry.config, model } }
-      })
-
-      if (activeProviders.length === 0) {
-        throw new Error('No providers configured. Add at least one provider API key.')
-      }
-
-      log.info('run.dispatch', { runId, providerCount: activeProviders.length, providers: activeProviders.map(p => p.adapter.name) })
-
       // Fetch queries for the project (scope to existingRun.queries if set)
       const scopedQueryNames = existingRun.queries
       projectQueries = scopedQueryNames
@@ -370,6 +353,37 @@ export class JobRunner {
       // A run that pinned a measurement plan carries its own execution graph.
       // A run that did not gets the legacy query-by-query path below, untouched.
       planExecution = resolvePlanExecution(existingRun, projectQueries)
+
+      // Resolve which providers to use. A manifest-pinned run measures exactly
+      // the providers frozen onto its manifest at queue time — reading
+      // `project.providers` here would let a provider added or removed after
+      // queueing (but before this run got to the front of the queue) silently
+      // change what an already-queued run measures, defeating the point of
+      // freezing a manifest at all. Only a planless run honours the per-run
+      // override / live project config, exactly as before.
+      if (planExecution) {
+        const plan = planExecution
+        const manifestProviders = [...plan.unitsByProvider.keys()] as ProviderName[]
+        activeProviders = manifestProviders
+          .map(name => this.registry.get(name))
+          .filter((entry): entry is RegisteredProvider => entry !== undefined)
+      } else {
+        const projectProviders = providerOverride ?? (project.providers as ProviderName[])
+        activeProviders = this.registry.getForProject(projectProviders).map((entry) => {
+          const model = project.providerModels[entry.adapter.name]
+          // Clone the registration instead of mutating the shared registry: two
+          // projects can run different models through the same provider process.
+          return model === undefined
+            ? entry
+            : { ...entry, config: { ...entry.config, model } }
+        })
+      }
+
+      if (activeProviders.length === 0) {
+        throw new Error('No providers configured. Add at least one provider API key.')
+      }
+
+      log.info('run.dispatch', { runId, providerCount: activeProviders.length, providers: activeProviders.map(p => p.adapter.name) })
 
       // Fetch competitors for the project
       const projectCompetitors = this.db
@@ -415,11 +429,19 @@ export class JobRunner {
         providerReservations.set(p.adapter.name, { scope: providerScope, period: todayPeriod, reserved: queriesPerProvider })
       }
 
+      // One gate per provider NAME, shared process-wide (see
+      // `getSharedProviderExecutionGate`) — not one per run. Two runs for two
+      // different projects can be in flight at once, and if both name the
+      // same provider they share the same upstream API key and the same
+      // real-world rate limit. A gate built fresh per run would give each run
+      // its own independent budget against that key, silently multiplying
+      // the configured limit by the number of concurrent runs.
       const executionGates = new Map<ProviderName, ProviderExecutionGate>()
       for (const provider of activeProviders) {
         executionGates.set(
           provider.adapter.name,
-          new ProviderExecutionGate(
+          getSharedProviderExecutionGate(
+            provider.adapter.name,
             provider.config.quotaPolicy.maxConcurrency,
             provider.config.quotaPolicy.maxRequestsPerMinute,
           ),
@@ -724,7 +746,12 @@ export class JobRunner {
               retrievalContract: raw.retrievalContract,
               competitorOverlap: overlap,
               recommendedCompetitors: extractedCompetitors,
-              location: requestedContext?.label ?? null,
+              // Only claim the geography the provider actually honoured. A
+              // requested-but-unsupported context stores `location: null` —
+              // "no claim" — rather than the label we asked for, mirroring
+              // `supportedContext` itself: this field is never non-null when
+              // that one is null.
+              location: supportedContext ? requestedContext?.label ?? null : null,
               measurementExecutionId: unit.executionId,
               requestedContext,
               supportedContext,

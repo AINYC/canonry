@@ -142,13 +142,13 @@ function buildEnv(options: {
   return { db, projectId, runId, queryId, plan, manifest }
 }
 
-function registryFor(calls: RecordedCall[], providers: Array<{ name: string; supportsLocationContext?: boolean; failFromCall?: number }>) {
+function registryFor(calls: RecordedCall[], providers: Array<{ name: string; supportsLocationContext?: boolean; failFromCall?: number; maxRequestsPerDay?: number }>) {
   const registry = new ProviderRegistry()
   for (const provider of providers) {
     registry.register(fakeAdapter({ ...provider, calls }), {
       provider: provider.name,
       apiKey: 'test-key',
-      quotaPolicy: { maxConcurrency: 2, maxRequestsPerMinute: 60, maxRequestsPerDay: 1000 },
+      quotaPolicy: { maxConcurrency: 2, maxRequestsPerMinute: 60, maxRequestsPerDay: provider.maxRequestsPerDay ?? 1000 },
     })
   }
   return registry
@@ -255,11 +255,18 @@ describe('honest geo capability', () => {
     for (const row of blind) {
       expect(row.supportedContext).toBeNull()
       expect(row.requestedContext).not.toBeNull()
+      // The row must not claim a geography the provider never honoured: only
+      // `requestedContext` records what was asked for. `location` — the
+      // field every other reader (analytics, exports) treats as "where this
+      // was measured from" — stays null rather than echoing the request.
+      expect(row.location).toBeNull()
     }
 
     const threaded = rows.filter(row => row.provider === 'openai')
     for (const row of threaded) {
       expect(row.supportedContext).toEqual({ status: 'applied', resolved: row.requestedContext })
+      // A provider that actually honoured the request may say so on `location`.
+      expect(row.location).toBe(row.requestedContext?.label)
     }
   })
 })
@@ -350,6 +357,58 @@ describe('frozen model', () => {
 
     // And the report reader accepts the provenance it finds.
     expect(report(env).diagnostics.unmatchedObservationIds).toEqual([])
+  })
+})
+
+describe('frozen provider roster', () => {
+  test('a provider added to the project after queueing is not admitted into the run, even if its quota is exhausted', async () => {
+    // Queued against a manifest that only ever asked for openai.
+    const env = buildEnv({ providers: ['openai'] })
+
+    // The project is given a second provider after the run was queued. If the
+    // roster were read live, gemini would be pulled into quota admission —
+    // and here it has zero daily quota left, so admitting it at all would
+    // fail the whole run even though the manifest never asked for it.
+    env.db.update(projects).set({ providers: ['openai', 'gemini'] }).run()
+
+    const calls: RecordedCall[] = []
+    const registry = registryFor(calls, [
+      { name: 'openai' },
+      { name: 'gemini', maxRequestsPerDay: 0 },
+    ])
+
+    await new JobRunner(env.db, registry).executeRun(env.runId, env.projectId)
+
+    // Only the manifest's own provider was ever called.
+    expect(calls.every(call => call.provider === 'openai')).toBe(true)
+    expect(snapshotsFor(env).every(row => row.provider === 'openai')).toBe(true)
+
+    // The run completed — gemini's exhausted quota never entered the picture.
+    const run = env.db.select().from(runs).where(eq(runs.id, env.runId)).get()!
+    expect(run.status).toBe('completed')
+  })
+
+  test('a provider removed from the project after queueing still runs its frozen manifest slots', async () => {
+    // Queued against a manifest that asked for both openai and gemini.
+    const env = buildEnv({ providers: ['openai', 'gemini'] })
+    expect(new Set(env.manifest.expectedSlots.map(slot => slot.provider))).toEqual(new Set(['openai', 'gemini']))
+
+    // gemini is dropped from the project's live config after queueing — but
+    // it is still registered and available to this worker.
+    env.db.update(projects).set({ providers: ['openai'] }).run()
+
+    const calls: RecordedCall[] = []
+    const registry = registryFor(calls, [{ name: 'openai' }, { name: 'gemini' }])
+
+    await new JobRunner(env.db, registry).executeRun(env.runId, env.projectId)
+
+    // The manifest's gemini slots ran anyway: the roster came from the frozen
+    // manifest, not from the project row that changed underneath the run.
+    expect(new Set(calls.map(call => call.provider))).toEqual(new Set(['openai', 'gemini']))
+    expect(snapshotsFor(env)).toHaveLength(env.manifest.expectedSlots.length)
+
+    const run = env.db.select().from(runs).where(eq(runs.id, env.runId)).get()!
+    expect(run.status).toBe('completed')
   })
 })
 

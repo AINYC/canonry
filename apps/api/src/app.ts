@@ -112,6 +112,23 @@ export function buildApp(env: PlatformEnv) {
     },
   ]
 
+  // The model each configured provider will actually answer with: its
+  // explicit env override if set, else the hand-mirrored catalog's own
+  // default (KEEP IN SYNC comment above). A plan-pinned run freezes this at
+  // queue time via `getEffectiveProviderModels`, so an inherited default that
+  // is empty here silently drops the model half of that run's execution
+  // identity on Cloud while local `canonry serve` still records it.
+  const effectiveProviderModels = (): Record<string, string> => {
+    const models: Record<string, string> = {}
+    for (const provider of providerSummary) {
+      if (!provider.configured) continue
+      const defaultModel = providerAdapters.find(adapter => adapter.name === provider.name)?.defaultModel
+      const model = provider.model ?? defaultModel
+      if (model) models[provider.name] = model
+    }
+    return models
+  }
+
   app.register(apiRoutes, {
     db,
     skipAuth: false,
@@ -124,6 +141,7 @@ export function buildApp(env: PlatformEnv) {
     providerAdapters,
     getRunnableProviderNames: () =>
       providerSummary.filter(provider => provider.configured).map(provider => provider.name),
+    getEffectiveProviderModels: effectiveProviderModels,
     googleStateSecret: env.googleStateSecret,
   })
 

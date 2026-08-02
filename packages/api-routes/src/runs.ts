@@ -768,6 +768,12 @@ function loadRunDetail(app: FastifyInstance, run: typeof runs.$inferSelect) {
       competitorOverlap: querySnapshots.competitorOverlap,
       recommendedCompetitors: querySnapshots.recommendedCompetitors,
       location: querySnapshots.location,
+      // The honesty pair behind `location`: what a plan-aware run asked for,
+      // and whether the provider actually honoured it. Without both, a
+      // caller cannot tell "no location was requested" apart from "one was
+      // requested and ignored" — `location` alone reads the same either way.
+      requestedContext: querySnapshots.requestedContext,
+      supportedContext: querySnapshots.supportedContext,
       rawResponse: querySnapshots.rawResponse,
       createdAt: querySnapshots.createdAt,
     })
@@ -815,6 +821,8 @@ function loadRunDetail(app: FastifyInstance, run: typeof runs.$inferSelect) {
         // an unrecoverable one stays null rather than echoing configuration.
         servedModel: s.servedModel,
         location: s.location,
+        requestedContext: s.requestedContext,
+        supportedContext: s.supportedContext,
         groundingSources: rawParsed.groundingSources,
         searchQueries: rawParsed.searchQueries,
         createdAt: s.createdAt,

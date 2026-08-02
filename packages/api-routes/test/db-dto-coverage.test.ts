@@ -150,8 +150,6 @@ const COVERAGE: Record<string, CoverageEntry> = {
     internal: {
       queryText: 'Renamed to `query` on the DTO (self-describing when queries row is deleted).',
       measurementExecutionId: 'Plan-run attribution; read through the measurement report, not the snapshot DTO.',
-      requestedContext: 'Plan-run attribution; read through the measurement report, not the snapshot DTO.',
-      supportedContext: 'Plan-run attribution; read through the measurement report, not the snapshot DTO.',
       screenshotPath: 'Debug-only artifact path; not surfaced on the snapshot DTO.',
       rawResponse: 'Raw provider payload; exposed via a separate endpoint, not the snapshot DTO.',
     },
