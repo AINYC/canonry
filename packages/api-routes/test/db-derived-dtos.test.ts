@@ -135,6 +135,8 @@ describe('drizzle-zod derived row schemas', () => {
       queryBasketRevision: null,
       measurementPlanVersionId: null,
       measurementManifest: null,
+      measurementScope: null,
+      measurementExecutionIdentity: null,
       createdAt: '2026-05-17T00:00:00Z',
     }
     const parsed = runRowSchema.parse(row)
@@ -159,6 +161,13 @@ describe('drizzle-zod derived row schemas', () => {
       measurementManifest: {
         schemaVersion: 1,
         executionIds: ['execution-1'],
+      },
+      measurementScope: { groups: ['metro-group'], targets: [], queries: [], resolvedTargets: ['north-branch'] },
+      measurementExecutionIdentity: {
+        schemaVersion: 1 as const,
+        providers: ['gemini', 'openai'],
+        models: { openai: 'model-a' },
+        checksum: 'b'.repeat(64),
       },
       createdAt: '2026-05-17T00:00:00Z',
     }

@@ -149,9 +149,7 @@ const COVERAGE: Record<string, CoverageEntry> = {
     dto: querySnapshotDtoSchema,
     internal: {
       queryText: 'Renamed to `query` on the DTO (self-describing when queries row is deleted).',
-      measurementExecutionId: 'Reserved for future target-run attribution; no live executor writes it yet.',
-      requestedContext: 'Reserved for future target-run attribution; no live executor writes it yet.',
-      supportedContext: 'Reserved for future target-run attribution; no live executor writes it yet.',
+      measurementExecutionId: 'Plan-run attribution; read through the measurement report, not the snapshot DTO.',
       screenshotPath: 'Debug-only artifact path; not surfaced on the snapshot DTO.',
       rawResponse: 'Raw provider payload; exposed via a separate endpoint, not the snapshot DTO.',
     },

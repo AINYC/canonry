@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import { getPlatformEnv } from '@ainyc/canonry-config'
 import { PROVIDER_NAMES } from '@ainyc/canonry-contracts'
-import { createClient, migrate, apiKeys } from '@ainyc/canonry-db'
+import { createClient, migrate, apiKeys, queries, runs } from '@ainyc/canonry-db'
 
 import { buildApp } from '../src/app.js'
 import { loadApiEnv } from '../src/plugins/env.js'
@@ -232,4 +232,105 @@ test('loadApiEnv delegates to shared platform config', () => {
     maxRequestsPerMinute: 15,
     maxRequestsPerDay: 500,
   })
+})
+
+test('a plan-pinned run queued on Cloud freezes the inherited provider model into its execution identity', async () => {
+  // No GEMINI_MODEL is set here — gemini is configured only via its API key,
+  // so the model that will actually answer is the adapter's own inherited
+  // default. That inherited value is exactly what `getEffectiveProviderModels`
+  // exists to surface at queue time; if the callback is never wired up, the
+  // model half of the run's execution identity comes back empty on Cloud
+  // even though the provider roster half is populated.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'api-identity-test-'))
+  const dbPath = path.join(tmpDir, 'test.db')
+
+  onTestFinished(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  const db = createClient(dbPath)
+  migrate(db)
+
+  const rawKey = `cnry_${crypto.randomBytes(16).toString('hex')}`
+  db.insert(apiKeys).values({
+    id: crypto.randomUUID(),
+    name: 'test',
+    keyHash: crypto.createHash('sha256').update(rawKey).digest('hex'),
+    keyPrefix: rawKey.slice(0, 9),
+    scopes: ['*'],
+    createdAt: new Date().toISOString(),
+  }).run()
+
+  const app = buildApp(getPlatformEnv({
+    DATABASE_URL: dbPath,
+    API_PORT: '3000',
+    WORKER_PORT: '3001',
+    GOOGLE_STATE_SECRET: 'test-only-google-state-secret-32b',
+    GEMINI_API_KEY: 'gemini-test-key',
+  }))
+
+  onTestFinished(async () => {
+    await app.close()
+  })
+
+  const auth = { authorization: `Bearer ${rawKey}` }
+
+  const upsert = await app.inject({
+    method: 'PUT',
+    url: '/api/v1/projects/cloud-identity',
+    headers: auth,
+    payload: {
+      displayName: 'Location 001',
+      canonicalDomain: 'example.com',
+      country: 'US',
+      language: 'en',
+      providers: ['gemini'],
+    },
+  })
+  expect(upsert.statusCode).toBe(201)
+
+  const trackedQuery = await app.inject({
+    method: 'POST',
+    url: '/api/v1/projects/cloud-identity/queries',
+    headers: auth,
+    payload: { queries: ['widget pricing'] },
+  })
+  expect(trackedQuery.statusCode).toBe(200)
+  const queryId = db.select({ id: queries.id }).from(queries).all()[0]!.id
+
+  const published = await app.inject({
+    method: 'PUT',
+    url: '/api/v1/projects/cloud-identity/measurement-plan',
+    headers: auth,
+    payload: {
+      expectedActiveRevision: null,
+      plan: {
+        schemaVersion: 1,
+        targets: [{
+          stableKey: 'main',
+          label: 'Main',
+          urls: [{ kind: 'prefix', host: 'example.com', pathPrefix: '/', pathCase: 'insensitive' }],
+          aliases: ['Main Branch'],
+        }],
+        groups: [{ stableKey: 'all', label: 'All', targetKeys: ['main'] }],
+        targetQuerySelections: [{ targetKey: 'main', queryIds: [queryId] }],
+      },
+    },
+  })
+  expect(published.statusCode).toBe(201)
+
+  const triggered = await app.inject({
+    method: 'POST',
+    url: '/api/v1/projects/cloud-identity/runs',
+    headers: auth,
+  })
+  expect(triggered.statusCode).toBe(201)
+  const runId = (triggered.json() as { id: string }).id
+
+  const run = db.select().from(runs).all().find(row => row.id === runId)!
+  expect(run.measurementExecutionIdentity).not.toBeNull()
+  expect(run.measurementExecutionIdentity!.providers).toEqual(['gemini'])
+  // The inherited default, not an empty object — this is the assertion that
+  // fails when apps/api omits `getEffectiveProviderModels`.
+  expect(run.measurementExecutionIdentity!.models).toEqual({ gemini: 'gemini-2.5-flash' })
 })

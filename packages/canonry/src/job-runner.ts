@@ -5,13 +5,13 @@ import os from 'node:os'
 import { and, eq, inArray, ne, sql } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { runs, queries, competitors, projects, querySnapshots, usageCounters } from '@ainyc/canonry-db'
-import type { ProviderName, LocationContext } from '@ainyc/canonry-contracts'
-import { CITED_URL_CAPTURE_VERSION, ONBOARDING_FLOW_VERSION, bucketOnboardingCount, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, serializeRunError } from '@ainyc/canonry-contracts'
+import type { ProviderName, LocationContext, MeasurementRunManifestV1 } from '@ainyc/canonry-contracts'
+import { CITED_URL_CAPTURE_VERSION, ONBOARDING_FLOW_VERSION, bucketOnboardingCount, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, normalizeMeasurementExecutionQueryText, parseMeasurementRunManifestV1, providerSupportsLocationContext, serializeRunError } from '@ainyc/canonry-contracts'
 import type { ProviderRegistry, RegisteredProvider } from './provider-registry.js'
 import { trackEvent } from './telemetry.js'
 import { buildRunCompletedProps, hashDomain, type RunPhaseTimings } from './run-telemetry.js'
 import { createLogger } from './logger.js'
-import { ProviderExecutionGate } from './provider-execution-gate.js'
+import { ProviderExecutionGate, getSharedProviderExecutionGate } from './provider-execution-gate.js'
 import { getCurrentUsageDay, releaseDailyQueryQuota, reserveDailyQueryQuota } from './usage-quota.js'
 import {
   computeCompetitorOverlap,
@@ -48,6 +48,83 @@ export async function runWithConcurrency<T>(
 }
 
 const PROVIDER_FANOUT_DEFAULT = 8
+
+/**
+ * One expected slot of a run's frozen manifest, ready to dispatch: one
+ * question, in one context, on one provider.
+ *
+ * `queryId` is best-effort: the slot names a question by text, and the tracked
+ * row that text came from may have been deleted since the plan was published.
+ * A missing row leaves the snapshot's `query_id` null — `query_text` and the
+ * execution id keep the row self-describing either way.
+ */
+interface PlanExecutionUnit {
+  executionId: string
+  queryText: string
+  context: LocationContext | null
+  queryId: string | null
+  /** The model frozen onto this slot at queue time, when the project pinned one. */
+  requestedModel: string | undefined
+}
+
+interface PlanExecution {
+  manifest: MeasurementRunManifestV1
+  /** Slots grouped by the provider the manifest expects to answer them. */
+  unitsByProvider: Map<string, PlanExecutionUnit[]>
+  /** Distinct execution nodes, for telemetry and quota. */
+  nodeCount: number
+  maxUnitsPerProvider: number
+}
+
+interface RunState {
+  kind: string
+  status: string
+  finishedAt: string | null
+  error: string | null
+  trigger: string
+  queries: string[] | null
+  measurementPlanVersionId: string | null
+  measurementManifest: Record<string, unknown> | null
+}
+
+/**
+ * Read the run's own frozen manifest — never today's active plan. A run that
+ * was queued against revision 4 measures revision 4 even if 5 was published
+ * while it sat in the queue, and it measures exactly the provider slots the
+ * manifest lists, so "executed vs expected" compares like with like.
+ */
+function resolvePlanExecution(
+  run: RunState,
+  projectQueries: readonly typeof queries.$inferSelect[],
+): PlanExecution | null {
+  if (!run.measurementPlanVersionId || !run.measurementManifest) return null
+  const manifest = parseMeasurementRunManifestV1(run.measurementManifest)
+  const queryIdByText = new Map<string, string>()
+  for (const row of projectQueries) {
+    const key = normalizeMeasurementExecutionQueryText(row.query)
+    if (!queryIdByText.has(key)) queryIdByText.set(key, row.id)
+  }
+  const unitsByProvider = new Map<string, PlanExecutionUnit[]>()
+  const nodes = new Set<string>()
+  for (const slot of manifest.expectedSlots) {
+    nodes.add(slot.executionId)
+    const units = unitsByProvider.get(slot.provider) ?? []
+    units.push({
+      executionId: slot.executionId,
+      queryText: slot.queryText,
+      context: slot.context,
+      queryId: queryIdByText.get(normalizeMeasurementExecutionQueryText(slot.queryText)) ?? null,
+      requestedModel: slot.requestedModel,
+    })
+    unitsByProvider.set(slot.provider, units)
+  }
+  return {
+    manifest,
+    unitsByProvider,
+    nodeCount: nodes.size,
+    maxUnitsPerProvider: Math.max(0, ...[...unitsByProvider.values()].map(units => units.length)),
+  }
+}
 
 function resolveProviderFanout(): number {
   const raw = process.env.CANONRY_PROVIDER_FANOUT
@@ -199,6 +276,7 @@ export class JobRunner {
     let runLocation: LocationContext | undefined
     let activeProviders: RegisteredProvider[] = []
     let projectQueries: typeof queries.$inferSelect[] = []
+    let planExecution: PlanExecution | null = null
     let runTrigger: string | undefined
     let canonicalDomain: string | undefined
     const providerDispatchCounts = new Map<ProviderName, number>()
@@ -258,23 +336,6 @@ export class JobRunner {
         }
       }
 
-      // Resolve which providers to use — honour per-run override, then project config
-      const projectProviders = providerOverride ?? (project.providers as ProviderName[])
-      activeProviders = this.registry.getForProject(projectProviders).map((entry) => {
-        const model = project.providerModels[entry.adapter.name]
-        // Clone the registration instead of mutating the shared registry: two
-        // projects can run different models through the same provider process.
-        return model === undefined
-          ? entry
-          : { ...entry, config: { ...entry.config, model } }
-      })
-
-      if (activeProviders.length === 0) {
-        throw new Error('No providers configured. Add at least one provider API key.')
-      }
-
-      log.info('run.dispatch', { runId, providerCount: activeProviders.length, providers: activeProviders.map(p => p.adapter.name) })
-
       // Fetch queries for the project (scope to existingRun.queries if set)
       const scopedQueryNames = existingRun.queries
       projectQueries = scopedQueryNames
@@ -288,6 +349,41 @@ export class JobRunner {
             .from(queries)
             .where(eq(queries.projectId, projectId))
             .all()
+
+      // A run that pinned a measurement plan carries its own execution graph.
+      // A run that did not gets the legacy query-by-query path below, untouched.
+      planExecution = resolvePlanExecution(existingRun, projectQueries)
+
+      // Resolve which providers to use. A manifest-pinned run measures exactly
+      // the providers frozen onto its manifest at queue time — reading
+      // `project.providers` here would let a provider added or removed after
+      // queueing (but before this run got to the front of the queue) silently
+      // change what an already-queued run measures, defeating the point of
+      // freezing a manifest at all. Only a planless run honours the per-run
+      // override / live project config, exactly as before.
+      if (planExecution) {
+        const plan = planExecution
+        const manifestProviders = [...plan.unitsByProvider.keys()] as ProviderName[]
+        activeProviders = manifestProviders
+          .map(name => this.registry.get(name))
+          .filter((entry): entry is RegisteredProvider => entry !== undefined)
+      } else {
+        const projectProviders = providerOverride ?? (project.providers as ProviderName[])
+        activeProviders = this.registry.getForProject(projectProviders).map((entry) => {
+          const model = project.providerModels[entry.adapter.name]
+          // Clone the registration instead of mutating the shared registry: two
+          // projects can run different models through the same provider process.
+          return model === undefined
+            ? entry
+            : { ...entry, config: { ...entry.config, model } }
+        })
+      }
+
+      if (activeProviders.length === 0) {
+        throw new Error('No providers configured. Add at least one provider API key.')
+      }
+
+      log.info('run.dispatch', { runId, providerCount: activeProviders.length, providers: activeProviders.map(p => p.adapter.name) })
 
       // Fetch competitors for the project
       const projectCompetitors = this.db
@@ -308,7 +404,7 @@ export class JobRunner {
       const executionContext: RunExecutionContext = {
         providerCount: activeProviders.length,
         providers: activeProviders.map(provider => provider.adapter.name),
-        queryCount: projectQueries.length,
+        queryCount: planExecution?.nodeCount ?? projectQueries.length,
         ...(runLocation ? { location: runLocation.label } : {}),
         ...(runTrigger ? { trigger: runTrigger } : {}),
         ...(canonicalDomain ? { canonicalDomain } : {}),
@@ -317,7 +413,7 @@ export class JobRunner {
       // Enforce daily quota per provider — each provider receives one request per query.
       // Track and check usage per (projectId, providerName) so that a provider that has
       // never been used isn't blocked by another provider's past usage.
-      const queriesPerProvider = projectQueries.length
+      const queriesPerProvider = planExecution?.maxUnitsPerProvider ?? projectQueries.length
       const todayPeriod = getCurrentUsageDay()
 
       for (const p of activeProviders) {
@@ -333,11 +429,19 @@ export class JobRunner {
         providerReservations.set(p.adapter.name, { scope: providerScope, period: todayPeriod, reserved: queriesPerProvider })
       }
 
+      // One gate per provider NAME, shared process-wide (see
+      // `getSharedProviderExecutionGate`) — not one per run. Two runs for two
+      // different projects can be in flight at once, and if both name the
+      // same provider they share the same upstream API key and the same
+      // real-world rate limit. A gate built fresh per run would give each run
+      // its own independent budget against that key, silently multiplying
+      // the configured limit by the number of concurrent runs.
       const executionGates = new Map<ProviderName, ProviderExecutionGate>()
       for (const provider of activeProviders) {
         executionGates.set(
           provider.adapter.name,
-          new ProviderExecutionGate(
+          getSharedProviderExecutionGate(
+            provider.adapter.name,
             provider.config.quotaPolicy.maxConcurrency,
             provider.config.quotaPolicy.maxRequestsPerMinute,
           ),
@@ -521,26 +625,237 @@ export class JobRunner {
         }
       }
 
-      providerCallStart = Date.now()
-      await runWithConcurrency(apiProviders, resolveProviderFanout(), async (registeredProvider) => {
-        await Promise.all(projectQueries.map(async (q) => {
-          await processQueryForProvider(registeredProvider, q)
-        }))
-      })
+      /**
+       * The plan-aware unit of work: one execution node, one provider.
+       *
+       * Deliberately a separate worker from `processQueryForProvider` rather
+       * than a generalization of it. The legacy path is the behaviour every
+       * planless project already depends on; leaving its body alone is what
+       * makes "planless is byte-identical" a fact rather than a hope. The two
+       * want to be one function once the industrial runner lands and both can
+       * be re-tested together.
+       */
+      const processNodeForProvider = async (
+        registeredProvider: RegisteredProvider,
+        unit: PlanExecutionUnit,
+      ): Promise<void> => {
+        const { adapter, config: providerConfig } = registeredProvider
+        const providerName = adapter.name
+        const gate = executionGates.get(providerName)
+        if (!gate) {
+          throw new Error(`Missing execution gate for provider ${providerName}`)
+        }
+        // The manifest froze which model answers this slot. Honouring today's
+        // project setting instead would change what a stored row means without
+        // anything recording that it moved.
+        const config = unit.requestedModel ? { ...providerConfig, model: unit.requestedModel } : providerConfig
+        const requestedContext = unit.context
+        // Only a provider that actually forwards the location may say the
+        // answer was measured from there. Everything else stores null, which
+        // reads as "no claim" rather than as the place we asked for.
+        const supportedContext = requestedContext && providerSupportsLocationContext(adapter)
+          ? { status: 'applied' as const, resolved: requestedContext }
+          : null
 
-      // Browser providers still run query-by-query to preserve tab reuse semantics.
-      for (const registeredProvider of browserProviders) {
-        for (const q of projectQueries) {
-          await processQueryForProvider(registeredProvider, q)
+        try {
+          await gate.run(async () => {
+            this.throwIfRunCancelled(runId)
+            providerDispatchCounts.set(providerName, (providerDispatchCounts.get(providerName) ?? 0) + 1)
+
+            const raw = await adapter.executeTrackedQuery(
+              {
+                query: unit.queryText,
+                canonicalDomains: allDomains,
+                competitorDomains,
+                location: requestedContext ?? undefined,
+              },
+              config,
+            )
+
+            this.throwIfRunCancelled(runId)
+
+            const providerResult = adapter.normalizeResult(raw)
+            const rawGroundingSources = providerResult.groundingSources
+            const normalized = {
+              ...providerResult,
+              groundingSources: Array.isArray(rawGroundingSources) ? rawGroundingSources : [],
+            }
+            let citedUrlCapture: CitedUrlCapture
+            try {
+              citedUrlCapture = await captureCitedUrls(providerName, rawGroundingSources)
+            } catch (err: unknown) {
+              citedUrlCapture = {
+                citedUrls: [],
+                captureStatus: 'failed',
+                sourceCount: normalized.groundingSources.length,
+                resolvedCount: 0,
+                captureVersion: CITED_URL_CAPTURE_VERSION,
+              }
+              log.warn('query.cited-url-capture-failed', {
+                runId,
+                provider: providerName,
+                query: unit.queryText,
+                error: err instanceof Error ? err.message : String(err),
+              })
+            }
+            this.throwIfRunCancelled(runId)
+
+            const citationState = determineCitationState(normalized, allDomains)
+            const answerMentioned = determineAnswerMentioned(
+              normalized.answerText,
+              allBrandNames,
+              allDomains,
+            )
+            const overlap = computeCompetitorOverlap(normalized, competitorDomains)
+            const extractedCompetitors = extractRecommendedCompetitors(
+              normalized.answerText,
+              allDomains,
+              normalized.citedDomains,
+              competitorDomains,
+              allBrandNames,
+            )
+
+            const snapshotId = crypto.randomUUID()
+            let screenshotRelPath: string | null = null
+            if (raw.screenshotPath && fs.existsSync(raw.screenshotPath)) {
+              const screenshotDir = path.join(os.homedir(), '.canonry', 'screenshots', runId)
+              if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true })
+              const destPath = path.join(screenshotDir, `${snapshotId}.png`)
+              fs.renameSync(raw.screenshotPath, destPath)
+              screenshotRelPath = `${runId}/${snapshotId}.png`
+            }
+
+            this.db.insert(querySnapshots).values({
+              id: snapshotId,
+              runId,
+              queryId: unit.queryId,
+              queryText: unit.queryText,
+              provider: providerName,
+              model: raw.model,
+              servedModel: raw.servedModel ?? null,
+              citationState,
+              answerMentioned,
+              answerText: normalized.answerText,
+              citedDomains: normalized.citedDomains,
+              citedUrls: citedUrlCapture.citedUrls,
+              captureStatus: citedUrlCapture.captureStatus,
+              sourceCount: citedUrlCapture.sourceCount,
+              resolvedCount: citedUrlCapture.resolvedCount,
+              captureVersion: citedUrlCapture.captureVersion,
+              retrievalStatus: normalized.retrievalStatus,
+              retrievalContract: raw.retrievalContract,
+              competitorOverlap: overlap,
+              recommendedCompetitors: extractedCompetitors,
+              // Only claim the geography the provider actually honoured. A
+              // requested-but-unsupported context stores `location: null` —
+              // "no claim" — rather than the label we asked for, mirroring
+              // `supportedContext` itself: this field is never non-null when
+              // that one is null.
+              location: supportedContext ? requestedContext?.label ?? null : null,
+              measurementExecutionId: unit.executionId,
+              requestedContext,
+              supportedContext,
+              screenshotPath: screenshotRelPath,
+              rawResponse: JSON.stringify({
+                model: raw.model,
+                servedModel: raw.servedModel ?? null,
+                groundingSources: normalized.groundingSources,
+                searchQueries: normalized.searchQueries,
+                apiResponse: raw.rawResponse,
+              }),
+              createdAt: new Date().toISOString(),
+            }).run()
+
+            totalSnapshotsInserted++
+            log.info('query.citation', {
+              runId,
+              provider: providerName,
+              query: unit.queryText,
+              executionId: unit.executionId,
+              location: requestedContext?.label ?? null,
+              citationState,
+              answerMentioned,
+            })
+          })
+        } catch (err: unknown) {
+          if (err instanceof RunCancelledError) {
+            throw err
+          }
+
+          const msg = err instanceof Error ? err.message : String(err)
+          const stack = err instanceof Error ? err.stack : undefined
+          log.error('query.failed', { runId, provider: providerName, query: unit.queryText, executionId: unit.executionId, error: msg, stack })
+          if (!providerErrors.has(providerName)) {
+            providerErrors.set(providerName, msg)
+          }
+        }
+      }
+
+      providerCallStart = Date.now()
+      if (planExecution) {
+        // The manifest decides who runs what. A provider it does not list is
+        // not part of this run's expectation, and a provider it lists but the
+        // registry cannot serve simply leaves its slots unexecuted — visible
+        // as executed below expected rather than silently swapped for another.
+        const plan = planExecution
+        const unitsFor = (provider: RegisteredProvider): PlanExecutionUnit[] =>
+          plan.unitsByProvider.get(provider.adapter.name.trim().toLocaleLowerCase('en')) ?? []
+        log.info('run.plan-dispatch', {
+          runId,
+          expectedSlots: plan.manifest.expectedSlots.length,
+          executionNodes: plan.nodeCount,
+          providers: [...plan.unitsByProvider.keys()],
+        })
+        await runWithConcurrency(apiProviders, resolveProviderFanout(), async (registeredProvider) => {
+          await Promise.all(unitsFor(registeredProvider).map(async (unit) => {
+            await processNodeForProvider(registeredProvider, unit)
+          }))
+        })
+        for (const registeredProvider of browserProviders) {
+          for (const unit of unitsFor(registeredProvider)) {
+            await processNodeForProvider(registeredProvider, unit)
+          }
+        }
+      } else {
+        await runWithConcurrency(apiProviders, resolveProviderFanout(), async (registeredProvider) => {
+          await Promise.all(projectQueries.map(async (q) => {
+            await processQueryForProvider(registeredProvider, q)
+          }))
+        })
+
+        // Browser providers still run query-by-query to preserve tab reuse semantics.
+        for (const registeredProvider of browserProviders) {
+          for (const q of projectQueries) {
+            await processQueryForProvider(registeredProvider, q)
+          }
         }
       }
       providerCallEnd = Date.now()
 
       this.throwIfRunCancelled(runId)
 
+      // An expected slot that never ran is not a success. A provider the
+      // manifest lists but the registry could not serve dispatches nothing and
+      // raises no error, so without this a run could report "completed" having
+      // measured half of what it promised.
+      if (planExecution) {
+        for (const [provider, units] of planExecution.unitsByProvider) {
+          const providerName = provider as ProviderName
+          const dispatched = providerDispatchCounts.get(providerName) ?? 0
+          if (dispatched >= units.length || providerErrors.has(providerName)) continue
+          providerErrors.set(
+            providerName,
+            `${units.length - dispatched} expected measurement(s) did not run: no ${provider} provider was available to this worker.`,
+          )
+        }
+      }
+      const planShortfall = planExecution
+        ? Math.max(0, planExecution.manifest.expectedSlots.length - totalSnapshotsInserted)
+        : 0
+
       // Determine final run status
-      const allFailed = totalSnapshotsInserted === 0 && providerErrors.size > 0
-      const someFailed = providerErrors.size > 0
+      const allFailed = totalSnapshotsInserted === 0 && (providerErrors.size > 0 || planShortfall > 0)
+      const someFailed = providerErrors.size > 0 || planShortfall > 0
 
       if (allFailed) {
         const errorDetail = serializeRunError(buildRunErrorFromMessages(providerErrors))
@@ -626,7 +941,7 @@ export class JobRunner {
       const executionContext: RunExecutionContext = {
         providerCount: activeProviders.length,
         providers: activeProviders.map(provider => provider.adapter.name),
-        queryCount: projectQueries.length,
+        queryCount: planExecution?.nodeCount ?? projectQueries.length,
         ...(runLocation ? { location: runLocation.label } : {}),
         ...(runTrigger ? { trigger: runTrigger } : {}),
         ...(canonicalDomain ? { canonicalDomain } : {}),
@@ -745,7 +1060,7 @@ export class JobRunner {
       .get() !== undefined
   }
 
-  private getRunState(runId: string): { kind: string; status: string; finishedAt: string | null; error: string | null; trigger: string; queries: string[] | null } | undefined {
+  private getRunState(runId: string): RunState | undefined {
     return this.db
       .select({
         kind: runs.kind,
@@ -754,6 +1069,8 @@ export class JobRunner {
         error: runs.error,
         trigger: runs.trigger,
         queries: runs.queries,
+        measurementPlanVersionId: runs.measurementPlanVersionId,
+        measurementManifest: runs.measurementManifest,
       })
       .from(runs)
       .where(eq(runs.id, runId))
@@ -761,7 +1078,15 @@ export class JobRunner {
   }
 
   private isRunCancelled(runId: string): boolean {
-    return this.getRunState(runId)?.status === 'cancelled'
+    // Status only. This runs before and after every provider call, and
+    // `getRunState` now also reads the run's measurement manifest — decoding
+    // that JSON a few times per query to answer a yes/no question would be
+    // pure waste.
+    return this.db
+      .select({ status: runs.status })
+      .from(runs)
+      .where(eq(runs.id, runId))
+      .get()?.status === 'cancelled'
   }
 
   private throwIfRunCancelled(runId: string): void {

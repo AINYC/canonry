@@ -31,6 +31,8 @@ export const geminiAdapter: ProviderAdapter = {
   name: 'gemini',
   displayName: 'Gemini',
   mode: 'api',
+  // normalize.ts folds the location into the prompt the model receives.
+  supportsLocationContext: true,
   keyUrl: 'https://aistudio.google.com/apikey',
   // Upstream model list: https://ai.google.dev/gemini-api/docs/models
   modelRegistry: {

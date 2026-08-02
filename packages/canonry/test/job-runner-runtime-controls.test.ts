@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { eq } from 'drizzle-orm'
-import { expect, onTestFinished, test, vi } from 'vitest'
+import { beforeEach, expect, onTestFinished, test, vi } from 'vitest'
 import type {
   NormalizedQueryResult,
   ProviderAdapter,
@@ -15,7 +15,18 @@ import type {
 import { createClient, queries, migrate, projects, querySnapshots, runs, usageCounters } from '@ainyc/canonry-db'
 import { JobRunner } from '../src/job-runner.js'
 import { ProviderRegistry } from '../src/provider-registry.js'
+import { resetSharedProviderExecutionGates } from '../src/provider-execution-gate.js'
 import { getCurrentUsageDay, reserveDailyQueryQuota } from '../src/usage-quota.js'
+
+// The provider execution gate is now a process-wide singleton per provider
+// name (see NEW-3 in provider-execution-gate.ts) — that is the fix, not a
+// bug. But several tests below register the same provider name ('gemini')
+// with DIFFERENT quota policies to exercise different limits, and without a
+// reset the first test to run would freeze that budget for every later one
+// in this file.
+beforeEach(() => {
+  resetSharedProviderExecutionGates()
+})
 
 function createTempDb(prefix: string) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))

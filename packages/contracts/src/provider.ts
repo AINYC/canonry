@@ -119,6 +119,14 @@ export type ProviderLocationTreatment = 'prompt' | 'request-param' | 'browser-ge
 
 export interface ProviderLocationHandling {
   treatment: ProviderLocationTreatment
+  /**
+   * Whether the configured location actually reaches this provider's request.
+   * True for prompt-borne and structured-parameter treatments alike — in both
+   * the model saw the location. False where the provider never receives it
+   * (browser geolocation, or no handling at all), so a stored row must not
+   * claim the answer was measured from that place.
+   */
+  supportsLocationContext: boolean
   /** One-sentence description suitable for a non-technical reader. */
   description: string
 }
@@ -126,37 +134,56 @@ export interface ProviderLocationHandling {
 const PROVIDER_LOCATION_HANDLING: Record<string, ProviderLocationHandling> = {
   gemini: {
     treatment: 'prompt',
+    supportsLocationContext: true,
     description: 'Location appended to the query text the Gemini model receives.',
   },
   perplexity: {
     treatment: 'prompt',
+    supportsLocationContext: true,
     description: 'Location appended to the query text the Perplexity model receives.',
   },
   local: {
     treatment: 'prompt',
+    supportsLocationContext: true,
     description: 'Location appended to the system message sent to the local model.',
   },
   openai: {
     treatment: 'request-param',
+    supportsLocationContext: true,
     description: 'Location sent as a structured `user_location` field on OpenAI’s web_search tool.',
   },
   claude: {
     treatment: 'request-param',
+    supportsLocationContext: true,
     description: 'Location sent as a structured `user_location` field on Anthropic’s web_search_20250305 tool.',
   },
   'cdp:chatgpt': {
     treatment: 'browser-geo',
+    supportsLocationContext: false,
     description: 'CDP relies on the browser session’s own geolocation; canonry’s configured location is not forwarded.',
   },
 }
 
 const UNKNOWN_PROVIDER_HANDLING: ProviderLocationHandling = {
   treatment: 'ignored',
+  supportsLocationContext: false,
   description: 'No documented location handling for this provider — assume the configured location was not applied.',
 }
 
 export function getProviderLocationHandling(provider: string): ProviderLocationHandling {
   return PROVIDER_LOCATION_HANDLING[provider] ?? UNKNOWN_PROVIDER_HANDLING
+}
+
+/**
+ * Whether a stored row may claim it was measured from the requested place.
+ *
+ * Reads the adapter's own declaration and nothing else. An adapter that says
+ * nothing claims nothing: an undeclared provider is treated as location-blind,
+ * because the cost of a wrong `true` is a report asserting geography that
+ * never reached the model.
+ */
+export function providerSupportsLocationContext(adapter: { supportsLocationContext?: boolean }): boolean {
+  return adapter.supportsLocationContext === true
 }
 
 export interface TrackedQueryInput {
@@ -231,6 +258,14 @@ export interface ProviderAdapter {
   displayName: string
   /** Whether this is an API-based or browser-based (CDP) provider */
   mode: ProviderMode
+  /**
+   * Whether this adapter actually forwards a `LocationContext` to the model —
+   * in the prompt or as a request parameter. Required, not optional, for the
+   * same reason `retrievalStatus` is: an adapter that quietly drops the
+   * location must state so, rather than letting a snapshot inherit a claim
+   * nobody checked. Keep in step with `getProviderLocationHandling`.
+   */
+  supportsLocationContext: boolean
   /** Model registry with defaults, validation, and known models */
   modelRegistry: ProviderModelRegistry
   /** URL where users can obtain an API key (shown in UI) */

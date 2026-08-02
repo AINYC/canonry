@@ -23,82 +23,12 @@ import { fetchSiteText } from './site-fetch.js'
 import type { RegisteredProvider, ProviderRegistry } from './provider-registry.js'
 import { createLogger } from './logger.js'
 import { formatAuditFactorScore } from './snapshot-format.js'
+import { type ProviderExecutionGate, getSharedProviderExecutionGate } from './provider-execution-gate.js'
 
 const log = createLogger('Snapshot')
 
 const ANALYSIS_PROVIDER_PRIORITY = ['openai', 'claude', 'gemini', 'perplexity', 'local'] as const
 const SNAPSHOT_QUERY_COUNT = 6
-class ProviderExecutionGate {
-  private readonly window: number[] = []
-  private readonly waiters: Array<() => void> = []
-  private rateLimitChain = Promise.resolve()
-  private inFlight = 0
-
-  constructor(
-    private readonly maxConcurrency: number,
-    private readonly maxPerMinute: number,
-  ) {}
-
-  async run<T>(task: () => Promise<T>): Promise<T> {
-    await this.acquire()
-    try {
-      await this.waitForRateLimit()
-      return await task()
-    } finally {
-      this.release()
-    }
-  }
-
-  private async acquire(): Promise<void> {
-    if (this.inFlight < Math.max(1, this.maxConcurrency)) {
-      this.inFlight++
-      return
-    }
-
-    await new Promise<void>((resolve) => {
-      this.waiters.push(resolve)
-    })
-    this.inFlight++
-  }
-
-  private release(): void {
-    this.inFlight = Math.max(0, this.inFlight - 1)
-    const next = this.waiters.shift()
-    next?.()
-  }
-
-  private async waitForRateLimit(): Promise<void> {
-    let releaseChain: (() => void) | undefined
-    const previousChain = this.rateLimitChain
-    this.rateLimitChain = new Promise<void>((resolve) => {
-      releaseChain = resolve
-    })
-
-    await previousChain
-    try {
-      const now = Date.now()
-      const windowStart = now - 60_000
-      while (this.window.length > 0 && this.window[0]! < windowStart) {
-        this.window.shift()
-      }
-
-      if (this.window.length >= this.maxPerMinute) {
-        const oldestInWindow = this.window[0]!
-        const waitMs = oldestInWindow + 60_000 - now + 50
-        await new Promise(resolve => setTimeout(resolve, waitMs))
-        const nowAfterWait = Date.now()
-        const newWindowStart = nowAfterWait - 60_000
-        while (this.window.length > 0 && this.window[0]! < newWindowStart) {
-          this.window.shift()
-        }
-      }
-
-      this.window.push(Date.now())
-    } finally {
-      releaseChain?.()
-    }
-  }
-}
 
 type GeneratedSnapshotProfile = SnapshotProfileDto & {
   queries: string[]
@@ -288,11 +218,17 @@ export class SnapshotService {
     providers: RegisteredProvider[]
     manualCompetitors: string[]
   }): Promise<SnapshotQueryResultDto[]> {
+    // Shared process-wide, one gate per provider name — see NEW-3 in
+    // `provider-execution-gate.ts`. A snapshot run can execute concurrently
+    // with an answer-visibility sweep or another snapshot against the same
+    // provider; a gate built fresh here would give it its own independent
+    // budget against the same upstream key.
     const gates = new Map<ProviderName, ProviderExecutionGate>()
     for (const provider of ctx.providers) {
       gates.set(
         provider.adapter.name,
-        new ProviderExecutionGate(
+        getSharedProviderExecutionGate(
+          provider.adapter.name,
           provider.config.quotaPolicy.maxConcurrency,
           provider.config.quotaPolicy.maxRequestsPerMinute,
         ),

@@ -28,6 +28,8 @@ export const openaiAdapter: ProviderAdapter = {
   name: 'openai',
   displayName: 'OpenAI',
   mode: 'api',
+  // normalize.ts sets `user_location` on the web_search tool.
+  supportsLocationContext: true,
   keyUrl: 'https://platform.openai.com/api-keys',
   // Upstream model list: https://platform.openai.com/docs/models
   modelRegistry: {

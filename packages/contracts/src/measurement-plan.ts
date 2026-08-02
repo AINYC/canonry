@@ -463,6 +463,278 @@ export function parseStoredMeasurementPlan(value: unknown): MeasurementPlan {
 const measurementPlanChecksumSchema = z.string().regex(/^[a-f0-9]{64}$/)
 const measurementPlanCreatedAtSchema = z.string().datetime()
 
+/**
+ * Measuring one slice of a published plan.
+ *
+ * A full sweep measures every execution node the revision froze, and its
+ * expected work is the run manifest in `measurement-service.ts`. A scoped run
+ * is a spot check: the operator names groups and/or targets, and only the
+ * execution nodes those targets selected are measured. Resolution happens once,
+ * at queue time, against the revision the run pins — never against whatever
+ * plan is active when the run is later read.
+ */
+
+/**
+ * What a run measured WITH, as opposed to what it measured.
+ *
+ * A plan revision freezes the questions, the contexts and how many snapshots
+ * each question expects. It deliberately does not freeze which engines answer
+ * them or which models those engines are pointed at, because a same-count swap
+ * changes neither the questions nor the shape of the expected work — there is
+ * nothing for a republish to change, so refusing such a run would leave the
+ * operator unable to comply.
+ *
+ * So engine and model identity is recorded per run instead. A comparable
+ * series is one plan revision measured under one execution identity; a change
+ * of engine or model starts a new series under the same revision, and charts
+ * break and annotate at that boundary exactly as they do at a revision
+ * boundary. Nothing is refused and nothing drifts silently.
+ */
+export const measurementExecutionIdentitySchema = z.object({
+  schemaVersion: z.literal(1),
+  /** Sorted, lower-cased provider names. */
+  providers: z.array(z.string().min(1)).min(1),
+  /** Provider → the model that will actually answer, however it was resolved. */
+  models: z.record(z.string().min(1), z.string().min(1)),
+  checksum: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict()
+export type MeasurementExecutionIdentity = z.output<typeof measurementExecutionIdentitySchema>
+
+export interface MeasurementExecutionIdentityInput {
+  providers: readonly string[]
+  models: Readonly<Record<string, string>>
+}
+
+function normalizeExecutionIdentity(input: MeasurementExecutionIdentityInput): MeasurementExecutionIdentityInput {
+  const providers = [...new Set(input.providers.map(value => value.trim().toLocaleLowerCase('en')).filter(Boolean))].sort(compareText)
+  const models: Record<string, string> = {}
+  for (const provider of providers) {
+    const model = input.models[provider]
+    if (model && model.trim()) models[provider] = model.trim()
+  }
+  return { providers, models }
+}
+
+/**
+ * Stable, browser-safe serialization of an execution identity. The checksum is
+ * taken over exactly this string by whichever layer owns hashing.
+ */
+export function canonicalMeasurementExecutionIdentityJson(input: MeasurementExecutionIdentityInput): string {
+  const normalized = normalizeExecutionIdentity(input)
+  return JSON.stringify(canonicalJsonValue({
+    schemaVersion: 1,
+    providers: normalized.providers,
+    models: normalized.models,
+  }))
+}
+
+export function buildMeasurementExecutionIdentity(
+  input: MeasurementExecutionIdentityInput,
+  checksum: string,
+): MeasurementExecutionIdentity {
+  const normalized = normalizeExecutionIdentity(input)
+  return measurementExecutionIdentitySchema.parse({
+    schemaVersion: 1,
+    providers: normalized.providers,
+    models: normalized.models,
+    checksum,
+  })
+}
+
+export function parseStoredMeasurementExecutionIdentity(value: unknown): MeasurementExecutionIdentity {
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      throw new Error('Stored measurement execution identity JSON is invalid')
+    }
+  }
+  const parsed = measurementExecutionIdentitySchema.safeParse(value)
+  if (!parsed.success) throw new Error('Stored measurement execution identity is invalid')
+  return parsed.data
+}
+
+/** Plain-language summary for a chart annotation or an operator surface. */
+export function describeMeasurementExecutionIdentity(identity: MeasurementExecutionIdentity): string {
+  return identity.providers
+    .map(provider => (identity.models[provider] ? `${provider} on ${identity.models[provider]}` : provider))
+    .join(', ')
+}
+
+/** Caller-supplied scope on a run trigger. Both lists are optional; omitting both means a full sweep. */
+export const measurementRunScopeRequestSchema = z.object({
+  groups: z.array(measurementStableKeySchema).optional(),
+  targets: z.array(measurementStableKeySchema).optional(),
+}).strict()
+export type MeasurementRunScopeRequest = z.output<typeof measurementRunScopeRequestSchema>
+
+/**
+ * The scope as resolved against the pinned revision, recorded on the run.
+ * `groups` and `targets` are what the caller asked for; `resolvedTargets` is
+ * the expansion actually measured, so a reader can tell a spot check from a
+ * full sweep without re-deriving group membership from a plan that has since
+ * moved on.
+ */
+export const measurementRunScopeSchema = z.object({
+  groups: z.array(measurementStableKeySchema),
+  targets: z.array(measurementStableKeySchema),
+  /** Question texts, when the slice was chosen by question rather than by target. */
+  queries: z.array(z.string().min(1)),
+  resolvedTargets: z.array(measurementStableKeySchema),
+}).strict().superRefine((value, ctx) => {
+  if (value.resolvedTargets.length === 0 && value.queries.length === 0) {
+    ctx.addIssue({ code: 'custom', path: ['resolvedTargets'], message: 'A recorded scope must name something it measured' })
+  }
+})
+export type MeasurementRunScope = z.output<typeof measurementRunScopeSchema>
+
+export function parseStoredMeasurementRunScope(value: unknown): MeasurementRunScope {
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      throw new Error('Stored measurement run scope JSON is invalid')
+    }
+  }
+  const parsed = measurementRunScopeSchema.safeParse(value)
+  if (!parsed.success) throw new Error('Stored measurement run scope is invalid')
+  return parsed.data
+}
+
+/**
+ * A scope that names something the pinned revision does not contain, or that
+ * resolves to nothing runnable. Callers turn this into a 400 that names the
+ * key — a silently-empty or silently-widened run is the failure this prevents.
+ */
+export class MeasurementRunScopeError extends Error {
+  readonly unknownGroups: string[]
+  readonly unknownTargets: string[]
+  readonly unknownQueries: string[]
+  readonly emptyTargets: string[]
+
+  constructor(input: {
+    message: string
+    unknownGroups?: string[]
+    unknownTargets?: string[]
+    unknownQueries?: string[]
+    emptyTargets?: string[]
+  }) {
+    super(input.message)
+    this.name = 'MeasurementRunScopeError'
+    this.unknownGroups = input.unknownGroups ?? []
+    this.unknownTargets = input.unknownTargets ?? []
+    this.unknownQueries = input.unknownQueries ?? []
+    this.emptyTargets = input.emptyTargets ?? []
+  }
+}
+
+function quotedList(values: readonly string[]): string {
+  return values.map(value => `"${value}"`).join(', ')
+}
+
+/** True when a scope names nothing, i.e. the caller asked for a full sweep. */
+export function measurementRunScopeIsEmpty(scope: MeasurementRunScopeRequest | null | undefined): boolean {
+  return !scope || ((scope.groups?.length ?? 0) === 0 && (scope.targets?.length ?? 0) === 0)
+}
+
+export interface MeasurementRunScopeResolution {
+  scope: MeasurementRunScope
+  executionNodes: MeasurementExecutionNode[]
+}
+
+/**
+ * Expand a scope into the execution nodes it actually covers.
+ *
+ * Groups stand for their member targets; the nodes are the ones those targets
+ * selected. Baseline edges are deliberately not followed: baseline coverage is
+ * a property of a full sweep, and a spot check that pulled baseline nodes in
+ * would measure questions nobody asked for and read as though more of the plan
+ * had been swept than was.
+ */
+export function resolveMeasurementRunScope(
+  plan: MeasurementPlan,
+  scope: MeasurementRunScopeRequest,
+): MeasurementRunScopeResolution {
+  const requestedGroups = canonicalStrings(scope.groups ?? [])
+  const requestedTargets = canonicalStrings(scope.targets ?? [])
+  const groupsByKey = new Map(plan.groups.map(group => [group.stableKey, group]))
+  const targetKeys = new Set(plan.targets.map(target => target.stableKey))
+
+  const unknownGroups = requestedGroups.filter(key => !groupsByKey.has(key))
+  const unknownTargets = requestedTargets.filter(key => !targetKeys.has(key))
+  if (unknownGroups.length || unknownTargets.length) {
+    const parts: string[] = []
+    if (unknownGroups.length) parts.push(`no group named ${quotedList(unknownGroups)}`)
+    if (unknownTargets.length) parts.push(`no target named ${quotedList(unknownTargets)}`)
+    throw new MeasurementRunScopeError({
+      message: `The published measurement plan has ${parts.join(', and ')}. Check the spelling against the plan, or publish a plan that includes it.`,
+      unknownGroups,
+      unknownTargets,
+    })
+  }
+
+  const selected = new Set<string>(requestedTargets)
+  for (const key of requestedGroups) {
+    for (const targetKey of groupsByKey.get(key)!.targetKeys) selected.add(targetKey)
+  }
+  const resolvedTargets = [...selected].sort(compareText)
+
+  const usedNodeKeys = new Set(plan.usageEdges
+    .filter(edge => edge.kind !== 'baseline' && selected.has(edge.targetKey))
+    .map(edge => edge.executionNodeKey))
+  const executionNodes = plan.executionNodes.filter(node => usedNodeKeys.has(node.stableKey))
+
+  if (executionNodes.length === 0) {
+    throw new MeasurementRunScopeError({
+      message: `Nothing to measure: ${quotedList(resolvedTargets)} has no queries selected in the published measurement plan.`,
+      emptyTargets: resolvedTargets,
+    })
+  }
+
+  return {
+    scope: measurementRunScopeSchema.parse({ groups: requestedGroups, targets: requestedTargets, queries: [], resolvedTargets }),
+    executionNodes,
+  }
+}
+
+/**
+ * Expand a list of questions into the execution nodes that measure them.
+ *
+ * The unit being sliced here is the question, not the target, so every node the
+ * revision compiled for that text is in — including the one baseline asks for.
+ * Excluding it would drop the very measurement the operator named. A question
+ * the pinned revision does not measure is named back rather than dropped: a
+ * silently smaller run is the failure this prevents.
+ */
+export function resolveMeasurementRunQueryScope(
+  plan: MeasurementPlan,
+  queryTexts: readonly string[],
+): MeasurementRunScopeResolution {
+  const requested = canonicalStrings(queryTexts.map(normalizeMeasurementExecutionQueryText).filter(Boolean))
+  const nodesByText = new Map<string, MeasurementExecutionNode[]>()
+  for (const node of plan.executionNodes) {
+    const key = normalizeMeasurementExecutionQueryText(node.queryText)
+    nodesByText.set(key, [...(nodesByText.get(key) ?? []), node])
+  }
+
+  const unknown = requested.filter(text => !nodesByText.has(text))
+  if (unknown.length) {
+    throw new MeasurementRunScopeError({
+      message: `The published measurement plan does not measure ${quotedList(unknown)}. `
+        + 'Publish a revision that includes it, or run a question the plan already measures.',
+      unknownQueries: unknown,
+    })
+  }
+
+  const executionNodes = plan.executionNodes.filter(node => (
+    requested.includes(normalizeMeasurementExecutionQueryText(node.queryText))
+  ))
+  return {
+    scope: measurementRunScopeSchema.parse({ groups: [], targets: [], queries: requested, resolvedTargets: [] }),
+    executionNodes,
+  }
+}
+
 /** Kept generic while API retirement moves from legacy segments to Target/Group records. */
 export const measurementSegmentRetirementResponseSchema = z.object({
   stableKey: measurementStableKeySchema,
@@ -694,7 +966,12 @@ function ownedBy(host: string, roots: readonly string[]): boolean {
   return roots.some(root => host === root || host.endsWith(`.${root}`))
 }
 
-function normalizeExecutionQueryText(value: string): string {
+/**
+ * The exact text an execution node carries. Exported so a runner can match a
+ * node back to the tracked query row it came from using the compiler's own
+ * rule rather than a lookalike of it.
+ */
+export function normalizeMeasurementExecutionQueryText(value: string): string {
   return value.trim().normalize('NFC').replace(/\s+/gu, ' ')
 }
 
@@ -858,7 +1135,7 @@ export function compileMeasurementPlan(input: MeasurementPlanInput, context: Mea
   context.trackedQueries.forEach((query, index) => {
     const queryId = typeof query.id === 'string' ? query.id.trim() : ''
     const queryText = typeof query.query === 'string' ? query.query : ''
-    const executionQueryText = normalizeExecutionQueryText(queryText)
+    const executionQueryText = normalizeMeasurementExecutionQueryText(queryText)
     if (!queryId) {
       issues.push({ path: ['context', 'trackedQueries', index, 'id'], message: 'Tracked query id is invalid' })
     } else if (knownQueries.has(queryId)) {

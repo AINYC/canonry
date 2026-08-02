@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { validationError } from './errors.js'
+import { measurementExecutionIdentitySchema } from './measurement-plan.js'
 import { modelPointerChangeDisclosureSchema } from './model-pointers.js'
 import { sourceCategorySchema } from './source-categories.js'
 import { surfaceClassSchema } from './surface-class.js'
@@ -275,6 +276,22 @@ export const queryChangeEventSchema = z.object({
 })
 export type QueryChangeEvent = z.infer<typeof queryChangeEventSchema>
 
+/**
+ * A point where the engines or models actually measuring this project
+ * changed, derived from the `measurementExecutionIdentity` checksum stamped
+ * on each plan-aware run at queue time — never inferred from row timestamps.
+ * A comparable series is one execution identity; this is where it broke and
+ * a new one started, the execution-identity sibling of `basketChangeEvent`.
+ * Planless runs carry no identity and never produce one of these.
+ */
+export const executionIdentityChangeEventSchema = z.object({
+  /** When the new identity was first measured — the boundary itself. */
+  at: z.string(),
+  /** The identity now in effect, starting at `at`. */
+  identity: measurementExecutionIdentitySchema,
+})
+export type ExecutionIdentityChangeEvent = z.infer<typeof executionIdentityChangeEventSchema>
+
 export const brandMetricsDtoSchema = z.object({
   window: metricsWindowSchema,
   buckets: z.array(timeBucketSchema),
@@ -289,6 +306,15 @@ export const brandMetricsDtoSchema = z.object({
    * since versioning shipped.
    */
   basketChanges: z.array(basketChangeEventSchema).default([]),
+  /**
+   * Recorded engine/model swaps inside this window, oldest first. A plan run
+   * stamps its execution identity at queue time (see `runDtoSchema`'s field
+   * of the same name); this is the diffed, chart-ready trail of where that
+   * identity actually changed — the "visible break" a comparable-series swap
+   * promises. Empty for a project that has never swapped engines/models
+   * under a plan, and for one with no plan-aware runs at all.
+   */
+  executionIdentityChanges: z.array(executionIdentityChangeEventSchema).default([]),
   /**
    * The query-set version the comparable trend line is measured against —
    * the project's current basket. Null when no basket has been recorded yet,

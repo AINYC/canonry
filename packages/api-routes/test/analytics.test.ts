@@ -2062,3 +2062,89 @@ describe('analytics metrics — model changes we cannot see in the response', ()
     expect(await pointerChangesFor('pointer-empty')).toEqual({})
   })
 })
+
+describe('analytics metrics excludes incomplete plan runs', () => {
+  let app: ReturnType<typeof Fastify>
+  let db: ReturnType<typeof createClient>
+  let tmpDir: string
+
+  beforeAll(async () => {
+    const ctx = buildApp()
+    app = ctx.app
+    db = ctx.db
+    tmpDir = ctx.tmpDir
+    await app.ready()
+  })
+
+  afterAll(async () => {
+    await app.close()
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('keeps a half-measured sweep out of the citation-rate denominator', async () => {
+    const projectId = crypto.randomUUID()
+    const older = '2026-07-01T00:00:00.000Z'
+    const newer = '2026-07-15T00:00:00.000Z'
+    db.insert(projects).values({
+      id: projectId, name: 'incomplete-plan-metrics', displayName: 'Incomplete Plan Metrics',
+      canonicalDomain: 'example.com', ownedDomains: '[]', country: 'US', language: 'en',
+      tags: '[]', labels: '{}', providers: '["openai","gemini"]', locations: '[]', defaultLocation: null,
+      configSource: 'api', configRevision: 1, createdAt: older, updatedAt: older,
+    }).run()
+    const queryId = crypto.randomUUID()
+    db.insert(queries).values({ id: queryId, projectId, query: 'widget pricing', createdAt: older }).run()
+
+    // A fully-executed baseline sweep: both providers answered, both cited.
+    const cleanRunId = crypto.randomUUID()
+    db.insert(runs).values({
+      id: cleanRunId, projectId, kind: 'answer-visibility', status: 'completed', trigger: 'manual',
+      createdAt: older, finishedAt: older,
+    }).run()
+    db.insert(querySnapshots).values([
+      {
+        id: crypto.randomUUID(), runId: cleanRunId, queryId, provider: 'openai',
+        citationState: 'cited', citedDomains: ['example.com'], competitorOverlap: [],
+        location: null, rawResponse: '{}', createdAt: older,
+      },
+      {
+        id: crypto.randomUUID(), runId: cleanRunId, queryId, provider: 'gemini',
+        citationState: 'cited', citedDomains: ['example.com'], competitorOverlap: [],
+        location: null, rawResponse: '{}', createdAt: older,
+      },
+    ]).run()
+
+    // A plan-pinned sweep that only filled one of its two promised slots. The
+    // one row it does have is uncited — folding it in would drag the rate down
+    // over a question the sweep never finished asking.
+    const partialRunId = crypto.randomUUID()
+    db.insert(runs).values({
+      id: partialRunId,
+      projectId,
+      kind: 'answer-visibility',
+      status: 'partial',
+      trigger: 'manual',
+      measurementPlanVersionId: null,
+      measurementManifest: {
+        schemaVersion: 1,
+        expectedSlots: [
+          { executionId: 'e1', queryText: 'widget pricing', provider: 'openai', context: null },
+          { executionId: 'e2', queryText: 'widget pricing', provider: 'gemini', context: null },
+        ],
+      },
+      createdAt: newer,
+      finishedAt: newer,
+    }).run()
+    db.insert(querySnapshots).values({
+      id: crypto.randomUUID(), runId: partialRunId, queryId, provider: 'openai',
+      citationState: 'not-cited', citedDomains: [], competitorOverlap: [],
+      measurementExecutionId: 'e1', location: null, rawResponse: '{}', createdAt: newer,
+    }).run()
+
+    const res = await app.inject({ method: 'GET', url: '/api/v1/projects/incomplete-plan-metrics/analytics/metrics?window=all' })
+    expect(res.statusCode).toBe(200)
+    const body = JSON.parse(res.payload)
+
+    expect(body.overall.total).toBe(2)
+    expect(body.overall.citationRate).toBe(1)
+  })
+})

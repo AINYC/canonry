@@ -2,9 +2,11 @@ import crypto from 'node:crypto'
 import { and, eq, asc, desc, or, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { runs, querySnapshots, queries, projects, parseJsonColumn } from '@ainyc/canonry-db'
-import type { LocationContext } from '@ainyc/canonry-contracts'
+import type { LocationContext, MeasurementExecutionIdentity, MeasurementRunScope } from '@ainyc/canonry-contracts'
 import {
+  AppError as AppErrorClass,
   type AppError,
+  measurementRunScopeIsEmpty,
   RunKinds,
   RunTriggers,
   runTriggerRequestSchema,
@@ -21,7 +23,7 @@ import {
 import { notProbeRun, resolveProject, resolveSnapshotAnswerMentioned, resolveSnapshotMentionState, resolveSnapshotVisibilityState, resolveSnapshotMatchedTerms, writeAuditLog } from './helpers.js'
 import { assertProjectScope } from './auth.js'
 import { gte } from 'drizzle-orm'
-import { queueRunIfProjectIdle } from './run-queue.js'
+import { assertMeasurementRunStampable, hasActiveMeasurementPlan, queueRunIfProjectIdle } from './run-queue.js'
 
 export interface RunRoutesOptions {
   onRunCreated?: (runId: string, projectId: string, providers?: string[], location?: LocationContext | null) => void
@@ -29,6 +31,8 @@ export interface RunRoutesOptions {
   validProviderNames?: string[]
   /** Current provider registry membership. When omitted, activation preflight is disabled. */
   getRunnableProviderNames?: () => readonly string[]
+  /** Provider → the model this instance has it pointed at, for freezing model identity. */
+  getEffectiveProviderModels?: () => Readonly<Record<string, string>>
 }
 
 export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
@@ -72,14 +76,50 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
           .all()
       : []
     if (shouldPreflight) {
+      // A published plan froze its own questions. Deleting a query from the
+      // live library must not retroactively make a published revision
+      // unrunnable — and the scheduler never consulted the live library, so
+      // without this the two paths disagreed about the same project.
+      const measuresAPlan = hasActiveMeasurementPlan(app.db, project.id)
       const preflightError = answerVisibilityPreflightError({
         projectName: project.name,
         projectProviders: project.providers,
         requestedProviders: providers,
         runnableProviderNames: opts.getRunnableProviderNames!(),
-        trackedQueryCount: trackedRows.length,
+        trackedQueryCount: measuresAPlan ? 1 : trackedRows.length,
       })
       if (preflightError) throw preflightError
+    }
+
+    // A scope that names nothing is not a request for everything. An agent
+    // whose filter came back empty would otherwise buy a full sweep by
+    // accident; omitting the field entirely is how you ask for one.
+    if (body.measurementScope !== undefined && measurementRunScopeIsEmpty(body.measurementScope)) {
+      throw validationError(
+        'The measurement scope names nothing to measure. Name at least one group or target, '
+        + 'or leave the scope out entirely to run a full sweep.',
+      )
+    }
+
+    // A published plan sets the location per execution node, so a per-run
+    // location has nothing to apply to. Rejecting says so; accepting would
+    // take the flag and ignore it. `--all-locations` also bypasses the queue
+    // helper entirely, which would leave a plan project with unstamped runs.
+    if (hasActiveMeasurementPlan(app.db, project.id) && (body.location || body.allLocations || body.noLocation)) {
+      throw validationError(
+        'This project measures a published measurement plan, which sets the location for each question itself. '
+        + 'Run it without "location", "allLocations", or "noLocation".',
+      )
+    }
+
+    // Two different subset mechanisms. A plan-scoped run executes the plan's
+    // own execution nodes and never reads the run's query list, so accepting
+    // both would silently drop one of them.
+    if (body.queries?.length && !measurementRunScopeIsEmpty(body.measurementScope)) {
+      throw validationError(
+        'A run can be narrowed by queries or by a measurement scope, not both. '
+        + 'Drop "queries" to measure a slice of the plan, or drop "measurementScope" to measure specific questions.',
+      )
     }
 
     // Validate that body.queries (if provided) is a subset of the project's
@@ -196,6 +236,10 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
       trigger,
       location: locationLabel,
       queries: queriesColumn,
+      providers,
+      runnableProviders: opts.getRunnableProviderNames?.(),
+      providerModels: opts.getEffectiveProviderModels?.(),
+      measurementScope: body.measurementScope ?? null,
     })
 
     if (queueResult.conflict) throw runInProgress(project.name)
@@ -377,6 +421,13 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
     const results = []
     const runnableProviderNames = opts.getRunnableProviderNames?.()
 
+    // Two passes on purpose. This route answers for many projects at once, so
+    // one project's problem must never decide the others' fate or hide what
+    // was already dispatched: every project is checked first, then the ones
+    // that can run are queued, and each project gets its own row in the
+    // response — queued with its run id, or refused with the reason.
+    const eligible: Array<{ project: typeof allProjects[number]; resolvedLocation: LocationContext | undefined }> = []
+
     for (const project of allProjects) {
       if (runnableProviderNames) {
         const trackedQuery = app.db
@@ -390,7 +441,10 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
           projectProviders: project.providers,
           requestedProviders: providers,
           runnableProviderNames,
-          trackedQueryCount: trackedQuery ? 1 : 0,
+          // A project measuring a published plan runs the plan's frozen
+          // questions, not today's library — same rule as the single-project
+          // route, so the two agree.
+          trackedQueryCount: trackedQuery || hasActiveMeasurementPlan(app.db, project.id) ? 1 : 0,
         })
         if (preflightError) {
           results.push({
@@ -415,14 +469,47 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
         }
         resolvedLocation = loc
       }
-      const locationLabel = resolvedLocation?.label ?? null
 
+      eligible.push({ project, resolvedLocation })
+    }
+
+    const dispatchable: typeof eligible = []
+    for (const entry of eligible) {
+      try {
+        assertMeasurementRunStampable(app.db, {
+          projectId: entry.project.id,
+          kind,
+          trigger: 'manual',
+          location: entry.resolvedLocation?.label ?? null,
+          providers,
+          runnableProviders: runnableProviderNames,
+          providerModels: opts.getEffectiveProviderModels?.(),
+        })
+        dispatchable.push(entry)
+      } catch (error) {
+        if (!(error instanceof AppErrorClass)) throw error
+        results.push({
+          projectName: entry.project.name,
+          projectId: entry.project.id,
+          status: 'error',
+          error: error.message,
+          errorCode: error.code,
+        })
+      }
+    }
+
+    for (const { project, resolvedLocation } of dispatchable) {
       const queueResult = queueRunIfProjectIdle(app.db, {
         createdAt: now,
         kind,
         projectId: project.id,
         trigger: 'manual',
-        location: locationLabel,
+        location: resolvedLocation?.label ?? null,
+        // The same list this route dispatches with, so what a run is measured
+        // against is what it was actually asked to do.
+        providers,
+        runnableProviders: runnableProviderNames,
+        providerModels: opts.getEffectiveProviderModels?.(),
       })
 
       if (queueResult.conflict) {
@@ -600,6 +687,8 @@ export function formatRun(row: {
   createdAt: string
   measurementPlanVersionId?: string | null
   measurementManifest?: unknown
+  measurementScope?: MeasurementRunScope | null
+  measurementExecutionIdentity?: MeasurementExecutionIdentity | null
 }) {
   const measurementManifest = row.measurementManifest !== null
     && typeof row.measurementManifest === 'object'
@@ -625,6 +714,8 @@ export function formatRun(row: {
       ? {
           measurementPlanVersionId: row.measurementPlanVersionId ?? null,
           measurementManifest,
+          measurementScope: row.measurementScope ?? null,
+          measurementExecutionIdentity: row.measurementExecutionIdentity ?? null,
         }
       : {}),
     createdAt: row.createdAt,
@@ -677,6 +768,12 @@ function loadRunDetail(app: FastifyInstance, run: typeof runs.$inferSelect) {
       competitorOverlap: querySnapshots.competitorOverlap,
       recommendedCompetitors: querySnapshots.recommendedCompetitors,
       location: querySnapshots.location,
+      // The honesty pair behind `location`: what a plan-aware run asked for,
+      // and whether the provider actually honoured it. Without both, a
+      // caller cannot tell "no location was requested" apart from "one was
+      // requested and ignored" — `location` alone reads the same either way.
+      requestedContext: querySnapshots.requestedContext,
+      supportedContext: querySnapshots.supportedContext,
       rawResponse: querySnapshots.rawResponse,
       createdAt: querySnapshots.createdAt,
     })
@@ -724,6 +821,8 @@ function loadRunDetail(app: FastifyInstance, run: typeof runs.$inferSelect) {
         // an unrecoverable one stays null rather than echoing configuration.
         servedModel: s.servedModel,
         location: s.location,
+        requestedContext: s.requestedContext,
+        supportedContext: s.supportedContext,
         groundingSources: rawParsed.groundingSources,
         searchQueries: rawParsed.searchQueries,
         createdAt: s.createdAt,

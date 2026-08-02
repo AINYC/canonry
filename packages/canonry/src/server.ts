@@ -213,6 +213,21 @@ interface SessionRecord {
   expiresAt: number;
 }
 
+/**
+ * The model each registered provider will actually answer with: whatever this
+ * instance has it configured to, else the adapter's own default. A plan run
+ * freezes this, so a default that moves under a project starts a new
+ * measurement series instead of quietly changing what its rows mean.
+ */
+function effectiveProviderModels(registry: ProviderRegistry): Record<string, string> {
+  const models: Record<string, string> = {};
+  for (const provider of registry.getAll()) {
+    const model = provider.config.model ?? provider.adapter.modelRegistry.defaultModel;
+    if (model) models[provider.adapter.name] = model;
+  }
+  return models;
+}
+
 function parseBooleanEnv(value: string | undefined): boolean | undefined {
   const normalized = value?.trim().toLowerCase();
   if (!normalized) return undefined;
@@ -1179,6 +1194,11 @@ export async function createServer(opts: {
           app.log.error({ runId, err }, "Scheduled job runner failed");
         });
     },
+    // Same source of truth the HTTP routes use, so a scheduled sweep resolves
+    // "all configured providers" exactly as a hand-triggered one does.
+    getRunnableProviderNames: () =>
+      registry.getAll().map((provider) => provider.adapter.name),
+    getEffectiveProviderModels: () => effectiveProviderModels(registry),
     onTrafficSyncRequested: (projectName, sourceId) => {
       // Reuse the same in-process API client Aero uses. The traffic-sync
       // endpoint owns run-row creation, dedupe, rollup writes, and emits
@@ -2328,6 +2348,7 @@ export async function createServer(opts: {
     },
     getRunnableProviderNames: () =>
       registry.getAll().map((provider) => provider.adapter.name),
+    getEffectiveProviderModels: () => effectiveProviderModels(registry),
     onProviderUpdate: (
       providerName: string,
       apiKey: string,
