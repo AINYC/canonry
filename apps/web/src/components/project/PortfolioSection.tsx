@@ -374,10 +374,18 @@ export function PortfolioSection(props: PortfolioSectionProps) {
   })
   const [draft, setDraftState] = useState<PortfolioSetupDraft | null>(initialState.draft)
   const [draftSource, setDraftSource] = useState<'empty' | 'active' | 'local'>(initialState.source)
-  const [stage, setStage] = useState<Stage>(() => initialState.draft ? 1 : 0)
+  // Published plan already in hand at mount goes straight to the report; an
+  // unsaved local draft resumes where it was left; a project with neither is a
+  // genuine first run and starts at Import.
+  const [stage, setStage] = useState<Stage>(() => (
+    initialState.source === 'active' ? 4 : initialState.draft ? 1 : 0
+  ))
   const [sitemapUrl, setSitemapUrl] = useState('')
   const [primaryHost, setPrimaryHost] = useState('')
-  const [primaryPath, setPrimaryPath] = useState('/locations/{slug}')
+  // The example spelling belongs in the field's placeholder, never in its value.
+  // Prefilling it reads as "this is your rule" on a project whose published plan
+  // came from somewhere else entirely.
+  const [primaryPath, setPrimaryPath] = useState('')
   const [aliasHost, setAliasHost] = useState('')
   const [aliasPath, setAliasPath] = useState('/{slug}')
   const [excludedSlugs, setExcludedSlugs] = useState('')
@@ -454,7 +462,11 @@ export function PortfolioSection(props: PortfolioSectionProps) {
     setDraftState(stateFromActivePlan(activePlan.plan))
     setDraftSource('active')
     seededActiveKeyRef.current = nextActiveKey
-    setStage(1)
+    // A project whose plan is already published is not being set up, it is being
+    // read. Land on the report; the setup steps stay one click away for anyone
+    // who came here to change something. Landing on a setup step made a
+    // configured project look unconfigured.
+    setStage(4)
   }, [activePlan, draftSource, isPlanError, isPlanLoading])
 
   useEffect(() => {
