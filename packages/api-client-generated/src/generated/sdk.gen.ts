@@ -2994,6 +2994,8 @@ export const getApiV1ProjectsByNameAdsStatus = <ThrowOnError extends boolean = f
 
 /**
  * Read the connected OpenAI ad account and live review state
+ *
+ * Calls the OpenAI Ads API right now with the stored connection. Because it spends on the operator's ad account rather than returning stored data, it requires a credential granted ads authority (the wildcard key, or one of ads.write / ads.approve / ads.activate) and is refused to a view-only account. A read-only or unrelated-scope key is refused.
  */
 export const getApiV1ProjectsByNameAdsAccount = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameAdsAccountData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameAdsAccountResponses, GetApiV1ProjectsByNameAdsAccountErrors, ThrowOnError>({
@@ -3010,6 +3012,8 @@ export const getApiV1ProjectsByNameAdsAccount = <ThrowOnError extends boolean = 
 
 /**
  * Search OpenAI Ads targetable geographic locations
+ *
+ * Searches the provider geo catalog live. Because it spends on the operator's ad account rather than returning stored data, it requires a credential granted ads authority (the wildcard key, or one of ads.write / ads.approve / ads.activate) and is refused to a view-only account. A read-only or unrelated-scope key is refused.
  */
 export const getApiV1ProjectsByNameAdsGeoSearch = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameAdsGeoSearchData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameAdsGeoSearchResponses, GetApiV1ProjectsByNameAdsGeoSearchErrors, ThrowOnError>({
@@ -3026,6 +3030,8 @@ export const getApiV1ProjectsByNameAdsGeoSearch = <ThrowOnError extends boolean 
 
 /**
  * List OpenAI Ads conversion pixels
+ *
+ * Lists conversion pixels live from the provider, auto-paginating up to 100 pages. Because it spends on the operator's ad account rather than returning stored data, it requires a credential granted ads authority (the wildcard key, or one of ads.write / ads.approve / ads.activate) and is refused to a view-only account. A read-only or unrelated-scope key is refused.
  */
 export const getApiV1ProjectsByNameAdsConversionsPixels = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameAdsConversionsPixelsData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameAdsConversionsPixelsResponses, GetApiV1ProjectsByNameAdsConversionsPixelsErrors, ThrowOnError>({
@@ -3042,6 +3048,8 @@ export const getApiV1ProjectsByNameAdsConversionsPixels = <ThrowOnError extends 
 
 /**
  * List OpenAI Ads conversion event settings
+ *
+ * Lists conversion event settings live from the provider, auto-paginating up to 100 pages. Because it spends on the operator's ad account rather than returning stored data, it requires a credential granted ads authority (the wildcard key, or one of ads.write / ads.approve / ads.activate) and is refused to a view-only account. A read-only or unrelated-scope key is refused.
  */
 export const getApiV1ProjectsByNameAdsConversionsEventSettings = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameAdsConversionsEventSettingsData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameAdsConversionsEventSettingsResponses, GetApiV1ProjectsByNameAdsConversionsEventSettingsErrors, ThrowOnError>({

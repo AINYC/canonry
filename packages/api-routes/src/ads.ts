@@ -2335,7 +2335,18 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
     return statusDto(row)
   })
 
+  /**
+   * The four LIVE planning reads below are not reads of stored data: each one
+   * resolves the operator's advertiser credential and calls the provider on
+   * demand. They are cheaper than live-delivery — one upstream request for the
+   * account and geo reads, up to `OPENAI_ADS_MAX_PAGES` for each conversions
+   * list — but they spend on the same account and disclose the same class of
+   * thing (account identity, conversion configuration), so they carry the same
+   * gate. Same reasoning as live-delivery: refuse before any work happens.
+   */
   app.get<{ Params: { name: string } }>('/projects/:name/ads/account', async (request) => {
+    requireAdminSession(request)
+    requirePaidReadScope(request)
     const project = resolveProject(app.db, request.params.name)
     const { apiKey, reader } = resolveAdsReader(opts, project.name)
     return executeAdsRead('account', () => reader.getAccount(apiKey))
@@ -2345,6 +2356,8 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
     Params: { name: string }
     Querystring: { q?: string; limit?: string | number }
   }>('/projects/:name/ads/geo/search', async (request) => {
+    requireAdminSession(request)
+    requirePaidReadScope(request)
     const project = resolveProject(app.db, request.params.name)
     const parsed = adsGeoSearchQuerySchema.safeParse({
       q: request.query.q,
@@ -2358,6 +2371,8 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
   })
 
   app.get<{ Params: { name: string } }>('/projects/:name/ads/conversions/pixels', async (request) => {
+    requireAdminSession(request)
+    requirePaidReadScope(request)
     const project = resolveProject(app.db, request.params.name)
     const { apiKey, reader } = resolveAdsReader(opts, project.name)
     return executeAdsRead('conversion pixel list', () => reader.listConversionPixels(apiKey))
@@ -2366,6 +2381,8 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
   app.get<{ Params: { name: string } }>(
     '/projects/:name/ads/conversions/event-settings',
     async (request) => {
+      requireAdminSession(request)
+      requirePaidReadScope(request)
       const project = resolveProject(app.db, request.params.name)
       const { apiKey, reader } = resolveAdsReader(opts, project.name)
       return executeAdsRead(

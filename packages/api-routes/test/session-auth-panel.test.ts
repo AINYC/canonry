@@ -30,6 +30,7 @@ import { USER_SESSION_COOKIE_NAME } from '../src/user-session.js'
 const ROOT_KEY = 'cnry_panel_root'
 const READ_KEY = 'cnry_panel_read'
 const NARROW_KEY = 'cnry_panel_narrow'
+const ADS_OPERATOR_KEY = 'cnry_panel_ads_operator'
 const LEGACY_COOKIE = 'canonry_session'
 const LEGACY_SESSION_ID = 'legacy-dashboard-password-session'
 const ADMIN_PASSWORD = 'a-long-enough-admin-password'
@@ -43,6 +44,20 @@ let app: ReturnType<typeof Fastify>
 let projectId: string
 let rootKeyId: string
 let liveDeliveryCalls: number
+let planningReadCalls: number
+
+/**
+ * The other GETs that call the ads provider on the caller's behalf. Cheaper
+ * than live-delivery per call — one upstream request for the account and geo
+ * reads, up to `OPENAI_ADS_MAX_PAGES` for each conversions list — but the same
+ * shape: they resolve the operator's advertiser credential and spend on it.
+ */
+const PAID_PLANNING_READS = [
+  '/api/v1/projects/sample/ads/account',
+  '/api/v1/projects/sample/ads/geo/search?q=San%20Francisco',
+  '/api/v1/projects/sample/ads/conversions/pixels',
+  '/api/v1/projects/sample/ads/conversions/event-settings',
+] as const
 
 function seedKey(name: string, token: string, scopes: string[]): string {
   const id = crypto.randomUUID()
@@ -118,6 +133,7 @@ beforeEach(async () => {
   }).run()
 
   liveDeliveryCalls = 0
+  planningReadCalls = 0
 
   app = Fastify()
   app.register(apiRoutes, {
@@ -149,6 +165,12 @@ beforeEach(async () => {
       listAdGroups: async () => { liveDeliveryCalls++; return [] },
       listAds: async () => { liveDeliveryCalls++; return [] },
       getInsights: async () => { liveDeliveryCalls++; return [] },
+    } as never,
+    adsReader: {
+      getAccount: async () => { planningReadCalls++; return {} },
+      searchGeo: async () => { planningReadCalls++; return { count: 0, query: '', results: [] } },
+      listConversionPixels: async () => { planningReadCalls++; return { pixels: [] } },
+      listConversionEventSettings: async () => { planningReadCalls++; return { eventSettings: [] } },
     } as never,
   })
   await app.ready()
@@ -341,6 +363,61 @@ test('the paid live-delivery read is refused to a key scoped to something unrela
   })
   expect(res.statusCode).toBe(403)
   expect(liveDeliveryCalls).toBe(0)
+})
+
+// ─── the OTHER GETs that spend money ───────────────────────────────────────
+//
+// live-delivery was gated on its own; the four planning reads next to it were
+// not. They are a different shape of the same hole — no gate at all rather
+// than a wrong-shaped one — and every credential below reached the provider
+// through them while being refused by the route one door down.
+
+test('the paid planning reads are refused to a read-only key', async () => {
+  for (const url of PAID_PLANNING_READS) {
+    const res = await app.inject({ method: 'GET', url, headers: withKey(READ_KEY) })
+    expect(res.statusCode).toBe(403)
+  }
+  expect(planningReadCalls).toBe(0)
+})
+
+test('the paid planning reads are refused to a key scoped to something unrelated', async () => {
+  for (const url of PAID_PLANNING_READS) {
+    const res = await app.inject({ method: 'GET', url, headers: withKey(NARROW_KEY) })
+    expect(res.statusCode).toBe(403)
+  }
+  expect(planningReadCalls).toBe(0)
+})
+
+test('the paid planning reads are refused to a view-only account', async () => {
+  await createAccount('owner', ADMIN_PASSWORD, 'admin')
+  await createAccount('watcher', VIEWER_PASSWORD, 'viewer')
+  const viewer = await signIn('watcher', VIEWER_PASSWORD)
+
+  for (const url of PAID_PLANNING_READS) {
+    const res = await app.inject({
+      method: 'GET',
+      url,
+      headers: { cookie: `${USER_SESSION_COOKIE_NAME}=${viewer}` },
+    })
+    expect(res.statusCode).toBe(403)
+  }
+  expect(planningReadCalls).toBe(0)
+})
+
+test('the paid planning reads still serve the credentials that were granted ads authority', async () => {
+  // The gate has to stay open for the key every operator actually holds: the
+  // `canonry init` root key, and the ads-operator key the docs tell you to
+  // mint. Otherwise this closes the hole by breaking onboarding.
+  for (const url of PAID_PLANNING_READS) {
+    expect((await app.inject({ method: 'GET', url, headers: withKey(ROOT_KEY) })).statusCode).toBe(200)
+  }
+  expect(planningReadCalls).toBe(PAID_PLANNING_READS.length)
+
+  seedKey('ads-operator', ADS_OPERATOR_KEY, ['read', 'ads.write', 'ads.activate'])
+  for (const url of PAID_PLANNING_READS) {
+    expect((await app.inject({ method: 'GET', url, headers: withKey(ADS_OPERATOR_KEY) })).statusCode).toBe(200)
+  }
+  expect(planningReadCalls).toBe(PAID_PLANNING_READS.length * 2)
 })
 
 // ─── P2.3 the admin gate ignored what the key could do ─────────────────────

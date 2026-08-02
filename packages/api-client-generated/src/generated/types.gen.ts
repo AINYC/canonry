@@ -13436,6 +13436,10 @@ export type GetApiV1ProjectsByNameAdsAccountErrors = {
      */
     400: ErrorEnvelope;
     /**
+     * The credential was not granted OpenAI Ads paid reads.
+     */
+    403: ErrorEnvelope;
+    /**
      * Project not found.
      */
     404: ErrorEnvelope;
@@ -13483,6 +13487,10 @@ export type GetApiV1ProjectsByNameAdsGeoSearchErrors = {
      */
     400: ErrorEnvelope;
     /**
+     * The credential was not granted OpenAI Ads paid reads.
+     */
+    403: ErrorEnvelope;
+    /**
      * Project not found.
      */
     404: ErrorEnvelope;
@@ -13521,6 +13529,10 @@ export type GetApiV1ProjectsByNameAdsConversionsPixelsErrors = {
      */
     400: ErrorEnvelope;
     /**
+     * The credential was not granted OpenAI Ads paid reads.
+     */
+    403: ErrorEnvelope;
+    /**
      * Project not found.
      */
     404: ErrorEnvelope;
@@ -13558,6 +13570,10 @@ export type GetApiV1ProjectsByNameAdsConversionsEventSettingsErrors = {
      * Ads connection or live reader unavailable.
      */
     400: ErrorEnvelope;
+    /**
+     * The credential was not granted OpenAI Ads paid reads.
+     */
+    403: ErrorEnvelope;
     /**
      * Project not found.
      */
@@ -14678,6 +14694,10 @@ export type GetApiV1ProjectsByNameAdsLiveDeliveryErrors = {
      * Invalid query, or no ads connection for this project.
      */
     400: ErrorEnvelope;
+    /**
+     * The credential was not granted OpenAI Ads paid reads.
+     */
+    403: ErrorEnvelope;
     /**
      * Project not found.
      */
