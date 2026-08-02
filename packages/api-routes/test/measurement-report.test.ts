@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildMeasurementOverview,
   buildMeasurementReport,
   classifyCitedUrl,
   normalizeMeasurementLocation,
+  type MeasurementOverviewInput,
   type MeasurementReportInput,
   type MeasurementTargetInput,
 } from '../src/measurement-report.js'
@@ -411,5 +413,121 @@ describe('report kernel', () => {
     expect(report.groups[0]?.completeness).toMatchObject({ executed: 1, expected: 1, complete: true })
     expect(report.groups[0]?.targetCoverage).toEqual({ numerator: 1, denominator: 200, rate: 1 / 200 })
     expect(report.evidence.filter(row => row.usageEdgeType === 'target')).toHaveLength(200)
+  })
+})
+
+function overviewInput(overrides: Partial<MeasurementOverviewInput> = {}): MeasurementOverviewInput {
+  return { ...baseInput(), scopeTargetIds: ['north', 'harbor'], ...overrides }
+}
+
+describe('scoped overview', () => {
+  it('counts a reused execution slot once however many properties share it', () => {
+    const shared = buildMeasurementOverview(overviewInput())
+    const single = buildMeasurementOverview(overviewInput({ scopeTargetIds: ['north'] }))
+
+    // One execution answered for both properties. Two providers is two slots,
+    // and adding the second property must not make it four.
+    expect(shared.eligibleSlots).toBe(2)
+    expect(shared.answeredSlots).toBe(2)
+    expect(shared.mentionCoverage).toEqual({ numerator: 2, denominator: 2, rate: 1 })
+    expect(single.eligibleSlots).toBe(2)
+    expect(single.mentionCoverage).toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
+  })
+
+  it('takes mention coverage over the answered slots rather than zeroing partial evidence', () => {
+    const overview = buildMeasurementOverview(overviewInput({ observations: [baseInput().observations[0]!] }))
+
+    expect(overview.eligibleSlots).toBe(2)
+    expect(overview.answeredSlots).toBe(1)
+    expect(overview.mentionCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 })
+  })
+
+  it('takes citation coverage over the source-complete slots only', () => {
+    const overview = buildMeasurementOverview(overviewInput(withPartialSources(['observation-gemini'])))
+
+    expect(overview.citationCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 })
+  })
+
+  it('withholds every metric with a reason instead of reporting zero', () => {
+    const unanswered = buildMeasurementOverview(overviewInput({ observations: [] }))
+    for (const metric of [
+      unanswered.mentionCoverage,
+      unanswered.citationCoverage,
+      unanswered.brandPresence,
+      unanswered.propertiesMentioned,
+    ]) {
+      expect(metric).toEqual({ numerator: null, denominator: null, rate: null, reason: 'evidence-incomplete' })
+    }
+
+    const unreached = buildMeasurementOverview(overviewInput({ scopeTargetIds: ['shared-a'] }))
+    expect(unreached.eligibleSlots).toBe(0)
+    expect(unreached.mentionCoverage).toEqual({ numerator: null, denominator: null, rate: null, reason: 'no-population' })
+
+    const aliasless = buildMeasurementOverview(overviewInput({
+      targets: [...targets, { id: 'aliasless', label: 'Aliasless', aliases: [], urls: [] }],
+      usageEdges: [
+        ...baseInput().usageEdges,
+        { id: 'aliasless-edge', type: 'target', executionId: 'exec-shared', targetId: 'aliasless' },
+      ],
+      scopeTargetIds: ['aliasless'],
+    }))
+    expect(aliasless.mentionCoverage).toEqual({ numerator: null, denominator: null, rate: null, reason: 'aliasless' })
+    expect(aliasless.propertiesMentioned).toEqual({ numerator: null, denominator: null, rate: null, reason: 'aliasless' })
+  })
+
+  it('reads brand presence as independent identity presence, not a shared denominator', () => {
+    const overview = buildMeasurementOverview(overviewInput())
+
+    // Both answers name the project and one also names a competitor. Presence is
+    // per identity, so the competitor never subtracts from the project's rate.
+    expect(overview.brandPresence).toEqual({ numerator: 2, denominator: 2, rate: 1 })
+  })
+
+  it('counts the properties mentioned at least once out of the mentionable ones', () => {
+    expect(buildMeasurementOverview(overviewInput()).propertiesMentioned)
+      .toEqual({ numerator: 2, denominator: 2, rate: 1 })
+    expect(buildMeasurementOverview(overviewInput({ scopeTargetIds: ['north'] })).propertiesMentioned)
+      .toEqual({ numerator: 1, denominator: 1, rate: 1 })
+  })
+
+  it('sums one shared denominator of named presence credits', () => {
+    const overview = buildMeasurementOverview(overviewInput({
+      namedIdentities: [
+        { key: 'project', aliases: ['Northstar'] },
+        { key: 'challenger', aliases: ['Challenger'] },
+      ],
+    }))
+
+    // The openai slot credits both identities, so the denominator counts named
+    // presence credits rather than the two slots they were found in.
+    expect(overview.namedShareOfVoice).toEqual({
+      denominator: 3,
+      entries: [
+        { key: 'project', credits: 2, share: 2 / 3 },
+        { key: 'challenger', credits: 1, share: 1 / 3 },
+      ],
+    })
+  })
+
+  it('leaves the named share absent when nothing named was found', () => {
+    expect(buildMeasurementOverview(overviewInput()).namedShareOfVoice).toBeNull()
+    expect(buildMeasurementOverview(overviewInput({
+      namedIdentities: [{ key: 'absent', aliases: ['Absent Brand'] }],
+    })).namedShareOfVoice).toBeNull()
+  })
+
+  it('flags the ambiguous attribution behind a property row', () => {
+    const overview = buildMeasurementOverview(overviewInput({
+      scopeTargetIds: ['shared-a', 'shared-b'],
+      usageEdges: [
+        ...baseInput().usageEdges,
+        { id: 'shared-a-edge', type: 'target', executionId: 'exec-shared', targetId: 'shared-a' },
+        { id: 'shared-b-edge', type: 'target', executionId: 'exec-shared', targetId: 'shared-b' },
+      ],
+      observations: [{ ...baseInput().observations[0]!, citedUrls: ['https://northstar.example/shared/article'] }],
+    }))
+
+    expect(overview.properties.map(row => [row.targetId, row.flags])).toEqual([['shared-a', 1], ['shared-b', 1]])
+    expect(overview.flags).toBe(2)
   })
 })

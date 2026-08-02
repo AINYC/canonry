@@ -4,19 +4,26 @@ import {
   buildMeasurementExecutionIdentity,
   buildMeasurementRunManifestV1,
   canonicalMeasurementExecutionIdentityJson,
+  MEASUREMENT_PLAN_V2_SCHEMA_VERSION,
   MeasurementRunScopeError,
   measurementRunScopeIsEmpty,
+  measurementRunScopeSchema,
+  normalizeMeasurementExecutionQueryText,
   parseStoredMeasurementPlanAnyVersion,
   RunTriggers,
   resolveMeasurementRunQueryScope,
   resolveMeasurementRunScope,
   validationError,
+  type LocationContext,
   type MeasurementExecutionIdentity,
   type MeasurementExecutionNode,
+  type MeasurementExpectedSlotV1,
   type MeasurementPlan,
+  type MeasurementPlanV2,
   type MeasurementRunManifestV1,
   type MeasurementRunScope,
   type MeasurementRunScopeRequest,
+  type MeasurementV2ExecutionNode,
 } from '@ainyc/canonry-contracts'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { measurementPlans, measurementPlanVersions, projects, runs } from '@ainyc/canonry-db'
@@ -143,6 +150,252 @@ function expectedSlotsFor(
   })))
 }
 
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
+/**
+ * A place, reduced to the identity two execution nodes are compared on. Label
+ * casing and stray whitespace are authoring noise; the same city asked about
+ * twice is one provider request, not two.
+ */
+function normalizedLocationIdentity(value: LocationContext | null): string | null {
+  if (!value) return null
+  return [value.country, value.region, value.city, value.label, value.timezone ?? '']
+    .map(part => part.trim().toLocaleLowerCase('en'))
+    .join('\u0000')
+}
+
+/** The engine configuration of one node, lower-cased and blank-stripped for lookup and comparison. */
+function nodeProviderModels(node: MeasurementV2ExecutionNode): Map<string, string> {
+  const declared = new Map<string, string>()
+  for (const [key, value] of Object.entries(node.context.models)) {
+    const provider = key.trim().toLocaleLowerCase('en')
+    if (provider && value.trim()) declared.set(provider, value.trim())
+  }
+  return declared
+}
+
+/**
+ * The dedup identity of §11: one provider request per unique question,
+ * normalized place, and provider/model map.
+ *
+ * A compiled revision is already unique by it, and the runner re-derives it
+ * anyway rather than trusting that. A duplicate node reaching the manifest
+ * would buy a second provider call for a measurement already being made, and
+ * add a slot to the denominator every rate in the revision is taken over.
+ */
+function executionSlotIdentity(
+  node: MeasurementV2ExecutionNode,
+  providers: readonly string[],
+  models: ReadonlyMap<string, string>,
+): string {
+  return crypto.createHash('sha256').update(JSON.stringify([
+    node.queryId,
+    normalizedLocationIdentity(node.context.location),
+    providers.map(provider => [provider, models.get(provider) ?? null]),
+  ])).digest('hex')
+}
+
+interface V2Materialization {
+  expectedSlots: MeasurementExpectedSlotV1[]
+  providers: string[]
+  models: Record<string, string>
+}
+
+/**
+ * Turn frozen execution nodes into the provider work one run will do.
+ *
+ * The unit of work is the node, never the assignment: a node shared by every
+ * Property in a portfolio is one request per engine, and the Targets that
+ * reuse it are usage edges the report reads, not extra calls.
+ *
+ * `instanceModels` fills only what the revision left open. A revision that
+ * pinned no model for an engine still has to record which model answered,
+ * because an inherited default that moves underneath a series has to start a
+ * new one rather than change what stored rows mean.
+ */
+function materializeV2ExecutionNodes(
+  nodes: readonly MeasurementV2ExecutionNode[],
+  instanceModels: Readonly<Record<string, string>>,
+): V2Materialization {
+  const expectedSlots: MeasurementExpectedSlotV1[] = []
+  const providers = new Set<string>()
+  // `null` marks an engine this revision runs on more than one model: the run
+  // identity has one slot per engine, and guessing which model to put in it
+  // would describe a measurement that never happened. The per-slot
+  // `requestedModel` stays exact either way.
+  const models = new Map<string, string | null>()
+  const claimed = new Set<string>()
+
+  for (const node of [...nodes].sort((left, right) => compareText(left.stableKey, right.stableKey))) {
+    const nodeProviders = normalizeProviders(node.context.providers)
+    const declared = nodeProviderModels(node)
+    const resolved = new Map<string, string>()
+    for (const provider of nodeProviders) {
+      const model = declared.get(provider) ?? instanceModels[provider]
+      if (model) resolved.set(provider, model)
+    }
+
+    const identity = executionSlotIdentity(node, nodeProviders, resolved)
+    if (claimed.has(identity)) continue
+    claimed.add(identity)
+
+    for (const provider of nodeProviders) {
+      providers.add(provider)
+      const model = resolved.get(provider) ?? null
+      if (!models.has(provider)) models.set(provider, model)
+      else if (models.get(provider) !== model) models.set(provider, null)
+      expectedSlots.push({
+        executionId: node.stableKey,
+        queryText: node.queryText,
+        provider,
+        context: node.context.location,
+        ...(model ? { requestedModel: model } : {}),
+      })
+    }
+  }
+
+  return {
+    expectedSlots,
+    providers: [...providers].sort(compareText),
+    models: Object.fromEntries([...models].flatMap(([provider, model]) => model ? [[provider, model] as const] : [])),
+  }
+}
+
+/**
+ * The slice a v2 run measures, or null when it measures the whole revision.
+ *
+ * v1's resolvers cannot serve here: they read `usageEdges[].kind`, and a v2
+ * revision has no baseline questions, so every edge belongs to a Target. The
+ * failure vocabulary is deliberately identical, so an operator who names a key
+ * the plan does not have reads the same sentence whichever schema they are on.
+ */
+function sliceForV2(plan: MeasurementPlanV2, params: QueueRunParams): {
+  scope: MeasurementRunScope
+  executionNodes: MeasurementV2ExecutionNode[]
+} | null {
+  if (!measurementRunScopeIsEmpty(params.measurementScope)) {
+    return asScopeValidation(() => resolveV2RunScope(plan, params.measurementScope!))
+  }
+  if (params.queries?.length) {
+    return asScopeValidation(() => resolveV2QueryScope(plan, params.queries!))
+  }
+  return null
+}
+
+function quotedList(values: readonly string[]): string {
+  return values.map(value => `"${value}"`).join(', ')
+}
+
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort(compareText)
+}
+
+function resolveV2RunScope(plan: MeasurementPlanV2, scope: MeasurementRunScopeRequest) {
+  const requestedGroups = sortedUnique(scope.groups ?? [])
+  const requestedTargets = sortedUnique(scope.targets ?? [])
+  const groupsByKey = new Map(plan.groups.map(group => [group.stableKey, group]))
+  const targetKeys = new Set(plan.targets.map(target => target.stableKey))
+
+  const unknownGroups = requestedGroups.filter(key => !groupsByKey.has(key))
+  const unknownTargets = requestedTargets.filter(key => !targetKeys.has(key))
+  if (unknownGroups.length || unknownTargets.length) {
+    const parts: string[] = []
+    if (unknownGroups.length) parts.push(`no group named ${quotedList(unknownGroups)}`)
+    if (unknownTargets.length) parts.push(`no target named ${quotedList(unknownTargets)}`)
+    throw new MeasurementRunScopeError({
+      message: `The published measurement plan has ${parts.join(', and ')}. Check the spelling against the plan, or publish a plan that includes it.`,
+      unknownGroups,
+      unknownTargets,
+    })
+  }
+
+  const selected = new Set<string>(requestedTargets)
+  for (const key of requestedGroups) {
+    for (const targetKey of groupsByKey.get(key)!.targetKeys) selected.add(targetKey)
+  }
+  const resolvedTargets = [...selected].sort(compareText)
+
+  const usedNodeKeys = new Set(plan.usageEdges.filter(edge => selected.has(edge.targetKey)).map(edge => edge.executionNodeKey))
+  const executionNodes = plan.executionNodes.filter(node => usedNodeKeys.has(node.stableKey))
+  if (executionNodes.length === 0) {
+    throw new MeasurementRunScopeError({
+      message: `Nothing to measure: ${quotedList(resolvedTargets)} has no queries selected in the published measurement plan.`,
+      emptyTargets: resolvedTargets,
+    })
+  }
+
+  return {
+    scope: measurementRunScopeSchema.parse({ groups: requestedGroups, targets: requestedTargets, queries: [], resolvedTargets }),
+    executionNodes,
+  }
+}
+
+function resolveV2QueryScope(plan: MeasurementPlanV2, queryTexts: readonly string[]) {
+  const requested = sortedUnique(queryTexts.map(normalizeMeasurementExecutionQueryText).filter(Boolean))
+  const measured = new Set(plan.executionNodes.map(node => normalizeMeasurementExecutionQueryText(node.queryText)))
+  const unknown = requested.filter(text => !measured.has(text))
+  if (unknown.length) {
+    throw new MeasurementRunScopeError({
+      message: `The published measurement plan does not measure ${quotedList(unknown)}. `
+        + 'Publish a revision that includes it, or run a question the plan already measures.',
+      unknownQueries: unknown,
+    })
+  }
+
+  return {
+    scope: measurementRunScopeSchema.parse({ groups: [], targets: [], queries: requested, resolvedTargets: [] }),
+    executionNodes: plan.executionNodes.filter(node => (
+      requested.includes(normalizeMeasurementExecutionQueryText(node.queryText))
+    )),
+  }
+}
+
+/**
+ * Materialize one run against a published v2 revision.
+ *
+ * Everything the run measures comes out of the frozen document — the questions,
+ * the places, and the engines and models each node was published with. The
+ * project row is deliberately not consulted for provider configuration: a v2
+ * revision froze it, and reading today's live settings would let a project
+ * setting change what an immutable revision means.
+ */
+function measurementStampV2(plan: MeasurementPlanV2, versionId: string, params: QueueRunParams): MeasurementStamp {
+  const resolution = sliceForV2(plan, params)
+  const nodes = resolution?.executionNodes ?? plan.executionNodes
+  if (nodes.length === 0) {
+    throw validationError(
+      'The published measurement plan has no execution nodes, so this run would measure nothing. '
+      + 'Publish a revision with at least one property assigned to a question.',
+    )
+  }
+
+  const materialized = materializeV2ExecutionNodes(nodes, params.providerModels ?? {})
+  const requested = normalizeProviders(params.providers ?? [])
+  if (requested.length && requested.join('\u0000') !== materialized.providers.join('\u0000')) {
+    throw validationError(
+      `This measurement plan revision measures with ${materialized.providers.join(', ')}, and this run asked for `
+      + `${requested.join(', ')}. A published revision freezes which engines answer each question, and how many `
+      + 'answers each question expects is the denominator of every rate taken over it. '
+      + 'Run it without a provider list, or publish a revision that names the engines you want.',
+      { planProviders: materialized.providers, requestedProviders: requested },
+    )
+  }
+
+  return {
+    versionId,
+    manifest: buildMeasurementRunManifestV1({ expectedSlots: materialized.expectedSlots }),
+    scope: resolution?.scope ?? null,
+    // Recorded, never refused: a v2 revision pins the models, so this repeats
+    // the revision back rather than describing a choice the run made.
+    identity: buildMeasurementExecutionIdentity(
+      { providers: materialized.providers, models: materialized.models },
+      executionIdentityChecksum({ providers: materialized.providers, models: materialized.models }),
+    ),
+  }
+}
+
 function measurementStamp(tx: DatabaseClient, params: QueueRunParams): MeasurementStamp | null {
   const active = tx.select().from(measurementPlans)
     .where(eq(measurementPlans.projectId, params.projectId)).get()
@@ -162,12 +415,12 @@ function measurementStamp(tx: DatabaseClient, params: QueueRunParams): Measureme
   )).get()
   if (!version) throw new Error(`Measurement plan ${params.projectId} points to missing version ${active.activeVersionId}`)
 
-  // Slice 4 replaces this branch with real v2 materialization. Until then a v2
-  // revision is refused with a domain error rather than reaching the v1 decoder,
-  // which would throw and surface as a 500 on an otherwise valid stored plan.
+  // A v2 revision carries its own provider configuration, so it materializes
+  // from the frozen document alone. v1 keeps the roster-and-project path below,
+  // unchanged: those revisions never froze which engines answer.
   const stored = parseStoredMeasurementPlanAnyVersion(version.canonicalJson)
-  if (stored.schemaVersion !== 1) {
-    throw validationError(`Measurement plan revision ${version.revision} is schema v${stored.schemaVersion}, which this runner cannot execute yet.`)
+  if (stored.schemaVersion === MEASUREMENT_PLAN_V2_SCHEMA_VERSION) {
+    return measurementStampV2(stored, version.id, params)
   }
   const plan: MeasurementPlan = stored
   const providers = providerRoster(tx, params)
@@ -232,19 +485,14 @@ function measurementStamp(tx: DatabaseClient, params: QueueRunParams): Measureme
   }
 }
 
-/** The slice this run measures, or null when it measures the whole plan. */
-function sliceFor(plan: MeasurementPlan, params: QueueRunParams) {
+/**
+ * A slice that names something the pinned revision does not contain is a
+ * caller mistake, not a server fault: answer with the key they typed.
+ */
+function asScopeValidation<T>(resolve: () => T): T {
   try {
-    if (!measurementRunScopeIsEmpty(params.measurementScope)) {
-      return resolveMeasurementRunScope(plan, params.measurementScope!)
-    }
-    if (params.queries?.length) {
-      return resolveMeasurementRunQueryScope(plan, params.queries)
-    }
-    return null
+    return resolve()
   } catch (error) {
-    // A slice that names something the pinned revision does not contain is a
-    // caller mistake, not a server fault: answer with the key they typed.
     if (error instanceof MeasurementRunScopeError) {
       throw validationError(error.message, {
         unknownGroups: error.unknownGroups,
@@ -255,6 +503,17 @@ function sliceFor(plan: MeasurementPlan, params: QueueRunParams) {
     }
     throw error
   }
+}
+
+/** The slice this run measures, or null when it measures the whole plan. */
+function sliceFor(plan: MeasurementPlan, params: QueueRunParams) {
+  if (!measurementRunScopeIsEmpty(params.measurementScope)) {
+    return asScopeValidation(() => resolveMeasurementRunScope(plan, params.measurementScope!))
+  }
+  if (params.queries?.length) {
+    return asScopeValidation(() => resolveMeasurementRunQueryScope(plan, params.queries!))
+  }
+  return null
 }
 
 /**

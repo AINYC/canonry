@@ -248,6 +248,9 @@ export class JobRunner {
     this.registry = registry
   }
 
+
+
+
   recoverStaleRuns(): void {
     const stale = this.db
       .select({ id: runs.id, status: runs.status })
@@ -731,7 +734,12 @@ export class JobRunner {
               queryId: unit.queryId,
               queryText: unit.queryText,
               provider: providerName,
-              model: raw.model,
+              // `model` is what was REQUESTED and `served_model` is what
+              // answered. The manifest froze the request, so it is the
+              // authority here: an adapter that reports its own default rather
+              // than what it was handed would otherwise overwrite the identity
+              // the revision recorded, and nothing would show that it moved.
+              model: unit.requestedModel ?? raw.model,
               servedModel: raw.servedModel ?? null,
               citationState,
               answerMentioned,

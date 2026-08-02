@@ -10,10 +10,15 @@ import type { ApiRoutesOptions } from '../src/index.js'
 const NOW = '2026-08-01T00:00:00.000Z'
 
 /**
- * Slice 1 registers these routes and leaves the bodies to the slices that own
- * each module. Registration is the contract those slices build against, so it
- * is pinned here: a route that quietly fails to mount would surface as a 404
- * only once the handler landed.
+ * Slice 1 registered these routes and left the bodies to the slices that own
+ * each module. Those slices have landed, so nothing here answers 501 any more.
+ *
+ * What the file still pins is what it was written to catch, now stated in both
+ * directions: every path is mounted, so a route that quietly failed to register
+ * cannot hide behind a handler that was never called; and none of them has
+ * regressed to a stub. A route that came back as 501 would mean a slice was
+ * reverted or lost in an integration, which is exactly the failure a squashed
+ * merge makes easy to miss.
  */
 const DRAFT_ROUTES = [
   ['GET', '/measurement-setup'],
@@ -86,7 +91,7 @@ afterEach(async () => {
 })
 
 it.each([...DRAFT_ROUTES, ...DISCOVERY_ROUTES, ...OVERVIEW_ROUTES])(
-  '%s %s is registered and answers 501 until its slice lands',
+  '%s %s is mounted and is not a stub',
   async (method, route) => {
     const { app, tmpDir } = buildApp()
     cleanups.push(() => fs.rmSync(tmpDir, { recursive: true, force: true }))
@@ -97,8 +102,28 @@ it.each([...DRAFT_ROUTES, ...DISCOVERY_ROUTES, ...OVERVIEW_ROUTES])(
       ...(method === 'GET' || method === 'DELETE' ? {} : { payload: {} }),
     })
 
-    expect(response.statusCode, `${method} ${route} returned ${response.statusCode}`).toBe(501)
-    expect(response.json()).toMatchObject({ error: { code: 'NOT_IMPLEMENTED' } })
+    // The project has no draft, no plan and an empty payload, so each route
+    // answers either a real success or a real refusal. Which one is each
+    // slice's own business and is asserted in that slice's tests; what matters
+    // here is only that a handler ran.
+    //
+    // A plain "not 404" cannot say that, because several of these answer 404
+    // correctly when no draft exists. The discriminator is the body: a mounted
+    // route either succeeds or produces a coded domain error, where an unrouted
+    // one produces Fastify's default shape with a bare `error` string.
+    const body = response.json() as { error?: unknown }
+    const code = typeof body.error === 'object' && body.error !== null
+      ? (body.error as { code?: unknown }).code
+      : undefined
+
+    if (response.statusCode >= 400) {
+      expect(
+        typeof code,
+        `${method} ${route} was not mounted (${response.statusCode}: ${JSON.stringify(body).slice(0, 120)})`,
+      ).toBe('string')
+      expect(code, `${method} ${route} is still a stub`).not.toBe('NOT_IMPLEMENTED')
+    }
+    expect(response.statusCode, `${method} ${route} crashed`).toBeLessThan(500)
     await app.close()
   },
 )

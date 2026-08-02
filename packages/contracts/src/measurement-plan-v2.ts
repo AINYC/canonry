@@ -166,7 +166,67 @@ export const measurementPlanV2Schema = z.object({
    * at two revisions compares equal and a revert is expressible.
    */
   compiledChecksum: sha256HexSchema,
-}).strict()
+}).strict().superRefine((plan, ctx) => {
+  // Referential integrity is checked here rather than left to each reader.
+  // A usage edge pointing at a node that is missing, or at one of two nodes
+  // sharing a key, does not fail loudly downstream: the runner dedups by slot
+  // identity and simply skips the loser, so the edge's Target is silently never
+  // measured. A Target that quietly drops out of a sweep is exactly the kind of
+  // wrong number this model exists to prevent, so a revision that could produce
+  // one must not decode at all.
+  const nodeKeys = new Set<string>()
+  for (const node of plan.executionNodes) {
+    if (nodeKeys.has(node.stableKey)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['executionNodes'],
+        message: `Duplicate execution node key "${node.stableKey}"`,
+      })
+    }
+    nodeKeys.add(node.stableKey)
+  }
+
+  const targetKeys = new Set(plan.targets.map(target => target.stableKey))
+
+  plan.usageEdges.forEach((edge, index) => {
+    if (!nodeKeys.has(edge.executionNodeKey)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['usageEdges', index, 'executionNodeKey'],
+        message: `Usage edge references unknown execution node "${edge.executionNodeKey}"`,
+      })
+    }
+    if (!targetKeys.has(edge.targetKey)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['usageEdges', index, 'targetKey'],
+        message: `Usage edge references unknown Target "${edge.targetKey}"`,
+      })
+    }
+  })
+
+  plan.assignments.forEach((assignment, index) => {
+    if (!targetKeys.has(assignment.targetKey)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['assignments', index, 'targetKey'],
+        message: `Assignment references unknown Target "${assignment.targetKey}"`,
+      })
+    }
+  })
+
+  for (const group of plan.groups) {
+    for (const targetKey of group.targetKeys) {
+      if (!targetKeys.has(targetKey)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['groups'],
+          message: `Group "${group.stableKey}" references unknown Target "${targetKey}"`,
+        })
+      }
+    }
+  }
+})
 export type MeasurementPlanV2 = z.output<typeof measurementPlanV2Schema>
 
 function compareText(left: string, right: string): number {

@@ -205,6 +205,48 @@ export interface MeasurementReport {
   }
 }
 
+/** One comparable name and the revision-pinned aliases it is recognized by. */
+export interface MeasurementNamedIdentityInput {
+  key: string
+  aliases: readonly string[]
+}
+
+export interface MeasurementOverviewInput extends MeasurementReportInput {
+  /** The Properties this scope selects. Every metric is taken over slots reachable from them. */
+  scopeTargetIds: readonly string[]
+  /**
+   * Identities for the shared-denominator named share. The caller supplies them
+   * only where the spec allows one, so the kernel never has to know which scope
+   * it is serving.
+   */
+  namedIdentities?: readonly MeasurementNamedIdentityInput[]
+}
+
+export interface MeasurementOverviewPropertyRow {
+  targetId: string
+  mentionCoverage: MeasurementRate
+  citationCoverage: MeasurementRate
+  flags: number
+}
+
+export interface MeasurementNamedShareOfVoice {
+  /** One shared denominator: the sum of named presence credits, not a slot count. */
+  denominator: number
+  entries: Array<{ key: string; credits: number; share: number }>
+}
+
+export interface MeasurementOverview {
+  eligibleSlots: number
+  answeredSlots: number
+  propertiesMentioned: MeasurementRate
+  mentionCoverage: MeasurementRate
+  citationCoverage: MeasurementRate
+  brandPresence: MeasurementRate
+  namedShareOfVoice: MeasurementNamedShareOfVoice | null
+  properties: MeasurementOverviewPropertyRow[]
+  flags: number
+}
+
 interface ParsedSourceUrl {
   normalizedUrl: string
   host: string
@@ -754,6 +796,212 @@ function buildTargetReport(
         mentionCoverage: mentionRate(target, providerSlots, prepared),
       }
     }),
+  }
+}
+
+function unavailable(reason: MeasurementMetricReason): MeasurementRate {
+  return { numerator: null, denominator: null, rate: null, reason }
+}
+
+function scopeEdges(
+  input: MeasurementOverviewInput,
+  targetIds: ReadonlySet<string>,
+): Array<Extract<MeasurementUsageEdgeInput, { type: 'target' }>> {
+  return input.usageEdges.filter((edge): edge is Extract<MeasurementUsageEdgeInput, { type: 'target' }> => (
+    edge.type === 'target' && targetIds.has(edge.targetId)
+  ))
+}
+
+/**
+ * Slots whose answer text actually landed. Every answer-dependent overview rate
+ * is taken over these rather than over the whole expected population: a run that
+ * answered half its slots has measured half, not zero.
+ */
+function answeredSlots(
+  slots: readonly MeasurementExpectedSlotInput[],
+  prepared: PreparedReport,
+): MeasurementExpectedSlotInput[] {
+  return slots.filter(slot => {
+    const answer = prepared.observationsBySlot.get(slot.id)?.input.answerText
+    return answer !== null && answer !== undefined
+  })
+}
+
+function mentionableTargets(
+  input: MeasurementOverviewInput,
+  targetIds: ReadonlySet<string>,
+): MeasurementTargetInput[] {
+  return input.targets.filter(target => (
+    targetIds.has(target.id) && target.aliases.some(alias => words(alias).length > 0)
+  ))
+}
+
+function scopeMentionRate(
+  input: MeasurementOverviewInput,
+  targetIds: ReadonlySet<string>,
+  slots: readonly MeasurementExpectedSlotInput[],
+  answered: readonly MeasurementExpectedSlotInput[],
+  prepared: PreparedReport,
+): MeasurementRate {
+  const mentionable = mentionableTargets(input, targetIds)
+  if (mentionable.length === 0) return unavailable('aliasless')
+  if (slots.length === 0) return unavailable('no-population')
+  if (answered.length === 0) return unavailable('evidence-incomplete')
+
+  const ids = mentionable.map(target => target.id)
+  const numerator = answered.filter(slot => {
+    const mentioned = prepared.observationsBySlot.get(slot.id)?.mentionedTargetIds
+    return mentioned !== undefined && ids.some(id => mentioned.has(id))
+  }).length
+  return { numerator, denominator: answered.length, rate: numerator / answered.length }
+}
+
+function scopeCitationRate(
+  slots: readonly MeasurementExpectedSlotInput[],
+  edges: readonly MeasurementUsageEdgeInput[],
+  prepared: PreparedReport,
+): MeasurementRate {
+  if (slots.length === 0) return unavailable('no-population')
+  const basis = sourceCompleteSlots(slots, prepared)
+  if (basis.length === 0) return unavailable('evidence-incomplete')
+
+  const edgeIds = new Set(edges.map(edge => edge.id))
+  const assignedSlots = new Set(prepared.evidence
+    .filter(row => edgeIds.has(row.usageEdgeId) && row.classification === 'assigned')
+    .map(row => row.expectedSlotId))
+  const numerator = basis.filter(slot => assignedSlots.has(slot.id)).length
+  return { numerator, denominator: basis.length, rate: numerator / basis.length }
+}
+
+function presenceIn(
+  slots: readonly MeasurementExpectedSlotInput[],
+  aliases: readonly string[],
+  prepared: PreparedReport,
+): number {
+  return slots.filter(slot => {
+    const answer = prepared.observationsBySlot.get(slot.id)?.input.answerText
+    return answer !== null && answer !== undefined && containsAnyAlias(answer, aliases)
+  }).length
+}
+
+/**
+ * Independent identity presence, never a share of anything. Nobody else's
+ * appearance moves this number, which is exactly what separates it from the
+ * shared-denominator named share below.
+ */
+function scopeBrandPresence(
+  input: MeasurementOverviewInput,
+  slots: readonly MeasurementExpectedSlotInput[],
+  answered: readonly MeasurementExpectedSlotInput[],
+  prepared: PreparedReport,
+): MeasurementRate {
+  if (slots.length === 0) return unavailable('no-population')
+  if (input.projectBrandNames.every(alias => words(alias).length === 0)) return unavailable('no-project-aliases')
+  if (answered.length === 0) return unavailable('evidence-incomplete')
+
+  const numerator = presenceIn(answered, input.projectBrandNames, prepared)
+  return { numerator, denominator: answered.length, rate: numerator / answered.length }
+}
+
+function scopePropertiesMentioned(
+  input: MeasurementOverviewInput,
+  targetIds: ReadonlySet<string>,
+  slots: readonly MeasurementExpectedSlotInput[],
+  answered: readonly MeasurementExpectedSlotInput[],
+  prepared: PreparedReport,
+): MeasurementRate {
+  const mentionable = mentionableTargets(input, targetIds)
+  if (mentionable.length === 0) return unavailable('aliasless')
+  if (slots.length === 0) return unavailable('no-population')
+  if (answered.length === 0) return unavailable('evidence-incomplete')
+
+  const mentioned = new Set(answered.flatMap(slot => (
+    [...(prepared.observationsBySlot.get(slot.id)?.mentionedTargetIds ?? [])]
+  )))
+  const numerator = mentionable.filter(target => mentioned.has(target.id)).length
+  return { numerator, denominator: mentionable.length, rate: numerator / mentionable.length }
+}
+
+function scopeNamedShareOfVoice(
+  identities: readonly MeasurementNamedIdentityInput[],
+  answered: readonly MeasurementExpectedSlotInput[],
+  prepared: PreparedReport,
+): MeasurementNamedShareOfVoice | null {
+  if (identities.length === 0 || answered.length === 0) return null
+
+  const credited = identities.map(identity => ({
+    key: identity.key,
+    credits: presenceIn(answered, identity.aliases, prepared),
+  }))
+  // One answer may name several identities, so this sums credits rather than
+  // slots. A denominator of zero is no share at all, not a row of zeroes.
+  const denominator = credited.reduce((total, row) => total + row.credits, 0)
+  if (denominator === 0) return null
+  return {
+    denominator,
+    entries: credited.map(row => ({ ...row, share: row.credits / denominator })),
+  }
+}
+
+/**
+ * Cited URLs that tied between this Property and another at equal precedence.
+ * They earn no credit anywhere (§12), so they are surfaced as work for the
+ * operator instead of quietly vanishing from both denominators.
+ */
+function ambiguousFlags(
+  targetId: string,
+  slots: readonly MeasurementExpectedSlotInput[],
+  edges: readonly MeasurementUsageEdgeInput[],
+  prepared: PreparedReport,
+): number {
+  const slotIds = new Set(slots.map(slot => slot.id))
+  const edgeIds = new Set(edges.map(edge => edge.id))
+  const seen = new Set<string>()
+  for (const row of prepared.evidence) {
+    if (row.classification !== 'ambiguous') continue
+    if (!slotIds.has(row.expectedSlotId) || !edgeIds.has(row.usageEdgeId)) continue
+    if (!row.matchedTargetIds.includes(targetId)) continue
+    seen.add(`${row.expectedSlotId} ${row.sourceUrl}`)
+  }
+  return seen.size
+}
+
+/**
+ * Scoped aggregate over one run's evidence.
+ *
+ * The caller narrows `expectedSlots` and `usageEdges` before calling — that is
+ * how the provider, location and question-class filters are applied — so the
+ * kernel only has to reach the unique slots the selected Properties share. Two
+ * Properties reusing one execution contribute one slot, never two.
+ */
+export function buildMeasurementOverview(input: MeasurementOverviewInput): MeasurementOverview {
+  const prepared = prepareReport(input)
+  const targetIds = new Set(input.scopeTargetIds)
+  const edges = scopeEdges(input, targetIds)
+  const slots = slotsForEdges(input.expectedSlots, edges)
+  const answered = answeredSlots(slots, prepared)
+
+  const properties = sortedUnique([...targetIds]).map(targetId => {
+    const ownEdges = scopeEdges(input, new Set([targetId]))
+    const ownSlots = slotsForEdges(input.expectedSlots, ownEdges)
+    return {
+      targetId,
+      mentionCoverage: scopeMentionRate(input, new Set([targetId]), ownSlots, answeredSlots(ownSlots, prepared), prepared),
+      citationCoverage: scopeCitationRate(ownSlots, ownEdges, prepared),
+      flags: ambiguousFlags(targetId, ownSlots, ownEdges, prepared),
+    }
+  })
+
+  return {
+    eligibleSlots: slots.length,
+    answeredSlots: answered.length,
+    propertiesMentioned: scopePropertiesMentioned(input, targetIds, slots, answered, prepared),
+    mentionCoverage: scopeMentionRate(input, targetIds, slots, answered, prepared),
+    citationCoverage: scopeCitationRate(slots, edges, prepared),
+    brandPresence: scopeBrandPresence(input, slots, answered, prepared),
+    namedShareOfVoice: scopeNamedShareOfVoice(input.namedIdentities ?? [], answered, prepared),
+    properties,
+    flags: properties.reduce((total, row) => total + row.flags, 0),
   }
 }
 
