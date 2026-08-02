@@ -59,11 +59,137 @@ export const measurementPlanVersions = sqliteTable('measurement_plan_versions', 
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   revision: integer('revision').notNull(),
   canonicalJson: text('canonical_json').notNull(),
+  /** Document identity: sha256 over the whole stored document, revision included. */
   checksum: text('checksum').notNull(),
+  /** Which decoder reads `canonical_json`. Every row written before v122 is v1. */
+  schemaVersion: integer('schema_version').notNull().default(1),
+  /**
+   * The publish/review guard, and deliberately NOT `checksum`. It is taken over
+   * the compiled document with storage ids, timestamps, revision and itself
+   * excluded, so the same content at two revisions compares equal — which is
+   * what makes a revert expressible at all. Null on every historic v1 row: it
+   * was never computed for them, and backfilling one would claim a review that
+   * never happened.
+   */
+  compiledChecksum: text('compiled_checksum'),
+  publishedBy: text('published_by'),
+  sourceDraftId: text('source_draft_id'),
   createdAt: text('created_at').notNull(),
 }, (table) => [
   uniqueIndex('idx_measurement_plan_versions_project_revision').on(table.projectId, table.revision),
   uniqueIndex('idx_measurement_plan_versions_project_id').on(table.projectId, table.id),
+  // The DDL orders `revision` DESC on both of these: every read of them wants
+  // the newest revision first.
+  index('idx_measurement_plan_versions_project_revision_desc').on(table.projectId, table.revision),
+  index('idx_measurement_plan_versions_project_schema').on(table.projectId, table.schemaVersion, table.revision),
+  // Lookup only, and non-unique on purpose: a unique index here would refuse to
+  // publish content identical to an older revision, which is exactly a revert.
+  index('idx_measurement_plan_versions_compiled_checksum').on(table.projectId, table.compiledChecksum),
+])
+
+/**
+ * At most one server-side authoring draft per project. `etag_version` is a
+ * monotonic counter rather than a content hash: the ETag must change after
+ * every mutation and must not repeat when content returns to a value it already
+ * had, which a hash cannot promise.
+ */
+export const measurementPlanDrafts = sqliteTable('measurement_plan_drafts', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().unique().references(() => projects.id, { onDelete: 'cascade' }),
+  schemaVersion: integer('schema_version').notNull().default(2),
+  /** Null when the draft was started from a planless project. */
+  baseActiveVersionId: text('base_active_version_id'),
+  baseActiveRevision: integer('base_active_revision'),
+  /** Authoring intent only — never compiled nodes, usage edges or query snapshots. */
+  authoringJson: text('authoring_json').notNull(),
+  etagVersion: integer('etag_version').notNull().default(1),
+  createdBy: text('created_by').notNull(),
+  updatedBy: text('updated_by').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+export const measurementQuerySets = sqliteTable('measurement_query_sets', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  description: text('description'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_measurement_query_sets_project_name').on(table.projectId, table.name),
+])
+
+/**
+ * Ordered references only. Deleting a set drops its rows here and no query:
+ * the queries themselves outlive every set and every published snapshot.
+ */
+export const measurementQuerySetItems = sqliteTable('measurement_query_set_items', {
+  id: text('id').primaryKey(),
+  querySetId: text('query_set_id').notNull().references(() => measurementQuerySets.id, { onDelete: 'cascade' }),
+  queryId: text('query_id').notNull().references(() => queries.id, { onDelete: 'cascade' }),
+  position: integer('position').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_measurement_query_set_items_set_query').on(table.querySetId, table.queryId),
+  index('idx_measurement_query_set_items_order').on(table.querySetId, table.position),
+])
+
+/** Authoring asset. Applying one expands concrete project queries; a published plan holds only snapshots. */
+export const measurementQueryTemplates = sqliteTable('measurement_query_templates', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  description: text('description'),
+  pattern: text('pattern').notNull(),
+  variables: text('variables_json', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_measurement_query_templates_project_name').on(table.projectId, table.name),
+])
+
+/**
+ * The inputs a discovery rerun has to reproduce to be called deterministic.
+ * Keyed by the checksum over them so an unchanged sitemap, rule and exclusion
+ * set resolves to the row that already exists instead of proposing the same
+ * Targets a second time.
+ */
+export const measurementDiscoveryConfigs = sqliteTable('measurement_discovery_configs', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  sitemapUrl: text('sitemap_url').notNull(),
+  rule: text('rule_json', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+  exclusions: text('exclusions_json', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  inputChecksum: text('input_checksum').notNull(),
+  /** Same bytes and same rule under a different compiler are a different result. */
+  compilerVersion: text('compiler_version').notNull(),
+  reviewedAt: text('reviewed_at'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_measurement_discovery_configs_input').on(table.projectId, table.inputChecksum),
+  index('idx_measurement_discovery_configs_project').on(table.projectId),
+])
+
+/**
+ * Idempotency receipts for mutating measurement actions. Nothing deletes a row
+ * on the write path, so the expiry index is what the boot-time and periodic
+ * sweep uses to keep the table from growing without bound.
+ */
+export const measurementOperationReceipts = sqliteTable('measurement_operation_receipts', {
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  operation: text('operation').notNull(),
+  idempotencyKey: text('idempotency_key').notNull(),
+  /** Same key with different content is a conflict, not a replay. */
+  requestChecksum: text('request_checksum').notNull(),
+  responseJson: text('response_json').notNull(),
+  statusCode: integer('status_code').notNull(),
+  createdAt: text('created_at').notNull(),
+  expiresAt: text('expires_at').notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.projectId, table.operation, table.idempotencyKey] }),
+  index('idx_measurement_operation_receipts_expires').on(table.expiresAt),
 ])
 
 // Stable identity only. Labels, memberships, aliases and route matchers remain

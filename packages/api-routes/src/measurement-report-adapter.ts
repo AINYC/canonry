@@ -15,7 +15,7 @@ import {
   filterCapturedCitedUrls,
   isVertexGroundingRedirect,
   parseMeasurementRunManifestV1,
-  parseStoredMeasurementPlan,
+  parseStoredMeasurementPlanAnyVersion,
   RunKinds,
   RunStatuses,
   RunTriggers,
@@ -297,7 +297,12 @@ export function buildStoredMeasurementReport(db: DatabaseClient, projectId: stri
     inArray(runs.status, [RunStatuses.completed, RunStatuses.partial]),
     ne(runs.trigger, RunTriggers.probe),
   )).orderBy(desc(runs.createdAt), desc(runs.id)).get()
-  const plan = parseStoredMeasurementPlan(version.canonicalJson)
+  // Slice 5 replaces this branch with the v2 report path. Until then a v2
+  // revision is reported as not-yet-reportable rather than decoded through the
+  // v1 reader, which would throw and surface as a 500.
+  const stored = parseStoredMeasurementPlanAnyVersion(version.canonicalJson)
+  if (stored.schemaVersion !== 1) return { kind: 'no-plan', revision }
+  const plan = stored
   let selectedRun = run
   let manifest: MeasurementRunManifestV1
   let legacy = false

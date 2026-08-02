@@ -2702,6 +2702,128 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)`,
     ],
   },
+  {
+    // Advanced Measurement v2 storage on the existing immutable revisions.
+    // Every column is additive and every existing row is v1, so nothing
+    // published is rewritten.
+    //
+    // `compiled_checksum` is a NEW column beside `checksum`, not a redefinition
+    // of it. `checksum` hashes the whole stored document, revision included, so
+    // reusing it as the publish guard would make identical content at two
+    // revisions hash differently — "identical to the active revision is a no-op"
+    // and revert would both stop working. It is nullable because it was never
+    // computed for a historic v1 row, and inventing one would claim a review
+    // that never happened.
+    version: 122,
+    name: 'measurement-plan-v2-version-columns',
+    statements: [
+      // NOT NULL DEFAULT 1 is the backfill: SQLite writes the default into
+      // every existing row as it adds the column, so each historic revision
+      // ends up explicitly marked v1 without a separate UPDATE pass.
+      `ALTER TABLE measurement_plan_versions ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1`,
+      `ALTER TABLE measurement_plan_versions ADD COLUMN compiled_checksum TEXT`,
+      `ALTER TABLE measurement_plan_versions ADD COLUMN published_by TEXT`,
+      `ALTER TABLE measurement_plan_versions ADD COLUMN source_draft_id TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_measurement_plan_versions_project_revision_desc
+        ON measurement_plan_versions(project_id, revision DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_measurement_plan_versions_project_schema
+        ON measurement_plan_versions(project_id, schema_version, revision DESC)`,
+      // Lookup only, and NOT unique on purpose: a unique index here would
+      // refuse to publish content identical to an older revision, leaving an
+      // operator who changed a setting and changed it back with no way out.
+      `CREATE INDEX IF NOT EXISTS idx_measurement_plan_versions_compiled_checksum
+        ON measurement_plan_versions(project_id, compiled_checksum)`,
+    ],
+  },
+  {
+    // Server-side authoring: one draft per project, the query assets a draft
+    // authors from, the discovery inputs a rerun must reproduce, and the
+    // idempotency receipts every mutating action writes. All new tables, so no
+    // existing row is touched and every install starts with them empty.
+    version: 123,
+    name: 'measurement-authoring-tables',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS measurement_plan_drafts (
+        id                     TEXT PRIMARY KEY,
+        project_id             TEXT NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+        schema_version         INTEGER NOT NULL DEFAULT 2,
+        base_active_version_id TEXT,
+        base_active_revision   INTEGER,
+        authoring_json         TEXT NOT NULL,
+        etag_version           INTEGER NOT NULL DEFAULT 1,
+        created_by             TEXT NOT NULL,
+        updated_by             TEXT NOT NULL,
+        created_at             TEXT NOT NULL,
+        updated_at             TEXT NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS measurement_query_sets (
+        id          TEXT PRIMARY KEY,
+        project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name        TEXT NOT NULL,
+        description TEXT,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_measurement_query_sets_project_name
+        ON measurement_query_sets(project_id, name)`,
+      // ON DELETE CASCADE from the set drops the membership row; the FK to
+      // queries only follows a query that was itself deleted. Deleting a set
+      // never reaches a query.
+      `CREATE TABLE IF NOT EXISTS measurement_query_set_items (
+        id           TEXT PRIMARY KEY,
+        query_set_id TEXT NOT NULL REFERENCES measurement_query_sets(id) ON DELETE CASCADE,
+        query_id     TEXT NOT NULL REFERENCES queries(id) ON DELETE CASCADE,
+        position     INTEGER NOT NULL,
+        created_at   TEXT NOT NULL
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_measurement_query_set_items_set_query
+        ON measurement_query_set_items(query_set_id, query_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_measurement_query_set_items_order
+        ON measurement_query_set_items(query_set_id, position)`,
+      `CREATE TABLE IF NOT EXISTS measurement_query_templates (
+        id             TEXT PRIMARY KEY,
+        project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name           TEXT NOT NULL,
+        description    TEXT,
+        pattern        TEXT NOT NULL,
+        variables_json TEXT NOT NULL DEFAULT '[]',
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_measurement_query_templates_project_name
+        ON measurement_query_templates(project_id, name)`,
+      `CREATE TABLE IF NOT EXISTS measurement_discovery_configs (
+        id               TEXT PRIMARY KEY,
+        project_id       TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        sitemap_url      TEXT NOT NULL,
+        rule_json        TEXT NOT NULL,
+        exclusions_json  TEXT NOT NULL DEFAULT '[]',
+        input_checksum   TEXT NOT NULL,
+        compiler_version TEXT NOT NULL,
+        reviewed_at      TEXT,
+        created_at       TEXT NOT NULL,
+        updated_at       TEXT NOT NULL
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_measurement_discovery_configs_input
+        ON measurement_discovery_configs(project_id, input_checksum)`,
+      `CREATE INDEX IF NOT EXISTS idx_measurement_discovery_configs_project
+        ON measurement_discovery_configs(project_id)`,
+      `CREATE TABLE IF NOT EXISTS measurement_operation_receipts (
+        project_id       TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        operation        TEXT NOT NULL,
+        idempotency_key  TEXT NOT NULL,
+        request_checksum TEXT NOT NULL,
+        response_json    TEXT NOT NULL,
+        status_code      INTEGER NOT NULL,
+        created_at       TEXT NOT NULL,
+        expires_at       TEXT NOT NULL,
+        PRIMARY KEY (project_id, operation, idempotency_key)
+      )`,
+      // Nothing on the write path deletes a receipt, so the sweep needs this.
+      `CREATE INDEX IF NOT EXISTS idx_measurement_operation_receipts_expires
+        ON measurement_operation_receipts(expires_at)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

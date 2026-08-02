@@ -53,6 +53,8 @@ import {
   siteAuditPageSchema,
   trafficSourceDtoSchema,
   userDtoSchema,
+  measurementQuerySetSchema,
+  measurementQueryTemplateSchema,
 } from '@ainyc/canonry-contracts'
 
 /**
@@ -613,6 +615,32 @@ const COVERAGE: Record<string, CoverageEntry> = {
   measurementSegments: {
     kind: 'internal-only',
     reason: 'Stable target/group identity anchor; labels and attribution rules remain in immutable plan JSON.',
+  },
+  measurementPlanDrafts: {
+    kind: 'internal-only',
+    reason: 'Authoring draft storage; the draft API returns the parsed authoring document and an ETag, not this row.',
+  },
+  measurementQuerySets: {
+    kind: 'dto',
+    dto: measurementQuerySetSchema,
+    internal: {},
+  },
+  measurementQuerySetItems: {
+    kind: 'internal-only',
+    reason: 'Ordered membership rows; returned only inside a query-set detail, never as a row of their own.',
+  },
+  measurementQueryTemplates: {
+    kind: 'dto',
+    dto: measurementQueryTemplateSchema,
+    internal: {},
+  },
+  measurementDiscoveryConfigs: {
+    kind: 'internal-only',
+    reason: 'Recorded discovery inputs for determinism; the draft carries the operator-facing copy of them.',
+  },
+  measurementOperationReceipts: {
+    kind: 'internal-only',
+    reason: 'Idempotency receipts. A replay returns the stored response body, never the receipt row.',
   },
   usageCounters: {
     kind: 'internal-only',

@@ -413,8 +413,13 @@ describe('Target aliases and frozen storage', () => {
     const compiled = compile()
     expect(parseStoredMeasurementPlan(compiled)).toEqual(compiled)
     expect(parseStoredMeasurementPlan(canonicalMeasurementPlanJson(compiled))).toEqual(compiled)
+    // v2 is a known version now, so a v1 body wearing its label fails v2
+    // validation instead of reading as an unknown version.
     expect(() => parseStoredMeasurementPlan({ ...compiled, schemaVersion: 2 })).toThrow(
-      'Unsupported stored measurement plan schema version: 2',
+      'Stored measurement plan v2 is invalid',
+    )
+    expect(() => parseStoredMeasurementPlan({ ...compiled, schemaVersion: 3 })).toThrow(
+      'Unsupported stored measurement plan schema version: 3',
     )
     expect(() => parseStoredMeasurementPlan({ schemaVersion: 1, cohorts: [] })).toThrow('Stored measurement plan v1 is invalid')
   })

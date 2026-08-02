@@ -1,5 +1,10 @@
 import { z } from 'zod'
 import { brandKeyFromText } from './brand-matching.js'
+import {
+  MEASUREMENT_PLAN_V2_SCHEMA_VERSION,
+  measurementPlanV2Schema,
+  type MeasurementPlanV2,
+} from './measurement-plan-v2.js'
 import { locationContextSchema, type LocationContext } from './provider.js'
 import { brandLabelFromDomain, hostOf } from './url-normalize.js'
 
@@ -438,8 +443,11 @@ export const measurementPlanV1Schema = z.object({
 export const measurementPlanSchema = measurementPlanV1Schema
 export type MeasurementPlan = z.output<typeof measurementPlanSchema>
 
+/** Every stored revision shape, discriminated by `schemaVersion`. */
+export type StoredMeasurementPlan = MeasurementPlan | MeasurementPlanV2
+
 /** Explicit version dispatch prevents a future compiler from reinterpreting stored v1 rows. */
-export function parseStoredMeasurementPlan(value: unknown): MeasurementPlan {
+export function parseStoredMeasurementPlanAnyVersion(value: unknown): StoredMeasurementPlan {
   if (typeof value === 'string') {
     try {
       value = JSON.parse(value)
@@ -455,9 +463,29 @@ export function parseStoredMeasurementPlan(value: unknown): MeasurementPlan {
       if (!parsed.success) throw new Error('Stored measurement plan v1 is invalid')
       return parsed.data
     }
+    case MEASUREMENT_PLAN_V2_SCHEMA_VERSION: {
+      const parsed = measurementPlanV2Schema.safeParse(value)
+      if (!parsed.success) throw new Error('Stored measurement plan v2 is invalid')
+      return parsed.data
+    }
     default:
       throw new Error(`Unsupported stored measurement plan schema version: ${String(schemaVersion)}`)
   }
+}
+
+/**
+ * v1-only reader. Callers that understand only the frozen v1 shape keep this
+ * signature and get a hard error on a later revision, because handing them a v2
+ * document typed as v1 would leave every field they read undefined at runtime.
+ */
+export function parseStoredMeasurementPlan(value: unknown): MeasurementPlan {
+  const plan = parseStoredMeasurementPlanAnyVersion(value)
+  if (plan.schemaVersion !== MEASUREMENT_PLAN_SCHEMA_VERSION) {
+    throw new Error(
+      `Stored measurement plan revision is schema v${plan.schemaVersion}, which this reader does not understand`,
+    )
+  }
+  return plan
 }
 
 const measurementPlanChecksumSchema = z.string().regex(/^[a-f0-9]{64}$/)
