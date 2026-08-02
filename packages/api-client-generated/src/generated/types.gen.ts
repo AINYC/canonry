@@ -14695,6 +14695,10 @@ export type GetApiV1ProjectsByNameAdsLiveDeliveryErrors = {
      */
     400: ErrorEnvelope;
     /**
+     * The credential was not granted OpenAI Ads paid reads.
+     */
+    403: ErrorEnvelope;
+    /**
      * Project not found.
      */
     404: ErrorEnvelope;

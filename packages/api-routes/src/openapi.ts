@@ -3829,6 +3829,7 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('Live provider state and snapshot delta returned.', 'AdsLiveDeliveryDto'),
       400: errorResponse('Invalid query, or no ads connection for this project.'),
+      403: errorResponse('The credential was not granted OpenAI Ads paid reads.'),
       404: errorResponse('Project not found.'),
       429: errorResponse('Another live read for this project is still running, or the minimum interval since the last provider read has not elapsed. error.details.reason says which.'),
       502: errorResponse('The OpenAI Ads API read failed.'),
