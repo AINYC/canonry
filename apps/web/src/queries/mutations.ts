@@ -20,6 +20,8 @@ import {
   undismissContentTarget,
 } from '../api.js'
 import type { ContentTargetDismissRequest } from '@ainyc/canonry-contracts'
+import { useAccount } from '../contexts/account-context.js'
+import { assertCanWrite } from '../lib/write-guard.js'
 import { createTrackedBatch, trackRun, type TrackedRunSourceAction } from '../lib/run-tracker-store.js'
 import { addToast } from '../lib/toast-store.js'
 import { invalidateQueriesForRunKind } from './run-invalidations.js'
@@ -34,6 +36,20 @@ import { invalidateProjectQueryDomain } from './query-invalidation.js'
 function invalidateProjectAndRunQueries(queryClient: QueryClient) {
   void queryClient.invalidateQueries({ queryKey: getApiV1RunsQueryKey({ client: heyClient }) })
   void queryClient.invalidateQueries({ queryKey: getApiV1ProjectsQueryKey({ client: heyClient }) })
+}
+
+/**
+ * Refuse a view-only account before the request goes out.
+ *
+ * Every hook below runs this first. Wrapping each individual control in a
+ * `WriteButton` is the visible half of the same rule, but a page has dozens of
+ * controls and one will eventually be added without the wrapper. This is where
+ * that mistake becomes a clear refusal instead of a request that travels to the
+ * server and comes back 403.
+ */
+function useWriteGuard(): () => void {
+  const account = useAccount()
+  return () => { assertCanWrite(account) }
 }
 
 function queuedTitleForRun(kind: string) {
@@ -160,8 +176,10 @@ function handleTrackedRunError(error: unknown, options?: {
 }
 
 export function useTriggerRun() {
+  const guardWrite = useWriteGuard()
   const queryClient = useQueryClient()
   return useMutation({
+    onMutate: guardWrite,
     meta: { skipGlobalErrorToast: true },
     mutationFn: ({ projectName, opts }: {
       projectName: string
@@ -188,8 +206,10 @@ export function useTriggerRun() {
 }
 
 export function useTriggerAllRuns() {
+  const guardWrite = useWriteGuard()
   const queryClient = useQueryClient()
   return useMutation({
+    onMutate: guardWrite,
     meta: { skipGlobalErrorToast: true },
     mutationFn: (body?: { providers?: string[] }) => triggerAllRuns(body),
     onSuccess: (results) => {
@@ -206,8 +226,10 @@ export function useTriggerAllRuns() {
 }
 
 export function useTriggerSiteAudit() {
+  const guardWrite = useWriteGuard()
   const queryClient = useQueryClient()
   return useMutation({
+    onMutate: guardWrite,
     meta: { skipGlobalErrorToast: true },
     mutationFn: ({ projectName, body }: {
       projectName: string
@@ -244,8 +266,10 @@ export function useTriggerSiteAudit() {
 }
 
 export function useTriggerGscSync() {
+  const guardWrite = useWriteGuard()
   const queryClient = useQueryClient()
   return useMutation({
+    onMutate: guardWrite,
     meta: { skipGlobalErrorToast: true },
     mutationFn: ({ projectName, opts }: {
       projectName: string
@@ -270,8 +294,10 @@ export function useTriggerGscSync() {
 }
 
 export function useTriggerDiscoverSitemaps() {
+  const guardWrite = useWriteGuard()
   const queryClient = useQueryClient()
   return useMutation({
+    onMutate: guardWrite,
     meta: { skipGlobalErrorToast: true },
     mutationFn: ({ projectName }: {
       projectName: string
@@ -295,8 +321,10 @@ export function useTriggerDiscoverSitemaps() {
 }
 
 export function useTriggerInspectSitemap() {
+  const guardWrite = useWriteGuard()
   const queryClient = useQueryClient()
   return useMutation({
+    onMutate: guardWrite,
     meta: { skipGlobalErrorToast: true },
     mutationFn: ({ projectName, opts }: {
       projectName: string
@@ -347,8 +375,10 @@ export function isProjectDetailQuery(query: { queryKey: readonly unknown[] }): b
 }
 
 export function useAppendQueries() {
+  const guardWrite = useWriteGuard()
   const queryClient = useQueryClient()
   return useMutation({
+    onMutate: guardWrite,
     mutationFn: ({ projectName, queries }: { projectName: string; queries: string[] }) =>
       appendQueries(projectName, queries),
     onSuccess: () => {
@@ -380,8 +410,10 @@ export function useAppendQueries() {
  * the next read.
  */
 export function useDismissContentTarget() {
+  const guardWrite = useWriteGuard()
   const queryClient = useQueryClient()
   return useMutation({
+    onMutate: guardWrite,
     mutationFn: ({ projectName, body }: { projectName: string; body: ContentTargetDismissRequest }) =>
       dismissContentTarget(projectName, body),
     onSuccess: () => {
@@ -395,8 +427,10 @@ export function useDismissContentTarget() {
 
 /** Reverse a content dismissal. Symmetric to `useDismissContentTarget`. */
 export function useUndismissContentTarget() {
+  const guardWrite = useWriteGuard()
   const queryClient = useQueryClient()
   return useMutation({
+    onMutate: guardWrite,
     mutationFn: ({ projectName, targetRef }: { projectName: string; targetRef: string }) =>
       undismissContentTarget(projectName, targetRef),
     onSuccess: () => {

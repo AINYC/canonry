@@ -148,6 +148,14 @@ const nameParameter: OpenApiParameter = {
   schema: stringSchema,
 }
 
+const userNameParameter: OpenApiParameter = {
+  name: 'name',
+  in: 'path',
+  required: true,
+  description: 'Account name. Matched without regard to letter case.',
+  schema: stringSchema,
+}
+
 const measurementPlanRevisionParameter: OpenApiParameter = {
   name: 'revision',
   in: 'path',
@@ -1625,6 +1633,129 @@ const routeCatalog: OpenApiOperation[] = [
       400: errorResponse('Cannot revoke the currently-authenticating key.'),
       403: errorResponse('Missing the keys.write scope.'),
       404: errorResponse('Key not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/auth/session',
+    summary: 'Check whether this install requires a sign-in',
+    description:
+      'Answers two things at once: whether this install has any accounts (`authRequired`), and who is signed in right now (`user`). An install with no accounts always answers `{ authRequired: false, user: null }` and never asks anyone to sign in — that is the historical behavior and it is preserved exactly. Public: the sign-in screen has to be able to ask this before it holds any credential.',
+    tags: ['auth'],
+    auth: false,
+    responses: {
+      200: jsonResponse('Sign-in state returned.', 'AuthSessionDto'),
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/auth/login',
+    summary: 'Sign in with an account name and password',
+    description:
+      'Signs in and sets an HttpOnly, SameSite=Lax session cookie. Every failure — unknown name, wrong password — returns the same message, so the form never reveals which names exist. Repeated failures for one name are paused for a few minutes.',
+    tags: ['auth'],
+    auth: false,
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/LoginRequest' },
+        },
+      },
+    },
+    responses: {
+      200: jsonResponse('Signed in. The session cookie is set on this response.', 'AuthSessionDto'),
+      400: errorResponse('Name or password missing.'),
+      401: errorResponse('Incorrect name or password.'),
+      429: errorResponse('Too many failed attempts for this name.'),
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/auth/logout',
+    summary: 'Sign out',
+    description:
+      'Ends the session on the server and clears the cookie. Always succeeds, including when the session had already expired — the point is that the browser ends up holding nothing.',
+    tags: ['auth'],
+    auth: false,
+    responses: {
+      204: { description: 'Signed out.' },
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/auth/sessions',
+    summary: 'See where you are signed in',
+    description:
+      'Lists the caller\'s OWN live sessions — when each began and when it expires. Never returns the session token or its digest, so this list cannot itself become a way in. An administrator cannot enumerate somebody else\'s sessions from here.',
+    tags: ['auth'],
+    auth: false,
+    responses: {
+      200: rawJsonResponse('Your sessions.', looseObjectSchema),
+      401: errorResponse('Not signed in.'),
+    },
+  },
+  {
+    method: 'delete',
+    path: '/api/v1/auth/sessions',
+    summary: 'End every session on this account',
+    description:
+      'Ends all of the caller\'s sessions, including the one making the request — the answer to "my laptop was stolen". Without it, a leaked cookie could only be ended by deleting the whole account with a root key. Signing out just this browser is `POST /auth/logout`.',
+    tags: ['auth'],
+    auth: false,
+    responses: {
+      204: { description: 'Every session ended.' },
+      401: errorResponse('Not signed in.'),
+      403: errorResponse('The request did not come from the dashboard.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/users',
+    summary: 'List accounts',
+    description:
+      'Returns every account, oldest first, as safe metadata only — name, role, created and last-signed-in timestamps. The stored password digest is never returned. Administrators only.',
+    tags: ['users'],
+    responses: {
+      200: jsonResponse('Accounts returned.', 'UserListDto'),
+      403: errorResponse('View-only accounts cannot list accounts.'),
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/users',
+    summary: 'Create an account',
+    description:
+      'Creates a named account. Creating the FIRST account is what turns sign-in on for the whole install: from that point on the dashboard asks for a name and password, and API keys keep working exactly as before. Requires the `users.write` scope (the default `*` key satisfies it) and, once accounts exist, an administrator.',
+    tags: ['users'],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/CreateUserRequest' },
+        },
+      },
+    },
+    responses: {
+      201: jsonResponse('Account created.', 'UserDto'),
+      400: errorResponse('Invalid name, password, or role.'),
+      403: errorResponse('Not permitted to create accounts.'),
+      409: errorResponse('That name is already taken.'),
+    },
+  },
+  {
+    method: 'delete',
+    path: '/api/v1/users/{name}',
+    summary: 'Delete an account',
+    description:
+      'Deletes the account and ends its sessions immediately. Refuses to delete the last administrator, which would leave an install nobody can administer from the dashboard.',
+    tags: ['users'],
+    parameters: [userNameParameter],
+    responses: {
+      200: rawJsonResponse('Account deleted.', looseObjectSchema),
+      400: errorResponse('This is the only administrator account.'),
+      403: errorResponse('Not permitted to delete accounts.'),
+      404: errorResponse('Account not found.'),
     },
   },
   {

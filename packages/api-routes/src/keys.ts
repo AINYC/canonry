@@ -11,7 +11,7 @@ import {
   type ApiKeyDto,
   type CreatedApiKeyDto,
 } from '@ainyc/canonry-contracts'
-import { hashApiKey, requireScope } from './auth.js'
+import { hashApiKey, requireAdminSession, requireScope } from './auth.js'
 import { auditFromRequest, writeAuditLog } from './helpers.js'
 
 /**
@@ -44,10 +44,13 @@ function toApiKeyDto(row: typeof apiKeys.$inferSelect): ApiKeyDto {
 }
 
 export async function keysRoutes(app: FastifyInstance) {
-  // List keys — ungated (any valid bearer). Returns SAFE metadata only. A
-  // project-scoped key sees only keys scoped to that same project, never
-  // full-instance or sibling-project keys.
+  // List keys — ungated for any valid bearer (a key's own authority is already
+  // described by its scopes), but closed to a view-only account: the list of
+  // keys is who can reach this install, which is an administrator's business.
+  // Returns SAFE metadata only. A project-scoped key sees only keys scoped to
+  // that same project, never full-instance or sibling-project keys.
   app.get('/keys', async (request) => {
+    requireAdminSession(request)
     const scopedProjectId = request.apiKey?.projectId
     const rows = scopedProjectId
       ? app.db
@@ -86,6 +89,7 @@ export async function keysRoutes(app: FastifyInstance) {
   // Create a key — requires the keys.write scope. Mints a `cnry_…` token,
   // stores only its sha256 hash + prefix, and returns the plaintext ONCE.
   app.post('/keys', async (request) => {
+    requireAdminSession(request)
     requireScope(request, KEYS_WRITE_SCOPE)
 
     const parsed = createApiKeyRequestSchema.safeParse(request.body)
@@ -159,6 +163,7 @@ export async function keysRoutes(app: FastifyInstance) {
   // takes effect immediately because `authPlugin` rejects any key whose
   // `revokedAt` is set on every request.
   app.post<{ Params: { id: string } }>('/keys/:id/revoke', async (request) => {
+    requireAdminSession(request)
     requireScope(request, KEYS_WRITE_SCOPE)
     const { id } = request.params
 

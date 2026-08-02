@@ -2,7 +2,18 @@ import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 
-import { ApiError, fetchSession, hasExplicitBrowserApiKey, loginWithPassword, setupDashboardPassword, setOnAuthExpired } from '../../api.js'
+import {
+  ApiError,
+  fetchAccountSession,
+  fetchSession,
+  hasExplicitBrowserApiKey,
+  loginWithPassword,
+  setupDashboardPassword,
+  setOnAuthExpired,
+  signInWithAccount,
+  type ApiAccountSession,
+} from '../../api.js'
+import { AccountProvider, type SignedInAccount } from '../../contexts/account-context.js'
 import { asyncHandler } from '../../lib/async-handler.js'
 import { createQueryClient } from '../../queries/query-client.js'
 import { createAppRouter } from '../../router/router.js'
@@ -11,46 +22,89 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui
 
 const SESSION_RECHECK_MS = 60_000
 
+/**
+ * `account-login` is the named-account sign-in. `setup` and `login` are the
+ * older shared-password screens, which apply only to an install that has no
+ * accounts at all — and which the server refuses once any account exists.
+ */
+type AuthState = 'checking' | 'ready' | 'setup' | 'login' | 'account-login'
+
 export function AuthGate() {
-  const [authState, setAuthState] = useState<'checking' | 'ready' | 'setup' | 'login'>(
+  const [authState, setAuthState] = useState<AuthState>(
     hasExplicitBrowserApiKey() ? 'ready' : 'checking',
   )
+  const [account, setAccount] = useState<SignedInAccount | null>(null)
+  const [accountsInUse, setAccountsInUse] = useState(false)
+  const [name, setName] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [sessionExpired, setSessionExpired] = useState(false)
 
-  // Lazy-initialize router + query client only when needed for rendering
+  // Lazy-initialize router + query client only when needed for rendering.
+  //
+  // Both are rebuilt whenever the person changes. The cache holds whatever the
+  // PREVIOUS account was allowed to read — an administrator's provider settings,
+  // for instance — and a cache that outlives a sign-out hands that straight to
+  // whoever signs in next on the same tab. Keying it to the principal makes the
+  // cache's lifetime the session's lifetime.
   const routerRef = useRef<ReturnType<typeof createAppRouter> | null>(null)
   const queryClientRef = useRef<ReturnType<typeof createQueryClient> | null>(null)
+  const cachedForPrincipalRef = useRef<string | null>(null)
   const getRouter = () => {
-    if (!routerRef.current) {
+    const principalKey = account ? `${account.name}:${account.role}` : 'no-accounts'
+    if (!routerRef.current || cachedForPrincipalRef.current !== principalKey) {
+      queryClientRef.current?.clear()
       const qc = createQueryClient()
       queryClientRef.current = qc
       routerRef.current = createAppRouter(qc)
+      cachedForPrincipalRef.current = principalKey
     }
     return { queryClient: queryClientRef.current!, router: routerRef.current! }
   }
 
-  // Initial session check
+  const applyAccountSession = (session: ApiAccountSession): boolean => {
+    if (!session.authRequired) return false
+    setAccountsInUse(true)
+    setAccount(session.user)
+    setAuthState(session.user ? 'ready' : 'account-login')
+    return true
+  }
+
+  // Initial session check.
+  //
+  // Both questions go out together rather than one after the other: asking the
+  // account-aware one first and only then the older one would put a second
+  // round trip in front of every page load, on an install where the answer to
+  // the first is almost always "no accounts". The account answer WINS when it
+  // says accounts are in use; otherwise the older shared-password answer
+  // decides, exactly as it always did.
   useEffect(() => {
     if (hasExplicitBrowserApiKey()) return
 
     let cancelled = false
-    void fetchSession()
-      .then((session) => {
+    void Promise.allSettled([fetchAccountSession(), fetchSession()])
+      .then(([accountResult, legacyResult]) => {
         if (cancelled) return
+
+        if (accountResult.status === 'fulfilled' && applyAccountSession(accountResult.value)) {
+          return
+        }
+
+        if (legacyResult.status === 'rejected') {
+          const err: unknown = legacyResult.reason
+          setError(err instanceof Error ? err.message : 'Failed to reach the Canonry API')
+          setAuthState('login')
+          return
+        }
+
+        const session = legacyResult.value
         if (session.authenticated) {
           setAuthState('ready')
         } else {
           setAuthState(session.setupRequired ? 'setup' : 'login')
         }
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        setError(err instanceof Error ? err.message : 'Failed to reach the Canonry API')
-        setAuthState('login')
       })
 
     return () => {
@@ -65,11 +119,25 @@ export function AuthGate() {
     if (authState !== 'ready') return
     if (hasExplicitBrowserApiKey()) return
 
-    // Periodic re-check. Only kick on a confirmed `authenticated: false`
-    // response — transient network errors should not silently log the user
-    // out. A real session loss will surface through the apiFetch 401/403
-    // interceptor below the next time any request fires.
+    // Periodic re-check. Only kick on a confirmed signed-out response —
+    // transient network errors should not silently log the user out. A real
+    // session loss will surface through the apiFetch 401 interceptor below the
+    // next time any request fires.
     const interval = setInterval(() => {
+      if (accountsInUse) {
+        fetchAccountSession()
+          .then((session) => {
+            if (session.authRequired && !session.user) {
+              setSessionExpired(true)
+              setAccount(null)
+              setAuthState('account-login')
+            }
+          })
+          .catch(() => {
+            // Leave the user where they are; the next real request will catch it.
+          })
+        return
+      }
       fetchSession()
         .then((session) => {
           if (!session.authenticated) {
@@ -86,14 +154,15 @@ export function AuthGate() {
     // Immediate auth expiry handler (triggered by apiFetch on 401/403)
     setOnAuthExpired(() => {
       setSessionExpired(true)
-      setAuthState('login')
+      setAccount(null)
+      setAuthState(accountsInUse ? 'account-login' : 'login')
     })
 
     return () => {
       clearInterval(interval)
       setOnAuthExpired(null)
     }
-  }, [authState])
+  }, [authState, accountsInUse])
 
   const handleSetup = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -147,12 +216,39 @@ export function AuthGate() {
     }
   }
 
+  const handleAccountSignIn = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!name.trim() || !password) return
+
+    setSubmitting(true)
+    setError(null)
+    try {
+      const session = await signInWithAccount(name.trim(), password)
+      if (!session.user) {
+        setError('Incorrect name or password.')
+        return
+      }
+      setPassword('')
+      setSessionExpired(false)
+      setAccount(session.user)
+      setAuthState('ready')
+    } catch (err) {
+      // The server answers the same way for every failure, so whatever it says
+      // is what the person is shown.
+      setError(err instanceof ApiError ? err.message : 'Incorrect name or password.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   if (authState === 'ready') {
     const { queryClient, router } = getRouter()
     return (
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>
+      <AccountProvider account={account}>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </AccountProvider>
     )
   }
 
@@ -164,6 +260,52 @@ export function AuthGate() {
             <CardContent className="py-8">
               <p className="supporting-copy text-center">Connecting to Canonry…</p>
             </CardContent>
+          ) : authState === 'account-login' ? (
+            <>
+              <CardHeader>
+                <p className="eyebrow eyebrow-soft">Dashboard access</p>
+                <CardTitle>Sign in to Canonry</CardTitle>
+                <CardDescription>
+                  Enter the name and password for your account.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {sessionExpired ? (
+                  <p className="mb-4 rounded-md border border-caution bg-caution-soft px-3 py-2 text-sm text-caution">
+                    You were signed out — please sign in again.
+                  </p>
+                ) : null}
+                <form className="space-y-4" onSubmit={asyncHandler(handleAccountSignIn)}>
+                  <label className="block space-y-1.5" htmlFor="account-name">
+                    <span className="text-xs font-medium text-secondary">Name</span>
+                    <input
+                      autoFocus
+                      id="account-name"
+                      className="w-full rounded-md border border-base bg-bg px-3 py-2 text-sm text-heading outline-none transition focus:border-mono-600"
+                      type="text"
+                      autoComplete="username"
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                    />
+                  </label>
+                  <label className="block space-y-1.5" htmlFor="account-password">
+                    <span className="text-xs font-medium text-secondary">Password</span>
+                    <input
+                      id="account-password"
+                      className="w-full rounded-md border border-base bg-bg px-3 py-2 text-sm text-heading outline-none transition focus:border-mono-600"
+                      type="password"
+                      autoComplete="current-password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                    />
+                  </label>
+                  {error ? <p className="text-sm text-negative-400">{error}</p> : null}
+                  <Button type="submit" disabled={submitting || !name.trim() || !password}>
+                    {submitting ? 'Signing in…' : 'Sign in'}
+                  </Button>
+                </form>
+              </CardContent>
+            </>
           ) : authState === 'setup' ? (
             <>
               <CardHeader>

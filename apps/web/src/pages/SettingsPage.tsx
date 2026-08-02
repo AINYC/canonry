@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
+import { AdminOnly } from '../components/shared/AccessControls.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
 import { ProviderConfigForm } from '../components/settings/ProviderConfigForm.js'
 import { GoogleOAuthConfigForm } from '../components/settings/GoogleOAuthConfigForm.js'
@@ -21,7 +22,20 @@ const defaultHealthSnapshot: HealthSnapshot = {
   workerStatus: { label: 'Worker', state: 'checking', detail: 'Checking service health' },
 }
 
+/**
+ * Settings holds provider credentials, the Google/Bing connections and the API
+ * keys. The server refuses this whole surface to a view-only account; the
+ * wrapper below is so a viewer gets an explanation rather than an empty page.
+ */
 export function SettingsPage() {
+  return (
+    <AdminOnly title="Settings">
+      <SettingsPageBody />
+    </AdminOnly>
+  )
+}
+
+function SettingsPageBody() {
   const contextDashboard = useInitialDashboard()
   const { dashboard } = useDashboard()
   const settings = dashboard?.settings ?? contextDashboard?.dashboard?.settings

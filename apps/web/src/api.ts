@@ -507,7 +507,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
     // rationale. A 403 never means "session expired" (re-login can't fix a
     // missing scope or an upstream provider 403), so it surfaces to the caller.
     // Skip /session/* — a 401 there means "wrong password", not "session expired".
-    if (res.status === 401 && !path.startsWith('/session')) {
+    if (res.status === 401 && !path.startsWith('/session') && !path.startsWith('/auth/')) {
       handleAuthExpired()
     }
     throw new ApiError(message, res.status, code, details)
@@ -913,6 +913,33 @@ export function loginWithPassword(password: string): Promise<ApiSessionState> {
     method: 'POST',
     body: JSON.stringify({ password }),
   })
+}
+
+/**
+ * Whether this install has named accounts, and who is signed in.
+ *
+ * `authRequired: false` is an install with no accounts at all: no sign-in
+ * screen, the dashboard opens straight up. This is asked BEFORE anything else,
+ * because the answer decides which of the two sign-in surfaces even applies.
+ */
+export interface ApiAccountSession {
+  authRequired: boolean
+  user: { name: string; role: 'admin' | 'viewer' } | null
+}
+
+export function fetchAccountSession(): Promise<ApiAccountSession> {
+  return apiFetch('/auth/session')
+}
+
+export function signInWithAccount(name: string, password: string): Promise<ApiAccountSession> {
+  return apiFetch('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ name, password }),
+  })
+}
+
+export function signOutOfAccount(): Promise<void> {
+  return apiFetch('/auth/logout', { method: 'POST' })
 }
 
 // /health is outside /api/v1 — keep on raw fetch.

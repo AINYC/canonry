@@ -305,13 +305,20 @@ export async function measurementPlanRoutes(app: FastifyInstance, opts: Measurem
     return { active: active ? activeDto(active.version) : null }
   })
 
-  app.post<{ Params: { name: string } }>('/projects/:name/measurement-plan/compile-preview', async request => {
+  // Both previews are POSTs only because the plan being asked about is far too
+  // large for a URL. Neither writes a row, so both are marked as reads and a
+  // view-only account can call them — see `readSemantic` in `auth.ts`.
+  app.post<{ Params: { name: string } }>('/projects/:name/measurement-plan/compile-preview', {
+    config: { readSemantic: true },
+  }, async request => {
     requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
     const project = resolveProject(app.db, request.params.name)
     return compileMeasurementPlanPreview(request.body, compileContextForProject(app, project, opts))
   })
 
-  app.post<{ Params: { name: string } }>('/projects/:name/measurement-plan/diff-preview', async request => {
+  app.post<{ Params: { name: string } }>('/projects/:name/measurement-plan/diff-preview', {
+    config: { readSemantic: true },
+  }, async request => {
     requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
     const project = resolveProject(app.db, request.params.name)
     const preview = compileMeasurementPlanPreview(request.body, compileContextForProject(app, project, opts))

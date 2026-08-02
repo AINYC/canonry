@@ -2,14 +2,20 @@ import Fastify from 'fastify'
 
 import type { PlatformEnv } from '@ainyc/canonry-config'
 import { createClient } from '@ainyc/canonry-db'
-import { apiRoutes } from '@ainyc/canonry-api-routes'
+import { apiRoutes, resolveTrustProxy } from '@ainyc/canonry-api-routes'
 
 import { registerHealthRoutes } from './routes/health.js'
 import { registerTelemetryCollectorRoutes } from './routes/telemetry-collector.js'
 
 export function buildApp(env: PlatformEnv) {
+  // A cloud deployment is always behind at least one load balancer, so the
+  // socket's peer is never the caller. Anything keyed on `request.ip` — the
+  // sign-in budget in particular — is meaningless until this says which hops
+  // to believe. See `resolveTrustProxy`.
+  const trustProxy = resolveTrustProxy(process.env.CANONRY_TRUST_PROXY)
   const app = Fastify({
     logger: true,
+    trustProxy,
   })
 
   // Connect to database and register shared API routes
@@ -143,6 +149,7 @@ export function buildApp(env: PlatformEnv) {
       providerSummary.filter(provider => provider.configured).map(provider => provider.name),
     getEffectiveProviderModels: effectiveProviderModels,
     googleStateSecret: env.googleStateSecret,
+    trustProxyConfigured: trustProxy !== false,
   })
 
   registerTelemetryCollectorRoutes(app)

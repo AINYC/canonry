@@ -168,6 +168,9 @@ import type {
   ApiKeyListDto,
   CreateApiKeyRequest,
   CreatedApiKeyDto,
+  CreateUserRequest,
+  UserDto,
+  UserListDto,
   ResultsExportFormat,
 } from '@ainyc/canonry-contracts'
 import {
@@ -235,6 +238,10 @@ import {
   getApiV1KeysSelf,
   postApiV1Keys,
   postApiV1KeysByIdRevoke,
+  // Account management
+  getApiV1Users,
+  postApiV1Users,
+  deleteApiV1UsersByName,
   // Schedules / notifications
   getApiV1ProjectsByNameSchedule,
   putApiV1ProjectsByNameSchedule,
@@ -1296,6 +1303,22 @@ export class ApiClient {
   async revokeApiKey(id: string): Promise<ApiKeyDto> {
     return this.invoke<ApiKeyDto>(() =>
       postApiV1KeysByIdRevoke({ client: this.heyClient, path: { id } }),
+    )
+  }
+
+  // ── Account management ──────────────────────────────────────────────────
+
+  async listUsers(): Promise<UserListDto> {
+    return this.invoke<UserListDto>(() => getApiV1Users({ client: this.heyClient }))
+  }
+
+  async createUser(body: CreateUserRequest): Promise<UserDto> {
+    return this.invoke<UserDto>(() => postApiV1Users({ client: this.heyClient, body }))
+  }
+
+  async deleteUser(name: string): Promise<{ deleted: boolean; name: string }> {
+    return this.invoke<{ deleted: boolean; name: string }>(() =>
+      deleteApiV1UsersByName({ client: this.heyClient, path: { name } }),
     )
   }
 

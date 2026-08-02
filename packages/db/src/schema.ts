@@ -284,6 +284,52 @@ export const apiKeys = sqliteTable('api_keys', {
   index('idx_api_keys_project').on(table.projectId),
 ])
 
+/**
+ * Named sign-in accounts.
+ *
+ * An install with no rows here is an install that never asks anyone to sign in
+ * — that is the historical behavior and it is preserved exactly. The first row
+ * inserted turns sign-in on for the whole install.
+ *
+ * `password_hash` holds a salted scrypt digest in a self-describing format (see
+ * `hashUserPassword`). The plaintext is never stored, never logged, and never
+ * leaves the request that carried it.
+ */
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  /** Display form, as typed at creation. */
+  name: text('name').notNull(),
+  /** Lower-cased `name`. Unique, so "Sam" and "sam" cannot both exist. */
+  nameKey: text('name_key').notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  role: text('role').$type<'admin' | 'viewer'>().notNull(),
+  createdAt: text('created_at').notNull(),
+  lastLoginAt: text('last_login_at'),
+})
+
+/**
+ * Live sign-in sessions. One row per browser that signed in, so signing out (or
+ * deleting the account) ends the session server-side rather than merely asking
+ * the browser to forget it.
+ *
+ * The key is the SHA-256 of the cookie's token, never the token. A session
+ * cookie is a bearer credential: stored verbatim, anyone who reads this table —
+ * a copied database file, a stray backup, a support export — is holding a live
+ * sign-in for as long as it has left. Storing the digest makes the table a
+ * record that a session exists rather than a way to become that session. Plain
+ * SHA-256 is right here (unlike a password) because the token is 256 bits of
+ * randomness, so there is nothing to guess.
+ */
+export const userSessions = sqliteTable('user_sessions', {
+  tokenHash: text('token_hash').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: text('created_at').notNull(),
+  expiresAt: text('expires_at').notNull(),
+}, (table) => [
+  index('idx_user_sessions_user').on(table.userId),
+  index('idx_user_sessions_expires').on(table.expiresAt),
+])
+
 export const schedules = sqliteTable('schedules', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
