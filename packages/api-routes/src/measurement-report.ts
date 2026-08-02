@@ -135,6 +135,13 @@ export type MeasurementRate =
 export interface MeasurementCompleteness {
   executed: number
   expected: number
+  /**
+   * Executed observations whose citation capture is complete. This is the exact
+   * denominator basis of every source-dependent rate, so a reader can always see
+   * how many of the executed observations a coverage rate was computed over.
+   * Equal to `executed` when `sourceComplete` is true.
+   */
+  sourceCompleteObservations: number
   complete: boolean
   sourceComplete: boolean
   answerComplete: boolean
@@ -555,13 +562,29 @@ function completeness(
     return observation ? [observation] : []
   })
   const complete = observations.length === slots.length
+  const sourceCompleteObservations = observations.filter(observation => observation.sourceComplete).length
   return {
     executed: observations.length,
     expected: slots.length,
+    sourceCompleteObservations,
     complete,
-    sourceComplete: complete && observations.every(observation => observation.sourceComplete),
+    sourceComplete: complete && sourceCompleteObservations === observations.length,
     answerComplete: complete && observations.every(observation => observation.input.answerText !== null),
   }
+}
+
+/**
+ * Cited URLs come from live web sources, so a fraction of them never resolves and
+ * some observations land with partial citation capture. Those rows are not zeros
+ * and they are not grounds to refuse the whole population: they simply leave the
+ * denominator. Every source-dependent rate is computed over exactly this basis,
+ * and `MeasurementCompleteness.sourceCompleteObservations` reports its size.
+ */
+function sourceCompleteSlots(
+  slots: readonly MeasurementExpectedSlotInput[],
+  prepared: PreparedReport,
+): MeasurementExpectedSlotInput[] {
+  return slots.filter(slot => prepared.observationsBySlot.get(slot.id)?.sourceComplete === true)
 }
 
 function coverageRate(
@@ -570,15 +593,18 @@ function coverageRate(
   prepared: PreparedReport,
 ): MeasurementRate {
   const status = completeness(slots, prepared)
+  if (slots.length === 0) return { numerator: null, denominator: null, rate: null, reason: 'no-population' }
+  if (!status.complete) return { numerator: null, denominator: null, rate: null, reason: 'incomplete' }
+
+  const basis = sourceCompleteSlots(slots, prepared)
+  if (basis.length === 0) return { numerator: null, denominator: null, rate: null, reason: 'evidence-incomplete' }
+
   const edgeIds = new Set(edges.map(edge => edge.id))
   const assignedSlots = new Set(prepared.evidence
     .filter(row => edgeIds.has(row.usageEdgeId) && row.classification === 'assigned')
     .map(row => row.expectedSlotId))
-  const numerator = slots.filter(slot => assignedSlots.has(slot.id)).length
-  if (slots.length === 0) return { numerator: null, denominator: null, rate: null, reason: 'no-population' }
-  if (!status.complete) return { numerator: null, denominator: null, rate: null, reason: 'incomplete' }
-  if (!status.sourceComplete) return { numerator: null, denominator: null, rate: null, reason: 'evidence-incomplete' }
-  return { numerator, denominator: slots.length, rate: numerator / slots.length }
+  const numerator = basis.filter(slot => assignedSlots.has(slot.id)).length
+  return { numerator, denominator: basis.length, rate: numerator / basis.length }
 }
 
 function targetCoverageRate(
@@ -588,15 +614,20 @@ function targetCoverageRate(
   prepared: PreparedReport,
 ): MeasurementRate {
   const status = completeness(slots, prepared)
-  const edgeIds = new Set(edges.map(edge => edge.id))
-  const citedTargets = new Set(prepared.evidence
-    .filter(row => edgeIds.has(row.usageEdgeId) && row.classification === 'assigned')
-    .flatMap(row => row.matchedTargetIds))
   const denominator = sortedUnique(targetIds).length
-  const numerator = sortedUnique(targetIds).filter(id => citedTargets.has(id)).length
   if (denominator === 0 || slots.length === 0) return { numerator: null, denominator: null, rate: null, reason: 'no-population' }
   if (!status.complete) return { numerator: null, denominator: null, rate: null, reason: 'incomplete' }
-  if (!status.sourceComplete) return { numerator: null, denominator: null, rate: null, reason: 'evidence-incomplete' }
+
+  const basis = new Set(sourceCompleteSlots(slots, prepared).map(slot => slot.id))
+  if (basis.size === 0) return { numerator: null, denominator: null, rate: null, reason: 'evidence-incomplete' }
+
+  const edgeIds = new Set(edges.map(edge => edge.id))
+  // A target cited only by a partially captured observation cannot count here: its
+  // evidence sits outside the basis the rate is reported over.
+  const citedTargets = new Set(prepared.evidence
+    .filter(row => edgeIds.has(row.usageEdgeId) && row.classification === 'assigned' && basis.has(row.expectedSlotId))
+    .flatMap(row => row.matchedTargetIds))
+  const numerator = sortedUnique(targetIds).filter(id => citedTargets.has(id)).length
   return { numerator, denominator, rate: numerator / denominator }
 }
 

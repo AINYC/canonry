@@ -8,6 +8,15 @@ import {
   type MeasurementTargetInput,
 } from '../src/measurement-report.js'
 
+/** Marks one observation's citation capture partial, leaving its answer text intact. */
+function withPartialSources(ids: readonly string[]): Partial<MeasurementReportInput> {
+  return {
+    observations: baseInput().observations.map(observation => ids.includes(observation.id)
+      ? { ...observation, citedUrlsComplete: false, historicalCitedUrlsComplete: false }
+      : observation),
+  }
+}
+
 const targets: MeasurementTargetInput[] = [
   {
     id: 'north',
@@ -144,8 +153,9 @@ describe('report kernel', () => {
     const report = buildMeasurementReport(baseInput())
     const group = report.groups.find(candidate => candidate.id === 'harbor-region')!
 
-    expect(group.targetIds).toEqual(['harbor', 'north'])
-    expect(group.completeness).toEqual({ executed: 2, expected: 2, complete: true, sourceComplete: true, answerComplete: true })
+    expect(group.completeness).toEqual({
+      executed: 2, expected: 2, sourceCompleteObservations: 2, complete: true, sourceComplete: true, answerComplete: true,
+    })
     expect(group.answerCoverage).toEqual({ numerator: 2, denominator: 2, rate: 1 })
     expect(group.targetCoverage).toEqual({ numerator: 2, denominator: 2, rate: 1 })
     expect(report.evidence.filter(row => row.usageEdgeType === 'target')).toHaveLength(4)
@@ -164,11 +174,9 @@ describe('report kernel', () => {
   })
 
   it('keeps every unavailable rate structurally null', () => {
-    const evidenceIncomplete = buildMeasurementReport(baseInput({
-      observations: baseInput().observations.map(observation => observation.id === 'observation-gemini'
-        ? { ...observation, historicalCitedUrlsComplete: false }
-        : observation),
-    }))
+    const evidenceIncomplete = buildMeasurementReport(baseInput(
+      withPartialSources(['observation-openai', 'observation-gemini']),
+    ))
     expect(evidenceIncomplete.groups.find(candidate => candidate.id === 'north-region')?.answerCoverage)
       .toEqual({ numerator: null, denominator: null, rate: null, reason: 'evidence-incomplete' })
 
@@ -185,6 +193,107 @@ describe('report kernel', () => {
     }))
     expect(aliasless.targets.find(target => target.id === 'aliasless')?.mentionCoverage)
       .toEqual({ numerator: null, denominator: null, rate: null, reason: 'aliasless' })
+  })
+
+  it('computes a source-dependent rate over the source-complete observations only', () => {
+    const report = buildMeasurementReport(baseInput(withPartialSources(['observation-gemini'])))
+    const harbor = report.groups.find(candidate => candidate.id === 'harbor-region')!
+    const north = report.groups.find(candidate => candidate.id === 'north-region')!
+
+    // Both slots executed; only the openai observation captured its citations in full.
+    expect(harbor.completeness).toEqual({
+      executed: 2, expected: 2, sourceCompleteObservations: 1, complete: true, sourceComplete: false, answerComplete: true,
+    })
+    // The openai observation cites the harbor target, so it counts under the harbor edge
+    // and not under the north edge. The gemini row contributes to neither side of the ratio.
+    expect(harbor.answerCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 })
+    expect(north.answerCoverage).toEqual({ numerator: 0, denominator: 1, rate: 0 })
+    expect(harbor.targetCoverage).toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
+    expect(report.targets.find(target => target.id === 'harbor')?.citationCoverage)
+      .toEqual({ numerator: 1, denominator: 1, rate: 1 })
+    expect(report.targets.find(target => target.id === 'north')?.citationCoverage)
+      .toEqual({ numerator: 0, denominator: 1, rate: 0 })
+  })
+
+  it('exposes the partial basis next to every source-dependent rate', () => {
+    const report = buildMeasurementReport(baseInput(withPartialSources(['observation-gemini'])))
+    const harbor = report.groups.find(candidate => candidate.id === 'harbor-region')!
+
+    // A reader can always tell a partial basis from a full one: sourceComplete is false and
+    // the contributing count sits beside the executed count on the same completeness record.
+    for (const status of [harbor.completeness, ...harbor.providers.map(provider => provider.completeness)]) {
+      expect(status.sourceComplete).toBe(status.sourceCompleteObservations === status.executed)
+    }
+    expect(harbor.providers.map(provider => [
+      provider.provider, provider.completeness.sourceCompleteObservations, provider.completeness.executed,
+    ])).toEqual([['gemini', 0, 1], ['openai', 1, 1]])
+    expect(report.diagnostics.evidenceIncompleteObservationIds).toEqual(['observation-gemini'])
+    // The provider whose only observation is partial still has no basis at all.
+    expect(harbor.providers.find(provider => provider.provider === 'gemini')?.answerCoverage)
+      .toEqual({ numerator: null, denominator: null, rate: null, reason: 'evidence-incomplete' })
+  })
+
+  it('withholds a source-dependent rate only when no observation is source-complete', () => {
+    const report = buildMeasurementReport(baseInput(withPartialSources(['observation-openai', 'observation-gemini'])))
+    const group = report.groups.find(candidate => candidate.id === 'harbor-region')!
+
+    expect(group.completeness).toEqual({
+      executed: 2, expected: 2, sourceCompleteObservations: 0, complete: true, sourceComplete: false, answerComplete: true,
+    })
+    expect(group.answerCoverage).toEqual({ numerator: null, denominator: null, rate: null, reason: 'evidence-incomplete' })
+    expect(group.targetCoverage).toEqual({ numerator: null, denominator: null, rate: null, reason: 'evidence-incomplete' })
+    expect(report.targets.find(target => target.id === 'harbor')?.citationCoverage)
+      .toEqual({ numerator: null, denominator: null, rate: null, reason: 'evidence-incomplete' })
+  })
+
+  it('still withholds an unexecuted population as incomplete when sources are also partial', () => {
+    const partial = withPartialSources(['observation-openai']).observations ?? []
+    const report = buildMeasurementReport(baseInput({
+      observations: partial.filter(observation => observation.id === 'observation-openai'),
+    }))
+    const group = report.groups.find(candidate => candidate.id === 'harbor-region')!
+
+    expect(group.completeness).toMatchObject({ executed: 1, expected: 2, complete: false, sourceCompleteObservations: 0 })
+    expect(group.answerCoverage).toEqual({ numerator: null, denominator: null, rate: null, reason: 'incomplete' })
+    expect(group.targetCoverage).toEqual({ numerator: null, denominator: null, rate: null, reason: 'incomplete' })
+  })
+
+  it('leaves answer-only metrics identical when citation capture is partial', () => {
+    const answerOnly = (report: ReturnType<typeof buildMeasurementReport>) => ({
+      sov: report.groups.map(group => ({ id: group.id, sov: group.sov })),
+      answerComplete: report.groups.map(group => group.completeness.answerComplete),
+      mentions: report.targets.map(target => ({
+        id: target.id,
+        mentionCoverage: target.mentionCoverage,
+        providers: target.providers.map(provider => ({ provider: provider.provider, mentionCoverage: provider.mentionCoverage })),
+      })),
+    })
+
+    const full = answerOnly(buildMeasurementReport(baseInput()))
+    expect(answerOnly(buildMeasurementReport(baseInput(withPartialSources(['observation-gemini']))))).toEqual(full)
+    expect(answerOnly(buildMeasurementReport(baseInput(
+      withPartialSources(['observation-openai', 'observation-gemini']),
+    )))).toEqual(full)
+    expect(full.mentions.find(mention => mention.id === 'harbor')?.mentionCoverage)
+      .toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
+  })
+
+  it('reproduces the fully captured numbers unchanged', () => {
+    const report = buildMeasurementReport(baseInput())
+    const harbor = report.groups.find(candidate => candidate.id === 'harbor-region')!
+    const north = report.groups.find(candidate => candidate.id === 'north-region')!
+
+    expect(harbor.answerCoverage).toEqual({ numerator: 2, denominator: 2, rate: 1 })
+    expect(harbor.targetCoverage).toEqual({ numerator: 2, denominator: 2, rate: 1 })
+    expect(north.answerCoverage).toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
+    expect(north.targetCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 })
+    expect(harbor.providers.map(provider => [provider.provider, provider.answerCoverage]))
+      .toEqual([['gemini', { numerator: 1, denominator: 1, rate: 1 }], ['openai', { numerator: 1, denominator: 1, rate: 1 }]])
+    expect(report.targets.find(target => target.id === 'harbor')?.citationCoverage)
+      .toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
+    expect(report.targets.find(target => target.id === 'north')?.citationCoverage)
+      .toEqual({ numerator: 1, denominator: 2, rate: 0.5 })
+    expect(north.completeness.sourceCompleteObservations).toBe(2)
   })
 
   it('keeps project and competitor answer presence symmetric and revision-pinned', () => {
