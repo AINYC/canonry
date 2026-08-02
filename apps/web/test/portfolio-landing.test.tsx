@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, afterEach } from 'vitest'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { PortfolioSection } from '../src/components/project/PortfolioSection'
 
 // A project whose plan is published is being READ, not set up. Landing it on a
@@ -18,6 +18,10 @@ const plan = {
   groups: [],
   targetQuerySelections: [],
 }
+
+// Without explicit cleanup a later test reads an earlier test's DOM; this
+// suite's config does not clean up on its own.
+afterEach(cleanup)
 
 const noop = async () => { throw new Error('not called in this test') }
 

@@ -66,6 +66,8 @@ export type PortfolioSectionProps = {
 const stages = ['Import', 'Targets', 'Queries', 'Review & publish', 'Report'] as const
 const memoryStorage = new Map<string, string>()
 const TARGET_PAGE_SIZE = 50
+const LIST_PAGE_SIZE = 50
+const GROUP_BUTTON_LIMIT = 8
 const PROJECT_DEFAULT_CONTEXT = '__project_default__'
 const NO_LOCATION_CONTEXT = '__no_location__'
 
@@ -87,6 +89,21 @@ function readStoredDraft(projectName: string): PortfolioSetupDraft | null {
     } catch {
       return null
     }
+  }
+}
+
+/**
+ * Once a plan is published the local draft is spent. Leaving it behind made a
+ * reload resume setup on a project that was already configured, which is the
+ * same "configured project looks unconfigured" failure the landing fix removed.
+ */
+function clearStoredDraft(projectName: string): void {
+  const key = storageKey(projectName)
+  memoryStorage.delete(key)
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // The in-memory copy is already gone, which is what the reload path reads.
   }
 }
 
@@ -155,7 +172,11 @@ function rateLabel(
   if (!completeness.complete) {
     return `Incomplete: ${completeness.executed}/${completeness.expected}`
   }
-  if (rate.rate !== null) return `${Math.round(rate.rate * 100)}%`
+  // A bare percentage hides the basis it stands on: at portfolio scale one
+  // citation out of two hundred queries and one out of two both read as "1%"
+  // and "50%" with equal confidence. The count is the number a reader can act
+  // on, so it leads.
+  if (rate.rate !== null) return `${rate.numerator} of ${rate.denominator} (${Math.round(rate.rate * 100)}%)`
   if (rate.reason === 'incomplete' || rate.reason === 'evidence-incomplete') {
     return `Incomplete: ${completeness.executed}/${completeness.expected}`
   }
@@ -166,11 +187,16 @@ function rateLabel(
 function completenessLabel(
   completeness: MeasurementReportResponse['targets'][number]['completeness'],
   hasStoredResult = true,
+  bridged = false,
 ): string {
   if (!hasStoredResult) return 'Not measured'
-  return completeness.complete
-    ? `${completeness.executed}/${completeness.expected}`
-    : `Incomplete: ${completeness.executed}/${completeness.expected}`
+  if (!completeness.complete) return `Incomplete: ${completeness.executed}/${completeness.expected}`
+  // Bridged rows were captured before this plan existed and joined to it by
+  // (query text, provider, location). Counting them as a fresh measurement
+  // presents history as though it were just measured.
+  return bridged
+    ? `${completeness.executed}/${completeness.expected} (bridged)`
+    : `${completeness.executed}/${completeness.expected}`
 }
 
 function evidenceTone(classification: MeasurementReportResponse['evidence'][number]['classification']) {
@@ -195,7 +221,7 @@ function evidenceLabel(classification: MeasurementReportResponse['evidence'][num
   return labels[classification]
 }
 
-function PortfolioReport({
+export function PortfolioReport({
   activePlan,
   report,
   isLoading,
@@ -209,6 +235,10 @@ function PortfolioReport({
   onRetry?: () => void
 }) {
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null)
+  // Called before the early returns below, because hook order has to be stable
+  // across renders and most of those returns fire while the report is loading.
+  const { shown: shownGroups, total: groupTotal, showAll: showAllGroups } = useCappedList(report?.groups ?? [])
+  const { shown: shownReportTargets, total: reportTargetTotal, showAll: showAllReportTargets } = useCappedList(report?.targets ?? [])
 
   if (isError && !activePlan) {
     return (
@@ -255,6 +285,15 @@ function PortfolioReport({
   const reviewEvidence = report.evidence.filter(item => item.usageEdgeType === 'target' && (item.classification === 'sibling' || item.classification === 'ambiguous'))
   const hasStoredResult = report.run !== null
 
+  // Which Targets rest on bridged evidence, so their completeness can say so
+  // instead of presenting joined history as a fresh measurement.
+  const bridgedTargetIds = new Set<string>()
+  for (const item of report.evidence) {
+    if (!item.bridged) continue
+    for (const id of item.matchedTargetIds) bridgedTargetIds.add(id)
+  }
+  const reportIsBridged = report.diagnostics.bridgedObservationIds.length > 0
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2">
@@ -264,6 +303,9 @@ function PortfolioReport({
             {report.run.status === 'completed' ? 'Complete' : 'Partial result'}
           </ToneBadge>
         ) : <ToneBadge tone="neutral">No stored result</ToneBadge>}
+        {reportIsBridged ? (
+          <ToneBadge tone="caution">Includes bridged history</ToneBadge>
+        ) : null}
         {isError ? <span className="text-sm text-caution">Refresh failed. Showing saved data.</span> : null}
       </div>
 
@@ -273,11 +315,13 @@ function PortfolioReport({
           <div className="overflow-x-auto rounded-md border border-default">
             <table className="evidence-table min-w-[780px]">
               <thead><tr><th>Group</th><th>Targets</th><th>Completeness</th><th>Answer coverage</th><th>Target coverage</th><th>Competitor share of voice</th></tr></thead>
-              <tbody>{report.groups.map(group => {
+              <tbody>{shownGroups.map(group => {
                 const competitors = group.sov.domains.filter(domain => !domain.own)
-                return <tr key={group.id}><td className="font-medium text-heading">{group.label}</td><td className="tabular-nums text-secondary">{group.targetIds.length}</td><td className="tabular-nums text-secondary">{completenessLabel(group.completeness, hasStoredResult)}</td><td className="text-secondary">{rateLabel(group.answerCoverage, group.completeness, hasStoredResult)}</td><td className="text-secondary">{rateLabel(group.targetCoverage, group.completeness, hasStoredResult)}</td><td className="text-secondary">{competitors.length === 0 ? 'No competitors' : competitors.map(domain => `${domain.domain} ${domain.presentIn === null ? 'N/A' : `${Math.round((domain.presentIn / domain.of) * 100)}%`}`).join(', ')}</td></tr>
+                const groupIsBridged = group.targetIds.some(id => bridgedTargetIds.has(id))
+                return <tr key={group.id}><td className="font-medium text-heading">{group.label}</td><td className="tabular-nums text-secondary">{group.targetIds.length}</td><td className="tabular-nums text-secondary">{completenessLabel(group.completeness, hasStoredResult, groupIsBridged)}</td><td className="text-secondary">{rateLabel(group.answerCoverage, group.completeness, hasStoredResult)}</td><td className="text-secondary">{rateLabel(group.targetCoverage, group.completeness, hasStoredResult)}</td><td className="text-secondary">{competitors.length === 0 ? 'No competitors' : competitors.map(domain => `${domain.domain} ${domain.presentIn === null ? 'N/A' : `${domain.presentIn} of ${domain.of}`}`).join(', ')}</td></tr>
               })}</tbody>
             </table>
+            <ShowMore shown={shownGroups.length} total={groupTotal} onShowAll={showAllGroups} />
           </div>
         </section>
       ) : null}
@@ -287,11 +331,11 @@ function PortfolioReport({
           <caption className="sr-only">Measurement results by Target</caption>
           <thead><tr><th>Target</th><th>Completeness</th><th>Citation coverage</th><th>Mention coverage</th><th><span className="sr-only">Evidence</span></th></tr></thead>
           <tbody>
-            {report.targets.map(target => (
+            {shownReportTargets.map(target => (
               <tr key={target.id}>
                 <td className="font-medium text-heading">{target.label}</td>
                 <td className="tabular-nums text-secondary">
-                  {completenessLabel(target.completeness, hasStoredResult)}
+                  {completenessLabel(target.completeness, hasStoredResult, bridgedTargetIds.has(target.id))}
                 </td>
                 <td className="tabular-nums text-secondary">{rateLabel(target.citationCoverage, target.completeness, hasStoredResult)}</td>
                 <td className="tabular-nums text-secondary">{rateLabel(target.mentionCoverage, target.completeness, hasStoredResult)}</td>
@@ -300,6 +344,7 @@ function PortfolioReport({
             ))}
           </tbody>
         </table>
+        <ShowMore shown={shownReportTargets.length} total={reportTargetTotal} onShowAll={showAllReportTargets} />
       </div>
 
       {reviewEvidence.length > 0 ? (
@@ -324,16 +369,49 @@ function PortfolioReport({
   )
 }
 
+/**
+ * Renders the first `LIST_PAGE_SIZE` of a list and says so. A portfolio holds
+ * hundreds of Targets and thousands of evidence rows; rendering straight from
+ * the data both stalls the page and, worse, lets a truncated list read as the
+ * whole list.
+ */
+function ShowMore({ shown, total, onShowAll }: { shown: number, total: number, onShowAll: () => void }) {
+  if (shown >= total) return null
+  return (
+    <div className="flex items-center gap-3 border-t border-default px-3 py-2 text-sm text-secondary">
+      <span>Showing {shown} of {total}</span>
+      <Button size="sm" variant="outline" onClick={onShowAll}>Show all {total}</Button>
+    </div>
+  )
+}
+
+function useCappedList<T>(items: readonly T[]): { shown: readonly T[], total: number, showAll: () => void } {
+  const [limit, setLimit] = useState(LIST_PAGE_SIZE)
+  // A filter change can leave the list shorter than an expanded limit; that is
+  // harmless, the cap only ever hides, never invents.
+  return {
+    shown: items.slice(0, limit),
+    total: items.length,
+    showAll: () => setLimit(Number.MAX_SAFE_INTEGER),
+  }
+}
+
 function EvidenceTable({ evidence }: { evidence: readonly MeasurementReportResponse['evidence'][number][] }) {
+  const { shown, total, showAll } = useCappedList(evidence)
   return (
     <div className="overflow-x-auto rounded-md border border-default">
       <table className="evidence-table min-w-[880px]">
         <caption className="sr-only">Stored citation evidence</caption>
         <thead><tr><th>Status</th><th>Engine</th><th>Tracked query</th><th>Location</th><th>Source URL</th></tr></thead>
         <tbody>
-          {evidence.map(item => (
+          {shown.map(item => (
             <tr key={`${item.observationId}:${item.usageEdgeId}:${item.sourceUrl}`}>
-              <td><ToneBadge tone={evidenceTone(item.classification)}>{evidenceLabel(item.classification)}</ToneBadge></td>
+              <td>
+                <span className="flex flex-wrap items-center gap-1">
+                  <ToneBadge tone={evidenceTone(item.classification)}>{evidenceLabel(item.classification)}</ToneBadge>
+                  {item.bridged ? <ToneBadge tone="caution">Bridged</ToneBadge> : null}
+                </span>
+              </td>
               <td className="text-secondary">{item.provider}</td>
               <td className="text-secondary">{item.queryText}</td>
               <td className="text-secondary">{item.location ?? 'No location'}</td>
@@ -342,6 +420,7 @@ function EvidenceTable({ evidence }: { evidence: readonly MeasurementReportRespo
           ))}
         </tbody>
       </table>
+      <ShowMore shown={shown.length} total={total} onShowAll={showAll} />
     </div>
   )
 }
@@ -439,7 +518,11 @@ export function PortfolioSection(props: PortfolioSectionProps) {
     const search = targetSearch.trim().toLocaleLowerCase()
     return draft.targets.filter(target => !search || `${target.label} ${target.stableKey}`.toLocaleLowerCase().includes(search))
   }, [draft, targetSearch])
-  const shownTargets = filteredTargets.slice(0, TARGET_PAGE_SIZE)
+  // The count was already honest about truncating; there was simply no way to
+  // reach Target 51 except by searching for it.
+  const [targetLimit, setTargetLimit] = useState(TARGET_PAGE_SIZE)
+  const [draftGroupLimit, setDraftGroupLimit] = useState(LIST_PAGE_SIZE)
+  const shownTargets = filteredTargets.slice(0, targetLimit)
   const selectedTargetSet = new Set(selectedTargetKeys)
   const selectedQuerySet = new Set(selectedQueryIds)
   const compileFails = compilePreview?.checks.filter(check => check.severity === 'fail') ?? []
@@ -663,6 +746,10 @@ export function PortfolioSection(props: PortfolioSectionProps) {
     try {
       const response = await onPublishPlan(planInput, activePlan?.revision ?? null)
       setPublishedPlan(response.active)
+      clearStoredDraft(projectName)
+      // Dropping out of 'local' stops the persistence effect from writing the
+      // draft straight back, and lets the published plan reseed the view.
+      setDraftSource('active')
     } catch (error) {
       setActionError(errorMessage(error, 'Could not publish this plan.'))
     } finally {
@@ -761,7 +848,12 @@ export function PortfolioSection(props: PortfolioSectionProps) {
           {!draft ? <p className="text-sm text-secondary">Import a sitemap to review Targets.</p> : (
             <>
               <label className="block max-w-md"><span className="text-sm font-medium text-secondary">Search Targets</span><input aria-label="Search Targets" className="mt-1 w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none" value={targetSearch} onChange={event => setTargetSearch(event.target.value)} placeholder="Target name" /></label>
-              <p className="text-sm text-secondary">Showing {shownTargets.length} of {filteredTargets.length} matching {filteredTargets.length === 1 ? 'Target' : 'Targets'} ({draft.targets.length} total)</p>
+              <p className="flex items-center gap-3 text-sm text-secondary">
+                <span>Showing {shownTargets.length} of {filteredTargets.length} matching {filteredTargets.length === 1 ? 'Target' : 'Targets'} ({draft.targets.length} total)</span>
+                {shownTargets.length < filteredTargets.length ? (
+                  <Button size="sm" variant="outline" onClick={() => setTargetLimit(Number.MAX_SAFE_INTEGER)}>Show all {filteredTargets.length}</Button>
+                ) : null}
+              </p>
               {pendingCoverageReviews.length > 0 ? (
                 <div className="space-y-3 rounded-md border border-caution-800/40 bg-caution-950/20 p-4">
                   <div><p className="text-sm font-medium text-caution">{pendingCoverageReviews.length} {pendingCoverageReviews.length === 1 ? 'Target has' : 'Targets have'} URL coverage changes.</p><p className="mt-1 text-sm text-secondary">Select changed Targets, then keep their saved coverage or replace it with this import.</p></div>
@@ -803,7 +895,28 @@ export function PortfolioSection(props: PortfolioSectionProps) {
             <>
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => setSelectedTargetKeys(confirmedTargets.map(target => target.stableKey))}>Select all confirmed Targets</Button>
-                {draft.groups.map(group => <Button key={group.stableKey} size="sm" variant="outline" onClick={() => selectTargetKeys(group.targetKeys)}>Select members of {group.label}</Button>)}
+                {/* One button per group is unusable at portfolio scale, where a
+                    site can carry dozens. Beyond a handful this becomes a
+                    picker rather than a row of buttons. */}
+                {draft.groups.length <= GROUP_BUTTON_LIMIT
+                  ? draft.groups.map(group => <Button key={group.stableKey} size="sm" variant="outline" onClick={() => selectTargetKeys(group.targetKeys)}>Select members of {group.label}</Button>)
+                  : (
+                    <label className="flex items-center gap-2 text-sm text-secondary">
+                      <span>Select members of</span>
+                      <select
+                        aria-label="Select members of a group"
+                        className="rounded border border-strong bg-transparent px-2 py-1 text-sm text-strong focus:border-mono-500 focus:outline-none"
+                        value=""
+                        onChange={event => {
+                          const group = draft.groups.find(item => item.stableKey === event.target.value)
+                          if (group) selectTargetKeys(group.targetKeys)
+                        }}
+                      >
+                        <option value="">Choose a group ({draft.groups.length})</option>
+                        {draft.groups.map(group => <option key={group.stableKey} value={group.stableKey}>{group.label} ({group.targetKeys.length})</option>)}
+                      </select>
+                    </label>
+                  )}
                 <Button size="sm" variant="ghost" disabled={selectedTargetKeys.length === 0} onClick={() => setSelectedTargetKeys([])}>Clear selection</Button>
                 <span className="self-center text-sm text-secondary">{selectedConfirmedTargetKeys.length} confirmed selected</span>
               </div>
@@ -838,7 +951,7 @@ export function PortfolioSection(props: PortfolioSectionProps) {
                 <div><h4 className="font-medium text-heading">Reporting group</h4><p className="mt-1 text-sm text-secondary">Create an optional reporting view for the selected Targets. The group does not own queries or locations.</p></div>
                 <div className="grid gap-3 md:grid-cols-2"><Field label="Group name" value={groupName} onChange={setGroupName} placeholder="North region" /><Field label="Competitor domains (optional)" value={groupCompetitor} onChange={setGroupCompetitor} placeholder="one.example, two.example" /></div>
                 <Button size="sm" variant="outline" disabled={!groupName.trim() || selectedConfirmedTargetKeys.length === 0} onClick={saveReportingGroup}>Save reporting group</Button>
-                {draft.groups.length > 0 ? <div className="overflow-x-auto"><table className="evidence-table min-w-[560px]"><thead><tr><th>Group</th><th>Targets</th><th>Competitors</th></tr></thead><tbody>{draft.groups.map(group => <tr key={group.stableKey}><td className="font-medium text-heading">{group.label}</td><td className="tabular-nums text-secondary">{group.targetKeys.length}</td><td className="text-secondary">{group.competitors?.join(', ') || 'None'}</td></tr>)}</tbody></table></div> : null}
+                {draft.groups.length > 0 ? <div className="overflow-x-auto"><table className="evidence-table min-w-[560px]"><thead><tr><th>Group</th><th>Targets</th><th>Competitors</th></tr></thead><tbody>{draft.groups.slice(0, draftGroupLimit).map(group => <tr key={group.stableKey}><td className="font-medium text-heading">{group.label}</td><td className="tabular-nums text-secondary">{group.targetKeys.length}</td><td className="text-secondary">{group.competitors?.join(', ') || 'None'}</td></tr>)}</tbody></table>{draft.groups.length > draftGroupLimit ? <p className="flex items-center gap-3 px-1 py-2 text-sm text-secondary"><span>Showing {draftGroupLimit} of {draft.groups.length}</span><Button size="sm" variant="outline" onClick={() => setDraftGroupLimit(Number.MAX_SAFE_INTEGER)}>Show all {draft.groups.length}</Button></p> : null}</div> : null}
               </div>
               <Button onClick={() => setStage(3)}>Continue to Review & publish</Button>
             </>
