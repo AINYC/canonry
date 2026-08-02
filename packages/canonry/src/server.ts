@@ -233,6 +233,12 @@ function resolveDashboardShowResourceLinks(env: NodeJS.ProcessEnv, config: Canon
     ?? true;
 }
 
+function resolveDashboardShowUpdateNotification(env: NodeJS.ProcessEnv, config: CanonryConfig): boolean {
+  return parseBooleanEnv(env.CANONRY_DASHBOARD_SHOW_UPDATE_NOTIFICATION)
+    ?? config.dashboard?.showUpdateNotification
+    ?? true;
+}
+
 /** All known API adapters — add new providers here */
 const API_ADAPTERS: ProviderAdapter[] = [
   geminiAdapter,
@@ -1619,6 +1625,7 @@ export async function createServer(opts: {
   }
   const dashboardRequirePassword = resolveDashboardRequirePassword(process.env, opts.config);
   const dashboardShowResourceLinks = resolveDashboardShowResourceLinks(process.env, opts.config);
+  const dashboardShowUpdateNotification = resolveDashboardShowUpdateNotification(process.env, opts.config);
   app.log.info(
     { dashboardRequirePassword },
     "Dashboard password gate resolved",
@@ -2608,9 +2615,16 @@ export async function createServer(opts: {
       const clientConfig: Record<string, unknown> = {};
       if (basePath) clientConfig.basePath = basePath;
       // Keep the default client config byte-for-byte unchanged. Only inject the
-      // dashboard block when the operator opts out of the resource links.
+      // dashboard block when the operator opts out of dashboard chrome.
+      const dashboardConfig: Record<string, boolean> = {};
       if (!dashboardShowResourceLinks) {
-        clientConfig.dashboard = { showResourceLinks: false };
+        dashboardConfig.showResourceLinks = false;
+      }
+      if (!dashboardShowUpdateNotification) {
+        dashboardConfig.showUpdateNotification = false;
+      }
+      if (Object.keys(dashboardConfig).length > 0) {
+        clientConfig.dashboard = dashboardConfig;
       }
       // Embed block is appended LAST and only when enabled, so the default
       // (non-embed) serve emits byte-for-byte the same `{}` / `{basePath}`.

@@ -417,3 +417,16 @@ export function compactDateToIso(value: string): string {
   if (value.length !== 8 || !/^\d{8}$/.test(value)) return value
   return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`
 }
+
+/**
+ * Parse a GA4 rate metric that the contract bounds to 0..1.
+ *
+ * `parseOptionalMetric` accepts any finite number, so an out-of-range value
+ * from GA4 would pass the client and only fail at the Zod boundary, throwing
+ * instead of degrading. An out-of-range rate is not a usable measurement, so it
+ * is reported as unavailable rather than as a wrong number or an exception.
+ */
+export function parseBoundedRate(value: number | null): number | null {
+  if (value === null) return null
+  return value >= 0 && value <= 1 ? value : null
+}

@@ -48,15 +48,21 @@ Opens at [http://127.0.0.1:4100](http://127.0.0.1:4100). No configuration needed
 > proxy. Never expose an engine with `requirePassword: false` directly to the
 > internet.
 
-To remove the GitHub, documentation, and changelog icons from the dashboard
-sidebar and page footer, set the resource-link option to false:
+To remove optional dashboard chrome, set either option to false:
 
 ```yaml
 dashboard:
   showResourceLinks: false
+  showUpdateNotification: false
 ```
 
-For container deployments, set `CANONRY_DASHBOARD_SHOW_RESOURCE_LINKS=0`.
+`showResourceLinks` removes the GitHub, documentation, and changelog icons
+from the sidebar and page footer. `showUpdateNotification` removes the
+available-version badge from the sidebar but keeps update checks and CLI
+notices active.
+
+For container deployments, set `CANONRY_DASHBOARD_SHOW_RESOURCE_LINKS=0` or
+`CANONRY_DASHBOARD_SHOW_UPDATE_NOTIFICATION=0`.
 
 ---
 

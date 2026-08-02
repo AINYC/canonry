@@ -48,10 +48,10 @@ export function BrandLockup({ compact = false, version, updateAvailable, onDismi
     )
   }
 
-  // Sidebar layout: split the Link so the version slot can host interactive
-  // elements (the bubble's npm link + dismiss button) without nesting <a>/<button>
-  // inside another <a>. The bird image and the "Canonry" wordmark are both
-  // separate Links to home — accessible to keyboard users either way.
+  // Sidebar layout: split the Links so the version notification can host
+  // interactive elements without nesting <a>/<button> inside another <a>.
+  // The bubble spans the whole lockup below the wordmark, keeping long version
+  // strings within the sidebar instead of squeezing them beside the mascot.
   return (
     <div className="brand-lockup brand-lockup-wrapper">
       <Link
@@ -64,37 +64,38 @@ export function BrandLockup({ compact = false, version, updateAvailable, onDismi
       </Link>
       <div className="brand-copy">
         <Link to="/" className="brand-mark">Canonry</Link>
-        {showBubble ? (
-          <span
-            className={`brand-update-bubble ${closing ? 'brand-update-bubble-closing' : ''}`}
-            role="status"
-            aria-live="polite"
-          >
-            <a
-              className="brand-update-bubble-link"
-              href={updateAvailable.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={`Open release: ${updateAvailable.upgradeCommand}`}
-              aria-label={`New version v${updateAvailable.latest} available — open release page`}
-            >
-              <span className="brand-update-bubble-from">v{updateAvailable.current}</span>
-              <ArrowRight className="brand-update-bubble-arrow size-3" aria-hidden="true" />
-              <span className="brand-update-bubble-to">v{updateAvailable.latest}</span>
-            </a>
-            <button
-              type="button"
-              className="brand-update-bubble-dismiss"
-              onClick={handleDismiss}
-              aria-label={`Dismiss update notification for v${updateAvailable.latest}`}
-            >
-              <X className="size-3" aria-hidden="true" />
-            </button>
-          </span>
-        ) : showVersion ? (
+        {!showBubble && showVersion ? (
           <span className="brand-version">v{version}</span>
         ) : null}
       </div>
+      {showBubble ? (
+        <span
+          className={`brand-update-bubble ${closing ? 'brand-update-bubble-closing' : ''}`}
+          role="status"
+          aria-live="polite"
+        >
+          <a
+            className="brand-update-bubble-link"
+            href={updateAvailable.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open release: ${updateAvailable.upgradeCommand}`}
+            aria-label={`New version v${updateAvailable.latest} available — open release page`}
+          >
+            <span className="brand-update-bubble-from">v{updateAvailable.current}</span>
+            <ArrowRight className="brand-update-bubble-arrow size-3" aria-hidden="true" />
+            <span className="brand-update-bubble-to">v{updateAvailable.latest}</span>
+          </a>
+          <button
+            type="button"
+            className="brand-update-bubble-dismiss"
+            onClick={handleDismiss}
+            aria-label={`Dismiss update notification for v${updateAvailable.latest}`}
+          >
+            <X className="size-3" aria-hidden="true" />
+          </button>
+        </span>
+      ) : null}
     </div>
   )
 }

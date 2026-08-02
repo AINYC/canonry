@@ -410,6 +410,16 @@ cnry google coverage <project>                         # index coverage summary
 cnry google refresh <project>                         # force-fetch fresh GSC coverage data
 cnry google performance <project>                      # search performance data
 cnry google performance <project> --days 30 --keyword "term" --page "/url"
+cnry google performance <project> --start 2026-06-01 --end 2026-06-30
+cnry google performance <project> --order-by impressions --limit 2000 --offset 2000
+# Rows are ordered by clicks descending by default; --order-by date|impressions
+# changes the ranking. --days and --start/--end are mutually exclusive.
+# One page, not the whole set: the response reports the total number of matching
+# rows, and the CLI prints how many of them you are looking at. Never sum these
+# rows for a property total, use `cnry google performance-daily`.
+cnry google performance-daily <project>                # per-day series + property-level window totals
+cnry google top-pages <project>                        # pages ranked by clicks, aggregated in SQL
+cnry google top-pages <project> --start 2026-06-01 --end 2026-06-30 --limit 20
 
 cnry google inspect <project> <url>                    # inspect specific URL
 cnry google inspect-sitemap <project> --wait           # bulk inspect all sitemap URLs
@@ -420,6 +430,17 @@ cnry google deindexed <project>                        # pages that lost indexin
 cnry google request-indexing <project> <url>           # push URL to Google
 cnry google request-indexing <project> --all-unindexed # push all unknown pages
 ```
+
+**The dimensioned search-data table is valid for RANKING and invalid for TOTALS.** Read
+any clicks/impressions total from the property-level daily figures (`performance-daily`
+totals, or the `totals` block on `top-pages`), never by summing per-query or per-page rows.
+
+Why: Google withholds rare/anonymised queries, so the dimensioned sum UNDER-counts clicks,
+and one impression fans out across every query x page x country x device combination, so it
+OVER-counts impressions. Measured on one real property-month: 792 summed clicks against
+1,142 actual (31% under) and 45,266 summed impressions against 34,916 actual (30% over).
+`top-pages` labels its total `totalsSource: "property-daily"` and returns `null` when no
+property-level figure covers the window: a missing total, not a wrong one.
 
 ## Discovery (Tracked-Basket Expansion)
 
@@ -508,7 +529,8 @@ cnry ga measurement-analysis <project> [--window 30d|60d|90d]
                                                   # configured lead events, branded/non-brand GSC demand,
                                                   # ranked landing pages/queries, and independent freshness/errors
                                                   # for acquisition and leads
-cnry ga traffic <project>                     # current-period rollup; returns: totalSessions,
+cnry ga traffic <project> [--window 30d] [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+                                                  # current-period rollup; returns: totalSessions,
                                                   # totalOrganicSessions/totalDirectSessions/totalUsers,
                                                   # organicSharePct/aiSharePct/socialSharePct/directSharePct,
                                                   # topPages[], aiReferrals[], aiReferralLandingPages[],
@@ -518,7 +540,8 @@ cnry ga traffic <project>                     # current-period rollup; returns: 
 cnry ga attribution <project> [--trend]       # unified channel breakdown (organic / ai / social / direct
                                                   # sessions + raw and display share %s); --trend adds 7d/30d
                                                   # direction per channel + biggest mover
-cnry ga ai-referral-daily <project>           # AI sessions per day and per source: days[] with
+cnry ga ai-referral-daily <project> [--window 30d] [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+                                                  # AI sessions per day and per source: days[] with
                                                   # {date, sessions, paidSessions, organicSessions,
                                                   # bySource[]} + window totals. Landing pages summed inside
                                                   # ONE attribution dimension, never across dimensions, so
@@ -526,20 +549,25 @@ cnry ga ai-referral-daily <project>           # AI sessions per day and per sour
                                                   # Use this for any AI session COUNT. Sessions only: GA
                                                   # counts users DISTINCT per grain, so an AI-referral user
                                                   # count cannot be summed from these rows or fetched.
-cnry ga ai-referral-history <project>         # RAW DETAIL, one row per (day × source × dimension ×
+cnry ga ai-referral-history <project> [--window 30d] [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+                                                  # RAW DETAIL, one row per (day × source × dimension ×
                                                   # landing page): {date, source, medium, attribution,
                                                   # landingPage, sessions, users}. Rows are fragments of a
                                                   # day, commonly worth 1 session each. Never collapse them
                                                   # into a total; read ai-referral-daily instead.
-cnry ga social-referral-history <project>     # daily array of {date, source, medium, channel,
+cnry ga social-referral-history <project> [--window 30d] [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+                                                  # daily array of {date, source, medium, channel,
                                                   # sessions, users}; channel ∈ {Organic Social, Paid Social}
 cnry ga social-referral-summary <project> [--trend]
                                                   # one-line social rollup: socialSessions, socialUsers,
                                                   # socialSharePct, topSources[]; --trend adds 7d/30d direction
-cnry ga session-history <project>             # daily totals: {date, sessions, organicSessions, users}
+cnry ga session-history <project> [--window 30d] [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+                                                  # daily totals: {date, sessions, organicSessions, users}
 cnry ga coverage <project>                    # per-page overlay: {landingPage, sessions,
                                                   # organicSessions, users}
 ```
+
+`--window` is rolling from now, so it can never name a calendar month. Pass `--start` / `--end` (inclusive, `YYYY-MM-DD`) for a calendar range; explicit dates win over `--window`. An unrecognised `--window` value is now REJECTED with a validation error rather than silently returning the full history under the label the caller asked for.
 
 Every read command queries persisted DB rows, so a stale `lastSyncedAt` means the response is stale — always check `ga status` before drawing conclusions, and re-`ga sync` if the data is older than the analysis window. Use `--only ai` or `--only social` to refresh just one slice when iterating.
 

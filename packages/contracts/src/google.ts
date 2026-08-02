@@ -28,6 +28,35 @@ export const gscSearchDataDtoSchema = z.object({
 })
 export type GscSearchDataDto = z.infer<typeof gscSearchDataDtoSchema>
 
+export const gscPerformanceOrderBySchema = z.enum(['clicks', 'impressions', 'date'])
+export type GscPerformanceOrderBy = z.infer<typeof gscPerformanceOrderBySchema>
+
+/**
+ * Envelope for the dimensioned GSC performance read.
+ *
+ * `rows` is one page of the dimensioned table, ordered by `orderBy` (clicks
+ * descending by default). Ordering by `date` and then truncating is what made
+ * the old bare-array response return a single day: on a real project the
+ * newest date alone holds more rows than the page limit, so the cap was spent
+ * before the first date boundary. `totalMatching` is the COUNT over the same
+ * WHERE ignoring limit/offset, so a caller can tell a complete answer from a
+ * page. `latestAvailableDate` is MAX(date) for the project ignoring the date
+ * filter, which is what lets a caller distinguish "no data" from "asked past
+ * the GSC reporting lag".
+ *
+ * Never sum `rows` for a property total. The dimensioned table both understates
+ * clicks (Google withholds rare and anonymised queries) and overstates
+ * impressions (one impression fans out across query x page x country x device).
+ * Use /performance/daily for totals.
+ */
+export const gscPerformanceResponseDtoSchema = z.object({
+  rows: z.array(gscSearchDataDtoSchema),
+  totalMatching: z.number(),
+  truncated: z.boolean(),
+  latestAvailableDate: z.string().nullable(),
+})
+export type GscPerformanceResponseDto = z.infer<typeof gscPerformanceResponseDtoSchema>
+
 export const gscPerformanceDailyPointSchema = z.object({
   date: z.string(),
   clicks: z.number(),
@@ -46,6 +75,58 @@ export const gscPerformanceDailyDtoSchema = z.object({
   daily: z.array(gscPerformanceDailyPointSchema),
 })
 export type GscPerformanceDailyDto = z.infer<typeof gscPerformanceDailyDtoSchema>
+
+export const gscTopPageRowSchema = z.object({
+  page: z.string(),
+  clicks: z.number(),
+  impressions: z.number(),
+  ctr: z.number(),
+})
+export type GscTopPageRow = z.infer<typeof gscTopPageRowSchema>
+
+/**
+ * Ranked pages plus an OPTIONAL window total.
+ *
+ * The rows are a ranking, aggregated from the dimensioned `gsc_search_data`
+ * table. That table is valid for ranking and INVALID for totals: Google
+ * withholds rare/anonymised queries, so summing it under-counts clicks, and one
+ * impression fans out across every query x page x country x device combination,
+ * so summing it over-counts impressions. On one real property-month the sum
+ * read 792 clicks against 1,142 actual and 45,266 impressions against 34,916.
+ *
+ * `totals` is therefore never the sum of `rows`. It is read from the
+ * un-dimensioned property-level daily table and carries the explicit
+ * `totalsSource` discriminator so a consumer can tell where it came from. When
+ * that table has no rows in the window, `totals` is `null`: the honest answer
+ * is "no property-level total available", not a plausible wrong number.
+ */
+export const gscTopPagesDtoSchema = z.object({
+  rows: z.array(gscTopPageRowSchema),
+  totals: z.object({
+    clicks: z.number(),
+    impressions: z.number(),
+    ctr: z.number(),
+    days: z.number(),
+    /** First date the property-level totals actually cover. */
+    coveredFrom: z.string().nullable(),
+    /** Last date the property-level totals actually cover. */
+    coveredThrough: z.string().nullable(),
+    /**
+     * False when the totals span less than the ranked rows above.
+     *
+     * The dimensioned and property-level tables sync independently, so a
+     * 30-day totals sync can sit next to months of dimensioned rows. Printing
+     * both as one period would misstate the window the totals belong to.
+     */
+    complete: z.boolean(),
+  }).nullable(),
+  totalsSource: z.literal('property-daily'),
+  /** First date the ranked rows cover, so a caller can compare spans. */
+  rankedFrom: z.string().nullable(),
+  /** Last date the ranked rows cover. */
+  rankedThrough: z.string().nullable(),
+})
+export type GscTopPagesDto = z.infer<typeof gscTopPagesDtoSchema>
 
 export const gscUrlInspectionDtoSchema = z.object({
   id: z.string(),

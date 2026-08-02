@@ -1,4 +1,4 @@
-import type { EmbedClientConfig, ErrorCode, GroundingSource, ProjectOverviewDto, ScheduleDto, NotificationDto, GscCoverageSummaryDto, GscCoverageSnapshotDto, GscPerformanceDailyDto, IndexingRequestResultDto, MetricsWindow, BrandMetricsDto, GA4AiReferralDailyDto, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry, InsightDto, ProjectReportDto, ReportAudience, ResultsExportFormat, CitationVisibilityResponse, BacklinkSource, BacklinkSummaryDto, BacklinkDomainDto, BacklinkListResponse, BacklinkHistoryEntry, BacklinksInstallStatusDto, BacklinksInstallResultDto, CcAvailableRelease, CcCachedRelease, CcReleaseSyncDto, TrafficSourceDto, TrafficSourceDetailDto, TrafficSourceListResponse, TrafficStatusResponse, TrafficEventsResponse, TrafficConnectCloudRunRequest, TrafficConnectWordpressRequest, TrafficConnectVercelRequest, TrafficSyncResponse, TrafficBackfillResponse, DiscoveryRunRequest, DiscoverySessionDto, DiscoverySessionDetailDto, DiscoveryPromotePreview, DiscoveryPromoteRequest, DiscoveryPromoteResult, ProjectDto, ProjectUpsertRequest, QueryDto, CompetitorDto, LocationContext, GoogleConnectionDto, GscUrlInspectionDto, GscDeindexedRowDto, BingUrlInspectionDto, BingCoverageSummaryDto, BingKeywordStatsDto, BingStatusDto, BingConnectResponseDto, BingSetSiteResponseDto, BingSitesResponseDto, GscSearchDataDto, ContentTargetDismissalDto, ContentTargetDismissRequest, SiteAuditRunResponseDto, GscSitemapDto, GscSitemapListResponseDto, GscSubmitSitemapsResponseDto, GscDiscoverSitemapsResponseDto, OnboardingTelemetryEvent, TelemetryEventAcceptedDto } from '@ainyc/canonry-contracts'
+import type { EmbedClientConfig, ErrorCode, GroundingSource, ProjectOverviewDto, ScheduleDto, NotificationDto, GscCoverageSummaryDto, GscCoverageSnapshotDto, GscPerformanceDailyDto, IndexingRequestResultDto, MetricsWindow, BrandMetricsDto, GA4AiReferralDailyDto, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry, InsightDto, ProjectReportDto, ReportAudience, ResultsExportFormat, CitationVisibilityResponse, BacklinkSource, BacklinkSummaryDto, BacklinkDomainDto, BacklinkListResponse, BacklinkHistoryEntry, BacklinksInstallStatusDto, BacklinksInstallResultDto, CcAvailableRelease, CcCachedRelease, CcReleaseSyncDto, TrafficSourceDto, TrafficSourceDetailDto, TrafficSourceListResponse, TrafficStatusResponse, TrafficEventsResponse, TrafficConnectCloudRunRequest, TrafficConnectWordpressRequest, TrafficConnectVercelRequest, TrafficSyncResponse, TrafficBackfillResponse, DiscoveryRunRequest, DiscoverySessionDto, DiscoverySessionDetailDto, DiscoveryPromotePreview, DiscoveryPromoteRequest, DiscoveryPromoteResult, ProjectDto, ProjectUpsertRequest, QueryDto, CompetitorDto, LocationContext, GoogleConnectionDto, GscUrlInspectionDto, GscDeindexedRowDto, BingUrlInspectionDto, BingCoverageSummaryDto, BingKeywordStatsDto, BingStatusDto, BingConnectResponseDto, BingSetSiteResponseDto, BingSitesResponseDto, GscSearchDataDto, GscPerformanceResponseDto, GscPerformanceOrderBy, ContentTargetDismissalDto, ContentTargetDismissRequest, SiteAuditRunResponseDto, GscSitemapDto, GscSitemapListResponseDto, GscSubmitSitemapsResponseDto, GscDiscoverSitemapsResponseDto, OnboardingTelemetryEvent, TelemetryEventAcceptedDto } from '@ainyc/canonry-contracts'
 import {
   createClient as createHeyClient,
   // Projects + queries + competitors + locations + runs + apply + settings + telemetry
@@ -170,6 +170,7 @@ declare global {
       /** Present only when dashboard chrome differs from its defaults. */
       dashboard?: {
         showResourceLinks?: boolean
+        showUpdateNotification?: boolean
       }
       /**
        * Read-only embed block injected by `canonry serve --embed` (#716). Present
@@ -250,6 +251,12 @@ export function getEmbedConfig(): EmbedClientConfig | null {
 export function shouldShowDashboardResourceLinks(): boolean {
   if (typeof window === 'undefined') return true
   return window.__CANONRY_CONFIG__?.dashboard?.showResourceLinks !== false
+}
+
+/** Whether the available-version notification renders in the sidebar. */
+export function shouldShowDashboardUpdateNotification(): boolean {
+  if (typeof window === 'undefined') return true
+  return window.__CANONRY_CONFIG__?.dashboard?.showUpdateNotification !== false
 }
 
 /**
@@ -1154,8 +1161,8 @@ export function triggerGscSync(project: string, opts?: { days?: number; full?: b
 
 export function fetchGscPerformance(
   project: string,
-  params?: { startDate?: string; endDate?: string; query?: string; page?: string; limit?: number; offset?: number; window?: MetricsWindow },
-): Promise<ApiGscPerformanceRow[]> {
+  params?: { startDate?: string; endDate?: string; query?: string; page?: string; limit?: number; offset?: number; orderBy?: GscPerformanceOrderBy; window?: MetricsWindow },
+): Promise<GscPerformanceResponseDto> {
   const query: Record<string, string> = {}
   if (params?.startDate) query.startDate = params.startDate
   if (params?.endDate) query.endDate = params.endDate
@@ -1164,7 +1171,8 @@ export function fetchGscPerformance(
   if (params?.page) query.page = params.page
   if (params?.limit !== undefined) query.limit = String(params.limit)
   if (params?.offset !== undefined && params.offset > 0) query.offset = String(params.offset)
-  return invokeWeb<ApiGscPerformanceRow[]>(() =>
+  if (params?.orderBy) query.orderBy = params.orderBy
+  return invokeWeb<GscPerformanceResponseDto>(() =>
     getApiV1ProjectsByNameGoogleGscPerformance({
       client: heyClient,
       path: { name: project },

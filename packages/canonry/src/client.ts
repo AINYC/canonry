@@ -96,8 +96,9 @@ import type {
   GbpAttributesListResponse,
   GbpPlaceDetailsListResponse,
   GbpSummaryDto,
-  GscSearchDataDto,
+  GscPerformanceResponseDto,
   GscPerformanceDailyDto,
+  GscTopPagesDto,
   GscUrlInspectionDto,
   GscCoverageSummaryDto,
   GscCoverageSnapshotDto,
@@ -298,6 +299,7 @@ import {
   postApiV1ProjectsByNameGoogleGscSync,
   getApiV1ProjectsByNameGoogleGscPerformance,
   getApiV1ProjectsByNameGoogleGscPerformanceDaily,
+  getApiV1ProjectsByNameGoogleGscTopPages,
   postApiV1ProjectsByNameGoogleGscInspect,
   getApiV1ProjectsByNameGoogleGscInspections,
   getApiV1ProjectsByNameGoogleGscDeindexed,
@@ -1875,8 +1877,8 @@ export class ApiClient {
     )
   }
 
-  async gscPerformance(project: string, params?: Record<string, string>): Promise<GscSearchDataDto[]> {
-    return this.invoke<GscSearchDataDto[]>(() =>
+  async gscPerformance(project: string, params?: Record<string, string>): Promise<GscPerformanceResponseDto> {
+    return this.invoke<GscPerformanceResponseDto>(() =>
       getApiV1ProjectsByNameGoogleGscPerformance({
         client: this.heyClient,
         path: { name: project },
@@ -1888,6 +1890,16 @@ export class ApiClient {
   async gscPerformanceDaily(project: string, params?: Record<string, string>): Promise<GscPerformanceDailyDto> {
     return this.invoke<GscPerformanceDailyDto>(() =>
       getApiV1ProjectsByNameGoogleGscPerformanceDaily({
+        client: this.heyClient,
+        path: { name: project },
+        query: params as never,
+      }),
+    )
+  }
+
+  async gscTopPages(project: string, params?: Record<string, string>): Promise<GscTopPagesDto> {
+    return this.invoke<GscTopPagesDto>(() =>
+      getApiV1ProjectsByNameGoogleGscTopPages({
         client: this.heyClient,
         path: { name: project },
         query: params as never,

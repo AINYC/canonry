@@ -219,9 +219,15 @@ The **Search Console** tab on each project page provides:
 canonry google sync <project>
 canonry google sync <project> --days 90 --full --wait
 
-# Search performance data
+# Search performance data (one page, ordered by clicks descending)
 canonry google performance <project>
 canonry google performance <project> --days 30 --keyword "best widgets"
+canonry google performance <project> --start 2026-06-01 --end 2026-06-30 --order-by date
+canonry google performance <project> --limit 2000 --offset 2000
+
+# Top pages ranked by clicks (aggregated in SQL, one row per page)
+canonry google top-pages <project>
+canonry google top-pages <project> --start 2026-06-01 --end 2026-06-30 --limit 20
 
 # Index coverage summary
 canonry google coverage <project>

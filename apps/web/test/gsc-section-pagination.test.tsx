@@ -75,9 +75,28 @@ function renderSection() {
     }
     if (path.includes('/google/gsc/performance')) {
       const query = new URL(url).searchParams
-      if (query.get('limit') === '500') return jsonResponse(expandedRows)
+      // The route returns a page envelope: `totalMatching` is the COUNT over
+      // the same WHERE, which is what drives "has next page" now.
+      if (query.get('limit') === '500') {
+        return jsonResponse({
+          rows: expandedRows,
+          totalMatching: expandedRows.length,
+          truncated: false,
+          latestAvailableDate: '2026-07-25',
+        })
+      }
       const offset = Number(query.get('offset') ?? 0)
-      return jsonResponse(pagedRows.slice(offset, offset + 26))
+      // Honour the requested limit. Hardcoding a page size here let the mock
+      // return more rows than the component asked for, which is exactly the
+      // over-fetch the component no longer does.
+      const limit = Number(query.get('limit') ?? 25)
+      const rows = pagedRows.slice(offset, offset + limit)
+      return jsonResponse({
+        rows,
+        totalMatching: pagedRows.length,
+        truncated: offset + rows.length < pagedRows.length,
+        latestAvailableDate: '2026-07-25',
+      })
     }
     if (path.includes('/google/gsc/sitemaps')) {
       return jsonResponse({
@@ -158,7 +177,7 @@ function renderSitemapSection({
     }])
     if (path.includes('/google/properties')) return jsonResponse({ sites: [{ siteUrl: 'sc-domain:example.com', permissionLevel: 'siteOwner' }] })
     if (path.includes('/google/gsc/performance/daily')) return jsonResponse({ totals: { clicks: 0, impressions: 0, ctr: 0 }, daily: [] })
-    if (path.includes('/google/gsc/performance')) return jsonResponse([])
+    if (path.includes('/google/gsc/performance')) return jsonResponse({ rows: [], totalMatching: 0, truncated: false, latestAvailableDate: null })
     if (path.includes('/google/gsc/inspections') || path.includes('/google/gsc/deindexed') || path.includes('/google/gsc/coverage/history')) return jsonResponse([])
     if (path.includes('/google/gsc/coverage')) return jsonResponse(null)
     if (path.includes('/google/gsc/sitemaps/submit')) {
@@ -256,7 +275,7 @@ test('refreshes the cached OAuth connection immediately after popup authorizatio
     }
     if (path.includes('/google/properties')) return jsonResponse({ sites: [{ siteUrl: 'sc-domain:example.com', permissionLevel: 'siteOwner' }] })
     if (path.includes('/google/gsc/performance/daily')) return jsonResponse({ totals: { clicks: 0, impressions: 0, ctr: 0 }, daily: [] })
-    if (path.includes('/google/gsc/performance')) return jsonResponse([])
+    if (path.includes('/google/gsc/performance')) return jsonResponse({ rows: [], totalMatching: 0, truncated: false, latestAvailableDate: null })
     if (path.includes('/google/gsc/inspections') || path.includes('/google/gsc/deindexed') || path.includes('/google/gsc/coverage/history')) return jsonResponse([])
     if (path.includes('/google/gsc/coverage')) return jsonResponse(null)
     if (path.includes('/google/gsc/sitemaps')) {
@@ -316,7 +335,7 @@ test('manual GSC refresh actions bypass the one-minute query cache', async () =>
       return jsonResponse({ sites: [{ siteUrl: 'sc-domain:example.com', permissionLevel: 'siteOwner' }] })
     }
     if (path.includes('/google/gsc/performance/daily')) return jsonResponse({ totals: { clicks: 0, impressions: 0, ctr: 0 }, daily: [] })
-    if (path.includes('/google/gsc/performance')) return jsonResponse([])
+    if (path.includes('/google/gsc/performance')) return jsonResponse({ rows: [], totalMatching: 0, truncated: false, latestAvailableDate: null })
     if (path.includes('/google/gsc/inspections')) {
       inspectionReads += 1
       return jsonResponse([])
@@ -379,7 +398,7 @@ test('connection-owned sitemap changes stay fresh after a remount', async () => 
     }
     if (path.includes('/google/properties')) return jsonResponse({ sites: [{ siteUrl: 'sc-domain:example.com', permissionLevel: 'siteOwner' }] })
     if (path.includes('/google/gsc/performance/daily')) return jsonResponse({ totals: { clicks: 0, impressions: 0, ctr: 0 }, daily: [] })
-    if (path.includes('/google/gsc/performance')) return jsonResponse([])
+    if (path.includes('/google/gsc/performance')) return jsonResponse({ rows: [], totalMatching: 0, truncated: false, latestAvailableDate: null })
     if (path.includes('/google/gsc/inspections') || path.includes('/google/gsc/deindexed') || path.includes('/google/gsc/coverage/history')) return jsonResponse([])
     if (path.includes('/google/gsc/coverage')) return jsonResponse(null)
     if (path.includes('/google/gsc/sitemaps')) return jsonResponse({

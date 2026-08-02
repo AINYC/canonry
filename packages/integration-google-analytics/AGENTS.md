@@ -17,6 +17,8 @@ Google Analytics 4 (GA4) integration — service account-based client for fetchi
 
 - **Service account auth**: Uses Google service account credentials (JSON key file), not OAuth. Credentials stored in `~/.canonry/config.yaml`.
 - **AI referral tracking**: Queries GA4 for traffic from AI answer engines (source dimension tracking) to correlate with visibility data.
+- **Returning users are derived, never requested**: GA4 exposes `totalUsers`, `activeUsers`, and `newUsers` plus a `newVsReturning` dimension — there is no `returningUsers` metric. `fetchDailyTotals` derives it as `totalUsers - newUsers` on a report whose ONLY dimension is `date`, where GA4 has already deduplicated both counts inside the day, so the subtraction is exact at that grain. The `newVsReturning` dimension is deliberately unused: it multiplies the row count and breaks the date-only grain `ga_daily_totals` exists to hold.
+- **An absent metric is `null`, never `0`**: `engagementRate` / `newUsers` / `returningUsers` on `GA4DailyTotalRow` are nullable. A property or a stored row with no reading must not report as a 0% engagement, 0-returning-user day — that is a real value, and the absence of one is not.
 
 ## Common Mistakes
 
