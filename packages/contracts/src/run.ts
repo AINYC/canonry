@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { providerNameSchema } from './provider.js'
 import { citedUrlCaptureStatusSchema } from './cited-urls.js'
+import { measurementExecutionIdentitySchema, measurementRunScopeRequestSchema, measurementRunScopeSchema } from './measurement-plan.js'
 import { retrievalContractSchema, retrievalStatusSchema } from './retrieval.js'
 
 export const runStatusSchema = z.enum(['queued', 'running', 'completed', 'partial', 'failed', 'cancelled'])
@@ -89,6 +90,12 @@ export const runTriggerRequestSchema = z.object({
   trigger: operatorTriggerSchema.optional(),
   providers: z.array(providerNameSchema).optional(),
   queries: z.array(z.string().min(1)).min(1).optional(),
+  /**
+   * Spot-check a slice of the project's published measurement plan. Groups
+   * expand to their member targets; the run measures only the questions those
+   * targets selected. Omit for a full sweep.
+   */
+  measurementScope: measurementRunScopeRequestSchema.optional(),
   location: z.string().min(1).optional(),
   allLocations: z.boolean().optional(),
   noLocation: z.boolean().optional(),
@@ -125,6 +132,17 @@ export const runDtoSchema = z.object({
   trigger: runTriggerSchema.default('manual'),
   measurementPlanVersionId: z.string().nullable().optional(),
   measurementManifest: z.record(z.string(), z.unknown()).nullable().optional(),
+  /**
+   * Set only on a spot check: the groups/targets that were asked for and the
+   * targets they resolved to. Null on a run that measured the whole plan.
+   */
+  measurementScope: measurementRunScopeSchema.nullable().optional(),
+  /**
+   * What this run measured with. One plan revision measured under one
+   * execution identity is a comparable series; a change of engine or model
+   * starts a new one, which a chart should break and annotate at.
+   */
+  measurementExecutionIdentity: measurementExecutionIdentitySchema.nullable().optional(),
   location: z.string().nullable().optional(),
   queries: z.array(z.string()).nullable().optional(),
   startedAt: z.string().nullable().optional(),

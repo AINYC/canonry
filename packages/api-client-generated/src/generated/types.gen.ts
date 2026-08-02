@@ -2684,6 +2684,20 @@ export type LatestProjectRunDto = {
         measurementManifest?: {
             [key: string]: unknown;
         } | null;
+        measurementScope?: {
+            groups: Array<string>;
+            targets: Array<string>;
+            queries: Array<string>;
+            resolvedTargets: Array<string>;
+        } | null;
+        measurementExecutionIdentity?: {
+            schemaVersion: 1;
+            providers: Array<string>;
+            models: {
+                [key: string]: string;
+            };
+            checksum: string;
+        } | null;
         location?: string | null;
         queries?: Array<string> | null;
         startedAt?: string | null;
@@ -4310,6 +4324,20 @@ export type ProjectOverviewDto = {
             measurementManifest?: {
                 [key: string]: unknown;
             } | null;
+            measurementScope?: {
+                groups: Array<string>;
+                targets: Array<string>;
+                queries: Array<string>;
+                resolvedTargets: Array<string>;
+            } | null;
+            measurementExecutionIdentity?: {
+                schemaVersion: 1;
+                providers: Array<string>;
+                models: {
+                    [key: string]: string;
+                };
+                checksum: string;
+            } | null;
             location?: string | null;
             queries?: Array<string> | null;
             startedAt?: string | null;
@@ -5214,6 +5242,20 @@ export type RunDetailDto = {
     measurementManifest?: {
         [key: string]: unknown;
     } | null;
+    measurementScope?: {
+        groups: Array<string>;
+        targets: Array<string>;
+        queries: Array<string>;
+        resolvedTargets: Array<string>;
+    } | null;
+    measurementExecutionIdentity?: {
+        schemaVersion: 1;
+        providers: Array<string>;
+        models: {
+            [key: string]: string;
+        };
+        checksum: string;
+    } | null;
     location?: string | null;
     queries?: Array<string> | null;
     startedAt?: string | null;
@@ -5273,6 +5315,20 @@ export type RunDto = {
     measurementPlanVersionId?: string | null;
     measurementManifest?: {
         [key: string]: unknown;
+    } | null;
+    measurementScope?: {
+        groups: Array<string>;
+        targets: Array<string>;
+        queries: Array<string>;
+        resolvedTargets: Array<string>;
+    } | null;
+    measurementExecutionIdentity?: {
+        schemaVersion: 1;
+        providers: Array<string>;
+        models: {
+            [key: string]: string;
+        };
+        checksum: string;
     } | null;
     location?: string | null;
     queries?: Array<string> | null;
@@ -7602,6 +7658,13 @@ export type PostApiV1ProjectsByNameRunsData = {
         trigger?: string;
         providers?: Array<string>;
         queries?: Array<string>;
+        /**
+         * Spot-check a slice of the published measurement plan. Groups expand to their member targets.
+         */
+        measurementScope?: {
+            groups?: Array<string>;
+            targets?: Array<string>;
+        };
         location?: string;
         allLocations?: boolean;
         noLocation?: boolean;
@@ -7617,6 +7680,10 @@ export type PostApiV1ProjectsByNameRunsData = {
 };
 
 export type PostApiV1ProjectsByNameRunsErrors = {
+    /**
+     * Invalid request: an untracked query, a measurement scope naming a group/target/question the published plan does not contain, a scope combined with a query list, a per-run location on a plan project, or a provider roster the plan was not published for.
+     */
+    400: ErrorEnvelope;
     /**
      * Run already in progress.
      */
@@ -7706,13 +7773,22 @@ export type PostApiV1RunsData = {
     url: '/api/v1/runs';
 };
 
+export type PostApiV1RunsErrors = {
+    /**
+     * Invalid request: an unknown provider name, or an unsupported run kind.
+     */
+    400: ErrorEnvelope;
+};
+
+export type PostApiV1RunsError = PostApiV1RunsErrors[keyof PostApiV1RunsErrors];
+
 export type PostApiV1RunsResponses = {
     /**
-     * Run results returned.
+     * One row per project: either a queued run or an error for that project alone. A project that cannot be measured (for example one whose published measurement plan expects a different number of answers per question) never prevents or hides the others.
      */
-    207: {
+    207: Array<{
         [key: string]: unknown;
-    };
+    }>;
 };
 
 export type PostApiV1RunsResponse = PostApiV1RunsResponses[keyof PostApiV1RunsResponses];

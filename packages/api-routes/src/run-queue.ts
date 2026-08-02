@@ -1,7 +1,26 @@
 import crypto from 'node:crypto'
 import { and, eq, or } from 'drizzle-orm'
+import {
+  buildMeasurementExecutionIdentity,
+  buildMeasurementRunManifestV1,
+  canonicalMeasurementExecutionIdentityJson,
+  MeasurementRunScopeError,
+  measurementRunScopeIsEmpty,
+  parseStoredMeasurementPlan,
+  RunTriggers,
+  resolveMeasurementRunQueryScope,
+  resolveMeasurementRunScope,
+  validationError,
+  type MeasurementExecutionIdentity,
+  type MeasurementExecutionNode,
+  type MeasurementPlan,
+  type MeasurementRunManifestV1,
+  type MeasurementRunScope,
+  type MeasurementRunScopeRequest,
+} from '@ainyc/canonry-contracts'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { runs } from '@ainyc/canonry-db'
+import { measurementPlans, measurementPlanVersions, projects, runs } from '@ainyc/canonry-db'
+import { buildMeasurementRunManifest } from './measurement-report-adapter.js'
 import { ensureCurrentQueryBasketRevision } from './query-basket.js'
 
 export interface QueueRunParams {
@@ -12,6 +31,234 @@ export interface QueueRunParams {
   location?: string | null
   /** Array of tracked query strings to scope the sweep to. Null = full sweep. */
   queries?: string[] | null
+  /**
+   * Providers this run was asked for. Empty or omitted falls back to the
+   * project's own list, and an empty project list falls back to whatever the
+   * instance can run — the same order the preflight check uses, so what is
+   * stamped is what was validated.
+   */
+  providers?: readonly string[] | null
+  /** Providers this instance can actually run, for the "all configured" fallback. */
+  runnableProviders?: readonly string[] | null
+  /**
+   * Provider → the model this instance currently has it pointed at, used when
+   * the project pins no override. Without it an inherited default could change
+   * under a series with nothing recording the change.
+   */
+  providerModels?: Readonly<Record<string, string>> | null
+  /** Groups/targets to spot-check, resolved against the plan revision pinned here. */
+  measurementScope?: MeasurementRunScopeRequest | null
+}
+
+interface MeasurementStamp {
+  versionId: string
+  manifest: MeasurementRunManifestV1
+  scope: MeasurementRunScope | null
+  identity: MeasurementExecutionIdentity
+}
+
+/** Whether this project's runs measure a published plan. */
+export function hasActiveMeasurementPlan(db: DatabaseClient, projectId: string): boolean {
+  return db.select({ projectId: measurementPlans.projectId }).from(measurementPlans)
+    .where(eq(measurementPlans.projectId, projectId)).get() !== undefined
+}
+
+/** The checksum layer contracts deliberately leaves to whoever owns hashing. */
+function executionIdentityChecksum(input: { providers: readonly string[]; models: Record<string, string> }): string {
+  return crypto.createHash('sha256')
+    .update(canonicalMeasurementExecutionIdentityJson(input))
+    .digest('hex')
+}
+
+function normalizeProviders(values: readonly string[]): string[] {
+  return [...new Set(values.map(value => value.trim().toLocaleLowerCase('en')).filter(Boolean))].sort()
+}
+
+/**
+ * Which providers a run measures with: what was asked for, else the project's
+ * own list, else everything the instance can run. An empty project list means
+ * "all configured" everywhere else in canonry, and reading it as zero here
+ * would freeze an expectation nothing could ever satisfy.
+ */
+export function resolveRunProviderSelection(input: {
+  requestedProviders?: readonly string[] | null
+  projectProviders?: readonly string[] | null
+  runnableProviders?: readonly string[] | null
+}): string[] {
+  const requested = normalizeProviders(input.requestedProviders ?? [])
+  if (requested.length) return requested
+  const project = normalizeProviders(input.projectProviders ?? [])
+  if (project.length) return project
+  return normalizeProviders(input.runnableProviders ?? [])
+}
+
+function providerRoster(tx: DatabaseClient, params: QueueRunParams): string[] {
+  return resolveRunProviderSelection({
+    requestedProviders: params.providers,
+    projectProviders: tx.select({ providers: projects.providers }).from(projects)
+      .where(eq(projects.id, params.projectId)).get()?.providers ?? [],
+    runnableProviders: params.runnableProviders,
+  })
+}
+
+/**
+ * The model that will actually answer for each provider: the project's
+ * override if it set one, otherwise whatever this instance has the provider
+ * pointed at, otherwise the provider's own default.
+ *
+ * Resolved here rather than left to execution because an inherited default
+ * that changes underneath a series has to produce a different execution
+ * identity, not a silently different measurement.
+ */
+function effectiveModels(
+  tx: DatabaseClient,
+  params: QueueRunParams,
+  providers: readonly string[],
+): Record<string, string> {
+  const overrides = tx.select({ models: projects.providerModels }).from(projects)
+    .where(eq(projects.id, params.projectId)).get()?.models ?? {}
+  const instance = params.providerModels ?? {}
+  const resolved: Record<string, string> = {}
+  for (const provider of providers) {
+    const model = overrides[provider] ?? instance[provider]
+    if (model) resolved[provider] = model
+  }
+  return resolved
+}
+
+function expectedSlotsFor(
+  nodes: readonly MeasurementExecutionNode[],
+  providers: readonly string[],
+  models: Record<string, string>,
+): Array<{ executionId: string; queryText: string; provider: string; context: MeasurementExecutionNode['context']; requestedModel?: string }> {
+  return nodes.flatMap(node => providers.map(provider => ({
+    executionId: node.stableKey,
+    queryText: node.queryText,
+    provider,
+    context: node.context,
+    // Freeze the model too. A project that re-points a provider between queue
+    // and execution would otherwise change what a stored row means without
+    // anything recording that it moved.
+    ...(models[provider] ? { requestedModel: models[provider] } : {}),
+  })))
+}
+
+function measurementStamp(tx: DatabaseClient, params: QueueRunParams): MeasurementStamp | null {
+  const active = tx.select().from(measurementPlans)
+    .where(eq(measurementPlans.projectId, params.projectId)).get()
+  if (!active) {
+    if (!measurementRunScopeIsEmpty(params.measurementScope)) {
+      throw validationError(
+        'This project has no published measurement plan, so there is nothing for a group or target scope to point at. '
+        + 'Publish a plan first, or run a full sweep.',
+      )
+    }
+    return null
+  }
+
+  const version = tx.select().from(measurementPlanVersions).where(and(
+    eq(measurementPlanVersions.projectId, params.projectId),
+    eq(measurementPlanVersions.id, active.activeVersionId),
+  )).get()
+  if (!version) throw new Error(`Measurement plan ${params.projectId} points to missing version ${active.activeVersionId}`)
+
+  const plan: MeasurementPlan = parseStoredMeasurementPlan(version.canonicalJson)
+  const providers = providerRoster(tx, params)
+  const models = effectiveModels(tx, params, providers)
+  if (providers.length === 0) {
+    throw validationError(
+      'No provider is configured for this project and none is available on this instance, so a plan run has nothing to measure with. '
+      + 'Add a provider key, or set the providers on the project.',
+    )
+  }
+  // Engine and model identity is recorded, never refused. A different roster or
+  // a re-pointed model is a new comparable series under the same revision.
+  const identity = buildMeasurementExecutionIdentity({ providers, models }, executionIdentityChecksum({ providers, models }))
+
+  // A slice, however it was chosen. Naming questions is the same kind of
+  // subset as naming groups or targets, and gets the same treatment: probe,
+  // recorded scope, no basket stamp.
+  const resolution = sliceFor(plan, params)
+  if (!resolution) {
+    // A full sweep's manifest is the plan's own expectation, built by the same
+    // function the report reads it back with.
+    //
+    // The one thing a run cannot change is HOW MANY snapshots each question
+    // expects: that number is the denominator every rate in the revision is
+    // taken over, and it is part of what the revision's checksum covers.
+    // Swapping which engines answer is a new series (recorded above, never
+    // refused) because the count is unchanged; running a different NUMBER of
+    // engines describes a different measurement, and republishing is the
+    // action that actually changes it.
+    try {
+      const base = buildMeasurementRunManifest(plan, providers)
+      const manifest = buildMeasurementRunManifestV1({
+        expectedSlots: base.expectedSlots.map(slot => ({
+          ...slot,
+          ...(models[slot.provider] ? { requestedModel: models[slot.provider]! } : {}),
+        })),
+      })
+      return { versionId: version.id, manifest, scope: null, identity }
+    } catch (error) {
+      if (error instanceof MeasurementRunScopeError) throw error
+      const expected = plan.executionNodes[0]?.expectedSnapshots ?? 0
+      throw validationError(
+        `The published measurement plan expects ${expected} answer(s) per question, but this run would produce ${providers.length}`
+        + `${providers.length ? ` (${providers.join(', ')})` : ''}. `
+        + 'That number is the denominator of every rate in this revision, so it cannot change inside one. '
+        + `Run with ${expected} provider(s), or publish the plan again with the ${providers.length} you want — `
+        + 'publishing records the new count and gives you a revision that describes it.',
+      )
+    }
+  }
+
+  // A spot check's expectation is its own slice, so the manifest is built
+  // directly rather than from the plan: it deliberately does not satisfy every
+  // frozen node, which is why a scoped run never displaces a sweep.
+  return {
+    versionId: version.id,
+    manifest: buildMeasurementRunManifestV1({
+      expectedSlots: expectedSlotsFor(resolution.executionNodes, providers, models),
+    }),
+    scope: resolution.scope,
+    identity,
+  }
+}
+
+/** The slice this run measures, or null when it measures the whole plan. */
+function sliceFor(plan: MeasurementPlan, params: QueueRunParams) {
+  try {
+    if (!measurementRunScopeIsEmpty(params.measurementScope)) {
+      return resolveMeasurementRunScope(plan, params.measurementScope!)
+    }
+    if (params.queries?.length) {
+      return resolveMeasurementRunQueryScope(plan, params.queries)
+    }
+    return null
+  } catch (error) {
+    // A slice that names something the pinned revision does not contain is a
+    // caller mistake, not a server fault: answer with the key they typed.
+    if (error instanceof MeasurementRunScopeError) {
+      throw validationError(error.message, {
+        unknownGroups: error.unknownGroups,
+        unknownTargets: error.unknownTargets,
+        unknownQueries: error.unknownQueries,
+        emptyTargets: error.emptyTargets,
+      })
+    }
+    throw error
+  }
+}
+
+/**
+ * Run the plan checks a queue would run, without queueing anything.
+ *
+ * The batch trigger needs to know whether every project can be measured before
+ * it dispatches the first one — a 400 raised halfway through a batch would be
+ * describing work that had already been sent to providers.
+ */
+export function assertMeasurementRunStampable(db: DatabaseClient, params: QueueRunParams): void {
+  measurementStamp(db, params)
 }
 
 export type QueueRunResult =
@@ -40,28 +287,43 @@ export function queueRunIfProjectIdle(db: DatabaseClient, params: QueueRunParams
       return { conflict: true, activeRunId: activeRun.id } as const
     }
 
+    const stamp = measurementStamp(tx as unknown as DatabaseClient, params)
+
     // Stamp the query set this run is about to measure, so analytics can compare
     // like-for-like later without inferring membership from row timestamps.
     //
-    // Only a FULL sweep is stamped. A scoped run (`queries` non-null) deliberately
-    // measures a subset, and labelling it with the full basket would let a
-    // 3-query spot check land in a bucket as though all 16 had been measured —
-    // the same denominator error the basket exists to prevent, arriving by a
-    // different route. Scoped runs keep a null revision and analytics treats them
-    // as unversioned.
-    const basket = params.queries == null
-      ? ensureCurrentQueryBasketRevision(tx as unknown as DatabaseClient, params.projectId, createdAt)
-      : null
+    // Only a FULL sweep is stamped. A scoped run (`queries` non-null, or a
+    // measurement scope naming groups/targets) deliberately measures a subset,
+    // and labelling it with the full basket would let a 3-query spot check land
+    // in a bucket as though all 16 had been measured — the same denominator
+    // error the basket exists to prevent, arriving by a different route. Scoped
+    // runs keep a null revision and analytics treats them as unversioned.
+    const scoped = params.queries != null || stamp?.scope != null
+    const basket = scoped
+      ? null
+      : ensureCurrentQueryBasketRevision(tx as unknown as DatabaseClient, params.projectId, createdAt)
 
     tx.insert(runs).values({
       id: runId,
       projectId: params.projectId,
       kind,
+      // A slice of a plan is exactly what a probe is for: it exercises part of
+      // the measurement set to check something, and must never stand in for a
+      // sweep. Every dashboard, analytics and report read already excludes
+      // probes, so this is the one flag that keeps a spot check out of numbers
+      // that claim to describe the whole plan.
+      trigger: stamp?.scope ? RunTriggers.probe : trigger,
       status: 'queued',
-      trigger,
-      location: params.location ?? null,
+      // A plan sets the location per question, so one label on the run would
+      // describe only some of its rows. Nothing may read a single location off
+      // a run whose measurements span several.
+      location: stamp ? null : params.location ?? null,
       queries: params.queries ?? null,
       queryBasketRevision: basket?.revision ?? null,
+      measurementPlanVersionId: stamp?.versionId ?? null,
+      measurementManifest: stamp?.manifest ?? null,
+      measurementScope: stamp?.scope ?? null,
+      measurementExecutionIdentity: stamp?.identity ?? null,
       createdAt,
     }).run()
 

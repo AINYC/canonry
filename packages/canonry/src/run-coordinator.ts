@@ -7,6 +7,7 @@ import {
   type DiscoveryCompetitorMapEntry,
   type RunKind,
 } from '@ainyc/canonry-contracts'
+import { measurementRunCompleteness } from '@ainyc/canonry-api-routes'
 import type { Notifier } from './notifier.js'
 import type { IntelligenceService } from './intelligence-service.js'
 import type { AnalysisResult, Insight } from '@ainyc/canonry-intelligence'
@@ -76,6 +77,27 @@ export class RunCoordinator {
     // never feed aggregations either.
     if (runRow?.trigger === RunTriggers.probe) {
       log.info('probe.skip-side-effects', { runId, projectId, kind })
+      return
+    }
+
+    // A plan run that did not fill every slot its manifest promised has not
+    // measured the plan. Deriving insights from it, or waking Aero with it,
+    // would state a conclusion about questions nobody answered — the same
+    // partial-denominator error the report refuses to make. The operator still
+    // gets the notification, carrying the partial status the run really has.
+    const completeness = measurementRunCompleteness(this.db, runId)
+    if (completeness.planned && !completeness.complete) {
+      log.info('measurement.incomplete-skip-derived', {
+        runId,
+        projectId,
+        executed: completeness.executed,
+        expected: completeness.expected,
+      })
+      try {
+        await this.notifier.onRunCompleted(runId, projectId)
+      } catch (err) {
+        log.error('notifier.failed', { runId, error: err instanceof Error ? err.message : String(err) })
+      }
       return
     }
 

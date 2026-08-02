@@ -98,6 +98,12 @@ export interface ApiRoutesOptions {
   onRunCreated?: (runId: string, projectId: string, providers?: string[], location?: import('@ainyc/canonry-contracts').LocationContext | null) => void
   /** Returns providers currently registered and runnable by the host worker. */
   getRunnableProviderNames?: () => readonly string[]
+  /**
+   * Provider → the model this instance currently has it pointed at. A run
+   * freezes the model that will actually answer, so an inherited default that
+   * moves shows up as a new measurement series instead of silent drift.
+   */
+  getEffectiveProviderModels?: () => Readonly<Record<string, string>>
   /** Optional deterministic sitemap-fetch seam for Target discovery tests/hosts. */
   fetchMeasurementSitemap?: MeasurementServiceRoutesOptions['fetchSitemap']
   /** Provider configuration summary for settings endpoint */
@@ -368,6 +374,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       onRunCreated: opts.onRunCreated,
       validProviderNames: opts.providerAdapters?.map(a => a.name),
       getRunnableProviderNames: opts.getRunnableProviderNames,
+      getEffectiveProviderModels: opts.getEffectiveProviderModels,
     } satisfies RunRoutesOptions)
     await api.register(measurementPlanRoutes, {
       getRunnableProviderNames: opts.getRunnableProviderNames,
@@ -540,7 +547,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
 }
 
 export type { DatabaseClient } from '@ainyc/canonry-db'
-export { queueRunIfProjectIdle } from './run-queue.js'
+export { hasActiveMeasurementPlan, queueRunIfProjectIdle } from './run-queue.js'
 export { ensureCurrentQueryBasketRevision, latestQueryBasketRevision } from './query-basket.js'
 export { nextRunFromCron } from './schedule-utils.js'
 export {
@@ -603,6 +610,10 @@ export type { OpenApiInfo } from './openapi.js'
 // without implying that a read performs sitemap or provider I/O.
 export * from './measurement-discovery.js'
 export * from './measurement-report.js'
+export * from './measurement-run-completeness.js'
+// Additive re-export: the runner package needs the same manifest builder and
+// stored-report reader the routes use, and the package exposes only this entry.
+export { buildMeasurementRunManifest, buildStoredMeasurementReport } from './measurement-report-adapter.js'
 
 /**
  * Build the per-source-type validator map consumed by the generic

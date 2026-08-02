@@ -17,6 +17,15 @@ export interface SchedulerCallbacks {
   /** Fired when an answer-visibility schedule triggers. Existing canonry callsites wire this to the JobRunner. */
   onRunCreated: (runId: string, projectId: string, providers?: ProviderName[], location?: LocationContext | null) => void
   /**
+   * Providers this host can actually run. A project with an empty provider
+   * list means "all configured" — without this the scheduler cannot resolve
+   * that to anything, and a scheduled plan sweep would have no roster to
+   * measure against while a hand-triggered one worked fine.
+   */
+  getRunnableProviderNames?: () => readonly string[]
+  /** Provider → the model this host has it pointed at, frozen onto plan runs. */
+  getEffectiveProviderModels?: () => Readonly<Record<string, string>>
+  /**
    * Fired when a traffic-sync schedule triggers. Receives the project's name
    * and the configured source UUID — the host wires this to the existing
    * `POST /traffic/sources/:id/sync` flow (typically via `ApiClient.trafficSync`).
@@ -504,12 +513,21 @@ export class Scheduler {
       }
       const locationLabel = resolvedLocation?.label ?? null
 
+      // Resolve providers before queuing: a plan-aware run records what it
+      // expects to produce, and a schedule that pins its own providers expects
+      // those, not the project's whole list.
+      const scheduleProviders = currentSchedule.providers
+      const providers = scheduleProviders.length > 0 ? scheduleProviders : undefined
+
       const queueResult = queueRunIfProjectIdle(this.db, {
         createdAt: now,
         kind: 'answer-visibility',
         projectId,
         trigger: 'scheduled',
         location: locationLabel,
+        providers,
+        runnableProviders: this.callbacks.getRunnableProviderNames?.(),
+        providerModels: this.callbacks.getEffectiveProviderModels?.(),
       })
 
       if (queueResult.conflict) {
@@ -527,10 +545,6 @@ export class Scheduler {
         nextRunAt,
         updatedAt: now,
       }).where(eq(schedules.id, currentSchedule.id)).run()
-
-      // Resolve providers
-      const scheduleProviders = currentSchedule.providers
-      const providers = scheduleProviders.length > 0 ? scheduleProviders : undefined
 
       log.info('run.triggered', { runId, projectName: project.name, providers: providers ?? 'all' })
       this.callbacks.onRunCreated(runId, projectId, providers, resolvedLocation)

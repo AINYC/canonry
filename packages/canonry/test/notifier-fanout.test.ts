@@ -279,3 +279,60 @@ describe('Notifier multi-location fan-out (#480)', () => {
     expect(transitions).toEqual([])
   })
 })
+
+describe('Notifier and incomplete plan runs', () => {
+  it('reports no citation transitions from a run that did not finish its manifest', () => {
+    const db = buildDb()
+    const projectId = crypto.randomUUID()
+    const queryId = crypto.randomUUID()
+    const now = '2026-08-02T00:00:00.000Z'
+    const earlier = '2026-08-01T00:00:00.000Z'
+
+    db.insert(projects).values({
+      id: projectId,
+      name: 'planned-notify',
+      displayName: 'Planned Notify',
+      canonicalDomain: 'example.com',
+      country: 'US',
+      language: 'en',
+      createdAt: earlier,
+      updatedAt: earlier,
+    }).run()
+    db.insert(queries).values({ id: queryId, projectId, query: 'widget pricing', createdAt: earlier }).run()
+
+    // A complete earlier run that saw a citation.
+    db.insert(runs).values({
+      id: 'previous', projectId, status: 'completed', createdAt: earlier, finishedAt: earlier,
+    }).run()
+    db.insert(querySnapshots).values({
+      id: crypto.randomUUID(), runId: 'previous', queryId, provider: 'openai',
+      citationState: 'cited', citedDomains: ['example.com'], competitorOverlap: [], createdAt: earlier,
+    }).run()
+
+    // A plan run that only managed one of its two promised slots, and the one
+    // it managed is not cited. Calling that a lost citation would be a
+    // conclusion drawn from a measurement that never happened.
+    db.insert(runs).values({
+      id: 'incomplete',
+      projectId,
+      status: 'partial',
+      createdAt: now,
+      finishedAt: now,
+      measurementPlanVersionId: null,
+      measurementManifest: {
+        schemaVersion: 1,
+        expectedSlots: [
+          { executionId: 'e1', queryText: 'widget pricing', provider: 'openai', context: null },
+          { executionId: 'e2', queryText: 'widget pricing', provider: 'gemini', context: null },
+        ],
+      },
+    }).run()
+    db.insert(querySnapshots).values({
+      id: crypto.randomUUID(), runId: 'incomplete', queryId, provider: 'openai',
+      citationState: 'not-cited', citedDomains: [], competitorOverlap: [], createdAt: now,
+    }).run()
+
+    const notifier = new Notifier(db, 'http://localhost:4100')
+    expect(callCompute(notifier, 'incomplete', projectId)).toEqual([])
+  })
+})

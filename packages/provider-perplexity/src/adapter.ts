@@ -27,6 +27,8 @@ export const perplexityAdapter: ProviderAdapter = {
   name: 'perplexity',
   displayName: 'Perplexity',
   mode: 'api',
+  // normalize.ts folds the location into the prompt the model receives.
+  supportsLocationContext: true,
   keyUrl: 'https://www.perplexity.ai/settings/api',
   // Upstream model list: https://docs.perplexity.ai/guides/model-cards
   modelRegistry: {

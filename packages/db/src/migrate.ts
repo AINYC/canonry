@@ -2650,6 +2650,30 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
     run: addRunsMeasurementPlanVersionForeignKey,
     disableForeignKeys: true,
   },
+  {
+    // A spot check measures a slice of a published plan. The slice it was asked
+    // for is recorded next to the run so a reader never has to infer it from a
+    // shorter manifest. Null on every existing row, which is correct: they all
+    // measured whatever their plan or query set said in full.
+    version: 119,
+    name: 'measurement-run-scope',
+    statements: [
+      `ALTER TABLE runs ADD COLUMN measurement_scope TEXT`,
+    ],
+  },
+  {
+    // Engine and model identity is a property of a run, not of a plan: a plan
+    // revision that expects two snapshots per question is satisfied by any two
+    // engines. Recording it per run makes a swap a new comparable series
+    // instead of either silent drift or a run nobody can make valid.
+    version: 120,
+    name: 'measurement-run-execution-identity',
+    statements: [
+      `ALTER TABLE runs ADD COLUMN measurement_execution_identity TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_runs_measurement_series
+        ON runs(project_id, measurement_plan_version_id, measurement_execution_identity)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

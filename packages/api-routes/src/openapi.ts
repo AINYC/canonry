@@ -1207,6 +1207,14 @@ const routeCatalog: OpenApiOperation[] = [
               trigger: stringSchema,
               providers: stringArraySchema,
               queries: stringArraySchema,
+              measurementScope: {
+                type: 'object',
+                description: 'Spot-check a slice of the published measurement plan. Groups expand to their member targets.',
+                properties: {
+                  groups: stringArraySchema,
+                  targets: stringArraySchema,
+                },
+              },
               location: stringSchema,
               allLocations: booleanSchema,
               noLocation: booleanSchema,
@@ -1217,6 +1225,10 @@ const routeCatalog: OpenApiOperation[] = [
     },
     responses: {
       201: jsonResponse('Run queued.', 'RunDto'),
+      400: errorResponse(
+        'Invalid request: an untracked query, a measurement scope naming a group/target/question the published plan does not contain, '
+        + 'a scope combined with a query list, a per-run location on a plan project, or a provider roster the plan was not published for.',
+      ),
       422: errorResponse('Project has no tracked queries.'),
       409: errorResponse('Run already in progress.'),
       503: errorResponse('No runnable answer provider is configured.'),
@@ -1277,7 +1289,13 @@ const routeCatalog: OpenApiOperation[] = [
     },
     responses: {
       // TODO: Add `TriggerAllRunsResponse` Zod schema in contracts.
-      207: rawJsonResponse('Run results returned.', looseObjectSchema),
+      207: rawJsonResponse(
+        'One row per project: either a queued run or an error for that project alone. A project that cannot be measured '
+        + '(for example one whose published measurement plan expects a different number of answers per question) never '
+        + 'prevents or hides the others.',
+        { type: 'array', items: looseObjectSchema },
+      ),
+      400: errorResponse('Invalid request: an unknown provider name, or an unsupported run kind.'),
     },
   },
   {

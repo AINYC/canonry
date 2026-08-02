@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, it, expect, vi, onTestFinished } from 'vitest'
 import { eq } from 'drizzle-orm'
-import { createClient, discoverySessions, migrate, projects, runs, queries, querySnapshots, healthSnapshots, insights, gbpLocations, gbpLodgingSnapshots } from '@ainyc/canonry-db'
+import { createClient, discoverySessions, measurementPlanVersions, migrate, projects, runs, queries, querySnapshots, healthSnapshots, insights, gbpLocations, gbpLodgingSnapshots } from '@ainyc/canonry-db'
 import type { AnalysisResult } from '@ainyc/canonry-intelligence'
 import { Notifier } from '../src/notifier.js'
 import { IntelligenceService } from '../src/intelligence-service.js'
@@ -72,6 +72,117 @@ function createMockNotifier(): Pick<Notifier, 'onRunCompleted'> {
     onRunCompleted: vi.fn().mockResolvedValue(undefined),
   }
 }
+
+/**
+ * A plan run that did not fill every slot its manifest promised is not a
+ * measurement of the plan. Deriving insights from it, or waking Aero with it,
+ * states a conclusion about questions nobody answered.
+ */
+function seedPlanRun(db: ReturnType<typeof createClient>, options: { executed: number; expected: number }) {
+  const now = new Date().toISOString()
+  const projectId = crypto.randomUUID()
+  const versionId = crypto.randomUUID()
+  const runId = crypto.randomUUID()
+
+  db.insert(projects).values({
+    id: projectId,
+    name: 'planned-coord',
+    displayName: 'Planned Coord',
+    canonicalDomain: 'example.com',
+    country: 'US',
+    language: 'en',
+    providers: ['gemini'],
+    createdAt: now,
+    updatedAt: now,
+  }).run()
+  db.insert(measurementPlanVersions).values({
+    id: versionId,
+    projectId,
+    revision: 1,
+    canonicalJson: '{}',
+    checksum: 'a'.repeat(64),
+    createdAt: now,
+  }).run()
+
+  const expectedSlots = Array.from({ length: options.expected }, (_, index) => ({
+    executionId: `execution-${index}`,
+    queryText: `question ${index}`,
+    provider: 'gemini',
+    context: null,
+  }))
+  db.insert(runs).values({
+    id: runId,
+    projectId,
+    status: options.executed === options.expected ? 'completed' : 'partial',
+    trigger: 'manual',
+    measurementPlanVersionId: versionId,
+    measurementManifest: { schemaVersion: 1, expectedSlots },
+    createdAt: now,
+    finishedAt: now,
+  }).run()
+
+  for (let index = 0; index < options.executed; index++) {
+    db.insert(querySnapshots).values({
+      id: crypto.randomUUID(),
+      runId,
+      queryId: null,
+      queryText: `question ${index}`,
+      provider: 'gemini',
+      model: 'test-model',
+      citationState: 'cited',
+      citedDomains: ['example.com'],
+      competitorOverlap: [],
+      measurementExecutionId: `execution-${index}`,
+      createdAt: now,
+    }).run()
+  }
+
+  return { projectId, runId }
+}
+
+describe('incomplete plan runs', () => {
+  it('derives no intelligence and wakes nobody when slots went unmeasured', async () => {
+    const { db } = createTempDb('coord-partial-plan-')
+    const { projectId, runId } = seedPlanRun(db, { executed: 1, expected: 4 })
+
+    const notifier = createMockNotifier()
+    const service = new IntelligenceService(db)
+    const analyze = vi.spyOn(service, 'analyzeAndPersist')
+    const aeroEvents: AeroEventContext[] = []
+    const coordinator = new RunCoordinator(
+      db,
+      notifier as Notifier,
+      service,
+      undefined,
+      async (ctx) => { aeroEvents.push(ctx) },
+    )
+
+    await coordinator.onRunCompleted(runId, projectId)
+
+    expect(analyze).not.toHaveBeenCalled()
+    expect(db.select().from(healthSnapshots).all()).toHaveLength(0)
+    expect(aeroEvents).toHaveLength(0)
+
+    // The operator still hears about it — as the partial run it was.
+    expect(notifier.onRunCompleted).toHaveBeenCalledWith(runId, projectId)
+    expect(db.select().from(runs).where(eq(runs.id, runId)).get()!.status).toBe('partial')
+  })
+
+  it('still derives intelligence when the plan run filled every slot', async () => {
+    const { db } = createTempDb('coord-complete-plan-')
+    const { projectId, runId } = seedPlanRun(db, { executed: 2, expected: 2 })
+
+    const notifier = createMockNotifier()
+    const service = new IntelligenceService(db)
+    const analyze = vi.spyOn(service, 'analyzeAndPersist')
+    const coordinator = new RunCoordinator(db, notifier as Notifier, service)
+
+    await coordinator.onRunCompleted(runId, projectId)
+
+    expect(analyze).toHaveBeenCalled()
+    expect(notifier.onRunCompleted).toHaveBeenCalledWith(runId, projectId)
+  })
+})
 
 describe('RunCoordinator', () => {
   it('calls both intelligence and notifier on run completion', async () => {

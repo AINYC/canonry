@@ -118,6 +118,28 @@ export const runs = sqliteTable('runs', {
   // to materialize its execution graph. Planless runs keep both fields null.
   measurementPlanVersionId: text('measurement_plan_version_id'),
   measurementManifest: text('measurement_manifest', { mode: 'json' }).$type<Record<string, unknown>>(),
+  // Set only on a spot check: which groups/targets the operator named and the
+  // targets they resolved to. Null means the run measured the whole plan, so
+  // `IS NOT NULL` is the test for "this run measured a slice".
+  measurementScope: text('measurement_scope', { mode: 'json' }).$type<{
+    groups: string[]
+    targets: string[]
+    queries: string[]
+    resolvedTargets: string[]
+  }>(),
+  /**
+   * What this run measured WITH: the engines and the models they were pointed
+   * at, plus a checksum over both. One plan revision measured under one
+   * execution identity is a comparable series; a change of engine or model
+   * starts a new series rather than being refused, and charts break at the
+   * boundary the same way they break at a revision boundary.
+   */
+  measurementExecutionIdentity: text('measurement_execution_identity', { mode: 'json' }).$type<{
+    schemaVersion: 1
+    providers: string[]
+    models: Record<string, string>
+    checksum: string
+  }>(),
   createdAt: text('created_at').notNull(),
 }, (table) => [
   index('idx_runs_project').on(table.projectId),

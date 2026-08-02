@@ -54,6 +54,8 @@ import {
   configSourceSchema,
   locationContextSchema,
   measurementConfigSchema,
+  measurementExecutionIdentitySchema,
+  measurementRunScopeSchema,
   notificationEventSchema,
   providerNameSchema,
   runKindSchema,
@@ -92,6 +94,12 @@ export const runRowSchema = createSelectSchema(runs, {
   // Execution is not shipped yet. Keep the future provenance column
   // structural until a versioned target-run contract is introduced.
   measurementManifest: z.record(z.string(), z.unknown()).nullable(),
+  // Null on a full sweep; on a spot check it records the slice that was asked
+  // for and the targets it resolved to.
+  measurementScope: measurementRunScopeSchema.nullable(),
+  // Engines + models this run measured with, and the checksum that groups a
+  // comparable series with it.
+  measurementExecutionIdentity: measurementExecutionIdentitySchema.nullable(),
 })
 
 // --- schedules ---

@@ -1,5 +1,5 @@
 import { createServer, type ServerResponse } from 'node:http'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, test, vi } from 'vitest'
 import { z } from 'zod'
 import { buildOpenApiDocument } from '../../api-routes/src/openapi.js'
 import { CliError } from '../src/cli-error.js'
@@ -1113,3 +1113,17 @@ function sendJson(response: ServerResponse, value: unknown, status = 200): void 
   response.writeHead(status, { 'content-type': 'application/json' })
   response.end(JSON.stringify(value))
 }
+
+test('the run-trigger tool tells an agent it can measure one slice of a plan', () => {
+  const tool = canonryMcpTools.find(candidate => candidate.name === 'canonry_run_trigger')!
+
+  // The tool already accepts measurementScope; an agent that cannot see the
+  // capability in the description will never reach for it.
+  expect(tool.description).toMatch(/measurementScope/)
+  expect(tool.description).toMatch(/group/i)
+  expect(tool.description).toMatch(/target/i)
+  // The description must not imply an empty scope is a way to ask for a sweep:
+  // the API rejects that, and an agent following the text would get a 400.
+  expect(tool.description).not.toMatch(/measurementScope=\{groups:\[\],\s*targets:\[\]\}/)
+  expect(tool.description).toMatch(/omit the field/i)
+})

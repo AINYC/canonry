@@ -49,6 +49,9 @@ export const cdpChatgptAdapter: ProviderAdapter = {
   name: 'cdp:chatgpt',
   displayName: 'ChatGPT (Browser)',
   mode: 'browser',
+  // The browser session's own geolocation decides; the configured location
+  // never reaches the request, so a row from this adapter claims no place.
+  supportsLocationContext: false,
   modelRegistry: {
     defaultModel: 'chatgpt-web',
     validationPattern: /./,

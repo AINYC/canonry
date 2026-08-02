@@ -1,5 +1,5 @@
 import { eq, desc, and, inArray, or } from 'drizzle-orm'
-import { deliverWebhook, redactNotificationUrl, resolveDestination, resolveWebhookTarget, toAlertView } from '@ainyc/canonry-api-routes'
+import { deliverWebhook, measurementRunCompleteness, redactNotificationUrl, resolveDestination, resolveWebhookTarget, toAlertView } from '@ainyc/canonry-api-routes'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { auditLog, doctorHealthState, groupRunsByCreatedAt, notifications, projects, queries, querySnapshots, runs } from '@ainyc/canonry-db'
 import type { NotificationEvent, WebhookPayload, InsightWebhookPayload, HealthWebhookPayload } from '@ainyc/canonry-contracts'
@@ -336,6 +336,20 @@ export class Notifier {
     // promote to a DB-backed marker table.
     const thisRun = this.db.select().from(runs).where(eq(runs.id, runId)).get()
     if (!thisRun) return []
+
+    // A plan run that fell short of its manifest measured only part of the
+    // set. Diffing it against a complete previous run would report a citation
+    // as lost when the truth is that the question was never asked this time —
+    // a wrong number, dressed as an alert.
+    const completeness = measurementRunCompleteness(this.db, runId)
+    if (completeness.planned && !completeness.complete) {
+      log.info('transitions.skipped-incomplete', {
+        runId,
+        executed: completeness.executed,
+        expected: completeness.expected,
+      })
+      return []
+    }
 
     // Siblings at the same (project, kind, createdAt). The `kind` filter
     // avoids cross-kind interference — a queued traffic-sync that happened

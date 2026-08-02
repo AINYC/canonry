@@ -9,7 +9,7 @@ function getClient() {
 
 const TERMINAL_STATUSES = new Set(['completed', 'partial', 'failed', 'cancelled'])
 
-export async function triggerRun(project: string, opts?: { provider?: string; queries?: string[]; wait?: boolean; format?: string; location?: string; allLocations?: boolean; noLocation?: boolean; probe?: boolean }): Promise<void> {
+export async function triggerRun(project: string, opts?: { provider?: string; queries?: string[]; groups?: string[]; targets?: string[]; wait?: boolean; format?: string; location?: string; allLocations?: boolean; noLocation?: boolean; probe?: boolean }): Promise<void> {
   const client = getClient()
   const body: Record<string, unknown> = {}
   if (opts?.provider) {
@@ -20,6 +20,14 @@ export async function triggerRun(project: string, opts?: { provider?: string; qu
   }
   if (opts?.queries?.length) {
     body.queries = opts.queries
+  }
+  // Only send the halves the operator named: an empty list would read as
+  // "measure nothing" rather than "measure everything".
+  if (opts?.groups?.length || opts?.targets?.length) {
+    body.measurementScope = {
+      ...(opts.groups?.length ? { groups: opts.groups } : {}),
+      ...(opts.targets?.length ? { targets: opts.targets } : {}),
+    }
   }
   if (opts?.location) {
     body.location = opts.location

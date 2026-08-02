@@ -28,6 +28,8 @@ export const claudeAdapter: ProviderAdapter = {
   name: 'claude',
   displayName: 'Claude',
   mode: 'api',
+  // normalize.ts sets `user_location` on the web_search tool.
+  supportsLocationContext: true,
   keyUrl: 'https://platform.claude.com/settings/keys',
   // Upstream model list: https://platform.claude.com/docs/en/about-claude/models/overview
   modelRegistry: {
