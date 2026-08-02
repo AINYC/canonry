@@ -246,6 +246,43 @@ describe('openapi contract', () => {
     expect(JSON.stringify(body.components?.schemas?.ProjectSearchResponseDto)).toContain('citedUrls')
   })
 
+  it('publishes typed measurement discovery and revision-pinned report operations', async () => {
+    const ctx = buildObservedApp()
+    contexts.push(ctx)
+    await ctx.app.ready()
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/openapi.json' })
+    expect(res.statusCode).toBe(200)
+
+    type SchemaRef = { $ref?: string }
+    type Operation = {
+      parameters?: Array<{
+        name?: string
+        in?: string
+        required?: boolean
+        schema?: { minimum?: number }
+      }>
+      requestBody?: { content?: Record<string, { schema?: SchemaRef }> }
+      responses?: Record<string, { content?: Record<string, { schema?: SchemaRef }> }>
+    }
+    const body = res.json() as {
+      paths: Record<string, { get?: Operation; post?: Operation }>
+    }
+
+    const discovery = body.paths['/api/v1/projects/{name}/measurement-discovery']?.post
+    expect(discovery?.requestBody?.content?.['application/json']?.schema?.$ref)
+      .toBe('#/components/schemas/MeasurementDiscoveryRequest')
+    expect(discovery?.responses?.['200']?.content?.['application/json']?.schema?.$ref)
+      .toBe('#/components/schemas/MeasurementDiscoveryResponse')
+    expect(discovery?.responses?.['403']).toBeDefined()
+
+    const report = body.paths['/api/v1/projects/{name}/measurement-report']?.get
+    const revision = report?.parameters?.find(parameter => parameter.name === 'revision')
+    expect(revision).toMatchObject({ in: 'query', required: true, schema: { minimum: 1 } })
+    expect(report?.responses?.['200']?.content?.['application/json']?.schema?.$ref)
+      .toBe('#/components/schemas/MeasurementReportResponse')
+  })
+
   it('every registered component schema is referenced by at least one route', async () => {
     // Keeps the schema table honest: removing a schema from a route without
     // removing it from `openapi-schemas.ts` is a slow leak. This test

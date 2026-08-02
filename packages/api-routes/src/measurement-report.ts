@@ -166,6 +166,8 @@ export interface MeasurementSov {
 export interface MeasurementGroupReport {
   id: string
   label: string
+  /** Revision-pinned member ids for Target drill-down. */
+  targetIds: string[]
   completeness: MeasurementCompleteness
   answerCoverage: MeasurementRate
   targetCoverage: MeasurementRate
@@ -712,6 +714,7 @@ function buildGroupReport(
   return {
     id: group.id,
     label: group.label,
+    targetIds: sortedUnique(group.targetIds),
     completeness: completeness(slots, prepared),
     answerCoverage: coverageRate(slots, edges, prepared),
     targetCoverage: targetCoverageRate(group.targetIds, slots, edges, prepared),

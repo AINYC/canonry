@@ -1,6 +1,13 @@
-import { listMeasurementPlanVersions, publishMeasurementPlan, retireMeasurementPlanSegment, showMeasurementPlan } from '../commands/measurement-plan.js'
+import {
+  discoverMeasurementTargets,
+  listMeasurementPlanVersions,
+  publishMeasurementPlan,
+  retireMeasurementPlanSegment,
+  showMeasurementPlan,
+  showMeasurementReport,
+} from '../commands/measurement-plan.js'
 import type { CliCommandSpec } from '../cli-dispatch.js'
-import { getString, requireProject, stringOption } from '../cli-command-helpers.js'
+import { getString, requireProject, requireStringOption, stringOption } from '../cli-command-helpers.js'
 import { usageError } from '../cli-error.js'
 
 export const MEASUREMENT_PLAN_CLI_COMMANDS: readonly CliCommandSpec[] = [
@@ -23,4 +30,39 @@ export const MEASUREMENT_PLAN_CLI_COMMANDS: readonly CliCommandSpec[] = [
     if (!stableKey) throw usageError('stable segment key is required')
     return retireMeasurementPlanSegment(project, stableKey)
   } },
+  {
+    path: ['measurement-plan', 'discover'],
+    usage: 'canonry measurement-plan discover <project> --sitemap-url <url> --rule <yaml|json|-> [--max-urls N] [--format json]',
+    options: { 'sitemap-url': stringOption(), rule: stringOption(), 'max-urls': stringOption() },
+    run: input => {
+      const usage = 'canonry measurement-plan discover <project> --sitemap-url <url> --rule <yaml|json|-> [--max-urls N]'
+      const project = requireProject(input, 'measurement-plan.discover', usage)
+      const sitemapUrl = requireStringOption(input, 'sitemap-url', {
+        command: 'measurement-plan.discover', usage, message: '--sitemap-url is required',
+      })
+      const rule = requireStringOption(input, 'rule', {
+        command: 'measurement-plan.discover', usage, message: '--rule is required',
+      })
+      const maxUrlsValue = getString(input.values, 'max-urls')
+      const maxUrls = maxUrlsValue === undefined ? undefined : Number(maxUrlsValue)
+      if (maxUrls !== undefined && (!Number.isInteger(maxUrls) || maxUrls < 1 || maxUrls > 10_000)) {
+        throw usageError('--max-urls must be an integer from 1 to 10000')
+      }
+      return discoverMeasurementTargets(project, sitemapUrl, rule, maxUrls)
+    },
+  },
+  {
+    path: ['measurement-plan', 'report'],
+    usage: 'canonry measurement-plan report <project> --revision N [--format json]',
+    options: { revision: stringOption() },
+    run: input => {
+      const project = requireProject(input, 'measurement-plan.report', 'canonry measurement-plan report <project> --revision N')
+      const value = getString(input.values, 'revision')
+      const revision = value === undefined ? undefined : Number(value)
+      if (revision === undefined || !Number.isInteger(revision) || revision <= 0) {
+        throw usageError('--revision must be a positive integer')
+      }
+      return showMeasurementReport(project, revision)
+    },
+  },
 ]
