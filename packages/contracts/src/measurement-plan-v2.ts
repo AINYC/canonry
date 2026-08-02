@@ -369,6 +369,18 @@ export type MeasurementOverviewScopeKind = z.output<typeof measurementOverviewSc
 export const measurementQueryClassFilterSchema = z.enum(['all', 'branded', 'non-brand'])
 export type MeasurementQueryClassFilter = z.output<typeof measurementQueryClassFilterSchema>
 
+/** A single HTTP-friendly sort token keeps cursors bound to the exact ordering. */
+export const measurementOverviewSortSchema = z.enum([
+  'label-asc',
+  'label-desc',
+  'citationCoverage-asc',
+  'citationCoverage-desc',
+  'mentionCoverage-asc',
+  'mentionCoverage-desc',
+])
+export type MeasurementOverviewSort = z.output<typeof measurementOverviewSortSchema>
+export const MEASUREMENT_OVERVIEW_DEFAULT_SORT: MeasurementOverviewSort = 'label-asc'
+
 export const measurementStateSchema = z.enum(['not_measured', 'queued', 'running', 'complete', 'partial', 'failed'])
 export type MeasurementState = z.output<typeof measurementStateSchema>
 
@@ -398,6 +410,8 @@ export const measurementOverviewQuerySchema = z.object({
   runId: z.string().trim().min(1).optional(),
   /** Filters the returned rows only. Metrics are computed before it is applied. */
   search: z.string().optional(),
+  /** Omit for the shipped label-ascending order. Metric-unavailable rows sort first. */
+  sort: measurementOverviewSortSchema.optional(),
   cursor: z.string().trim().min(1).optional(),
   limit: z.number().int().positive().max(MEASUREMENT_PAGE_MAX_LIMIT).optional(),
 }).strict()

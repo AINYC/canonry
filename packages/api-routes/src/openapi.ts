@@ -469,6 +469,31 @@ const measurementCursorParameter: OpenApiParameter = {
   schema: stringSchema,
 }
 
+const measurementOverviewSortParameter: OpenApiParameter = {
+  name: 'sort',
+  in: 'query',
+  description: 'Snapshot row order. label-asc is the default. For coverage sorts, unavailable rows form the first bucket in either direction; available rates then follow the requested direction.',
+  schema: {
+    type: 'string',
+    enum: [
+      'label-asc',
+      'label-desc',
+      'citationCoverage-asc',
+      'citationCoverage-desc',
+      'mentionCoverage-asc',
+      'mentionCoverage-desc',
+    ],
+    default: 'label-asc',
+  },
+}
+
+const measurementOverviewCursorParameter: OpenApiParameter = {
+  name: 'cursor',
+  in: 'query',
+  description: 'Opaque, sort-aware cursor from the previous page. It pins pagination to the active revision, displayed run, evidence snapshot, and same filters even if a newer run completes. Reuse it unchanged with the same sort and filters; a mismatch or newly appended evidence is rejected. A legacy label cursor works only when sort is omitted; an explicit sort requires a new sort-bound cursor.',
+  schema: stringSchema,
+}
+
 const measurementLimitParameter: OpenApiParameter = {
   name: 'limit',
   in: 'query',
@@ -500,10 +525,10 @@ const measurementDraftCollectionParameters: OpenApiParameter[] = [
 ]
 
 /**
- * One typed draft action. Every one is a POST under the same prefix, carries
- * the draft ETag and an idempotency key, and answers with the new ETag plus
- * counts — so the shared half is built once here rather than repeated per
- * action, where a divergence would be invisible.
+ * One typed draft action. Every one is a POST under the same prefix and
+ * carries an idempotency key. Actions against an existing draft also carry
+ * its ETag and answer with the new ETag plus counts, so the shared half is
+ * built once here rather than repeated per action.
  */
 function measurementDraftAction(input: {
   action: string
@@ -514,10 +539,17 @@ function measurementDraftAction(input: {
   responseDescription?: string
   /** Set for the previews, which compile the stored draft and write nothing. */
   readOnly?: boolean
+  /** False only when the action creates the draft and no current ETag exists. */
+  requiresDraftEtag?: boolean
 }): OpenApiOperation {
+  const requiresDraftEtag = !input.readOnly && input.requiresDraftEtag !== false
   const parameters = input.readOnly
     ? [nameParameter]
-    : [nameParameter, measurementIfMatchParameter, measurementIdempotencyKeyParameter]
+    : [
+        nameParameter,
+        ...(requiresDraftEtag ? [measurementIfMatchParameter] : []),
+        measurementIdempotencyKeyParameter,
+      ]
   return {
     method: 'post',
     path: `/api/v1/projects/{name}/measurement-plan/draft/actions/${input.action}`,
@@ -545,8 +577,12 @@ function measurementDraftAction(input: {
         ? {}
         : {
             409: errorResponse('The idempotency key was already used with a different request body.'),
-            412: errorResponse('The draft changed since it was loaded.'),
-            428: errorResponse('The draft ETag was not supplied in `If-Match`.'),
+            ...(requiresDraftEtag
+              ? {
+                  412: errorResponse('The draft changed since it was loaded.'),
+                  428: errorResponse('The draft ETag was not supplied in `If-Match`.'),
+                }
+              : {}),
           }),
     },
   }
@@ -826,6 +862,7 @@ const routeCatalog: OpenApiOperation[] = [
     summary: 'Start a setup draft',
     description: 'Creates the single draft for the project, recording the active revision it was created from. A draft never changes the active mode.',
     request: 'MeasurementDraftCreateRequest',
+    requiresDraftEtag: false,
   }),
   measurementDraftAction({
     action: 'import-sitemap',
@@ -965,7 +1002,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'get',
     path: '/api/v1/projects/{name}/measurement-overview',
     summary: 'Get the scoped measurement overview',
-    description: 'Aggregates one run of evidence for All Properties, a group, or a single Property. Without runId the most recent completed run pinned to the active revision is used; a run pinned to another revision is refused rather than joined. Metrics are computed before search is applied, and a metric with no evidence is unavailable rather than zero.',
+    description: 'Aggregates one revision-pinned run snapshot for All Properties, a group, or a single Property. This is snapshot ranking only: it never infers a trend or compares evidence across revisions. Without runId the most recent completed run pinned to the active revision is used; once paging begins, the cursor pins that revision, displayed run, evidence snapshot, and result filters. A run pinned to another revision is refused rather than joined, and appended evidence on a mutable named run invalidates its cursor. Metrics are computed before search is applied, and a metric with no evidence is unavailable rather than zero. For coverage sorts, unavailable rows form the first bucket in either direction before available numeric rates follow the requested direction.',
     tags: ['measurement-plans'],
     parameters: [
       nameParameter,
@@ -979,7 +1016,8 @@ const routeCatalog: OpenApiOperation[] = [
       { name: 'to', in: 'query', description: 'Inclusive end of the window (YYYY-MM-DD).', schema: stringSchema },
       { name: 'runId', in: 'query', description: 'Display this run. It must be pinned to the active revision. This is also the only way to display a scoped spot check.', schema: stringSchema },
       measurementSearchParameter,
-      measurementCursorParameter,
+      measurementOverviewSortParameter,
+      measurementOverviewCursorParameter,
       measurementLimitParameter,
     ],
     responses: {

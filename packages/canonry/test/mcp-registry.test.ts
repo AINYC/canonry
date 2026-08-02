@@ -113,6 +113,22 @@ const expectedToolNames = [
   'canonry_measurement_plan_diff_preview',
   'canonry_measurement_plan_publish',
   'canonry_measurement_plan_segment_retire',
+  'canonry_measurement_setup',
+  'canonry_measurement_overview',
+  'canonry_measurement_draft_get',
+  'canonry_measurement_draft_targets',
+  'canonry_measurement_draft_assignments',
+  'canonry_measurement_draft_groups',
+  'canonry_measurement_query_sets',
+  'canonry_measurement_query_set_get',
+  'canonry_measurement_query_templates',
+  'canonry_measurement_draft_action',
+  'canonry_measurement_plan_deactivate',
+  'canonry_measurement_query_set_upsert',
+  'canonry_measurement_query_set_delete',
+  'canonry_measurement_query_template_upsert',
+  'canonry_measurement_query_template_delete',
+  'canonry_measurement_query_template_apply',
   'canonry_measurement_report',
   'canonry_run_trigger',
   'canonry_run_cancel',
@@ -246,8 +262,8 @@ describe('MCP tool registry', () => {
   })
 
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(154)
-    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(97)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(170)
+    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(106)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(readNames)
@@ -284,7 +300,7 @@ describe('MCP tool registry', () => {
       counts.set(tool.tier, (counts.get(tool.tier) ?? 0) + 1)
     }
     expect(counts.get('monitoring')).toBe(28)
-    expect(counts.get('setup')).toBe(33)
+    expect(counts.get('setup')).toBe(49)
     expect(counts.get('gsc')).toBe(10)
     expect(counts.get('ga')).toBe(10)
     expect(counts.get('gbp')).toBe(13)
@@ -298,8 +314,10 @@ describe('MCP tool registry', () => {
     for (const tool of canonryMcpTools) {
       expect(tool.inputSchema).toBeTruthy()
       expect(tool.inputJsonSchema).toMatchObject({ title: tool.name })
-      const schema = tool.inputJsonSchema as { type?: string; anyOf?: unknown[] }
-      expect(schema.type === 'object' || Array.isArray(schema.anyOf)).toBe(true)
+      const schema = tool.inputJsonSchema as { type?: string; anyOf?: unknown[]; oneOf?: unknown[] }
+      // A discriminated action union is emitted as oneOf; every branch is
+      // still a strict object and the no-$ref assertion below remains intact.
+      expect(schema.type === 'object' || Array.isArray(schema.anyOf) || Array.isArray(schema.oneOf)).toBe(true)
       expect(tool.inputJsonSchema).not.toHaveProperty('$ref')
     }
 

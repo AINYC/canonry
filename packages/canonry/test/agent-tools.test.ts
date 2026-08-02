@@ -309,6 +309,22 @@ describe('mcpToAgentTool', () => {
     expect(calls[0].args[1]).toEqual({ key: 'pref', value: 'be terse' })
   })
 
+  it('exposes draft-action arguments and injects the scoped project', async () => {
+    const calls: CallLog[] = []
+    const draftAction = canonryMcpTools.find((t) => t.name === 'canonry_measurement_draft_action')!
+    const tool = mcpToAgentTool(draftAction, { client: recordingClient(calls), projectName: 'demo' })
+
+    const props = jsonSchemaProperties(tool) ?? {}
+    expect(props).not.toHaveProperty('project')
+    expect(props).toMatchObject({
+      operation: {},
+    })
+    expect((tool.parameters as { required?: string[] }).required).toContain('operation')
+
+    await tool.execute('call-1', { operation: { action: 'compile-preview' } })
+    expect(calls).toEqual([{ method: 'compileMeasurementDraftPreview', args: ['demo'] }])
+  })
+
   it('wraps the handler result in an AgentToolResult envelope', async () => {
     const calls: CallLog[] = []
     const memoryList = canonryMcpTools.find((t) => t.name === CanonryMcpToolNames.canonry_memory_list)!

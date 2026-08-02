@@ -299,6 +299,202 @@ describe('measurement overview', () => {
     expect(second.body.properties.nextCursor).toBeNull()
   })
 
+  it('sorts metric coverage with unavailable Properties first and deterministic label/key ties', async () => {
+    plan = measurementPlanV2Fixture({
+      targets: [
+        ...plan.targets,
+        {
+          stableKey: 'unmeasured-yankee-b',
+          label: 'Yankee Unmeasured',
+          aliases: ['Yankee Unmeasured'],
+          urlMatchers: [{ kind: 'prefix', host: 'northstar.example', pathPrefix: '/locations/yankee-b', pathCase: 'insensitive' }],
+          mentionNotApplicable: false,
+          discoveryIdentity: null,
+        },
+        {
+          stableKey: 'unmeasured-yankee-a',
+          label: 'Yankee Unmeasured',
+          aliases: ['Yankee Unmeasured'],
+          urlMatchers: [{ kind: 'prefix', host: 'northstar.example', pathPrefix: '/locations/yankee-a', pathCase: 'insensitive' }],
+          mentionNotApplicable: false,
+          discoveryIdentity: null,
+        },
+      ],
+    })
+    const versionId = seedVersion(1)
+    activate(versionId)
+    seedMeasuredRun(versionId)
+
+    const ascending = await overview('scope=all&sort=citationCoverage-asc')
+    const descending = await overview('scope=all&sort=citationCoverage-desc')
+    const labelDescending = await overview('scope=all&sort=label-desc')
+    const mentionsAscending = await overview('scope=all&sort=mentionCoverage-asc')
+    const mentionsDescending = await overview('scope=all&sort=mentionCoverage-desc')
+
+    expect(ascending.status).toBe(200)
+    expect(ascending.body.properties.items.map(row => row.targetKey))
+      .toEqual(['unmeasured-yankee-a', 'unmeasured-yankee-b', 'bayside', 'harbor'])
+    expect(descending.status).toBe(200)
+    expect(descending.body.properties.items.map(row => row.targetKey))
+      .toEqual(['unmeasured-yankee-a', 'unmeasured-yankee-b', 'harbor', 'bayside'])
+    expect(labelDescending.status).toBe(200)
+    expect(labelDescending.body.properties.items.map(row => row.targetKey))
+      .toEqual(['unmeasured-yankee-a', 'unmeasured-yankee-b', 'harbor', 'bayside'])
+    expect(mentionsAscending.status).toBe(200)
+    expect(mentionsAscending.body.properties.items.map(row => row.targetKey))
+      .toEqual(['unmeasured-yankee-a', 'unmeasured-yankee-b', 'bayside', 'harbor'])
+    expect(mentionsDescending.status).toBe(200)
+    expect(mentionsDescending.body.properties.items.map(row => row.targetKey))
+      .toEqual(['unmeasured-yankee-a', 'unmeasured-yankee-b', 'harbor', 'bayside'])
+  })
+
+  it('binds new cursors to their sort while accepting a legacy label cursor only for an omitted sort', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    seedMeasuredRun(versionId)
+
+    // This is the pre-sort cursor format emitted by the shipped HTTP endpoint.
+    const legacyLabelCursor = Buffer.from('bayside homes:bayside', 'utf8').toString('base64url')
+    const legacyDefault = await overview(`scope=all&limit=1&cursor=${encodeURIComponent(legacyLabelCursor)}`)
+    expect(legacyDefault.status).toBe(200)
+    expect(legacyDefault.body.properties.items.map(row => row.targetKey)).toEqual(['harbor'])
+
+    const explicitLabel = await app.inject({
+      method: 'GET',
+      url: `/api/v1/projects/northstar/measurement-overview?scope=all&sort=label-asc&cursor=${encodeURIComponent(legacyLabelCursor)}`,
+    })
+    expect(explicitLabel.statusCode).toBe(400)
+    expect(explicitLabel.json()).toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'The measurement overview cursor does not belong to this result set.',
+      },
+    })
+
+    const first = await overview('scope=all&sort=citationCoverage-desc&limit=1')
+    expect(first.status).toBe(200)
+    expect(first.body.properties.nextCursor).toEqual(expect.any(String))
+
+    const sameSort = await overview(
+      `scope=all&sort=citationCoverage-desc&limit=1&cursor=${encodeURIComponent(first.body.properties.nextCursor!)}`,
+    )
+    expect(sameSort.status).toBe(200)
+    expect(sameSort.body.properties.items.map(row => row.targetKey)).toEqual(['bayside'])
+
+    const mismatch = await app.inject({
+      method: 'GET',
+      url: `/api/v1/projects/northstar/measurement-overview?scope=all&sort=mentionCoverage-desc&cursor=${encodeURIComponent(first.body.properties.nextCursor!)}`,
+    })
+    expect(mismatch.statusCode).toBe(400)
+    expect(mismatch.json()).toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'The measurement overview cursor sort does not match the request.',
+      },
+    })
+  })
+
+  it('pins sorted cursor pagination to the run that produced the first page', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    const firstRun = seedRun(versionId, {
+      createdAt: '2026-08-01T10:00:00.000Z',
+      finishedAt: '2026-08-01T10:05:00.000Z',
+    })
+    for (const provider of ['openai', 'gemini']) {
+      seedSnapshot(firstRun, 'exec-nearby', provider)
+      seedSnapshot(firstRun, 'exec-brand', provider)
+    }
+
+    const first = await overview('scope=all&sort=citationCoverage-desc&limit=1')
+    expect(first.body.measurement.displayedRunId).toBe(firstRun)
+    expect(first.body.properties.items.map(row => row.targetKey)).toEqual(['harbor'])
+    expect(first.body.properties.nextCursor).toEqual(expect.any(String))
+
+    const strippedCursor = JSON.parse(
+      Buffer.from(first.body.properties.nextCursor!, 'base64url').toString('utf8'),
+    ) as Record<string, unknown>
+    delete strippedCursor.displayedRunId
+    delete strippedCursor.filterFingerprint
+    delete strippedCursor.planVersionId
+    delete strippedCursor.evidenceFingerprint
+    const tampered = Buffer.from(JSON.stringify(strippedCursor), 'utf8').toString('base64url')
+    const strippedBinding = await app.inject({
+      method: 'GET',
+      url: `/api/v1/projects/northstar/measurement-overview?scope=all&sort=citationCoverage-desc&cursor=${encodeURIComponent(tampered)}`,
+    })
+    expect(strippedBinding.statusCode).toBe(400)
+
+    const changedFilter = await app.inject({
+      method: 'GET',
+      url: `/api/v1/projects/northstar/measurement-overview?scope=all&sort=citationCoverage-desc&search=harbor&cursor=${encodeURIComponent(first.body.properties.nextCursor!)}`,
+    })
+    expect(changedFilter.statusCode).toBe(400)
+    expect(changedFilter.json()).toMatchObject({
+      error: { message: 'The measurement overview cursor filters do not match the request.' },
+    })
+
+    const newerRun = seedRun(versionId, {
+      createdAt: '2026-08-02T10:00:00.000Z',
+      finishedAt: '2026-08-02T10:05:00.000Z',
+    })
+    for (const provider of ['openai', 'gemini']) {
+      seedSnapshot(newerRun, 'exec-nearby', provider, {
+        citedUrls: ['https://northstar.example/locations/bayside/details'],
+      })
+      seedSnapshot(newerRun, 'exec-brand', provider, { citedUrls: [] })
+    }
+
+    const second = await overview(
+      `scope=all&sort=citationCoverage-desc&limit=1&cursor=${encodeURIComponent(first.body.properties.nextCursor!)}`,
+    )
+    expect(second.status).toBe(200)
+    expect(second.body.measurement.displayedRunId).toBe(firstRun)
+    expect(second.body.properties.items.map(row => row.targetKey)).toEqual(['bayside'])
+  })
+
+  it('rejects a no-run cursor after the active plan changes', async () => {
+    const firstVersion = seedVersion(1)
+    activate(firstVersion)
+
+    const first = await overview('scope=all&limit=1')
+    expect(first.body.measurement.displayedRunId).toBeUndefined()
+    expect(first.body.properties.nextCursor).toEqual(expect.any(String))
+
+    const secondVersion = seedVersion(2)
+    activate(secondVersion)
+    const continued = await app.inject({
+      method: 'GET',
+      url: `/api/v1/projects/northstar/measurement-overview?scope=all&cursor=${encodeURIComponent(first.body.properties.nextCursor!)}`,
+    })
+    expect(continued.statusCode).toBe(400)
+    expect(continued.json()).toMatchObject({
+      error: { message: 'The measurement overview cursor revision does not match the active plan.' },
+    })
+  })
+
+  it('rejects a cursor when a named running run gains evidence between pages', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    const runningRun = seedRun(versionId, { status: 'running', finishedAt: null })
+    seedSnapshot(runningRun, 'exec-nearby', 'openai')
+
+    const first = await overview(`scope=all&runId=${runningRun}&sort=citationCoverage-desc&limit=1`)
+    expect(first.status).toBe(200)
+    expect(first.body.measurement.state).toBe('running')
+    expect(first.body.properties.nextCursor).toEqual(expect.any(String))
+
+    seedSnapshot(runningRun, 'exec-brand', 'gemini')
+    const continued = await app.inject({
+      method: 'GET',
+      url: `/api/v1/projects/northstar/measurement-overview?scope=all&runId=${runningRun}&sort=citationCoverage-desc&cursor=${encodeURIComponent(first.body.properties.nextCursor!)}`,
+    })
+    expect(continued.statusCode).toBe(400)
+    expect(continued.json()).toMatchObject({
+      error: { message: 'The measurement overview cursor evidence changed between pages.' },
+    })
+  })
+
   it('rejects a scope without the key it needs', async () => {
     activate(seedVersion(1))
 

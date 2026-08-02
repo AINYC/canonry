@@ -17,6 +17,18 @@ import type {
   MeasurementDiscoveryRequest,
   MeasurementDiscoveryResponse,
   MeasurementReportResponse,
+  MeasurementSetupResponse,
+  MeasurementOverviewQuery,
+  MeasurementOverviewResponse,
+  MeasurementDraftCollectionQuery,
+  MeasurementDraftResponse,
+  DraftMutationResponse,
+  MeasurementDraftCompilePreviewResponse,
+  MeasurementDraftDiffPreviewResponse,
+  MeasurementPlanV2PublishResponse,
+  MeasurementQuerySetDetail,
+  MeasurementQueryTemplate,
+  MeasurementQueryTemplateApplyResponse,
   LatestProjectRunDto,
   SiteAuditScoreDto,
   SiteAuditPagesResponseDto,
@@ -441,6 +453,48 @@ import {
   getApiV1ProjectsByNameMeasurementPlanVersionsByRevision,
   postApiV1ProjectsByNameMeasurementDiscovery,
   getApiV1ProjectsByNameMeasurementReport,
+  getApiV1ProjectsByNameMeasurementSetup,
+  getApiV1ProjectsByNameMeasurementPlanDraft,
+  getApiV1ProjectsByNameMeasurementPlanDraftTargets,
+  getApiV1ProjectsByNameMeasurementPlanDraftAssignments,
+  getApiV1ProjectsByNameMeasurementPlanDraftGroups,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsCreate,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsImportSitemap,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelection,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertTarget,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsRenameTarget,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsMergeTargets,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTarget,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsRebindTarget,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignment,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsClearAssignments,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsClassifyAssignments,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroup,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveGroup,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertCompetitor,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveCompetitor,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsCompilePreview,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsDiffPreview,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsPublish,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsDiscard,
+  postApiV1ProjectsByNameMeasurementPlanActionsDeactivate,
+  getApiV1ProjectsByNameMeasurementOverview,
+  getApiV1ProjectsByNameMeasurementQuerySets,
+  getApiV1ProjectsByNameMeasurementQuerySetsBySetId,
+  putApiV1ProjectsByNameMeasurementQuerySetsBySetId,
+  deleteApiV1ProjectsByNameMeasurementQuerySetsBySetId,
+  getApiV1ProjectsByNameMeasurementQueryTemplates,
+  putApiV1ProjectsByNameMeasurementQueryTemplatesByTemplateId,
+  deleteApiV1ProjectsByNameMeasurementQueryTemplatesByTemplateId,
+  postApiV1ProjectsByNameMeasurementQueryTemplatesByTemplateIdApply,
+  type GetApiV1ProjectsByNameMeasurementPlanDraftTargetsResponse,
+  type GetApiV1ProjectsByNameMeasurementPlanDraftAssignmentsResponse,
+  type GetApiV1ProjectsByNameMeasurementPlanDraftGroupsResponse,
+  type GetApiV1ProjectsByNameMeasurementQuerySetsResponse,
+  type GetApiV1ProjectsByNameMeasurementQueryTemplatesResponse,
+  type PostApiV1ProjectsByNameMeasurementPlanDraftActionsDiscardResponse,
+  type PostApiV1ProjectsByNameMeasurementPlanActionsDeactivateResponse,
 } from '@ainyc/canonry-api-client'
 
 export type { BrandMetricsDto, GapAnalysisDto, SourceBreakdownDto, AuditLogEntry, CompetitorDto, KeywordDto, QueryDto }
@@ -575,6 +629,28 @@ type SdkResult = {
   request: Request
   response: Response
 }
+
+type MeasurementPlanDraftCreateRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsCreate>[0]['body']
+type MeasurementPlanDraftImportSitemapRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsImportSitemap>[0]['body']
+type MeasurementPlanDraftApplySitemapSelectionRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelection>[0]['body']
+type MeasurementPlanDraftUpsertTargetRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertTarget>[0]['body']
+type MeasurementPlanDraftRenameTargetRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsRenameTarget>[0]['body']
+type MeasurementPlanDraftMergeTargetsRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsMergeTargets>[0]['body']
+type MeasurementPlanDraftExcludeTargetRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTarget>[0]['body']
+type MeasurementPlanDraftRebindTargetRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsRebindTarget>[0]['body']
+type MeasurementPlanDraftApplyAssignmentsRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments>[0]['body']
+type MeasurementPlanDraftRemoveAssignmentRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignment>[0]['body']
+type MeasurementPlanDraftClearAssignmentsRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsClearAssignments>[0]['body']
+type MeasurementPlanDraftClassifyAssignmentsRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsClassifyAssignments>[0]['body']
+type MeasurementPlanDraftUpsertGroupRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroup>[0]['body']
+type MeasurementPlanDraftRemoveGroupRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveGroup>[0]['body']
+type MeasurementPlanDraftUpsertCompetitorRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertCompetitor>[0]['body']
+type MeasurementPlanDraftRemoveCompetitorRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveCompetitor>[0]['body']
+type MeasurementPlanDraftPublishRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsPublish>[0]['body']
+type MeasurementPlanDeactivateRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanActionsDeactivate>[0]['body']
+type MeasurementQuerySetUpsertRequest = Parameters<typeof putApiV1ProjectsByNameMeasurementQuerySetsBySetId>[0]['body']
+type MeasurementQueryTemplateUpsertRequest = Parameters<typeof putApiV1ProjectsByNameMeasurementQueryTemplatesByTemplateId>[0]['body']
+type MeasurementQueryTemplateApplyRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementQueryTemplatesByTemplateIdApply>[0]['body']
 
 export class ApiClient {
   private originUrl: string
@@ -723,6 +799,16 @@ export class ApiClient {
     }
 
     return result.data as TData
+  }
+
+  private measurementDraftMutationHeaders(idempotencyKey: string, etag?: string): {
+    'Idempotency-Key': string
+    'If-Match'?: string
+  } {
+    return {
+      'Idempotency-Key': idempotencyKey,
+      ...(etag === undefined ? {} : { 'If-Match': etag }),
+    }
   }
 
   // ── Agent (canonry-local routes — SDK-typed since v4.50.0) ─────────────
@@ -1169,6 +1255,471 @@ export class ApiClient {
         client: this.heyClient,
         path: { name: project },
         query: { revision },
+      }),
+    )
+  }
+
+  // ── Advanced Measurement v2 ───────────────────────────────────────────
+
+  async getMeasurementSetup(project: string): Promise<MeasurementSetupResponse> {
+    return this.invoke<MeasurementSetupResponse>(() =>
+      getApiV1ProjectsByNameMeasurementSetup({ client: this.heyClient, path: { name: project } }),
+    )
+  }
+
+  async getMeasurementOverview(project: string, query: MeasurementOverviewQuery): Promise<MeasurementOverviewResponse> {
+    return this.invoke<MeasurementOverviewResponse>(() =>
+      getApiV1ProjectsByNameMeasurementOverview({
+        client: this.heyClient,
+        path: { name: project },
+        query,
+      }),
+    )
+  }
+
+  async getMeasurementPlanDraft(project: string): Promise<MeasurementDraftResponse> {
+    return this.invoke<MeasurementDraftResponse>(() =>
+      getApiV1ProjectsByNameMeasurementPlanDraft({ client: this.heyClient, path: { name: project } }),
+    )
+  }
+
+  async getMeasurementDraftTargets(
+    project: string,
+    query?: MeasurementDraftCollectionQuery,
+  ): Promise<GetApiV1ProjectsByNameMeasurementPlanDraftTargetsResponse> {
+    return this.invoke<GetApiV1ProjectsByNameMeasurementPlanDraftTargetsResponse>(() =>
+      getApiV1ProjectsByNameMeasurementPlanDraftTargets({
+        client: this.heyClient,
+        path: { name: project },
+        query,
+      }),
+    )
+  }
+
+  async getMeasurementDraftAssignments(
+    project: string,
+    query?: MeasurementDraftCollectionQuery,
+  ): Promise<GetApiV1ProjectsByNameMeasurementPlanDraftAssignmentsResponse> {
+    return this.invoke<GetApiV1ProjectsByNameMeasurementPlanDraftAssignmentsResponse>(() =>
+      getApiV1ProjectsByNameMeasurementPlanDraftAssignments({
+        client: this.heyClient,
+        path: { name: project },
+        query,
+      }),
+    )
+  }
+
+  async getMeasurementDraftGroups(
+    project: string,
+    query?: MeasurementDraftCollectionQuery,
+  ): Promise<GetApiV1ProjectsByNameMeasurementPlanDraftGroupsResponse> {
+    return this.invoke<GetApiV1ProjectsByNameMeasurementPlanDraftGroupsResponse>(() =>
+      getApiV1ProjectsByNameMeasurementPlanDraftGroups({
+        client: this.heyClient,
+        path: { name: project },
+        query,
+      }),
+    )
+  }
+
+  async createMeasurementPlanDraft(
+    project: string,
+    request: MeasurementPlanDraftCreateRequest,
+    idempotencyKey: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsCreate({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        // No draft exists yet, so create has no ETag to match.
+        headers: this.measurementDraftMutationHeaders(idempotencyKey),
+      }),
+    )
+  }
+
+  async importMeasurementDraftSitemap(
+    project: string,
+    request: MeasurementPlanDraftImportSitemapRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsImportSitemap({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async applyMeasurementDraftSitemapSelection(
+    project: string,
+    request: MeasurementPlanDraftApplySitemapSelectionRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelection({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async upsertMeasurementDraftTarget(
+    project: string,
+    request: MeasurementPlanDraftUpsertTargetRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertTarget({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async renameMeasurementDraftTarget(
+    project: string,
+    request: MeasurementPlanDraftRenameTargetRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsRenameTarget({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async mergeMeasurementDraftTargets(
+    project: string,
+    request: MeasurementPlanDraftMergeTargetsRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsMergeTargets({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async excludeMeasurementDraftTarget(
+    project: string,
+    request: MeasurementPlanDraftExcludeTargetRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTarget({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async rebindMeasurementDraftTarget(
+    project: string,
+    request: MeasurementPlanDraftRebindTargetRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsRebindTarget({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async applyMeasurementDraftAssignments(
+    project: string,
+    request: MeasurementPlanDraftApplyAssignmentsRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async removeMeasurementDraftAssignment(
+    project: string,
+    request: MeasurementPlanDraftRemoveAssignmentRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignment({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async clearMeasurementDraftAssignments(
+    project: string,
+    request: MeasurementPlanDraftClearAssignmentsRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsClearAssignments({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async classifyMeasurementDraftAssignments(
+    project: string,
+    request: MeasurementPlanDraftClassifyAssignmentsRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsClassifyAssignments({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async upsertMeasurementDraftGroup(
+    project: string,
+    request: MeasurementPlanDraftUpsertGroupRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroup({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async removeMeasurementDraftGroup(
+    project: string,
+    request: MeasurementPlanDraftRemoveGroupRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveGroup({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async upsertMeasurementDraftCompetitor(
+    project: string,
+    request: MeasurementPlanDraftUpsertCompetitorRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertCompetitor({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async removeMeasurementDraftCompetitor(
+    project: string,
+    request: MeasurementPlanDraftRemoveCompetitorRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveCompetitor({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async compileMeasurementDraftPreview(project: string): Promise<MeasurementDraftCompilePreviewResponse> {
+    return this.invoke<MeasurementDraftCompilePreviewResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsCompilePreview({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async diffMeasurementDraftPreview(project: string): Promise<MeasurementDraftDiffPreviewResponse> {
+    return this.invoke<MeasurementDraftDiffPreviewResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsDiffPreview({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async publishMeasurementDraft(
+    project: string,
+    request: MeasurementPlanDraftPublishRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<MeasurementPlanV2PublishResponse> {
+    return this.invoke<MeasurementPlanV2PublishResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsPublish({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async discardMeasurementDraft(
+    project: string,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<PostApiV1ProjectsByNameMeasurementPlanDraftActionsDiscardResponse> {
+    return this.invoke<PostApiV1ProjectsByNameMeasurementPlanDraftActionsDiscardResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsDiscard({
+        client: this.heyClient,
+        path: { name: project },
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async deactivateMeasurementPlan(
+    project: string,
+    request: MeasurementPlanDeactivateRequest,
+    idempotencyKey: string,
+  ): Promise<PostApiV1ProjectsByNameMeasurementPlanActionsDeactivateResponse> {
+    return this.invoke<PostApiV1ProjectsByNameMeasurementPlanActionsDeactivateResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanActionsDeactivate({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: { 'Idempotency-Key': idempotencyKey },
+      }),
+    )
+  }
+
+  async listMeasurementQuerySets(project: string): Promise<GetApiV1ProjectsByNameMeasurementQuerySetsResponse> {
+    return this.invoke<GetApiV1ProjectsByNameMeasurementQuerySetsResponse>(() =>
+      getApiV1ProjectsByNameMeasurementQuerySets({ client: this.heyClient, path: { name: project } }),
+    )
+  }
+
+  async getMeasurementQuerySet(project: string, setId: string): Promise<MeasurementQuerySetDetail> {
+    return this.invoke<MeasurementQuerySetDetail>(() =>
+      getApiV1ProjectsByNameMeasurementQuerySetsBySetId({
+        client: this.heyClient,
+        path: { name: project, setId },
+      }),
+    )
+  }
+
+  async upsertMeasurementQuerySet(
+    project: string,
+    setId: string,
+    request: MeasurementQuerySetUpsertRequest,
+  ): Promise<MeasurementQuerySetDetail> {
+    return this.invoke<MeasurementQuerySetDetail>(() =>
+      putApiV1ProjectsByNameMeasurementQuerySetsBySetId({
+        client: this.heyClient,
+        path: { name: project, setId },
+        body: request,
+      }),
+    )
+  }
+
+  async deleteMeasurementQuerySet(project: string, setId: string): Promise<void> {
+    return this.invoke<void>(() =>
+      deleteApiV1ProjectsByNameMeasurementQuerySetsBySetId({
+        client: this.heyClient,
+        path: { name: project, setId },
+      }),
+    )
+  }
+
+  async listMeasurementQueryTemplates(project: string): Promise<GetApiV1ProjectsByNameMeasurementQueryTemplatesResponse> {
+    return this.invoke<GetApiV1ProjectsByNameMeasurementQueryTemplatesResponse>(() =>
+      getApiV1ProjectsByNameMeasurementQueryTemplates({ client: this.heyClient, path: { name: project } }),
+    )
+  }
+
+  async upsertMeasurementQueryTemplate(
+    project: string,
+    templateId: string,
+    request: MeasurementQueryTemplateUpsertRequest,
+  ): Promise<MeasurementQueryTemplate> {
+    return this.invoke<MeasurementQueryTemplate>(() =>
+      putApiV1ProjectsByNameMeasurementQueryTemplatesByTemplateId({
+        client: this.heyClient,
+        path: { name: project, templateId },
+        body: request,
+      }),
+    )
+  }
+
+  async deleteMeasurementQueryTemplate(project: string, templateId: string): Promise<void> {
+    return this.invoke<void>(() =>
+      deleteApiV1ProjectsByNameMeasurementQueryTemplatesByTemplateId({
+        client: this.heyClient,
+        path: { name: project, templateId },
+      }),
+    )
+  }
+
+  async applyMeasurementQueryTemplate(
+    project: string,
+    templateId: string,
+    request: MeasurementQueryTemplateApplyRequest,
+    idempotencyKey: string,
+  ): Promise<MeasurementQueryTemplateApplyResponse> {
+    return this.invoke<MeasurementQueryTemplateApplyResponse>(() =>
+      postApiV1ProjectsByNameMeasurementQueryTemplatesByTemplateIdApply({
+        client: this.heyClient,
+        path: { name: project, templateId },
+        body: request,
+        headers: { 'Idempotency-Key': idempotencyKey },
       }),
     )
   }

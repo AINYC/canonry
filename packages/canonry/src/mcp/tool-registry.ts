@@ -46,6 +46,29 @@ import {
   measurementPlanAuthoringSchema,
   measurementPlanPublishRequestSchema,
   measurementDiscoveryRequestSchema,
+  measurementDraftApplyAssignmentsRequestSchema,
+  measurementDraftApplySitemapSelectionRequestSchema,
+  measurementDraftClassifyAssignmentsRequestSchema,
+  measurementDraftClearAssignmentsRequestSchema,
+  measurementDraftCollectionQuerySchema,
+  measurementDraftCreateRequestSchema,
+  measurementDraftExcludeTargetRequestSchema,
+  measurementDraftImportSitemapRequestSchema,
+  measurementDraftMergeTargetsRequestSchema,
+  measurementDraftPublishRequestSchema,
+  measurementDraftRebindTargetRequestSchema,
+  measurementDraftRemoveAssignmentRequestSchema,
+  measurementDraftRemoveCompetitorRequestSchema,
+  measurementDraftRemoveGroupRequestSchema,
+  measurementDraftRenameTargetRequestSchema,
+  measurementDraftUpsertCompetitorRequestSchema,
+  measurementDraftUpsertGroupRequestSchema,
+  measurementDraftUpsertTargetRequestSchema,
+  measurementOverviewQuerySchema,
+  measurementPlanDeactivateRequestSchema,
+  measurementQuerySetUpsertRequestSchema,
+  measurementQueryTemplateApplyRequestSchema,
+  measurementQueryTemplateUpsertRequestSchema,
   type NotificationEvent,
 } from '@ainyc/canonry-contracts'
 import { z } from 'zod'
@@ -113,6 +136,156 @@ const measurementPlanPreviewInputSchema = z.object({ project: projectNameSchema,
 const measurementPlanPublishInputSchema = measurementPlanPublishRequestSchema.extend({ project: projectNameSchema })
 const measurementPlanRetireInputSchema = z.object({ project: projectNameSchema, stableKey: z.string().min(1) })
 const measurementDiscoveryInputSchema = measurementDiscoveryRequestSchema.extend({ project: projectNameSchema })
+const idempotencyKeyInputSchema = z.string().trim().min(1).describe('A fresh request key. Reuse it only when retrying the identical request.')
+const measurementDraftEtagInputSchema = z.string().trim().min(1).optional().describe(
+  'Current draft ETag from canonry_measurement_draft_get. The API requires it for draft edits, publish, and discard; omit it only to receive the API’s actionable 428 response.',
+)
+const measurementOverviewInputSchema = measurementOverviewQuerySchema.extend({ project: projectNameSchema })
+const measurementDraftCollectionInputSchema = measurementDraftCollectionQuerySchema.extend({ project: projectNameSchema })
+const measurementQuerySetInputSchema = z.object({
+  project: projectNameSchema,
+  setId: z.string().trim().min(1),
+}).strict()
+const measurementQuerySetUpsertInputSchema = measurementQuerySetInputSchema.extend({
+  request: measurementQuerySetUpsertRequestSchema,
+}).strict()
+const measurementQueryTemplateInputSchema = z.object({
+  project: projectNameSchema,
+  templateId: z.string().trim().min(1),
+}).strict()
+const measurementQueryTemplateUpsertInputSchema = measurementQueryTemplateInputSchema.extend({
+  request: measurementQueryTemplateUpsertRequestSchema,
+}).strict()
+const measurementQueryTemplateApplyInputSchema = measurementQueryTemplateInputSchema.extend({
+  request: measurementQueryTemplateApplyRequestSchema,
+  idempotencyKey: idempotencyKeyInputSchema,
+}).strict()
+const measurementPlanDeactivateInputSchema = measurementPlanDeactivateRequestSchema.extend({
+  project: projectNameSchema,
+  idempotencyKey: idempotencyKeyInputSchema,
+}).strict()
+
+function measurementDraftMutationOperationSchema<
+  TAction extends string,
+  TRequest extends z.ZodTypeAny,
+>(action: TAction, request: TRequest) {
+  return z.object({
+    action: z.literal(action),
+    request,
+    etag: measurementDraftEtagInputSchema,
+    idempotencyKey: idempotencyKeyInputSchema,
+  }).strict().describe(`Operation for ${action}.`)
+}
+
+const measurementDraftOperationSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('create'),
+    request: measurementDraftCreateRequestSchema,
+    idempotencyKey: idempotencyKeyInputSchema,
+  }).strict().describe('Operation for create.'),
+  measurementDraftMutationOperationSchema('import-sitemap', measurementDraftImportSitemapRequestSchema),
+  measurementDraftMutationOperationSchema('apply-sitemap-selection', measurementDraftApplySitemapSelectionRequestSchema),
+  measurementDraftMutationOperationSchema('upsert-target', measurementDraftUpsertTargetRequestSchema),
+  measurementDraftMutationOperationSchema('rename-target', measurementDraftRenameTargetRequestSchema),
+  measurementDraftMutationOperationSchema('merge-targets', measurementDraftMergeTargetsRequestSchema),
+  measurementDraftMutationOperationSchema('exclude-target', measurementDraftExcludeTargetRequestSchema),
+  measurementDraftMutationOperationSchema('rebind-target', measurementDraftRebindTargetRequestSchema),
+  measurementDraftMutationOperationSchema('apply-assignments', measurementDraftApplyAssignmentsRequestSchema),
+  measurementDraftMutationOperationSchema('remove-assignment', measurementDraftRemoveAssignmentRequestSchema),
+  measurementDraftMutationOperationSchema('clear-assignments', measurementDraftClearAssignmentsRequestSchema),
+  measurementDraftMutationOperationSchema('classify-assignments', measurementDraftClassifyAssignmentsRequestSchema),
+  measurementDraftMutationOperationSchema('upsert-group', measurementDraftUpsertGroupRequestSchema),
+  measurementDraftMutationOperationSchema('remove-group', measurementDraftRemoveGroupRequestSchema),
+  measurementDraftMutationOperationSchema('upsert-competitor', measurementDraftUpsertCompetitorRequestSchema),
+  measurementDraftMutationOperationSchema('remove-competitor', measurementDraftRemoveCompetitorRequestSchema),
+  z.object({ action: z.literal('compile-preview') }).strict().describe('Operation for compile-preview.'),
+  z.object({ action: z.literal('diff-preview') }).strict().describe('Operation for diff-preview.'),
+  measurementDraftMutationOperationSchema('publish', measurementDraftPublishRequestSchema),
+  z.object({
+    action: z.literal('discard'),
+    etag: measurementDraftEtagInputSchema,
+    idempotencyKey: idempotencyKeyInputSchema,
+  }).strict().describe('Operation for discard.'),
+])
+
+// The MCP SDK advertises only top-level object schemas. Nesting the union keeps
+// that envelope compatible while preserving action/request/header correlation
+// in the live listTools schema consumed by unfamiliar agents and Aero.
+const measurementDraftActionInputSchema = z.object({
+  project: projectNameSchema,
+  operation: measurementDraftOperationSchema.describe('Typed draft operation. Select exactly one action branch.'),
+}).strict()
+
+type MeasurementDraftActionInput = z.infer<typeof measurementDraftActionInputSchema>
+
+const measurementDraftActionOpenApiOperations = [
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/create',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/import-sitemap',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-sitemap-selection',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/upsert-target',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/rename-target',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/merge-targets',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/exclude-target',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/rebind-target',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-assignments',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/remove-assignment',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/clear-assignments',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/classify-assignments',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/upsert-group',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/remove-group',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/upsert-competitor',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/remove-competitor',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/compile-preview',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/diff-preview',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/publish',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/discard',
+]
+
+function runMeasurementDraftAction(client: ApiClient, input: MeasurementDraftActionInput): Promise<unknown> {
+  const { project, operation: actionInput } = input
+  switch (actionInput.action) {
+    case 'create':
+      return client.createMeasurementPlanDraft(project, actionInput.request, actionInput.idempotencyKey)
+    case 'import-sitemap':
+      return client.importMeasurementDraftSitemap(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'apply-sitemap-selection':
+      return client.applyMeasurementDraftSitemapSelection(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'upsert-target':
+      return client.upsertMeasurementDraftTarget(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'rename-target':
+      return client.renameMeasurementDraftTarget(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'merge-targets':
+      return client.mergeMeasurementDraftTargets(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'exclude-target':
+      return client.excludeMeasurementDraftTarget(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'rebind-target':
+      return client.rebindMeasurementDraftTarget(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'apply-assignments':
+      return client.applyMeasurementDraftAssignments(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'remove-assignment':
+      return client.removeMeasurementDraftAssignment(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'clear-assignments':
+      return client.clearMeasurementDraftAssignments(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'classify-assignments':
+      return client.classifyMeasurementDraftAssignments(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'upsert-group':
+      return client.upsertMeasurementDraftGroup(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'remove-group':
+      return client.removeMeasurementDraftGroup(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'upsert-competitor':
+      return client.upsertMeasurementDraftCompetitor(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'remove-competitor':
+      return client.removeMeasurementDraftCompetitor(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'compile-preview':
+      return client.compileMeasurementDraftPreview(project)
+    case 'diff-preview':
+      return client.diffMeasurementDraftPreview(project)
+    case 'publish':
+      return client.publishMeasurementDraft(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'discard':
+      return client.discardMeasurementDraft(project, actionInput.idempotencyKey, actionInput.etag)
+  }
+}
 const runsListInputSchema = z.object({
   project: projectNameSchema,
   limit: z.number().int().positive().max(500).optional(),
@@ -1871,6 +2044,201 @@ export const canonryMcpTools = [
   }),
   defineTool({
     name: 'canonry_measurement_plan_segment_retire', title: 'Retire measurement segment', description: 'Permanently retire an inactive Target or group stable key. Publish a revision without it first; there is no unretire.', access: 'write', tier: 'setup', inputSchema: measurementPlanRetireInputSchema, annotations: writeAnnotations({ idempotentHint: true, destructiveHint: true }), openApiOperations: ['POST /api/v1/projects/{name}/measurement-plan/segments/{stableKey}/retire'], handler: (client, input) => client.retireMeasurementPlanSegment(input.project, input.stableKey),
+  }),
+  defineTool({
+    name: 'canonry_measurement_setup',
+    title: 'Get Advanced Measurement setup state',
+    description: 'Return the project’s stored Advanced Measurement setup state, mode, active revision, draft freshness, and next action. It never starts provider work or incurs provider cost, and refuses an unknown project.',
+    access: 'read',
+    tier: 'setup',
+    inputSchema: projectInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-setup'],
+    handler: (client, input) => client.getMeasurementSetup(input.project),
+  }),
+  defineTool({
+    name: 'canonry_measurement_overview',
+    title: 'Get Advanced Measurement overview',
+    description: 'Return stored, revision-pinned Advanced Measurement metrics and a bounded page of Target rows for one scope. It ranks one run snapshot only and never infers a trend or compares across revisions. Choose label-asc (default), label-desc, citationCoverage-asc/desc, or mentionCoverage-asc/desc. For a coverage sort, unavailable rows form the first bucket in either direction; available rows then follow the requested numeric direction. The cursor is sort-aware, pins pagination to the active revision, displayed run, evidence snapshot, and filters even if a newer run completes, and must be reused unchanged with the same sort and filters. Legacy label cursors work only when sort is omitted, while any explicit sort needs a new sort-bound cursor. It never starts provider work or incurs provider cost; page size is at most 100, and it refuses invalid scope keys, cursor combinations, appended evidence, or a run pinned to another revision.',
+    access: 'read',
+    tier: 'setup',
+    inputSchema: measurementOverviewInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-overview'],
+    handler: (client, input) => {
+      const { project, ...query } = input
+      return client.getMeasurementOverview(project, query)
+    },
+  }),
+  defineTool({
+    name: 'canonry_measurement_draft_get',
+    title: 'Get Advanced Measurement draft',
+    description: 'Return the stored v2 draft and its current ETag, or draft:null when none exists. It never starts provider work or incurs provider cost, and refuses an unknown project.',
+    access: 'read',
+    tier: 'setup',
+    inputSchema: projectInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-plan/draft'],
+    handler: (client, input) => client.getMeasurementPlanDraft(input.project),
+  }),
+  defineTool({
+    name: 'canonry_measurement_draft_targets',
+    title: 'List Advanced Measurement draft Targets',
+    description: 'Return one stored, cursor-paged set of draft Targets. It never starts provider work or incurs provider cost; pages are capped at 100 rows and it refuses a missing draft or unknown project.',
+    access: 'read',
+    tier: 'setup',
+    inputSchema: measurementDraftCollectionInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-plan/draft/targets'],
+    handler: (client, input) => {
+      const { project, ...query } = input
+      return client.getMeasurementDraftTargets(project, query)
+    },
+  }),
+  defineTool({
+    name: 'canonry_measurement_draft_assignments',
+    title: 'List Advanced Measurement draft assignments',
+    description: 'Return one stored, cursor-paged set of draft Target-to-query assignments. It never starts provider work or incurs provider cost; pages are capped at 100 rows and it refuses a missing draft or unknown project.',
+    access: 'read',
+    tier: 'setup',
+    inputSchema: measurementDraftCollectionInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-plan/draft/assignments'],
+    handler: (client, input) => {
+      const { project, ...query } = input
+      return client.getMeasurementDraftAssignments(project, query)
+    },
+  }),
+  defineTool({
+    name: 'canonry_measurement_draft_groups',
+    title: 'List Advanced Measurement draft groups',
+    description: 'Return one stored, cursor-paged set of draft reporting groups and competitors. It never starts provider work or incurs provider cost; pages are capped at 100 rows and it refuses a missing draft or unknown project.',
+    access: 'read',
+    tier: 'setup',
+    inputSchema: measurementDraftCollectionInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-plan/draft/groups'],
+    handler: (client, input) => {
+      const { project, ...query } = input
+      return client.getMeasurementDraftGroups(project, query)
+    },
+  }),
+  defineTool({
+    name: 'canonry_measurement_query_sets',
+    title: 'List Advanced Measurement query sets',
+    description: 'Return stored query-set metadata for one project. It never starts provider work or incurs provider cost, and refuses an unknown project.',
+    access: 'read',
+    tier: 'setup',
+    inputSchema: projectInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-query-sets'],
+    handler: (client, input) => client.listMeasurementQuerySets(input.project),
+  }),
+  defineTool({
+    name: 'canonry_measurement_query_set_get',
+    title: 'Get Advanced Measurement query set',
+    description: 'Return one stored query set with its ordered query members. It never starts provider work or incurs provider cost, and refuses an unknown project or query-set ID.',
+    access: 'read',
+    tier: 'setup',
+    inputSchema: measurementQuerySetInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-query-sets/{setId}'],
+    handler: (client, input) => client.getMeasurementQuerySet(input.project, input.setId),
+  }),
+  defineTool({
+    name: 'canonry_measurement_query_templates',
+    title: 'List Advanced Measurement query templates',
+    description: 'Return stored query-template metadata for one project. It never starts provider work or incurs provider cost, and refuses an unknown project.',
+    access: 'read',
+    tier: 'setup',
+    inputSchema: projectInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-query-templates'],
+    handler: (client, input) => client.listMeasurementQueryTemplates(input.project),
+  }),
+  defineTool({
+    name: 'canonry_measurement_draft_action',
+    title: 'Act on an Advanced Measurement draft',
+    description: 'Create, edit, inspect, publish, or discard one v2 draft. Pass project plus exactly one typed operation branch; each operation correlates its action with the required request, ETag, and idempotency key so the live schema is self-describing. Requires measurement-plan write authority. Every mutating action needs idempotencyKey: reuse it only for an identical retry; a changed request with the same key is refused. Create has no ETag. Draft edits, publish, and discard should pass the latest ETag from canonry_measurement_draft_get; a missing ETag reaches the API as actionable 428, while a stale ETag returns 412. Compile-preview and diff-preview never mutate or start provider work and require neither header. Import-sitemap performs a bounded public sitemap fetch but does not publish or run measurement; publish replaces the active plan after validation, and discard permanently removes the draft.',
+    access: 'write',
+    tier: 'setup',
+    inputSchema: measurementDraftActionInputSchema,
+    annotations: writeAnnotations({ idempotentHint: true, destructiveHint: true, openWorldHint: true }),
+    openApiOperations: measurementDraftActionOpenApiOperations,
+    handler: runMeasurementDraftAction,
+  }),
+  defineTool({
+    name: 'canonry_measurement_plan_deactivate',
+    title: 'Deactivate Advanced Measurement plan',
+    description: 'Remove the active Advanced Measurement plan pointer while retaining immutable revisions. Requires measurement-plan write authority, the active revision you reviewed, and idempotencyKey; reuse that key only to retry the identical request. It does not use a draft ETag and refuses a moved or missing active plan.',
+    access: 'write',
+    tier: 'setup',
+    inputSchema: measurementPlanDeactivateInputSchema,
+    annotations: writeAnnotations({ idempotentHint: true, destructiveHint: true }),
+    openApiOperations: ['POST /api/v1/projects/{name}/measurement-plan/actions/deactivate'],
+    handler: (client, input) => client.deactivateMeasurementPlan(input.project, {
+      expectedActiveRevision: input.expectedActiveRevision,
+    }, input.idempotencyKey),
+  }),
+  defineTool({
+    name: 'canonry_measurement_query_set_upsert',
+    title: 'Create or replace Advanced Measurement query set',
+    description: 'Create or replace one query set and its ordered query references. Requires measurement-plan write authority. This is an idempotent PUT with no mutation headers; safely retry the same request. It replaces the named query-set contents but never deletes project queries or published plans.',
+    access: 'write',
+    tier: 'setup',
+    inputSchema: measurementQuerySetUpsertInputSchema,
+    annotations: writeAnnotations({ idempotentHint: true, destructiveHint: true }),
+    openApiOperations: ['PUT /api/v1/projects/{name}/measurement-query-sets/{setId}'],
+    handler: (client, input) => client.upsertMeasurementQuerySet(input.project, input.setId, input.request),
+  }),
+  defineTool({
+    name: 'canonry_measurement_query_set_delete',
+    title: 'Delete Advanced Measurement query set',
+    description: 'Delete one query set without deleting its project queries or published plans. Requires measurement-plan write authority. DELETE is idempotent and uses no mutation headers; retrying the same request is safe, while an unknown query-set ID is refused.',
+    access: 'write',
+    tier: 'setup',
+    inputSchema: measurementQuerySetInputSchema,
+    annotations: writeAnnotations({ idempotentHint: true, destructiveHint: true }),
+    openApiOperations: ['DELETE /api/v1/projects/{name}/measurement-query-sets/{setId}'],
+    handler: (client, input) => client.deleteMeasurementQuerySet(input.project, input.setId),
+  }),
+  defineTool({
+    name: 'canonry_measurement_query_template_upsert',
+    title: 'Create or replace Advanced Measurement query template',
+    description: 'Create or replace one query template. Requires measurement-plan write authority. This is an idempotent PUT with no mutation headers; safely retry the same request. It replaces only the named template and does not create queries until an explicit apply.',
+    access: 'write',
+    tier: 'setup',
+    inputSchema: measurementQueryTemplateUpsertInputSchema,
+    annotations: writeAnnotations({ idempotentHint: true, destructiveHint: true }),
+    openApiOperations: ['PUT /api/v1/projects/{name}/measurement-query-templates/{templateId}'],
+    handler: (client, input) => client.upsertMeasurementQueryTemplate(input.project, input.templateId, input.request),
+  }),
+  defineTool({
+    name: 'canonry_measurement_query_template_delete',
+    title: 'Delete Advanced Measurement query template',
+    description: 'Delete one query template without deleting previously expanded project queries. Requires measurement-plan write authority. DELETE is idempotent and uses no mutation headers; retrying the same request is safe, while an unknown template ID is refused.',
+    access: 'write',
+    tier: 'setup',
+    inputSchema: measurementQueryTemplateInputSchema,
+    annotations: writeAnnotations({ idempotentHint: true, destructiveHint: true }),
+    openApiOperations: ['DELETE /api/v1/projects/{name}/measurement-query-templates/{templateId}'],
+    handler: (client, input) => client.deleteMeasurementQueryTemplate(input.project, input.templateId),
+  }),
+  defineTool({
+    name: 'canonry_measurement_query_template_apply',
+    title: 'Apply Advanced Measurement query template',
+    description: 'Expand one query template into project queries and optionally add them to a query set. Requires measurement-plan write authority and idempotencyKey; reuse that key only to retry the identical apply. This additive action returns created and already-existing queries, does not use a draft ETag, and never removes prior queries.',
+    access: 'write',
+    tier: 'setup',
+    inputSchema: measurementQueryTemplateApplyInputSchema,
+    annotations: writeAnnotations({ idempotentHint: true }),
+    openApiOperations: ['POST /api/v1/projects/{name}/measurement-query-templates/{templateId}/apply'],
+    handler: (client, input) => client.applyMeasurementQueryTemplate(
+      input.project,
+      input.templateId,
+      input.request,
+      input.idempotencyKey,
+    ),
   }),
   defineTool({
     name: 'canonry_measurement_report',

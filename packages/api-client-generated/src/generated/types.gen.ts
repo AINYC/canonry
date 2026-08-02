@@ -7900,10 +7900,6 @@ export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsCreateData = {
     body: MeasurementDraftCreateRequest;
     headers: {
         /**
-         * Current draft ETag. Missing returns 428; stale returns 412.
-         */
-        'If-Match': string;
-        /**
          * Replay key. The same key with a different request body returns 409.
          */
         'Idempotency-Key': string;
@@ -7935,14 +7931,6 @@ export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsCreateErrors = {
      * The idempotency key was already used with a different request body.
      */
     409: ErrorEnvelope;
-    /**
-     * The draft changed since it was loaded.
-     */
-    412: ErrorEnvelope;
-    /**
-     * The draft ETag was not supplied in `If-Match`.
-     */
-    428: ErrorEnvelope;
 };
 
 export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsCreateError = PostApiV1ProjectsByNameMeasurementPlanDraftActionsCreateErrors[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsCreateErrors];
@@ -9146,7 +9134,11 @@ export type GetApiV1ProjectsByNameMeasurementOverviewData = {
          */
         search?: string;
         /**
-         * Opaque cursor from the previous page.
+         * Snapshot row order. label-asc is the default. For coverage sorts, unavailable rows form the first bucket in either direction; available rates then follow the requested direction.
+         */
+        sort?: 'label-asc' | 'label-desc' | 'citationCoverage-asc' | 'citationCoverage-desc' | 'mentionCoverage-asc' | 'mentionCoverage-desc';
+        /**
+         * Opaque, sort-aware cursor from the previous page. It pins pagination to the active revision, displayed run, evidence snapshot, and same filters even if a newer run completes. Reuse it unchanged with the same sort and filters; a mismatch or newly appended evidence is rejected. A legacy label cursor works only when sort is omitted; an explicit sort requires a new sort-bound cursor.
          */
         cursor?: string;
         /**

@@ -6,8 +6,17 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createClient, migrate } from '@ainyc/canonry-db'
 import { apiRoutes } from '../src/index.js'
 
+interface SpecParameter {
+  name?: string
+  in?: string
+  required?: boolean
+  description?: string
+  schema?: { type?: string; enum?: string[]; default?: string }
+}
+
 interface SpecOperation {
-  parameters?: Array<{ name?: string; in?: string; required?: boolean }>
+  description?: string
+  parameters?: SpecParameter[]
   requestBody?: { content?: Record<string, { schema?: { $ref?: string } }> }
   responses?: Record<string, { content?: Record<string, { schema?: { $ref?: string } }> }>
 }
@@ -40,6 +49,15 @@ async function spec(): Promise<Spec> {
 }
 
 const DRAFT = '/api/v1/projects/{name}/measurement-plan/draft'
+const OVERVIEW = '/api/v1/projects/{name}/measurement-overview'
+const OVERVIEW_SORTS = [
+  'label-asc',
+  'label-desc',
+  'citationCoverage-asc',
+  'citationCoverage-desc',
+  'mentionCoverage-asc',
+  'mentionCoverage-desc',
+]
 
 describe('advanced measurement v2 openapi surface', () => {
   it('types every draft action against a contract, not a loose object', async () => {
@@ -87,6 +105,24 @@ describe('advanced measurement v2 openapi surface', () => {
     expect(headers('diff-preview')).toEqual([])
   })
 
+  it('documents draft creation as idempotency-only while ordinary mutations require the draft ETag', async () => {
+    const document = await spec()
+    const operation = (action: string) => document.paths[`${DRAFT}/actions/${action}`]?.post
+    const headers = (action: string) => (operation(action)?.parameters ?? [])
+      .filter(parameter => parameter.in === 'header')
+      .map(parameter => `${parameter.name}:${parameter.required === true}`)
+      .sort()
+    const errorStatuses = (action: string) => Object.keys(operation(action)?.responses ?? {})
+      .filter(status => Number(status) >= 400)
+      .sort()
+
+    expect.soft(headers('create')).toEqual(['Idempotency-Key:true'])
+    expect.soft(errorStatuses('create')).toEqual(['400', '403', '404', '409'])
+
+    expect.soft(headers('upsert-target')).toEqual(['Idempotency-Key:true', 'If-Match:true'])
+    expect.soft(errorStatuses('upsert-target')).toEqual(['400', '403', '404', '409', '412', '428'])
+  })
+
   it('publishes the compiled checksum on every contract that reviews or guards content', async () => {
     const document = await spec()
     const compile = document.components?.schemas?.MeasurementDraftCompilePreviewResponse
@@ -114,12 +150,32 @@ describe('advanced measurement v2 openapi surface', () => {
 
   it('documents the cross-revision run rejection on the overview', async () => {
     const document = await spec()
-    const overview = document.paths['/api/v1/projects/{name}/measurement-overview']?.get
+    const overview = document.paths[OVERVIEW]?.get
     const runId = overview?.parameters?.find(parameter => parameter.name === 'runId')
 
     expect(runId).toMatchObject({ in: 'query' })
     expect(overview?.responses?.['422']).toBeDefined()
     expect(overview?.responses?.['200']?.content?.['application/json']?.schema?.$ref)
       .toBe('#/components/schemas/MeasurementOverviewResponse')
+  })
+
+  it('exposes sort-aware snapshot ranking without implying a trend', async () => {
+    const document = await spec()
+    const overview = document.paths[OVERVIEW]?.get
+    const sort = overview?.parameters?.find(parameter => parameter.name === 'sort')
+    const cursor = overview?.parameters?.find(parameter => parameter.name === 'cursor')
+
+    expect(sort).toMatchObject({
+      in: 'query',
+      schema: { type: 'string', enum: OVERVIEW_SORTS, default: 'label-asc' },
+    })
+    expect(sort?.description).toMatch(/unavailable rows form the first bucket/i)
+    expect(overview?.description).toMatch(/one revision-pinned run snapshot/i)
+    expect(overview?.description).toMatch(/never infers a trend/i)
+    expect(overview?.description).toMatch(/across revisions/i)
+    expect(cursor?.description).toMatch(/sort-aware/i)
+    expect(cursor?.description).toMatch(/pins pagination to.*run/i)
+    expect(cursor?.description).toMatch(/same filters/i)
+    expect(cursor?.description).toMatch(/legacy label cursor works only when sort is omitted/i)
   })
 })
