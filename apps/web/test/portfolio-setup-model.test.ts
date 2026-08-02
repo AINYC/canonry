@@ -17,6 +17,7 @@ import {
   parsePortfolioDraft,
   reconcileDraftWithDiscovery,
   rejectTarget,
+  removeReportingGroup,
   removeTargetUrl,
   resolveCoverageReviews,
   renameTarget,
@@ -494,6 +495,20 @@ describe('portfolio setup draft', () => {
     expect(draft.assignments).toEqual([
       { targetKey: 'south-quay', queryId: 'q-nearby', context: undefined },
     ])
+  })
+
+  test('removes a saved reporting group without changing its Properties or query assignments', () => {
+    let draft = createDraftFromDiscovery(discoveryFixture())
+    draft = confirmTarget(confirmTarget(draft, 'north-pier'), 'south-quay')
+    draft = upsertQuerySet(draft, { key: 'nearby', label: 'Nearby', queryIds: ['q-nearby'], context: undefined })
+    draft = applyQuerySet(draft, 'nearby', ['north-pier'])
+    draft = upsertReportingGroup(draft, { stableKey: 'coast', label: 'Coast', targetKeys: ['north-pier'] })
+
+    draft = removeReportingGroup(draft, 'coast')
+
+    expect(draft.groups).toEqual([])
+    expect(draft.targets).toHaveLength(2)
+    expect(draft.assignments).toEqual([{ targetKey: 'north-pier', queryId: 'q-nearby', context: undefined }])
   })
 
   test('uses contract URL normalization and rejects exact routes that could widen silently', () => {

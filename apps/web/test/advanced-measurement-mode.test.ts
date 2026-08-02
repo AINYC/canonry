@@ -1,0 +1,33 @@
+import { describe, expect, it } from 'vitest'
+
+import { resolveAdvancedMeasurementMode } from '../src/components/project/advanced-measurement/model.js'
+
+describe('advanced measurement mode', () => {
+  it('keeps an untouched project on the existing overview', () => {
+    expect(resolveAdvancedMeasurementMode({ activePlanSchemaVersion: null, hasDraft: false })).toEqual({
+      surface: 'simple-overview',
+      setupAction: 'set-up',
+    })
+  })
+
+  it('keeps a draft-only project on the existing overview', () => {
+    expect(resolveAdvancedMeasurementMode({ activePlanSchemaVersion: null, hasDraft: true })).toEqual({
+      surface: 'simple-overview',
+      setupAction: 'continue',
+    })
+  })
+
+  it('routes a version-one plan to the advanced overview with a republish action', () => {
+    expect(resolveAdvancedMeasurementMode({ activePlanSchemaVersion: 1, hasDraft: false })).toEqual({
+      surface: 'advanced-overview-v1',
+      setupAction: 'republish',
+    })
+  })
+
+  it('routes a current plan to the advanced overview', () => {
+    expect(resolveAdvancedMeasurementMode({ activePlanSchemaVersion: 2, hasDraft: false })).toEqual({
+      surface: 'advanced-overview',
+      setupAction: 'edit',
+    })
+  })
+})

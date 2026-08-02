@@ -667,6 +667,15 @@ export function upsertReportingGroup(draft: PortfolioSetupDraft, group: DraftRep
   })
 }
 
+export function removeReportingGroup(draft: PortfolioSetupDraft, stableKey: string): PortfolioSetupDraft {
+  const key = stableKey.trim()
+  if (!draft.groups.some(group => group.stableKey === key)) throw new Error(`Group not found: ${key}`)
+  return canonicalDraft({
+    ...draft,
+    groups: draft.groups.filter(group => group.stableKey !== key),
+  })
+}
+
 export function validatePortfolioDraft(draft: PortfolioSetupDraft): DraftValidationIssue[] {
   const issues: DraftValidationIssue[] = []
   const confirmed = draft.targets.filter(target => target.status === 'confirmed')

@@ -32,7 +32,11 @@ import { VisibilityTrendSection } from '../components/project/VisibilityTrendSec
 import { DiscoverySection } from '../components/project/DiscoverySection.js'
 import { TechnicalAeoSection } from '../components/project/TechnicalAeoSection.js'
 import { ProjectHistorySection } from '../components/project/ProjectHistorySection.js'
-import { PortfolioSection } from '../components/project/PortfolioSection.js'
+import { AdvancedMeasurementSection } from '../components/project/advanced-measurement/AdvancedMeasurementSection.js'
+import { hasAdvancedMeasurementCompatibilityDraft } from '../components/project/advanced-measurement/draft-storage.js'
+import { AdvancedMeasurementLanding } from '../components/project/advanced-measurement/AdvancedMeasurementLanding.js'
+import { resolveAdvancedMeasurementMode } from '../components/project/advanced-measurement/model.js'
+import { adaptVersionOneMeasurementReport } from '../components/project/advanced-measurement/v1-report-adapter.js'
 import { ReportPage } from './ReportPage.js'
 import { formatTimestamp, SEARCH_METRIC_SHORT_LABELS, SearchMetric } from '../lib/format-helpers.js'
 import { METRIC_TONE_TEXT_CLASS } from '../lib/tone-helpers.js'
@@ -83,7 +87,6 @@ import {
   getApiV1ProjectsByNameMeasurementPlanQueryKey,
   getApiV1ProjectsByNameMeasurementReportOptions,
   getApiV1ProjectsByNameQueriesOptions,
-  getApiV1ProjectsByNameQueriesQueryKey,
   getApiV1ProjectsQueryKey,
   getApiV1ProjectsByNameQueryKey,
   getApiV1SettingsOptions,
@@ -1636,26 +1639,49 @@ function ProjectPageContent({
   })
   const activeMeasurementPlanQuery = useQuery({
     ...getApiV1ProjectsByNameMeasurementPlanOptions({ client: heyClient, path: { name: projectName } }),
-    enabled: tab === 'portfolio' && Boolean(projectName),
+    enabled: !isEmbed() && (tab === 'portfolio' || tab === 'overview') && Boolean(projectName),
     staleTime: 0,
     refetchOnMount: 'always',
   })
-  const isActiveMeasurementPlanLoading = activeMeasurementPlanQuery.isPending || activeMeasurementPlanQuery.isFetching
-  const activeMeasurementRevision = activeMeasurementPlanQuery.data?.active?.revision ?? null
-  const measurementReportQuery = useQuery({
+  const activeMeasurementPlan = activeMeasurementPlanQuery.data?.active ?? null
+  const activeMeasurementPlanSchemaVersion = activeMeasurementPlan === null
+    ? null
+    : Number(activeMeasurementPlan.plan.schemaVersion)
+  const activeMeasurementRevision = activeMeasurementPlan?.revision ?? 0
+  const advancedMeasurementReportQuery = useQuery({
     ...getApiV1ProjectsByNameMeasurementReportOptions({
       client: heyClient,
       path: { name: projectName },
-      query: { revision: activeMeasurementRevision ?? 1 },
+      query: { revision: activeMeasurementRevision },
     }),
-    enabled: tab === 'portfolio'
-      && activeMeasurementRevision !== null
-      && !isActiveMeasurementPlanLoading
-      && !activeMeasurementPlanQuery.isError,
+    enabled: tab === 'overview' && Boolean(projectName) && activeMeasurementPlan !== null,
     staleTime: 0,
     refetchOnMount: 'always',
   })
-
+  const hasCachedMeasurementPlan = activeMeasurementPlanQuery.data !== undefined
+  const hasCachedPortfolioQueries = portfolioQueriesQuery.data !== undefined
+  const isActiveMeasurementPlanLoading = activeMeasurementPlanQuery.isPending && !hasCachedMeasurementPlan
+  const isActiveMeasurementPlanError = activeMeasurementPlanQuery.isError && !hasCachedMeasurementPlan
+  const isPortfolioQueriesLoading = portfolioQueriesQuery.isPending && !hasCachedPortfolioQueries
+  const isPortfolioQueriesError = portfolioQueriesQuery.isError && !hasCachedPortfolioQueries
+  const hasCachedAdvancedMeasurementReport = advancedMeasurementReportQuery.data !== undefined
+  const advancedMeasurementReportState = advancedMeasurementReportQuery.isPending && !hasCachedAdvancedMeasurementReport
+    ? 'loading' as const
+    : advancedMeasurementReportQuery.isError && !hasCachedAdvancedMeasurementReport
+      ? 'error' as const
+      : 'ready' as const
+  const advancedMeasurementMode = resolveAdvancedMeasurementMode({
+    activePlanSchemaVersion: activeMeasurementPlanSchemaVersion,
+    hasDraft: hasAdvancedMeasurementCompatibilityDraft(projectName),
+  })
+  const advancedMeasurementReport = useMemo(() => (
+    activeMeasurementPlan
+      && activeMeasurementPlanSchemaVersion !== null
+      && activeMeasurementPlanSchemaVersion < 2
+      && advancedMeasurementReportQuery.data
+      ? adaptVersionOneMeasurementReport(activeMeasurementPlan, advancedMeasurementReportQuery.data)
+      : undefined
+  ), [activeMeasurementPlan, activeMeasurementPlanSchemaVersion, advancedMeasurementReportQuery.data])
   const hasActiveVisibilitySweep = (model?.recentRuns ?? []).some(
     r => r.kind === RunKinds['answer-visibility'] && (r.status === RunStatuses.running || r.status === RunStatuses.queued),
   )
@@ -1901,16 +1927,6 @@ function ProjectPageContent({
     return data
   }
 
-  async function handleCreateMeasurementQueries(texts: readonly string[]) {
-    const queries = await apiAppendQueries(projectName, [...texts])
-    queryClient.setQueryData(
-      getApiV1ProjectsByNameQueriesQueryKey({ client: heyClient, path: { name: projectName } }),
-      queries,
-    )
-    void refetch()
-    return queries
-  }
-
   async function handleCompileMeasurementPlan(input: MeasurementPlanInput) {
     const { data } = await postApiV1ProjectsByNameMeasurementPlanCompilePreview({
       client: heyClient,
@@ -1955,7 +1971,6 @@ function ProjectPageContent({
   const projectTabBase = `/projects/${encodeURIComponent(model.project.name)}`
   const projectTabItemsAll: ProjectTabItem[] = [
     { key: 'overview', label: 'Overview', href: projectTabBase },
-    ...(!isEmbed() ? [{ key: 'portfolio' as const, label: 'Portfolio', href: `${projectTabBase}/portfolio` }] : []),
     { key: 'search-console', label: 'Search Engines', href: `${projectTabBase}/search-console` },
     { key: 'activity', label: 'Activity', href: `${projectTabBase}/activity` },
     { key: 'technical-aeo', label: 'Technical AEO', href: `${projectTabBase}/technical-aeo` },
@@ -2083,30 +2098,45 @@ function ProjectPageContent({
       </nav>
 
       {tab === 'portfolio' && !isEmbed() ? (
-        <PortfolioSection
+        <AdvancedMeasurementSection
           key={projectName}
           projectName={projectName}
-          locations={model.project.locations}
+          canEdit
           queries={portfolioQueriesQuery.data ?? []}
-          isQueryLoading={portfolioQueriesQuery.isPending || portfolioQueriesQuery.isFetching}
-          isQueryError={portfolioQueriesQuery.isError}
+          isQueryLoading={isPortfolioQueriesLoading}
+          isQueryError={isPortfolioQueriesError}
           onRetryQueries={() => { void portfolioQueriesQuery.refetch() }}
           activePlan={activeMeasurementPlanQuery.data?.active ?? null}
           isPlanLoading={isActiveMeasurementPlanLoading}
-          isPlanError={activeMeasurementPlanQuery.isError}
+          isPlanError={isActiveMeasurementPlanError}
           onRetryPlan={() => { void activeMeasurementPlanQuery.refetch() }}
-          report={measurementReportQuery.data ?? null}
-          isReportLoading={measurementReportQuery.isPending || measurementReportQuery.isFetching}
-          isReportError={measurementReportQuery.isError}
-          onRetryReport={() => { void measurementReportQuery.refetch() }}
           onDiscover={handleMeasurementDiscovery}
-          onCreateQueries={handleCreateMeasurementQueries}
           onCompilePlan={handleCompileMeasurementPlan}
           onDiffPlan={handleDiffMeasurementPlan}
           onPublishPlan={handlePublishMeasurementPlan}
+          onManageProjectQueries={() => {
+            setManagingQueries(true)
+            void navigate({ to: '/projects/$projectName', params: { projectName } })
+          }}
+          onPublished={() => {
+            void navigate({ to: '/projects/$projectName', params: { projectName } })
+          }}
         />
       ) : tab === 'overview' ? (
         <>
+          {isActiveMeasurementPlanError ? (
+            <div role="alert" className="mb-5 flex flex-wrap items-center gap-3 border-y border-negative-800/40 bg-negative-950/20 py-4 text-sm text-negative">
+              <span>Could not check the advanced measurement setup. Existing project-wide results remain available.</span>
+              <Button type="button" size="sm" variant="outline" onClick={() => { void activeMeasurementPlanQuery.refetch() }}>
+                Retry setup check
+              </Button>
+            </div>
+          ) : null}
+          <AdvancedMeasurementLanding
+            mode={advancedMeasurementMode}
+            canEdit={!isEmbed() && !isActiveMeasurementPlanLoading && !isActiveMeasurementPlanError}
+            simpleOverview={(
+              <>
           <section className="page-section-divider">
             <VisibilityTrendSection
               projectName={model.project.name}
@@ -2368,6 +2398,15 @@ function ProjectPageContent({
             </OverviewDisclosure>
           )}
 
+              </>
+            )}
+            report={advancedMeasurementReport}
+            reportState={advancedMeasurementReportState}
+            onOpenSetup={!isEmbed() ? () => {
+              void navigate({ to: '/projects/$projectName/portfolio', params: { projectName } })
+            } : undefined}
+            onRetryReport={() => { void advancedMeasurementReportQuery.refetch() }}
+          />
         </>
       ) : tab === 'settings' ? (
         <>
