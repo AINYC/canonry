@@ -20,6 +20,12 @@ export type ErrorCode =
   | 'MISSING_DEPENDENCY'
   | 'RUNTIME_STATE_MISSING'
   | 'MEASUREMENT_PLAN_REVISION_CONFLICT'
+  | 'MEASUREMENT_COMPILED_CHECKSUM_CONFLICT'
+  | 'MEASUREMENT_RUN_REVISION_MISMATCH'
+  | 'MEASUREMENT_DRAFT_ETAG_REQUIRED'
+  | 'MEASUREMENT_DRAFT_ETAG_STALE'
+  | 'MEASUREMENT_IDEMPOTENCY_KEY_REQUIRED'
+  | 'MEASUREMENT_IDEMPOTENCY_KEY_CONFLICT'
 
 export class AppError extends Error {
   readonly code: ErrorCode
@@ -120,6 +126,78 @@ export function measurementPlanRevisionConflict(
     'The active measurement plan changed. Reload it before publishing.',
     409,
     { expectedActiveRevision, actualActiveRevision },
+  )
+}
+
+/**
+ * The recompile at publish time produced different content than the operator
+ * reviewed. Nothing is written: republishing a document nobody looked at is the
+ * failure this prevents.
+ */
+export function measurementCompiledChecksumConflict(
+  expectedCompiledChecksum: string,
+  actualCompiledChecksum: string,
+): AppError {
+  return new AppError(
+    'MEASUREMENT_COMPILED_CHECKSUM_CONFLICT',
+    'The compiled measurement plan changed after it was reviewed. Reload the review and publish again.',
+    409,
+    { expectedCompiledChecksum, actualCompiledChecksum },
+  )
+}
+
+/**
+ * A report was asked to display a run pinned to a different plan revision.
+ * Joining across revisions would compare two different sets of questions, so
+ * the request is refused rather than answered with a mixed basis.
+ */
+export function measurementRunRevisionMismatch(
+  runId: string,
+  runRevision: number,
+  activeRevision: number | null,
+): AppError {
+  return new AppError(
+    'MEASUREMENT_RUN_REVISION_MISMATCH',
+    `Run '${runId}' measured plan revision ${runRevision}, not the active revision. Select a run pinned to the active revision.`,
+    422,
+    { runId, runRevision, activeRevision },
+  )
+}
+
+/** A draft mutation arrived without `If-Match`, so it cannot be shown to be acting on what the caller saw. */
+export function measurementDraftEtagRequired(): AppError {
+  return new AppError(
+    'MEASUREMENT_DRAFT_ETAG_REQUIRED',
+    'This action requires the current draft ETag in `If-Match`. Reload the draft and retry.',
+    428,
+  )
+}
+
+export function measurementDraftEtagStale(expectedEtag: string, actualEtag: string): AppError {
+  return new AppError(
+    'MEASUREMENT_DRAFT_ETAG_STALE',
+    'The measurement draft changed since it was loaded. Reload it and retry.',
+    412,
+    { expectedEtag, actualEtag },
+  )
+}
+
+export function measurementIdempotencyKeyRequired(operation: string): AppError {
+  return new AppError(
+    'MEASUREMENT_IDEMPOTENCY_KEY_REQUIRED',
+    `The '${operation}' action requires an \`Idempotency-Key\` header.`,
+    400,
+    { operation },
+  )
+}
+
+/** Same key, different content: replaying a receipt over a changed request would silently apply the wrong one. */
+export function measurementIdempotencyKeyConflict(operation: string): AppError {
+  return new AppError(
+    'MEASUREMENT_IDEMPOTENCY_KEY_CONFLICT',
+    `The \`Idempotency-Key\` for '${operation}' was already used with a different request body.`,
+    409,
+    { operation },
   )
 }
 

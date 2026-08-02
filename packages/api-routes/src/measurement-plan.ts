@@ -11,9 +11,10 @@ import {
   measurementPlanPublishRequestSchema,
   measurementPlanRevisionConflict,
   notFound,
-  parseStoredMeasurementPlan,
+  parseStoredMeasurementPlanAnyVersion,
   validationError,
   type MeasurementPlan,
+  type StoredMeasurementPlan,
   type MeasurementPlanContext,
   type MeasurementPlanCounts,
   type MeasurementPlanInput,
@@ -43,8 +44,26 @@ type SemanticSelection = {
   queryIds: string[]
 }
 
-function parseStoredPlan(canonicalJson: unknown): MeasurementPlan {
-  return parseStoredMeasurementPlan(canonicalJson)
+/**
+ * Reads a revision of any schema version. Every read surface here must use this
+ * rather than the v1-only reader: the moment a v2 revision exists, decoding it
+ * through `parseStoredPlan` throws, and a route that lets that escape answers
+ * 500 on a perfectly valid stored plan.
+ */
+function parseStoredPlanAnyVersion(canonicalJson: unknown): StoredMeasurementPlan {
+  return parseStoredMeasurementPlanAnyVersion(canonicalJson)
+}
+
+/**
+ * A v1 candidate cannot be diffed against a v2 active revision: they do not
+ * share an assignment model, so any diff would be invented rather than
+ * computed. Refusing is the honest answer until the v2 diff lands.
+ */
+function requireV1Plan(plan: StoredMeasurementPlan, what: string): MeasurementPlan {
+  if (plan.schemaVersion !== 1) {
+    throw validationError(`${what} is not available for a schema v${plan.schemaVersion} revision.`)
+  }
+  return plan
 }
 
 function versionDto(row: typeof measurementPlanVersions.$inferSelect, active: boolean) {
@@ -53,7 +72,9 @@ function versionDto(row: typeof measurementPlanVersions.$inferSelect, active: bo
     checksum: row.checksum,
     createdAt: row.createdAt,
     active,
-    plan: parseStoredPlan(row.canonicalJson),
+    // Any schema version: a stored revision must remain readable through the
+    // revision-detail surfaces regardless of which compiler wrote it.
+    plan: parseStoredPlanAnyVersion(row.canonicalJson),
   }
 }
 
@@ -292,7 +313,7 @@ function assertNoRetiredSegmentReuse(
   }
 }
 
-function activePlanContainsKey(plan: MeasurementPlan, stableKey: string): boolean {
+function activePlanContainsKey(plan: StoredMeasurementPlan, stableKey: string): boolean {
   return plan.targets.some(target => target.stableKey === stableKey)
     || plan.groups.some(group => group.stableKey === stableKey)
 }
@@ -324,7 +345,9 @@ export async function measurementPlanRoutes(app: FastifyInstance, opts: Measurem
     const preview = compileMeasurementPlanPreview(request.body, compileContextForProject(app, project, opts))
     if (!preview.ok) return { ...preview, diff: null }
     const active = activePlanVersion(app, project.id)
-    const activePlan = active ? parseStoredPlan(active.version.canonicalJson) : null
+    const activePlan = active
+      ? requireV1Plan(parseStoredPlanAnyVersion(active.version.canonicalJson), 'Plan diff')
+      : null
     return {
       ...preview,
       diff: planDiff(activePlan, preview.plan, active?.version.revision ?? null),
@@ -430,7 +453,7 @@ export async function measurementPlanRoutes(app: FastifyInstance, opts: Measurem
     if (segment.retiredAt !== null) return reply.send({ stableKey: segment.stableKey, retiredAt: segment.retiredAt })
 
     const active = activePlanVersion(app, project.id)
-    if (active && activePlanContainsKey(parseStoredPlan(active.version.canonicalJson), segment.stableKey)) {
+    if (active && activePlanContainsKey(parseStoredPlanAnyVersion(active.version.canonicalJson), segment.stableKey)) {
       throw validationError(`Measurement segment "${segment.stableKey}" is in the active plan. Publish a revision without it before retiring it.`)
     }
 

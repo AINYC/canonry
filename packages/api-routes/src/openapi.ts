@@ -12,6 +12,7 @@ import {
   jsonResponse,
   looseObjectSchema,
   rawJsonResponse,
+  type RegisteredSchemaName,
 } from './openapi-schemas.js'
 
 export interface OpenApiInfo {
@@ -32,7 +33,8 @@ type HttpMethod = 'get' | 'post' | 'put' | 'delete'
 
 interface OpenApiParameter {
   name: string
-  in: 'path' | 'query'
+  /** `header` covers the concurrency and idempotency guards on draft mutations. */
+  in: 'path' | 'query' | 'header'
   required?: boolean
   description: string
   schema: Record<string, unknown>
@@ -437,6 +439,119 @@ const wordpressSlugQueryParameter: OpenApiParameter = {
   schema: stringSchema,
 }
 
+const measurementIfMatchParameter: OpenApiParameter = {
+  name: 'If-Match',
+  in: 'header',
+  required: true,
+  description: 'Current draft ETag. Missing returns 428; stale returns 412.',
+  schema: stringSchema,
+}
+
+const measurementIdempotencyKeyParameter: OpenApiParameter = {
+  name: 'Idempotency-Key',
+  in: 'header',
+  required: true,
+  description: 'Replay key. The same key with a different request body returns 409.',
+  schema: stringSchema,
+}
+
+const measurementSearchParameter: OpenApiParameter = {
+  name: 'search',
+  in: 'query',
+  description: 'Case-insensitive filter over the returned rows. It never changes a metric denominator.',
+  schema: stringSchema,
+}
+
+const measurementCursorParameter: OpenApiParameter = {
+  name: 'cursor',
+  in: 'query',
+  description: 'Opaque cursor from the previous page.',
+  schema: stringSchema,
+}
+
+const measurementLimitParameter: OpenApiParameter = {
+  name: 'limit',
+  in: 'query',
+  description: 'Page size. Defaults to 50, maximum 100.',
+  schema: { type: 'integer', minimum: 1, maximum: 100 },
+}
+
+const measurementQuerySetIdParameter: OpenApiParameter = {
+  name: 'setId',
+  in: 'path',
+  required: true,
+  description: 'Measurement query-set ID.',
+  schema: stringSchema,
+}
+
+const measurementQueryTemplateIdParameter: OpenApiParameter = {
+  name: 'templateId',
+  in: 'path',
+  required: true,
+  description: 'Measurement query-template ID.',
+  schema: stringSchema,
+}
+
+const measurementDraftCollectionParameters: OpenApiParameter[] = [
+  nameParameter,
+  measurementSearchParameter,
+  measurementCursorParameter,
+  measurementLimitParameter,
+]
+
+/**
+ * One typed draft action. Every one is a POST under the same prefix, carries
+ * the draft ETag and an idempotency key, and answers with the new ETag plus
+ * counts — so the shared half is built once here rather than repeated per
+ * action, where a divergence would be invisible.
+ */
+function measurementDraftAction(input: {
+  action: string
+  summary: string
+  description?: string
+  request?: RegisteredSchemaName
+  response?: RegisteredSchemaName
+  responseDescription?: string
+  /** Set for the previews, which compile the stored draft and write nothing. */
+  readOnly?: boolean
+}): OpenApiOperation {
+  const parameters = input.readOnly
+    ? [nameParameter]
+    : [nameParameter, measurementIfMatchParameter, measurementIdempotencyKeyParameter]
+  return {
+    method: 'post',
+    path: `/api/v1/projects/{name}/measurement-plan/draft/actions/${input.action}`,
+    summary: input.summary,
+    ...(input.description ? { description: input.description } : {}),
+    tags: ['measurement-plans'],
+    parameters,
+    ...(input.request
+      ? {
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: `#/components/schemas/${input.request}` } } },
+          },
+        }
+      : {}),
+    responses: {
+      200: jsonResponse(
+        input.responseDescription ?? 'Draft mutated; the new ETag and counts are returned.',
+        input.response ?? 'MeasurementDraftMutationResponse',
+      ),
+      400: errorResponse('The action payload is invalid.'),
+      403: errorResponse('The caller may read the draft but not mutate it.'),
+      404: errorResponse('Project or draft not found.'),
+      ...(input.readOnly
+        ? {}
+        : {
+            409: errorResponse('The idempotency key was already used with a different request body.'),
+            412: errorResponse('The draft changed since it was loaded.'),
+            428: errorResponse('The draft ETag was not supplied in `If-Match`.'),
+          }),
+    },
+  }
+}
+
 const routeCatalog: OpenApiOperation[] = [
   {
     method: 'get',
@@ -644,6 +759,356 @@ const routeCatalog: OpenApiOperation[] = [
       200: jsonResponse('Revision-pinned measurement report returned.', 'MeasurementReportResponse'),
       400: errorResponse('The revision query parameter is invalid.'),
       404: errorResponse('Project or measurement-plan revision not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-setup',
+    summary: 'Get the measurement setup state',
+    description: 'Returns exactly one state, evaluated in a fixed precedence: republish_required, setup_in_progress, awaiting_first_run, operational, simple. A draft over an active v1 plan is republish_required, because republishing is the blocking action.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter],
+    responses: {
+      200: jsonResponse('Setup state and its next action returned.', 'MeasurementSetupResponse'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-plan/draft',
+    summary: 'Get the server-side setup draft',
+    description: 'Returns the single draft for the project, or an explicit null for a project with none. The response ETag is required on every subsequent mutation.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter],
+    responses: {
+      200: jsonResponse('Draft and its ETag returned.', 'MeasurementDraftResponse'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-plan/draft/targets',
+    summary: 'Page the draft Targets',
+    description: 'Cursor-paginated and deterministically ordered by normalized label then stable key. Serves a thousand Targets without client-side truncation.',
+    tags: ['measurement-plans'],
+    parameters: measurementDraftCollectionParameters,
+    responses: {
+      200: jsonResponse('Draft Target page returned.', 'MeasurementDraftTargetPage'),
+      404: errorResponse('Project or draft not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-plan/draft/assignments',
+    summary: 'Page the draft assignments',
+    description: 'Cursor-paginated Target-owned query assignments, each carrying its class and where that class came from.',
+    tags: ['measurement-plans'],
+    parameters: measurementDraftCollectionParameters,
+    responses: {
+      200: jsonResponse('Draft assignment page returned.', 'MeasurementDraftAssignmentPage'),
+      404: errorResponse('Project or draft not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-plan/draft/groups',
+    summary: 'Page the draft groups',
+    description: 'Cursor-paginated reporting groups and their confirmed competitors. Groups never hold queries or execution context.',
+    tags: ['measurement-plans'],
+    parameters: measurementDraftCollectionParameters,
+    responses: {
+      200: jsonResponse('Draft group page returned.', 'MeasurementDraftGroupPage'),
+      404: errorResponse('Project or draft not found.'),
+    },
+  },
+  measurementDraftAction({
+    action: 'create',
+    summary: 'Start a setup draft',
+    description: 'Creates the single draft for the project, recording the active revision it was created from. A draft never changes the active mode.',
+    request: 'MeasurementDraftCreateRequest',
+  }),
+  measurementDraftAction({
+    action: 'import-sitemap',
+    summary: 'Import a sitemap into the draft',
+    description: 'Fetches an operator-supplied sitemap under strict egress policy and records the deterministic discovery inputs on the draft. It proposes Targets for review; it never publishes a plan or starts a run.',
+    request: 'MeasurementDraftImportSitemapRequest',
+  }),
+  measurementDraftAction({
+    action: 'apply-sitemap-selection',
+    summary: 'Apply the operator selection from discovery',
+    description: 'Turns reviewed discovery proposals into new or rebound Targets. Ambiguity is never resolved automatically.',
+    request: 'MeasurementDraftApplySitemapSelectionRequest',
+  }),
+  measurementDraftAction({
+    action: 'upsert-target',
+    summary: 'Add or update a draft Target',
+    request: 'MeasurementDraftUpsertTargetRequest',
+  }),
+  measurementDraftAction({
+    action: 'rename-target',
+    summary: 'Rename a draft Target',
+    description: 'Changes the label only. The stable key, its assignments and its group membership are untouched.',
+    request: 'MeasurementDraftRenameTargetRequest',
+  }),
+  measurementDraftAction({
+    action: 'merge-targets',
+    summary: 'Merge draft Targets into one',
+    description: 'The survivor keeps its stable key, and the merged Targets contribute their assignments and group membership.',
+    request: 'MeasurementDraftMergeTargetsRequest',
+  }),
+  measurementDraftAction({
+    action: 'exclude-target',
+    summary: 'Exclude a draft Target',
+    description: 'Excluded Targets stay in the draft for review but never compile.',
+    request: 'MeasurementDraftExcludeTargetRequest',
+  }),
+  measurementDraftAction({
+    action: 'rebind-target',
+    summary: 'Rebind a draft Target to a new discovered URL',
+    description: 'Preserves the stable key, the assignments and the group membership, so history follows the Target across a site restructure.',
+    request: 'MeasurementDraftRebindTargetRequest',
+  }),
+  measurementDraftAction({
+    action: 'apply-assignments',
+    summary: 'Assign project queries to a draft Target',
+    request: 'MeasurementDraftApplyAssignmentsRequest',
+  }),
+  measurementDraftAction({
+    action: 'remove-assignment',
+    summary: 'Remove one assignment from a draft Target',
+    description: 'Removes the assignment only. The project query behind it is never deleted.',
+    request: 'MeasurementDraftRemoveAssignmentRequest',
+  }),
+  measurementDraftAction({
+    action: 'clear-assignments',
+    summary: 'Clear every assignment on a draft Target',
+    request: 'MeasurementDraftClearAssignmentsRequest',
+  }),
+  measurementDraftAction({
+    action: 'classify-assignments',
+    summary: 'Classify assignments as Branded or Non-brand',
+    description: 'Always records the class as operator-sourced, so a later rule proposal cannot overwrite it. The class belongs to the assignment, so one query can be Branded for one Target and Non-brand for another.',
+    request: 'MeasurementDraftClassifyAssignmentsRequest',
+  }),
+  measurementDraftAction({
+    action: 'upsert-group',
+    summary: 'Add or update a draft group',
+    description: 'Reporting membership only. A payload carrying queries, providers, locations or models is rejected.',
+    request: 'MeasurementDraftUpsertGroupRequest',
+  }),
+  measurementDraftAction({
+    action: 'remove-group',
+    summary: 'Remove a draft group',
+    request: 'MeasurementDraftRemoveGroupRequest',
+  }),
+  measurementDraftAction({
+    action: 'upsert-competitor',
+    summary: 'Add or update a group competitor',
+    request: 'MeasurementDraftUpsertCompetitorRequest',
+  }),
+  measurementDraftAction({
+    action: 'remove-competitor',
+    summary: 'Remove a group competitor',
+    request: 'MeasurementDraftRemoveCompetitorRequest',
+  }),
+  measurementDraftAction({
+    action: 'compile-preview',
+    summary: 'Compile the draft without publishing',
+    description: 'Compiles the stored draft and returns the compiled checksum the publish guard expects. Writes nothing, so a view-only account can call it.',
+    response: 'MeasurementDraftCompilePreviewResponse',
+    responseDescription: 'Compiled draft preview returned. Invalid authoring returns ok=false with typed checks.',
+    readOnly: true,
+  }),
+  measurementDraftAction({
+    action: 'diff-preview',
+    summary: 'Compare the draft with the active revision',
+    description: 'Compiles the stored draft and reports the keys that changed against the active revision. Writes nothing.',
+    response: 'MeasurementDraftDiffPreviewResponse',
+    responseDescription: 'Draft diff returned. Invalid authoring returns ok=false with a null diff.',
+    readOnly: true,
+  }),
+  measurementDraftAction({
+    action: 'publish',
+    summary: 'Publish the draft as a new revision',
+    description: 'Recompiles server-side and refuses content that changed after review. Content identical to the active revision is a no-op returning it; content identical to an older revision publishes as a new revision, so a revert is a first-class operation. Publishing never starts a run.',
+    request: 'MeasurementDraftPublishRequest',
+    response: 'MeasurementPlanV2PublishResponse',
+    responseDescription: 'The published revision, or the unchanged active revision when the content was identical to it.',
+  }),
+  measurementDraftAction({
+    action: 'discard',
+    summary: 'Discard the draft',
+    response: 'MeasurementDraftDiscardResponse',
+    responseDescription: 'Draft discarded.',
+  }),
+  {
+    method: 'post',
+    path: '/api/v1/projects/{name}/measurement-plan/actions/deactivate',
+    summary: 'Deactivate the active measurement plan',
+    description: 'Deletes the active-plan pointer and nothing else. Schedules, runs, queries, versions and evidence are untouched, and the revisions stay readable.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter, measurementIdempotencyKeyParameter],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': { schema: { $ref: '#/components/schemas/MeasurementPlanDeactivateRequest' } },
+      },
+    },
+    responses: {
+      200: jsonResponse('The plan pointer was removed.', 'MeasurementPlanDeactivateResponse'),
+      403: errorResponse('The caller may read the plan but not deactivate it.'),
+      404: errorResponse('Project or active plan not found.'),
+      409: errorResponse('The active revision changed after the caller loaded it.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-overview',
+    summary: 'Get the scoped measurement overview',
+    description: 'Aggregates one run of evidence for All Properties, a group, or a single Property. Without runId the most recent completed run pinned to the active revision is used; a run pinned to another revision is refused rather than joined. Metrics are computed before search is applied, and a metric with no evidence is unavailable rather than zero.',
+    tags: ['measurement-plans'],
+    parameters: [
+      nameParameter,
+      { name: 'scope', in: 'query', required: true, description: 'Reporting scope.', schema: { type: 'string', enum: ['all', 'group', 'property'] } },
+      { name: 'groupKey', in: 'query', description: 'Group stable key, required when scope is "group".', schema: stringSchema },
+      { name: 'targetKey', in: 'query', description: 'Target stable key, required when scope is "property".', schema: stringSchema },
+      { name: 'queryClass', in: 'query', description: 'Restrict to one question class. Never pooled across classes.', schema: { type: 'string', enum: ['all', 'branded', 'non-brand'] } },
+      { name: 'provider', in: 'query', description: 'Restrict to one answer provider.', schema: stringSchema },
+      { name: 'location', in: 'query', description: 'Restrict to one execution location label.', schema: stringSchema },
+      { name: 'from', in: 'query', description: 'Inclusive start of the window (YYYY-MM-DD).', schema: stringSchema },
+      { name: 'to', in: 'query', description: 'Inclusive end of the window (YYYY-MM-DD).', schema: stringSchema },
+      { name: 'runId', in: 'query', description: 'Display this run. It must be pinned to the active revision. This is also the only way to display a scoped spot check.', schema: stringSchema },
+      measurementSearchParameter,
+      measurementCursorParameter,
+      measurementLimitParameter,
+    ],
+    responses: {
+      200: jsonResponse('Scoped measurement overview returned.', 'MeasurementOverviewResponse'),
+      400: errorResponse('The scope or its required key is invalid.'),
+      404: errorResponse('Project not found.'),
+      422: errorResponse('The named run is pinned to a different plan revision.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-query-sets',
+    summary: 'List measurement query sets',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter],
+    responses: {
+      200: jsonResponse('Query sets returned.', 'MeasurementQuerySetListResponse'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-query-sets/{setId}',
+    summary: 'Get a measurement query set',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter, measurementQuerySetIdParameter],
+    responses: {
+      200: jsonResponse('Query set and its ordered members returned.', 'MeasurementQuerySetDetail'),
+      404: errorResponse('Project or query set not found.'),
+    },
+  },
+  {
+    method: 'put',
+    path: '/api/v1/projects/{name}/measurement-query-sets/{setId}',
+    summary: 'Create or replace a measurement query set',
+    description: 'A set holds ordered references to project query IDs. Membership changes never create or delete a query.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter, measurementQuerySetIdParameter],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': { schema: { $ref: '#/components/schemas/MeasurementQuerySetUpsertRequest' } },
+      },
+    },
+    responses: {
+      200: jsonResponse('Query set replaced.', 'MeasurementQuerySetDetail'),
+      201: jsonResponse('Query set created.', 'MeasurementQuerySetDetail'),
+      400: errorResponse('The query set payload is invalid.'),
+      403: errorResponse('The caller may read query assets but not manage them.'),
+      404: errorResponse('Project or referenced query not found.'),
+    },
+  },
+  {
+    method: 'delete',
+    path: '/api/v1/projects/{name}/measurement-query-sets/{setId}',
+    summary: 'Delete a measurement query set',
+    description: 'Deletes the set and its membership rows. It never deletes a query or a published snapshot.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter, measurementQuerySetIdParameter],
+    responses: {
+      204: { description: 'Query set deleted.' },
+      403: errorResponse('The caller may read query assets but not manage them.'),
+      404: errorResponse('Project or query set not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-query-templates',
+    summary: 'List measurement query templates',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter],
+    responses: {
+      200: jsonResponse('Query templates returned.', 'MeasurementQueryTemplateListResponse'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'put',
+    path: '/api/v1/projects/{name}/measurement-query-templates/{templateId}',
+    summary: 'Create or replace a measurement query template',
+    description: 'Templates are authoring assets. A published plan contains only the immutable snapshots an expansion produced.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter, measurementQueryTemplateIdParameter],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': { schema: { $ref: '#/components/schemas/MeasurementQueryTemplateUpsertRequest' } },
+      },
+    },
+    responses: {
+      200: jsonResponse('Query template replaced.', 'MeasurementQueryTemplateDto'),
+      201: jsonResponse('Query template created.', 'MeasurementQueryTemplateDto'),
+      400: errorResponse('The template payload is invalid.'),
+      403: errorResponse('The caller may read query assets but not manage them.'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'delete',
+    path: '/api/v1/projects/{name}/measurement-query-templates/{templateId}',
+    summary: 'Delete a measurement query template',
+    description: 'Deletes the authoring template. Queries it already expanded, and every published snapshot of them, are untouched.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter, measurementQueryTemplateIdParameter],
+    responses: {
+      204: { description: 'Query template deleted.' },
+      403: errorResponse('The caller may read query assets but not manage them.'),
+      404: errorResponse('Project or query template not found.'),
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/projects/{name}/measurement-query-templates/{templateId}/apply',
+    summary: 'Expand a query template into project queries',
+    description: 'Expands one binding per concrete query. Expansion is additive: a query that already exists is reported rather than duplicated.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter, measurementQueryTemplateIdParameter, measurementIdempotencyKeyParameter],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': { schema: { $ref: '#/components/schemas/MeasurementQueryTemplateApplyRequest' } },
+      },
+    },
+    responses: {
+      200: jsonResponse('Expansion result returned.', 'MeasurementQueryTemplateApplyResponse'),
+      400: errorResponse('A binding does not satisfy the template variables.'),
+      403: errorResponse('The caller may read query assets but not manage them.'),
+      404: errorResponse('Project or query template not found.'),
+      409: errorResponse('The idempotency key was already used with a different request body.'),
     },
   },
   {

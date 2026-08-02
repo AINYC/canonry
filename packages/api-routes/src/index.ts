@@ -14,6 +14,9 @@ import { measurementPlanRoutes } from './measurement-plan.js'
 import type { MeasurementPlanRoutesOptions } from './measurement-plan.js'
 import { measurementServiceRoutes } from './measurement-service.js'
 import type { MeasurementServiceRoutesOptions } from './measurement-service.js'
+import { measurementDraftRoutes } from './measurement-draft.js'
+import { measurementDiscoveryV2Routes } from './measurement-discovery-v2.js'
+import { measurementOverviewRoutes } from './measurement-overview.js'
 import { applyRoutes } from './apply.js'
 import type { ApplyRoutesOptions } from './apply.js'
 import { historyRoutes } from './history.js'
@@ -412,6 +415,11 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
     await api.register(measurementServiceRoutes, {
       fetchSitemap: opts.fetchMeasurementSitemap,
     } satisfies MeasurementServiceRoutesOptions)
+    // Advanced Measurement v2. Registered here so the slices that fill in the
+    // handlers never have to touch this file or `openapi.ts`.
+    await api.register(measurementDraftRoutes)
+    await api.register(measurementDiscoveryV2Routes)
+    await api.register(measurementOverviewRoutes)
     await api.register(applyRoutes, {
       onScheduleUpdated: opts.onScheduleUpdated,
       onProjectUpserted: opts.onProjectUpserted,

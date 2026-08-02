@@ -6,7 +6,7 @@ import {
   canonicalMeasurementExecutionIdentityJson,
   MeasurementRunScopeError,
   measurementRunScopeIsEmpty,
-  parseStoredMeasurementPlan,
+  parseStoredMeasurementPlanAnyVersion,
   RunTriggers,
   resolveMeasurementRunQueryScope,
   resolveMeasurementRunScope,
@@ -162,7 +162,14 @@ function measurementStamp(tx: DatabaseClient, params: QueueRunParams): Measureme
   )).get()
   if (!version) throw new Error(`Measurement plan ${params.projectId} points to missing version ${active.activeVersionId}`)
 
-  const plan: MeasurementPlan = parseStoredMeasurementPlan(version.canonicalJson)
+  // Slice 4 replaces this branch with real v2 materialization. Until then a v2
+  // revision is refused with a domain error rather than reaching the v1 decoder,
+  // which would throw and surface as a 500 on an otherwise valid stored plan.
+  const stored = parseStoredMeasurementPlanAnyVersion(version.canonicalJson)
+  if (stored.schemaVersion !== 1) {
+    throw validationError(`Measurement plan revision ${version.revision} is schema v${stored.schemaVersion}, which this runner cannot execute yet.`)
+  }
+  const plan: MeasurementPlan = stored
   const providers = providerRoster(tx, params)
   const models = effectiveModels(tx, params, providers)
   if (providers.length === 0) {
