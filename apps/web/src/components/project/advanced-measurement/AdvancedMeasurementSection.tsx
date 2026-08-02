@@ -997,6 +997,10 @@ export function AdvancedMeasurementSection({
       // The server says which question was rejected and why. Replacing that with
       // a house string is what sent an operator round in circles on the sitemap.
       setCreateQueriesError(extractErrorMessage(error))
+      // Rethrow so the step keeps what the operator typed. Resolving here would
+      // report failure and clear the box in the same breath, and they would have
+      // to retype every question to try again.
+      throw error
     } finally {
       setBusyAction(null)
     }

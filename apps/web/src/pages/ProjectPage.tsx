@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, RefreshCw, Trash2 } from 'lucide-react'
-import { useParams, useNavigate } from '@tanstack/react-router'
+import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { Link } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { RunKinds, RunStatuses } from '@ainyc/canonry-contracts'
@@ -1613,7 +1613,8 @@ function ProjectPageContent({
   // connecting one rather than being hidden until after connection.
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [managingQueries, setManagingQueries] = useState(false)
+  const manageQueriesRequested = (useSearch({ strict: false }) as { manageQueries?: boolean }).manageQueries === true
+  const [managingQueries, setManagingQueries] = useState(manageQueriesRequested)
   const [newQueryText, setNewQueryText] = useState('')
   const [querySaving, setQuerySaving] = useState(false)
   const [removingQuery, setRemovingQuery] = useState<string | null>(null)
@@ -2175,8 +2176,14 @@ function ProjectPageContent({
             await portfolioQueriesQuery.refetch()
           }}
           onManageProjectQueries={() => {
-            setManagingQueries(true)
-            void navigate({ to: '/projects/$projectName', params: { projectName } })
+            // Local state does not survive this navigation: it remounts the page
+            // and resets, which left the operator on Overview with the manager
+            // shut. The URL carries the intent instead.
+            void navigate({
+              to: '/projects/$projectName',
+              params: { projectName },
+              search: { manageQueries: true },
+            })
           }}
           onPublished={() => {
             void Promise.all([

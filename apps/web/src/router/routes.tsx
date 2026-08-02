@@ -64,6 +64,8 @@ export interface RouterContext {
 }
 
 type SearchParams = {
+  /** Opens the project's query manager after a navigation, so setup can hand off to it. */
+  manageQueries?: boolean
   runId?: string
   evidenceId?: string
   runStatus?: string
@@ -84,6 +86,7 @@ function RootLayoutWithErrorBoundary() {
 export const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: RootLayoutWithErrorBoundary,
   validateSearch: (search: Record<string, unknown>): SearchParams => ({
+    manageQueries: search.manageQueries === true || search.manageQueries === 'true' ? true : undefined,
     runId: typeof search.runId === 'string' ? search.runId : undefined,
     evidenceId: typeof search.evidenceId === 'string' ? search.evidenceId : undefined,
     runStatus: typeof search.runStatus === 'string' ? search.runStatus : undefined,

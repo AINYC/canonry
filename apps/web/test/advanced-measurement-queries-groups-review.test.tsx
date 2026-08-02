@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import {
   AdvancedMeasurementGroupsStep,
@@ -298,6 +298,32 @@ test('asks for a placeholder rather than writing the same question repeatedly', 
   })
 
   expect(screen.getByText(/Add \{property\} to the pattern/)).toBeTruthy()
+})
+
+// Clearing the box on failure means retyping every question to retry, which is
+// worst for the pattern case where the operator may have written one line that
+// expanded to two hundred.
+test('keeps what was typed when creation fails', async () => {
+  const onCreateQueries = vi.fn().mockRejectedValue(new Error('Query is already tracked.'))
+  renderQueries({ queries: [], selectedQueryIds: [], onCreateQueries })
+
+  const box = screen.getByLabelText('New questions, one per line')
+  fireEvent.change(box, { target: { value: 'best apartments in dallas' } })
+  fireEvent.click(screen.getByRole('button', { name: /Add 1 question/ }))
+
+  await waitFor(() => expect(onCreateQueries).toHaveBeenCalled())
+  expect((box as HTMLTextAreaElement).value).toBe('best apartments in dallas')
+})
+
+test('clears the box only once creation succeeds', async () => {
+  const onCreateQueries = vi.fn().mockResolvedValue(undefined)
+  renderQueries({ queries: [], selectedQueryIds: [], onCreateQueries })
+
+  const box = screen.getByLabelText('New questions, one per line')
+  fireEvent.change(box, { target: { value: 'best apartments in dallas' } })
+  fireEvent.click(screen.getByRole('button', { name: /Add 1 question/ }))
+
+  await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe(''))
 })
 
 test('surfaces the server reason when adding questions fails', () => {

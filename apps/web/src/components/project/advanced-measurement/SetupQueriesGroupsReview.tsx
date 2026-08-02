@@ -521,7 +521,8 @@ export function AdvancedMeasurementQueriesStep({
               size="sm"
               disabled={parsedNewQueries.length === 0 || isCreatingQueries}
               onClick={() => {
-                void Promise.resolve(onCreateQueries(parsedNewQueries)).then(() => setNewQueriesText(''))
+                void Promise.resolve(onCreateQueries(parsedNewQueries))
+                  .then(() => setNewQueriesText(''), () => {})
               }}
             >
               {isCreatingQueries
@@ -577,7 +578,8 @@ export function AdvancedMeasurementQueriesStep({
               className="mt-2"
               disabled={patternExpansions.length === 0 || isCreatingQueries}
               onClick={() => {
-                void Promise.resolve(onCreateQueries(patternExpansions)).then(() => setPatternText(''))
+                void Promise.resolve(onCreateQueries(patternExpansions))
+                  .then(() => setPatternText(''), () => {})
               }}
             >
               {isCreatingQueries
