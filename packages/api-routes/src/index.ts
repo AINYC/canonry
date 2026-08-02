@@ -10,6 +10,10 @@ import type { QueryRoutesOptions } from './queries.js'
 import { competitorRoutes } from './competitors.js'
 import { runRoutes } from './runs.js'
 import type { RunRoutesOptions } from './runs.js'
+import { measurementPlanRoutes } from './measurement-plan.js'
+import type { MeasurementPlanRoutesOptions } from './measurement-plan.js'
+import { measurementServiceRoutes } from './measurement-service.js'
+import type { MeasurementServiceRoutesOptions } from './measurement-service.js'
 import { applyRoutes } from './apply.js'
 import type { ApplyRoutesOptions } from './apply.js'
 import { historyRoutes } from './history.js'
@@ -94,6 +98,8 @@ export interface ApiRoutesOptions {
   onRunCreated?: (runId: string, projectId: string, providers?: string[], location?: import('@ainyc/canonry-contracts').LocationContext | null) => void
   /** Returns providers currently registered and runnable by the host worker. */
   getRunnableProviderNames?: () => readonly string[]
+  /** Optional deterministic sitemap-fetch seam for Target discovery tests/hosts. */
+  fetchMeasurementSitemap?: MeasurementServiceRoutesOptions['fetchSitemap']
   /** Provider configuration summary for settings endpoint */
   providerSummary?: ProviderSummaryEntry[]
   /** Resolves agent LLM provider key status for the `config.agent-providers` doctor check. See `DoctorContext.getAgentProviderSummary`. */
@@ -363,6 +369,12 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       validProviderNames: opts.providerAdapters?.map(a => a.name),
       getRunnableProviderNames: opts.getRunnableProviderNames,
     } satisfies RunRoutesOptions)
+    await api.register(measurementPlanRoutes, {
+      getRunnableProviderNames: opts.getRunnableProviderNames,
+    } satisfies MeasurementPlanRoutesOptions)
+    await api.register(measurementServiceRoutes, {
+      fetchSitemap: opts.fetchMeasurementSitemap,
+    } satisfies MeasurementServiceRoutesOptions)
     await api.register(applyRoutes, {
       onScheduleUpdated: opts.onScheduleUpdated,
       onProjectUpserted: opts.onProjectUpserted,
@@ -586,6 +598,11 @@ export type {
 } from './content.js'
 export { buildOpenApiDocument } from './openapi.js'
 export type { OpenApiInfo } from './openapi.js'
+// Pure Target-model engines. They are intentionally network- and DB-free so
+// callers can reuse deterministic discovery and historical attribution
+// without implying that a read performs sitemap or provider I/O.
+export * from './measurement-discovery.js'
+export * from './measurement-report.js'
 
 /**
  * Build the per-source-type validator map consumed by the generic

@@ -1,10 +1,20 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest'
-import { createClient, getApiV1Projects } from '../src/index.js'
+import {
+  createClient,
+  getApiV1Projects,
+  getApiV1ProjectsByNameMeasurementReport,
+  postApiV1ProjectsByNameMeasurementDiscovery,
+} from '../src/index.js'
 import type {
   AdsCampaignListResponse,
   AdsOperationReconcileResponse,
   AdsUnresolvedOperationListResponse,
+  GetApiV1ProjectsByNameMeasurementReportData,
   GetApiV1ProjectsByNameSearchResponse,
+  MeasurementDiscoveryRequest,
+  MeasurementDiscoveryResponse,
+  MeasurementReportResponse,
+  PostApiV1ProjectsByNameMeasurementDiscoveryData,
 } from '../src/index.js'
 
 /**
@@ -46,6 +56,54 @@ describe('canonry-api-client', () => {
     expectTypeOf<SnapshotHit['matchedField']>().toEqualTypeOf<
       'answerText' | 'citedDomains' | 'citedUrls' | 'searchQueries' | 'query'
     >()
+  })
+
+  it('generates the typed measurement discovery and report adapter surface', () => {
+    expectTypeOf<PostApiV1ProjectsByNameMeasurementDiscoveryData['body']>()
+      .toEqualTypeOf<MeasurementDiscoveryRequest>()
+    expectTypeOf<GetApiV1ProjectsByNameMeasurementReportData['query']>()
+      .toEqualTypeOf<{ revision: number }>()
+    expectTypeOf<MeasurementDiscoveryResponse['proposed'][number]['classification']>()
+      .toEqualTypeOf<'proposed'>()
+    expectTypeOf<MeasurementReportResponse['groups'][number]['targetIds']>()
+      .toEqualTypeOf<string[]>()
+  })
+
+  it('serializes measurement discovery bodies and report revisions', async () => {
+    const fakeFetch = vi.fn(async () =>
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const client = createClient({
+      baseUrl: 'https://example.test',
+      fetch: fakeFetch as unknown as typeof fetch,
+    })
+
+    await postApiV1ProjectsByNameMeasurementDiscovery({
+      client,
+      path: { name: 'example' },
+      body: {
+        sitemapUrl: 'https://example.test/sitemap.xml',
+        rule: {
+          primary: { host: 'example.test', pathTemplate: '/locations/{slug}' },
+        },
+      },
+    })
+    await getApiV1ProjectsByNameMeasurementReport({
+      client,
+      path: { name: 'example' },
+      query: { revision: 3 },
+    })
+
+    const discoveryRequest = fakeFetch.mock.calls[0]![0] as Request
+    expect(discoveryRequest.url).toBe('https://example.test/api/v1/projects/example/measurement-discovery')
+    expect(await discoveryRequest.json()).toMatchObject({
+      sitemapUrl: 'https://example.test/sitemap.xml',
+    })
+    const reportRequest = fakeFetch.mock.calls[1]![0] as Request
+    expect(reportRequest.url).toBe('https://example.test/api/v1/projects/example/measurement-report?revision=3')
   })
 
   it('createClient applies bearer auth + base URL to generated operations', async () => {

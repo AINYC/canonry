@@ -39,6 +39,39 @@ export function isEmbedProjectTabAllowed(tab: string, allow: readonly string[] |
 }
 
 /**
+ * Project tabs that are safe to expose in the read-only embed. Portfolio is an
+ * operator setup surface, so it is deliberately absent even when the host does
+ * not provide an explicit allowlist.
+ */
+export const EMBED_PROJECT_TABS = [
+  'overview',
+  'search-console',
+  'local',
+  'discovery',
+  'report',
+  'activity',
+  'backlinks',
+  'technical-aeo',
+  'history',
+  'settings',
+] as const
+
+const EMBED_PROJECT_TAB_SET = new Set<string>(EMBED_PROJECT_TABS)
+
+/**
+ * Normalize host-provided project tabs before either navigation or rendering.
+ * Unknown values and operator-only surfaces are dropped. A fully-invalid list
+ * falls back to Overview so an embed can never resolve to a blank project page.
+ */
+export function filterEmbedProjectTabs(allow: readonly string[] | undefined): Array<(typeof EMBED_PROJECT_TABS)[number]> {
+  const source = allow ?? EMBED_PROJECT_TABS
+  const filtered = [...new Set(source.filter((tab): tab is (typeof EMBED_PROJECT_TABS)[number] =>
+    EMBED_PROJECT_TAB_SET.has(tab),
+  ))]
+  return filtered.length > 0 ? filtered : ['overview']
+}
+
+/**
  * The project tab to actually render under an embed `projectTabs` allowlist: the
  * requested tab when allowed, otherwise `overview` (or the first allowed tab when
  * even overview is hidden). With no allowlist the requested tab is unchanged. So a
@@ -46,8 +79,8 @@ export function isEmbedProjectTabAllowed(tab: string, allow: readonly string[] |
  */
 export function resolveEmbedProjectTab<T extends string>(requested: T, allow: readonly string[] | undefined): T {
   if (isEmbedProjectTabAllowed(requested, allow)) return requested
-  if (!allow || allow.length === 0) return requested
-  return (allow.includes('overview') ? 'overview' : allow[0]) as T
+  if (!allow) return requested
+  return (allow.includes('overview') ? 'overview' : allow[0] ?? 'overview') as T
 }
 
 /**

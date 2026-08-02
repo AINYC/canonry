@@ -148,6 +148,22 @@ const nameParameter: OpenApiParameter = {
   schema: stringSchema,
 }
 
+const measurementPlanRevisionParameter: OpenApiParameter = {
+  name: 'revision',
+  in: 'path',
+  required: true,
+  description: 'Immutable project-local measurement-plan revision.',
+  schema: { type: 'integer', minimum: 1 },
+}
+
+const measurementReportRevisionParameter: OpenApiParameter = {
+  name: 'revision',
+  in: 'query',
+  required: true,
+  description: 'Immutable project-local measurement-plan revision to report.',
+  schema: { type: 'integer', minimum: 1 },
+}
+
 const runIdParameter: OpenApiParameter = {
   name: 'id',
   in: 'path',
@@ -470,6 +486,156 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('Project updated.', 'ProjectDto'),
       201: jsonResponse('Project created.', 'ProjectDto'),
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/projects/{name}/measurement-discovery',
+    summary: 'Discover measurement Targets from a sitemap',
+    description: 'Fetches a public sitemap under bounded network policy and applies the supplied deterministic route rule to project-owned URLs. Every accepted URL is classified as proposed, alias, shared, unmatched, or excluded; no plan is published.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/MeasurementDiscoveryRequest' },
+        },
+      },
+    },
+    responses: {
+      200: jsonResponse('Deterministic sitemap classification returned.', 'MeasurementDiscoveryResponse'),
+      400: errorResponse('The sitemap URL or discovery rule is invalid.'),
+      403: errorResponse('The API key lacks measurement-plan.write.'),
+      404: errorResponse('Project not found.'),
+      502: errorResponse('The sitemap could not be fetched safely.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-plan',
+    summary: 'Get the active measurement plan',
+    description: 'Returns the active immutable measurement-plan revision, or an explicit null active state for a planless project.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter],
+    responses: {
+      200: jsonResponse('Active measurement plan returned.', 'MeasurementPlanResponse'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'put',
+    path: '/api/v1/projects/{name}/measurement-plan',
+    summary: 'Publish a measurement-plan revision',
+    description: 'Compares the caller-observed active revision, then validates and canonicalizes the plan against current project domains, locations, and tracked queries. Identical active content is idempotent; restoring older content creates a new immutable revision.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/MeasurementPlanPublishRequest' },
+        },
+      },
+    },
+    responses: {
+      200: jsonResponse('The identical active revision was returned.', 'MeasurementPlanResponse'),
+      201: jsonResponse('A new immutable revision was published.', 'MeasurementPlanResponse'),
+      400: errorResponse('The measurement plan or publish request is invalid.'),
+      409: errorResponse('The active measurement-plan revision changed after the caller loaded it.'),
+      403: errorResponse('The API key lacks measurement-plan.write.'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/projects/{name}/measurement-plan/compile-preview',
+    summary: 'Compile a measurement plan without publishing',
+    description: 'Validates and compiles a candidate Target/group plan without writing state. Invalid authoring returns HTTP 200 with ok=false and typed checks; valid authoring returns frozen execution counts, expected snapshot slots, deduplication savings, and warnings.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/MeasurementPlanInput' },
+        },
+      },
+    },
+    responses: {
+      200: jsonResponse('Compiled measurement-plan preview returned.', 'MeasurementPlanCompilePreviewResponse'),
+      403: errorResponse('The API key lacks measurement-plan.write.'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/projects/{name}/measurement-plan/diff-preview',
+    summary: 'Preview a measurement-plan change',
+    description: 'Compiles a candidate plan and compares its Targets, groups, query selections, and execution graph with the active immutable revision without writing state. Invalid authoring returns HTTP 200 with ok=false, typed checks, and a null diff.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/MeasurementPlanInput' },
+        },
+      },
+    },
+    responses: {
+      200: jsonResponse('Semantic measurement-plan diff returned.', 'MeasurementPlanDiffPreviewResponse'),
+      403: errorResponse('The API key lacks measurement-plan.write.'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-plan/versions',
+    summary: 'List measurement-plan revisions',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter],
+    responses: {
+      200: jsonResponse('Measurement-plan revision metadata returned.', 'MeasurementPlanVersionsResponse'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/projects/{name}/measurement-plan/segments/{stableKey}/retire',
+    summary: 'Permanently retire a measurement segment key',
+    description: 'Retires an inactive stable Target or group key so it cannot be reused. Idempotent. First publish a revision without the segment; retirement does not unretire.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter, { name: 'stableKey', in: 'path', required: true, description: 'Stable Target or group key to retire.', schema: stringSchema }],
+    responses: {
+      200: jsonResponse('Segment retirement state returned.', 'MeasurementSegmentRetirementResponse'),
+      400: errorResponse('The segment remains in the active measurement-plan revision.'),
+      403: errorResponse('The API key lacks measurement-plan.write.'),
+      404: errorResponse('Project or measurement segment not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-plan/versions/{revision}',
+    summary: 'Get a measurement-plan revision',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter, measurementPlanRevisionParameter],
+    responses: {
+      200: jsonResponse('Immutable measurement-plan revision returned.', 'MeasurementPlanVersionResponse'),
+      404: errorResponse('Project or revision not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-report',
+    summary: 'Get a revision-pinned measurement report',
+    description: 'Builds the Target, group, and evidence report from the immutable plan revision and its latest eligible stored run. Missing run population remains explicit and never triggers live provider execution.',
+    tags: ['measurement-plans'],
+    parameters: [nameParameter, measurementReportRevisionParameter],
+    responses: {
+      200: jsonResponse('Revision-pinned measurement report returned.', 'MeasurementReportResponse'),
+      400: errorResponse('The revision query parameter is invalid.'),
+      404: errorResponse('Project or measurement-plan revision not found.'),
     },
   },
   {

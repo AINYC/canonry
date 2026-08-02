@@ -91,6 +91,20 @@ describe('executeResearchRun', () => {
     expect(completed.every(row => row.answerMentioned === true && row.citationState === 'not-cited')).toBe(true)
   })
 
+  it('does not treat a short canonical-domain label as an approved answer mention', async () => {
+    const { db, registry } = setup({
+      answer: 'AI can help teams compare options.',
+      citedDomains: ['third-party.example'],
+      failQueries: false,
+    })
+    db.update(projects).set({ displayName: 'Zebra', canonicalDomain: 'ai.com' }).run()
+
+    await executeResearchRun(db, registry, 'r', 'p')
+
+    const completed = db.select().from(researchRunQueries).all()
+    expect(completed.every(row => row.answerMentioned === false)).toBe(true)
+  })
+
   it('persists answer-text competitor names separately from cited competitor domains', async () => {
     const { db, registry } = setup({
       answer: '- **Rival**: a strong alternative for growing teams.',

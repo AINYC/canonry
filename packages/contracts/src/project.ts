@@ -2,7 +2,9 @@ import { z } from 'zod'
 import { validationError } from './errors.js'
 import { locationContextSchema, providerModelsSchema, providerNameSchema, type LocationContext } from './provider.js'
 import { measurementConfigSchema, defaultMeasurementConfig } from './measurement.js'
-import { hostOf } from './url-normalize.js'
+import { brandLabelFromDomain, hostOf } from './url-normalize.js'
+import { brandKeyFromText } from './brand-matching.js'
+import { MIN_DOMAIN_BRAND_KEY_LENGTH } from './answer-visibility.js'
 
 export const configSourceSchema = z.enum(['cli', 'api', 'config-file'])
 export type ConfigSource = z.infer<typeof configSourceSchema>
@@ -245,18 +247,37 @@ export function normalizeProjectAliases(
 
 /**
  * Returns the brand-name identities used for mention detection: `displayName`
- * (when set) followed by the normalized aliases. Each entry is a separate
- * brand identity in `extractAnswerMentions`.
+ * (when set), normalized aliases, then every owned domain's registrable
+ * brand label. Domain labels use the same four-character key floor as
+ * `extractAnswerMentions`; display names and explicit aliases remain
+ * operator-approved at any length. Identity-equivalent entries collapse with
+ * the same key used by `extractAnswerMentions`.
  */
 export function effectiveBrandNames(project: {
   displayName?: string | null
   aliases?: string[] | null
+  canonicalDomain?: string | null
+  ownedDomains?: string[] | null
 }): string[] {
   const names: string[] = []
+  const seen = new Set<string>()
+  const add = (name: string) => {
+    const key = brandKeyFromText(name)
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    names.push(name)
+  }
   const display = project.displayName?.trim() ?? ''
-  if (display) names.push(display)
+  if (display) add(display)
   for (const alias of normalizeProjectAliases(project.displayName, project.aliases)) {
-    names.push(alias)
+    add(alias)
+  }
+  for (const domain of effectiveDomains({
+    canonicalDomain: project.canonicalDomain ?? '',
+    ownedDomains: project.ownedDomains ?? [],
+  })) {
+    const domainBrand = brandLabelFromDomain(domain)
+    if (brandKeyFromText(domainBrand).length >= MIN_DOMAIN_BRAND_KEY_LENGTH) add(domainBrand)
   }
   return names
 }

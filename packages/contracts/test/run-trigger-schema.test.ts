@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { runDtoSchema, runTriggerRequestSchema, runTriggerSchema, RunTriggers } from '../src/run.js'
+import { runDtoSchema, runKindSchema, runTriggerRequestSchema, runTriggerSchema, RunTriggers } from '../src/run.js'
 
 describe('runDtoSchema.queries', () => {
   it('parses a run row with a queries array', () => {
@@ -24,6 +24,24 @@ describe('runDtoSchema.queries', () => {
       createdAt: '2026-05-13T00:00:00.000Z',
     })
     expect(result.queries).toBeNull()
+  })
+
+  it('keeps future target-run provenance structural and nullable', () => {
+    const result = runDtoSchema.parse({
+      id: 'run_1',
+      projectId: 'proj_1',
+      kind: 'answer-visibility',
+      status: 'queued',
+      measurementPlanVersionId: 'plan_version_1',
+      measurementManifest: { schemaVersion: 1, executionIds: ['slot_1'] },
+      createdAt: '2026-05-13T00:00:00.000Z',
+    })
+    expect(result.measurementPlanVersionId).toBe('plan_version_1')
+    expect(result.measurementManifest).toEqual({ schemaVersion: 1, executionIds: ['slot_1'] })
+  })
+
+  it('rejects the removed cohort-only run kind', () => {
+    expect(runKindSchema.safeParse('measurement-sweep').success).toBe(false)
   })
 })
 

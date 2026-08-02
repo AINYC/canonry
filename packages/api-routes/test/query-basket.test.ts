@@ -131,6 +131,8 @@ describe('runs are stamped with the set they measure', () => {
     expect(result.conflict).toBe(false)
     const row = db.select().from(runs).all()[0]!
     expect(row.queryBasketRevision).toBe(1)
+    expect(row.measurementPlanVersionId).toBeNull()
+    expect(row.measurementManifest).toBeNull()
   })
 
   it('leaves a SCOPED run unstamped, because it did not measure the whole basket', () => {
@@ -148,6 +150,8 @@ describe('runs are stamped with the set they measure', () => {
     })
     const row = db.select().from(runs).all()[0]!
     expect(row.queryBasketRevision).toBeNull()
+    expect(row.measurementPlanVersionId).toBeNull()
+    expect(row.measurementManifest).toBeNull()
   })
 })
 

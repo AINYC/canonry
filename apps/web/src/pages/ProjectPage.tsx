@@ -4,6 +4,13 @@ import { useParams, useNavigate } from '@tanstack/react-router'
 import { Link } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { RunKinds, RunStatuses } from '@ainyc/canonry-contracts'
+import type { MeasurementDiscoveryRequest, MeasurementPlanInput } from '@ainyc/canonry-api-client'
+import {
+  postApiV1ProjectsByNameMeasurementDiscovery,
+  postApiV1ProjectsByNameMeasurementPlanCompilePreview,
+  postApiV1ProjectsByNameMeasurementPlanDiffPreview,
+  putApiV1ProjectsByNameMeasurementPlan,
+} from '@ainyc/canonry-api-client'
 
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
@@ -24,6 +31,7 @@ import { VisibilityTrendSection } from '../components/project/VisibilityTrendSec
 import { DiscoverySection } from '../components/project/DiscoverySection.js'
 import { TechnicalAeoSection } from '../components/project/TechnicalAeoSection.js'
 import { ProjectHistorySection } from '../components/project/ProjectHistorySection.js'
+import { PortfolioSection } from '../components/project/PortfolioSection.js'
 import { ReportPage } from './ReportPage.js'
 import { formatTimestamp, SEARCH_METRIC_SHORT_LABELS, SearchMetric } from '../lib/format-helpers.js'
 import { METRIC_TONE_TEXT_CLASS } from '../lib/tone-helpers.js'
@@ -61,7 +69,7 @@ import {
   type ApiGscCoverageSummary,
   type ApiProject,
 } from '../api.js'
-import { isEmbedProjectTabAllowed, resolveEmbedProjectTab } from '../embed.js'
+import { filterEmbedProjectTabs, isEmbedProjectTabAllowed, resolveEmbedProjectTab } from '../embed.js'
 import {
   getApiV1ProjectsByNameBingCoverageOptions,
   getApiV1ProjectsByNameBingInspectionsOptions,
@@ -70,6 +78,11 @@ import {
   getApiV1ProjectsByNameBingStatusOptions,
   getApiV1ProjectsByNameGoogleConnectionsOptions,
   getApiV1ProjectsByNameGoogleGscCoverageOptions,
+  getApiV1ProjectsByNameMeasurementPlanOptions,
+  getApiV1ProjectsByNameMeasurementPlanQueryKey,
+  getApiV1ProjectsByNameMeasurementReportOptions,
+  getApiV1ProjectsByNameQueriesOptions,
+  getApiV1ProjectsByNameQueriesQueryKey,
   getApiV1ProjectsQueryKey,
   getApiV1ProjectsByNameQueryKey,
   getApiV1SettingsOptions,
@@ -84,7 +97,7 @@ import { useInitialDashboard } from '../contexts/dashboard-context.js'
 import { useDrawer } from '../hooks/use-drawer.js'
 import type { ProjectCommandCenterVm, RunHistoryPoint } from '../view-models.js'
 
-export type ProjectPageTab = 'overview' | 'search-console' | 'local' | 'discovery' | 'report' | 'activity' | 'backlinks' | 'technical-aeo' | 'history' | 'settings'
+export type ProjectPageTab = 'overview' | 'portfolio' | 'search-console' | 'local' | 'discovery' | 'report' | 'activity' | 'backlinks' | 'technical-aeo' | 'history' | 'settings'
 
 type SearchConsoleWorkspace = 'google' | 'bing'
 
@@ -1586,7 +1599,10 @@ function ProjectPageContent({
   // surfaces (Search Engines, Activity, Backlinks, ...) from the embedded client
   // dashboard. Unset (or non-embed) = all tabs. The subnav below is filtered to
   // the allowlist; a direct-URL hit on a hidden tab falls back to a visible board.
-  const embedProjectTabs = useMemo(() => getEmbedConfig()?.projectTabs, [])
+  const embedProjectTabs = useMemo(() => {
+    const embed = getEmbedConfig()
+    return embed ? filterEmbedProjectTabs(embed.projectTabs) : undefined
+  }, [])
   const tab = resolveEmbedProjectTab(requestedTab, embedProjectTabs)
   const competitorDomains = useMemo(() => model.competitors.map(c => c.domain), [model.competitors])
   // "Local Presence" is always shown — GbpSection renders a setup guide when no
@@ -1611,6 +1627,33 @@ function ProjectPageContent({
   const projectName = model?.project.name ?? ''
   const projectLabel = model?.project.displayName || model?.project.name || projectName
   const triggerRunMutation = useTriggerRun()
+  const portfolioQueriesQuery = useQuery({
+    ...getApiV1ProjectsByNameQueriesOptions({ client: heyClient, path: { name: projectName } }),
+    enabled: tab === 'portfolio' && Boolean(projectName),
+    staleTime: 0,
+    refetchOnMount: 'always',
+  })
+  const activeMeasurementPlanQuery = useQuery({
+    ...getApiV1ProjectsByNameMeasurementPlanOptions({ client: heyClient, path: { name: projectName } }),
+    enabled: tab === 'portfolio' && Boolean(projectName),
+    staleTime: 0,
+    refetchOnMount: 'always',
+  })
+  const isActiveMeasurementPlanLoading = activeMeasurementPlanQuery.isPending || activeMeasurementPlanQuery.isFetching
+  const activeMeasurementRevision = activeMeasurementPlanQuery.data?.active?.revision ?? null
+  const measurementReportQuery = useQuery({
+    ...getApiV1ProjectsByNameMeasurementReportOptions({
+      client: heyClient,
+      path: { name: projectName },
+      query: { revision: activeMeasurementRevision ?? 1 },
+    }),
+    enabled: tab === 'portfolio'
+      && activeMeasurementRevision !== null
+      && !isActiveMeasurementPlanLoading
+      && !activeMeasurementPlanQuery.isError,
+    staleTime: 0,
+    refetchOnMount: 'always',
+  })
 
   const hasActiveVisibilitySweep = (model?.recentRuns ?? []).some(
     r => r.kind === RunKinds['answer-visibility'] && (r.status === RunStatuses.running || r.status === RunStatuses.queued),
@@ -1847,6 +1890,62 @@ function ProjectPageContent({
     return updated
   }
 
+  async function handleMeasurementDiscovery(request: MeasurementDiscoveryRequest) {
+    const { data } = await postApiV1ProjectsByNameMeasurementDiscovery({
+      client: heyClient,
+      path: { name: projectName },
+      body: request,
+      throwOnError: true,
+    })
+    return data
+  }
+
+  async function handleCreateMeasurementQueries(texts: readonly string[]) {
+    const queries = await apiAppendQueries(projectName, [...texts])
+    queryClient.setQueryData(
+      getApiV1ProjectsByNameQueriesQueryKey({ client: heyClient, path: { name: projectName } }),
+      queries,
+    )
+    void refetch()
+    return queries
+  }
+
+  async function handleCompileMeasurementPlan(input: MeasurementPlanInput) {
+    const { data } = await postApiV1ProjectsByNameMeasurementPlanCompilePreview({
+      client: heyClient,
+      path: { name: projectName },
+      body: input,
+      throwOnError: true,
+    })
+    return data
+  }
+
+  async function handleDiffMeasurementPlan(input: MeasurementPlanInput) {
+    const { data } = await postApiV1ProjectsByNameMeasurementPlanDiffPreview({
+      client: heyClient,
+      path: { name: projectName },
+      body: input,
+      throwOnError: true,
+    })
+    return data
+  }
+
+  async function handlePublishMeasurementPlan(input: MeasurementPlanInput, expectedActiveRevision: number | null) {
+    const { data } = await putApiV1ProjectsByNameMeasurementPlan({
+      client: heyClient,
+      path: { name: projectName },
+      body: { expectedActiveRevision, plan: input },
+      throwOnError: true,
+    })
+    await queryClient.invalidateQueries({
+      queryKey: getApiV1ProjectsByNameMeasurementPlanQueryKey({
+        client: heyClient,
+        path: { name: projectName },
+      }),
+    })
+    return data
+  }
+
   // Quiet underline tabs (Vercel/Linear lineage), not a pill rack. Section nav
   // is chrome: plain text that recedes, the active tab marked by a Snow
   // underline on the bar's hairline. Low-frequency sections (Report) live in a
@@ -1855,6 +1954,7 @@ function ProjectPageContent({
   const projectTabBase = `/projects/${encodeURIComponent(model.project.name)}`
   const projectTabItemsAll: ProjectTabItem[] = [
     { key: 'overview', label: 'Overview', href: projectTabBase },
+    ...(!isEmbed() ? [{ key: 'portfolio' as const, label: 'Portfolio', href: `${projectTabBase}/portfolio` }] : []),
     { key: 'search-console', label: 'Search Engines', href: `${projectTabBase}/search-console` },
     { key: 'activity', label: 'Activity', href: `${projectTabBase}/activity` },
     { key: 'technical-aeo', label: 'Technical AEO', href: `${projectTabBase}/technical-aeo` },
@@ -1981,7 +2081,30 @@ function ProjectPageContent({
         </div>
       </nav>
 
-      {tab === 'overview' ? (
+      {tab === 'portfolio' && !isEmbed() ? (
+        <PortfolioSection
+          key={projectName}
+          projectName={projectName}
+          locations={model.project.locations}
+          queries={portfolioQueriesQuery.data ?? []}
+          isQueryLoading={portfolioQueriesQuery.isPending || portfolioQueriesQuery.isFetching}
+          isQueryError={portfolioQueriesQuery.isError}
+          onRetryQueries={() => { void portfolioQueriesQuery.refetch() }}
+          activePlan={activeMeasurementPlanQuery.data?.active ?? null}
+          isPlanLoading={isActiveMeasurementPlanLoading}
+          isPlanError={activeMeasurementPlanQuery.isError}
+          onRetryPlan={() => { void activeMeasurementPlanQuery.refetch() }}
+          report={measurementReportQuery.data ?? null}
+          isReportLoading={measurementReportQuery.isPending || measurementReportQuery.isFetching}
+          isReportError={measurementReportQuery.isError}
+          onRetryReport={() => { void measurementReportQuery.refetch() }}
+          onDiscover={handleMeasurementDiscovery}
+          onCreateQueries={handleCreateMeasurementQueries}
+          onCompilePlan={handleCompileMeasurementPlan}
+          onDiffPlan={handleDiffMeasurementPlan}
+          onPublishPlan={handlePublishMeasurementPlan}
+        />
+      ) : tab === 'overview' ? (
         <>
           <section className="page-section-divider">
             <VisibilityTrendSection
@@ -2268,9 +2391,9 @@ function ProjectPageContent({
         // Local presence (Google Business Profile + Places). GbpSection
         // self-gates on the connection and renders its own empty state.
         <GbpSection projectName={model.project.name} projectId={model.project.id} />
-      ) : (
+      ) : tab === 'search-console' ? (
         <SearchConsoleSection projectName={model.project.name} />
-      )}
+      ) : null}
     </div>
   )
 }

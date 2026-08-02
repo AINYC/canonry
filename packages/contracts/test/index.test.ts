@@ -194,6 +194,35 @@ describe('effectiveBrandNames', () => {
     expect(effectiveBrandNames({ displayName: 'LlamaIndex', aliases: ['llamaindex', 'LlamaParse'] }))
       .toEqual(['LlamaIndex', 'LlamaParse'])
   })
+
+  it('includes every owned domain label with extractAnswerMentions identity semantics', () => {
+    expect(effectiveBrandNames({ canonicalDomain: 'www.Example.co.uk' }))
+      .toEqual(['example'])
+    expect(effectiveBrandNames({
+      canonicalDomain: 'www.Example.co.uk',
+      ownedDomains: ['bookings.example-group.com', 'www.Example.co.uk'],
+      aliases: ['Example'],
+    }))
+      .toEqual(['Example', 'example-group'])
+  })
+
+  it('does not add short domain labels, while preserving explicit short approved names', () => {
+    expect(effectiveBrandNames({
+      canonicalDomain: 'www.ai.com',
+      ownedDomains: ['go.io', 'four.com'],
+      displayName: 'AI',
+      aliases: ['Go'],
+    }))
+      .toEqual(['AI', 'Go', 'four'])
+  })
+
+  it('keeps an owned-domain label distinct from the canonical-domain label', () => {
+    expect(effectiveBrandNames({
+      canonicalDomain: 'example.com',
+      ownedDomains: ['booking.example-group.com'],
+    }))
+      .toEqual(['example', 'example-group'])
+  })
 })
 
 test('run schemas accept expected values and reject invalid statuses', () => {

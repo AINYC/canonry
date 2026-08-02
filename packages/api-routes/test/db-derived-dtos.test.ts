@@ -133,13 +133,15 @@ describe('drizzle-zod derived row schemas', () => {
       finishedAt: '2026-05-17T00:01:00Z',
       error: null,
       queryBasketRevision: null,
+      measurementPlanVersionId: null,
+      measurementManifest: null,
       createdAt: '2026-05-17T00:00:00Z',
     }
     const parsed = runRowSchema.parse(row)
     expect(parsed).toEqual(row)
   })
 
-  it('runRowSchema round-trips a representative row with typed queries array', () => {
+  it('runRowSchema round-trips structural future execution provenance', () => {
     const row = {
       id: 'r_2',
       projectId: 'p_1',
@@ -153,6 +155,11 @@ describe('drizzle-zod derived row schemas', () => {
       finishedAt: '2026-05-17T00:01:00Z',
       error: null,
       queryBasketRevision: null,
+      measurementPlanVersionId: 'plan-version-us-east-v2',
+      measurementManifest: {
+        schemaVersion: 1,
+        executionIds: ['execution-1'],
+      },
       createdAt: '2026-05-17T00:00:00Z',
     }
     const parsed = runRowSchema.parse(row)
