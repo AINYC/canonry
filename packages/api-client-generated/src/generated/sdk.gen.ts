@@ -807,7 +807,7 @@ export const postApiV1ProjectsByNameMeasurementPlanActionsDeactivate = <ThrowOnE
 /**
  * Get the scoped measurement overview
  *
- * Aggregates one run of evidence for All Properties, a group, or a single Property. Without runId the most recent completed run pinned to the active revision is used; a run pinned to another revision is refused rather than joined. Metrics are computed before search is applied, and a metric with no evidence is unavailable rather than zero.
+ * Aggregates one revision-pinned run snapshot for All Properties, a group, or a single Property. This is snapshot ranking only: it never infers a trend or compares evidence across revisions. Without runId the most recent completed run pinned to the active revision is used; once paging begins, the cursor pins that revision, displayed run, evidence snapshot, and result filters. A run pinned to another revision is refused rather than joined, and appended evidence on a mutable named run invalidates its cursor. Metrics are computed before search is applied, and a metric with no evidence is unavailable rather than zero. For coverage sorts, unavailable rows form the first bucket in either direction before available numeric rates follow the requested direction.
  */
 export const getApiV1ProjectsByNameMeasurementOverview = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameMeasurementOverviewData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameMeasurementOverviewResponses, GetApiV1ProjectsByNameMeasurementOverviewErrors, ThrowOnError>({

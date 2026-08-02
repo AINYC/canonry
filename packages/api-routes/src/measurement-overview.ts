@@ -8,14 +8,17 @@
  * rather than serialized as zero.
  */
 
+import { createHash } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import {
   AppError,
   MEASUREMENT_PAGE_DEFAULT_LIMIT,
   MEASUREMENT_PLAN_V2_SCHEMA_VERSION,
+  MEASUREMENT_OVERVIEW_DEFAULT_SORT,
   measurementOverviewQuerySchema,
   measurementOverviewResponseSchema,
+  measurementOverviewSortSchema,
   measurementRunRevisionMismatch,
   notFound,
   parseStoredMeasurementPlanAnyVersion,
@@ -24,6 +27,7 @@ import {
   type MeasurementMetricUnavailableReason,
   type MeasurementOverviewQuery,
   type MeasurementOverviewResponse,
+  type MeasurementOverviewSort,
   type MeasurementPlanV2,
   type MeasurementPropertyRow,
   type MeasurementQueryClassFilter,
@@ -93,6 +97,16 @@ interface PropertyLabel {
   label: string
 }
 
+interface OverviewCursor {
+  v: 1
+  sort: MeasurementOverviewSort
+  targetKey: string
+  displayedRunId: string | null
+  filterFingerprint: string
+  planVersionId: string
+  evidenceFingerprint: string
+}
+
 function parseOverviewQuery(raw: Record<string, unknown>): MeasurementOverviewQuery {
   const candidate = { ...raw, ...(raw.limit === undefined ? {} : { limit: Number(raw.limit) }) }
   const parsed = measurementOverviewQuerySchema.safeParse(candidate)
@@ -145,34 +159,202 @@ function normalizedText(value: string): string {
   return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en')
 }
 
-function compareRows(left: PropertyLabel, right: PropertyLabel): number {
+function overviewFilterFingerprint(query: MeasurementOverviewQuery): string {
+  const filters = {
+    scope: query.scope,
+    groupKey: query.groupKey ?? null,
+    targetKey: query.targetKey ?? null,
+    queryClass: query.queryClass ?? 'all',
+    provider: query.provider === undefined ? null : normalizedText(query.provider),
+    location: query.location === undefined ? null : normalizedText(query.location),
+    from: query.from ?? null,
+    to: query.to ?? null,
+    search: query.search === undefined ? null : normalizedText(query.search),
+  }
+  return createHash('sha256').update(JSON.stringify(filters)).digest('base64url')
+}
+
+function overviewEvidenceFingerprint(snapshots: readonly typeof querySnapshots.$inferSelect[]): string {
+  const canonical = [...snapshots]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map(snapshot => JSON.stringify(snapshot))
+    .join('\n')
+  return createHash('sha256').update(canonical).digest('base64url')
+}
+
+function compareLabels(left: PropertyLabel, right: PropertyLabel): number {
   const leftLabel = normalizedText(left.label)
   const rightLabel = normalizedText(right.label)
   if (leftLabel !== rightLabel) return leftLabel < rightLabel ? -1 : 1
   return left.targetKey < right.targetKey ? -1 : left.targetKey > right.targetKey ? 1 : 0
 }
 
-function cursorOf(row: PropertyLabel): string {
+function compareLabelSort(left: PropertyLabel, right: PropertyLabel, descending: boolean): number {
+  const leftLabel = normalizedText(left.label)
+  const rightLabel = normalizedText(right.label)
+  if (leftLabel !== rightLabel) {
+    const compared = leftLabel < rightLabel ? -1 : 1
+    return descending ? -compared : compared
+  }
+  return left.targetKey < right.targetKey ? -1 : left.targetKey > right.targetKey ? 1 : 0
+}
+
+function metricForSort(row: MeasurementPropertyRow, sort: MeasurementOverviewSort): MetricValue | null {
+  switch (sort) {
+    case 'citationCoverage-asc':
+    case 'citationCoverage-desc':
+      return row.citationCoverage
+    case 'mentionCoverage-asc':
+    case 'mentionCoverage-desc':
+      return row.mentionCoverage
+    case 'label-asc':
+    case 'label-desc':
+      return null
+  }
+}
+
+function compareRows(left: MeasurementPropertyRow, right: MeasurementPropertyRow, sort: MeasurementOverviewSort): number {
+  if (sort === 'label-asc' || sort === 'label-desc') {
+    return compareLabelSort(left, right, sort === 'label-desc')
+  }
+
+  const leftMetric = metricForSort(left, sort)!
+  const rightMetric = metricForSort(right, sort)!
+  // Unknown is not zero. Keep this explicit bucket first for either numeric
+  // direction so an agent asking for underperformance cannot miss unmeasured
+  // Properties at the tail of a result set.
+  if (leftMetric.state !== rightMetric.state) return leftMetric.state === 'unavailable' ? -1 : 1
+  if (leftMetric.state === 'available' && rightMetric.state === 'available' && leftMetric.value !== rightMetric.value) {
+    const compared = leftMetric.value < rightMetric.value ? -1 : 1
+    return sort.endsWith('-desc') ? -compared : compared
+  }
+  // Metric ties deliberately use the stable label/key order, independent of
+  // numeric direction, so page boundaries cannot drift between calls.
+  return compareLabels(left, right)
+}
+
+function legacyCursorOf(row: PropertyLabel): string {
   return Buffer.from(`${normalizedText(row.label)}:${row.targetKey}`, 'utf8').toString('base64url')
+}
+
+function cursorOf(
+  row: MeasurementPropertyRow,
+  sort: MeasurementOverviewSort,
+  displayedRunId: string | null,
+  filterFingerprint: string,
+  planVersionId: string,
+  evidenceFingerprint: string,
+): string {
+  const cursor: OverviewCursor = {
+    v: 1,
+    sort,
+    targetKey: row.targetKey,
+    displayedRunId,
+    filterFingerprint,
+    planVersionId,
+    evidenceFingerprint,
+  }
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
+}
+
+function parseCursor(value: string): OverviewCursor | null {
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const cursor = parsed as Record<string, unknown>
+    if (
+      cursor.v !== 1
+      || typeof cursor.targetKey !== 'string'
+      || !measurementOverviewSortSchema.safeParse(cursor.sort).success
+    ) return null
+    if (
+      cursor.displayedRunId !== null
+      && typeof cursor.displayedRunId !== 'string'
+    ) return null
+    if (typeof cursor.filterFingerprint !== 'string' || cursor.filterFingerprint.length === 0) return null
+    if (typeof cursor.planVersionId !== 'string' || cursor.planVersionId.length === 0) return null
+    if (typeof cursor.evidenceFingerprint !== 'string' || cursor.evidenceFingerprint.length === 0) return null
+    return {
+      v: 1,
+      sort: cursor.sort as MeasurementOverviewSort,
+      targetKey: cursor.targetKey,
+      displayedRunId: cursor.displayedRunId as string | null,
+      filterFingerprint: cursor.filterFingerprint,
+      planVersionId: cursor.planVersionId,
+      evidenceFingerprint: cursor.evidenceFingerprint,
+    }
+  } catch {
+    return null
+  }
+}
+
+function validatedCursor(query: MeasurementOverviewQuery, activePlanVersionId: string): OverviewCursor | null {
+  if (query.cursor === undefined) return null
+  const cursor = parseCursor(query.cursor)
+  if (cursor === null) return null
+  const sort = query.sort ?? MEASUREMENT_OVERVIEW_DEFAULT_SORT
+  if (cursor.sort !== sort) {
+    throw validationError('The measurement overview cursor sort does not match the request.')
+  }
+  if (
+    cursor.filterFingerprint !== overviewFilterFingerprint(query)
+  ) {
+    throw validationError('The measurement overview cursor filters do not match the request.')
+  }
+  if (
+    query.runId !== undefined
+    && cursor.displayedRunId !== query.runId
+  ) {
+    throw validationError('The measurement overview cursor run does not match the request.')
+  }
+  if (cursor.planVersionId !== activePlanVersionId) {
+    throw validationError('The measurement overview cursor revision does not match the active plan.')
+  }
+  return cursor
 }
 
 function pageOf(
   rows: readonly MeasurementPropertyRow[],
   query: MeasurementOverviewQuery,
+  displayedRunId: string | null,
+  activePlanVersionId: string,
+  evidenceFingerprint: string,
 ): MeasurementOverviewResponse['properties'] {
+  const sort = query.sort ?? MEASUREMENT_OVERVIEW_DEFAULT_SORT
+  const ordered = [...rows].sort((left, right) => compareRows(left, right, sort))
   const limit = query.limit ?? MEASUREMENT_PAGE_DEFAULT_LIMIT
   let offset = 0
   if (query.cursor !== undefined) {
-    const index = rows.findIndex(row => cursorOf(row) === query.cursor)
+    const cursor = validatedCursor(query, activePlanVersionId)
+    if (cursor !== null && cursor.evidenceFingerprint !== evidenceFingerprint) {
+      throw validationError('The measurement overview cursor evidence changed between pages.')
+    }
+    const index = cursor === null
+      // The original endpoint shipped this label-only cursor. It is safe only
+      // on the implicit default request; explicit sort requests must prove
+      // their ordering through the new cursor envelope.
+      ? query.sort === undefined
+        ? ordered.findIndex(row => legacyCursorOf(row) === query.cursor)
+        : -1
+      : ordered.findIndex(row => row.targetKey === cursor.targetKey)
     if (index < 0) throw validationError('The measurement overview cursor does not belong to this result set.')
     offset = index + 1
   }
-  const items = rows.slice(offset, offset + limit)
+  const items = ordered.slice(offset, offset + limit)
   const last = items.at(-1)
   return {
     items,
-    nextCursor: last === undefined || rows.at(offset + limit) === undefined ? null : cursorOf(last),
-    totalEstimate: rows.length,
+    nextCursor: last === undefined || ordered.at(offset + limit) === undefined
+      ? null
+      : cursorOf(
+          last,
+          sort,
+          displayedRunId,
+          overviewFilterFingerprint(query),
+          activePlanVersionId,
+          evidenceFingerprint,
+        ),
+    totalEstimate: ordered.length,
   }
 }
 
@@ -223,7 +405,10 @@ function selectDisplayedRun(
   active: ActiveMeasurementPlan,
   query: MeasurementOverviewQuery,
 ): typeof runs.$inferSelect | undefined {
-  if (query.runId === undefined) {
+  const cursor = validatedCursor(query, active.version.id)
+  const selectedRunId = query.runId ?? cursor?.displayedRunId
+  if (selectedRunId === null) return undefined
+  if (selectedRunId === undefined) {
     // The default is the most recent completed run pinned to the active
     // revision, and never a spot check — see `latestMeasurementRun`. `from`/`to`
     // narrow which run that is; they never slice one run's evidence.
@@ -232,8 +417,8 @@ function selectDisplayedRun(
       to: windowBound(query.to, true),
     })
   }
-  const run = db.select().from(runs).where(and(eq(runs.projectId, projectId), eq(runs.id, query.runId))).get()
-  if (!run) throw notFound('Run', query.runId)
+  const run = db.select().from(runs).where(and(eq(runs.projectId, projectId), eq(runs.id, selectedRunId))).get()
+  if (!run) throw notFound('Run', selectedRunId)
   if (run.measurementPlanVersionId === active.version.id) return run
 
   const pinned = run.measurementPlanVersionId === null
@@ -339,7 +524,6 @@ function propertyLabels(plan: StoredMeasurementPlan, scope: ScopeSelection): Pro
   const labels = new Map(plan.targets.map(target => [target.stableKey, target.label]))
   return scope.targetKeys
     .map(targetKey => ({ targetKey, label: labels.get(targetKey) ?? targetKey }))
-    .sort(compareRows)
 }
 
 function scopeDto(scope: ScopeSelection): MeasurementOverviewResponse['scope'] {
@@ -368,7 +552,7 @@ function planV1Overview(
   query: MeasurementOverviewQuery,
   scope: ScopeSelection,
 ): MeasurementOverviewResponse {
-  const displayed = latestMeasurementRun(db, projectId, active.version.id, [RunStatuses.completed])
+  const displayed = selectDisplayedRun(db, projectId, active, query)
   const page = pageOf(
     propertyLabels(active.plan, scope)
       .filter(row => matchesSearch(row, query.search))
@@ -379,6 +563,11 @@ function planV1Overview(
         flags: 0,
       })),
     query,
+    displayed?.id ?? null,
+    active.version.id,
+    // V1 rows are always plan_v1-unavailable and label/key ordered. Evidence
+    // cannot change this page, so avoid materializing a full run merely to hash it.
+    overviewEvidenceFingerprint([]),
   )
 
   return {
@@ -428,6 +617,9 @@ function planV2Overview(
           flags: 0,
         })),
       query,
+      null,
+      active.version.id,
+      overviewEvidenceFingerprint([]),
     )
     return {
       mode: 'active-v2',
@@ -487,6 +679,9 @@ function planV2Overview(
         }
       }),
     query,
+    displayed.id,
+    active.version.id,
+    overviewEvidenceFingerprint(snapshots),
   )
 
   const credited = new Map((overview.namedShareOfVoice?.entries ?? []).map(entry => [entry.key, entry]))

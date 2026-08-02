@@ -171,8 +171,8 @@ describe('canonry-mcp stdio', () => {
     await client.connect(transport)
 
     const list = await client.listTools()
-    // 154 API tools + 2 meta-tools (canonry_help, canonry_load_toolkit).
-    expect(list.tools).toHaveLength(156)
+    // 170 API tools + 2 meta-tools (canonry_help, canonry_load_toolkit).
+    expect(list.tools).toHaveLength(172)
     const names = list.tools.map(tool => tool.name)
     expect(names).toContain('canonry_insights_list')
     expect(names).toContain('canonry_project_overview')
@@ -184,6 +184,97 @@ describe('canonry-mcp stdio', () => {
     expect(names).toContain('canonry_ads_operation_resume_activation')
     expect(names).toContain('canonry_gsc_sitemaps_submit')
     expect(names).toContain('canonry_help')
+
+    const draftAction = list.tools.find(tool => tool.name === 'canonry_measurement_draft_action')
+    expect(draftAction?.inputSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        project: { type: 'string' },
+        operation: {},
+      },
+      required: expect.arrayContaining(['project', 'operation']),
+    })
+
+    const draftInput = draftAction?.inputSchema as {
+      properties?: {
+        operation?: {
+          anyOf?: Array<{ properties?: Record<string, { const?: unknown; properties?: Record<string, unknown> }> }>
+          oneOf?: Array<{ properties?: Record<string, { const?: unknown; properties?: Record<string, unknown> }> }>
+        }
+      }
+    }
+    const operationSchema = draftInput.properties?.operation
+    const operationBranches = operationSchema?.oneOf ?? operationSchema?.anyOf ?? []
+    const requestFieldsByAction = [
+      ['create', 'expectedActiveRevision'],
+      ['import-sitemap', 'sitemapUrl'],
+      ['apply-sitemap-selection', 'selections'],
+      ['upsert-target', 'target'],
+      ['rename-target', 'label'],
+      ['merge-targets', 'mergedKeys'],
+      ['exclude-target', 'targetKey'],
+      ['rebind-target', 'discoveredUrl'],
+      ['apply-assignments', 'queryIds'],
+      ['remove-assignment', 'queryId'],
+      ['clear-assignments', 'targetKey'],
+      ['classify-assignments', 'assignments'],
+      ['upsert-group', 'group'],
+      ['remove-group', 'groupKey'],
+      ['upsert-competitor', 'competitor'],
+      ['remove-competitor', 'competitorKey'],
+      ['publish', 'expectedCompiledChecksum'],
+    ] as const
+    for (const [action, field] of requestFieldsByAction) {
+      const branch = operationBranches.find(candidate => candidate.properties?.action?.const === action)
+      expect(branch?.properties?.request?.properties, `${action}.${field}`).toHaveProperty(field)
+    }
+
+    const draftTarget = {
+      stableKey: 'target-a',
+      label: 'Target A',
+      status: 'included',
+      aliases: ['Target A'],
+      urlMatchers: ['https://acme.example.com/target-a'],
+      source: 'manual',
+    }
+    const missingEtag = await client.callTool({
+      name: 'canonry_measurement_draft_action',
+      arguments: {
+        project: 'acme',
+        operation: {
+          action: 'upsert-target',
+          request: { target: draftTarget },
+          idempotencyKey: 'request-missing-etag',
+        },
+      },
+    })
+    expect(missingEtag.isError).toBe(true)
+    expect(jsonText(missingEtag)).toMatchObject({
+      error: {
+        code: 'MEASUREMENT_DRAFT_ETAG_REQUIRED',
+        details: { httpStatus: 428 },
+      },
+    })
+
+    const staleEtag = await client.callTool({
+      name: 'canonry_measurement_draft_action',
+      arguments: {
+        project: 'acme',
+        operation: {
+          action: 'upsert-target',
+          request: { target: draftTarget },
+          etag: '"mpd_stale"',
+          idempotencyKey: 'request-stale-etag',
+        },
+      },
+    })
+    expect(staleEtag.isError).toBe(true)
+    expect(jsonText(staleEtag)).toMatchObject({
+      error: {
+        code: 'MEASUREMENT_DRAFT_ETAG_STALE',
+        details: { httpStatus: 412 },
+      },
+    })
   })
 })
 
@@ -233,6 +324,28 @@ function handleRequest(request: IncomingMessage, response: ServerResponse): void
       windowStart: '2026-05-07T23:30:00Z',
       windowEnd: '2026-05-08T00:00:00Z',
     })
+    return
+  }
+  if (
+    request.method === 'POST'
+    && url.pathname === '/api/v1/projects/acme/measurement-plan/draft/actions/upsert-target'
+  ) {
+    request.resume()
+    if (request.headers['if-match'] === undefined) {
+      send(response, {
+        error: {
+          code: 'MEASUREMENT_DRAFT_ETAG_REQUIRED',
+          message: 'Draft ETag is required.',
+        },
+      }, 428)
+      return
+    }
+    send(response, {
+      error: {
+        code: 'MEASUREMENT_DRAFT_ETAG_STALE',
+        message: 'Draft ETag is stale.',
+      },
+    }, 412)
     return
   }
   send(response, { error: { code: 'NOT_FOUND', message: `${request.method} ${url.pathname}` } }, 404)

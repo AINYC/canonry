@@ -6,6 +6,7 @@ import {
   measurementMetricValueSchema,
   measurementOverviewQuerySchema,
   measurementOverviewResponseSchema,
+  measurementOverviewSortSchema,
   measurementPlanV2ChecksumJson,
   measurementPlanV2Schema,
   measurementV2StableKeySchema,
@@ -223,6 +224,20 @@ describe('measurement overview response', () => {
   it('accepts an explicit run selection on the query', () => {
     const parsed = measurementOverviewQuerySchema.parse({ scope: 'group', groupKey: 'northbridge-portfolio', runId: 'run-7' })
     expect(parsed).toEqual({ scope: 'group', groupKey: 'northbridge-portfolio', runId: 'run-7' })
+  })
+
+  it('accepts the explicit, direction-aware Property sort vocabulary', () => {
+    expect(measurementOverviewSortSchema.options).toEqual([
+      'label-asc',
+      'label-desc',
+      'citationCoverage-asc',
+      'citationCoverage-desc',
+      'mentionCoverage-asc',
+      'mentionCoverage-desc',
+    ])
+    expect(measurementOverviewQuerySchema.parse({ scope: 'all', sort: 'citationCoverage-desc' }).sort)
+      .toBe('citationCoverage-desc')
+    expect(() => measurementOverviewQuerySchema.parse({ scope: 'all', sort: 'citationCoverage' })).toThrow()
   })
 
   it('caps the page limit so a Target list cannot be pulled unbounded', () => {
