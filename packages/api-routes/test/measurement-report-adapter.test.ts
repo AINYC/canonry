@@ -5,8 +5,10 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   canonicalMeasurementPlanJson,
+  canonicalMeasurementPlanV2Json,
   compileMeasurementPlan,
   type MeasurementPlan,
+  type MeasurementPlanV2,
 } from '@ainyc/canonry-contracts'
 import {
   createClient,
@@ -18,9 +20,12 @@ import {
   type DatabaseClient,
 } from '@ainyc/canonry-db'
 import {
+  buildMeasurementPlanV2Manifest,
+  buildMeasurementPlanV2ReportInput,
   buildMeasurementRunManifest,
   buildStoredMeasurementReport,
 } from '../src/measurement-report-adapter.js'
+import { measurementPlanV2Fixture } from './measurement-plan-v2-fixture.js'
 
 let directory: string
 let db: DatabaseClient
@@ -370,5 +375,143 @@ describe('measurement report adapter', () => {
     })
 
     expect(() => buildStoredMeasurementReport(db, projectId, 7)).toThrow('requested model is corrupt')
+  })
+})
+
+describe('measurement report adapter, schema v2', () => {
+  let planV2: MeasurementPlanV2
+
+  function seedVersionV2(revision = 11): string {
+    const id = crypto.randomUUID()
+    db.insert(measurementPlanVersions).values({
+      id,
+      projectId,
+      revision,
+      canonicalJson: canonicalMeasurementPlanV2Json(planV2),
+      checksum: 'c'.repeat(64),
+      schemaVersion: 2,
+      compiledChecksum: planV2.compiledChecksum,
+      createdAt: now(),
+    }).run()
+    return id
+  }
+
+  function seedRunV2(versionId: string, values: Partial<typeof runs.$inferInsert> = {}): string {
+    const id = crypto.randomUUID()
+    db.insert(runs).values({
+      id,
+      projectId,
+      kind: 'answer-visibility',
+      status: 'completed',
+      trigger: 'manual',
+      measurementPlanVersionId: versionId,
+      measurementManifest: buildMeasurementPlanV2Manifest(planV2),
+      createdAt: now(),
+      ...values,
+    }).run()
+    return id
+  }
+
+  function seedV2Snapshot(runId: string, executionKey: string, provider: string, values: Partial<typeof querySnapshots.$inferInsert>): string {
+    const node = planV2.executionNodes.find(candidate => candidate.stableKey === executionKey)!
+    const id = crypto.randomUUID()
+    db.insert(querySnapshots).values({
+      id,
+      runId,
+      queryId: null,
+      queryText: node.queryText,
+      provider,
+      citationState: 'cited',
+      answerMentioned: true,
+      answerText: 'Harbor Homes and Challenger are both worth a look.',
+      citedDomains: [],
+      competitorOverlap: [],
+      recommendedCompetitors: [],
+      measurementExecutionId: executionKey,
+      requestedContext: node.context.location,
+      supportedContext: { status: 'applied', resolved: node.context.location },
+      location: node.context.location?.label ?? null,
+      citedUrls: [],
+      captureStatus: 'complete',
+      createdAt: now(),
+      ...values,
+    }).run()
+    return id
+  }
+
+  beforeEach(() => {
+    planV2 = measurementPlanV2Fixture()
+  })
+
+  it('expands one expected slot per frozen provider on each execution node', () => {
+    const manifest = buildMeasurementPlanV2Manifest(planV2)
+
+    expect(manifest.expectedSlots).toHaveLength(4)
+    expect(manifest.expectedSlots.filter(slot => slot.executionId === 'exec-nearby').map(slot => slot.provider))
+      .toEqual(['gemini', 'openai'])
+  })
+
+  it('reuses one execution across Properties without adding an expected slot', () => {
+    const manifest = buildMeasurementPlanV2Manifest(planV2)
+    const { input, edgeQueryClass } = buildMeasurementPlanV2ReportInput(11, planV2, manifest, [])
+
+    // Two Properties, one shared question: two usage edges over the same two slots.
+    expect(input.expectedSlots.filter(slot => slot.executionId === 'exec-nearby')).toHaveLength(2)
+    expect(input.usageEdges.filter(edge => edge.executionId === 'exec-nearby')).toHaveLength(2)
+    expect([...edgeQueryClass.values()].sort()).toEqual(['branded', 'non-brand', 'non-brand'])
+  })
+
+  it('carries the frozen identity, aliases and competitors rather than live project state', () => {
+    const { input } = buildMeasurementPlanV2ReportInput(11, planV2, buildMeasurementPlanV2Manifest(planV2), [])
+
+    expect(input.projectDomain).toBe('northstar.example')
+    expect(input.projectBrandNames).toEqual(['Northstar'])
+    expect(input.groups[0]?.competitors).toEqual([{ domain: 'challenger.example', aliases: ['Challenger'] }])
+    expect(input.targets.map(target => target.id).sort()).toEqual(['bayside', 'harbor'])
+  })
+
+  it('reports a v2 revision instead of the slice-1 no-plan placeholder', () => {
+    const versionId = seedVersionV2()
+    const runId = seedRunV2(versionId)
+    for (const provider of ['openai', 'gemini']) {
+      seedV2Snapshot(runId, 'exec-nearby', provider, {
+        citedUrls: ['https://northstar.example/locations/harbor/details'],
+      })
+      seedV2Snapshot(runId, 'exec-brand', provider, {})
+    }
+
+    const result = buildStoredMeasurementReport(db, projectId, 11)
+
+    expect(result.kind).toBe('report')
+    if (result.kind !== 'report') throw new Error('Expected report')
+    expect(result.report.revision).toBe(11)
+    expect(result.report.run?.id).toBe(runId)
+    expect(result.report.targets.map(target => target.id)).toEqual(['bayside', 'harbor'])
+    expect(result.report.groups[0]).toMatchObject({ id: 'regional', targetIds: ['bayside', 'harbor'] })
+    expect(result.report.targets.find(target => target.id === 'harbor')?.citationCoverage)
+      .toEqual({ numerator: 2, denominator: 4, rate: 0.5 })
+  })
+
+  it('never displays a scoped spot check as the revision default', () => {
+    const versionId = seedVersionV2()
+    seedRunV2(versionId, {
+      measurementScope: { groups: [], targets: ['harbor'], queries: [], resolvedTargets: ['harbor'] },
+    })
+
+    const result = buildStoredMeasurementReport(db, projectId, 11)
+
+    expect(result.kind).toBe('no-population')
+  })
+
+  it('reports no population rather than joining a run pinned to another revision', () => {
+    const other = seedVersionV2(10)
+    seedVersionV2(11)
+    seedRunV2(other)
+
+    const result = buildStoredMeasurementReport(db, projectId, 11)
+
+    expect(result.kind).toBe('no-population')
+    if (result.kind !== 'no-population') throw new Error('Expected no population')
+    expect(result.report).toMatchObject({ revision: 11, run: null })
   })
 })

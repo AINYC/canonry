@@ -230,3 +230,48 @@ describe('measurement overview response', () => {
     expect(measurementOverviewQuerySchema.parse({ scope: 'all', limit: 100 }).limit).toBe(100)
   })
 })
+
+// The runner dedups execution nodes by slot identity and skips the loser. If a
+// usage edge points at a node that is missing, or at one of two nodes sharing a
+// key, the edge's Target is silently never measured: no error, just a Target
+// quietly absent from the sweep. That is the exact class of wrong number this
+// model exists to prevent, so such a revision must not decode at all.
+describe('v2 referential integrity', () => {
+  it('refuses a usage edge pointing at an execution node that does not exist', () => {
+    const plan = planV2()
+    plan.usageEdges.push({ executionNodeKey: 'exec-missing', targetKey: 'harbor-point', queryId: 'q-best' })
+
+    const result = measurementPlanV2Schema.safeParse(plan)
+
+    expect(result.success).toBe(false)
+    expect(JSON.stringify(result.error?.issues)).toContain('unknown execution node')
+  })
+
+  it('refuses two execution nodes sharing a stable key', () => {
+    const plan = planV2()
+    plan.executionNodes.push({ ...plan.executionNodes[0]!, queryText: 'a different question' })
+
+    const result = measurementPlanV2Schema.safeParse(plan)
+
+    expect(result.success).toBe(false)
+    expect(JSON.stringify(result.error?.issues)).toContain('Duplicate execution node key')
+  })
+
+  it('refuses an edge, an assignment or a group naming a Target that does not exist', () => {
+    const edge = planV2()
+    edge.usageEdges.push({ executionNodeKey: 'exec-best', targetKey: 'ghost', queryId: 'q-best' })
+    expect(measurementPlanV2Schema.safeParse(edge).success).toBe(false)
+
+    const assignment = planV2()
+    assignment.assignments.push({ targetKey: 'ghost', queryId: 'q-best', queryClass: 'non-brand', executionNodeKey: 'exec-best' })
+    expect(measurementPlanV2Schema.safeParse(assignment).success).toBe(false)
+
+    const group = planV2()
+    group.groups[0]!.targetKeys.push('ghost')
+    expect(measurementPlanV2Schema.safeParse(group).success).toBe(false)
+  })
+
+  it('still accepts a plan whose edges all resolve', () => {
+    expect(measurementPlanV2Schema.safeParse(planV2()).success).toBe(true)
+  })
+})

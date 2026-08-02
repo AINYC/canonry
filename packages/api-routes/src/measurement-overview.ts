@@ -1,15 +1,555 @@
-import type { FastifyInstance } from 'fastify'
-import { notImplemented } from '@ainyc/canonry-contracts'
-
 /**
  * Scoped Advanced aggregates over one run's evidence.
  *
- * Run selection, the `brandPresence`/`sov` pair and group-only Named Share of
- * Voice all land with the reporting slice. The route is registered now so the
- * generated client carries the shape from the start.
+ * Everything here reads the run-pinned revision: identities, aliases,
+ * competitors and questions all come from the frozen plan the displayed run
+ * measured, never from live project configuration. Metrics are computed before
+ * `search` is applied, and a metric with no evidence is withheld with a reason
+ * rather than serialized as zero.
  */
-export async function measurementOverviewRoutes(app: FastifyInstance) {
-  app.get<{ Params: { name: string } }>('/projects/:name/measurement-overview', async () => {
-    throw notImplemented('Measurement overview is not available yet.')
+
+import { and, eq } from 'drizzle-orm'
+import type { FastifyInstance } from 'fastify'
+import {
+  AppError,
+  MEASUREMENT_PAGE_DEFAULT_LIMIT,
+  MEASUREMENT_PLAN_V2_SCHEMA_VERSION,
+  measurementOverviewQuerySchema,
+  measurementOverviewResponseSchema,
+  measurementRunRevisionMismatch,
+  notFound,
+  parseStoredMeasurementPlanAnyVersion,
+  RunStatuses,
+  validationError,
+  type MeasurementMetricUnavailableReason,
+  type MeasurementOverviewQuery,
+  type MeasurementOverviewResponse,
+  type MeasurementPlanV2,
+  type MeasurementPropertyRow,
+  type MeasurementQueryClassFilter,
+  type MeasurementState,
+  type MetricValue,
+  type NamedShareOfVoice,
+  type RunStatus,
+  type StoredMeasurementPlan,
+} from '@ainyc/canonry-contracts'
+import {
+  measurementPlanDrafts,
+  measurementPlans,
+  measurementPlanVersions,
+  querySnapshots,
+  runs,
+  type DatabaseClient,
+} from '@ainyc/canonry-db'
+import { resolveProject } from './helpers.js'
+import {
+  buildMeasurementOverview,
+  type MeasurementMetricReason,
+  type MeasurementOverviewPropertyRow,
+  type MeasurementRate,
+  type MeasurementUsageEdgeInput,
+} from './measurement-report.js'
+import {
+  buildMeasurementPlanV2ReportInput,
+  latestMeasurementRun,
+  measurementRunExpectedSlots,
+} from './measurement-report-adapter.js'
+import { measurementRunCompleteness } from './measurement-run-completeness.js'
+
+/** Every state a run can be in and still be the current one. Cancelled runs never are. */
+const CURRENT_RUN_STATUSES: readonly RunStatus[] = [
+  RunStatuses.queued,
+  RunStatuses.running,
+  RunStatuses.completed,
+  RunStatuses.partial,
+  RunStatuses.failed,
+]
+
+interface ActiveMeasurementPlan {
+  version: typeof measurementPlanVersions.$inferSelect
+  plan: StoredMeasurementPlan
+}
+
+interface ScopeSelection {
+  kind: MeasurementOverviewResponse['scope']['kind']
+  key?: string
+  label: string
+  targetKeys: string[]
+  /** Set only for a v2 group scope: the one place Named Share of Voice may exist. */
+  group: MeasurementPlanV2['groups'][number] | null
+}
+
+interface NamedIdentity {
+  key: string
+  aliases: readonly string[]
+  kind: 'project' | 'competitor'
+  stableKey: string
+  label: string
+  domain: string
+}
+
+interface PropertyLabel {
+  targetKey: string
+  label: string
+}
+
+function parseOverviewQuery(raw: Record<string, unknown>): MeasurementOverviewQuery {
+  const candidate = { ...raw, ...(raw.limit === undefined ? {} : { limit: Number(raw.limit) }) }
+  const parsed = measurementOverviewQuerySchema.safeParse(candidate)
+  if (!parsed.success) throw validationError('Invalid measurement overview query', { issues: parsed.error.issues })
+  return parsed.data
+}
+
+function activeMeasurementPlan(db: DatabaseClient, projectId: string): ActiveMeasurementPlan | null {
+  const pointer = db.select().from(measurementPlans).where(eq(measurementPlans.projectId, projectId)).get()
+  if (!pointer) return null
+  const version = db.select().from(measurementPlanVersions).where(and(
+    eq(measurementPlanVersions.projectId, projectId),
+    eq(measurementPlanVersions.id, pointer.activeVersionId),
+  )).get()
+  if (!version) throw new Error(`Measurement plan ${projectId} points to missing version ${pointer.activeVersionId}`)
+  return { version, plan: parseStoredMeasurementPlanAnyVersion(version.canonicalJson) }
+}
+
+function metricReason(reason: MeasurementMetricReason): MeasurementMetricUnavailableReason {
+  switch (reason) {
+    case 'no-population':
+      return 'no_population'
+    case 'incomplete':
+    case 'evidence-incomplete':
+      return 'evidence_incomplete'
+    case 'aliasless':
+    case 'no-competitors':
+    case 'no-project-aliases':
+      return 'not_applicable'
+  }
+}
+
+function unavailable(reason: MeasurementMetricUnavailableReason): MetricValue {
+  return { state: 'unavailable', reason }
+}
+
+/** A coverage metric reads out as its ratio; an unavailable one carries no `value` key at all. */
+function coverageMetric(rate: MeasurementRate): MetricValue {
+  if (rate.rate === null) return unavailable(metricReason(rate.reason))
+  return { state: 'available', value: rate.rate, numerator: rate.numerator, denominator: rate.denominator }
+}
+
+/** A count metric reads out as the numerator, with the eligible population beside it. */
+function countMetric(rate: MeasurementRate): MetricValue {
+  if (rate.numerator === null) return unavailable(metricReason(rate.reason))
+  return { state: 'available', value: rate.numerator, numerator: rate.numerator, denominator: rate.denominator }
+}
+
+function normalizedText(value: string): string {
+  return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en')
+}
+
+function compareRows(left: PropertyLabel, right: PropertyLabel): number {
+  const leftLabel = normalizedText(left.label)
+  const rightLabel = normalizedText(right.label)
+  if (leftLabel !== rightLabel) return leftLabel < rightLabel ? -1 : 1
+  return left.targetKey < right.targetKey ? -1 : left.targetKey > right.targetKey ? 1 : 0
+}
+
+function cursorOf(row: PropertyLabel): string {
+  return Buffer.from(`${normalizedText(row.label)}:${row.targetKey}`, 'utf8').toString('base64url')
+}
+
+function pageOf(
+  rows: readonly MeasurementPropertyRow[],
+  query: MeasurementOverviewQuery,
+): MeasurementOverviewResponse['properties'] {
+  const limit = query.limit ?? MEASUREMENT_PAGE_DEFAULT_LIMIT
+  let offset = 0
+  if (query.cursor !== undefined) {
+    const index = rows.findIndex(row => cursorOf(row) === query.cursor)
+    if (index < 0) throw validationError('The measurement overview cursor does not belong to this result set.')
+    offset = index + 1
+  }
+  const items = rows.slice(offset, offset + limit)
+  const last = items.at(-1)
+  return {
+    items,
+    nextCursor: last === undefined || rows.at(offset + limit) === undefined ? null : cursorOf(last),
+    totalEstimate: rows.length,
+  }
+}
+
+/**
+ * A run pinned to another revision answered a different set of questions, and a
+ * run pinned to none answered questions this revision never asked. Neither may
+ * be joined into these numbers, so naming one is refused rather than mixed in.
+ */
+function runRevisionMismatch(runId: string, runRevision: number | null, activeRevision: number): AppError {
+  if (runRevision === null) {
+    return new AppError(
+      'MEASUREMENT_RUN_REVISION_MISMATCH',
+      `Run '${runId}' measured no published plan revision. Select a run pinned to the active revision.`,
+      422,
+      { runId, runRevision: null, activeRevision },
+    )
+  }
+  return measurementRunRevisionMismatch(runId, runRevision, activeRevision)
+}
+
+function displayedState(status: string): MeasurementState {
+  switch (status) {
+    case RunStatuses.completed:
+      return 'complete'
+    case RunStatuses.partial:
+      return 'partial'
+    case RunStatuses.running:
+      return 'running'
+    case RunStatuses.queued:
+      return 'queued'
+    // A cancelled run stopped short of what it promised, which is what a failed
+    // one did as far as this revision's numbers are concerned.
+    default:
+      return 'failed'
+  }
+}
+
+/** `from`/`to` are calendar days; a run stamped late on the end day is still inside the window. */
+function windowBound(value: string | undefined, endOfDay: boolean): string | undefined {
+  if (value === undefined) return undefined
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+  return `${value}${endOfDay ? 'T23:59:59.999Z' : 'T00:00:00.000Z'}`
+}
+
+function selectDisplayedRun(
+  db: DatabaseClient,
+  projectId: string,
+  active: ActiveMeasurementPlan,
+  query: MeasurementOverviewQuery,
+): typeof runs.$inferSelect | undefined {
+  if (query.runId === undefined) {
+    // The default is the most recent completed run pinned to the active
+    // revision, and never a spot check — see `latestMeasurementRun`. `from`/`to`
+    // narrow which run that is; they never slice one run's evidence.
+    return latestMeasurementRun(db, projectId, active.version.id, [RunStatuses.completed], {
+      from: windowBound(query.from, false),
+      to: windowBound(query.to, true),
+    })
+  }
+  const run = db.select().from(runs).where(and(eq(runs.projectId, projectId), eq(runs.id, query.runId))).get()
+  if (!run) throw notFound('Run', query.runId)
+  if (run.measurementPlanVersionId === active.version.id) return run
+
+  const pinned = run.measurementPlanVersionId === null
+    ? null
+    : db.select({ revision: measurementPlanVersions.revision }).from(measurementPlanVersions)
+        .where(eq(measurementPlanVersions.id, run.measurementPlanVersionId)).get()?.revision ?? null
+  throw runRevisionMismatch(run.id, pinned, active.version.revision)
+}
+
+/** Only a v2 group carries the frozen competitors a named share needs. */
+function v2GroupOf(plan: StoredMeasurementPlan, groupKey: string): MeasurementPlanV2['groups'][number] | null {
+  if (plan.schemaVersion !== MEASUREMENT_PLAN_V2_SCHEMA_VERSION) return null
+  return plan.groups.find(candidate => candidate.stableKey === groupKey) ?? null
+}
+
+function resolveScope(plan: StoredMeasurementPlan, query: MeasurementOverviewQuery): ScopeSelection {
+  if (query.scope === 'group') {
+    if (query.groupKey === undefined) throw validationError('"groupKey" is required when scope is "group".')
+    const groupKey = query.groupKey
+    const group = plan.groups.find(candidate => candidate.stableKey === groupKey)
+    if (!group) throw validationError(`Measurement group "${groupKey}" is not in the active revision.`)
+    return {
+      kind: 'group',
+      key: group.stableKey,
+      label: group.label,
+      targetKeys: [...group.targetKeys],
+      group: v2GroupOf(plan, groupKey),
+    }
+  }
+  if (query.scope === 'property') {
+    if (query.targetKey === undefined) throw validationError('"targetKey" is required when scope is "property".')
+    const target = plan.targets.find(candidate => candidate.stableKey === query.targetKey)
+    if (!target) throw validationError(`Measurement Property "${query.targetKey}" is not in the active revision.`)
+    return { kind: 'property', key: target.stableKey, label: target.label, targetKeys: [target.stableKey], group: null }
+  }
+  return { kind: 'all', label: 'All Properties', targetKeys: plan.targets.map(target => target.stableKey), group: null }
+}
+
+/**
+ * Named Share of Voice exists only for a group's Non-brand basket with confirmed
+ * competitors. Everywhere else it is absent rather than zeroed: All Properties
+ * and a single Property have no comparable set to share a denominator with.
+ */
+function namedIdentitiesFor(
+  plan: MeasurementPlanV2,
+  scope: ScopeSelection,
+  queryClass: MeasurementQueryClassFilter,
+): NamedIdentity[] {
+  if (scope.kind !== 'group' || queryClass !== 'non-brand' || scope.group === null) return []
+  if (scope.group.competitors.length === 0) return []
+
+  const brand = plan.identities.projectBrand
+  return [
+    {
+      key: 'project',
+      kind: 'project',
+      stableKey: 'project',
+      label: brand.names.at(0) ?? brand.canonicalHost,
+      domain: brand.canonicalHost,
+      aliases: brand.names,
+    },
+    ...scope.group.competitors.map(competitor => ({
+      key: `competitor:${competitor.stableKey}`,
+      kind: 'competitor' as const,
+      stableKey: competitor.stableKey,
+      label: competitor.label,
+      domain: competitor.domain,
+      // The frozen label is an identity name too, so a competitor published
+      // without extra aliases is still matchable in an answer.
+      aliases: [...new Set([competitor.label, ...competitor.aliases])],
+    })),
+  ]
+}
+
+function nextActionFor(
+  db: DatabaseClient,
+  projectId: string,
+  displayed: typeof runs.$inferSelect | undefined,
+  flags: number,
+): MeasurementOverviewResponse['nextAction'] {
+  // Same precedence the setup state uses: finish an open draft, then measure,
+  // then review what the measurement surfaced.
+  const draft = db.select({ id: measurementPlanDrafts.id }).from(measurementPlanDrafts)
+    .where(eq(measurementPlanDrafts.projectId, projectId)).get()
+  if (draft) return { kind: 'complete_setup' }
+  if (!displayed) return { kind: 'run_measurement' }
+  if (flags > 0) return { kind: 'review_flags', count: flags }
+  return { kind: 'none' }
+}
+
+function planExpectedSlots(plan: StoredMeasurementPlan): number {
+  return plan.executionNodes.reduce((total, node) => total + node.expectedSnapshots, 0)
+}
+
+function matchesSearch(row: PropertyLabel, search: string | undefined): boolean {
+  if (search === undefined) return true
+  const needle = normalizedText(search)
+  if (needle === '') return true
+  return normalizedText(row.label).includes(needle) || normalizedText(row.targetKey).includes(needle)
+}
+
+function propertyLabels(plan: StoredMeasurementPlan, scope: ScopeSelection): PropertyLabel[] {
+  const labels = new Map(plan.targets.map(target => [target.stableKey, target.label]))
+  return scope.targetKeys
+    .map(targetKey => ({ targetKey, label: labels.get(targetKey) ?? targetKey }))
+    .sort(compareRows)
+}
+
+function scopeDto(scope: ScopeSelection): MeasurementOverviewResponse['scope'] {
+  return { kind: scope.kind, ...(scope.key === undefined ? {} : { key: scope.key }), label: scope.label }
+}
+
+function runProgress(
+  db: DatabaseClient,
+  displayed: typeof runs.$inferSelect | undefined,
+  plan: StoredMeasurementPlan,
+): { completed: number; expected: number } {
+  if (!displayed) return { completed: 0, expected: planExpectedSlots(plan) }
+  const completeness = measurementRunCompleteness(db, displayed.id)
+  return { completed: completeness.executed, expected: completeness.expected }
+}
+
+/**
+ * An active v1 revision has no Branded/Non-brand assignments at all, so every
+ * metric this surface reports is class-dependent and none of them can be
+ * produced. Republishing is the action that changes that (§2).
+ */
+function planV1Overview(
+  db: DatabaseClient,
+  projectId: string,
+  active: ActiveMeasurementPlan,
+  query: MeasurementOverviewQuery,
+  scope: ScopeSelection,
+): MeasurementOverviewResponse {
+  const displayed = latestMeasurementRun(db, projectId, active.version.id, [RunStatuses.completed])
+  const page = pageOf(
+    propertyLabels(active.plan, scope)
+      .filter(row => matchesSearch(row, query.search))
+      .map(row => ({
+        ...row,
+        mentionCoverage: unavailable('plan_v1'),
+        citationCoverage: unavailable('plan_v1'),
+        flags: 0,
+      })),
+    query,
+  )
+
+  return {
+    mode: 'active-v1',
+    scope: scopeDto(scope),
+    queryClass: query.queryClass ?? 'all',
+    measurement: {
+      state: displayed ? displayedState(displayed.status) : 'not_measured',
+      ...(displayed ? { currentRunId: displayed.id, displayedRunId: displayed.id } : {}),
+      ...runProgress(db, displayed, active.plan),
+      ...(displayed?.finishedAt ? { completedAt: displayed.finishedAt } : {}),
+    },
+    nextAction: { kind: 'republish_setup' },
+    metrics: {
+      propertiesMentioned: unavailable('plan_v1'),
+      mentionCoverage: unavailable('plan_v1'),
+      citationCoverage: unavailable('plan_v1'),
+      brandPresence: unavailable('plan_v1'),
+      sov: unavailable('plan_v1'),
+    },
+    properties: page,
+    flags: { total: 0 },
+  }
+}
+
+function planV2Overview(
+  db: DatabaseClient,
+  projectId: string,
+  active: ActiveMeasurementPlan,
+  plan: MeasurementPlanV2,
+  query: MeasurementOverviewQuery,
+  scope: ScopeSelection,
+): MeasurementOverviewResponse {
+  const queryClass = query.queryClass ?? 'all'
+  const displayed = selectDisplayedRun(db, projectId, active, query)
+  const current = latestMeasurementRun(db, projectId, active.version.id, CURRENT_RUN_STATUSES)
+  const currentDto = current ? { currentRunId: current.id } : {}
+
+  if (!displayed) {
+    const page = pageOf(
+      propertyLabels(plan, scope)
+        .filter(row => matchesSearch(row, query.search))
+        .map(row => ({
+          ...row,
+          mentionCoverage: unavailable('no_completed_run'),
+          citationCoverage: unavailable('no_completed_run'),
+          flags: 0,
+        })),
+      query,
+    )
+    return {
+      mode: 'active-v2',
+      scope: scopeDto(scope),
+      queryClass,
+      measurement: { state: 'not_measured', ...currentDto, ...runProgress(db, displayed, plan) },
+      nextAction: nextActionFor(db, projectId, displayed, 0),
+      metrics: {
+        propertiesMentioned: unavailable('no_completed_run'),
+        mentionCoverage: unavailable('no_completed_run'),
+        citationCoverage: unavailable('no_completed_run'),
+        brandPresence: unavailable('no_completed_run'),
+        sov: unavailable('no_completed_run'),
+      },
+      properties: page,
+      flags: { total: 0 },
+    }
+  }
+
+  const manifest = measurementRunExpectedSlots(displayed, plan)
+  const snapshots = db.select().from(querySnapshots).where(eq(querySnapshots.runId, displayed.id)).all()
+  const { input, edgeQueryClass } = buildMeasurementPlanV2ReportInput(active.version.revision, plan, manifest, snapshots)
+
+  // Provider, location and question class narrow the population every metric is
+  // taken over, so they are applied before a single aggregate is computed.
+  // `search` never is.
+  const expectedSlots = input.expectedSlots.filter(slot => (
+    (query.provider === undefined || slot.provider === normalizedText(query.provider))
+    && (query.location === undefined || normalizedText(slot.location ?? '') === normalizedText(query.location))
+  ))
+  const usageEdges: readonly MeasurementUsageEdgeInput[] = queryClass === 'all'
+    ? input.usageEdges
+    : input.usageEdges.filter(edge => edgeQueryClass.get(edge.id) === queryClass)
+
+  const identities = namedIdentitiesFor(plan, scope, queryClass)
+  const overview = buildMeasurementOverview({
+    ...input,
+    expectedSlots,
+    usageEdges,
+    scopeTargetIds: scope.targetKeys,
+    namedIdentities: identities,
   })
+
+  const measured = new Map<string, MeasurementOverviewPropertyRow>(
+    overview.properties.map(row => [row.targetId, row]),
+  )
+  const page = pageOf(
+    propertyLabels(plan, scope)
+      .filter(row => matchesSearch(row, query.search))
+      .map(row => {
+        const property = measured.get(row.targetKey)
+        return {
+          ...row,
+          mentionCoverage: property ? coverageMetric(property.mentionCoverage) : unavailable('no_population'),
+          citationCoverage: property ? coverageMetric(property.citationCoverage) : unavailable('no_population'),
+          flags: property?.flags ?? 0,
+        }
+      }),
+    query,
+  )
+
+  const credited = new Map((overview.namedShareOfVoice?.entries ?? []).map(entry => [entry.key, entry]))
+  const namedShareOfVoice: NamedShareOfVoice | undefined = overview.namedShareOfVoice === null || scope.key === undefined
+    ? undefined
+    : {
+        groupKey: scope.key,
+        queryClass: 'non-brand',
+        denominator: overview.namedShareOfVoice.denominator,
+        entries: identities.map(identity => ({
+          kind: identity.kind,
+          stableKey: identity.stableKey,
+          label: identity.label,
+          domain: identity.domain,
+          credits: credited.get(identity.key)?.credits ?? 0,
+          share: credited.get(identity.key)?.share ?? 0,
+        })),
+      }
+
+  const brandPresence = coverageMetric(overview.brandPresence)
+  return {
+    mode: 'active-v2',
+    scope: scopeDto(scope),
+    queryClass,
+    measurement: {
+      state: displayedState(displayed.status),
+      ...currentDto,
+      displayedRunId: displayed.id,
+      ...runProgress(db, displayed, plan),
+      ...(displayed.finishedAt ? { completedAt: displayed.finishedAt } : {}),
+    },
+    nextAction: nextActionFor(db, projectId, displayed, overview.flags),
+    metrics: {
+      propertiesMentioned: countMetric(overview.propertiesMentioned),
+      mentionCoverage: coverageMetric(overview.mentionCoverage),
+      citationCoverage: coverageMetric(overview.citationCoverage),
+      brandPresence,
+      // Deprecated alias of `brandPresence`, carrying the identical value until
+      // the browser migrates off it (§0.2). The two must never diverge.
+      sov: brandPresence,
+    },
+    properties: page,
+    flags: { total: overview.flags },
+    ...(namedShareOfVoice === undefined ? {} : { namedShareOfVoice }),
+  }
+}
+
+export async function measurementOverviewRoutes(app: FastifyInstance) {
+  app.get<{ Params: { name: string }; Querystring: Record<string, unknown> }>(
+    '/projects/:name/measurement-overview',
+    async request => {
+      const project = resolveProject(app.db, request.params.name)
+      const query = parseOverviewQuery(request.query)
+      const active = activeMeasurementPlan(app.db, project.id)
+      // This surface describes an active plan. Without one there is nothing to
+      // aggregate, and Simple has its own reads.
+      if (!active) throw notFound('Active measurement plan', project.name)
+
+      const scope = resolveScope(active.plan, query)
+      const response = active.plan.schemaVersion === MEASUREMENT_PLAN_V2_SCHEMA_VERSION
+        ? planV2Overview(app.db, project.id, active, active.plan, query, scope)
+        : planV1Overview(app.db, project.id, active, query, scope)
+      return measurementOverviewResponseSchema.parse(response)
+    },
+  )
 }

@@ -6,7 +6,7 @@
  * project identity, call providers, or repair missing evidence.
  */
 
-import { and, desc, eq, inArray, isNull, lt, ne } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, isNull, lt, lte, ne } from 'drizzle-orm'
 import {
   brandLabelFromDomain,
   brandKeyFromText,
@@ -14,6 +14,7 @@ import {
   deriveCitedUrlCandidates,
   filterCapturedCitedUrls,
   isVertexGroundingRedirect,
+  MEASUREMENT_PLAN_V2_SCHEMA_VERSION,
   parseMeasurementRunManifestV1,
   parseStoredMeasurementPlanAnyVersion,
   RunKinds,
@@ -21,8 +22,14 @@ import {
   RunTriggers,
   type LocationContext,
   type MeasurementPlan,
+  type MeasurementPlanV2,
+  type MeasurementQueryClass,
   type MeasurementReportResponse,
   type MeasurementRunManifestV1,
+  type MeasurementTargetUrlMatcher,
+  type MeasurementV2UrlMatcher,
+  type RunStatus,
+  type StoredMeasurementPlan,
 } from '@ainyc/canonry-contracts'
 import {
   measurementPlanVersions,
@@ -70,14 +77,42 @@ function manifestExecutionId(nodeKey: string): string {
   return nodeKey
 }
 
-/** Materializes the provider-expanded, deterministic snapshot slots for one frozen plan. */
-export function buildMeasurementRunManifest(
-  plan: MeasurementPlan,
-  providerRoster: readonly string[],
+/**
+ * The execution graph both schema versions share. v1 hangs the location context
+ * straight off the node; v2 nests it inside the frozen execution context beside
+ * the provider set. Everything downstream reads slots, not plan versions.
+ */
+interface FrozenExecutionNode {
+  stableKey: string
+  queryText: string
+  context: LocationContext | null
+  expectedSnapshots: number
+}
+
+function frozenExecutionNodes(plan: StoredMeasurementPlan): FrozenExecutionNode[] {
+  if (plan.schemaVersion === MEASUREMENT_PLAN_V2_SCHEMA_VERSION) {
+    return plan.executionNodes.map(node => ({
+      stableKey: node.stableKey,
+      queryText: node.queryText,
+      context: node.context.location,
+      expectedSnapshots: node.expectedSnapshots,
+    }))
+  }
+  return plan.executionNodes.map(node => ({
+    stableKey: node.stableKey,
+    queryText: node.queryText,
+    context: node.context,
+    expectedSnapshots: node.expectedSnapshots,
+  }))
+}
+
+function manifestFromNodes(
+  nodes: readonly FrozenExecutionNode[],
+  providersFor: (node: FrozenExecutionNode) => readonly string[],
 ): MeasurementRunManifestV1 {
-  const providers = normalizedProviders(providerRoster)
   const expectedSlots: MeasurementRunManifestV1['expectedSlots'] = []
-  for (const node of [...plan.executionNodes].sort((left, right) => compareText(left.stableKey, right.stableKey))) {
+  for (const node of [...nodes].sort((left, right) => compareText(left.stableKey, right.stableKey))) {
+    const providers = providersFor(node)
     if (node.expectedSnapshots !== providers.length) {
       throw new Error(`measurement manifest provider roster does not satisfy execution ${node.stableKey}`)
     }
@@ -93,18 +128,50 @@ export function buildMeasurementRunManifest(
   return buildMeasurementRunManifestV1({ expectedSlots })
 }
 
+/** Materializes the provider-expanded, deterministic snapshot slots for one frozen plan. */
+export function buildMeasurementRunManifest(
+  plan: MeasurementPlan,
+  providerRoster: readonly string[],
+): MeasurementRunManifestV1 {
+  const providers = normalizedProviders(providerRoster)
+  return manifestFromNodes(frozenExecutionNodes(plan), () => providers)
+}
+
+/**
+ * v2 froze the provider set on every execution node, so its expected work needs
+ * no external roster: the revision already says how many answers each question
+ * expects and from whom.
+ */
+export function buildMeasurementPlanV2Manifest(plan: MeasurementPlanV2): MeasurementRunManifestV1 {
+  const providersByNode = new Map(plan.executionNodes.map(node => [
+    node.stableKey,
+    normalizedProviders(node.context.providers),
+  ]))
+  return manifestFromNodes(frozenExecutionNodes(plan), node => providersByNode.get(node.stableKey) ?? [])
+}
+
 function manifestFailure(message: string): never {
   throw new Error(`measurement manifest is corrupt: ${message}`)
 }
 
-function parseManifest(value: unknown, plan: MeasurementPlan): MeasurementRunManifestV1 {
+/**
+ * `exhaustive` is what separates a full sweep from a spot check. A full sweep
+ * promised every frozen execution node, so a missing one is corruption. A spot
+ * check measured the slice the operator named, so its manifest is a subset by
+ * construction and only the slots it does carry are checked against the plan.
+ */
+function parseManifest(
+  value: unknown,
+  executionNodes: readonly FrozenExecutionNode[],
+  exhaustive = true,
+): MeasurementRunManifestV1 {
   let manifest: MeasurementRunManifestV1
   try {
     manifest = parseMeasurementRunManifestV1(value)
   } catch {
     manifestFailure('unsupported shape')
   }
-  const nodes = new Map(plan.executionNodes.map(node => [manifestExecutionId(node.stableKey), node]))
+  const nodes = new Map(executionNodes.map(node => [manifestExecutionId(node.stableKey), node]))
   const seenNodeProviders = new Set<string>()
   const counts = new Map<string, number>()
   for (const slot of manifest.expectedSlots) {
@@ -117,15 +184,16 @@ function parseManifest(value: unknown, plan: MeasurementPlan): MeasurementRunMan
     seenNodeProviders.add(nodeProvider)
     counts.set(node.stableKey, (counts.get(node.stableKey) ?? 0) + 1)
   }
-  for (const node of plan.executionNodes) {
-    if ((counts.get(node.stableKey) ?? 0) !== node.expectedSnapshots) {
+  for (const node of executionNodes) {
+    const measured = counts.get(node.stableKey) ?? 0
+    if (exhaustive ? measured !== node.expectedSnapshots : measured > node.expectedSnapshots) {
       manifestFailure(`expected slot count mismatch for ${node.stableKey}`)
     }
   }
   return manifest
 }
 
-function matcherInput(targetKey: string, matcher: MeasurementPlan['targets'][number]['urls'][number], index: number): MeasurementTargetUrlInput {
+function matcherInput(targetKey: string, matcher: MeasurementTargetUrlMatcher | MeasurementV2UrlMatcher, index: number): MeasurementTargetUrlInput {
   if (matcher.kind === 'host') return { id: `${targetKey}:url:${index}`, mode: 'host', host: matcher.host }
   if (matcher.kind === 'prefix') {
     return { id: `${targetKey}:url:${index}`, mode: 'prefix', host: matcher.host, path: matcher.pathPrefix, pathCase: matcher.pathCase }
@@ -196,6 +264,48 @@ function supportsRequestedContext(
   return true
 }
 
+function expectedSlotInputs(manifest: MeasurementRunManifestV1): MeasurementExpectedSlotInput[] {
+  return manifest.expectedSlots.map(slot => ({
+    id: `slot:${slot.executionId}:${slot.provider}`,
+    executionId: slot.executionId,
+    queryText: slot.queryText,
+    provider: slot.provider,
+    location: slotLocation(slot),
+  }))
+}
+
+function observationInputs(
+  manifest: MeasurementRunManifestV1,
+  snapshots: readonly (typeof querySnapshots.$inferSelect)[],
+  legacy: boolean,
+): MeasurementReportInput['observations'] {
+  const slotsByExecution = new Map(manifest.expectedSlots.map(slot => [`${slot.executionId}\u0000${slot.provider}`, slot]))
+  return snapshots.flatMap(snapshot => {
+    if (legacy ? snapshot.measurementExecutionId !== null : snapshot.measurementExecutionId === null) return []
+    if (snapshot.measurementExecutionId !== null) {
+      const slot = slotsByExecution.get(`${snapshot.measurementExecutionId}\u0000${snapshot.provider.trim().toLocaleLowerCase('en')}`)
+      if (!slot) throw new Error(`measurement snapshot provenance is corrupt: ${snapshot.id}`)
+      validateExecutionSnapshot(snapshot, slot)
+      if (!supportsRequestedContext(snapshot, slot)) return []
+    }
+    const directCitations = snapshot.citedUrls
+    return [{
+      id: snapshot.id,
+      executionId: snapshot.measurementExecutionId,
+      queryText: snapshot.queryText ?? '',
+      provider: snapshot.provider.trim().toLocaleLowerCase('en'),
+      location: snapshot.location,
+      answerText: snapshot.answerText,
+      citedUrls: directCitations,
+      citedUrlsComplete: directCitations !== null && snapshot.captureStatus === 'complete',
+      ...(directCitations === null ? (() => {
+        const historical = historicalEvidence(snapshot.rawResponse)
+        return { historicalCitedUrls: historical.urls, historicalCitedUrlsComplete: historical.complete }
+      })() : {}),
+    }]
+  })
+}
+
 function reportInput(
   revision: number,
   plan: MeasurementPlan,
@@ -203,17 +313,10 @@ function reportInput(
   snapshots: readonly (typeof querySnapshots.$inferSelect)[],
   legacy: boolean,
 ): MeasurementReportInput {
-  const slots: MeasurementExpectedSlotInput[] = manifest.expectedSlots.map(slot => ({
-    id: `slot:${slot.executionId}:${slot.provider}`,
-    executionId: slot.executionId,
-    queryText: slot.queryText,
-    provider: slot.provider,
-    location: slotLocation(slot),
-  }))
+  const slots = expectedSlotInputs(manifest)
   const usageEdges: MeasurementUsageEdgeInput[] = plan.usageEdges.map(edge => edge.kind === 'baseline'
     ? { id: `baseline:${edge.queryId}:${edge.executionNodeKey}`, type: 'baseline' as const, executionId: manifestExecutionId(edge.executionNodeKey) }
     : { id: `target:${edge.targetKey}:${edge.queryId}:${edge.executionNodeKey}`, type: 'target' as const, executionId: manifestExecutionId(edge.executionNodeKey), targetId: edge.targetKey })
-  const slotsByExecution = new Map(manifest.expectedSlots.map(slot => [`${slot.executionId}\u0000${slot.provider}`, slot]))
 
   return {
     revision,
@@ -237,30 +340,82 @@ function reportInput(
     })),
     expectedSlots: slots,
     usageEdges,
-    observations: snapshots.flatMap(snapshot => {
-      if (legacy ? snapshot.measurementExecutionId !== null : snapshot.measurementExecutionId === null) return []
-      if (snapshot.measurementExecutionId !== null) {
-        const slot = slotsByExecution.get(`${snapshot.measurementExecutionId}\u0000${snapshot.provider.trim().toLocaleLowerCase('en')}`)
-        if (!slot) throw new Error(`measurement snapshot provenance is corrupt: ${snapshot.id}`)
-        validateExecutionSnapshot(snapshot, slot)
-        if (!supportsRequestedContext(snapshot, slot)) return []
-      }
-      const directCitations = snapshot.citedUrls
-      return [{
-        id: snapshot.id,
-        executionId: snapshot.measurementExecutionId,
-        queryText: snapshot.queryText ?? '',
-        provider: snapshot.provider.trim().toLocaleLowerCase('en'),
-        location: snapshot.location,
-        answerText: snapshot.answerText,
-        citedUrls: directCitations,
-        citedUrlsComplete: directCitations !== null && snapshot.captureStatus === 'complete',
-        ...(directCitations === null ? (() => {
-          const historical = historicalEvidence(snapshot.rawResponse)
-          return { historicalCitedUrls: historical.urls, historicalCitedUrlsComplete: historical.complete }
-        })() : {}),
-      }]
-    }),
+    observations: observationInputs(manifest, snapshots, legacy),
+  }
+}
+
+function v2UsageEdgeId(edge: MeasurementPlanV2['usageEdges'][number]): string {
+  return `target:${edge.targetKey}:${edge.queryId}:${edge.executionNodeKey}`
+}
+
+export interface MeasurementPlanV2ReportInput {
+  input: MeasurementReportInput
+  /**
+   * The frozen class of the assignment behind each usage edge. Classification
+   * belongs to the Target-owned assignment, so one question can be Branded for
+   * one Property and Non-brand for another; a class filter therefore selects
+   * edges, never questions.
+   */
+  edgeQueryClass: ReadonlyMap<string, MeasurementQueryClass>
+}
+
+/**
+ * Turns one frozen v2 revision and one run's snapshots into report-kernel input.
+ * Every identity, alias, competitor and question comes from the revision, never
+ * from live project configuration.
+ */
+export function buildMeasurementPlanV2ReportInput(
+  revision: number,
+  plan: MeasurementPlanV2,
+  manifest: MeasurementRunManifestV1,
+  snapshots: readonly (typeof querySnapshots.$inferSelect)[],
+): MeasurementPlanV2ReportInput {
+  const classByAssignment = new Map(plan.assignments.map(assignment => [
+    `${assignment.targetKey}:${assignment.queryId}`,
+    assignment.queryClass,
+  ]))
+  const edgeQueryClass = new Map<string, MeasurementQueryClass>()
+  for (const edge of plan.usageEdges) {
+    const queryClass = classByAssignment.get(`${edge.targetKey}:${edge.queryId}`)
+    if (queryClass) edgeQueryClass.set(v2UsageEdgeId(edge), queryClass)
+  }
+
+  return {
+    edgeQueryClass,
+    input: {
+      revision,
+      ownedHosts: plan.identities.projectBrand.ownedHosts,
+      projectBrandNames: plan.identities.projectBrand.names,
+      projectDomain: plan.identities.projectBrand.canonicalHost,
+      targets: plan.targets.map(target => ({
+        id: target.stableKey,
+        label: target.label,
+        // The revision already decided this Property cannot be mentioned. Feeding
+        // its aliases in anyway would turn "not applicable" into a 0% reading.
+        aliases: target.mentionNotApplicable ? [] : target.aliases,
+        urls: target.urlMatchers.map((matcher, index) => matcherInput(target.stableKey, matcher, index)),
+      })),
+      groups: plan.groups.map(group => ({
+        id: group.stableKey,
+        label: group.label,
+        targetIds: group.targetKeys,
+        // The frozen label is an identity name too, so a competitor published
+        // without extra aliases is still matchable in an answer.
+        competitors: group.competitors.map(competitor => ({
+          domain: competitor.domain,
+          aliases: [...new Set([competitor.label, ...competitor.aliases])],
+        })),
+      })),
+      expectedSlots: expectedSlotInputs(manifest),
+      // A v2 run is always plan-pinned, so there is no pre-plan bridge here.
+      usageEdges: plan.usageEdges.map(edge => ({
+        id: v2UsageEdgeId(edge),
+        type: 'target' as const,
+        executionId: manifestExecutionId(edge.executionNodeKey),
+        targetId: edge.targetKey,
+      })),
+      observations: observationInputs(manifest, snapshots, false),
+    },
   }
 }
 
@@ -283,12 +438,90 @@ function responseFromReport(
   }
 }
 
+/**
+ * The default displayed run for one revision.
+ *
+ * A scoped spot check is excluded on purpose: it measured a slice the operator
+ * named, so displaying it as the revision's result would report a subset as the
+ * whole. It stays selectable by naming its id (§0.3).
+ */
+export function latestMeasurementRun(
+  db: DatabaseClient,
+  projectId: string,
+  versionId: string,
+  statuses: readonly RunStatus[],
+  window: { from?: string; to?: string } = {},
+): typeof runs.$inferSelect | undefined {
+  const conditions = [
+    eq(runs.projectId, projectId),
+    eq(runs.measurementPlanVersionId, versionId),
+    eq(runs.kind, RunKinds['answer-visibility']),
+    inArray(runs.status, [...statuses]),
+    ne(runs.trigger, RunTriggers.probe),
+    isNull(runs.measurementScope),
+  ]
+  if (window.from !== undefined) conditions.push(gte(runs.createdAt, window.from))
+  if (window.to !== undefined) conditions.push(lte(runs.createdAt, window.to))
+  return db.select().from(runs).where(and(...conditions))
+    .orderBy(desc(runs.createdAt), desc(runs.id)).get()
+}
+
+/**
+ * The expected work one stored run actually promised, checked against the
+ * revision it was pinned to. A run with no manifest measured nothing this
+ * revision can be held to, so it fails loudly rather than being reported over
+ * an invented denominator.
+ */
+export function measurementRunExpectedSlots(
+  run: typeof runs.$inferSelect,
+  plan: StoredMeasurementPlan,
+): MeasurementRunManifestV1 {
+  if (run.measurementManifest === null) manifestFailure(`missing for run ${run.id}`)
+  return parseManifest(run.measurementManifest, frozenExecutionNodes(plan), run.measurementScope === null)
+}
+
+function storedMeasurementPlanV2Report(
+  db: DatabaseClient,
+  projectId: string,
+  version: typeof measurementPlanVersions.$inferSelect,
+  plan: MeasurementPlanV2,
+): StoredMeasurementReport {
+  const run = latestMeasurementRun(db, projectId, version.id, [RunStatuses.completed, RunStatuses.partial])
+  if (!run) {
+    const empty = buildMeasurementPlanV2ReportInput(version.revision, plan, { schemaVersion: 1, expectedSlots: [] }, [])
+    return {
+      kind: 'no-population',
+      reason: 'no-run',
+      report: responseFromReport(version.revision, buildMeasurementReport(empty.input), null),
+    }
+  }
+  const manifest = measurementRunExpectedSlots(run, plan)
+  const snapshots = db.select().from(querySnapshots).where(eq(querySnapshots.runId, run.id)).all()
+  const { input } = buildMeasurementPlanV2ReportInput(version.revision, plan, manifest, snapshots)
+  return {
+    kind: 'report',
+    report: responseFromReport(version.revision, buildMeasurementReport(input), {
+      id: run.id,
+      status: run.status === RunStatuses.completed ? RunStatuses.completed : RunStatuses.partial,
+      createdAt: run.createdAt,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+    }),
+  }
+}
+
 export function buildStoredMeasurementReport(db: DatabaseClient, projectId: string, revision: number): StoredMeasurementReport {
   const version = db.select().from(measurementPlanVersions).where(and(
     eq(measurementPlanVersions.projectId, projectId),
     eq(measurementPlanVersions.revision, revision),
   )).get()
   if (!version) return { kind: 'no-plan', revision }
+
+  const stored = parseStoredMeasurementPlanAnyVersion(version.canonicalJson)
+  if (stored.schemaVersion === MEASUREMENT_PLAN_V2_SCHEMA_VERSION) {
+    return storedMeasurementPlanV2Report(db, projectId, version, stored)
+  }
+  const plan = stored
 
   const run = db.select().from(runs).where(and(
     eq(runs.projectId, projectId),
@@ -297,18 +530,12 @@ export function buildStoredMeasurementReport(db: DatabaseClient, projectId: stri
     inArray(runs.status, [RunStatuses.completed, RunStatuses.partial]),
     ne(runs.trigger, RunTriggers.probe),
   )).orderBy(desc(runs.createdAt), desc(runs.id)).get()
-  // Slice 5 replaces this branch with the v2 report path. Until then a v2
-  // revision is reported as not-yet-reportable rather than decoded through the
-  // v1 reader, which would throw and surface as a 500.
-  const stored = parseStoredMeasurementPlanAnyVersion(version.canonicalJson)
-  if (stored.schemaVersion !== 1) return { kind: 'no-plan', revision }
-  const plan = stored
   let selectedRun = run
   let manifest: MeasurementRunManifestV1
   let legacy = false
   if (selectedRun) {
     if (selectedRun.measurementManifest === null) manifestFailure(`missing for run ${selectedRun.id}`)
-    manifest = parseManifest(selectedRun.measurementManifest, plan)
+    manifest = parseManifest(selectedRun.measurementManifest, frozenExecutionNodes(plan))
   } else {
     // A revision with no plan-aware measurement may display the latest completed
     // pre-plan run. Its provider roster is safe to infer only from a completed
