@@ -1613,6 +1613,7 @@ function ProjectPageContent({
   // connecting one rather than being hidden until after connection.
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const appendQueries = useAppendQueries()
   const manageQueriesRequested = (useSearch({ strict: false }) as { manageQueries?: boolean }).manageQueries === true
   const [managingQueries, setManagingQueries] = useState(manageQueriesRequested)
   const [newQueryText, setNewQueryText] = useState('')
@@ -2170,10 +2171,15 @@ function ProjectPageContent({
           onRetryQueries={() => { void portfolioQueriesQuery.refetch() }}
           publishedPlan={activeMeasurementPlan}
           onCreateQueries={async texts => {
-            await apiAppendQueries(projectName, [...texts])
+            // The shared mutation carries the write guard and invalidates both
+            // the projects list and the per-project detail. Calling the raw
+            // client skipped all of that, so other surfaces kept showing the
+            // old basket.
+            await appendQueries.mutateAsync({ projectName, queries: [...texts] })
             // The step selects from this list, so it has to reflect the new
-            // questions before the operator can apply them.
-            await portfolioQueriesQuery.refetch()
+            // questions before the operator can apply them. A refetch failure
+            // must not read as success, hence throwOnError.
+            await portfolioQueriesQuery.refetch({ throwOnError: true })
           }}
           onManageProjectQueries={() => {
             // Local state does not survive this navigation: it remounts the page

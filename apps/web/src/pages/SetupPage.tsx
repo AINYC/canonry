@@ -912,7 +912,10 @@ function ReadySetupPage({
                 size="sm"
                 onClick={() => {
                   skipQueries()
-                  void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' })
+                  // Advanced measurement lives on the portfolio tab. Landing on the
+                  // project root dropped the operator on Overview and made them hunt
+                  // for the thing this button just offered them.
+                  void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}/portfolio` : '/' })
                 }}
               >
                 Set up Advanced measurement instead

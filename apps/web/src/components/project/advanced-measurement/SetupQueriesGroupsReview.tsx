@@ -392,6 +392,10 @@ export function AdvancedMeasurementQueriesStep({
               />
             </div>
           </details>
+          {/* With an empty basket these three controls can only ever be disabled,
+              and they sat above the form that creates the questions they act on.
+              The Property checklist stays: the pattern form below needs it. */}
+          {queries.length === 0 ? null : (
           <div className="flex flex-wrap items-center gap-3">
             <Button
               type="button"
@@ -422,6 +426,7 @@ export function AdvancedMeasurementQueriesStep({
             </Button>
             <p className="text-sm text-secondary">{selectedQueryIds.length} selected, {selectedPropertyIds.length} Properties selected.</p>
           </div>
+          )}
         </div>
       )}
 
