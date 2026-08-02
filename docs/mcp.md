@@ -86,6 +86,14 @@ Some write tools compose existing API calls rather than using a native atomic en
 
 The built-in Aero agent consumes the same MCP-derived local tool registry, then may apply an agent profile. The `ads-operator` profile is intentionally narrower than the full MCP catalog and adds one Aero-only context-packing helper, `canonry_ads_operator_context`, that bundles existing public reads for long-session efficiency. It is not an MCP tool because it introduces no new public capability; agents that need the same data outside Aero should call the existing project overview, ads, doctor, and memory tools directly.
 
+Five ads tools call the provider live and spend on the operator's ad account:
+`canonry_ads_account`, `canonry_ads_geo_search`, `canonry_ads_conversion_pixels`,
+`canonry_ads_conversion_event_settings`, and `canonry_ads_live_delivery`. They
+are read tools and stay in a `--read-only` catalog, but the server refuses them
+to a credential that was never granted ads authority — a key carrying only
+`read`, or one scoped to something unrelated, gets `403`. The default `*` key
+and the ads-operator key below both satisfy the gate.
+
 For an external ads operator, default to a project-scoped key with exactly
 `read`, `ads.write`, and `ads.activate`. The auth layer confines a key whose
 only write grants are ads scopes to that project's `/ads/*` mutations; unrelated project writes

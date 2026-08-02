@@ -3204,11 +3204,14 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'get',
     path: '/api/v1/projects/{name}/ads/account',
     summary: 'Read the connected OpenAI ad account and live review state',
+    description:
+      'Calls the OpenAI Ads API right now with the stored connection. Because it spends on the operator\'s ad account rather than returning stored data, it requires a credential granted ads authority (the wildcard key, or one of ads.write / ads.approve / ads.activate) and is refused to a view-only account. A read-only or unrelated-scope key is refused.',
     tags: ['ads'],
     parameters: [nameParameter],
     responses: {
       200: jsonResponse('Live ad-account metadata and review state.', 'AdsAccountDto'),
       400: errorResponse('Ads connection or live reader unavailable.'),
+      403: errorResponse('The credential was not granted OpenAI Ads paid reads.'),
       404: errorResponse('Project not found.'),
       502: errorResponse('OpenAI Ads API read failed.'),
     },
@@ -3217,6 +3220,8 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'get',
     path: '/api/v1/projects/{name}/ads/geo/search',
     summary: 'Search OpenAI Ads targetable geographic locations',
+    description:
+      'Searches the provider geo catalog live. Because it spends on the operator\'s ad account rather than returning stored data, it requires a credential granted ads authority (the wildcard key, or one of ads.write / ads.approve / ads.activate) and is refused to a view-only account. A read-only or unrelated-scope key is refused.',
     tags: ['ads'],
     parameters: [
       nameParameter,
@@ -3226,6 +3231,7 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('Targetable geographic locations.', 'AdsGeoSearchResponse'),
       400: errorResponse('Invalid query or ads connection unavailable.'),
+      403: errorResponse('The credential was not granted OpenAI Ads paid reads.'),
       404: errorResponse('Project not found.'),
       502: errorResponse('OpenAI Ads API read failed.'),
     },
@@ -3234,11 +3240,14 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'get',
     path: '/api/v1/projects/{name}/ads/conversions/pixels',
     summary: 'List OpenAI Ads conversion pixels',
+    description:
+      'Lists conversion pixels live from the provider, auto-paginating up to 100 pages. Because it spends on the operator\'s ad account rather than returning stored data, it requires a credential granted ads authority (the wildcard key, or one of ads.write / ads.approve / ads.activate) and is refused to a view-only account. A read-only or unrelated-scope key is refused.',
     tags: ['ads'],
     parameters: [nameParameter],
     responses: {
       200: jsonResponse('Conversion pixels.', 'AdsConversionPixelListResponse'),
       400: errorResponse('Ads connection or live reader unavailable.'),
+      403: errorResponse('The credential was not granted OpenAI Ads paid reads.'),
       404: errorResponse('Project not found.'),
       502: errorResponse('OpenAI Ads API read failed.'),
     },
@@ -3247,11 +3256,14 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'get',
     path: '/api/v1/projects/{name}/ads/conversions/event-settings',
     summary: 'List OpenAI Ads conversion event settings',
+    description:
+      'Lists conversion event settings live from the provider, auto-paginating up to 100 pages. Because it spends on the operator\'s ad account rather than returning stored data, it requires a credential granted ads authority (the wildcard key, or one of ads.write / ads.approve / ads.activate) and is refused to a view-only account. A read-only or unrelated-scope key is refused.',
     tags: ['ads'],
     parameters: [nameParameter],
     responses: {
       200: jsonResponse('Conversion event settings.', 'AdsConversionEventSettingListResponse'),
       400: errorResponse('Ads connection or live reader unavailable.'),
+      403: errorResponse('The credential was not granted OpenAI Ads paid reads.'),
       404: errorResponse('Project not found.'),
       502: errorResponse('OpenAI Ads API read failed.'),
     },

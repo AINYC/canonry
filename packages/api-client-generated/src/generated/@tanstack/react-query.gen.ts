@@ -3449,6 +3449,8 @@ export const getApiV1ProjectsByNameAdsAccountQueryKey = (options: Options<GetApi
 
 /**
  * Read the connected OpenAI ad account and live review state
+ *
+ * Calls the OpenAI Ads API right now with the stored connection. Because it spends on the operator's ad account rather than returning stored data, it requires a credential granted ads authority (the wildcard key, or one of ads.write / ads.approve / ads.activate) and is refused to a view-only account. A read-only or unrelated-scope key is refused.
  */
 export const getApiV1ProjectsByNameAdsAccountOptions = (options: Options<GetApiV1ProjectsByNameAdsAccountData>) => {
     return queryOptions({
@@ -3469,6 +3471,8 @@ export const getApiV1ProjectsByNameAdsGeoSearchQueryKey = (options: Options<GetA
 
 /**
  * Search OpenAI Ads targetable geographic locations
+ *
+ * Searches the provider geo catalog live. Because it spends on the operator's ad account rather than returning stored data, it requires a credential granted ads authority (the wildcard key, or one of ads.write / ads.approve / ads.activate) and is refused to a view-only account. A read-only or unrelated-scope key is refused.
  */
 export const getApiV1ProjectsByNameAdsGeoSearchOptions = (options: Options<GetApiV1ProjectsByNameAdsGeoSearchData>) => {
     return queryOptions({
@@ -3489,6 +3493,8 @@ export const getApiV1ProjectsByNameAdsConversionsPixelsQueryKey = (options: Opti
 
 /**
  * List OpenAI Ads conversion pixels
+ *
+ * Lists conversion pixels live from the provider, auto-paginating up to 100 pages. Because it spends on the operator's ad account rather than returning stored data, it requires a credential granted ads authority (the wildcard key, or one of ads.write / ads.approve / ads.activate) and is refused to a view-only account. A read-only or unrelated-scope key is refused.
  */
 export const getApiV1ProjectsByNameAdsConversionsPixelsOptions = (options: Options<GetApiV1ProjectsByNameAdsConversionsPixelsData>) => {
     return queryOptions({
@@ -3509,6 +3515,8 @@ export const getApiV1ProjectsByNameAdsConversionsEventSettingsQueryKey = (option
 
 /**
  * List OpenAI Ads conversion event settings
+ *
+ * Lists conversion event settings live from the provider, auto-paginating up to 100 pages. Because it spends on the operator's ad account rather than returning stored data, it requires a credential granted ads authority (the wildcard key, or one of ads.write / ads.approve / ads.activate) and is refused to a view-only account. A read-only or unrelated-scope key is refused.
  */
 export const getApiV1ProjectsByNameAdsConversionsEventSettingsOptions = (options: Options<GetApiV1ProjectsByNameAdsConversionsEventSettingsData>) => {
     return queryOptions({
