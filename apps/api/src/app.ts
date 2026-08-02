@@ -12,7 +12,25 @@ export function buildApp(env: PlatformEnv) {
   // socket's peer is never the caller. Anything keyed on `request.ip` — the
   // sign-in budget in particular — is meaningless until this says which hops
   // to believe. See `resolveTrustProxy`.
-  const trustProxy = resolveTrustProxy(process.env.CANONRY_TRUST_PROXY)
+  //
+  // Leaving CANONRY_TRUST_PROXY unset does NOT mean "no proxy" here the way it
+  // safely does for a standalone `canonry serve` — this app only ever runs
+  // behind a load balancer, so an unset value silently makes every caller
+  // resolve to that load balancer's own address, and every per-caller
+  // rate-limit / login budget collapses into one shared bucket that punishes
+  // every real caller for one attacker. That degradation must be an explicit
+  // operator decision, not a silent default, so refuse to start instead.
+  const rawTrustProxy = process.env.CANONRY_TRUST_PROXY
+  if (rawTrustProxy === undefined) {
+    throw new Error(
+      'CANONRY_TRUST_PROXY is not set. This deployment always sits behind a load balancer, so '
+      + 'leaving it unset makes every caller resolve to the load balancer\'s own address and '
+      + 'collapses every per-caller rate limit / login budget into one shared bucket. Set it to the '
+      + 'trusted hop count (e.g. "1") or a comma-separated proxy CIDR list, or explicitly to "false" '
+      + 'only if this deployment is truly reachable directly with nothing in front of it.',
+    )
+  }
+  const trustProxy = resolveTrustProxy(rawTrustProxy)
   const app = Fastify({
     logger: true,
     trustProxy,

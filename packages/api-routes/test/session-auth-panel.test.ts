@@ -29,6 +29,7 @@ import { USER_SESSION_COOKIE_NAME } from '../src/user-session.js'
 
 const ROOT_KEY = 'cnry_panel_root'
 const READ_KEY = 'cnry_panel_read'
+const NARROW_KEY = 'cnry_panel_narrow'
 const LEGACY_COOKIE = 'canonry_session'
 const LEGACY_SESSION_ID = 'legacy-dashboard-password-session'
 const ADMIN_PASSWORD = 'a-long-enough-admin-password'
@@ -103,6 +104,9 @@ beforeEach(async () => {
 
   rootKeyId = seedKey('root', ROOT_KEY, ['*'])
   seedKey('reader', READ_KEY, ['read'])
+  // Scoped to something entirely unrelated to ads — not read-only, so the
+  // OLD deny-list gate let it straight through.
+  seedKey('narrow', NARROW_KEY, ['users.read'])
 
   db.insert(adsConnections).values({
     id: crypto.randomUUID(),
@@ -123,10 +127,23 @@ beforeEach(async () => {
     sessionCookieName: LEGACY_COOKIE,
     resolveSessionApiKeyId: (id: string) => (id === LEGACY_SESSION_ID ? rootKeyId : null),
     adsCredentialStore: {
-      getConnection: () => ({ accessToken: 'sample-token' }),
+      getConnection: () => ({ apiKey: 'sample-token' }),
       upsertConnection: (connection: unknown) => connection,
       deleteConnection: () => true,
     } as never,
+    // Matches the seeded `adsConnections.adAccountId` below, so a request that
+    // gets PAST the auth gate reaches real (fake) provider I/O instead of
+    // failing on an unrelated "wrong account" check first.
+    verifyAdsAccount: async () => ({
+      id: 'sample-account',
+      name: 'Sample Ads Account',
+      status: 'active',
+      currencyCode: 'USD',
+      timezone: 'UTC',
+      reviewStatus: null,
+      integrityReviewStatus: null,
+      integrityDecision: null,
+    }),
     adsLiveDeliveryReader: {
       listCampaigns: async () => { liveDeliveryCalls++; return [] },
       listAdGroups: async () => { liveDeliveryCalls++; return [] },
@@ -312,6 +329,20 @@ test('the paid live-delivery read is refused to a read-only key', async () => {
   expect(liveDeliveryCalls).toBe(0)
 })
 
+test('the paid live-delivery read is refused to a key scoped to something unrelated', async () => {
+  // A key scoped to `users.read` is not read-only (it never opted into the
+  // `read` token), so the OLD deny-list gate — "refuse only if read-only" —
+  // let it sail straight through to a route that fans out to ~4000 billed
+  // OpenAI Ads requests. It was never granted any ads authority at all.
+  const res = await app.inject({
+    method: 'GET',
+    url: '/api/v1/projects/sample/ads/live-delivery',
+    headers: withKey(NARROW_KEY),
+  })
+  expect(res.statusCode).toBe(403)
+  expect(liveDeliveryCalls).toBe(0)
+})
+
 // ─── P2.3 the admin gate ignored what the key could do ─────────────────────
 
 test('a read-only key cannot enumerate the accounts on this install', async () => {
@@ -319,6 +350,57 @@ test('a read-only key cannot enumerate the accounts on this install', async () =
 
   const res = await app.inject({ method: 'GET', url: '/api/v1/users', headers: withKey(READ_KEY) })
   expect(res.statusCode).toBe(403)
+})
+
+// ─── P2.6 a caller-supplied header widened the embed tab allowlist ─────────
+
+/** The install's server-side embed tab allowlist for THIS boot. */
+async function bootEmbedApp(configuredTabs: string[]) {
+  const embedded = Fastify()
+  embedded.register(apiRoutes, { db, embedProjectTabs: configuredTabs })
+  await embedded.ready()
+  return embedded
+}
+
+test('a caller-supplied embed-tabs header cannot widen the configured allowlist', async () => {
+  // The install is configured for the "overview" tab only. The header is
+  // supposed to be a per-request NARROWING of that — the OLD code let it
+  // REPLACE the allowlist instead, so a header naming "technical-aeo" opened
+  // a tab the operator never configured this embedded dashboard to expose.
+  const embedded = await bootEmbedApp(['overview'])
+  try {
+    const res = await embedded.inject({
+      method: 'GET',
+      url: '/api/v1/projects/sample/technical-aeo',
+      headers: { ...withKey(ROOT_KEY), 'x-canonry-embed-tabs': 'overview,technical-aeo' },
+    })
+    expect(res.statusCode).toBe(403)
+  } finally {
+    await embedded.close()
+  }
+})
+
+test('a caller-supplied embed-tabs header still narrows within the configured allowlist', async () => {
+  // The legitimate case: the install allows both tabs, and this particular
+  // embedded dashboard is scoped down to just one of them.
+  const embedded = await bootEmbedApp(['overview', 'technical-aeo'])
+  try {
+    const narrowed = await embedded.inject({
+      method: 'GET',
+      url: '/api/v1/projects/sample/technical-aeo',
+      headers: { ...withKey(ROOT_KEY), 'x-canonry-embed-tabs': 'overview' },
+    })
+    expect(narrowed.statusCode).toBe(403)
+
+    const stillAllowed = await embedded.inject({
+      method: 'GET',
+      url: '/api/v1/projects/sample/overview',
+      headers: { ...withKey(ROOT_KEY), 'x-canonry-embed-tabs': 'overview' },
+    })
+    expect(stillAllowed.statusCode).toBe(200)
+  } finally {
+    await embedded.close()
+  }
 })
 
 // ─── P2.5 sessions that never end ──────────────────────────────────────────

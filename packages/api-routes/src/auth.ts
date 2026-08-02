@@ -210,16 +210,31 @@ export function requireAdminSession(request: FastifyRequest): void {
  *
  * Some reads are not free: they fan out into billed provider calls. The
  * method-based gate only sees the HTTP verb, so a GET that costs money looks
- * exactly like one that does not. A read-only key is the credential handed to
- * embeds and reporting jobs, and it must not be able to run up a bill on a
- * timer — "read-only" is a statement about Canonry's own data, not a licence to
- * spend.
+ * exactly like one that does not.
+ *
+ * Stated as an ALLOW list on purpose, mirroring `requireBroadInstanceKey`. The
+ * previous version asked one DENY question — "is this key read-only" — and a
+ * key that was merely narrow (scoped to something unrelated, e.g.
+ * `users.read`) sailed straight through: it never opted into the `read` token,
+ * so `isReadOnlyKey` said no, and "not read-only" was treated as "may spend."
+ * Deny lists silently widen every time a new scope is invented; an allow list
+ * does not.
+ *
+ * So: the wildcard, or a scope explicitly about ads. Nothing else — including
+ * a key that merely isn't marked read-only, and including an empty scope
+ * list. "Read-only" is a statement about Canonry's own data; it was never a
+ * licence to spend, and now neither is silence.
  */
 export function requirePaidReadScope(request: FastifyRequest): void {
   const principal = request.principal
   if (!principal || principal.kind !== 'api-key') return
-  if (isReadOnlyKey(principal.scopes)) {
-    throw forbidden('This API key is read-only and cannot trigger paid provider reads.')
+  const grantsAdsAccess = principal.scopes.some(scope =>
+    scope === WILDCARD_SCOPE
+    || scope === ADS_WRITE_SCOPE
+    || scope === ADS_APPROVE_SCOPE
+    || scope === ADS_ACTIVATE_SCOPE)
+  if (!grantsAdsAccess) {
+    throw forbidden('This API key was not granted access to OpenAI Ads paid reads.')
   }
 }
 
@@ -331,10 +346,30 @@ function queryValue(request: FastifyRequest, key: string): string | undefined {
   return undefined
 }
 
-function requestEmbedProjectTabs(request: FastifyRequest, fallback: readonly string[] | undefined): string[] | undefined {
+/**
+ * The effective tab set to enforce for this request, or `undefined` when
+ * nothing restricts it at all.
+ *
+ * A caller-supplied header may only NARROW the server's configured allowlist,
+ * never replace or widen it — the header comes from the Embed v2 fronting
+ * proxy scoping ONE embedded dashboard down to a subset of what the install
+ * allows overall, not from a party trusted to name the install's allowlist
+ * itself. When a configured allowlist exists, the result is its intersection
+ * with the header (or the allowlist verbatim when there is no header) — this
+ * can legitimately be `[]` when the header names no tab the install permits,
+ * and `[]` must still be treated as an ACTIVE (maximally narrow) restriction
+ * by the caller, not as "nothing to enforce".
+ */
+function requestEmbedProjectTabs(
+  request: FastifyRequest,
+  configuredTabs: readonly string[] | undefined,
+): string[] | undefined {
   const headerTabs = normalizeIdTokens(splitList(request.headers['x-canonry-embed-tabs']))
-  if (headerTabs) return headerTabs
-  return fallback && fallback.length > 0 ? [...fallback] : undefined
+  const configured = configuredTabs && configuredTabs.length > 0 ? configuredTabs : undefined
+
+  if (!configured) return headerTabs
+  if (!headerTabs) return [...configured]
+  return headerTabs.filter((tab) => configured.includes(tab))
 }
 
 function projectRouteRest(url: string): string | null {
@@ -406,7 +441,12 @@ function isReportRead(url: string): boolean {
 
 function enforceEmbedProjectTabs(request: FastifyRequest, configuredTabs: readonly string[] | undefined): void {
   const tabs = requestEmbedProjectTabs(request, configuredTabs)
-  if (!tabs || tabs.length === 0) return
+  // `undefined` is the only "nothing to enforce" value now. An empty ARRAY is
+  // a real, maximally-narrow restriction (a header that named no tab the
+  // install permits) and must fall through to the checks below, where an
+  // empty `tabs.includes(...)` never matches and the request is refused
+  // rather than waved through as if no allowlist applied.
+  if (tabs === undefined) return
   if (request.method === 'OPTIONS') return
 
   // In embed mode with a tab allowlist, the public iframe is a read surface.
