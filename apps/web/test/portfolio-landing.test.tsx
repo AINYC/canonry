@@ -70,3 +70,20 @@ describe('portfolio landing state', () => {
     expect(field.placeholder).toContain('/locations/')
   })
 })
+
+// A Target's evidence drawer showed the same URL twice under contradictory
+// labels: every answer carries a baseline usage edge as well as the Target's
+// own, and from the baseline edge no Target is the assigned one. Both rows were
+// correct per edge, but a reader sees one URL called Assigned and Sibling at
+// once, on the screen whose whole job is proving the numbers.
+describe('target evidence drawer', () => {
+  it('shows a URL once, from the edge that measured the target', () => {
+    const evidence = [
+      { usageEdgeType: 'target', classification: 'assigned', matchedTargetIds: ['harbor'], sourceUrl: 'https://northstar.example/homes/harbor' },
+      { usageEdgeType: 'baseline', classification: 'sibling', matchedTargetIds: ['harbor'], sourceUrl: 'https://northstar.example/homes/harbor' },
+    ]
+    const shown = evidence.filter(item => item.usageEdgeType === 'target' && item.matchedTargetIds.includes('harbor'))
+    expect(shown).toHaveLength(1)
+    expect(shown[0]!.classification).toBe('assigned')
+  })
+})

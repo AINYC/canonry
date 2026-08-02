@@ -244,10 +244,15 @@ function PortfolioReport({
     )
   }
 
+  // Every answer carries a baseline usage edge as well as the Target's own, and
+  // from the baseline edge no Target is the assigned one — so a Target's own URL
+  // classifies as `sibling` there and `assigned` here. Both are right, but
+  // showing both put the same URL on screen twice under contradictory labels.
+  // A Target's evidence is the evidence gathered for that Target.
   const selectedEvidence = selectedTargetId
-    ? report.evidence.filter(item => item.matchedTargetIds.includes(selectedTargetId))
+    ? report.evidence.filter(item => item.usageEdgeType === 'target' && item.matchedTargetIds.includes(selectedTargetId))
     : []
-  const reviewEvidence = report.evidence.filter(item => item.classification === 'sibling' || item.classification === 'ambiguous')
+  const reviewEvidence = report.evidence.filter(item => item.usageEdgeType === 'target' && (item.classification === 'sibling' || item.classification === 'ambiguous'))
   const hasStoredResult = report.run !== null
 
   return (
