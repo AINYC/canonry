@@ -3567,6 +3567,7 @@ export type MeasurementReportResponse = {
             expected: number;
             complete: boolean;
             sourceComplete: boolean;
+            sourceCompleteObservations: number;
             answerComplete: boolean;
         };
         answerCoverage: {
@@ -3625,6 +3626,7 @@ export type MeasurementReportResponse = {
                 expected: number;
                 complete: boolean;
                 sourceComplete: boolean;
+                sourceCompleteObservations: number;
                 answerComplete: boolean;
             };
             answerCoverage: {
@@ -3647,6 +3649,7 @@ export type MeasurementReportResponse = {
             expected: number;
             complete: boolean;
             sourceComplete: boolean;
+            sourceCompleteObservations: number;
             answerComplete: boolean;
         };
         citationCoverage: {
@@ -3676,6 +3679,7 @@ export type MeasurementReportResponse = {
                 expected: number;
                 complete: boolean;
                 sourceComplete: boolean;
+                sourceCompleteObservations: number;
                 answerComplete: boolean;
             };
             citationCoverage: {

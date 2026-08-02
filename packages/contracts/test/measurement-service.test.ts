@@ -79,7 +79,7 @@ describe('measurement service contracts', () => {
         id: 'northbridge',
         label: 'Northbridge',
         targetIds: ['harbor'],
-        completeness: { executed: 1, expected: 2, complete: false, sourceComplete: false, answerComplete: false },
+        completeness: { executed: 1, expected: 2, complete: false, sourceComplete: false, sourceCompleteObservations: 0, answerComplete: false },
         answerCoverage: { numerator: null, denominator: null, rate: null, reason: 'incomplete' },
         targetCoverage: { numerator: null, denominator: null, rate: null, reason: 'incomplete' },
         sov: {
@@ -90,7 +90,7 @@ describe('measurement service contracts', () => {
       }],
       targets: [{
         id: 'harbor', label: 'Harbor',
-        completeness: { executed: 1, expected: 1, complete: true, sourceComplete: true, answerComplete: true },
+        completeness: { executed: 1, expected: 1, complete: true, sourceComplete: true, sourceCompleteObservations: 1, answerComplete: true },
         citationCoverage: { numerator: 1, denominator: 1, rate: 1 },
         mentionCoverage: { numerator: null, denominator: null, rate: null, reason: 'aliasless' },
         providers: [],

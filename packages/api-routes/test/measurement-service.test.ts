@@ -216,9 +216,9 @@ describe('measurement report route', () => {
     const response = await request('GET', '/api/v1/projects/northstar/measurement-report?revision=1', READ_KEY)
     expect(response.statusCode).toBe(200)
     const body = measurementReportResponseSchema.parse(response.json())
-    const completeness = { executed: 2, expected: 2, complete: true, sourceComplete: true, answerComplete: true }
+    const completeness = { executed: 2, expected: 2, complete: true, sourceComplete: true, sourceCompleteObservations: 2, answerComplete: true }
     const fullRate = { numerator: 2, denominator: 2, rate: 1 }
-    const providerCompleteness = { executed: 1, expected: 1, complete: true, sourceComplete: true, answerComplete: true }
+    const providerCompleteness = { executed: 1, expected: 1, complete: true, sourceComplete: true, sourceCompleteObservations: 1, answerComplete: true }
     const providerRate = { numerator: 1, denominator: 1, rate: 1 }
     const baselineEdgeId = `baseline:${queryId}:${executionId}`
     const targetEdgeId = `target:harbor:${queryId}:${executionId}`

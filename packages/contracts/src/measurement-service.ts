@@ -233,6 +233,12 @@ export const measurementCompletenessSchema = z.object({
   expected: z.number().int().nonnegative(),
   complete: z.boolean(),
   sourceComplete: z.boolean(),
+  /**
+   * How many of the executed answers had every cited URL captured. Rates that
+   * depend on citations are computed over these, so a reader can always see the
+   * basis a rate stands on rather than assuming it covered every answer.
+   */
+  sourceCompleteObservations: z.number().int().nonnegative(),
   answerComplete: z.boolean(),
 }).strict()
 export type MeasurementCompleteness = z.infer<typeof measurementCompletenessSchema>
