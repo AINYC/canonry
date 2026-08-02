@@ -239,29 +239,55 @@ test('shares the bounded, searchable Property picker with group setup', () => {
   expect(screen.getByText('Showing 1 of 1 Properties')).toBeTruthy()
 })
 
-test('gives an empty query library a clear way to manage project queries', () => {
-  const onManageProjectQueries = vi.fn()
+// Previously this asserted the copy "Add queries to this project first. Then
+// return here to apply them to Properties." — an instruction to leave the
+// wizard. On a new project that was a dead end: the step consumed questions and
+// could not create them, so the only way forward was out and back. It now
+// creates them in place, and the assertion moves with the behaviour.
+test('lets an empty query library add questions without leaving setup', () => {
+  const onCreateQueries = vi.fn()
   renderQueries({
     queries: [],
     selectedQueryIds: [],
-    onManageProjectQueries,
+    onCreateQueries,
   })
 
-  expect(screen.getByText('Add queries to this project first. Then return here to apply them to Properties.')).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Manage project queries' }))
-  expect(onManageProjectQueries).toHaveBeenCalledTimes(1)
+  fireEvent.change(screen.getByLabelText('New questions, one per line'), {
+    target: { value: 'best apartments in dallas\nluxury apartments atlanta' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: /Add 2 questions/ }))
+
+  expect(onCreateQueries).toHaveBeenCalledTimes(1)
+  expect(onCreateQueries.mock.calls[0]![0]).toEqual([
+    'best apartments in dallas',
+    'luxury apartments atlanta',
+  ])
 })
 
-test('keeps the empty-library action hidden from viewers', () => {
+test('surfaces the server reason when adding questions fails', () => {
+  renderQueries({
+    queries: [],
+    selectedQueryIds: [],
+    onCreateQueries: vi.fn(),
+    createQueriesError: 'Query "best apartments in dallas" is already tracked.',
+  })
+
+  expect(screen.getByRole('alert').textContent)
+    .toContain('Query "best apartments in dallas" is already tracked.')
+})
+
+test('keeps question creation away from viewers', () => {
   renderQueries({
     access: 'viewer',
     queries: [],
     selectedQueryIds: [],
+    onCreateQueries: vi.fn(),
     onManageProjectQueries: vi.fn(),
   })
 
-  expect(screen.getByText('Add queries to this project first. Then return here to apply them to Properties.')).toBeTruthy()
-  expect(screen.queryByRole('button', { name: 'Manage project queries' })).toBeNull()
+  expect(screen.queryByLabelText('New questions, one per line')).toBeNull()
+  expect(screen.queryByRole('button', { name: /Add .* question/ })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Manage all project questions' })).toBeNull()
 })
 
 test('uses an accessible hit target for each table query checkbox', () => {

@@ -2168,6 +2168,12 @@ function ProjectPageContent({
           isQueryError={isPortfolioQueriesError}
           onRetryQueries={() => { void portfolioQueriesQuery.refetch() }}
           publishedPlan={activeMeasurementPlan}
+          onCreateQueries={async texts => {
+            await apiAppendQueries(projectName, [...texts])
+            // The step selects from this list, so it has to reflect the new
+            // questions before the operator can apply them.
+            await portfolioQueriesQuery.refetch()
+          }}
           onManageProjectQueries={() => {
             setManagingQueries(true)
             void navigate({ to: '/projects/$projectName', params: { projectName } })

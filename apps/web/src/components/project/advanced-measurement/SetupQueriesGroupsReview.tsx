@@ -54,7 +54,15 @@ export interface AdvancedMeasurementQueriesStepProps {
   onClearQueryAssignments?: (queryId: string) => void | Promise<void>
   /** Compatibility fallback for callers that have not split clearing from removal yet. */
   onRemoveQuery: (queryId: string) => void | Promise<void>
-  /** Opens the project's normal query-management surface when the library is empty. */
+  /**
+   * Adds new tracked questions to the project from inside setup. Without this the
+   * step can only consume questions that already exist, which sends a first-time
+   * operator out of the wizard to create them and back again.
+   */
+  onCreateQueries?: (texts: readonly string[]) => void | Promise<void>
+  isCreatingQueries?: boolean
+  createQueriesError?: string | null
+  /** Opens the project's normal query-management surface for anything setup does not cover. */
   onManageProjectQueries?: () => void
   onBack?: () => void
   onContinue: () => void
@@ -297,12 +305,16 @@ export function AdvancedMeasurementQueriesStep({
   onApplySelectedQueries,
   onClearQueryAssignments,
   onRemoveQuery,
+  onCreateQueries,
+  isCreatingQueries = false,
+  createQueriesError = null,
   onManageProjectQueries,
   onBack,
   onContinue,
 }: AdvancedMeasurementQueriesStepProps) {
   const [querySearch, setQuerySearch] = useState('')
   const [showAllQueries, setShowAllQueries] = useState(false)
+  const [newQueriesText, setNewQueriesText] = useState('')
   if (isUnavailable(availability)) {
     return <section aria-label="Queries"><UnavailableState message={availability.message} /></section>
   }
@@ -320,6 +332,9 @@ export function AdvancedMeasurementQueriesStep({
     : queries
   const visibleQueries = showAllQueries ? filteredQueries : filteredQueries.slice(0, QUERY_LIST_PAGE_SIZE)
   const selectableVisibleQueries = visibleQueries.filter(query => !isMissingQuery(query))
+  const parsedNewQueries = [...new Set(
+    newQueriesText.split('\n').map(line => line.trim()).filter(Boolean),
+  )]
 
   function selectAllShownQueries(): void {
     const selected = new Set([...selectedQueryIds, ...selectableVisibleQueries.map(query => query.id)])
@@ -465,12 +480,47 @@ export function AdvancedMeasurementQueriesStep({
         <Button type="button" size="sm" variant="outline" onClick={() => setShowAllQueries(true)}>Show all queries</Button>
       ) : null}
 
-      {queries.length === 0 ? (
+      {viewer || !onCreateQueries ? null : (
         <div className="border-y border-default py-4">
-          <p className="text-sm text-secondary">Add queries to this project first. Then return here to apply them to Properties.</p>
-          {!viewer && onManageProjectQueries ? <Button type="button" variant="outline" size="sm" className="mt-3" onClick={onManageProjectQueries}>Manage project queries</Button> : null}
+          <h4 className="m-0 text-sm font-medium text-heading">
+            {queries.length === 0 ? 'Add the questions you want to track' : 'Add more questions'}
+          </h4>
+          <p className="mt-1 mb-2 text-sm text-secondary">
+            One per line. These are added to the project, then you choose which
+            Properties to apply them to. You can edit or add more at any time.
+          </p>
+          <textarea
+            aria-label="New questions, one per line"
+            className="w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
+            rows={4}
+            value={newQueriesText}
+            onChange={event => setNewQueriesText(event.target.value)}
+            placeholder={'best apartments in dallas\nluxury apartments atlanta\npet friendly apartments austin'}
+          />
+          {createQueriesError ? (
+            <p role="alert" className="mt-2 text-sm text-negative">{createQueriesError}</p>
+          ) : null}
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              size="sm"
+              disabled={parsedNewQueries.length === 0 || isCreatingQueries}
+              onClick={() => {
+                void Promise.resolve(onCreateQueries(parsedNewQueries)).then(() => setNewQueriesText(''))
+              }}
+            >
+              {isCreatingQueries
+                ? 'Adding…'
+                : `Add ${parsedNewQueries.length || ''} question${parsedNewQueries.length === 1 ? '' : 's'}`.replace('  ', ' ')}
+            </Button>
+            {onManageProjectQueries ? (
+              <Button type="button" size="sm" variant="ghost" onClick={onManageProjectQueries}>
+                Manage all project questions
+              </Button>
+            ) : null}
+          </div>
         </div>
-      ) : null}
+      )}
 
       {viewer ? null : (
         <>
