@@ -426,6 +426,41 @@ test('binds publication to the reviewed candidate and active revision', async ()
   expect(onPublishPlan.mock.calls[0]![0].targets[0]?.stableKey).toBe('location-001')
 })
 
+// A published plan is the saved state; the local draft that produced it is
+// spent. Keeping it meant a reload resumed setup on a project that was already
+// configured, which is the same "configured project looks unconfigured"
+// failure the landing behaviour exists to prevent.
+test('discards the local draft once the plan is published', async () => {
+  const published = activePlanFixture(8, 'Location 001')
+  const onPublishPlan = vi.fn(async () => ({ active: published }))
+  const screen = setup({
+    projectName: 'synthetic-publish-draft',
+    activePlan: activePlanFixture(7, 'Location 001'),
+    onPublishPlan,
+  })
+
+  // A published plan opens on its report, so setup has to be entered first.
+  fireEvent.click(screen.getByRole('button', { name: 'Targets' }))
+  // An edit is what makes the draft local and therefore persisted; a draft
+  // merely seeded from the active plan is deliberately never written.
+  fireEvent.click(screen.getByRole('button', { name: 'Select all matching Targets' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm selected Targets' }))
+  await waitFor(() => {
+    expect(window.localStorage.getItem('canonry:portfolio-draft:synthetic-publish-draft')).not.toBeNull()
+  })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Review & publish' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Check plan' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Publish plan' })).toHaveProperty('disabled', false))
+
+  fireEvent.click(screen.getByRole('button', { name: 'Publish plan' }))
+
+  await waitFor(() => expect(onPublishPlan).toHaveBeenCalledTimes(1))
+  await waitFor(() => {
+    expect(window.localStorage.getItem('canonry:portfolio-draft:synthetic-publish-draft')).toBeNull()
+  })
+})
+
 test('names portfolio-scale setup blockers and requires explicit bulk resolution', async () => {
   const onCompilePlan = vi.fn(async (input: Parameters<Props['onCompilePlan']>[0]) => ({
     ok: true as const,
