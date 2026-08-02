@@ -111,7 +111,12 @@ function mergeTargets(authoring: MeasurementDraftAuthoring, body: unknown): Draf
   const survivor = requireTarget(authoring, targetKey)
   const absorbed = mergedKeys.filter(key => key !== targetKey)
   for (const key of absorbed) requireTarget(authoring, key)
-  if (absorbed.length === 0) return { authoring, warnings: [warn('merge-targets-noop', 'The merge named only the surviving Target.', ['mergedKeys'])] }
+  if (absorbed.length === 0) {
+    return {
+      authoring,
+      warnings: [warn('merge-targets-noop', 'The merge named only the surviving Target.', ['targets', authoring.targets.indexOf(survivor)])],
+    }
+  }
 
   const absorbedSet = new Set(absorbed)
   const merged: MeasurementDraftTarget = {
@@ -147,9 +152,24 @@ function mergeTargets(authoring: MeasurementDraftAuthoring, body: unknown): Draf
 }
 
 function excludeTarget(authoring: MeasurementDraftAuthoring, body: unknown): DraftActionResult {
-  const { targetKey } = parseBody(measurementDraftExcludeTargetRequestSchema, body, 'exclude-target')
-  requireTarget(authoring, targetKey)
+  const { targetKey, cleanup } = parseBody(measurementDraftExcludeTargetRequestSchema, body, 'exclude-target')
+  const target = requireTarget(authoring, targetKey)
+  const targetIndex = authoring.targets.indexOf(target)
   const stranded = authoring.assignments.filter(assignment => assignment.targetKey === targetKey).length
+  if (cleanup === 'assignments-and-group-memberships') {
+    return {
+      authoring: {
+        ...authoring,
+        targets: authoring.targets.map(target => (target.stableKey === targetKey ? { ...target, status: 'excluded' as const } : target)),
+        assignments: authoring.assignments.filter(assignment => assignment.targetKey !== targetKey),
+        groups: authoring.groups.map(group => ({
+          ...group,
+          targetKeys: group.targetKeys.filter(key => key !== targetKey),
+        })),
+      },
+      warnings: [],
+    }
+  }
   return {
     authoring: {
       ...authoring,
@@ -159,7 +179,7 @@ function excludeTarget(authoring: MeasurementDraftAuthoring, body: unknown): Dra
     // decision that can be undone, and silently dropping the operator's query
     // selection would make undoing it a retype. Publish names them instead.
     warnings: stranded > 0
-      ? [warn('excluded-target-has-assignments', `Target "${targetKey}" still has ${stranded} assignment(s); remove them or include the Target before publishing.`, ['assignments'])]
+      ? [warn('excluded-target-has-assignments', `Target "${targetKey}" still has ${stranded} assignment(s); remove them or include the Target before publishing.`, ['targets', targetIndex, 'assignments'])]
       : [],
   }
 }
@@ -190,7 +210,7 @@ function rebindTarget(authoring: MeasurementDraftAuthoring, body: unknown): Draf
 }
 
 /**
- * Assigns project queries to a Target and proposes a class for the new ones.
+ * Assigns project queries to selected Targets and proposes a class for the new ones.
  *
  * An assignment that already carries an operator classification keeps it: §7.3
  * says a proposal never overwrites an operator decision, and re-running the
@@ -201,46 +221,58 @@ function applyAssignments(
   body: unknown,
   context: DraftActionContext,
 ): DraftActionResult {
-  const { targetKey, queryIds, contextOverride } = parseBody(measurementDraftApplyAssignmentsRequestSchema, body, 'apply-assignments')
-  requireTarget(authoring, targetKey)
+  const parsed = parseBody(measurementDraftApplyAssignmentsRequestSchema, body, 'apply-assignments')
+  const { queryIds, contextOverride } = parsed
+  const targetKeys = unique('targetKeys' in parsed ? parsed.targetKeys : [parsed.targetKey])
+  for (const targetKey of targetKeys) requireTarget(authoring, targetKey)
   const unknown = queryIds.filter(queryId => !context.queriesById.has(queryId))
   if (unknown.length) {
     throw validationError(`The project has no query ${unknown.map(id => `"${id}"`).join(', ')}. Add it before assigning it.`)
   }
 
   const assignments = [...authoring.assignments]
-  for (const queryId of unique(queryIds)) {
-    const index = assignments.findIndex(assignment => assignment.targetKey === targetKey && assignment.queryId === queryId)
-    if (index === -1) {
-      assignments.push({
-        targetKey,
-        queryId,
+  const assignmentIndexes = new Map(assignments.map((assignment, index) => [
+    `${assignment.targetKey}\u0000${assignment.queryId}`,
+    index,
+  ]))
+  for (const targetKey of targetKeys) {
+    for (const queryId of unique(queryIds)) {
+      const key = `${targetKey}\u0000${queryId}`
+      const index = assignmentIndexes.get(key)
+      if (index === undefined) {
+        assignmentIndexes.set(key, assignments.length)
+        assignments.push({
+          targetKey,
+          queryId,
+          ...(contextOverride ? { contextOverride } : {}),
+          queryClass: proposeQueryClass(context.queriesById.get(queryId)!, context.brandNames),
+          classificationSource: 'rule',
+        })
+        continue
+      }
+      const existing = assignments[index]!
+      assignments[index] = {
+        ...existing,
         ...(contextOverride ? { contextOverride } : {}),
-        queryClass: proposeQueryClass(context.queriesById.get(queryId)!, context.brandNames),
-        classificationSource: 'rule',
-      })
-      continue
-    }
-    const existing = assignments[index]!
-    assignments[index] = {
-      ...existing,
-      ...(contextOverride ? { contextOverride } : {}),
-      ...(existing.classificationSource === 'operator'
-        ? {}
-        : { queryClass: proposeQueryClass(context.queriesById.get(queryId)!, context.brandNames) }),
+        ...(existing.classificationSource === 'operator'
+          ? {}
+          : { queryClass: proposeQueryClass(context.queriesById.get(queryId)!, context.brandNames) }),
+      }
     }
   }
   return { authoring: { ...authoring, assignments }, warnings: [] }
 }
 
 function removeAssignment(authoring: MeasurementDraftAuthoring, body: unknown): DraftActionResult {
-  const { targetKey, queryId } = parseBody(measurementDraftRemoveAssignmentRequestSchema, body, 'remove-assignment')
+  const parsed = parseBody(measurementDraftRemoveAssignmentRequestSchema, body, 'remove-assignment')
+  const { queryId } = parsed
+  const targetKeys = new Set('targetKeys' in parsed ? parsed.targetKeys : [parsed.targetKey])
   // The project query itself is never touched: other Targets may still assign
   // it, and every published snapshot of it has to stay readable.
   return {
     authoring: {
       ...authoring,
-      assignments: authoring.assignments.filter(assignment => !(assignment.targetKey === targetKey && assignment.queryId === queryId)),
+      assignments: authoring.assignments.filter(assignment => !(targetKeys.has(assignment.targetKey) && assignment.queryId === queryId)),
     },
     warnings: [],
   }
@@ -281,9 +313,9 @@ function classifyAssignments(authoring: MeasurementDraftAuthoring, body: unknown
 }
 
 /**
- * Reporting membership only. Competitors are not in the payload, so an update
- * carries the ones already confirmed forward — dropping them because the caller
- * did not repeat them would delete confirmed identities on a rename.
+ * Reporting membership only. A legacy payload omits competitors and carries
+ * the confirmed list forward. A full editor save includes competitors and
+ * replaces the complete list in this same draft mutation.
  */
 function upsertGroup(authoring: MeasurementDraftAuthoring, body: unknown): DraftActionResult {
   const { group } = parseBody(measurementDraftUpsertGroupRequestSchema, body, 'upsert-group')
@@ -293,15 +325,18 @@ function upsertGroup(authoring: MeasurementDraftAuthoring, body: unknown): Draft
     stableKey: group.stableKey,
     label: group.label,
     targetKeys: unique(group.targetKeys),
-    competitors: index === -1 ? [] : groups[index]!.competitors,
+    competitors: group.competitors === undefined
+      ? (index === -1 ? [] : groups[index]!.competitors)
+      : group.competitors,
   }
   if (index === -1) groups.push(next)
   else groups[index] = next
+  const groupIndex = index === -1 ? groups.length - 1 : index
   const unknown = next.targetKeys.filter(key => !authoring.targets.some(target => target.stableKey === key))
   return {
     authoring: { ...authoring, groups },
     warnings: unknown.length
-      ? [warn('group-unknown-target', `Group "${group.stableKey}" names ${unknown.length} Target(s) the draft does not hold yet.`, ['groups'])]
+      ? [warn('group-unknown-target', `Group "${group.stableKey}" names ${unknown.length} Target(s) the draft does not hold yet.`, ['groups', groupIndex, 'targetKeys'])]
       : [],
   }
 }

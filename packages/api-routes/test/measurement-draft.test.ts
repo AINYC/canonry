@@ -10,6 +10,8 @@ import {
   measurementDraftDiffPreviewResponseSchema,
   measurementDraftMutationResponseSchema,
   measurementDraftResponseSchema,
+  measurementPlanResponseSchema,
+  measurementPlanVersionResponseSchema,
   measurementPlanV2PublishResponseSchema,
   measurementSetupResponseSchema,
 } from '@ainyc/canonry-contracts'
@@ -40,6 +42,7 @@ let tmpDir: string
 let db: DatabaseClient
 let app: ReturnType<typeof Fastify>
 let tracked: Array<{ id: string; query: string }>
+let runnableProviders: string[]
 
 function seedKey(name: string, token: string, scopes: string[]) {
   db.insert(apiKeys).values({
@@ -167,8 +170,9 @@ beforeEach(async () => {
   }
   tracked = db.select({ id: queries.id, query: queries.query }).from(queries).all()
 
+  runnableProviders = ['gemini', 'openai']
   app = Fastify()
-  app.register(apiRoutes, { db })
+  app.register(apiRoutes, { db, getRunnableProviderNames: () => runnableProviders })
   await app.ready()
 })
 
@@ -216,6 +220,24 @@ describe('measurement draft lifecycle', () => {
     expect(loaded.json().draft.authoring.defaultContext).toEqual({
       providers: ['gemini', 'openai'],
       models: { gemini: 'gemini-test', openai: 'gpt-test' },
+      locations: ['nyc'],
+    })
+  })
+
+  it('freezes the runnable provider roster when the project uses all configured providers', async () => {
+    db.update(projects).set({
+      providers: [],
+      providerModels: { gemini: 'gemini-test', openai: 'gpt-test', perplexity: 'sonar-test' },
+    }).where(eq(projects.id, 'prj_northwind')).run()
+    runnableProviders = ['perplexity', ' GEMINI ', 'gemini']
+
+    await createDraft()
+    runnableProviders = ['openai']
+
+    const loaded = await request('GET', '/measurement-plan/draft')
+    expect(loaded.json().draft.authoring.defaultContext).toEqual({
+      providers: ['gemini', 'perplexity'],
+      models: { gemini: 'gemini-test', perplexity: 'sonar-test' },
       locations: ['nyc'],
     })
   })
@@ -361,6 +383,44 @@ describe('measurement draft typed actions', () => {
     ]))
   })
 
+  it('applies and removes one query selection across multiple Targets in one mutation', async () => {
+    const session = await DraftSession.start()
+    await session.run('upsert-target', { target: WIDGETS_TARGET })
+    await session.run('upsert-target', { target: GADGETS_TARGET })
+    const beforeApply = Number(session.etag.match(/\d+/)?.[0])
+    const queryIds = [queryId('best widget supplier'), queryId('widget delivery times')]
+
+    const refused = await action('apply-assignments', {
+      payload: { targetKeys: ['widgets', 'missing-property'], queryIds },
+      ifMatch: session.etag,
+    })
+    expect(refused.statusCode).toBe(404)
+    expect((await request('GET', '/measurement-plan/draft/assignments')).json().items).toEqual([])
+
+    await session.run('apply-assignments', {
+      targetKeys: ['widgets', 'gadgets', 'widgets'],
+      queryIds,
+    })
+    expect(Number(session.etag.match(/\d+/)?.[0])).toBe(beforeApply + 1)
+    expect((await request('GET', '/measurement-plan/draft/assignments')).json().items)
+      .toEqual(expect.arrayContaining([
+        { targetKey: 'widgets', queryId: queryIds[0], queryClass: 'non-brand', classificationSource: 'rule' },
+        { targetKey: 'widgets', queryId: queryIds[1], queryClass: 'non-brand', classificationSource: 'rule' },
+        { targetKey: 'gadgets', queryId: queryIds[0], queryClass: 'non-brand', classificationSource: 'rule' },
+        { targetKey: 'gadgets', queryId: queryIds[1], queryClass: 'non-brand', classificationSource: 'rule' },
+      ]))
+
+    const beforeRemove = Number(session.etag.match(/\d+/)?.[0])
+    await session.run('remove-assignment', {
+      targetKeys: ['widgets', 'gadgets'],
+      queryId: queryIds[0],
+    })
+    expect(Number(session.etag.match(/\d+/)?.[0])).toBe(beforeRemove + 1)
+    const remaining = (await request('GET', '/measurement-plan/draft/assignments')).json().items
+    expect(remaining).toHaveLength(2)
+    expect(remaining.map((entry: { queryId: string }) => entry.queryId)).toEqual([queryIds[1], queryIds[1]])
+  })
+
   it('keeps the surviving key, its assignments and its group membership across a merge', async () => {
     const session = await DraftSession.start()
     await session.run('upsert-target', { target: WIDGETS_TARGET })
@@ -428,6 +488,124 @@ describe('measurement draft typed actions', () => {
     expect(excluded.json().warnings).toEqual([expect.objectContaining({ code: 'excluded-target-has-assignments' })])
     expect(excluded.json().counts).toMatchObject({ targets: 1, includedTargets: 0, assignments: 2 })
   })
+
+  it('can exclude one Target and atomically unlink only its assignments and group memberships', async () => {
+    const session = await DraftSession.start()
+    await session.run('upsert-target', { target: WIDGETS_TARGET })
+    await session.run('upsert-target', { target: GADGETS_TARGET })
+    await session.run('apply-assignments', {
+      targetKeys: ['widgets', 'gadgets'],
+      queryIds: [queryId('best widget supplier'), queryId('widget delivery times')],
+    })
+    await session.run('upsert-group', {
+      group: { stableKey: 'catalog', label: 'Catalog', targetKeys: ['widgets', 'gadgets'] },
+    })
+    await session.run('upsert-group', {
+      group: { stableKey: 'widgets-only', label: 'Widgets only', targetKeys: ['widgets'] },
+    })
+    await session.run('upsert-competitor', {
+      groupKey: 'catalog',
+      competitor: { stableKey: 'contoso', label: 'Contoso', domain: 'contoso.example', aliases: ['Contoso'] },
+    })
+    const before = Number(session.etag.match(/\d+/)?.[0])
+    const queryCount = db.select().from(queries).all().length
+
+    const excluded = await session.run('exclude-target', {
+      targetKey: 'widgets',
+      cleanup: 'assignments-and-group-memberships',
+    })
+
+    expect(Number(session.etag.match(/\d+/)?.[0])).toBe(before + 1)
+    expect(excluded.json().warnings).toEqual([])
+    const authoring = (await request('GET', '/measurement-plan/draft')).json().draft.authoring
+    expect(authoring.targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stableKey: 'widgets', status: 'excluded' }),
+      expect.objectContaining({ stableKey: 'gadgets', status: 'included' }),
+    ]))
+    expect(authoring.assignments).toHaveLength(2)
+    expect(new Set(authoring.assignments.map((assignment: { targetKey: string }) => assignment.targetKey)))
+      .toEqual(new Set(['gadgets']))
+    expect(authoring.groups).toEqual([
+      expect.objectContaining({
+        stableKey: 'catalog',
+        targetKeys: ['gadgets'],
+        competitors: [expect.objectContaining({ stableKey: 'contoso' })],
+      }),
+      expect.objectContaining({ stableKey: 'widgets-only', targetKeys: [], competitors: [] }),
+    ])
+    expect(db.select().from(queries).all()).toHaveLength(queryCount)
+
+    const settledEtag = session.etag
+    const repeated = await session.run('exclude-target', {
+      targetKey: 'widgets',
+      cleanup: 'assignments-and-group-memberships',
+    })
+    expect(repeated.json().changed).toBe(false)
+    expect(session.etag).toBe(settledEtag)
+
+    await session.run('upsert-target', { target: WIDGETS_TARGET })
+    const restored = (await request('GET', '/measurement-plan/draft')).json().draft.authoring
+    expect(restored.assignments).toHaveLength(2)
+    expect(restored.groups.map((group: { targetKeys: string[] }) => group.targetKeys)).toEqual([['gadgets'], []])
+  })
+
+  it('replaces a complete group and competitor list in one ETag mutation', async () => {
+    const session = await DraftSession.start()
+    await session.run('upsert-target', { target: WIDGETS_TARGET })
+    await session.run('upsert-target', { target: GADGETS_TARGET })
+    await session.run('upsert-group', {
+      group: { stableKey: 'catalog', label: 'Old catalog', targetKeys: ['widgets'] },
+    })
+    await session.run('upsert-competitor', {
+      groupKey: 'catalog',
+      competitor: { stableKey: 'legacy', label: 'Legacy', domain: 'legacy.example', aliases: [] },
+    })
+    await session.run('upsert-group', {
+      group: { stableKey: 'catalog', label: 'Renamed catalog', targetKeys: ['widgets', 'gadgets'] },
+    })
+    expect((await request('GET', '/measurement-plan/draft')).json().draft.authoring.groups[0].competitors)
+      .toEqual([expect.objectContaining({ stableKey: 'legacy' })])
+    const before = Number(session.etag.match(/\d+/)?.[0])
+    const staleEtag = session.etag
+    const group = {
+      stableKey: 'catalog',
+      label: 'Product catalog',
+      targetKeys: ['widgets', 'gadgets'],
+      competitors: [
+        { stableKey: 'contoso', label: 'Contoso', domain: 'contoso.example', aliases: ['Contoso'] },
+        { stableKey: 'fabrikam', label: 'Fabrikam', domain: 'fabrikam.example', aliases: ['Fabrikam'] },
+      ],
+    }
+
+    await session.run('upsert-group', { group })
+
+    expect(Number(session.etag.match(/\d+/)?.[0])).toBe(before + 1)
+    expect((await request('GET', '/measurement-plan/draft')).json().draft.authoring.groups).toEqual([group])
+
+    const stale = await action('upsert-group', {
+      ifMatch: staleEtag,
+      payload: { group: { ...group, competitors: [] } },
+    })
+    expect(stale.statusCode).toBe(412)
+    expect((await request('GET', '/measurement-plan/draft')).json()).toMatchObject({
+      etag: session.etag,
+      draft: { authoring: { groups: [group] } },
+    })
+
+    await session.run('upsert-group', { group: { ...group, competitors: [] } })
+    expect((await request('GET', '/measurement-plan/draft')).json().draft.authoring.groups[0].competitors).toEqual([])
+
+    const validEtag = session.etag
+    const invalid = await action('upsert-group', {
+      ifMatch: validEtag,
+      payload: { group: { ...group, competitors: [{ ...group.competitors[0], domain: 'not a host' }] } },
+    })
+    expect(invalid.statusCode).toBe(400)
+    expect((await request('GET', '/measurement-plan/draft')).json()).toMatchObject({
+      etag: validEtag,
+      draft: { authoring: { groups: [{ ...group, competitors: [] }] } },
+    })
+  })
 })
 
 describe('measurement draft previews', () => {
@@ -485,6 +663,73 @@ describe('measurement draft previews', () => {
       expect.objectContaining({ ruleId: 'target-url-matcher-unowned', severity: 'fail', path: ['targets', 0, 'urlMatchers', 0] }),
     ]))
   })
+
+  it('blocks publish when included sitemap Targets claim the same normalized alias', async () => {
+    const session = await DraftSession.start()
+    await session.run('upsert-target', {
+      target: { ...WIDGETS_TARGET, source: 'sitemap', aliases: ['Northwind Widgets'] },
+    })
+    await session.run('upsert-target', {
+      target: { ...GADGETS_TARGET, source: 'sitemap', aliases: ['northwind-widgets'] },
+    })
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(preview.json()).toMatchObject({
+      ok: false,
+      compiledChecksum: null,
+      checks: expect.arrayContaining([expect.objectContaining({
+        ruleId: 'target-alias-ambiguous',
+        severity: 'fail',
+        path: ['targets', 1, 'aliases', 0],
+      })]),
+    })
+
+    const publish = await action('publish', {
+      payload: { expectedActiveRevision: null, expectedCompiledChecksum: 'a'.repeat(64) },
+      ifMatch: session.etag,
+    })
+    expect(publish.statusCode, publish.body).toBe(400)
+    expect(publish.json().error.details.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: 'target-alias-ambiguous', severity: 'fail' }),
+    ]))
+    expect(db.select().from(measurementPlanVersions).all()).toEqual([])
+    expect(db.select().from(measurementPlanDrafts).all()).toHaveLength(1)
+  })
+
+  it('allows a normalized sitemap alias collision when only one Target is included', async () => {
+    const session = await DraftSession.start()
+    await session.run('upsert-target', {
+      target: { ...WIDGETS_TARGET, source: 'sitemap', aliases: ['Northwind Widgets'] },
+    })
+    await session.run('upsert-target', {
+      target: { ...GADGETS_TARGET, status: 'excluded', source: 'sitemap', aliases: ['northwind-widgets'] },
+    })
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(preview.json()).toMatchObject({ ok: true, plan: { targets: [{ stableKey: 'widgets' }] } })
+    expect(preview.json().checks).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: 'target-alias-ambiguous' }),
+    ]))
+  })
+
+  it('allows aliases with distinct scorer token sequences', async () => {
+    const session = await DraftSession.start()
+    await session.run('upsert-target', {
+      target: { ...WIDGETS_TARGET, source: 'sitemap', aliases: ['North Park'] },
+    })
+    await session.run('upsert-target', {
+      target: { ...GADGETS_TARGET, source: 'sitemap', aliases: ['Northpark'] },
+    })
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(preview.json()).toMatchObject({ ok: true })
+    expect(preview.json().checks).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: 'target-alias-ambiguous' }),
+    ]))
+  })
 })
 
 /** Compiles the current draft and publishes it under both guards the transaction requires. */
@@ -519,6 +764,15 @@ describe('measurement draft publish', () => {
     expect(db.select().from(measurementPlans).all()).toHaveLength(1)
     expect(db.select().from(measurementPlanDrafts).all()).toEqual([])
     expect(db.select().from(auditLog).where(eq(auditLog.action, 'measurement-draft.published')).all()).toHaveLength(1)
+
+    const active = await request('GET', '/measurement-plan')
+    expect(active.statusCode, active.body).toBe(200)
+    expect(measurementPlanResponseSchema.safeParse(active.json()).success).toBe(true)
+    expect(active.json().active.plan.schemaVersion).toBe(2)
+    const detail = await request('GET', '/measurement-plan/versions/1')
+    expect(detail.statusCode, detail.body).toBe(200)
+    expect(measurementPlanVersionResponseSchema.safeParse(detail.json()).success).toBe(true)
+    expect(detail.json().version.plan.schemaVersion).toBe(2)
 
     // Publishing never starts a run.
     expect(db.select().from(runs).all()).toEqual([])
@@ -859,6 +1113,60 @@ describe('measurement draft compiled checksum', () => {
 
     setDefaultContext({ providers: ['gemini'], models: { gemini: 'gemini-next' }, locations: ['nyc'] })
     expect(await compiledChecksum()).not.toBe(remodelled)
+  })
+
+  it('hydrates a pre-fix empty default from the runnable roster and detects roster drift', async () => {
+    const session = await readyDraft()
+    db.update(projects).set({ providers: [] }).where(eq(projects.id, 'prj_northwind')).run()
+    setDefaultContext({ providers: [], locations: ['nyc'] })
+    runnableProviders = ['openai']
+
+    const first = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(first.statusCode, first.body).toBe(200)
+    expect(first.json()).toMatchObject({ ok: true, compiledChecksum: expect.any(String) })
+    expect(first.json().plan.executionNodes.map((node: { context: { providers: string[] } }) => node.context.providers))
+      .toEqual([['openai'], ['openai']])
+
+    runnableProviders = ['gemini', 'openai']
+    const second = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(second.statusCode, second.body).toBe(200)
+    expect(second.json()).toMatchObject({ ok: true, compiledChecksum: expect.any(String) })
+    expect(second.json().compiledChecksum).not.toBe(first.json().compiledChecksum)
+
+    const stalePublish = await action('publish', {
+      payload: {
+        expectedActiveRevision: null,
+        expectedCompiledChecksum: first.json().compiledChecksum,
+      },
+      ifMatch: session.etag,
+    })
+    expect(stalePublish.statusCode).toBe(409)
+    expect(stalePublish.json()).toMatchObject({ error: { code: 'MEASUREMENT_COMPILED_CHECKSUM_CONFLICT' } })
+    expect(db.select().from(measurementPlanDrafts).all()).toHaveLength(1)
+  })
+
+  it('keeps an explicit empty assignment provider override invalid', async () => {
+    const session = await readyDraft()
+    db.update(projects).set({ providers: [] }).where(eq(projects.id, 'prj_northwind')).run()
+    setDefaultContext({ providers: [], locations: ['nyc'] })
+    runnableProviders = ['openai']
+    await session.run('apply-assignments', {
+      targetKey: 'widgets',
+      queryIds: [queryId('best widget supplier')],
+      contextOverride: { providers: [] },
+    })
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(preview.json()).toMatchObject({
+      ok: false,
+      compiledChecksum: null,
+      checks: expect.arrayContaining([expect.objectContaining({
+        ruleId: 'execution-context-no-provider',
+        severity: 'fail',
+        path: ['assignments', expect.any(Number), 'contextOverride', 'providers'],
+      })]),
+    })
   })
 
   it('keys an execution node on the provider map, so two contexts never collapse into one call', async () => {

@@ -2866,6 +2866,16 @@ export type MeasurementDraftApplyAssignmentsRequest = {
         };
         locations?: Array<string>;
     };
+} | {
+    targetKeys: Array<string>;
+    queryIds: Array<string>;
+    contextOverride?: {
+        providers?: Array<string>;
+        models?: {
+            [key: string]: string;
+        };
+        locations?: Array<string>;
+    };
 };
 
 export type MeasurementDraftApplySitemapSelectionRequest = {
@@ -2875,6 +2885,7 @@ export type MeasurementDraftApplySitemapSelectionRequest = {
         targetKey?: string;
         label?: string;
     }>;
+    selectedTargetKeys?: Array<string>;
 };
 
 export type MeasurementDraftAssignmentPage = {
@@ -3160,6 +3171,7 @@ export type MeasurementDraftDiscardResponse = {
 
 export type MeasurementDraftExcludeTargetRequest = {
     targetKey: string;
+    cleanup?: 'assignments-and-group-memberships';
 };
 
 export type MeasurementDraftGroupPage = {
@@ -3234,6 +3246,9 @@ export type MeasurementDraftRebindTargetRequest = {
 
 export type MeasurementDraftRemoveAssignmentRequest = {
     targetKey: string;
+    queryId: string;
+} | {
+    targetKeys: Array<string>;
     queryId: string;
 };
 
@@ -3368,6 +3383,12 @@ export type MeasurementDraftUpsertGroupRequest = {
         stableKey: string;
         label: string;
         targetKeys: Array<string>;
+        competitors?: Array<{
+            stableKey: string;
+            label: string;
+            domain: string;
+            aliases: Array<string>;
+        }>;
     };
 };
 
@@ -3399,6 +3420,7 @@ export type MeasurementOverviewResponse = {
         completed: number;
         expected: number;
         completedAt?: string;
+        includesHistoricalData?: boolean;
     };
     nextAction: {
         kind: 'run_measurement' | 'review_flags' | 'complete_setup' | 'republish_setup' | 'none';
@@ -4234,6 +4256,86 @@ export type MeasurementPlanResponse = {
                 targetKeys: Array<string>;
                 aliases: Array<string>;
             }>;
+        } | {
+            schemaVersion: 2;
+            identities: {
+                projectBrand: {
+                    canonicalHost: string;
+                    ownedHosts: Array<string>;
+                    names: Array<string>;
+                };
+            };
+            targets: Array<{
+                stableKey: string;
+                label: string;
+                aliases: Array<string>;
+                urlMatchers: Array<{
+                    kind: 'exact';
+                    url: string;
+                    pathCase: 'sensitive' | 'insensitive';
+                } | {
+                    kind: 'prefix';
+                    host: string;
+                    pathPrefix: string;
+                    pathCase: 'sensitive' | 'insensitive';
+                } | {
+                    kind: 'host';
+                    host: string;
+                }>;
+                mentionNotApplicable: boolean;
+                discoveryIdentity: string | null;
+            }>;
+            groups: Array<{
+                stableKey: string;
+                label: string;
+                targetKeys: Array<string>;
+                competitors: Array<{
+                    stableKey: string;
+                    label: string;
+                    domain: string;
+                    aliases: Array<string>;
+                }>;
+            }>;
+            querySnapshots: Array<{
+                queryId: string;
+                queryText: string;
+                provenance: {
+                    source: 'manual' | 'query-set' | 'template' | 'discovery';
+                    sourceId: string | null;
+                    capturedAt: string;
+                };
+            }>;
+            assignments: Array<{
+                targetKey: string;
+                queryId: string;
+                queryClass: 'branded' | 'non-brand';
+                executionNodeKey: string;
+            }>;
+            executionNodes: Array<{
+                stableKey: string;
+                queryId: string;
+                queryText: string;
+                context: {
+                    providers: Array<string>;
+                    models: {
+                        [key: string]: string;
+                    };
+                    location: {
+                        label: string;
+                        city: string;
+                        region: string;
+                        country: string;
+                        timezone?: string;
+                    } | null;
+                };
+                expectedSnapshots: number;
+            }>;
+            usageEdges: Array<{
+                executionNodeKey: string;
+                targetKey: string;
+                queryId: string;
+            }>;
+            compiledChecksum: string;
         };
     } | null;
 };
@@ -4418,6 +4520,86 @@ export type MeasurementPlanVersionResponse = {
                 targetKeys: Array<string>;
                 aliases: Array<string>;
             }>;
+        } | {
+            schemaVersion: 2;
+            identities: {
+                projectBrand: {
+                    canonicalHost: string;
+                    ownedHosts: Array<string>;
+                    names: Array<string>;
+                };
+            };
+            targets: Array<{
+                stableKey: string;
+                label: string;
+                aliases: Array<string>;
+                urlMatchers: Array<{
+                    kind: 'exact';
+                    url: string;
+                    pathCase: 'sensitive' | 'insensitive';
+                } | {
+                    kind: 'prefix';
+                    host: string;
+                    pathPrefix: string;
+                    pathCase: 'sensitive' | 'insensitive';
+                } | {
+                    kind: 'host';
+                    host: string;
+                }>;
+                mentionNotApplicable: boolean;
+                discoveryIdentity: string | null;
+            }>;
+            groups: Array<{
+                stableKey: string;
+                label: string;
+                targetKeys: Array<string>;
+                competitors: Array<{
+                    stableKey: string;
+                    label: string;
+                    domain: string;
+                    aliases: Array<string>;
+                }>;
+            }>;
+            querySnapshots: Array<{
+                queryId: string;
+                queryText: string;
+                provenance: {
+                    source: 'manual' | 'query-set' | 'template' | 'discovery';
+                    sourceId: string | null;
+                    capturedAt: string;
+                };
+            }>;
+            assignments: Array<{
+                targetKey: string;
+                queryId: string;
+                queryClass: 'branded' | 'non-brand';
+                executionNodeKey: string;
+            }>;
+            executionNodes: Array<{
+                stableKey: string;
+                queryId: string;
+                queryText: string;
+                context: {
+                    providers: Array<string>;
+                    models: {
+                        [key: string]: string;
+                    };
+                    location: {
+                        label: string;
+                        city: string;
+                        region: string;
+                        country: string;
+                        timezone?: string;
+                    } | null;
+                };
+                expectedSnapshots: number;
+            }>;
+            usageEdges: Array<{
+                executionNodeKey: string;
+                targetKey: string;
+                queryId: string;
+            }>;
+            compiledChecksum: string;
         };
     };
 };
@@ -7681,6 +7863,10 @@ export type GetApiV1ProjectsByNameMeasurementReportData = {
          * Immutable project-local measurement-plan revision to report.
          */
         revision: number;
+        /**
+         * Eligible full measurement run to reconstruct. Omit to use the latest run for the revision.
+         */
+        runId?: string;
     };
     url: '/api/v1/projects/{name}/measurement-report';
 };
@@ -7691,7 +7877,7 @@ export type GetApiV1ProjectsByNameMeasurementReportErrors = {
      */
     400: ErrorEnvelope;
     /**
-     * Project or measurement-plan revision not found.
+     * Project, measurement-plan revision, or requested run not found.
      */
     404: ErrorEnvelope;
 };

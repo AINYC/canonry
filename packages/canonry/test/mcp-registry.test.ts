@@ -199,6 +199,7 @@ describe('MCP tool registry', () => {
       ['canonry_measurement_plan_diff_preview', 'write', 'POST /api/v1/projects/{name}/measurement-plan/diff-preview'],
       ['canonry_measurement_plan_publish', 'write', 'PUT /api/v1/projects/{name}/measurement-plan'],
       ['canonry_measurement_plan_segment_retire', 'write', 'POST /api/v1/projects/{name}/measurement-plan/segments/{stableKey}/retire'],
+      ['canonry_measurement_overview', 'read', 'GET /api/v1/projects/{name}/measurement-overview'],
       ['canonry_measurement_report', 'read', 'GET /api/v1/projects/{name}/measurement-report'],
     ] as const
 
@@ -221,6 +222,7 @@ describe('MCP tool registry', () => {
       publishMeasurementPlan: vi.fn().mockResolvedValue({ active: { revision: 1 } }),
       retireMeasurementPlanSegment: vi.fn().mockResolvedValue({ stableKey: 'nyc' }),
       discoverMeasurementTargets: vi.fn().mockResolvedValue({ proposed: [] }),
+      getMeasurementOverview: vi.fn().mockResolvedValue({ mode: 'active-v2' }),
       getMeasurementReport: vi.fn().mockResolvedValue({ revision: 2 }),
     } as unknown as ApiClient
     const plan = {
@@ -250,7 +252,37 @@ describe('MCP tool registry', () => {
         rule: { primary: { host: 'acme.example', pathTemplate: '/locations/{slug}' } },
         maxUrls: 250,
       }]],
-      ['canonry_measurement_report', { project: 'acme', revision: 2 }, 'getMeasurementReport', ['acme', 2]],
+      ['canonry_measurement_overview', {
+        project: 'acme',
+        scope: 'property',
+        targetKey: 'harbor-view',
+        queryClass: 'non-brand',
+        provider: 'openai',
+        location: 'New York, NY',
+        from: '2026-07-01',
+        to: '2026-07-31',
+        runId: 'run-7',
+        search: 'harbor',
+        cursor: 'next-page',
+        limit: 25,
+      }, 'getMeasurementOverview', ['acme', {
+        scope: 'property',
+        targetKey: 'harbor-view',
+        queryClass: 'non-brand',
+        provider: 'openai',
+        location: 'New York, NY',
+        from: '2026-07-01',
+        to: '2026-07-31',
+        runId: 'run-7',
+        search: 'harbor',
+        cursor: 'next-page',
+        limit: 25,
+      }]],
+      ['canonry_measurement_report', {
+        project: 'acme',
+        revision: 2,
+        runId: 'run-7',
+      }, 'getMeasurementReport', ['acme', 2, 'run-7']],
     ] as const
 
     for (const [name, input, method, args] of cases) {
@@ -258,6 +290,45 @@ describe('MCP tool registry', () => {
       expect(tool, name).toBeTruthy()
       await tool!.handler(client, input)
       expect(client[method as keyof typeof client]).toHaveBeenCalledWith(...args)
+    }
+  })
+
+  it('sends the exact measurement-overview filters through ApiClient', async () => {
+    const api = await startCaptureApi()
+    try {
+      const client = new RealApiClient(api.origin, 'cnry_test', { skipProbe: true })
+      await client.getMeasurementOverview('acme', {
+        scope: 'property',
+        targetKey: 'harbor-view',
+        queryClass: 'non-brand',
+        provider: 'openai',
+        location: 'New York, NY',
+        from: '2026-07-01',
+        to: '2026-07-31',
+        runId: 'run-7',
+        search: 'harbor',
+        cursor: 'next-page',
+        limit: 25,
+      })
+
+      expect(api.requests).toHaveLength(1)
+      const request = new URL(api.requests[0]!, api.origin)
+      expect(request.pathname).toBe('/api/v1/projects/acme/measurement-overview')
+      expect(Object.fromEntries(request.searchParams)).toEqual({
+        scope: 'property',
+        targetKey: 'harbor-view',
+        queryClass: 'non-brand',
+        provider: 'openai',
+        location: 'New York, NY',
+        from: '2026-07-01',
+        to: '2026-07-31',
+        runId: 'run-7',
+        search: 'harbor',
+        cursor: 'next-page',
+        limit: '25',
+      })
+    } finally {
+      await api.close()
     }
   })
 
@@ -467,6 +538,46 @@ describe('MCP tool registry', () => {
     expect(measurementDiscovery?.inputSchema.parse(discoveryInput)).toEqual(discoveryInput)
     expect(() => measurementDiscovery?.inputSchema.parse({ ...discoveryInput, maxUrls: 10_001 })).toThrow()
     expect(() => measurementDiscovery?.inputSchema.parse({ ...discoveryInput, unknown: true })).toThrow()
+
+    const measurementOverview = canonryMcpTools.find(
+      candidate => candidate.name === 'canonry_measurement_overview',
+    )
+    expect(measurementOverview).toMatchObject({ access: 'read', tier: 'setup' })
+    expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toContain('canonry_measurement_overview')
+    expect(measurementOverview?.inputSchema.parse({
+      project: 'acme',
+      scope: 'property',
+      targetKey: 'harbor-view',
+      queryClass: 'non-brand',
+      provider: 'openai',
+      location: 'New York, NY',
+      from: '2026-07-01',
+      to: '2026-07-31',
+      runId: 'run-7',
+      search: 'harbor',
+      cursor: 'next-page',
+      limit: 100,
+    })).toEqual({
+      project: 'acme',
+      scope: 'property',
+      targetKey: 'harbor-view',
+      queryClass: 'non-brand',
+      provider: 'openai',
+      location: 'New York, NY',
+      from: '2026-07-01',
+      to: '2026-07-31',
+      runId: 'run-7',
+      search: 'harbor',
+      cursor: 'next-page',
+      limit: 100,
+    })
+    expect(() => measurementOverview?.inputSchema.parse({ project: 'acme', scope: 'all', limit: 101 })).toThrow()
+    expect(() => measurementOverview?.inputSchema.parse({ project: 'acme', scope: 'property' })).toThrow()
+    expect(() => measurementOverview?.inputSchema.parse({ project: 'acme', scope: 'group' })).toThrow()
+    expect(() => measurementOverview?.inputSchema.parse({ project: 'acme', scope: 'all', groupKey: 'east' })).toThrow()
+    expect(() => measurementOverview?.inputSchema.parse({ project: 'acme', scope: 'all', targetKey: 'harbor-view' })).toThrow()
+    expect(() => measurementOverview?.inputSchema.parse({ project: 'acme', scope: 'group', groupKey: 'east', targetKey: 'harbor-view' })).toThrow()
+    expect(() => measurementOverview?.inputSchema.parse({ project: 'acme', scope: 'property', targetKey: 'harbor-view', groupKey: 'east' })).toThrow()
   })
 
   it('limits MCP run trigger input to manual answer-visibility runs', () => {
@@ -1123,6 +1234,26 @@ async function startErrorApi(): Promise<{ origin: string; close: () => Promise<v
   if (!address || typeof address === 'string') throw new Error('Failed to start stub API')
   return {
     origin: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise(resolve => server.close(() => resolve())),
+  }
+}
+
+async function startCaptureApi(): Promise<{
+  origin: string
+  requests: string[]
+  close: () => Promise<void>
+}> {
+  const requests: string[] = []
+  const server = createServer((request, response: ServerResponse) => {
+    requests.push(request.url ?? '')
+    sendJson(response, { mode: 'active-v2' })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Failed to start stub API')
+  return {
+    origin: `http://127.0.0.1:${address.port}`,
+    requests,
     close: () => new Promise(resolve => server.close(() => resolve())),
   }
 }

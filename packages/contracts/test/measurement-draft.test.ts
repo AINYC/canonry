@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   MEASUREMENT_DRAFT_ETAG_PREFIX,
   measurementDraftAuthoringSchema,
+  measurementDraftApplyAssignmentsRequestSchema,
   measurementDraftClassifyAssignmentsRequestSchema,
+  measurementDraftExcludeTargetRequestSchema,
   measurementDraftEtag,
   measurementDraftMutationResponseSchema,
   measurementDraftPublishRequestSchema,
+  measurementDraftRemoveAssignmentRequestSchema,
   measurementDraftTargetPageSchema,
   measurementDraftUpsertGroupRequestSchema,
   measurementPlanDraftSchema,
@@ -94,12 +97,58 @@ describe('measurement draft ETag', () => {
 })
 
 describe('measurement draft action payloads', () => {
+  it('accepts one Target or a non-empty bulk Target selection, but never both', () => {
+    const singleApply = { targetKey: 'harbor-point', queryIds: ['q-best'] }
+    const bulkApply = { targetKeys: ['harbor-point', 'river-point'], queryIds: ['q-best'] }
+    expect(measurementDraftApplyAssignmentsRequestSchema.parse(singleApply)).toEqual(singleApply)
+    expect(measurementDraftApplyAssignmentsRequestSchema.parse(bulkApply)).toEqual(bulkApply)
+    expect(() => measurementDraftApplyAssignmentsRequestSchema.parse({ queryIds: ['q-best'] })).toThrow()
+    expect(() => measurementDraftApplyAssignmentsRequestSchema.parse({ ...singleApply, targetKeys: ['river-point'] })).toThrow()
+    expect(() => measurementDraftApplyAssignmentsRequestSchema.parse({ targetKeys: [], queryIds: ['q-best'] })).toThrow()
+
+    const singleRemove = { targetKey: 'harbor-point', queryId: 'q-best' }
+    const bulkRemove = { targetKeys: ['harbor-point', 'river-point'], queryId: 'q-best' }
+    expect(measurementDraftRemoveAssignmentRequestSchema.parse(singleRemove)).toEqual(singleRemove)
+    expect(measurementDraftRemoveAssignmentRequestSchema.parse(bulkRemove)).toEqual(bulkRemove)
+    expect(() => measurementDraftRemoveAssignmentRequestSchema.parse({ queryId: 'q-best' })).toThrow()
+    expect(() => measurementDraftRemoveAssignmentRequestSchema.parse({ ...singleRemove, targetKeys: ['river-point'] })).toThrow()
+  })
+
   it('rejects a group payload that carries queries or execution context', () => {
     const group = { stableKey: 'northbridge-portfolio', label: 'Northbridge portfolio', targetKeys: ['harbor-point'] }
     expect(measurementDraftUpsertGroupRequestSchema.parse({ group })).toEqual({ group })
     expect(() => measurementDraftUpsertGroupRequestSchema.parse({ group: { ...group, queryIds: ['q-best'] } })).toThrow()
     expect(() => measurementDraftUpsertGroupRequestSchema.parse({ group: { ...group, providers: ['gemini'] } })).toThrow()
     expect(() => measurementDraftUpsertGroupRequestSchema.parse({ group: { ...group, locations: ['northbridge'] } })).toThrow()
+  })
+
+  it('accepts an explicit cleanup mode for exclusion while preserving the legacy payload', () => {
+    expect(measurementDraftExcludeTargetRequestSchema.parse({ targetKey: 'harbor-point' }))
+      .toEqual({ targetKey: 'harbor-point' })
+    expect(measurementDraftExcludeTargetRequestSchema.parse({
+      targetKey: 'harbor-point',
+      cleanup: 'assignments-and-group-memberships',
+    })).toEqual({ targetKey: 'harbor-point', cleanup: 'assignments-and-group-memberships' })
+    expect(() => measurementDraftExcludeTargetRequestSchema.parse({ targetKey: 'harbor-point', cleanup: 'urls' }))
+      .toThrow()
+  })
+
+  it('accepts a complete competitor list on an atomic group save', () => {
+    const group = {
+      stableKey: 'northbridge-portfolio',
+      label: 'Northbridge portfolio',
+      targetKeys: ['harbor-point'],
+      competitors: [{
+        stableKey: 'river-group',
+        label: 'River Group',
+        domain: 'river-group.example',
+        aliases: ['River Group'],
+      }],
+    }
+    expect(measurementDraftUpsertGroupRequestSchema.parse({ group })).toEqual({ group })
+    expect(() => measurementDraftUpsertGroupRequestSchema.parse({
+      group: { ...group, competitors: [{ ...group.competitors[0], domain: 'not a host' }] },
+    })).toThrow()
   })
 
   it('only lets an operator classify into a published class', () => {

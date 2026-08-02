@@ -1,0 +1,667 @@
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { MetricTone } from '../../../view-models.js'
+
+import { ToneBadge } from '../../shared/ToneBadge.js'
+import { Button } from '../../ui/button.js'
+
+export type AdvancedMeasurementClass = 'non-brand' | 'branded'
+
+export type AdvancedMeasurementEvidenceKind =
+  | 'this-property'
+  | 'another-property'
+  | 'owned-unassigned'
+  | 'external'
+  | 'multiple-properties'
+  | 'invalid-url'
+
+export type AdvancedMeasurementMetric =
+  | { numerator: number; denominator: number; reason?: never }
+  | { numerator: null; denominator: null; reason: string }
+
+export interface AdvancedMeasurementProperty {
+  id: string
+  name: string
+  mentionCoverage: AdvancedMeasurementMetric
+  citationCoverage: AdvancedMeasurementMetric
+  status: { label: string; tone: MetricTone }
+  assignedQueries: readonly string[]
+  urls: readonly string[]
+  evidence: readonly AdvancedMeasurementEvidence[]
+  evidenceState?: 'ready' | 'loading' | 'error'
+  historical?: boolean
+}
+
+export interface AdvancedMeasurementEvidence {
+  id: string
+  kind: AdvancedMeasurementEvidenceKind
+  query: string
+  provider?: string
+  location?: string | null
+  url: string
+  tone: MetricTone
+  historical?: boolean
+}
+
+export interface AdvancedMeasurementAggregate {
+  metrics: {
+    propertiesMentioned: AdvancedMeasurementMetric
+    mentionCoverage: AdvancedMeasurementMetric
+    citationCoverage: AdvancedMeasurementMetric
+  }
+  /** Properties excluded from a complete measurement, shown alongside the property headline. */
+  unavailablePropertyCount?: number
+  properties: readonly AdvancedMeasurementProperty[]
+  shareOfVoice?: readonly AdvancedMeasurementShareOfVoice[]
+}
+
+export interface AdvancedMeasurementShareOfVoice {
+  name: string
+  coverage: AdvancedMeasurementMetric
+}
+
+export interface AdvancedMeasurementGroup {
+  id: string
+  label: string
+  confirmedCompetitorCount: number
+  aggregate: AdvancedMeasurementAggregate
+}
+
+export interface AdvancedMeasurementScope {
+  aggregate: AdvancedMeasurementAggregate
+  groups: readonly AdvancedMeasurementGroup[]
+}
+
+export interface AdvancedMeasurementFlaggedResult {
+  id: string
+  property: string
+  summary: string
+  tone: MetricTone
+  /** Number of underlying results represented by this Property-level summary. */
+  count?: number
+}
+
+export interface AdvancedMeasurementOverviewReport {
+  /** `plan-v1` has an active plan but cannot split results by query class yet. */
+  classReporting: 'available' | 'plan-v1'
+  latestMeasurement: {
+    status: { label: string; tone: MetricTone }
+    completedSlots: number
+    totalSlots: number
+    includesBridgedHistory?: boolean
+    /** Already formatted by the caller for the viewer's locale. */
+    date: string
+  }
+  /** The active plan's aggregate, used for the version-one fallback. */
+  overall?: AdvancedMeasurementScope
+  /** Each scope is calculated upstream. The component never recomputes an aggregate. */
+  classScopes?: {
+    nonBrand: AdvancedMeasurementScope
+    branded: AdvancedMeasurementScope
+  }
+  /** One server-computed scope/class view. Other views must be fetched, never reconstructed here. */
+  currentView?: {
+    scope: { kind: 'all' | 'group'; key?: string }
+    queryClass: AdvancedMeasurementClass
+    aggregate: AdvancedMeasurementAggregate
+    propertyTotal: number
+    nextCursor: string | null
+  }
+  availableGroups?: readonly { id: string; label: string }[]
+  nextActionText?: string
+  /** Server total, including results on Property pages that are not loaded yet. */
+  flaggedResultsTotal?: number
+  flaggedResults: readonly AdvancedMeasurementFlaggedResult[]
+}
+
+export interface AdvancedMeasurementViewRequest {
+  scope: 'all' | 'group'
+  groupKey?: string
+  queryClass: AdvancedMeasurementClass
+  search?: string
+}
+
+export interface AdvancedMeasurementOverviewProps {
+  report: AdvancedMeasurementOverviewReport
+  /** Editors see the one safe action appropriate to the active setup. */
+  canEdit: boolean
+  onRunMeasurement?: () => void | Promise<void>
+  onRepublishSetup?: () => void | Promise<void>
+  isRunningMeasurement?: boolean
+  isRepublishingSetup?: boolean
+  isViewLoading?: boolean
+  isLoadingMore?: boolean
+  /** A later server-view page failed; retain the loaded page and offer a scoped retry. */
+  isLoadMoreError?: boolean
+  viewSearch?: string
+  onViewChange?: (view: AdvancedMeasurementViewRequest) => void
+  onLoadMore?: (cursor: string) => void
+  onPropertyExpand?: (propertyId: string) => void
+  onRetryEvidence?: () => void
+}
+
+const ALL_PROPERTIES = '__all_properties__'
+const PROPERTY_LIST_LIMIT = 50
+const DETAIL_LIST_LIMIT = 50
+const FLAGGED_RESULTS_INITIAL_LIMIT = 20
+const FLAGGED_RESULTS_INCREMENT = 50
+const SEARCH_DEBOUNCE_MS = 250
+
+const evidenceLabels: Record<AdvancedMeasurementEvidenceKind, string> = {
+  'this-property': 'Matches this Property',
+  'another-property': 'Matches another Property',
+  'owned-unassigned': 'Site URL not included in a Property',
+  external: 'External URL',
+  'multiple-properties': 'Matches multiple Properties',
+  'invalid-url': 'Invalid URL',
+}
+
+const metricReasons: Record<string, string> = {
+  plan_v1: 'Setup update required.',
+  no_completed_run: 'Not measured yet.',
+  no_population: 'No matching queries.',
+  evidence_incomplete: 'Evidence incomplete.',
+  not_applicable: 'Not applicable.',
+  incomplete: 'The latest measurement is incomplete.',
+  'evidence-incomplete': 'Some source evidence is incomplete.',
+  'no-population': 'No measurements are available for this selection.',
+  unavailable: 'This measurement is unavailable.',
+}
+
+const planV1Metric: AdvancedMeasurementMetric = {
+  numerator: null,
+  denominator: null,
+  reason: 'plan_v1',
+}
+
+function isMeasured(metric: AdvancedMeasurementMetric): metric is Extract<AdvancedMeasurementMetric, { numerator: number }> {
+  if (metric.numerator === null) return false
+  return Number.isFinite(metric.numerator)
+    && Number.isFinite(metric.denominator)
+    && metric.numerator >= 0
+    && metric.denominator > 0
+    && metric.numerator <= metric.denominator
+}
+
+function metricLabel(metric: AdvancedMeasurementMetric): string {
+  if (!isMeasured(metric)) return 'N/A'
+  return `${metric.numerator} of ${metric.denominator} (${Math.round((metric.numerator / metric.denominator) * 100)}%)`
+}
+
+function metricReason(metric: AdvancedMeasurementMetric): string {
+  if (isMeasured(metric)) return ''
+  const reason = (metric as { reason?: string }).reason ?? 'unavailable'
+  return metricReasons[reason] ?? reason
+}
+
+function slotProgressLabel(completed: number, total: number): string | null {
+  if (!Number.isFinite(completed) || !Number.isFinite(total) || completed < 0 || total <= 0 || completed > total) {
+    return null
+  }
+  return `${completed} of ${total}`
+}
+
+function availableLabel(value: string): string | null {
+  const trimmed = value.trim()
+  return trimmed && !trimmed.toLocaleLowerCase().includes('unavailable') ? trimmed : null
+}
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  const element = target as { closest?: (selector: string) => Element | null } | null
+  return element?.closest?.('button, a, input, select, textarea, [role="button"]') != null
+}
+
+function MetricValue({
+  metric,
+  compact = false,
+}: {
+  metric: AdvancedMeasurementMetric
+  compact?: boolean
+}) {
+  const valueClassName = compact
+    ? isMeasured(metric) ? 'text-sm font-medium text-primary' : 'text-sm font-medium text-secondary'
+    : isMeasured(metric) ? 'text-lg font-semibold text-heading' : 'text-lg font-semibold text-secondary'
+  return (
+    <span
+      className="inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-1 tabular-nums"
+      {...(!isMeasured(metric) ? { title: metricReason(metric) } : {})}
+    >
+      <span className={valueClassName}>{metricLabel(metric)}</span>
+    </span>
+  )
+}
+
+function Truncation({
+  shown,
+  total,
+  onShowAll,
+  itemLabel,
+}: {
+  shown: number
+  total: number
+  onShowAll: () => void
+  itemLabel: string
+}) {
+  if (shown >= total) return null
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-secondary">
+      <span>Showing {shown} of {total}</span>
+      <Button size="sm" variant="outline" onClick={onShowAll}>Show all {total} {itemLabel}</Button>
+    </div>
+  )
+}
+
+function CappedStringList({
+  title,
+  values,
+  emptyLabel,
+  valueClassName = 'text-secondary',
+}: {
+  title: string
+  values: readonly string[]
+  emptyLabel: string
+  valueClassName?: string
+}) {
+  const [limit, setLimit] = useState(DETAIL_LIST_LIMIT)
+  const shown = values.slice(0, limit)
+
+  return (
+    <section aria-label={title}>
+      <h4 className="text-sm font-medium text-heading">{title}</h4>
+      {values.length === 0 ? <p className="mt-2 text-sm text-secondary">{emptyLabel}</p> : (
+        <>
+          <ul className="mt-2 space-y-1.5 text-sm">
+            {shown.map((value, index) => <li key={`${value}:${index}`} className={valueClassName}>{value}</li>)}
+          </ul>
+          <Truncation
+            shown={shown.length}
+            total={values.length}
+            itemLabel={title.toLocaleLowerCase()}
+            onShowAll={() => setLimit(Number.MAX_SAFE_INTEGER)}
+          />
+        </>
+      )}
+    </section>
+  )
+}
+
+function CappedEvidenceList({
+  evidence,
+  state = 'ready',
+  onRetry,
+}: {
+  evidence: readonly AdvancedMeasurementEvidence[]
+  state?: 'ready' | 'loading' | 'error'
+  onRetry?: () => void
+}) {
+  const [limit, setLimit] = useState(DETAIL_LIST_LIMIT)
+  const shown = evidence.slice(0, limit)
+
+  return (
+    <section aria-label="Evidence">
+      <h4 className="text-sm font-medium text-heading">Evidence</h4>
+      {state === 'loading' ? <p className="mt-2 text-sm text-secondary">Loading evidence…</p>
+        : state === 'error' ? (
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-secondary">
+              <span>Evidence could not be loaded.</span>
+              {onRetry ? <Button type="button" size="sm" variant="outline" onClick={onRetry}>Retry evidence</Button> : null}
+            </div>
+          )
+          : evidence.length === 0 ? <p className="mt-2 text-sm text-secondary">No source evidence is available.</p> : (
+        <>
+          <div className="mt-2 overflow-x-auto rounded-md border border-default">
+            <table className="evidence-table min-w-[640px]">
+              <thead><tr><th>Status</th><th>Query</th><th>URL</th></tr></thead>
+              <tbody>{shown.map(item => (
+                <tr key={item.id}>
+                  <td>
+                    <span className="flex flex-wrap items-center gap-1">
+                      <ToneBadge tone={item.tone}>{evidenceLabels[item.kind]}</ToneBadge>
+                      {item.historical ? <ToneBadge tone="caution">Historical</ToneBadge> : null}
+                    </span>
+                  </td>
+                  <td className="text-secondary">
+                    <span className="block">{item.query}</span>
+                    {item.provider || item.location ? (
+                      <span className="mt-1 block text-xs text-muted">
+                        {[item.provider, item.location].filter(Boolean).join(' · ')}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="break-all text-secondary">{item.url}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <Truncation
+            shown={shown.length}
+            total={evidence.length}
+            itemLabel="evidence items"
+            onShowAll={() => setLimit(Number.MAX_SAFE_INTEGER)}
+          />
+        </>
+      )}
+    </section>
+  )
+}
+
+function PropertyDetails({ property, onRetryEvidence }: { property: AdvancedMeasurementProperty; onRetryEvidence?: () => void }) {
+  return (
+    <div className="space-y-5 py-2">
+      <CappedStringList title="Assigned queries" values={property.assignedQueries} emptyLabel="No queries are assigned." />
+      <CappedStringList title="URLs" values={property.urls} emptyLabel="No URLs are assigned." valueClassName="break-all text-secondary" />
+      <CappedEvidenceList evidence={property.evidence} state={property.evidenceState} onRetry={onRetryEvidence} />
+    </div>
+  )
+}
+
+function CompetitorShareOfVoice({ values }: { values: readonly AdvancedMeasurementShareOfVoice[] }) {
+  return (
+    <section aria-labelledby="advanced-measurement-share-of-voice" className="border-y border-default py-4">
+      <h2 id="advanced-measurement-share-of-voice" className="text-sm font-medium text-heading">Competitor share of voice</h2>
+      <div className="mt-3 overflow-x-auto">
+        <table className="evidence-table min-w-[420px]">
+          <thead><tr><th>Name</th><th>Share of voice</th></tr></thead>
+          <tbody>{values.map(value => (
+            <tr key={value.name}>
+              <td className="font-medium text-heading">{value.name}</td>
+              <td className="text-secondary"><MetricValue metric={value.coverage} compact /></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+export function AdvancedMeasurementOverview({
+  report,
+  canEdit,
+  onRunMeasurement,
+  onRepublishSetup,
+  isRunningMeasurement = false,
+  isRepublishingSetup = false,
+  isViewLoading = false,
+  isLoadingMore = false,
+  isLoadMoreError = false,
+  viewSearch,
+  onViewChange,
+  onLoadMore,
+  onPropertyExpand,
+  onRetryEvidence,
+}: AdvancedMeasurementOverviewProps) {
+  const usesServerView = report.currentView != null
+  const classReportingAvailable = report.classReporting === 'available' && (usesServerView || report.classScopes != null)
+  const [selectedClass, setSelectedClass] = useState<AdvancedMeasurementClass>(report.currentView?.queryClass ?? 'non-brand')
+  const [selectedView, setSelectedView] = useState(report.currentView?.scope.key ?? ALL_PROPERTIES)
+  const [search, setSearch] = useState(viewSearch ?? '')
+  const [propertyLimit, setPropertyLimit] = useState(PROPERTY_LIST_LIMIT)
+  const [flaggedLimit, setFlaggedLimit] = useState(FLAGGED_RESULTS_INITIAL_LIMIT)
+  const [expandedPropertyIds, setExpandedPropertyIds] = useState<ReadonlySet<string>>(new Set())
+  const lastRequestedSearch = useRef(viewSearch ?? '')
+
+  const legacyScope = classReportingAvailable && !usesServerView
+    ? selectedClass === 'non-brand' ? report.classScopes!.nonBrand : report.classScopes!.branded
+    : report.overall
+  const scope: AdvancedMeasurementScope = usesServerView
+    ? { aggregate: report.currentView!.aggregate, groups: [] }
+    : legacyScope!
+
+  const requestView = useCallback((next: Partial<AdvancedMeasurementViewRequest>) => {
+    if (!usesServerView || !onViewChange) return
+    const nextScope = next.scope ?? (selectedView === ALL_PROPERTIES ? 'all' : 'group')
+    const nextSearch = next.search ?? search
+    lastRequestedSearch.current = nextSearch
+    onViewChange({
+      scope: nextScope,
+      ...(nextScope === 'group' ? { groupKey: next.groupKey ?? selectedView } : {}),
+      queryClass: next.queryClass ?? selectedClass,
+      ...(nextSearch ? { search: nextSearch } : {}),
+    })
+  }, [onViewChange, search, selectedClass, selectedView, usesServerView])
+
+  useEffect(() => {
+    if (!report.currentView || isViewLoading) return
+    setSelectedClass(report.currentView.queryClass)
+    setSelectedView(report.currentView.scope.key ?? ALL_PROPERTIES)
+  }, [isViewLoading, report.currentView])
+
+  useEffect(() => {
+    if (viewSearch === undefined) return
+    lastRequestedSearch.current = viewSearch
+    setSearch(viewSearch)
+  }, [viewSearch])
+
+  useEffect(() => {
+    if (!usesServerView || !onViewChange || search === lastRequestedSearch.current) return
+    const timer = window.setTimeout(() => requestView({ search }), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [onViewChange, requestView, search, usesServerView])
+
+  useEffect(() => {
+    const groups = report.availableGroups ?? scope.groups
+    if (selectedView === ALL_PROPERTIES || groups.some(group => group.id === selectedView)) return
+    setSelectedView(ALL_PROPERTIES)
+  }, [report.availableGroups, scope, selectedView])
+
+  const selectedGroup = usesServerView ? undefined : scope.groups.find(group => group.id === selectedView)
+  const aggregate = selectedGroup?.aggregate ?? scope.aggregate
+  const classMetric = (metric: AdvancedMeasurementMetric): AdvancedMeasurementMetric => (
+    classReportingAvailable ? metric : planV1Metric
+  )
+  const normalizedSearch = search.trim().toLocaleLowerCase()
+  const filteredProperties = useMemo(() => (
+    !usesServerView && normalizedSearch
+      ? aggregate.properties.filter(property => property.name.toLocaleLowerCase().includes(normalizedSearch))
+      : aggregate.properties
+  ), [aggregate.properties, normalizedSearch, usesServerView])
+  const shownProperties = usesServerView ? filteredProperties : filteredProperties.slice(0, propertyLimit)
+  const showShareOfVoice = (usesServerView ? report.currentView?.scope.kind === 'group' : selectedGroup != null)
+    && selectedClass === 'non-brand'
+    && classReportingAvailable
+    && (usesServerView || selectedGroup!.confirmedCompetitorCount > 0)
+    && (aggregate.shareOfVoice?.length ?? 0) > 0
+  const unavailableProperties = classReportingAvailable ? aggregate.unavailablePropertyCount ?? 0 : 0
+  const loadedFlaggedCount = report.flaggedResults.reduce((total, result) => total + (result.count ?? 1), 0)
+  const flaggedResultsTotal = report.flaggedResultsTotal ?? loadedFlaggedCount
+  const headlineUnavailableReason = [
+    classMetric(aggregate.metrics.propertiesMentioned),
+    classMetric(aggregate.metrics.mentionCoverage),
+    classMetric(aggregate.metrics.citationCoverage),
+  ].map(metricReason).find(Boolean)
+  const statusMessage = !classReportingAvailable
+    ? metricReasons.plan_v1
+    : report.nextActionText ?? headlineUnavailableReason
+      ?? (unavailableProperties > 0
+        ? `${unavailableProperties} ${unavailableProperties === 1 ? 'property is' : 'properties are'} unavailable.`
+        : flaggedResultsTotal > 0
+          ? `${flaggedResultsTotal} flagged ${flaggedResultsTotal === 1 ? 'result needs' : 'results need'} review.`
+          : 'No action needed.')
+  const progressLabel = slotProgressLabel(report.latestMeasurement.completedSlots, report.latestMeasurement.totalSlots)
+  const measurementDate = availableLabel(report.latestMeasurement.date)
+
+  function toggleProperty(propertyId: string) {
+    const willExpand = !expandedPropertyIds.has(propertyId)
+    setExpandedPropertyIds(current => {
+      const next = new Set(current)
+      if (next.has(propertyId)) next.delete(propertyId)
+      else next.add(propertyId)
+      return next
+    })
+    if (willExpand) onPropertyExpand?.(propertyId)
+  }
+
+  return (
+    <section aria-label="Advanced measurement overview" aria-busy={isViewLoading} className="space-y-5">
+      <header className="border-b border-default pb-4">
+        <div role="status" aria-label="Measurement status and next action" className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          {isViewLoading ? <span className="text-sm text-secondary">Updating results…</span> : (
+            <>
+              <ToneBadge tone={report.latestMeasurement.status.tone}>{report.latestMeasurement.status.label}</ToneBadge>
+              {report.latestMeasurement.includesBridgedHistory ? <ToneBadge tone="caution">Includes historical data</ToneBadge> : null}
+              {progressLabel ? <span className="text-sm text-secondary tabular-nums">{progressLabel}</span> : null}
+              {measurementDate ? <span className="text-sm text-secondary">{measurementDate}</span> : null}
+              <span className="text-sm text-secondary">{statusMessage}</span>
+              {canEdit && classReportingAvailable && onRunMeasurement ? (
+                <Button className="ml-auto" size="sm" onClick={() => { void onRunMeasurement() }} disabled={isRunningMeasurement}>
+                  {isRunningMeasurement ? 'Starting measurement…' : 'Run measurement'}
+                </Button>
+              ) : canEdit && !classReportingAvailable ? (
+                <Button className="ml-auto" size="sm" onClick={() => { void onRepublishSetup?.() }} disabled={!onRepublishSetup || isRepublishingSetup}>
+                  {isRepublishingSetup ? 'Opening setup…' : 'Republish setup'}
+                </Button>
+              ) : null}
+            </>
+          )}
+        </div>
+      </header>
+
+      {!isViewLoading ? <dl className="grid gap-4 border-y border-default py-4 md:grid-cols-3">
+        <div>
+          <dt className="text-sm text-secondary">Properties mentioned</dt>
+          <dd className="mt-1"><MetricValue metric={classMetric(aggregate.metrics.propertiesMentioned)} /></dd>
+        </div>
+        <div>
+          <dt className="text-sm text-secondary">Mention coverage</dt>
+          <dd className="mt-1"><MetricValue metric={classMetric(aggregate.metrics.mentionCoverage)} /></dd>
+        </div>
+        <div>
+          <dt className="text-sm text-secondary">Citation coverage</dt>
+          <dd className="mt-1"><MetricValue metric={classMetric(aggregate.metrics.citationCoverage)} /></dd>
+        </div>
+      </dl> : <div className="h-20 animate-pulse rounded-md bg-surface-subtle" aria-label="Updating measurement results" />}
+
+      <div className="flex flex-wrap items-end gap-4 border-b border-default pb-4">
+        <div className="space-y-1">
+          <label htmlFor="advanced-measurement-group" className="block text-sm font-medium text-heading">Group</label>
+          <select
+            id="advanced-measurement-group"
+            value={selectedView}
+            onChange={event => {
+              const value = event.target.value
+              setSelectedView(value)
+              requestView(value === ALL_PROPERTIES ? { scope: 'all' } : { scope: 'group', groupKey: value })
+            }}
+            className="h-9 rounded-md border border-default bg-surface px-3 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-mono-400"
+          >
+            <option value={ALL_PROPERTIES}>All properties</option>
+            {(report.availableGroups ?? scope.groups).map(group => <option key={group.id} value={group.id}>{group.label}</option>)}
+          </select>
+        </div>
+        <fieldset disabled={!classReportingAvailable} className="space-y-1">
+          <legend className="text-sm font-medium text-heading">Query type</legend>
+          <div className="flex items-center gap-3 text-sm text-secondary">
+            <label className="flex items-center gap-1.5"><input type="radio" name="advanced-measurement-class" disabled={!classReportingAvailable} checked={selectedClass === 'non-brand'} onChange={() => { setSelectedClass('non-brand'); requestView({ queryClass: 'non-brand' }) }} /> Non-brand</label>
+            <label className="flex items-center gap-1.5"><input type="radio" name="advanced-measurement-class" disabled={!classReportingAvailable} checked={selectedClass === 'branded'} onChange={() => { setSelectedClass('branded'); requestView({ queryClass: 'branded' }) }} /> Branded</label>
+          </div>
+        </fieldset>
+        <div className="min-w-52 flex-1 space-y-1">
+          <label htmlFor="advanced-measurement-search" className="block text-sm font-medium text-heading">Search properties</label>
+          <input
+            id="advanced-measurement-search"
+            type="search"
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            placeholder="Search properties"
+            className="h-9 w-full rounded-md border border-default bg-surface px-3 text-sm text-primary placeholder-mono-600 focus:outline-none focus:ring-2 focus:ring-mono-400"
+          />
+        </div>
+      </div>
+
+      {!isViewLoading && showShareOfVoice ? <CompetitorShareOfVoice values={aggregate.shareOfVoice ?? []} /> : null}
+
+      {!isViewLoading ? <section aria-labelledby="advanced-measurement-properties-title">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 id="advanced-measurement-properties-title" className="text-base font-semibold text-heading">Properties</h2>
+          <span className="text-sm text-secondary">{report.currentView?.propertyTotal ?? filteredProperties.length} {(report.currentView?.propertyTotal ?? filteredProperties.length) === 1 ? 'property' : 'properties'}</span>
+        </div>
+        <div className="overflow-x-auto rounded-md border border-default">
+          <table className="evidence-table min-w-[720px]">
+            <caption className="sr-only">Property measurement results</caption>
+            <thead><tr><th>Property</th><th>Mention</th><th>Citation</th><th>Status</th><th><span className="sr-only">Details</span></th></tr></thead>
+            <tbody>
+              {shownProperties.map(property => {
+                const expanded = expandedPropertyIds.has(property.id)
+                return (
+                  <Fragment key={property.id}>
+                    <tr
+                      key={property.id}
+                      className="cursor-pointer transition-colors hover:bg-surface-subtle"
+                      onClick={event => {
+                        if (!isInteractiveTarget(event.target)) toggleProperty(property.id)
+                      }}
+                    >
+                      <td className="font-medium text-heading">{property.name}</td>
+                      <td className="text-secondary"><MetricValue metric={property.mentionCoverage} compact /></td>
+                      <td className="text-secondary"><MetricValue metric={property.citationCoverage} compact /></td>
+                      <td>
+                        <span className="flex flex-wrap items-center gap-1">
+                          <ToneBadge tone={property.status.tone}>{property.status.label}</ToneBadge>
+                          {property.historical ? <ToneBadge tone="caution">Historical</ToneBadge> : null}
+                        </span>
+                      </td>
+                      <td className="text-right"><Button size="sm" variant="ghost" aria-expanded={expanded} onClick={() => toggleProperty(property.id)}>{expanded ? `Hide details for ${property.name}` : `Show details for ${property.name}`}</Button></td>
+                    </tr>
+                    {expanded ? <tr key={`${property.id}:details`}><td colSpan={5} className="bg-surface-subtle px-4"><PropertyDetails property={property} onRetryEvidence={onRetryEvidence} /></td></tr> : null}
+                  </Fragment>
+                )
+              })}
+              {shownProperties.length === 0 ? <tr><td colSpan={5} className="py-8 text-center text-sm text-secondary">No properties match this search.</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+        {usesServerView && report.currentView!.nextCursor && onLoadMore ? (
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-secondary">
+            <span>Showing {shownProperties.length} of {report.currentView!.propertyTotal}</span>
+            {isLoadMoreError ? <span role="alert">Could not load more properties.</span> : null}
+            <Button size="sm" variant="outline" disabled={isLoadingMore} onClick={() => onLoadMore(report.currentView!.nextCursor!)}>
+              {isLoadingMore ? 'Loading…' : isLoadMoreError ? 'Retry loading more properties' : 'Show 50 more'}
+            </Button>
+          </div>
+        ) : usesServerView ? (
+          shownProperties.length < report.currentView!.propertyTotal
+            ? <p className="mt-2 text-sm text-secondary">Showing {shownProperties.length} of {report.currentView!.propertyTotal}</p>
+            : null
+        ) : (
+          <Truncation
+            shown={shownProperties.length}
+            total={filteredProperties.length}
+            itemLabel="properties"
+            onShowAll={() => setPropertyLimit(Number.MAX_SAFE_INTEGER)}
+          />
+        )}
+      </section> : <div className="h-44 animate-pulse rounded-md bg-surface-subtle" aria-label="Updating Property results" />}
+
+      {!isViewLoading && !normalizedSearch && flaggedResultsTotal > 0 ? (
+        <section aria-label="Flagged results" className="border-t border-default pt-4">
+          <details>
+            <summary className="cursor-pointer text-sm font-medium text-heading">Flagged results ({flaggedResultsTotal})</summary>
+            <ul className="mt-3 space-y-3">
+              {report.flaggedResults.slice(0, flaggedLimit).map(result => (
+                <li key={result.id} className="flex flex-wrap items-start gap-2 text-sm">
+                  <ToneBadge tone={result.tone}>Flagged</ToneBadge>
+                  <span className="font-medium text-heading">{result.property}</span>
+                  <span className="text-secondary">{result.summary}</span>
+                </li>
+              ))}
+            </ul>
+            {flaggedLimit < report.flaggedResults.length ? (
+              <div className="mt-3 flex items-center gap-3 text-sm text-secondary">
+                <span>Showing details for {report.flaggedResults.slice(0, flaggedLimit).reduce((total, result) => total + (result.count ?? 1), 0)} of {flaggedResultsTotal} flagged results</span>
+                <Button size="sm" variant="outline" onClick={() => setFlaggedLimit(limit => Math.min(report.flaggedResults.length, limit + FLAGGED_RESULTS_INCREMENT))}>Show 50 more</Button>
+              </div>
+            ) : loadedFlaggedCount < flaggedResultsTotal ? (
+              <div className="mt-3 flex items-center gap-3 text-sm text-secondary">
+                <span>Showing details for {loadedFlaggedCount} of {flaggedResultsTotal} flagged results</span>
+                {usesServerView && report.currentView!.nextCursor && onLoadMore ? (
+                  <Button size="sm" variant="outline" disabled={isLoadingMore} onClick={() => onLoadMore(report.currentView!.nextCursor!)}>
+                    {isLoadingMore ? 'Loading…' : isLoadMoreError ? 'Retry loading more Properties' : 'Load more Properties'}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </details>
+        </section>
+      ) : null}
+    </section>
+  )
+}

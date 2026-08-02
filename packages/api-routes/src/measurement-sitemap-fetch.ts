@@ -11,7 +11,9 @@ const gunzipAsync = promisify(gunzip)
 
 export const DEFAULT_MEASUREMENT_SITEMAP_LIMITS = {
   timeoutMs: 10_000,
-  maxBodyBytes: 1_000_000,
+  // Large portfolios commonly publish one sitemap close to the 10k URL cap.
+  // Keep the byte budget bounded, but large enough for those documents.
+  maxBodyBytes: 5_000_000,
   maxDepth: 3,
   maxUrls: 10_000,
   maxSitemaps: 100,

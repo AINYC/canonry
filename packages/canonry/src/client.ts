@@ -1249,12 +1249,12 @@ export class ApiClient {
     )
   }
 
-  async getMeasurementReport(project: string, revision: number): Promise<MeasurementReportResponse> {
+  async getMeasurementReport(project: string, revision: number, runId?: string): Promise<MeasurementReportResponse> {
     return this.invoke<MeasurementReportResponse>(() =>
       getApiV1ProjectsByNameMeasurementReport({
         client: this.heyClient,
         path: { name: project },
-        query: { revision },
+        query: { revision, runId },
       }),
     )
   }

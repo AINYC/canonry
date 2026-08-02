@@ -3,6 +3,7 @@ import { expect, test, vi } from 'vitest'
 import { gzipSync } from 'node:zlib'
 import type { SafeWebhookTarget } from '../src/webhooks.js'
 import {
+  DEFAULT_MEASUREMENT_SITEMAP_LIMITS,
   fetchMeasurementSitemap,
   requestPinnedSitemap,
   type MeasurementSitemapHttpResponse,
@@ -38,6 +39,17 @@ test('accepts a gzip-compressed sitemap body within the decoded body cap', async
       body: gzipSync('<urlset><url><loc>https://public.example.test/covered</loc></url></urlset>'),
     }),
   })
+  expect(result.urls).toEqual(['https://public.example.test/covered'])
+})
+
+test('accepts a large single-file sitemap within the default URL safety budget', async () => {
+  const padding = ' '.repeat(1_700_000)
+  const result = await fetchMeasurementSitemap('https://public.example.test/sitemap.xml', {
+    resolveTarget: allowPublic,
+    transport: async () => xml(`<urlset>${padding}<url><loc>https://public.example.test/covered</loc></url></urlset>`),
+  })
+
+  expect(DEFAULT_MEASUREMENT_SITEMAP_LIMITS.maxBodyBytes).toBeGreaterThan(1_700_000)
   expect(result.urls).toEqual(['https://public.example.test/covered'])
 })
 

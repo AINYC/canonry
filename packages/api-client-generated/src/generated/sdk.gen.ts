@@ -263,7 +263,7 @@ export const getApiV1ProjectsByNameMeasurementPlanVersionsByRevision = <ThrowOnE
 /**
  * Get a revision-pinned measurement report
  *
- * Builds the Target, group, and evidence report from the immutable plan revision and its latest eligible stored run. Missing run population remains explicit and never triggers live provider execution.
+ * Builds the Target, group, and evidence report from the immutable plan revision and either its latest eligible stored run or the exact eligible runId supplied by the caller. Missing run population remains explicit and never triggers live provider execution.
  */
 export const getApiV1ProjectsByNameMeasurementReport = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameMeasurementReportData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameMeasurementReportResponses, GetApiV1ProjectsByNameMeasurementReportErrors, ThrowOnError>({
@@ -415,7 +415,7 @@ export const postApiV1ProjectsByNameMeasurementPlanDraftActionsImportSitemap = <
 /**
  * Apply the operator selection from discovery
  *
- * Turns reviewed discovery proposals into new or rebound Targets. Ambiguity is never resolved automatically.
+ * Turns reviewed discovery proposals into new or rebound Targets. An optional complete Property selection also applies inclusion, assignment cleanup and group cleanup in the same ETag-guarded commit. Ambiguity is never resolved automatically.
  */
 export const postApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelection = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelectionData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelectionResponses, PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelectionErrors, ThrowOnError>({
@@ -501,7 +501,7 @@ export const postApiV1ProjectsByNameMeasurementPlanDraftActionsMergeTargets = <T
 /**
  * Exclude a draft Target
  *
- * Excluded Targets stay in the draft for review but never compile.
+ * Excluded Targets stay in the draft for review but never compile. The optional `assignments-and-group-memberships` cleanup removes that Target's query assignments and every group membership in the same ETag-guarded mutation; omitting it preserves the reversible legacy behavior.
  */
 export const postApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTarget = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTargetData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTargetResponses, PostApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTargetErrors, ThrowOnError>({
@@ -543,7 +543,9 @@ export const postApiV1ProjectsByNameMeasurementPlanDraftActionsRebindTarget = <T
 };
 
 /**
- * Assign project queries to a draft Target
+ * Assign project queries to draft Targets
+ *
+ * Accepts the compatible singular `targetKey` or a bulk `targetKeys` selection. The server validates the full selection and writes one canonical draft mutation.
  */
 export const postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsResponses, PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsErrors, ThrowOnError>({
@@ -563,9 +565,9 @@ export const postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments 
 };
 
 /**
- * Remove one assignment from a draft Target
+ * Remove one query assignment from draft Targets
  *
- * Removes the assignment only. The project query behind it is never deleted.
+ * Accepts the compatible singular `targetKey` or a bulk `targetKeys` selection. It removes assignments only; the project query behind them is never deleted.
  */
 export const postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignment = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentResponses, PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentErrors, ThrowOnError>({
@@ -629,7 +631,7 @@ export const postApiV1ProjectsByNameMeasurementPlanDraftActionsClassifyAssignmen
 /**
  * Add or update a draft group
  *
- * Reporting membership only. A payload carrying queries, providers, locations or models is rejected.
+ * Reporting membership only. When `competitors` is present it replaces the complete competitor list atomically; omission preserves the existing list for backward compatibility. A payload carrying queries, providers, locations or models is rejected.
  */
 export const postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroup = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroupData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroupResponses, PostApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroupErrors, ThrowOnError>({

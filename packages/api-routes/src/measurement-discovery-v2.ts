@@ -2,7 +2,9 @@ import crypto from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import {
+  brandKeyFromText,
   effectiveDomains,
+  MIN_DOMAIN_BRAND_KEY_LENGTH,
   measurementDraftApplySitemapSelectionRequestSchema,
   measurementDraftAuthoringSchema,
   measurementDraftEtag,
@@ -593,7 +595,13 @@ export async function measurementDiscoveryV2Routes(app: FastifyInstance) {
       label: proposal.label,
       // Proposed, never included: discovery reviews and the operator decides.
       status: 'proposed',
-      aliases: [],
+      // The label is deterministic output from the reviewed sitemap rule, so
+      // it is safe to seed as mention identity when it meets the scorer's
+      // specificity floor. A later display-label edit deliberately does not
+      // rewrite this approved identity.
+      aliases: brandKeyFromText(proposal.label).length >= MIN_DOMAIN_BRAND_KEY_LENGTH
+        ? [proposal.label]
+        : [],
       urlMatchers: proposal.urlMatchers,
       source: 'sitemap',
       discoveredUrl: proposal.discoveredUrl,
@@ -652,7 +660,19 @@ export async function measurementDiscoveryV2Routes(app: FastifyInstance) {
     const draft = loadDraft(app, project.id, request.params.name)
     requireCurrentEtag(request, draft)
 
+    if (parsed.data.selectedTargetKeys !== undefined) {
+      const unresolved = draft.authoring.targets
+        .filter(target => target.status === 'proposed' && target.discoveryIdentity && !identities.has(target.discoveryIdentity))
+      if (unresolved.length > 0) {
+        throw validationError('Every discovery proposal must be reviewed before saving the Property selection.', {
+          discoveryIdentities: unresolved.map(target => target.discoveryIdentity),
+        })
+      }
+    }
+
     let targets = draft.authoring.targets
+    let assignments = draft.authoring.assignments
+    let groups = draft.authoring.groups
     const applied: Array<Record<string, unknown>> = []
     for (const selection of parsed.data.selections) {
       const proposal = targets.find(target =>
@@ -705,6 +725,24 @@ export async function measurementDiscoveryV2Routes(app: FastifyInstance) {
       })
     }
 
+    if (parsed.data.selectedTargetKeys !== undefined) {
+      const selected = new Set(parsed.data.selectedTargetKeys)
+      const known = new Set(targets.map(target => target.stableKey))
+      const unknown = [...selected].filter(targetKey => !known.has(targetKey))
+      if (unknown.length > 0) throw notFound('Measurement Target', unknown[0]!)
+      const excluded = new Set(targets.filter(target => !selected.has(target.stableKey)).map(target => target.stableKey))
+      targets = targets.map(target => ({
+        ...target,
+        status: selected.has(target.stableKey) ? 'included' as const : 'excluded' as const,
+      }))
+      assignments = assignments.filter(assignment => !excluded.has(assignment.targetKey))
+      groups = groups.map(group => ({
+        ...group,
+        targetKeys: group.targetKeys.filter(targetKey => !excluded.has(targetKey)),
+      }))
+      applied.push({ action: 'review-selection', included: selected.size, excluded: excluded.size })
+    }
+
     return commitDraft(app, {
       request,
       reply,
@@ -713,7 +751,7 @@ export async function measurementDiscoveryV2Routes(app: FastifyInstance) {
       operation: 'apply-sitemap-selection',
       idempotencyKey,
       requestChecksum,
-      authoring: { ...draft.authoring, targets },
+      authoring: { ...draft.authoring, targets, assignments, groups },
       changed: true,
       warnings: [],
       audit: { action: 'measurement.discovery.selection_applied', diff: { applied } },

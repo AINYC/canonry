@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   canonicalMeasurementPlanJson,
   compileMeasurementPlan,
+  measurementPlanResponseSchema,
+  measurementPlanVersionResponseSchema,
   parseStoredMeasurementPlan,
   parseStoredMeasurementPlanAnyVersion,
   type MeasurementPlanInput,
@@ -82,6 +84,20 @@ describe('stored measurement plan version dispatch', () => {
 
     expect(parseStoredMeasurementPlanAnyVersion(V2_PLAN)).toEqual(V2_PLAN)
     expect(parseStoredMeasurementPlanAnyVersion(stored)).toEqual(V2_PLAN)
+  })
+
+  it('types v2 plans on both active and revision-detail read responses', () => {
+    const metadata = {
+      revision: 2,
+      checksum: 'd'.repeat(64),
+      createdAt: '2026-08-01T00:00:00.000Z',
+    }
+
+    expect(measurementPlanResponseSchema.parse({ active: { ...metadata, plan: V2_PLAN } }).active?.plan)
+      .toEqual(V2_PLAN)
+    expect(measurementPlanVersionResponseSchema.parse({
+      version: { ...metadata, active: true, plan: V2_PLAN },
+    }).version.plan).toEqual(V2_PLAN)
   })
 
   it('refuses a malformed v2 revision instead of falling back to v1', () => {

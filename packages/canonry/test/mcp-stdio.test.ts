@@ -198,10 +198,19 @@ describe('canonry-mcp stdio', () => {
     const draftInput = draftAction?.inputSchema as {
       properties?: {
         operation?: {
-          anyOf?: Array<{ properties?: Record<string, { const?: unknown; properties?: Record<string, unknown> }> }>
-          oneOf?: Array<{ properties?: Record<string, { const?: unknown; properties?: Record<string, unknown> }> }>
+          anyOf?: OperationBranch[]
+          oneOf?: OperationBranch[]
         }
       }
+    }
+    type RequestBranch = { properties?: Record<string, unknown> }
+    type OperationBranch = {
+      properties?: Record<string, {
+        const?: unknown
+        properties?: Record<string, unknown>
+        anyOf?: RequestBranch[]
+        oneOf?: RequestBranch[]
+      }>
     }
     const operationSchema = draftInput.properties?.operation
     const operationBranches = operationSchema?.oneOf ?? operationSchema?.anyOf ?? []
@@ -226,7 +235,12 @@ describe('canonry-mcp stdio', () => {
     ] as const
     for (const [action, field] of requestFieldsByAction) {
       const branch = operationBranches.find(candidate => candidate.properties?.action?.const === action)
-      expect(branch?.properties?.request?.properties, `${action}.${field}`).toHaveProperty(field)
+      const request = branch?.properties?.request
+      const requestBranches = request?.oneOf ?? request?.anyOf ?? [request]
+      expect(
+        requestBranches.some(candidate => candidate?.properties && field in candidate.properties),
+        `${action}.${field}`,
+      ).toBe(true)
     }
 
     const draftTarget = {

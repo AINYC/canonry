@@ -283,6 +283,25 @@ describe('measurement report route', () => {
         evidenceIncompleteObservationIds: [], ambiguousObservationIds: [], unmatchedObservationIds: [],
       },
     })
+
+    db.insert(runs).values({
+      id: 'run-measurement-2', projectId: project.id, kind: 'answer-visibility', status: 'completed', trigger: 'manual',
+      location: 'Harbor', queries: ['homes near harbor'], measurementPlanVersionId: version.id,
+      measurementManifest: manifest, createdAt: '2026-08-01T13:00:00.000Z',
+      startedAt: '2026-08-01T13:00:00.000Z', finishedAt: '2026-08-01T13:00:00.000Z',
+    }).run()
+    const pinned = await request(
+      'GET',
+      '/api/v1/projects/northstar/measurement-report?revision=1&runId=run-measurement-1',
+      READ_KEY,
+    )
+    expect(pinned.statusCode).toBe(200)
+    expect(measurementReportResponseSchema.parse(pinned.json()).run?.id).toBe('run-measurement-1')
+    expect((await request(
+      'GET',
+      '/api/v1/projects/northstar/measurement-report?revision=1&runId=run-unknown',
+      READ_KEY,
+    )).statusCode).toBe(404)
     expect((await request('GET', '/api/v1/projects/northstar/measurement-report?revision=2', READ_KEY)).statusCode).toBe(404)
   })
 

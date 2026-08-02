@@ -15,8 +15,9 @@ import type { MeasurementPlanRoutesOptions } from './measurement-plan.js'
 import { measurementServiceRoutes } from './measurement-service.js'
 import type { MeasurementServiceRoutesOptions } from './measurement-service.js'
 import { measurementDraftRoutes } from './measurement-draft.js'
+import type { MeasurementDraftRoutesOptions } from './measurement-draft.js'
 import { measurementDiscoveryV2Routes } from './measurement-discovery-v2.js'
-import { measurementOverviewRoutes } from './measurement-overview.js'
+import { measurementOverviewRoutes, type MeasurementOverviewCache } from './measurement-overview.js'
 import { applyRoutes } from './apply.js'
 import type { ApplyRoutesOptions } from './apply.js'
 import { historyRoutes } from './history.js'
@@ -128,6 +129,8 @@ export interface ApiRoutesOptions {
   getEffectiveProviderModels?: () => Readonly<Record<string, string>>
   /** Optional deterministic sitemap-fetch seam for Target discovery tests/hosts. */
   fetchMeasurementSitemap?: MeasurementServiceRoutesOptions['fetchSitemap']
+  /** Bounded read-through cache for a server instance's measurement overview aggregates. */
+  measurementOverviewCache?: MeasurementOverviewCache
   /** Provider configuration summary for settings endpoint */
   providerSummary?: ProviderSummaryEntry[]
   /** Resolves agent LLM provider key status for the `config.agent-providers` doctor check. See `DoctorContext.getAgentProviderSummary`. */
@@ -417,9 +420,11 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
     } satisfies MeasurementServiceRoutesOptions)
     // Advanced Measurement v2. Registered here so the slices that fill in the
     // handlers never have to touch this file or `openapi.ts`.
-    await api.register(measurementDraftRoutes)
+    await api.register(measurementDraftRoutes, {
+      getRunnableProviderNames: opts.getRunnableProviderNames,
+    } satisfies MeasurementDraftRoutesOptions)
     await api.register(measurementDiscoveryV2Routes)
-    await api.register(measurementOverviewRoutes)
+    await api.register(measurementOverviewRoutes, { cache: opts.measurementOverviewCache })
     await api.register(applyRoutes, {
       onScheduleUpdated: opts.onScheduleUpdated,
       onProjectUpserted: opts.onProjectUpserted,

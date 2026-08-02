@@ -298,7 +298,7 @@ export const getApiV1ProjectsByNameMeasurementReportQueryKey = (options: Options
 /**
  * Get a revision-pinned measurement report
  *
- * Builds the Target, group, and evidence report from the immutable plan revision and its latest eligible stored run. Missing run population remains explicit and never triggers live provider execution.
+ * Builds the Target, group, and evidence report from the immutable plan revision and either its latest eligible stored run or the exact eligible runId supplied by the caller. Missing run population remains explicit and never triggers live provider execution.
  */
 export const getApiV1ProjectsByNameMeasurementReportOptions = (options: Options<GetApiV1ProjectsByNameMeasurementReportData>) => {
     return queryOptions({
@@ -590,7 +590,7 @@ export const postApiV1ProjectsByNameMeasurementPlanDraftActionsImportSitemapMuta
 /**
  * Apply the operator selection from discovery
  *
- * Turns reviewed discovery proposals into new or rebound Targets. Ambiguity is never resolved automatically.
+ * Turns reviewed discovery proposals into new or rebound Targets. An optional complete Property selection also applies inclusion, assignment cleanup and group cleanup in the same ETag-guarded commit. Ambiguity is never resolved automatically.
  */
 export const postApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelectionMutation = (options?: Partial<Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelectionData>>): UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelectionResponse, PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelectionError, Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelectionData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelectionResponse, PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelectionError, Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelectionData>> = {
@@ -664,7 +664,7 @@ export const postApiV1ProjectsByNameMeasurementPlanDraftActionsMergeTargetsMutat
 /**
  * Exclude a draft Target
  *
- * Excluded Targets stay in the draft for review but never compile.
+ * Excluded Targets stay in the draft for review but never compile. The optional `assignments-and-group-memberships` cleanup removes that Target's query assignments and every group membership in the same ETag-guarded mutation; omitting it preserves the reversible legacy behavior.
  */
 export const postApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTargetMutation = (options?: Partial<Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTargetData>>): UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTargetResponse, PostApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTargetError, Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTargetData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTargetResponse, PostApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTargetError, Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTargetData>> = {
@@ -700,7 +700,9 @@ export const postApiV1ProjectsByNameMeasurementPlanDraftActionsRebindTargetMutat
 };
 
 /**
- * Assign project queries to a draft Target
+ * Assign project queries to draft Targets
+ *
+ * Accepts the compatible singular `targetKey` or a bulk `targetKeys` selection. The server validates the full selection and writes one canonical draft mutation.
  */
 export const postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsMutation = (options?: Partial<Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsData>>): UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsResponse, PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsError, Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsResponse, PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsError, Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsData>> = {
@@ -717,9 +719,9 @@ export const postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsM
 };
 
 /**
- * Remove one assignment from a draft Target
+ * Remove one query assignment from draft Targets
  *
- * Removes the assignment only. The project query behind it is never deleted.
+ * Accepts the compatible singular `targetKey` or a bulk `targetKeys` selection. It removes assignments only; the project query behind them is never deleted.
  */
 export const postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentMutation = (options?: Partial<Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentData>>): UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentResponse, PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentError, Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentResponse, PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentError, Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentData>> = {
@@ -774,7 +776,7 @@ export const postApiV1ProjectsByNameMeasurementPlanDraftActionsClassifyAssignmen
 /**
  * Add or update a draft group
  *
- * Reporting membership only. A payload carrying queries, providers, locations or models is rejected.
+ * Reporting membership only. When `competitors` is present it replaces the complete competitor list atomically; omission preserves the existing list for backward compatibility. A payload carrying queries, providers, locations or models is rejected.
  */
 export const postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroupMutation = (options?: Partial<Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroupData>>): UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroupResponse, PostApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroupError, Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroupData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroupResponse, PostApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroupError, Options<PostApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroupData>> = {

@@ -22,6 +22,12 @@ import {
   type DatabaseClient,
 } from '@ainyc/canonry-db'
 import { apiRoutes } from '../src/index.js'
+import {
+  createMeasurementOverviewCache,
+  type MeasurementOverviewCache,
+  type MeasurementOverviewCacheKey,
+} from '../src/measurement-overview.js'
+import type { MeasurementOverview } from '../src/measurement-report.js'
 import { buildMeasurementPlanV2Manifest } from '../src/measurement-report-adapter.js'
 import { measurementPlanV2Fixture } from './measurement-plan-v2-fixture.js'
 
@@ -32,6 +38,33 @@ let db: DatabaseClient
 let app: FastifyInstance
 let projectId: string
 let plan: MeasurementPlanV2
+let overviewBuilds: number
+
+function emptyCachedOverview(): MeasurementOverview {
+  const noPopulation = { numerator: null, denominator: null, rate: null, reason: 'no-population' as const }
+  return {
+    eligibleSlots: 0,
+    answeredSlots: 0,
+    includesHistoricalData: false,
+    propertiesMentioned: noPopulation,
+    mentionCoverage: noPopulation,
+    citationCoverage: noPopulation,
+    brandPresence: noPopulation,
+    namedShareOfVoice: null,
+    properties: [],
+    flags: 0,
+  }
+}
+
+function overviewCacheKey(runId: string): MeasurementOverviewCacheKey {
+  return {
+    planVersionId: 'version',
+    revision: 1,
+    runId,
+    aggregateFingerprint: 'filter',
+    evidenceFingerprint: 'evidence',
+  }
+}
 
 function seedVersion(revision: number): string {
   const id = crypto.randomUUID()
@@ -138,9 +171,19 @@ beforeEach(async () => {
     updatedAt: NOW,
   }).run()
   plan = measurementPlanV2Fixture()
+  overviewBuilds = 0
+  const backingOverviewCache = createMeasurementOverviewCache()
+  const measurementOverviewCache: MeasurementOverviewCache = {
+    getOrBuild(key, build) {
+      return backingOverviewCache.getOrBuild(key, () => {
+        overviewBuilds++
+        return build()
+      })
+    },
+  }
 
   app = Fastify()
-  app.register(apiRoutes, { db, skipAuth: true })
+  app.register(apiRoutes, { db, skipAuth: true, measurementOverviewCache })
   await app.ready()
 })
 
@@ -163,7 +206,7 @@ describe('measurement overview', () => {
     expect(status).toBe(200)
     expect(body.mode).toBe('active-v2')
     expect(body.measurement.state).toBe('not_measured')
-    expect(body.measurement).toMatchObject({ completed: 0, expected: 4 })
+    expect(body.measurement).toMatchObject({ completed: 0, expected: 4, includesHistoricalData: false })
     expect(body.measurement.displayedRunId).toBeUndefined()
     expect(Object.values(body.metrics)).toEqual(Array.from(
       { length: 5 },
@@ -214,9 +257,32 @@ describe('measurement overview', () => {
 
     const { body } = await overview('scope=all')
 
-    expect(body.measurement).toMatchObject({ state: 'complete', displayedRunId: runId, completed: 4, expected: 4 })
+    expect(body.measurement).toMatchObject({
+      state: 'complete',
+      displayedRunId: runId,
+      completed: 4,
+      expected: 4,
+      includesHistoricalData: false,
+    })
     expect(body.metrics.brandPresence).toMatchObject({ state: 'available' })
     expect(body.metrics.sov).toEqual(body.metrics.brandPresence)
+  })
+
+  it('reports historical source recovery without requiring evidence rows', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    const runId = seedRun(versionId)
+    seedSnapshot(runId, 'exec-nearby', 'openai', {
+      citedUrls: null,
+      rawResponse: JSON.stringify({ groundingSources: [] }),
+    })
+    seedSnapshot(runId, 'exec-nearby', 'gemini')
+    seedSnapshot(runId, 'exec-brand', 'openai', { answerText: 'Northstar is well reviewed.' })
+    seedSnapshot(runId, 'exec-brand', 'gemini', { answerText: 'Northstar is well reviewed.' })
+
+    const { body } = await overview('scope=all')
+
+    expect(body.measurement.includesHistoricalData).toBe(true)
   })
 
   it('counts a question shared by two Properties once in the denominator', async () => {
@@ -277,12 +343,16 @@ describe('measurement overview', () => {
 
     const unfiltered = await overview('scope=group&groupKey=regional&queryClass=non-brand')
     const searched = await overview('scope=group&groupKey=regional&queryClass=non-brand&search=HARBOR')
+    const otherSearch = await overview('scope=group&groupKey=regional&queryClass=non-brand&search=BAYSIDE')
 
     expect(searched.body.metrics).toEqual(unfiltered.body.metrics)
+    expect(otherSearch.body.metrics).toEqual(unfiltered.body.metrics)
     expect(searched.body.flags).toEqual(unfiltered.body.flags)
     expect(searched.body.namedShareOfVoice).toEqual(unfiltered.body.namedShareOfVoice)
     expect(unfiltered.body.properties.items.map(row => row.targetKey)).toEqual(['bayside', 'harbor'])
     expect(searched.body.properties.items.map(row => row.targetKey)).toEqual(['harbor'])
+    expect(otherSearch.body.properties.items.map(row => row.targetKey)).toEqual(['bayside'])
+    expect(overviewBuilds).toBe(1)
   })
 
   it('pages Properties deterministically through an opaque cursor', async () => {
@@ -297,6 +367,63 @@ describe('measurement overview', () => {
     const second = await overview(`scope=all&limit=1&cursor=${encodeURIComponent(first.body.properties.nextCursor!)}`)
     expect(second.body.properties.items.map(row => row.targetKey)).toEqual(['harbor'])
     expect(second.body.properties.nextCursor).toBeNull()
+  })
+
+  it('reuses one stable aggregate across cursor pages but not a changed filter or run', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    seedMeasuredRun(versionId)
+
+    const first = await overview('scope=all&limit=1')
+    expect(first.status).toBe(200)
+    expect(first.body.properties.nextCursor).toEqual(expect.any(String))
+    expect(overviewBuilds).toBe(1)
+
+    const second = await overview(`scope=all&limit=1&cursor=${encodeURIComponent(first.body.properties.nextCursor!)}`)
+    expect(second.status).toBe(200)
+    expect(overviewBuilds).toBe(1)
+
+    const providerFiltered = await overview('scope=all&provider=openai&limit=1')
+    expect(providerFiltered.status).toBe(200)
+    expect(overviewBuilds).toBe(2)
+
+    const laterRun = seedMeasuredRun(versionId)
+    const changedRun = await overview(`scope=all&runId=${laterRun}&limit=1`)
+    expect(changedRun.status).toBe(200)
+    expect(overviewBuilds).toBe(3)
+  })
+
+  it('rebuilds a named in-progress run when its evidence changes', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    const runningRun = seedRun(versionId, { status: 'running', finishedAt: null })
+    seedSnapshot(runningRun, 'exec-nearby', 'openai')
+
+    const initial = await overview(`scope=all&runId=${runningRun}&limit=1`)
+    expect(initial.status).toBe(200)
+    expect(overviewBuilds).toBe(1)
+
+    seedSnapshot(runningRun, 'exec-nearby', 'gemini')
+    const refreshed = await overview(`scope=all&runId=${runningRun}&limit=1`)
+    expect(refreshed.status).toBe(200)
+    expect(overviewBuilds).toBe(2)
+  })
+
+  it('bounds cached aggregates with LRU eviction', () => {
+    const cache = createMeasurementOverviewCache(2)
+    let builds = 0
+    const read = (runId: string) => cache.getOrBuild(overviewCacheKey(runId), () => {
+      builds++
+      return emptyCachedOverview()
+    })
+
+    read('first')
+    read('second')
+    read('first') // Refresh first, so second becomes the eviction candidate.
+    read('third')
+    read('second')
+
+    expect(builds).toBe(4)
   })
 
   it('sorts metric coverage with unavailable Properties first and deterministic label/key ties', async () => {
