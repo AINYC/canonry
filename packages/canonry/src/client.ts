@@ -6,6 +6,13 @@ import type {
   ProjectUpsertRequest,
   RunDto,
   RunDetailDto,
+  MeasurementPlanInput,
+  MeasurementPlanCompilePreviewResponse,
+  MeasurementPlanDiffPreviewResponse,
+  MeasurementPlanResponse,
+  MeasurementPlanVersionsResponse,
+  MeasurementPlanVersionResponse,
+  MeasurementSegmentRetirementResponse,
   LatestProjectRunDto,
   SiteAuditScoreDto,
   SiteAuditPagesResponseDto,
@@ -414,6 +421,13 @@ import {
   getApiV1ProjectsByNameBacklinksDomains,
   getApiV1ProjectsByNameBacklinksHistory,
   getApiV1ProjectsByNameBacklinksSources,
+  getApiV1ProjectsByNameMeasurementPlan,
+  postApiV1ProjectsByNameMeasurementPlanCompilePreview,
+  postApiV1ProjectsByNameMeasurementPlanDiffPreview,
+  postApiV1ProjectsByNameMeasurementPlanSegmentsByStableKeyRetire,
+  putApiV1ProjectsByNameMeasurementPlan,
+  getApiV1ProjectsByNameMeasurementPlanVersions,
+  getApiV1ProjectsByNameMeasurementPlanVersionsByRevision,
 } from '@ainyc/canonry-api-client'
 
 export type { BrandMetricsDto, GapAnalysisDto, SourceBreakdownDto, AuditLogEntry, CompetitorDto, KeywordDto, QueryDto }
@@ -1059,6 +1073,66 @@ export class ApiClient {
         client: this.heyClient,
         path: { name: project },
         body: (body ?? {}) as never,
+      }),
+    )
+  }
+
+  async getMeasurementPlan(project: string): Promise<MeasurementPlanResponse> {
+    return this.invoke<MeasurementPlanResponse>(() =>
+      getApiV1ProjectsByNameMeasurementPlan({ client: this.heyClient, path: { name: project } }),
+    )
+  }
+
+  async listMeasurementPlanVersions(project: string): Promise<MeasurementPlanVersionsResponse> {
+    return this.invoke<MeasurementPlanVersionsResponse>(() =>
+      getApiV1ProjectsByNameMeasurementPlanVersions({ client: this.heyClient, path: { name: project } }),
+    )
+  }
+
+  async getMeasurementPlanVersion(project: string, revision: number): Promise<MeasurementPlanVersionResponse> {
+    return this.invoke<MeasurementPlanVersionResponse>(() =>
+      getApiV1ProjectsByNameMeasurementPlanVersionsByRevision({
+        client: this.heyClient,
+        path: { name: project, revision },
+      }),
+    )
+  }
+
+  async compileMeasurementPlanPreview(project: string, plan: MeasurementPlanInput): Promise<MeasurementPlanCompilePreviewResponse> {
+    return this.invoke<MeasurementPlanCompilePreviewResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanCompilePreview({
+        client: this.heyClient,
+        path: { name: project },
+        body: plan,
+      }),
+    )
+  }
+
+  async diffMeasurementPlanPreview(project: string, plan: MeasurementPlanInput): Promise<MeasurementPlanDiffPreviewResponse> {
+    return this.invoke<MeasurementPlanDiffPreviewResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDiffPreview({
+        client: this.heyClient,
+        path: { name: project },
+        body: plan,
+      }),
+    )
+  }
+
+  async publishMeasurementPlan(project: string, plan: MeasurementPlanInput): Promise<MeasurementPlanResponse> {
+    return this.invoke<MeasurementPlanResponse>(() =>
+      putApiV1ProjectsByNameMeasurementPlan({
+        client: this.heyClient,
+        path: { name: project },
+        body: plan,
+      }),
+    )
+  }
+
+  async retireMeasurementPlanSegment(project: string, stableKey: string): Promise<MeasurementSegmentRetirementResponse> {
+    return this.invoke<MeasurementSegmentRetirementResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanSegmentsByStableKeyRetire({
+        client: this.heyClient,
+        path: { name: project, stableKey },
       }),
     )
   }

@@ -9,6 +9,10 @@ erDiagram
   projects ||--o{ queries : has
   projects ||--o{ competitors : has
   projects ||--o{ runs : has
+  projects ||--o| measurement_plans : "activates"
+  projects ||--o{ measurement_plan_versions : "publishes"
+  projects ||--o{ measurement_segments : "identifies"
+  measurement_plan_versions ||--o{ runs : "optionally pins"
   projects ||--o| schedules : "has (1:1)"
   projects ||--o{ notifications : has
   projects ||--o{ audit_log : has
@@ -70,8 +74,11 @@ erDiagram
 | **projects** | Root entity — domain, location config, provider list, per-project `provider_models` overrides, `measurement_config` (JSON: marketing hosts, brand terms, and GA4 lead-event names), optional `icp_description` (free-text ICP used by discovery seed phase) | Unique: `name` |
 | **queries** | Tracked queries per project. `provenance` tags where the entry came from (e.g. `cli`, `discovery:<session_id>`) so adopted basket entries can be traced back to a discovery run. | Unique: `(projectId, query)` |
 | **competitors** | Competitor domains per project. `provenance` tags origin (`cli`, `discovery:<session_id>`) for the same traceability reason. | Unique: `(projectId, domain)` |
-| **runs** | Visibility sweep executions | FK: projectId → projects |
-| **query_snapshots** | Per-query per-provider results | FK: runId → runs, queryId → queries |
+| **measurement_plans** | Optional active-plan pointer for a project. | PK: `projectId`; composite FK `(projectId, activeVersionId)` → plan version |
+| **measurement_plan_versions** | Immutable canonical Target-model revisions. A revision freezes project brand identity, Targets, optional reporting groups, URL matchers, query snapshots, deduplicated execution nodes with expected snapshot counts, and baseline/Target usage edges. Groups never own queries or execution edges. | Unique: `(projectId, revision)` |
+| **measurement_segments** | Stable project-local identity for a Target or group, including its immutable `kind`. Only explicit retirement permanently prevents key reuse; omission from a revision does not. First publish a revision without the key, then run `canonry measurement-plan retire <project> <stable-key>` (or the matching API/MCP mutation). Retirement is idempotent and irreversible. Labels, memberships, aliases, and URL matchers remain versioned in canonical plan JSON. | Unique: `(projectId, stableKey)` |
+| **runs** | Existing sweep executions. A future plan-aware run can optionally pin `measurement_plan_version_id` and a materialized `measurement_manifest`; planless runs keep both null. | FK: projectId → projects; optional composite FK `(projectId, measurementPlanVersionId)` → plan version |
+| **query_snapshots** | Per-query per-provider results. Plan-aware rows can additionally record `measurement_execution_id`, requested context, and provider-supported context; historical and planless rows keep them null. | FK: runId → runs, queryId → queries |
 | **research_runs** | Saved batch header for ad-hoc model research. Isolated from tracked monitoring. | FK: projectId → projects, unique `(projectId, idempotencyKey)` |
 | **research_run_queries** | One persisted answer/evidence result per research batch query. | FK: researchRunId → research_runs, unique `(researchRunId, position)` |
 | **schedules** | Cron schedules (1:1 with project) | Unique: projectId |
@@ -83,6 +90,17 @@ history. They are deliberately not linked to `queries`, `runs`, or
 `query_snapshots`: a research request never changes the tracked basket or any
 monitoring metric. Deleting a project cascades to its research runs, and
 deleting a research run cascades to its query results.
+
+Measurement planning is additive. Existing projects and ordinary
+`answer-visibility` runs do not require a plan, and publishing a plan does not
+change their metrics or scheduling. The compiler freezes a deduplicated graph:
+every project query gets a baseline edge, while user-selected Target assignments
+add attribution edges to the same execution node when query text and context are
+identical. Optional groups own membership and competitor metadata only; their
+reporting edges are derived from member Target assignments and never own query
+intent. A plan-aware runner can later pin the exact revision and manifest so
+historical execution remains reproducible after the active plan or tracked-query
+library changes.
 
 #### `projects.provider_models`
 
@@ -247,6 +265,8 @@ Several text columns store serialized JSON. Always use `parseJsonColumn()` from 
 | `projects.tags` | `string[]` |
 | `projects.labels` | `Record<string, string>` |
 | `projects.ownedDomains` | `string[]` |
+| `measurement_plan_versions.canonicalJson` | `MeasurementPlan` (native `mode: 'json'`) |
+| `runs.measurementManifest` | `MeasurementRunManifest` (native `mode: 'json'`) |
 | `query_snapshots.citedDomains` | `string[]` |
 | `query_snapshots.groundingSources` | `GroundingSource[]` |
 | `query_snapshots.competitorOverlap` | `string[]` |

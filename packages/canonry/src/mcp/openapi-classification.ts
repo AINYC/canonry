@@ -40,6 +40,13 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   // covers the MCP workflow without forcing agents to look up ids first.
   'DELETE /api/v1/projects/{name}/competitors/{id}': 'deferred',
   'POST /api/v1/projects/{name}/runs': 'included',
+  'GET /api/v1/projects/{name}/measurement-plan': 'included',
+  'POST /api/v1/projects/{name}/measurement-plan/compile-preview': 'included',
+  'POST /api/v1/projects/{name}/measurement-plan/diff-preview': 'included',
+  'PUT /api/v1/projects/{name}/measurement-plan': 'included',
+  'POST /api/v1/projects/{name}/measurement-plan/segments/{stableKey}/retire': 'included',
+  'GET /api/v1/projects/{name}/measurement-plan/versions': 'included',
+  'GET /api/v1/projects/{name}/measurement-plan/versions/{revision}': 'included',
   'POST /api/v1/projects/{name}/research/runs': 'included',
   'GET /api/v1/projects/{name}/research/runs': 'included',
   'GET /api/v1/projects/{name}/research/runs/{runId}': 'included',

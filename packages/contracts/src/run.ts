@@ -123,6 +123,8 @@ export const runDtoSchema = z.object({
   kind: runKindSchema,
   status: runStatusSchema,
   trigger: runTriggerSchema.default('manual'),
+  measurementPlanVersionId: z.string().nullable().optional(),
+  measurementManifest: z.record(z.string(), z.unknown()).nullable().optional(),
   location: z.string().nullable().optional(),
   queries: z.array(z.string()).nullable().optional(),
   startedAt: z.string().nullable().optional(),

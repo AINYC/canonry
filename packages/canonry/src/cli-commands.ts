@@ -34,6 +34,7 @@ import { TECHNICAL_AEO_CLI_COMMANDS } from './cli-commands/technical-aeo.js'
 import { VISIBILITY_STATS_CLI_COMMANDS } from './cli-commands/visibility-stats.js'
 import { WORDPRESS_CLI_COMMANDS } from './cli-commands/wordpress.js'
 import { AGENT_CLI_COMMANDS } from './cli-commands/agent.js'
+import { MEASUREMENT_PLAN_CLI_COMMANDS } from './cli-commands/measurement-plan.js'
 
 export const REGISTERED_CLI_COMMANDS: readonly CliCommandSpec[] = [
   ...BACKFILL_CLI_COMMANDS,
@@ -71,4 +72,5 @@ export const REGISTERED_CLI_COMMANDS: readonly CliCommandSpec[] = [
   ...DOCTOR_CLI_COMMANDS,
   ...GET_CLI_COMMANDS,
   ...MCP_CLI_COMMANDS,
+  ...MEASUREMENT_PLAN_CLI_COMMANDS,
 ]

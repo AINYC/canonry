@@ -70,6 +70,12 @@ const RUN_HOOK_ALLOWLIST: ReadonlySet<number> = new Set([
   // Idempotent via the `served_model IS NULL` guard, which also stops it
   // overwriting a value the live insert path recorded.
   105,
+  // v118 adds nullable snapshot execution/context columns and rebuilds `runs`
+  // only to attach the same-project measurement-plan foreign key. It preserves
+  // every existing column and row. An older binary ignores the new nullable
+  // columns and continues to write valid runs; the hook is required because
+  // SQLite cannot add a foreign key without a transactional table rebuild.
+  118,
 ])
 
 test(`migrations after v${DOWNGRADE_BASELINE} define no run() hook unless explicitly allowlisted`, () => {
