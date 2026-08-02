@@ -19,6 +19,7 @@ export type ErrorCode =
   | 'AGENT_BUSY'
   | 'MISSING_DEPENDENCY'
   | 'RUNTIME_STATE_MISSING'
+  | 'MEASUREMENT_PLAN_REVISION_CONFLICT'
 
 export class AppError extends Error {
   readonly code: ErrorCode
@@ -108,6 +109,18 @@ export function operationInProgress(
   details?: Record<string, unknown>,
 ): AppError {
   return new AppError('OPERATION_IN_PROGRESS', message, 409, details)
+}
+
+export function measurementPlanRevisionConflict(
+  expectedActiveRevision: number | null,
+  actualActiveRevision: number | null,
+): AppError {
+  return new AppError(
+    'MEASUREMENT_PLAN_REVISION_CONFLICT',
+    'The active measurement plan changed. Reload it before publishing.',
+    409,
+    { expectedActiveRevision, actualActiveRevision },
+  )
 }
 
 export function runNotCancellable(runId: string, status: string): AppError {

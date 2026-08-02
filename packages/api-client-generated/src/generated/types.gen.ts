@@ -3399,6 +3399,51 @@ export type MeasurementPlanInput = {
     }>;
 };
 
+export type MeasurementPlanPublishRequest = {
+    expectedActiveRevision: number | null;
+    plan: {
+        schemaVersion: 1;
+        targets: Array<{
+            stableKey: string;
+            label: string;
+            urls: Array<{
+                kind: 'exact';
+                url: string;
+                pathCase: 'sensitive' | 'insensitive';
+            } | {
+                kind: 'prefix';
+                host: string;
+                pathPrefix: string;
+                pathCase: 'sensitive' | 'insensitive';
+            } | {
+                kind: 'host';
+                host: string;
+            }>;
+            aliases: Array<string>;
+            metadata?: {
+                [key: string]: string;
+            };
+        }>;
+        groups?: Array<{
+            stableKey: string;
+            label: string;
+            targetKeys: Array<string>;
+            competitors?: Array<string>;
+        }>;
+        targetQuerySelections?: Array<{
+            targetKey: string;
+            queryIds: Array<string>;
+            context?: {
+                label: string;
+                city: string;
+                region: string;
+                country: string;
+                timezone?: string;
+            } | null;
+        }>;
+    };
+};
+
 export type MeasurementPlanResponse = {
     active: {
         revision: number;
@@ -6395,7 +6440,7 @@ export type GetApiV1ProjectsByNameMeasurementPlanResponses = {
 export type GetApiV1ProjectsByNameMeasurementPlanResponse = GetApiV1ProjectsByNameMeasurementPlanResponses[keyof GetApiV1ProjectsByNameMeasurementPlanResponses];
 
 export type PutApiV1ProjectsByNameMeasurementPlanData = {
-    body: MeasurementPlanInput;
+    body: MeasurementPlanPublishRequest;
     path: {
         /**
          * Project name.
@@ -6408,7 +6453,7 @@ export type PutApiV1ProjectsByNameMeasurementPlanData = {
 
 export type PutApiV1ProjectsByNameMeasurementPlanErrors = {
     /**
-     * The measurement plan is invalid or stale.
+     * The measurement plan or publish request is invalid.
      */
     400: ErrorEnvelope;
     /**
@@ -6419,6 +6464,10 @@ export type PutApiV1ProjectsByNameMeasurementPlanErrors = {
      * Project not found.
      */
     404: ErrorEnvelope;
+    /**
+     * The active measurement-plan revision changed after the caller loaded it.
+     */
+    409: ErrorEnvelope;
 };
 
 export type PutApiV1ProjectsByNameMeasurementPlanError = PutApiV1ProjectsByNameMeasurementPlanErrors[keyof PutApiV1ProjectsByNameMeasurementPlanErrors];

@@ -527,21 +527,22 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'put',
     path: '/api/v1/projects/{name}/measurement-plan',
     summary: 'Publish a measurement-plan revision',
-    description: 'Validates and canonicalizes the plan against current project domains, locations, and tracked queries. Identical active content is idempotent; restoring older content creates a new immutable revision.',
+    description: 'Compares the caller-observed active revision, then validates and canonicalizes the plan against current project domains, locations, and tracked queries. Identical active content is idempotent; restoring older content creates a new immutable revision.',
     tags: ['measurement-plans'],
     parameters: [nameParameter],
     requestBody: {
       required: true,
       content: {
         'application/json': {
-          schema: { $ref: '#/components/schemas/MeasurementPlanInput' },
+          schema: { $ref: '#/components/schemas/MeasurementPlanPublishRequest' },
         },
       },
     },
     responses: {
       200: jsonResponse('The identical active revision was returned.', 'MeasurementPlanResponse'),
       201: jsonResponse('A new immutable revision was published.', 'MeasurementPlanResponse'),
-      400: errorResponse('The measurement plan is invalid or stale.'),
+      400: errorResponse('The measurement plan or publish request is invalid.'),
+      409: errorResponse('The active measurement-plan revision changed after the caller loaded it.'),
       403: errorResponse('The API key lacks measurement-plan.write.'),
       404: errorResponse('Project not found.'),
     },

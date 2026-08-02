@@ -71,20 +71,23 @@ function discoveryRequest() {
 
 async function publishPlan() {
   const response = await request('PUT', '/api/v1/projects/northstar/measurement-plan', ROOT_KEY, {
-    schemaVersion: 1,
-    targets: [{
-      stableKey: 'harbor',
-      label: 'Harbor Homes',
-      urls: [{ kind: 'prefix', host: 'northstar.example', pathPrefix: '/locations/harbor', pathCase: 'insensitive' }],
-      aliases: ['Harbor Homes'],
-    }],
-    groups: [{
-      stableKey: 'regional',
-      label: 'Regional comparison',
-      targetKeys: ['harbor'],
-      competitors: ['challenger.example'],
-    }],
-    targetQuerySelections: [{ targetKey: 'harbor', queryIds: [queryId] }],
+    expectedActiveRevision: null,
+    plan: {
+      schemaVersion: 1,
+      targets: [{
+        stableKey: 'harbor',
+        label: 'Harbor Homes',
+        urls: [{ kind: 'prefix', host: 'northstar.example', pathPrefix: '/locations/harbor', pathCase: 'insensitive' }],
+        aliases: ['Harbor Homes'],
+      }],
+      groups: [{
+        stableKey: 'regional',
+        label: 'Regional comparison',
+        targetKeys: ['harbor'],
+        competitors: ['challenger.example'],
+      }],
+      targetQuerySelections: [{ targetKey: 'harbor', queryIds: [queryId] }],
+    },
   })
   expect(response.statusCode).toBe(201)
   return measurementPlanResponseSchema.parse(response.json()).active!

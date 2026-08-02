@@ -4,6 +4,7 @@ import {
   embedThemeStyle,
   embedThemeMode,
   embedThemeFontHref,
+  filterEmbedProjectTabs,
   isEmbedProjectTabAllowed,
   resolveEmbedProjectTab,
 } from '../src/embed.js'
@@ -168,5 +169,27 @@ describe('resolveEmbedProjectTab', () => {
 
   it('falls back to the first allowed tab when even overview is hidden', () => {
     expect(resolveEmbedProjectTab('backlinks', ['technical-aeo', 'report'])).toBe('technical-aeo')
+  })
+
+  it('falls back to overview when filtering leaves no valid tabs', () => {
+    expect(resolveEmbedProjectTab('portfolio', filterEmbedProjectTabs(['portfolio', 'unknown']))).toBe('overview')
+    expect(resolveEmbedProjectTab('portfolio', [])).toBe('overview')
+  })
+})
+
+describe('filterEmbedProjectTabs', () => {
+  it('removes operator-only and unknown tabs', () => {
+    expect(filterEmbedProjectTabs(['overview', 'portfolio', 'unknown', 'report'])).toEqual(['overview', 'report'])
+  })
+
+  it('defaults an unset allowlist to every embed-safe project tab', () => {
+    const tabs = filterEmbedProjectTabs(undefined)
+    expect(tabs).toContain('overview')
+    expect(tabs).toContain('search-console')
+    expect(tabs).not.toContain('portfolio')
+  })
+
+  it('returns a safe fallback when every configured tab is rejected', () => {
+    expect(filterEmbedProjectTabs(['portfolio', 'not-a-tab'])).toEqual(['overview'])
   })
 })

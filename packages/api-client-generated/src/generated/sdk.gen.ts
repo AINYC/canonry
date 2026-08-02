@@ -147,7 +147,7 @@ export const getApiV1ProjectsByNameMeasurementPlan = <ThrowOnError extends boole
 /**
  * Publish a measurement-plan revision
  *
- * Validates and canonicalizes the plan against current project domains, locations, and tracked queries. Identical active content is idempotent; restoring older content creates a new immutable revision.
+ * Compares the caller-observed active revision, then validates and canonicalizes the plan against current project domains, locations, and tracked queries. Identical active content is idempotent; restoring older content creates a new immutable revision.
  */
 export const putApiV1ProjectsByNameMeasurementPlan = <ThrowOnError extends boolean = false>(options: Options<PutApiV1ProjectsByNameMeasurementPlanData, ThrowOnError>) => {
     return (options.client ?? client).put<PutApiV1ProjectsByNameMeasurementPlanResponses, PutApiV1ProjectsByNameMeasurementPlanErrors, ThrowOnError>({

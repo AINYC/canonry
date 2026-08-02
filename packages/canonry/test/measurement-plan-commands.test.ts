@@ -112,7 +112,10 @@ describe('measurement-plan CLI commands', () => {
       positionals: ['acme', inputPath], values: {}, format: 'json', dryRun: false,
     })
 
-    expect(publishMeasurementPlan).toHaveBeenCalledWith('acme', PLAN)
+    expect(publishMeasurementPlan).toHaveBeenCalledWith('acme', {
+      expectedActiveRevision: null,
+      plan: PLAN,
+    })
   })
 
   it('accepts - as stdin input for publish', async () => {
@@ -123,7 +126,26 @@ describe('measurement-plan CLI commands', () => {
     })
 
     expect(readFile).toHaveBeenCalledWith(0, 'utf8')
-    expect(publishMeasurementPlan).toHaveBeenCalledWith('acme', PLAN)
+    expect(publishMeasurementPlan).toHaveBeenCalledWith('acme', {
+      expectedActiveRevision: null,
+      plan: PLAN,
+    })
+  })
+
+  it('publishes against the active revision read immediately before the write', async () => {
+    const inputPath = path.join(tmpDir, 'plan.json')
+    fs.writeFileSync(inputPath, JSON.stringify(PLAN))
+    getMeasurementPlan.mockResolvedValueOnce({ active: { revision: 4 } })
+
+    await command('measurement-plan publish').run({
+      positionals: ['acme', inputPath], values: {}, format: 'json', dryRun: false,
+    })
+
+    expect(getMeasurementPlan).toHaveBeenCalledWith('acme')
+    expect(publishMeasurementPlan).toHaveBeenCalledWith('acme', {
+      expectedActiveRevision: 4,
+      plan: PLAN,
+    })
   })
 
   it.each([

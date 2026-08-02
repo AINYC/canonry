@@ -34,7 +34,13 @@ export async function listMeasurementPlanVersions(project: string): Promise<void
 }
 
 export async function publishMeasurementPlan(project: string, source: string): Promise<void> {
-  console.log(JSON.stringify(await createApiClient().publishMeasurementPlan(project, readPlan(source)), null, 2))
+  const client = createApiClient()
+  const plan = readPlan(source)
+  const current = await client.getMeasurementPlan(project)
+  console.log(JSON.stringify(await client.publishMeasurementPlan(project, {
+    expectedActiveRevision: current.active?.revision ?? null,
+    plan,
+  }), null, 2))
 }
 
 export async function retireMeasurementPlanSegment(project: string, stableKey: string): Promise<void> {

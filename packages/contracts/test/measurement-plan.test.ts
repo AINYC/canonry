@@ -8,6 +8,7 @@ import {
   measurementPlanInputSchema,
   measurementPlanCompilePreviewResponseSchema,
   measurementPlanDiffPreviewResponseSchema,
+  measurementPlanPublishRequestSchema,
   normalizeMeasurementPathPrefix,
   parseStoredMeasurementPlan,
   resolveMeasurementTarget,
@@ -81,6 +82,19 @@ function validationError(action: () => unknown): MeasurementPlanValidationError 
 }
 
 describe('Target measurement plan v1 authoring', () => {
+  it('requires the caller-observed active revision for publication', () => {
+    expect(measurementPlanPublishRequestSchema.parse({
+      expectedActiveRevision: null,
+      plan: PLAN,
+    })).toMatchObject({ expectedActiveRevision: null, plan: { schemaVersion: 1 } })
+    expect(measurementPlanPublishRequestSchema.parse({
+      expectedActiveRevision: 7,
+      plan: PLAN,
+    })).toMatchObject({ expectedActiveRevision: 7 })
+    expect(measurementPlanPublishRequestSchema.safeParse({ plan: PLAN }).success).toBe(false)
+    expect(measurementPlanPublishRequestSchema.safeParse({ expectedActiveRevision: 0, plan: PLAN }).success).toBe(false)
+  })
+
   it('accepts a generic synthetic target plan without cohort or lane concepts', () => {
     const parsed = measurementPlanInputSchema.parse(PLAN)
 
