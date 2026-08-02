@@ -6,6 +6,7 @@ import type {
   MeasurementDraftCompilePreviewResponse,
   MeasurementDraftDiffPreviewResponse,
   MeasurementDraftResponse,
+  MeasurementDraftWarning,
   MeasurementPlanV2PublishResponse,
   MeasurementSetupResponse,
 } from '@ainyc/canonry-contracts'
@@ -142,6 +143,9 @@ interface FakeServiceOptions {
   publishConflictRevision?: number
   etagVersion?: number
   sitemapSelectionGate?: Promise<void>
+  importWarnings?: MeasurementDraftWarning[]
+  assignmentWarnings?: MeasurementDraftWarning[]
+  groupWarnings?: MeasurementDraftWarning[]
 }
 
 function createFakeService(options: FakeServiceOptions = {}) {
@@ -181,10 +185,10 @@ function createFakeService(options: FakeServiceOptions = {}) {
     if (!currentDraft || etag !== currentEtag()) throw new ApiError('The draft changed.', 412)
     return currentDraft
   }
-  const mutation = (): DraftMutationResponse => {
+  const mutation = (warnings: MeasurementDraftWarning[] = []): DraftMutationResponse => {
     etagVersion += 1
     if (currentDraft) currentDraft.updatedAt = NOW
-    return { etag: currentEtag()!, changed: true, warnings: [], counts: counts() }
+    return { etag: currentEtag()!, changed: true, warnings: clone(warnings), counts: counts() }
   }
   const preview = (): MeasurementDraftCompilePreviewResponse => ({
     ok: true,
@@ -212,7 +216,7 @@ function createFakeService(options: FakeServiceOptions = {}) {
         exclusions: input.exclusions ?? [],
         inputChecksum: 'c'.repeat(64),
       }
-      return mutation()
+      return mutation(options.importWarnings)
     }),
     applySitemapSelection: vi.fn(async (_projectName, etag, selections: SitemapSelectionInput[], selectedTargetKeys: string[]) => {
       await options.sitemapSelectionGate
@@ -255,7 +259,7 @@ function createFakeService(options: FakeServiceOptions = {}) {
           })
         }
       }
-      return mutation()
+      return mutation(options.assignmentWarnings)
     }),
     removeAssignment: vi.fn(async (_projectName, etag, targetKeys, queryId) => {
       const draft = requireDraft(etag)
@@ -297,7 +301,7 @@ function createFakeService(options: FakeServiceOptions = {}) {
       }
       if (index === -1) draft.authoring.groups.push(next)
       else draft.authoring.groups[index] = next
-      return mutation()
+      return mutation(options.groupWarnings)
     }),
     removeGroup: vi.fn(async (_projectName, etag, groupKey) => {
       const draft = requireDraft(etag)
@@ -437,7 +441,7 @@ async function advanceExistingDraftToReview() {
   await screen.findByRole('heading', { name: 'Queries' })
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
   await screen.findByRole('heading', { name: 'Groups' })
-  fireEvent.click(screen.getByRole('button', { name: 'Continue without groups' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Continue(?: without groups)?$/ }))
   await screen.findByRole('heading', { name: 'Review & publish' })
 }
 
@@ -447,7 +451,11 @@ test('keeps internal setup terminology out of customer-facing errors', () => {
   expect(setupErrorMessage(new ApiError('Measurement draft Target was not found', 404), 'Could not save this Property.'))
     .toBe('Could not save this Property.')
   expect(setupErrorMessage(new ApiError('Sitemap request timed out', 504), 'Could not review this sitemap.'))
-    .toBe('Sitemap request timed out')
+    .toBe('Could not review this sitemap.')
+  expect(setupErrorMessage(new ApiError('Target Stores could not be saved', 500), 'Could not save this group.'))
+    .toBe('Could not save this group.')
+  expect(setupErrorMessage(new Error('Target Stores needs a competitor domain'), 'Could not save this group.'))
+    .toBe('Target Stores needs a competitor domain')
   expect(setupErrorMessage(new ApiError('Measurement plan draft no longer exists', 404), 'Could not discard these changes.'))
     .toBe('Could not discard these changes.')
   expect(setupErrorMessage(new ApiError('A draft already exists', 409), 'Could not open setup.'))
@@ -539,6 +547,81 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     )
   })
 
+  test('renders real sitemap warning codes from paths without leaking warning prose or stable keys', async () => {
+    const targetStores = {
+      ...property(1, 'proposed'),
+      stableKey: 'target-stores',
+      label: 'Target Stores',
+    }
+    const originalStore = {
+      ...property(2),
+      stableKey: 'original-store',
+      label: 'Original Store',
+    }
+    const movedStore = {
+      ...property(3, 'proposed'),
+      stableKey: 'moved-store',
+      label: 'Moved Store',
+    }
+    const ambiguousStore = {
+      ...property(4, 'proposed'),
+      stableKey: 'ambiguous-store',
+      label: 'Ambiguous Store',
+    }
+    const warnings: MeasurementDraftWarning[] = [
+      {
+        code: 'measurement.discovery.proposed_new_target',
+        message: `'${targetStores.discoveredUrl}' matches no existing Target and is proposed as a new one.`,
+        path: ['targets', targetStores.stableKey],
+      },
+      {
+        code: 'measurement.discovery.proposed_rebind',
+        message: `'${movedStore.discoveredUrl}' looks like Target '${originalStore.stableKey}' at a new URL.`,
+        path: ['targets', movedStore.stableKey, 'rebind', originalStore.stableKey],
+      },
+      {
+        code: 'measurement.discovery.rebind_ambiguous',
+        message: `'${ambiguousStore.discoveredUrl}' matches several Targets, '${originalStore.stableKey}' among them.`,
+        path: ['targets', ambiguousStore.stableKey, 'rebind', originalStore.stableKey],
+      },
+      {
+        code: 'future-warning',
+        message: 'Target node stable key leaked from a future warning.',
+        path: ['targets', targetStores.stableKey],
+      },
+    ]
+    const fake = createFakeService({
+      importedTargets: [targetStores, originalStore, movedStore, ambiguousStore],
+      importWarnings: warnings,
+      assignmentWarnings: warnings,
+    })
+    renderSection(fake)
+
+    await reviewSyntheticSitemap()
+    await screen.findByRole('heading', { name: 'Properties' })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await screen.findByRole('heading', { name: 'Queries' })
+    fireEvent.click(screen.getByLabelText(`Select query ${QUERIES[0]!.query}`))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply selected queries' }))
+    await waitFor(() => expect(fake.service.applyAssignments).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await screen.findByRole('heading', { name: 'Groups' })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue without groups' }))
+    await screen.findByRole('heading', { name: 'Review & publish' })
+
+    expect(screen.getByText('Review a new Property')).toBeTruthy()
+    expect(screen.getByText(`Review Target Stores — ${targetStores.discoveredUrl}. It did not match an existing Property.`)).toBeTruthy()
+    expect(screen.getByText('Review a moved Property')).toBeTruthy()
+    expect(screen.getByText(`Review Moved Store — ${movedStore.discoveredUrl}. It may be the same Property as Original Store.`)).toBeTruthy()
+    expect(screen.getByText('Choose an existing Property')).toBeTruthy()
+    expect(screen.getByText(`Review Ambiguous Store — ${ambiguousStore.discoveredUrl}. It may match Original Store; choose the correct Property.`)).toBeTruthy()
+    expect(screen.getByText('Unexpected setup warning')).toBeTruthy()
+    expect(screen.getByText('Review the latest setup change before publishing. If this warning remains, contact support.')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('matches no existing Target')
+    expect(document.body.textContent).not.toContain('original-store')
+    expect(document.body.textContent).not.toContain('Target node stable key leaked')
+  })
+
   test('disables Properties Continue with saving feedback while the server selection is pending', async () => {
     let releaseSelection: (() => void) | undefined
     const sitemapSelectionGate = new Promise<void>(resolve => { releaseSelection = resolve })
@@ -627,6 +710,41 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     expect(fake.getDraft()?.authoring.groups[0]?.targetKeys).toEqual(['property-002'])
   })
 
+  test('keeps all 194 included Properties after narrowing query assignment scope, going Back, and continuing', async () => {
+    const targets = Array.from({ length: 194 }, (_, index) => property(index + 1))
+    const initialDraft = draftFixture({ targets, assignedQueryIds: ['q-nearby'], baseActiveRevision: 4 })
+    initialDraft.authoring.groups = [{
+      stableKey: 'group-synthetic',
+      label: 'Synthetic group',
+      targetKeys: targets.map(target => target.stableKey),
+      competitors: [],
+    }]
+    const fake = createFakeService({ initialDraft })
+    renderSection(fake)
+
+    await screen.findByRole('heading', { name: 'Properties' })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await screen.findByRole('heading', { name: 'Queries' })
+    expect(screen.getByText('194 of 194 Properties selected')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }))
+    fireEvent.click(screen.getByLabelText('Select Property 001'))
+    fireEvent.click(screen.getByLabelText('Select Property 002'))
+    expect(screen.getByText('2 of 194 Properties selected')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await screen.findByRole('heading', { name: 'Properties' })
+    expect(screen.getByText('194 of 194 selected')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await screen.findByRole('heading', { name: 'Queries' })
+    expect(screen.getByText('194 of 194 Properties selected')).toBeTruthy()
+
+    expect(fake.service.applySitemapSelection).not.toHaveBeenCalled()
+    expect(fake.getDraft()?.authoring.targets.filter(target => target.status === 'included')).toHaveLength(194)
+    expect(fake.getDraft()?.authoring.assignments).toHaveLength(194)
+    expect(fake.getDraft()?.authoring.groups[0]?.targetKeys).toHaveLength(194)
+  })
+
   test('saves a group and its complete competitor list atomically', async () => {
     const fake = createFakeService({
       initialDraft: draftFixture({ targets: [property(1)], assignedQueryIds: ['q-nearby'], baseActiveRevision: 4 }),
@@ -654,6 +772,32 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     })
     expect(fake.service.upsertCompetitor).not.toHaveBeenCalled()
     expect(fake.service.removeCompetitor).not.toHaveBeenCalled()
+  })
+
+  test('renders an action warning from its group path without filtering the operator label', async () => {
+    const fake = createFakeService({
+      initialDraft: draftFixture({ targets: [property(1)], assignedQueryIds: ['q-nearby'], baseActiveRevision: 4 }),
+      groupWarnings: [{
+        code: 'group-unknown-target',
+        message: 'Group "group-target-stores" names 1 Target the draft does not hold yet.',
+        path: ['groups', 0, 'targetKeys'],
+      }],
+    })
+    renderSection(fake)
+    await advanceExistingDraftToReview()
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+
+    fireEvent.change(screen.getByLabelText('Group name'), { target: { value: 'Target Stores' } })
+    fireEvent.click(screen.getByLabelText('Select Property 001'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save group' }))
+    await waitFor(() => expect(fake.service.upsertGroup).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await screen.findByRole('heading', { name: 'Review & publish' })
+
+    expect(screen.getByText('Fix group Properties')).toBeTruthy()
+    expect(screen.getByText('This group includes a Property that is not in setup. Remove it or add the Property first. Affected: Target Stores.')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('group-target-stores')
+    expect(document.body.textContent).not.toContain('names 1 Target')
   })
 
   test('lets a viewer inspect the server draft without creating or mutating anything', async () => {
@@ -767,16 +911,16 @@ describe('AdvancedMeasurementSection server draft controller', () => {
         path: ['targets', index],
       })),
       {
-        ruleId: 'property-url-review',
+        ruleId: 'target-url-matcher-invalid',
         severity: 'warn' as const,
-        message: 'Property 001 needs a URL review.',
-        path: ['targets', 0, 'urlMatchers'],
+        message: 'Target URL matcher is not a URL, a "/*" path prefix, or a hostname.',
+        path: ['targets', 0, 'urlMatchers', 0],
       },
       {
-        ruleId: 'property-url-review',
+        ruleId: 'target-url-matcher-unowned',
         severity: 'warn' as const,
-        message: 'Property 002 needs a URL review.',
-        path: ['targets', 1, 'urlMatchers'],
+        message: 'Target URL matcher host must be a project-owned host or its subdomain.',
+        path: ['targets', 1, 'urlMatchers', 0],
       },
     ]
     const fake = createFakeService({
@@ -789,16 +933,185 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
 
     expect(await screen.findByText('Choose a provider')).toBeTruthy()
-    expect(screen.getByText('Choose at least one provider before publishing. 194 query assignments need a provider.')).toBeTruthy()
+    expect(screen.getByText('Choose at least one provider before publishing. 194 query assignments need a provider. Affected: Property 001 — event venues nearby, Property 002 — event venues nearby, Property 003 — event venues nearby, and 191 more.')).toBeTruthy()
     expect(screen.getByText('Add Property aliases')).toBeTruthy()
-    expect(screen.getByText('Add a name or alias to measure mentions. 194 Properties need aliases.')).toBeTruthy()
+    expect(screen.getByText('Add a name or alias to measure mentions. 194 Properties need aliases. Affected: Property 001, Property 002, Property 003, and 191 more.')).toBeTruthy()
     expect(screen.getByText('Assign queries')).toBeTruthy()
-    expect(screen.getByText('Assign at least one query to measure a Property. 194 Properties need queries.')).toBeTruthy()
-    expect(screen.getByText('Property 001 needs a URL review.')).toBeTruthy()
-    expect(screen.getByText('Property 002 needs a URL review.')).toBeTruthy()
+    expect(screen.getByText('Assign at least one query to measure a Property. 194 Properties need queries. Affected: Property 001, Property 002, Property 003, and 191 more.')).toBeTruthy()
+    expect(screen.getByText('Fix a Property URL')).toBeTruthy()
+    expect(screen.getByText('Use a project domain')).toBeTruthy()
     expect(screen.getByText('Showing 5 of 5')).toBeTruthy()
     expect(document.body.textContent).not.toContain('An execution context must name at least one provider.')
+    expect(document.body.textContent).not.toContain('Target URL matcher')
     expect(document.body.textContent).not.toMatch(/\b(?:target|edge|node|manifest|revision|checksum|stableKey)\b/i)
+  })
+
+  test('renders structured compile guidance for limits and an operator-named group', async () => {
+    const initialDraft = draftFixture({ targets: [property(1)], assignedQueryIds: ['q-nearby'], baseActiveRevision: 4 })
+    initialDraft.authoring.groups = [{
+      stableKey: 'group-target-stores',
+      label: 'Target Stores',
+      targetKeys: ['property-001'],
+      competitors: [
+        { stableKey: 'competitor-rival', label: 'rival.com', domain: 'rival.com', aliases: [] },
+        { stableKey: 'competitor-rival-www', label: 'www.rival.com', domain: 'www.rival.com', aliases: [] },
+      ],
+    }]
+    const fake = createFakeService({
+      initialDraft,
+      compileChecks: [
+        {
+          ruleId: 'target-limit-exceeded',
+          severity: 'fail',
+          message: 'A draft holds at most 1000 Targets.',
+          path: ['targets'],
+        },
+        {
+          ruleId: 'competitor-duplicate',
+          severity: 'fail',
+          message: 'Competitor is listed twice in group group-target-stores: rival.com',
+          path: ['groups', 0, 'competitors', 1],
+        },
+      ],
+    })
+    renderSection(fake)
+    await screen.findByRole('heading', { name: 'Properties' })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await screen.findByRole('heading', { name: 'Queries' })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await screen.findByRole('heading', { name: 'Groups' })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await screen.findByRole('heading', { name: 'Review & publish' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+
+    expect(await screen.findByText('Reduce Properties')).toBeTruthy()
+    expect(screen.getByText('This setup exceeds the Properties publishing limit. Remove some Properties, then review again.')).toBeTruthy()
+    expect(screen.getByText('Remove a duplicate competitor')).toBeTruthy()
+    expect(screen.getByText('List each competitor domain only once in a group. Affected: Target Stores — www.rival.com.')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('Return to the earlier setup steps and review the affected Property or query.')
+    expect(document.body.textContent).not.toContain('A draft holds at most 1000 Targets.')
+    expect(document.body.textContent).not.toContain('Competitor is listed twice in group group-target-stores: rival.com')
+  })
+
+  test('gives every measurement compiler rule an operator-facing action', async () => {
+    const targets = [property(1), property(2, 'excluded')]
+    const initialDraft = draftFixture({ targets, assignedQueryIds: ['q-nearby'], baseActiveRevision: 4 })
+    initialDraft.authoring.groups = [{
+      stableKey: 'group-waterfront',
+      label: 'Waterfront venues',
+      targetKeys: ['property-001', 'property-002', 'missing-property'],
+      competitors: [
+        { stableKey: 'competitor-rival', label: 'rival.com', domain: 'rival.com', aliases: [] },
+        { stableKey: 'competitor-rival-www', label: 'www.rival.com', domain: 'www.rival.com', aliases: [] },
+      ],
+    }]
+    const compilerRules: Array<readonly [string, string, readonly (string | number)[], 'fail' | 'warn']> = [
+      ['invalid-project-identity', 'Fix the project domain', ['identities', 'projectBrand', 'canonicalHost'], 'fail'],
+      ['target-limit-exceeded', 'Reduce Properties', ['targets'], 'fail'],
+      ['duplicate-target-key', 'Resolve duplicate Properties', ['targets', 0, 'stableKey'], 'fail'],
+      ['no-included-targets', 'Include a Property', ['targets'], 'fail'],
+      ['target-url-matcher-invalid', 'Fix a Property URL', ['targets', 0, 'urlMatchers', 0], 'fail'],
+      ['target-url-matcher-unowned', 'Use a project domain', ['targets', 0, 'urlMatchers', 0], 'fail'],
+      ['target-url-matcher-ambiguous', 'Separate Property URL coverage', ['targets', 0, 'urlMatchers', 0], 'fail'],
+      ['target-alias-ambiguous', 'Use distinct Property names', ['targets', 0, 'aliases', 0], 'fail'],
+      ['target-without-aliases', 'Add Property aliases', ['targets', 0, 'aliases'], 'warn'],
+      ['duplicate-group-key', 'Resolve duplicate groups', ['groups', 0, 'stableKey'], 'fail'],
+      ['group-unknown-target', 'Fix group Properties', ['groups', 0, 'targetKeys', 2], 'fail'],
+      ['group-excluded-target', 'Include or remove a grouped Property', ['groups', 0, 'targetKeys', 1], 'fail'],
+      ['competitor-invalid-domain', 'Fix a competitor domain', ['groups', 0, 'competitors', 0, 'domain'], 'fail'],
+      ['competitor-matches-project', 'Remove a project domain', ['groups', 0, 'competitors', 0, 'domain'], 'fail'],
+      ['competitor-duplicate', 'Remove a duplicate competitor', ['groups', 0, 'competitors', 1], 'fail'],
+      ['execution-context-no-provider', 'Choose a provider', ['assignments', 0, 'contextOverride', 'providers'], 'fail'],
+      ['invalid-provider-model', 'Fix provider settings', ['assignments', 0, 'contextOverride', 'models', 'gemini'], 'fail'],
+      ['invalid-location', 'Fix a location', ['assignments', 0, 'contextOverride', 'locations', 0], 'fail'],
+      ['duplicate-assignment', 'Remove a duplicate query', ['assignments', 0], 'fail'],
+      ['assignment-unknown-target', 'Fix a query assignment', ['assignments', 0, 'targetKey'], 'fail'],
+      ['assignment-excluded-target', 'Include or unassign a Property', ['assignments', 0, 'targetKey'], 'fail'],
+      ['assignment-unknown-query', 'Remove an unavailable query', ['assignments', 0, 'queryId'], 'fail'],
+      ['assignment-unclassified', 'Classify a query', ['assignments', 0, 'queryClass'], 'fail'],
+      ['query-limit-exceeded', 'Reduce queries', ['assignments'], 'fail'],
+      ['target-without-assignments', 'Assign queries', ['targets', 0], 'warn'],
+      ['invalid-compiled-plan', 'Fix setup details', ['targets', 0, 'label'], 'fail'],
+      ['compiled-plan-too-large', 'Reduce setup size', [], 'fail'],
+    ]
+    const fake = createFakeService({
+      initialDraft,
+      compileChecks: compilerRules.map(([ruleId, _title, path, severity]) => ({
+        ruleId,
+        severity,
+        message: `Internal Target compiler message for ${ruleId}`,
+        path: [...path],
+      })),
+    })
+    renderSection(fake)
+    await advanceExistingDraftToReview()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+    await screen.findByText('Fix the project domain')
+    fireEvent.click(screen.getByRole('button', { name: 'Show next 50 exceptions' }))
+
+    for (const [, title] of compilerRules) expect(screen.getByText(title)).toBeTruthy()
+    expect(document.body.textContent).not.toContain('Internal Target compiler message')
+    expect(document.body.textContent).not.toContain('Return to the earlier setup steps and review the affected Property or query.')
+  })
+
+  test('shows inherited model and location values for a partial assignment override', async () => {
+    const initialDraft = draftFixture({ targets: [property(1)], assignedQueryIds: ['q-nearby'], baseActiveRevision: 4 })
+    initialDraft.authoring.defaultContext = {
+      providers: ['gemini'],
+      models: { openai: 'gpt-default' },
+      locations: ['Target Stores'],
+    }
+    initialDraft.authoring.assignments[0]!.contextOverride = { providers: ['gemini'] }
+    const fake = createFakeService({
+      initialDraft,
+      compileChecks: [
+        {
+          ruleId: 'invalid-provider-model',
+          severity: 'fail',
+          message: 'Internal model error.',
+          path: ['assignments', 0, 'contextOverride', 'models', 'openai'],
+        },
+        {
+          ruleId: 'invalid-location',
+          severity: 'fail',
+          message: 'Internal location error.',
+          path: ['assignments', 0, 'contextOverride', 'locations', 0],
+        },
+      ],
+    })
+    renderSection(fake)
+    await advanceExistingDraftToReview()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+
+    expect(await screen.findByText('Fix provider settings')).toBeTruthy()
+    expect(screen.getByText('Choose the provider that runs this model, or remove the model setting. Affected: Property 001 — event venues nearby — gpt-default.')).toBeTruthy()
+    expect(screen.getByText('Fix a location')).toBeTruthy()
+    expect(screen.getByText('Choose a location configured for this project, or remove it from the query. Affected: Property 001 — event venues nearby — Target Stores.')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('Internal model error.')
+    expect(document.body.textContent).not.toContain('Internal location error.')
+  })
+
+  test('makes an unknown compiler failure explicit and actionable', async () => {
+    const fake = createFakeService({
+      initialDraft: draftFixture({ targets: [property(1)], assignedQueryIds: ['q-nearby'], baseActiveRevision: 4 }),
+      compileChecks: [{
+        ruleId: 'future-validation-check',
+        severity: 'fail',
+        message: 'Target compiler validation failed.',
+        path: ['targets', 0],
+      }],
+    })
+    renderSection(fake)
+    await advanceExistingDraftToReview()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+
+    expect(await screen.findByText('An unexpected setup issue blocks publishing')).toBeTruthy()
+    expect(screen.getByText('Review the affected item, make a correction, and review again. If it remains blocked, contact support. Affected: Property 001.')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('Target compiler validation failed.')
   })
 
   test('explains that existing results remain available when updating an older setup', async () => {

@@ -214,7 +214,7 @@ export function compileMeasurementDraft(
   // Targets, where a linear search per matcher is a quadratic walk.
   const matcherClaims = new Map<string, string>()
   const aliasClaims = new Map<string, string>()
-  const compiledTargets: MeasurementV2Target[] = []
+  const compiledTargets: Array<{ target: MeasurementV2Target; targetIndex: number }> = []
   for (const { target, targetIndex } of included) {
     const matchers: MeasurementV2UrlMatcher[] = []
     target.urlMatchers.forEach((raw, matcherIndex) => {
@@ -257,12 +257,15 @@ export function compileMeasurementDraft(
       sink.warn('target-without-aliases', `Target "${target.label}" has no aliases, so it can be cited but never mentioned.`, ['targets', targetIndex, 'aliases'])
     }
     compiledTargets.push({
-      stableKey: target.stableKey,
-      label: target.label,
-      aliases,
-      urlMatchers: matchers,
-      mentionNotApplicable: aliases.length === 0,
-      discoveryIdentity: target.discoveryIdentity ?? null,
+      target: {
+        stableKey: target.stableKey,
+        label: target.label,
+        aliases,
+        urlMatchers: matchers,
+        mentionNotApplicable: aliases.length === 0,
+        discoveryIdentity: target.discoveryIdentity ?? null,
+      },
+      targetIndex,
     })
   }
 
@@ -419,9 +422,9 @@ export function compileMeasurementDraft(
     sink.fail('query-limit-exceeded', `A draft assigns at most ${MEASUREMENT_DRAFT_MAX_QUERIES} distinct queries.`, ['assignments'])
   }
   const assignedTargetKeys = new Set(assignments.map(assignment => assignment.targetKey))
-  for (const target of compiledTargets) {
+  for (const { target, targetIndex } of compiledTargets) {
     if (!assignedTargetKeys.has(target.stableKey)) {
-      sink.warn('target-without-assignments', `Target "${target.label}" has no assigned questions, so nothing will be measured for it.`, ['targets'])
+      sink.warn('target-without-assignments', `Target "${target.label}" has no assigned questions, so nothing will be measured for it.`, ['targets', targetIndex])
     }
   }
 
@@ -445,7 +448,7 @@ export function compileMeasurementDraft(
         names: canonicalStrings(context.brandNames),
       },
     },
-    targets: compiledTargets,
+    targets: compiledTargets.map(({ target }) => target),
     groups: compiledGroups,
     querySnapshots,
     assignments,

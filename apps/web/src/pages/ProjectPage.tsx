@@ -1781,7 +1781,7 @@ function ProjectPageContent({
       ? 'error' as const
       : advancedMeasurementOverviewQuery.isPending
       ? 'loading' as const
-      : advancedMeasurementOverviewQuery.isError
+      : advancedMeasurementOverviewQuery.isError && advancedMeasurementReport === undefined
         ? 'error' as const
         : 'ready' as const
     : advancedMeasurementReportQuery.isPending && !hasCachedAdvancedMeasurementReport
@@ -2493,6 +2493,7 @@ function ProjectPageContent({
             onRetryEvidence={() => { void advancedMeasurementReportQuery.refetch() }}
             isViewLoading={advancedMeasurementOverviewQuery.isPlaceholderData}
             isLoadingMore={advancedMeasurementOverviewQuery.isFetchingNextPage}
+            isLoadMoreError={advancedMeasurementOverviewQuery.isFetchNextPageError}
             viewSearch={advancedMeasurementView.search ?? ''}
           />
         </>

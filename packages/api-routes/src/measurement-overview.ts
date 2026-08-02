@@ -49,6 +49,7 @@ import { resolveProject } from './helpers.js'
 import {
   buildMeasurementOverview,
   type MeasurementMetricReason,
+  type MeasurementOverview,
   type MeasurementOverviewPropertyRow,
   type MeasurementRate,
   type MeasurementUsageEdgeInput,
@@ -105,6 +106,66 @@ interface OverviewCursor {
   filterFingerprint: string
   planVersionId: string
   evidenceFingerprint: string
+}
+
+/**
+ * The aggregate behind the Property list is independent of its cursor, limit,
+ * and sort. Cache it per process so an infinite-list page does not rebuild a
+ * stable run on every click. A request still reads and fingerprints snapshots
+ * before lookup, so a running run cannot serve a stale aggregate.
+ */
+export interface MeasurementOverviewCacheKey {
+  planVersionId: string
+  revision: number
+  runId: string
+  aggregateFingerprint: string
+  evidenceFingerprint: string
+}
+
+export interface MeasurementOverviewCache {
+  getOrBuild(key: MeasurementOverviewCacheKey, build: () => MeasurementOverview): MeasurementOverview
+}
+
+export const MEASUREMENT_OVERVIEW_CACHE_MAX_ENTRIES = 32
+
+function cacheKeyOf(key: MeasurementOverviewCacheKey): string {
+  return JSON.stringify([
+    key.planVersionId,
+    key.revision,
+    key.runId,
+    key.aggregateFingerprint,
+    key.evidenceFingerprint,
+  ])
+}
+
+/** A tiny LRU keeps the process cache bounded across plans, runs, and filters. */
+export function createMeasurementOverviewCache(
+  maxEntries = MEASUREMENT_OVERVIEW_CACHE_MAX_ENTRIES,
+): MeasurementOverviewCache {
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) {
+    throw new RangeError('Measurement overview cache maxEntries must be a positive safe integer.')
+  }
+  const entries = new Map<string, MeasurementOverview>()
+  return {
+    getOrBuild(key, build) {
+      const cacheKey = cacheKeyOf(key)
+      const hit = entries.get(cacheKey)
+      if (hit !== undefined) {
+        // Map insertion order is the LRU order. Refresh a hit before returning.
+        entries.delete(cacheKey)
+        entries.set(cacheKey, hit)
+        return hit
+      }
+
+      const overview = build()
+      entries.set(cacheKey, overview)
+      if (entries.size > maxEntries) {
+        const oldest = entries.keys().next().value
+        if (oldest !== undefined) entries.delete(oldest)
+      }
+      return overview
+    },
+  }
 }
 
 function parseOverviewQuery(raw: Record<string, unknown>): MeasurementOverviewQuery {
@@ -170,6 +231,25 @@ function overviewFilterFingerprint(query: MeasurementOverviewQuery): string {
     from: query.from ?? null,
     to: query.to ?? null,
     search: query.search === undefined ? null : normalizedText(query.search),
+  }
+  return createHash('sha256').update(JSON.stringify(filters)).digest('base64url')
+}
+
+/**
+ * Filters applied before aggregation. `search` is deliberately absent: it
+ * narrows only the already-computed Property rows, while the cursor fingerprint
+ * above must continue binding it to one result set.
+ */
+function overviewAggregateFingerprint(query: MeasurementOverviewQuery): string {
+  const filters = {
+    scope: query.scope,
+    groupKey: query.groupKey ?? null,
+    targetKey: query.targetKey ?? null,
+    queryClass: query.queryClass ?? 'all',
+    provider: query.provider === undefined ? null : normalizedText(query.provider),
+    location: query.location === undefined ? null : normalizedText(query.location),
+    from: query.from ?? null,
+    to: query.to ?? null,
   }
   return createHash('sha256').update(JSON.stringify(filters)).digest('base64url')
 }
@@ -600,6 +680,7 @@ function planV2Overview(
   plan: MeasurementPlanV2,
   query: MeasurementOverviewQuery,
   scope: ScopeSelection,
+  cache: MeasurementOverviewCache,
 ): MeasurementOverviewResponse {
   const queryClass = query.queryClass ?? 'all'
   const displayed = selectDisplayedRun(db, projectId, active, query)
@@ -644,28 +725,37 @@ function planV2Overview(
     }
   }
 
-  const manifest = measurementRunExpectedSlots(displayed, plan)
   const snapshots = db.select().from(querySnapshots).where(eq(querySnapshots.runId, displayed.id)).all()
-  const { input, edgeQueryClass } = buildMeasurementPlanV2ReportInput(active.version.revision, plan, manifest, snapshots)
-
-  // Provider, location and question class narrow the population every metric is
-  // taken over, so they are applied before a single aggregate is computed.
-  // `search` never is.
-  const expectedSlots = input.expectedSlots.filter(slot => (
-    (query.provider === undefined || slot.provider === normalizedText(query.provider))
-    && (query.location === undefined || normalizedText(slot.location ?? '') === normalizedText(query.location))
-  ))
-  const usageEdges: readonly MeasurementUsageEdgeInput[] = queryClass === 'all'
-    ? input.usageEdges
-    : input.usageEdges.filter(edge => edgeQueryClass.get(edge.id) === queryClass)
-
+  const evidenceFingerprint = overviewEvidenceFingerprint(snapshots)
   const identities = namedIdentitiesFor(plan, scope, queryClass)
-  const overview = buildMeasurementOverview({
-    ...input,
-    expectedSlots,
-    usageEdges,
-    scopeTargetIds: scope.targetKeys,
-    namedIdentities: identities,
+  const overview = cache.getOrBuild({
+    planVersionId: active.version.id,
+    revision: active.version.revision,
+    runId: displayed.id,
+    aggregateFingerprint: overviewAggregateFingerprint(query),
+    evidenceFingerprint,
+  }, () => {
+    const manifest = measurementRunExpectedSlots(displayed, plan)
+    const { input, edgeQueryClass } = buildMeasurementPlanV2ReportInput(active.version.revision, plan, manifest, snapshots)
+
+    // Provider, location and question class narrow the population every metric is
+    // taken over, so they are applied before a single aggregate is computed.
+    // `search` never is.
+    const expectedSlots = input.expectedSlots.filter(slot => (
+      (query.provider === undefined || slot.provider === normalizedText(query.provider))
+      && (query.location === undefined || normalizedText(slot.location ?? '') === normalizedText(query.location))
+    ))
+    const usageEdges: readonly MeasurementUsageEdgeInput[] = queryClass === 'all'
+      ? input.usageEdges
+      : input.usageEdges.filter(edge => edgeQueryClass.get(edge.id) === queryClass)
+
+    return buildMeasurementOverview({
+      ...input,
+      expectedSlots,
+      usageEdges,
+      scopeTargetIds: scope.targetKeys,
+      namedIdentities: identities,
+    })
   })
 
   const measured = new Map<string, MeasurementOverviewPropertyRow>(
@@ -686,7 +776,7 @@ function planV2Overview(
     query,
     displayed.id,
     active.version.id,
-    overviewEvidenceFingerprint(snapshots),
+    evidenceFingerprint,
   )
 
   const credited = new Map((overview.namedShareOfVoice?.entries ?? []).map(entry => [entry.key, entry]))
@@ -735,7 +825,13 @@ function planV2Overview(
   }
 }
 
-export async function measurementOverviewRoutes(app: FastifyInstance) {
+export interface MeasurementOverviewRoutesOptions {
+  /** Supply one when the host owns a longer-lived server/cache lifecycle. */
+  cache?: MeasurementOverviewCache
+}
+
+export async function measurementOverviewRoutes(app: FastifyInstance, options: MeasurementOverviewRoutesOptions = {}) {
+  const cache = options.cache ?? createMeasurementOverviewCache()
   app.get<{ Params: { name: string }; Querystring: Record<string, unknown> }>(
     '/projects/:name/measurement-overview',
     async request => {
@@ -748,7 +844,7 @@ export async function measurementOverviewRoutes(app: FastifyInstance) {
 
       const scope = resolveScope(active.plan, query)
       const response = active.plan.schemaVersion === MEASUREMENT_PLAN_V2_SCHEMA_VERSION
-        ? planV2Overview(app.db, project.id, active, active.plan, query, scope)
+        ? planV2Overview(app.db, project.id, active, active.plan, query, scope, cache)
         : planV1Overview(app.db, project.id, active, query, scope)
       return measurementOverviewResponseSchema.parse(response)
     },

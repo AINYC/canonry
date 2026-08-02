@@ -566,7 +566,7 @@ test('a failed setup read blocks setup instead of looking planless', async () =>
   )
 
   await waitFor(() => {
-    expect(screen.getByText('temporary failure')).toBeTruthy()
+    expect(screen.getByText('Could not load advanced measurement setup.')).toBeTruthy()
   })
   expect(screen.queryByRole('button', { name: 'Review sitemap' })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Publish setup' })).toBeNull()

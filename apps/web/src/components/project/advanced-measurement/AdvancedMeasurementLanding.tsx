@@ -25,6 +25,7 @@ export interface AdvancedMeasurementLandingProps {
   isOpeningSetup?: boolean
   isViewLoading?: boolean
   isLoadingMore?: boolean
+  isLoadMoreError?: boolean
   viewSearch?: string
 }
 
@@ -52,6 +53,7 @@ export function AdvancedMeasurementLanding({
   isOpeningSetup,
   isViewLoading,
   isLoadingMore,
+  isLoadMoreError,
   viewSearch,
 }: AdvancedMeasurementLandingProps) {
   if (mode.surface === 'simple-overview') {
@@ -80,7 +82,7 @@ export function AdvancedMeasurementLanding({
       ) : null}
       {reportState === 'loading' ? (
         <div className="h-32 animate-pulse rounded-md bg-surface-subtle" aria-label="Loading advanced measurement report" />
-      ) : reportState === 'error' ? (
+      ) : reportState === 'error' && !report ? (
         <div role="alert" className="border-y border-negative-800/40 bg-negative-950/20 py-4 text-sm text-negative">
           <p>Could not load the advanced measurement report.</p>
           {onRetryReport ? <Button className="mt-3" type="button" size="sm" variant="outline" onClick={onRetryReport}>Retry report</Button> : null}
@@ -99,6 +101,7 @@ export function AdvancedMeasurementLanding({
           isRepublishingSetup={isOpeningSetup}
           isViewLoading={isViewLoading}
           isLoadingMore={isLoadingMore}
+          isLoadMoreError={isLoadMoreError}
           viewSearch={viewSearch}
         />
       ) : (

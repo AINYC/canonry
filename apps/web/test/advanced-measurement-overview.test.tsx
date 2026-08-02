@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -393,6 +393,32 @@ describe('AdvancedMeasurementOverview', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Republish setup' }))
     expect(onRepublishSetup).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('button', { name: 'Run measurement' })).toBeNull()
+  })
+
+  it('keeps version-one property coverage rates even while aggregate class metrics are unavailable', () => {
+    const current = report()
+    const completeProperty = property('complete-office', 'Complete Office', {
+      mentionCoverage: ratio(1, 1),
+      citationCoverage: ratio(1, 1),
+    })
+    renderOverview({
+      report: {
+        ...current,
+        classReporting: 'plan-v1',
+        classScopes: undefined,
+        overall: {
+          ...current.overall!,
+          aggregate: {
+            ...current.overall!.aggregate,
+            properties: [completeProperty],
+          },
+        },
+      },
+    })
+
+    const propertyRow = screen.getByRole('button', { name: 'Show details for Complete Office' }).closest('tr')
+    expect(propertyRow).toBeTruthy()
+    expect(within(propertyRow!).getAllByText('1 of 1 (100%)')).toHaveLength(2)
   })
 
   it('keeps the report visible to viewers without mutation buttons', () => {

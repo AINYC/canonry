@@ -249,6 +249,15 @@ export interface MeasurementOverview {
   flags: number
 }
 
+/**
+ * Optional deterministic work hook for callers that need to profile a large
+ * overview without using a wall-clock threshold. The callback reports the one
+ * pass that builds reusable attribution indexes.
+ */
+export interface MeasurementOverviewBuildOptions {
+  onEvidenceIndexed?: (rows: number) => void
+}
+
 interface ParsedSourceUrl {
   normalizedUrl: string
   host: string
@@ -810,13 +819,120 @@ function unavailable(reason: MeasurementMetricReason): MeasurementRate {
   return { numerator: null, denominator: null, rate: null, reason }
 }
 
-function scopeEdges(
+type MeasurementTargetUsageEdge = Extract<MeasurementUsageEdgeInput, { type: 'target' }>
+
+/**
+ * Every per-Property calculation shares this projection of a prepared run.
+ * In particular, attribution evidence is read once here rather than once for
+ * every Target in the scoped Property list.
+ */
+interface MeasurementOverviewIndexes {
+  targetsById: ReadonlyMap<string, readonly MeasurementTargetInput[]>
+  targetEdgesByTargetId: ReadonlyMap<string, readonly MeasurementTargetUsageEdge[]>
+  slotsByExecutionId: ReadonlyMap<string, readonly MeasurementExpectedSlotInput[]>
+  answeredSlotIds: ReadonlySet<string>
+  sourceCompleteSlotIds: ReadonlySet<string>
+  mentionedSlotIdsByTargetId: ReadonlyMap<string, ReadonlySet<string>>
+  assignedSlotIdsByEdgeId: ReadonlyMap<string, ReadonlySet<string>>
+  ambiguousEvidenceKeysByTargetId: ReadonlyMap<string, ReadonlySet<string>>
+}
+
+function addToSet(map: Map<string, Set<string>>, key: string, value: string): void {
+  const values = map.get(key) ?? new Set<string>()
+  values.add(value)
+  map.set(key, values)
+}
+
+function buildMeasurementOverviewIndexes(
   input: MeasurementOverviewInput,
+  prepared: PreparedReport,
+  onEvidenceIndexed: MeasurementOverviewBuildOptions['onEvidenceIndexed'],
+): MeasurementOverviewIndexes {
+  const targetsById = new Map<string, MeasurementTargetInput[]>()
+  for (const target of input.targets) {
+    const targets = targetsById.get(target.id) ?? []
+    targets.push(target)
+    targetsById.set(target.id, targets)
+  }
+  const targetEdgesByTargetId = new Map<string, MeasurementTargetUsageEdge[]>()
+  const targetIdByEdgeId = new Map<string, string>()
+  for (const edge of input.usageEdges) {
+    if (edge.type !== 'target') continue
+    const edges = targetEdgesByTargetId.get(edge.targetId) ?? []
+    edges.push(edge)
+    targetEdgesByTargetId.set(edge.targetId, edges)
+    targetIdByEdgeId.set(edge.id, edge.targetId)
+  }
+
+  const slotsByExecutionId = new Map<string, MeasurementExpectedSlotInput[]>()
+  for (const slot of input.expectedSlots) {
+    const slots = slotsByExecutionId.get(slot.executionId) ?? []
+    slots.push(slot)
+    slotsByExecutionId.set(slot.executionId, slots)
+  }
+
+  const answeredSlotIds = new Set<string>()
+  const sourceCompleteSlotIds = new Set<string>()
+  const mentionedSlotIdsByTargetId = new Map<string, Set<string>>()
+  for (const [slotId, observation] of prepared.observationsBySlot) {
+    if (observation.sourceComplete) sourceCompleteSlotIds.add(slotId)
+    if (observation.input.answerText === null) continue
+    answeredSlotIds.add(slotId)
+    for (const targetId of observation.mentionedTargetIds) {
+      addToSet(mentionedSlotIdsByTargetId, targetId, slotId)
+    }
+  }
+
+  const assignedSlotIdsByEdgeId = new Map<string, Set<string>>()
+  const ambiguousEvidenceKeysByTargetId = new Map<string, Set<string>>()
+  let evidenceRowsIndexed = 0
+  for (const row of prepared.evidence) {
+    evidenceRowsIndexed++
+    if (row.classification === 'assigned') {
+      addToSet(assignedSlotIdsByEdgeId, row.usageEdgeId, row.expectedSlotId)
+      continue
+    }
+    if (row.classification !== 'ambiguous') continue
+
+    // An ambiguity belongs to the Property whose own usage edge produced this
+    // row. A sibling's edge gets its own row and its own indexed flag.
+    const targetId = targetIdByEdgeId.get(row.usageEdgeId)
+    if (targetId !== undefined && row.matchedTargetIds.includes(targetId)) {
+      addToSet(ambiguousEvidenceKeysByTargetId, targetId, `${row.expectedSlotId}\u0000${row.sourceUrl}`)
+    }
+  }
+  onEvidenceIndexed?.(evidenceRowsIndexed)
+
+  return {
+    targetsById,
+    targetEdgesByTargetId,
+    slotsByExecutionId,
+    answeredSlotIds,
+    sourceCompleteSlotIds,
+    mentionedSlotIdsByTargetId,
+    assignedSlotIdsByEdgeId,
+    ambiguousEvidenceKeysByTargetId,
+  }
+}
+
+function indexedScopeEdges(
+  indexes: MeasurementOverviewIndexes,
   targetIds: ReadonlySet<string>,
-): Array<Extract<MeasurementUsageEdgeInput, { type: 'target' }>> {
-  return input.usageEdges.filter((edge): edge is Extract<MeasurementUsageEdgeInput, { type: 'target' }> => (
-    edge.type === 'target' && targetIds.has(edge.targetId)
-  ))
+): MeasurementTargetUsageEdge[] {
+  const edges: MeasurementTargetUsageEdge[] = []
+  for (const targetId of targetIds) edges.push(...(indexes.targetEdgesByTargetId.get(targetId) ?? []))
+  return edges
+}
+
+function indexedSlotsForEdges(
+  edges: readonly MeasurementUsageEdgeInput[],
+  indexes: MeasurementOverviewIndexes,
+): MeasurementExpectedSlotInput[] {
+  const slots = new Map<string, MeasurementExpectedSlotInput>()
+  for (const edge of edges) {
+    for (const slot of indexes.slotsByExecutionId.get(edge.executionId) ?? []) slots.set(slot.id, slot)
+  }
+  return [...slots.values()].sort((left, right) => compareText(left.id, right.id))
 }
 
 /**
@@ -824,14 +940,11 @@ function scopeEdges(
  * is taken over these rather than over the whole expected population: a run that
  * answered half its slots has measured half, not zero.
  */
-function answeredSlots(
+function indexedAnsweredSlots(
   slots: readonly MeasurementExpectedSlotInput[],
-  prepared: PreparedReport,
+  indexes: MeasurementOverviewIndexes,
 ): MeasurementExpectedSlotInput[] {
-  return slots.filter(slot => {
-    const answer = prepared.observationsBySlot.get(slot.id)?.input.answerText
-    return answer !== null && answer !== undefined
-  })
+  return slots.filter(slot => indexes.answeredSlotIds.has(slot.id))
 }
 
 function mentionableTargets(
@@ -863,21 +976,37 @@ function scopeMentionRate(
   return { numerator, denominator: answered.length, rate: numerator / answered.length }
 }
 
-function scopeCitationRate(
+function indexedScopeCitationRate(
   slots: readonly MeasurementExpectedSlotInput[],
   edges: readonly MeasurementUsageEdgeInput[],
-  prepared: PreparedReport,
+  indexes: MeasurementOverviewIndexes,
 ): MeasurementRate {
   if (slots.length === 0) return unavailable('no-population')
-  const basis = sourceCompleteSlots(slots, prepared)
+  const basis = slots.filter(slot => indexes.sourceCompleteSlotIds.has(slot.id))
   if (basis.length === 0) return unavailable('evidence-incomplete')
 
-  const edgeIds = new Set(edges.map(edge => edge.id))
-  const assignedSlots = new Set(prepared.evidence
-    .filter(row => edgeIds.has(row.usageEdgeId) && row.classification === 'assigned')
-    .map(row => row.expectedSlotId))
+  const assignedSlots = new Set<string>()
+  for (const edge of edges) {
+    for (const slotId of indexes.assignedSlotIdsByEdgeId.get(edge.id) ?? []) assignedSlots.add(slotId)
+  }
   const numerator = basis.filter(slot => assignedSlots.has(slot.id)).length
   return { numerator, denominator: basis.length, rate: numerator / basis.length }
+}
+
+function targetMentionRate(
+  targets: readonly MeasurementTargetInput[] | undefined,
+  slots: readonly MeasurementExpectedSlotInput[],
+  answered: readonly MeasurementExpectedSlotInput[],
+  indexes: MeasurementOverviewIndexes,
+): MeasurementRate {
+  const mentionable = targets?.filter(target => target.aliases.some(alias => words(alias).length > 0)) ?? []
+  if (mentionable.length === 0) return unavailable('aliasless')
+  if (slots.length === 0) return unavailable('no-population')
+  if (answered.length === 0) return unavailable('evidence-incomplete')
+
+  const mentioned = indexes.mentionedSlotIdsByTargetId.get(mentionable[0]!.id) ?? new Set<string>()
+  const numerator = answered.filter(slot => mentioned.has(slot.id)).length
+  return { numerator, denominator: answered.length, rate: numerator / answered.length }
 }
 
 function presenceIn(
@@ -951,29 +1080,6 @@ function scopeNamedShareOfVoice(
 }
 
 /**
- * Cited URLs that tied between this Property and another at equal precedence.
- * They earn no credit anywhere (§12), so they are surfaced as work for the
- * operator instead of quietly vanishing from both denominators.
- */
-function ambiguousFlags(
-  targetId: string,
-  slots: readonly MeasurementExpectedSlotInput[],
-  edges: readonly MeasurementUsageEdgeInput[],
-  prepared: PreparedReport,
-): number {
-  const slotIds = new Set(slots.map(slot => slot.id))
-  const edgeIds = new Set(edges.map(edge => edge.id))
-  const seen = new Set<string>()
-  for (const row of prepared.evidence) {
-    if (row.classification !== 'ambiguous') continue
-    if (!slotIds.has(row.expectedSlotId) || !edgeIds.has(row.usageEdgeId)) continue
-    if (!row.matchedTargetIds.includes(targetId)) continue
-    seen.add(`${row.expectedSlotId}\u0000${row.sourceUrl}`)
-  }
-  return seen.size
-}
-
-/**
  * Scoped aggregate over one run's evidence.
  *
  * The caller narrows `expectedSlots` and `usageEdges` before calling — that is
@@ -981,21 +1087,26 @@ function ambiguousFlags(
  * kernel only has to reach the unique slots the selected Properties share. Two
  * Properties reusing one execution contribute one slot, never two.
  */
-export function buildMeasurementOverview(input: MeasurementOverviewInput): MeasurementOverview {
+export function buildMeasurementOverview(
+  input: MeasurementOverviewInput,
+  options: MeasurementOverviewBuildOptions = {},
+): MeasurementOverview {
   const prepared = prepareReport(input)
+  const indexes = buildMeasurementOverviewIndexes(input, prepared, options.onEvidenceIndexed)
   const targetIds = new Set(input.scopeTargetIds)
-  const edges = scopeEdges(input, targetIds)
-  const slots = slotsForEdges(input.expectedSlots, edges)
-  const answered = answeredSlots(slots, prepared)
+  const edges = indexedScopeEdges(indexes, targetIds)
+  const slots = indexedSlotsForEdges(edges, indexes)
+  const answered = indexedAnsweredSlots(slots, indexes)
 
   const properties = sortedUnique([...targetIds]).map(targetId => {
-    const ownEdges = scopeEdges(input, new Set([targetId]))
-    const ownSlots = slotsForEdges(input.expectedSlots, ownEdges)
+    const ownEdges = indexes.targetEdgesByTargetId.get(targetId) ?? []
+    const ownSlots = indexedSlotsForEdges(ownEdges, indexes)
+    const ownAnswered = indexedAnsweredSlots(ownSlots, indexes)
     return {
       targetId,
-      mentionCoverage: scopeMentionRate(input, new Set([targetId]), ownSlots, answeredSlots(ownSlots, prepared), prepared),
-      citationCoverage: scopeCitationRate(ownSlots, ownEdges, prepared),
-      flags: ambiguousFlags(targetId, ownSlots, ownEdges, prepared),
+      mentionCoverage: targetMentionRate(indexes.targetsById.get(targetId), ownSlots, ownAnswered, indexes),
+      citationCoverage: indexedScopeCitationRate(ownSlots, ownEdges, indexes),
+      flags: indexes.ambiguousEvidenceKeysByTargetId.get(targetId)?.size ?? 0,
     }
   })
 
@@ -1006,7 +1117,7 @@ export function buildMeasurementOverview(input: MeasurementOverviewInput): Measu
       || prepared.diagnostics.historicalObservationIds.length > 0,
     propertiesMentioned: scopePropertiesMentioned(input, targetIds, slots, answered, prepared),
     mentionCoverage: scopeMentionRate(input, targetIds, slots, answered, prepared),
-    citationCoverage: scopeCitationRate(slots, edges, prepared),
+    citationCoverage: indexedScopeCitationRate(slots, edges, indexes),
     brandPresence: scopeBrandPresence(input, slots, answered, prepared),
     namedShareOfVoice: scopeNamedShareOfVoice(input.namedIdentities ?? [], answered, prepared),
     properties,

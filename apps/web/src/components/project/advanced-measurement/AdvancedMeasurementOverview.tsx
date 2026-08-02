@@ -130,6 +130,8 @@ export interface AdvancedMeasurementOverviewProps {
   isRepublishingSetup?: boolean
   isViewLoading?: boolean
   isLoadingMore?: boolean
+  /** A later server-view page failed; retain the loaded page and offer a scoped retry. */
+  isLoadMoreError?: boolean
   viewSearch?: string
   onViewChange?: (view: AdvancedMeasurementViewRequest) => void
   onLoadMore?: (cursor: string) => void
@@ -380,6 +382,7 @@ export function AdvancedMeasurementOverview({
   isRepublishingSetup = false,
   isViewLoading = false,
   isLoadingMore = false,
+  isLoadMoreError = false,
   viewSearch,
   onViewChange,
   onLoadMore,
@@ -588,8 +591,8 @@ export function AdvancedMeasurementOverview({
                       }}
                     >
                       <td className="font-medium text-heading">{property.name}</td>
-                      <td className="text-secondary"><MetricValue metric={classMetric(property.mentionCoverage)} compact /></td>
-                      <td className="text-secondary"><MetricValue metric={classMetric(property.citationCoverage)} compact /></td>
+                      <td className="text-secondary"><MetricValue metric={property.mentionCoverage} compact /></td>
+                      <td className="text-secondary"><MetricValue metric={property.citationCoverage} compact /></td>
                       <td>
                         <span className="flex flex-wrap items-center gap-1">
                           <ToneBadge tone={property.status.tone}>{property.status.label}</ToneBadge>
@@ -609,8 +612,9 @@ export function AdvancedMeasurementOverview({
         {usesServerView && report.currentView!.nextCursor && onLoadMore ? (
           <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-secondary">
             <span>Showing {shownProperties.length} of {report.currentView!.propertyTotal}</span>
+            {isLoadMoreError ? <span role="alert">Could not load more properties.</span> : null}
             <Button size="sm" variant="outline" disabled={isLoadingMore} onClick={() => onLoadMore(report.currentView!.nextCursor!)}>
-              {isLoadingMore ? 'Loading…' : 'Show 50 more'}
+              {isLoadingMore ? 'Loading…' : isLoadMoreError ? 'Retry loading more properties' : 'Show 50 more'}
             </Button>
           </div>
         ) : usesServerView ? (
@@ -650,7 +654,7 @@ export function AdvancedMeasurementOverview({
                 <span>Showing details for {loadedFlaggedCount} of {flaggedResultsTotal} flagged results</span>
                 {usesServerView && report.currentView!.nextCursor && onLoadMore ? (
                   <Button size="sm" variant="outline" disabled={isLoadingMore} onClick={() => onLoadMore(report.currentView!.nextCursor!)}>
-                    {isLoadingMore ? 'Loading…' : 'Load more Properties'}
+                    {isLoadingMore ? 'Loading…' : isLoadMoreError ? 'Retry loading more Properties' : 'Load more Properties'}
                   </Button>
                 ) : null}
               </div>

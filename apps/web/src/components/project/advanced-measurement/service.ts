@@ -99,10 +99,9 @@ export function isDraftConflict(error: unknown): boolean {
 }
 
 export function setupErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof ApiError && (error.statusCode === 404 || error.statusCode === 409 || error.statusCode === 412)) return fallback
+  if (error instanceof ApiError) return fallback
   const message = error instanceof Error ? error.message.trim() : ''
-  if (message && !/\b(?:target|revision|checksum|node|edge|manifest|measurement plan|stable[ -]?key)s?\b/i.test(message)) return message
-  return fallback
+  return message || fallback
 }
 
 export const advancedMeasurementService: AdvancedMeasurementService = {

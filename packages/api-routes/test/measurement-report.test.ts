@@ -5,6 +5,7 @@ import {
   buildMeasurementReport,
   classifyCitedUrl,
   normalizeMeasurementLocation,
+  type MeasurementOverviewBuildOptions,
   type MeasurementOverviewInput,
   type MeasurementReportInput,
   type MeasurementTargetInput,
@@ -529,5 +530,19 @@ describe('scoped overview', () => {
 
     expect(overview.properties.map(row => [row.targetId, row.flags])).toEqual([['shared-a', 1], ['shared-b', 1]])
     expect(overview.flags).toBe(2)
+  })
+
+  it('indexes shared attribution evidence once before deriving every Property row', () => {
+    const evidencePasses: number[] = []
+    const options: MeasurementOverviewBuildOptions = {
+      onEvidenceIndexed: rows => evidencePasses.push(rows),
+    }
+
+    const overview = buildMeasurementOverview(overviewInput(), options)
+
+    // Two observations × three usage edges × one source URL. This asserts
+    // deterministic structural work instead of a machine-dependent duration.
+    expect(evidencePasses).toEqual([6])
+    expect(overview.properties.map(row => row.targetId)).toEqual(['harbor', 'north'])
   })
 })

@@ -111,7 +111,12 @@ function mergeTargets(authoring: MeasurementDraftAuthoring, body: unknown): Draf
   const survivor = requireTarget(authoring, targetKey)
   const absorbed = mergedKeys.filter(key => key !== targetKey)
   for (const key of absorbed) requireTarget(authoring, key)
-  if (absorbed.length === 0) return { authoring, warnings: [warn('merge-targets-noop', 'The merge named only the surviving Target.', ['mergedKeys'])] }
+  if (absorbed.length === 0) {
+    return {
+      authoring,
+      warnings: [warn('merge-targets-noop', 'The merge named only the surviving Target.', ['targets', authoring.targets.indexOf(survivor)])],
+    }
+  }
 
   const absorbedSet = new Set(absorbed)
   const merged: MeasurementDraftTarget = {
@@ -148,7 +153,8 @@ function mergeTargets(authoring: MeasurementDraftAuthoring, body: unknown): Draf
 
 function excludeTarget(authoring: MeasurementDraftAuthoring, body: unknown): DraftActionResult {
   const { targetKey, cleanup } = parseBody(measurementDraftExcludeTargetRequestSchema, body, 'exclude-target')
-  requireTarget(authoring, targetKey)
+  const target = requireTarget(authoring, targetKey)
+  const targetIndex = authoring.targets.indexOf(target)
   const stranded = authoring.assignments.filter(assignment => assignment.targetKey === targetKey).length
   if (cleanup === 'assignments-and-group-memberships') {
     return {
@@ -173,7 +179,7 @@ function excludeTarget(authoring: MeasurementDraftAuthoring, body: unknown): Dra
     // decision that can be undone, and silently dropping the operator's query
     // selection would make undoing it a retype. Publish names them instead.
     warnings: stranded > 0
-      ? [warn('excluded-target-has-assignments', `Target "${targetKey}" still has ${stranded} assignment(s); remove them or include the Target before publishing.`, ['assignments'])]
+      ? [warn('excluded-target-has-assignments', `Target "${targetKey}" still has ${stranded} assignment(s); remove them or include the Target before publishing.`, ['targets', targetIndex, 'assignments'])]
       : [],
   }
 }
@@ -325,11 +331,12 @@ function upsertGroup(authoring: MeasurementDraftAuthoring, body: unknown): Draft
   }
   if (index === -1) groups.push(next)
   else groups[index] = next
+  const groupIndex = index === -1 ? groups.length - 1 : index
   const unknown = next.targetKeys.filter(key => !authoring.targets.some(target => target.stableKey === key))
   return {
     authoring: { ...authoring, groups },
     warnings: unknown.length
-      ? [warn('group-unknown-target', `Group "${group.stableKey}" names ${unknown.length} Target(s) the draft does not hold yet.`, ['groups'])]
+      ? [warn('group-unknown-target', `Group "${group.stableKey}" names ${unknown.length} Target(s) the draft does not hold yet.`, ['groups', groupIndex, 'targetKeys'])]
       : [],
   }
 }

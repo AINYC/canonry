@@ -39,6 +39,35 @@ const availableReport: AdvancedMeasurementOverviewReport = {
   },
 }
 
+function pagedReport(): AdvancedMeasurementOverviewReport {
+  return {
+    ...availableReport,
+    currentView: {
+      scope: { kind: 'all' },
+      queryClass: 'non-brand',
+      aggregate: {
+        metrics: {
+          propertiesMentioned: { numerator: 1, denominator: 1 },
+          mentionCoverage: { numerator: 1, denominator: 1 },
+          citationCoverage: { numerator: 1, denominator: 1 },
+        },
+        properties: [{
+          id: 'loaded-property',
+          name: 'Loaded Property',
+          mentionCoverage: { numerator: 1, denominator: 1 },
+          citationCoverage: { numerator: 1, denominator: 1 },
+          status: { label: 'Measured', tone: 'positive' },
+          assignedQueries: [],
+          urls: [],
+          evidence: [],
+        }],
+      },
+      propertyTotal: 51,
+      nextCursor: 'next-page',
+    },
+  }
+}
+
 describe('advanced measurement landing', () => {
   it('keeps the existing overview for a Simple project and opens setup explicitly', () => {
     const onOpenSetup = vi.fn()
@@ -154,5 +183,26 @@ describe('advanced measurement landing', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry report' }))
     expect(onRetryReport).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('button', { name: 'Edit setup' })).toBeTruthy()
+  })
+
+  it('preserves loaded Properties and retries a failed later page inline', () => {
+    const onLoadMore = vi.fn()
+    render(
+      <AdvancedMeasurementLanding
+        mode={{ surface: 'advanced-overview', setupAction: 'edit' }}
+        canEdit
+        simpleOverview={null}
+        report={pagedReport()}
+        reportState="error"
+        isLoadMoreError
+        onLoadMore={onLoadMore}
+      />,
+    )
+
+    expect(screen.getByText('Loaded Property')).toBeTruthy()
+    expect(screen.queryByText('Could not load the advanced measurement report.')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toContain('Could not load more properties.')
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading more properties' }))
+    expect(onLoadMore).toHaveBeenCalledWith('next-page')
   })
 })
