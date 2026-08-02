@@ -246,8 +246,8 @@ describe('MCP tool registry', () => {
   })
 
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(153)
-    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(96)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(154)
+    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(97)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(readNames)
@@ -285,7 +285,7 @@ describe('MCP tool registry', () => {
     }
     expect(counts.get('monitoring')).toBe(28)
     expect(counts.get('setup')).toBe(33)
-    expect(counts.get('gsc')).toBe(9)
+    expect(counts.get('gsc')).toBe(10)
     expect(counts.get('ga')).toBe(10)
     expect(counts.get('gbp')).toBe(13)
     expect(counts.get('ads')).toBe(26)
