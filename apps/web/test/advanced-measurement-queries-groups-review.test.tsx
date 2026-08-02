@@ -264,6 +264,42 @@ test('lets an empty query library add questions without leaving setup', () => {
   ])
 })
 
+// The portfolio shape. Typing one generic question and applying it to 213
+// Properties measures the portfolio; a question per Property measures the
+// Properties. The count is shown before the click because 213 is a surprising
+// number to produce from one line of text.
+test('writes one question per selected Property from a pattern', () => {
+  const onCreateQueries = vi.fn()
+  renderQueries({
+    queries: [],
+    selectedQueryIds: [],
+    onCreateQueries,
+  })
+
+  fireEvent.change(screen.getByLabelText('Question pattern'), {
+    target: { value: 'apartments near {property}' },
+  })
+
+  // The expansion is visible before it is committed.
+  expect(screen.getByText('apartments near Harbor House')).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('button', { name: /Add \d+ questions?/ }))
+
+  const created = onCreateQueries.mock.calls[0]![0] as string[]
+  expect(created.every(text => text.startsWith('apartments near '))).toBe(true)
+  expect(new Set(created).size).toBe(created.length)
+})
+
+test('asks for a placeholder rather than writing the same question repeatedly', () => {
+  renderQueries({ queries: [], selectedQueryIds: [], onCreateQueries: vi.fn() })
+
+  fireEvent.change(screen.getByLabelText('Question pattern'), {
+    target: { value: 'best apartments' },
+  })
+
+  expect(screen.getByText(/Add \{property\} to the pattern/)).toBeTruthy()
+})
+
 test('surfaces the server reason when adding questions fails', () => {
   renderQueries({
     queries: [],

@@ -315,6 +315,7 @@ export function AdvancedMeasurementQueriesStep({
   const [querySearch, setQuerySearch] = useState('')
   const [showAllQueries, setShowAllQueries] = useState(false)
   const [newQueriesText, setNewQueriesText] = useState('')
+  const [patternText, setPatternText] = useState('')
   if (isUnavailable(availability)) {
     return <section aria-label="Queries"><UnavailableState message={availability.message} /></section>
   }
@@ -335,6 +336,20 @@ export function AdvancedMeasurementQueriesStep({
   const parsedNewQueries = [...new Set(
     newQueriesText.split('\n').map(line => line.trim()).filter(Boolean),
   )]
+  // One pattern, one question per selected Property. This is the portfolio
+  // shape: nobody types "apartments near Harbor Point" two hundred times, and
+  // typing two hundred generic questions measures the portfolio rather than the
+  // Properties in it.
+  const patternPlaceholders = [...patternText.matchAll(/\{([a-z][\w-]*)\}/gi)].map(match => match[1]!)
+  const patternTargets = properties.filter(property => selectedPropertyIds.includes(property.id))
+  const patternExpansions = patternPlaceholders.length === 0 || patternText.trim() === ''
+    ? []
+    : [...new Set(patternTargets.map(property => (
+      patternPlaceholders.reduce(
+        (text, name) => text.replaceAll(`{${name}}`, property.label),
+        patternText.trim(),
+      )
+    )))]
 
   function selectAllShownQueries(): void {
     const selected = new Set([...selectedQueryIds, ...selectableVisibleQueries.map(query => query.id)])
@@ -518,6 +533,57 @@ export function AdvancedMeasurementQueriesStep({
                 Manage all project questions
               </Button>
             ) : null}
+          </div>
+
+          <div className="mt-4 border-t border-default pt-4">
+            <h4 className="m-0 text-sm font-medium text-heading">Or write one question for every Property</h4>
+            <p className="mt-1 mb-2 text-sm text-secondary">
+              Put <code className="rounded bg-bg-elevated px-1">{'{property}'}</code> where the
+              Property name belongs. You get one question per selected Property.
+            </p>
+            <input
+              aria-label="Question pattern"
+              className="w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
+              value={patternText}
+              onChange={event => setPatternText(event.target.value)}
+              placeholder="apartments near {property}"
+            />
+            {patternText.trim() === '' ? null : patternPlaceholders.length === 0 ? (
+              <p className="mt-2 text-sm text-caution">
+                Add {'{property}'} to the pattern, or use the box above for a single question.
+              </p>
+            ) : patternTargets.length === 0 ? (
+              <p className="mt-2 text-sm text-caution">Select at least one Property to write questions for.</p>
+            ) : (
+              <div className="mt-2 rounded-md border border-base bg-bg-elevated p-3">
+                <p className="m-0 text-sm text-secondary">
+                  {patternExpansions.length} question{patternExpansions.length === 1 ? '' : 's'}, one per selected Property:
+                </p>
+                <ul className="mt-1 mb-0 list-none space-y-0.5 p-0">
+                  {patternExpansions.slice(0, 3).map(text => (
+                    <li key={text} className="text-sm text-strong">{text}</li>
+                  ))}
+                </ul>
+                {patternExpansions.length > 3 ? (
+                  <p className="mt-1 mb-0 text-sm text-secondary">
+                    and {patternExpansions.length - 3} more
+                  </p>
+                ) : null}
+              </div>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              className="mt-2"
+              disabled={patternExpansions.length === 0 || isCreatingQueries}
+              onClick={() => {
+                void Promise.resolve(onCreateQueries(patternExpansions)).then(() => setPatternText(''))
+              }}
+            >
+              {isCreatingQueries
+                ? 'Adding…'
+                : `Add ${patternExpansions.length || ''} question${patternExpansions.length === 1 ? '' : 's'}`.replace('  ', ' ')}
+            </Button>
           </div>
         </div>
       )}
