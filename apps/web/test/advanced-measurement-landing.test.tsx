@@ -83,7 +83,7 @@ describe('advanced measurement landing', () => {
     )
 
     expect(screen.queryByText('Existing project overview')).toBeNull()
-    expect(screen.getByText('Republish setup to enable Non-brand and Branded reporting.')).toBeTruthy()
+    expect(screen.getByText('Setup update required.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Republish setup' }))
     expect(onOpenSetup).toHaveBeenCalledTimes(1)
   })

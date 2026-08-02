@@ -119,7 +119,7 @@ const evidenceLabels: Record<AdvancedMeasurementEvidenceKind, string> = {
 }
 
 const metricReasons: Record<string, string> = {
-  plan_v1: 'Republish setup to enable Non-brand and Branded reporting.',
+  plan_v1: 'Setup update required.',
   incomplete: 'The latest measurement is incomplete.',
   'evidence-incomplete': 'Some source evidence is incomplete.',
   'no-population': 'No measurements are available for this selection.',
@@ -152,11 +152,21 @@ function metricReason(metric: AdvancedMeasurementMetric): string {
   return metricReasons[reason] ?? reason
 }
 
-function slotProgressLabel(completed: number, total: number): string {
+function slotProgressLabel(completed: number, total: number): string | null {
   if (!Number.isFinite(completed) || !Number.isFinite(total) || completed < 0 || total <= 0 || completed > total) {
-    return 'Measurement progress unavailable'
+    return null
   }
-  return `${completed} of ${total} slots completed`
+  return `${completed} of ${total}`
+}
+
+function availableLabel(value: string): string | null {
+  const trimmed = value.trim()
+  return trimmed && !trimmed.toLocaleLowerCase().includes('unavailable') ? trimmed : null
+}
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  const element = target as { closest?: (selector: string) => Element | null } | null
+  return element?.closest?.('button, a, input, select, textarea, [role="button"]') != null
 }
 
 function MetricValue({
@@ -345,13 +355,15 @@ export function AdvancedMeasurementOverview({
     classMetric(aggregate.metrics.citationCoverage),
   ].map(metricReason).find(Boolean)
   const statusMessage = !classReportingAvailable
-    ? (canEdit ? metricReasons.plan_v1 : 'Non-brand and Branded reporting is unavailable until setup is republished.')
+    ? metricReasons.plan_v1
     : headlineUnavailableReason
       ?? (unavailableProperties > 0
         ? `${unavailableProperties} ${unavailableProperties === 1 ? 'property is' : 'properties are'} unavailable.`
         : report.flaggedResults.length > 0
           ? `${report.flaggedResults.length} flagged ${report.flaggedResults.length === 1 ? 'result needs' : 'results need'} review.`
           : 'No action needed.')
+  const progressLabel = slotProgressLabel(report.latestMeasurement.completedSlots, report.latestMeasurement.totalSlots)
+  const measurementDate = availableLabel(report.latestMeasurement.date)
 
   function toggleProperty(propertyId: string) {
     setExpandedPropertyIds(current => {
@@ -367,8 +379,8 @@ export function AdvancedMeasurementOverview({
       <header className="border-b border-default pb-4">
         <div role="status" aria-label="Measurement status and next action" className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <ToneBadge tone={report.latestMeasurement.status.tone}>{report.latestMeasurement.status.label}</ToneBadge>
-          <span className="text-sm text-secondary tabular-nums">{slotProgressLabel(report.latestMeasurement.completedSlots, report.latestMeasurement.totalSlots)}</span>
-          <span className="text-sm text-secondary">{report.latestMeasurement.date}</span>
+          {progressLabel ? <span className="text-sm text-secondary tabular-nums">{progressLabel}</span> : null}
+          {measurementDate ? <span className="text-sm text-secondary">{measurementDate}</span> : null}
           <span className="text-sm text-secondary">{statusMessage}</span>
           {canEdit && classReportingAvailable && onRunMeasurement ? (
             <Button className="ml-auto" size="sm" onClick={() => { void onRunMeasurement() }} disabled={isRunningMeasurement}>
@@ -446,7 +458,13 @@ export function AdvancedMeasurementOverview({
                 const expanded = expandedPropertyIds.has(property.id)
                 return (
                   <Fragment key={property.id}>
-                    <tr key={property.id}>
+                    <tr
+                      key={property.id}
+                      className="cursor-pointer transition-colors hover:bg-surface-subtle"
+                      onClick={event => {
+                        if (!isInteractiveTarget(event.target)) toggleProperty(property.id)
+                      }}
+                    >
                       <td className="font-medium text-heading">{property.name}</td>
                       <td className="text-secondary"><MetricValue metric={classMetric(property.mentionCoverage)} compact /></td>
                       <td className="text-secondary"><MetricValue metric={classMetric(property.citationCoverage)} compact /></td>

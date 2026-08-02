@@ -147,7 +147,7 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.getAllByText('3 of 4 (75%)').length).toBeGreaterThan(0)
     expect(screen.getByText('6 of 8 (75%)')).toBeTruthy()
     expect(screen.getByText('2 of 8 (25%)')).toBeTruthy()
-    expect(screen.getByText('8 of 8 slots completed')).toBeTruthy()
+    expect(screen.getByText('8 of 8')).toBeTruthy()
     expect(screen.getByText('Aug 2, 2026')).toBeTruthy()
   })
 
@@ -183,7 +183,8 @@ describe('AdvancedMeasurementOverview', () => {
 
     const statusLine = screen.getByLabelText('Measurement status and next action')
     expect(statusLine.textContent).toContain('Complete')
-    expect(statusLine.textContent).toContain('8 of 8 slots completed')
+    expect(statusLine.textContent).toContain('8 of 8')
+    expect(statusLine.textContent).not.toContain('slots completed')
     expect(statusLine.textContent).toContain('Aug 2, 2026')
     expect(statusLine.textContent).toContain('1 flagged result needs review.')
   })
@@ -200,7 +201,7 @@ describe('AdvancedMeasurementOverview', () => {
       },
     })
 
-    expect(screen.getByText('Measurement progress unavailable')).toBeTruthy()
+    expect(screen.queryByText('Measurement progress unavailable')).toBeNull()
     expect(screen.queryByText('0 of 0 slots completed')).toBeNull()
   })
 
@@ -242,6 +243,19 @@ describe('AdvancedMeasurementOverview', () => {
     expect(document.body.textContent).not.toContain('Sibling')
     expect(document.body.textContent).not.toContain('owned-unassigned')
     expect(document.body.textContent).not.toContain('Owned URL without an assignment')
+  })
+
+  it('expands a Property by clicking anywhere on its row', () => {
+    renderOverview()
+
+    const details = screen.getByRole('button', { name: 'Show details for Downtown Office' })
+    const row = details.closest('tr')
+    expect(row).toBeTruthy()
+
+    fireEvent.click(row!)
+
+    expect(screen.getByText('Assigned queries')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Hide details for Downtown Office' })).toBeTruthy()
   })
 
   it('badges bridged property and evidence rows as Historical', () => {
@@ -336,11 +350,19 @@ describe('AdvancedMeasurementOverview', () => {
         ...report(),
         classReporting: 'plan-v1',
         classScopes: undefined,
+        latestMeasurement: {
+          status: { label: 'Not measured', tone: 'neutral' },
+          completedSlots: 0,
+          totalSlots: 0,
+          date: 'Date unavailable',
+        },
       },
     })
 
-    expect(screen.getAllByText('Republish setup to enable Non-brand and Branded reporting.')).toHaveLength(1)
-    expect(screen.getByLabelText('Measurement status and next action').textContent).toContain('Republish setup to enable Non-brand and Branded reporting.')
+    expect(screen.getByText('Setup update required.')).toBeTruthy()
+    expect(screen.queryByText('Republish setup to enable Non-brand and Branded reporting.')).toBeNull()
+    expect(screen.queryByText('Measurement progress unavailable')).toBeNull()
+    expect(screen.queryByText('Date unavailable')).toBeNull()
     expect((screen.getByLabelText('Non-brand') as HTMLInputElement).disabled).toBe(true)
     expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
     fireEvent.click(screen.getByRole('button', { name: 'Republish setup' }))
