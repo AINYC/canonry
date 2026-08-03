@@ -306,6 +306,7 @@ describe('MCP tool registry', () => {
         provider: 'openai',
         location: 'New York, NY',
         runId: 'run-7',
+        shape: 'answers',
         cursor: 'next-page',
         limit: 25,
       }, 'getMeasurementPropertyEvidence', ['acme', {
@@ -314,6 +315,7 @@ describe('MCP tool registry', () => {
         provider: 'openai',
         location: 'New York, NY',
         runId: 'run-7',
+        shape: 'answers',
         cursor: 'next-page',
         limit: 25,
       }]],
@@ -397,6 +399,66 @@ describe('MCP tool registry', () => {
         to: '2026-07-31',
         runId: 'run-7',
         search: 'harbor',
+        cursor: 'next-page',
+        limit: '25',
+      })
+    } finally {
+      await api.close()
+    }
+  })
+
+  it('declares the evidence shape on the property-evidence tool without adding a second tool for it', () => {
+    const tool = canonryMcpTools.find(candidate => candidate.name === 'canonry_measurement_property_evidence')
+    expect(tool).toBeTruthy()
+
+    // The DECLARED schema is what an MCP client validates a call against, so a
+    // parameter absent from it is unreachable however the handler behaves.
+    expect(tool!.inputSchema.safeParse({ project: 'acme', targetKey: 'harbor-view', shape: 'answers' }).success).toBe(true)
+    expect(tool!.inputSchema.safeParse({ project: 'acme', targetKey: 'harbor-view' }).success).toBe(true)
+    expect(tool!.inputSchema.safeParse({ project: 'acme', targetKey: 'harbor-view', shape: 'urls' }).success).toBe(false)
+    expect(schemaProperty(inputSchemaFor('canonry_measurement_property_evidence'), 'shape')).toMatchObject({
+      enum: ['sources', 'answers'],
+    })
+
+    // The answer shape is a parameter, never a second operation: adding a tool
+    // would move the pinned catalog counts asserted below.
+    expect(tool!.openApiOperations).toEqual(['GET /api/v1/projects/{name}/measurement-property-evidence'])
+    // Guard the operation, not a `measurement_property*` count: unrelated work
+    // legitimately adds tools under that prefix, and a count assertion then
+    // fails on a base this change never touched.
+    const servingEvidence = canonryMcpTools.filter(candidate => (
+      candidate.openApiOperations.includes('GET /api/v1/projects/{name}/measurement-property-evidence')
+    ))
+    expect(servingEvidence.map(candidate => candidate.name)).toEqual(['canonry_measurement_property_evidence'])
+  })
+
+  it('sends the exact measurement-property-evidence filters, shape included, through ApiClient', async () => {
+    const api = await startCaptureApi()
+    try {
+      const client = new RealApiClient(api.origin, 'cnry_test', { skipProbe: true })
+      await client.getMeasurementPropertyEvidence('acme', {
+        targetKey: 'harbor-view',
+        queryClass: 'branded',
+        provider: 'openai',
+        location: 'New York, NY',
+        runId: 'run-7',
+        shape: 'answers',
+        cursor: 'next-page',
+        limit: 25,
+      })
+
+      expect(api.requests).toHaveLength(1)
+      const request = new URL(api.requests[0]!, api.origin)
+      expect(request.pathname).toBe('/api/v1/projects/acme/measurement-property-evidence')
+      // A shape that silently never reached the wire would answer with the flat
+      // rows under a request that asked for answers.
+      expect(Object.fromEntries(request.searchParams)).toEqual({
+        targetKey: 'harbor-view',
+        queryClass: 'branded',
+        provider: 'openai',
+        location: 'New York, NY',
+        runId: 'run-7',
+        shape: 'answers',
         cursor: 'next-page',
         limit: '25',
       })

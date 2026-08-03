@@ -935,9 +935,9 @@ export const getApiV1ProjectsByNameMeasurementOverview = <ThrowOnError extends b
 };
 
 /**
- * Page one Property's source evidence
+ * Page one Property's evidence
  *
- * Returns the attribution evidence rows for exactly one Property out of one revision-pinned run, optionally narrowed to a question class, provider, or location. Run selection matches the overview: the most recent completed run pinned to the active revision unless runId names another. Use this rather than GET /measurement-report when you want one Property — the report reconstructs every group and Target for a revision and does not paginate. Not available for a schema v1 revision, which records no question class to scope by. An empty page under measurement.state = not_measured means the Property has not been measured, which is not the same statement as a measured Property with no evidence.
+ * Returns the evidence rows for exactly one Property out of one revision-pinned run, optionally narrowed to a question class, provider, or location. shape chooses what a row is: sources (the default) is one row per cited URL, answers is one row per measured answer with its cited URLs nested inside. Prefer answers to explain a gap — an answer that mentioned the Property without linking it, or that named nobody, has no URL to hang a source row on and is invisible in the default shape. Run selection matches the overview: the most recent completed run pinned to the active revision unless runId names another. Use this rather than GET /measurement-report when you want one Property — the report reconstructs every group and Target for a revision and does not paginate. Not available for a schema v1 revision, which records no question class to scope by. An empty page under measurement.state = not_measured means the Property has not been measured, which is not the same statement as a measured Property with no evidence.
  */
 export const getApiV1ProjectsByNameMeasurementPropertyEvidence = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameMeasurementPropertyEvidenceData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameMeasurementPropertyEvidenceResponses, GetApiV1ProjectsByNameMeasurementPropertyEvidenceErrors, ThrowOnError>({

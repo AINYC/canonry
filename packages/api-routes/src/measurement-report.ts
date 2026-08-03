@@ -18,6 +18,7 @@ export type MeasurementAttributionClass =
   | 'invalid'
 
 export type MeasurementUsageEdgeType = 'baseline' | 'target'
+export type MeasurementQueryClass = 'branded' | 'non-brand'
 export type MeasurementUrlMatchMode = 'exact' | 'prefix' | 'host'
 export type MeasurementMetricReason =
   | 'incomplete'
@@ -75,6 +76,12 @@ export type MeasurementUsageEdgeInput =
       type: 'target'
       executionId: string
       targetId: string
+      /**
+       * The frozen class of the assignment behind this edge. It travels with the
+       * edge because one question can be Branded for one Property and Non-brand
+       * for another. Absent when the revision recorded none.
+       */
+      queryClass?: MeasurementQueryClass | null
     }
 
 export interface MeasurementObservationInput {
@@ -123,6 +130,43 @@ export interface MeasurementAttributionEvidence extends MeasurementAttributionRe
   queryText: string
   location: string | null
   sourceUrl: string
+  bridged: boolean
+  historical: boolean
+  evidenceComplete: boolean
+}
+
+export interface MeasurementAnswerSource extends MeasurementAttributionResult {
+  sourceUrl: string
+}
+
+/**
+ * One answer as one Property saw it.
+ *
+ * A per-URL row can only describe a citation, so an answer that mentioned the
+ * Property without linking it, or did neither, produced nothing at all. Emitting
+ * per usage edge instead means every measured answer is a row and the URLs nest
+ * inside it: `sources` is empty exactly where the gap is.
+ *
+ * `mentioned` is null when the observation has no answer text to read — a
+ * missing signal must never be reported as "not mentioned" — and on a baseline
+ * edge, which belongs to no Property for a mention to be about.
+ */
+export interface MeasurementAnswerEvidence {
+  observationId: string
+  expectedSlotId: string
+  executionId: string
+  usageEdgeId: string
+  usageEdgeType: MeasurementUsageEdgeType
+  provider: string
+  queryText: string
+  location: string | null
+  queryClass: MeasurementQueryClass | null
+  mentioned: boolean | null
+  cited: boolean | null
+  sources: MeasurementAnswerSource[]
+  /** The FULL count. A reader may cap `sources`; this never shrinks with it. */
+  sourceCount: number
+  sourcesTruncated: boolean
   bridged: boolean
   historical: boolean
   evidenceComplete: boolean
@@ -295,6 +339,7 @@ interface PreparedObservation {
 
 interface PreparedReport {
   observationsBySlot: ReadonlyMap<string, PreparedObservation>
+  answers: MeasurementAnswerEvidence[]
   evidence: MeasurementAttributionEvidence[]
   diagnostics: MeasurementReport['diagnostics']
 }
@@ -583,30 +628,81 @@ function prepareReport(input: MeasurementReportInput): PreparedReport {
     edgesByExecution.set(edge.executionId, edges)
   }
 
-  const evidence: MeasurementAttributionEvidence[] = []
+  // One row per (answer, usage edge). A slot with no cited URL at all still
+  // produces a row here, which is the only way a Property's gap is visible: the
+  // per-URL rows below can describe a citation and nothing else.
+  const answers: MeasurementAnswerEvidence[] = []
+  // Computed once: a Property whose aliases tokenize to nothing can never be
+  // mentioned, and the rate path already treats that as unreadable.
+  const mentionableIds = new Set(
+    input.targets.filter(target => target.aliases.some(alias => words(alias).length > 0)).map(target => target.id),
+  )
   for (const observation of observationsBySlot.values()) {
     const edges = [...(edgesByExecution.get(observation.slot.executionId) ?? [])]
       .sort((left, right) => compareText(left.id, right.id))
     for (const edge of edges) {
-      for (const sourceUrl of observation.sourceUrls) {
-        evidence.push({
-          observationId: observation.input.id,
-          expectedSlotId: observation.slot.id,
-          executionId: observation.slot.executionId,
-          usageEdgeId: edge.id,
-          usageEdgeType: edge.type,
-          provider: observation.slot.provider,
-          queryText: observation.slot.queryText,
-          location: observation.slot.location,
-          sourceUrl,
-          bridged: observation.bridged,
-          historical: observation.historical,
-          evidenceComplete: observation.sourceComplete,
-          ...classifyCitedUrl(sourceUrl, input.targets, input.ownedHosts, edge),
-        })
-      }
+      const sources = observation.sourceUrls.map(sourceUrl => {
+        const { classification, normalizedUrl, matchedTargetIds, matchedUrlIds } =
+          classifyCitedUrl(sourceUrl, input.targets, input.ownedHosts, edge)
+        return { sourceUrl, normalizedUrl, classification, matchedTargetIds, matchedUrlIds }
+      })
+      answers.push({
+        observationId: observation.input.id,
+        expectedSlotId: observation.slot.id,
+        executionId: observation.slot.executionId,
+        usageEdgeId: edge.id,
+        usageEdgeType: edge.type,
+        provider: observation.slot.provider,
+        queryText: observation.slot.queryText,
+        location: observation.slot.location,
+        queryClass: edge.type === 'target' ? (edge.queryClass ?? null) : null,
+        // Read per Property, because that is the granularity a Property page
+        // asks about. Null where there is no signal to read at all: a baseline
+        // edge names no Property, and an observation without answer text was
+        // never searched — neither is "not mentioned".
+        mentioned: mentionedForEdge(observation, edge, mentionableIds),
+        // A positive survives incomplete capture: a source we DID see and
+        // matched is still a citation. A negative does not — with capture
+        // incomplete we cannot tell "not cited" from "we never saw the
+        // sources", and reporting the first would be a measured zero.
+        cited: sources.some(source => source.classification === 'assigned')
+          ? true
+          : observation.sourceComplete ? false : null,
+        sources,
+        sourceCount: sources.length,
+        sourcesTruncated: false,
+        bridged: observation.bridged,
+        historical: observation.historical,
+        evidenceComplete: observation.sourceComplete,
+      })
     }
   }
+  answers.sort((left, right) => (
+    compareText(left.expectedSlotId, right.expectedSlotId)
+    || compareText(left.usageEdgeId, right.usageEdgeId)
+  ))
+
+  // The flat per-URL rows are the published shape, so they are DERIVED from the
+  // answer rows rather than built beside them: one source of truth, and the two
+  // cannot drift into disagreeing about the same run.
+  const evidence: MeasurementAttributionEvidence[] = answers.flatMap(answer => answer.sources.map(source => ({
+    observationId: answer.observationId,
+    expectedSlotId: answer.expectedSlotId,
+    executionId: answer.executionId,
+    usageEdgeId: answer.usageEdgeId,
+    usageEdgeType: answer.usageEdgeType,
+    provider: answer.provider,
+    queryText: answer.queryText,
+    location: answer.location,
+    sourceUrl: source.sourceUrl,
+    bridged: answer.bridged,
+    historical: answer.historical,
+    evidenceComplete: answer.evidenceComplete,
+    classification: source.classification,
+    normalizedUrl: source.normalizedUrl,
+    matchedTargetIds: source.matchedTargetIds,
+    matchedUrlIds: source.matchedUrlIds,
+  })))
   evidence.sort((left, right) => (
     compareText(left.expectedSlotId, right.expectedSlotId)
     || compareText(left.usageEdgeId, right.usageEdgeId)
@@ -616,6 +712,7 @@ function prepareReport(input: MeasurementReportInput): PreparedReport {
 
   return {
     observationsBySlot,
+    answers,
     evidence,
     diagnostics: {
       bridgedObservationIds: sortedUnique([...bridged].filter(id => !ambiguous.has(id))),
@@ -975,6 +1072,24 @@ function indexedAnsweredSlots(
   return slots.filter(slot => indexes.answeredSlotIds.has(slot.id))
 }
 
+/**
+ * Mention is unreadable, not absent, in three cases: a baseline edge names no
+ * Property for a mention to be about; an observation with no answer text was
+ * never searched; and a Property whose aliases tokenize to nothing can never
+ * match, which the rate path already reports as `aliasless`. Returning false
+ * for any of them states a measured negative the run does not support.
+ */
+function mentionedForEdge(
+  observation: PreparedObservation,
+  edge: MeasurementUsageEdgeInput,
+  mentionableIds: ReadonlySet<string>,
+): boolean | null {
+  if (edge.type !== 'target') return null
+  if (observation.input.answerText === null) return null
+  if (!mentionableIds.has(edge.targetId)) return null
+  return observation.mentionedTargetIds.has(edge.targetId)
+}
+
 function mentionableTargets(
   input: MeasurementOverviewInput,
   targetIds: ReadonlySet<string>,
@@ -1171,6 +1286,8 @@ export function buildMeasurementOverview(
 }
 
 export interface MeasurementEvidenceResult {
+  /** One row per (answer, usage edge), including the answers that cited nobody. */
+  answers: MeasurementAnswerEvidence[]
   evidence: MeasurementAttributionEvidence[]
   diagnostics: MeasurementReport['diagnostics']
 }
@@ -1185,7 +1302,7 @@ export interface MeasurementEvidenceResult {
  */
 export function buildMeasurementEvidence(input: MeasurementReportInput): MeasurementEvidenceResult {
   const prepared = prepareReport(input)
-  return { evidence: prepared.evidence, diagnostics: prepared.diagnostics }
+  return { answers: prepared.answers, evidence: prepared.evidence, diagnostics: prepared.diagnostics }
 }
 
 export function buildMeasurementReport(input: MeasurementReportInput): MeasurementReport {

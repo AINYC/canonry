@@ -1,15 +1,43 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildMeasurementRunManifestV1,
+  measurementAnswerEvidenceSchema,
   measurementAttributionClassSchema,
   measurementDiscoveryRequestSchema,
   measurementDiscoveryResponseSchema,
+  measurementPropertyEvidenceResponseSchema,
   measurementRateSchema,
   measurementReportResponseSchema,
   measurementRunManifestV1Schema,
 } from '../src/measurement-service.js'
 
 const CONTEXT = { label: 'Northbridge', city: 'Northbridge', region: 'NB', country: 'US' }
+
+const ANSWER_EVIDENCE = {
+  observationId: 'snap-1',
+  expectedSlotId: 'slot-1',
+  executionId: 'exec-1',
+  usageEdgeId: 'target-harbor',
+  usageEdgeType: 'target',
+  provider: 'gemini',
+  queryText: 'homes in northbridge',
+  location: 'Northbridge',
+  queryClass: 'non-brand',
+  mentioned: true,
+  cited: true,
+  sources: [{
+    sourceUrl: 'https://northstar.example/locations/harbor',
+    normalizedUrl: 'https://northstar.example/locations/harbor',
+    classification: 'assigned',
+    matchedTargetIds: ['harbor'],
+    matchedUrlIds: ['harbor-root'],
+  }],
+  sourceCount: 1,
+  sourcesTruncated: false,
+  bridged: false,
+  historical: false,
+  evidenceComplete: true,
+}
 
 describe('measurement service contracts', () => {
   it('accepts the deterministic sitemap discovery request vocabulary', () => {
@@ -111,5 +139,79 @@ describe('measurement service contracts', () => {
 
     expect(response.groups[0]?.targetIds).toEqual(['harbor'])
     expect(response.evidence[0]?.classification).toBe('assigned')
+  })
+})
+
+describe('answer-level measurement evidence', () => {
+  it('carries both signals on one row with its sources nested', () => {
+    const row = measurementAnswerEvidenceSchema.parse(ANSWER_EVIDENCE)
+
+    expect(row.mentioned).toBe(true)
+    expect(row.cited).toBe(true)
+    expect(row.sources).toEqual([expect.objectContaining({ classification: 'assigned' })])
+  })
+
+  it('represents an answer that cited nobody', () => {
+    // The whole point of the answer-level shape: a loss is a row, not an
+    // absence. It has to survive the wire schema with no sources at all.
+    const row = measurementAnswerEvidenceSchema.parse({
+      ...ANSWER_EVIDENCE,
+      mentioned: false,
+      cited: false,
+      sources: [],
+      sourceCount: 0,
+    })
+
+    expect(row.sources).toEqual([])
+    expect(row.cited).toBe(false)
+  })
+
+  it('keeps an unknown mention null rather than false', () => {
+    const row = measurementAnswerEvidenceSchema.parse({ ...ANSWER_EVIDENCE, mentioned: null })
+
+    expect(row.mentioned).toBeNull()
+    expect(row.mentioned).not.toBe(false)
+    // Absent is a distinct reading, so the field is never allowed to go missing.
+    const { mentioned: _mentioned, ...withoutMention } = ANSWER_EVIDENCE
+    expect(measurementAnswerEvidenceSchema.safeParse(withoutMention).success).toBe(false)
+  })
+
+  it('accepts a row whose usage edge carries no question class', () => {
+    const row = measurementAnswerEvidenceSchema.parse({
+      ...ANSWER_EVIDENCE,
+      usageEdgeType: 'baseline',
+      queryClass: null,
+    })
+
+    expect(row.queryClass).toBeNull()
+    expect(measurementAnswerEvidenceSchema.safeParse({ ...ANSWER_EVIDENCE, queryClass: 'navigational' }).success).toBe(false)
+  })
+
+  it('refuses an unknown field and an unknown source classification', () => {
+    expect(measurementAnswerEvidenceSchema.safeParse({ ...ANSWER_EVIDENCE, sourceUrl: 'https://northstar.example/' }).success).toBe(false)
+    expect(measurementAnswerEvidenceSchema.safeParse({
+      ...ANSWER_EVIDENCE,
+      sources: [{ ...ANSWER_EVIDENCE.sources[0], classification: 'unmapped' }],
+    }).success).toBe(false)
+  })
+
+  it('serves exactly one evidence page, naming the shape by which key carries it', () => {
+    const base = {
+      property: { targetKey: 'harbor', label: 'Harbor Homes' },
+      queryClass: 'non-brand' as const,
+      measurement: { state: 'complete' as const, displayedRunId: 'run-7' },
+    }
+    const page = { items: [], nextCursor: null, totalEstimate: 0 }
+
+    expect(measurementPropertyEvidenceResponseSchema.safeParse({ ...base, evidence: page }).success).toBe(true)
+    expect(measurementPropertyEvidenceResponseSchema.safeParse({
+      ...base,
+      answers: { items: [ANSWER_EVIDENCE], nextCursor: null, totalEstimate: 1 },
+    }).success).toBe(true)
+
+    // Both would let a reader take the shape it did not ask for as a measured
+    // zero; neither leaves it with nothing to read at all.
+    expect(measurementPropertyEvidenceResponseSchema.safeParse({ ...base, evidence: page, answers: page }).success).toBe(false)
+    expect(measurementPropertyEvidenceResponseSchema.safeParse(base).success).toBe(false)
   })
 })

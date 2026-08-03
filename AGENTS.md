@@ -83,7 +83,7 @@ canonry measurement-plan versions <project>
 canonry measurement-plan publish <project> <yaml|json|->
 canonry measurement-plan report <project> --revision <n>  # stored evidence only; never starts provider work
 canonry measurement-plan property <project> --target-key <key> [--query-class all|branded|non-brand] [--provider <p>] [--location <l>] [--run-id <id>]  # one Property out of the scoped overview: mention/citation coverage plus the per-answer-engine split. A class with no assigned question reads "not measured", never 0%
-canonry measurement-plan property-evidence <project> --target-key <key> [--query-class ...] [--provider <p>] [--location <l>] [--run-id <id>] [--cursor <c>] [--limit <n>]  # one Property's source evidence, cursor-paged; v2 revisions only (use `measurement-plan report` for a v1 revision)
+canonry measurement-plan property-evidence <project> --target-key <key> [--query-class ...] [--provider <p>] [--location <l>] [--run-id <id>] [--shape sources|answers] [--cursor <c>] [--limit <n>]  # one Property's evidence, cursor-paged; v2 revisions only (use `measurement-plan report` for a v1 revision). --shape answers gives one row per measured ANSWER with its cited URLs nested and both signals on the row — the only shape that shows the answers a Property was NOT cited in, since those have no URL to hang a source row on
 canonry run <project>
 canonry run <project> --provider gemini          # single-provider run
 canonry run <project> --probe --provider openai --query "..."  # operator/agent test run — writes a snapshot for inspection but is EXCLUDED from dashboard, analytics, intelligence, and notifications
