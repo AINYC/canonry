@@ -2,6 +2,8 @@ import crypto from 'node:crypto'
 import { and, asc, desc, eq, inArray } from 'drizzle-orm'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import {
+  AppError,
+  MEASUREMENT_GROUP_MEMBERSHIP_CSV_MAX_BYTES,
   alreadyExists,
   canonicalMeasurementPlanV2Json,
   effectiveBrandNames,
@@ -9,8 +11,12 @@ import {
   MEASUREMENT_PAGE_MAX_LIMIT,
   measurementCompiledChecksumConflict,
   measurementDraftCreateRequestSchema,
+  measurementDraftApplyGroupMembershipRequestSchema,
   measurementDraftEtag,
+  measurementDraftEtagStale,
   measurementDraftPublishRequestSchema,
+  measurementDraftPreviewAssignmentsRequestSchema,
+  measurementDraftPreviewGroupMembershipRequestSchema,
   measurementPlanDeactivateRequestSchema,
   measurementPlanRevisionConflict,
   measurementQuerySetUpsertRequestSchema,
@@ -48,6 +54,8 @@ import { auditFromRequest, resolveProject, writeAuditLog } from './helpers.js'
 import { MEASUREMENT_PLAN_WRITE_SCOPE } from './measurement-plan.js'
 import {
   applyDraftAction,
+  applyAssignmentsToAuthoring,
+  assertMeasurementDraftAuthoringLimits,
   MEASUREMENT_DRAFT_ACTIONS,
   type DraftActionContext,
 } from './measurement-draft-actions.js'
@@ -57,6 +65,12 @@ import {
   proposeQueryClassForTarget,
   type MeasurementDraftCompileContext,
 } from './measurement-draft-compile.js'
+import {
+  MeasurementGroupMembershipImportError,
+  applyReviewedGroupMembership,
+  assertReviewedGroupMembership,
+  previewGroupMembershipCsv,
+} from './measurement-group-import.js'
 import { resolveRunProviderSelection } from './run-queue.js'
 import {
   actorFromRequest,
@@ -81,6 +95,10 @@ import {
 
 type ProjectRow = typeof projects.$inferSelect
 type TransactionClient = Parameters<Parameters<DatabaseClient['transaction']>[0]>[0]
+
+// JSON escaping can expand one source character to six bytes. The embedded
+// CSV keeps its own strict 1 MiB UTF-8 ceiling after transport parsing.
+const MEASUREMENT_GROUP_MEMBERSHIP_BODY_LIMIT = MEASUREMENT_GROUP_MEMBERSHIP_CSV_MAX_BYTES * 7 + 4_096
 
 export interface MeasurementDraftRoutesOptions {
   /** Current provider registry membership, used when a project means "all configured". */
@@ -116,6 +134,27 @@ function actionContextFor(db: DatabaseClient, project: ProjectRow): DraftActionC
     brandNames: effectiveBrandNames(project),
     queriesById: new Map(trackedQueriesFor(db, project.id).map(query => [query.id, query.query])),
   }
+}
+
+function segmentDescriptorsFor(
+  db: DatabaseClient | TransactionClient,
+  projectId: string,
+) {
+  return db.select({
+    stableKey: measurementSegments.stableKey,
+    kind: measurementSegments.kind,
+    retiredAt: measurementSegments.retiredAt,
+  }).from(measurementSegments).where(eq(measurementSegments.projectId, projectId)).all()
+}
+
+function rethrowGroupMembershipError(error: unknown): never {
+  if (error instanceof MeasurementGroupMembershipImportError) {
+    throw new AppError('VALIDATION_ERROR', error.message, error.statusCode, {
+      importCode: error.code,
+      ...(error.details ?? {}),
+    })
+  }
+  throw error
 }
 
 /**
@@ -285,6 +324,18 @@ function authoringForCompile(
       providers,
       ...(Object.keys(models).length > 0 ? { models } : {}),
     },
+  }
+}
+
+/** Provider work is the compiled execution graph, never the assignment row count. */
+function assignmentExecutionImpact(before: MeasurementPlanV2, candidate: MeasurementPlanV2) {
+  const beforeKeys = new Set(before.executionNodes.map(node => node.stableKey))
+  const added = candidate.executionNodes.filter(node => !beforeKeys.has(node.stableKey))
+  return {
+    addedNodes: added.length,
+    addedProviderCalls: added.reduce((total, node) => total + node.expectedSnapshots, 0),
+    fullRunNodes: candidate.executionNodes.length,
+    fullRunProviderCalls: candidate.executionNodes.reduce((total, node) => total + node.expectedSnapshots, 0),
   }
 }
 
@@ -574,13 +625,29 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
       const etagVersion = changed ? row.etagVersion + 1 : row.etagVersion
       const response = mutationResponse(etagVersion, changed, result.warnings, result.authoring)
       const settled = finishMutation(gate, response, (tx, now) => {
+        // The observed ETag was useful for early feedback, but the predicate
+        // below is the real compare-and-swap. Two requests that both read mpd_2
+        // cannot each write a successor; only the first one changes this row.
+        const current = draftRow(tx, gate.project.id)
+        if (!current) throw notFound('Measurement plan draft', gate.project.name)
+        if (current.etagVersion !== row.etagVersion) {
+          throw measurementDraftEtagStale(ifMatch, measurementDraftEtag(current.etagVersion))
+        }
         if (!changed) return
-        tx.update(measurementPlanDrafts).set({
+        const updated = tx.update(measurementPlanDrafts).set({
           authoringJson: JSON.stringify(result.authoring),
           etagVersion,
           updatedBy: serializeActor(gate.actor),
           updatedAt: now.toISOString(),
-        }).where(eq(measurementPlanDrafts.id, row.id)).run()
+        }).where(and(
+          eq(measurementPlanDrafts.id, row.id),
+          eq(measurementPlanDrafts.etagVersion, row.etagVersion),
+        )).run()
+        if (updated.changes !== 1) {
+          const actual = draftRow(tx, gate.project.id)
+          if (!actual) throw notFound('Measurement plan draft', gate.project.name)
+          throw measurementDraftEtagStale(ifMatch, measurementDraftEtag(actual.etagVersion))
+        }
         writeAuditLog(tx, auditFromRequest(request, {
           projectId: gate.project.id,
           actor: 'api',
@@ -594,6 +661,146 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
       return settled
     })
   }
+
+  /**
+   * This is deliberately a POST read: the audience can be large, but preview
+   * does not write a draft, audit, receipt, or usage row. The returned ETag is
+   * the one the client must still hold when it applies this exact selection.
+   */
+  app.post<{ Params: { name: string } }>('/projects/:name/measurement-plan/draft/actions/preview-assignments', {
+    config: { readSemantic: true },
+  }, async (request, reply) => {
+    requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
+    const project = resolveProject(app.db, request.params.name)
+    const parsed = measurementDraftPreviewAssignmentsRequestSchema.safeParse(request.body)
+    if (!parsed.success) throw validationError('Invalid "preview-assignments" payload', { issues: parsed.error.issues })
+    const row = requireDraft(project)
+    const before = parseStoredAuthoring(row.authoringJson)
+    const result = applyAssignmentsToAuthoring(before, parsed.data, actionContextFor(app.db, project))
+    assertMeasurementDraftAuthoringLimits(before, result.authoring)
+
+    const context = compileContextFor(app.db, project)
+    const current = compileMeasurementDraft(authoringForCompile(before, project, opts), context)
+    const candidate = compileMeasurementDraft(authoringForCompile(result.authoring, project, opts), context)
+    if (!current.ok || !candidate.ok) {
+      throw validationError('The measurement draft does not compile.', {
+        currentChecks: current.checks,
+        candidateChecks: candidate.checks,
+      })
+    }
+
+    const draftEtag = measurementDraftEtag(row.etagVersion)
+    reply.header('etag', draftEtag)
+    return {
+      draftEtag,
+      groups: result.audience.groups,
+      resolvedTargetKeys: result.audience.targetKeys,
+      overlapCount: result.audience.overlapCount,
+      assignments: result.assignments,
+      execution: assignmentExecutionImpact(current.plan, candidate.plan),
+    }
+  })
+
+  app.post<{ Params: { name: string } }>('/projects/:name/measurement-plan/draft/actions/preview-group-membership', {
+    bodyLimit: MEASUREMENT_GROUP_MEMBERSHIP_BODY_LIMIT,
+    config: { readSemantic: true },
+  }, async (request, reply) => {
+    requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
+    const project = resolveProject(app.db, request.params.name)
+    const parsed = measurementDraftPreviewGroupMembershipRequestSchema.safeParse(request.body)
+    if (!parsed.success) {
+      throw validationError('Invalid "preview-group-membership" payload', { issues: parsed.error.issues })
+    }
+    const row = requireDraft(project)
+    try {
+      const preview = previewGroupMembershipCsv({
+        authoring: parseStoredAuthoring(row.authoringJson),
+        draftEtag: measurementDraftEtag(row.etagVersion),
+        segments: segmentDescriptorsFor(app.db, project.id),
+        csv: parsed.data.csv,
+      })
+      reply.header('etag', preview.draftEtag)
+      return preview
+    } catch (error) {
+      rethrowGroupMembershipError(error)
+    }
+  })
+
+  app.post<{ Params: { name: string } }>('/projects/:name/measurement-plan/draft/actions/apply-group-membership', {
+    bodyLimit: MEASUREMENT_GROUP_MEMBERSHIP_BODY_LIMIT,
+  }, async (request, reply) => {
+    const gate = beginMutation(request, reply, 'apply-group-membership')
+    if (gate.replay !== null) return gate.replay
+    const parsed = measurementDraftApplyGroupMembershipRequestSchema.safeParse(request.body)
+    if (!parsed.success) {
+      throw validationError('Invalid "apply-group-membership" payload', { issues: parsed.error.issues })
+    }
+    const ifMatch = requireIfMatch(request)
+    const now = new Date()
+
+    try {
+      const settled = app.db.transaction(tx => {
+        const row = draftRow(tx, gate.project.id)
+        if (!row) throw notFound('Measurement plan draft', gate.project.name)
+        assertDraftEtag(row, ifMatch)
+        const before = parseStoredAuthoring(row.authoringJson)
+        const preview = previewGroupMembershipCsv({
+          authoring: before,
+          draftEtag: measurementDraftEtag(row.etagVersion),
+          segments: segmentDescriptorsFor(tx, gate.project.id),
+          csv: parsed.data.csv,
+        })
+        assertReviewedGroupMembership(preview, parsed.data)
+        const applied = applyReviewedGroupMembership(before, preview, parsed.data.acceptedRows)
+        assertMeasurementDraftAuthoringLimits(before, applied.authoring)
+
+        const changed = authoringIdentity(applied.authoring) !== authoringIdentity(before)
+        const etagVersion = changed ? row.etagVersion + 1 : row.etagVersion
+        const response = {
+          ...mutationResponse(etagVersion, changed, [], applied.authoring),
+          appliedRows: applied.appliedRows,
+          addedMemberships: applied.addedMemberships,
+          unchangedMemberships: applied.unchangedMemberships,
+        }
+        if (changed) {
+          const updated = tx.update(measurementPlanDrafts).set({
+            authoringJson: JSON.stringify(applied.authoring),
+            etagVersion,
+            updatedBy: serializeActor(gate.actor),
+            updatedAt: now.toISOString(),
+          }).where(and(
+            eq(measurementPlanDrafts.id, row.id),
+            eq(measurementPlanDrafts.etagVersion, row.etagVersion),
+          )).run()
+          if (updated.changes !== 1) {
+            const actual = draftRow(tx, gate.project.id)
+            if (!actual) throw notFound('Measurement plan draft', gate.project.name)
+            throw measurementDraftEtagStale(ifMatch, measurementDraftEtag(actual.etagVersion))
+          }
+          writeAuditLog(tx, auditFromRequest(request, {
+            projectId: gate.project.id,
+            actor: 'api',
+            action: 'measurement-draft.apply-group-membership',
+            entityType: 'measurement-draft',
+            entityId: row.id,
+            diff: {
+              previousEtag: measurementDraftEtag(row.etagVersion),
+              etag: response.etag,
+              appliedRows: applied.appliedRows,
+              addedMemberships: applied.addedMemberships,
+            },
+          }))
+        }
+        sweepExpiredMeasurementReceipts(tx, now)
+        writeReceipt(tx, gate.project.id, gate.lookup, response, 200, now)
+        return response
+      })
+      reply.header('etag', settled.etag)
+      return settled
+    } catch (error) {
+      rethrowGroupMembershipError(error)
+    }
+  })
 
   // Both previews are POSTs only because the draft they compile is far too
   // large for a URL, and neither writes a row — see `readSemantic` in `auth.ts`.

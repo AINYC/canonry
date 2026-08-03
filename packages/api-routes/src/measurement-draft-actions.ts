@@ -1,4 +1,8 @@
 import {
+  MEASUREMENT_DRAFT_MAX_ASSIGNMENTS,
+  MEASUREMENT_DRAFT_MAX_ASSIGNMENTS_PER_ACTION,
+  MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES,
+  MEASUREMENT_DRAFT_MAX_GROUPS,
   measurementDraftApplyAssignmentsRequestSchema,
   measurementDraftApplyPairedAssignmentsRequestSchema,
   measurementDraftClassifyAssignmentsRequestSchema,
@@ -9,6 +13,7 @@ import {
   measurementDraftRemoveAssignmentRequestSchema,
   measurementDraftRemoveCompetitorRequestSchema,
   measurementDraftRemoveGroupRequestSchema,
+  measurementDraftReplaceAssignmentsRequestSchema,
   measurementDraftRenameTargetRequestSchema,
   measurementDraftUpsertCompetitorRequestSchema,
   measurementDraftUpsertGroupRequestSchema,
@@ -16,8 +21,11 @@ import {
   notFound,
   validationError,
   type MeasurementDraftAssignment,
+  type MeasurementDraftAssignmentAudienceRequest,
+  type MeasurementDraftAudience,
   type MeasurementDraftAuthoring,
   type MeasurementDraftGroup,
+  type MeasurementDraftResolvedAudienceGroup,
   type MeasurementDraftTarget,
   type MeasurementDraftWarning,
 } from '@ainyc/canonry-contracts'
@@ -32,6 +40,7 @@ export const MEASUREMENT_DRAFT_ACTIONS = [
   'exclude-target',
   'rebind-target',
   'apply-assignments',
+  'replace-assignments',
   'apply-paired-assignments',
   'remove-assignment',
   'clear-assignments',
@@ -48,7 +57,7 @@ export type MeasurementDraftActionName = (typeof MEASUREMENT_DRAFT_ACTIONS)[numb
  * deliberate action (20 questions x 50 Properties is 1,000) and below the
  * 45,369 that one mis-shaped pattern apply produced.
  */
-export const MAX_ASSIGNMENTS_PER_ACTION = 5_000
+export const MAX_ASSIGNMENTS_PER_ACTION = MEASUREMENT_DRAFT_MAX_ASSIGNMENTS_PER_ACTION
 
 export interface DraftActionContext {
   brandNames: readonly string[]
@@ -58,6 +67,22 @@ export interface DraftActionContext {
 export interface DraftActionResult {
   authoring: MeasurementDraftAuthoring
   warnings: MeasurementDraftWarning[]
+}
+
+export interface ResolvedDraftAudience {
+  targetKeys: string[]
+  groups: MeasurementDraftResolvedAudienceGroup[]
+  /** Selected source memberships that collapsed onto an already-selected Target. */
+  overlapCount: number
+}
+
+export interface AssignmentAuthoringResult extends DraftActionResult {
+  audience: ResolvedDraftAudience
+  assignments: {
+    requested: number
+    added: number
+    alreadyPresent: number
+  }
 }
 
 function parseBody<T>(schema: ZodType<T>, body: unknown, action: string): T {
@@ -82,6 +107,118 @@ function requireGroup(authoring: MeasurementDraftAuthoring, groupKey: string): M
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)]
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
+function knownQueryIds(queryIds: readonly string[], context: DraftActionContext): string[] {
+  const uniqueQueryIds = unique(queryIds)
+  const unknown = uniqueQueryIds.filter(queryId => !context.queriesById.has(queryId))
+  if (unknown.length) {
+    throw validationError(`The project has no query ${unknown.map(id => `"${id}"`).join(', ')}. Add it before assigning it.`)
+  }
+  return uniqueQueryIds
+}
+
+/**
+ * Resolves the operator's audience at the only boundary that matters: the
+ * draft server. A group cannot stand in for a Target later in the graph, so
+ * this returns concrete stable keys and rejects stale or unreviewed membership
+ * before any assignment count is shown.
+ */
+export function resolveDraftAudience(
+  authoring: MeasurementDraftAuthoring,
+  audience: MeasurementDraftAudience,
+): ResolvedDraftAudience {
+  const targetsByKey = new Map(authoring.targets.map(target => [target.stableKey, target]))
+  const selected = unique(audience.targetKeys ?? [])
+  for (const targetKey of unique(audience.targetKeys ?? [])) requireTarget(authoring, targetKey)
+
+  const groups: MeasurementDraftResolvedAudienceGroup[] = []
+  for (const groupKey of unique(audience.groupKeys ?? [])) {
+    const group = authoring.groups.find(candidate => candidate.stableKey === groupKey)
+    if (!group) {
+      throw validationError(`Group "${groupKey}" does not exist in this measurement draft.`)
+    }
+    const memberKeys = unique(group.targetKeys)
+    if (memberKeys.length === 0) {
+      throw validationError(`Group "${group.label}" has no Properties to assign.`)
+    }
+    for (const targetKey of memberKeys) {
+      const target = targetsByKey.get(targetKey)
+      if (!target) {
+        throw validationError(`Group "${group.label}" references unknown Property "${targetKey}".`)
+      }
+      if (target.status !== 'included') {
+        throw validationError(
+          `Group "${group.label}" contains Property "${target.label}" that is ${target.status}, not included.`,
+        )
+      }
+    }
+    groups.push({ groupKey: group.stableKey, label: group.label, memberCount: memberKeys.length })
+    selected.push(...memberKeys)
+  }
+
+  const targetKeys = unique(selected).sort(compareText)
+  return {
+    targetKeys,
+    groups,
+    overlapCount: selected.length - targetKeys.length,
+  }
+}
+
+function assertAssignmentActionLimit(
+  audience: ResolvedDraftAudience,
+  queryIds: readonly string[],
+) {
+  const pairCount = audience.targetKeys.length * queryIds.length
+  if (pairCount <= MAX_ASSIGNMENTS_PER_ACTION) return
+  const groupDetail = audience.groups.length
+    ? ` Audience groups: ${audience.groups.map(group => `"${group.label}" (${group.memberCount} Properties)`).join(', ')}.`
+    : ''
+  throw validationError(
+    `This would create ${pairCount.toLocaleString('en-US')} assignments `
+    + `(${queryIds.length} questions across ${audience.targetKeys.length} unique Properties), `
+    + `over the ${MAX_ASSIGNMENTS_PER_ACTION.toLocaleString('en-US')} limit for one action.`
+    + groupDetail
+    + ' Apply a question to the Properties it is about, or use "apply-paired-assignments" '
+    + 'when each question names its own Property.',
+  )
+}
+
+/** Global draft preflight for every generic action, not just the new audience operations. */
+export function assertMeasurementDraftAuthoringLimits(
+  before: MeasurementDraftAuthoring,
+  candidate: MeasurementDraftAuthoring,
+) {
+  const assertCount = (
+    label: string,
+    current: number,
+    requested: number,
+    maximum: number,
+  ) => {
+    if (requested <= maximum || requested <= current) return
+    throw validationError(
+      `Measurement draft ${label} limit exceeded: current ${current.toLocaleString('en-US')}, `
+      + `requested ${requested.toLocaleString('en-US')}, maximum ${maximum.toLocaleString('en-US')}.`,
+      { current, requested, maximum, resource: label },
+    )
+  }
+  assertCount('groups', before.groups.length, candidate.groups.length, MEASUREMENT_DRAFT_MAX_GROUPS)
+  assertCount('assignments', before.assignments.length, candidate.assignments.length, MEASUREMENT_DRAFT_MAX_ASSIGNMENTS)
+
+  const current = Buffer.byteLength(JSON.stringify(before), 'utf8')
+  const requested = Buffer.byteLength(JSON.stringify(candidate), 'utf8')
+  if (requested > MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES && requested > current) {
+    throw validationError(
+      `Measurement draft authoring size limit exceeded: current ${current.toLocaleString('en-US')} bytes, `
+      + `requested ${requested.toLocaleString('en-US')} bytes, `
+      + `maximum ${MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES.toLocaleString('en-US')} bytes.`,
+      { current, requested, maximum: MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES, resource: 'authoring bytes' },
+    )
+  }
 }
 
 function warn(code: string, message: string, path: (string | number)[]): MeasurementDraftWarning {
@@ -219,40 +356,18 @@ function rebindTarget(authoring: MeasurementDraftAuthoring, body: unknown): Draf
 }
 
 /**
- * Assigns project queries to selected Targets and proposes a class for the new ones.
- *
- * An assignment that already carries an operator classification keeps it: §7.3
- * says a proposal never overwrites an operator decision, and re-running the
- * rule over an operator's call is exactly that overwrite.
+ * Assigns project queries to a fully resolved audience and proposes a class
+ * for new rows. It is deliberately pure so preview, apply, and replace cannot
+ * drift in their dedupe or classification behavior.
  */
-function applyAssignments(
+export function applyAssignmentsToAuthoring(
   authoring: MeasurementDraftAuthoring,
-  body: unknown,
+  request: MeasurementDraftAssignmentAudienceRequest,
   context: DraftActionContext,
-): DraftActionResult {
-  const parsed = parseBody(measurementDraftApplyAssignmentsRequestSchema, body, 'apply-assignments')
-  const { queryIds, contextOverride } = parsed
-  const targetKeys = unique('targetKeys' in parsed ? parsed.targetKeys : [parsed.targetKey])
-  for (const targetKey of targetKeys) requireTarget(authoring, targetKey)
-  const unknown = queryIds.filter(queryId => !context.queriesById.has(queryId))
-  if (unknown.length) {
-    throw validationError(`The project has no query ${unknown.map(id => `"${id}"`).join(', ')}. Add it before assigning it.`)
-  }
-
-  // A cross product cannot tell intent apart: 20 market questions across the 50
-  // Properties of one market is 1,000 assignments and entirely correct. So this
-  // is a backstop against the absurd, not a judgement — the fix for the 45,369
-  // incident is showing the number before the click, which the caller does.
-  const pairCount = targetKeys.length * unique(queryIds).length
-  if (pairCount > MAX_ASSIGNMENTS_PER_ACTION) {
-    throw validationError(
-      `This would create ${pairCount.toLocaleString('en-US')} assignments `
-      + `(${unique(queryIds).length} questions on each of ${targetKeys.length} Properties), `
-      + `over the ${MAX_ASSIGNMENTS_PER_ACTION.toLocaleString('en-US')} limit for one action. `
-      + 'Apply a question to the Properties it is about, or use "apply-paired-assignments" '
-      + 'when each question names its own Property.',
-    )
-  }
+): AssignmentAuthoringResult {
+  const audience = resolveDraftAudience(authoring, request)
+  const queryIds = knownQueryIds(request.queryIds, context)
+  assertAssignmentActionLimit(audience, queryIds)
 
   const targetByKey = new Map(authoring.targets.map(target => [target.stableKey, target]))
   const assignments = [...authoring.assignments]
@@ -260,16 +375,18 @@ function applyAssignments(
     `${assignment.targetKey}\u0000${assignment.queryId}`,
     index,
   ]))
-  for (const targetKey of targetKeys) {
-    for (const queryId of unique(queryIds)) {
+  let added = 0
+  for (const targetKey of audience.targetKeys) {
+    for (const queryId of queryIds) {
       const key = `${targetKey}\u0000${queryId}`
       const index = assignmentIndexes.get(key)
       if (index === undefined) {
         assignmentIndexes.set(key, assignments.length)
+        added++
         assignments.push({
           targetKey,
           queryId,
-          ...(contextOverride ? { contextOverride } : {}),
+          ...(request.contextOverride ? { contextOverride: request.contextOverride } : {}),
           queryClass: proposeQueryClassForTarget(context.queriesById.get(queryId)!, context.brandNames, targetByKey.get(targetKey)),
           classificationSource: 'rule',
         })
@@ -278,14 +395,70 @@ function applyAssignments(
       const existing = assignments[index]!
       assignments[index] = {
         ...existing,
-        ...(contextOverride ? { contextOverride } : {}),
+        ...(request.contextOverride ? { contextOverride: request.contextOverride } : {}),
         ...(existing.classificationSource === 'operator'
           ? {}
           : { queryClass: proposeQueryClassForTarget(context.queriesById.get(queryId)!, context.brandNames, targetByKey.get(targetKey)) }),
       }
     }
   }
-  return { authoring: { ...authoring, assignments }, warnings: [] }
+  const requested = audience.targetKeys.length * queryIds.length
+  return {
+    authoring: { ...authoring, assignments },
+    warnings: [],
+    audience,
+    assignments: { requested, added, alreadyPresent: requested - added },
+  }
+}
+
+/**
+ * Clears the exact named questions from every previous Property first, then
+ * writes the replacement cross product. Other questions remain byte-for-byte
+ * intact, and the generic mutation wrapper commits the one candidate once.
+ */
+export function replaceAssignmentsInAuthoring(
+  authoring: MeasurementDraftAuthoring,
+  request: MeasurementDraftAssignmentAudienceRequest,
+  context: DraftActionContext,
+): AssignmentAuthoringResult {
+  const queryIds = knownQueryIds(request.queryIds, context)
+  // Resolve and cap before constructing the replacement candidate, so an
+  // invalid group or oversized request never looks like it partially cleared.
+  const audience = resolveDraftAudience(authoring, request)
+  assertAssignmentActionLimit(audience, queryIds)
+  const wanted = new Set(queryIds)
+  const cleared: MeasurementDraftAuthoring = {
+    ...authoring,
+    assignments: authoring.assignments.filter(assignment => !wanted.has(assignment.queryId)),
+  }
+  const result = applyAssignmentsToAuthoring(cleared, { ...request, queryIds }, context)
+  return { ...result, audience }
+}
+
+/**
+ * Legacy `targetKey` stays exactly as it was; the bulk branch carries the
+ * shared audience and can name groups. Both paths delegate to the same pure
+ * concrete-assignment implementation after parsing.
+ */
+function applyAssignments(
+  authoring: MeasurementDraftAuthoring,
+  body: unknown,
+  context: DraftActionContext,
+): DraftActionResult {
+  const parsed = parseBody(measurementDraftApplyAssignmentsRequestSchema, body, 'apply-assignments')
+  const request: MeasurementDraftAssignmentAudienceRequest = 'targetKey' in parsed
+    ? { targetKeys: [parsed.targetKey], queryIds: parsed.queryIds, ...(parsed.contextOverride ? { contextOverride: parsed.contextOverride } : {}) }
+    : parsed
+  return applyAssignmentsToAuthoring(authoring, request, context)
+}
+
+function replaceAssignments(
+  authoring: MeasurementDraftAuthoring,
+  body: unknown,
+  context: DraftActionContext,
+): DraftActionResult {
+  const request = parseBody(measurementDraftReplaceAssignmentsRequestSchema, body, 'replace-assignments')
+  return replaceAssignmentsInAuthoring(authoring, request, context)
 }
 
 /**
@@ -303,6 +476,13 @@ function applyPairedAssignments(
   const unknown = pairs.filter(pair => !context.queriesById.has(pair.queryId)).map(pair => pair.queryId)
   if (unknown.length) {
     throw validationError(`The project has no query ${unique(unknown).map(id => `"${id}"`).join(', ')}. Add it before assigning it.`)
+  }
+  const distinctPairCount = new Set(pairs.map(pair => `${pair.targetKey}\u0000${pair.queryId}`)).size
+  if (distinctPairCount > MAX_ASSIGNMENTS_PER_ACTION) {
+    throw validationError(
+      `This would create ${distinctPairCount.toLocaleString('en-US')} paired assignments, `
+      + `over the ${MAX_ASSIGNMENTS_PER_ACTION.toLocaleString('en-US')} limit for one action.`,
+    )
   }
 
   const targetByKey = new Map(authoring.targets.map(target => [target.stableKey, target]))
@@ -460,20 +640,25 @@ export function applyDraftAction(
   body: unknown,
   context: DraftActionContext,
 ): DraftActionResult {
-  switch (action) {
-    case 'upsert-target': return upsertTarget(authoring, body)
-    case 'rename-target': return renameTarget(authoring, body)
-    case 'merge-targets': return mergeTargets(authoring, body)
-    case 'exclude-target': return excludeTarget(authoring, body)
-    case 'rebind-target': return rebindTarget(authoring, body)
-    case 'apply-assignments': return applyAssignments(authoring, body, context)
-    case 'apply-paired-assignments': return applyPairedAssignments(authoring, body, context)
-    case 'remove-assignment': return removeAssignment(authoring, body)
-    case 'clear-assignments': return clearAssignments(authoring, body)
-    case 'classify-assignments': return classifyAssignments(authoring, body)
-    case 'upsert-group': return upsertGroup(authoring, body)
-    case 'remove-group': return removeGroup(authoring, body)
-    case 'upsert-competitor': return upsertCompetitor(authoring, body)
-    case 'remove-competitor': return removeCompetitor(authoring, body)
-  }
+  const result = (() => {
+    switch (action) {
+      case 'upsert-target': return upsertTarget(authoring, body)
+      case 'rename-target': return renameTarget(authoring, body)
+      case 'merge-targets': return mergeTargets(authoring, body)
+      case 'exclude-target': return excludeTarget(authoring, body)
+      case 'rebind-target': return rebindTarget(authoring, body)
+      case 'apply-assignments': return applyAssignments(authoring, body, context)
+      case 'replace-assignments': return replaceAssignments(authoring, body, context)
+      case 'apply-paired-assignments': return applyPairedAssignments(authoring, body, context)
+      case 'remove-assignment': return removeAssignment(authoring, body)
+      case 'clear-assignments': return clearAssignments(authoring, body)
+      case 'classify-assignments': return classifyAssignments(authoring, body)
+      case 'upsert-group': return upsertGroup(authoring, body)
+      case 'remove-group': return removeGroup(authoring, body)
+      case 'upsert-competitor': return upsertCompetitor(authoring, body)
+      case 'remove-competitor': return removeCompetitor(authoring, body)
+    }
+  })()
+  assertMeasurementDraftAuthoringLimits(authoring, result.authoring)
+  return result
 }

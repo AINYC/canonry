@@ -3,13 +3,13 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ToneBadge } from '../../shared/ToneBadge.js'
 import { Button } from '../../ui/button.js'
 
-export type AdvancedMeasurementSetupStep = 'import' | 'properties' | 'queries' | 'groups' | 'review'
+export type AdvancedMeasurementSetupStep = 'import' | 'properties' | 'groups' | 'queries' | 'review'
 
 const setupSteps: readonly { id: AdvancedMeasurementSetupStep; label: string }[] = [
   { id: 'import', label: 'Import' },
   { id: 'properties', label: 'Properties' },
+  { id: 'groups', label: 'Groups' },
   { id: 'queries', label: 'Questions' },
-  { id: 'groups', label: 'Groups (optional)' },
   { id: 'review', label: 'Review and publish' },
 ]
 

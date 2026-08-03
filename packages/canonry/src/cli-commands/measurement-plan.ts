@@ -1,8 +1,11 @@
 import type { MeasurementQueryClassFilter } from '@ainyc/canonry-contracts'
 import {
+  applyMeasurementPlanAssignments,
+  applyMeasurementPlanGroups,
   discoverMeasurementTargets,
   listMeasurementPlanVersions,
   publishMeasurementPlan,
+  previewMeasurementPlanGroups,
   retireMeasurementPlanSegment,
   showMeasurementPlan,
   showMeasurementProperty,
@@ -10,7 +13,15 @@ import {
   showMeasurementReport,
 } from '../commands/measurement-plan.js'
 import type { CliCommandInput, CliCommandSpec } from '../cli-dispatch.js'
-import { getString, requireProject, requireStringOption, stringOption } from '../cli-command-helpers.js'
+import {
+  getBoolean,
+  getString,
+  getStringArray,
+  multiStringOption,
+  requireProject,
+  requireStringOption,
+  stringOption,
+} from '../cli-command-helpers.js'
 import { usageError } from '../cli-error.js'
 
 const QUERY_CLASSES: readonly MeasurementQueryClassFilter[] = ['all', 'branded', 'non-brand']
@@ -63,6 +74,74 @@ export const MEASUREMENT_PLAN_CLI_COMMANDS: readonly CliCommandSpec[] = [
     if (!stableKey) throw usageError('stable segment key is required')
     return retireMeasurementPlanSegment(project, stableKey)
   } },
+  {
+    path: ['measurement-plan', 'assignments', 'apply'],
+    usage: 'canonry measurement-plan assignments apply <project> [--group KEY ...] [--target-key KEY ... | --all-properties] --query-id ID [--query-id ID ...] [--format json]',
+    options: {
+      group: multiStringOption(),
+      'target-key': multiStringOption(),
+      'all-properties': { type: 'boolean' },
+      'query-id': multiStringOption(),
+    },
+    run: input => {
+      const usage = 'canonry measurement-plan assignments apply <project> [--group KEY ...] [--target-key KEY ... | --all-properties] --query-id ID [--query-id ID ...]'
+      const project = requireProject(input, 'measurement-plan.assignments.apply', usage)
+      const groupKeys = getStringArray(input.values, 'group')?.map(value => value.trim()).filter(Boolean)
+      const targetKeys = getStringArray(input.values, 'target-key')?.map(value => value.trim()).filter(Boolean)
+      const queryIds = getStringArray(input.values, 'query-id')?.map(value => value.trim()).filter(Boolean) ?? []
+      const allProperties = getBoolean(input.values, 'all-properties')
+      if (queryIds.length === 0) throw usageError(`Error: at least one --query-id is required\nUsage: ${usage}`)
+      if (allProperties && ((groupKeys?.length ?? 0) > 0 || (targetKeys?.length ?? 0) > 0)) {
+        throw usageError(`Error: --all-properties cannot be combined with --group or --target-key\nUsage: ${usage}`)
+      }
+      if (!allProperties && (groupKeys?.length ?? 0) === 0 && (targetKeys?.length ?? 0) === 0) {
+        throw usageError(`Error: select at least one --group, --target-key, or --all-properties\nUsage: ${usage}`)
+      }
+      return applyMeasurementPlanAssignments(project, { groupKeys, targetKeys, queryIds, allProperties })
+    },
+  },
+  {
+    path: ['measurement-plan', 'groups', 'preview'],
+    usage: 'canonry measurement-plan groups preview <project> <csv|-> [--format json]',
+    run: input => {
+      const usage = 'canonry measurement-plan groups preview <project> <csv|->'
+      const project = requireProject(input, 'measurement-plan.groups.preview', usage)
+      const source = input.positionals[1]
+      if (!source) throw usageError(`Error: CSV file path or - is required\nUsage: ${usage}`)
+      return previewMeasurementPlanGroups(project, source)
+    },
+  },
+  {
+    path: ['measurement-plan', 'groups', 'apply'],
+    usage: 'canonry measurement-plan groups apply <project> <csv|-> --confirm [--accept-row N ... | --accept-all-matched] [--acknowledge-skipped] [--format json]',
+    options: {
+      confirm: { type: 'boolean' },
+      'accept-row': multiStringOption(),
+      'accept-all-matched': { type: 'boolean' },
+      'acknowledge-skipped': { type: 'boolean' },
+    },
+    run: input => {
+      const usage = 'canonry measurement-plan groups apply <project> <csv|-> --confirm [--accept-row N ... | --accept-all-matched] [--acknowledge-skipped]'
+      const project = requireProject(input, 'measurement-plan.groups.apply', usage)
+      const source = input.positionals[1]
+      if (!source) throw usageError(`Error: CSV file path or - is required\nUsage: ${usage}`)
+      if (!getBoolean(input.values, 'confirm')) throw usageError(`Error: --confirm is required\nUsage: ${usage}`)
+      const acceptAllMatched = getBoolean(input.values, 'accept-all-matched')
+      const rowValues = getStringArray(input.values, 'accept-row') ?? []
+      if (acceptAllMatched === (rowValues.length > 0)) {
+        throw usageError(`Error: choose exactly one of --accept-row or --accept-all-matched\nUsage: ${usage}`)
+      }
+      const acceptedRows = rowValues.map(value => Number(value))
+      if (acceptedRows.some(row => !Number.isSafeInteger(row) || row < 1)) {
+        throw usageError(`Error: --accept-row must be a positive integer\nUsage: ${usage}`)
+      }
+      return applyMeasurementPlanGroups(project, source, {
+        acceptedRows,
+        acceptAllMatched,
+        acknowledgeSkipped: getBoolean(input.values, 'acknowledge-skipped'),
+      })
+    },
+  },
   {
     path: ['measurement-plan', 'discover'],
     usage: 'canonry measurement-plan discover <project> --sitemap-url <url> --rule <yaml|json|-> [--max-urls N] [--format json]',

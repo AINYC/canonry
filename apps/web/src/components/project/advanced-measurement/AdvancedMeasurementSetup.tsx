@@ -30,8 +30,8 @@ interface SetupBaseProps {
 
 export type AdvancedMeasurementSetupProps = SetupBaseProps & (
   | { currentStep: 'import' | 'properties'; importProperties: ImportPropertiesProps }
-  | { currentStep: 'queries'; queries: QueriesProps }
   | { currentStep: 'groups'; groups: GroupsProps }
+  | { currentStep: 'queries'; queries: QueriesProps }
   | { currentStep: 'review'; review: ReviewProps }
 )
 

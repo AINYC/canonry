@@ -16,12 +16,16 @@ const advancedMeasurementV2Operations = [
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/exclude-target',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/rebind-target',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-assignments',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/preview-assignments',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/replace-assignments',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-paired-assignments',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/remove-assignment',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/clear-assignments',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/classify-assignments',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/upsert-group',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/remove-group',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/preview-group-membership',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-group-membership',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/upsert-competitor',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/remove-competitor',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/compile-preview',
@@ -53,7 +57,7 @@ function isAdvancedMeasurementV2Operation(operation: string): boolean {
 
 describe('Advanced Measurement v2 MCP OpenAPI classification', () => {
   it('lists every exposed operation', () => {
-    expect(advancedMeasurementV2Operations).toHaveLength(37)
+    expect(advancedMeasurementV2Operations).toHaveLength(41)
 
     const classifiedOperations = Object.keys(MCP_OPENAPI_OPERATION_CLASSIFICATIONS)
       .filter(isAdvancedMeasurementV2Operation)

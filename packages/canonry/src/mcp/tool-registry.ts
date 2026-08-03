@@ -47,6 +47,7 @@ import {
   measurementPlanPublishRequestSchema,
   measurementDiscoveryRequestSchema,
   measurementDraftApplyAssignmentsRequestSchema,
+  measurementDraftApplyGroupMembershipRequestSchema,
   measurementDraftApplyPairedAssignmentsRequestSchema,
   measurementDraftApplySitemapSelectionRequestSchema,
   measurementDraftClassifyAssignmentsRequestSchema,
@@ -57,10 +58,13 @@ import {
   measurementDraftImportSitemapRequestSchema,
   measurementDraftMergeTargetsRequestSchema,
   measurementDraftPublishRequestSchema,
+  measurementDraftPreviewAssignmentsRequestSchema,
+  measurementDraftPreviewGroupMembershipRequestSchema,
   measurementDraftRebindTargetRequestSchema,
   measurementDraftRemoveAssignmentRequestSchema,
   measurementDraftRemoveCompetitorRequestSchema,
   measurementDraftRemoveGroupRequestSchema,
+  measurementDraftReplaceAssignmentsRequestSchema,
   measurementDraftRenameTargetRequestSchema,
   measurementDraftUpsertCompetitorRequestSchema,
   measurementDraftUpsertGroupRequestSchema,
@@ -252,12 +256,22 @@ const measurementDraftOperationSchema = z.discriminatedUnion('action', [
   measurementDraftMutationOperationSchema('exclude-target', measurementDraftExcludeTargetRequestSchema),
   measurementDraftMutationOperationSchema('rebind-target', measurementDraftRebindTargetRequestSchema),
   measurementDraftMutationOperationSchema('apply-assignments', measurementDraftApplyAssignmentsRequestSchema),
+  z.object({
+    action: z.literal('preview-assignments'),
+    request: measurementDraftPreviewAssignmentsRequestSchema,
+  }).strict().describe('Read-semantic assignment impact preview.'),
+  measurementDraftMutationOperationSchema('replace-assignments', measurementDraftReplaceAssignmentsRequestSchema),
   measurementDraftMutationOperationSchema('apply-paired-assignments', measurementDraftApplyPairedAssignmentsRequestSchema),
   measurementDraftMutationOperationSchema('remove-assignment', measurementDraftRemoveAssignmentRequestSchema),
   measurementDraftMutationOperationSchema('clear-assignments', measurementDraftClearAssignmentsRequestSchema),
   measurementDraftMutationOperationSchema('classify-assignments', measurementDraftClassifyAssignmentsRequestSchema),
   measurementDraftMutationOperationSchema('upsert-group', measurementDraftUpsertGroupRequestSchema),
   measurementDraftMutationOperationSchema('remove-group', measurementDraftRemoveGroupRequestSchema),
+  z.object({
+    action: z.literal('preview-group-membership'),
+    request: measurementDraftPreviewGroupMembershipRequestSchema,
+  }).strict().describe('Read-semantic CSV group-membership preview.'),
+  measurementDraftMutationOperationSchema('apply-group-membership', measurementDraftApplyGroupMembershipRequestSchema),
   measurementDraftMutationOperationSchema('upsert-competitor', measurementDraftUpsertCompetitorRequestSchema),
   measurementDraftMutationOperationSchema('remove-competitor', measurementDraftRemoveCompetitorRequestSchema),
   z.object({ action: z.literal('compile-preview') }).strict().describe('Operation for compile-preview.'),
@@ -290,12 +304,16 @@ const measurementDraftActionOpenApiOperations = [
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/exclude-target',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/rebind-target',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-assignments',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/preview-assignments',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/replace-assignments',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-paired-assignments',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/remove-assignment',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/clear-assignments',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/classify-assignments',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/upsert-group',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/remove-group',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/preview-group-membership',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-group-membership',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/upsert-competitor',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/remove-competitor',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/compile-preview',
@@ -325,6 +343,10 @@ function runMeasurementDraftAction(client: ApiClient, input: MeasurementDraftAct
       return client.rebindMeasurementDraftTarget(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
     case 'apply-assignments':
       return client.applyMeasurementDraftAssignments(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'preview-assignments':
+      return client.previewMeasurementDraftAssignments(project, actionInput.request)
+    case 'replace-assignments':
+      return client.replaceMeasurementDraftAssignments(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
     case 'apply-paired-assignments':
       return client.applyPairedMeasurementDraftAssignments(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
     case 'remove-assignment':
@@ -337,6 +359,10 @@ function runMeasurementDraftAction(client: ApiClient, input: MeasurementDraftAct
       return client.upsertMeasurementDraftGroup(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
     case 'remove-group':
       return client.removeMeasurementDraftGroup(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'preview-group-membership':
+      return client.previewMeasurementDraftGroupMembership(project, actionInput.request)
+    case 'apply-group-membership':
+      return client.applyMeasurementDraftGroupMembership(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
     case 'upsert-competitor':
       return client.upsertMeasurementDraftCompetitor(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
     case 'remove-competitor':

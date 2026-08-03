@@ -408,6 +408,30 @@ describe('ApiClient Advanced Measurement v2 draft actions', () => {
       },
     },
     {
+      name: 'preview assignments',
+      invoke: (api: ApiClient) => api.previewMeasurementDraftAssignments(PROJECT, {
+        groupKeys: ['northstar-group'],
+        queryIds: ['northstar-query'],
+      }),
+      expected: {
+        method: 'POST',
+        pathname: `/api/v1/projects/${PROJECT}/measurement-plan/draft/actions/preview-assignments`,
+        headers: { 'Idempotency-Key': undefined, 'If-Match': undefined },
+      },
+    },
+    {
+      name: 'replace assignments',
+      invoke: (api: ApiClient) => api.replaceMeasurementDraftAssignments(PROJECT, {
+        groupKeys: ['northstar-group'],
+        queryIds: ['northstar-query'],
+      }, IDEMPOTENCY_KEY, ETAG),
+      expected: {
+        method: 'POST',
+        pathname: `/api/v1/projects/${PROJECT}/measurement-plan/draft/actions/replace-assignments`,
+        headers: ordinaryHeaders,
+      },
+    },
+    {
       name: 'remove assignment',
       invoke: (api: ApiClient) => api.removeMeasurementDraftAssignment(PROJECT, {
         targetKey: target.stableKey,
@@ -461,6 +485,31 @@ describe('ApiClient Advanced Measurement v2 draft actions', () => {
       expected: {
         method: 'POST',
         pathname: `/api/v1/projects/${PROJECT}/measurement-plan/draft/actions/remove-group`,
+        headers: ordinaryHeaders,
+      },
+    },
+    {
+      name: 'preview group membership',
+      invoke: (api: ApiClient) => api.previewMeasurementDraftGroupMembership(PROJECT, {
+        csv: 'property,group\nNorthstar home,Northstar group',
+      }),
+      expected: {
+        method: 'POST',
+        pathname: `/api/v1/projects/${PROJECT}/measurement-plan/draft/actions/preview-group-membership`,
+        headers: { 'Idempotency-Key': undefined, 'If-Match': undefined },
+      },
+    },
+    {
+      name: 'apply group membership',
+      invoke: (api: ApiClient) => api.applyMeasurementDraftGroupMembership(PROJECT, {
+        csv: 'property,group\nNorthstar home,Northstar group',
+        sourceChecksum: 'a'.repeat(64),
+        previewChecksum: 'b'.repeat(64),
+        acceptedRows: [1],
+      }, IDEMPOTENCY_KEY, ETAG),
+      expected: {
+        method: 'POST',
+        pathname: `/api/v1/projects/${PROJECT}/measurement-plan/draft/actions/apply-group-membership`,
         headers: ordinaryHeaders,
       },
     },

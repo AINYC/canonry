@@ -6,9 +6,13 @@ import Fastify from 'fastify'
 import { eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  MEASUREMENT_GROUP_MEMBERSHIP_CSV_MAX_BYTES,
+  measurementDraftApplyGroupMembershipResponseSchema,
   measurementDraftCompilePreviewResponseSchema,
   measurementDraftDiffPreviewResponseSchema,
   measurementDraftMutationResponseSchema,
+  measurementDraftPreviewAssignmentsResponseSchema,
+  measurementDraftPreviewGroupMembershipResponseSchema,
   measurementDraftResponseSchema,
   measurementPlanResponseSchema,
   measurementPlanVersionResponseSchema,
@@ -353,6 +357,30 @@ describe('measurement draft idempotency', () => {
     expect(retry.json()).toEqual(renamed.json())
     expect(db.select().from(measurementPlanDrafts).get()!.etagVersion).toBe(3)
   })
+
+  it('accepts only one same-ETag writer and replays the winner without a second write', async () => {
+    const etag = await createDraft()
+    const leftPayload = { target: WIDGETS_TARGET }
+    const rightPayload = { target: GADGETS_TARGET }
+    const [left, right] = await Promise.all([
+      action('upsert-target', { payload: leftPayload, ifMatch: etag, idempotencyKey: 'concurrent-left' }),
+      action('upsert-target', { payload: rightPayload, ifMatch: etag, idempotencyKey: 'concurrent-right' }),
+    ])
+    expect([left.statusCode, right.statusCode].sort()).toEqual([200, 412])
+
+    const winner = left.statusCode === 200
+      ? { response: left, payload: leftPayload, key: 'concurrent-left' }
+      : { response: right, payload: rightPayload, key: 'concurrent-right' }
+    const replay = await action('upsert-target', {
+      payload: winner.payload,
+      ifMatch: etag,
+      idempotencyKey: winner.key,
+    })
+    expect(replay.statusCode, replay.body).toBe(200)
+    expect(replay.json()).toEqual(winner.response.json())
+    expect(db.select().from(measurementPlanDrafts).get()!.etagVersion).toBe(2)
+    expect(db.select().from(auditLog).where(eq(auditLog.action, 'measurement-draft.upsert-target')).all()).toHaveLength(1)
+  })
 })
 
 describe('measurement draft typed actions', () => {
@@ -419,6 +447,31 @@ describe('measurement draft typed actions', () => {
     const remaining = (await request('GET', '/measurement-plan/draft/assignments')).json().items
     expect(remaining).toHaveLength(2)
     expect(remaining.map((entry: { queryId: string }) => entry.queryId)).toEqual([queryIds[1], queryIds[1]])
+  })
+
+  it('replaces all prior Properties for the named questions while leaving other questions intact', async () => {
+    const session = await DraftSession.start()
+    await session.run('upsert-target', { target: WIDGETS_TARGET })
+    await session.run('upsert-target', { target: GADGETS_TARGET })
+    const market = queryId('best widget supplier')
+    const delivery = queryId('widget delivery times')
+    await session.run('apply-assignments', {
+      targetKeys: ['widgets', 'gadgets'],
+      queryIds: [market, delivery],
+    })
+
+    await session.run('replace-assignments', {
+      targetKeys: ['gadgets'],
+      queryIds: [market],
+    })
+
+    expect((await request('GET', '/measurement-plan/draft/assignments')).json().items
+      .map((entry: { targetKey: string; queryId: string }) => `${entry.targetKey}/${entry.queryId}`).sort())
+      .toEqual([
+        `gadgets/${delivery}`,
+        `gadgets/${market}`,
+        `widgets/${delivery}`,
+      ].sort())
   })
 
   it('keeps the surviving key, its assignments and its group membership across a merge', async () => {
@@ -609,6 +662,156 @@ describe('measurement draft typed actions', () => {
 })
 
 describe('measurement draft previews', () => {
+  it('previews and atomically applies reviewed CSV group membership', async () => {
+    const session = await DraftSession.start()
+    await session.run('upsert-target', { target: WIDGETS_TARGET })
+    await session.run('upsert-target', { target: GADGETS_TARGET })
+    const csv = 'property,group\nWidgets,Dallas\nGadgets,Dallas'
+    const before = db.select().from(measurementPlanDrafts).get()!
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/preview-group-membership', {
+      payload: { csv },
+    })
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(measurementDraftPreviewGroupMembershipResponseSchema.safeParse(preview.json()).success).toBe(true)
+    expect(preview.json()).toMatchObject({
+      draftEtag: session.etag,
+      counts: { matchedRows: 2, groupsReady: 1, needsAttention: 0, addedMemberships: 2 },
+      rows: [
+        { dataRow: 1, status: 'matched', targetKey: 'widgets', groupKey: 'group-dallas' },
+        { dataRow: 2, status: 'matched', targetKey: 'gadgets', groupKey: 'group-dallas' },
+      ],
+    })
+    expect(db.select().from(measurementPlanDrafts).get()).toEqual(before)
+
+    const applied = await action('apply-group-membership', {
+      ifMatch: session.etag,
+      payload: {
+        csv,
+        sourceChecksum: preview.json().sourceChecksum,
+        previewChecksum: preview.json().previewChecksum,
+        acceptedRows: [1, 2],
+      },
+    })
+    expect(applied.statusCode, applied.body).toBe(200)
+    expect(measurementDraftApplyGroupMembershipResponseSchema.safeParse(applied.json()).success).toBe(true)
+    expect(applied.json()).toMatchObject({
+      changed: true,
+      appliedRows: 2,
+      addedMemberships: 2,
+      unchangedMemberships: 0,
+      counts: { groups: 1 },
+    })
+    expect((await request('GET', '/measurement-plan/draft')).json().draft.authoring.groups).toEqual([{
+      stableKey: 'group-dallas',
+      label: 'Dallas',
+      targetKeys: ['widgets', 'gadgets'],
+      competitors: [],
+    }])
+  })
+
+  it('rejects stale CSV previews and oversized CSV fields without changing the draft', async () => {
+    const session = await DraftSession.start()
+    await session.run('upsert-target', { target: WIDGETS_TARGET })
+    const csv = 'property,group\nWidgets,Dallas'
+    const preview = await request('POST', '/measurement-plan/draft/actions/preview-group-membership', {
+      payload: { csv },
+    })
+    const before = db.select().from(measurementPlanDrafts).get()!
+    const stale = await action('apply-group-membership', {
+      ifMatch: session.etag,
+      payload: {
+        csv,
+        sourceChecksum: preview.json().sourceChecksum,
+        previewChecksum: '0'.repeat(64),
+        acceptedRows: [1],
+      },
+    })
+    expect(stale.statusCode, stale.body).toBe(409)
+    expect(stale.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR', details: { importCode: 'preview-checksum-mismatch' } } })
+    expect(db.select().from(measurementPlanDrafts).get()).toEqual(before)
+
+    const tooLarge = await request('POST', '/measurement-plan/draft/actions/preview-group-membership', {
+      payload: { csv: `property,group\n${'a'.repeat(MEASUREMENT_GROUP_MEMBERSHIP_CSV_MAX_BYTES)},Dallas` },
+    })
+    expect(tooLarge.statusCode, tooLarge.body).toBe(413)
+    expect(db.select().from(measurementPlanDrafts).get()).toEqual(before)
+  })
+
+  it('previews a server-resolved audience with exact assignment and provider impact without writing', async () => {
+    const session = await readyDraft()
+    await session.run('upsert-target', { target: GADGETS_TARGET })
+    await session.run('upsert-group', {
+      group: { stableKey: 'catalog', label: 'Catalog', targetKeys: ['widgets', 'gadgets'] },
+    })
+    const delivery = queryId('widget delivery times')
+    const beforeDraft = db.select().from(measurementPlanDrafts).get()!
+    const beforeAudits = db.select().from(auditLog).all()
+    const beforeReceipts = db.select().from(measurementOperationReceipts).all()
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/preview-assignments', {
+      payload: { groupKeys: ['catalog'], queryIds: [delivery] },
+    })
+
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(measurementDraftPreviewAssignmentsResponseSchema.safeParse(preview.json()).success).toBe(true)
+    expect(preview.headers.etag).toBe(session.etag)
+    expect(preview.json()).toEqual(expect.objectContaining({
+      draftEtag: session.etag,
+      groups: [{ groupKey: 'catalog', label: 'Catalog', memberCount: 2 }],
+      resolvedTargetKeys: ['gadgets', 'widgets'],
+      overlapCount: 0,
+      assignments: { requested: 2, added: 2, alreadyPresent: 0 },
+      execution: { addedNodes: 1, addedProviderCalls: 2, fullRunNodes: 3, fullRunProviderCalls: 6 },
+    }))
+    expect(db.select().from(measurementPlanDrafts).get()).toEqual(beforeDraft)
+    expect(db.select().from(auditLog).all()).toEqual(beforeAudits)
+    expect(db.select().from(measurementOperationReceipts).all()).toEqual(beforeReceipts)
+
+    await session.run('apply-assignments', { groupKeys: ['catalog'], queryIds: [delivery] })
+    expect((await request('GET', '/measurement-plan/draft/assignments')).json().items)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ targetKey: 'widgets', queryId: delivery }),
+        expect.objectContaining({ targetKey: 'gadgets', queryId: delivery }),
+      ]))
+  })
+
+  it('reports 58 Property assignments as four provider calls for a 29-Property group', async () => {
+    const session = await readyDraft()
+    const targetKeys = ['widgets']
+    for (let index = 2; index <= 29; index += 1) {
+      const stableKey = `property-${String(index).padStart(2, '0')}`
+      targetKeys.push(stableKey)
+      await session.run('upsert-target', {
+        target: {
+          stableKey,
+          label: `Property ${index}`,
+          status: 'included',
+          aliases: [`Property ${index}`],
+          urlMatchers: [`https://northwind.example/${stableKey}`],
+          source: 'manual',
+        },
+      })
+    }
+    await session.run('upsert-group', {
+      group: { stableKey: 'dallas', label: 'Dallas', targetKeys },
+    })
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/preview-assignments', {
+      payload: {
+        groupKeys: ['dallas'],
+        queryIds: [queryId('best widget supplier'), queryId('northwind widget reviews')],
+      },
+    })
+
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(preview.json()).toMatchObject({
+      resolvedTargetKeys: expect.arrayContaining(targetKeys),
+      assignments: { requested: 58, added: 56, alreadyPresent: 2 },
+      execution: { addedNodes: 0, addedProviderCalls: 0, fullRunNodes: 2, fullRunProviderCalls: 4 },
+    })
+  })
+
   it('compiles the stored draft, carries the compiled checksum and writes nothing', async () => {
     const session = await readyDraft()
     const before = db.select().from(measurementPlanDrafts).get()!

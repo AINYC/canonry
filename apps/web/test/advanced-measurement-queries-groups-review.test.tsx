@@ -168,6 +168,18 @@ test('clears an individual query assignment with explicit wording', () => {
   expect(props.onRemoveQuery).toHaveBeenCalledWith('q-saved')
 })
 
+test('offers an explicit replacement editor for an already assigned question', () => {
+  const onReplaceAssignments = vi.fn()
+  renderQueries({ onReplaceAssignments })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Replace question assignments for Harbor House events' }))
+  expect(screen.getByRole('heading', { name: 'Replace assigned Properties' })).toBeTruthy()
+  fireEvent.click(screen.getAllByRole('button', { name: 'Clear selection' }).at(-1)!)
+  fireEvent.click(screen.getAllByLabelText('Select North Hall').at(-1)!)
+  fireEvent.click(screen.getByRole('button', { name: 'Replace with 1 Property' }))
+  expect(onReplaceAssignments).toHaveBeenCalledWith({ queryId: 'q-saved', propertyIds: ['north-hall'] })
+})
+
 test('keeps a missing tracked query visible only for clearing its assignments', () => {
   const missingQuery: AdvancedMeasurementQuery = {
     id: 'q-missing',
@@ -196,6 +208,73 @@ test('supports bulk query selection and keeps the long Property list collapsed',
   expect(props.onSelectedQueryIdsChange).toHaveBeenCalledWith(queries.map(query => query.id))
   fireEvent.click(screen.getByRole('button', { name: 'Clear question selection' }))
   expect(props.onSelectedQueryIdsChange).toHaveBeenLastCalledWith([])
+})
+
+test('uses one audience control for all Properties, groups, and the Specific Properties escape hatch', () => {
+  const onAudienceChange = vi.fn()
+  const onApplySelectedQueries = vi.fn()
+  const metroGroups: AdvancedMeasurementGroup[] = [
+    ...groups,
+    { id: 'downtown', name: 'Downtown', propertyIds: ['north-hall'], competitors: [] },
+  ]
+  renderQueries({
+    groups: metroGroups,
+    audience: { kind: 'groups', groupIds: ['waterfront-venues'] },
+    onAudienceChange,
+    onApplySelectedQueries,
+    assignmentImpact: {
+      assignmentCount: 1,
+      addedAssignments: 1,
+      alreadyPresentAssignments: 0,
+      resolvedPropertyCount: 1,
+      overlapCount: 0,
+      addedProviderCalls: 2,
+      fullRunProviderCalls: 4,
+    },
+  })
+
+  expect((screen.getByLabelText('Apply to') as HTMLSelectElement).value).toBe('group:waterfront-venues')
+  expect(screen.getByText('1 question → 1 Property assignment · 4 provider requests per full run · 2 new · 1 unique Property. Existing assignments stay in place.')).toBeTruthy()
+  fireEvent.change(screen.getByLabelText('Add another group'), { target: { value: 'downtown' } })
+  expect(onAudienceChange).toHaveBeenLastCalledWith({ kind: 'groups', groupIds: ['waterfront-venues', 'downtown'] })
+  fireEvent.click(screen.getByRole('button', { name: 'Assign 1 question to Waterfront venues' }))
+  expect(onApplySelectedQueries).toHaveBeenCalledWith({
+    queryIds: ['q-saved'],
+    propertyIds: ['harbor-house'],
+    groupIds: ['waterfront-venues'],
+  })
+})
+
+test('shows zero new provider requests when the execution nodes are already reused', () => {
+  renderQueries({
+    groups,
+    audience: { kind: 'groups', groupIds: ['waterfront-venues'] },
+    assignmentImpact: {
+      assignmentCount: 1,
+      addedAssignments: 0,
+      alreadyPresentAssignments: 1,
+      resolvedPropertyCount: 1,
+      overlapCount: 0,
+      addedProviderCalls: 0,
+      fullRunProviderCalls: 4,
+    },
+  })
+
+  expect(screen.getByText('1 question → 1 Property assignment · 4 provider requests per full run · 0 new · 1 unique Property. Existing assignments stay in place.')).toBeTruthy()
+})
+
+test('keeps selected questions visible and disables assignment when the server impact cannot be calculated', () => {
+  const view = renderQueries({
+    audience: { kind: 'all' },
+    onAudienceChange: vi.fn(),
+    assignmentImpactError: 'Could not calculate assignment impact.',
+  })
+
+  expect(screen.getByRole('alert').textContent).toContain('Could not calculate assignment impact.')
+  expect(screen.getByRole('button', { name: 'Assign 1 question to all 2 Properties' })).toHaveProperty('disabled', true)
+  expect((screen.getByLabelText('Select question Harbor House events') as HTMLInputElement).checked).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Back to Groups' }))
+  expect(view.props.onBack).toHaveBeenCalledTimes(1)
 })
 
 test('keeps a large query library searchable, capped, and explicit about bulk selection', () => {
@@ -533,6 +612,93 @@ test('collapses group Properties and exposes optional actions for saved groups',
   expect(onEditGroup).toHaveBeenCalledWith(groups[0])
   fireEvent.click(screen.getByRole('button', { name: 'Remove Waterfront venues' }))
   expect(onRemoveGroup).toHaveBeenCalledWith('waterfront-venues')
+})
+
+test('reviews CSV group rows before applying only matched memberships', () => {
+  const onReview = vi.fn()
+  const onApply = vi.fn()
+  renderGroups({
+    membershipImport: {
+      csv: 'property,group\nHarbor House,Dallas\nUnknown,Miami',
+      preview: {
+        draftEtag: '"mpd_7"',
+        sourceChecksum: 'a'.repeat(64),
+        previewChecksum: 'b'.repeat(64),
+        rows: [
+          { dataRow: 1, property: 'Harbor House', group: 'Dallas', url: null, status: 'matched' },
+          { dataRow: 2, property: 'Unknown', group: 'Miami', url: null, status: 'unmatched' },
+        ],
+        groupChanges: [{
+          groupKey: 'group-dallas',
+          label: 'Dallas',
+          action: 'create',
+          targetKeys: ['harbor-house'],
+          addedTargetKeys: ['harbor-house'],
+          unchangedTargetKeys: [],
+        }],
+        counts: { dataRows: 2, matchedRows: 1, needsAttention: 1, groupsReady: 1 },
+      },
+      onCsvChange: vi.fn(),
+      onReview,
+      onApply,
+    },
+  })
+
+  expect(screen.getByText('1 matched · 1 group ready · 1 needs attention')).toBeTruthy()
+  expect(screen.getByRole('table', { name: 'Groups and memberships ready to apply' }).textContent).toContain('DallasCreate group11')
+  fireEvent.click(screen.getByText('Review CSV rows (2)'))
+  expect(screen.getByRole('table', { name: 'CSV group membership review' }).textContent).toContain('Harbor House')
+  fireEvent.click(screen.getByText('Fix 1 row before applying'))
+  const apply = screen.getByRole('button', { name: 'Apply 1 matched row' })
+  expect((apply as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I reviewed the exceptions and understand that 1 row will be skipped.' }))
+  fireEvent.click(apply)
+  expect(onApply).toHaveBeenCalledWith([1])
+})
+
+test('pages CSV exceptions and requires the final page to be reviewed before skipping rows', () => {
+  const onApply = vi.fn()
+  const exceptionRows = Array.from({ length: 52 }, (_, index) => ({
+    dataRow: index + 2,
+    property: `Unknown ${index + 1}`,
+    group: 'Dallas',
+    url: null,
+    status: 'unmatched' as const,
+  }))
+  renderGroups({
+    membershipImport: {
+      csv: 'property,group',
+      preview: {
+        draftEtag: '"mpd_7"',
+        sourceChecksum: 'a'.repeat(64),
+        previewChecksum: 'b'.repeat(64),
+        rows: [{ dataRow: 1, property: 'Harbor House', group: 'Dallas', url: null, status: 'matched' }, ...exceptionRows],
+        groupChanges: [{
+          groupKey: 'group-dallas',
+          label: 'Dallas',
+          action: 'create',
+          targetKeys: ['harbor-house'],
+          addedTargetKeys: ['harbor-house'],
+          unchangedTargetKeys: [],
+        }],
+        counts: { dataRows: 53, matchedRows: 1, needsAttention: 52, groupsReady: 1 },
+      },
+      onCsvChange: vi.fn(),
+      onReview: vi.fn(),
+      onApply,
+    },
+  })
+
+  fireEvent.click(screen.getByText('Fix 52 rows before applying'))
+  const acknowledgement = screen.getByRole('checkbox', { name: 'I reviewed the exceptions and understand that 52 rows will be skipped.' }) as HTMLInputElement
+  expect(acknowledgement.disabled).toBe(true)
+  expect(screen.getByRole('table', { name: 'CSV rows that need attention' }).textContent).toContain('Unknown 50')
+  fireEvent.click(screen.getByRole('button', { name: 'Review next 50 exceptions' }))
+  expect(screen.getByRole('table', { name: 'CSV rows that need attention' }).textContent).toContain('Unknown 52')
+  expect(acknowledgement.disabled).toBe(false)
+  fireEvent.click(acknowledgement)
+  fireEvent.click(screen.getByRole('button', { name: 'Apply 1 matched row' }))
+  expect(onApply).toHaveBeenCalledWith([1])
 })
 
 test('requires a partially entered group to be saved or cleared before continuing', () => {

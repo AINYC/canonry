@@ -20,6 +20,8 @@ import type {
 } from './SetupImportProperties.js'
 import type {
   AdvancedMeasurementFlaggedException,
+  AdvancedMeasurementAudience,
+  AdvancedMeasurementAssignmentImpact,
   AdvancedMeasurementGroup,
   AdvancedMeasurementGroupDraft,
   AdvancedMeasurementProperty as SetupProperty,
@@ -27,13 +29,17 @@ import type {
 } from './SetupQueriesGroupsReview.js'
 import {
   advancedMeasurementService,
+  assignmentPreviewErrorMessage,
   isDraftConflict,
   setupErrorMessage,
   type AdvancedMeasurementService,
+  type GroupMembershipPreview,
+  type MeasurementAudienceAssignmentInput,
+  type MeasurementAudienceAssignmentPreview,
   type SitemapImportInput,
 } from './service.js'
 
-type SetupStep = 'import' | 'properties' | 'queries' | 'groups' | 'review'
+type SetupStep = 'import' | 'properties' | 'groups' | 'queries' | 'review'
 type Draft = NonNullable<MeasurementDraftResponse['draft']>
 type DraftTarget = MeasurementDraftAuthoring['targets'][number]
 
@@ -42,6 +48,7 @@ interface ReviewedSetup {
   baseActiveRevision: number | null
   compiledChecksum: string
   changes: { title: string; items: string[] }
+  providerCalls: number
 }
 
 export interface AdvancedMeasurementSectionProps {
@@ -186,7 +193,7 @@ export function sitemapImportInput(draft: AdvancedMeasurementImportDraft): Sitem
 function initialStepFor(draft: Draft | null): SetupStep {
   if (!draft || draft.authoring.targets.length === 0) return 'import'
   if (draft.authoring.targets.some(target => target.status === 'proposed')) return 'properties'
-  if (draft.authoring.assignments.length === 0) return 'queries'
+  if (draft.authoring.assignments.length === 0) return 'groups'
   return draft.baseActiveRevision === null ? 'review' : 'properties'
 }
 
@@ -194,7 +201,7 @@ function recoveredStepFor(draft: Draft | null, current: SetupStep): SetupStep {
   if (!draft || draft.authoring.targets.length === 0) return 'import'
   if (!draft.authoring.targets.some(target => target.status !== 'excluded')) return 'properties'
   if (draft.authoring.targets.some(target => target.status === 'proposed')) return 'properties'
-  if (draft.authoring.assignments.length === 0 && (current === 'groups' || current === 'review')) return 'queries'
+  if (draft.authoring.assignments.length === 0 && current === 'review') return 'groups'
   return current
 }
 
@@ -680,6 +687,32 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values)]
 }
 
+function assignmentInputFor(
+  audience: AdvancedMeasurementAudience,
+  allTargetKeys: readonly string[],
+  queryIds: readonly string[],
+): MeasurementAudienceAssignmentInput {
+  if (audience.kind === 'groups') {
+    return { groupKeys: unique(audience.groupIds), queryIds: unique(queryIds) }
+  }
+  return {
+    targetKeys: unique(audience.kind === 'all' ? allTargetKeys : audience.propertyIds),
+    queryIds: unique(queryIds),
+  }
+}
+
+function assignmentImpactFor(preview: MeasurementAudienceAssignmentPreview): AdvancedMeasurementAssignmentImpact {
+  return {
+    assignmentCount: preview.assignments.requested,
+    addedAssignments: preview.assignments.added,
+    alreadyPresentAssignments: preview.assignments.alreadyPresent,
+    resolvedPropertyCount: preview.resolvedTargetKeys.length,
+    overlapCount: preview.overlapCount,
+    addedProviderCalls: preview.execution.addedProviderCalls,
+    fullRunProviderCalls: preview.execution.fullRunProviderCalls,
+  }
+}
+
 function matcherString(matcher: {
   kind: 'exact' | 'prefix' | 'host'
   url?: string
@@ -778,12 +811,25 @@ export function AdvancedMeasurementSection({
   const [includedPropertyIds, setIncludedPropertyIds] = useState<string[]>([])
   const [queryPropertyIds, setQueryPropertyIds] = useState<string[]>([])
   const [selectedQueryIds, setSelectedQueryIds] = useState<string[]>([])
+  const [audience, setAudience] = useState<AdvancedMeasurementAudience>({ kind: 'all' })
+  const [assignmentPreview, setAssignmentPreview] = useState<MeasurementAudienceAssignmentPreview | null>(null)
+  const [assignmentPreviewSelectionKey, setAssignmentPreviewSelectionKey] = useState<string | null>(null)
+  const [isPreviewingAssignment, setIsPreviewingAssignment] = useState(false)
+  const [assignmentPreviewError, setAssignmentPreviewError] = useState<string | null>(null)
+  const [assignmentNotice, setAssignmentNotice] = useState<string | null>(null)
   const [groupDraft, setGroupDraft] = useState<AdvancedMeasurementGroupDraft>({ ...DEFAULT_GROUP_DRAFT })
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null)
+  const [groupMembershipCsv, setGroupMembershipCsv] = useState('')
+  const [groupMembershipPreview, setGroupMembershipPreview] = useState<GroupMembershipPreview | null>(null)
+  const [isReviewingGroupMembership, setIsReviewingGroupMembership] = useState(false)
+  const [isApplyingGroupMembership, setIsApplyingGroupMembership] = useState(false)
+  const [groupMembershipError, setGroupMembershipError] = useState<string | null>(null)
+  const [groupMembershipNotice, setGroupMembershipNotice] = useState<string | null>(null)
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [createQueriesError, setCreateQueriesError] = useState<string | null>(null)
   const [reviewed, setReviewed] = useState<ReviewedSetup | null>(null)
   const requestVersionRef = useRef(0)
+  const assignmentPreviewVersionRef = useRef(0)
 
   const draft = draftResponse?.draft ?? null
   const etag = draftResponse?.etag ?? null
@@ -942,6 +988,53 @@ export function AdvancedMeasurementSection({
     }))
   ), [viewDraft])
 
+  const assignmentPreviewInput = useMemo<MeasurementAudienceAssignmentInput | null>(() => {
+    if (selectedQueryIds.length === 0) return null
+    const input = assignmentInputFor(audience, confirmedProperties.map(property => property.id), selectedQueryIds)
+    const targetCount = input.groupKeys?.length ?? input.targetKeys?.length ?? 0
+    return targetCount > 0 ? input : null
+  }, [audience, confirmedProperties, selectedQueryIds])
+  const assignmentPreviewKey = assignmentPreviewInput ? JSON.stringify(assignmentPreviewInput) : ''
+
+  useEffect(() => {
+    const request = assignmentPreviewInput
+    const requestVersion = ++assignmentPreviewVersionRef.current
+    if (!canEdit || !draft || !etag || !request) {
+      setAssignmentPreview(null)
+      setAssignmentPreviewSelectionKey(null)
+      setAssignmentPreviewError(null)
+      setIsPreviewingAssignment(false)
+      return
+    }
+
+    setAssignmentPreview(null)
+    setAssignmentPreviewSelectionKey(null)
+    setAssignmentPreviewError(null)
+    setIsPreviewingAssignment(true)
+    void service.previewAssignments(projectName, request)
+      .then(preview => {
+        if (requestVersion !== assignmentPreviewVersionRef.current) return
+        if (preview.draftEtag !== etag) {
+          setAssignmentPreview(null)
+          setAssignmentPreviewSelectionKey(null)
+          setAssignmentPreviewError('The setup changed while calculating assignment impact. Refresh the draft and try again.')
+          return
+        }
+        setAssignmentPreview(preview)
+        setAssignmentPreviewSelectionKey(assignmentPreviewKey)
+      })
+      .catch(error => {
+        if (requestVersion !== assignmentPreviewVersionRef.current) return
+        setAssignmentPreview(null)
+        setAssignmentPreviewSelectionKey(null)
+        setAssignmentPreviewError(assignmentPreviewErrorMessage(error))
+      })
+      .finally(() => {
+        if (requestVersion === assignmentPreviewVersionRef.current) setIsPreviewingAssignment(false)
+      })
+    return () => { assignmentPreviewVersionRef.current += 1 }
+  }, [assignmentPreviewInput, assignmentPreviewKey, canEdit, draft, etag, projectName, service])
+
   const reviewFlags = useMemo<AdvancedMeasurementFlaggedException[]>(() => [
     ...(assignmentCount === 0 ? [{
       id: 'no-query-assignments',
@@ -1027,7 +1120,7 @@ export function AdvancedMeasurementSection({
       if (!selectionChanged) {
         setIncludedPropertyIds([...selected])
         setQueryPropertyIds([...selected])
-        setStep('queries')
+        setStep('groups')
         return
       }
       await service.applySitemapSelection(projectName, etag, selections, [...selected])
@@ -1035,7 +1128,8 @@ export function AdvancedMeasurementSection({
       const included = includedPropertyIdsFor(next.draft)
       setIncludedPropertyIds(included)
       setQueryPropertyIds(included)
-      setStep('queries')
+      setAudience({ kind: 'all' })
+      setStep('groups')
     } catch (error) {
       if (isDraftConflict(error)) await recoverConflict('This setup changed in another session. The latest Properties are loaded.')
       else setActionError(setupErrorMessage(error, 'Could not save the selected Properties.'))
@@ -1044,13 +1138,40 @@ export function AdvancedMeasurementSection({
     }
   }
 
-  async function applySelectedQueries(selection: { queryIds: readonly string[]; propertyIds: readonly string[] }): Promise<void> {
+  async function applySelectedQueries(selection: { queryIds: readonly string[]; propertyIds: readonly string[]; groupIds?: readonly string[] }): Promise<void> {
+    const input: MeasurementAudienceAssignmentInput = selection.groupIds && selection.groupIds.length > 0
+      ? { groupKeys: unique(selection.groupIds), queryIds: unique(selection.queryIds) }
+      : { targetKeys: unique(selection.propertyIds), queryIds: unique(selection.queryIds) }
+    if (!assignmentPreview || assignmentPreviewSelectionKey !== JSON.stringify(input)
+      || !etag || assignmentPreview.draftEtag !== etag) {
+      setActionError('Review the latest assignment impact before assigning questions.')
+      return
+    }
     const next = await mutate(
       'assignments',
-      currentEtag => service.applyAssignments(projectName, currentEtag, unique(selection.propertyIds), unique(selection.queryIds)),
+      currentEtag => service.applyAssignments(projectName, currentEtag, input),
       'Could not apply these questions.',
     )
-    if (next) setSelectedQueryIds([])
+    if (next) {
+      setSelectedQueryIds([])
+      setAssignmentNotice(`${assignmentPreview.assignments.added} new assignment${assignmentPreview.assignments.added === 1 ? '' : 's'} added. Existing assignments were kept.`)
+    }
+  }
+
+  async function replaceQueryAssignments(selection: { queryId: string; propertyIds: readonly string[] }): Promise<void> {
+    if (selection.propertyIds.length === 0) return
+    const next = await mutate(
+      'replace-assignments',
+      currentEtag => service.replaceAssignments(projectName, currentEtag, {
+        targetKeys: unique(selection.propertyIds),
+        queryIds: [selection.queryId],
+      }),
+      'Could not replace this question assignment.',
+    )
+    if (next) {
+      setSelectedQueryIds(current => current.filter(queryId => queryId !== selection.queryId))
+      setAssignmentNotice('Question assignments replaced.')
+    }
   }
 
   /**
@@ -1200,6 +1321,64 @@ export function AdvancedMeasurementSection({
     }
   }
 
+  function changeGroupMembershipCsv(csv: string): void {
+    setGroupMembershipCsv(csv)
+    setGroupMembershipPreview(null)
+    setGroupMembershipError(null)
+    setGroupMembershipNotice(null)
+  }
+
+  async function reviewGroupMembership(): Promise<void> {
+    if (!canEdit || !groupMembershipCsv.trim() || isReviewingGroupMembership || isApplyingGroupMembership) return
+    setIsReviewingGroupMembership(true)
+    setGroupMembershipError(null)
+    setGroupMembershipNotice(null)
+    try {
+      setGroupMembershipPreview(await service.previewGroupMembership(projectName, { csv: groupMembershipCsv }))
+    } catch (error) {
+      setGroupMembershipPreview(null)
+      setGroupMembershipError(setupErrorMessage(error, 'Could not review this CSV.'))
+    } finally {
+      setIsReviewingGroupMembership(false)
+    }
+  }
+
+  async function applyGroupMembership(acceptedRows: readonly number[]): Promise<void> {
+    if (!canEdit || !etag || !groupMembershipPreview || acceptedRows.length === 0 || busyAction) return
+    if (groupMembershipPreview.draftEtag !== etag) {
+      setGroupMembershipError('The setup changed while this CSV was open. Review the latest CSV before applying it.')
+      return
+    }
+    setIsApplyingGroupMembership(true)
+    setBusyAction('group-import')
+    setGroupMembershipError(null)
+    setGroupMembershipNotice(null)
+    setReviewed(null)
+    try {
+      const result = await service.applyGroupMembership(projectName, etag, {
+        csv: groupMembershipCsv,
+        sourceChecksum: groupMembershipPreview.sourceChecksum,
+        previewChecksum: groupMembershipPreview.previewChecksum,
+        acceptedRows: unique(acceptedRows.map(String)).map(Number),
+      })
+      const next = await refreshDraft()
+      setServerFlags(result.warnings.map((warning, index) => warningFlag(warning, index, next.draft?.authoring)))
+      setGroupMembershipCsv('')
+      setGroupMembershipPreview(null)
+      setGroupMembershipNotice(`${result.addedMemberships} membership${result.addedMemberships === 1 ? '' : 's'} added${result.unchangedMemberships > 0 ? `; ${result.unchangedMemberships} already present` : ''}.`)
+    } catch (error) {
+      if (isDraftConflict(error)) {
+        await recoverConflict('This setup changed in another session. The latest draft is loaded; review the CSV again.')
+        setGroupMembershipError('The setup changed while this CSV was open. Review the latest CSV before applying it.')
+      } else {
+        setGroupMembershipError(setupErrorMessage(error, 'Could not apply this CSV.'))
+      }
+    } finally {
+      setBusyAction(null)
+      setIsApplyingGroupMembership(false)
+    }
+  }
+
   async function reviewSetupChanges(): Promise<void> {
     if (!draft || !etag || busyAction || assignmentCount === 0) return
     setBusyAction('review')
@@ -1230,6 +1409,7 @@ export function AdvancedMeasurementSection({
         baseActiveRevision: draft.baseActiveRevision,
         compiledChecksum: compile.compiledChecksum,
         changes: reviewedChanges(diff.diff, preservesHistoricalResults),
+        providerCalls: compile.plan.executionNodes.reduce((total, node) => total + node.expectedSnapshots, 0),
       })
     } catch (error) {
       setActionError(setupErrorMessage(error, 'Could not review this setup.'))
@@ -1293,8 +1473,16 @@ export function AdvancedMeasurementSection({
       setIncludedPropertyIds([])
       setQueryPropertyIds([])
       setSelectedQueryIds([])
+      setAudience({ kind: 'all' })
+      setAssignmentPreview(null)
+      setAssignmentPreviewError(null)
+      setAssignmentNotice(null)
       setGroupDraft({ ...DEFAULT_GROUP_DRAFT })
       setEditingGroupId(null)
+      setGroupMembershipCsv('')
+      setGroupMembershipPreview(null)
+      setGroupMembershipError(null)
+      setGroupMembershipNotice(null)
       await loadCurrent(false)
     } catch (error) {
       if (isDraftConflict(error)) await recoverConflict('The setup changed again. Reloaded the latest draft and published setup.')
@@ -1424,13 +1612,28 @@ export function AdvancedMeasurementSection({
             onSelectedPropertyIdsChange: ids => setQueryPropertyIds([...ids]),
             onSelectedQueryIdsChange: ids => setSelectedQueryIds([...ids]),
             onApplySelectedQueries: selection => applySelectedQueries(selection),
+            groups: setupGroups,
+            audience,
+            onAudienceChange: nextAudience => {
+              setAudience(nextAudience)
+              if (nextAudience.kind === 'specific') setQueryPropertyIds([...nextAudience.propertyIds])
+              setAssignmentNotice(null)
+            },
+            assignmentImpact: assignmentPreview && assignmentPreviewSelectionKey === assignmentPreviewKey
+              ? assignmentImpactFor(assignmentPreview)
+              : null,
+            isPreviewingAssignmentImpact: isPreviewingAssignment,
+            assignmentImpactError: assignmentPreviewError,
+            assignmentNotice,
+            onReplaceAssignments: replaceQueryAssignments,
+            isReplacingAssignments: busyAction === 'replace-assignments',
             onApplyPairedQuestions: pairs => applyPairedQuestions(pairs),
             onCreateAndPairQuestions: canEdit && onCreateQueries ? createAndPairQuestions : undefined,
             onClearQueryAssignments: clearQueryAssignments,
             onRemoveQuery: clearQueryAssignments,
             canContinue: assignmentCount > 0,
-            onBack: () => setStep('properties'),
-            onContinue: () => setStep('groups'),
+            onBack: () => setStep('groups'),
+            onContinue: () => setStep('review'),
           }}
         />
       ) : step === 'groups' ? (
@@ -1453,11 +1656,21 @@ export function AdvancedMeasurementSection({
               setEditingGroupId(null)
               setGroupDraft({ ...DEFAULT_GROUP_DRAFT })
             },
-            onBack: () => {
-              setQueryPropertyIds(includedPropertyIds)
-              setStep('queries')
+            membershipImport: {
+              csv: groupMembershipCsv,
+              preview: groupMembershipPreview,
+              isReviewing: isReviewingGroupMembership,
+              isApplying: isApplyingGroupMembership,
+              error: groupMembershipError,
+              notice: groupMembershipNotice,
+              onCsvChange: changeGroupMembershipCsv,
+              onReview: reviewGroupMembership,
+              onApply: applyGroupMembership,
             },
-            onContinue: () => setStep('review'),
+            onBack: () => {
+              setStep('properties')
+            },
+            onContinue: () => setStep('queries'),
           }}
         />
       ) : (
@@ -1472,13 +1685,15 @@ export function AdvancedMeasurementSection({
               properties: includedTargets.length,
               queries: new Set(viewDraft.authoring.assignments.map(assignment => assignment.queryId)).size,
               groups: viewDraft.authoring.groups.length,
+              assignments: viewDraft.authoring.assignments.length,
+              providerCalls: reviewed?.providerCalls,
             },
             flaggedExceptions: reviewFlags,
             reviewedChanges: reviewed?.changes,
             isReviewing: busyAction === 'review',
             canReviewChanges: assignmentCount > 0 && !busyAction,
             onReviewChanges: reviewSetupChanges,
-            onBack: () => setStep('groups'),
+            onBack: () => setStep('queries'),
             canPublish: reviewed !== null && !busyAction,
             isPublishing: busyAction === 'publish',
             onPublish: publishSetup,

@@ -16,8 +16,8 @@ describe('advanced measurement setup shell', () => {
     expect(screen.getAllByRole('listitem').map(item => item.textContent)).toEqual([
       'Import',
       'Properties',
+      'Groups',
       'Questions',
-      'Groups (optional)',
       'Review and publish',
     ])
     expect(screen.getByText('Properties').getAttribute('aria-current')).toBe('step')

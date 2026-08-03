@@ -2867,7 +2867,8 @@ export type MeasurementDraftApplyAssignmentsRequest = {
         locations?: Array<string>;
     };
 } | {
-    targetKeys: Array<string>;
+    targetKeys?: Array<string>;
+    groupKeys?: Array<string>;
     queryIds: Array<string>;
     contextOverride?: {
         providers?: Array<string>;
@@ -2876,6 +2877,34 @@ export type MeasurementDraftApplyAssignmentsRequest = {
         };
         locations?: Array<string>;
     };
+};
+
+export type MeasurementDraftApplyGroupMembershipRequest = {
+    csv: string;
+    sourceChecksum: string;
+    previewChecksum: string;
+    acceptedRows: Array<number>;
+};
+
+export type MeasurementDraftApplyGroupMembershipResponse = {
+    etag: string;
+    changed: boolean;
+    warnings: Array<{
+        code: string;
+        message: string;
+        path: Array<string | number>;
+    }>;
+    counts: {
+        targets: number;
+        includedTargets: number;
+        assignments: number;
+        unclassifiedAssignments: number;
+        groups: number;
+        competitors: number;
+    };
+    appliedRows: number;
+    addedMemberships: number;
+    unchangedMemberships: number;
 };
 
 export type MeasurementDraftApplyPairedAssignmentsRequest = {
@@ -3252,6 +3281,148 @@ export type MeasurementDraftPublishRequest = {
     expectedCompiledChecksum: string;
 };
 
+export type MeasurementDraftPreviewAssignmentsRequest = {
+    targetKeys?: Array<string>;
+    groupKeys?: Array<string>;
+    queryIds: Array<string>;
+    contextOverride?: {
+        providers?: Array<string>;
+        models?: {
+            [key: string]: string;
+        };
+        locations?: Array<string>;
+    };
+};
+
+export type MeasurementDraftPreviewAssignmentsResponse = {
+    draftEtag: string;
+    groups: Array<{
+        groupKey: string;
+        label: string;
+        memberCount: number;
+    }>;
+    resolvedTargetKeys: Array<string>;
+    overlapCount: number;
+    assignments: {
+        requested: number;
+        added: number;
+        alreadyPresent: number;
+    };
+    execution: {
+        addedNodes: number;
+        addedProviderCalls: number;
+        fullRunNodes: number;
+        fullRunProviderCalls: number;
+    };
+};
+
+export type MeasurementDraftPreviewGroupMembershipRequest = {
+    csv: string;
+};
+
+export type MeasurementDraftPreviewGroupMembershipResponse = {
+    draftEtag: string;
+    sourceChecksum: string;
+    previewChecksum: string;
+    rows: Array<{
+        dataRow: number;
+        property: string;
+        group: string;
+        url: string | null;
+        normalizedProperty: string;
+        normalizedGroupLabel: string;
+        status: 'matched';
+        targetKey: string;
+        groupKey: string;
+    } | {
+        dataRow: number;
+        property: string;
+        group: string;
+        url: string | null;
+        normalizedProperty: string;
+        normalizedGroupLabel: string;
+        reason: 'column-count' | 'missing-property' | 'missing-group' | 'invalid-url' | 'property-not-found' | 'property-label-ambiguous' | 'url-not-exact-match' | 'target-proposed' | 'target-excluded' | 'group-label-ambiguous' | 'group-key-conflict';
+        status: 'ambiguous';
+        candidateTargetKeys: Array<string>;
+    } | {
+        dataRow: number;
+        property: string;
+        group: string;
+        url: string | null;
+        normalizedProperty: string;
+        normalizedGroupLabel: string;
+        reason: 'column-count' | 'missing-property' | 'missing-group' | 'invalid-url' | 'property-not-found' | 'property-label-ambiguous' | 'url-not-exact-match' | 'target-proposed' | 'target-excluded' | 'group-label-ambiguous' | 'group-key-conflict';
+        status: 'unmatched';
+    } | {
+        dataRow: number;
+        property: string;
+        group: string;
+        url: string | null;
+        normalizedProperty: string;
+        normalizedGroupLabel: string;
+        reason: 'column-count' | 'missing-property' | 'missing-group' | 'invalid-url' | 'property-not-found' | 'property-label-ambiguous' | 'url-not-exact-match' | 'target-proposed' | 'target-excluded' | 'group-label-ambiguous' | 'group-key-conflict';
+        status: 'invalid';
+    } | {
+        dataRow: number;
+        property: string;
+        group: string;
+        url: string | null;
+        normalizedProperty: string;
+        normalizedGroupLabel: string;
+        status: 'duplicate';
+        duplicateOfRow: number;
+        targetKey: string;
+        groupKey: string;
+    } | {
+        dataRow: number;
+        property: string;
+        group: string;
+        url: string | null;
+        normalizedProperty: string;
+        normalizedGroupLabel: string;
+        reason: 'column-count' | 'missing-property' | 'missing-group' | 'invalid-url' | 'property-not-found' | 'property-label-ambiguous' | 'url-not-exact-match' | 'target-proposed' | 'target-excluded' | 'group-label-ambiguous' | 'group-key-conflict';
+        status: 'proposed';
+        targetKey: string;
+    } | {
+        dataRow: number;
+        property: string;
+        group: string;
+        url: string | null;
+        normalizedProperty: string;
+        normalizedGroupLabel: string;
+        reason: 'column-count' | 'missing-property' | 'missing-group' | 'invalid-url' | 'property-not-found' | 'property-label-ambiguous' | 'url-not-exact-match' | 'target-proposed' | 'target-excluded' | 'group-label-ambiguous' | 'group-key-conflict';
+        status: 'excluded';
+        targetKey: string;
+    }>;
+    groupChanges: Array<{
+        normalizedGroupLabel: string;
+        groupKey: string;
+        label: string;
+        action: 'create' | 'extend';
+        matchedRows: Array<number>;
+        targetKeys: Array<string>;
+        addedTargetKeys: Array<string>;
+        unchangedTargetKeys: Array<string>;
+    }>;
+    counts: {
+        dataRows: number;
+        matchedRows: number;
+        ambiguousRows: number;
+        unmatchedRows: number;
+        invalidRows: number;
+        duplicateRows: number;
+        proposedRows: number;
+        excludedRows: number;
+        needsAttention: number;
+        groupsReady: number;
+        groupsToCreate: number;
+        groupsToExtend: number;
+        membershipsReady: number;
+        addedMemberships: number;
+        unchangedMemberships: number;
+    };
+};
+
 export type MeasurementDraftRebindTargetRequest = {
     targetKey: string;
     discoveryIdentity: string;
@@ -3273,6 +3444,19 @@ export type MeasurementDraftRemoveCompetitorRequest = {
 
 export type MeasurementDraftRemoveGroupRequest = {
     groupKey: string;
+};
+
+export type MeasurementDraftReplaceAssignmentsRequest = {
+    targetKeys?: Array<string>;
+    groupKeys?: Array<string>;
+    queryIds: Array<string>;
+    contextOverride?: {
+        providers?: Array<string>;
+        models?: {
+            [key: string]: string;
+        };
+        locations?: Array<string>;
+    };
 };
 
 export type MeasurementDraftRenameTargetRequest = {
@@ -9091,6 +9275,104 @@ export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsRe
 
 export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsResponse = PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsResponses[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsResponses];
 
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignmentsData = {
+    body: MeasurementDraftPreviewAssignmentsRequest;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan/draft/actions/preview-assignments';
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignmentsErrors = {
+    /**
+     * The action payload is invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The caller may read the draft but not mutate it.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project or draft not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignmentsError = PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignmentsErrors[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignmentsErrors];
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignmentsResponses = {
+    /**
+     * Resolved audience and assignment execution impact returned.
+     */
+    200: MeasurementDraftPreviewAssignmentsResponse;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignmentsResponse = PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignmentsResponses[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignmentsResponses];
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignmentsData = {
+    body: MeasurementDraftReplaceAssignmentsRequest;
+    headers: {
+        /**
+         * Current draft ETag. Missing returns 428; stale returns 412.
+         */
+        'If-Match': string;
+        /**
+         * Replay key. The same key with a different request body returns 409.
+         */
+        'Idempotency-Key': string;
+    };
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan/draft/actions/replace-assignments';
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignmentsErrors = {
+    /**
+     * The action payload is invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The caller may read the draft but not mutate it.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project or draft not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The idempotency key was already used with a different request body.
+     */
+    409: ErrorEnvelope;
+    /**
+     * The draft changed since it was loaded.
+     */
+    412: ErrorEnvelope;
+    /**
+     * The draft ETag was not supplied in `If-Match`.
+     */
+    428: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignmentsError = PostApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignmentsErrors[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignmentsErrors];
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignmentsResponses = {
+    /**
+     * Draft mutated; the new ETag and counts are returned.
+     */
+    200: MeasurementDraftMutationResponse;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignmentsResponse = PostApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignmentsResponses[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignmentsResponses];
+
 export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsData = {
     body: MeasurementDraftApplyPairedAssignmentsRequest;
     headers: {
@@ -9450,6 +9732,112 @@ export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveGroupRespons
 };
 
 export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveGroupResponse = PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveGroupResponses[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveGroupResponses];
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembershipData = {
+    body: MeasurementDraftPreviewGroupMembershipRequest;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan/draft/actions/preview-group-membership';
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembershipErrors = {
+    /**
+     * The action payload is invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The caller may read the draft but not mutate it.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project or draft not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The request body or embedded CSV exceeds its limit.
+     */
+    413: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembershipError = PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembershipErrors[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembershipErrors];
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembershipResponses = {
+    /**
+     * CSV row outcomes and proposed group changes returned.
+     */
+    200: MeasurementDraftPreviewGroupMembershipResponse;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembershipResponse = PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembershipResponses[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembershipResponses];
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembershipData = {
+    body: MeasurementDraftApplyGroupMembershipRequest;
+    headers: {
+        /**
+         * Current draft ETag. Missing returns 428; stale returns 412.
+         */
+        'If-Match': string;
+        /**
+         * Replay key. The same key with a different request body returns 409.
+         */
+        'Idempotency-Key': string;
+    };
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan/draft/actions/apply-group-membership';
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembershipErrors = {
+    /**
+     * The action payload is invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The caller may read the draft but not mutate it.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project or draft not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The idempotency key was already used with a different request body.
+     */
+    409: ErrorEnvelope;
+    /**
+     * The draft changed since it was loaded.
+     */
+    412: ErrorEnvelope;
+    /**
+     * The request body or embedded CSV exceeds its limit.
+     */
+    413: ErrorEnvelope;
+    /**
+     * The draft ETag was not supplied in `If-Match`.
+     */
+    428: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembershipError = PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembershipErrors[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembershipErrors];
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembershipResponses = {
+    /**
+     * Reviewed group memberships applied.
+     */
+    200: MeasurementDraftApplyGroupMembershipResponse;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembershipResponse = PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembershipResponses[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembershipResponses];
 
 export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertCompetitorData = {
     body: MeasurementDraftUpsertCompetitorRequest;

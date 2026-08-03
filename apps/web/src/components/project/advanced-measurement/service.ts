@@ -4,6 +4,10 @@ import type {
   MeasurementDraftCompilePreviewResponse,
   MeasurementDraftDiffPreviewResponse,
   MeasurementDraftResponse,
+  MeasurementDraftApplyGroupMembershipResponse,
+  MeasurementDraftGroupMembershipRow,
+  MeasurementDraftGroupMembershipRowStatus,
+  MeasurementDraftPreviewGroupMembershipResponse,
   MeasurementPlanV2PublishResponse,
   MeasurementSetupResponse,
 } from '@ainyc/canonry-contracts'
@@ -11,6 +15,7 @@ import {
   getApiV1ProjectsByNameMeasurementPlanDraft,
   getApiV1ProjectsByNameMeasurementSetup,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembership,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignments,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelection,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsCompilePreview,
@@ -19,10 +24,13 @@ import {
   postApiV1ProjectsByNameMeasurementPlanDraftActionsDiscard,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTarget,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsImportSitemap,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignments,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembership,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsPublish,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignment,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveCompetitor,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveGroup,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignments,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertCompetitor,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroup,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertTarget,
@@ -47,6 +55,53 @@ export interface SitemapSelectionInput {
   label?: string
 }
 
+/**
+ * The browser names an audience in customer terms. The API resolves groups at
+ * the draft boundary, so the browser never expands a market into a long list
+ * of Property identifiers just to make an assignment.
+ */
+export interface MeasurementAudienceAssignmentInput {
+  targetKeys?: string[]
+  groupKeys?: string[]
+  queryIds: string[]
+}
+
+export interface MeasurementAudienceAssignmentPreview {
+  /** The exact draft version that the subsequent apply must use. */
+  draftEtag: string
+  groups: Array<{
+    groupKey: string
+    label: string
+    memberCount: number
+  }>
+  resolvedTargetKeys: string[]
+  overlapCount: number
+  assignments: {
+    requested: number
+    added: number
+    alreadyPresent: number
+  }
+  execution: {
+    addedNodes: number
+    addedProviderCalls: number
+    fullRunNodes: number
+    fullRunProviderCalls: number
+  }
+}
+
+export type GroupMembershipMatchStatus = MeasurementDraftGroupMembershipRowStatus
+export type GroupMembershipPreviewRow = MeasurementDraftGroupMembershipRow
+export type GroupMembershipPreview = MeasurementDraftPreviewGroupMembershipResponse
+
+export interface GroupMembershipApplyInput {
+  csv: string
+  sourceChecksum: string
+  previewChecksum: string
+  acceptedRows: number[]
+}
+
+export type GroupMembershipApplyResponse = MeasurementDraftApplyGroupMembershipResponse
+
 export interface AdvancedMeasurementService {
   loadSetup(projectName: string): Promise<MeasurementSetupResponse>
   loadDraft(projectName: string): Promise<MeasurementDraftResponse>
@@ -58,7 +113,9 @@ export interface AdvancedMeasurementService {
     selections: SitemapSelectionInput[],
     selectedTargetKeys: string[],
   ): Promise<DraftMutationResponse>
-  applyAssignments(projectName: string, etag: string, targetKeys: string[], queryIds: string[]): Promise<DraftMutationResponse>
+  previewAssignments(projectName: string, input: MeasurementAudienceAssignmentInput): Promise<MeasurementAudienceAssignmentPreview>
+  applyAssignments(projectName: string, etag: string, input: MeasurementAudienceAssignmentInput): Promise<DraftMutationResponse>
+  replaceAssignments(projectName: string, etag: string, input: MeasurementAudienceAssignmentInput): Promise<DraftMutationResponse>
   applyPairedAssignments(projectName: string, etag: string, pairs: { targetKey: string; queryId: string }[]): Promise<DraftMutationResponse>
   removeAssignment(projectName: string, etag: string, targetKeys: string[], queryId: string): Promise<DraftMutationResponse>
   excludeTarget(projectName: string, etag: string, targetKey: string): Promise<DraftMutationResponse>
@@ -75,6 +132,8 @@ export interface AdvancedMeasurementService {
     competitor: MeasurementDraftAuthoring['groups'][number]['competitors'][number]
   }): Promise<DraftMutationResponse>
   removeCompetitor(projectName: string, etag: string, groupKey: string, competitorKey: string): Promise<DraftMutationResponse>
+  previewGroupMembership(projectName: string, input: { csv: string }): Promise<GroupMembershipPreview>
+  applyGroupMembership(projectName: string, etag: string, input: GroupMembershipApplyInput): Promise<GroupMembershipApplyResponse>
   compilePreview(projectName: string): Promise<MeasurementDraftCompilePreviewResponse>
   diffPreview(projectName: string): Promise<MeasurementDraftDiffPreviewResponse>
   publish(projectName: string, etag: string, input: {
@@ -106,6 +165,15 @@ export function setupErrorMessage(error: unknown, fallback: string): string {
   return message || fallback
 }
 
+/** Exposes only the audience errors that name an operator-visible group or Property. */
+export function assignmentPreviewErrorMessage(error: unknown): string {
+  const fallback = 'Could not calculate assignment impact.'
+  if (!(error instanceof ApiError) || error.code !== 'VALIDATION_ERROR') return fallback
+  const message = error.message.trim()
+  const safeGroupMessage = /^Group ".+" (?:does not exist in this measurement draft\.|has no Properties to assign\.|references unknown Property ".+"\.|contains Property ".+" that is (?:proposed|excluded), not included\.)$/
+  return safeGroupMessage.test(message) ? message : fallback
+}
+
 export const advancedMeasurementService: AdvancedMeasurementService = {
   loadSetup: projectName => invokeWeb(() => getApiV1ProjectsByNameMeasurementSetup({
     client: heyClient,
@@ -133,11 +201,22 @@ export const advancedMeasurementService: AdvancedMeasurementService = {
     headers: mutationHeaders(etag),
     body: { selections, selectedTargetKeys },
   })),
-  applyAssignments: (projectName, etag, targetKeys, queryIds) => invokeWeb(() => postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments({
+  previewAssignments: (projectName, input) => invokeWeb(() => postApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignments({
+    client: heyClient,
+    path: { name: projectName },
+    body: input,
+  })),
+  applyAssignments: (projectName, etag, input) => invokeWeb(() => postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments({
     client: heyClient,
     path: { name: projectName },
     headers: mutationHeaders(etag),
-    body: { targetKeys, queryIds },
+    body: input,
+  })),
+  replaceAssignments: (projectName, etag, input) => invokeWeb(() => postApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignments({
+    client: heyClient,
+    path: { name: projectName },
+    headers: mutationHeaders(etag),
+    body: input,
   })),
   applyPairedAssignments: (projectName, etag, pairs) => invokeWeb(() => postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignments({
     client: heyClient,
@@ -186,6 +265,17 @@ export const advancedMeasurementService: AdvancedMeasurementService = {
     path: { name: projectName },
     headers: mutationHeaders(etag),
     body: { groupKey, competitorKey },
+  })),
+  previewGroupMembership: (projectName, input) => invokeWeb(() => postApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembership({
+    client: heyClient,
+    path: { name: projectName },
+    body: input,
+  })),
+  applyGroupMembership: (projectName, etag, input) => invokeWeb(() => postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembership({
+    client: heyClient,
+    path: { name: projectName },
+    headers: mutationHeaders(etag),
+    body: input,
   })),
   compilePreview: projectName => invokeWeb(() => postApiV1ProjectsByNameMeasurementPlanDraftActionsCompilePreview({
     client: heyClient,
