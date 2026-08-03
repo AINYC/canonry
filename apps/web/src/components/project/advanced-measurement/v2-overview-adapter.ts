@@ -154,9 +154,6 @@ export function adaptV2MeasurementOverview({
   if (activePlan.plan.schemaVersion !== 2 || overview.mode !== 'active-v2') {
     throw new Error('The current overview requires an active version-two setup.')
   }
-  if (overview.queryClass === 'all') {
-    throw new Error('The current overview requires a Branded or Non-brand query filter.')
-  }
   if (overview.scope.kind !== 'all' && overview.scope.kind !== 'group') {
     throw new Error('The current overview requires an All Properties or group scope.')
   }
@@ -166,7 +163,9 @@ export function adaptV2MeasurementOverview({
   const queryById = new Map(plan.querySnapshots.map(query => [query.queryId, query.queryText]))
   const assignmentsByTarget = new Map<string, Set<string>>()
   for (const assignment of plan.assignments) {
-    if (assignment.queryClass !== overview.queryClass) continue
+    // `all` means every lane, so it filters nothing. Comparing it to a stored
+    // class matched nothing and left every Property with no questions.
+    if (overview.queryClass !== 'all' && assignment.queryClass !== overview.queryClass) continue
     const text = queryById.get(assignment.queryId)
     if (!text) continue
     const values = assignmentsByTarget.get(assignment.targetKey) ?? new Set<string>()
@@ -185,7 +184,11 @@ export function adaptV2MeasurementOverview({
     : reportState === 'error' || report !== undefined && report !== null
       ? 'error' as const
       : 'loading' as const
-  const evidenceByTarget = indexV2EvidenceByTarget(plan, pinnedReport, overview.queryClass)
+  const evidenceByTarget = indexV2EvidenceByTarget(
+    plan,
+    pinnedReport,
+    overview.queryClass === 'all' ? undefined : overview.queryClass,
+  )
   const properties = overview.properties.items.map(row => {
     const configured = targetByKey.get(row.targetKey)
     const evidence = evidenceByTarget.get(row.targetKey) ?? []
