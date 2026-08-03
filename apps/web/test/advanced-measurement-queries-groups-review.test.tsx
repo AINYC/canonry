@@ -177,18 +177,18 @@ test('supports bulk query selection and keeps the long Property list collapsed',
 test('keeps a large query library searchable, capped, and explicit about bulk selection', () => {
   const view = renderQueries({ queries: manyQueries, selectedQueryIds: [] })
 
-  expect(screen.getByText('Showing 50 of 55 queries')).toBeTruthy()
+  expect(screen.getByText(/Showing 50 of 55 questions/)).toBeTruthy()
   expect(screen.queryByLabelText('Select query Service query 51')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Select all shown queries' }))
   expect(view.props.onSelectedQueryIdsChange).toHaveBeenCalledWith(manyQueries.slice(0, 50).map(query => query.id))
 
   fireEvent.change(screen.getByRole('searchbox', { name: 'Search queries' }), { target: { value: 'Service query 55' } })
-  expect(screen.getByText('Showing 1 of 1 queries')).toBeTruthy()
+  expect(screen.getByText(/Showing 1 of 1 questions/)).toBeTruthy()
   expect(screen.getByLabelText('Select query Service query 55')).toBeTruthy()
 
   fireEvent.change(screen.getByRole('searchbox', { name: 'Search queries' }), { target: { value: '' } })
   fireEvent.click(screen.getByRole('button', { name: 'Show all queries' }))
-  expect(screen.getByText('Showing 55 of 55 queries')).toBeTruthy()
+  expect(screen.getByText(/Showing 55 of 55 questions/)).toBeTruthy()
   expect(screen.getByLabelText('Select query Service query 51')).toBeTruthy()
 })
 

@@ -60,6 +60,8 @@ export interface AdvancedMeasurementQueriesStepProps {
    * operator out of the wizard to create them and back again.
    */
   onCreateQueries?: (texts: readonly string[]) => void | Promise<unknown>
+  /** Assigns already-created questions, each to the one Property it names. */
+  onApplyPairedQuestions?: (pairs: readonly { targetKey: string; queryId: string }[]) => void | Promise<void>
   /** Writes one question per Property and assigns each to the Property it names. */
   onCreateAndPairQuestions?: (pairs: readonly { propertyId: string; text: string }[]) => void | Promise<void>
   isCreatingQueries?: boolean
@@ -308,6 +310,7 @@ export function AdvancedMeasurementQueriesStep({
   onClearQueryAssignments,
   onRemoveQuery,
   onCreateQueries,
+  onApplyPairedQuestions,
   onCreateAndPairQuestions,
   isCreatingQueries = false,
   createQueriesError = null,
@@ -317,6 +320,7 @@ export function AdvancedMeasurementQueriesStep({
 }: AdvancedMeasurementQueriesStepProps) {
   const [querySearch, setQuerySearch] = useState('')
   const [showAllQueries, setShowAllQueries] = useState(false)
+  const [showUnappliedOnly, setShowUnappliedOnly] = useState(false)
   const [newQueriesText, setNewQueriesText] = useState('')
   const [patternText, setPatternText] = useState('')
   if (isUnavailable(availability)) {
@@ -334,7 +338,21 @@ export function AdvancedMeasurementQueriesStep({
       return `${queryLabel(query)} ${source} ${query.sourceDetail ?? ''}`.toLocaleLowerCase().includes(normalizedQuerySearch)
     })
     : queries
-  const visibleQueries = showAllQueries ? filteredQueries : filteredQueries.slice(0, QUERY_LIST_PAGE_SIZE)
+  const unappliedQueries = filteredQueries.filter(query => (query.propertyIds?.length ?? 0) === 0)
+  const listedQueries = showUnappliedOnly ? unappliedQueries : filteredQueries
+  const visibleQueries = showAllQueries ? listedQueries : listedQueries.slice(0, QUERY_LIST_PAGE_SIZE)
+
+  /**
+   * Questions generated from a pattern each name exactly one Property, and the
+   * pairing is recoverable from the text alone. Without this the only route back
+   * is 213 manual selections, or the cross product that produced 45,369.
+   * A question matching two Property names is left alone rather than guessed at.
+   */
+  const nameMatchedPairs = unappliedQueries.flatMap(query => {
+    const text = queryLabel(query).toLocaleLowerCase()
+    const named = properties.filter(property => text.includes(property.label.toLocaleLowerCase()))
+    return named.length === 1 ? [{ targetKey: named[0]!.id, queryId: query.id }] : []
+  })
   const selectableVisibleQueries = visibleQueries.filter(query => !isMissingQuery(query))
   const parsedNewQueries = [...new Set(
     newQueriesText.split('\n').map(line => line.trim()).filter(Boolean),
@@ -555,7 +573,40 @@ export function AdvancedMeasurementQueriesStep({
               placeholder="Query text or source"
             />
           </label>
-          <p className="text-sm text-secondary">Showing {visibleQueries.length} of {filteredQueries.length} queries</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="m-0 text-sm text-secondary">
+              Showing {visibleQueries.length} of {listedQueries.length} questions,{' '}
+              {filteredQueries.length - unappliedQueries.length} of {filteredQueries.length} applied
+            </p>
+            {viewer || unappliedQueries.length === 0 ? null : (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => { setShowUnappliedOnly(current => !current); setShowAllQueries(false) }}
+              >
+                {showUnappliedOnly ? 'Show all questions' : `Show the ${unappliedQueries.length} not applied`}
+              </Button>
+            )}
+          </div>
+          {!viewer && nameMatchedPairs.length > 0 && onApplyPairedQuestions ? (
+            <div className="rounded-md border border-base bg-bg-elevated p-3">
+              <p className="m-0 text-sm text-strong">
+                {nameMatchedPairs.length} question{nameMatchedPairs.length === 1 ? '' : 's'} name a single Property.
+              </p>
+              <p className="mt-1 mb-2 text-sm text-secondary">
+                Each one is measured on the Property it names, and on nothing else.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                disabled={isApplying}
+                onClick={() => { void onApplyPairedQuestions(nameMatchedPairs) }}
+              >
+                {isApplying ? 'Assigning…' : `Assign ${nameMatchedPairs.length} to the Property it names`}
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

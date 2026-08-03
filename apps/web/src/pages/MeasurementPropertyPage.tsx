@@ -14,6 +14,8 @@ import {
 } from '@ainyc/canonry-api-client/react-query'
 
 import { heyClient } from '../api.js'
+import { getEmbedConfig } from '../api.js'
+import { isEmbedProjectTabAllowed } from '../embed.js'
 import { Button } from '../components/ui/button.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
@@ -344,7 +346,22 @@ export function MeasurementPropertyPage() {
     return <div className="page-container"><p className="text-sm text-muted">Missing project name or Property key in URL.</p></div>
   }
 
-  if (planQuery.isPending || brandedQuery.isPending || nonBrandQuery.isPending) {
+  // This page is a child route, so the project subnav's tab allowlist never saw
+  // it and a direct link reached Advanced Measurement inside an embed that hides
+  // the portfolio tab. Presentational, exactly like the subnav filter.
+  if (!isEmbedProjectTabAllowed('portfolio', getEmbedConfig()?.projectTabs)) {
+    return (
+      <div className="page-container">
+        <p className="text-sm text-muted">This view is not available here.</p>
+      </div>
+    )
+  }
+
+  // An errored query is neither pending nor settled with data, so testing
+  // isPending alone left one failed class rendering the skeleton forever.
+  const classesStillLoading = (brandedQuery.isPending && !brandedQuery.isError)
+    || (nonBrandQuery.isPending && !nonBrandQuery.isError)
+  if ((planQuery.isPending && !planQuery.isError) || classesStillLoading) {
     return (
       <div className="page-container">
         <div className="h-32 animate-pulse rounded-md bg-surface-subtle" aria-label="Loading Property" />
@@ -439,9 +456,17 @@ export function MeasurementPropertyPage() {
           </div>
           {evidenceRows.length > 0 ? <p className="supporting-copy">{evidenceRows.length} of {evidenceTotal}</p> : null}
         </div>
-        {evidenceQuery.isPending ? (
+        {evidenceQuery.isError && evidenceRows.length > 0 ? (
+          // A failed "load more" used to replace the rows already on screen with
+          // an error, so a paging failure looked like the evidence had vanished.
+          <div className="mb-3 flex flex-wrap items-center gap-3 text-sm text-secondary">
+            <span role="alert">More evidence could not be loaded.</span>
+            <Button type="button" size="sm" variant="outline" onClick={() => { void evidenceQuery.refetch() }}>Retry</Button>
+          </div>
+        ) : null}
+        {evidenceQuery.isPending && evidenceRows.length === 0 ? (
           <p className="text-sm text-secondary">Loading evidence…</p>
-        ) : evidenceQuery.isError ? (
+        ) : evidenceQuery.isError && evidenceRows.length === 0 ? (
           <div className="flex flex-wrap items-center gap-3 text-sm text-secondary">
             <span role="alert">Evidence could not be loaded.</span>
             <Button type="button" size="sm" variant="outline" onClick={() => { void evidenceQuery.refetch() }}>Retry evidence</Button>

@@ -54,7 +54,7 @@ import {
 import {
   compileMeasurementDraft,
   diffCompiledPlans,
-  proposeQueryClass,
+  proposeQueryClassForTarget,
   type MeasurementDraftCompileContext,
 } from './measurement-draft-compile.js'
 import { resolveRunProviderSelection } from './run-queue.js'
@@ -212,6 +212,7 @@ function seedAuthoring(
   }
 
   const assignments: MeasurementDraftAssignment[] = []
+  const targetsByKey = new Map(active.targets.map(target => [target.stableKey, { label: target.label, aliases: target.aliases }]))
   const seen = new Set<string>()
   for (const selection of active.targetQuerySelections) {
     for (const queryId of selection.queryIds) {
@@ -222,7 +223,12 @@ function seedAuthoring(
       assignments.push({
         targetKey: selection.targetKey,
         queryId,
-        queryClass: queryText === undefined ? 'unclassified' : proposeQueryClass(queryText, context.brandNames),
+        // Same classifier as the assignment actions. Using the project brand alone
+        // here made a question naming its own Property non-brand when the draft
+        // was seeded from a v1 plan and branded when it was assigned directly.
+        queryClass: queryText === undefined
+          ? 'unclassified'
+          : proposeQueryClassForTarget(queryText, context.brandNames, targetsByKey.get(selection.targetKey)),
         classificationSource: 'rule',
       })
     }

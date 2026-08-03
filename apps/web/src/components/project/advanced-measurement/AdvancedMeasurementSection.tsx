@@ -1062,11 +1062,15 @@ export function AdvancedMeasurementSection({
    */
   async function applyPairedQuestions(pairs: readonly { targetKey: string; queryId: string }[]): Promise<void> {
     if (pairs.length === 0) return
-    await mutate(
+    const next = await mutate(
       'paired-assignments',
       currentEtag => service.applyPairedAssignments(projectName, currentEtag, [...pairs]),
       'Could not assign these questions.',
     )
+    // mutate reports failure by returning null, not by throwing. Swallowing that
+    // let a failed assignment read as success: the questions were created, none
+    // were assigned, and the authored pattern was cleared as if it had worked.
+    if (!next) throw new Error('Could not assign these questions.')
   }
 
   /**
@@ -1391,6 +1395,7 @@ export function AdvancedMeasurementSection({
             onSelectedPropertyIdsChange: ids => setQueryPropertyIds([...ids]),
             onSelectedQueryIdsChange: ids => setSelectedQueryIds([...ids]),
             onApplySelectedQueries: selection => applySelectedQueries(selection),
+            onApplyPairedQuestions: pairs => applyPairedQuestions(pairs),
             onCreateAndPairQuestions: onCreateQueries ? createAndPairQuestions : undefined,
             onClearQueryAssignments: clearQueryAssignments,
             onRemoveQuery: clearQueryAssignments,

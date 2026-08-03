@@ -173,6 +173,17 @@ export async function showMeasurementPropertyEvidence(
   })
 
   if (opts.format === 'jsonl') {
+    // A bare row stream cannot tell an unmeasured Property from a measured one
+    // with no evidence, and drops the run and cursor a consumer needs to page.
+    // The header line carries that state; the rows follow unchanged.
+    emitJsonl([{
+      kind: 'measurement-property-evidence-header' as const,
+      property: response.property,
+      queryClass: response.queryClass,
+      measurement: response.measurement,
+      totalEstimate: response.evidence.totalEstimate ?? null,
+      nextCursor: response.evidence.nextCursor ?? null,
+    }])
     emitJsonl(response.evidence.items)
     return
   }
