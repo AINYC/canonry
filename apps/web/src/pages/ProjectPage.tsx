@@ -1630,7 +1630,7 @@ function ProjectPageContent({
   const [advancedMeasurementView, setAdvancedMeasurementView] = useState<{
     scope: 'all' | 'group'
     groupKey?: string
-    queryClass: 'non-brand' | 'branded'
+    queryClass: 'all' | 'non-brand' | 'branded'
     search?: string
   }>({ scope: 'all', queryClass: 'non-brand' })
   const [hasExpandedAdvancedProperty, setHasExpandedAdvancedProperty] = useState(false)

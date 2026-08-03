@@ -5,7 +5,11 @@ import type { MetricTone } from '../../../view-models.js'
 import { ToneBadge } from '../../shared/ToneBadge.js'
 import { Button } from '../../ui/button.js'
 
-export type AdvancedMeasurementClass = 'non-brand' | 'branded'
+/**
+ * `all` is what the API has always accepted and the dashboard never offered, so
+ * the only way to see both lanes at once was to read one and add the other.
+ */
+export type AdvancedMeasurementClass = 'all' | 'non-brand' | 'branded'
 
 export type AdvancedMeasurementEvidenceKind =
   | 'this-property'
@@ -407,7 +411,7 @@ export function AdvancedMeasurementOverview({
   const [expandedPropertyIds, setExpandedPropertyIds] = useState<ReadonlySet<string>>(new Set())
   const lastRequestedSearch = useRef(viewSearch ?? '')
 
-  const legacyScope = classReportingAvailable && !usesServerView
+  const legacyScope = classReportingAvailable && !usesServerView && selectedClass !== 'all'
     ? selectedClass === 'non-brand' ? report.classScopes!.nonBrand : report.classScopes!.branded
     : report.overall
   const scope: AdvancedMeasurementScope = usesServerView
@@ -555,13 +559,24 @@ export function AdvancedMeasurementOverview({
             {(report.availableGroups ?? scope.groups).map(group => <option key={group.id} value={group.id}>{group.label}</option>)}
           </select>
         </div>
-        <fieldset disabled={!classReportingAvailable} className="space-y-1">
-          <legend className="text-sm font-medium text-heading">Query type</legend>
-          <div className="flex items-center gap-3 text-sm text-secondary">
-            <label className="flex items-center gap-1.5"><input type="radio" name="advanced-measurement-class" disabled={!classReportingAvailable} checked={selectedClass === 'non-brand'} onChange={() => { setSelectedClass('non-brand'); requestView({ queryClass: 'non-brand' }) }} /> Non-brand</label>
-            <label className="flex items-center gap-1.5"><input type="radio" name="advanced-measurement-class" disabled={!classReportingAvailable} checked={selectedClass === 'branded'} onChange={() => { setSelectedClass('branded'); requestView({ queryClass: 'branded' }) }} /> Branded</label>
-          </div>
-        </fieldset>
+        <div className="space-y-1">
+          <label htmlFor="advanced-measurement-class" className="block text-sm font-medium text-heading">Question type</label>
+          <select
+            id="advanced-measurement-class"
+            disabled={!classReportingAvailable}
+            value={selectedClass}
+            onChange={event => {
+              const value = event.target.value as AdvancedMeasurementClass
+              setSelectedClass(value)
+              requestView({ queryClass: value })
+            }}
+            className="h-9 rounded-md border border-default bg-surface px-3 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-mono-400"
+          >
+            <option value="all">All questions</option>
+            <option value="non-brand">Non-brand</option>
+            <option value="branded">Branded</option>
+          </select>
+        </div>
         <div className="min-w-52 flex-1 space-y-1">
           <label htmlFor="advanced-measurement-search" className="block text-sm font-medium text-heading">Search properties</label>
           <input
