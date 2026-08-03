@@ -38,6 +38,18 @@ function setupActionLabel(mode: AdvancedMeasurementMode): string {
   return 'Set up advanced measurement'
 }
 
+/**
+ * The control sat alone at the right of an empty row, so it read as a stray
+ * affordance rather than the next step. Leading with it and saying what it does
+ * puts the action where the eye starts and stops the row being empty.
+ */
+function setupActionDetail(mode: AdvancedMeasurementMode): string {
+  if (mode.setupAction === 'continue') return 'Setup is unfinished. Pick up where you left off.'
+  if (mode.setupAction === 'edit') return 'Change which Properties and questions are measured.'
+  if (mode.setupAction === 'republish') return 'Unpublished changes are waiting to go live.'
+  return 'Measure each Property on its own questions, not just the project as a whole.'
+}
+
 export function AdvancedMeasurementLanding({
   mode,
   canEdit,
@@ -63,10 +75,11 @@ export function AdvancedMeasurementLanding({
     return (
       <>
         {canEdit && onOpenSetup ? (
-          <div className="mb-5 flex justify-end">
+          <div className="mb-5 flex flex-wrap items-center gap-3">
             <Button type="button" variant="outline" disabled={isOpeningSetup} onClick={onOpenSetup}>
               {isOpeningSetup ? 'Opening setup…' : setupActionLabel(mode)}
             </Button>
+            <p className="supporting-copy m-0">{setupActionDetail(mode)}</p>
           </div>
         ) : null}
         {simpleOverview}
@@ -77,10 +90,11 @@ export function AdvancedMeasurementLanding({
   return (
     <div className="space-y-4">
       {(mode.setupAction === 'edit' || (mode.setupAction === 'republish' && !report)) && canEdit && onOpenSetup ? (
-        <div className="flex justify-end">
+        <div className="flex flex-wrap items-center gap-3">
           <Button type="button" size="sm" variant={mode.setupAction === 'republish' ? 'default' : 'outline'} disabled={isOpeningSetup} onClick={onOpenSetup}>
             {isOpeningSetup ? 'Opening setup…' : setupActionLabel(mode)}
           </Button>
+          <p className="supporting-copy m-0">{setupActionDetail(mode)}</p>
         </div>
       ) : null}
       {reportState === 'loading' ? (
