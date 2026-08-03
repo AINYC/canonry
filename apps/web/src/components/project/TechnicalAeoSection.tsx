@@ -255,9 +255,6 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
             The dashboard will refresh automatically when the audit finishes.
           </p>
         ) : null}
-        <p className="mt-3 text-xs text-faint">
-          Or from the CLI: <code className="text-secondary">canonry technical-aeo run {projectName} --wait</code>
-        </p>
       </Card>
     )
   }
