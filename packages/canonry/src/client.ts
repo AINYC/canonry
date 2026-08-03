@@ -467,6 +467,7 @@ import {
   postApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTarget,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsRebindTarget,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignments,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignment,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsClearAssignments,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsClassifyAssignments,
@@ -639,6 +640,7 @@ type MeasurementPlanDraftMergeTargetsRequest = Parameters<typeof postApiV1Projec
 type MeasurementPlanDraftExcludeTargetRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTarget>[0]['body']
 type MeasurementPlanDraftRebindTargetRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsRebindTarget>[0]['body']
 type MeasurementPlanDraftApplyAssignmentsRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments>[0]['body']
+type MeasurementPlanDraftApplyPairedAssignmentsRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignments>[0]['body']
 type MeasurementPlanDraftRemoveAssignmentRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignment>[0]['body']
 type MeasurementPlanDraftClearAssignmentsRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsClearAssignments>[0]['body']
 type MeasurementPlanDraftClassifyAssignmentsRequest = Parameters<typeof postApiV1ProjectsByNameMeasurementPlanDraftActionsClassifyAssignments>[0]['body']
@@ -1458,6 +1460,22 @@ export class ApiClient {
   ): Promise<DraftMutationResponse> {
     return this.invoke<DraftMutationResponse>(() =>
       postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async applyPairedMeasurementDraftAssignments(
+    project: string,
+    request: MeasurementPlanDraftApplyPairedAssignmentsRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignments({
         client: this.heyClient,
         path: { name: project },
         body: request,

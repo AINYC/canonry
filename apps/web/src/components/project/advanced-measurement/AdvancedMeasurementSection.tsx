@@ -53,7 +53,8 @@ export interface AdvancedMeasurementSectionProps {
   publishedPlan?: MeasurementPlanResponse['active']
   canEdit?: boolean
   /** Adds tracked questions to the project from inside setup. */
-  onCreateQueries?: (texts: readonly string[]) => Promise<void>
+  /** Returns the project's queries AFTER the write, so a pairing can resolve text -> id. */
+  onCreateQueries?: (texts: readonly string[]) => Promise<readonly { id: string; query: string }[]>
   onManageProjectQueries?: () => void
   onPublished?: () => void
   service?: AdvancedMeasurementService
@@ -987,12 +988,12 @@ export function AdvancedMeasurementSection({
     }
   }
 
-  async function addProjectQueries(texts: readonly string[]): Promise<void> {
-    if (!onCreateQueries || texts.length === 0 || busyAction) return
+  async function addProjectQueries(texts: readonly string[]): Promise<readonly { id: string; query: string }[]> {
+    if (!onCreateQueries || texts.length === 0 || busyAction) return []
     setBusyAction('create-queries')
     setCreateQueriesError(null)
     try {
-      await onCreateQueries(texts)
+      return await onCreateQueries(texts)
     } catch (error) {
       // The server says which question was rejected and why. Replacing that with
       // a house string is what sent an operator round in circles on the sitemap.
@@ -1048,6 +1049,45 @@ export function AdvancedMeasurementSection({
       'Could not apply these queries.',
     )
     if (next) setSelectedQueryIds([])
+  }
+
+  /**
+   * One question written for one Property, assigned to that Property alone.
+   *
+   * The pattern box generates a question per Property, but the only assignment
+   * action used to be a cross product, so applying the generated set put every
+   * question on every Property: 213 questions over 213 Properties is 45,369
+   * assignments, and coverage is matched/assignments, so each Property's
+   * denominator became the whole portfolio.
+   */
+  async function applyPairedQuestions(pairs: readonly { targetKey: string; queryId: string }[]): Promise<void> {
+    if (pairs.length === 0) return
+    await mutate(
+      'paired-assignments',
+      currentEtag => service.applyPairedAssignments(projectName, currentEtag, [...pairs]),
+      'Could not assign these questions.',
+    )
+  }
+
+  /**
+   * Writes one question per Property and assigns each to the Property it names.
+   *
+   * Creating the questions and assigning them used to be two unrelated steps,
+   * and the only assignment action was a cross product, so the generated set
+   * landed on every Property. The pairing has to survive from generation to
+   * assignment, which means one operation owns both halves.
+   */
+  async function createAndPairQuestions(
+    pairs: readonly { propertyId: string; text: string }[],
+  ): Promise<void> {
+    if (!onCreateQueries || pairs.length === 0) return
+    // The ids only exist after the write, and the pairing is by text.
+    const refreshed = await addProjectQueries(unique(pairs.map(pair => pair.text)))
+    const idByText = new Map(refreshed.map(query => [query.query, query.id]))
+    const assignmentPairs = pairs
+      .map(pair => ({ targetKey: pair.propertyId, queryId: idByText.get(pair.text) }))
+      .filter((pair): pair is { targetKey: string; queryId: string } => pair.queryId !== undefined)
+    await applyPairedQuestions(assignmentPairs)
   }
 
   async function clearQueryAssignments(queryId: string): Promise<void> {
@@ -1351,6 +1391,7 @@ export function AdvancedMeasurementSection({
             onSelectedPropertyIdsChange: ids => setQueryPropertyIds([...ids]),
             onSelectedQueryIdsChange: ids => setSelectedQueryIds([...ids]),
             onApplySelectedQueries: selection => applySelectedQueries(selection),
+            onCreateAndPairQuestions: onCreateQueries ? createAndPairQuestions : undefined,
             onClearQueryAssignments: clearQueryAssignments,
             onRemoveQuery: clearQueryAssignments,
             canContinue: assignmentCount > 0,

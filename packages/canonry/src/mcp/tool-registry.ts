@@ -47,6 +47,7 @@ import {
   measurementPlanPublishRequestSchema,
   measurementDiscoveryRequestSchema,
   measurementDraftApplyAssignmentsRequestSchema,
+  measurementDraftApplyPairedAssignmentsRequestSchema,
   measurementDraftApplySitemapSelectionRequestSchema,
   measurementDraftClassifyAssignmentsRequestSchema,
   measurementDraftClearAssignmentsRequestSchema,
@@ -222,6 +223,7 @@ const measurementDraftOperationSchema = z.discriminatedUnion('action', [
   measurementDraftMutationOperationSchema('exclude-target', measurementDraftExcludeTargetRequestSchema),
   measurementDraftMutationOperationSchema('rebind-target', measurementDraftRebindTargetRequestSchema),
   measurementDraftMutationOperationSchema('apply-assignments', measurementDraftApplyAssignmentsRequestSchema),
+  measurementDraftMutationOperationSchema('apply-paired-assignments', measurementDraftApplyPairedAssignmentsRequestSchema),
   measurementDraftMutationOperationSchema('remove-assignment', measurementDraftRemoveAssignmentRequestSchema),
   measurementDraftMutationOperationSchema('clear-assignments', measurementDraftClearAssignmentsRequestSchema),
   measurementDraftMutationOperationSchema('classify-assignments', measurementDraftClassifyAssignmentsRequestSchema),
@@ -259,6 +261,7 @@ const measurementDraftActionOpenApiOperations = [
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/exclude-target',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/rebind-target',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-assignments',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-paired-assignments',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/remove-assignment',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/clear-assignments',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/classify-assignments',
@@ -293,6 +296,8 @@ function runMeasurementDraftAction(client: ApiClient, input: MeasurementDraftAct
       return client.rebindMeasurementDraftTarget(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
     case 'apply-assignments':
       return client.applyMeasurementDraftAssignments(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'apply-paired-assignments':
+      return client.applyPairedMeasurementDraftAssignments(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
     case 'remove-assignment':
       return client.removeMeasurementDraftAssignment(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
     case 'clear-assignments':

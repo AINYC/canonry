@@ -268,12 +268,16 @@ test('lets an empty query library add questions without leaving setup', () => {
 // Properties measures the portfolio; a question per Property measures the
 // Properties. The count is shown before the click because 213 is a surprising
 // number to produce from one line of text.
-test('writes one question per selected Property from a pattern', () => {
-  const onCreateQueries = vi.fn()
+test('writes one question per selected Property from a pattern, paired to it', () => {
+  // Was: this handed the expanded texts to onCreateQueries and nothing carried
+  // the pairing, so the caller could only cross-product them back onto every
+  // Property. The pattern now emits (Property, text) pairs.
+  const onCreateAndPairQuestions = vi.fn()
   renderQueries({
     queries: [],
     selectedQueryIds: [],
-    onCreateQueries,
+    onCreateQueries: vi.fn(),
+    onCreateAndPairQuestions,
   })
 
   fireEvent.change(screen.getByLabelText('Question pattern'), {
@@ -285,9 +289,27 @@ test('writes one question per selected Property from a pattern', () => {
 
   fireEvent.click(screen.getByRole('button', { name: /Add \d+ questions?/ }))
 
-  const created = onCreateQueries.mock.calls[0]![0] as string[]
-  expect(created.every(text => text.startsWith('apartments near '))).toBe(true)
-  expect(new Set(created).size).toBe(created.length)
+  const pairs = onCreateAndPairQuestions.mock.calls[0]![0] as { propertyId: string; text: string }[]
+  expect(pairs.every(pair => pair.text.startsWith('apartments near '))).toBe(true)
+  // One question per Property, each naming the Property it is assigned to.
+  expect(new Set(pairs.map(pair => pair.propertyId)).size).toBe(pairs.length)
+  for (const pair of pairs) expect(pair.text.includes('{property}')).toBe(false)
+})
+
+test('states how many assignments the pattern will create', () => {
+  renderQueries({
+    queries: [],
+    selectedQueryIds: [],
+    onCreateQueries: vi.fn(),
+    onCreateAndPairQuestions: vi.fn(),
+  })
+
+  fireEvent.change(screen.getByLabelText('Question pattern'), {
+    target: { value: 'apartments near {property}' },
+  })
+
+  // The number nobody saw before a plan was published with 45,369 of them.
+  expect(screen.getByText(/adds \d+ assignments?/)).toBeTruthy()
 })
 
 test('asks for a placeholder rather than writing the same question repeatedly', () => {

@@ -65,6 +65,7 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/exclude-target': 'included',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/rebind-target': 'included',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-assignments': 'included',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-paired-assignments': 'included',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/remove-assignment': 'included',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/clear-assignments': 'included',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/classify-assignments': 'included',

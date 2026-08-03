@@ -920,6 +920,12 @@ const routeCatalog: OpenApiOperation[] = [
     request: 'MeasurementDraftApplyAssignmentsRequest',
   }),
   measurementDraftAction({
+    action: 'apply-paired-assignments',
+    summary: 'Assign each query to the one Target it names',
+    description: 'Takes explicit (targetKey, queryId) pairs, so N pairs create at most N assignments. Use it when each question names its own Property; `apply-assignments` is a cross product and would multiply the two lists together.',
+    request: 'MeasurementDraftApplyPairedAssignmentsRequest',
+  }),
+  measurementDraftAction({
     action: 'remove-assignment',
     summary: 'Remove one query assignment from draft Targets',
     description: 'Accepts the compatible singular `targetKey` or a bulk `targetKeys` selection. It removes assignments only; the project query behind them is never deleted.',

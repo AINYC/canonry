@@ -59,7 +59,9 @@ export interface AdvancedMeasurementQueriesStepProps {
    * step can only consume questions that already exist, which sends a first-time
    * operator out of the wizard to create them and back again.
    */
-  onCreateQueries?: (texts: readonly string[]) => void | Promise<void>
+  onCreateQueries?: (texts: readonly string[]) => void | Promise<unknown>
+  /** Writes one question per Property and assigns each to the Property it names. */
+  onCreateAndPairQuestions?: (pairs: readonly { propertyId: string; text: string }[]) => void | Promise<void>
   isCreatingQueries?: boolean
   createQueriesError?: string | null
   /** Opens the project's normal query-management surface for anything setup does not cover. */
@@ -306,6 +308,7 @@ export function AdvancedMeasurementQueriesStep({
   onClearQueryAssignments,
   onRemoveQuery,
   onCreateQueries,
+  onCreateAndPairQuestions,
   isCreatingQueries = false,
   createQueriesError = null,
   onManageProjectQueries,
@@ -342,14 +345,19 @@ export function AdvancedMeasurementQueriesStep({
   // Properties in it.
   const patternPlaceholders = [...patternText.matchAll(/\{([a-z][\w-]*)\}/gi)].map(match => match[1]!)
   const patternTargets = properties.filter(property => selectedPropertyIds.includes(property.id))
-  const patternExpansions = patternPlaceholders.length === 0 || patternText.trim() === ''
+  // Each expansion stays tied to the Property it was written for, so it can be
+  // assigned to that Property alone. Dropping the pairing here is what forced
+  // the caller into a cross product.
+  const patternPairs = patternPlaceholders.length === 0 || patternText.trim() === ''
     ? []
-    : [...new Set(patternTargets.map(property => (
-      patternPlaceholders.reduce(
+    : patternTargets.map(property => ({
+      propertyId: property.id,
+      text: patternPlaceholders.reduce(
         (text, name) => text.replaceAll(`{${name}}`, property.label),
         patternText.trim(),
-      )
-    )))]
+      ),
+    }))
+  const patternExpansions = [...new Set(patternPairs.map(pair => pair.text))]
 
   function selectAllShownQueries(): void {
     const selected = new Set([...selectedQueryIds, ...selectableVisibleQueries.map(query => query.id)])
@@ -581,16 +589,23 @@ export function AdvancedMeasurementQueriesStep({
               type="button"
               size="sm"
               className="mt-2"
-              disabled={patternExpansions.length === 0 || isCreatingQueries}
+              disabled={patternPairs.length === 0 || isCreatingQueries || !onCreateAndPairQuestions}
               onClick={() => {
-                void Promise.resolve(onCreateQueries(patternExpansions))
+                if (!onCreateAndPairQuestions) return
+                void Promise.resolve(onCreateAndPairQuestions(patternPairs))
                   .then(() => setPatternText(''), () => {})
               }}
             >
               {isCreatingQueries
                 ? 'Adding…'
-                : `Add ${patternExpansions.length || ''} question${patternExpansions.length === 1 ? '' : 's'}`.replace('  ', ' ')}
+                : `Add ${patternPairs.length || ''} question${patternPairs.length === 1 ? '' : 's'}`.replace('  ', ' ')}
             </Button>
+            {patternPairs.length > 0 ? (
+              <p className="mt-2 mb-0 text-sm text-secondary">
+                Each question is measured on the one Property it names, so this adds{' '}
+                {patternPairs.length} assignment{patternPairs.length === 1 ? '' : 's'}.
+              </p>
+            ) : null}
           </div>
         </div>
       )}

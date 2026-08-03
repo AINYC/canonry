@@ -2878,6 +2878,20 @@ export type MeasurementDraftApplyAssignmentsRequest = {
     };
 };
 
+export type MeasurementDraftApplyPairedAssignmentsRequest = {
+    pairs: Array<{
+        targetKey: string;
+        queryId: string;
+    }>;
+    contextOverride?: {
+        providers?: Array<string>;
+        models?: {
+            [key: string]: string;
+        };
+        locations?: Array<string>;
+    };
+};
+
 export type MeasurementDraftApplySitemapSelectionRequest = {
     selections: Array<{
         discoveryIdentity: string;
@@ -8609,6 +8623,66 @@ export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsRe
 };
 
 export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsResponse = PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsResponses[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsResponses];
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsData = {
+    body: MeasurementDraftApplyPairedAssignmentsRequest;
+    headers: {
+        /**
+         * Current draft ETag. Missing returns 428; stale returns 412.
+         */
+        'If-Match': string;
+        /**
+         * Replay key. The same key with a different request body returns 409.
+         */
+        'Idempotency-Key': string;
+    };
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan/draft/actions/apply-paired-assignments';
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsErrors = {
+    /**
+     * The action payload is invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The caller may read the draft but not mutate it.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project or draft not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The idempotency key was already used with a different request body.
+     */
+    409: ErrorEnvelope;
+    /**
+     * The draft changed since it was loaded.
+     */
+    412: ErrorEnvelope;
+    /**
+     * The draft ETag was not supplied in `If-Match`.
+     */
+    428: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsError = PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsErrors[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsErrors];
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsResponses = {
+    /**
+     * Draft mutated; the new ETag and counts are returned.
+     */
+    200: MeasurementDraftMutationResponse;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsResponse = PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsResponses[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsResponses];
 
 export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentData = {
     body: MeasurementDraftRemoveAssignmentRequest;
