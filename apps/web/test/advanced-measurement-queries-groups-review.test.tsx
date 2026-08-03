@@ -927,3 +927,17 @@ test('review states why assignments outrun questions, and never puts a button na
   // 1 question and 3 assignments is correct and needs saying.
   expect(screen.getByText(/a question aimed at a market is measured on every Property in it/)).toBeTruthy()
 })
+
+test('the assignment impact slot keeps a reserved height so ticking a box cannot move the table', () => {
+  // Four mutually exclusive states share this slot — calculating, the impact
+  // sentence, an error with buttons, and the fallback count — and the sentence
+  // itself rewraps as the counts grow. Without a reserved height, selecting a
+  // question shifted the table under the operator's cursor.
+  // The apply controls only render once questions exist, so use the defaults.
+  const { container } = renderQueries({ onCreateQueries: vi.fn() })
+
+  const slot = container.querySelector('.min-h-\\[2\\.75rem\\]')
+  expect(slot).toBeTruthy()
+  // The fallback count lives inside it, so every state shares the reservation.
+  expect(slot!.textContent).toContain('assignments')
+})
