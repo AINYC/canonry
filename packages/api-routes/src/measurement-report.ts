@@ -486,6 +486,22 @@ function mentionedTargets(answerText: string | null, targets: readonly Measureme
   return result
 }
 
+/**
+ * Target-scoped mention state for a stored answer.
+ *
+ * This deliberately delegates to the same longest-alias, ambiguity-aware
+ * matcher used by report aggregates. A Property detail must not reimplement
+ * alias matching and accidentally credit a shared alias to both Properties.
+ */
+export function targetMentionedInAnswer(
+  answerText: string | null,
+  targetId: string,
+  targets: readonly MeasurementTargetInput[],
+): boolean | null {
+  if (answerText === null) return null
+  return mentionedTargets(answerText, targets).has(targetId)
+}
+
 function observationSource(observation: MeasurementObservationInput): {
   urls: string[]
   historical: boolean

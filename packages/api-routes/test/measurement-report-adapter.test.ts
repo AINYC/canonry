@@ -282,7 +282,10 @@ describe('measurement report adapter', () => {
       measurementExecutionId: openai.executionId,
       requestedContext: openai.context,
       supportedContext: { status: 'ignored' },
-      location: 'Harbor',
+      // The runner stores no claimed location when a provider ignores the
+      // requested context. The frozen requested context still identifies the
+      // intended slot, but this observation must remain outside its metrics.
+      location: null,
       citedUrls: [],
       captureStatus: 'complete',
     })
