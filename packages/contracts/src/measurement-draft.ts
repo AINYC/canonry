@@ -268,6 +268,26 @@ export const measurementDraftApplyAssignmentsRequestSchema = z.union([
   }).strict(),
 ])
 
+/**
+ * One question paired with the one Target it is about.
+ *
+ * `apply-assignments` is a cross product: every listed query lands on every
+ * listed Target. That is right when one question has an audience of Targets
+ * ("best apartments in dallas" -> the Dallas Targets), and wrong when each
+ * question names its own Target. A pattern that writes one question per Target
+ * has no way to say so through the cross product, so applying 213 generated
+ * questions to the 213 Targets they were generated from produced 45,369
+ * assignments instead of 213 — and since coverage is matched/assignments, every
+ * Target's denominator became the whole portfolio.
+ */
+export const measurementDraftApplyPairedAssignmentsRequestSchema = z.object({
+  pairs: z.array(z.object({
+    targetKey: measurementV2StableKeySchema,
+    queryId: measurementDraftQueryIdSchema,
+  }).strict()).min(1),
+  contextOverride: measurementDraftContextOverrideSchema.optional(),
+}).strict()
+
 /** Removing one query from one or many Targets never deletes the project query behind it. */
 export const measurementDraftRemoveAssignmentRequestSchema = z.union([
   z.object({
