@@ -19,6 +19,7 @@ import { isEmbedProjectTabAllowed } from '../embed.js'
 import { Button } from '../components/ui/button.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
+import { useAccount } from '../contexts/account-context.js'
 import { matcherLabel } from '../components/project/advanced-measurement/v2-overview-adapter.js'
 
 type QueryClass = 'branded' | 'non-brand'
@@ -88,7 +89,7 @@ function MetricCell({ metric, emphasis = false }: { metric: MetricValue; emphasi
     return (
       <span className="inline-flex flex-col gap-0.5">
         <span className={emphasis ? 'text-lg font-semibold text-secondary' : 'text-sm font-medium text-secondary'}>Not measured</span>
-        <span className="text-xs text-muted">{reasonText(metric)}</span>
+        <span className="text-sm text-secondary">{reasonText(metric)}</span>
       </span>
     )
   }
@@ -123,13 +124,19 @@ function propertyRowOf(overview: MeasurementOverviewResponse | undefined): Prope
 function BrandContrast({
   branded,
   nonBrand,
+  brandedError,
+  nonBrandError,
+  onRetry,
 }: {
   branded: PropertyRow | undefined
   nonBrand: PropertyRow | undefined
+  brandedError: boolean
+  nonBrandError: boolean
+  onRetry: (queryClass: QueryClass) => void
 }) {
-  const rows: Array<{ queryClass: QueryClass; row: PropertyRow | undefined }> = [
-    { queryClass: 'branded', row: branded },
-    { queryClass: 'non-brand', row: nonBrand },
+  const rows: Array<{ queryClass: QueryClass; row: PropertyRow | undefined; isError: boolean }> = [
+    { queryClass: 'branded', row: branded, isError: brandedError },
+    { queryClass: 'non-brand', row: nonBrand, isError: nonBrandError },
   ]
   return (
     <section aria-labelledby="property-brand-contrast">
@@ -153,14 +160,52 @@ function BrandContrast({
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ queryClass, row }) => (
+            {rows.map(({ queryClass, row, isError }) => (
               <tr key={queryClass}>
                 <td>
                   <span className="block font-medium text-heading">{CLASS_LABELS[queryClass].headline}</span>
                   <span className="mt-0.5 block text-xs text-muted">{CLASS_LABELS[queryClass].technical}</span>
+                  {row && isError ? (
+                    <span className="mt-2 flex flex-wrap items-center gap-2 text-sm text-caution">
+                      <span role="status">Refresh failed.</span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-11 px-3 text-sm md:h-11"
+                        onClick={() => onRetry(queryClass)}
+                      >
+                        Retry {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()}
+                      </Button>
+                    </span>
+                  ) : null}
                 </td>
-                <td>{row ? <MetricCell metric={row.mentionCoverage} emphasis /> : <span className="text-sm text-secondary">Loading…</span>}</td>
-                <td>{row ? <MetricCell metric={row.citationCoverage} emphasis /> : <span className="text-sm text-secondary">Loading…</span>}</td>
+                {row ? (
+                  <>
+                    <td><MetricCell metric={row.mentionCoverage} emphasis /></td>
+                    <td><MetricCell metric={row.citationCoverage} emphasis /></td>
+                  </>
+                ) : isError ? (
+                  <td colSpan={2}>
+                    <div className="flex flex-wrap items-center gap-3 text-sm text-secondary">
+                      <span role="alert">Could not load {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()}.</span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-11 px-4 text-sm md:h-11"
+                        onClick={() => onRetry(queryClass)}
+                      >
+                        Retry {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()}
+                      </Button>
+                    </div>
+                  </td>
+                ) : (
+                  <>
+                    <td><span className="text-sm text-secondary">Loading…</span></td>
+                    <td><span className="text-sm text-secondary">Loading…</span></td>
+                  </>
+                )}
               </tr>
             ))}
           </tbody>
@@ -170,7 +215,7 @@ function BrandContrast({
   )
 }
 
-function ProviderBreakdown({ row, queryClass }: { row: PropertyRow | undefined; queryClass: QueryClass }) {
+function ProviderBreakdown({ row, queryClass, isError }: { row: PropertyRow | undefined; queryClass: QueryClass; isError: boolean }) {
   return (
     <section aria-labelledby="property-providers" className="page-section-divider">
       <div className="section-head section-head-inline">
@@ -182,7 +227,9 @@ function ProviderBreakdown({ row, queryClass }: { row: PropertyRow | undefined; 
           </h2>
         </div>
       </div>
-      {row === undefined ? (
+      {row === undefined && isError ? (
+        <p className="text-sm text-secondary">Details for {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} are unavailable. Retry that question type above.</p>
+      ) : row === undefined ? (
         <p className="text-sm text-secondary">Loading…</p>
       ) : row.providers.length === 0 ? (
         <p className="text-sm text-secondary">
@@ -273,6 +320,7 @@ export function MeasurementPropertyPage() {
   const project = projectName ?? ''
   const property = targetKey ?? ''
   const enabled = Boolean(project) && Boolean(property)
+  const { canWrite } = useAccount()
 
   const planQuery = useQuery({
     ...getApiV1ProjectsByNameMeasurementPlanOptions({ client: heyClient, path: { name: project } }),
@@ -285,6 +333,8 @@ export function MeasurementPropertyPage() {
   const nonBrandRow = propertyRowOf(nonBrandQuery.data)
   const selected = queryClass === 'branded' ? brandedQuery.data : nonBrandQuery.data
   const selectedRow = queryClass === 'branded' ? brandedRow : nonBrandRow
+  const selectedClassError = queryClass === 'branded' ? brandedQuery.isError : nonBrandQuery.isError
+  const selectedClassUnavailable = selectedClassError && selectedRow === undefined
   const displayedRunId = selected?.measurement.displayedRunId
 
   const evidenceInput = {
@@ -310,6 +360,7 @@ export function MeasurementPropertyPage() {
 
   const activePlan = planQuery.data?.active ?? null
   const planV2 = activePlan?.plan.schemaVersion === 2 ? activePlan.plan as PlanV2 : null
+  const legacyPlan = activePlan !== null && planV2 === null
   const target = planV2?.targets.find(candidate => candidate.stableKey === property) ?? null
 
   const questions = useMemo(() => {
@@ -357,19 +408,21 @@ export function MeasurementPropertyPage() {
     )
   }
 
-  // An errored query is neither pending nor settled with data, so testing
-  // isPending alone left one failed class rendering the skeleton forever.
-  const classesStillLoading = (brandedQuery.isPending && !brandedQuery.isError)
-    || (nonBrandQuery.isPending && !nonBrandQuery.isError)
-  if ((planQuery.isPending && !planQuery.isError) || classesStillLoading) {
+  if (planQuery.isPending && !planQuery.isError) {
     return (
       <div className="page-container">
-        <div className="h-32 animate-pulse rounded-md bg-surface-subtle" aria-label="Loading Property" />
+        <div role="status" aria-live="polite">
+          <span className="sr-only">Loading Property</span>
+          <div className="h-32 animate-pulse rounded-md bg-surface-subtle" aria-hidden="true" />
+        </div>
       </div>
     )
   }
 
-  if (planQuery.isError || (brandedQuery.isError && nonBrandQuery.isError)) {
+  const planUnavailable = planQuery.isError && planQuery.data === undefined
+  const brandedUnavailable = brandedQuery.isError && brandedQuery.data === undefined
+  const nonBrandUnavailable = nonBrandQuery.isError && nonBrandQuery.data === undefined
+  if (planUnavailable || (brandedUnavailable && nonBrandUnavailable)) {
     return (
       <div className="page-container space-y-3">
         {backLink}
@@ -378,6 +431,7 @@ export function MeasurementPropertyPage() {
           type="button"
           size="sm"
           variant="outline"
+          className="h-11 px-4 text-sm md:h-11"
           onClick={() => {
             void planQuery.refetch()
             void brandedQuery.refetch()
@@ -399,6 +453,11 @@ export function MeasurementPropertyPage() {
             ? 'This Property is not in the published setup. It may have been renamed or removed.'
             : 'A Property page needs a published advanced measurement setup. Republish setup from the project Portfolio tab.'}
         </p>
+        <Button asChild type="button" variant="outline" className="h-11 px-4 text-sm md:h-11">
+          <Link to="/projects/$projectName/portfolio" params={{ projectName: project }}>
+            {canWrite ? (legacyPlan ? 'Republish setup' : 'Open measurement setup') : 'View measurement setup'}
+          </Link>
+        </Button>
       </div>
     )
   }
@@ -409,7 +468,7 @@ export function MeasurementPropertyPage() {
         <div className="page-header-left">
           {backLink}
           <h1 className="page-title mt-2">{target.label}</h1>
-          <p className="page-subtitle">Property in {project} · revision {activePlan?.revision}</p>
+          <p className="page-subtitle">Property in {project}</p>
         </div>
         <div className="page-header-right">
           {selected ? (
@@ -423,7 +482,30 @@ export function MeasurementPropertyPage() {
         </div>
       </div>
 
-      <BrandContrast branded={brandedRow} nonBrand={nonBrandRow} />
+      <BrandContrast
+        branded={brandedRow}
+        nonBrand={nonBrandRow}
+        brandedError={brandedQuery.isError}
+        nonBrandError={nonBrandQuery.isError}
+        onRetry={classToRetry => {
+          void (classToRetry === 'branded' ? brandedQuery.refetch() : nonBrandQuery.refetch())
+        }}
+      />
+
+      {selected && (selected.measurement.state === 'not_measured' || selected.nextAction.kind === 'run_measurement') ? (
+        <section className="flex flex-wrap items-center justify-between gap-3 border-y border-default py-4" aria-label="Measurement next step">
+          <p className="text-sm text-secondary">
+            {canWrite
+              ? 'Run a measurement from the project overview to collect this Property’s coverage and source evidence.'
+              : 'This Property needs a new measurement before coverage and source evidence are available.'}
+          </p>
+          <Button asChild type="button" className="h-11 px-4 text-sm md:h-11">
+            <Link to="/projects/$projectName" params={{ projectName: project }}>
+              {canWrite ? 'Go to measurement overview' : 'View measurement overview'}
+            </Link>
+          </Button>
+        </section>
+      ) : null}
 
       <div className="flex flex-wrap items-end gap-4 border-y border-default py-4">
         <div className="space-y-1">
@@ -432,7 +514,7 @@ export function MeasurementPropertyPage() {
             id="property-query-class"
             value={queryClass}
             onChange={event => setQueryClass(event.target.value === 'branded' ? 'branded' : 'non-brand')}
-            className="h-9 rounded-md border border-default bg-surface px-3 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-mono-400"
+            className="h-11 rounded-md border border-default bg-surface px-3 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-mono-400"
           >
             <option value="non-brand">{CLASS_LABELS['non-brand'].technical}</option>
             <option value="branded">{CLASS_LABELS.branded.technical}</option>
@@ -441,7 +523,7 @@ export function MeasurementPropertyPage() {
         <p className="supporting-copy">Everything below is measured over {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} only.</p>
       </div>
 
-      <ProviderBreakdown row={selectedRow} queryClass={queryClass} />
+      <ProviderBreakdown row={selectedRow} queryClass={queryClass} isError={selectedClassUnavailable} />
       <AssignedQuestions questions={questions} queryClass={queryClass} />
       <PropertyUrls urls={urls} />
 
@@ -456,20 +538,14 @@ export function MeasurementPropertyPage() {
           </div>
           {evidenceRows.length > 0 ? <p className="supporting-copy">{evidenceRows.length} of {evidenceTotal}</p> : null}
         </div>
-        {evidenceQuery.isError && evidenceRows.length > 0 ? (
-          // A failed "load more" used to replace the rows already on screen with
-          // an error, so a paging failure looked like the evidence had vanished.
-          <div className="mb-3 flex flex-wrap items-center gap-3 text-sm text-secondary">
-            <span role="alert">More evidence could not be loaded.</span>
-            <Button type="button" size="sm" variant="outline" onClick={() => { void evidenceQuery.refetch() }}>Retry</Button>
-          </div>
-        ) : null}
-        {evidenceQuery.isPending && evidenceRows.length === 0 ? (
+        {selectedClassUnavailable ? (
+          <p className="text-sm text-secondary">Evidence for {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} is unavailable. Retry that question type above.</p>
+        ) : evidenceQuery.isPending && evidenceRows.length === 0 ? (
           <p className="text-sm text-secondary">Loading evidence…</p>
         ) : evidenceQuery.isError && evidenceRows.length === 0 ? (
           <div className="flex flex-wrap items-center gap-3 text-sm text-secondary">
             <span role="alert">Evidence could not be loaded.</span>
-            <Button type="button" size="sm" variant="outline" onClick={() => { void evidenceQuery.refetch() }}>Retry evidence</Button>
+            <Button type="button" size="sm" variant="outline" className="h-11 px-4 text-sm md:h-11" onClick={() => { void evidenceQuery.refetch() }}>Retry evidence</Button>
           </div>
         ) : evidenceState === 'not_measured' ? (
           // Not measured is not "no evidence". Saying "none" here would report
@@ -511,10 +587,15 @@ export function MeasurementPropertyPage() {
                 <Button
                   size="sm"
                   variant="outline"
+                  className="h-11 px-4 text-sm md:h-11"
                   disabled={evidenceQuery.isFetchingNextPage}
                   onClick={() => { void evidenceQuery.fetchNextPage() }}
                 >
-                  {evidenceQuery.isFetchingNextPage ? 'Loading…' : `Show ${EVIDENCE_PAGE_SIZE} more`}
+                  {evidenceQuery.isFetchingNextPage
+                    ? 'Loading…'
+                    : evidenceQuery.isFetchNextPageError
+                      ? 'Retry more evidence'
+                      : `Show ${EVIDENCE_PAGE_SIZE} more`}
                 </Button>
               </div>
             ) : null}
