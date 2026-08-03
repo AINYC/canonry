@@ -22,6 +22,18 @@ import type {
   MeasurementOverviewResponse,
   MeasurementPropertyEvidenceQuery,
   MeasurementPropertyEvidenceResponse,
+  MeasurementPortfolioSummaryQuery,
+  MeasurementPortfolioSummaryResponse,
+  MeasurementPropertyQuestionsQuery,
+  MeasurementPropertyQuestionsResponse,
+  MeasurementQuestionResultQuery,
+  MeasurementQuestionResultResponse,
+  MeasurementPropertyCompetitorsQuery,
+  MeasurementPropertyCompetitorsResponse,
+  MeasurementChangesQuery,
+  MeasurementChangesResponse,
+  MeasurementDataQualityQuery,
+  MeasurementDataQualityResponse,
   MeasurementDraftCollectionQuery,
   MeasurementDraftResponse,
   DraftMutationResponse,
@@ -457,6 +469,12 @@ import {
   getApiV1ProjectsByNameMeasurementReport,
   getApiV1ProjectsByNameMeasurementSetup,
   getApiV1ProjectsByNameMeasurementPropertyEvidence,
+  getApiV1ProjectsByNameMeasurementPortfolioSummary,
+  getApiV1ProjectsByNameMeasurementPropertyQuestions,
+  getApiV1ProjectsByNameMeasurementQuestionResult,
+  getApiV1ProjectsByNameMeasurementPropertyCompetitors,
+  getApiV1ProjectsByNameMeasurementChanges,
+  getApiV1ProjectsByNameMeasurementDataQuality,
   getApiV1ProjectsByNameMeasurementPlanDraft,
   getApiV1ProjectsByNameMeasurementPlanDraftTargets,
   getApiV1ProjectsByNameMeasurementPlanDraftAssignments,
@@ -1288,6 +1306,84 @@ export class ApiClient {
   ): Promise<MeasurementPropertyEvidenceResponse> {
     return this.invoke<MeasurementPropertyEvidenceResponse>(() =>
       getApiV1ProjectsByNameMeasurementPropertyEvidence({
+        client: this.heyClient,
+        path: { name: project },
+        query,
+      }),
+    )
+  }
+
+  async getMeasurementPortfolioSummary(
+    project: string,
+    query: MeasurementPortfolioSummaryQuery,
+  ): Promise<MeasurementPortfolioSummaryResponse> {
+    return this.invoke<MeasurementPortfolioSummaryResponse>(() =>
+      getApiV1ProjectsByNameMeasurementPortfolioSummary({
+        client: this.heyClient,
+        path: { name: project },
+        query,
+      }),
+    )
+  }
+
+  async getMeasurementPropertyQuestions(
+    project: string,
+    query: MeasurementPropertyQuestionsQuery,
+  ): Promise<MeasurementPropertyQuestionsResponse> {
+    return this.invoke<MeasurementPropertyQuestionsResponse>(() =>
+      getApiV1ProjectsByNameMeasurementPropertyQuestions({
+        client: this.heyClient,
+        path: { name: project },
+        query,
+      }),
+    )
+  }
+
+  async getMeasurementQuestionResult(
+    project: string,
+    query: MeasurementQuestionResultQuery,
+  ): Promise<MeasurementQuestionResultResponse> {
+    return this.invoke<MeasurementQuestionResultResponse>(() =>
+      getApiV1ProjectsByNameMeasurementQuestionResult({
+        client: this.heyClient,
+        path: { name: project },
+        query,
+      }),
+    )
+  }
+
+  async getMeasurementPropertyCompetitors(
+    project: string,
+    query: MeasurementPropertyCompetitorsQuery,
+  ): Promise<MeasurementPropertyCompetitorsResponse> {
+    return this.invoke<MeasurementPropertyCompetitorsResponse>(() =>
+      getApiV1ProjectsByNameMeasurementPropertyCompetitors({
+        client: this.heyClient,
+        path: { name: project },
+        query,
+      }),
+    )
+  }
+
+  async getMeasurementChanges(
+    project: string,
+    query: MeasurementChangesQuery,
+  ): Promise<MeasurementChangesResponse> {
+    return this.invoke<MeasurementChangesResponse>(() =>
+      getApiV1ProjectsByNameMeasurementChanges({
+        client: this.heyClient,
+        path: { name: project },
+        query,
+      }),
+    )
+  }
+
+  async getMeasurementDataQuality(
+    project: string,
+    query: MeasurementDataQualityQuery,
+  ): Promise<MeasurementDataQualityResponse> {
+    return this.invoke<MeasurementDataQualityResponse>(() =>
+      getApiV1ProjectsByNameMeasurementDataQuality({
         client: this.heyClient,
         path: { name: project },
         query,

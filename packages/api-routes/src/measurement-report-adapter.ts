@@ -245,6 +245,12 @@ function validateExecutionSnapshot(
   if (slot.requestedModel !== undefined && snapshot.model !== slot.requestedModel) {
     throw new Error(`measurement snapshot requested model is corrupt: ${snapshot.id}`)
   }
+}
+
+function validateSupportedLocation(
+  snapshot: typeof querySnapshots.$inferSelect,
+  slot: MeasurementRunManifestV1['expectedSlots'][number],
+): void {
   if (normalizeMeasurementLocation(snapshot.location) !== normalizeMeasurementLocation(slotLocation(slot))) {
     throw new Error(`measurement snapshot location is corrupt: ${snapshot.id}`)
   }
@@ -287,6 +293,7 @@ function observationInputs(
       if (!slot) throw new Error(`measurement snapshot provenance is corrupt: ${snapshot.id}`)
       validateExecutionSnapshot(snapshot, slot)
       if (!supportsRequestedContext(snapshot, slot)) return []
+      validateSupportedLocation(snapshot, slot)
     }
     const directCitations = snapshot.citedUrls
     return [{

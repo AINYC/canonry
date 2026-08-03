@@ -3280,6 +3280,223 @@ export type MeasurementDraftRenameTargetRequest = {
     label: string;
 };
 
+export type MeasurementChangesResponse = {
+    current: {
+        state: 'not_measured' | 'queued' | 'running' | 'complete' | 'partial' | 'failed';
+        displayedRunId: string | null;
+        planRevision: number;
+        completedAt: string | null;
+        executionIdentity: string | null;
+        measurementScope: 'full' | 'spot_check' | null;
+    };
+    comparison: {
+        state: 'available';
+        previous: {
+            displayedRunId: string;
+            planRevision: number;
+            completedAt: string | null;
+            executionIdentity: string;
+            measurementScope: 'full' | 'spot_check';
+        };
+        metrics: {
+            propertiesMentioned: {
+                state: 'available';
+                previous: {
+                    state: 'available';
+                    value: number;
+                    numerator?: number;
+                    denominator?: number;
+                } | {
+                    state: 'unavailable';
+                    reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+                };
+                current: {
+                    state: 'available';
+                    value: number;
+                    numerator?: number;
+                    denominator?: number;
+                } | {
+                    state: 'unavailable';
+                    reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+                };
+                delta: number;
+            } | {
+                state: 'unavailable';
+                reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+            };
+            mentionCoverage: {
+                state: 'available';
+                previous: {
+                    state: 'available';
+                    value: number;
+                    numerator?: number;
+                    denominator?: number;
+                } | {
+                    state: 'unavailable';
+                    reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+                };
+                current: {
+                    state: 'available';
+                    value: number;
+                    numerator?: number;
+                    denominator?: number;
+                } | {
+                    state: 'unavailable';
+                    reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+                };
+                delta: number;
+            } | {
+                state: 'unavailable';
+                reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+            };
+            citationCoverage: {
+                state: 'available';
+                previous: {
+                    state: 'available';
+                    value: number;
+                    numerator?: number;
+                    denominator?: number;
+                } | {
+                    state: 'unavailable';
+                    reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+                };
+                current: {
+                    state: 'available';
+                    value: number;
+                    numerator?: number;
+                    denominator?: number;
+                } | {
+                    state: 'unavailable';
+                    reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+                };
+                delta: number;
+            } | {
+                state: 'unavailable';
+                reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+            };
+        };
+        changedProperties: Array<{
+            targetKey: string;
+            label: string;
+            mentionCoverage: {
+                state: 'available';
+                previous: {
+                    state: 'available';
+                    value: number;
+                    numerator?: number;
+                    denominator?: number;
+                } | {
+                    state: 'unavailable';
+                    reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+                };
+                current: {
+                    state: 'available';
+                    value: number;
+                    numerator?: number;
+                    denominator?: number;
+                } | {
+                    state: 'unavailable';
+                    reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+                };
+                delta: number;
+            } | {
+                state: 'unavailable';
+                reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+            };
+            citationCoverage: {
+                state: 'available';
+                previous: {
+                    state: 'available';
+                    value: number;
+                    numerator?: number;
+                    denominator?: number;
+                } | {
+                    state: 'unavailable';
+                    reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+                };
+                current: {
+                    state: 'available';
+                    value: number;
+                    numerator?: number;
+                    denominator?: number;
+                } | {
+                    state: 'unavailable';
+                    reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+                };
+                delta: number;
+            } | {
+                state: 'unavailable';
+                reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+            };
+            flags: number;
+        }>;
+        totalProperties: number;
+        truncated: boolean;
+    } | {
+        state: 'unavailable';
+        reason: 'no_previous_run' | 'execution_identity_changed' | 'incomplete' | 'not_comparable';
+    };
+};
+
+export type MeasurementDataQualityResponse = {
+    run: {
+        state: 'not_measured' | 'queued' | 'running' | 'complete' | 'partial' | 'failed';
+        displayedRunId: string | null;
+        planRevision: number;
+        completedAt: string | null;
+        executionIdentity: string | null;
+        measurementScope: 'full' | 'spot_check' | null;
+    };
+    completeness: {
+        state: 'available';
+        expected: number;
+        executed: number;
+        answered: number;
+        missing: number;
+    } | {
+        state: 'unavailable';
+        reason: 'no_completed_run' | 'incomplete' | 'evidence_incomplete' | 'no_population' | 'not_applicable';
+    };
+    capture: {
+        state: 'available';
+        complete: number;
+        partial: number;
+        failed: number;
+        unsupported: number;
+        notRecorded: number;
+    } | {
+        state: 'unavailable';
+        reason: 'no_completed_run' | 'incomplete' | 'evidence_incomplete' | 'no_population' | 'not_applicable';
+    };
+    retrieval: {
+        state: 'available';
+        used: number;
+        notUsed: number;
+        unknown: number;
+        notApplicable: number;
+        notRecorded: number;
+    } | {
+        state: 'unavailable';
+        reason: 'no_completed_run' | 'incomplete' | 'evidence_incomplete' | 'no_population' | 'not_applicable';
+    };
+    population: {
+        state: 'available';
+        expectedQuestions: number;
+        answeredQuestions: number;
+        missingQuestions: number;
+    } | {
+        state: 'unavailable';
+        reason: 'no_completed_run' | 'incomplete' | 'evidence_incomplete' | 'no_population' | 'not_applicable';
+    };
+    comparison: {
+        state: 'available';
+        previousDisplayedRunId: string;
+    } | {
+        state: 'unavailable';
+        reason: 'no_previous_run' | 'execution_identity_changed' | 'incomplete' | 'not_comparable';
+    };
+};
+
 export type MeasurementDraftResponse = {
     draft: {
         id: string;
@@ -3554,6 +3771,81 @@ export type MeasurementOverviewResponse = {
             share: number;
         }>;
     };
+};
+
+export type MeasurementPortfolioSummaryResponse = {
+    portfolio: {
+        groupKey: string | null;
+        label: string | null;
+        measurementScope: 'full' | 'spot_check' | null;
+    };
+    measurement: {
+        state: 'not_measured' | 'queued' | 'running' | 'complete' | 'partial' | 'failed';
+        displayedRunId: string | null;
+        planRevision: number;
+        completedAt: string | null;
+    };
+    queryClass: 'all' | 'branded' | 'non-brand';
+    metrics: {
+        propertiesMentioned: {
+            state: 'available';
+            value: number;
+            numerator?: number;
+            denominator?: number;
+        } | {
+            state: 'unavailable';
+            reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+        };
+        mentionCoverage: {
+            state: 'available';
+            value: number;
+            numerator?: number;
+            denominator?: number;
+        } | {
+            state: 'unavailable';
+            reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+        };
+        citationCoverage: {
+            state: 'available';
+            value: number;
+            numerator?: number;
+            denominator?: number;
+        } | {
+            state: 'unavailable';
+            reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+        };
+    };
+    weakestProperties: Array<{
+        targetKey: string;
+        label: string;
+        mentionCoverage: {
+            state: 'available';
+            value: number;
+            numerator?: number;
+            denominator?: number;
+        } | {
+            state: 'unavailable';
+            reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+        };
+        citationCoverage: {
+            state: 'available';
+            value: number;
+            numerator?: number;
+            denominator?: number;
+        } | {
+            state: 'unavailable';
+            reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+        };
+        flags: number;
+        recommendedInstead: Array<{
+            name: string;
+            occurrences: number;
+        }>;
+        recommendedInsteadTotal: number;
+        recommendedInsteadTruncated: boolean;
+    }>;
+    totalProperties: number;
+    truncated: boolean;
 };
 
 export type MeasurementPlanCompilePreviewResponse = {
@@ -4648,6 +4940,41 @@ export type MeasurementPlanVersionsResponse = {
     }>;
 };
 
+export type MeasurementPropertyCompetitorsResponse = {
+    property: {
+        targetKey: string;
+        label: string;
+    };
+    measurement: {
+        state: 'not_measured' | 'queued' | 'running' | 'complete' | 'partial' | 'failed';
+        displayedRunId: string | null;
+        planRevision: number;
+        completedAt: string | null;
+    };
+    queryClass: 'all' | 'branded' | 'non-brand';
+    basis: {
+        state: 'available';
+        answeredResults: number;
+        targetMissResults: number;
+        recommendationOccurrences: number;
+    } | {
+        state: 'unavailable';
+        reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+    };
+    competitors: Array<{
+        name: string;
+        occurrences: number;
+        providers: Array<string>;
+        providerTotal: number;
+        providersTruncated: boolean;
+        questions: Array<string>;
+        questionTotal: number;
+        questionsTruncated: boolean;
+    }>;
+    total: number;
+    truncated: boolean;
+};
+
 export type MeasurementPropertyEvidenceResponse = {
     property: {
         targetKey: string;
@@ -4681,6 +5008,90 @@ export type MeasurementPropertyEvidenceResponse = {
         nextCursor: string | null;
         totalEstimate?: number;
     };
+};
+
+export type MeasurementPropertyQuestionsResponse = {
+    property: {
+        targetKey: string;
+        label: string;
+    };
+    measurement: {
+        state: 'not_measured' | 'queued' | 'running' | 'complete' | 'partial' | 'failed';
+        displayedRunId: string | null;
+        planRevision: number;
+        completedAt: string | null;
+    };
+    queryClass: 'all' | 'branded' | 'non-brand';
+    questions: Array<{
+        resultId: string;
+        queryId: string;
+        text: string;
+        class: 'branded' | 'non-brand';
+        provider: string;
+        requestedModel: string | null;
+        servedModel: string | null;
+        location: string | null;
+        status: 'answered';
+        mentioned: boolean | null;
+        cited: boolean | null;
+        recommendedInstead: Array<string>;
+        answerExcerpt: string | null;
+    } | {
+        resultId: null;
+        queryId: string;
+        text: string;
+        class: 'branded' | 'non-brand';
+        provider: string;
+        requestedModel: string | null;
+        servedModel: string | null;
+        location: string | null;
+        status: 'missing';
+        mentioned: null;
+        cited: null;
+        recommendedInstead: Array<string>;
+        answerExcerpt: null;
+    }>;
+    total: number;
+    truncated: boolean;
+};
+
+export type MeasurementQuestionResultResponse = {
+    property: {
+        targetKey: string;
+        label: string;
+    };
+    measurement: {
+        state: 'not_measured' | 'queued' | 'running' | 'complete' | 'partial' | 'failed';
+        displayedRunId: string | null;
+        planRevision: number;
+        completedAt: string | null;
+    };
+    question: {
+        resultId: string;
+        queryId: string;
+        text: string;
+        class: 'branded' | 'non-brand';
+        provider: string;
+        requestedModel: string | null;
+        servedModel: string | null;
+        location: string | null;
+        status: 'answered';
+    };
+    mentioned: boolean | null;
+    cited: boolean | null;
+    recommendedInstead: Array<string>;
+    answer: string | null;
+    sources: Array<{
+        url: string;
+        classification: 'assigned' | 'sibling' | 'ownedUnmapped' | 'external' | 'ambiguous' | 'invalid';
+        matchedTargetKeys: Array<string>;
+        assigned: boolean;
+        historical: boolean;
+        evidenceComplete: boolean;
+    }>;
+    captureStatus: 'complete' | 'partial' | 'failed' | 'unsupported' | null;
+    retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
+    retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
 };
 
 export type MeasurementQuerySetDetail = {
@@ -9557,6 +9968,360 @@ export type GetApiV1ProjectsByNameMeasurementPropertyEvidenceResponses = {
 };
 
 export type GetApiV1ProjectsByNameMeasurementPropertyEvidenceResponse = GetApiV1ProjectsByNameMeasurementPropertyEvidenceResponses[keyof GetApiV1ProjectsByNameMeasurementPropertyEvidenceResponses];
+
+export type GetApiV1ProjectsByNameMeasurementPortfolioSummaryData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Optional reporting group stable key.
+         */
+        groupKey?: string;
+        /**
+         * Question class. Defaults to non-brand.
+         */
+        queryClass?: 'all' | 'branded' | 'non-brand';
+        /**
+         * Restrict to one answer provider.
+         */
+        provider?: string;
+        /**
+         * Restrict to one execution location label.
+         */
+        location?: string;
+        /**
+         * Read this completed or partial active-revision run, including a named spot check.
+         */
+        runId?: string;
+        /**
+         * Maximum Property rows. Defaults to 10, maximum 50.
+         */
+        limit?: number;
+    };
+    url: '/api/v1/projects/{name}/measurement-portfolio-summary';
+};
+
+export type GetApiV1ProjectsByNameMeasurementPortfolioSummaryErrors = {
+    /**
+     * The filters, group, or active plan schema are invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project, active measurement plan, or requested run not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The named run is pinned to a different plan revision.
+     */
+    422: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPortfolioSummaryError = GetApiV1ProjectsByNameMeasurementPortfolioSummaryErrors[keyof GetApiV1ProjectsByNameMeasurementPortfolioSummaryErrors];
+
+export type GetApiV1ProjectsByNameMeasurementPortfolioSummaryResponses = {
+    /**
+     * Compact portfolio summary returned.
+     */
+    200: MeasurementPortfolioSummaryResponse;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPortfolioSummaryResponse = GetApiV1ProjectsByNameMeasurementPortfolioSummaryResponses[keyof GetApiV1ProjectsByNameMeasurementPortfolioSummaryResponses];
+
+export type GetApiV1ProjectsByNameMeasurementPropertyQuestionsData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query: {
+        /**
+         * Property stable key.
+         */
+        targetKey: string;
+        /**
+         * Restrict to one question class.
+         */
+        queryClass?: 'all' | 'branded' | 'non-brand';
+        /**
+         * Restrict to one answer provider.
+         */
+        provider?: string;
+        /**
+         * Restrict to one execution location label.
+         */
+        location?: string;
+        /**
+         * Read this completed or partial active-revision run, including a named spot check.
+         */
+        runId?: string;
+        /**
+         * Zero-based row offset for paging through the full question population.
+         */
+        offset?: number;
+        /**
+         * Page size. Defaults to 50, maximum 100.
+         */
+        limit?: number;
+    };
+    url: '/api/v1/projects/{name}/measurement-property-questions';
+};
+
+export type GetApiV1ProjectsByNameMeasurementPropertyQuestionsErrors = {
+    /**
+     * The Property, filters, run status, or active plan schema are invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project, active measurement plan, or requested run not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The named run is pinned to a different plan revision.
+     */
+    422: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPropertyQuestionsError = GetApiV1ProjectsByNameMeasurementPropertyQuestionsErrors[keyof GetApiV1ProjectsByNameMeasurementPropertyQuestionsErrors];
+
+export type GetApiV1ProjectsByNameMeasurementPropertyQuestionsResponses = {
+    /**
+     * Compact Property question rows returned.
+     */
+    200: MeasurementPropertyQuestionsResponse;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPropertyQuestionsResponse = GetApiV1ProjectsByNameMeasurementPropertyQuestionsResponses[keyof GetApiV1ProjectsByNameMeasurementPropertyQuestionsResponses];
+
+export type GetApiV1ProjectsByNameMeasurementQuestionResultData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query: {
+        /**
+         * Property stable key used for mention and citation attribution.
+         */
+        targetKey: string;
+        /**
+         * Stored result ID returned by measurement-property-questions.
+         */
+        resultId: string;
+    };
+    url: '/api/v1/projects/{name}/measurement-question-result';
+};
+
+export type GetApiV1ProjectsByNameMeasurementQuestionResultErrors = {
+    /**
+     * The Property, result, run status, or active plan schema are invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project, active plan, Property assignment, or result not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The result belongs to a run pinned to a different plan revision.
+     */
+    422: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameMeasurementQuestionResultError = GetApiV1ProjectsByNameMeasurementQuestionResultErrors[keyof GetApiV1ProjectsByNameMeasurementQuestionResultErrors];
+
+export type GetApiV1ProjectsByNameMeasurementQuestionResultResponses = {
+    /**
+     * Full stored question result returned.
+     */
+    200: MeasurementQuestionResultResponse;
+};
+
+export type GetApiV1ProjectsByNameMeasurementQuestionResultResponse = GetApiV1ProjectsByNameMeasurementQuestionResultResponses[keyof GetApiV1ProjectsByNameMeasurementQuestionResultResponses];
+
+export type GetApiV1ProjectsByNameMeasurementPropertyCompetitorsData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query: {
+        /**
+         * Property stable key.
+         */
+        targetKey: string;
+        /**
+         * Restrict to one question class.
+         */
+        queryClass?: 'all' | 'branded' | 'non-brand';
+        /**
+         * Restrict to one answer provider.
+         */
+        provider?: string;
+        /**
+         * Restrict to one execution location label.
+         */
+        location?: string;
+        /**
+         * Read this completed or partial active-revision run, including a named spot check.
+         */
+        runId?: string;
+        /**
+         * Maximum competitor rows. Defaults to 10, maximum 50.
+         */
+        limit?: number;
+    };
+    url: '/api/v1/projects/{name}/measurement-property-competitors';
+};
+
+export type GetApiV1ProjectsByNameMeasurementPropertyCompetitorsErrors = {
+    /**
+     * The Property, filters, run status, or active plan schema are invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project, active measurement plan, or requested run not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The named run is pinned to a different plan revision.
+     */
+    422: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPropertyCompetitorsError = GetApiV1ProjectsByNameMeasurementPropertyCompetitorsErrors[keyof GetApiV1ProjectsByNameMeasurementPropertyCompetitorsErrors];
+
+export type GetApiV1ProjectsByNameMeasurementPropertyCompetitorsResponses = {
+    /**
+     * Repeated Property replacements returned.
+     */
+    200: MeasurementPropertyCompetitorsResponse;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPropertyCompetitorsResponse = GetApiV1ProjectsByNameMeasurementPropertyCompetitorsResponses[keyof GetApiV1ProjectsByNameMeasurementPropertyCompetitorsResponses];
+
+export type GetApiV1ProjectsByNameMeasurementChangesData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Reporting scope. Defaults to all.
+         */
+        scope?: 'all' | 'group' | 'property';
+        /**
+         * Required for group scope.
+         */
+        groupKey?: string;
+        /**
+         * Required for Property scope.
+         */
+        targetKey?: string;
+        /**
+         * Question class. Defaults to all.
+         */
+        queryClass?: 'all' | 'branded' | 'non-brand';
+        /**
+         * Restrict both runs to one answer provider.
+         */
+        provider?: string;
+        /**
+         * Restrict both runs to one execution location label.
+         */
+        location?: string;
+        /**
+         * Use this completed or partial run as the current side.
+         */
+        runId?: string;
+        /**
+         * Maximum changed Property rows. Defaults to 10, maximum 50.
+         */
+        limit?: number;
+    };
+    url: '/api/v1/projects/{name}/measurement-changes';
+};
+
+export type GetApiV1ProjectsByNameMeasurementChangesErrors = {
+    /**
+     * The scope, filters, run status, or active plan schema are invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project, active measurement plan, or requested run not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The named run is pinned to a different plan revision.
+     */
+    422: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameMeasurementChangesError = GetApiV1ProjectsByNameMeasurementChangesErrors[keyof GetApiV1ProjectsByNameMeasurementChangesErrors];
+
+export type GetApiV1ProjectsByNameMeasurementChangesResponses = {
+    /**
+     * Comparable change summary, or an explicit unavailable reason, returned.
+     */
+    200: MeasurementChangesResponse;
+};
+
+export type GetApiV1ProjectsByNameMeasurementChangesResponse = GetApiV1ProjectsByNameMeasurementChangesResponses[keyof GetApiV1ProjectsByNameMeasurementChangesResponses];
+
+export type GetApiV1ProjectsByNameMeasurementDataQualityData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Inspect this completed or partial active-revision run. Omit for the latest completed full run.
+         */
+        runId?: string;
+    };
+    url: '/api/v1/projects/{name}/measurement-data-quality';
+};
+
+export type GetApiV1ProjectsByNameMeasurementDataQualityErrors = {
+    /**
+     * The run status or active plan schema is invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project, active measurement plan, or requested run not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The named run is pinned to a different plan revision.
+     */
+    422: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameMeasurementDataQualityError = GetApiV1ProjectsByNameMeasurementDataQualityErrors[keyof GetApiV1ProjectsByNameMeasurementDataQualityErrors];
+
+export type GetApiV1ProjectsByNameMeasurementDataQualityResponses = {
+    /**
+     * Measurement data quality returned.
+     */
+    200: MeasurementDataQualityResponse;
+};
+
+export type GetApiV1ProjectsByNameMeasurementDataQualityResponse = GetApiV1ProjectsByNameMeasurementDataQualityResponses[keyof GetApiV1ProjectsByNameMeasurementDataQualityResponses];
 
 export type GetApiV1ProjectsByNameMeasurementQuerySetsData = {
     body?: never;

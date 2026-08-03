@@ -171,6 +171,132 @@ describe('ApiClient Advanced Measurement v2 reads', () => {
   })
 })
 
+describe('ApiClient measurement demo reads', () => {
+  const cases = [
+    {
+      name: 'portfolio summary',
+      invoke: (api: ApiClient) => api.getMeasurementPortfolioSummary(PROJECT, {
+        groupKey: 'northstar-group',
+        queryClass: 'non-brand',
+        provider: 'openai',
+        location: 'New York, NY',
+        runId: 'run-7',
+        limit: 8,
+      }),
+      expected: {
+        method: 'GET',
+        pathname: `/api/v1/projects/${PROJECT}/measurement-portfolio-summary`,
+        query: {
+          groupKey: 'northstar-group',
+          queryClass: 'non-brand',
+          provider: 'openai',
+          location: 'New York, NY',
+          runId: 'run-7',
+          limit: '8',
+        },
+      },
+    },
+    {
+      name: 'Property questions',
+      invoke: (api: ApiClient) => api.getMeasurementPropertyQuestions(PROJECT, {
+        targetKey: 'northstar-home',
+        queryClass: 'branded',
+        provider: 'openai',
+        location: 'New York, NY',
+        runId: 'run-7',
+        limit: 10,
+      }),
+      expected: {
+        method: 'GET',
+        pathname: `/api/v1/projects/${PROJECT}/measurement-property-questions`,
+        query: {
+          targetKey: 'northstar-home',
+          queryClass: 'branded',
+          provider: 'openai',
+          location: 'New York, NY',
+          runId: 'run-7',
+          limit: '10',
+        },
+      },
+    },
+    {
+      name: 'one question result',
+      invoke: (api: ApiClient) => api.getMeasurementQuestionResult(PROJECT, {
+        targetKey: 'northstar-home',
+        resultId: 'result-7',
+      }),
+      expected: {
+        method: 'GET',
+        pathname: `/api/v1/projects/${PROJECT}/measurement-question-result`,
+        query: { targetKey: 'northstar-home', resultId: 'result-7' },
+      },
+    },
+    {
+      name: 'Property competitors',
+      invoke: (api: ApiClient) => api.getMeasurementPropertyCompetitors(PROJECT, {
+        targetKey: 'northstar-home',
+        queryClass: 'non-brand',
+        provider: 'openai',
+        location: 'New York, NY',
+        runId: 'run-7',
+        limit: 5,
+      }),
+      expected: {
+        method: 'GET',
+        pathname: `/api/v1/projects/${PROJECT}/measurement-property-competitors`,
+        query: {
+          targetKey: 'northstar-home',
+          queryClass: 'non-brand',
+          provider: 'openai',
+          location: 'New York, NY',
+          runId: 'run-7',
+          limit: '5',
+        },
+      },
+    },
+    {
+      name: 'same-identity changes',
+      invoke: (api: ApiClient) => api.getMeasurementChanges(PROJECT, {
+        scope: 'group',
+        groupKey: 'northstar-group',
+        queryClass: 'non-brand',
+        provider: 'openai',
+        location: 'New York, NY',
+        runId: 'run-7',
+        limit: 5,
+      }),
+      expected: {
+        method: 'GET',
+        pathname: `/api/v1/projects/${PROJECT}/measurement-changes`,
+        query: {
+          scope: 'group',
+          groupKey: 'northstar-group',
+          queryClass: 'non-brand',
+          provider: 'openai',
+          location: 'New York, NY',
+          runId: 'run-7',
+          limit: '5',
+        },
+      },
+    },
+    {
+      name: 'data quality',
+      invoke: (api: ApiClient) => api.getMeasurementDataQuality(PROJECT, { runId: 'run-7' }),
+      expected: {
+        method: 'GET',
+        pathname: `/api/v1/projects/${PROJECT}/measurement-data-quality`,
+        query: { runId: 'run-7' },
+      },
+    },
+  ]
+
+  it.each(cases)('calls $name through the generated SDK', async ({ invoke, expected }) => {
+    queueResponse()
+    await invoke(client())
+    assertRequest(expected)
+  })
+})
+
 describe('ApiClient Advanced Measurement v2 draft actions', () => {
   const target = {
     stableKey: 'northstar-home',
