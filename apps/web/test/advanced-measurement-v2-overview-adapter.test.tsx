@@ -315,3 +315,34 @@ describe('version-two measurement overview adapter', () => {
     expect(screen.getByText('Evidence could not be loaded.')).toBeTruthy()
   })
 })
+
+describe('the All question lane', () => {
+  // Shipping the All option without teaching the adapter about it crashed the
+  // page with "requires a Branded or Non-brand query filter" the moment it was
+  // selected. These cover the places that assumed exactly one class.
+  it('adapts an all-class overview instead of throwing', () => {
+    const { activePlan, overview } = fixture()
+    expect(() => adaptV2MeasurementOverview({
+      overview: { ...overview, queryClass: 'all' },
+      activePlan,
+    })).not.toThrow()
+  })
+
+  it('carries the all class through to the rendered view', () => {
+    const { activePlan, overview } = fixture()
+    const report = adaptV2MeasurementOverview({
+      overview: { ...overview, queryClass: 'all' },
+      activePlan,
+    })
+    expect(report.currentView?.queryClass).toBe('all')
+  })
+
+  it('lists questions from every lane rather than none', () => {
+    const { activePlan, overview } = fixture()
+    const all = adaptV2MeasurementOverview({ overview: { ...overview, queryClass: 'all' }, activePlan })
+    const branded = adaptV2MeasurementOverview({ overview: { ...overview, queryClass: 'branded' }, activePlan })
+    const count = (r: typeof all) => r.currentView!.aggregate.properties.reduce((n, p) => n + p.assignedQueries.length, 0)
+    // All must be a superset: filtering to one lane can only ever remove questions.
+    expect(count(all)).toBeGreaterThanOrEqual(count(branded))
+  })
+})
