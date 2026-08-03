@@ -387,6 +387,108 @@ export function AdvancedMeasurementQueriesStep({
         </dl>
       </details>
 
+      {viewer || !onCreateQueries ? null : (
+        <div className="border-y border-default py-4">
+          <h4 className="m-0 text-sm font-medium text-heading">
+            {queries.length === 0 ? 'Add the questions you want to track' : 'Add more questions'}
+          </h4>
+          <p className="mt-1 mb-2 text-sm text-secondary">
+            One per line. These are added to the project, then you choose which
+            Properties to apply them to. You can edit or add more at any time.
+          </p>
+          <textarea
+            aria-label="New questions, one per line"
+            className="w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
+            rows={4}
+            value={newQueriesText}
+            onChange={event => setNewQueriesText(event.target.value)}
+            placeholder={'best apartments in dallas\nluxury apartments atlanta\npet friendly apartments austin'}
+          />
+          {createQueriesError ? (
+            <p role="alert" className="mt-2 text-sm text-negative">{createQueriesError}</p>
+          ) : null}
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              size="sm"
+              disabled={parsedNewQueries.length === 0 || isCreatingQueries}
+              onClick={() => {
+                void Promise.resolve(onCreateQueries(parsedNewQueries))
+                  .then(() => setNewQueriesText(''), () => {})
+              }}
+            >
+              {isCreatingQueries
+                ? 'Adding…'
+                : `Add ${parsedNewQueries.length || ''} question${parsedNewQueries.length === 1 ? '' : 's'}`.replace('  ', ' ')}
+            </Button>
+            {onManageProjectQueries ? (
+              <Button type="button" size="sm" variant="ghost" onClick={onManageProjectQueries}>
+                Manage all project questions
+              </Button>
+            ) : null}
+          </div>
+
+          <div className="mt-4 border-t border-default pt-4">
+            <h4 className="m-0 text-sm font-medium text-heading">Or write one question for every Property</h4>
+            <p className="mt-1 mb-2 text-sm text-secondary">
+              Put <code className="rounded bg-bg-elevated px-1">{'{property}'}</code> where the
+              Property name belongs. You get one question per selected Property.
+            </p>
+            <input
+              aria-label="Question pattern"
+              className="w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
+              value={patternText}
+              onChange={event => setPatternText(event.target.value)}
+              placeholder="apartments near {property}"
+            />
+            {patternText.trim() === '' ? null : patternPlaceholders.length === 0 ? (
+              <p className="mt-2 text-sm text-caution">
+                Add {'{property}'} to the pattern, or use the box above for a single question.
+              </p>
+            ) : patternTargets.length === 0 ? (
+              <p className="mt-2 text-sm text-caution">Select at least one Property to write questions for.</p>
+            ) : (
+              <div className="mt-2 rounded-md border border-base bg-bg-elevated p-3">
+                <p className="m-0 text-sm text-secondary">
+                  {patternExpansions.length} question{patternExpansions.length === 1 ? '' : 's'}, one per selected Property:
+                </p>
+                <ul className="mt-1 mb-0 list-none space-y-0.5 p-0">
+                  {patternExpansions.slice(0, 3).map(text => (
+                    <li key={text} className="text-sm text-strong">{text}</li>
+                  ))}
+                </ul>
+                {patternExpansions.length > 3 ? (
+                  <p className="mt-1 mb-0 text-sm text-secondary">
+                    and {patternExpansions.length - 3} more
+                  </p>
+                ) : null}
+              </div>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              className="mt-2"
+              disabled={patternPairs.length === 0 || isCreatingQueries || !onCreateAndPairQuestions}
+              onClick={() => {
+                if (!onCreateAndPairQuestions) return
+                void Promise.resolve(onCreateAndPairQuestions(patternPairs))
+                  .then(() => setPatternText(''), () => {})
+              }}
+            >
+              {isCreatingQueries
+                ? 'Adding…'
+                : `Add ${patternPairs.length || ''} question${patternPairs.length === 1 ? '' : 's'}`.replace('  ', ' ')}
+            </Button>
+            {patternPairs.length > 0 ? (
+              <p className="mt-2 mb-0 text-sm text-secondary">
+                Each question is measured on the one Property it names, so this adds{' '}
+                {patternPairs.length} assignment{patternPairs.length === 1 ? '' : 's'}.
+              </p>
+            ) : null}
+          </div>
+        </div>
+      )}
+
       {viewer ? null : (
         <div className="space-y-3 border-y border-default py-4">
           <details>
@@ -507,108 +609,6 @@ export function AdvancedMeasurementQueriesStep({
       {visibleQueries.length < filteredQueries.length ? (
         <Button type="button" size="sm" variant="outline" onClick={() => setShowAllQueries(true)}>Show all queries</Button>
       ) : null}
-
-      {viewer || !onCreateQueries ? null : (
-        <div className="border-y border-default py-4">
-          <h4 className="m-0 text-sm font-medium text-heading">
-            {queries.length === 0 ? 'Add the questions you want to track' : 'Add more questions'}
-          </h4>
-          <p className="mt-1 mb-2 text-sm text-secondary">
-            One per line. These are added to the project, then you choose which
-            Properties to apply them to. You can edit or add more at any time.
-          </p>
-          <textarea
-            aria-label="New questions, one per line"
-            className="w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
-            rows={4}
-            value={newQueriesText}
-            onChange={event => setNewQueriesText(event.target.value)}
-            placeholder={'best apartments in dallas\nluxury apartments atlanta\npet friendly apartments austin'}
-          />
-          {createQueriesError ? (
-            <p role="alert" className="mt-2 text-sm text-negative">{createQueriesError}</p>
-          ) : null}
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <Button
-              type="button"
-              size="sm"
-              disabled={parsedNewQueries.length === 0 || isCreatingQueries}
-              onClick={() => {
-                void Promise.resolve(onCreateQueries(parsedNewQueries))
-                  .then(() => setNewQueriesText(''), () => {})
-              }}
-            >
-              {isCreatingQueries
-                ? 'Adding…'
-                : `Add ${parsedNewQueries.length || ''} question${parsedNewQueries.length === 1 ? '' : 's'}`.replace('  ', ' ')}
-            </Button>
-            {onManageProjectQueries ? (
-              <Button type="button" size="sm" variant="ghost" onClick={onManageProjectQueries}>
-                Manage all project questions
-              </Button>
-            ) : null}
-          </div>
-
-          <div className="mt-4 border-t border-default pt-4">
-            <h4 className="m-0 text-sm font-medium text-heading">Or write one question for every Property</h4>
-            <p className="mt-1 mb-2 text-sm text-secondary">
-              Put <code className="rounded bg-bg-elevated px-1">{'{property}'}</code> where the
-              Property name belongs. You get one question per selected Property.
-            </p>
-            <input
-              aria-label="Question pattern"
-              className="w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
-              value={patternText}
-              onChange={event => setPatternText(event.target.value)}
-              placeholder="apartments near {property}"
-            />
-            {patternText.trim() === '' ? null : patternPlaceholders.length === 0 ? (
-              <p className="mt-2 text-sm text-caution">
-                Add {'{property}'} to the pattern, or use the box above for a single question.
-              </p>
-            ) : patternTargets.length === 0 ? (
-              <p className="mt-2 text-sm text-caution">Select at least one Property to write questions for.</p>
-            ) : (
-              <div className="mt-2 rounded-md border border-base bg-bg-elevated p-3">
-                <p className="m-0 text-sm text-secondary">
-                  {patternExpansions.length} question{patternExpansions.length === 1 ? '' : 's'}, one per selected Property:
-                </p>
-                <ul className="mt-1 mb-0 list-none space-y-0.5 p-0">
-                  {patternExpansions.slice(0, 3).map(text => (
-                    <li key={text} className="text-sm text-strong">{text}</li>
-                  ))}
-                </ul>
-                {patternExpansions.length > 3 ? (
-                  <p className="mt-1 mb-0 text-sm text-secondary">
-                    and {patternExpansions.length - 3} more
-                  </p>
-                ) : null}
-              </div>
-            )}
-            <Button
-              type="button"
-              size="sm"
-              className="mt-2"
-              disabled={patternPairs.length === 0 || isCreatingQueries || !onCreateAndPairQuestions}
-              onClick={() => {
-                if (!onCreateAndPairQuestions) return
-                void Promise.resolve(onCreateAndPairQuestions(patternPairs))
-                  .then(() => setPatternText(''), () => {})
-              }}
-            >
-              {isCreatingQueries
-                ? 'Adding…'
-                : `Add ${patternPairs.length || ''} question${patternPairs.length === 1 ? '' : 's'}`.replace('  ', ' ')}
-            </Button>
-            {patternPairs.length > 0 ? (
-              <p className="mt-2 mb-0 text-sm text-secondary">
-                Each question is measured on the one Property it names, so this adds{' '}
-                {patternPairs.length} assignment{patternPairs.length === 1 ? '' : 's'}.
-              </p>
-            ) : null}
-          </div>
-        </div>
-      )}
 
       {viewer ? null : (
         <>

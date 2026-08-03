@@ -43,7 +43,8 @@ function metric(value: OverviewMetric): AdvancedMeasurementMetric {
   return { numerator: value.numerator, denominator: value.denominator }
 }
 
-function matcherLabel(matcher: PlanV2['targets'][number]['urlMatchers'][number]): string {
+/** The one rendering of a frozen URL matcher. The Property page reuses it so the two surfaces cannot print the same matcher differently. */
+export function matcherLabel(matcher: PlanV2['targets'][number]['urlMatchers'][number]): string {
   if (matcher.kind === 'exact') return matcher.url
   if (matcher.kind === 'prefix') return `https://${matcher.host}${matcher.pathPrefix}/*`
   return `https://${matcher.host}/*`

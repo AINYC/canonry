@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { MetricTone } from '../../../view-models.js'
 
 import { ToneBadge } from '../../shared/ToneBadge.js'
@@ -137,6 +138,12 @@ export interface AdvancedMeasurementOverviewProps {
   onLoadMore?: (cursor: string) => void
   onPropertyExpand?: (propertyId: string) => void
   onRetryEvidence?: () => void
+  /**
+   * Renders the Property name as a link to its own page. The caller owns
+   * routing so this component stays presentational; without it the name is
+   * plain text and the row still expands in place.
+   */
+  renderPropertyLink?: (property: { id: string; name: string }) => ReactNode
 }
 
 const ALL_PROPERTIES = '__all_properties__'
@@ -388,6 +395,7 @@ export function AdvancedMeasurementOverview({
   onLoadMore,
   onPropertyExpand,
   onRetryEvidence,
+  renderPropertyLink,
 }: AdvancedMeasurementOverviewProps) {
   const usesServerView = report.currentView != null
   const classReportingAvailable = report.classReporting === 'available' && (usesServerView || report.classScopes != null)
@@ -590,7 +598,11 @@ export function AdvancedMeasurementOverview({
                         if (!isInteractiveTarget(event.target)) toggleProperty(property.id)
                       }}
                     >
-                      <td className="font-medium text-heading">{property.name}</td>
+                      <td className="font-medium text-heading">
+                        {renderPropertyLink
+                          ? renderPropertyLink({ id: property.id, name: property.name })
+                          : property.name}
+                      </td>
                       <td className="text-secondary"><MetricValue metric={property.mentionCoverage} compact /></td>
                       <td className="text-secondary"><MetricValue metric={property.citationCoverage} compact /></td>
                       <td>

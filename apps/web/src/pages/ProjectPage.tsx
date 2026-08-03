@@ -2513,6 +2513,17 @@ function ProjectPageContent({
               setHasExpandedAdvancedProperty(true)
             }}
             onRetryEvidence={() => { void advancedMeasurementReportQuery.refetch() }}
+            renderPropertyLink={activeMeasurementPlanSchemaVersion === 2 && !isEmbed()
+              ? ({ id, name }) => (
+                  <Link
+                    to="/projects/$projectName/properties/$targetKey"
+                    params={{ projectName, targetKey: id }}
+                    className="text-link hover:underline"
+                  >
+                    {name}
+                  </Link>
+                )
+              : undefined}
             isViewLoading={advancedMeasurementOverviewQuery.isPlaceholderData}
             isLoadingMore={advancedMeasurementOverviewQuery.isFetchingNextPage}
             isLoadMoreError={advancedMeasurementOverviewQuery.isFetchNextPageError}
