@@ -28,6 +28,7 @@ import { formatErrorLog } from './lib/format-helpers.js'
 import {
   getEmbedConfig,
   heyClient,
+  shouldShowDashboardAgentBar,
   shouldShowDashboardResourceLinks,
   shouldShowDashboardUpdateNotification,
   signOutOfAccount,
@@ -303,6 +304,7 @@ export function RootLayout() {
   // render. The server-side embed tab policy intentionally blocks /settings.
   const embed = useMemo(() => getEmbedConfig(), [])
   const resourceLinksVisible = useMemo(shouldShowDashboardResourceLinks, [])
+  const agentBarVisible = useMemo(shouldShowDashboardAgentBar, [])
   const updateNotificationVisible = useMemo(shouldShowDashboardUpdateNotification, [])
 
   // ── Data fetching via TanStack Query ──
@@ -1044,7 +1046,7 @@ export function RootLayout() {
 
       <RunNotificationObserver />
       <Toaster />
-      <AeroBarHost />
+      {agentBarVisible ? <AeroBarHost /> : null}
     </div>
   )
 }

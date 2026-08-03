@@ -2689,6 +2689,13 @@ export async function createServer(opts: {
       if (!dashboardShowUpdateNotification) {
         dashboardConfig.showUpdateNotification = false;
       }
+      // The agent kill-switch removes the routes; without telling the browser,
+      // the command bar still rendered and every request 404'd in front of the
+      // operator. The dashboard has to know the capability is gone, not discover
+      // it one failed fetch at a time.
+      if (!agentEnabled) {
+        dashboardConfig.showAgentBar = false;
+      }
       if (Object.keys(dashboardConfig).length > 0) {
         clientConfig.dashboard = dashboardConfig;
       }

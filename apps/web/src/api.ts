@@ -171,6 +171,7 @@ declare global {
       dashboard?: {
         showResourceLinks?: boolean
         showUpdateNotification?: boolean
+        showAgentBar?: boolean
       }
       /**
        * Read-only embed block injected by `canonry serve --embed` (#716). Present
@@ -251,6 +252,16 @@ export function getEmbedConfig(): EmbedClientConfig | null {
 export function shouldShowDashboardResourceLinks(): boolean {
   if (typeof window === 'undefined') return true
   return window.__CANONRY_CONFIG__?.dashboard?.showResourceLinks !== false
+}
+
+/**
+ * Whether the Aero command bar renders. The server clears this when the agent
+ * kill-switch is on, because the routes are gone and a bar that only 404s is
+ * worse than no bar.
+ */
+export function shouldShowDashboardAgentBar(): boolean {
+  if (typeof window === 'undefined') return true
+  return window.__CANONRY_CONFIG__?.dashboard?.showAgentBar !== false
 }
 
 /** Whether the available-version notification renders in the sidebar. */
