@@ -668,7 +668,10 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
    * the one the client must still hold when it applies this exact selection.
    */
   app.post<{ Params: { name: string } }>('/projects/:name/measurement-plan/draft/actions/preview-assignments', {
-    config: { readSemantic: true },
+    config: {
+      readSemantic: true,
+      rateLimit: { max: 30, timeWindow: '1 minute' },
+    },
   }, async (request, reply) => {
     requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
     const project = resolveProject(app.db, request.params.name)
@@ -703,7 +706,10 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
 
   app.post<{ Params: { name: string } }>('/projects/:name/measurement-plan/draft/actions/preview-group-membership', {
     bodyLimit: MEASUREMENT_GROUP_MEMBERSHIP_BODY_LIMIT,
-    config: { readSemantic: true },
+    config: {
+      readSemantic: true,
+      rateLimit: { max: 30, timeWindow: '1 minute' },
+    },
   }, async (request, reply) => {
     requireScope(request, MEASUREMENT_PLAN_WRITE_SCOPE)
     const project = resolveProject(app.db, request.params.name)

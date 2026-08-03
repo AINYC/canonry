@@ -738,6 +738,54 @@ describe('measurement draft previews', () => {
     expect(db.select().from(measurementPlanDrafts).get()).toEqual(before)
   })
 
+  it('rate-limits each expensive preview per authenticated caller', async () => {
+    await readyDraft()
+    const assignmentPayload = {
+      targetKeys: ['widgets'],
+      queryIds: [queryId('widget delivery times')],
+    }
+    const groupPayload = { csv: 'property,group\nWidgets,Dallas' }
+
+    for (let index = 0; index < 30; index += 1) {
+      const response = await request('POST', '/measurement-plan/draft/actions/preview-assignments', {
+        payload: assignmentPayload,
+      })
+      expect(response.statusCode, response.body).toBe(200)
+    }
+
+    const limited = await request('POST', '/measurement-plan/draft/actions/preview-assignments', {
+      payload: assignmentPayload,
+    })
+    expect(limited.statusCode, limited.body).toBe(429)
+    expect(limited.headers['retry-after']).toBeDefined()
+    expect(limited.json()).toMatchObject({ error: { code: 'QUOTA_EXCEEDED' } })
+
+    for (let index = 0; index < 30; index += 1) {
+      const response = await request('POST', '/measurement-plan/draft/actions/preview-group-membership', {
+        payload: groupPayload,
+      })
+      expect(response.statusCode, response.body).toBe(200)
+    }
+    const groupLimited = await request('POST', '/measurement-plan/draft/actions/preview-group-membership', {
+      payload: groupPayload,
+    })
+    expect(groupLimited.statusCode, groupLimited.body).toBe(429)
+    expect(groupLimited.headers['retry-after']).toBeDefined()
+
+    const secondKey = 'cnry_draft_second'
+    seedKey('second', secondKey, ['*'])
+    const independent = await request('POST', '/measurement-plan/draft/actions/preview-assignments', {
+      token: secondKey,
+      payload: assignmentPayload,
+    })
+    expect(independent.statusCode, independent.body).toBe(200)
+    const independentGroup = await request('POST', '/measurement-plan/draft/actions/preview-group-membership', {
+      token: secondKey,
+      payload: groupPayload,
+    })
+    expect(independentGroup.statusCode, independentGroup.body).toBe(200)
+  })
+
   it('previews a server-resolved audience with exact assignment and provider impact without writing', async () => {
     const session = await readyDraft()
     await session.run('upsert-target', { target: GADGETS_TARGET })

@@ -128,6 +128,8 @@ describe('advanced measurement v2 openapi surface', () => {
       .toBe('#/components/schemas/MeasurementDraftApplyGroupMembershipResponse')
     expect(preview?.responses?.['413']).toBeDefined()
     expect(apply?.responses?.['413']).toBeDefined()
+    expect(preview?.responses?.['429']).toBeDefined()
+    expect(document.paths[`${DRAFT}/actions/preview-assignments`]?.post?.responses?.['429']).toBeDefined()
   })
 
   it('documents draft creation as idempotency-only while ordinary mutations require the draft ETag', async () => {

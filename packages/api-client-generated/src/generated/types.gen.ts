@@ -9300,6 +9300,10 @@ export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignments
      * Project or draft not found.
      */
     404: ErrorEnvelope;
+    /**
+     * The preview request budget has been exceeded.
+     */
+    429: ErrorEnvelope;
 };
 
 export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignmentsError = PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignmentsErrors[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignmentsErrors];
@@ -9762,6 +9766,10 @@ export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMember
      * The request body or embedded CSV exceeds its limit.
      */
     413: ErrorEnvelope;
+    /**
+     * The preview request budget has been exceeded.
+     */
+    429: ErrorEnvelope;
 };
 
 export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembershipError = PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembershipErrors[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembershipErrors];

@@ -558,6 +558,8 @@ function measurementDraftAction(input: {
   requiresDraftEtag?: boolean
   /** The route enforces a bounded request body in addition to schema limits. */
   payloadTooLarge?: boolean
+  /** The route has a per-caller request budget and can return HTTP 429. */
+  rateLimited?: boolean
 }): OpenApiOperation {
   const requiresDraftEtag = !input.readOnly && input.requiresDraftEtag !== false
   const parameters = input.readOnly
@@ -591,6 +593,7 @@ function measurementDraftAction(input: {
       403: errorResponse('The caller may read the draft but not mutate it.'),
       404: errorResponse('Project or draft not found.'),
       ...(input.payloadTooLarge ? { 413: errorResponse('The request body or embedded CSV exceeds its limit.') } : {}),
+      ...(input.rateLimited ? { 429: errorResponse('The preview request budget has been exceeded.') } : {}),
       ...(input.readOnly
         ? {}
         : {
@@ -937,6 +940,7 @@ const routeCatalog: OpenApiOperation[] = [
     response: 'MeasurementDraftPreviewAssignmentsResponse',
     responseDescription: 'Resolved audience and assignment execution impact returned.',
     readOnly: true,
+    rateLimited: true,
   }),
   measurementDraftAction({
     action: 'replace-assignments',
@@ -987,6 +991,7 @@ const routeCatalog: OpenApiOperation[] = [
     responseDescription: 'CSV row outcomes and proposed group changes returned.',
     readOnly: true,
     payloadTooLarge: true,
+    rateLimited: true,
   }),
   measurementDraftAction({
     action: 'apply-group-membership',
