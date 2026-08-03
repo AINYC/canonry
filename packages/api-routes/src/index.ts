@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyError } from 'fastify'
+import rateLimit from '@fastify/rate-limit'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import fs from 'node:fs'
 import { AppError, runtimeStateMissing } from '@ainyc/canonry-contracts'
@@ -378,6 +379,17 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
   // When a basePath is set and the reverse proxy does not strip it, pass
   // routePrefix: `${basePath}api/v1` so routes match the full incoming path.
   await app.register(async (api) => {
+    // Expensive POST-based previews opt in per route. Run after authentication
+    // so API keys and named users get independent budgets; unauthenticated test
+    // harnesses safely fall back to the caller IP.
+    await api.register(rateLimit, {
+      global: false,
+      hook: 'preHandler',
+      keyGenerator: request => request.principal
+        ? `${request.principal.kind}:${request.principal.id}`
+        : request.ip,
+    })
+
     if (!opts.skipAuth) {
       await authPlugin(api, {
         sessionCookieName: opts.sessionCookieName,

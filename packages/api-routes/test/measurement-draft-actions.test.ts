@@ -1,6 +1,43 @@
 import { describe, expect, it } from 'vitest'
-import { measurementDraftAuthoringSchema } from '@ainyc/canonry-contracts'
-import { applyDraftAction } from '../src/measurement-draft-actions.js'
+import {
+  MEASUREMENT_DRAFT_MAX_ASSIGNMENTS,
+  MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES,
+  MEASUREMENT_DRAFT_MAX_GROUPS,
+  measurementDraftAuthoringSchema,
+} from '@ainyc/canonry-contracts'
+import {
+  applyAssignmentsToAuthoring,
+  applyDraftAction,
+  assertMeasurementDraftAuthoringLimits,
+  replaceAssignmentsInAuthoring,
+  resolveDraftAudience,
+} from '../src/measurement-draft-actions.js'
+
+function audienceFixture() {
+  return measurementDraftAuthoringSchema.parse({
+    defaultContext: { providers: ['gemini'], models: { gemini: 'gemini-test' }, locations: [] },
+    targets: [
+      { stableKey: 'dallas-1', label: 'Dallas One', status: 'included', aliases: [], urlMatchers: ['https://portfolio.example/dallas-1'], source: 'manual' },
+      { stableKey: 'dallas-2', label: 'Dallas Two', status: 'included', aliases: [], urlMatchers: ['https://portfolio.example/dallas-2'], source: 'manual' },
+      { stableKey: 'proposed-1', label: 'Proposed One', status: 'proposed', aliases: [], urlMatchers: ['https://portfolio.example/proposed-1'], source: 'manual' },
+      { stableKey: 'excluded-1', label: 'Excluded One', status: 'excluded', aliases: [], urlMatchers: ['https://portfolio.example/excluded-1'], source: 'manual' },
+    ],
+    assignments: [],
+    groups: [
+      { stableKey: 'dallas', label: 'Dallas', targetKeys: ['dallas-1', 'dallas-2'], competitors: [] },
+      { stableKey: 'luxury', label: 'Luxury', targetKeys: ['dallas-2'], competitors: [] },
+      { stableKey: 'empty', label: 'Empty', targetKeys: [], competitors: [] },
+      { stableKey: 'future', label: 'Future', targetKeys: ['proposed-1'], competitors: [] },
+      { stableKey: 'retired', label: 'Retired', targetKeys: ['excluded-1'], competitors: [] },
+      { stableKey: 'missing', label: 'Missing', targetKeys: ['unknown-1'], competitors: [] },
+    ],
+  })
+}
+
+const audienceContext = {
+  brandNames: ['Example Portfolio'],
+  queriesById: new Map([['q-market', 'best apartments downtown'], ['q-delivery', 'apartment delivery times']]),
+}
 
 describe('measurement draft assignment scale', () => {
   it('applies one query to 200 selected Targets without mutating the input', () => {
@@ -73,6 +110,123 @@ describe('measurement draft assignment scale', () => {
     }, context).warnings).toEqual([
       expect.objectContaining({ code: 'group-unknown-target', path: ['groups', 0, 'targetKeys'] }),
     ])
+  })
+})
+
+describe('measurement draft assignment audiences', () => {
+  it('resolves overlapping groups once and produces the same concrete assignments as explicit Targets', () => {
+    const authoring = audienceFixture()
+    const audience = resolveDraftAudience(authoring, { groupKeys: ['dallas', 'luxury'] })
+    expect(audience).toEqual({
+      targetKeys: ['dallas-1', 'dallas-2'],
+      groups: [
+        { groupKey: 'dallas', label: 'Dallas', memberCount: 2 },
+        { groupKey: 'luxury', label: 'Luxury', memberCount: 1 },
+      ],
+      overlapCount: 1,
+    })
+
+    const viaGroups = applyAssignmentsToAuthoring(authoring, { groupKeys: ['dallas', 'luxury'], queryIds: ['q-market'] }, audienceContext)
+    const explicit = applyAssignmentsToAuthoring(authoring, { targetKeys: ['dallas-1', 'dallas-2'], queryIds: ['q-market'] }, audienceContext)
+    expect(viaGroups.authoring.assignments).toEqual(explicit.authoring.assignments)
+    expect(viaGroups.assignments).toEqual({ requested: 2, added: 2, alreadyPresent: 0 })
+  })
+
+  it('names the invalid group before it calculates an assignment count', () => {
+    const authoring = audienceFixture()
+    expect(() => resolveDraftAudience(authoring, { groupKeys: ['empty'] })).toThrow(/Group "Empty"/)
+    expect(() => resolveDraftAudience(authoring, { groupKeys: ['future'] })).toThrow(/Group "Future".*proposed/)
+    expect(() => resolveDraftAudience(authoring, { groupKeys: ['retired'] })).toThrow(/Group "Retired".*excluded/)
+    expect(() => resolveDraftAudience(authoring, { groupKeys: ['missing'] })).toThrow(/Group "Missing".*unknown Property/)
+    expect(() => resolveDraftAudience(authoring, { groupKeys: ['not-a-group'] })).toThrow(/selected group is no longer available/i)
+  })
+
+  it('replaces only the named questions across their complete prior audience', () => {
+    const authoring = audienceFixture()
+    const first = applyAssignmentsToAuthoring(authoring, {
+      targetKeys: ['dallas-1', 'dallas-2'],
+      queryIds: ['q-market', 'q-delivery'],
+    }, audienceContext)
+    const replaced = replaceAssignmentsInAuthoring(first.authoring, {
+      targetKeys: ['dallas-2'],
+      queryIds: ['q-market'],
+    }, audienceContext)
+    expect(replaced.authoring.assignments.map(assignment => `${assignment.targetKey}/${assignment.queryId}`).sort()).toEqual([
+      'dallas-1/q-delivery',
+      'dallas-2/q-delivery',
+      'dallas-2/q-market',
+    ])
+  })
+
+  it('preserves surviving operator classifications and context overrides during replacement', () => {
+    const authoring = audienceFixture()
+    const original = {
+      targetKey: 'dallas-1',
+      queryId: 'q-market',
+      contextOverride: { providers: ['gemini'] },
+      queryClass: 'branded' as const,
+      classificationSource: 'operator' as const,
+    }
+    const withAssignments = {
+      ...authoring,
+      assignments: [
+        original,
+        { ...original, targetKey: 'dallas-2', contextOverride: { providers: ['openai'] } },
+      ],
+    }
+
+    const unchanged = replaceAssignmentsInAuthoring(withAssignments, {
+      targetKeys: ['dallas-2', 'dallas-1'],
+      queryIds: ['q-market'],
+    }, audienceContext)
+    expect(unchanged.authoring.assignments).toEqual(withAssignments.assignments)
+
+    const narrowed = replaceAssignmentsInAuthoring(withAssignments, {
+      targetKeys: ['dallas-1'],
+      queryIds: ['q-market'],
+    }, audienceContext)
+    expect(narrowed.authoring.assignments).toEqual([original])
+  })
+
+  it('keeps additive reapply a no-op at the authoring level', () => {
+    const authoring = audienceFixture()
+    const once = applyAssignmentsToAuthoring(authoring, { groupKeys: ['dallas'], queryIds: ['q-market'] }, audienceContext)
+    const twice = applyAssignmentsToAuthoring(once.authoring, { groupKeys: ['dallas'], queryIds: ['q-market'] }, audienceContext)
+    expect(twice.assignments).toEqual({ requested: 2, added: 0, alreadyPresent: 2 })
+    expect(twice.authoring).toEqual(once.authoring)
+  })
+})
+
+describe('measurement draft authoring ceilings', () => {
+  it('refuses group, assignment, and serialized authoring growth past each global ceiling', () => {
+    const before = audienceFixture()
+    expect(() => assertMeasurementDraftAuthoringLimits(before, {
+      ...before,
+      groups: Array.from({ length: MEASUREMENT_DRAFT_MAX_GROUPS + 1 }, (_, index) => ({
+        stableKey: `group-${index}`,
+        label: `Group ${index}`,
+        targetKeys: [],
+        competitors: [],
+      })),
+    })).toThrow(/groups limit exceeded/i)
+
+    expect(() => assertMeasurementDraftAuthoringLimits(before, {
+      ...before,
+      assignments: Array.from({ length: MEASUREMENT_DRAFT_MAX_ASSIGNMENTS + 1 }, (_, index) => ({
+        targetKey: 'dallas-1',
+        queryId: `q-${index}`,
+        queryClass: 'non-brand' as const,
+        classificationSource: 'rule' as const,
+      })),
+    })).toThrow(/assignments limit exceeded/i)
+
+    expect(() => assertMeasurementDraftAuthoringLimits(before, {
+      ...before,
+      defaultContext: {
+        ...before.defaultContext,
+        models: { oversized: 'x'.repeat(MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES) },
+      },
+    })).toThrow(/authoring size limit exceeded/i)
   })
 })
 

@@ -18,8 +18,10 @@ import {
   sitemapImportInput,
 } from '../src/components/project/advanced-measurement/AdvancedMeasurementSection.js'
 import {
+  assignmentPreviewErrorMessage,
   setupErrorMessage,
   type AdvancedMeasurementService,
+  type GroupMembershipPreview,
   type SitemapImportInput,
   type SitemapSelectionInput,
 } from '../src/components/project/advanced-measurement/service.js'
@@ -38,6 +40,10 @@ type DraftTarget = MeasurementDraftAuthoring['targets'][number]
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
+}
+
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values)]
 }
 
 function property(index: number, status: DraftTarget['status'] = 'included'): DraftTarget {
@@ -148,6 +154,7 @@ interface FakeServiceOptions {
   groupWarnings?: MeasurementDraftWarning[]
   pairedAssignmentError?: Error
   pairedAssignmentGate?: Promise<void>
+  groupMembershipPreview?: GroupMembershipPreview
 }
 
 function createFakeService(options: FakeServiceOptions = {}) {
@@ -239,7 +246,45 @@ function createFakeService(options: FakeServiceOptions = {}) {
       }))
       return mutation()
     }),
-    applyAssignments: vi.fn(async (_projectName, etag, targetKeys, queryIds) => {
+    previewAssignments: vi.fn(async (_projectName, input) => {
+      const draft = currentDraft
+      if (!draft || !currentEtag()) throw new ApiError('The draft changed.', 412)
+      const selectedGroups = new Set(input.groupKeys ?? [])
+      const targetKeys = input.groupKeys
+        ? unique(draft.authoring.groups
+          .filter(group => selectedGroups.has(group.stableKey))
+          .flatMap(group => group.targetKeys))
+        : unique(input.targetKeys ?? [])
+      const queryIds = unique(input.queryIds)
+      const existing = new Set(draft.authoring.assignments.map(assignment => `${assignment.targetKey}\u0000${assignment.queryId}`))
+      const requested = targetKeys.length * queryIds.length
+      let added = 0
+      for (const targetKey of targetKeys) {
+        for (const queryId of queryIds) {
+          if (!existing.has(`${targetKey}\u0000${queryId}`)) added += 1
+        }
+      }
+      const membershipCounts = new Map<string, number>()
+      for (const group of draft.authoring.groups.filter(group => selectedGroups.has(group.stableKey))) {
+        for (const targetKey of group.targetKeys) membershipCounts.set(targetKey, (membershipCounts.get(targetKey) ?? 0) + 1)
+      }
+      return {
+        draftEtag: currentEtag()!,
+        groups: draft.authoring.groups
+          .filter(group => selectedGroups.has(group.stableKey))
+          .map(group => ({ groupKey: group.stableKey, label: group.label, memberCount: group.targetKeys.length })),
+        resolvedTargetKeys: targetKeys,
+        overlapCount: [...membershipCounts.values()].filter(count => count > 1).length,
+        assignments: { requested, added, alreadyPresent: requested - added },
+        execution: {
+          addedNodes: added,
+          addedProviderCalls: added,
+          fullRunNodes: draft.authoring.assignments.length + added,
+          fullRunProviderCalls: draft.authoring.assignments.length + added,
+        },
+      }
+    }),
+    applyAssignments: vi.fn(async (_projectName, etag, input) => {
       const draft = requireDraft(etag)
       if (assignmentConflictStatus !== undefined) {
         const status = assignmentConflictStatus
@@ -247,12 +292,41 @@ function createFakeService(options: FakeServiceOptions = {}) {
         etagVersion += 1
         throw new ApiError('The setup changed in another session.', status)
       }
+      const selectedGroups = new Set(input.groupKeys ?? [])
+      const targetKeys = input.groupKeys
+        ? unique(draft.authoring.groups
+          .filter(group => selectedGroups.has(group.stableKey))
+          .flatMap(group => group.targetKeys))
+        : unique(input.targetKeys ?? [])
+      const queryIds = unique(input.queryIds)
       const existing = new Set(draft.authoring.assignments.map(assignment => `${assignment.targetKey}\u0000${assignment.queryId}`))
       for (const targetKey of targetKeys) {
         for (const queryId of queryIds) {
           const key = `${targetKey}\u0000${queryId}`
           if (existing.has(key)) continue
           existing.add(key)
+          draft.authoring.assignments.push({
+            targetKey,
+            queryId,
+            queryClass: 'non-brand',
+            classificationSource: 'rule',
+          })
+        }
+      }
+      return mutation(options.assignmentWarnings)
+    }),
+    replaceAssignments: vi.fn(async (_projectName, etag, input) => {
+      const draft = requireDraft(etag)
+      const targetKeys = unique(input.targetKeys ?? [])
+      const queryIds = new Set(input.queryIds)
+      const targets = new Set(targetKeys)
+      draft.authoring.assignments = draft.authoring.assignments.filter(assignment => (
+        !queryIds.has(assignment.queryId) || targets.has(assignment.targetKey)
+      ))
+      const existing = new Set(draft.authoring.assignments.map(assignment => `${assignment.targetKey}\u0000${assignment.queryId}`))
+      for (const targetKey of targetKeys) {
+        for (const queryId of queryIds) {
+          if (existing.has(`${targetKey}\u0000${queryId}`)) continue
           draft.authoring.assignments.push({
             targetKey,
             queryId,
@@ -343,6 +417,39 @@ function createFakeService(options: FakeServiceOptions = {}) {
       const group = draft.authoring.groups.find(candidate => candidate.stableKey === groupKey)
       if (group) group.competitors = group.competitors.filter(competitor => competitor.stableKey !== competitorKey)
       return mutation()
+    }),
+    previewGroupMembership: vi.fn(async () => options.groupMembershipPreview ?? ({
+      draftEtag: currentEtag()!,
+      sourceChecksum: 'c'.repeat(64),
+      previewChecksum: 'd'.repeat(64),
+      rows: [],
+      groupChanges: [],
+      counts: {
+        dataRows: 0,
+        matchedRows: 0,
+        ambiguousRows: 0,
+        unmatchedRows: 0,
+        invalidRows: 0,
+        duplicateRows: 0,
+        proposedRows: 0,
+        excludedRows: 0,
+        needsAttention: 0,
+        groupsReady: 0,
+        groupsToCreate: 0,
+        groupsToExtend: 0,
+        membershipsReady: 0,
+        addedMemberships: 0,
+        unchangedMemberships: 0,
+      },
+    })),
+    applyGroupMembership: vi.fn(async (_projectName, etag, input) => {
+      requireDraft(etag)
+      return {
+        ...mutation(),
+        appliedRows: input.acceptedRows.length,
+        addedMemberships: input.acceptedRows.length,
+        unchangedMemberships: 0,
+      }
     }),
     compilePreview: vi.fn(async () => preview()),
     diffPreview: vi.fn(async () => {
@@ -458,11 +565,29 @@ async function reviewSyntheticSitemap() {
 async function advanceExistingDraftToReview() {
   await screen.findByRole('heading', { name: 'Properties' })
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-  await screen.findByRole('heading', { name: 'Questions' })
-  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
   await screen.findByRole('heading', { name: 'Groups' })
   fireEvent.click(screen.getByRole('button', { name: /^Continue(?: without groups)?$/ }))
+  await screen.findByRole('heading', { name: 'Questions' })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
   await screen.findByRole('heading', { name: 'Review & publish' })
+}
+
+async function advanceGroupsToQuestions() {
+  await screen.findByRole('heading', { name: 'Groups' })
+  fireEvent.click(screen.getByRole('button', { name: /^Continue(?: without groups)?$/ }))
+  await screen.findByRole('heading', { name: 'Questions' })
+}
+
+async function advancePropertiesToQuestions() {
+  await screen.findByRole('heading', { name: 'Properties' })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+  await advanceGroupsToQuestions()
+}
+
+async function clickReadyAssignment(name: RegExp): Promise<void> {
+  const button = screen.getByRole('button', { name })
+  await waitFor(() => expect(button).not.toHaveProperty('disabled', true))
+  fireEvent.click(button)
 }
 
 afterEach(cleanup)
@@ -480,6 +605,18 @@ test('keeps internal setup terminology out of customer-facing errors', () => {
     .toBe('Could not discard these changes.')
   expect(setupErrorMessage(new ApiError('A draft already exists', 409), 'Could not open setup.'))
     .toBe('Could not open setup.')
+  expect(assignmentPreviewErrorMessage(new ApiError(
+    'Group "Dallas" has no Properties to assign.',
+    400,
+    'VALIDATION_ERROR',
+    { displayToOperator: true },
+  )))
+    .toBe('Group "Dallas" has no Properties to assign.')
+  const ceiling = 'This would create 5,100 assignments (3 questions across 1700 unique Properties), over the 5,000 limit for one action.'
+  expect(assignmentPreviewErrorMessage(new ApiError(ceiling, 400, 'VALIDATION_ERROR', { displayToOperator: true })))
+    .toBe(ceiling)
+  expect(assignmentPreviewErrorMessage(new ApiError('Invalid "preview-assignments" payload', 400, 'VALIDATION_ERROR')))
+    .toBe('Could not calculate assignment impact.')
 })
 
 test('turns simple path wildcards into deterministic sitemap exclusions', () => {
@@ -553,7 +690,7 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     await screen.findByRole('heading', { name: 'Properties' })
     expect(screen.getByText('Showing 50 of 213 Properties')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    await screen.findByRole('heading', { name: 'Questions' })
+    await screen.findByRole('heading', { name: 'Groups' })
 
     expect(fake.service.applySitemapSelection).toHaveBeenCalledTimes(1)
     const selections = vi.mocked(fake.service.applySitemapSelection).mock.calls[0]![2]
@@ -620,13 +757,11 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     await reviewSyntheticSitemap()
     await screen.findByRole('heading', { name: 'Properties' })
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    await screen.findByRole('heading', { name: 'Questions' })
+    await advanceGroupsToQuestions()
     fireEvent.click(screen.getByLabelText(`Select question ${QUERIES[0]!.query}`))
-    fireEvent.click(screen.getByRole('button', { name: 'Apply selected questions' }))
+    await clickReadyAssignment(/Assign 1 question to all 4 Properties/)
     await waitFor(() => expect(fake.service.applyAssignments).toHaveBeenCalledTimes(1))
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    await screen.findByRole('heading', { name: 'Groups' })
-    fireEvent.click(screen.getByRole('button', { name: 'Continue without groups' }))
     await screen.findByRole('heading', { name: 'Review & publish' })
 
     expect(screen.getByText('Review a new Property')).toBeTruthy()
@@ -661,7 +796,7 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     expect(fake.service.applySitemapSelection).toHaveBeenCalledTimes(1)
 
     releaseSelection?.()
-    expect(await screen.findByRole('heading', { name: 'Questions' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Groups' })).toBeTruthy()
     expect(fake.service.applySitemapSelection).toHaveBeenCalledTimes(1)
   })
 
@@ -670,18 +805,94 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     const fake = createFakeService({ initialDraft: draftFixture({ targets }) })
     renderSection(fake)
 
-    await screen.findByRole('heading', { name: 'Questions' })
+    await advanceGroupsToQuestions()
     for (const query of QUERIES) fireEvent.click(screen.getByLabelText(`Select question ${query.query}`))
-    fireEvent.click(screen.getByRole('button', { name: 'Apply selected questions' }))
+    await clickReadyAssignment(/Assign 2 questions to all 3 Properties/)
 
     await waitFor(() => expect(fake.service.applyAssignments).toHaveBeenCalledTimes(1))
+    expect(fake.service.previewAssignments).toHaveBeenCalledTimes(1)
     expect(fake.service.applyAssignments).toHaveBeenCalledWith(
       PROJECT,
       '"mpd_7"',
-      targets.map(target => target.stableKey),
-      QUERIES.map(query => query.id),
+      {
+        targetKeys: targets.map(target => target.stableKey),
+        queryIds: QUERIES.map(query => query.id),
+      },
     )
     expect(fake.getDraft()?.authoring.assignments).toHaveLength(targets.length * QUERIES.length)
+  })
+
+  test('previews and applies a selected group through one server-resolved audience', async () => {
+    const targets = [property(1), property(2), property(3)]
+    const initialDraft = draftFixture({ targets })
+    initialDraft.authoring.groups = [{
+      stableKey: 'group-dallas',
+      label: 'Dallas',
+      targetKeys: ['property-001', 'property-003'],
+      competitors: [],
+    }]
+    const fake = createFakeService({ initialDraft })
+    renderSection(fake)
+
+    await advanceGroupsToQuestions()
+    fireEvent.change(screen.getByLabelText('Apply to'), { target: { value: 'group:group-dallas' } })
+    fireEvent.click(screen.getByLabelText(`Select question ${QUERIES[0]!.query}`))
+    await clickReadyAssignment(/Assign 1 question to Dallas/)
+
+    await waitFor(() => expect(fake.service.applyAssignments).toHaveBeenCalledTimes(1))
+    expect(fake.service.previewAssignments).toHaveBeenLastCalledWith(PROJECT, {
+      groupKeys: ['group-dallas'],
+      queryIds: [QUERIES[0]!.id],
+    })
+    expect(fake.service.applyAssignments).toHaveBeenCalledWith(PROJECT, '"mpd_7"', {
+      groupKeys: ['group-dallas'],
+      queryIds: [QUERIES[0]!.id],
+    })
+  })
+
+  test('applies Specific Properties in canonical order regardless of checkbox order', async () => {
+    const targets = [property(1), property(2), property(3)]
+    const fake = createFakeService({ initialDraft: draftFixture({ targets }) })
+    renderSection(fake)
+
+    await advanceGroupsToQuestions()
+    fireEvent.change(screen.getByLabelText('Apply to'), { target: { value: 'specific' } })
+    fireEvent.click(screen.getByLabelText('Select Property 003'))
+    fireEvent.click(screen.getByLabelText('Select Property 001'))
+    fireEvent.click(screen.getByLabelText(`Select question ${QUERIES[0]!.query}`))
+    await clickReadyAssignment(/Assign 1 question to 2 Properties/)
+
+    await waitFor(() => expect(fake.service.applyAssignments).toHaveBeenCalledTimes(1))
+    expect(fake.service.applyAssignments).toHaveBeenCalledWith(PROJECT, '"mpd_7"', {
+      targetKeys: ['property-001', 'property-003'],
+      queryIds: [QUERIES[0]!.id],
+    })
+    expect(screen.queryByText('Review the latest assignment impact before assigning questions.')).toBeNull()
+  })
+
+  test('resets the audience when its selected group is removed', async () => {
+    const targets = [property(1), property(2)]
+    const initialDraft = draftFixture({ targets })
+    initialDraft.authoring.groups = [{
+      stableKey: 'group-dallas',
+      label: 'Dallas',
+      targetKeys: ['property-001'],
+      competitors: [],
+    }]
+    const fake = createFakeService({ initialDraft })
+    renderSection(fake)
+
+    await advanceGroupsToQuestions()
+    fireEvent.change(screen.getByLabelText('Apply to'), { target: { value: 'group:group-dallas' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await screen.findByRole('heading', { name: 'Groups' })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Dallas' }))
+    await waitFor(() => expect(fake.service.removeGroup).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue without groups' }))
+    await screen.findByRole('heading', { name: 'Questions' })
+
+    expect((screen.getByLabelText('Apply to') as HTMLSelectElement).value).toBe('all')
+    expect(screen.queryByText(/selected group is no longer available/i)).toBeNull()
   })
 
   test('keeps a generated pattern and gives a recoverable pairing error when assignment fails after creation', async () => {
@@ -695,6 +906,7 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     ))
     renderSection(fake, { onCreateQueries })
 
+    await advanceGroupsToQuestions()
     const pattern = await screen.findByLabelText('Question pattern')
     fireEvent.change(pattern, { target: { value: 'events at {property}' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add 2 questions' }))
@@ -720,6 +932,7 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     ))
     renderSection(fake, { onCreateQueries })
 
+    await advanceGroupsToQuestions()
     const pattern = await screen.findByLabelText('Question pattern')
     fireEvent.change(pattern, { target: { value: 'events at {property}' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add 2 questions' }))
@@ -748,9 +961,7 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     })
     renderSection(fake)
 
-    await screen.findByRole('heading', { name: 'Properties' })
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    await screen.findByRole('heading', { name: 'Questions' })
+    await advancePropertiesToQuestions()
     fireEvent.click(screen.getByRole('button', { name: `Clear question assignments for ${QUERIES[0]!.query}` }))
 
     await waitFor(() => expect(fake.service.removeAssignment).toHaveBeenCalledTimes(1))
@@ -778,7 +989,7 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     const firstProperty = await screen.findByLabelText('Select Property 001')
     fireEvent.click(firstProperty)
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    await screen.findByRole('heading', { name: 'Questions' })
+    await screen.findByRole('heading', { name: 'Groups' })
 
     expect(fake.service.applySitemapSelection).toHaveBeenCalledTimes(1)
     expect(fake.service.applySitemapSelection).toHaveBeenCalledWith(PROJECT, '"mpd_7"', [], ['property-002'])
@@ -787,7 +998,7 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     expect(fake.getDraft()?.authoring.groups[0]?.targetKeys).toEqual(['property-002'])
   })
 
-  test('keeps all 194 included Properties after narrowing query assignment scope, going Back, and continuing', async () => {
+  test('resets a narrowed audience after returning through Properties', async () => {
     const targets = Array.from({ length: 194 }, (_, index) => property(index + 1))
     const initialDraft = draftFixture({ targets, assignedQueryIds: ['q-nearby'], baseActiveRevision: 4 })
     initialDraft.authoring.groups = [{
@@ -799,22 +1010,22 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     const fake = createFakeService({ initialDraft })
     renderSection(fake)
 
-    await screen.findByRole('heading', { name: 'Properties' })
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    await screen.findByRole('heading', { name: 'Questions' })
-    expect(screen.getByText('194 of 194 Properties selected')).toBeTruthy()
+    await advancePropertiesToQuestions()
+    fireEvent.change(screen.getByLabelText('Apply to'), { target: { value: 'specific' } })
+    expect(screen.getByText('Specific Properties')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }))
     fireEvent.click(screen.getByLabelText('Select Property 001'))
     fireEvent.click(screen.getByLabelText('Select Property 002'))
-    expect(screen.getByText('2 of 194 Properties selected')).toBeTruthy()
 
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await screen.findByRole('heading', { name: 'Groups' })
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
     await screen.findByRole('heading', { name: 'Properties' })
     expect(screen.getByText('194 of 194 selected')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    await screen.findByRole('heading', { name: 'Questions' })
-    expect(screen.getByText('194 of 194 Properties selected')).toBeTruthy()
+    await advanceGroupsToQuestions()
+    expect((screen.getByLabelText('Apply to') as HTMLSelectElement).value).toBe('all')
+    expect(screen.queryByText('Specific Properties')).toBeNull()
 
     expect(fake.service.applySitemapSelection).not.toHaveBeenCalled()
     expect(fake.getDraft()?.authoring.targets.filter(target => target.status === 'included')).toHaveLength(194)
@@ -829,6 +1040,9 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     renderSection(fake)
     await advanceExistingDraftToReview()
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await screen.findByRole('heading', { name: 'Questions' })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await screen.findByRole('heading', { name: 'Groups' })
 
     fireEvent.change(screen.getByLabelText('Group name'), { target: { value: 'Synthetic metro' } })
     fireEvent.click(screen.getByLabelText('Select Property 001'))
@@ -863,11 +1077,16 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     renderSection(fake)
     await advanceExistingDraftToReview()
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await screen.findByRole('heading', { name: 'Questions' })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await screen.findByRole('heading', { name: 'Groups' })
 
     fireEvent.change(screen.getByLabelText('Group name'), { target: { value: 'Target Stores' } })
     fireEvent.click(screen.getByLabelText('Select Property 001'))
     fireEvent.click(screen.getByRole('button', { name: 'Save group' }))
     await waitFor(() => expect(fake.service.upsertGroup).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await screen.findByRole('heading', { name: 'Questions' })
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     await screen.findByRole('heading', { name: 'Review & publish' })
 
@@ -930,17 +1149,17 @@ describe('AdvancedMeasurementSection server draft controller', () => {
       assignmentConflictStatus: status,
     })
     renderSection(fake)
-    await screen.findByRole('heading', { name: 'Questions' })
+    await advanceGroupsToQuestions()
     fireEvent.click(screen.getByLabelText(`Select question ${QUERIES[0]!.query}`))
-    fireEvent.click(screen.getByRole('button', { name: 'Apply selected questions' }))
+    await clickReadyAssignment(/Assign 1 question to all 1 Property/)
 
     expect(await screen.findByText(
       'This setup changed in another session. The latest draft is loaded; review your changes again.',
     )).toBeTruthy()
     expect(fake.service.applyAssignments).toHaveBeenCalledTimes(1)
-    expect(screen.getByRole('button', { name: 'Apply selected questions' })).not.toHaveProperty('disabled', true)
+    await waitFor(() => expect(screen.getByRole('button', { name: /Assign 1 question to all 1 Property/ })).not.toHaveProperty('disabled', true))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply selected questions' }))
+    await clickReadyAssignment(/Assign 1 question to all 1 Property/)
     await waitFor(() => expect(fake.service.applyAssignments).toHaveBeenCalledTimes(2))
     expect(vi.mocked(fake.service.applyAssignments).mock.calls[1]![1]).toBe('"mpd_8"')
     expect(fake.getDraft()?.authoring.assignments).toHaveLength(1)
@@ -1054,9 +1273,9 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     renderSection(fake)
     await screen.findByRole('heading', { name: 'Properties' })
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    await screen.findByRole('heading', { name: 'Questions' })
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     await screen.findByRole('heading', { name: 'Groups' })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await screen.findByRole('heading', { name: 'Questions' })
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     await screen.findByRole('heading', { name: 'Review & publish' })
 

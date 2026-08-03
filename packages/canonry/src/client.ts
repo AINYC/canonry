@@ -37,8 +37,15 @@ import type {
   MeasurementDraftCollectionQuery,
   MeasurementDraftResponse,
   DraftMutationResponse,
+  MeasurementDraftApplyGroupMembershipRequest,
+  MeasurementDraftApplyGroupMembershipResponse,
   MeasurementDraftCompilePreviewResponse,
   MeasurementDraftDiffPreviewResponse,
+  MeasurementDraftPreviewAssignmentsRequest,
+  MeasurementDraftPreviewAssignmentsResponse,
+  MeasurementDraftPreviewGroupMembershipRequest,
+  MeasurementDraftPreviewGroupMembershipResponse,
+  MeasurementDraftReplaceAssignmentsRequest,
   MeasurementPlanV2PublishResponse,
   MeasurementQuerySetDetail,
   MeasurementQueryTemplate,
@@ -488,12 +495,16 @@ import {
   postApiV1ProjectsByNameMeasurementPlanDraftActionsExcludeTarget,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsRebindTarget,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignments,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignments,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignments,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignment,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsClearAssignments,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsClassifyAssignments,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertGroup,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveGroup,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembership,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembership,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsUpsertCompetitor,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveCompetitor,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsCompilePreview,
@@ -1580,6 +1591,35 @@ export class ApiClient {
     )
   }
 
+  async previewMeasurementDraftAssignments(
+    project: string,
+    request: MeasurementDraftPreviewAssignmentsRequest,
+  ): Promise<MeasurementDraftPreviewAssignmentsResponse> {
+    return this.invoke<MeasurementDraftPreviewAssignmentsResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewAssignments({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+      }),
+    )
+  }
+
+  async replaceMeasurementDraftAssignments(
+    project: string,
+    request: MeasurementDraftReplaceAssignmentsRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<DraftMutationResponse> {
+    return this.invoke<DraftMutationResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsReplaceAssignments({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
   async applyPairedMeasurementDraftAssignments(
     project: string,
     request: MeasurementPlanDraftApplyPairedAssignmentsRequest,
@@ -1668,6 +1708,35 @@ export class ApiClient {
   ): Promise<DraftMutationResponse> {
     return this.invoke<DraftMutationResponse>(() =>
       postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveGroup({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+        headers: this.measurementDraftMutationHeaders(idempotencyKey, etag) as never,
+      }),
+    )
+  }
+
+  async previewMeasurementDraftGroupMembership(
+    project: string,
+    request: MeasurementDraftPreviewGroupMembershipRequest,
+  ): Promise<MeasurementDraftPreviewGroupMembershipResponse> {
+    return this.invoke<MeasurementDraftPreviewGroupMembershipResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsPreviewGroupMembership({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+      }),
+    )
+  }
+
+  async applyMeasurementDraftGroupMembership(
+    project: string,
+    request: MeasurementDraftApplyGroupMembershipRequest,
+    idempotencyKey: string,
+    etag?: string,
+  ): Promise<MeasurementDraftApplyGroupMembershipResponse> {
+    return this.invoke<MeasurementDraftApplyGroupMembershipResponse>(() =>
+      postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyGroupMembership({
         client: this.heyClient,
         path: { name: project },
         body: request,

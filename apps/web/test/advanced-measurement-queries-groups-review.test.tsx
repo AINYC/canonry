@@ -84,12 +84,22 @@ function renderQueries(overrides: Partial<ComponentProps<typeof AdvancedMeasurem
   const props = {
     properties,
     queries,
-    selectedPropertyIds: ['harbor-house', 'north-hall'],
     selectedQueryIds: ['q-saved'],
-    onSelectedPropertyIdsChange: vi.fn(),
     onSelectedQueryIdsChange: vi.fn(),
     onApplySelectedQueries: vi.fn(),
     onRemoveQuery: vi.fn(),
+    groups: [],
+    audience: { kind: 'all' as const },
+    onAudienceChange: vi.fn(),
+    assignmentImpact: {
+      assignmentCount: 2,
+      addedAssignments: 2,
+      alreadyPresentAssignments: 0,
+      resolvedPropertyCount: 2,
+      overlapCount: 0,
+      addedProviderCalls: 2,
+      fullRunProviderCalls: 2,
+    },
     onBack: vi.fn(),
     onContinue: vi.fn(),
     ...overrides,
@@ -144,12 +154,12 @@ test('opens Question creation only when the library is empty', () => {
 
 test('shows Property scope before dependent question patterns and previews cross-product impact', () => {
   const { props } = renderQueries({ onCreateQueries: vi.fn() })
-  const scope = screen.getByText('2 of 2 Properties selected').closest('details')
+  const scope = screen.getByLabelText('Apply to').closest('fieldset')
   const creation = screen.getAllByText('Add questions').find(element => element.tagName === 'SUMMARY')?.closest('details')
 
   expect(scope?.compareDocumentPosition(creation!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
-  expect(screen.getByText('1 question × 2 Properties = 2 assignments')).toBeTruthy()
-  const apply = screen.getByRole('button', { name: 'Apply selected questions' })
+  expect(screen.getByText(/2 new, 0 already assigned/)).toBeTruthy()
+  const apply = screen.getByRole('button', { name: 'Assign 1 question to all 2 Properties' })
   expect(apply.className).toContain('min-h-11')
   expect(apply.className).toContain('bg-accent')
   expect(screen.getByRole('button', { name: 'Continue' }).className).toContain('border')
@@ -166,6 +176,18 @@ test('clears an individual query assignment with explicit wording', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Clear question assignments for Harbor House events' }))
 
   expect(props.onRemoveQuery).toHaveBeenCalledWith('q-saved')
+})
+
+test('offers an explicit replacement editor for an already assigned question', () => {
+  const onReplaceAssignments = vi.fn()
+  renderQueries({ onReplaceAssignments })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Replace question assignments for Harbor House events' }))
+  expect(screen.getByRole('heading', { name: 'Replace assigned Properties' })).toBeTruthy()
+  fireEvent.click(screen.getAllByRole('button', { name: 'Clear selection' }).at(-1)!)
+  fireEvent.click(screen.getAllByLabelText('Select North Hall').at(-1)!)
+  fireEvent.click(screen.getByRole('button', { name: 'Replace with 1 Property' }))
+  expect(onReplaceAssignments).toHaveBeenCalledWith({ queryId: 'q-saved', propertyIds: ['north-hall'] })
 })
 
 test('keeps a missing tracked query visible only for clearing its assignments', () => {
@@ -187,15 +209,87 @@ test('keeps a missing tracked query visible only for clearing its assignments', 
   expect(props.onRemoveQuery).toHaveBeenCalledWith('q-missing')
 })
 
-test('supports bulk query selection and keeps the long Property list collapsed', () => {
+test('supports bulk query selection through the live audience control', () => {
   const { props } = renderQueries()
 
-  const propertyChooser = screen.getByText('2 of 2 Properties selected').closest('details')
-  expect(propertyChooser?.open).toBe(false)
+  expect((screen.getByLabelText('Apply to') as HTMLSelectElement).value).toBe('all')
+  expect(screen.queryByText('Specific Properties')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Select all shown questions' }))
   expect(props.onSelectedQueryIdsChange).toHaveBeenCalledWith(queries.map(query => query.id))
   fireEvent.click(screen.getByRole('button', { name: 'Clear question selection' }))
   expect(props.onSelectedQueryIdsChange).toHaveBeenLastCalledWith([])
+})
+
+test('uses one audience control for all Properties, groups, and the Specific Properties escape hatch', () => {
+  const onAudienceChange = vi.fn()
+  const onApplySelectedQueries = vi.fn()
+  const metroGroups: AdvancedMeasurementGroup[] = [
+    ...groups,
+    { id: 'downtown', name: 'Downtown', propertyIds: ['north-hall'], competitors: [] },
+  ]
+  renderQueries({
+    groups: metroGroups,
+    audience: { kind: 'groups', groupIds: ['waterfront-venues'] },
+    onAudienceChange,
+    onApplySelectedQueries,
+    assignmentImpact: {
+      assignmentCount: 1,
+      addedAssignments: 1,
+      alreadyPresentAssignments: 0,
+      resolvedPropertyCount: 1,
+      overlapCount: 0,
+      addedProviderCalls: 2,
+      fullRunProviderCalls: 4,
+    },
+  })
+
+  expect((screen.getByLabelText('Apply to') as HTMLSelectElement).value).toBe('group:waterfront-venues')
+  expect(screen.getByText('1 question → 1 Property assignment · 1 new, 0 already assigned · 4 provider requests per full run · 2 new · 1 unique Property. Existing assignments stay in place.')).toBeTruthy()
+  fireEvent.change(screen.getByLabelText('Add another group'), { target: { value: 'downtown' } })
+  expect(onAudienceChange).toHaveBeenLastCalledWith({ kind: 'groups', groupIds: ['waterfront-venues', 'downtown'] })
+  fireEvent.click(screen.getByRole('button', { name: 'Assign 1 question to Waterfront venues' }))
+  expect(onApplySelectedQueries).toHaveBeenCalledWith({
+    queryIds: ['q-saved'],
+    propertyIds: ['harbor-house'],
+    groupIds: ['waterfront-venues'],
+  })
+})
+
+test('shows zero new provider requests when the execution nodes are already reused', () => {
+  renderQueries({
+    groups,
+    audience: { kind: 'groups', groupIds: ['waterfront-venues'] },
+    assignmentImpact: {
+      assignmentCount: 1,
+      addedAssignments: 0,
+      alreadyPresentAssignments: 1,
+      resolvedPropertyCount: 1,
+      overlapCount: 0,
+      addedProviderCalls: 0,
+      fullRunProviderCalls: 4,
+    },
+  })
+
+  expect(screen.getByText('1 question → 1 Property assignment · 0 new, 1 already assigned · 4 provider requests per full run · 0 new · 1 unique Property. Existing assignments stay in place.')).toBeTruthy()
+})
+
+test('keeps selected questions visible and disables assignment when the server impact cannot be calculated', () => {
+  const onRetryAssignmentImpact = vi.fn()
+  const view = renderQueries({
+    audience: { kind: 'all' },
+    onAudienceChange: vi.fn(),
+    assignmentImpact: null,
+    assignmentImpactError: 'Could not calculate assignment impact.',
+    onRetryAssignmentImpact,
+  })
+
+  expect(screen.getByRole('alert').textContent).toContain('Could not calculate assignment impact.')
+  expect(screen.getByRole('button', { name: 'Assign 1 question to all 2 Properties' })).toHaveProperty('disabled', true)
+  expect((screen.getByLabelText('Select question Harbor House events') as HTMLInputElement).checked).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Retry impact' }))
+  expect(onRetryAssignmentImpact).toHaveBeenCalledTimes(1)
+  fireEvent.click(screen.getByRole('button', { name: 'Back to Groups' }))
+  expect(view.props.onBack).toHaveBeenCalledTimes(1)
 })
 
 test('keeps a large query library searchable, capped, and explicit about bulk selection', () => {
@@ -217,18 +311,21 @@ test('keeps a large query library searchable, capped, and explicit about bulk se
 })
 
 test('makes the query Property picker searchable and bounded for large portfolios', () => {
+  const onAudienceChange = vi.fn()
   const view = renderQueries({
     properties: manyProperties,
-    selectedPropertyIds: [],
     selectedQueryIds: [],
+    audience: { kind: 'specific', propertyIds: [] },
+    onAudienceChange,
+    assignmentImpact: null,
   })
 
-  fireEvent.click(screen.getByText('0 of 55 Properties selected'))
   expect(screen.getByText('Showing 50 of 55 Properties')).toBeTruthy()
   expect(screen.queryByLabelText('Select Property 51')).toBeNull()
-
-  fireEvent.click(screen.getByRole('button', { name: 'Select all shown' }))
-  expect(view.props.onSelectedPropertyIdsChange).toHaveBeenCalledWith(manyProperties.slice(0, 50).map(property => property.id))
+  expect(screen.queryByRole('button', { name: 'Select all shown' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Clear selection' })).toBeNull()
+  fireEvent.click(screen.getByLabelText('Select Property 1'))
+  expect(onAudienceChange).toHaveBeenCalledWith({ kind: 'specific', propertyIds: ['property-1'] })
 
   fireEvent.click(screen.getByRole('button', { name: 'Show all Properties' }))
   expect(screen.getByText('Showing 55 of 55 Properties')).toBeTruthy()
@@ -239,14 +336,6 @@ test('makes the query Property picker searchable and bounded for large portfolio
   expect(screen.getByLabelText('Select Property 55')).toBeTruthy()
 
   view.unmount()
-  const selectedView = renderQueries({
-    properties: manyProperties,
-    selectedPropertyIds: manyProperties.slice(0, 50).map(property => property.id),
-    selectedQueryIds: [],
-  })
-  fireEvent.click(screen.getByText('50 of 55 Properties selected'))
-  fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }))
-  expect(selectedView.props.onSelectedPropertyIdsChange).toHaveBeenCalledWith([])
 })
 
 test('shares the bounded, searchable Property picker with group setup', () => {
@@ -336,56 +425,10 @@ test('states how many assignments the pattern will create', () => {
   expect(screen.getByText(/adds \d+ assignments?/)).toBeTruthy()
 })
 
-test('previews only unambiguous whole-name recovery matches before assigning them', () => {
-  const onApplyPairedQuestions = vi.fn()
-  renderQueries({ onApplyPairedQuestions })
-
-  const disclosure = screen.getByText('Review 1 suggested question-to-Property match')
-  fireEvent.click(disclosure)
-  const preview = screen.getByRole('table', { name: 'Suggested question-to-Property matches' })
-  expect(preview.textContent).toContain('Harbor House private events')
-  expect(preview.textContent).toContain('Harbor House')
-
-  fireEvent.click(screen.getByRole('button', { name: 'Assign 1 suggested match' }))
-  expect(onApplyPairedQuestions).toHaveBeenCalledWith([
-    { targetKey: 'harbor-house', queryId: 'q-draft' },
-  ])
-})
-
-test('requires every large recovery mapping to be revealed before bulk assignment', () => {
-  const recoveryProperties = Array.from({ length: 12 }, (_, index) => ({
-    id: `property-${index + 1}`,
-    label: `Property ${index + 1}`,
-    urlCount: 1,
-  }))
-  const recoveryQueries = recoveryProperties.map((property, index) => ({
-    id: `recovery-${index + 1}`,
-    text: `events at ${property.label}`,
-    source: 'saved-project-queries' as const,
-  }))
-  const onApplyPairedQuestions = vi.fn()
-  renderQueries({
-    properties: recoveryProperties,
-    queries: recoveryQueries,
-    selectedPropertyIds: [],
-    selectedQueryIds: [],
-    onApplyPairedQuestions,
-  })
-
-  fireEvent.click(screen.getByText('Review 12 suggested question-to-Property matches'))
-  const assign = screen.getByRole('button', { name: 'Assign 12 suggested matches' })
-  expect(assign).toHaveProperty('disabled', true)
-  expect(screen.getByText('Showing 10 of 12 suggested matches')).toBeTruthy()
-
-  fireEvent.click(screen.getByRole('button', { name: 'Review all 12 matches' }))
-  expect(screen.getByText('Showing 12 of 12 suggested matches')).toBeTruthy()
-  expect(screen.getByRole('table', { name: 'Suggested question-to-Property matches' }).textContent).toContain('events at Property 12')
-  expect(assign).toHaveProperty('disabled', false)
-  fireEvent.click(assign)
-  expect(onApplyPairedQuestions).toHaveBeenCalledWith(expect.arrayContaining([
-    { targetKey: 'property-12', queryId: 'recovery-12' },
-  ]))
-  expect(onApplyPairedQuestions.mock.calls[0]![0]).toHaveLength(12)
+test('removes the legacy name-matched recovery banner in favor of the pattern path', () => {
+  renderQueries({ onCreateQueries: vi.fn(), onCreateAndPairQuestions: vi.fn() })
+  expect(screen.queryByText(/suggested question-to-Property match/)).toBeNull()
+  expect(screen.getByText('Write one question for every Property')).toBeTruthy()
 })
 
 test('does not show a no-op pagination action for a fully shown unapplied filter', () => {
@@ -411,9 +454,7 @@ test('does not guess recovery matches for partial or overlapping Property names'
       { id: 'partial', text: 'Harborview events', source: 'saved-project-queries' },
       { id: 'overlap', text: 'events at Park Place', source: 'saved-project-queries' },
     ],
-    selectedPropertyIds: [],
     selectedQueryIds: [],
-    onApplyPairedQuestions: vi.fn(),
   })
 
   expect(screen.queryByText(/suggested question-to-Property match/)).toBeNull()
@@ -533,6 +574,137 @@ test('collapses group Properties and exposes optional actions for saved groups',
   expect(onEditGroup).toHaveBeenCalledWith(groups[0])
   fireEvent.click(screen.getByRole('button', { name: 'Remove Waterfront venues' }))
   expect(onRemoveGroup).toHaveBeenCalledWith('waterfront-venues')
+})
+
+test('reviews CSV group rows before applying only matched memberships', () => {
+  const onReview = vi.fn()
+  const onApply = vi.fn()
+  renderGroups({
+    membershipImport: {
+      csv: 'property,group\nHarbor House,Dallas\nUnknown,Miami',
+      preview: {
+        draftEtag: '"mpd_7"',
+        sourceChecksum: 'a'.repeat(64),
+        previewChecksum: 'b'.repeat(64),
+        rows: [
+          { dataRow: 1, property: 'Harbor House', group: 'Dallas', url: null, status: 'matched' },
+          { dataRow: 2, property: 'Unknown', group: 'Miami', url: null, status: 'unmatched' },
+        ],
+        groupChanges: [{
+          groupKey: 'group-dallas',
+          label: 'Dallas',
+          action: 'create',
+          targetKeys: ['harbor-house'],
+          addedTargetKeys: ['harbor-house'],
+          unchangedTargetKeys: [],
+        }],
+        counts: { dataRows: 2, matchedRows: 1, needsAttention: 1, groupsReady: 1 },
+      },
+      onCsvChange: vi.fn(),
+      onReview,
+      onApply,
+    },
+  })
+
+  expect(screen.getByText('1 matched · 1 group ready · 1 needs attention')).toBeTruthy()
+  expect(screen.getByRole('table', { name: 'Groups and memberships ready to apply' }).textContent).toContain('DallasCreate group11')
+  fireEvent.click(screen.getByText('Review CSV rows (2)'))
+  expect(screen.getByRole('table', { name: 'CSV group membership review' }).textContent).toContain('Harbor House')
+  fireEvent.click(screen.getByText('Fix 1 row before applying'))
+  const apply = screen.getByRole('button', { name: 'Apply 1 matched row' })
+  expect((apply as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I reviewed the exceptions and understand that 1 row will be skipped.' }))
+  fireEvent.click(apply)
+  expect(onApply).toHaveBeenCalledWith([1])
+})
+
+test('gives group-specific repair guidance for ambiguous labels and stable-key conflicts', () => {
+  renderGroups({
+    membershipImport: {
+      csv: 'property,group\nHarbor House,Dallas\nNorth Hall,A/B',
+      preview: {
+        draftEtag: '"mpd_7"',
+        sourceChecksum: 'a'.repeat(64),
+        previewChecksum: 'b'.repeat(64),
+        rows: [
+          {
+            dataRow: 1,
+            property: 'Harbor House',
+            group: 'Dallas',
+            status: 'ambiguous',
+            reason: 'group-label-ambiguous',
+            candidateGroupKeys: ['dallas-a', 'dallas-b'],
+          },
+          {
+            dataRow: 2,
+            property: 'North Hall',
+            group: 'A/B',
+            status: 'invalid',
+            reason: 'group-key-conflict',
+            groupKeyConflict: {
+              proposedGroupKey: 'group-a-b',
+              evidence: [{ source: 'draft-target', stableKey: 'group-a-b' }],
+            },
+          },
+        ],
+        groupChanges: [],
+        counts: { dataRows: 2, matchedRows: 0, needsAttention: 2, groupsReady: 0 },
+      },
+      onCsvChange: vi.fn(),
+      onReview: vi.fn(),
+      onApply: vi.fn(),
+    },
+  })
+
+  fireEvent.click(screen.getByText('Fix 2 rows before applying'))
+  expect(screen.getAllByText('More than one group matches “Dallas”. Rename duplicate groups, then preview again.').length).toBeGreaterThan(0)
+  expect(screen.getAllByText('The group name “A/B” conflicts with an existing setup identity. Rename the group, then preview again.').length).toBeGreaterThan(0)
+  expect(document.body.textContent).not.toContain('group-a-b')
+})
+
+test('pages CSV exceptions and requires the final page to be reviewed before skipping rows', () => {
+  const onApply = vi.fn()
+  const exceptionRows = Array.from({ length: 52 }, (_, index) => ({
+    dataRow: index + 2,
+    property: `Unknown ${index + 1}`,
+    group: 'Dallas',
+    url: null,
+    status: 'unmatched' as const,
+  }))
+  renderGroups({
+    membershipImport: {
+      csv: 'property,group',
+      preview: {
+        draftEtag: '"mpd_7"',
+        sourceChecksum: 'a'.repeat(64),
+        previewChecksum: 'b'.repeat(64),
+        rows: [{ dataRow: 1, property: 'Harbor House', group: 'Dallas', url: null, status: 'matched' }, ...exceptionRows],
+        groupChanges: [{
+          groupKey: 'group-dallas',
+          label: 'Dallas',
+          action: 'create',
+          targetKeys: ['harbor-house'],
+          addedTargetKeys: ['harbor-house'],
+          unchangedTargetKeys: [],
+        }],
+        counts: { dataRows: 53, matchedRows: 1, needsAttention: 52, groupsReady: 1 },
+      },
+      onCsvChange: vi.fn(),
+      onReview: vi.fn(),
+      onApply,
+    },
+  })
+
+  fireEvent.click(screen.getByText('Fix 52 rows before applying'))
+  const acknowledgement = screen.getByRole('checkbox', { name: 'I reviewed the exceptions and understand that 52 rows will be skipped.' }) as HTMLInputElement
+  expect(acknowledgement.disabled).toBe(true)
+  expect(screen.getByRole('table', { name: 'CSV rows that need attention' }).textContent).toContain('Unknown 50')
+  fireEvent.click(screen.getByRole('button', { name: 'Review next 50 exceptions' }))
+  expect(screen.getByRole('table', { name: 'CSV rows that need attention' }).textContent).toContain('Unknown 52')
+  expect(acknowledgement.disabled).toBe(false)
+  fireEvent.click(acknowledgement)
+  fireEvent.click(screen.getByRole('button', { name: 'Apply 1 matched row' }))
+  expect(onApply).toHaveBeenCalledWith([1])
 })
 
 test('requires a partially entered group to be saved or cleared before continuing', () => {

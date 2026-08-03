@@ -72,11 +72,15 @@ describe('advanced measurement v2 openapi surface', () => {
       ['exclude-target', 'MeasurementDraftExcludeTargetRequest'],
       ['rebind-target', 'MeasurementDraftRebindTargetRequest'],
       ['apply-assignments', 'MeasurementDraftApplyAssignmentsRequest'],
+      ['preview-assignments', 'MeasurementDraftPreviewAssignmentsRequest'],
+      ['replace-assignments', 'MeasurementDraftReplaceAssignmentsRequest'],
       ['remove-assignment', 'MeasurementDraftRemoveAssignmentRequest'],
       ['clear-assignments', 'MeasurementDraftClearAssignmentsRequest'],
       ['classify-assignments', 'MeasurementDraftClassifyAssignmentsRequest'],
       ['upsert-group', 'MeasurementDraftUpsertGroupRequest'],
       ['remove-group', 'MeasurementDraftRemoveGroupRequest'],
+      ['preview-group-membership', 'MeasurementDraftPreviewGroupMembershipRequest'],
+      ['apply-group-membership', 'MeasurementDraftApplyGroupMembershipRequest'],
       ['upsert-competitor', 'MeasurementDraftUpsertCompetitorRequest'],
       ['remove-competitor', 'MeasurementDraftRemoveCompetitorRequest'],
       ['publish', 'MeasurementDraftPublishRequest'],
@@ -107,6 +111,25 @@ describe('advanced measurement v2 openapi surface', () => {
     // Compiling the stored draft writes nothing, so it carries neither guard.
     expect(headers('compile-preview')).toEqual([])
     expect(headers('diff-preview')).toEqual([])
+    expect(headers('preview-assignments')).toEqual([])
+    expect(headers('preview-group-membership')).toEqual([])
+    expect(headers('replace-assignments')).toEqual(['Idempotency-Key:true', 'If-Match:true'])
+    expect(headers('apply-group-membership')).toEqual(['Idempotency-Key:true', 'If-Match:true'])
+  })
+
+  it('documents the bounded CSV transport and typed preview/apply responses', async () => {
+    const document = await spec()
+    const preview = document.paths[`${DRAFT}/actions/preview-group-membership`]?.post
+    const apply = document.paths[`${DRAFT}/actions/apply-group-membership`]?.post
+
+    expect(preview?.responses?.['200']?.content?.['application/json']?.schema?.$ref)
+      .toBe('#/components/schemas/MeasurementDraftPreviewGroupMembershipResponse')
+    expect(apply?.responses?.['200']?.content?.['application/json']?.schema?.$ref)
+      .toBe('#/components/schemas/MeasurementDraftApplyGroupMembershipResponse')
+    expect(preview?.responses?.['413']).toBeDefined()
+    expect(apply?.responses?.['413']).toBeDefined()
+    expect(preview?.responses?.['429']).toBeDefined()
+    expect(document.paths[`${DRAFT}/actions/preview-assignments`]?.post?.responses?.['429']).toBeDefined()
   })
 
   it('documents draft creation as idempotency-only while ordinary mutations require the draft ETag', async () => {

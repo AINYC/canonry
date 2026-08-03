@@ -12,6 +12,12 @@ const discoverMeasurementTargets = vi.fn()
 const getMeasurementReport = vi.fn()
 const getMeasurementOverview = vi.fn()
 const getMeasurementPropertyEvidence = vi.fn()
+const getMeasurementPlanDraft = vi.fn()
+const previewMeasurementDraftAssignments = vi.fn()
+const applyMeasurementDraftAssignments = vi.fn()
+const replaceMeasurementDraftAssignments = vi.fn()
+const previewMeasurementDraftGroupMembership = vi.fn()
+const applyMeasurementDraftGroupMembership = vi.fn()
 
 vi.mock('../src/client.js', () => ({
   createApiClient: () => ({
@@ -24,6 +30,12 @@ vi.mock('../src/client.js', () => ({
     getMeasurementReport,
     getMeasurementOverview,
     getMeasurementPropertyEvidence,
+    getMeasurementPlanDraft,
+    previewMeasurementDraftAssignments,
+    applyMeasurementDraftAssignments,
+    replaceMeasurementDraftAssignments,
+    previewMeasurementDraftGroupMembership,
+    applyMeasurementDraftGroupMembership,
   }),
 }))
 
@@ -122,6 +134,28 @@ describe('measurement-plan CLI commands', () => {
     getMeasurementReport.mockResolvedValue({ revision: 1, run: null, groups: [], targets: [], evidence: [], diagnostics: {} })
     getMeasurementOverview.mockResolvedValue(OVERVIEW)
     getMeasurementPropertyEvidence.mockResolvedValue(PROPERTY_EVIDENCE)
+    getMeasurementPlanDraft.mockResolvedValue({
+      etag: '"mpd_7"',
+      draft: { authoring: { targets: [{ stableKey: 'harbor-view', status: 'included' }] } },
+    })
+    previewMeasurementDraftAssignments.mockResolvedValue({
+      draftEtag: '"mpd_8"',
+      groups: [],
+      resolvedTargetKeys: ['harbor-view'],
+      overlapCount: 0,
+      assignments: { requested: 1, added: 1, alreadyPresent: 0 },
+      execution: { addedNodes: 1, addedProviderCalls: 2, fullRunNodes: 1, fullRunProviderCalls: 2 },
+    })
+    applyMeasurementDraftAssignments.mockResolvedValue({ etag: '"mpd_8"', changed: true })
+    replaceMeasurementDraftAssignments.mockResolvedValue({ etag: '"mpd_8"', changed: true })
+    previewMeasurementDraftGroupMembership.mockResolvedValue({
+      draftEtag: '"mpd_7"',
+      sourceChecksum: 'a'.repeat(64),
+      previewChecksum: 'b'.repeat(64),
+      rows: [{ dataRow: 1, status: 'matched' }],
+      counts: { needsAttention: 0 },
+    })
+    applyMeasurementDraftGroupMembership.mockResolvedValue({ appliedRows: 1, addedMemberships: 1 })
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-measurement-plan-cli-'))
   })
 
@@ -143,6 +177,109 @@ describe('measurement-plan CLI commands', () => {
       .toBe('canonry measurement-plan discover <project> --sitemap-url <url> --rule <yaml|json|-> [--max-urls N] [--format json]')
     expect(command('measurement-plan report').usage)
       .toBe('canonry measurement-plan report <project> --revision N [--format json]')
+    expect(command('measurement-plan assignments apply').usage).toContain('--group KEY')
+    expect(command('measurement-plan assignments preview').usage).toContain('--group KEY')
+    expect(command('measurement-plan assignments replace').usage).toContain('--confirm')
+    expect(command('measurement-plan groups preview').usage).toContain('<csv|->')
+    expect(command('measurement-plan groups apply').usage).toContain('--confirm')
+  })
+
+  it('previews then applies one server-resolved assignment audience', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    await command('measurement-plan assignments apply').run({
+      positionals: ['acme'],
+      values: { group: ['dallas'], 'query-id': ['query-1', 'query-2'] },
+      format: 'json',
+      dryRun: false,
+    })
+
+    const request = { groupKeys: ['dallas'], queryIds: ['query-1', 'query-2'] }
+    expect(previewMeasurementDraftAssignments).toHaveBeenCalledWith('acme', request)
+    expect(applyMeasurementDraftAssignments).toHaveBeenCalledWith(
+      'acme', request, expect.any(String), '"mpd_8"',
+    )
+  })
+
+  it('exposes read-only assignment preview and confirmed atomic replacement', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    await command('measurement-plan assignments preview').run({
+      positionals: ['acme'],
+      values: { 'all-properties': true, 'query-id': ['query-1'] },
+      format: 'json',
+      dryRun: false,
+    })
+    expect(previewMeasurementDraftAssignments).toHaveBeenCalledWith('acme', {
+      targetKeys: ['harbor-view'],
+      queryIds: ['query-1'],
+    })
+
+    await command('measurement-plan assignments replace').run({
+      positionals: ['acme'],
+      values: { group: ['dallas'], 'query-id': ['query-1'], confirm: true },
+      format: 'json',
+      dryRun: false,
+    })
+    expect(replaceMeasurementDraftAssignments).toHaveBeenCalledWith(
+      'acme',
+      { groupKeys: ['dallas'], queryIds: ['query-1'] },
+      expect.any(String),
+      '"mpd_8"',
+    )
+  })
+
+  it('requires skipped-row acknowledgement before any selected-row CSV write', async () => {
+    const csvPath = path.join(tmpDir, 'groups.csv')
+    fs.writeFileSync(csvPath, 'property,group\nHarbor View,Dallas\nMissing,Austin')
+    previewMeasurementDraftGroupMembership.mockResolvedValueOnce({
+      draftEtag: '"mpd_7"',
+      sourceChecksum: 'a'.repeat(64),
+      previewChecksum: 'b'.repeat(64),
+      rows: [{ dataRow: 1, status: 'matched' }, { dataRow: 2, status: 'unmatched' }],
+      counts: { needsAttention: 1 },
+    })
+
+    await expect(command('measurement-plan groups apply').run({
+      positionals: ['acme', csvPath],
+      values: { confirm: true, 'accept-row': ['1'] },
+      format: 'json',
+      dryRun: false,
+    })).rejects.toThrow('--acknowledge-skipped')
+    expect(applyMeasurementDraftGroupMembership).not.toHaveBeenCalled()
+  })
+
+  it('reviews CSV again and applies only the confirmed matched rows', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const csvPath = path.join(tmpDir, 'groups.csv')
+    fs.writeFileSync(csvPath, 'property,group\nHarbor View,Dallas')
+
+    await command('measurement-plan groups apply').run({
+      positionals: ['acme', csvPath],
+      values: { confirm: true, 'accept-all-matched': true },
+      format: 'json',
+      dryRun: false,
+    })
+
+    expect(previewMeasurementDraftGroupMembership).toHaveBeenCalledWith('acme', {
+      csv: 'property,group\nHarbor View,Dallas',
+    })
+    expect(applyMeasurementDraftGroupMembership).toHaveBeenCalledWith('acme', {
+      csv: 'property,group\nHarbor View,Dallas',
+      sourceChecksum: 'a'.repeat(64),
+      previewChecksum: 'b'.repeat(64),
+      acceptedRows: [1],
+    }, expect.any(String), '"mpd_7"')
+  })
+
+  it('requires explicit audience and CSV apply confirmation', () => {
+    expect(() => command('measurement-plan assignments apply').run({
+      positionals: ['acme'], values: { 'query-id': ['query-1'] }, format: 'json', dryRun: false,
+    })).toThrow('select at least one')
+    expect(() => command('measurement-plan groups apply').run({
+      positionals: ['acme', 'groups.csv'], values: { 'accept-all-matched': true }, format: 'json', dryRun: false,
+    })).toThrow('--confirm is required')
+    expect(() => command('measurement-plan assignments replace').run({
+      positionals: ['acme'], values: { group: ['dallas'], 'query-id': ['query-1'] }, format: 'json', dryRun: false,
+    })).toThrow('--confirm is required')
   })
 
   it('retires a stable measurement segment key', async () => {

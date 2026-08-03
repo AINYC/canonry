@@ -556,6 +556,10 @@ function measurementDraftAction(input: {
   readOnly?: boolean
   /** False only when the action creates the draft and no current ETag exists. */
   requiresDraftEtag?: boolean
+  /** The route enforces a bounded request body in addition to schema limits. */
+  payloadTooLarge?: boolean
+  /** The route has a per-caller request budget and can return HTTP 429. */
+  rateLimited?: boolean
 }): OpenApiOperation {
   const requiresDraftEtag = !input.readOnly && input.requiresDraftEtag !== false
   const parameters = input.readOnly
@@ -588,6 +592,8 @@ function measurementDraftAction(input: {
       400: errorResponse('The action payload is invalid.'),
       403: errorResponse('The caller may read the draft but not mutate it.'),
       404: errorResponse('Project or draft not found.'),
+      ...(input.payloadTooLarge ? { 413: errorResponse('The request body or embedded CSV exceeds its limit.') } : {}),
+      ...(input.rateLimited ? { 429: errorResponse('The preview request budget has been exceeded.') } : {}),
       ...(input.readOnly
         ? {}
         : {
@@ -923,8 +929,24 @@ const routeCatalog: OpenApiOperation[] = [
   measurementDraftAction({
     action: 'apply-assignments',
     summary: 'Assign project queries to draft Targets',
-    description: 'Accepts the compatible singular `targetKey` or a bulk `targetKeys` selection. The server validates the full selection and writes one canonical draft mutation.',
+    description: 'Accepts the compatible singular `targetKey` or a bulk audience of `targetKeys` and `groupKeys`. Groups resolve server-side to included Properties; the server validates the full cross product and writes one canonical draft mutation.',
     request: 'MeasurementDraftApplyAssignmentsRequest',
+  }),
+  measurementDraftAction({
+    action: 'preview-assignments',
+    summary: 'Preview audience assignment impact',
+    description: 'Resolves the selected Properties and groups, then returns exact new assignment and provider-call impact without changing the draft or starting provider work.',
+    request: 'MeasurementDraftPreviewAssignmentsRequest',
+    response: 'MeasurementDraftPreviewAssignmentsResponse',
+    responseDescription: 'Resolved audience and assignment execution impact returned.',
+    readOnly: true,
+    rateLimited: true,
+  }),
+  measurementDraftAction({
+    action: 'replace-assignments',
+    summary: 'Replace the audience for project queries',
+    description: 'Atomically removes every prior Property assignment for the named questions and writes the exact resolved audience. Other questions are untouched.',
+    request: 'MeasurementDraftReplaceAssignmentsRequest',
   }),
   measurementDraftAction({
     action: 'apply-paired-assignments',
@@ -959,6 +981,26 @@ const routeCatalog: OpenApiOperation[] = [
     action: 'remove-group',
     summary: 'Remove a draft group',
     request: 'MeasurementDraftRemoveGroupRequest',
+  }),
+  measurementDraftAction({
+    action: 'preview-group-membership',
+    summary: 'Preview group membership CSV',
+    description: 'Parses and resolves a bounded CSV against the current draft, returning deterministic row outcomes and checksums. It writes nothing.',
+    request: 'MeasurementDraftPreviewGroupMembershipRequest',
+    response: 'MeasurementDraftPreviewGroupMembershipResponse',
+    responseDescription: 'CSV row outcomes and proposed group changes returned.',
+    readOnly: true,
+    payloadTooLarge: true,
+    rateLimited: true,
+  }),
+  measurementDraftAction({
+    action: 'apply-group-membership',
+    summary: 'Apply reviewed group membership CSV rows',
+    description: 'Reparses the CSV under the previewed draft ETag, verifies both checksums, and atomically applies only the explicitly accepted matched rows.',
+    request: 'MeasurementDraftApplyGroupMembershipRequest',
+    response: 'MeasurementDraftApplyGroupMembershipResponse',
+    responseDescription: 'Reviewed group memberships applied.',
+    payloadTooLarge: true,
   }),
   measurementDraftAction({
     action: 'upsert-competitor',

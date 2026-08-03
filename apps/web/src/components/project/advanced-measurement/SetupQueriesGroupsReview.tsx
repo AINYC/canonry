@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { ToneBadge } from '../../shared/ToneBadge.js'
 import { Button } from '../../ui/button.js'
@@ -37,6 +37,28 @@ export interface AdvancedMeasurementQuery {
 export interface AdvancedMeasurementApplySelection {
   queryIds: readonly string[]
   propertyIds: readonly string[]
+  groupIds?: readonly string[]
+}
+
+/** A group is an assignment shortcut. Published assignments still name Properties. */
+export type AdvancedMeasurementAudience =
+  | { kind: 'all' }
+  | { kind: 'groups'; groupIds: readonly string[] }
+  | { kind: 'specific'; propertyIds: readonly string[] }
+
+export interface AdvancedMeasurementAssignmentImpact {
+  assignmentCount: number
+  addedAssignments: number
+  alreadyPresentAssignments: number
+  resolvedPropertyCount: number
+  overlapCount: number
+  addedProviderCalls: number
+  fullRunProviderCalls: number
+}
+
+export interface AdvancedMeasurementReplaceAssignmentsSelection {
+  queryId: string
+  propertyIds: readonly string[]
 }
 
 export interface AdvancedMeasurementQueriesStepProps {
@@ -44,12 +66,10 @@ export interface AdvancedMeasurementQueriesStepProps {
   availability?: AdvancedMeasurementAvailability
   properties: readonly AdvancedMeasurementProperty[]
   queries: readonly AdvancedMeasurementQuery[]
-  selectedPropertyIds: readonly string[]
   selectedQueryIds: readonly string[]
   isApplying?: boolean
   isBusy?: boolean
   canContinue?: boolean
-  onSelectedPropertyIdsChange: (propertyIds: readonly string[]) => void
   onSelectedQueryIdsChange: (queryIds: readonly string[]) => void
   onApplySelectedQueries: (selection: AdvancedMeasurementApplySelection) => void | Promise<void>
   onClearQueryAssignments?: (queryId: string) => void | Promise<void>
@@ -61,14 +81,22 @@ export interface AdvancedMeasurementQueriesStepProps {
    * operator out of the wizard to create them and back again.
    */
   onCreateQueries?: (texts: readonly string[]) => void | Promise<unknown>
-  /** Assigns already-created questions, each to the one Property it names. */
-  onApplyPairedQuestions?: (pairs: readonly { targetKey: string; queryId: string }[]) => void | Promise<void>
   /** Writes one question per Property and assigns each to the Property it names. */
   onCreateAndPairQuestions?: (pairs: readonly { propertyId: string; text: string }[]) => void | Promise<void>
   isCreatingQueries?: boolean
   createQueriesError?: string | null
   /** Opens the project's normal query-management surface for anything setup does not cover. */
   onManageProjectQueries?: () => void
+  groups: readonly AdvancedMeasurementGroup[]
+  audience: AdvancedMeasurementAudience
+  onAudienceChange: (audience: AdvancedMeasurementAudience) => void
+  assignmentImpact?: AdvancedMeasurementAssignmentImpact | null
+  isPreviewingAssignmentImpact?: boolean
+  assignmentImpactError?: string | null
+  onRetryAssignmentImpact?: () => void
+  assignmentNotice?: string | null
+  onReplaceAssignments?: (selection: AdvancedMeasurementReplaceAssignmentsSelection) => void | Promise<void>
+  isReplacingAssignments?: boolean
   onBack?: () => void
   onContinue: () => void
 }
@@ -86,6 +114,64 @@ export interface AdvancedMeasurementGroupDraft {
   competitorDomains: string
 }
 
+export type AdvancedMeasurementGroupMembershipStatus =
+  | 'matched'
+  | 'ambiguous'
+  | 'unmatched'
+  | 'invalid'
+  | 'duplicate'
+  | 'proposed'
+  | 'excluded'
+
+export interface AdvancedMeasurementGroupMembershipRow {
+  dataRow: number
+  property: string
+  group: string
+  url?: string | null
+  status: AdvancedMeasurementGroupMembershipStatus
+  reason?: string
+  duplicateOfRow?: number
+  candidateTargetKeys?: readonly string[]
+  candidateGroupKeys?: readonly string[]
+  groupKeyConflict?: {
+    proposedGroupKey: string
+    evidence: readonly { source: string; stableKey: string }[]
+  }
+}
+
+export interface AdvancedMeasurementGroupMembershipPreview {
+  draftEtag: string
+  sourceChecksum: string
+  previewChecksum: string
+  rows: readonly AdvancedMeasurementGroupMembershipRow[]
+  groupChanges: readonly {
+    groupKey: string
+    label: string
+    action: 'create' | 'extend'
+    targetKeys: readonly string[]
+    addedTargetKeys: readonly string[]
+    unchangedTargetKeys: readonly string[]
+  }[]
+  counts: {
+    dataRows: number
+    matchedRows: number
+    needsAttention: number
+    groupsReady: number
+  }
+}
+
+export interface AdvancedMeasurementGroupImport {
+  csv: string
+  preview: AdvancedMeasurementGroupMembershipPreview | null
+  isReviewing?: boolean
+  isApplying?: boolean
+  error?: string | null
+  notice?: string | null
+  onCsvChange: (csv: string) => void
+  onReview: () => void | Promise<void>
+  onApply: (acceptedRows: readonly number[]) => void | Promise<void>
+}
+
 export interface AdvancedMeasurementGroupsStepProps {
   access?: AdvancedMeasurementAccess
   availability?: AdvancedMeasurementAvailability
@@ -98,6 +184,7 @@ export interface AdvancedMeasurementGroupsStepProps {
   onEditGroup?: (group: AdvancedMeasurementGroup) => void
   onRemoveGroup?: (groupId: string) => void | Promise<void>
   onClearGroupDraft?: () => void
+  membershipImport?: AdvancedMeasurementGroupImport
   /** Compatibility-only. The UI has a single continuation action. */
   onSkipGroups?: () => void
   onBack?: () => void
@@ -108,6 +195,8 @@ export interface AdvancedMeasurementReviewCounts {
   properties: number
   queries: number
   groups: number
+  assignments?: number
+  providerCalls?: number
 }
 
 export interface AdvancedMeasurementFlaggedException {
@@ -163,7 +252,6 @@ const REVIEW_ITEM_PAGE_SIZE = 50
 
 const PROPERTY_CHECKLIST_PAGE_SIZE = 50
 const QUERY_LIST_PAGE_SIZE = 50
-const RECOVERY_PREVIEW_LIMIT = 10
 
 function isViewer(access: AdvancedMeasurementAccess | undefined): boolean {
   return access === 'viewer'
@@ -185,6 +273,72 @@ function propertyNames(ids: readonly string[], properties: readonly AdvancedMeas
   return names.length > 3 ? `${names.length} Properties` : names.join(', ')
 }
 
+function selectedAudiencePropertyIds(
+  audience: AdvancedMeasurementAudience,
+  properties: readonly AdvancedMeasurementProperty[],
+  groups: readonly AdvancedMeasurementGroup[],
+): string[] {
+  if (audience.kind === 'all') return properties.map(property => property.id)
+  if (audience.kind === 'specific') return properties
+    .filter(property => audience.propertyIds.includes(property.id))
+    .map(property => property.id)
+
+  const selectedGroups = new Set(audience.groupIds)
+  const selectedProperties = new Set(groups
+    .filter(group => selectedGroups.has(group.id))
+    .flatMap(group => group.propertyIds))
+  return properties.filter(property => selectedProperties.has(property.id)).map(property => property.id)
+}
+
+function audienceLabel(
+  audience: AdvancedMeasurementAudience,
+  groups: readonly AdvancedMeasurementGroup[],
+  propertyCount: number,
+): string {
+  if (audience.kind === 'all') return `all ${propertyCount} ${propertyCount === 1 ? 'Property' : 'Properties'}`
+  if (audience.kind === 'specific') return propertyCount === 1 ? '1 Property' : `${propertyCount} Properties`
+  const labels = audience.groupIds
+    .map(id => groups.find(group => group.id === id)?.name)
+    .filter((label): label is string => Boolean(label))
+  return labels.length === 0 ? 'selected groups' : labels.join(' + ')
+}
+
+function audienceOptionLabel(group: AdvancedMeasurementGroup, properties: readonly AdvancedMeasurementProperty[]): string {
+  const known = new Set(properties.map(property => property.id))
+  const count = group.propertyIds.filter(id => known.has(id)).length
+  return `${group.name} · ${count === 1 ? '1 Property' : `${count} Properties`}`
+}
+
+function membershipTone(status: AdvancedMeasurementGroupMembershipStatus): 'positive' | 'caution' | 'negative' | 'neutral' {
+  if (status === 'matched') return 'positive'
+  if (status === 'duplicate') return 'neutral'
+  if (status === 'ambiguous' || status === 'proposed' || status === 'excluded') return 'caution'
+  return 'negative'
+}
+
+function membershipLabel(status: AdvancedMeasurementGroupMembershipStatus): string {
+  if (status === 'matched') return 'Matched'
+  if (status === 'duplicate') return 'Duplicate'
+  if (status === 'ambiguous') return 'Ambiguous'
+  if (status === 'proposed') return 'Property needs review'
+  if (status === 'excluded') return 'Property excluded'
+  if (status === 'invalid') return 'Invalid row'
+  return 'Not matched'
+}
+
+function membershipMessage(row: AdvancedMeasurementGroupMembershipRow): string | null {
+  if (row.status === 'duplicate' && row.duplicateOfRow) return `Duplicates row ${row.duplicateOfRow}.`
+  if (row.status === 'matched') return null
+  if (row.reason === 'group-label-ambiguous') return `More than one group matches “${row.group}”. Rename duplicate groups, then preview again.`
+  if (row.status === 'ambiguous') return 'More than one Property matches this row. Add an exact URL to choose one.'
+  if (row.status === 'unmatched') return 'No included Property matches this row.'
+  if (row.reason === 'group-key-conflict') return `The group name “${row.group}” conflicts with an existing setup identity. Rename the group, then preview again.`
+  if (row.status === 'invalid') return 'Check the Property, group, and optional URL fields.'
+  if (row.status === 'proposed') return 'Review this proposed Property before importing it.'
+  if (row.status === 'excluded') return 'Include this Property before importing it.'
+  return row.reason ?? null
+}
+
 function isMissingQuery(query: AdvancedMeasurementQuery): boolean {
   return query.state === 'missing' || query.source === 'unavailable-tracked-query' || !query.source
 }
@@ -193,35 +347,18 @@ function queryLabel(query: AdvancedMeasurementQuery): string {
   return isMissingQuery(query) ? 'Unavailable tracked question' : query.text?.trim() || 'Unavailable tracked question'
 }
 
-function isNameCharacter(value: string | undefined): boolean {
-  return value !== undefined && /[\p{L}\p{N}]/u.test(value)
-}
-
-function includesWholePropertyName(text: string, label: string): boolean {
-  const haystack = text.toLocaleLowerCase()
-  const needle = label.trim().toLocaleLowerCase()
-  if (!needle) return false
-
-  let offset = haystack.indexOf(needle)
-  while (offset >= 0) {
-    const before = offset === 0 ? undefined : haystack[offset - 1]
-    const after = haystack[offset + needle.length]
-    if (!isNameCharacter(before) && !isNameCharacter(after)) return true
-    offset = haystack.indexOf(needle, offset + needle.length)
-  }
-  return false
-}
-
 function PropertyChecklist({
   properties,
   selectedPropertyIds,
   onSelectedPropertyIdsChange,
   legend,
+  showBulkActions = true,
 }: {
   properties: readonly AdvancedMeasurementProperty[]
   selectedPropertyIds: readonly string[]
   onSelectedPropertyIdsChange: (propertyIds: readonly string[]) => void
   legend: string
+  showBulkActions?: boolean
 }) {
   const [search, setSearch] = useState('')
   const [showAll, setShowAll] = useState(false)
@@ -250,10 +387,10 @@ function PropertyChecklist({
             className="mt-1 block min-h-11 w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-400"
           />
         </label>
-        <div className="flex flex-wrap items-center gap-2">
+        {showBulkActions ? <div className="flex flex-wrap items-center gap-2">
           <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={visibleProperties.length === 0} onClick={selectAllShown}>Select all shown</Button>
           <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={selectedPropertyIds.length === 0} onClick={() => onSelectedPropertyIdsChange([])}>Clear selection</Button>
-        </div>
+        </div> : null}
       </div>
 
       {filteredProperties.length === 0 ? <p className="mt-3 text-sm text-secondary">No Properties match this search.</p> : (
@@ -298,27 +435,214 @@ function UnavailableState({ message }: { message: string }) {
   )
 }
 
+function GroupMembershipImportPanel({ value }: { value: AdvancedMeasurementGroupImport }) {
+  const [rowPage, setRowPage] = useState(0)
+  const [attentionPage, setAttentionPage] = useState(0)
+  const [acknowledgedPreview, setAcknowledgedPreview] = useState<string | null>(null)
+  const preview = value.preview
+  const attentionCount = preview?.counts.needsAttention ?? 0
+  const matchedRows = preview?.rows.filter(row => row.status === 'matched') ?? []
+  const previewRows = preview?.rows ?? []
+  const attentionRows = previewRows.filter(row => row.status !== 'matched')
+  const rowPageCount = Math.max(1, Math.ceil(previewRows.length / REVIEW_ITEM_PAGE_SIZE))
+  const shownRowPage = Math.min(rowPage, rowPageCount - 1)
+  const shownRows = previewRows.slice(shownRowPage * REVIEW_ITEM_PAGE_SIZE, (shownRowPage + 1) * REVIEW_ITEM_PAGE_SIZE)
+  const attentionPageCount = Math.max(1, Math.ceil(attentionRows.length / REVIEW_ITEM_PAGE_SIZE))
+  const shownAttentionPage = Math.min(attentionPage, attentionPageCount - 1)
+  const shownAttentionRows = attentionRows.slice(shownAttentionPage * REVIEW_ITEM_PAGE_SIZE, (shownAttentionPage + 1) * REVIEW_ITEM_PAGE_SIZE)
+  const canReview = value.csv.trim().length > 0 && !value.isReviewing && !value.isApplying
+  const canApply = matchedRows.length > 0 && !value.isApplying
+  const skippedRowsAcknowledged = preview !== null && acknowledgedPreview === preview.previewChecksum
+  const reviewedAllAttentionRows = attentionRows.length > 0 && shownAttentionPage === attentionPageCount - 1
+
+  useEffect(() => {
+    setRowPage(0)
+    setAttentionPage(0)
+    setAcknowledgedPreview(null)
+  }, [preview?.previewChecksum])
+
+  async function readCsvFile(file: File | undefined): Promise<void> {
+    if (!file) return
+    try {
+      value.onCsvChange(await file.text())
+    } catch {
+      // File.text() is the only browser read here. The controlled textarea keeps
+      // the prior input intact if the browser refuses the read.
+    }
+  }
+
+  return (
+    <section aria-labelledby="advanced-measurement-group-import-title" className="border-y border-default py-4">
+      <div className="max-w-2xl">
+        <h4 id="advanced-measurement-group-import-title" className="text-sm font-medium text-heading">Import groups from CSV</h4>
+        <p className="mt-1 text-sm text-secondary">Import market membership once instead of selecting the same Properties for every group.</p>
+      </div>
+      <div className="mt-3 space-y-3">
+        <label className="block max-w-xl">
+          <span className="text-sm font-medium text-heading">CSV file</span>
+          <input
+            aria-label="Group membership CSV file"
+            type="file"
+            accept=".csv,text/csv"
+            disabled={value.isReviewing || value.isApplying}
+            onChange={event => { void readCsvFile(event.currentTarget.files?.[0]) }}
+            className="mt-1 block min-h-11 w-full text-sm text-secondary file:mr-3 file:min-h-11 file:rounded-md file:border file:border-default file:bg-surface file:px-3 file:text-sm file:font-medium file:text-primary"
+          />
+        </label>
+        <label className="block max-w-xl">
+          <span className="text-sm font-medium text-heading">Or paste CSV</span>
+          <textarea
+            aria-label="Group membership CSV"
+            rows={5}
+            value={value.csv}
+            disabled={value.isReviewing || value.isApplying}
+            onChange={event => value.onCsvChange(event.currentTarget.value)}
+            placeholder={'property,group,url\nHarbor House,Dallas,https://example.com/harbor-house'}
+            className="mt-1 block w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-400 disabled:cursor-not-allowed disabled:opacity-60"
+          />
+        </label>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={!canReview} onClick={() => { void value.onReview() }}>
+            {value.isReviewing ? 'Reviewing CSV…' : 'Review CSV'}
+          </Button>
+          <span className="text-sm text-secondary">Use columns named property and group. URL is optional.</span>
+        </div>
+        {value.error ? <p role="alert" className="text-sm text-negative">{value.error}</p> : null}
+        {value.notice ? <p role="status" className="text-sm text-secondary">{value.notice}</p> : null}
+      </div>
+
+      {preview ? (
+        <div className="mt-4 border-t border-default pt-4" aria-live="polite">
+          <h5 className="text-sm font-medium text-heading">Review group membership</h5>
+          <p className="mt-1 text-sm text-secondary">
+            {preview.counts.matchedRows} matched · {preview.counts.groupsReady} group{preview.counts.groupsReady === 1 ? '' : 's'} ready
+            {attentionCount > 0 ? ` · ${attentionCount} need${attentionCount === 1 ? 's' : ''} attention` : ''}
+          </p>
+          {preview.groupChanges.length > 0 ? (
+            <div className="mt-3 overflow-x-auto border-y border-default">
+              <table className="evidence-table min-w-[620px]">
+                <caption className="sr-only">Groups and memberships ready to apply</caption>
+                <thead><tr><th>Group</th><th>Change</th><th>Properties</th><th>New memberships</th></tr></thead>
+                <tbody>
+                  {preview.groupChanges.map(change => (
+                    <tr key={change.groupKey}>
+                      <td className="font-medium text-heading">{change.label}</td>
+                      <td className="text-secondary">{change.action === 'create' ? 'Create group' : 'Add to existing group'}</td>
+                      <td className="tabular-nums text-secondary">{change.targetKeys.length}</td>
+                      <td className="tabular-nums text-secondary">{change.addedTargetKeys.length}{change.unchangedTargetKeys.length > 0 ? ` · ${change.unchangedTargetKeys.length} already members` : ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+          {preview.rows.length > 0 ? (
+            <details className="mt-3 border-y border-default py-3">
+              <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">Review CSV rows ({preview.counts.dataRows})</summary>
+              <div className="mt-3 overflow-x-auto border-y border-default">
+                <table className="evidence-table min-w-[620px]">
+                  <caption className="sr-only">CSV group membership review</caption>
+                  <thead><tr><th>Row</th><th>Property</th><th>Group</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {shownRows.map(row => (
+                      <tr key={row.dataRow}>
+                        <td className="tabular-nums text-secondary">{row.dataRow}</td>
+                        <td className="text-heading">{row.property}</td>
+                        <td className="text-secondary">{row.group}</td>
+                        <td>
+                          <ToneBadge tone={membershipTone(row.status)}>{membershipLabel(row.status)}</ToneBadge>
+                          {membershipMessage(row) ? <p className="mt-1 text-sm text-secondary">{membershipMessage(row)}</p> : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-secondary">
+                <span>Page {shownRowPage + 1} of {rowPageCount} · {preview.rows.length} rows</span>
+                <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={shownRowPage === 0} onClick={() => setRowPage(page => Math.max(0, page - 1))}>Previous 50 rows</Button>
+                <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={shownRowPage === rowPageCount - 1} onClick={() => setRowPage(page => Math.min(rowPageCount - 1, page + 1))}>Next 50 rows</Button>
+              </div>
+            </details>
+          ) : null}
+          {attentionCount > 0 ? (
+            <details className="mt-3 border-y border-caution-800/30 py-3">
+              <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">Fix {attentionCount} row{attentionCount === 1 ? '' : 's'} before applying</summary>
+              <p className="mt-2 text-sm text-secondary">Correct these rows, or explicitly continue with only the reviewed matches. Rows needing attention are not added.</p>
+              <div className="mt-3 overflow-x-auto border-y border-default">
+                <table className="evidence-table min-w-[620px]">
+                  <caption className="sr-only">CSV rows that need attention</caption>
+                  <thead><tr><th>Row</th><th>Property</th><th>Group</th><th>Issue</th></tr></thead>
+                  <tbody>
+                    {shownAttentionRows.map(row => (
+                      <tr key={row.dataRow}>
+                        <td className="tabular-nums text-secondary">{row.dataRow}</td>
+                        <td className="text-heading">{row.property}</td>
+                        <td className="text-secondary">{row.group}</td>
+                        <td><ToneBadge tone={membershipTone(row.status)}>{membershipLabel(row.status)}</ToneBadge>{membershipMessage(row) ? <p className="mt-1 text-sm text-secondary">{membershipMessage(row)}</p> : null}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-secondary">
+                <span>Exception page {shownAttentionPage + 1} of {attentionPageCount}</span>
+                <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={shownAttentionPage === 0} onClick={() => setAttentionPage(page => Math.max(0, page - 1))}>Previous 50 exceptions</Button>
+                <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={shownAttentionPage === attentionPageCount - 1} onClick={() => setAttentionPage(page => Math.min(attentionPageCount - 1, page + 1))}>Review next 50 exceptions</Button>
+              </div>
+              <label className="mt-3 flex min-h-11 max-w-xl items-center gap-3 text-sm text-heading">
+                <input
+                  type="checkbox"
+                  checked={skippedRowsAcknowledged}
+                  disabled={value.isApplying || !reviewedAllAttentionRows}
+                  onChange={event => setAcknowledgedPreview(event.currentTarget.checked ? preview.previewChecksum : null)}
+                  className="size-4 rounded border-default"
+                />
+                I reviewed the exceptions and understand that {attentionCount} row{attentionCount === 1 ? '' : 's'} will be skipped.
+              </label>
+              <Button type="button" size="sm" variant="outline" className="mt-3 min-h-11" disabled={!canApply || !skippedRowsAcknowledged} onClick={() => { void value.onApply(matchedRows.map(row => row.dataRow)) }}>
+                {value.isApplying ? 'Applying groups…' : `Apply ${matchedRows.length} matched row${matchedRows.length === 1 ? '' : 's'}`}
+              </Button>
+            </details>
+          ) : (
+            <Button type="button" className="mt-3 min-h-11" disabled={!canApply} onClick={() => { void value.onApply(matchedRows.map(row => row.dataRow)) }}>
+              {value.isApplying ? 'Creating groups…' : `Create ${preview.counts.groupsReady} group${preview.counts.groupsReady === 1 ? '' : 's'} with ${matchedRows.length} membership${matchedRows.length === 1 ? '' : 's'}`}
+            </Button>
+          )}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
 export function AdvancedMeasurementQueriesStep({
   access,
   availability,
   properties,
   queries,
-  selectedPropertyIds,
   selectedQueryIds,
   isApplying = false,
   isBusy = false,
   canContinue = true,
-  onSelectedPropertyIdsChange,
   onSelectedQueryIdsChange,
   onApplySelectedQueries,
   onClearQueryAssignments,
   onRemoveQuery,
   onCreateQueries,
-  onApplyPairedQuestions,
   onCreateAndPairQuestions,
   isCreatingQueries = false,
   createQueriesError = null,
   onManageProjectQueries,
+  groups,
+  audience,
+  onAudienceChange,
+  assignmentImpact = null,
+  isPreviewingAssignmentImpact = false,
+  assignmentImpactError = null,
+  onRetryAssignmentImpact,
+  assignmentNotice = null,
+  onReplaceAssignments,
+  isReplacingAssignments = false,
   onBack,
   onContinue,
 }: AdvancedMeasurementQueriesStepProps) {
@@ -327,14 +651,23 @@ export function AdvancedMeasurementQueriesStep({
   const [showUnappliedOnly, setShowUnappliedOnly] = useState(false)
   const [newQueriesText, setNewQueriesText] = useState('')
   const [patternText, setPatternText] = useState('')
-  const [reviewedSuggestionSignature, setReviewedSuggestionSignature] = useState<string | null>(null)
+  const [replacement, setReplacement] = useState<{ queryId: string; propertyIds: string[] } | null>(null)
   if (isUnavailable(availability)) {
     return <section aria-label="Questions"><UnavailableState message={availability.message} /></section>
   }
 
   const viewer = isViewer(access)
-  const canApply = selectedPropertyIds.length > 0 && selectedQueryIds.length > 0 && !isApplying && !isBusy
-  const selectedPropertyCount = properties.filter(property => selectedPropertyIds.includes(property.id)).length
+  const activeAudience = audience
+  const updateAudience = onAudienceChange
+  const resolvedAudiencePropertyIds = selectedAudiencePropertyIds(activeAudience, properties, groups)
+  const selectedPropertyCount = resolvedAudiencePropertyIds.length
+  const canApply = selectedPropertyCount > 0
+    && selectedQueryIds.length > 0
+    && !isApplying
+    && !isBusy
+    && !isPreviewingAssignmentImpact
+    && assignmentImpact !== null
+    && assignmentImpactError === null
   const clearAssignments = onClearQueryAssignments ?? onRemoveQuery
   const normalizedQuerySearch = querySearch.trim().toLocaleLowerCase()
   const filteredQueries = normalizedQuerySearch
@@ -344,29 +677,6 @@ export function AdvancedMeasurementQueriesStep({
   const listedQueries = showUnappliedOnly ? unappliedQueries : filteredQueries
   const visibleQueries = showAllQueries ? listedQueries : listedQueries.slice(0, QUERY_LIST_PAGE_SIZE)
 
-  /**
-   * Questions generated from a pattern each name exactly one Property, and the
-   * pairing is recoverable from the text alone. Without this the only route back
-   * is 213 manual selections, or the cross product that produced 45,369.
-   * A question matching two Property names is left alone rather than guessed at.
-   */
-  const nameMatchedAssignments = unappliedQueries.flatMap(query => {
-    const question = queryLabel(query)
-    const named = properties.filter(property => includesWholePropertyName(question, property.label))
-    return named.length === 1 ? [{
-      targetKey: named[0]!.id,
-      queryId: query.id,
-      property: named[0]!.label,
-      question,
-    }] : []
-  })
-  const nameMatchedPairs = nameMatchedAssignments.map(({ targetKey, queryId }) => ({ targetKey, queryId }))
-  const suggestionSignature = nameMatchedPairs.map(pair => `${pair.queryId}:${pair.targetKey}`).join('|')
-  const reviewedAllSuggestions = nameMatchedAssignments.length <= RECOVERY_PREVIEW_LIMIT
-    || reviewedSuggestionSignature === suggestionSignature
-  const shownNameMatchedAssignments = reviewedAllSuggestions
-    ? nameMatchedAssignments
-    : nameMatchedAssignments.slice(0, RECOVERY_PREVIEW_LIMIT)
   const selectableVisibleQueries = visibleQueries.filter(query => !isMissingQuery(query))
   const parsedNewQueries = [...new Set(
     newQueriesText.split('\n').map(line => line.trim()).filter(Boolean),
@@ -376,7 +686,7 @@ export function AdvancedMeasurementQueriesStep({
   // typing two hundred generic questions measures the portfolio rather than the
   // Properties in it.
   const patternPlaceholders = [...patternText.matchAll(/\{([a-z][\w-]*)\}/gi)].map(match => match[1]!)
-  const patternTargets = properties.filter(property => selectedPropertyIds.includes(property.id))
+  const patternTargets = properties.filter(property => resolvedAudiencePropertyIds.includes(property.id))
   // Each expansion stays tied to the Property it was written for, so it can be
   // assigned to that Property alone. Dropping the pairing here is what forced
   // the caller into a cross product.
@@ -408,17 +718,105 @@ export function AdvancedMeasurementQueriesStep({
       {viewer ? <ViewerNotice /> : null}
 
       {viewer ? null : (
-        <details className="border-y border-default py-4">
-          <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">{selectedPropertyCount} of {properties.length} Properties selected</summary>
-          <div className="pt-3">
-            <PropertyChecklist
-              legend="Apply to selected Properties"
-              properties={properties}
-              selectedPropertyIds={selectedPropertyIds}
-              onSelectedPropertyIdsChange={onSelectedPropertyIdsChange}
-            />
+        <fieldset className="border-y border-default py-4">
+          <legend className="text-sm font-medium text-heading">Apply to</legend>
+          <div className="mt-3 max-w-xl">
+            <label className="block">
+              <span className="sr-only">Apply to</span>
+              <select
+                aria-label="Apply to"
+                value={activeAudience.kind === 'all'
+                  ? 'all'
+                  : activeAudience.kind === 'specific'
+                    ? 'specific'
+                    : `group:${activeAudience.groupIds[0] ?? ''}`}
+                onChange={event => {
+                  const value = event.currentTarget.value
+                  if (value === 'all') updateAudience({ kind: 'all' })
+                  else if (value === 'specific') {
+                    updateAudience({ kind: 'specific', propertyIds: [] })
+                  }
+                  else if (value.startsWith('group:')) updateAudience({ kind: 'groups', groupIds: [value.slice('group:'.length)] })
+                }}
+                className="block min-h-11 w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none focus:border-strong focus:ring-2 focus:ring-mono-400"
+              >
+                <option value="all">All Properties · {properties.length}</option>
+                {groups.length > 0 ? (
+                  <optgroup label="Groups">
+                    {groups.map(group => {
+                      const count = selectedAudiencePropertyIds({ kind: 'groups', groupIds: [group.id] }, properties, groups).length
+                      return <option key={group.id} value={`group:${group.id}`} disabled={count === 0}>{audienceOptionLabel(group, properties)}</option>
+                    })}
+                  </optgroup>
+                ) : null}
+                <option value="specific">Specific Properties…</option>
+              </select>
+            </label>
           </div>
-        </details>
+
+          {activeAudience.kind === 'groups' ? (
+            <div className="mt-3 max-w-2xl space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {activeAudience.groupIds.map(groupId => {
+                  const group = groups.find(candidate => candidate.id === groupId)
+                  if (!group) return null
+                  return (
+                    <span key={group.id} className="inline-flex min-h-11 items-center gap-1 rounded-md border border-default bg-surface px-2 text-sm text-primary">
+                      {audienceOptionLabel(group, properties)}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${group.name}`}
+                        className="-my-px -mr-2 ml-1 inline-flex min-h-11 min-w-11 items-center justify-center rounded text-secondary outline-none hover:text-heading focus-visible:ring-2 focus-visible:ring-mono-400"
+                        onClick={() => {
+                          const groupIds = activeAudience.groupIds.filter(id => id !== group.id)
+                          updateAudience(groupIds.length > 0 ? { kind: 'groups', groupIds } : { kind: 'all' })
+                        }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )
+                })}
+              </div>
+              {groups.some(group => !activeAudience.groupIds.includes(group.id) && selectedAudiencePropertyIds({ kind: 'groups', groupIds: [group.id] }, properties, groups).length > 0) ? (
+                <label className="block max-w-sm">
+                  <span className="text-sm font-medium text-heading">Add another group</span>
+                  <select
+                    aria-label="Add another group"
+                    value=""
+                    onChange={event => {
+                      if (!event.currentTarget.value) return
+                      updateAudience({ kind: 'groups', groupIds: [...activeAudience.groupIds, event.currentTarget.value] })
+                    }}
+                    className="mt-1 block min-h-11 w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none focus:border-strong focus:ring-2 focus:ring-mono-400"
+                  >
+                    <option value="">Choose a group</option>
+                    {groups.filter(group => !activeAudience.groupIds.includes(group.id)).map(group => {
+                      const count = selectedAudiencePropertyIds({ kind: 'groups', groupIds: [group.id] }, properties, groups).length
+                      return <option key={group.id} value={group.id} disabled={count === 0}>{audienceOptionLabel(group, properties)}</option>
+                    })}
+                  </select>
+                </label>
+              ) : null}
+              {selectedPropertyCount === 0 ? <p role="alert" className="text-sm text-caution">This group has no included Properties. Add Properties to the group, then try again.</p> : null}
+            </div>
+          ) : null}
+
+          {activeAudience.kind === 'specific' ? (
+            <div className="mt-4">
+              <PropertyChecklist
+                legend="Specific Properties"
+                properties={properties}
+                selectedPropertyIds={activeAudience.propertyIds}
+                showBulkActions={false}
+                onSelectedPropertyIdsChange={propertyIds => {
+                  updateAudience({ kind: 'specific', propertyIds })
+                }}
+              />
+            </div>
+          ) : null}
+          <p className="mt-3 max-w-2xl text-sm text-secondary">Groups are shortcuts resolved when you assign. Changing membership later does not rewrite existing assignments, and a Property added later does not receive earlier group questions.</p>
+        </fieldset>
       )}
 
       {viewer || !onCreateQueries ? null : (
@@ -556,11 +954,38 @@ export function AdvancedMeasurementQueriesStep({
               size="sm"
               className="min-h-11"
               disabled={!canApply}
-              onClick={() => { void onApplySelectedQueries({ queryIds: selectedQueryIds, propertyIds: selectedPropertyIds }) }}
+              onClick={() => {
+                void onApplySelectedQueries({
+                  queryIds: selectedQueryIds,
+                  propertyIds: resolvedAudiencePropertyIds,
+                  ...(activeAudience.kind === 'groups' ? { groupIds: activeAudience.groupIds } : {}),
+                })
+              }}
             >
-              {isApplying ? 'Applying questions…' : 'Apply selected questions'}
+              {isApplying
+                ? 'Assigning questions…'
+                : `Assign ${selectedQueryIds.length || ''} question${selectedQueryIds.length === 1 ? '' : 's'} to ${audienceLabel(activeAudience, groups, selectedPropertyCount)}`.replace('  ', ' ')}
             </Button>
-            <p className="text-sm text-secondary">{selectedQueryIds.length} question{selectedQueryIds.length === 1 ? '' : 's'} × {selectedPropertyCount} Properties = {selectedQueryIds.length * selectedPropertyCount} assignments</p>
+            {isPreviewingAssignmentImpact ? <p role="status" className="text-sm text-secondary">Calculating assignment impact…</p> : null}
+            {assignmentImpact ? (
+              <p className="text-sm text-secondary">
+                {selectedQueryIds.length} question{selectedQueryIds.length === 1 ? '' : 's'} → {assignmentImpact.assignmentCount} Property assignment{assignmentImpact.assignmentCount === 1 ? '' : 's'}
+                {' · '}{assignmentImpact.addedAssignments} new, {assignmentImpact.alreadyPresentAssignments} already assigned
+                {' · '}{assignmentImpact.fullRunProviderCalls} provider request{assignmentImpact.fullRunProviderCalls === 1 ? '' : 's'} per full run
+                {' · '}{assignmentImpact.addedProviderCalls} new
+                {activeAudience.kind === 'groups' ? ` · ${assignmentImpact.resolvedPropertyCount} unique ${assignmentImpact.resolvedPropertyCount === 1 ? 'Property' : 'Properties'}${assignmentImpact.overlapCount > 0 ? `, ${assignmentImpact.overlapCount} in overlapping groups` : ''}` : ''}
+                . Existing assignments stay in place.
+              </p>
+            ) : assignmentImpactError ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <p role="alert" className="text-sm text-negative">{assignmentImpactError}</p>
+                {onRetryAssignmentImpact ? <Button type="button" size="sm" variant="outline" className="min-h-11" onClick={onRetryAssignmentImpact}>Retry impact</Button> : null}
+                {onBack ? <Button type="button" size="sm" variant="outline" className="min-h-11" onClick={onBack}>Back to Groups</Button> : null}
+              </div>
+            ) : (
+              <p className="text-sm text-secondary">{selectedQueryIds.length} question{selectedQueryIds.length === 1 ? '' : 's'} × {selectedPropertyCount} Properties = {selectedQueryIds.length * selectedPropertyCount} assignments</p>
+            )}
+            {assignmentNotice ? <p role="status" className="text-sm text-secondary">{assignmentNotice}</p> : null}
           </div>
           )}
         </div>
@@ -598,58 +1023,6 @@ export function AdvancedMeasurementQueriesStep({
               </Button>
             )}
           </div>
-          {!viewer && nameMatchedPairs.length > 0 && onApplyPairedQuestions ? (
-            <details className="rounded-md border border-base bg-bg-elevated p-3">
-              <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">
-                Review {nameMatchedPairs.length} suggested question-to-Property match{nameMatchedPairs.length === 1 ? '' : 'es'}
-              </summary>
-              <p className="mt-2 mb-3 text-sm text-secondary">
-                Confirm each question is paired with the Property it names before assigning it.
-              </p>
-              <div className="overflow-x-auto rounded-md border border-default">
-                <table className="evidence-table min-w-[520px]">
-                  <caption className="sr-only">Suggested question-to-Property matches</caption>
-                  <thead><tr><th>Question</th><th>Property</th></tr></thead>
-                  <tbody>
-                    {shownNameMatchedAssignments.map(assignment => (
-                      <tr key={`${assignment.queryId}:${assignment.targetKey}`}>
-                        <td className="text-secondary">{assignment.question}</td>
-                        <td className="text-heading">{assignment.property}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {nameMatchedAssignments.length > RECOVERY_PREVIEW_LIMIT ? (
-                <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-secondary">
-                  <span>Showing {shownNameMatchedAssignments.length} of {nameMatchedAssignments.length} suggested matches</span>
-                  {!reviewedAllSuggestions ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="min-h-11"
-                      onClick={() => setReviewedSuggestionSignature(suggestionSignature)}
-                    >
-                      Review all {nameMatchedAssignments.length} matches
-                    </Button>
-                  ) : null}
-                </div>
-              ) : null}
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="mt-3 min-h-11"
-                disabled={isApplying || isBusy || !reviewedAllSuggestions}
-                onClick={() => {
-                  void Promise.resolve(onApplyPairedQuestions(nameMatchedPairs)).catch(() => {})
-                }}
-              >
-                {isApplying ? 'Assigning…' : `Assign ${nameMatchedPairs.length} suggested match${nameMatchedPairs.length === 1 ? '' : 'es'}`}
-              </Button>
-            </details>
-          ) : null}
         </div>
       ) : null}
 
@@ -689,7 +1062,28 @@ export function AdvancedMeasurementQueriesStep({
                     <p className="font-medium text-heading">{label}</p>
                   </td>
                   <td className="text-secondary">{propertyNames(query.propertyIds ?? [], properties)}</td>
-                  {viewer ? null : <td className="text-right">{hasAssignments ? <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={isBusy} onClick={() => { void clearAssignments(query.id) }} aria-label={`Clear question assignments for ${label}`}>Clear assignments</Button> : null}</td>}
+                  {viewer ? null : (
+                    <td className="text-right">
+                      {hasAssignments ? (
+                        <div className="flex flex-wrap justify-end gap-1">
+                          {onReplaceAssignments ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="min-h-11"
+                              disabled={isBusy || isReplacingAssignments}
+                              onClick={() => setReplacement({ queryId: query.id, propertyIds: [...(query.propertyIds ?? [])] })}
+                              aria-label={`Replace question assignments for ${label}`}
+                            >
+                              Replace assignments
+                            </Button>
+                          ) : null}
+                          <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={isBusy} onClick={() => { void clearAssignments(query.id) }} aria-label={`Clear question assignments for ${label}`}>Clear assignments</Button>
+                        </div>
+                      ) : null}
+                    </td>
+                  )}
                 </tr>
               )
             })}
@@ -697,6 +1091,42 @@ export function AdvancedMeasurementQueriesStep({
           </table>
         </div>
       ) : queries.length > 0 ? <p className="text-sm text-secondary">No questions match this search.</p> : null}
+
+      {viewer || !replacement ? null : (() => {
+        const query = queries.find(candidate => candidate.id === replacement.queryId)
+        const label = query ? queryLabel(query) : 'this question'
+        const selected = replacement.propertyIds.filter(propertyId => properties.some(property => property.id === propertyId))
+        return (
+          <section aria-labelledby="advanced-measurement-replace-assignments-title" className="border-y border-default py-4">
+            <h4 id="advanced-measurement-replace-assignments-title" className="text-sm font-medium text-heading">Replace assigned Properties</h4>
+            <p className="mt-1 max-w-2xl text-sm text-secondary">This replaces every Property assigned to “{label}”.</p>
+            <div className="mt-3">
+              <PropertyChecklist
+                legend="Properties for this question"
+                properties={properties}
+                selectedPropertyIds={selected}
+                onSelectedPropertyIdsChange={propertyIds => setReplacement(current => current ? { ...current, propertyIds: [...propertyIds] } : current)}
+              />
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={isReplacingAssignments || isBusy} onClick={() => setReplacement(null)}>Keep current assignments</Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="min-h-11"
+                disabled={selected.length === 0 || isReplacingAssignments || isBusy || !onReplaceAssignments}
+                onClick={() => {
+                  if (!onReplaceAssignments) return
+                  void Promise.resolve(onReplaceAssignments({ queryId: replacement.queryId, propertyIds: selected }))
+                }}
+              >
+                {isReplacingAssignments ? 'Replacing assignments…' : `Replace with ${selected.length} ${selected.length === 1 ? 'Property' : 'Properties'}`}
+              </Button>
+            </div>
+          </section>
+        )
+      })()}
 
       {visibleQueries.length < listedQueries.length ? (
         <Button type="button" size="sm" variant="outline" className="min-h-11" onClick={() => setShowAllQueries(true)}>Show all questions</Button>
@@ -727,6 +1157,7 @@ export function AdvancedMeasurementGroupsStep({
   onEditGroup,
   onRemoveGroup,
   onClearGroupDraft,
+  membershipImport,
   onBack,
   onContinue,
 }: AdvancedMeasurementGroupsStepProps) {
@@ -753,11 +1184,13 @@ export function AdvancedMeasurementGroupsStep({
       <div className="section-head">
         <div>
           <h3 id="advanced-measurement-groups-title">Groups</h3>
-          <p className="mt-1 max-w-2xl text-sm text-secondary">Optional reporting organization for Properties and competitor comparisons.</p>
+          <p className="mt-1 max-w-2xl text-sm text-secondary">Use groups to assign questions by market and compare competitors.</p>
         </div>
       </div>
 
       {viewer ? <ViewerNotice /> : null}
+
+      {viewer || !membershipImport ? null : <GroupMembershipImportPanel value={membershipImport} />}
 
       {viewer ? null : (
         <div className="space-y-4 border-y border-default py-4">
@@ -797,7 +1230,7 @@ export function AdvancedMeasurementGroupsStep({
               {isSaving ? 'Saving group…' : 'Save group'}
             </Button>
             <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={!hasUnsavedGroupDraft} onClick={clearGroupForm}>Clear form</Button>
-            <p className="text-sm text-secondary">Competitor domains are used only in this group&apos;s competitor report. Groups organize reporting only.</p>
+            <p className="text-sm text-secondary">Competitor domains are used only in this group&apos;s competitor report. Membership changes affect future assignments only.</p>
           </div>
           {hasUnsavedGroupDraft ? <p role="status" className="text-sm text-caution">Save this group or clear the form before continuing.</p> : null}
         </div>
@@ -966,9 +1399,15 @@ export function AdvancedMeasurementReviewStep({
       ) : null}
 
       <div className="overflow-x-auto border-y border-default">
-        <table className="evidence-table min-w-[480px]">
-          <thead><tr><th>Properties</th><th>Questions</th><th>Groups</th></tr></thead>
-          <tbody><tr><td className="tabular-nums text-heading">{counts.properties}</td><td className="tabular-nums text-heading">{counts.queries}</td><td className="tabular-nums text-heading">{counts.groups}</td></tr></tbody>
+        <table className="evidence-table min-w-[720px]">
+          <thead><tr><th>Properties</th><th>Questions</th><th>Groups</th><th>Assignments</th><th>Provider requests / run</th></tr></thead>
+          <tbody><tr>
+            <td className="tabular-nums text-heading">{counts.properties}</td>
+            <td className="tabular-nums text-heading">{counts.queries}</td>
+            <td className="tabular-nums text-heading">{counts.groups}</td>
+            <td className="tabular-nums text-heading">{counts.assignments ?? '—'}</td>
+            <td className="tabular-nums text-heading">{counts.providerCalls ?? 'Review changes'}</td>
+          </tr></tbody>
         </table>
       </div>
 
