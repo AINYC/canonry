@@ -116,6 +116,12 @@ const expectedToolNames = [
   'canonry_measurement_setup',
   'canonry_measurement_overview',
   'canonry_measurement_property_evidence',
+  'canonry_measurement_portfolio_summary',
+  'canonry_measurement_property_questions',
+  'canonry_measurement_question_result',
+  'canonry_measurement_property_competitors',
+  'canonry_measurement_changes',
+  'canonry_measurement_data_quality',
   'canonry_measurement_draft_get',
   'canonry_measurement_draft_targets',
   'canonry_measurement_draft_assignments',
@@ -202,6 +208,12 @@ describe('MCP tool registry', () => {
       ['canonry_measurement_plan_segment_retire', 'write', 'POST /api/v1/projects/{name}/measurement-plan/segments/{stableKey}/retire'],
       ['canonry_measurement_overview', 'read', 'GET /api/v1/projects/{name}/measurement-overview'],
       ['canonry_measurement_property_evidence', 'read', 'GET /api/v1/projects/{name}/measurement-property-evidence'],
+      ['canonry_measurement_portfolio_summary', 'read', 'GET /api/v1/projects/{name}/measurement-portfolio-summary'],
+      ['canonry_measurement_property_questions', 'read', 'GET /api/v1/projects/{name}/measurement-property-questions'],
+      ['canonry_measurement_question_result', 'read', 'GET /api/v1/projects/{name}/measurement-question-result'],
+      ['canonry_measurement_property_competitors', 'read', 'GET /api/v1/projects/{name}/measurement-property-competitors'],
+      ['canonry_measurement_changes', 'read', 'GET /api/v1/projects/{name}/measurement-changes'],
+      ['canonry_measurement_data_quality', 'read', 'GET /api/v1/projects/{name}/measurement-data-quality'],
       ['canonry_measurement_report', 'read', 'GET /api/v1/projects/{name}/measurement-report'],
     ] as const
 
@@ -226,6 +238,12 @@ describe('MCP tool registry', () => {
       discoverMeasurementTargets: vi.fn().mockResolvedValue({ proposed: [] }),
       getMeasurementOverview: vi.fn().mockResolvedValue({ mode: 'active-v2' }),
       getMeasurementPropertyEvidence: vi.fn().mockResolvedValue({ evidence: { items: [], nextCursor: null } }),
+      getMeasurementPortfolioSummary: vi.fn().mockResolvedValue({ properties: [] }),
+      getMeasurementPropertyQuestions: vi.fn().mockResolvedValue({ questions: [] }),
+      getMeasurementQuestionResult: vi.fn().mockResolvedValue({ answer: null }),
+      getMeasurementPropertyCompetitors: vi.fn().mockResolvedValue({ competitors: [] }),
+      getMeasurementChanges: vi.fn().mockResolvedValue({ comparison: { state: 'unavailable' } }),
+      getMeasurementDataQuality: vi.fn().mockResolvedValue({ population: { state: 'no_population' } }),
       getMeasurementReport: vi.fn().mockResolvedValue({ revision: 2 }),
     } as unknown as ApiClient
     const plan = {
@@ -301,6 +319,40 @@ describe('MCP tool registry', () => {
         cursor: 'next-page',
         limit: 25,
       }]],
+      ['canonry_measurement_portfolio_summary', {
+        project: 'acme', groupKey: 'metro-east', queryClass: 'non-brand', provider: 'openai',
+        location: 'New York, NY', runId: 'run-7', limit: 8,
+      }, 'getMeasurementPortfolioSummary', ['acme', {
+        groupKey: 'metro-east', queryClass: 'non-brand', provider: 'openai',
+        location: 'New York, NY', runId: 'run-7', limit: 8,
+      }]],
+      ['canonry_measurement_property_questions', {
+        project: 'acme', targetKey: 'harbor-view', queryClass: 'non-brand', provider: 'openai',
+        location: 'New York, NY', runId: 'run-7', limit: 25,
+      }, 'getMeasurementPropertyQuestions', ['acme', {
+        targetKey: 'harbor-view', queryClass: 'non-brand', provider: 'openai',
+        location: 'New York, NY', runId: 'run-7', limit: 25,
+      }]],
+      ['canonry_measurement_question_result', {
+        project: 'acme', targetKey: 'harbor-view', resultId: 'result-7',
+      }, 'getMeasurementQuestionResult', ['acme', { targetKey: 'harbor-view', resultId: 'result-7' }]],
+      ['canonry_measurement_property_competitors', {
+        project: 'acme', targetKey: 'harbor-view', queryClass: 'non-brand', provider: 'openai',
+        location: 'New York, NY', runId: 'run-7', limit: 10,
+      }, 'getMeasurementPropertyCompetitors', ['acme', {
+        targetKey: 'harbor-view', queryClass: 'non-brand', provider: 'openai',
+        location: 'New York, NY', runId: 'run-7', limit: 10,
+      }]],
+      ['canonry_measurement_changes', {
+        project: 'acme', scope: 'group', groupKey: 'metro-east', queryClass: 'non-brand',
+        provider: 'openai', location: 'New York, NY', runId: 'run-7', limit: 10,
+      }, 'getMeasurementChanges', ['acme', {
+        scope: 'group', groupKey: 'metro-east', queryClass: 'non-brand', provider: 'openai',
+        location: 'New York, NY', runId: 'run-7', limit: 10,
+      }]],
+      ['canonry_measurement_data_quality', {
+        project: 'acme', runId: 'run-7',
+      }, 'getMeasurementDataQuality', ['acme', { runId: 'run-7' }]],
       ['canonry_measurement_report', {
         project: 'acme',
         revision: 2,
@@ -410,8 +462,8 @@ describe('MCP tool registry', () => {
   })
 
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(171)
-    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(107)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(177)
+    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(113)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(readNames)
@@ -447,7 +499,7 @@ describe('MCP tool registry', () => {
     for (const tool of canonryMcpTools) {
       counts.set(tool.tier, (counts.get(tool.tier) ?? 0) + 1)
     }
-    expect(counts.get('monitoring')).toBe(28)
+    expect(counts.get('monitoring')).toBe(34)
     expect(counts.get('setup')).toBe(50)
     expect(counts.get('gsc')).toBe(10)
     expect(counts.get('ga')).toBe(10)

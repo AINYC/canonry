@@ -66,6 +66,12 @@ import {
   measurementDraftUpsertGroupRequestSchema,
   measurementDraftUpsertTargetRequestSchema,
   measurementOverviewQuerySchema,
+  measurementPortfolioSummaryQuerySchema,
+  measurementPropertyQuestionsQuerySchema,
+  measurementQuestionResultQuerySchema,
+  measurementPropertyCompetitorsQuerySchema,
+  measurementChangesQuerySchema,
+  measurementDataQualityQuerySchema,
   measurementPropertyEvidenceQuerySchema,
   measurementPlanDeactivateRequestSchema,
   measurementQuerySetUpsertRequestSchema,
@@ -180,6 +186,24 @@ const measurementPropertyEvidenceInputSchema = measurementPropertyEvidenceQueryS
   shape: measurementPropertyEvidenceQuerySchema.shape.shape.describe(
     'What one row is. Omit for sources (one row per cited URL). answers gives one row per measured answer with its cited URLs nested, including the answers that cited nothing.',
   ),
+}).strict()
+const measurementPortfolioSummaryInputSchema = measurementPortfolioSummaryQuerySchema.extend({
+  project: projectNameSchema,
+}).strict()
+const measurementPropertyQuestionsInputSchema = measurementPropertyQuestionsQuerySchema.extend({
+  project: projectNameSchema,
+}).strict()
+const measurementQuestionResultInputSchema = measurementQuestionResultQuerySchema.extend({
+  project: projectNameSchema,
+}).strict()
+const measurementPropertyCompetitorsInputSchema = measurementPropertyCompetitorsQuerySchema.extend({
+  project: projectNameSchema,
+}).strict()
+const measurementChangesInputSchema = measurementChangesQuerySchema.extend({
+  project: projectNameSchema,
+}).strict()
+const measurementDataQualityInputSchema = measurementDataQualityQuerySchema.extend({
+  project: projectNameSchema,
 }).strict()
 const measurementDraftCollectionInputSchema = measurementDraftCollectionQuerySchema.extend({ project: projectNameSchema })
 const measurementQuerySetInputSchema = z.object({
@@ -2126,6 +2150,90 @@ export const canonryMcpTools = [
     handler: (client, input) => {
       const { project, ...query } = input
       return client.getMeasurementPropertyEvidence(project, query)
+    },
+  }),
+  defineTool({
+    name: 'canonry_measurement_portfolio_summary',
+    title: 'Summarize measured Properties',
+    description: 'Start here to rank the weakest measured Properties and their stored replacement names. Reads stored data only; it never starts provider work.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: measurementPortfolioSummaryInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-portfolio-summary'],
+    handler: (client, input) => {
+      const { project, ...query } = input
+      return client.getMeasurementPortfolioSummary(project, query)
+    },
+  }),
+  defineTool({
+    name: 'canonry_measurement_property_questions',
+    title: 'List a Property’s stored questions',
+    description: 'After identifying a Property, list its stored question outcomes and use a returned resultId with canonry_measurement_question_result. Reads stored data only; it never starts provider work.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: measurementPropertyQuestionsInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-property-questions'],
+    handler: (client, input) => {
+      const { project, ...query } = input
+      return client.getMeasurementPropertyQuestions(project, query)
+    },
+  }),
+  defineTool({
+    name: 'canonry_measurement_question_result',
+    title: 'Get a stored question result',
+    description: 'After listing a Property’s questions, expand one returned resultId into its stored answer and attribution sources. Reads stored data only; it never starts provider work.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: measurementQuestionResultInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-question-result'],
+    handler: (client, input) => {
+      const { project, ...query } = input
+      return client.getMeasurementQuestionResult(project, query)
+    },
+  }),
+  defineTool({
+    name: 'canonry_measurement_property_competitors',
+    title: 'List a Property’s stored replacements',
+    description: 'After reviewing a Property’s question outcomes, find repeated stored replacement names for its misses. Reads stored data only; it never starts provider work.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: measurementPropertyCompetitorsInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-property-competitors'],
+    handler: (client, input) => {
+      const { project, ...query } = input
+      return client.getMeasurementPropertyCompetitors(project, query)
+    },
+  }),
+  defineTool({
+    name: 'canonry_measurement_changes',
+    title: 'Compare stored measurement changes',
+    description: 'After reviewing the current summary, compare stored runs only when their execution identity is compatible. Reads stored data only; it never starts provider work.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: measurementChangesInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-changes'],
+    handler: (client, input) => {
+      const { project, ...query } = input
+      return client.getMeasurementChanges(project, query)
+    },
+  }),
+  defineTool({
+    name: 'canonry_measurement_data_quality',
+    title: 'Inspect stored measurement data quality',
+    description: 'Before acting on a measurement, inspect its stored completeness, capture, retrieval, and comparability context. Reads stored data only; it never starts provider work.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: measurementDataQualityInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-data-quality'],
+    handler: (client, input) => {
+      const { project, ...query } = input
+      return client.getMeasurementDataQuality(project, query)
     },
   }),
   defineTool({

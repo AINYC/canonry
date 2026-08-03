@@ -14,9 +14,9 @@ export interface CanonryMcpToolkit {
 export const CANONRY_MCP_TOOLKITS: readonly CanonryMcpToolkit[] = [
   {
     name: 'monitoring',
-    title: 'Runs, snapshots, insights, health',
-    description: 'Inspect run history, query snapshots, intelligence insights, and health timelines.',
-    whenToLoad: 'Load when investigating regressions, comparing runs, or reviewing insights and health history.',
+    title: 'Measurement, runs, insights, health',
+    description: 'Inspect portfolio and Property measurement, question results, run history, intelligence insights, and health timelines.',
+    whenToLoad: 'Load when finding weak Properties, reviewing answers and competitors, checking data quality, comparing runs, or investigating regressions.',
   },
   {
     name: 'setup',
