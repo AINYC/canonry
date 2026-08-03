@@ -968,6 +968,13 @@ export function AdvancedMeasurementQueriesStep({
                 ? 'Assigning questions…'
                 : `Assign ${selectedQueryIds.length || ''} question${selectedQueryIds.length === 1 ? '' : 's'} to ${audienceLabel(activeAudience, groups, selectedPropertyCount)}`.replace('  ', ' ')}
             </Button>
+            {/*
+              Four states share this slot and each is a different height, and the
+              impact sentence itself rewraps as the counts change. Without a
+              reserved two lines, ticking a box moved the question table under
+              the cursor.
+            */}
+            <div className="min-h-[2.75rem]">
             {isPreviewingAssignmentImpact ? <p role="status" className="text-sm text-secondary">Calculating assignment impact…</p> : null}
             {assignmentImpact ? (
               <p className="text-sm text-secondary">
@@ -987,6 +994,7 @@ export function AdvancedMeasurementQueriesStep({
             ) : (
               <p className="text-sm text-secondary">{selectedQueryIds.length} question{selectedQueryIds.length === 1 ? '' : 's'} × {selectedPropertyCount} Properties = {selectedQueryIds.length * selectedPropertyCount} assignments</p>
             )}
+            </div>
             {assignmentNotice ? <p role="status" className="text-sm text-secondary">{assignmentNotice}</p> : null}
           </div>
           )}
