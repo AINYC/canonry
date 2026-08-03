@@ -333,6 +333,58 @@ export const measurementAttributionEvidenceSchema = z.object({
 }).strict()
 export type MeasurementAttributionEvidence = z.infer<typeof measurementAttributionEvidenceSchema>
 
+/** One cited URL as it hangs off the answer it was cited in. */
+export const measurementAnswerSourceSchema = z.object({
+  sourceUrl: z.string(),
+  normalizedUrl: z.string().nullable(),
+  classification: measurementAttributionClassSchema,
+  matchedTargetIds: z.array(z.string().trim().min(1)),
+  matchedUrlIds: z.array(z.string().trim().min(1)),
+}).strict()
+export type MeasurementAnswerSource = z.infer<typeof measurementAnswerSourceSchema>
+
+/**
+ * One row per ANSWER a Property was measured on, rather than one row per cited
+ * URL.
+ *
+ * The per-URL shape can only ever describe a citation: an answer that mentioned
+ * the Property without linking it has no URL to hang a row on, and an answer
+ * that did neither produces nothing at all. Both readings are the ones a reader
+ * came to the panel for, so the row is the answer and the URLs nest inside it —
+ * `sources` is empty for the answers that explain a gap.
+ *
+ * `mentioned` is nullable because `answerText` can be missing on a bridged or
+ * legacy observation. A missing signal must never render as "not mentioned":
+ * absent is not zero. `queryClass` is nullable for the same reason — a baseline
+ * usage edge belongs to no Property and so carries no frozen assignment class.
+ */
+export const measurementAnswerEvidenceSchema = z.object({
+  observationId: z.string().trim().min(1),
+  expectedSlotId: z.string().trim().min(1),
+  executionId: z.string().trim().min(1),
+  usageEdgeId: z.string().trim().min(1),
+  usageEdgeType: measurementUsageEdgeTypeSchema,
+  provider: providerNameSchema,
+  queryText: z.string().trim().min(1),
+  location: z.string().nullable(),
+  // A union rather than `.nullable()` on the shared enum: the SDK generator
+  // drops nullability from a wrapped enum ref, so `.nullable()` typed this
+  // non-nullable in TypeScript while the route legitimately returns null on a
+  // baseline edge. A consumer got no null branch for a value it can receive.
+  queryClass: z.union([z.enum(['branded', 'non-brand']), z.null()]),
+  mentioned: z.boolean().nullable(),
+  /**
+   * Null where citation capture was incomplete and nothing matched: with the
+   * sources unseen, "not cited" is a claim the run does not support.
+   */
+  cited: z.boolean().nullable(),
+  sources: z.array(measurementAnswerSourceSchema),
+  bridged: z.boolean(),
+  historical: z.boolean(),
+  evidenceComplete: z.boolean(),
+}).strict()
+export type MeasurementAnswerEvidence = z.infer<typeof measurementAnswerEvidenceSchema>
+
 export const measurementReportDiagnosticsSchema = z.object({
   bridgedObservationIds: z.array(z.string()),
   historicalObservationIds: z.array(z.string()),
@@ -363,12 +415,19 @@ export const measurementReportResponseSchema = z.object({
 export type MeasurementReportResponse = z.infer<typeof measurementReportResponseSchema>
 
 /**
- * A cursor-paged slice of one Property's source evidence.
+ * A cursor-paged slice of one Property's evidence, in the shape the caller asked
+ * for.
  *
- * The rows are the same `MeasurementAttributionEvidence` the whole-report read
- * returns — same field names, same vocabulary — narrowed to the usage edges
- * this Property owns. `measurement.state` is what a reader must render when the
- * page is empty: an unmeasured Property has no evidence, and that is not the
+ * Exactly one page is present. `evidence` carries the published per-URL rows —
+ * the same `MeasurementAttributionEvidence` the whole-report read returns, same
+ * field names, same vocabulary — narrowed to the usage edges this Property owns,
+ * and is what a request that names no `shape` gets. `answers` carries one row per
+ * measured answer instead, with the cited URLs nested inside it.
+ *
+ * The other page is ABSENT rather than empty. An empty page is a statement about
+ * a measurement; this is a statement about which reading was requested, and the
+ * two must not look alike. `measurement.state` says which is which when a page
+ * really is empty: an unmeasured Property has no evidence, and that is not the
  * same statement as a measured Property having none.
  */
 export const measurementPropertyEvidenceResponseSchema = z.object({
@@ -382,6 +441,10 @@ export const measurementPropertyEvidenceResponseSchema = z.object({
     displayedRunId: z.string().min(1).optional(),
     completedAt: z.string().datetime().optional(),
   }).strict(),
-  evidence: measurementCursorPageSchema(measurementAttributionEvidenceSchema),
-}).strict()
+  evidence: measurementCursorPageSchema(measurementAttributionEvidenceSchema).optional(),
+  answers: measurementCursorPageSchema(measurementAnswerEvidenceSchema).optional(),
+}).strict().refine(
+  response => (response.evidence === undefined) !== (response.answers === undefined),
+  { message: 'Exactly one of evidence or answers is present, naming the shape that was served.' },
+)
 export type MeasurementPropertyEvidenceResponse = z.infer<typeof measurementPropertyEvidenceResponseSchema>

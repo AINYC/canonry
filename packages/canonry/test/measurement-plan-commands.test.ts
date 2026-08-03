@@ -102,6 +102,79 @@ const PROPERTY_EVIDENCE = {
   },
 }
 
+/**
+ * The same run read as answers: one cited, one that named nobody, and one whose
+ * text never landed. The three readings the human table has to keep apart.
+ */
+const PROPERTY_ANSWERS = {
+  property: { targetKey: 'harbor-view', label: 'Harbor View' },
+  queryClass: 'branded',
+  measurement: { state: 'complete', displayedRunId: 'run-7' },
+  answers: {
+    items: [
+      {
+        observationId: 'obs-1',
+        expectedSlotId: 'slot-1',
+        executionId: 'exec-1',
+        usageEdgeId: 'target:harbor-view:q-1:exec-1',
+        usageEdgeType: 'target',
+        provider: 'openai',
+        queryText: 'harbor view reviews',
+        location: null,
+        queryClass: 'branded',
+        mentioned: true,
+        cited: true,
+        sources: [{
+          sourceUrl: 'https://example.com/locations/harbor-view',
+          normalizedUrl: 'https://example.com/locations/harbor-view',
+          classification: 'assigned',
+          matchedTargetIds: ['harbor-view'],
+          matchedUrlIds: ['harbor-view:url:0'],
+        }],
+        bridged: false,
+        historical: false,
+        evidenceComplete: true,
+      },
+      {
+        observationId: 'obs-2',
+        expectedSlotId: 'slot-2',
+        executionId: 'exec-2',
+        usageEdgeId: 'target:harbor-view:q-2:exec-2',
+        usageEdgeType: 'target',
+        provider: 'gemini',
+        queryText: 'best harbor view stays',
+        location: null,
+        queryClass: 'branded',
+        mentioned: false,
+        cited: false,
+        sources: [],
+        bridged: false,
+        historical: false,
+        evidenceComplete: true,
+      },
+      {
+        observationId: 'obs-3',
+        expectedSlotId: 'slot-3',
+        executionId: 'exec-3',
+        usageEdgeId: 'target:harbor-view:q-3:exec-3',
+        usageEdgeType: 'target',
+        provider: 'openai',
+        queryText: 'harbor view compared',
+        location: null,
+        queryClass: 'branded',
+        mentioned: null,
+        cited: false,
+        sources: [],
+        bridged: true,
+        historical: false,
+        evidenceComplete: false,
+      },
+    ],
+    nextCursor: null,
+    totalEstimate: 3,
+  },
+}
+
 function command(pathname: string) {
   const found = MEASUREMENT_PLAN_CLI_COMMANDS.find(entry => entry.path.join(' ') === pathname)
   expect(found, pathname).toBeTruthy()
@@ -368,6 +441,142 @@ describe('measurement-plan CLI commands', () => {
     log.mockRestore()
     const output = logged.join('\n')
     expect(output).toContain('Not measured yet.')
+    expect(output).not.toContain('No source evidence matched')
+  })
+
+  it('passes the evidence shape through and refuses one outside the published vocabulary', async () => {
+    await command('measurement-plan property-evidence').run({
+      positionals: ['acme'],
+      values: { 'target-key': 'harbor-view', shape: 'answers' },
+      format: 'json',
+      dryRun: false,
+    })
+
+    expect(getMeasurementPropertyEvidence).toHaveBeenCalledWith('acme', { targetKey: 'harbor-view', shape: 'answers' })
+
+    expect(() => command('measurement-plan property-evidence').run({
+      positionals: ['acme'], values: { 'target-key': 'harbor-view', shape: 'urls' }, format: 'json', dryRun: false,
+    })).toThrow('--shape must be one of sources, answers')
+  })
+
+  it('prints the answer shape as --format json byte-for-byte, exactly as it does the source shape', async () => {
+    getMeasurementPropertyEvidence.mockResolvedValueOnce(PROPERTY_ANSWERS)
+    const logged: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation(line => { logged.push(String(line)) })
+
+    await command('measurement-plan property-evidence').run({
+      positionals: ['acme'], values: { 'target-key': 'harbor-view', shape: 'answers' }, format: 'json', dryRun: false,
+    })
+
+    log.mockRestore()
+    expect(JSON.parse(logged.join('\n'))).toEqual(PROPERTY_ANSWERS)
+  })
+
+  it('streams one JSONL object per source row under a header that names the shape', async () => {
+    const written: string[] = []
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(chunk => { written.push(String(chunk)); return true })
+
+    await command('measurement-plan property-evidence').run({
+      positionals: ['acme'], values: { 'target-key': 'harbor-view' }, format: 'jsonl', dryRun: false,
+    })
+
+    write.mockRestore()
+    const lines = written.join('').trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
+    expect(lines).toHaveLength(2)
+    expect(lines[0]).toEqual({
+      kind: 'measurement-property-evidence-header',
+      shape: 'sources',
+      property: PROPERTY_EVIDENCE.property,
+      queryClass: 'branded',
+      measurement: PROPERTY_EVIDENCE.measurement,
+      totalEstimate: 1,
+      nextCursor: null,
+    })
+    expect(lines[1]).toEqual(PROPERTY_EVIDENCE.evidence.items[0])
+  })
+
+  it('streams one JSONL object per ANSWER with its sources inlined', async () => {
+    getMeasurementPropertyEvidence.mockResolvedValueOnce(PROPERTY_ANSWERS)
+    const written: string[] = []
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(chunk => { written.push(String(chunk)); return true })
+
+    await command('measurement-plan property-evidence').run({
+      positionals: ['acme'], values: { 'target-key': 'harbor-view', shape: 'answers' }, format: 'jsonl', dryRun: false,
+    })
+
+    write.mockRestore()
+    const lines = written.join('').trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
+    // One header plus one line per answer, INCLUDING the two that cited nothing:
+    // a stream that dropped them would be the flat shape under a new name.
+    expect(lines).toHaveLength(4)
+    expect(lines[0]).toMatchObject({ kind: 'measurement-property-evidence-header', shape: 'answers', totalEstimate: 3 })
+    expect(lines.slice(1)).toEqual(PROPERTY_ANSWERS.answers.items)
+    expect(lines[2]!.sources).toEqual([])
+    expect(lines[3]!.mentioned).toBeNull()
+  })
+
+  it('keeps the not-measured header in both shapes, with no rows behind it', async () => {
+    for (const shape of ['sources', 'answers'] as const) {
+      getMeasurementPropertyEvidence.mockResolvedValueOnce({
+        property: PROPERTY_EVIDENCE.property,
+        queryClass: 'branded',
+        measurement: { state: 'not_measured' },
+        ...(shape === 'answers'
+          ? { answers: { items: [], nextCursor: null, totalEstimate: 0 } }
+          : { evidence: { items: [], nextCursor: null, totalEstimate: 0 } }),
+      })
+      const written: string[] = []
+      const write = vi.spyOn(process.stdout, 'write').mockImplementation(chunk => { written.push(String(chunk)); return true })
+
+      await command('measurement-plan property-evidence').run({
+        positionals: ['acme'], values: { 'target-key': 'harbor-view', shape }, format: 'jsonl', dryRun: false,
+      })
+
+      write.mockRestore()
+      const lines = written.join('').trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
+      expect(lines, shape).toHaveLength(1)
+      // The header is the only thing that tells a row stream apart from an
+      // unmeasured Property, in either shape.
+      expect(lines[0], shape).toMatchObject({ shape, measurement: { state: 'not_measured' }, totalEstimate: 0 })
+    }
+  })
+
+  it('renders both signals per answer and says not measured where the mention is unknown', async () => {
+    getMeasurementPropertyEvidence.mockResolvedValueOnce(PROPERTY_ANSWERS)
+    const logged: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation(line => { logged.push(String(line)) })
+
+    await command('measurement-plan property-evidence').run({
+      positionals: ['acme'], values: { 'target-key': 'harbor-view', shape: 'answers' }, format: 'text', dryRun: false,
+    })
+
+    log.mockRestore()
+    const output = logged.join('\n')
+    expect(output).toContain('Mentioned')
+    expect(output).toContain('Cited')
+    // The answer that cited nobody is a row, not an omission.
+    expect(output).toContain('best harbor view stays')
+    // An unknown mention never renders as a measured "no".
+    expect(output).toContain('not measured')
+  })
+
+  it('says a measured Property matched no ANSWERS, not no source evidence, in the answer shape', async () => {
+    getMeasurementPropertyEvidence.mockResolvedValueOnce({
+      ...PROPERTY_ANSWERS,
+      answers: { items: [], nextCursor: null, totalEstimate: 0 },
+    })
+    const logged: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation(line => { logged.push(String(line)) })
+
+    await command('measurement-plan property-evidence').run({
+      positionals: ['acme'], values: { 'target-key': 'harbor-view', shape: 'answers' }, format: 'text', dryRun: false,
+    })
+
+    log.mockRestore()
+    const output = logged.join('\n')
+    // A measured Property with no answers in the filter is not a Property whose
+    // answers cited nothing, and the source wording says the wrong one.
+    expect(output).toContain('No answers matched this Property in the displayed run.')
     expect(output).not.toContain('No source evidence matched')
   })
 })

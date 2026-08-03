@@ -4659,7 +4659,7 @@ export type MeasurementPropertyEvidenceResponse = {
         displayedRunId?: string;
         completedAt?: string;
     };
-    evidence: {
+    evidence?: {
         items: Array<{
             observationId: string;
             expectedSlotId: string;
@@ -4677,6 +4677,33 @@ export type MeasurementPropertyEvidenceResponse = {
             normalizedUrl: string | null;
             matchedTargetIds: Array<string>;
             matchedUrlIds: Array<string>;
+        }>;
+        nextCursor: string | null;
+        totalEstimate?: number;
+    };
+    answers?: {
+        items: Array<{
+            observationId: string;
+            expectedSlotId: string;
+            executionId: string;
+            usageEdgeId: string;
+            usageEdgeType: 'baseline' | 'target';
+            provider: string;
+            queryText: string;
+            location: string | null;
+            queryClass: 'branded' | 'non-brand' | null;
+            mentioned: boolean | null;
+            cited: boolean | null;
+            sources: Array<{
+                sourceUrl: string;
+                normalizedUrl: string | null;
+                classification: 'assigned' | 'sibling' | 'ownedUnmapped' | 'external' | 'ambiguous' | 'invalid';
+                matchedTargetIds: Array<string>;
+                matchedUrlIds: Array<string>;
+            }>;
+            bridged: boolean;
+            historical: boolean;
+            evidenceComplete: boolean;
         }>;
         nextCursor: string | null;
         totalEstimate?: number;
@@ -9521,7 +9548,11 @@ export type GetApiV1ProjectsByNameMeasurementPropertyEvidenceData = {
          */
         runId?: string;
         /**
-         * Opaque cursor from the previous page. It pins pagination to the active revision, displayed run, evidence snapshot, and same filters; a mismatch or newly appended evidence is rejected rather than silently paged across.
+         * What one row is. sources (the default) returns one row per cited URL under evidence, which is what a caller written before this parameter existed reads. answers returns one row per measured answer under answers, with the cited URLs nested inside it, so the answers that cited nothing at all are present rather than missing. Exactly one of the two keys is returned; the other is absent, not empty.
+         */
+        shape?: 'sources' | 'answers';
+        /**
+         * Opaque cursor from the previous page. It pins pagination to the active revision, displayed run, evidence snapshot, same filters, and the shape it was issued for; a mismatch or newly appended evidence is rejected rather than silently paged across. An answer page is keyed on the slot, so a boundary never falls between one answer and its own cited URLs.
          */
         cursor?: string;
         /**

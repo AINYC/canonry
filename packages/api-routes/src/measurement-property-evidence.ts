@@ -19,14 +19,18 @@ import { createHash } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import {
+  MEASUREMENT_EVIDENCE_DEFAULT_SHAPE,
   MEASUREMENT_PAGE_DEFAULT_LIMIT,
   MEASUREMENT_PLAN_V2_SCHEMA_VERSION,
+  MeasurementEvidenceShapes,
   measurementPropertyEvidenceQuerySchema,
   measurementPropertyEvidenceResponseSchema,
   notFound,
   RunStatuses,
   validationError,
+  type MeasurementAnswerEvidence,
   type MeasurementAttributionEvidence,
+  type MeasurementEvidenceShape,
   type MeasurementPlanV2,
   type MeasurementPropertyEvidenceQuery,
   type MeasurementPropertyEvidenceResponse,
@@ -55,6 +59,7 @@ import {
 interface EvidenceCursor {
   v: 1
   key: string
+  shape: MeasurementEvidenceShape
   displayedRunId: string
   filterFingerprint: string
   planVersionId: string
@@ -93,16 +98,35 @@ function evidenceFingerprintOf(snapshots: readonly typeof querySnapshots.$inferS
 }
 
 /**
- * One evidence row is identified by the slot it was observed in, the usage edge
+ * One source row is identified by the slot it was observed in, the usage edge
  * that claimed it, and the source URL. `prepareReport` already orders rows by
  * exactly those three, so the identity and the ordering cannot drift apart.
  */
-function rowKey(row: MeasurementAttributionEvidence): string {
+function sourceRowKey(row: MeasurementAttributionEvidence): string {
   return [row.expectedSlotId, row.usageEdgeId, row.sourceUrl].join('\u0000')
 }
 
+/**
+ * One answer row is identified by the slot and the usage edge alone — the pair
+ * the kernel sorts `answers` by. Keying on the slot rather than on a URL is what
+ * makes a page boundary fall BETWEEN answers: an answer's cited URLs travel
+ * nested inside its row, so there is nothing left for a boundary to split.
+ */
+function answerRowKey(row: MeasurementAnswerEvidence): string {
+  return [row.expectedSlotId, row.usageEdgeId].join('\u0000')
+}
+
+/**
+ * The default shape omits the field, so a cursor over the published per-URL rows
+ * is byte-identical to one minted before this parameter existed and a caller
+ * mid-walk when it deploys keeps its place.
+ */
 function encodeCursor(cursor: EvidenceCursor): string {
-  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
+  const { shape, ...rest } = cursor
+  return Buffer.from(
+    JSON.stringify(shape === MEASUREMENT_EVIDENCE_DEFAULT_SHAPE ? rest : { ...rest, shape }),
+    'utf8',
+  ).toString('base64url')
 }
 
 function parseCursor(value: string): EvidenceCursor | null {
@@ -115,9 +139,14 @@ function parseCursor(value: string): EvidenceCursor | null {
       const candidate = cursor[field]
       if (typeof candidate !== 'string' || candidate.length === 0) return null
     }
+    // A cursor carrying no shape is one this route minted before the parameter
+    // existed, and could only ever have named the default.
+    const shape = cursor.shape === undefined ? MEASUREMENT_EVIDENCE_DEFAULT_SHAPE : cursor.shape
+    if (shape !== MeasurementEvidenceShapes.sources && shape !== MeasurementEvidenceShapes.answers) return null
     return {
       v: 1,
       key: cursor.key as string,
+      shape,
       displayedRunId: cursor.displayedRunId as string,
       filterFingerprint: cursor.filterFingerprint as string,
       planVersionId: cursor.planVersionId as string,
@@ -151,6 +180,13 @@ function selectDisplayedRun(
   throw runRevisionMismatch(run.id, pinned, active.version.revision)
 }
 
+/**
+ * Both readings of one result set.
+ *
+ * `buildMeasurementEvidence` derives the per-URL rows from the answer rows in a
+ * single pass, and the same edge/provider/location predicate narrows both here,
+ * so the two shapes cannot select different evidence out of the same run.
+ */
 function propertyEvidenceRows(
   db: DatabaseClient,
   plan: MeasurementPlanV2,
@@ -158,7 +194,11 @@ function propertyEvidenceRows(
   run: typeof runs.$inferSelect,
   query: MeasurementPropertyEvidenceQuery,
   queryClass: MeasurementQueryClassFilter,
-): { rows: MeasurementAttributionEvidence[]; evidenceFingerprint: string } {
+): {
+  sources: MeasurementAttributionEvidence[]
+  answers: MeasurementAnswerEvidence[]
+  evidenceFingerprint: string
+} {
   const snapshots = db.select().from(querySnapshots).where(eq(querySnapshots.runId, run.id)).all()
   const manifest = measurementRunExpectedSlots(run, plan)
   const { input, edgeQueryClass } = buildMeasurementPlanV2ReportInput(active.version.revision, plan, manifest, snapshots)
@@ -173,26 +213,53 @@ function propertyEvidenceRows(
 
   const provider = query.provider === undefined ? undefined : normalizedText(query.provider)
   const location = query.location === undefined ? undefined : normalizeMeasurementLocation(query.location)
-  const rows = buildMeasurementEvidence(input).evidence.filter(row => (
+  const owned = (row: { usageEdgeId: string; provider: string; location: string | null }): boolean => (
     ownEdgeIds.has(row.usageEdgeId)
     && (provider === undefined || row.provider === provider)
     && (location === undefined || normalizeMeasurementLocation(row.location) === location)
-  ))
-  return { rows, evidenceFingerprint: evidenceFingerprintOf(snapshots) }
+  )
+
+  const built = buildMeasurementEvidence(input)
+  return {
+    sources: built.evidence.filter(owned),
+    answers: built.answers.filter(owned),
+    evidenceFingerprint: evidenceFingerprintOf(snapshots),
+  }
 }
 
-function pageOf(
-  rows: readonly MeasurementAttributionEvidence[],
+interface CursorPage<Row> {
+  items: Row[]
+  nextCursor: string | null
+  totalEstimate: number
+}
+
+/**
+ * `keyOf` is what makes the page boundary land where the shape needs it: the
+ * per-URL rows key on the URL, the answer rows key on the (slot, usage edge)
+ * pair. Both are the exact tuple the kernel sorted by, so a cursor key and the
+ * ordering it walks cannot drift apart.
+ */
+function pageOf<Row>(
+  rows: readonly Row[],
+  keyOf: (row: Row) => string,
+  shape: MeasurementEvidenceShape,
   query: MeasurementPropertyEvidenceQuery,
   displayedRunId: string,
   planVersionId: string,
   evidenceFingerprint: string,
-): MeasurementPropertyEvidenceResponse['evidence'] {
+): CursorPage<Row> {
   const limit = query.limit ?? MEASUREMENT_PAGE_DEFAULT_LIMIT
   let offset = 0
   if (query.cursor !== undefined) {
     const cursor = parseCursor(query.cursor)
     if (cursor === null) throw validationError('The measurement property evidence cursor is not readable.')
+    // The shapes key their rows differently, so a cursor crossing between them
+    // would name a row identity the other shape never mints. Refused by name
+    // rather than folded into the filter mismatch below, which says nothing
+    // about which reading the caller asked for.
+    if (cursor.shape !== shape) {
+      throw validationError('The measurement property evidence cursor shape does not match the request.')
+    }
     if (cursor.filterFingerprint !== filterFingerprint(query)) {
       throw validationError('The measurement property evidence cursor filters do not match the request.')
     }
@@ -205,7 +272,7 @@ function pageOf(
     if (cursor.evidenceFingerprint !== evidenceFingerprint) {
       throw validationError('The measurement property evidence changed between pages.')
     }
-    const index = rows.findIndex(row => rowKey(row) === cursor.key)
+    const index = rows.findIndex(row => keyOf(row) === cursor.key)
     if (index < 0) throw validationError('The measurement property evidence cursor does not belong to this result set.')
     offset = index + 1
   }
@@ -218,7 +285,8 @@ function pageOf(
       ? null
       : encodeCursor({
           v: 1,
-          key: rowKey(last),
+          key: keyOf(last),
+          shape,
           displayedRunId,
           filterFingerprint: filterFingerprint(query),
           planVersionId,
@@ -249,6 +317,7 @@ export async function measurementPropertyEvidenceRoutes(app: FastifyInstance) {
       if (!target) throw validationError(`Measurement Property "${query.targetKey}" is not in the active revision.`)
 
       const queryClass = query.queryClass ?? 'all'
+      const shape = query.shape ?? MEASUREMENT_EVIDENCE_DEFAULT_SHAPE
       const property = { targetKey: target.stableKey, label: target.label }
       // A cursor pins the run it was issued against. Re-selecting the latest run
       // here meant a sweep completing between two pages moved the result set and
@@ -261,15 +330,21 @@ export async function measurementPropertyEvidenceRoutes(app: FastifyInstance) {
         if (query.cursor !== undefined) {
           throw validationError('The measurement property evidence cursor does not belong to this result set.')
         }
+        const empty = { items: [], nextCursor: null, totalEstimate: 0 }
         return measurementPropertyEvidenceResponseSchema.parse({
           property,
           queryClass,
           measurement: { state: 'not_measured' },
-          evidence: { items: [], nextCursor: null, totalEstimate: 0 },
+          // The page still arrives under the key the caller's shape names. An
+          // unmeasured Property has no rows in EITHER reading, and swapping the
+          // key here would read as "that shape is unavailable" instead.
+          ...(shape === MeasurementEvidenceShapes.answers ? { answers: empty } : { evidence: empty }),
         } satisfies MeasurementPropertyEvidenceResponse)
       }
 
-      const { rows, evidenceFingerprint } = propertyEvidenceRows(app.db, plan, active, displayed, query, queryClass)
+      const { sources, answers, evidenceFingerprint } =
+        propertyEvidenceRows(app.db, plan, active, displayed, query, queryClass)
+      const pageArgs = [shape, query, displayed.id, active.version.id, evidenceFingerprint] as const
       return measurementPropertyEvidenceResponseSchema.parse({
         property,
         queryClass,
@@ -278,7 +353,9 @@ export async function measurementPropertyEvidenceRoutes(app: FastifyInstance) {
           displayedRunId: displayed.id,
           ...(displayed.finishedAt ? { completedAt: displayed.finishedAt } : {}),
         },
-        evidence: pageOf(rows, query, displayed.id, active.version.id, evidenceFingerprint),
+        ...(shape === MeasurementEvidenceShapes.answers
+          ? { answers: pageOf(answers, answerRowKey, ...pageArgs) }
+          : { evidence: pageOf(sources, sourceRowKey, ...pageArgs) }),
       } satisfies MeasurementPropertyEvidenceResponse)
     },
   )

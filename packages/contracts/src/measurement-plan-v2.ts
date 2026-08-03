@@ -505,6 +505,24 @@ export const measurementOverviewResponseSchema = z.object({
 export type MeasurementOverviewResponse = z.output<typeof measurementOverviewResponseSchema>
 
 /**
+ * What one evidence row is.
+ *
+ * `sources` is one row per cited URL — the published shape, and the only thing
+ * a caller written before this parameter existed can read. It can describe a
+ * citation and nothing else: an answer that mentioned the Property without
+ * linking it has no URL to hang a row on, and an answer that did neither
+ * produces no row at all.
+ *
+ * `answers` is one row per answer the Property was measured on, with the cited
+ * URLs nested inside it, so the answers that explain a gap are present rather
+ * than missing.
+ */
+export const measurementEvidenceShapeSchema = z.enum(['sources', 'answers'])
+export type MeasurementEvidenceShape = z.output<typeof measurementEvidenceShapeSchema>
+export const MeasurementEvidenceShapes = measurementEvidenceShapeSchema.enum
+export const MEASUREMENT_EVIDENCE_DEFAULT_SHAPE: MeasurementEvidenceShape = MeasurementEvidenceShapes.sources
+
+/**
  * Source evidence for exactly one Property.
  *
  * `targetKey` is required rather than optional: the whole point of this read is
@@ -519,6 +537,8 @@ export const measurementPropertyEvidenceQuerySchema = z.object({
   provider: providerNameSchema.optional(),
   location: z.string().trim().min(1).optional(),
   runId: z.string().trim().min(1).optional(),
+  /** Omit for the published per-URL rows. A cursor is bound to the shape that issued it. */
+  shape: measurementEvidenceShapeSchema.optional(),
   cursor: z.string().trim().min(1).optional(),
   limit: z.number().int().positive().max(MEASUREMENT_PAGE_MAX_LIMIT).optional(),
 }).strict()

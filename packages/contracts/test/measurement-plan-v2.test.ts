@@ -9,6 +9,7 @@ import {
   measurementOverviewSortSchema,
   measurementPlanV2ChecksumJson,
   measurementPlanV2Schema,
+  measurementPropertyEvidenceQuerySchema,
   measurementV2StableKeySchema,
   type MeasurementPlanV2,
 } from '../src/measurement-plan-v2.js'
@@ -289,5 +290,14 @@ describe('v2 referential integrity', () => {
 
   it('still accepts a plan whose edges all resolve', () => {
     expect(measurementPlanV2Schema.safeParse(planV2()).success).toBe(true)
+  })
+
+  it('reads the evidence shape as an opt-in, defaulting by absence to the published per-URL rows', () => {
+    const omitted = measurementPropertyEvidenceQuerySchema.parse({ targetKey: 'harbor' })
+    expect(omitted.shape).toBeUndefined()
+
+    expect(measurementPropertyEvidenceQuerySchema.parse({ targetKey: 'harbor', shape: 'sources' }).shape).toBe('sources')
+    expect(measurementPropertyEvidenceQuerySchema.parse({ targetKey: 'harbor', shape: 'answers' }).shape).toBe('answers')
+    expect(measurementPropertyEvidenceQuerySchema.safeParse({ targetKey: 'harbor', shape: 'urls' }).success).toBe(false)
   })
 })

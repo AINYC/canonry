@@ -413,6 +413,11 @@ export function buildMeasurementPlanV2ReportInput(
         type: 'target' as const,
         executionId: manifestExecutionId(edge.executionNodeKey),
         targetId: edge.targetKey,
+        // Stamped on the edge as well as returned in `edgeQueryClass`: the map
+        // SELECTS edges for the class filter, the field REPORTS the class on the
+        // row. One question can be Branded for one Property and Non-brand for
+        // another, so the class belongs to the assignment, not to the question.
+        queryClass: classByAssignment.get(`${edge.targetKey}:${edge.queryId}`) ?? null,
       })),
       observations: observationInputs(manifest, snapshots, false),
     },

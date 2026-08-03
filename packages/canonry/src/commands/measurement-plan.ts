@@ -1,18 +1,22 @@
 import fs from 'node:fs'
 import { parse } from 'yaml'
 import {
+  MeasurementEvidenceShapes,
   measurementDiscoveryRequestSchema,
   measurementDiscoveryRuleSchema,
   measurementPlanInputSchema,
+  type MeasurementAnswerEvidence,
+  type MeasurementAttributionEvidence,
   type MeasurementDiscoveryRequest,
   type MeasurementDiscoveryRule,
+  type MeasurementEvidenceShape,
   type MeasurementOverviewResponse,
   type MeasurementPlanInput,
   type MeasurementPropertyEvidenceResponse,
   type MeasurementQueryClassFilter,
   type MetricValue,
 } from '@ainyc/canonry-contracts'
-import { isMachineFormat } from '../cli-error.js'
+import { isMachineFormat, systemError } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
 import { createApiClient } from '../client.js'
 
@@ -149,14 +153,37 @@ export interface MeasurementPropertyEvidenceOptions {
   provider?: string
   location?: string
   runId?: string
+  shape?: MeasurementEvidenceShape
   cursor?: string
   limit?: number
   format?: string
 }
 
+interface ShapedPage<Row> {
+  items: Row[]
+  nextCursor: string | null
+  totalEstimate?: number
+}
+
+type ShapedEvidencePage =
+  | ({ shape: typeof MeasurementEvidenceShapes.sources } & ShapedPage<MeasurementAttributionEvidence>)
+  | ({ shape: typeof MeasurementEvidenceShapes.answers } & ShapedPage<MeasurementAnswerEvidence>)
+
+/**
+ * Which page arrived IS the shape the endpoint served, so the header and the
+ * rows under it are read off one value and cannot disagree. Neither page
+ * present is a broken contract rather than an empty result, and saying so is
+ * the only reading that is not a lie about the measurement.
+ */
+function shapedPage(response: MeasurementPropertyEvidenceResponse): ShapedEvidencePage {
+  if (response.answers !== undefined) return { shape: MeasurementEvidenceShapes.answers, ...response.answers }
+  if (response.evidence !== undefined) return { shape: MeasurementEvidenceShapes.sources, ...response.evidence }
+  throw systemError('The measurement property evidence response carried neither an evidence nor an answers page.')
+}
+
 /**
  * `canonry measurement-plan property-evidence <project> --target-key <key>` —
- * one Property's source evidence, cursor-paged exactly like the endpoint.
+ * one Property's evidence, cursor-paged exactly like the endpoint.
  */
 export async function showMeasurementPropertyEvidence(
   project: string,
@@ -168,23 +195,27 @@ export async function showMeasurementPropertyEvidence(
     ...(opts.provider === undefined ? {} : { provider: opts.provider }),
     ...(opts.location === undefined ? {} : { location: opts.location }),
     ...(opts.runId === undefined ? {} : { runId: opts.runId }),
+    ...(opts.shape === undefined ? {} : { shape: opts.shape }),
     ...(opts.cursor === undefined ? {} : { cursor: opts.cursor }),
     ...(opts.limit === undefined ? {} : { limit: opts.limit }),
   })
 
   if (opts.format === 'jsonl') {
+    const page = shapedPage(response)
     // A bare row stream cannot tell an unmeasured Property from a measured one
-    // with no evidence, and drops the run and cursor a consumer needs to page.
-    // The header line carries that state; the rows follow unchanged.
+    // with no evidence, drops the run and cursor a consumer needs to page, and
+    // — now that a row can be a URL or a whole answer — cannot say what it is
+    // streaming. The header line carries all three; the rows follow unchanged.
     emitJsonl([{
       kind: 'measurement-property-evidence-header' as const,
+      shape: page.shape,
       property: response.property,
       queryClass: response.queryClass,
       measurement: response.measurement,
-      totalEstimate: response.evidence.totalEstimate ?? null,
-      nextCursor: response.evidence.nextCursor ?? null,
+      totalEstimate: page.totalEstimate ?? null,
+      nextCursor: page.nextCursor ?? null,
     }])
-    emitJsonl(response.evidence.items)
+    emitJsonl(page.items)
     return
   }
   if (opts.format === 'json') {
@@ -192,6 +223,16 @@ export async function showMeasurementPropertyEvidence(
     return
   }
   printMeasurementPropertyEvidence(response)
+}
+
+/**
+ * A signal that was never read prints as the absence it is. "no" is a
+ * measurement; a bridged or legacy answer with no text to search is not one,
+ * and the two must not look alike in a terminal either.
+ */
+function signalText(signal: boolean | null): string {
+  if (signal === null) return 'not measured'
+  return signal ? 'yes' : 'no'
 }
 
 function printMeasurementPropertyEvidence(response: MeasurementPropertyEvidenceResponse): void {
@@ -203,18 +244,36 @@ function printMeasurementPropertyEvidence(response: MeasurementPropertyEvidenceR
     console.log(lines.join('\n'))
     return
   }
-  const page = response.evidence
+  const page = shapedPage(response)
+  const answerShape = page.shape === MeasurementEvidenceShapes.answers
   lines.push(`Measurement: ${response.measurement.state}${response.measurement.displayedRunId ? ` · run ${response.measurement.displayedRunId}` : ''}`)
   if (page.items.length === 0) {
-    lines.push('No source evidence matched this Property in the displayed run.')
+    // Named for what was looked for. "No source evidence" under the answer
+    // shape would report a Property whose answers cited nothing as a Property
+    // with no answers at all.
+    lines.push(answerShape
+      ? 'No answers matched this Property in the displayed run.'
+      : 'No source evidence matched this Property in the displayed run.')
     console.log(lines.join('\n'))
     return
   }
-  lines.push(`${page.items.length} of ${page.totalEstimate ?? page.items.length} evidence rows`)
+  lines.push(`${page.items.length} of ${page.totalEstimate ?? page.items.length} ${answerShape ? 'answers' : 'evidence rows'}`)
   lines.push('')
-  lines.push(`${'Match'.padEnd(14)}${'Engine'.padEnd(12)}${'Question'.padEnd(40)}URL`)
-  for (const item of page.items) {
-    lines.push(`${item.classification.padEnd(14)}${item.provider.padEnd(12)}${item.queryText.slice(0, 39).padEnd(40)}${item.sourceUrl}`)
+  if (page.shape === MeasurementEvidenceShapes.answers) {
+    // Both signals on every row: a single cell that flipped between them would
+    // leave a reader unable to tell which one they are looking at.
+    lines.push(`${'Engine'.padEnd(12)}${'Question'.padEnd(40)}${'Mentioned'.padEnd(15)}${'Cited'.padEnd(8)}Sources`)
+    for (const item of page.items) {
+      lines.push(
+        `${item.provider.padEnd(12)}${item.queryText.slice(0, 39).padEnd(40)}`
+        + `${signalText(item.mentioned).padEnd(15)}${signalText(item.cited).padEnd(8)}${item.sources.length}`,
+      )
+    }
+  } else {
+    lines.push(`${'Match'.padEnd(14)}${'Engine'.padEnd(12)}${'Question'.padEnd(40)}URL`)
+    for (const item of page.items) {
+      lines.push(`${item.classification.padEnd(14)}${item.provider.padEnd(12)}${item.queryText.slice(0, 39).padEnd(40)}${item.sourceUrl}`)
+    }
   }
   if (page.nextCursor) lines.push(`\nMore rows: --cursor ${page.nextCursor}`)
   console.log(lines.join('\n'))

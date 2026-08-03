@@ -17,6 +17,10 @@ import { jsonResponse, mockFetch, pathOf } from './mock-fetch.js'
 
 const TARGET_KEY = 'harbor-house'
 const RUN_ID = 'run-synthetic'
+const OWN_URL = 'https://locations.example/harbor-house'
+const NEARBY_QUESTION = 'boutique hotels near the harbor'
+/** The panel now reads one row per ANSWER, so every request carries the shape. */
+const EVIDENCE_SHAPE = 'answers' as const
 
 type Metric =
   | { state: 'available'; value: number; numerator: number; denominator: number }
@@ -144,40 +148,93 @@ function overviewResponse(queryClass: 'branded' | 'non-brand', row: {
   }
 }
 
-function evidenceResponse() {
+type AnswerSource = {
+  sourceUrl: string
+  normalizedUrl: string | null
+  classification: 'assigned' | 'sibling' | 'ownedUnmapped' | 'external' | 'ambiguous' | 'invalid'
+  matchedTargetIds: string[]
+  matchedUrlIds: string[]
+}
+
+const ownSource = (url: string = OWN_URL): AnswerSource => ({
+  sourceUrl: url,
+  normalizedUrl: url,
+  classification: 'assigned',
+  matchedTargetIds: [TARGET_KEY],
+  matchedUrlIds: [`${TARGET_KEY}:url:0`],
+})
+
+const externalSource = (url: string): AnswerSource => ({
+  sourceUrl: url,
+  normalizedUrl: url,
+  classification: 'external',
+  matchedTargetIds: [],
+  matchedUrlIds: [],
+})
+
+/**
+ * One answer as this Property saw it. `mentioned` defaults to a measured miss
+ * so a test that cares about the unknown case has to say so out loud.
+ */
+function answerRow(overrides: {
+  slot: string
+  queryText?: string
+  mentioned?: boolean | null
+  cited?: boolean
+  sources?: AnswerSource[]
+  provider?: string
+  location?: string | null
+  historical?: boolean
+}) {
+  const sources = overrides.sources ?? []
+  return {
+    observationId: `obs-${overrides.slot}`,
+    expectedSlotId: `slot:${overrides.slot}`,
+    executionId: 'node-nearby',
+    usageEdgeId: `target:${TARGET_KEY}:query-nearby:node-nearby`,
+    usageEdgeType: 'target' as const,
+    provider: overrides.provider ?? 'openai',
+    queryText: overrides.queryText ?? NEARBY_QUESTION,
+    location: overrides.location ?? null,
+    queryClass: 'non-brand' as const,
+    mentioned: overrides.mentioned === undefined ? false : overrides.mentioned,
+    cited: overrides.cited ?? sources.some(source => source.classification === 'assigned'),
+    sources,
+    bridged: false,
+    historical: overrides.historical ?? false,
+    evidenceComplete: true,
+  }
+}
+
+function evidenceResponse(
+  items: ReturnType<typeof answerRow>[] = [answerRow({ slot: 'nearby', mentioned: true, sources: [ownSource()] })],
+) {
   return {
     property: { targetKey: TARGET_KEY, label: 'Harbor House' },
     queryClass: 'non-brand' as const,
     measurement: { state: 'complete' as const, displayedRunId: RUN_ID },
-    evidence: {
-      items: [{
-        observationId: 'obs-1',
-        expectedSlotId: 'slot:node-nearby:openai',
-        executionId: 'node-nearby',
-        usageEdgeId: `target:${TARGET_KEY}:query-nearby:node-nearby`,
-        usageEdgeType: 'target' as const,
-        provider: 'openai',
-        queryText: 'boutique hotels near the harbor',
-        location: null,
-        sourceUrl: 'https://locations.example/harbor-house',
-        bridged: false,
-        historical: false,
-        evidenceComplete: true,
-        classification: 'assigned' as const,
-        normalizedUrl: 'https://locations.example/harbor-house',
-        matchedTargetIds: [TARGET_KEY],
-        matchedUrlIds: [`${TARGET_KEY}:url:0`],
-      }],
-      nextCursor: null,
-      totalEstimate: 1,
+    answers: {
+      items,
+      nextCursor: null as string | null,
+      totalEstimate: items.length,
     },
   }
+}
+
+/** The panel's own table, addressed by the caption every test shares. */
+function answersTable() {
+  return screen.findByRole('table', { name: 'Answers measured for this Property' })
+}
+
+function answerFor(table: HTMLElement, queryText: string): HTMLElement {
+  return within(table).getByText(queryText).closest('tr')!
 }
 
 async function renderPropertyPage(options: {
   branded: ReturnType<typeof overviewResponse>
   nonBrand: ReturnType<typeof overviewResponse>
   plan?: ReturnType<typeof planResponse> | ReturnType<typeof legacyPlanResponse>
+  evidence?: ReturnType<typeof evidenceResponse>
 }): Promise<void> {
   const fixture = createDashboardFixture({})
   const projectName = fixture.dashboard.projects.find(project => project.project.id === 'project_citypoint')!.project.name
@@ -197,7 +254,13 @@ async function renderPropertyPage(options: {
       response,
     )
   }
-  const evidenceQuery = { targetKey: TARGET_KEY, queryClass: 'non-brand' as const, limit: 50, runId: RUN_ID }
+  const evidenceQuery = {
+    targetKey: TARGET_KEY,
+    queryClass: 'non-brand' as const,
+    shape: EVIDENCE_SHAPE,
+    limit: 50,
+    runId: RUN_ID,
+  }
   queryClient.setQueryData(
     getApiV1ProjectsByNameMeasurementPropertyEvidenceInfiniteQueryKey({
       client: heyClient,
@@ -205,7 +268,7 @@ async function renderPropertyPage(options: {
       query: evidenceQuery,
     }),
     {
-      pages: [evidenceResponse()],
+      pages: [options.evidence ?? evidenceResponse()],
       pageParams: [{ path: { name: projectName }, query: evidenceQuery }],
     },
   )
@@ -321,7 +384,10 @@ describe('Property page', () => {
     })
     const branded = within(contrast).getByText('When they know your name').closest('tr')!
     expect(within(branded).getAllByText('50%')).toHaveLength(2)
-    const evidence = await screen.findByRole('table', { name: 'Source evidence for this Property' })
+    // The evidence panel is now one row per ANSWER, so the row that survives a
+    // failed refresh is addressed by its question rather than by a cited URL —
+    // the URL moved inside the row and is collapsed by default.
+    const evidence = await answersTable()
 
     await queryClient.refetchQueries({
       exact: true,
@@ -334,7 +400,7 @@ describe('Property page', () => {
 
     await screen.findByText('Refresh failed.')
     expect(within(branded).getAllByText('50%')).toHaveLength(2)
-    expect(within(evidence).getByText('https://locations.example/harbor-house')).toBeTruthy()
+    expect(within(evidence).getByText(NEARBY_QUESTION)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Retry branded questions' }))
     await waitFor(() => expect(within(branded).getAllByText('100%')).toHaveLength(2))
     expect(brandedAttempts).toBe(3)
@@ -354,7 +420,8 @@ describe('Property page', () => {
     const contrast = await screen.findByRole('table', {
       name: 'Mention and citation coverage for this Property, split by question class',
     })
-    const evidence = await screen.findByRole('table', { name: 'Source evidence for this Property' })
+    // Same rename as above: the panel's caption follows the answer rows.
+    const evidence = await answersTable()
     failRefresh = true
     await Promise.all([
       queryClient.refetchQueries({
@@ -373,12 +440,17 @@ describe('Property page', () => {
 
     expect(screen.queryByText('Could not load this Property.')).toBeNull()
     expect(contrast).toBeTruthy()
-    expect(within(evidence).getByText('https://locations.example/harbor-house')).toBeTruthy()
+    expect(within(evidence).getByText(NEARBY_QUESTION)).toBeTruthy()
     await waitFor(() => expect(screen.getAllByText('Refresh failed.')).toHaveLength(2))
   })
 
-  it('keeps loaded evidence on a next-page failure and retries that page from one alert', async () => {
+  // A failed "show more" must never take the loaded rows down with it — the
+  // panel is an explanation of a gap, and blanking it turns a paging hiccup
+  // into "there is no evidence". Rewritten for the answer rows: the first page
+  // is now addressed by its question, not by a cited URL.
+  it('keeps the loaded answers on a next-page failure and retries that page from one alert', async () => {
     let nextPageAttempts = 0
+    const secondPage = evidenceResponse([answerRow({ slot: 'dining', queryText: 'harbour restaurants with rooms above' })])
     await renderPropertyPageFromApi(url => {
       const path = pathOf(url)
       if (path.includes('/measurement-property-evidence')) {
@@ -387,33 +459,24 @@ describe('Property page', () => {
           if (nextPageAttempts === 1) {
             return new Response(JSON.stringify({ message: 'temporary failure' }), { status: 500, headers: { 'content-type': 'application/json' } })
           }
-          return jsonResponse({
-            ...evidenceResponse(),
-            evidence: {
-              ...evidenceResponse().evidence,
-              items: [{ ...evidenceResponse().evidence.items[0], observationId: 'obs-2', sourceUrl: 'https://locations.example/harbor-house/dining' }],
-              nextCursor: null,
-              totalEstimate: 2,
-            },
-          })
+          return jsonResponse({ ...secondPage, answers: { ...secondPage.answers, totalEstimate: 2 } })
         }
-        return jsonResponse({
-          ...evidenceResponse(),
-          evidence: { ...evidenceResponse().evidence, nextCursor: 'next', totalEstimate: 2 },
-        })
+        const first = evidenceResponse()
+        return jsonResponse({ ...first, answers: { ...first.answers, nextCursor: 'next', totalEstimate: 2 } })
       }
       return propertyPageResponses()(url)
     })
 
-    const evidence = await screen.findByRole('table', { name: 'Source evidence for this Property' })
+    const evidence = await answersTable()
     fireEvent.click(screen.getByRole('button', { name: 'Show 50 more' }))
     expect((await screen.findByRole('alert')).textContent).toContain('Could not load more evidence.')
     expect(screen.getAllByRole('alert')).toHaveLength(1)
-    expect(within(evidence).getByText('https://locations.example/harbor-house')).toBeTruthy()
+    expect(within(evidence).getByText(NEARBY_QUESTION)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry more evidence' })).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry more evidence' }))
-    await waitFor(() => expect(within(evidence).getByText('https://locations.example/harbor-house/dining')).toBeTruthy())
+    await waitFor(() => expect(within(evidence).getByText('harbour restaurants with rooms above')).toBeTruthy())
+    expect(within(evidence).getByText(NEARBY_QUESTION)).toBeTruthy()
     expect(nextPageAttempts).toBe(2)
   })
 
@@ -534,15 +597,166 @@ describe('Property page', () => {
     })
 
     const questions = await screen.findByRole('table', { name: 'Questions assigned to this Property' })
-    expect(within(questions).getByText('boutique hotels near the harbor')).toBeTruthy()
+    expect(within(questions).getByText(NEARBY_QUESTION)).toBeTruthy()
 
     const urls = screen.getByRole('table', { name: 'URL matchers configured for this Property' })
     expect(within(urls).getByText('https://locations.example/harbor-house/*')).toBeTruthy()
 
-    const evidence = await screen.findByRole('table', { name: 'Source evidence for this Property' })
+    // The cited URL and its classification moved inside the answer row, so this
+    // assertion now expands the answer before reading them.
+    const evidence = await answersTable()
+    fireEvent.click(within(evidence).getByRole('button', { name: `Show sources for ${NEARBY_QUESTION}` }))
     expect(within(evidence).getByText('Matches this Property')).toBeTruthy()
-    expect(within(evidence).getByText('https://locations.example/harbor-house')).toBeTruthy()
+    expect(within(evidence).getByText(OWN_URL)).toBeTruthy()
     expect(screen.queryByText(/revision \d+/i)).toBeNull()
     expect(screen.getByLabelText('Question type').className).toContain('h-11')
+  })
+})
+
+describe('Property answer evidence', () => {
+  const measuredNonBrand = overviewResponse('non-brand', {
+    mentionCoverage: available(1, 4),
+    citationCoverage: available(0, 4),
+  })
+  const measuredBranded = overviewResponse('branded', {
+    mentionCoverage: unavailable('no_population'),
+    citationCoverage: unavailable('no_population'),
+  })
+
+  async function renderAnswers(items: ReturnType<typeof answerRow>[]) {
+    await renderPropertyPage({
+      branded: measuredBranded,
+      nonBrand: measuredNonBrand,
+      evidence: evidenceResponse(items),
+    })
+    return answersTable()
+  }
+
+  it('renders an answer row for every measured answer when this Property was cited in none of them', async () => {
+    const evidence = await renderAnswers([
+      answerRow({ slot: 'a', queryText: 'where to stay by the water' }),
+      answerRow({ slot: 'b', queryText: 'best small hotels in the old port' }),
+      answerRow({ slot: 'c', queryText: 'quiet hotels with harbour views' }),
+    ])
+
+    // Three answers, zero citations. The per-URL shape had nothing to emit for
+    // any of them, which is exactly the gap this panel exists to show.
+    expect(within(evidence).getAllByRole('row')).toHaveLength(4)
+    expect(within(evidence).getByText('where to stay by the water')).toBeTruthy()
+    expect(within(evidence).getByText('quiet hotels with harbour views')).toBeTruthy()
+    expect(screen.queryByText('No answers matched this Property in the displayed measurement.')).toBeNull()
+  })
+
+  it('renders a mention with no citation as mentioned yes and cited no', async () => {
+    const evidence = await renderAnswers([
+      answerRow({
+        slot: 'a',
+        queryText: 'where to stay by the water',
+        mentioned: true,
+        sources: [externalSource('https://guide.example/harbour-stays')],
+      }),
+    ])
+    const row = answerFor(evidence, 'where to stay by the water')
+
+    expect(within(row).getByText('Mentioned')).toBeTruthy()
+    expect(within(row).getByText('Not cited')).toBeTruthy()
+    expect(within(row).queryByText('Not mentioned')).toBeNull()
+    expect(within(row).queryByText('Cited')).toBeNull()
+  })
+
+  it('renders an unread mention as Not measured with its reason and never as a zero', async () => {
+    const evidence = await renderAnswers([
+      answerRow({ slot: 'a', queryText: 'where to stay by the water', mentioned: null }),
+      answerRow({ slot: 'b', queryText: 'best small hotels in the old port', mentioned: null, historical: true }),
+    ])
+    const unread = answerFor(evidence, 'where to stay by the water')
+    const recovered = answerFor(evidence, 'best small hotels in the old port')
+
+    expect(within(unread).getByText('Not measured')).toBeTruthy()
+    expect(within(unread).getByText('No answer text to read')).toBeTruthy()
+    // Was: asserted "Recovered from an earlier run without its answer text".
+    // The wire says the signal is unreadable, never why, so naming a cause was a
+    // provenance claim the response does not carry.
+    expect(within(recovered).getByText('No answer text to read')).toBeTruthy()
+
+    // An absent signal is not a measured zero. Neither the row nor the panel
+    // may put a number on it.
+    expect(within(unread).queryByText('Not mentioned')).toBeNull()
+    expect(within(unread).queryByText('0%')).toBeNull()
+    expect(within(evidence).queryByText('0%')).toBeNull()
+    expect(within(evidence).queryByText(/0%/)).toBeNull()
+  })
+
+  it('puts losses above wins by default', async () => {
+    const evidence = await renderAnswers([
+      answerRow({ slot: 'a', queryText: 'won both ways', mentioned: true, sources: [ownSource()] }),
+      answerRow({ slot: 'b', queryText: 'mentioned only', mentioned: true }),
+      answerRow({ slot: 'c', queryText: 'mention never read', mentioned: null }),
+      answerRow({ slot: 'd', queryText: 'lost both ways' }),
+    ])
+
+    const order = within(evidence)
+      .getAllByRole('row')
+      .slice(1)
+      .map(row => row.querySelector('td')!.textContent)
+
+    expect(order).toEqual([
+      expect.stringContaining('lost both ways'),
+      expect.stringContaining('mention never read'),
+      expect.stringContaining('mentioned only'),
+      expect.stringContaining('won both ways'),
+    ])
+  })
+
+  it('collapses every answer and leads its sources with this Property\'s own', async () => {
+    const evidence = await renderAnswers([
+      answerRow({
+        slot: 'a',
+        queryText: 'where to stay by the water',
+        mentioned: true,
+        sources: [externalSource('https://guide.example/harbour-stays'), ownSource(), externalSource('https://reviews.example/harbour')],
+      }),
+    ])
+
+    expect(within(evidence).queryByText(OWN_URL)).toBeNull()
+    const toggle = within(evidence).getByRole('button', { name: 'Show sources for where to stay by the water' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+
+    fireEvent.click(toggle)
+    const sources = within(evidence).getByRole('table', { name: 'Source URLs for where to stay by the water' })
+    expect(within(sources).getAllByRole('row').slice(1).map(row => row.querySelector('td:last-child')!.textContent))
+      .toEqual([OWN_URL, 'https://guide.example/harbour-stays', 'https://reviews.example/harbour'])
+    expect(within(sources).getByText('Matches this Property')).toBeTruthy()
+  })
+
+  it('says an answer cited nothing rather than leaving its detail blank', async () => {
+    const evidence = await renderAnswers([answerRow({ slot: 'a', queryText: 'where to stay by the water' })])
+
+    fireEvent.click(within(evidence).getByRole('button', { name: 'Show sources for where to stay by the water' }))
+    expect(within(evidence).getByText('This answer returned no source URLs at all.')).toBeTruthy()
+  })
+
+  it('re-scopes the answers when the question type changes', async () => {
+    const requested: string[] = []
+    await renderPropertyPageFromApi(url => {
+      const path = pathOf(url)
+      if (path.includes('/measurement-property-evidence')) {
+        const params = new URL(url).searchParams
+        requested.push(`${params.get('queryClass')}:${params.get('shape')}`)
+        return jsonResponse(evidenceResponse([
+          answerRow({ slot: params.get('queryClass') === 'branded' ? 'branded' : 'nonbrand', queryText: `${params.get('queryClass')} answer` }),
+        ]))
+      }
+      return propertyPageResponses()(url)
+    })
+
+    await waitFor(async () => expect(within(await answersTable()).getByText('non-brand answer')).toBeTruthy())
+
+    // The panel unmounts while the new class loads, so the table is re-read
+    // rather than held across the switch.
+    fireEvent.change(screen.getByLabelText('Question type'), { target: { value: 'branded' } })
+    await waitFor(async () => expect(within(await answersTable()).getByText('branded answer')).toBeTruthy())
+    expect(requested).toContain('non-brand:answers')
+    expect(requested).toContain('branded:answers')
   })
 })

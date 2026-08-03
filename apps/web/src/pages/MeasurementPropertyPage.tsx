@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { Link, useParams } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
+import { MeasurementEvidenceShapes } from '@ainyc/canonry-contracts'
 import type {
   MeasurementOverviewResponse,
   MeasurementPlanResponse,
@@ -25,7 +26,16 @@ import { matcherLabel } from '../components/project/advanced-measurement/v2-over
 type QueryClass = 'branded' | 'non-brand'
 type MetricValue = MeasurementOverviewResponse['metrics']['mentionCoverage']
 type PropertyRow = MeasurementOverviewResponse['properties']['items'][number]
-type EvidenceRow = MeasurementPropertyEvidenceResponse['evidence']['items'][number]
+/**
+ * This page reads the ANSWER shape: one row per measured answer, with the cited
+ * URLs nested inside it. The per-URL shape can only describe a citation, so an
+ * answer that mentioned this Property without linking it — or did neither —
+ * produced no row at all, and the panel could corroborate a win while staying
+ * silent about every gap.
+ */
+type AnswerPage = NonNullable<MeasurementPropertyEvidenceResponse['answers']>
+type AnswerRow = AnswerPage['items'][number]
+type AnswerSource = AnswerRow['sources'][number]
 type ActivePlan = NonNullable<MeasurementPlanResponse['active']>
 type PlanV2 = Extract<ActivePlan['plan'], { schemaVersion: 2 }>
 
@@ -66,13 +76,93 @@ const MEASUREMENT_STATES: Record<
   not_measured: { label: 'Not measured', tone: 'neutral' },
 }
 
-const EVIDENCE_LABELS: Record<EvidenceRow['classification'], { label: string; tone: 'positive' | 'caution' | 'neutral' | 'negative' }> = {
+const EVIDENCE_LABELS: Record<AnswerSource['classification'], { label: string; tone: 'positive' | 'caution' | 'neutral' | 'negative' }> = {
   assigned: { label: 'Matches this Property', tone: 'positive' },
   sibling: { label: 'Matches another Property', tone: 'caution' },
   ownedUnmapped: { label: 'Site URL not in a Property', tone: 'caution' },
   external: { label: 'External URL', tone: 'neutral' },
   ambiguous: { label: 'Matches multiple Properties', tone: 'caution' },
   invalid: { label: 'Invalid URL', tone: 'negative' },
+}
+
+/**
+ * Why the mention could not be read. The wire carries no reason field because
+ * the rule behind it is single: no stored answer text, no mention to read. All
+ * that varies is which run lost the text.
+ */
+/**
+ * The wire says the signal is unreadable, not why. Naming a cause the response
+ * does not carry is a fabricated provenance claim, so this states only what is
+ * known and leaves the rest to the run's own provenance badges.
+ */
+function mentionUnknownReason(): string {
+  return 'No answer text to read'
+}
+
+/**
+ * Losses first, because the panel exists to explain a gap and the answers that
+ * gave this Property nothing are what a reader came for. A confirmed miss
+ * outranks an unread one: "not mentioned" is a finding, "not measured" is the
+ * absence of one, and sorting them together would bury the finding.
+ */
+function answerRank(row: AnswerRow): number {
+  const signals = (row.mentioned === true ? 1 : 0) + (row.cited ? 1 : 0)
+  if (signals > 0) return signals + 1
+  return row.mentioned === false ? 0 : 1
+}
+
+/** This Property's own citation is the one the reader is checking, so it leads. */
+function sourcesOwnFirst(sources: readonly AnswerSource[]): AnswerSource[] {
+  return [...sources].sort((left, right) => (
+    Number(right.classification === 'assigned') - Number(left.classification === 'assigned')
+  ))
+}
+
+function answerKey(row: AnswerRow): string {
+  return `${row.expectedSlotId}:${row.usageEdgeId}`
+}
+
+/**
+ * The mention signal as three states, never two. A null reads "Not measured"
+ * with the reason beside it — reporting it as "not mentioned" would invent a
+ * measured miss out of a missing measurement.
+ */
+function MentionSignal({ row }: { row: AnswerRow }) {
+  if (row.mentioned === null) {
+    return (
+      <span className="inline-flex flex-col items-start gap-0.5">
+        <ToneBadge tone="neutral">Not measured</ToneBadge>
+        <span className="text-xs text-muted">{mentionUnknownReason()}</span>
+      </span>
+    )
+  }
+  return <ToneBadge tone={row.mentioned ? 'positive' : 'neutral'}>{row.mentioned ? 'Mentioned' : 'Not mentioned'}</ToneBadge>
+}
+
+function AnswerSources({ row }: { row: AnswerRow }) {
+  if (row.sources.length === 0) {
+    return <p className="py-2 text-sm text-secondary">This answer returned no source URLs at all.</p>
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="evidence-table min-w-[420px]">
+        <caption className="sr-only">Source URLs for {row.queryText}</caption>
+        <thead><tr><th>Match</th><th>URL</th></tr></thead>
+        <tbody>
+          {sourcesOwnFirst(row.sources).map(source => (
+            <tr key={source.sourceUrl}>
+              <td>
+                <ToneBadge tone={EVIDENCE_LABELS[source.classification].tone}>
+                  {EVIDENCE_LABELS[source.classification].label}
+                </ToneBadge>
+              </td>
+              <td className="break-all text-secondary">{source.sourceUrl}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 function reasonText(metric: Extract<MetricValue, { state: 'unavailable' }>): string {
@@ -317,6 +407,7 @@ function PropertyUrls({ urls }: { urls: readonly string[] }) {
 export function MeasurementPropertyPage() {
   const { projectName, targetKey } = useParams({ strict: false }) as { projectName?: string; targetKey?: string }
   const [queryClass, setQueryClass] = useState<QueryClass>('non-brand')
+  const [expandedAnswers, setExpandedAnswers] = useState<ReadonlySet<string>>(new Set<string>())
   const project = projectName ?? ''
   const property = targetKey ?? ''
   const enabled = Boolean(project) && Boolean(property)
@@ -343,6 +434,7 @@ export function MeasurementPropertyPage() {
     query: {
       targetKey: property,
       queryClass,
+      shape: MeasurementEvidenceShapes.answers,
       limit: EVIDENCE_PAGE_SIZE,
       ...(displayedRunId ? { runId: displayedRunId } : {}),
     },
@@ -352,8 +444,8 @@ export function MeasurementPropertyPage() {
     enabled: enabled && selected !== undefined,
     initialPageParam: evidenceInput,
     getNextPageParam: (lastPage: MeasurementPropertyEvidenceResponse) => (
-      lastPage.evidence.nextCursor
-        ? { path: evidenceInput.path, query: { ...evidenceInput.query, cursor: lastPage.evidence.nextCursor } }
+      lastPage.answers?.nextCursor
+        ? { path: evidenceInput.path, query: { ...evidenceInput.query, cursor: lastPage.answers.nextCursor } }
         : undefined
     ),
   })
@@ -376,10 +468,23 @@ export function MeasurementPropertyPage() {
 
   const urls = useMemo(() => target?.urlMatchers.map(matcherLabel) ?? [], [target])
   const evidenceRows = useMemo(
-    () => (evidenceQuery.data?.pages ?? []).flatMap(page => page.evidence.items),
+    () => {
+      // A page that carries no `answers` key is a response in the source shape,
+      // not a Property with no answers. Collapsing it to [] reported an older
+      // server's data as a measured absence.
+      const pages = evidenceQuery.data?.pages ?? []
+      const loaded = pages.flatMap(page => page.answers?.items ?? [])
+      // Array sort is stable, so answers of equal rank keep the server's
+      // (slot, edge) order and a re-render can never shuffle the panel.
+      return [...loaded].sort((left, right) => answerRank(left) - answerRank(right))
+    },
     [evidenceQuery.data],
   )
-  const evidenceTotal = evidenceQuery.data?.pages[0]?.evidence.totalEstimate ?? evidenceRows.length
+  const evidenceTotal = evidenceQuery.data?.pages[0]?.answers?.totalEstimate ?? evidenceRows.length
+  // A response with no `answers` key came back in the source shape. That is a
+  // server that predates this view, not a Property with nothing to show.
+  const evidenceShapeMismatch = (evidenceQuery.data?.pages ?? []).length > 0
+    && (evidenceQuery.data?.pages ?? []).every(page => page.answers === undefined)
   const evidenceState = evidenceQuery.data?.pages[0]?.measurement.state
 
   const backLink = (
@@ -532,8 +637,8 @@ export function MeasurementPropertyPage() {
           <div>
             <p className="eyebrow eyebrow-soft">Evidence</p>
             <h2 id="property-evidence" className="text-base font-semibold text-heading">
-              Source URLs the engines used
-              <InfoTooltip text="Every source URL an answer engine returned for the questions assigned to this Property in the displayed measurement. A row matching this Property is what a citation is counted from; the other classifications are shown so a miss can be explained rather than guessed at." />
+              Answers the engines gave
+              <InfoTooltip text="One row per answer an engine gave for the questions assigned to this Property in the displayed measurement. Mentioned and cited are independent: an answer can name this Property without linking it, or link it without naming it. Answers that did neither are listed first, because those are what a gap is made of. Where the answer text was not stored the mention reads Not measured, never a zero. Expand a row for the source URLs the engine returned, this Property's own first." />
             </h2>
           </div>
           {evidenceRows.length > 0 ? <p className="supporting-copy">{evidenceRows.length} of {evidenceTotal}</p> : null}
@@ -550,33 +655,69 @@ export function MeasurementPropertyPage() {
         ) : evidenceState === 'not_measured' ? (
           // Not measured is not "no evidence". Saying "none" here would report
           // an absent measurement as a measured result.
-          <p className="text-sm text-secondary">Not measured yet. Run a measurement to collect source evidence for this Property.</p>
+          <p className="text-sm text-secondary">Not measured yet. Run a measurement to collect the answers for this Property.</p>
+        ) : evidenceShapeMismatch ? (
+          <p role="alert" className="text-sm text-caution">
+            This measurement was returned in an older format, so the answers cannot be shown here.
+            The numbers above are unaffected.
+          </p>
         ) : evidenceRows.length === 0 ? (
-          <p className="text-sm text-secondary">No source evidence matched this Property in the displayed measurement.</p>
+          <p className="text-sm text-secondary">No answers matched this Property in the displayed measurement.</p>
         ) : (
           <>
             <div className="overflow-x-auto rounded-md border border-default">
               <table className="evidence-table min-w-[720px]">
-                <caption className="sr-only">Source evidence for this Property</caption>
-                <thead><tr><th>Match</th><th>Question</th><th>URL</th></tr></thead>
+                <caption className="sr-only">Answers measured for this Property</caption>
+                <thead>
+                  <tr>
+                    <th>Question</th>
+                    <th>Mentioned in the answer</th>
+                    <th>Cited as a source</th>
+                    <th>Sources</th>
+                    <th><span className="sr-only">Sources detail</span></th>
+                  </tr>
+                </thead>
                 <tbody>
-                  {evidenceRows.map(item => (
-                    <tr key={`${item.expectedSlotId}:${item.usageEdgeId}:${item.sourceUrl}`}>
-                      <td>
-                        <span className="flex flex-wrap items-center gap-1">
-                          <ToneBadge tone={EVIDENCE_LABELS[item.classification].tone}>{EVIDENCE_LABELS[item.classification].label}</ToneBadge>
-                          {item.historical || item.bridged ? <ToneBadge tone="caution">Historical</ToneBadge> : null}
-                        </span>
-                      </td>
-                      <td className="text-secondary">
-                        <span className="block">{item.queryText}</span>
-                        <span className="mt-1 block text-xs text-muted">
-                          {[item.provider, item.location].filter(Boolean).join(' · ')}
-                        </span>
-                      </td>
-                      <td className="break-all text-secondary">{item.sourceUrl}</td>
-                    </tr>
-                  ))}
+                  {evidenceRows.map(item => {
+                    const key = answerKey(item)
+                    const expanded = expandedAnswers.has(key)
+                    return (
+                      <Fragment key={key}>
+                        <tr>
+                          <td className="text-secondary">
+                            <span className="block">{item.queryText}</span>
+                            <span className="mt-1 block text-xs text-muted">
+                              {[item.provider, item.location].filter(Boolean).join(' · ')}
+                            </span>
+                            {item.historical || item.bridged ? (
+                              <span className="mt-1 flex"><ToneBadge tone="caution">Historical</ToneBadge></span>
+                            ) : null}
+                          </td>
+                          <td><MentionSignal row={item} /></td>
+                          <td><ToneBadge tone={item.cited ? 'positive' : 'neutral'}>{item.cited ? 'Cited' : 'Not cited'}</ToneBadge></td>
+                          <td className="tabular-nums text-secondary">{item.sources.length}</td>
+                          <td className="text-right">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              aria-expanded={expanded}
+                              onClick={() => setExpandedAnswers(current => {
+                                const next = new Set(current)
+                                if (!next.delete(key)) next.add(key)
+                                return next
+                              })}
+                            >
+                              {expanded ? `Hide sources for ${item.queryText}` : `Show sources for ${item.queryText}`}
+                            </Button>
+                          </td>
+                        </tr>
+                        {expanded ? (
+                          <tr><td colSpan={5} className="bg-surface-subtle px-4"><AnswerSources row={item} /></td></tr>
+                        ) : null}
+                      </Fragment>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
