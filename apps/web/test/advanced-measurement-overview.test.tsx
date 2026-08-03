@@ -256,6 +256,31 @@ describe('AdvancedMeasurementOverview', () => {
     expect(document.body.textContent).not.toContain('Owned URL without an assignment')
   })
 
+  it('links a Property name to its own page without losing the inline expansion', () => {
+    renderOverview({
+      // preventDefault keeps jsdom from attempting a real document navigation;
+      // the href assertion below is what proves the link was rendered.
+      renderPropertyLink: ({ id, name }) => (
+        <a href={`/properties/${id}`} onClick={event => event.preventDefault()}>{name}</a>
+      ),
+    })
+
+    const link = screen.getByRole('link', { name: 'Downtown Office' })
+    expect(link.getAttribute('href')).toBe('/properties/downtown')
+
+    // A click on the link must navigate, not toggle the row it sits in.
+    fireEvent.click(link)
+    expect(screen.queryByText('Assigned queries')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Show details for Downtown Office' })).toBeTruthy()
+  })
+
+  it('renders the Property name as plain text when no link renderer is supplied', () => {
+    renderOverview()
+
+    expect(screen.queryByRole('link', { name: 'Downtown Office' })).toBeNull()
+    expect(screen.getAllByText('Downtown Office').length).toBeGreaterThan(0)
+  })
+
   it('expands a Property by clicking anywhere on its row', () => {
     renderOverview()
 

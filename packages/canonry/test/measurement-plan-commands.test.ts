@@ -10,6 +10,8 @@ const publishMeasurementPlan = vi.fn()
 const retireMeasurementPlanSegment = vi.fn()
 const discoverMeasurementTargets = vi.fn()
 const getMeasurementReport = vi.fn()
+const getMeasurementOverview = vi.fn()
+const getMeasurementPropertyEvidence = vi.fn()
 
 vi.mock('../src/client.js', () => ({
   createApiClient: () => ({
@@ -20,6 +22,8 @@ vi.mock('../src/client.js', () => ({
     retireMeasurementPlanSegment,
     discoverMeasurementTargets,
     getMeasurementReport,
+    getMeasurementOverview,
+    getMeasurementPropertyEvidence,
   }),
 }))
 
@@ -36,6 +40,66 @@ const PLAN = {
     competitors: ['rival.example'],
   }],
   targetQuerySelections: [],
+}
+
+/**
+ * One Property whose Branded basket was never measured. It is the shape the
+ * human output has to keep honest: a missing measurement, not a zero.
+ */
+const OVERVIEW = {
+  mode: 'active-v2',
+  scope: { kind: 'property', key: 'harbor-view', label: 'Harbor View' },
+  queryClass: 'branded',
+  measurement: { state: 'complete', displayedRunId: 'run-7', completed: 4, expected: 4 },
+  nextAction: { kind: 'none' },
+  metrics: {
+    propertiesMentioned: { state: 'unavailable', reason: 'no_population' },
+    mentionCoverage: { state: 'unavailable', reason: 'no_population' },
+    citationCoverage: { state: 'unavailable', reason: 'no_population' },
+    brandPresence: { state: 'unavailable', reason: 'no_population' },
+    sov: { state: 'unavailable', reason: 'no_population' },
+  },
+  properties: {
+    items: [{
+      targetKey: 'harbor-view',
+      label: 'Harbor View',
+      mentionCoverage: { state: 'unavailable', reason: 'no_population' },
+      citationCoverage: { state: 'unavailable', reason: 'no_population' },
+      providers: [],
+      flags: 0,
+    }],
+    nextCursor: null,
+    totalEstimate: 1,
+  },
+  flags: { total: 0 },
+}
+
+const PROPERTY_EVIDENCE = {
+  property: { targetKey: 'harbor-view', label: 'Harbor View' },
+  queryClass: 'branded',
+  measurement: { state: 'complete', displayedRunId: 'run-7' },
+  evidence: {
+    items: [{
+      observationId: 'obs-1',
+      expectedSlotId: 'slot-1',
+      executionId: 'exec-1',
+      usageEdgeId: 'target:harbor-view:q-1:exec-1',
+      usageEdgeType: 'target',
+      provider: 'openai',
+      queryText: 'harbor view reviews',
+      location: null,
+      sourceUrl: 'https://example.com/locations/harbor-view',
+      bridged: false,
+      historical: false,
+      evidenceComplete: true,
+      classification: 'assigned',
+      normalizedUrl: 'https://example.com/locations/harbor-view',
+      matchedTargetIds: ['harbor-view'],
+      matchedUrlIds: ['harbor-view:url:0'],
+    }],
+    nextCursor: null,
+    totalEstimate: 1,
+  },
 }
 
 function command(pathname: string) {
@@ -56,6 +120,8 @@ describe('measurement-plan CLI commands', () => {
     retireMeasurementPlanSegment.mockResolvedValue({ stableKey: 'nyc', retiredAt: '2026-07-31T00:00:00.000Z' })
     discoverMeasurementTargets.mockResolvedValue({ proposed: [], aliases: [], shared: [], unmatched: [], excluded: [], diagnostics: [] })
     getMeasurementReport.mockResolvedValue({ revision: 1, run: null, groups: [], targets: [], evidence: [], diagnostics: {} })
+    getMeasurementOverview.mockResolvedValue(OVERVIEW)
+    getMeasurementPropertyEvidence.mockResolvedValue(PROPERTY_EVIDENCE)
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-measurement-plan-cli-'))
   })
 
@@ -215,5 +281,93 @@ describe('measurement-plan CLI commands', () => {
     })
 
     expect(getMeasurementReport).toHaveBeenCalledWith('acme', 3)
+  })
+
+  it('reads one Property through the property scope of the overview', async () => {
+    await command('measurement-plan property').run({
+      positionals: ['acme'],
+      values: { 'target-key': 'harbor-view', 'query-class': 'branded', provider: 'openai', 'run-id': 'run-7' },
+      format: 'json',
+      dryRun: false,
+    })
+
+    expect(getMeasurementOverview).toHaveBeenCalledWith('acme', {
+      scope: 'property',
+      targetKey: 'harbor-view',
+      queryClass: 'branded',
+      provider: 'openai',
+      runId: 'run-7',
+    })
+  })
+
+  it('prints --format json byte-for-byte so an agent can swap the CLI for the endpoint', async () => {
+    const logged: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation(line => { logged.push(String(line)) })
+
+    await command('measurement-plan property').run({
+      positionals: ['acme'], values: { 'target-key': 'harbor-view' }, format: 'json', dryRun: false,
+    })
+
+    log.mockRestore()
+    expect(JSON.parse(logged.join('\n'))).toEqual(OVERVIEW)
+  })
+
+  it('renders an unmeasured Property as not measured and never as a percentage', async () => {
+    const logged: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation(line => { logged.push(String(line)) })
+
+    await command('measurement-plan property').run({
+      positionals: ['acme'], values: { 'target-key': 'harbor-view' }, format: 'text', dryRun: false,
+    })
+
+    log.mockRestore()
+    const output = logged.join('\n')
+    expect(output).toContain('not measured (no questions of this type)')
+    expect(output).not.toMatch(/\d+%/)
+  })
+
+  it('rejects a question class outside the published vocabulary', () => {
+    expect(() => command('measurement-plan property').run({
+      positionals: ['acme'], values: { 'target-key': 'harbor-view', 'query-class': 'brand' }, format: 'json', dryRun: false,
+    })).toThrow('--query-class must be one of all, branded, non-brand')
+  })
+
+  it('pages one Property\'s evidence with the same filters as the overview read', async () => {
+    await command('measurement-plan property-evidence').run({
+      positionals: ['acme'],
+      values: { 'target-key': 'harbor-view', 'query-class': 'branded', cursor: 'next-page', limit: '25' },
+      format: 'json',
+      dryRun: false,
+    })
+
+    expect(getMeasurementPropertyEvidence).toHaveBeenCalledWith('acme', {
+      targetKey: 'harbor-view',
+      queryClass: 'branded',
+      cursor: 'next-page',
+      limit: 25,
+    })
+
+    expect(() => command('measurement-plan property-evidence').run({
+      positionals: ['acme'], values: { 'target-key': 'harbor-view', limit: '500' }, format: 'json', dryRun: false,
+    })).toThrow('--limit must be an integer from 1 to 100')
+  })
+
+  it('says an unmeasured Property was not measured rather than showing an empty evidence table', async () => {
+    getMeasurementPropertyEvidence.mockResolvedValueOnce({
+      ...PROPERTY_EVIDENCE,
+      measurement: { state: 'not_measured' },
+      evidence: { items: [], nextCursor: null, totalEstimate: 0 },
+    })
+    const logged: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation(line => { logged.push(String(line)) })
+
+    await command('measurement-plan property-evidence').run({
+      positionals: ['acme'], values: { 'target-key': 'harbor-view' }, format: 'text', dryRun: false,
+    })
+
+    log.mockRestore()
+    const output = logged.join('\n')
+    expect(output).toContain('Not measured yet.')
+    expect(output).not.toContain('No source evidence matched')
   })
 })

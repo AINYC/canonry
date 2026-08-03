@@ -78,6 +78,7 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/discard': 'included',
   'POST /api/v1/projects/{name}/measurement-plan/actions/deactivate': 'included',
   'GET /api/v1/projects/{name}/measurement-overview': 'included',
+  'GET /api/v1/projects/{name}/measurement-property-evidence': 'included',
   'GET /api/v1/projects/{name}/measurement-query-sets': 'included',
   'GET /api/v1/projects/{name}/measurement-query-sets/{setId}': 'included',
   'PUT /api/v1/projects/{name}/measurement-query-sets/{setId}': 'included',

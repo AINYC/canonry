@@ -1,0 +1,501 @@
+import { useMemo, useState } from 'react'
+import { Link, useParams } from '@tanstack/react-router'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { ArrowLeft } from 'lucide-react'
+import type {
+  MeasurementOverviewResponse,
+  MeasurementPlanResponse,
+  MeasurementPropertyEvidenceResponse,
+} from '@ainyc/canonry-api-client'
+import {
+  getApiV1ProjectsByNameMeasurementOverviewOptions,
+  getApiV1ProjectsByNameMeasurementPlanOptions,
+  getApiV1ProjectsByNameMeasurementPropertyEvidenceInfiniteOptions,
+} from '@ainyc/canonry-api-client/react-query'
+
+import { heyClient } from '../api.js'
+import { Button } from '../components/ui/button.js'
+import { InfoTooltip } from '../components/shared/InfoTooltip.js'
+import { ToneBadge } from '../components/shared/ToneBadge.js'
+import { matcherLabel } from '../components/project/advanced-measurement/v2-overview-adapter.js'
+
+type QueryClass = 'branded' | 'non-brand'
+type MetricValue = MeasurementOverviewResponse['metrics']['mentionCoverage']
+type PropertyRow = MeasurementOverviewResponse['properties']['items'][number]
+type EvidenceRow = MeasurementPropertyEvidenceResponse['evidence']['items'][number]
+type ActivePlan = NonNullable<MeasurementPlanResponse['active']>
+type PlanV2 = Extract<ActivePlan['plan'], { schemaVersion: 2 }>
+
+const EVIDENCE_PAGE_SIZE = 50
+
+/**
+ * The founder's framing of the two baskets, kept beside the technical name so a
+ * reader never has to guess which one they are looking at.
+ */
+const CLASS_LABELS: Record<QueryClass, { headline: string; technical: string }> = {
+  branded: { headline: 'When they know your name', technical: 'Branded questions' },
+  'non-brand': { headline: 'When they don\'t', technical: 'Non-brand questions' },
+}
+
+/**
+ * Why a number is missing, in the reader's language. A metric with no evidence
+ * renders one of these and never a percentage — "0%" is a measured result and
+ * saying it here would invent one.
+ */
+const UNAVAILABLE_REASONS: Record<string, string> = {
+  plan_v1: 'Setup update required',
+  no_completed_run: 'No completed measurement yet',
+  no_population: 'No questions of this type are assigned',
+  evidence_incomplete: 'Source evidence is incomplete',
+  not_applicable: 'Not applicable for this Property',
+}
+
+/** Measurement state in the operator's language, never the wire token. */
+const MEASUREMENT_STATES: Record<
+  MeasurementOverviewResponse['measurement']['state'],
+  { label: string; tone: 'positive' | 'caution' | 'neutral' | 'negative' }
+> = {
+  complete: { label: 'Measured', tone: 'positive' },
+  partial: { label: 'Partly measured', tone: 'caution' },
+  running: { label: 'Measuring now', tone: 'neutral' },
+  queued: { label: 'Measurement queued', tone: 'neutral' },
+  failed: { label: 'Measurement failed', tone: 'negative' },
+  not_measured: { label: 'Not measured', tone: 'neutral' },
+}
+
+const EVIDENCE_LABELS: Record<EvidenceRow['classification'], { label: string; tone: 'positive' | 'caution' | 'neutral' | 'negative' }> = {
+  assigned: { label: 'Matches this Property', tone: 'positive' },
+  sibling: { label: 'Matches another Property', tone: 'caution' },
+  ownedUnmapped: { label: 'Site URL not in a Property', tone: 'caution' },
+  external: { label: 'External URL', tone: 'neutral' },
+  ambiguous: { label: 'Matches multiple Properties', tone: 'caution' },
+  invalid: { label: 'Invalid URL', tone: 'negative' },
+}
+
+function reasonText(metric: Extract<MetricValue, { state: 'unavailable' }>): string {
+  return UNAVAILABLE_REASONS[metric.reason] ?? 'Not measured'
+}
+
+/**
+ * One metric cell. The unavailable branch is deliberately not a number: it says
+ * "Not measured" and carries the server's reason, so an unmeasured Property can
+ * never be read as a measured zero.
+ */
+function MetricCell({ metric, emphasis = false }: { metric: MetricValue; emphasis?: boolean }) {
+  if (metric.state === 'unavailable') {
+    return (
+      <span className="inline-flex flex-col gap-0.5">
+        <span className={emphasis ? 'text-lg font-semibold text-secondary' : 'text-sm font-medium text-secondary'}>Not measured</span>
+        <span className="text-xs text-muted">{reasonText(metric)}</span>
+      </span>
+    )
+  }
+  const percent = `${Math.round(metric.value * 100)}%`
+  const counted = metric.numerator === undefined || metric.denominator === undefined
+    ? null
+    : `${metric.numerator} of ${metric.denominator}`
+  return (
+    <span className="inline-flex flex-col gap-0.5 tabular-nums">
+      <span className={emphasis ? 'text-lg font-semibold text-heading' : 'text-sm font-medium text-primary'}>{percent}</span>
+      {counted ? <span className="text-xs text-muted">{counted}</span> : null}
+    </span>
+  )
+}
+
+function overviewOptions(projectName: string, targetKey: string, queryClass: QueryClass) {
+  return getApiV1ProjectsByNameMeasurementOverviewOptions({
+    client: heyClient,
+    path: { name: projectName },
+    query: { scope: 'property', targetKey, queryClass },
+  })
+}
+
+function propertyRowOf(overview: MeasurementOverviewResponse | undefined): PropertyRow | undefined {
+  return overview?.properties.items.at(0)
+}
+
+/**
+ * The comparison the product is an argument about: the same Property, measured
+ * against the questions that name it and the questions that do not.
+ */
+function BrandContrast({
+  branded,
+  nonBrand,
+}: {
+  branded: PropertyRow | undefined
+  nonBrand: PropertyRow | undefined
+}) {
+  const rows: Array<{ queryClass: QueryClass; row: PropertyRow | undefined }> = [
+    { queryClass: 'branded', row: branded },
+    { queryClass: 'non-brand', row: nonBrand },
+  ]
+  return (
+    <section aria-labelledby="property-brand-contrast">
+      <div className="section-head section-head-inline">
+        <div>
+          <p className="eyebrow eyebrow-soft">The gap</p>
+          <h2 id="property-brand-contrast" className="text-base font-semibold text-heading">
+            Named versus not named
+            <InfoTooltip text="Branded questions already contain your name, so an answer engine has an easy path back to you. Non-brand questions describe the need instead, and that is the demand you have to earn. Each row is measured only over the questions assigned to this Property in that class; a class with no assigned question reads Not measured rather than 0%." />
+          </h2>
+        </div>
+      </div>
+      <div className="overflow-x-auto rounded-md border border-default">
+        <table className="evidence-table min-w-[560px]">
+          <caption className="sr-only">Mention and citation coverage for this Property, split by question class</caption>
+          <thead>
+            <tr>
+              <th>Question type</th>
+              <th>Mentioned in the answer</th>
+              <th>Cited as a source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ queryClass, row }) => (
+              <tr key={queryClass}>
+                <td>
+                  <span className="block font-medium text-heading">{CLASS_LABELS[queryClass].headline}</span>
+                  <span className="mt-0.5 block text-xs text-muted">{CLASS_LABELS[queryClass].technical}</span>
+                </td>
+                <td>{row ? <MetricCell metric={row.mentionCoverage} emphasis /> : <span className="text-sm text-secondary">Loading…</span>}</td>
+                <td>{row ? <MetricCell metric={row.citationCoverage} emphasis /> : <span className="text-sm text-secondary">Loading…</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+function ProviderBreakdown({ row, queryClass }: { row: PropertyRow | undefined; queryClass: QueryClass }) {
+  return (
+    <section aria-labelledby="property-providers" className="page-section-divider">
+      <div className="section-head section-head-inline">
+        <div>
+          <p className="eyebrow eyebrow-soft">By answer engine</p>
+          <h2 id="property-providers" className="text-base font-semibold text-heading">
+            Which engines answer for this Property
+            <InfoTooltip text="Each row is measured over the questions that engine actually answered for this Property, so the rows are a split of the same population rather than parts that add up to the Property total. An engine that answered nothing for this Property is absent instead of shown at 0%." />
+          </h2>
+        </div>
+      </div>
+      {row === undefined ? (
+        <p className="text-sm text-secondary">Loading…</p>
+      ) : row.providers.length === 0 ? (
+        <p className="text-sm text-secondary">
+          No answer engine has measured {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} for this Property.
+          {row.mentionCoverage.state === 'unavailable' ? ` ${reasonText(row.mentionCoverage)}.` : ''}
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-default">
+          <table className="evidence-table min-w-[520px]">
+            <caption className="sr-only">Per-engine mention and citation coverage</caption>
+            <thead><tr><th>Engine</th><th>Mentioned</th><th>Cited</th></tr></thead>
+            <tbody>
+              {row.providers.map(provider => (
+                <tr key={provider.provider}>
+                  <td className="font-medium text-heading">{provider.provider}</td>
+                  <td><MetricCell metric={provider.mentionCoverage} /></td>
+                  <td><MetricCell metric={provider.citationCoverage} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function AssignedQuestions({ questions, queryClass }: { questions: readonly string[]; queryClass: QueryClass }) {
+  return (
+    <section aria-labelledby="property-questions" className="page-section-divider">
+      <div className="section-head section-head-inline">
+        <div>
+          <p className="eyebrow eyebrow-soft">Questions</p>
+          <h2 id="property-questions" className="text-base font-semibold text-heading">
+            {CLASS_LABELS[queryClass].technical} assigned to this Property
+          </h2>
+        </div>
+        <p className="supporting-copy">{questions.length} assigned</p>
+      </div>
+      {questions.length === 0 ? (
+        <p className="text-sm text-secondary">
+          No {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} are assigned. Add one in advanced measurement setup to measure this class.
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-default">
+          <table className="evidence-table min-w-[420px]">
+            <caption className="sr-only">Questions assigned to this Property</caption>
+            <thead><tr><th>Question</th></tr></thead>
+            <tbody>{questions.map(question => <tr key={question}><td className="text-secondary">{question}</td></tr>)}</tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function PropertyUrls({ urls }: { urls: readonly string[] }) {
+  return (
+    <section aria-labelledby="property-urls" className="page-section-divider">
+      <div className="section-head section-head-inline">
+        <div>
+          <p className="eyebrow eyebrow-soft">Pages</p>
+          <h2 id="property-urls" className="text-base font-semibold text-heading">
+            URLs that count as this Property
+            <InfoTooltip text="A cited source URL is credited to this Property when it matches one of these. The most specific matcher wins, so a URL covered by two Properties at the same specificity is flagged for review instead of being credited to either." />
+          </h2>
+        </div>
+        <p className="supporting-copy">{urls.length} configured</p>
+      </div>
+      {urls.length === 0 ? (
+        <p className="text-sm text-secondary">No URLs are configured for this Property.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-default">
+          <table className="evidence-table min-w-[420px]">
+            <caption className="sr-only">URL matchers configured for this Property</caption>
+            <thead><tr><th>URL</th></tr></thead>
+            <tbody>{urls.map(url => <tr key={url}><td className="break-all text-secondary">{url}</td></tr>)}</tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
+export function MeasurementPropertyPage() {
+  const { projectName, targetKey } = useParams({ strict: false }) as { projectName?: string; targetKey?: string }
+  const [queryClass, setQueryClass] = useState<QueryClass>('non-brand')
+  const project = projectName ?? ''
+  const property = targetKey ?? ''
+  const enabled = Boolean(project) && Boolean(property)
+
+  const planQuery = useQuery({
+    ...getApiV1ProjectsByNameMeasurementPlanOptions({ client: heyClient, path: { name: project } }),
+    enabled,
+  })
+  const brandedQuery = useQuery({ ...overviewOptions(project, property, 'branded'), enabled })
+  const nonBrandQuery = useQuery({ ...overviewOptions(project, property, 'non-brand'), enabled })
+
+  const brandedRow = propertyRowOf(brandedQuery.data)
+  const nonBrandRow = propertyRowOf(nonBrandQuery.data)
+  const selected = queryClass === 'branded' ? brandedQuery.data : nonBrandQuery.data
+  const selectedRow = queryClass === 'branded' ? brandedRow : nonBrandRow
+  const displayedRunId = selected?.measurement.displayedRunId
+
+  const evidenceInput = {
+    client: heyClient,
+    path: { name: project },
+    query: {
+      targetKey: property,
+      queryClass,
+      limit: EVIDENCE_PAGE_SIZE,
+      ...(displayedRunId ? { runId: displayedRunId } : {}),
+    },
+  } as const
+  const evidenceQuery = useInfiniteQuery({
+    ...getApiV1ProjectsByNameMeasurementPropertyEvidenceInfiniteOptions(evidenceInput),
+    enabled: enabled && selected !== undefined,
+    initialPageParam: evidenceInput,
+    getNextPageParam: (lastPage: MeasurementPropertyEvidenceResponse) => (
+      lastPage.evidence.nextCursor
+        ? { path: evidenceInput.path, query: { ...evidenceInput.query, cursor: lastPage.evidence.nextCursor } }
+        : undefined
+    ),
+  })
+
+  const activePlan = planQuery.data?.active ?? null
+  const planV2 = activePlan?.plan.schemaVersion === 2 ? activePlan.plan as PlanV2 : null
+  const target = planV2?.targets.find(candidate => candidate.stableKey === property) ?? null
+
+  const questions = useMemo(() => {
+    if (!planV2) return []
+    const textById = new Map(planV2.querySnapshots.map(snapshot => [snapshot.queryId, snapshot.queryText]))
+    return [...new Set(planV2.assignments
+      .filter(assignment => assignment.targetKey === property && assignment.queryClass === queryClass)
+      .flatMap(assignment => {
+        const text = textById.get(assignment.queryId)
+        return text === undefined ? [] : [text]
+      }))].sort((left, right) => left.localeCompare(right))
+  }, [planV2, property, queryClass])
+
+  const urls = useMemo(() => target?.urlMatchers.map(matcherLabel) ?? [], [target])
+  const evidenceRows = useMemo(
+    () => (evidenceQuery.data?.pages ?? []).flatMap(page => page.evidence.items),
+    [evidenceQuery.data],
+  )
+  const evidenceTotal = evidenceQuery.data?.pages[0]?.evidence.totalEstimate ?? evidenceRows.length
+  const evidenceState = evidenceQuery.data?.pages[0]?.measurement.state
+
+  const backLink = (
+    <Link
+      to="/projects/$projectName"
+      params={{ projectName: project }}
+      className="inline-flex items-center gap-1 text-xs text-muted hover:text-strong"
+    >
+      <ArrowLeft className="size-3.5" aria-hidden="true" />
+      Back to measurement overview
+    </Link>
+  )
+
+  if (!enabled) {
+    return <div className="page-container"><p className="text-sm text-muted">Missing project name or Property key in URL.</p></div>
+  }
+
+  if (planQuery.isPending || brandedQuery.isPending || nonBrandQuery.isPending) {
+    return (
+      <div className="page-container">
+        <div className="h-32 animate-pulse rounded-md bg-surface-subtle" aria-label="Loading Property" />
+      </div>
+    )
+  }
+
+  if (planQuery.isError || (brandedQuery.isError && nonBrandQuery.isError)) {
+    return (
+      <div className="page-container space-y-3">
+        {backLink}
+        <p role="alert" className="text-sm text-negative">Could not load this Property.</p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            void planQuery.refetch()
+            void brandedQuery.refetch()
+            void nonBrandQuery.refetch()
+          }}
+        >
+          Try again
+        </Button>
+      </div>
+    )
+  }
+
+  if (!planV2 || !target) {
+    return (
+      <div className="page-container space-y-3">
+        {backLink}
+        <p role="status" className="text-sm text-secondary">
+          {planV2
+            ? 'This Property is not in the published setup. It may have been renamed or removed.'
+            : 'A Property page needs a published advanced measurement setup. Republish setup from the project Portfolio tab.'}
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="page-container space-y-8">
+      <div className="page-header">
+        <div className="page-header-left">
+          {backLink}
+          <h1 className="page-title mt-2">{target.label}</h1>
+          <p className="page-subtitle">Property in {project} · revision {activePlan?.revision}</p>
+        </div>
+        <div className="page-header-right">
+          {selected ? (
+            <ToneBadge tone={MEASUREMENT_STATES[selected.measurement.state].tone}>
+              {MEASUREMENT_STATES[selected.measurement.state].label}
+            </ToneBadge>
+          ) : null}
+          {selectedRow && selectedRow.flags > 0 ? (
+            <ToneBadge tone="caution">{selectedRow.flags} flagged</ToneBadge>
+          ) : null}
+        </div>
+      </div>
+
+      <BrandContrast branded={brandedRow} nonBrand={nonBrandRow} />
+
+      <div className="flex flex-wrap items-end gap-4 border-y border-default py-4">
+        <div className="space-y-1">
+          <label htmlFor="property-query-class" className="block text-sm font-medium text-heading">Question type</label>
+          <select
+            id="property-query-class"
+            value={queryClass}
+            onChange={event => setQueryClass(event.target.value === 'branded' ? 'branded' : 'non-brand')}
+            className="h-9 rounded-md border border-default bg-surface px-3 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-mono-400"
+          >
+            <option value="non-brand">{CLASS_LABELS['non-brand'].technical}</option>
+            <option value="branded">{CLASS_LABELS.branded.technical}</option>
+          </select>
+        </div>
+        <p className="supporting-copy">Everything below is measured over {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} only.</p>
+      </div>
+
+      <ProviderBreakdown row={selectedRow} queryClass={queryClass} />
+      <AssignedQuestions questions={questions} queryClass={queryClass} />
+      <PropertyUrls urls={urls} />
+
+      <section aria-labelledby="property-evidence" className="page-section-divider">
+        <div className="section-head section-head-inline">
+          <div>
+            <p className="eyebrow eyebrow-soft">Evidence</p>
+            <h2 id="property-evidence" className="text-base font-semibold text-heading">
+              Source URLs the engines used
+              <InfoTooltip text="Every source URL an answer engine returned for the questions assigned to this Property in the displayed measurement. A row matching this Property is what a citation is counted from; the other classifications are shown so a miss can be explained rather than guessed at." />
+            </h2>
+          </div>
+          {evidenceRows.length > 0 ? <p className="supporting-copy">{evidenceRows.length} of {evidenceTotal}</p> : null}
+        </div>
+        {evidenceQuery.isPending ? (
+          <p className="text-sm text-secondary">Loading evidence…</p>
+        ) : evidenceQuery.isError ? (
+          <div className="flex flex-wrap items-center gap-3 text-sm text-secondary">
+            <span role="alert">Evidence could not be loaded.</span>
+            <Button type="button" size="sm" variant="outline" onClick={() => { void evidenceQuery.refetch() }}>Retry evidence</Button>
+          </div>
+        ) : evidenceState === 'not_measured' ? (
+          // Not measured is not "no evidence". Saying "none" here would report
+          // an absent measurement as a measured result.
+          <p className="text-sm text-secondary">Not measured yet. Run a measurement to collect source evidence for this Property.</p>
+        ) : evidenceRows.length === 0 ? (
+          <p className="text-sm text-secondary">No source evidence matched this Property in the displayed measurement.</p>
+        ) : (
+          <>
+            <div className="overflow-x-auto rounded-md border border-default">
+              <table className="evidence-table min-w-[720px]">
+                <caption className="sr-only">Source evidence for this Property</caption>
+                <thead><tr><th>Match</th><th>Question</th><th>URL</th></tr></thead>
+                <tbody>
+                  {evidenceRows.map(item => (
+                    <tr key={`${item.expectedSlotId}:${item.usageEdgeId}:${item.sourceUrl}`}>
+                      <td>
+                        <span className="flex flex-wrap items-center gap-1">
+                          <ToneBadge tone={EVIDENCE_LABELS[item.classification].tone}>{EVIDENCE_LABELS[item.classification].label}</ToneBadge>
+                          {item.historical || item.bridged ? <ToneBadge tone="caution">Historical</ToneBadge> : null}
+                        </span>
+                      </td>
+                      <td className="text-secondary">
+                        <span className="block">{item.queryText}</span>
+                        <span className="mt-1 block text-xs text-muted">
+                          {[item.provider, item.location].filter(Boolean).join(' · ')}
+                        </span>
+                      </td>
+                      <td className="break-all text-secondary">{item.sourceUrl}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {evidenceQuery.hasNextPage ? (
+              <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-secondary">
+                <span>Showing {evidenceRows.length} of {evidenceTotal}</span>
+                {evidenceQuery.isFetchNextPageError ? <span role="alert">Could not load more evidence.</span> : null}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={evidenceQuery.isFetchingNextPage}
+                  onClick={() => { void evidenceQuery.fetchNextPage() }}
+                >
+                  {evidenceQuery.isFetchingNextPage ? 'Loading…' : `Show ${EVIDENCE_PAGE_SIZE} more`}
+                </Button>
+              </div>
+            ) : null}
+          </>
+        )}
+      </section>
+    </div>
+  )
+}

@@ -1,6 +1,12 @@
 import { z } from 'zod'
 import { locationContextSchema, providerNameSchema } from './provider.js'
 import { measurementStableKeySchema } from './measurement-plan.js'
+import {
+  measurementCursorPageSchema,
+  measurementQueryClassFilterSchema,
+  measurementStateSchema,
+  measurementV2StableKeySchema,
+} from './measurement-plan-v2.js'
 
 /** The five deterministic outcomes produced by sitemap target discovery. */
 export const measurementDiscoveryClassificationSchema = z.enum([
@@ -355,3 +361,27 @@ export const measurementReportResponseSchema = z.object({
   diagnostics: measurementReportDiagnosticsSchema,
 }).strict()
 export type MeasurementReportResponse = z.infer<typeof measurementReportResponseSchema>
+
+/**
+ * A cursor-paged slice of one Property's source evidence.
+ *
+ * The rows are the same `MeasurementAttributionEvidence` the whole-report read
+ * returns — same field names, same vocabulary — narrowed to the usage edges
+ * this Property owns. `measurement.state` is what a reader must render when the
+ * page is empty: an unmeasured Property has no evidence, and that is not the
+ * same statement as a measured Property having none.
+ */
+export const measurementPropertyEvidenceResponseSchema = z.object({
+  property: z.object({
+    targetKey: measurementV2StableKeySchema,
+    label: z.string().min(1),
+  }).strict(),
+  queryClass: measurementQueryClassFilterSchema,
+  measurement: z.object({
+    state: measurementStateSchema,
+    displayedRunId: z.string().min(1).optional(),
+    completedAt: z.string().datetime().optional(),
+  }).strict(),
+  evidence: measurementCursorPageSchema(measurementAttributionEvidenceSchema),
+}).strict()
+export type MeasurementPropertyEvidenceResponse = z.infer<typeof measurementPropertyEvidenceResponseSchema>

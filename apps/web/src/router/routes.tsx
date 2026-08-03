@@ -31,6 +31,7 @@ const LazySettingsPage = lazyRouteComponent(() => import('../pages/SettingsPage.
 const LazyBacklinksPage = lazyRouteComponent(() => import('../pages/BacklinksPage.js'), 'BacklinksPage')
 const LazyTrafficPage = lazyRouteComponent(() => import('../pages/TrafficPage.js'), 'TrafficPage')
 const LazyTrafficSourceDetailPage = lazyRouteComponent(() => import('../pages/TrafficSourceDetailPage.js'), 'TrafficSourceDetailPage')
+const LazyMeasurementPropertyPage = lazyRouteComponent(() => import('../pages/MeasurementPropertyPage.js'), 'MeasurementPropertyPage')
 
 /**
  * Resolve every lazy-loaded route component up front. Tests that render
@@ -56,6 +57,7 @@ export async function preloadAllLazyRoutes(): Promise<void> {
     LazyBacklinksPage.preload?.(),
     LazyTrafficPage.preload?.(),
     LazyTrafficSourceDetailPage.preload?.(),
+    LazyMeasurementPropertyPage.preload?.(),
   ])
 }
 
@@ -191,6 +193,15 @@ export const projectDiscoveryRoute = createRoute({
   component: () => <LazyProjectPage tab="discovery" />,
 })
 
+// One Property has its own page rather than an inline row expansion: it is a
+// destination an operator links to and comes back to, and the row cannot hold
+// the class comparison, the per-engine split, and paged evidence at once.
+export const projectMeasurementPropertyRoute = createRoute({
+  getParentRoute: () => projectLayoutRoute,
+  path: '/properties/$targetKey',
+  component: () => <LazyMeasurementPropertyPage />,
+})
+
 export const projectReportRoute = createRoute({
   getParentRoute: () => projectLayoutRoute,
   path: '/report',
@@ -287,6 +298,7 @@ export const routeTree = rootRoute.addChildren([
     projectSearchConsoleRoute,
     projectLocalRoute,
     projectDiscoveryRoute,
+    projectMeasurementPropertyRoute,
     projectReportRoute,
     projectActivityRoute,
     projectBacklinksRoute,

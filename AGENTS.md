@@ -82,6 +82,8 @@ canonry measurement-plan show <project> [--revision <n>]
 canonry measurement-plan versions <project>
 canonry measurement-plan publish <project> <yaml|json|->
 canonry measurement-plan report <project> --revision <n>  # stored evidence only; never starts provider work
+canonry measurement-plan property <project> --target-key <key> [--query-class all|branded|non-brand] [--provider <p>] [--location <l>] [--run-id <id>]  # one Property out of the scoped overview: mention/citation coverage plus the per-answer-engine split. A class with no assigned question reads "not measured", never 0%
+canonry measurement-plan property-evidence <project> --target-key <key> [--query-class ...] [--provider <p>] [--location <l>] [--run-id <id>] [--cursor <c>] [--limit <n>]  # one Property's source evidence, cursor-paged; v2 revisions only (use `measurement-plan report` for a v1 revision)
 canonry run <project>
 canonry run <project> --provider gemini          # single-provider run
 canonry run <project> --probe --provider openai --query "..."  # operator/agent test run — writes a snapshot for inspection but is EXCLUDED from dashboard, analytics, intelligence, and notifications
@@ -188,7 +190,7 @@ canonry-mcp --eager                                  # register all API tools at
 
 # MCP client install helpers (operate on local client config files)
 canonry mcp install --client claude-desktop          # merges a canonry entry into the config
-canonry mcp install --client cursor --read-only      # scope to the 106 read API tools
+canonry mcp install --client cursor --read-only      # scope to the 107 read API tools
 canonry mcp config  --client codex                   # print snippet for clients without auto-install
 
 # Skills — install canonry's agent playbook into a user's project
@@ -321,7 +323,7 @@ Each check returns `status: ok | warn | fail | skipped`, a stable machine-readab
 For MCP clients such as Claude Desktop, Codex, or custom agent shells that
 prefer a typed tool catalog over shell or HTTP, the package ships a separate
 `canonry-mcp` bin. It is a thin stdio adapter over `createApiClient()` — not
-a parallel surface. v1 exposes 170 curated API tools (106 read, 64 write) — including
+a parallel surface. v1 exposes 171 curated API tools (107 read, 64 write) — including
 the `canonry_project_overview` and `canonry_search` core composites; the
 catalog is split across a small **core tier** (always loaded) and nine
 **toolkits** (`monitoring`, `setup`, `gsc`, `ga`, `gbp`, `ads`, `traffic`, `agent`, `discovery`) that the client

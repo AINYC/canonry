@@ -21,6 +21,8 @@ export interface AdvancedMeasurementLandingProps {
   onLoadMore?: (cursor: string) => void
   onPropertyExpand?: (targetKey: string) => void
   onRetryEvidence?: () => void
+  /** Passed straight through so the overview table can link a Property to its own page. */
+  renderPropertyLink?: (property: { id: string; name: string }) => ReactNode
   isRunningMeasurement?: boolean
   isOpeningSetup?: boolean
   isViewLoading?: boolean
@@ -49,6 +51,7 @@ export function AdvancedMeasurementLanding({
   onLoadMore,
   onPropertyExpand,
   onRetryEvidence,
+  renderPropertyLink,
   isRunningMeasurement,
   isOpeningSetup,
   isViewLoading,
@@ -97,6 +100,7 @@ export function AdvancedMeasurementLanding({
           onLoadMore={onLoadMore}
           onPropertyExpand={onPropertyExpand}
           onRetryEvidence={onRetryEvidence}
+          renderPropertyLink={renderPropertyLink}
           isRunningMeasurement={isRunningMeasurement}
           isRepublishingSetup={isOpeningSetup}
           isViewLoading={isViewLoading}

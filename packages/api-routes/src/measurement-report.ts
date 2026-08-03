@@ -222,10 +222,22 @@ export interface MeasurementOverviewInput extends MeasurementReportInput {
   namedIdentities?: readonly MeasurementNamedIdentityInput[]
 }
 
+export interface MeasurementOverviewPropertyProviderRow {
+  provider: string
+  mentionCoverage: MeasurementRate
+  citationCoverage: MeasurementRate
+}
+
 export interface MeasurementOverviewPropertyRow {
   targetId: string
   mentionCoverage: MeasurementRate
   citationCoverage: MeasurementRate
+  /**
+   * The same two rates taken over each engine's own slots. They are not parts
+   * of a whole and never sum to the Property total; an engine with no slot for
+   * this Property is absent rather than zero.
+   */
+  providers: MeasurementOverviewPropertyProviderRow[]
   flags: number
 }
 
@@ -1102,10 +1114,27 @@ export function buildMeasurementOverview(
     const ownEdges = indexes.targetEdgesByTargetId.get(targetId) ?? []
     const ownSlots = indexedSlotsForEdges(ownEdges, indexes)
     const ownAnswered = indexedAnsweredSlots(ownSlots, indexes)
+    const ownTargets = indexes.targetsById.get(targetId)
     return {
       targetId,
-      mentionCoverage: targetMentionRate(indexes.targetsById.get(targetId), ownSlots, ownAnswered, indexes),
+      mentionCoverage: targetMentionRate(ownTargets, ownSlots, ownAnswered, indexes),
       citationCoverage: indexedScopeCitationRate(ownSlots, ownEdges, indexes),
+      // Each engine is measured over the slots it owns, using exactly the
+      // functions the Property total uses. A per-engine reading is therefore
+      // withheld for the same reasons the total is, never rounded down to zero.
+      providers: providersFor(ownSlots).map(provider => {
+        const providerSlots = ownSlots.filter(slot => slot.provider === provider)
+        return {
+          provider,
+          mentionCoverage: targetMentionRate(
+            ownTargets,
+            providerSlots,
+            indexedAnsweredSlots(providerSlots, indexes),
+            indexes,
+          ),
+          citationCoverage: indexedScopeCitationRate(providerSlots, ownEdges, indexes),
+        }
+      }),
       flags: indexes.ambiguousEvidenceKeysByTargetId.get(targetId)?.size ?? 0,
     }
   })
@@ -1123,6 +1152,24 @@ export function buildMeasurementOverview(
     properties,
     flags: properties.reduce((total, row) => total + row.flags, 0),
   }
+}
+
+export interface MeasurementEvidenceResult {
+  evidence: MeasurementAttributionEvidence[]
+  diagnostics: MeasurementReport['diagnostics']
+}
+
+/**
+ * Attribution evidence without the group and Target roll-ups.
+ *
+ * A caller that only needs the rows for one Property would otherwise build
+ * every group report and every Target report to reach them. The rows are
+ * identical to `buildMeasurementReport(input).evidence` — same preparation,
+ * same deterministic order — so the two reads can never disagree.
+ */
+export function buildMeasurementEvidence(input: MeasurementReportInput): MeasurementEvidenceResult {
+  const prepared = prepareReport(input)
+  return { evidence: prepared.evidence, diagnostics: prepared.diagnostics }
 }
 
 export function buildMeasurementReport(input: MeasurementReportInput): MeasurementReport {

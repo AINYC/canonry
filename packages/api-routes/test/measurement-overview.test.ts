@@ -314,6 +314,70 @@ describe('measurement overview', () => {
     expect(nonBrand.body.queryClass).toBe('non-brand')
   })
 
+  it('splits a Property row by answer engine over that engine\'s own slots', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    seedMeasuredRun(versionId)
+
+    const { body } = await overview('scope=property&targetKey=harbor')
+    const row = body.properties.items[0]!
+
+    // Harbor is named in the Non-brand answer and not in the Branded one, so
+    // each engine reads 1 of its 2 answered slots and the Property total is 2
+    // of 4. The per-engine rows are a split of the same population, not an
+    // average of it: they must not both read the Property's own 50%.
+    expect(row.mentionCoverage).toEqual({ state: 'available', value: 0.5, numerator: 2, denominator: 4 })
+    expect(row.citationCoverage).toEqual({ state: 'available', value: 1, numerator: 4, denominator: 4 })
+    expect(row.providers).toEqual([
+      {
+        provider: 'gemini',
+        mentionCoverage: { state: 'available', value: 0.5, numerator: 1, denominator: 2 },
+        citationCoverage: { state: 'available', value: 1, numerator: 2, denominator: 2 },
+      },
+      {
+        provider: 'openai',
+        mentionCoverage: { state: 'available', value: 0.5, numerator: 1, denominator: 2 },
+        citationCoverage: { state: 'available', value: 1, numerator: 2, denominator: 2 },
+      },
+    ])
+  })
+
+  it('withholds a Property with no question of the requested class instead of reading it as zero', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    seedMeasuredRun(versionId)
+
+    // Bayside carries a Non-brand assignment and no Branded one. Its Branded
+    // reading is the absence of a measurement, and a 0% would be a lie about
+    // an engine that was never asked.
+    const branded = await overview('scope=property&targetKey=bayside&queryClass=branded')
+    const row = branded.body.properties.items[0]!
+    expect(row.mentionCoverage).toEqual({ state: 'unavailable', reason: 'no_population' })
+    expect(row.citationCoverage).toEqual({ state: 'unavailable', reason: 'no_population' })
+    expect(row.providers).toEqual([])
+
+    const nonBrand = await overview('scope=property&targetKey=bayside&queryClass=non-brand')
+    const measured = nonBrand.body.properties.items[0]!
+    expect(measured.mentionCoverage).toEqual({ state: 'available', value: 0, numerator: 0, denominator: 2 })
+    expect(measured.providers.map(provider => provider.provider)).toEqual(['gemini', 'openai'])
+  })
+
+  it('narrows the per-engine split to the requested provider', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    seedMeasuredRun(versionId)
+
+    const { body } = await overview('scope=property&targetKey=harbor&provider=openai')
+
+    expect(body.properties.items[0]!.providers).toEqual([
+      {
+        provider: 'openai',
+        mentionCoverage: { state: 'available', value: 0.5, numerator: 1, denominator: 2 },
+        citationCoverage: { state: 'available', value: 1, numerator: 2, denominator: 2 },
+      },
+    ])
+  })
+
   it('publishes Named Share of Voice only for a Non-brand group basket', async () => {
     const versionId = seedVersion(1)
     activate(versionId)
@@ -669,7 +733,16 @@ describe('measurement overview', () => {
     expect(body.metrics.sov).toEqual({ state: 'unavailable', reason: 'plan_v1' })
     expect(body.nextAction).toEqual({ kind: 'republish_setup' })
     expect(body.properties.items).toEqual([
-      { targetKey: 'harbor', label: 'Harbor Homes', mentionCoverage: { state: 'unavailable', reason: 'plan_v1' }, citationCoverage: { state: 'unavailable', reason: 'plan_v1' }, flags: 0 },
+      {
+        targetKey: 'harbor',
+        label: 'Harbor Homes',
+        mentionCoverage: { state: 'unavailable', reason: 'plan_v1' },
+        citationCoverage: { state: 'unavailable', reason: 'plan_v1' },
+        // A v1 revision measured no per-engine population either, so this is
+        // empty rather than a row of engines reading zero.
+        providers: [],
+        flags: 0,
+      },
     ])
   })
 })
