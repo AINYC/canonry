@@ -615,6 +615,8 @@ function GroupMembershipImportPanel({ value }: { value: AdvancedMeasurementGroup
   )
 }
 
+const EM_DASH = '\u2014'
+
 export function AdvancedMeasurementQueriesStep({
   access,
   availability,
@@ -1406,10 +1408,25 @@ export function AdvancedMeasurementReviewStep({
             <td className="tabular-nums text-heading">{counts.queries}</td>
             <td className="tabular-nums text-heading">{counts.groups}</td>
             <td className="tabular-nums text-heading">{counts.assignments ?? '—'}</td>
-            <td className="tabular-nums text-heading">{counts.providerCalls ?? 'Review changes'}</td>
+            <td className="tabular-nums text-heading">{counts.providerCalls ?? EM_DASH}</td>
           </tr></tbody>
         </table>
       </div>
+      {counts.providerCalls === undefined ? (
+        <p className="supporting-copy">
+          Review changes to see how many provider requests one run will make.
+        </p>
+      ) : null}
+      {counts.assignments !== undefined && counts.assignments > counts.queries ? (
+        // Aiming one question at a market writes one assignment per Property in
+        // it, so this number outruns the question count and looks wrong without
+        // the reason beside it.
+        <p className="supporting-copy">
+          {counts.queries} question{counts.queries === 1 ? '' : 's'} aimed at markets and Properties
+          {' '}produce {counts.assignments} assignment{counts.assignments === 1 ? '' : 's'}:
+          {' '}a question aimed at a market is measured on every Property in it.
+        </p>
+      ) : null}
 
       {reviewedChanges ? (
         <section aria-labelledby="advanced-measurement-reviewed-changes-title" className="border-y border-default py-4" aria-live="polite">

@@ -912,3 +912,18 @@ test('renders an unavailable state without controls', () => {
   expect(screen.getByRole('region', { name: 'Review and publish' })).toBeTruthy()
   expect(container.querySelectorAll('button, input, select, textarea')).toHaveLength(0)
 })
+
+test('review states why assignments outrun questions, and never puts a button name in a number column', () => {
+  renderReview({
+    counts: { properties: 6, queries: 1, groups: 3, assignments: 3 },
+  })
+
+  // Was: the provider-requests cell rendered the literal string 'Review changes'
+  // — the name of the button beside it — inside a numeric column, which reads as
+  // a value rather than as "not computed yet".
+  expect(screen.queryByText('Review changes', { selector: 'td' })).toBeNull()
+
+  // One question aimed at a market writes one assignment per Property in it, so
+  // 1 question and 3 assignments is correct and needs saying.
+  expect(screen.getByText(/a question aimed at a market is measured on every Property in it/)).toBeTruthy()
+})
