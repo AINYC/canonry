@@ -292,6 +292,28 @@ describe('measurement portfolio reads', () => {
     expect(body.truncated).toBe(false)
   })
 
+  it('uses the same brand identity as question reads for self recommendations', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    const runId = seedFullRun(versionId)
+    db.update(querySnapshots).set({
+      recommendedCompetitors: ['Harbor Homes', 'HARBOR-HOMES', 'HarborHomes', '---', 'Rival One'],
+    }).where(and(
+      eq(querySnapshots.runId, runId), eq(querySnapshots.measurementExecutionId, 'exec-nearby'), eq(querySnapshots.provider, 'gemini'),
+    )).run()
+
+    const summary = await portfolio(`groupKey=regional&runId=${runId}&limit=2`)
+    const replacements = await competitors(`targetKey=harbor&runId=${runId}&queryClass=non-brand`)
+
+    expect(summary.status).toBe(200)
+    expect(summary.body.weakestProperties.find(row => row.targetKey === 'harbor')?.recommendedInstead)
+      .toEqual([{ name: 'Rival One', occurrences: 1 }])
+    expect(replacements.status).toBe(200)
+    expect(replacements.body.competitors).toEqual([expect.objectContaining({
+      name: 'Rival One', occurrences: 1,
+    })])
+  })
+
   it('caps replacement names per compact portfolio row and reports the omitted count', async () => {
     const versionId = seedVersion(1)
     activate(versionId)
@@ -362,6 +384,23 @@ describe('measurement portfolio reads', () => {
     expect(body.comparison.totalProperties).toBe(2)
     expect(body.comparison.truncated).toBe(true)
     expect(body.comparison.changedProperties).toHaveLength(1)
+  })
+
+  it('does not report a Property changed when its unavailable metrics remain unavailable for the same reason', async () => {
+    plan.targets.find(target => target.stableKey === 'bayside')!.mentionNotApplicable = true
+    const versionId = seedVersion(1)
+    activate(versionId)
+    seedFullRun(versionId, { createdAt: '2026-08-02T08:00:00.000Z' })
+    seedFullRun(versionId, { createdAt: '2026-08-02T09:00:00.000Z' })
+
+    const { status, body } = await changes()
+
+    expect(status).toBe(200)
+    expect(body.comparison).toMatchObject({ state: 'available' })
+    if (body.comparison.state !== 'available') throw new Error('Expected a comparable measurement run.')
+    expect(body.comparison.changedProperties).toEqual([])
+    expect(body.comparison.totalProperties).toBe(0)
+    expect(body.comparison.truncated).toBe(false)
   })
 
   it('does not bridge changes across an execution identity boundary', async () => {

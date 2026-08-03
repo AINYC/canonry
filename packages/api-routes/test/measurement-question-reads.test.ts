@@ -274,6 +274,23 @@ describe('measurement question reads', () => {
     })
   })
 
+  it('uses the same recommendation identity as portfolio reads and drops empty candidate keys', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    const runId = seedRun(versionId)
+    const resultId = seedSnapshot(runId, 'exec-nearby', 'openai', {
+      recommendedCompetitors: ['Harbor Homes', 'HARBOR-HOMES', 'HarborHomes', '   ', '---', 'Challenger'],
+    })
+
+    const { status, body } = await questions(`targetKey=harbor&runId=${runId}&provider=openai`)
+    const detail = await questionResult(`targetKey=harbor&resultId=${resultId}`)
+
+    expect(status).toBe(200)
+    expect(body.questions.find(question => question.resultId === resultId)?.recommendedInstead).toEqual(['Challenger'])
+    expect(detail.status).toBe(200)
+    expect(detail.body.recommendedInstead).toEqual(['Challenger'])
+  })
+
   it('deduplicates the provider request but evaluates mention and citation for each Property separately', async () => {
     const versionId = seedVersion(1)
     activate(versionId)

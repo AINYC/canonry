@@ -433,7 +433,7 @@ function recommendedInstead(
     .filter(key => key.length > 0))
   return candidates.filter(candidate => {
     const key = brandKeyFromText(candidate)
-    return key.length === 0 || !ownNames.has(key)
+    return key.length > 0 && !ownNames.has(key)
   })
 }
 

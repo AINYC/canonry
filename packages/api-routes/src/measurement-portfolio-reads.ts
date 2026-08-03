@@ -13,6 +13,7 @@ import {
   RunKinds,
   RunStatuses,
   RunTriggers,
+  brandKeyFromText,
   measurementChangesQuerySchema,
   measurementChangesResponseSchema,
   measurementDataQualityQuerySchema,
@@ -45,7 +46,6 @@ import {
 } from './measurement-overview.js'
 import {
   buildMeasurementOverview,
-  measurementMentionAliasKey,
   normalizeMeasurementLocation,
   targetMentionedInAnswer,
   type MeasurementOverview,
@@ -249,7 +249,7 @@ function targetAnswers(
 
 function targetAliasKeys(target: MeasurementPlanV2['targets'][number]): Set<string> {
   return new Set([target.label, ...target.aliases]
-    .map(measurementMentionAliasKey)
+    .map(brandKeyFromText)
     .filter(Boolean))
 }
 
@@ -265,7 +265,7 @@ function recommendationRows(
     if (answer.mentioned !== false || answer.cited !== false) continue
     for (const rawName of answer.snapshot.recommendedCompetitors) {
       const name = rawName.normalize('NFKC').trim().replace(/\s+/g, ' ')
-      const key = measurementMentionAliasKey(name)
+      const key = brandKeyFromText(name)
       if (!key || aliases.has(key)) continue
       const existing = grouped.get(key)
       if (existing) {
@@ -622,8 +622,14 @@ function metricDelta(previous: MetricValue, current: MetricValue) {
   return { state: 'unavailable' as const, reason: 'evidence_incomplete' }
 }
 
-function deltaChanged(delta: ReturnType<typeof metricDelta>): boolean {
-  return delta.state === 'available' ? delta.delta !== 0 : true
+function deltaChanged(previous: MetricValue, current: MetricValue): boolean {
+  if (previous.state === 'available' && current.state === 'available') {
+    return previous.value !== current.value
+  }
+  if (previous.state === 'unavailable' && current.state === 'unavailable') {
+    return false
+  }
+  return true
 }
 
 function changesResponse(
@@ -664,15 +670,24 @@ function changesResponse(
     const target = requireTarget(plan, targetKey)
     const currentProperty = currentProperties.get(targetKey)
     const previousProperty = previousProperties.get(targetKey)
-    const mentionCoverage = metricDelta(
-      previousProperty ? coverageMetric(previousProperty.mentionCoverage) : unavailable('no_population'),
-      currentProperty ? coverageMetric(currentProperty.mentionCoverage) : unavailable('no_population'),
-    )
-    const citationCoverage = metricDelta(
-      previousProperty ? coverageMetric(previousProperty.citationCoverage) : unavailable('no_population'),
-      currentProperty ? coverageMetric(currentProperty.citationCoverage) : unavailable('no_population'),
-    )
-    if (!deltaChanged(mentionCoverage) && !deltaChanged(citationCoverage)) return []
+    const previousMentionCoverage = previousProperty
+      ? coverageMetric(previousProperty.mentionCoverage)
+      : unavailable('no_population')
+    const currentMentionCoverage = currentProperty
+      ? coverageMetric(currentProperty.mentionCoverage)
+      : unavailable('no_population')
+    const previousCitationCoverage = previousProperty
+      ? coverageMetric(previousProperty.citationCoverage)
+      : unavailable('no_population')
+    const currentCitationCoverage = currentProperty
+      ? coverageMetric(currentProperty.citationCoverage)
+      : unavailable('no_population')
+    const mentionCoverage = metricDelta(previousMentionCoverage, currentMentionCoverage)
+    const citationCoverage = metricDelta(previousCitationCoverage, currentCitationCoverage)
+    if (
+      !deltaChanged(previousMentionCoverage, currentMentionCoverage)
+      && !deltaChanged(previousCitationCoverage, currentCitationCoverage)
+    ) return []
     return [{
       ...propertyDto(target),
       mentionCoverage,
