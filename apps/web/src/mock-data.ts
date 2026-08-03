@@ -999,7 +999,6 @@ const baseDashboard: DashboardVm = {
         meta: 'Gemini · OpenAI',
       },
     ],
-    lastUpdatedAt: 'Mar 9, 8:08 AM ET',
   },
   projects: baseProjectCommandCenters,
   runs: allRuns,

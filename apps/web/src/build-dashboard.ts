@@ -753,7 +753,6 @@ export function buildDashboard(projectDataList: ProjectData[], apiSettings?: Api
         { id: 'api', label: 'API', tone: 'positive', detail: 'Connected', meta: 'Real-time data' },
         { id: 'provider', label: 'Gemini', tone: 'positive', detail: 'Configured', meta: 'Provider active' },
       ],
-      lastUpdatedAt: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }),
       ...(!hasProjects ? {
         emptyState: {
           title: 'No projects yet',

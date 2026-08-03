@@ -91,7 +91,6 @@ export interface PortfolioOverviewVm {
   attentionItems: AttentionItemVm[]
   recentRuns: RunListItemVm[]
   systemHealth: SystemHealthCardVm[]
-  lastUpdatedAt: string
   emptyState?: {
     title: string
     detail: string
