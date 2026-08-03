@@ -120,9 +120,32 @@ describe('group membership CSV parser', () => {
     expect(result.rows.map(row => row.status)).toEqual(['invalid', 'invalid'])
     expect(result.rows.map(row => row.status === 'invalid' && row.reason)).toEqual(['column-count', 'column-count'])
   })
+
+  it('ignores blank and whitespace-only physical rows with LF or CRLF endings', () => {
+    for (const csv of [
+      'property,group\n\nHarbor House,Dallas\n   \n',
+      'property,group\r\n\r\nHarbor House,Dallas\r\n  \t\r\n',
+    ]) {
+      const parsed = parseGroupMembershipCsv(csv)
+      expect(parsed.rows).toHaveLength(1)
+      expect(parsed.rows[0]).toMatchObject({ dataRow: 1, property: 'Harbor House', group: 'Dallas' })
+    }
+    expect(parseGroupMembershipCsv('property,group,url\n,,').rows).toHaveLength(1)
+    expect(parseGroupMembershipCsv('property,group\n"",Dallas').rows).toHaveLength(1)
+  })
 })
 
 describe('group membership preview resolution', () => {
+  it('surfaces every unmatched Property row instead of dropping it from review counts', () => {
+    const result = preview(authoring(), 'property,group\nMissing One,Dallas\nMissing Two,Austin')
+    expect(result.rows).toHaveLength(2)
+    expect(result.rows).toEqual([
+      expect.objectContaining({ dataRow: 1, status: 'unmatched', reason: 'property-not-found' }),
+      expect.objectContaining({ dataRow: 2, status: 'unmatched', reason: 'property-not-found' }),
+    ])
+    expect(result.counts).toMatchObject({ dataRows: 2, unmatchedRows: 2, needsAttention: 2 })
+  })
+
   it('uses documented Unicode normalization for labels and a deterministic safe group key', () => {
     const current = authoring({ targets: [target('harbor-house', 'Harbor House')] })
     const result = preview(current, 'property,group\n Ｈａｒｂｏｒ\u00a0House , Ｄａｌｌａｓ ')
@@ -222,11 +245,22 @@ describe('group membership preview resolution', () => {
       ],
     })
     expect(preview(ambiguousGroup, 'property,group\nHarbor House,Dallas').rows[0])
-      .toMatchObject({ status: 'ambiguous', reason: 'group-label-ambiguous' })
+      .toMatchObject({
+        status: 'ambiguous',
+        reason: 'group-label-ambiguous',
+        candidateGroupKeys: ['dallas-a', 'dallas-b'],
+      })
 
     const draftTargetCollision = authoring({ targets: [target('group-dallas', 'Harbor House')] })
     expect(preview(draftTargetCollision, 'property,group\nHarbor House,Dallas').rows[0])
-      .toMatchObject({ status: 'invalid', reason: 'group-key-conflict' })
+      .toMatchObject({
+        status: 'invalid',
+        reason: 'group-key-conflict',
+        groupKeyConflict: {
+          proposedGroupKey: 'group-dallas',
+          evidence: [expect.objectContaining({ source: 'draft-target', stableKey: 'group-dallas' })],
+        },
+      })
 
     const draftGroupCollision = authoring({
       groups: [{ stableKey: 'GROUP-DALLAS', label: 'Different group', targetKeys: [], competitors: [] }],
@@ -293,12 +327,13 @@ describe('reviewed group membership application', () => {
       'Harbor House,Dallas',
       'Missing,Luxury',
     ].join('\n'))
-    assertReviewedGroupMembership(result, {
+    const review = {
       sourceChecksum: result.sourceChecksum,
       previewChecksum: result.previewChecksum,
       acceptedRows: [1],
-    })
-    const applied = applyReviewedGroupMembership(current, result, [1])
+    }
+    assertReviewedGroupMembership(result, review)
+    const applied = applyReviewedGroupMembership(current, result, review)
     expect(current.groups).toEqual([])
     expect(applied).toMatchObject({ appliedRows: 1, addedMemberships: 1, unchangedMemberships: 0 })
     expect(applied.authoring.groups).toEqual([{
@@ -319,7 +354,11 @@ describe('reviewed group membership application', () => {
       }],
     })
     const result = preview(current, 'property,group\nHarbor House,Dallas')
-    const applied = applyReviewedGroupMembership(current, result, [1])
+    const applied = applyReviewedGroupMembership(current, result, {
+      sourceChecksum: result.sourceChecksum,
+      previewChecksum: result.previewChecksum,
+      acceptedRows: [1],
+    })
     expect(applied).toMatchObject({ appliedRows: 1, addedMemberships: 0, unchangedMemberships: 1 })
     expect(applied.authoring.groups[0]!.competitors).toEqual(current.groups[0]!.competitors)
     expect(applied.authoring.groups[0]!.targetKeys).toEqual(['harbor-house'])
@@ -335,7 +374,11 @@ describe('reviewed group membership application', () => {
       'Elm Street,Dallas',
       'Harbor House,Luxury',
     ].join('\n'))
-    const applied = applyReviewedGroupMembership(current, result, [2, 3])
+    const applied = applyReviewedGroupMembership(current, result, {
+      sourceChecksum: result.sourceChecksum,
+      previewChecksum: result.previewChecksum,
+      acceptedRows: [2, 3],
+    })
     expect(applied.authoring.groups).toEqual([
       {
         stableKey: 'group-dallas',
@@ -366,9 +409,20 @@ describe('reviewed group membership application', () => {
       previewChecksum: 'b'.repeat(64),
       acceptedRows: [1],
     }), 'preview-checksum-mismatch', 409)
-    expectImportError(() => applyReviewedGroupMembership(current, result, []), 'accepted-rows-empty')
-    expectImportError(() => applyReviewedGroupMembership(current, result, [1, 1]), 'accepted-rows-duplicate')
-    expectImportError(() => applyReviewedGroupMembership(current, result, [2]), 'accepted-row-not-matched')
-    expectImportError(() => applyReviewedGroupMembership(current, result, [3]), 'accepted-row-not-matched')
+    const review = (acceptedRows: number[]) => ({
+      sourceChecksum: result.sourceChecksum,
+      previewChecksum: result.previewChecksum,
+      acceptedRows,
+    })
+    expectImportError(() => applyReviewedGroupMembership(current, result, review([])), 'accepted-rows-empty')
+    expectImportError(() => applyReviewedGroupMembership(current, result, review([1, 1])), 'accepted-rows-duplicate')
+    expectImportError(() => applyReviewedGroupMembership(current, result, review([2])), 'accepted-row-not-matched')
+    expectImportError(() => applyReviewedGroupMembership(current, result, review([3])), 'accepted-row-not-matched')
+
+    expectImportError(() => applyReviewedGroupMembership(current, result, {
+      sourceChecksum: 'f'.repeat(64),
+      previewChecksum: result.previewChecksum,
+      acceptedRows: [1],
+    }), 'source-checksum-mismatch', 409)
   })
 })

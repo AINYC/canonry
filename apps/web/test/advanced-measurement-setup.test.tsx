@@ -33,12 +33,13 @@ const properties = [{ id: 'harbor-house', label: 'Harbor House', urlCount: 2 }]
 const queries = {
   properties,
   queries: [],
-  selectedPropertyIds: [],
   selectedQueryIds: [],
-  onSelectedPropertyIdsChange: vi.fn(),
   onSelectedQueryIdsChange: vi.fn(),
   onApplySelectedQueries: vi.fn(),
   onRemoveQuery: vi.fn(),
+  groups: [],
+  audience: { kind: 'all' as const },
+  onAudienceChange: vi.fn(),
   onContinue: vi.fn(),
 }
 

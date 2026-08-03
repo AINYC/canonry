@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { measurementDraftAuthoringSchema } from '@ainyc/canonry-contracts'
+import {
+  MEASUREMENT_DRAFT_MAX_ASSIGNMENTS,
+  MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES,
+  MEASUREMENT_DRAFT_MAX_GROUPS,
+  measurementDraftAuthoringSchema,
+} from '@ainyc/canonry-contracts'
 import {
   applyAssignmentsToAuthoring,
   applyDraftAction,
+  assertMeasurementDraftAuthoringLimits,
   replaceAssignmentsInAuthoring,
   resolveDraftAudience,
 } from '../src/measurement-draft-actions.js'
@@ -132,7 +138,7 @@ describe('measurement draft assignment audiences', () => {
     expect(() => resolveDraftAudience(authoring, { groupKeys: ['future'] })).toThrow(/Group "Future".*proposed/)
     expect(() => resolveDraftAudience(authoring, { groupKeys: ['retired'] })).toThrow(/Group "Retired".*excluded/)
     expect(() => resolveDraftAudience(authoring, { groupKeys: ['missing'] })).toThrow(/Group "Missing".*unknown Property/)
-    expect(() => resolveDraftAudience(authoring, { groupKeys: ['not-a-group'] })).toThrow(/Group "not-a-group"/)
+    expect(() => resolveDraftAudience(authoring, { groupKeys: ['not-a-group'] })).toThrow(/selected group is no longer available/i)
   })
 
   it('replaces only the named questions across their complete prior audience', () => {
@@ -152,12 +158,75 @@ describe('measurement draft assignment audiences', () => {
     ])
   })
 
+  it('preserves surviving operator classifications and context overrides during replacement', () => {
+    const authoring = audienceFixture()
+    const original = {
+      targetKey: 'dallas-1',
+      queryId: 'q-market',
+      contextOverride: { providers: ['gemini'] },
+      queryClass: 'branded' as const,
+      classificationSource: 'operator' as const,
+    }
+    const withAssignments = {
+      ...authoring,
+      assignments: [
+        original,
+        { ...original, targetKey: 'dallas-2', contextOverride: { providers: ['openai'] } },
+      ],
+    }
+
+    const unchanged = replaceAssignmentsInAuthoring(withAssignments, {
+      targetKeys: ['dallas-2', 'dallas-1'],
+      queryIds: ['q-market'],
+    }, audienceContext)
+    expect(unchanged.authoring.assignments).toEqual(withAssignments.assignments)
+
+    const narrowed = replaceAssignmentsInAuthoring(withAssignments, {
+      targetKeys: ['dallas-1'],
+      queryIds: ['q-market'],
+    }, audienceContext)
+    expect(narrowed.authoring.assignments).toEqual([original])
+  })
+
   it('keeps additive reapply a no-op at the authoring level', () => {
     const authoring = audienceFixture()
     const once = applyAssignmentsToAuthoring(authoring, { groupKeys: ['dallas'], queryIds: ['q-market'] }, audienceContext)
     const twice = applyAssignmentsToAuthoring(once.authoring, { groupKeys: ['dallas'], queryIds: ['q-market'] }, audienceContext)
     expect(twice.assignments).toEqual({ requested: 2, added: 0, alreadyPresent: 2 })
     expect(twice.authoring).toEqual(once.authoring)
+  })
+})
+
+describe('measurement draft authoring ceilings', () => {
+  it('refuses group, assignment, and serialized authoring growth past each global ceiling', () => {
+    const before = audienceFixture()
+    expect(() => assertMeasurementDraftAuthoringLimits(before, {
+      ...before,
+      groups: Array.from({ length: MEASUREMENT_DRAFT_MAX_GROUPS + 1 }, (_, index) => ({
+        stableKey: `group-${index}`,
+        label: `Group ${index}`,
+        targetKeys: [],
+        competitors: [],
+      })),
+    })).toThrow(/groups limit exceeded/i)
+
+    expect(() => assertMeasurementDraftAuthoringLimits(before, {
+      ...before,
+      assignments: Array.from({ length: MEASUREMENT_DRAFT_MAX_ASSIGNMENTS + 1 }, (_, index) => ({
+        targetKey: 'dallas-1',
+        queryId: `q-${index}`,
+        queryClass: 'non-brand' as const,
+        classificationSource: 'rule' as const,
+      })),
+    })).toThrow(/assignments limit exceeded/i)
+
+    expect(() => assertMeasurementDraftAuthoringLimits(before, {
+      ...before,
+      defaultContext: {
+        ...before.defaultContext,
+        models: { oversized: 'x'.repeat(MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES) },
+      },
+    })).toThrow(/authoring size limit exceeded/i)
   })
 })
 

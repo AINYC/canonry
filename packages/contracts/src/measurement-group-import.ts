@@ -64,6 +64,20 @@ const rowFailureSchema = rowSourceSchema.extend({
   reason: measurementDraftGroupMembershipRowReasonSchema,
 })
 
+export const measurementDraftGroupKeyConflictEvidenceSchema = z.object({
+  source: z.enum(['draft-target', 'draft-group', 'persisted-segment', 'retired-segment', 'proposed-group']),
+  stableKey: measurementV2StableKeySchema,
+  kind: z.enum(['target', 'group']).optional(),
+  retiredAt: z.string().datetime().nullable().optional(),
+  normalizedGroupLabel: z.string().optional(),
+}).strict()
+export type MeasurementDraftGroupKeyConflictEvidence = z.output<typeof measurementDraftGroupKeyConflictEvidenceSchema>
+
+const measurementDraftGroupKeyConflictSchema = z.object({
+  proposedGroupKey: measurementV2StableKeySchema,
+  evidence: z.array(measurementDraftGroupKeyConflictEvidenceSchema).min(1),
+}).strict()
+
 export const measurementDraftGroupMembershipRowSchema = z.discriminatedUnion('status', [
   rowSourceSchema.extend({
     status: z.literal('matched'),
@@ -72,13 +86,15 @@ export const measurementDraftGroupMembershipRowSchema = z.discriminatedUnion('st
   }).strict(),
   rowFailureSchema.extend({
     status: z.literal('ambiguous'),
-    candidateTargetKeys: z.array(measurementV2StableKeySchema).min(1),
+    candidateTargetKeys: z.array(measurementV2StableKeySchema).min(1).optional(),
+    candidateGroupKeys: z.array(measurementV2StableKeySchema).min(1).optional(),
   }).strict(),
   rowFailureSchema.extend({
     status: z.literal('unmatched'),
   }).strict(),
   rowFailureSchema.extend({
     status: z.literal('invalid'),
+    groupKeyConflict: measurementDraftGroupKeyConflictSchema.optional(),
   }).strict(),
   rowSourceSchema.extend({
     status: z.literal('duplicate'),

@@ -61,11 +61,7 @@ export interface MeasurementAssignmentApplyOptions {
   allProperties?: boolean
 }
 
-/** Preview the exact resolved audience and execution impact before one ETag-bound write. */
-export async function applyMeasurementPlanAssignments(
-  project: string,
-  opts: MeasurementAssignmentApplyOptions,
-): Promise<void> {
+async function measurementAssignmentRequest(project: string, opts: MeasurementAssignmentApplyOptions) {
   const client = createApiClient()
   const current = await client.getMeasurementPlanDraft(project)
   if (!current.draft || !current.etag) {
@@ -76,13 +72,48 @@ export async function applyMeasurementPlanAssignments(
       .filter(target => target.status === 'included')
       .map(target => target.stableKey)
     : opts.targetKeys
-  const request = {
-    ...(targetKeys?.length ? { targetKeys } : {}),
-    ...(opts.groupKeys?.length ? { groupKeys: opts.groupKeys } : {}),
-    queryIds: opts.queryIds,
+  return {
+    client,
+    request: {
+      ...(targetKeys?.length ? { targetKeys } : {}),
+      ...(opts.groupKeys?.length ? { groupKeys: opts.groupKeys } : {}),
+      queryIds: opts.queryIds,
+    },
   }
+}
+
+export async function previewMeasurementPlanAssignments(
+  project: string,
+  opts: MeasurementAssignmentApplyOptions,
+): Promise<void> {
+  const { client, request } = await measurementAssignmentRequest(project, opts)
+  console.log(JSON.stringify(await client.previewMeasurementDraftAssignments(project, request), null, 2))
+}
+
+/** Preview the exact resolved audience and execution impact before one ETag-bound write. */
+export async function applyMeasurementPlanAssignments(
+  project: string,
+  opts: MeasurementAssignmentApplyOptions,
+): Promise<void> {
+  const { client, request } = await measurementAssignmentRequest(project, opts)
   const preview = await client.previewMeasurementDraftAssignments(project, request)
   const result = await client.applyMeasurementDraftAssignments(
+    project,
+    request,
+    crypto.randomUUID(),
+    preview.draftEtag,
+  )
+  console.log(JSON.stringify({ preview, result }, null, 2))
+}
+
+/** Preview first, then atomically replace the named questions at that ETag. */
+export async function replaceMeasurementPlanAssignments(
+  project: string,
+  opts: MeasurementAssignmentApplyOptions,
+): Promise<void> {
+  const { client, request } = await measurementAssignmentRequest(project, opts)
+  const preview = await client.previewMeasurementDraftAssignments(project, request)
+  const result = await client.replaceMeasurementDraftAssignments(
     project,
     request,
     crypto.randomUUID(),
@@ -117,10 +148,10 @@ export async function applyMeasurementPlanGroups(
   const client = createApiClient()
   const csv = readGroupMembershipCsv(source)
   const preview = await client.previewMeasurementDraftGroupMembership(project, { csv })
-  if (opts.acceptAllMatched && preview.counts.needsAttention > 0 && !opts.acknowledgeSkipped) {
+  if (preview.counts.needsAttention > 0 && !opts.acknowledgeSkipped) {
     throw new Error(
-      `${preview.counts.needsAttention} CSV rows need attention. Correct them, select rows with --accept-row, `
-      + 'or add --acknowledge-skipped to apply only matched rows.',
+      `${preview.counts.needsAttention} CSV rows need attention. Correct them or add --acknowledge-skipped `
+      + 'to apply only the selected matched rows.',
     )
   }
   const acceptedRows = opts.acceptAllMatched

@@ -165,13 +165,12 @@ export function setupErrorMessage(error: unknown, fallback: string): string {
   return message || fallback
 }
 
-/** Exposes only the audience errors that name an operator-visible group or Property. */
+/** Exposes only validation messages the API explicitly marks as operator-safe. */
 export function assignmentPreviewErrorMessage(error: unknown): string {
   const fallback = 'Could not calculate assignment impact.'
   if (!(error instanceof ApiError) || error.code !== 'VALIDATION_ERROR') return fallback
   const message = error.message.trim()
-  const safeGroupMessage = /^Group ".+" (?:does not exist in this measurement draft\.|has no Properties to assign\.|references unknown Property ".+"\.|contains Property ".+" that is (?:proposed|excluded), not included\.)$/
-  return safeGroupMessage.test(message) ? message : fallback
+  return error.details?.displayToOperator === true && message ? message : fallback
 }
 
 export const advancedMeasurementService: AdvancedMeasurementService = {

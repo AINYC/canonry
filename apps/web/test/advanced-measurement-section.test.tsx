@@ -319,9 +319,14 @@ function createFakeService(options: FakeServiceOptions = {}) {
       const draft = requireDraft(etag)
       const targetKeys = unique(input.targetKeys ?? [])
       const queryIds = new Set(input.queryIds)
-      draft.authoring.assignments = draft.authoring.assignments.filter(assignment => !queryIds.has(assignment.queryId))
+      const targets = new Set(targetKeys)
+      draft.authoring.assignments = draft.authoring.assignments.filter(assignment => (
+        !queryIds.has(assignment.queryId) || targets.has(assignment.targetKey)
+      ))
+      const existing = new Set(draft.authoring.assignments.map(assignment => `${assignment.targetKey}\u0000${assignment.queryId}`))
       for (const targetKey of targetKeys) {
         for (const queryId of queryIds) {
+          if (existing.has(`${targetKey}\u0000${queryId}`)) continue
           draft.authoring.assignments.push({
             targetKey,
             queryId,
@@ -600,8 +605,16 @@ test('keeps internal setup terminology out of customer-facing errors', () => {
     .toBe('Could not discard these changes.')
   expect(setupErrorMessage(new ApiError('A draft already exists', 409), 'Could not open setup.'))
     .toBe('Could not open setup.')
-  expect(assignmentPreviewErrorMessage(new ApiError('Group "Dallas" has no Properties to assign.', 400, 'VALIDATION_ERROR')))
+  expect(assignmentPreviewErrorMessage(new ApiError(
+    'Group "Dallas" has no Properties to assign.',
+    400,
+    'VALIDATION_ERROR',
+    { displayToOperator: true },
+  )))
     .toBe('Group "Dallas" has no Properties to assign.')
+  const ceiling = 'This would create 5,100 assignments (3 questions across 1700 unique Properties), over the 5,000 limit for one action.'
+  expect(assignmentPreviewErrorMessage(new ApiError(ceiling, 400, 'VALIDATION_ERROR', { displayToOperator: true })))
+    .toBe(ceiling)
   expect(assignmentPreviewErrorMessage(new ApiError('Invalid "preview-assignments" payload', 400, 'VALIDATION_ERROR')))
     .toBe('Could not calculate assignment impact.')
 })
@@ -797,6 +810,7 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     await clickReadyAssignment(/Assign 2 questions to all 3 Properties/)
 
     await waitFor(() => expect(fake.service.applyAssignments).toHaveBeenCalledTimes(1))
+    expect(fake.service.previewAssignments).toHaveBeenCalledTimes(1)
     expect(fake.service.applyAssignments).toHaveBeenCalledWith(
       PROJECT,
       '"mpd_7"',
@@ -806,6 +820,79 @@ describe('AdvancedMeasurementSection server draft controller', () => {
       },
     )
     expect(fake.getDraft()?.authoring.assignments).toHaveLength(targets.length * QUERIES.length)
+  })
+
+  test('previews and applies a selected group through one server-resolved audience', async () => {
+    const targets = [property(1), property(2), property(3)]
+    const initialDraft = draftFixture({ targets })
+    initialDraft.authoring.groups = [{
+      stableKey: 'group-dallas',
+      label: 'Dallas',
+      targetKeys: ['property-001', 'property-003'],
+      competitors: [],
+    }]
+    const fake = createFakeService({ initialDraft })
+    renderSection(fake)
+
+    await advanceGroupsToQuestions()
+    fireEvent.change(screen.getByLabelText('Apply to'), { target: { value: 'group:group-dallas' } })
+    fireEvent.click(screen.getByLabelText(`Select question ${QUERIES[0]!.query}`))
+    await clickReadyAssignment(/Assign 1 question to Dallas/)
+
+    await waitFor(() => expect(fake.service.applyAssignments).toHaveBeenCalledTimes(1))
+    expect(fake.service.previewAssignments).toHaveBeenLastCalledWith(PROJECT, {
+      groupKeys: ['group-dallas'],
+      queryIds: [QUERIES[0]!.id],
+    })
+    expect(fake.service.applyAssignments).toHaveBeenCalledWith(PROJECT, '"mpd_7"', {
+      groupKeys: ['group-dallas'],
+      queryIds: [QUERIES[0]!.id],
+    })
+  })
+
+  test('applies Specific Properties in canonical order regardless of checkbox order', async () => {
+    const targets = [property(1), property(2), property(3)]
+    const fake = createFakeService({ initialDraft: draftFixture({ targets }) })
+    renderSection(fake)
+
+    await advanceGroupsToQuestions()
+    fireEvent.change(screen.getByLabelText('Apply to'), { target: { value: 'specific' } })
+    fireEvent.click(screen.getByLabelText('Select Property 003'))
+    fireEvent.click(screen.getByLabelText('Select Property 001'))
+    fireEvent.click(screen.getByLabelText(`Select question ${QUERIES[0]!.query}`))
+    await clickReadyAssignment(/Assign 1 question to 2 Properties/)
+
+    await waitFor(() => expect(fake.service.applyAssignments).toHaveBeenCalledTimes(1))
+    expect(fake.service.applyAssignments).toHaveBeenCalledWith(PROJECT, '"mpd_7"', {
+      targetKeys: ['property-001', 'property-003'],
+      queryIds: [QUERIES[0]!.id],
+    })
+    expect(screen.queryByText('Review the latest assignment impact before assigning questions.')).toBeNull()
+  })
+
+  test('resets the audience when its selected group is removed', async () => {
+    const targets = [property(1), property(2)]
+    const initialDraft = draftFixture({ targets })
+    initialDraft.authoring.groups = [{
+      stableKey: 'group-dallas',
+      label: 'Dallas',
+      targetKeys: ['property-001'],
+      competitors: [],
+    }]
+    const fake = createFakeService({ initialDraft })
+    renderSection(fake)
+
+    await advanceGroupsToQuestions()
+    fireEvent.change(screen.getByLabelText('Apply to'), { target: { value: 'group:group-dallas' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await screen.findByRole('heading', { name: 'Groups' })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Dallas' }))
+    await waitFor(() => expect(fake.service.removeGroup).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue without groups' }))
+    await screen.findByRole('heading', { name: 'Questions' })
+
+    expect((screen.getByLabelText('Apply to') as HTMLSelectElement).value).toBe('all')
+    expect(screen.queryByText(/selected group is no longer available/i)).toBeNull()
   })
 
   test('keeps a generated pattern and gives a recoverable pairing error when assignment fails after creation', async () => {
@@ -911,7 +998,7 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     expect(fake.getDraft()?.authoring.groups[0]?.targetKeys).toEqual(['property-002'])
   })
 
-  test('keeps all 194 included Properties after using the Specific Properties escape hatch', async () => {
+  test('resets a narrowed audience after returning through Properties', async () => {
     const targets = Array.from({ length: 194 }, (_, index) => property(index + 1))
     const initialDraft = draftFixture({ targets, assignedQueryIds: ['q-nearby'], baseActiveRevision: 4 })
     initialDraft.authoring.groups = [{
@@ -927,7 +1014,6 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     fireEvent.change(screen.getByLabelText('Apply to'), { target: { value: 'specific' } })
     expect(screen.getByText('Specific Properties')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }))
     fireEvent.click(screen.getByLabelText('Select Property 001'))
     fireEvent.click(screen.getByLabelText('Select Property 002'))
 
@@ -938,8 +1024,8 @@ describe('AdvancedMeasurementSection server draft controller', () => {
     expect(screen.getByText('194 of 194 selected')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     await advanceGroupsToQuestions()
-    expect((screen.getByLabelText('Select Property 001') as HTMLInputElement).checked).toBe(true)
-    expect((screen.getByLabelText('Select Property 002') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByLabelText('Apply to') as HTMLSelectElement).value).toBe('all')
+    expect(screen.queryByText('Specific Properties')).toBeNull()
 
     expect(fake.service.applySitemapSelection).not.toHaveBeenCalled()
     expect(fake.getDraft()?.authoring.targets.filter(target => target.status === 'included')).toHaveLength(194)

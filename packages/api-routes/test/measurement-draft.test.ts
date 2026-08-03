@@ -824,6 +824,34 @@ describe('measurement draft previews', () => {
       ]))
   })
 
+  it('previews assignment execution even when an unrelated group competitor needs review', async () => {
+    const session = await readyDraft()
+    await session.run('upsert-group', {
+      group: {
+        stableKey: 'dallas',
+        label: 'Dallas',
+        targetKeys: ['widgets'],
+        competitors: [{
+          stableKey: 'northwind',
+          label: 'Northwind',
+          domain: 'northwind.example',
+          aliases: [],
+        }],
+      },
+    })
+    const compile = await request('POST', '/measurement-plan/draft/actions/compile-preview', { payload: {} })
+    expect(compile.json()).toMatchObject({
+      ok: false,
+      checks: expect.arrayContaining([expect.objectContaining({ ruleId: 'competitor-matches-project' })]),
+    })
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/preview-assignments', {
+      payload: { groupKeys: ['dallas'], queryIds: [queryId('widget delivery times')] },
+    })
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(preview.json()).toMatchObject({ assignments: { requested: 1 } })
+  })
+
   it('reports 58 Property assignments as four provider calls for a 29-Property group', async () => {
     const session = await readyDraft()
     const targetKeys = ['widgets']
@@ -858,6 +886,38 @@ describe('measurement draft previews', () => {
       assignments: { requested: 58, added: 56, alreadyPresent: 2 },
       execution: { addedNodes: 0, addedProviderCalls: 0, fullRunNodes: 2, fullRunProviderCalls: 4 },
     })
+  })
+
+  it('applies the 5,000 ceiling after group expansion and refuses preview and mutation atomically', async () => {
+    const etag = await createDraft()
+    const row = db.select().from(measurementPlanDrafts).get()!
+    const targetKeys = Array.from({ length: 1_700 }, (_, index) => `property-${index + 1}`)
+    const authoring = {
+      defaultContext: { providers: ['gemini', 'openai'], locations: ['nyc'] },
+      targets: targetKeys.map((stableKey, index) => ({
+        stableKey,
+        label: `Property ${index + 1}`,
+        status: 'included',
+        aliases: [],
+        urlMatchers: [`https://northwind.example/${stableKey}`],
+        source: 'manual',
+      })),
+      assignments: [],
+      groups: [{ stableKey: 'big', label: 'Big', targetKeys, competitors: [] }],
+    }
+    db.update(measurementPlanDrafts).set({ authoringJson: JSON.stringify(authoring) })
+      .where(eq(measurementPlanDrafts.id, row.id)).run()
+    const payload = { groupKeys: ['big'], queryIds: tracked.map(query => query.id) }
+
+    const preview = await request('POST', '/measurement-plan/draft/actions/preview-assignments', { payload })
+    const applied = await action('apply-assignments', { payload, ifMatch: etag })
+
+    expect(preview.statusCode, preview.body).toBe(400)
+    expect(applied.statusCode, applied.body).toBe(400)
+    expect(preview.json().error.message).toBe(applied.json().error.message)
+    expect(preview.json().error.message).toContain('5,100 assignments')
+    expect(preview.json().error.message).toContain('5,000 limit')
+    expect(JSON.parse(db.select().from(measurementPlanDrafts).get()!.authoringJson).assignments).toEqual([])
   })
 
   it('compiles the stored draft, carries the compiled checksum and writes nothing', async () => {

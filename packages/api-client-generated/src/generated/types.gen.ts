@@ -3343,7 +3343,8 @@ export type MeasurementDraftPreviewGroupMembershipResponse = {
         normalizedGroupLabel: string;
         reason: 'column-count' | 'missing-property' | 'missing-group' | 'invalid-url' | 'property-not-found' | 'property-label-ambiguous' | 'url-not-exact-match' | 'target-proposed' | 'target-excluded' | 'group-label-ambiguous' | 'group-key-conflict';
         status: 'ambiguous';
-        candidateTargetKeys: Array<string>;
+        candidateTargetKeys?: Array<string>;
+        candidateGroupKeys?: Array<string>;
     } | {
         dataRow: number;
         property: string;
@@ -3362,6 +3363,16 @@ export type MeasurementDraftPreviewGroupMembershipResponse = {
         normalizedGroupLabel: string;
         reason: 'column-count' | 'missing-property' | 'missing-group' | 'invalid-url' | 'property-not-found' | 'property-label-ambiguous' | 'url-not-exact-match' | 'target-proposed' | 'target-excluded' | 'group-label-ambiguous' | 'group-key-conflict';
         status: 'invalid';
+        groupKeyConflict?: {
+            proposedGroupKey: string;
+            evidence: Array<{
+                source: 'draft-target' | 'draft-group' | 'persisted-segment' | 'retired-segment' | 'proposed-group';
+                stableKey: string;
+                kind?: 'target' | 'group';
+                retiredAt?: string | null;
+                normalizedGroupLabel?: string;
+            }>;
+        };
     } | {
         dataRow: number;
         property: string;

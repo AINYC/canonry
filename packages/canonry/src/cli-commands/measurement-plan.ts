@@ -6,6 +6,8 @@ import {
   listMeasurementPlanVersions,
   publishMeasurementPlan,
   previewMeasurementPlanGroups,
+  previewMeasurementPlanAssignments,
+  replaceMeasurementPlanAssignments,
   retireMeasurementPlanSegment,
   showMeasurementPlan,
   showMeasurementProperty,
@@ -54,6 +56,29 @@ const PROPERTY_SCOPE_OPTIONS = {
   'run-id': stringOption(),
 }
 
+const ASSIGNMENT_AUDIENCE_OPTIONS = {
+  group: multiStringOption(),
+  'target-key': multiStringOption(),
+  'all-properties': { type: 'boolean' as const },
+  'query-id': multiStringOption(),
+}
+
+function assignmentAudience(input: CliCommandInput, command: string, usage: string) {
+  const project = requireProject(input, command, usage)
+  const groupKeys = getStringArray(input.values, 'group')?.map(value => value.trim()).filter(Boolean)
+  const targetKeys = getStringArray(input.values, 'target-key')?.map(value => value.trim()).filter(Boolean)
+  const queryIds = getStringArray(input.values, 'query-id')?.map(value => value.trim()).filter(Boolean) ?? []
+  const allProperties = getBoolean(input.values, 'all-properties')
+  if (queryIds.length === 0) throw usageError(`Error: at least one --query-id is required\nUsage: ${usage}`)
+  if (allProperties && ((groupKeys?.length ?? 0) > 0 || (targetKeys?.length ?? 0) > 0)) {
+    throw usageError(`Error: --all-properties cannot be combined with --group or --target-key\nUsage: ${usage}`)
+  }
+  if (!allProperties && (groupKeys?.length ?? 0) === 0 && (targetKeys?.length ?? 0) === 0) {
+    throw usageError(`Error: select at least one --group, --target-key, or --all-properties\nUsage: ${usage}`)
+  }
+  return { project, options: { groupKeys, targetKeys, queryIds, allProperties } }
+}
+
 export const MEASUREMENT_PLAN_CLI_COMMANDS: readonly CliCommandSpec[] = [
   { path: ['measurement-plan', 'show'], usage: 'canonry measurement-plan show <project> [--revision N] [--format json]', options: { revision: stringOption() }, run: async input => {
     const value = getString(input.values, 'revision')
@@ -75,29 +100,34 @@ export const MEASUREMENT_PLAN_CLI_COMMANDS: readonly CliCommandSpec[] = [
     return retireMeasurementPlanSegment(project, stableKey)
   } },
   {
+    path: ['measurement-plan', 'assignments', 'preview'],
+    usage: 'canonry measurement-plan assignments preview <project> [--group KEY ...] [--target-key KEY ... | --all-properties] --query-id ID [--query-id ID ...] [--format json]',
+    options: ASSIGNMENT_AUDIENCE_OPTIONS,
+    run: input => {
+      const usage = 'canonry measurement-plan assignments preview <project> [--group KEY ...] [--target-key KEY ... | --all-properties] --query-id ID [--query-id ID ...]'
+      const { project, options } = assignmentAudience(input, 'measurement-plan.assignments.preview', usage)
+      return previewMeasurementPlanAssignments(project, options)
+    },
+  },
+  {
     path: ['measurement-plan', 'assignments', 'apply'],
     usage: 'canonry measurement-plan assignments apply <project> [--group KEY ...] [--target-key KEY ... | --all-properties] --query-id ID [--query-id ID ...] [--format json]',
-    options: {
-      group: multiStringOption(),
-      'target-key': multiStringOption(),
-      'all-properties': { type: 'boolean' },
-      'query-id': multiStringOption(),
-    },
+    options: ASSIGNMENT_AUDIENCE_OPTIONS,
     run: input => {
       const usage = 'canonry measurement-plan assignments apply <project> [--group KEY ...] [--target-key KEY ... | --all-properties] --query-id ID [--query-id ID ...]'
-      const project = requireProject(input, 'measurement-plan.assignments.apply', usage)
-      const groupKeys = getStringArray(input.values, 'group')?.map(value => value.trim()).filter(Boolean)
-      const targetKeys = getStringArray(input.values, 'target-key')?.map(value => value.trim()).filter(Boolean)
-      const queryIds = getStringArray(input.values, 'query-id')?.map(value => value.trim()).filter(Boolean) ?? []
-      const allProperties = getBoolean(input.values, 'all-properties')
-      if (queryIds.length === 0) throw usageError(`Error: at least one --query-id is required\nUsage: ${usage}`)
-      if (allProperties && ((groupKeys?.length ?? 0) > 0 || (targetKeys?.length ?? 0) > 0)) {
-        throw usageError(`Error: --all-properties cannot be combined with --group or --target-key\nUsage: ${usage}`)
-      }
-      if (!allProperties && (groupKeys?.length ?? 0) === 0 && (targetKeys?.length ?? 0) === 0) {
-        throw usageError(`Error: select at least one --group, --target-key, or --all-properties\nUsage: ${usage}`)
-      }
-      return applyMeasurementPlanAssignments(project, { groupKeys, targetKeys, queryIds, allProperties })
+      const { project, options } = assignmentAudience(input, 'measurement-plan.assignments.apply', usage)
+      return applyMeasurementPlanAssignments(project, options)
+    },
+  },
+  {
+    path: ['measurement-plan', 'assignments', 'replace'],
+    usage: 'canonry measurement-plan assignments replace <project> [--group KEY ...] [--target-key KEY ... | --all-properties] --query-id ID [--query-id ID ...] --confirm [--format json]',
+    options: { ...ASSIGNMENT_AUDIENCE_OPTIONS, confirm: { type: 'boolean' } },
+    run: input => {
+      const usage = 'canonry measurement-plan assignments replace <project> [--group KEY ...] [--target-key KEY ... | --all-properties] --query-id ID [--query-id ID ...] --confirm'
+      if (!getBoolean(input.values, 'confirm')) throw usageError(`Error: --confirm is required\nUsage: ${usage}`)
+      const { project, options } = assignmentAudience(input, 'measurement-plan.assignments.replace', usage)
+      return replaceMeasurementPlanAssignments(project, options)
     },
   },
   {

@@ -495,6 +495,34 @@ export function compileMeasurementDraft(
   return { ok: true, plan, checks }
 }
 
+/**
+ * Compile only the authoring fields that can change assignment execution.
+ * Group competitors, URL matchers, and mention aliases do not affect provider
+ * calls, so an unrelated review failure in those fields must not block an
+ * operator from previewing or applying a question audience.
+ */
+export function compileMeasurementDraftAssignmentExecution(
+  authoring: MeasurementDraftAuthoring,
+  context: MeasurementDraftCompileContext,
+): MeasurementDraftCompileResult {
+  const includedTargetKeys = new Set(authoring.targets
+    .filter(target => target.status === 'included')
+    .map(target => target.stableKey))
+  const queryIds = new Set(context.trackedQueries.map(query => query.id))
+  return compileMeasurementDraft({
+    ...authoring,
+    targets: authoring.targets
+      .filter(target => target.status === 'included')
+      .map(target => ({ ...target, aliases: [], urlMatchers: [] })),
+    groups: [],
+    assignments: authoring.assignments.filter(assignment => (
+      includedTargetKeys.has(assignment.targetKey)
+      && queryIds.has(assignment.queryId)
+      && assignment.queryClass !== 'unclassified'
+    )),
+  }, context)
+}
+
 function keyedDiff<T extends { stableKey: string }>(before: readonly T[], after: readonly T[]) {
   const beforeByKey = new Map(before.map(value => [value.stableKey, value]))
   const afterByKey = new Map(after.map(value => [value.stableKey, value]))

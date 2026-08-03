@@ -61,6 +61,7 @@ import {
 } from './measurement-draft-actions.js'
 import {
   compileMeasurementDraft,
+  compileMeasurementDraftAssignmentExecution,
   diffCompiledPlans,
   proposeQueryClassForTarget,
   type MeasurementDraftCompileContext,
@@ -68,7 +69,6 @@ import {
 import {
   MeasurementGroupMembershipImportError,
   applyReviewedGroupMembership,
-  assertReviewedGroupMembership,
   previewGroupMembershipCsv,
 } from './measurement-group-import.js'
 import { resolveRunProviderSelection } from './run-queue.js'
@@ -683,10 +683,11 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
     assertMeasurementDraftAuthoringLimits(before, result.authoring)
 
     const context = compileContextFor(app.db, project)
-    const current = compileMeasurementDraft(authoringForCompile(before, project, opts), context)
-    const candidate = compileMeasurementDraft(authoringForCompile(result.authoring, project, opts), context)
+    const current = compileMeasurementDraftAssignmentExecution(authoringForCompile(before, project, opts), context)
+    const candidate = compileMeasurementDraftAssignmentExecution(authoringForCompile(result.authoring, project, opts), context)
     if (!current.ok || !candidate.ok) {
-      throw validationError('The measurement draft does not compile.', {
+      throw validationError('The selected assignments have invalid question or provider settings. Review them and try again.', {
+        displayToOperator: true,
         currentChecks: current.checks,
         candidateChecks: candidate.checks,
       })
@@ -756,8 +757,7 @@ export async function measurementDraftRoutes(app: FastifyInstance, opts: Measure
           segments: segmentDescriptorsFor(tx, gate.project.id),
           csv: parsed.data.csv,
         })
-        assertReviewedGroupMembership(preview, parsed.data)
-        const applied = applyReviewedGroupMembership(before, preview, parsed.data.acceptedRows)
+        const applied = applyReviewedGroupMembership(before, preview, parsed.data)
         assertMeasurementDraftAuthoringLimits(before, applied.authoring)
 
         const changed = authoringIdentity(applied.authoring) !== authoringIdentity(before)

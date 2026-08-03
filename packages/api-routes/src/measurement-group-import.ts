@@ -82,6 +82,7 @@ export interface ApplyReviewedGroupMembershipResult {
 
 interface CsvRecord {
   readonly fields: readonly string[]
+  readonly physicalBlank: boolean
 }
 
 interface GroupKeyConflictEvidence {
@@ -201,14 +202,19 @@ function parseCsvRecords(value: string): readonly CsvRecord[] {
   let inQuotes = false
   let closedQuote = false
   let recordHasInput = false
+  let recordHasStructure = false
 
   const endRecord = () => {
     fields.push(field)
-    records.push({ fields })
+    records.push({
+      fields,
+      physicalBlank: !recordHasStructure && fields.length === 1 && fields[0]!.trim().length === 0,
+    })
     fields = []
     field = ''
     closedQuote = false
     recordHasInput = false
+    recordHasStructure = false
   }
 
   for (let index = 0; index < source.length; index += 1) {
@@ -255,12 +261,14 @@ function parseCsvRecords(value: string): readonly CsvRecord[] {
       }
       inQuotes = true
       recordHasInput = true
+      recordHasStructure = true
       continue
     }
     if (character === ',') {
       fields.push(field)
       field = ''
       recordHasInput = true
+      recordHasStructure = true
       continue
     }
     if (character === '\n') {
@@ -281,7 +289,7 @@ function parseCsvRecords(value: string): readonly CsvRecord[] {
 
   if (inQuotes) csvError('csv-malformed', 'CSV has an unterminated quoted field.')
   if (recordHasInput || fields.length > 0 || field.length > 0) endRecord()
-  return records
+  return records.filter(record => !record.physicalBlank)
 }
 
 function parseHeader(records: readonly CsvRecord[]): { readonly indices: ReadonlyMap<string, number>; readonly length: number } {
@@ -364,7 +372,7 @@ function exactMatcherUrls(target: MeasurementDraftAuthoring['targets'][number]):
   return urls
 }
 
-function sourceRow(row: ParsedGroupMembershipCsvRow): Omit<MeasurementDraftGroupMembershipRow, 'status' | 'reason' | 'targetKey' | 'groupKey' | 'candidateTargetKeys' | 'duplicateOfRow'> {
+function sourceRow(row: ParsedGroupMembershipCsvRow): Omit<MeasurementDraftGroupMembershipRow, 'status' | 'reason' | 'targetKey' | 'groupKey' | 'candidateTargetKeys' | 'candidateGroupKeys' | 'groupKeyConflict' | 'duplicateOfRow'> {
   return {
     dataRow: row.dataRow,
     property: row.property,
@@ -379,16 +387,36 @@ function rowFailure(
   row: ParsedGroupMembershipCsvRow,
   status: 'ambiguous' | 'unmatched' | 'invalid',
   reason: MeasurementDraftGroupMembershipRowReason,
-  candidateTargetKeys?: readonly string[],
+  detail?: {
+    candidateTargetKeys?: readonly string[]
+    candidateGroupKeys?: readonly string[]
+    groupKeyConflict?: { proposedGroupKey: string; evidence: readonly GroupKeyConflictEvidence[] }
+  },
 ): MeasurementDraftGroupMembershipRow {
   const source = sourceRow(row)
   if (status === 'ambiguous') {
-    if (!candidateTargetKeys?.length) {
-      throw new MeasurementGroupMembershipImportError('preview-inconsistent', 'An ambiguous CSV row is missing target candidates.', 409)
+    if (!detail?.candidateTargetKeys?.length && !detail?.candidateGroupKeys?.length) {
+      throw new MeasurementGroupMembershipImportError('preview-inconsistent', 'An ambiguous CSV row is missing candidates.', 409)
     }
-    return { ...source, status, reason, candidateTargetKeys: [...candidateTargetKeys] }
+    return {
+      ...source,
+      status,
+      reason,
+      ...(detail.candidateTargetKeys?.length ? { candidateTargetKeys: [...detail.candidateTargetKeys] } : {}),
+      ...(detail.candidateGroupKeys?.length ? { candidateGroupKeys: [...detail.candidateGroupKeys] } : {}),
+    }
   }
-  return { ...source, status, reason }
+  return {
+    ...source,
+    status,
+    reason,
+    ...(detail?.groupKeyConflict ? {
+      groupKeyConflict: {
+        proposedGroupKey: detail.groupKeyConflict.proposedGroupKey,
+        evidence: [...detail.groupKeyConflict.evidence],
+      },
+    } : {}),
+  }
 }
 
 function targetStateRow(
@@ -669,7 +697,7 @@ function resolveRows(
         row,
         'ambiguous',
         'property-label-ambiguous',
-        candidates.map(target => target.stableKey),
+        { candidateTargetKeys: candidates.map(target => target.stableKey) },
       ))
       continue
     }
@@ -689,11 +717,13 @@ function resolveRows(
       throw new MeasurementGroupMembershipImportError('preview-inconsistent', 'A non-empty CSV group has no identity proposal.', 409, { dataRow: row.dataRow })
     }
     if (identity.kind === 'ambiguous') {
-      resolved.push(rowFailure(row, 'ambiguous', 'group-label-ambiguous', [target.stableKey]))
+      resolved.push(rowFailure(row, 'ambiguous', 'group-label-ambiguous', { candidateGroupKeys: identity.groupKeys }))
       continue
     }
     if (identity.kind === 'conflict') {
-      resolved.push(rowFailure(row, 'invalid', 'group-key-conflict'))
+      resolved.push(rowFailure(row, 'invalid', 'group-key-conflict', {
+        groupKeyConflict: { proposedGroupKey: identity.groupKey, evidence: identity.evidence },
+      }))
       continue
     }
 
@@ -874,19 +904,19 @@ function cloneAuthoring(authoring: MeasurementDraftAuthoring): MeasurementDraftA
 }
 
 /**
- * Applies only rows that survived the reviewed preview. The caller is
- * responsible for reparsing/reresolving under its If-Match ETag first.
+ * Applies only rows that survived the reviewed preview. The review checksums
+ * are required here so every caller gets the same staleness guard.
  */
 export function applyReviewedGroupMembership(
   authoring: MeasurementDraftAuthoring,
   preview: MeasurementDraftPreviewGroupMembershipResponse,
-  acceptedRows: readonly number[],
+  review: {
+    readonly sourceChecksum: string
+    readonly previewChecksum: string
+    readonly acceptedRows: readonly number[]
+  },
 ): ApplyReviewedGroupMembershipResult {
-  assertReviewedGroupMembership(preview, {
-    sourceChecksum: preview.sourceChecksum,
-    previewChecksum: preview.previewChecksum,
-    acceptedRows,
-  })
+  assertReviewedGroupMembership(preview, review)
   const next = cloneAuthoring(authoring)
   const rowsByNumber = new Map(preview.rows.map(row => [row.dataRow, row]))
   const changesByKey = new Map(preview.groupChanges.map(change => [change.groupKey, change]))
@@ -895,7 +925,7 @@ export function applyReviewedGroupMembership(
   let addedMemberships = 0
   let unchangedMemberships = 0
 
-  for (const dataRow of acceptedRows) {
+  for (const dataRow of review.acceptedRows) {
     const row = rowsByNumber.get(dataRow)
     if (!row || row.status !== 'matched') {
       throw new MeasurementGroupMembershipImportError('accepted-row-not-matched', `CSV data row ${dataRow} is not a reviewed matched row.`)
@@ -930,7 +960,7 @@ export function applyReviewedGroupMembership(
   }
   return {
     authoring: next,
-    appliedRows: acceptedRows.length,
+    appliedRows: review.acceptedRows.length,
     addedMemberships,
     unchangedMemberships,
   }

@@ -66,12 +66,10 @@ export interface AdvancedMeasurementQueriesStepProps {
   availability?: AdvancedMeasurementAvailability
   properties: readonly AdvancedMeasurementProperty[]
   queries: readonly AdvancedMeasurementQuery[]
-  selectedPropertyIds: readonly string[]
   selectedQueryIds: readonly string[]
   isApplying?: boolean
   isBusy?: boolean
   canContinue?: boolean
-  onSelectedPropertyIdsChange: (propertyIds: readonly string[]) => void
   onSelectedQueryIdsChange: (queryIds: readonly string[]) => void
   onApplySelectedQueries: (selection: AdvancedMeasurementApplySelection) => void | Promise<void>
   onClearQueryAssignments?: (queryId: string) => void | Promise<void>
@@ -83,21 +81,19 @@ export interface AdvancedMeasurementQueriesStepProps {
    * operator out of the wizard to create them and back again.
    */
   onCreateQueries?: (texts: readonly string[]) => void | Promise<unknown>
-  /** Assigns already-created questions, each to the one Property it names. */
-  onApplyPairedQuestions?: (pairs: readonly { targetKey: string; queryId: string }[]) => void | Promise<void>
   /** Writes one question per Property and assigns each to the Property it names. */
   onCreateAndPairQuestions?: (pairs: readonly { propertyId: string; text: string }[]) => void | Promise<void>
   isCreatingQueries?: boolean
   createQueriesError?: string | null
   /** Opens the project's normal query-management surface for anything setup does not cover. */
   onManageProjectQueries?: () => void
-  /** New audience-based authoring. Omit only for legacy callers while they migrate. */
-  groups?: readonly AdvancedMeasurementGroup[]
-  audience?: AdvancedMeasurementAudience
-  onAudienceChange?: (audience: AdvancedMeasurementAudience) => void
+  groups: readonly AdvancedMeasurementGroup[]
+  audience: AdvancedMeasurementAudience
+  onAudienceChange: (audience: AdvancedMeasurementAudience) => void
   assignmentImpact?: AdvancedMeasurementAssignmentImpact | null
   isPreviewingAssignmentImpact?: boolean
   assignmentImpactError?: string | null
+  onRetryAssignmentImpact?: () => void
   assignmentNotice?: string | null
   onReplaceAssignments?: (selection: AdvancedMeasurementReplaceAssignmentsSelection) => void | Promise<void>
   isReplacingAssignments?: boolean
@@ -135,6 +131,12 @@ export interface AdvancedMeasurementGroupMembershipRow {
   status: AdvancedMeasurementGroupMembershipStatus
   reason?: string
   duplicateOfRow?: number
+  candidateTargetKeys?: readonly string[]
+  candidateGroupKeys?: readonly string[]
+  groupKeyConflict?: {
+    proposedGroupKey: string
+    evidence: readonly { source: string; stableKey: string }[]
+  }
 }
 
 export interface AdvancedMeasurementGroupMembershipPreview {
@@ -250,7 +252,6 @@ const REVIEW_ITEM_PAGE_SIZE = 50
 
 const PROPERTY_CHECKLIST_PAGE_SIZE = 50
 const QUERY_LIST_PAGE_SIZE = 50
-const RECOVERY_PREVIEW_LIMIT = 10
 
 function isViewer(access: AdvancedMeasurementAccess | undefined): boolean {
   return access === 'viewer'
@@ -328,8 +329,10 @@ function membershipLabel(status: AdvancedMeasurementGroupMembershipStatus): stri
 function membershipMessage(row: AdvancedMeasurementGroupMembershipRow): string | null {
   if (row.status === 'duplicate' && row.duplicateOfRow) return `Duplicates row ${row.duplicateOfRow}.`
   if (row.status === 'matched') return null
-  if (row.status === 'ambiguous') return 'More than one Property matches this row.'
+  if (row.reason === 'group-label-ambiguous') return `More than one group matches “${row.group}”. Rename duplicate groups, then preview again.`
+  if (row.status === 'ambiguous') return 'More than one Property matches this row. Add an exact URL to choose one.'
   if (row.status === 'unmatched') return 'No included Property matches this row.'
+  if (row.reason === 'group-key-conflict') return `The group name “${row.group}” conflicts with an existing setup identity. Rename the group, then preview again.`
   if (row.status === 'invalid') return 'Check the Property, group, and optional URL fields.'
   if (row.status === 'proposed') return 'Review this proposed Property before importing it.'
   if (row.status === 'excluded') return 'Include this Property before importing it.'
@@ -344,35 +347,18 @@ function queryLabel(query: AdvancedMeasurementQuery): string {
   return isMissingQuery(query) ? 'Unavailable tracked question' : query.text?.trim() || 'Unavailable tracked question'
 }
 
-function isNameCharacter(value: string | undefined): boolean {
-  return value !== undefined && /[\p{L}\p{N}]/u.test(value)
-}
-
-function includesWholePropertyName(text: string, label: string): boolean {
-  const haystack = text.toLocaleLowerCase()
-  const needle = label.trim().toLocaleLowerCase()
-  if (!needle) return false
-
-  let offset = haystack.indexOf(needle)
-  while (offset >= 0) {
-    const before = offset === 0 ? undefined : haystack[offset - 1]
-    const after = haystack[offset + needle.length]
-    if (!isNameCharacter(before) && !isNameCharacter(after)) return true
-    offset = haystack.indexOf(needle, offset + needle.length)
-  }
-  return false
-}
-
 function PropertyChecklist({
   properties,
   selectedPropertyIds,
   onSelectedPropertyIdsChange,
   legend,
+  showBulkActions = true,
 }: {
   properties: readonly AdvancedMeasurementProperty[]
   selectedPropertyIds: readonly string[]
   onSelectedPropertyIdsChange: (propertyIds: readonly string[]) => void
   legend: string
+  showBulkActions?: boolean
 }) {
   const [search, setSearch] = useState('')
   const [showAll, setShowAll] = useState(false)
@@ -401,10 +387,10 @@ function PropertyChecklist({
             className="mt-1 block min-h-11 w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-400"
           />
         </label>
-        <div className="flex flex-wrap items-center gap-2">
+        {showBulkActions ? <div className="flex flex-wrap items-center gap-2">
           <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={visibleProperties.length === 0} onClick={selectAllShown}>Select all shown</Button>
           <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={selectedPropertyIds.length === 0} onClick={() => onSelectedPropertyIdsChange([])}>Clear selection</Button>
-        </div>
+        </div> : null}
       </div>
 
       {filteredProperties.length === 0 ? <p className="mt-3 text-sm text-secondary">No Properties match this search.</p> : (
@@ -634,28 +620,26 @@ export function AdvancedMeasurementQueriesStep({
   availability,
   properties,
   queries,
-  selectedPropertyIds,
   selectedQueryIds,
   isApplying = false,
   isBusy = false,
   canContinue = true,
-  onSelectedPropertyIdsChange,
   onSelectedQueryIdsChange,
   onApplySelectedQueries,
   onClearQueryAssignments,
   onRemoveQuery,
   onCreateQueries,
-  onApplyPairedQuestions,
   onCreateAndPairQuestions,
   isCreatingQueries = false,
   createQueriesError = null,
   onManageProjectQueries,
-  groups = [],
+  groups,
   audience,
   onAudienceChange,
   assignmentImpact = null,
   isPreviewingAssignmentImpact = false,
   assignmentImpactError = null,
+  onRetryAssignmentImpact,
   assignmentNotice = null,
   onReplaceAssignments,
   isReplacingAssignments = false,
@@ -667,16 +651,14 @@ export function AdvancedMeasurementQueriesStep({
   const [showUnappliedOnly, setShowUnappliedOnly] = useState(false)
   const [newQueriesText, setNewQueriesText] = useState('')
   const [patternText, setPatternText] = useState('')
-  const [reviewedSuggestionSignature, setReviewedSuggestionSignature] = useState<string | null>(null)
   const [replacement, setReplacement] = useState<{ queryId: string; propertyIds: string[] } | null>(null)
   if (isUnavailable(availability)) {
     return <section aria-label="Questions"><UnavailableState message={availability.message} /></section>
   }
 
   const viewer = isViewer(access)
-  const activeAudience = audience ?? { kind: 'specific' as const, propertyIds: selectedPropertyIds }
-  const usesAudienceControl = audience !== undefined && onAudienceChange !== undefined
-  const updateAudience = onAudienceChange ?? (() => {})
+  const activeAudience = audience
+  const updateAudience = onAudienceChange
   const resolvedAudiencePropertyIds = selectedAudiencePropertyIds(activeAudience, properties, groups)
   const selectedPropertyCount = resolvedAudiencePropertyIds.length
   const canApply = selectedPropertyCount > 0
@@ -684,7 +666,7 @@ export function AdvancedMeasurementQueriesStep({
     && !isApplying
     && !isBusy
     && !isPreviewingAssignmentImpact
-    && (!usesAudienceControl || assignmentImpact !== null)
+    && assignmentImpact !== null
     && assignmentImpactError === null
   const clearAssignments = onClearQueryAssignments ?? onRemoveQuery
   const normalizedQuerySearch = querySearch.trim().toLocaleLowerCase()
@@ -695,29 +677,6 @@ export function AdvancedMeasurementQueriesStep({
   const listedQueries = showUnappliedOnly ? unappliedQueries : filteredQueries
   const visibleQueries = showAllQueries ? listedQueries : listedQueries.slice(0, QUERY_LIST_PAGE_SIZE)
 
-  /**
-   * Questions generated from a pattern each name exactly one Property, and the
-   * pairing is recoverable from the text alone. Without this the only route back
-   * is 213 manual selections, or the cross product that produced 45,369.
-   * A question matching two Property names is left alone rather than guessed at.
-   */
-  const nameMatchedAssignments = unappliedQueries.flatMap(query => {
-    const question = queryLabel(query)
-    const named = properties.filter(property => includesWholePropertyName(question, property.label))
-    return named.length === 1 ? [{
-      targetKey: named[0]!.id,
-      queryId: query.id,
-      property: named[0]!.label,
-      question,
-    }] : []
-  })
-  const nameMatchedPairs = nameMatchedAssignments.map(({ targetKey, queryId }) => ({ targetKey, queryId }))
-  const suggestionSignature = nameMatchedPairs.map(pair => `${pair.queryId}:${pair.targetKey}`).join('|')
-  const reviewedAllSuggestions = nameMatchedAssignments.length <= RECOVERY_PREVIEW_LIMIT
-    || reviewedSuggestionSignature === suggestionSignature
-  const shownNameMatchedAssignments = reviewedAllSuggestions
-    ? nameMatchedAssignments
-    : nameMatchedAssignments.slice(0, RECOVERY_PREVIEW_LIMIT)
   const selectableVisibleQueries = visibleQueries.filter(query => !isMissingQuery(query))
   const parsedNewQueries = [...new Set(
     newQueriesText.split('\n').map(line => line.trim()).filter(Boolean),
@@ -758,7 +717,7 @@ export function AdvancedMeasurementQueriesStep({
 
       {viewer ? <ViewerNotice /> : null}
 
-      {viewer ? null : usesAudienceControl ? (
+      {viewer ? null : (
         <fieldset className="border-y border-default py-4">
           <legend className="text-sm font-medium text-heading">Apply to</legend>
           <div className="mt-3 max-w-xl">
@@ -774,7 +733,9 @@ export function AdvancedMeasurementQueriesStep({
                 onChange={event => {
                   const value = event.currentTarget.value
                   if (value === 'all') updateAudience({ kind: 'all' })
-                  else if (value === 'specific') updateAudience({ kind: 'specific', propertyIds: selectedPropertyIds })
+                  else if (value === 'specific') {
+                    updateAudience({ kind: 'specific', propertyIds: [] })
+                  }
                   else if (value.startsWith('group:')) updateAudience({ kind: 'groups', groupIds: [value.slice('group:'.length)] })
                 }}
                 className="block min-h-11 w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none focus:border-strong focus:ring-2 focus:ring-mono-400"
@@ -847,27 +808,15 @@ export function AdvancedMeasurementQueriesStep({
                 legend="Specific Properties"
                 properties={properties}
                 selectedPropertyIds={activeAudience.propertyIds}
+                showBulkActions={false}
                 onSelectedPropertyIdsChange={propertyIds => {
-                  onSelectedPropertyIdsChange(propertyIds)
                   updateAudience({ kind: 'specific', propertyIds })
                 }}
               />
             </div>
           ) : null}
-          <p className="mt-3 max-w-2xl text-sm text-secondary">Groups are shortcuts for future assignments. Changing membership does not change published results.</p>
+          <p className="mt-3 max-w-2xl text-sm text-secondary">Groups are shortcuts resolved when you assign. Changing membership later does not rewrite existing assignments, and a Property added later does not receive earlier group questions.</p>
         </fieldset>
-      ) : (
-        <details className="border-y border-default py-4">
-          <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">{selectedPropertyCount} of {properties.length} Properties selected</summary>
-          <div className="pt-3">
-            <PropertyChecklist
-              legend="Apply to selected Properties"
-              properties={properties}
-              selectedPropertyIds={selectedPropertyIds}
-              onSelectedPropertyIdsChange={onSelectedPropertyIdsChange}
-            />
-          </div>
-        </details>
       )}
 
       {viewer || !onCreateQueries ? null : (
@@ -1015,14 +964,13 @@ export function AdvancedMeasurementQueriesStep({
             >
               {isApplying
                 ? 'Assigning questions…'
-                : usesAudienceControl
-                  ? `Assign ${selectedQueryIds.length || ''} question${selectedQueryIds.length === 1 ? '' : 's'} to ${audienceLabel(activeAudience, groups, selectedPropertyCount)}`.replace('  ', ' ')
-                  : 'Apply selected questions'}
+                : `Assign ${selectedQueryIds.length || ''} question${selectedQueryIds.length === 1 ? '' : 's'} to ${audienceLabel(activeAudience, groups, selectedPropertyCount)}`.replace('  ', ' ')}
             </Button>
             {isPreviewingAssignmentImpact ? <p role="status" className="text-sm text-secondary">Calculating assignment impact…</p> : null}
             {assignmentImpact ? (
               <p className="text-sm text-secondary">
                 {selectedQueryIds.length} question{selectedQueryIds.length === 1 ? '' : 's'} → {assignmentImpact.assignmentCount} Property assignment{assignmentImpact.assignmentCount === 1 ? '' : 's'}
+                {' · '}{assignmentImpact.addedAssignments} new, {assignmentImpact.alreadyPresentAssignments} already assigned
                 {' · '}{assignmentImpact.fullRunProviderCalls} provider request{assignmentImpact.fullRunProviderCalls === 1 ? '' : 's'} per full run
                 {' · '}{assignmentImpact.addedProviderCalls} new
                 {activeAudience.kind === 'groups' ? ` · ${assignmentImpact.resolvedPropertyCount} unique ${assignmentImpact.resolvedPropertyCount === 1 ? 'Property' : 'Properties'}${assignmentImpact.overlapCount > 0 ? `, ${assignmentImpact.overlapCount} in overlapping groups` : ''}` : ''}
@@ -1031,6 +979,7 @@ export function AdvancedMeasurementQueriesStep({
             ) : assignmentImpactError ? (
               <div className="flex flex-wrap items-center gap-3">
                 <p role="alert" className="text-sm text-negative">{assignmentImpactError}</p>
+                {onRetryAssignmentImpact ? <Button type="button" size="sm" variant="outline" className="min-h-11" onClick={onRetryAssignmentImpact}>Retry impact</Button> : null}
                 {onBack ? <Button type="button" size="sm" variant="outline" className="min-h-11" onClick={onBack}>Back to Groups</Button> : null}
               </div>
             ) : (
@@ -1074,58 +1023,6 @@ export function AdvancedMeasurementQueriesStep({
               </Button>
             )}
           </div>
-          {!viewer && nameMatchedPairs.length > 0 && onApplyPairedQuestions ? (
-            <details className="rounded-md border border-base bg-bg-elevated p-3">
-              <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">
-                Review {nameMatchedPairs.length} suggested question-to-Property match{nameMatchedPairs.length === 1 ? '' : 'es'}
-              </summary>
-              <p className="mt-2 mb-3 text-sm text-secondary">
-                Confirm each question is paired with the Property it names before assigning it.
-              </p>
-              <div className="overflow-x-auto rounded-md border border-default">
-                <table className="evidence-table min-w-[520px]">
-                  <caption className="sr-only">Suggested question-to-Property matches</caption>
-                  <thead><tr><th>Question</th><th>Property</th></tr></thead>
-                  <tbody>
-                    {shownNameMatchedAssignments.map(assignment => (
-                      <tr key={`${assignment.queryId}:${assignment.targetKey}`}>
-                        <td className="text-secondary">{assignment.question}</td>
-                        <td className="text-heading">{assignment.property}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {nameMatchedAssignments.length > RECOVERY_PREVIEW_LIMIT ? (
-                <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-secondary">
-                  <span>Showing {shownNameMatchedAssignments.length} of {nameMatchedAssignments.length} suggested matches</span>
-                  {!reviewedAllSuggestions ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="min-h-11"
-                      onClick={() => setReviewedSuggestionSignature(suggestionSignature)}
-                    >
-                      Review all {nameMatchedAssignments.length} matches
-                    </Button>
-                  ) : null}
-                </div>
-              ) : null}
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="mt-3 min-h-11"
-                disabled={isApplying || isBusy || !reviewedAllSuggestions}
-                onClick={() => {
-                  void Promise.resolve(onApplyPairedQuestions(nameMatchedPairs)).catch(() => {})
-                }}
-              >
-                {isApplying ? 'Assigning…' : `Assign ${nameMatchedPairs.length} suggested match${nameMatchedPairs.length === 1 ? '' : 'es'}`}
-              </Button>
-            </details>
-          ) : null}
         </div>
       ) : null}
 

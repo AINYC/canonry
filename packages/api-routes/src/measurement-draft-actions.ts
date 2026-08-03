@@ -117,7 +117,10 @@ function knownQueryIds(queryIds: readonly string[], context: DraftActionContext)
   const uniqueQueryIds = unique(queryIds)
   const unknown = uniqueQueryIds.filter(queryId => !context.queriesById.has(queryId))
   if (unknown.length) {
-    throw validationError(`The project has no query ${unknown.map(id => `"${id}"`).join(', ')}. Add it before assigning it.`)
+    throw validationError(
+      `The project has no query ${unknown.map(id => `"${id}"`).join(', ')}. Add it before assigning it.`,
+      { displayToOperator: true },
+    )
   }
   return uniqueQueryIds
 }
@@ -134,26 +137,40 @@ export function resolveDraftAudience(
 ): ResolvedDraftAudience {
   const targetsByKey = new Map(authoring.targets.map(target => [target.stableKey, target]))
   const selected = unique(audience.targetKeys ?? [])
-  for (const targetKey of unique(audience.targetKeys ?? [])) requireTarget(authoring, targetKey)
+  for (const targetKey of unique(audience.targetKeys ?? [])) {
+    const target = requireTarget(authoring, targetKey)
+    if (target.status !== 'included') {
+      throw validationError(`Property "${target.label}" is ${target.status}, not included.`, {
+        displayToOperator: true,
+        audienceError: 'target-not-included',
+      })
+    }
+  }
 
   const groups: MeasurementDraftResolvedAudienceGroup[] = []
   for (const groupKey of unique(audience.groupKeys ?? [])) {
     const group = authoring.groups.find(candidate => candidate.stableKey === groupKey)
     if (!group) {
-      throw validationError(`Group "${groupKey}" does not exist in this measurement draft.`)
+      throw validationError('A selected group is no longer available. Choose the audience again.', {
+        displayToOperator: true,
+        audienceError: 'group-not-found',
+      })
     }
     const memberKeys = unique(group.targetKeys)
     if (memberKeys.length === 0) {
-      throw validationError(`Group "${group.label}" has no Properties to assign.`)
+      throw validationError(`Group "${group.label}" has no Properties to assign.`, { displayToOperator: true })
     }
     for (const targetKey of memberKeys) {
       const target = targetsByKey.get(targetKey)
       if (!target) {
-        throw validationError(`Group "${group.label}" references unknown Property "${targetKey}".`)
+        throw validationError(`Group "${group.label}" references an unknown Property. Review its membership.`, {
+          displayToOperator: true,
+        })
       }
       if (target.status !== 'included') {
         throw validationError(
           `Group "${group.label}" contains Property "${target.label}" that is ${target.status}, not included.`,
+          { displayToOperator: true },
         )
       }
     }
@@ -185,6 +202,7 @@ function assertAssignmentActionLimit(
     + groupDetail
     + ' Apply a question to the Properties it is about, or use "apply-paired-assignments" '
     + 'when each question names its own Property.',
+    { displayToOperator: true, pairCount, maximum: MAX_ASSIGNMENTS_PER_ACTION },
   )
 }
 
@@ -203,20 +221,29 @@ export function assertMeasurementDraftAuthoringLimits(
     throw validationError(
       `Measurement draft ${label} limit exceeded: current ${current.toLocaleString('en-US')}, `
       + `requested ${requested.toLocaleString('en-US')}, maximum ${maximum.toLocaleString('en-US')}.`,
-      { current, requested, maximum, resource: label },
+      { current, requested, maximum, resource: label, displayToOperator: true },
     )
   }
   assertCount('groups', before.groups.length, candidate.groups.length, MEASUREMENT_DRAFT_MAX_GROUPS)
   assertCount('assignments', before.assignments.length, candidate.assignments.length, MEASUREMENT_DRAFT_MAX_ASSIGNMENTS)
 
-  const current = Buffer.byteLength(JSON.stringify(before), 'utf8')
   const requested = Buffer.byteLength(JSON.stringify(candidate), 'utf8')
-  if (requested > MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES && requested > current) {
+  if (requested > MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES) {
+    // Serialize the prior draft only on the exceptional oversized path. Most
+    // actions pay one size check, while grandfathered drafts may still shrink.
+    const current = Buffer.byteLength(JSON.stringify(before), 'utf8')
+    if (requested <= current) return
     throw validationError(
       `Measurement draft authoring size limit exceeded: current ${current.toLocaleString('en-US')} bytes, `
       + `requested ${requested.toLocaleString('en-US')} bytes, `
       + `maximum ${MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES.toLocaleString('en-US')} bytes.`,
-      { current, requested, maximum: MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES, resource: 'authoring bytes' },
+      {
+        current,
+        requested,
+        maximum: MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES,
+        resource: 'authoring bytes',
+        displayToOperator: true,
+      },
     )
   }
 }
@@ -412,9 +439,9 @@ export function applyAssignmentsToAuthoring(
 }
 
 /**
- * Clears the exact named questions from every previous Property first, then
- * writes the replacement cross product. Other questions remain byte-for-byte
- * intact, and the generic mutation wrapper commits the one candidate once.
+ * Removes only pairs outside the replacement audience, then writes any missing
+ * pairs. A surviving pair keeps its operator classification and context
+ * override exactly as an additive apply would.
  */
 export function replaceAssignmentsInAuthoring(
   authoring: MeasurementDraftAuthoring,
@@ -426,10 +453,13 @@ export function replaceAssignmentsInAuthoring(
   // invalid group or oversized request never looks like it partially cleared.
   const audience = resolveDraftAudience(authoring, request)
   assertAssignmentActionLimit(audience, queryIds)
-  const wanted = new Set(queryIds)
+  const wantedQueries = new Set(queryIds)
+  const wantedTargets = new Set(audience.targetKeys)
   const cleared: MeasurementDraftAuthoring = {
     ...authoring,
-    assignments: authoring.assignments.filter(assignment => !wanted.has(assignment.queryId)),
+    assignments: authoring.assignments.filter(assignment => (
+      !wantedQueries.has(assignment.queryId) || wantedTargets.has(assignment.targetKey)
+    )),
   }
   const result = applyAssignmentsToAuthoring(cleared, { ...request, queryIds }, context)
   return { ...result, audience }

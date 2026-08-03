@@ -15,6 +15,7 @@ const getMeasurementPropertyEvidence = vi.fn()
 const getMeasurementPlanDraft = vi.fn()
 const previewMeasurementDraftAssignments = vi.fn()
 const applyMeasurementDraftAssignments = vi.fn()
+const replaceMeasurementDraftAssignments = vi.fn()
 const previewMeasurementDraftGroupMembership = vi.fn()
 const applyMeasurementDraftGroupMembership = vi.fn()
 
@@ -32,6 +33,7 @@ vi.mock('../src/client.js', () => ({
     getMeasurementPlanDraft,
     previewMeasurementDraftAssignments,
     applyMeasurementDraftAssignments,
+    replaceMeasurementDraftAssignments,
     previewMeasurementDraftGroupMembership,
     applyMeasurementDraftGroupMembership,
   }),
@@ -145,6 +147,7 @@ describe('measurement-plan CLI commands', () => {
       execution: { addedNodes: 1, addedProviderCalls: 2, fullRunNodes: 1, fullRunProviderCalls: 2 },
     })
     applyMeasurementDraftAssignments.mockResolvedValue({ etag: '"mpd_8"', changed: true })
+    replaceMeasurementDraftAssignments.mockResolvedValue({ etag: '"mpd_8"', changed: true })
     previewMeasurementDraftGroupMembership.mockResolvedValue({
       draftEtag: '"mpd_7"',
       sourceChecksum: 'a'.repeat(64),
@@ -175,6 +178,8 @@ describe('measurement-plan CLI commands', () => {
     expect(command('measurement-plan report').usage)
       .toBe('canonry measurement-plan report <project> --revision N [--format json]')
     expect(command('measurement-plan assignments apply').usage).toContain('--group KEY')
+    expect(command('measurement-plan assignments preview').usage).toContain('--group KEY')
+    expect(command('measurement-plan assignments replace').usage).toContain('--confirm')
     expect(command('measurement-plan groups preview').usage).toContain('<csv|->')
     expect(command('measurement-plan groups apply').usage).toContain('--confirm')
   })
@@ -193,6 +198,53 @@ describe('measurement-plan CLI commands', () => {
     expect(applyMeasurementDraftAssignments).toHaveBeenCalledWith(
       'acme', request, expect.any(String), '"mpd_8"',
     )
+  })
+
+  it('exposes read-only assignment preview and confirmed atomic replacement', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    await command('measurement-plan assignments preview').run({
+      positionals: ['acme'],
+      values: { 'all-properties': true, 'query-id': ['query-1'] },
+      format: 'json',
+      dryRun: false,
+    })
+    expect(previewMeasurementDraftAssignments).toHaveBeenCalledWith('acme', {
+      targetKeys: ['harbor-view'],
+      queryIds: ['query-1'],
+    })
+
+    await command('measurement-plan assignments replace').run({
+      positionals: ['acme'],
+      values: { group: ['dallas'], 'query-id': ['query-1'], confirm: true },
+      format: 'json',
+      dryRun: false,
+    })
+    expect(replaceMeasurementDraftAssignments).toHaveBeenCalledWith(
+      'acme',
+      { groupKeys: ['dallas'], queryIds: ['query-1'] },
+      expect.any(String),
+      '"mpd_8"',
+    )
+  })
+
+  it('requires skipped-row acknowledgement before any selected-row CSV write', async () => {
+    const csvPath = path.join(tmpDir, 'groups.csv')
+    fs.writeFileSync(csvPath, 'property,group\nHarbor View,Dallas\nMissing,Austin')
+    previewMeasurementDraftGroupMembership.mockResolvedValueOnce({
+      draftEtag: '"mpd_7"',
+      sourceChecksum: 'a'.repeat(64),
+      previewChecksum: 'b'.repeat(64),
+      rows: [{ dataRow: 1, status: 'matched' }, { dataRow: 2, status: 'unmatched' }],
+      counts: { needsAttention: 1 },
+    })
+
+    await expect(command('measurement-plan groups apply').run({
+      positionals: ['acme', csvPath],
+      values: { confirm: true, 'accept-row': ['1'] },
+      format: 'json',
+      dryRun: false,
+    })).rejects.toThrow('--acknowledge-skipped')
+    expect(applyMeasurementDraftGroupMembership).not.toHaveBeenCalled()
   })
 
   it('reviews CSV again and applies only the confirmed matched rows', async () => {
@@ -224,6 +276,9 @@ describe('measurement-plan CLI commands', () => {
     })).toThrow('select at least one')
     expect(() => command('measurement-plan groups apply').run({
       positionals: ['acme', 'groups.csv'], values: { 'accept-all-matched': true }, format: 'json', dryRun: false,
+    })).toThrow('--confirm is required')
+    expect(() => command('measurement-plan assignments replace').run({
+      positionals: ['acme'], values: { group: ['dallas'], 'query-id': ['query-1'] }, format: 'json', dryRun: false,
     })).toThrow('--confirm is required')
   })
 
