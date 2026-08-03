@@ -10,7 +10,7 @@ import { DashboardProvider } from '../src/contexts/dashboard-context.js'
 import { preloadAllLazyRoutes } from '../src/router/routes.js'
 
 type EmbedBlock = { enabled: boolean; views?: string[]; theme?: Record<string, string> }
-type DashboardBlock = { showResourceLinks?: boolean; showUpdateNotification?: boolean }
+type DashboardBlock = { showResourceLinks?: boolean; showUpdateNotification?: boolean; showAgentBar?: boolean }
 
 beforeAll(async () => {
   await preloadAllLazyRoutes()
