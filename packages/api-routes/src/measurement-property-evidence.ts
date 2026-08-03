@@ -112,6 +112,19 @@ function sourceRowKey(row: MeasurementAttributionEvidence): string {
  * makes a page boundary fall BETWEEN answers: an answer's cited URLs travel
  * nested inside its row, so there is nothing left for a boundary to split.
  */
+/**
+ * `limit` bounds answer ROWS, and each row nests every source the engine
+ * returned, so one answer citing hundreds of URLs produced an unbounded
+ * response through both the API and MCP, where a tool result has an output
+ * budget. `sourceCount` stays exact so a capped list cannot read as a short one.
+ */
+const MAX_SOURCES_PER_ANSWER = 50
+
+function capSources(row: MeasurementAnswerEvidence): MeasurementAnswerEvidence {
+  if (row.sources.length <= MAX_SOURCES_PER_ANSWER) return row
+  return { ...row, sources: row.sources.slice(0, MAX_SOURCES_PER_ANSWER), sourcesTruncated: true }
+}
+
 function answerRowKey(row: MeasurementAnswerEvidence): string {
   return [row.expectedSlotId, row.usageEdgeId].join('\u0000')
 }
@@ -354,7 +367,7 @@ export async function measurementPropertyEvidenceRoutes(app: FastifyInstance) {
           ...(displayed.finishedAt ? { completedAt: displayed.finishedAt } : {}),
         },
         ...(shape === MeasurementEvidenceShapes.answers
-          ? { answers: pageOf(answers, answerRowKey, ...pageArgs) }
+          ? { answers: pageOf(answers.map(capSources), answerRowKey, ...pageArgs) }
           : { evidence: pageOf(sources, sourceRowKey, ...pageArgs) }),
       } satisfies MeasurementPropertyEvidenceResponse)
     },

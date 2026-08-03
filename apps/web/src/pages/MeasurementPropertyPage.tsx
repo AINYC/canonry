@@ -90,27 +90,6 @@ const EVIDENCE_LABELS: Record<AnswerSource['classification'], { label: string; t
  * the rule behind it is single: no stored answer text, no mention to read. All
  * that varies is which run lost the text.
  */
-/**
- * The wire says the signal is unreadable, not why. Naming a cause the response
- * does not carry is a fabricated provenance claim, so this states only what is
- * known and leaves the rest to the run's own provenance badges.
- */
-function mentionUnknownReason(): string {
-  return 'No answer text to read'
-}
-
-/**
- * Losses first, because the panel exists to explain a gap and the answers that
- * gave this Property nothing are what a reader came for. A confirmed miss
- * outranks an unread one: "not mentioned" is a finding, "not measured" is the
- * absence of one, and sorting them together would bury the finding.
- */
-function answerRank(row: AnswerRow): number {
-  const signals = (row.mentioned === true ? 1 : 0) + (row.cited ? 1 : 0)
-  if (signals > 0) return signals + 1
-  return row.mentioned === false ? 0 : 1
-}
-
 /** This Property's own citation is the one the reader is checking, so it leads. */
 function sourcesOwnFirst(sources: readonly AnswerSource[]): AnswerSource[] {
   return [...sources].sort((left, right) => (
@@ -132,14 +111,37 @@ function MentionSignal({ row }: { row: AnswerRow }) {
     return (
       <span className="inline-flex flex-col items-start gap-0.5">
         <ToneBadge tone="neutral">Not measured</ToneBadge>
-        <span className="text-xs text-muted">{mentionUnknownReason()}</span>
+        <span className="text-xs text-muted">No mention signal for this Property</span>
       </span>
     )
   }
   return <ToneBadge tone={row.mentioned ? 'positive' : 'neutral'}>{row.mentioned ? 'Mentioned' : 'Not mentioned'}</ToneBadge>
 }
 
+/** Rendered where a source count would be, when there is no count to state. */
+const EM_DASH = '\u2014'
+
+/**
+ * Citation is three states for the same reason mention is. Null means the
+ * sources were never fully captured, so neither "Not cited" nor a source count
+ * is a claim this run supports: both report an unseen list as an empty one.
+ */
+function CitationSignal({ row }: { row: AnswerRow }) {
+  if (row.cited === null) {
+    return (
+      <span className="inline-flex flex-col items-start gap-0.5">
+        <ToneBadge tone="neutral">Not measured</ToneBadge>
+        <span className="text-xs text-muted">Sources were not fully captured</span>
+      </span>
+    )
+  }
+  return <ToneBadge tone={row.cited ? 'positive' : 'neutral'}>{row.cited ? 'Cited' : 'Not cited'}</ToneBadge>
+}
+
 function AnswerSources({ row }: { row: AnswerRow }) {
+  if (row.cited === null && row.sources.length === 0) {
+    return <p className="py-2 text-sm text-secondary">The sources for this answer were not fully captured, so none can be shown.</p>
+  }
   if (row.sources.length === 0) {
     return <p className="py-2 text-sm text-secondary">This answer returned no source URLs at all.</p>
   }
@@ -476,7 +478,11 @@ export function MeasurementPropertyPage() {
       const loaded = pages.flatMap(page => page.answers?.items ?? [])
       // Array sort is stable, so answers of equal rank keep the server's
       // (slot, edge) order and a re-render can never shuffle the panel.
-      return [...loaded].sort((left, right) => answerRank(left) - answerRank(right))
+      // Server order, deliberately. Ranking losses first client-side ranked only
+      // the rows FETCHED so far, so a loss on page two arrived via "Show more"
+      // and jumped above rows the operator was already reading. Ranking the whole
+      // result set belongs on the server, which this change does not do.
+      return loaded
     },
     [evidenceQuery.data],
   )
@@ -694,8 +700,8 @@ export function MeasurementPropertyPage() {
                             ) : null}
                           </td>
                           <td><MentionSignal row={item} /></td>
-                          <td><ToneBadge tone={item.cited ? 'positive' : 'neutral'}>{item.cited ? 'Cited' : 'Not cited'}</ToneBadge></td>
-                          <td className="tabular-nums text-secondary">{item.sources.length}</td>
+                          <td><CitationSignal row={item} /></td>
+                          <td className="tabular-nums text-secondary">{item.cited === null ? EM_DASH : item.sources.length}</td>
                           <td className="text-right">
                             <Button
                               type="button"

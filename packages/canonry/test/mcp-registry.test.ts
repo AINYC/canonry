@@ -423,7 +423,13 @@ describe('MCP tool registry', () => {
     // The answer shape is a parameter, never a second operation: adding a tool
     // would move the pinned catalog counts asserted below.
     expect(tool!.openApiOperations).toEqual(['GET /api/v1/projects/{name}/measurement-property-evidence'])
-    expect(canonryMcpTools.filter(candidate => candidate.name.includes('measurement_property'))).toHaveLength(1)
+    // Guard the operation, not a `measurement_property*` count: unrelated work
+    // legitimately adds tools under that prefix, and a count assertion then
+    // fails on a base this change never touched.
+    const servingEvidence = canonryMcpTools.filter(candidate => (
+      candidate.openApiOperations.includes('GET /api/v1/projects/{name}/measurement-property-evidence')
+    ))
+    expect(servingEvidence.map(candidate => candidate.name)).toEqual(['canonry_measurement_property_evidence'])
   })
 
   it('sends the exact measurement-property-evidence filters, shape included, through ApiClient', async () => {

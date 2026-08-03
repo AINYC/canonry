@@ -32,6 +32,8 @@ const ANSWER_EVIDENCE = {
     matchedTargetIds: ['harbor'],
     matchedUrlIds: ['harbor-root'],
   }],
+  sourceCount: 1,
+  sourcesTruncated: false,
   bridged: false,
   historical: false,
   evidenceComplete: true,
@@ -157,6 +159,7 @@ describe('answer-level measurement evidence', () => {
       mentioned: false,
       cited: false,
       sources: [],
+      sourceCount: 0,
     })
 
     expect(row.sources).toEqual([])

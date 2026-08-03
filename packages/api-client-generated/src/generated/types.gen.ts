@@ -5028,6 +5028,8 @@ export type MeasurementPropertyEvidenceResponse = {
                 matchedTargetIds: Array<string>;
                 matchedUrlIds: Array<string>;
             }>;
+            sourceCount: number;
+            sourcesTruncated: boolean;
             bridged: boolean;
             historical: boolean;
             evidenceComplete: boolean;

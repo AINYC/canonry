@@ -164,6 +164,9 @@ export interface MeasurementAnswerEvidence {
   mentioned: boolean | null
   cited: boolean | null
   sources: MeasurementAnswerSource[]
+  /** The FULL count. A reader may cap `sources`; this never shrinks with it. */
+  sourceCount: number
+  sourcesTruncated: boolean
   bridged: boolean
   historical: boolean
   evidenceComplete: boolean
@@ -666,6 +669,8 @@ function prepareReport(input: MeasurementReportInput): PreparedReport {
           ? true
           : observation.sourceComplete ? false : null,
         sources,
+        sourceCount: sources.length,
+        sourcesTruncated: false,
         bridged: observation.bridged,
         historical: observation.historical,
         evidenceComplete: observation.sourceComplete,

@@ -180,7 +180,7 @@ function answerRow(overrides: {
   slot: string
   queryText?: string
   mentioned?: boolean | null
-  cited?: boolean
+  cited?: boolean | null
   sources?: AnswerSource[]
   provider?: string
   location?: string | null
@@ -198,7 +198,11 @@ function answerRow(overrides: {
     location: overrides.location ?? null,
     queryClass: 'non-brand' as const,
     mentioned: overrides.mentioned === undefined ? false : overrides.mentioned,
-    cited: overrides.cited ?? sources.some(source => source.classification === 'assigned'),
+    // `??` treated an explicit null as absent and fell through to a computed
+    // boolean, so a test could not express "capture was incomplete" at all.
+    cited: 'cited' in overrides ? overrides.cited! : sources.some(source => source.classification === 'assigned'),
+    sourceCount: sources.length,
+    sourcesTruncated: false,
     sources,
     bridged: false,
     historical: overrides.historical ?? false,
@@ -673,11 +677,11 @@ describe('Property answer evidence', () => {
     const recovered = answerFor(evidence, 'best small hotels in the old port')
 
     expect(within(unread).getByText('Not measured')).toBeTruthy()
-    expect(within(unread).getByText('No answer text to read')).toBeTruthy()
+    expect(within(unread).getByText('No mention signal for this Property')).toBeTruthy()
     // Was: asserted "Recovered from an earlier run without its answer text".
     // The wire says the signal is unreadable, never why, so naming a cause was a
     // provenance claim the response does not carry.
-    expect(within(recovered).getByText('No answer text to read')).toBeTruthy()
+    expect(within(recovered).getByText('No mention signal for this Property')).toBeTruthy()
 
     // An absent signal is not a measured zero. Neither the row nor the panel
     // may put a number on it.
@@ -687,7 +691,26 @@ describe('Property answer evidence', () => {
     expect(within(evidence).queryByText(/0%/)).toBeNull()
   })
 
-  it('puts losses above wins by default', async () => {
+  it('renders an uncaptured citation as Not measured, never as Not cited', async () => {
+    // `cited: null` means the sources were never fully captured. "Not cited"
+    // states a measured miss, and a source count of 0 claims the engine returned
+    // no URLs when we simply never saw them.
+    const evidence = await renderAnswers([
+      answerRow({ slot: 'a', queryText: 'where to stay by the water', cited: null, sources: [] }),
+    ])
+    const unknown = answerFor(evidence, 'where to stay by the water')
+
+    expect(within(unknown).queryByText('Not cited')).toBeNull()
+    expect(within(unknown).getAllByText('Not measured').length).toBeGreaterThan(0)
+    expect(within(unknown).getByText('Sources were not fully captured')).toBeTruthy()
+  })
+
+  // Was: 'puts losses above wins by default', asserting a client-side re-sort.
+  // That ranked only the rows FETCHED so far, so a loss on page two arrived via
+  // "Show more" and jumped above rows the operator was already reading. Ranking
+  // the whole result set belongs on the server, which this change does not do,
+  // so the panel preserves server order and this asserts exactly that.
+  it('preserves the order the server returned', async () => {
     const evidence = await renderAnswers([
       answerRow({ slot: 'a', queryText: 'won both ways', mentioned: true, sources: [ownSource()] }),
       answerRow({ slot: 'b', queryText: 'mentioned only', mentioned: true }),
@@ -701,10 +724,10 @@ describe('Property answer evidence', () => {
       .map(row => row.querySelector('td')!.textContent)
 
     expect(order).toEqual([
-      expect.stringContaining('lost both ways'),
-      expect.stringContaining('mention never read'),
-      expect.stringContaining('mentioned only'),
       expect.stringContaining('won both ways'),
+      expect.stringContaining('mentioned only'),
+      expect.stringContaining('mention never read'),
+      expect.stringContaining('lost both ways'),
     ])
   })
 

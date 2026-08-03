@@ -379,6 +379,9 @@ export const measurementAnswerEvidenceSchema = z.object({
    */
   cited: z.boolean().nullable(),
   sources: z.array(measurementAnswerSourceSchema),
+  /** Always the FULL count, so a capped `sources` array cannot read as complete. */
+  sourceCount: z.number().int().nonnegative(),
+  sourcesTruncated: z.boolean(),
   bridged: z.boolean(),
   historical: z.boolean(),
   evidenceComplete: z.boolean(),
