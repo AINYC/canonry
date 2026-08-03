@@ -1,5 +1,6 @@
 import {
   measurementDraftApplyAssignmentsRequestSchema,
+  measurementDraftApplyPairedAssignmentsRequestSchema,
   measurementDraftClassifyAssignmentsRequestSchema,
   measurementDraftClearAssignmentsRequestSchema,
   measurementDraftExcludeTargetRequestSchema,
@@ -20,7 +21,7 @@ import {
   type MeasurementDraftTarget,
   type MeasurementDraftWarning,
 } from '@ainyc/canonry-contracts'
-import { proposeQueryClass } from './measurement-draft-compile.js'
+import { proposeQueryClassForTarget } from './measurement-draft-compile.js'
 import type { ZodType } from 'zod'
 
 /** Every typed action the draft service owns. Sitemap import and rebind selection live in the discovery slice. */
@@ -31,6 +32,7 @@ export const MEASUREMENT_DRAFT_ACTIONS = [
   'exclude-target',
   'rebind-target',
   'apply-assignments',
+  'apply-paired-assignments',
   'remove-assignment',
   'clear-assignments',
   'classify-assignments',
@@ -40,6 +42,13 @@ export const MEASUREMENT_DRAFT_ACTIONS = [
   'remove-competitor',
 ] as const
 export type MeasurementDraftActionName = (typeof MEASUREMENT_DRAFT_ACTIONS)[number]
+
+/**
+ * Ceiling on assignments one cross-product call may create. Set well above any
+ * deliberate action (20 questions x 50 Properties is 1,000) and below the
+ * 45,369 that one mis-shaped pattern apply produced.
+ */
+export const MAX_ASSIGNMENTS_PER_ACTION = 5_000
 
 export interface DraftActionContext {
   brandNames: readonly string[]
@@ -230,6 +239,22 @@ function applyAssignments(
     throw validationError(`The project has no query ${unknown.map(id => `"${id}"`).join(', ')}. Add it before assigning it.`)
   }
 
+  // A cross product cannot tell intent apart: 20 market questions across the 50
+  // Properties of one market is 1,000 assignments and entirely correct. So this
+  // is a backstop against the absurd, not a judgement — the fix for the 45,369
+  // incident is showing the number before the click, which the caller does.
+  const pairCount = targetKeys.length * unique(queryIds).length
+  if (pairCount > MAX_ASSIGNMENTS_PER_ACTION) {
+    throw validationError(
+      `This would create ${pairCount.toLocaleString('en-US')} assignments `
+      + `(${unique(queryIds).length} questions on each of ${targetKeys.length} Properties), `
+      + `over the ${MAX_ASSIGNMENTS_PER_ACTION.toLocaleString('en-US')} limit for one action. `
+      + 'Apply a question to the Properties it is about, or use "apply-paired-assignments" '
+      + 'when each question names its own Property.',
+    )
+  }
+
+  const targetByKey = new Map(authoring.targets.map(target => [target.stableKey, target]))
   const assignments = [...authoring.assignments]
   const assignmentIndexes = new Map(assignments.map((assignment, index) => [
     `${assignment.targetKey}\u0000${assignment.queryId}`,
@@ -245,7 +270,7 @@ function applyAssignments(
           targetKey,
           queryId,
           ...(contextOverride ? { contextOverride } : {}),
-          queryClass: proposeQueryClass(context.queriesById.get(queryId)!, context.brandNames),
+          queryClass: proposeQueryClassForTarget(context.queriesById.get(queryId)!, context.brandNames, targetByKey.get(targetKey)),
           classificationSource: 'rule',
         })
         continue
@@ -256,8 +281,58 @@ function applyAssignments(
         ...(contextOverride ? { contextOverride } : {}),
         ...(existing.classificationSource === 'operator'
           ? {}
-          : { queryClass: proposeQueryClass(context.queriesById.get(queryId)!, context.brandNames) }),
+          : { queryClass: proposeQueryClassForTarget(context.queriesById.get(queryId)!, context.brandNames, targetByKey.get(targetKey)) }),
       }
+    }
+  }
+  return { authoring: { ...authoring, assignments }, warnings: [] }
+}
+
+/**
+ * Each pair is one question on the one Target it names. Unlike
+ * `apply-assignments` this never multiplies: N pairs produce at most N
+ * assignments, so a per-Target question pattern can express what it promises.
+ */
+function applyPairedAssignments(
+  authoring: MeasurementDraftAuthoring,
+  body: unknown,
+  context: DraftActionContext,
+): DraftActionResult {
+  const { pairs, contextOverride } = parseBody(measurementDraftApplyPairedAssignmentsRequestSchema, body, 'apply-paired-assignments')
+  for (const pair of pairs) requireTarget(authoring, pair.targetKey)
+  const unknown = pairs.filter(pair => !context.queriesById.has(pair.queryId)).map(pair => pair.queryId)
+  if (unknown.length) {
+    throw validationError(`The project has no query ${unique(unknown).map(id => `"${id}"`).join(', ')}. Add it before assigning it.`)
+  }
+
+  const targetByKey = new Map(authoring.targets.map(target => [target.stableKey, target]))
+  const assignments = [...authoring.assignments]
+  const assignmentIndexes = new Map(assignments.map((assignment, index) => [
+    `${assignment.targetKey}\u0000${assignment.queryId}`,
+    index,
+  ]))
+  for (const { targetKey, queryId } of pairs) {
+    const key = `${targetKey}\u0000${queryId}`
+    const index = assignmentIndexes.get(key)
+    if (index === undefined) {
+      assignmentIndexes.set(key, assignments.length)
+      assignments.push({
+        targetKey,
+        queryId,
+        ...(contextOverride ? { contextOverride } : {}),
+        queryClass: proposeQueryClassForTarget(context.queriesById.get(queryId)!, context.brandNames, targetByKey.get(targetKey)),
+        classificationSource: 'rule',
+      })
+      continue
+    }
+    // An operator classification outranks the rule, exactly as in the cross-product path.
+    const existing = assignments[index]!
+    assignments[index] = {
+      ...existing,
+      ...(contextOverride ? { contextOverride } : {}),
+      ...(existing.classificationSource === 'operator'
+        ? {}
+        : { queryClass: proposeQueryClassForTarget(context.queriesById.get(queryId)!, context.brandNames, targetByKey.get(targetKey)) }),
     }
   }
   return { authoring: { ...authoring, assignments }, warnings: [] }
@@ -392,6 +467,7 @@ export function applyDraftAction(
     case 'exclude-target': return excludeTarget(authoring, body)
     case 'rebind-target': return rebindTarget(authoring, body)
     case 'apply-assignments': return applyAssignments(authoring, body, context)
+    case 'apply-paired-assignments': return applyPairedAssignments(authoring, body, context)
     case 'remove-assignment': return removeAssignment(authoring, body)
     case 'clear-assignments': return clearAssignments(authoring, body)
     case 'classify-assignments': return classifyAssignments(authoring, body)

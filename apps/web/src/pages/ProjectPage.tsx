@@ -2179,7 +2179,10 @@ function ProjectPageContent({
             // The step selects from this list, so it has to reflect the new
             // questions before the operator can apply them. A refetch failure
             // must not read as success, hence throwOnError.
-            await portfolioQueriesQuery.refetch({ throwOnError: true })
+            const refreshed = await portfolioQueriesQuery.refetch({ throwOnError: true })
+            // The caller pairs each question back to the Property it was written
+            // for, and can only do that once the ids exist.
+            return refreshed.data ?? []
           }}
           onManageProjectQueries={() => {
             // Local state does not survive this navigation: it remounts the page
@@ -2510,6 +2513,17 @@ function ProjectPageContent({
               setHasExpandedAdvancedProperty(true)
             }}
             onRetryEvidence={() => { void advancedMeasurementReportQuery.refetch() }}
+            renderPropertyLink={activeMeasurementPlanSchemaVersion === 2 && !isEmbed()
+              ? ({ id, name }) => (
+                  <Link
+                    to="/projects/$projectName/properties/$targetKey"
+                    params={{ projectName, targetKey: id }}
+                    className="text-link hover:underline"
+                  >
+                    {name}
+                  </Link>
+                )
+              : undefined}
             isViewLoading={advancedMeasurementOverviewQuery.isPlaceholderData}
             isLoadingMore={advancedMeasurementOverviewQuery.isFetchingNextPage}
             isLoadMoreError={advancedMeasurementOverviewQuery.isFetchNextPageError}

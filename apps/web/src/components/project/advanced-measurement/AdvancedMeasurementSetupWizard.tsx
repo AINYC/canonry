@@ -8,7 +8,7 @@ export type AdvancedMeasurementSetupStep = 'import' | 'properties' | 'queries' |
 const setupSteps: readonly { id: AdvancedMeasurementSetupStep; label: string }[] = [
   { id: 'import', label: 'Import' },
   { id: 'properties', label: 'Properties' },
-  { id: 'queries', label: 'Queries' },
+  { id: 'queries', label: 'Questions' },
   { id: 'groups', label: 'Groups (optional)' },
   { id: 'review', label: 'Review and publish' },
 ]
@@ -32,11 +32,21 @@ export function AdvancedMeasurementSetupWizard({
 }: AdvancedMeasurementSetupWizardProps) {
   const previousStepRef = useRef<AdvancedMeasurementSetupStep | null>(null)
   const stepContentRef = useRef<HTMLDivElement>(null)
+  const keepEditingRef = useRef<HTMLButtonElement>(null)
+  const discardTriggerRef = useRef<HTMLButtonElement>(null)
+  const wasDiscardArmedRef = useRef(false)
   const [discardArmed, setDiscardArmed] = useState(false)
 
   useEffect(() => {
     if (!hasDraft) setDiscardArmed(false)
   }, [hasDraft])
+
+  useEffect(() => {
+    const wasArmed = wasDiscardArmedRef.current
+    wasDiscardArmedRef.current = discardArmed
+    if (discardArmed) keepEditingRef.current?.focus()
+    else if (wasArmed) discardTriggerRef.current?.focus()
+  }, [discardArmed])
 
   useEffect(() => {
     const previousStep = previousStepRef.current
@@ -57,7 +67,7 @@ export function AdvancedMeasurementSetupWizard({
         <div className="min-w-0 w-full sm:flex-1">
           <h2>Advanced measurement setup</h2>
           <p className="mt-1 max-w-2xl text-sm text-secondary">
-            Choose the Properties and queries you want to measure.
+            Choose the Properties and questions you want to measure.
           </p>
         </div>
         {hasDraft ? (
@@ -66,15 +76,15 @@ export function AdvancedMeasurementSetupWizard({
             {canEdit && onDiscard ? discardArmed ? (
               <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Confirm discard">
                 <span className="text-sm text-secondary">Discard all unpublished changes?</span>
-                <Button type="button" size="sm" variant="ghost" onClick={() => setDiscardArmed(false)}>
+                <Button ref={keepEditingRef} type="button" size="sm" variant="ghost" className="min-h-11" onClick={() => setDiscardArmed(false)}>
                   Keep editing
                 </Button>
-                <Button type="button" size="sm" variant="outline" onClick={onDiscard}>
+                <Button type="button" size="sm" variant="outline" className="min-h-11" onClick={onDiscard}>
                   Discard unpublished changes
                 </Button>
               </div>
             ) : (
-              <Button type="button" size="sm" variant="ghost" onClick={() => setDiscardArmed(true)}>
+              <Button ref={discardTriggerRef} type="button" size="sm" variant="ghost" className="min-h-11" onClick={() => setDiscardArmed(true)}>
                 Discard changes
               </Button>
             ) : null}

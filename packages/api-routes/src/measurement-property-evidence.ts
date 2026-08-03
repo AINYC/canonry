@@ -1,0 +1,285 @@
+/**
+ * Source evidence for exactly one Property.
+ *
+ * `GET /measurement-report` answers a different question: it reconstructs a
+ * whole revision — every group, every Target, every evidence row, unpaginated —
+ * for a revision the caller names. A Property page asks for one Target's rows
+ * out of the run the overview is already displaying, split by question class,
+ * and it must be able to stop after a page. Those are different reads, so this
+ * is a separate route rather than a filter bolted onto the report: the report's
+ * `groups`, `targets` and `diagnostics` are run-level and would have to start
+ * meaning something narrower whenever a filter was present, and the class split
+ * lives on a v2 assignment that the v1 revisions `/measurement-report` also
+ * serves do not have at all.
+ *
+ * Everything reads the run-pinned revision, exactly as the overview does.
+ */
+
+import { createHash } from 'node:crypto'
+import { and, eq } from 'drizzle-orm'
+import type { FastifyInstance } from 'fastify'
+import {
+  MEASUREMENT_PAGE_DEFAULT_LIMIT,
+  MEASUREMENT_PLAN_V2_SCHEMA_VERSION,
+  measurementPropertyEvidenceQuerySchema,
+  measurementPropertyEvidenceResponseSchema,
+  notFound,
+  RunStatuses,
+  validationError,
+  type MeasurementAttributionEvidence,
+  type MeasurementPlanV2,
+  type MeasurementPropertyEvidenceQuery,
+  type MeasurementPropertyEvidenceResponse,
+  type MeasurementQueryClassFilter,
+} from '@ainyc/canonry-contracts'
+import {
+  measurementPlanVersions,
+  querySnapshots,
+  runs,
+  type DatabaseClient,
+} from '@ainyc/canonry-db'
+import { resolveProject } from './helpers.js'
+import {
+  activeMeasurementPlan,
+  displayedState,
+  runRevisionMismatch,
+  type ActiveMeasurementPlan,
+} from './measurement-overview.js'
+import { buildMeasurementEvidence, normalizeMeasurementLocation } from './measurement-report.js'
+import {
+  buildMeasurementPlanV2ReportInput,
+  latestMeasurementRun,
+  measurementRunExpectedSlots,
+} from './measurement-report-adapter.js'
+
+interface EvidenceCursor {
+  v: 1
+  key: string
+  displayedRunId: string
+  filterFingerprint: string
+  planVersionId: string
+  evidenceFingerprint: string
+}
+
+function parseEvidenceQuery(raw: Record<string, unknown>): MeasurementPropertyEvidenceQuery {
+  const candidate = { ...raw, ...(raw.limit === undefined ? {} : { limit: Number(raw.limit) }) }
+  const parsed = measurementPropertyEvidenceQuerySchema.safeParse(candidate)
+  if (!parsed.success) {
+    throw validationError('Invalid measurement property evidence query', { issues: parsed.error.issues })
+  }
+  return parsed.data
+}
+
+function normalizedText(value: string): string {
+  return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en')
+}
+
+function filterFingerprint(query: MeasurementPropertyEvidenceQuery): string {
+  const filters = {
+    targetKey: query.targetKey,
+    queryClass: query.queryClass ?? 'all',
+    provider: query.provider === undefined ? null : normalizedText(query.provider),
+    location: query.location === undefined ? null : normalizedText(query.location),
+  }
+  return createHash('sha256').update(JSON.stringify(filters)).digest('base64url')
+}
+
+function evidenceFingerprintOf(snapshots: readonly typeof querySnapshots.$inferSelect[]): string {
+  const canonical = [...snapshots]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map(snapshot => JSON.stringify(snapshot))
+    .join('\n')
+  return createHash('sha256').update(canonical).digest('base64url')
+}
+
+/**
+ * One evidence row is identified by the slot it was observed in, the usage edge
+ * that claimed it, and the source URL. `prepareReport` already orders rows by
+ * exactly those three, so the identity and the ordering cannot drift apart.
+ */
+function rowKey(row: MeasurementAttributionEvidence): string {
+  return [row.expectedSlotId, row.usageEdgeId, row.sourceUrl].join('\u0000')
+}
+
+function encodeCursor(cursor: EvidenceCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
+}
+
+function parseCursor(value: string): EvidenceCursor | null {
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const cursor = parsed as Record<string, unknown>
+    if (cursor.v !== 1) return null
+    for (const field of ['key', 'displayedRunId', 'filterFingerprint', 'planVersionId', 'evidenceFingerprint']) {
+      const candidate = cursor[field]
+      if (typeof candidate !== 'string' || candidate.length === 0) return null
+    }
+    return {
+      v: 1,
+      key: cursor.key as string,
+      displayedRunId: cursor.displayedRunId as string,
+      filterFingerprint: cursor.filterFingerprint as string,
+      planVersionId: cursor.planVersionId as string,
+      evidenceFingerprint: cursor.evidenceFingerprint as string,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A run pinned to another revision answered a different set of questions, so
+ * naming one is refused rather than reported under this Property's label.
+ */
+function selectDisplayedRun(
+  db: DatabaseClient,
+  projectId: string,
+  active: ActiveMeasurementPlan,
+  runId: string | undefined,
+): typeof runs.$inferSelect | undefined {
+  if (runId === undefined) {
+    return latestMeasurementRun(db, projectId, active.version.id, [RunStatuses.completed])
+  }
+  const run = db.select().from(runs).where(and(eq(runs.projectId, projectId), eq(runs.id, runId))).get()
+  if (!run) throw notFound('Run', runId)
+  if (run.measurementPlanVersionId === active.version.id) return run
+  const pinned = run.measurementPlanVersionId === null
+    ? null
+    : db.select({ revision: measurementPlanVersions.revision }).from(measurementPlanVersions)
+        .where(eq(measurementPlanVersions.id, run.measurementPlanVersionId)).get()?.revision ?? null
+  throw runRevisionMismatch(run.id, pinned, active.version.revision)
+}
+
+function propertyEvidenceRows(
+  db: DatabaseClient,
+  plan: MeasurementPlanV2,
+  active: ActiveMeasurementPlan,
+  run: typeof runs.$inferSelect,
+  query: MeasurementPropertyEvidenceQuery,
+  queryClass: MeasurementQueryClassFilter,
+): { rows: MeasurementAttributionEvidence[]; evidenceFingerprint: string } {
+  const snapshots = db.select().from(querySnapshots).where(eq(querySnapshots.runId, run.id)).all()
+  const manifest = measurementRunExpectedSlots(run, plan)
+  const { input, edgeQueryClass } = buildMeasurementPlanV2ReportInput(active.version.revision, plan, manifest, snapshots)
+
+  // Every usage edge this Property owns, narrowed to the requested class first:
+  // the class is a property of the Target-owned assignment, so it selects edges
+  // rather than questions.
+  const ownEdgeIds = new Set(input.usageEdges
+    .filter(edge => edge.type === 'target' && edge.targetId === query.targetKey)
+    .filter(edge => queryClass === 'all' || edgeQueryClass.get(edge.id) === queryClass)
+    .map(edge => edge.id))
+
+  const provider = query.provider === undefined ? undefined : normalizedText(query.provider)
+  const location = query.location === undefined ? undefined : normalizeMeasurementLocation(query.location)
+  const rows = buildMeasurementEvidence(input).evidence.filter(row => (
+    ownEdgeIds.has(row.usageEdgeId)
+    && (provider === undefined || row.provider === provider)
+    && (location === undefined || normalizeMeasurementLocation(row.location) === location)
+  ))
+  return { rows, evidenceFingerprint: evidenceFingerprintOf(snapshots) }
+}
+
+function pageOf(
+  rows: readonly MeasurementAttributionEvidence[],
+  query: MeasurementPropertyEvidenceQuery,
+  displayedRunId: string,
+  planVersionId: string,
+  evidenceFingerprint: string,
+): MeasurementPropertyEvidenceResponse['evidence'] {
+  const limit = query.limit ?? MEASUREMENT_PAGE_DEFAULT_LIMIT
+  let offset = 0
+  if (query.cursor !== undefined) {
+    const cursor = parseCursor(query.cursor)
+    if (cursor === null) throw validationError('The measurement property evidence cursor is not readable.')
+    if (cursor.filterFingerprint !== filterFingerprint(query)) {
+      throw validationError('The measurement property evidence cursor filters do not match the request.')
+    }
+    if (cursor.planVersionId !== planVersionId) {
+      throw validationError('The measurement property evidence cursor revision does not match the active plan.')
+    }
+    if (cursor.displayedRunId !== displayedRunId) {
+      throw validationError('The measurement property evidence cursor run does not match the request.')
+    }
+    if (cursor.evidenceFingerprint !== evidenceFingerprint) {
+      throw validationError('The measurement property evidence changed between pages.')
+    }
+    const index = rows.findIndex(row => rowKey(row) === cursor.key)
+    if (index < 0) throw validationError('The measurement property evidence cursor does not belong to this result set.')
+    offset = index + 1
+  }
+
+  const items = rows.slice(offset, offset + limit)
+  const last = items.at(-1)
+  return {
+    items,
+    nextCursor: last === undefined || rows.at(offset + limit) === undefined
+      ? null
+      : encodeCursor({
+          v: 1,
+          key: rowKey(last),
+          displayedRunId,
+          filterFingerprint: filterFingerprint(query),
+          planVersionId,
+          evidenceFingerprint,
+        }),
+    totalEstimate: rows.length,
+  }
+}
+
+export async function measurementPropertyEvidenceRoutes(app: FastifyInstance) {
+  app.get<{ Params: { name: string }; Querystring: Record<string, unknown> }>(
+    '/projects/:name/measurement-property-evidence',
+    async request => {
+      const project = resolveProject(app.db, request.params.name)
+      const query = parseEvidenceQuery(request.query)
+      const active = activeMeasurementPlan(app.db, project.id)
+      if (!active) throw notFound('Active measurement plan', project.name)
+      // A v1 revision has no Branded/Non-brand assignment to scope evidence by,
+      // so answering here would mean inventing a class this revision never
+      // recorded. `/measurement-report` still reconstructs a v1 revision whole.
+      if (active.plan.schemaVersion !== MEASUREMENT_PLAN_V2_SCHEMA_VERSION) {
+        throw validationError(
+          'Property evidence is not available for a schema v1 revision. Republish setup, or read the whole revision through GET /measurement-report.',
+        )
+      }
+      const plan = active.plan
+      const target = plan.targets.find(candidate => candidate.stableKey === query.targetKey)
+      if (!target) throw validationError(`Measurement Property "${query.targetKey}" is not in the active revision.`)
+
+      const queryClass = query.queryClass ?? 'all'
+      const property = { targetKey: target.stableKey, label: target.label }
+      // A cursor pins the run it was issued against. Re-selecting the latest run
+      // here meant a sweep completing between two pages moved the result set and
+      // the caller's own cursor was then rejected as not belonging to it.
+      const pinnedRunId = query.runId ?? (query.cursor === undefined ? undefined : parseCursor(query.cursor)?.displayedRunId)
+      const displayed = selectDisplayedRun(app.db, project.id, active, pinnedRunId)
+      if (!displayed) {
+        // Not measured is not "no evidence". The state says which one this is,
+        // and the empty page below must never be read as a measured zero.
+        if (query.cursor !== undefined) {
+          throw validationError('The measurement property evidence cursor does not belong to this result set.')
+        }
+        return measurementPropertyEvidenceResponseSchema.parse({
+          property,
+          queryClass,
+          measurement: { state: 'not_measured' },
+          evidence: { items: [], nextCursor: null, totalEstimate: 0 },
+        } satisfies MeasurementPropertyEvidenceResponse)
+      }
+
+      const { rows, evidenceFingerprint } = propertyEvidenceRows(app.db, plan, active, displayed, query, queryClass)
+      return measurementPropertyEvidenceResponseSchema.parse({
+        property,
+        queryClass,
+        measurement: {
+          state: displayedState(displayed.status),
+          displayedRunId: displayed.id,
+          ...(displayed.finishedAt ? { completedAt: displayed.finishedAt } : {}),
+        },
+        evidence: pageOf(rows, query, displayed.id, active.version.id, evidenceFingerprint),
+      } satisfies MeasurementPropertyEvidenceResponse)
+    },
+  )
+}

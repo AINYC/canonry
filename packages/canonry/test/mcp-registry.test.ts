@@ -115,6 +115,7 @@ const expectedToolNames = [
   'canonry_measurement_plan_segment_retire',
   'canonry_measurement_setup',
   'canonry_measurement_overview',
+  'canonry_measurement_property_evidence',
   'canonry_measurement_draft_get',
   'canonry_measurement_draft_targets',
   'canonry_measurement_draft_assignments',
@@ -200,6 +201,7 @@ describe('MCP tool registry', () => {
       ['canonry_measurement_plan_publish', 'write', 'PUT /api/v1/projects/{name}/measurement-plan'],
       ['canonry_measurement_plan_segment_retire', 'write', 'POST /api/v1/projects/{name}/measurement-plan/segments/{stableKey}/retire'],
       ['canonry_measurement_overview', 'read', 'GET /api/v1/projects/{name}/measurement-overview'],
+      ['canonry_measurement_property_evidence', 'read', 'GET /api/v1/projects/{name}/measurement-property-evidence'],
       ['canonry_measurement_report', 'read', 'GET /api/v1/projects/{name}/measurement-report'],
     ] as const
 
@@ -223,6 +225,7 @@ describe('MCP tool registry', () => {
       retireMeasurementPlanSegment: vi.fn().mockResolvedValue({ stableKey: 'nyc' }),
       discoverMeasurementTargets: vi.fn().mockResolvedValue({ proposed: [] }),
       getMeasurementOverview: vi.fn().mockResolvedValue({ mode: 'active-v2' }),
+      getMeasurementPropertyEvidence: vi.fn().mockResolvedValue({ evidence: { items: [], nextCursor: null } }),
       getMeasurementReport: vi.fn().mockResolvedValue({ revision: 2 }),
     } as unknown as ApiClient
     const plan = {
@@ -275,6 +278,24 @@ describe('MCP tool registry', () => {
         to: '2026-07-31',
         runId: 'run-7',
         search: 'harbor',
+        cursor: 'next-page',
+        limit: 25,
+      }]],
+      ['canonry_measurement_property_evidence', {
+        project: 'acme',
+        targetKey: 'harbor-view',
+        queryClass: 'branded',
+        provider: 'openai',
+        location: 'New York, NY',
+        runId: 'run-7',
+        cursor: 'next-page',
+        limit: 25,
+      }, 'getMeasurementPropertyEvidence', ['acme', {
+        targetKey: 'harbor-view',
+        queryClass: 'branded',
+        provider: 'openai',
+        location: 'New York, NY',
+        runId: 'run-7',
         cursor: 'next-page',
         limit: 25,
       }]],
@@ -333,8 +354,8 @@ describe('MCP tool registry', () => {
   })
 
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(170)
-    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(106)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(171)
+    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(107)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(readNames)
@@ -371,7 +392,7 @@ describe('MCP tool registry', () => {
       counts.set(tool.tier, (counts.get(tool.tier) ?? 0) + 1)
     }
     expect(counts.get('monitoring')).toBe(28)
-    expect(counts.get('setup')).toBe(49)
+    expect(counts.get('setup')).toBe(50)
     expect(counts.get('gsc')).toBe(10)
     expect(counts.get('ga')).toBe(10)
     expect(counts.get('gbp')).toBe(13)

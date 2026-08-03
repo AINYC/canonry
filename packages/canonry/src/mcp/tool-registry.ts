@@ -47,6 +47,7 @@ import {
   measurementPlanPublishRequestSchema,
   measurementDiscoveryRequestSchema,
   measurementDraftApplyAssignmentsRequestSchema,
+  measurementDraftApplyPairedAssignmentsRequestSchema,
   measurementDraftApplySitemapSelectionRequestSchema,
   measurementDraftClassifyAssignmentsRequestSchema,
   measurementDraftClearAssignmentsRequestSchema,
@@ -65,6 +66,7 @@ import {
   measurementDraftUpsertGroupRequestSchema,
   measurementDraftUpsertTargetRequestSchema,
   measurementOverviewQuerySchema,
+  measurementPropertyEvidenceQuerySchema,
   measurementPlanDeactivateRequestSchema,
   measurementQuerySetUpsertRequestSchema,
   measurementQueryTemplateApplyRequestSchema,
@@ -172,6 +174,10 @@ const measurementOverviewInputSchema = z.object({
     context.addIssue({ code: 'custom', path: ['targetKey'], message: `${input.scope} scope does not accept targetKey.` })
   }
 })
+const measurementPropertyEvidenceInputSchema = measurementPropertyEvidenceQuerySchema.extend({
+  project: projectNameSchema,
+  targetKey: measurementPropertyEvidenceQuerySchema.shape.targetKey.describe('Property stable key. Required — this read is scoped to exactly one Property.'),
+}).strict()
 const measurementDraftCollectionInputSchema = measurementDraftCollectionQuerySchema.extend({ project: projectNameSchema })
 const measurementQuerySetInputSchema = z.object({
   project: projectNameSchema,
@@ -222,6 +228,7 @@ const measurementDraftOperationSchema = z.discriminatedUnion('action', [
   measurementDraftMutationOperationSchema('exclude-target', measurementDraftExcludeTargetRequestSchema),
   measurementDraftMutationOperationSchema('rebind-target', measurementDraftRebindTargetRequestSchema),
   measurementDraftMutationOperationSchema('apply-assignments', measurementDraftApplyAssignmentsRequestSchema),
+  measurementDraftMutationOperationSchema('apply-paired-assignments', measurementDraftApplyPairedAssignmentsRequestSchema),
   measurementDraftMutationOperationSchema('remove-assignment', measurementDraftRemoveAssignmentRequestSchema),
   measurementDraftMutationOperationSchema('clear-assignments', measurementDraftClearAssignmentsRequestSchema),
   measurementDraftMutationOperationSchema('classify-assignments', measurementDraftClassifyAssignmentsRequestSchema),
@@ -259,6 +266,7 @@ const measurementDraftActionOpenApiOperations = [
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/exclude-target',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/rebind-target',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-assignments',
+  'POST /api/v1/projects/{name}/measurement-plan/draft/actions/apply-paired-assignments',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/remove-assignment',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/clear-assignments',
   'POST /api/v1/projects/{name}/measurement-plan/draft/actions/classify-assignments',
@@ -293,6 +301,8 @@ function runMeasurementDraftAction(client: ApiClient, input: MeasurementDraftAct
       return client.rebindMeasurementDraftTarget(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
     case 'apply-assignments':
       return client.applyMeasurementDraftAssignments(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
+    case 'apply-paired-assignments':
+      return client.applyPairedMeasurementDraftAssignments(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
     case 'remove-assignment':
       return client.removeMeasurementDraftAssignment(project, actionInput.request, actionInput.idempotencyKey, actionInput.etag)
     case 'clear-assignments':
@@ -2099,6 +2109,20 @@ export const canonryMcpTools = [
     handler: (client, input) => {
       const { project, ...query } = input
       return client.getMeasurementOverview(project, query)
+    },
+  }),
+  defineTool({
+    name: 'canonry_measurement_property_evidence',
+    title: 'Page one Property\'s measurement evidence',
+    description: 'Return the stored source-evidence rows for exactly one Property out of one revision-pinned run, optionally narrowed to a question class, provider, or location. Prefer this over canonry_measurement_report when you want one Property: the report reconstructs every group and every Target for a revision and does not paginate. Run selection matches canonry_measurement_overview — the most recent completed run pinned to the active revision unless runId names another, and a run pinned to a different revision is refused rather than joined. The cursor pins the active revision, displayed run, evidence snapshot, and filters; reuse it unchanged. Not available for a schema v1 revision, which records no question class to scope by. It never starts provider work; page size is at most 100. An empty page under measurement.state = not_measured means the Property has not been measured at all, which is NOT a measured result of zero.',
+    access: 'read',
+    tier: 'setup',
+    inputSchema: measurementPropertyEvidenceInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/measurement-property-evidence'],
+    handler: (client, input) => {
+      const { project, ...query } = input
+      return client.getMeasurementPropertyEvidence(project, query)
     },
   }),
   defineTool({

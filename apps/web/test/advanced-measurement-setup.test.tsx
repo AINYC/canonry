@@ -63,7 +63,7 @@ describe('advanced measurement setup composition', () => {
   it.each([
     ['import', 'Sitemap URL'],
     ['properties', 'Properties'],
-    ['queries', 'Where these queries come from'],
+    ['queries', 'Questions'],
     ['groups', 'Group name'],
     ['review', 'Flagged exceptions'],
   ] as const)('renders the %s step inside the shared draft shell', (currentStep, expectedText) => {
@@ -91,7 +91,7 @@ describe('advanced measurement setup composition', () => {
   // Renamed from "threads the empty-library action". The button it clicked was
   // "Manage project queries", the old exit out of the wizard; the escape hatch
   // is now secondary to creating questions in place, so the label moved with it.
-  it('threads the project-query actions into the Queries step', () => {
+  it('threads the project-question actions into the Questions step', () => {
     const onManageProjectQueries = vi.fn()
     render(
       <AdvancedMeasurementSetup
@@ -103,7 +103,7 @@ describe('advanced measurement setup composition', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Manage all project questions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage project questions' }))
     expect(onManageProjectQueries).toHaveBeenCalledTimes(1)
   })
 
@@ -120,7 +120,7 @@ describe('advanced measurement setup composition', () => {
     )
 
     expect(screen.getByText('Flagged exceptions')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Queries' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Questions' }))
     expect(onStepChange).toHaveBeenCalledWith('queries')
   })
 })

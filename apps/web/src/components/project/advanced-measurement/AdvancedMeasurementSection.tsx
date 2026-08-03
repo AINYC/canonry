@@ -53,7 +53,8 @@ export interface AdvancedMeasurementSectionProps {
   publishedPlan?: MeasurementPlanResponse['active']
   canEdit?: boolean
   /** Adds tracked questions to the project from inside setup. */
-  onCreateQueries?: (texts: readonly string[]) => Promise<void>
+  /** Returns the project's queries AFTER the write, so a pairing can resolve text -> id. */
+  onCreateQueries?: (texts: readonly string[]) => Promise<readonly { id: string; query: string }[]>
   onManageProjectQueries?: () => void
   onPublished?: () => void
   service?: AdvancedMeasurementService
@@ -296,8 +297,8 @@ function groupLocation(context: ReviewCheckContext, check: MeasurementDraftCompi
 function assignmentLocation(context: ReviewCheckContext, check: MeasurementDraftCompileCheck): string | undefined {
   const assignment = assignmentAtPath(context.authoring, check.path)
   if (!assignment) return undefined
-  const query = context.queries.find(candidate => candidate.id === assignment.queryId)?.query ?? 'an unavailable query'
-  return `${propertyLabel(context.authoring, assignment.targetKey)} — ${query}`
+  const question = context.queries.find(candidate => candidate.id === assignment.queryId)?.query ?? 'an unavailable question'
+  return `${propertyLabel(context.authoring, assignment.targetKey)} — ${question}`
 }
 
 function locationFromPath(context: ReviewCheckContext, check: MeasurementDraftCompileCheck): string | undefined {
@@ -392,7 +393,7 @@ function reviewCheckMeaning(check: MeasurementDraftCompileCheck, context: Review
     case 'invalid-location':
       return {
         title: 'Fix a location',
-        detail: 'Choose a location configured for this project, or remove it from the query.',
+        detail: 'Choose a location configured for this project, or remove it from the question.',
         tone: 'negative',
         affected: [affected, contextValue(context, check, 'locations')].filter(Boolean).join(' — ') || undefined,
       }
@@ -447,49 +448,49 @@ function reviewCheckMeaning(check: MeasurementDraftCompileCheck, context: Review
       }
     case 'duplicate-assignment':
       return {
-        title: 'Remove a duplicate query',
-        detail: 'Assign each query to a Property only once.',
+        title: 'Remove a duplicate question',
+        detail: 'Assign each question to a Property only once.',
         tone: 'negative',
         affected,
       }
     case 'assignment-unknown-target':
       return {
-        title: 'Fix a query assignment',
-        detail: 'This query is assigned to a Property that is no longer in setup. Remove the assignment or add the Property back.',
+        title: 'Fix a question assignment',
+        detail: 'This question is assigned to a Property that is no longer in setup. Remove the assignment or add the Property back.',
         tone: 'negative',
         affected,
       }
     case 'assignment-excluded-target':
       return {
         title: 'Include or unassign a Property',
-        detail: 'This query is assigned to an excluded Property. Include it or remove the assignment.',
+        detail: 'This question is assigned to an excluded Property. Include it or remove the assignment.',
         tone: 'negative',
         affected,
       }
     case 'assignment-unknown-query':
       return {
-        title: 'Remove an unavailable query',
-        detail: 'This assignment refers to a tracked query that is no longer available. Remove it or add the query back to the project.',
+        title: 'Remove an unavailable question',
+        detail: 'This assignment refers to a tracked question that is no longer available. Remove it or add the question back to the project.',
         tone: 'negative',
         affected,
       }
     case 'assignment-unclassified':
       return {
-        title: 'Classify a query',
-        detail: 'Choose Branded or Non-brand for this query before publishing.',
+        title: 'Classify a question',
+        detail: 'Choose Branded or Non-brand for this question before publishing.',
         tone: 'negative',
         affected,
       }
     case 'query-limit-exceeded':
       return {
-        title: 'Reduce queries',
-        detail: 'This setup exceeds the distinct-query publishing limit. Remove some query assignments, then review again.',
+        title: 'Reduce questions',
+        detail: 'This setup exceeds the distinct-question publishing limit. Remove some question assignments, then review again.',
         tone: 'negative',
       }
     case 'target-without-assignments':
       return {
-        title: 'Assign queries',
-        detail: 'Assign at least one query to measure a Property.',
+        title: 'Assign questions',
+        detail: 'Assign at least one question to measure a Property.',
         tone: 'caution',
         affected,
       }
@@ -503,7 +504,7 @@ function reviewCheckMeaning(check: MeasurementDraftCompileCheck, context: Review
     case 'compiled-plan-too-large':
       return {
         title: 'Reduce setup size',
-        detail: 'This setup is too large to publish. Remove Properties, queries, or groups, then review again.',
+        detail: 'This setup is too large to publish. Remove Properties, questions, or groups, then review again.',
         tone: 'negative',
       }
     case 'active-revision-schema-v1':
@@ -539,11 +540,11 @@ function reviewCheckDetail(ruleId: string, detail: string, count: number, affect
   const detailWithCount = (() => {
   switch (ruleId) {
     case 'execution-context-no-provider':
-      return `${detail} ${pluralized(count, 'query assignment')} need${count === 1 ? 's' : ''} a provider.`
+      return `${detail} ${pluralized(count, 'question assignment')} need${count === 1 ? 's' : ''} a provider.`
     case 'target-without-aliases':
       return `${detail} ${pluralized(count, 'Property', 'Properties')} need${count === 1 ? 's' : ''} aliases.`
     case 'target-without-assignments':
-      return `${detail} ${pluralized(count, 'Property', 'Properties')} need${count === 1 ? 's' : ''} queries.`
+      return `${detail} ${pluralized(count, 'Property', 'Properties')} need${count === 1 ? 's' : ''} questions.`
     default:
       return count > 1 ? `${detail} ${pluralized(count, 'item')} need review.` : detail
   }
@@ -614,8 +615,8 @@ function warningFlag(
     case 'excluded-target-has-assignments':
       return {
         ...base,
-        title: 'Review excluded Property queries',
-        detail: `An excluded Property still has assigned queries. Include it or remove those queries before publishing.${suffix}`,
+        title: 'Review excluded Property questions',
+        detail: `An excluded Property still has assigned questions. Include it or remove those questions before publishing.${suffix}`,
       }
     case 'group-unknown-target':
       return {
@@ -664,7 +665,7 @@ function reviewedChanges(diff: MeasurementDraftDiff, preservesHistoricalResults 
   const groupChanges = diff.groups.added.length + diff.groups.removed.length + diff.groups.changed.length
   const assignmentChanges = diff.assignments.added + diff.assignments.removed + diff.assignments.reclassified
   if (targetChanges > 0) items.push(`${targetChanges} Property ${targetChanges === 1 ? 'change' : 'changes'}`)
-  if (assignmentChanges > 0) items.push(`${assignmentChanges} query assignment ${assignmentChanges === 1 ? 'change' : 'changes'}`)
+  if (assignmentChanges > 0) items.push(`${assignmentChanges} question assignment ${assignmentChanges === 1 ? 'change' : 'changes'}`)
   if (groupChanges > 0) items.push(`${groupChanges} group ${groupChanges === 1 ? 'change' : 'changes'}`)
   if (preservesHistoricalResults) items.unshift('Existing results remain visible after you publish this setup.')
   return {
@@ -862,9 +863,11 @@ export function AdvancedMeasurementSection({
     action: string,
     run: (currentEtag: string) => Promise<{ etag: string; warnings?: MeasurementDraftWarning[] }>,
     fallback: string,
+    options: { preserveBusyAction?: boolean } = {},
   ): Promise<MeasurementDraftResponse | null> {
-    if (!canEdit || !etag || busyAction) return null
-    setBusyAction(action)
+    const { preserveBusyAction = false } = options
+    if (!canEdit || !etag || (busyAction && !preserveBusyAction)) return null
+    if (!preserveBusyAction) setBusyAction(action)
     setActionError(null)
     setReviewed(null)
     try {
@@ -880,7 +883,7 @@ export function AdvancedMeasurementSection({
       }
       return null
     } finally {
-      setBusyAction(null)
+      if (!preserveBusyAction) setBusyAction(null)
     }
   }
 
@@ -942,24 +945,24 @@ export function AdvancedMeasurementSection({
   const reviewFlags = useMemo<AdvancedMeasurementFlaggedException[]>(() => [
     ...(assignmentCount === 0 ? [{
       id: 'no-query-assignments',
-      title: 'Assign at least one query',
-      detail: 'Apply a tracked query to at least one Property before publishing.',
+      title: 'Assign at least one question',
+      detail: 'Apply a tracked question to at least one Property before publishing.',
       tone: 'negative' as const,
     }] : []),
     ...((viewDraft?.authoring.assignments.some(assignment => assignment.queryClass === 'unclassified')
       && !(publishedDraftView && publishedPlan?.plan.schemaVersion === 1)) ? [{
       id: 'unclassified-query-assignments',
-      title: 'Remove an unavailable query',
-      detail: 'One or more saved assignments no longer have a tracked query. Clear them before publishing.',
+      title: 'Remove an unavailable question',
+      detail: 'One or more saved assignments no longer have a tracked question. Clear them before publishing.',
       tone: 'negative' as const,
     }] : []),
     ...serverFlags,
   ], [assignmentCount, publishedDraftView, publishedPlan, serverFlags, viewDraft])
 
   const queryAvailability = isQueryLoading
-    ? { status: 'unavailable' as const, message: 'Tracked queries are loading.' }
+    ? { status: 'unavailable' as const, message: 'Tracked questions are loading.' }
     : isQueryError
-      ? { status: 'unavailable' as const, message: 'Tracked queries could not be loaded. Retry before assigning Properties.' }
+      ? { status: 'unavailable' as const, message: 'Tracked questions could not be loaded. Retry before assigning Properties.' }
       : { status: 'available' as const }
 
   async function reviewSitemap(nextImportDraft: AdvancedMeasurementImportDraft): Promise<void> {
@@ -987,12 +990,12 @@ export function AdvancedMeasurementSection({
     }
   }
 
-  async function addProjectQueries(texts: readonly string[]): Promise<void> {
-    if (!onCreateQueries || texts.length === 0 || busyAction) return
+  async function addProjectQueries(texts: readonly string[]): Promise<readonly { id: string; query: string }[]> {
+    if (!onCreateQueries || texts.length === 0 || busyAction) return []
     setBusyAction('create-queries')
     setCreateQueriesError(null)
     try {
-      await onCreateQueries(texts)
+      return await onCreateQueries(texts)
     } catch (error) {
       // The server says which question was rejected and why. Replacing that with
       // a house string is what sent an operator round in circles on the sitemap.
@@ -1045,9 +1048,78 @@ export function AdvancedMeasurementSection({
     const next = await mutate(
       'assignments',
       currentEtag => service.applyAssignments(projectName, currentEtag, unique(selection.propertyIds), unique(selection.queryIds)),
-      'Could not apply these queries.',
+      'Could not apply these questions.',
     )
     if (next) setSelectedQueryIds([])
+  }
+
+  /**
+   * One question written for one Property, assigned to that Property alone.
+   *
+   * The pattern box generates a question per Property, but the only assignment
+   * action used to be a cross product, so applying the generated set put every
+   * question on every Property: 213 questions over 213 Properties is 45,369
+   * assignments, and coverage is matched/assignments, so each Property's
+   * denominator became the whole portfolio.
+   */
+  async function applyPairedQuestions(
+    pairs: readonly { targetKey: string; queryId: string }[],
+    preserveBusyAction = false,
+  ): Promise<void> {
+    if (pairs.length === 0) return
+    const next = await mutate(
+      'paired-assignments',
+      currentEtag => service.applyPairedAssignments(projectName, currentEtag, [...pairs]),
+      'Could not assign these questions.',
+      { preserveBusyAction },
+    )
+    // mutate reports failure by returning null, not by throwing. Swallowing that
+    // let a failed assignment read as success: the questions were created, none
+    // were assigned, and the authored pattern was cleared as if it had worked.
+    if (!next) throw new Error('Could not assign these questions.')
+  }
+
+  /**
+   * Writes one question per Property and assigns each to the Property it names.
+   *
+   * Creating the questions and assigning them used to be two unrelated steps,
+   * and the only assignment action was a cross product, so the generated set
+   * landed on every Property. The pairing has to survive from generation to
+   * assignment, which means one operation owns both halves.
+   */
+  async function createAndPairQuestions(
+    pairs: readonly { propertyId: string; text: string }[],
+  ): Promise<void> {
+    if (!canEdit || !onCreateQueries || pairs.length === 0 || busyAction) return
+    // The ids only exist after the write, and the pairing is by text.
+    setBusyAction('create-and-pair-questions')
+    setCreateQueriesError(null)
+    try {
+      let refreshed: readonly { id: string; query: string }[]
+      try {
+        refreshed = await onCreateQueries(unique(pairs.map(pair => pair.text)))
+      } catch (error) {
+        setCreateQueriesError(extractErrorMessage(error))
+        throw error
+      }
+      const idByText = new Map(refreshed.map(query => [query.query, query.id]))
+      const assignmentPairs = pairs
+        .map(pair => ({ targetKey: pair.propertyId, queryId: idByText.get(pair.text) }))
+        .filter((pair): pair is { targetKey: string; queryId: string } => pair.queryId !== undefined)
+      if (assignmentPairs.length !== pairs.length) {
+        const error = new Error('The created questions could not be matched to their Properties.')
+        setCreateQueriesError('The questions were added, but could not be paired with every Property. Try again to pair them.')
+        throw error
+      }
+      try {
+        await applyPairedQuestions(assignmentPairs, true)
+      } catch (error) {
+        setCreateQueriesError('The questions were added, but could not be assigned to their Properties. Try again to pair them.')
+        throw error
+      }
+    } finally {
+      setBusyAction(null)
+    }
   }
 
   async function clearQueryAssignments(queryId: string): Promise<void> {
@@ -1059,7 +1131,7 @@ export function AdvancedMeasurementSection({
     const next = await mutate(
       `remove-${queryId}`,
       currentEtag => service.removeAssignment(projectName, currentEtag, targetKeys, queryId),
-      'Could not clear this query assignment.',
+      'Could not clear this question assignment.',
     )
     if (next) setSelectedQueryIds(current => current.filter(id => id !== queryId))
   }
@@ -1247,7 +1319,7 @@ export function AdvancedMeasurementSection({
         <div className="section-head"><h2 id="advanced-measurement-error-title">Advanced measurement setup</h2></div>
         <div role="alert" className="border-y border-negative-800/40 bg-negative-950/20 py-4 text-sm text-negative">
           <p>{loadError}</p>
-          <Button className="mt-3" type="button" size="sm" variant="outline" onClick={() => { void loadCurrent(true) }}>Try again</Button>
+          <Button className="mt-3 min-h-11" type="button" size="sm" variant="outline" onClick={() => { void loadCurrent(true) }}>Try again</Button>
         </div>
       </section>
     )
@@ -1270,7 +1342,7 @@ export function AdvancedMeasurementSection({
           <p className="text-sm font-medium text-heading">This draft is based on an older published setup.</p>
           <p className="mt-1 text-sm text-secondary">Restart from the latest setup before making more changes.</p>
           <Button
-            className="mt-3"
+            className="mt-3 min-h-11"
             type="button"
             size="sm"
             variant="outline"
@@ -1286,7 +1358,7 @@ export function AdvancedMeasurementSection({
   }
 
   const retryQueries = isQueryError && onRetryQueries ? (
-    <div className="flex justify-end"><Button type="button" size="sm" variant="outline" onClick={onRetryQueries}>Retry tracked queries</Button></div>
+    <div className="flex justify-end"><Button type="button" size="sm" variant="outline" className="min-h-11" onClick={onRetryQueries}>Retry questions</Button></div>
   ) : null
 
   return (
@@ -1340,17 +1412,20 @@ export function AdvancedMeasurementSection({
             onCreateQueries: onCreateQueries
               ? texts => addProjectQueries(texts)
               : undefined,
-            isCreatingQueries: busyAction === 'create-queries',
+            isCreatingQueries: busyAction === 'create-queries' || busyAction === 'create-and-pair-questions',
+            isBusy: busyAction !== null,
             createQueriesError: createQueriesError,
             availability: queryAvailability,
             properties: confirmedProperties,
             queries: setupQueries,
             selectedPropertyIds: queryPropertyIds,
             selectedQueryIds,
-            isApplying: busyAction === 'assignments',
+            isApplying: busyAction === 'assignments' || busyAction === 'paired-assignments',
             onSelectedPropertyIdsChange: ids => setQueryPropertyIds([...ids]),
             onSelectedQueryIdsChange: ids => setSelectedQueryIds([...ids]),
             onApplySelectedQueries: selection => applySelectedQueries(selection),
+            onApplyPairedQuestions: pairs => applyPairedQuestions(pairs),
+            onCreateAndPairQuestions: canEdit && onCreateQueries ? createAndPairQuestions : undefined,
             onClearQueryAssignments: clearQueryAssignments,
             onRemoveQuery: clearQueryAssignments,
             canContinue: assignmentCount > 0,

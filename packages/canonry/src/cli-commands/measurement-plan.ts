@@ -1,14 +1,47 @@
+import type { MeasurementQueryClassFilter } from '@ainyc/canonry-contracts'
 import {
   discoverMeasurementTargets,
   listMeasurementPlanVersions,
   publishMeasurementPlan,
   retireMeasurementPlanSegment,
   showMeasurementPlan,
+  showMeasurementProperty,
+  showMeasurementPropertyEvidence,
   showMeasurementReport,
 } from '../commands/measurement-plan.js'
-import type { CliCommandSpec } from '../cli-dispatch.js'
+import type { CliCommandInput, CliCommandSpec } from '../cli-dispatch.js'
 import { getString, requireProject, requireStringOption, stringOption } from '../cli-command-helpers.js'
 import { usageError } from '../cli-error.js'
+
+const QUERY_CLASSES: readonly MeasurementQueryClassFilter[] = ['all', 'branded', 'non-brand']
+
+function queryClassOption(input: CliCommandInput): MeasurementQueryClassFilter | undefined {
+  const value = getString(input.values, 'query-class')
+  if (value === undefined) return undefined
+  const match = QUERY_CLASSES.find(candidate => candidate === value)
+  if (!match) throw usageError(`--query-class must be one of ${QUERY_CLASSES.join(', ')}`)
+  return match
+}
+
+/** Filters every per-Property read shares, so the two commands cannot drift apart. */
+function propertyScope(input: CliCommandInput, command: string, usage: string) {
+  return {
+    targetKey: requireStringOption(input, 'target-key', { command, usage, message: '--target-key is required' }),
+    queryClass: queryClassOption(input),
+    provider: getString(input.values, 'provider'),
+    location: getString(input.values, 'location'),
+    runId: getString(input.values, 'run-id'),
+    format: input.format,
+  }
+}
+
+const PROPERTY_SCOPE_OPTIONS = {
+  'target-key': stringOption(),
+  'query-class': stringOption(),
+  provider: stringOption(),
+  location: stringOption(),
+  'run-id': stringOption(),
+}
 
 export const MEASUREMENT_PLAN_CLI_COMMANDS: readonly CliCommandSpec[] = [
   { path: ['measurement-plan', 'show'], usage: 'canonry measurement-plan show <project> [--revision N] [--format json]', options: { revision: stringOption() }, run: async input => {
@@ -63,6 +96,35 @@ export const MEASUREMENT_PLAN_CLI_COMMANDS: readonly CliCommandSpec[] = [
         throw usageError('--revision must be a positive integer')
       }
       return showMeasurementReport(project, revision)
+    },
+  },
+  {
+    path: ['measurement-plan', 'property'],
+    usage: 'canonry measurement-plan property <project> --target-key <key> [--query-class all|branded|non-brand] [--provider <p>] [--location <l>] [--run-id <id>] [--format json]',
+    options: PROPERTY_SCOPE_OPTIONS,
+    run: input => {
+      const usage = 'canonry measurement-plan property <project> --target-key <key>'
+      const project = requireProject(input, 'measurement-plan.property', usage)
+      return showMeasurementProperty(project, propertyScope(input, 'measurement-plan.property', usage))
+    },
+  },
+  {
+    path: ['measurement-plan', 'property-evidence'],
+    usage: 'canonry measurement-plan property-evidence <project> --target-key <key> [--query-class all|branded|non-brand] [--provider <p>] [--location <l>] [--run-id <id>] [--cursor <c>] [--limit N] [--format json|jsonl]',
+    options: { ...PROPERTY_SCOPE_OPTIONS, cursor: stringOption(), limit: stringOption() },
+    run: input => {
+      const usage = 'canonry measurement-plan property-evidence <project> --target-key <key>'
+      const project = requireProject(input, 'measurement-plan.property-evidence', usage)
+      const limitValue = getString(input.values, 'limit')
+      const limit = limitValue === undefined ? undefined : Number(limitValue)
+      if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+        throw usageError('--limit must be an integer from 1 to 100')
+      }
+      return showMeasurementPropertyEvidence(project, {
+        ...propertyScope(input, 'measurement-plan.property-evidence', usage),
+        cursor: getString(input.values, 'cursor'),
+        ...(limit === undefined ? {} : { limit }),
+      })
     },
   },
 ]

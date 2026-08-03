@@ -47,6 +47,7 @@ export interface AdvancedMeasurementQueriesStepProps {
   selectedPropertyIds: readonly string[]
   selectedQueryIds: readonly string[]
   isApplying?: boolean
+  isBusy?: boolean
   canContinue?: boolean
   onSelectedPropertyIdsChange: (propertyIds: readonly string[]) => void
   onSelectedQueryIdsChange: (queryIds: readonly string[]) => void
@@ -59,7 +60,11 @@ export interface AdvancedMeasurementQueriesStepProps {
    * step can only consume questions that already exist, which sends a first-time
    * operator out of the wizard to create them and back again.
    */
-  onCreateQueries?: (texts: readonly string[]) => void | Promise<void>
+  onCreateQueries?: (texts: readonly string[]) => void | Promise<unknown>
+  /** Assigns already-created questions, each to the one Property it names. */
+  onApplyPairedQuestions?: (pairs: readonly { targetKey: string; queryId: string }[]) => void | Promise<void>
+  /** Writes one question per Property and assigns each to the Property it names. */
+  onCreateAndPairQuestions?: (pairs: readonly { propertyId: string; text: string }[]) => void | Promise<void>
   isCreatingQueries?: boolean
   createQueriesError?: string | null
   /** Opens the project's normal query-management surface for anything setup does not cover. */
@@ -156,26 +161,9 @@ export interface AdvancedMeasurementReviewStepProps {
 const INITIAL_REVIEW_ITEM_LIMIT = 20
 const REVIEW_ITEM_PAGE_SIZE = 50
 
-const querySourceCopy: Record<AdvancedMeasurementQuerySource, { label: string; description: string }> = {
-  'saved-project-queries': {
-    label: 'Saved project queries',
-    description: 'Already saved in this project.',
-  },
-  'query-sets': {
-    label: 'Query sets',
-    description: 'A named selection of saved project queries.',
-  },
-  'generated-drafts-from-templates': {
-    label: 'Generated drafts from templates',
-    description: 'Shown for review before they are added.',
-  },
-  'unavailable-tracked-query': {
-    label: 'Unavailable tracked query',
-    description: 'No longer available in this project. Clear its assignments to remove it from setup.',
-  },
-}
 const PROPERTY_CHECKLIST_PAGE_SIZE = 50
 const QUERY_LIST_PAGE_SIZE = 50
+const RECOVERY_PREVIEW_LIMIT = 10
 
 function isViewer(access: AdvancedMeasurementAccess | undefined): boolean {
   return access === 'viewer'
@@ -202,7 +190,26 @@ function isMissingQuery(query: AdvancedMeasurementQuery): boolean {
 }
 
 function queryLabel(query: AdvancedMeasurementQuery): string {
-  return isMissingQuery(query) ? 'Unavailable tracked query' : query.text?.trim() || 'Unavailable tracked query'
+  return isMissingQuery(query) ? 'Unavailable tracked question' : query.text?.trim() || 'Unavailable tracked question'
+}
+
+function isNameCharacter(value: string | undefined): boolean {
+  return value !== undefined && /[\p{L}\p{N}]/u.test(value)
+}
+
+function includesWholePropertyName(text: string, label: string): boolean {
+  const haystack = text.toLocaleLowerCase()
+  const needle = label.trim().toLocaleLowerCase()
+  if (!needle) return false
+
+  let offset = haystack.indexOf(needle)
+  while (offset >= 0) {
+    const before = offset === 0 ? undefined : haystack[offset - 1]
+    const after = haystack[offset + needle.length]
+    if (!isNameCharacter(before) && !isNameCharacter(after)) return true
+    offset = haystack.indexOf(needle, offset + needle.length)
+  }
+  return false
 }
 
 function PropertyChecklist({
@@ -240,12 +247,12 @@ function PropertyChecklist({
             type="search"
             value={search}
             onChange={event => setSearch(event.currentTarget.value)}
-            className="mt-1 block w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-400"
+            className="mt-1 block min-h-11 w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-400"
           />
         </label>
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" size="sm" variant="outline" disabled={visibleProperties.length === 0} onClick={selectAllShown}>Select all shown</Button>
-          <Button type="button" size="sm" variant="ghost" disabled={selectedPropertyIds.length === 0} onClick={() => onSelectedPropertyIdsChange([])}>Clear selection</Button>
+          <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={visibleProperties.length === 0} onClick={selectAllShown}>Select all shown</Button>
+          <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={selectedPropertyIds.length === 0} onClick={() => onSelectedPropertyIdsChange([])}>Clear selection</Button>
         </div>
       </div>
 
@@ -271,7 +278,7 @@ function PropertyChecklist({
               )
             })}
           </div>
-          {hasHiddenProperties ? <Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setShowAll(true)}>Show all Properties</Button> : null}
+          {hasHiddenProperties ? <Button type="button" size="sm" variant="outline" className="mt-3 min-h-11" onClick={() => setShowAll(true)}>Show all Properties</Button> : null}
         </>
       )}
     </fieldset>
@@ -299,6 +306,7 @@ export function AdvancedMeasurementQueriesStep({
   selectedPropertyIds,
   selectedQueryIds,
   isApplying = false,
+  isBusy = false,
   canContinue = true,
   onSelectedPropertyIdsChange,
   onSelectedQueryIdsChange,
@@ -306,6 +314,8 @@ export function AdvancedMeasurementQueriesStep({
   onClearQueryAssignments,
   onRemoveQuery,
   onCreateQueries,
+  onApplyPairedQuestions,
+  onCreateAndPairQuestions,
   isCreatingQueries = false,
   createQueriesError = null,
   onManageProjectQueries,
@@ -314,24 +324,49 @@ export function AdvancedMeasurementQueriesStep({
 }: AdvancedMeasurementQueriesStepProps) {
   const [querySearch, setQuerySearch] = useState('')
   const [showAllQueries, setShowAllQueries] = useState(false)
+  const [showUnappliedOnly, setShowUnappliedOnly] = useState(false)
   const [newQueriesText, setNewQueriesText] = useState('')
   const [patternText, setPatternText] = useState('')
+  const [reviewedSuggestionSignature, setReviewedSuggestionSignature] = useState<string | null>(null)
   if (isUnavailable(availability)) {
-    return <section aria-label="Queries"><UnavailableState message={availability.message} /></section>
+    return <section aria-label="Questions"><UnavailableState message={availability.message} /></section>
   }
 
   const viewer = isViewer(access)
-  const canApply = selectedPropertyIds.length > 0 && selectedQueryIds.length > 0 && !isApplying
+  const canApply = selectedPropertyIds.length > 0 && selectedQueryIds.length > 0 && !isApplying && !isBusy
   const selectedPropertyCount = properties.filter(property => selectedPropertyIds.includes(property.id)).length
   const clearAssignments = onClearQueryAssignments ?? onRemoveQuery
   const normalizedQuerySearch = querySearch.trim().toLocaleLowerCase()
   const filteredQueries = normalizedQuerySearch
-    ? queries.filter(query => {
-      const source = query.source ? querySourceCopy[query.source].label : ''
-      return `${queryLabel(query)} ${source} ${query.sourceDetail ?? ''}`.toLocaleLowerCase().includes(normalizedQuerySearch)
-    })
+    ? queries.filter(query => queryLabel(query).toLocaleLowerCase().includes(normalizedQuerySearch))
     : queries
-  const visibleQueries = showAllQueries ? filteredQueries : filteredQueries.slice(0, QUERY_LIST_PAGE_SIZE)
+  const unappliedQueries = filteredQueries.filter(query => (query.propertyIds?.length ?? 0) === 0)
+  const listedQueries = showUnappliedOnly ? unappliedQueries : filteredQueries
+  const visibleQueries = showAllQueries ? listedQueries : listedQueries.slice(0, QUERY_LIST_PAGE_SIZE)
+
+  /**
+   * Questions generated from a pattern each name exactly one Property, and the
+   * pairing is recoverable from the text alone. Without this the only route back
+   * is 213 manual selections, or the cross product that produced 45,369.
+   * A question matching two Property names is left alone rather than guessed at.
+   */
+  const nameMatchedAssignments = unappliedQueries.flatMap(query => {
+    const question = queryLabel(query)
+    const named = properties.filter(property => includesWholePropertyName(question, property.label))
+    return named.length === 1 ? [{
+      targetKey: named[0]!.id,
+      queryId: query.id,
+      property: named[0]!.label,
+      question,
+    }] : []
+  })
+  const nameMatchedPairs = nameMatchedAssignments.map(({ targetKey, queryId }) => ({ targetKey, queryId }))
+  const suggestionSignature = nameMatchedPairs.map(pair => `${pair.queryId}:${pair.targetKey}`).join('|')
+  const reviewedAllSuggestions = nameMatchedAssignments.length <= RECOVERY_PREVIEW_LIMIT
+    || reviewedSuggestionSignature === suggestionSignature
+  const shownNameMatchedAssignments = reviewedAllSuggestions
+    ? nameMatchedAssignments
+    : nameMatchedAssignments.slice(0, RECOVERY_PREVIEW_LIMIT)
   const selectableVisibleQueries = visibleQueries.filter(query => !isMissingQuery(query))
   const parsedNewQueries = [...new Set(
     newQueriesText.split('\n').map(line => line.trim()).filter(Boolean),
@@ -342,14 +377,19 @@ export function AdvancedMeasurementQueriesStep({
   // Properties in it.
   const patternPlaceholders = [...patternText.matchAll(/\{([a-z][\w-]*)\}/gi)].map(match => match[1]!)
   const patternTargets = properties.filter(property => selectedPropertyIds.includes(property.id))
-  const patternExpansions = patternPlaceholders.length === 0 || patternText.trim() === ''
+  // Each expansion stays tied to the Property it was written for, so it can be
+  // assigned to that Property alone. Dropping the pairing here is what forced
+  // the caller into a cross product.
+  const patternPairs = patternPlaceholders.length === 0 || patternText.trim() === ''
     ? []
-    : [...new Set(patternTargets.map(property => (
-      patternPlaceholders.reduce(
+    : patternTargets.map(property => ({
+      propertyId: property.id,
+      text: patternPlaceholders.reduce(
         (text, name) => text.replaceAll(`{${name}}`, property.label),
         patternText.trim(),
-      )
-    )))]
+      ),
+    }))
+  const patternExpansions = [...new Set(patternPairs.map(pair => pair.text))]
 
   function selectAllShownQueries(): void {
     const selected = new Set([...selectedQueryIds, ...selectableVisibleQueries.map(query => query.id)])
@@ -360,71 +400,167 @@ export function AdvancedMeasurementQueriesStep({
     <section aria-labelledby="advanced-measurement-queries-title" className="space-y-5">
       <div className="section-head">
         <div>
-          <h3 id="advanced-measurement-queries-title">Queries</h3>
-          <p className="mt-1 max-w-2xl text-sm text-secondary">Choose queries already tracked for this project, then apply them to Properties.</p>
+          <h3 id="advanced-measurement-queries-title">Questions</h3>
+          <p className="mt-1 max-w-2xl text-sm text-secondary">Choose questions, then apply them to Properties.</p>
         </div>
       </div>
 
       {viewer ? <ViewerNotice /> : null}
 
-      <details className="border-y border-default py-4">
-        <summary className="cursor-pointer text-sm font-medium text-heading">Where these queries come from</summary>
-        <dl className="mt-3 grid gap-x-6 gap-y-3 md:grid-cols-2">
-          {(Object.keys(querySourceCopy) as AdvancedMeasurementQuerySource[]).map(source => (
-            <div key={source}>
-              <dt className="text-sm font-medium text-primary">{querySourceCopy[source].label}</dt>
-              <dd className="mt-1 text-sm text-secondary">{querySourceCopy[source].description}</dd>
+      {viewer ? null : (
+        <details className="border-y border-default py-4">
+          <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">{selectedPropertyCount} of {properties.length} Properties selected</summary>
+          <div className="pt-3">
+            <PropertyChecklist
+              legend="Apply to selected Properties"
+              properties={properties}
+              selectedPropertyIds={selectedPropertyIds}
+              onSelectedPropertyIdsChange={onSelectedPropertyIdsChange}
+            />
+          </div>
+        </details>
+      )}
+
+      {viewer || !onCreateQueries ? null : (
+        <details open={queries.length === 0} className="border-y border-default py-4">
+          <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">Add questions</summary>
+          <div className="pt-3">
+            <h4 className="m-0 text-sm font-medium text-heading">
+              {queries.length === 0 ? 'Add the questions you want to track' : 'Add more questions'}
+            </h4>
+            <p className="mt-1 mb-2 text-sm text-secondary">One per line. Add them to the project, then apply them to Properties.</p>
+            <textarea
+              aria-label="New questions, one per line"
+              className="w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
+              rows={4}
+              value={newQueriesText}
+              onChange={event => setNewQueriesText(event.currentTarget.value)}
+              placeholder={'best apartments in dallas\nluxury apartments atlanta\npet friendly apartments austin'}
+            />
+            {createQueriesError ? (
+              <p role="alert" className="mt-2 text-sm text-negative">{createQueriesError}</p>
+            ) : null}
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="min-h-11"
+                disabled={parsedNewQueries.length === 0 || isCreatingQueries || isBusy}
+                onClick={() => {
+                  void Promise.resolve(onCreateQueries(parsedNewQueries))
+                    .then(() => setNewQueriesText(''), () => {})
+                }}
+              >
+                {isCreatingQueries
+                  ? 'Adding…'
+                  : `Add ${parsedNewQueries.length || ''} question${parsedNewQueries.length === 1 ? '' : 's'}`.replace('  ', ' ')}
+              </Button>
+              {onManageProjectQueries ? (
+                <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={isBusy} onClick={onManageProjectQueries}>
+                  Manage project questions
+                </Button>
+              ) : null}
             </div>
-          ))}
-        </dl>
-      </details>
+
+            <div className="mt-4 border-t border-default pt-4">
+              <h4 className="m-0 text-sm font-medium text-heading">Write one question for every Property</h4>
+              <p className="mt-1 mb-2 text-sm text-secondary">
+                Put <code className="rounded bg-bg-elevated px-1">{'{property}'}</code> where the
+                Property name belongs. You get one question per selected Property.
+              </p>
+              <input
+                aria-label="Question pattern"
+                className="min-h-11 w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
+                value={patternText}
+                onChange={event => setPatternText(event.target.value)}
+                placeholder="apartments near {property}"
+              />
+              {patternText.trim() === '' ? null : patternPlaceholders.length === 0 ? (
+                <p className="mt-2 text-sm text-caution">
+                  Add {'{property}'} to the pattern, or use the box above for a single question.
+                </p>
+              ) : patternTargets.length === 0 ? (
+                <p className="mt-2 text-sm text-caution">Select at least one Property to write questions for.</p>
+              ) : (
+                <div className="mt-2 rounded-md border border-base bg-bg-elevated p-3">
+                  <p className="m-0 text-sm text-secondary">
+                    {patternExpansions.length} question{patternExpansions.length === 1 ? '' : 's'}, one per selected Property:
+                  </p>
+                  <ul className="mt-1 mb-0 list-none space-y-0.5 p-0">
+                    {patternExpansions.slice(0, 3).map(text => (
+                      <li key={text} className="text-sm text-strong">{text}</li>
+                    ))}
+                  </ul>
+                  {patternExpansions.length > 3 ? (
+                    <p className="mt-1 mb-0 text-sm text-secondary">
+                      and {patternExpansions.length - 3} more
+                    </p>
+                  ) : null}
+                </div>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="mt-2 min-h-11"
+                disabled={patternPairs.length === 0 || isCreatingQueries || isBusy || !onCreateAndPairQuestions}
+                onClick={() => {
+                  if (!onCreateAndPairQuestions) return
+                  void Promise.resolve(onCreateAndPairQuestions(patternPairs))
+                    .then(() => setPatternText(''), () => {})
+                }}
+              >
+                {isCreatingQueries
+                  ? 'Adding…'
+                  : `Add ${patternPairs.length || ''} question${patternPairs.length === 1 ? '' : 's'}`.replace('  ', ' ')}
+              </Button>
+              {patternPairs.length > 0 ? (
+                <p className="mt-2 mb-0 text-sm text-secondary">
+                  Each question is measured on the one Property it names, so this adds{' '}
+                  {patternPairs.length} assignment{patternPairs.length === 1 ? '' : 's'}.
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </details>
+      )}
 
       {viewer ? null : (
         <div className="space-y-3 border-y border-default py-4">
-          <details>
-            <summary className="cursor-pointer text-sm font-medium text-heading">{selectedPropertyCount} of {properties.length} Properties selected</summary>
-            <div className="pt-3">
-              <PropertyChecklist
-                legend="Apply to selected Properties"
-                properties={properties}
-                selectedPropertyIds={selectedPropertyIds}
-                onSelectedPropertyIdsChange={onSelectedPropertyIdsChange}
-              />
-            </div>
-          </details>
-          {/* With an empty basket these three controls can only ever be disabled,
-              and they sat above the form that creates the questions they act on.
-              The Property checklist stays: the pattern form below needs it. */}
+          {/* With an empty question library these controls can only be disabled. */}
           {queries.length === 0 ? null : (
           <div className="flex flex-wrap items-center gap-3">
             <Button
               type="button"
               size="sm"
               variant="ghost"
+              className="min-h-11"
               disabled={selectableVisibleQueries.length === 0}
               onClick={selectAllShownQueries}
             >
-              Select all shown queries
+              Select all shown questions
             </Button>
             <Button
               type="button"
               size="sm"
               variant="ghost"
+              className="min-h-11"
               disabled={selectedQueryIds.length === 0}
               onClick={() => onSelectedQueryIdsChange([])}
             >
-              Clear query selection
+              Clear question selection
             </Button>
             <Button
               type="button"
               size="sm"
-              variant="outline"
+              className="min-h-11"
               disabled={!canApply}
               onClick={() => { void onApplySelectedQueries({ queryIds: selectedQueryIds, propertyIds: selectedPropertyIds }) }}
             >
-              {isApplying ? 'Applying queries…' : 'Apply selected queries'}
+              {isApplying ? 'Applying questions…' : 'Apply selected questions'}
             </Button>
-            <p className="text-sm text-secondary">{selectedQueryIds.length} selected, {selectedPropertyIds.length} Properties selected.</p>
+            <p className="text-sm text-secondary">{selectedQueryIds.length} question{selectedQueryIds.length === 1 ? '' : 's'} × {selectedPropertyCount} Properties = {selectedQueryIds.length * selectedPropertyCount} assignments</p>
           </div>
           )}
         </div>
@@ -433,7 +569,7 @@ export function AdvancedMeasurementQueriesStep({
       {queries.length > 0 ? (
         <div className="space-y-3">
           <label className="block max-w-xl">
-            <span className="text-sm font-medium text-heading">Search queries</span>
+            <span className="text-sm font-medium text-heading">Search questions</span>
             <input
               type="search"
               value={querySearch}
@@ -441,11 +577,79 @@ export function AdvancedMeasurementQueriesStep({
                 setQuerySearch(event.currentTarget.value)
                 setShowAllQueries(false)
               }}
-              className="mt-1 block w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-400"
-              placeholder="Query text or source"
+              className="mt-1 block min-h-11 w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-400"
+              placeholder="Question text"
             />
           </label>
-          <p className="text-sm text-secondary">Showing {visibleQueries.length} of {filteredQueries.length} queries</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="m-0 text-sm text-secondary">
+              Showing {visibleQueries.length} of {listedQueries.length} questions,{' '}
+              {filteredQueries.length - unappliedQueries.length} of {filteredQueries.length} applied
+            </p>
+            {viewer || unappliedQueries.length === 0 ? null : (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="min-h-11"
+                onClick={() => { setShowUnappliedOnly(current => !current); setShowAllQueries(false) }}
+              >
+                {showUnappliedOnly ? 'Show all questions' : `Show the ${unappliedQueries.length} not applied`}
+              </Button>
+            )}
+          </div>
+          {!viewer && nameMatchedPairs.length > 0 && onApplyPairedQuestions ? (
+            <details className="rounded-md border border-base bg-bg-elevated p-3">
+              <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">
+                Review {nameMatchedPairs.length} suggested question-to-Property match{nameMatchedPairs.length === 1 ? '' : 'es'}
+              </summary>
+              <p className="mt-2 mb-3 text-sm text-secondary">
+                Confirm each question is paired with the Property it names before assigning it.
+              </p>
+              <div className="overflow-x-auto rounded-md border border-default">
+                <table className="evidence-table min-w-[520px]">
+                  <caption className="sr-only">Suggested question-to-Property matches</caption>
+                  <thead><tr><th>Question</th><th>Property</th></tr></thead>
+                  <tbody>
+                    {shownNameMatchedAssignments.map(assignment => (
+                      <tr key={`${assignment.queryId}:${assignment.targetKey}`}>
+                        <td className="text-secondary">{assignment.question}</td>
+                        <td className="text-heading">{assignment.property}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {nameMatchedAssignments.length > RECOVERY_PREVIEW_LIMIT ? (
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-secondary">
+                  <span>Showing {shownNameMatchedAssignments.length} of {nameMatchedAssignments.length} suggested matches</span>
+                  {!reviewedAllSuggestions ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="min-h-11"
+                      onClick={() => setReviewedSuggestionSignature(suggestionSignature)}
+                    >
+                      Review all {nameMatchedAssignments.length} matches
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="mt-3 min-h-11"
+                disabled={isApplying || isBusy || !reviewedAllSuggestions}
+                onClick={() => {
+                  void Promise.resolve(onApplyPairedQuestions(nameMatchedPairs)).catch(() => {})
+                }}
+              >
+                {isApplying ? 'Assigning…' : `Assign ${nameMatchedPairs.length} suggested match${nameMatchedPairs.length === 1 ? '' : 'es'}`}
+              </Button>
+            </details>
+          ) : null}
         </div>
       ) : null}
 
@@ -454,17 +658,16 @@ export function AdvancedMeasurementQueriesStep({
           <table className="evidence-table min-w-[620px]">
           <thead>
             <tr>
-              {viewer ? null : <th><span className="sr-only">Select query</span></th>}
-              <th>Query</th>
+              {viewer ? null : <th><span className="sr-only">Select question</span></th>}
+              <th>Question</th>
               <th>Properties</th>
-              {viewer ? null : <th><span className="sr-only">Clear assignments</span></th>}
+              {viewer ? null : <th><span className="sr-only">Clear question assignments</span></th>}
             </tr>
           </thead>
           <tbody>
             {visibleQueries.map(query => {
               const missing = isMissingQuery(query)
               const label = queryLabel(query)
-              const source = query.source ? querySourceCopy[query.source] : querySourceCopy['unavailable-tracked-query']
               const selected = selectedQueryIds.includes(query.id)
               const hasAssignments = (query.propertyIds?.length ?? 0) > 0
               return (
@@ -473,7 +676,7 @@ export function AdvancedMeasurementQueriesStep({
                     <td className="p-0">
                       <label className="flex min-h-11 min-w-11 cursor-pointer items-center justify-center">
                         <input
-                          aria-label={`Select query ${label}`}
+                          aria-label={`Select question ${label}`}
                           checked={selected}
                           type="checkbox"
                           onChange={event => onSelectedQueryIdsChange(changeSelection(selectedQueryIds, query.id, event.currentTarget.checked))}
@@ -484,123 +687,27 @@ export function AdvancedMeasurementQueriesStep({
                   )}
                   <td>
                     <p className="font-medium text-heading">{label}</p>
-                    <p className="mt-1 text-sm text-secondary">{source.label}{query.sourceDetail ? `, ${query.sourceDetail}` : ''}</p>
                   </td>
                   <td className="text-secondary">{propertyNames(query.propertyIds ?? [], properties)}</td>
-                  {viewer ? null : <td className="text-right">{hasAssignments ? <Button type="button" size="sm" variant="ghost" onClick={() => { void clearAssignments(query.id) }} aria-label={`Clear assignments for ${label}`}>Clear assignments</Button> : null}</td>}
+                  {viewer ? null : <td className="text-right">{hasAssignments ? <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={isBusy} onClick={() => { void clearAssignments(query.id) }} aria-label={`Clear question assignments for ${label}`}>Clear assignments</Button> : null}</td>}
                 </tr>
               )
             })}
           </tbody>
           </table>
         </div>
-      ) : queries.length > 0 ? <p className="text-sm text-secondary">No queries match this search.</p> : null}
+      ) : queries.length > 0 ? <p className="text-sm text-secondary">No questions match this search.</p> : null}
 
-      {visibleQueries.length < filteredQueries.length ? (
-        <Button type="button" size="sm" variant="outline" onClick={() => setShowAllQueries(true)}>Show all queries</Button>
+      {visibleQueries.length < listedQueries.length ? (
+        <Button type="button" size="sm" variant="outline" className="min-h-11" onClick={() => setShowAllQueries(true)}>Show all questions</Button>
       ) : null}
-
-      {viewer || !onCreateQueries ? null : (
-        <div className="border-y border-default py-4">
-          <h4 className="m-0 text-sm font-medium text-heading">
-            {queries.length === 0 ? 'Add the questions you want to track' : 'Add more questions'}
-          </h4>
-          <p className="mt-1 mb-2 text-sm text-secondary">
-            One per line. These are added to the project, then you choose which
-            Properties to apply them to. You can edit or add more at any time.
-          </p>
-          <textarea
-            aria-label="New questions, one per line"
-            className="w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
-            rows={4}
-            value={newQueriesText}
-            onChange={event => setNewQueriesText(event.target.value)}
-            placeholder={'best apartments in dallas\nluxury apartments atlanta\npet friendly apartments austin'}
-          />
-          {createQueriesError ? (
-            <p role="alert" className="mt-2 text-sm text-negative">{createQueriesError}</p>
-          ) : null}
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <Button
-              type="button"
-              size="sm"
-              disabled={parsedNewQueries.length === 0 || isCreatingQueries}
-              onClick={() => {
-                void Promise.resolve(onCreateQueries(parsedNewQueries))
-                  .then(() => setNewQueriesText(''), () => {})
-              }}
-            >
-              {isCreatingQueries
-                ? 'Adding…'
-                : `Add ${parsedNewQueries.length || ''} question${parsedNewQueries.length === 1 ? '' : 's'}`.replace('  ', ' ')}
-            </Button>
-            {onManageProjectQueries ? (
-              <Button type="button" size="sm" variant="ghost" onClick={onManageProjectQueries}>
-                Manage all project questions
-              </Button>
-            ) : null}
-          </div>
-
-          <div className="mt-4 border-t border-default pt-4">
-            <h4 className="m-0 text-sm font-medium text-heading">Or write one question for every Property</h4>
-            <p className="mt-1 mb-2 text-sm text-secondary">
-              Put <code className="rounded bg-bg-elevated px-1">{'{property}'}</code> where the
-              Property name belongs. You get one question per selected Property.
-            </p>
-            <input
-              aria-label="Question pattern"
-              className="w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
-              value={patternText}
-              onChange={event => setPatternText(event.target.value)}
-              placeholder="apartments near {property}"
-            />
-            {patternText.trim() === '' ? null : patternPlaceholders.length === 0 ? (
-              <p className="mt-2 text-sm text-caution">
-                Add {'{property}'} to the pattern, or use the box above for a single question.
-              </p>
-            ) : patternTargets.length === 0 ? (
-              <p className="mt-2 text-sm text-caution">Select at least one Property to write questions for.</p>
-            ) : (
-              <div className="mt-2 rounded-md border border-base bg-bg-elevated p-3">
-                <p className="m-0 text-sm text-secondary">
-                  {patternExpansions.length} question{patternExpansions.length === 1 ? '' : 's'}, one per selected Property:
-                </p>
-                <ul className="mt-1 mb-0 list-none space-y-0.5 p-0">
-                  {patternExpansions.slice(0, 3).map(text => (
-                    <li key={text} className="text-sm text-strong">{text}</li>
-                  ))}
-                </ul>
-                {patternExpansions.length > 3 ? (
-                  <p className="mt-1 mb-0 text-sm text-secondary">
-                    and {patternExpansions.length - 3} more
-                  </p>
-                ) : null}
-              </div>
-            )}
-            <Button
-              type="button"
-              size="sm"
-              className="mt-2"
-              disabled={patternExpansions.length === 0 || isCreatingQueries}
-              onClick={() => {
-                void Promise.resolve(onCreateQueries(patternExpansions))
-                  .then(() => setPatternText(''), () => {})
-              }}
-            >
-              {isCreatingQueries
-                ? 'Adding…'
-                : `Add ${patternExpansions.length || ''} question${patternExpansions.length === 1 ? '' : 's'}`.replace('  ', ' ')}
-            </Button>
-          </div>
-        </div>
-      )}
 
       {viewer ? null : (
         <>
-          {canContinue ? null : <p role="status" className="text-sm text-caution">Apply at least one query to a Property before continuing.</p>}
+          {canContinue ? null : <p role="status" className="text-sm text-caution">Apply at least one question to a Property before continuing.</p>}
           <div className={`flex flex-wrap items-center gap-3 ${onBack ? 'justify-between' : 'justify-end'}`}>
-            {onBack ? <Button type="button" variant="outline" onClick={onBack}>Back</Button> : null}
-            <Button type="button" disabled={!canContinue} onClick={onContinue}>Continue</Button>
+            {onBack ? <Button type="button" variant="outline" className="min-h-11" disabled={isBusy} onClick={onBack}>Back</Button> : null}
+            <Button type="button" variant={canApply ? 'outline' : 'default'} className="min-h-11" disabled={!canContinue || isBusy} onClick={onContinue}>Continue</Button>
           </div>
         </>
       )}
@@ -658,14 +765,14 @@ export function AdvancedMeasurementGroupsStep({
             <span className="text-sm font-medium text-heading">Group name</span>
             <input
               aria-label="Group name"
-              className="mt-1 w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
+              className="mt-1 min-h-11 w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
               value={groupDraft.name}
               onChange={event => onGroupDraftChange({ ...groupDraft, name: event.currentTarget.value })}
               placeholder="Waterfront venues"
             />
           </label>
           <details>
-            <summary className="cursor-pointer text-sm font-medium text-heading">{selectedPropertyCount} of {properties.length} Properties selected</summary>
+            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">{selectedPropertyCount} of {properties.length} Properties selected</summary>
             <div className="pt-3">
               <PropertyChecklist
                 legend="Properties in this group"
@@ -679,17 +786,17 @@ export function AdvancedMeasurementGroupsStep({
             <span className="text-sm font-medium text-heading">Competitor domains</span>
             <input
               aria-label="Competitor domains"
-              className="mt-1 w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
+              className="mt-1 min-h-11 w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
               value={groupDraft.competitorDomains}
               onChange={event => onGroupDraftChange({ ...groupDraft, competitorDomains: event.currentTarget.value })}
               placeholder="one.example, two.example"
             />
           </label>
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="button" size="sm" variant="outline" disabled={!canSave} onClick={() => { void onSaveGroup(groupDraft) }}>
+            <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={!canSave} onClick={() => { void onSaveGroup(groupDraft) }}>
               {isSaving ? 'Saving group…' : 'Save group'}
             </Button>
-            <Button type="button" size="sm" variant="ghost" disabled={!hasUnsavedGroupDraft} onClick={clearGroupForm}>Clear form</Button>
+            <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={!hasUnsavedGroupDraft} onClick={clearGroupForm}>Clear form</Button>
             <p className="text-sm text-secondary">Competitor domains are used only in this group&apos;s competitor report. Groups organize reporting only.</p>
           </div>
           {hasUnsavedGroupDraft ? <p role="status" className="text-sm text-caution">Save this group or clear the form before continuing.</p> : null}
@@ -708,8 +815,8 @@ export function AdvancedMeasurementGroupsStep({
                 {showSavedGroupActions ? (
                   <td className="text-right">
                     <div className="flex justify-end gap-1">
-                      {onEditGroup ? <Button type="button" size="sm" variant="ghost" aria-label={`Edit ${group.name}`} onClick={() => onEditGroup(group)}>Edit</Button> : null}
-                      {onRemoveGroup ? <Button type="button" size="sm" variant="ghost" aria-label={`Remove ${group.name}`} onClick={() => { void onRemoveGroup(group.id) }}>Remove</Button> : null}
+                      {onEditGroup ? <Button type="button" size="sm" variant="ghost" className="min-h-11" aria-label={`Edit ${group.name}`} onClick={() => onEditGroup(group)}>Edit</Button> : null}
+                      {onRemoveGroup ? <Button type="button" size="sm" variant="ghost" className="min-h-11" aria-label={`Remove ${group.name}`} onClick={() => { void onRemoveGroup(group.id) }}>Remove</Button> : null}
                     </div>
                   </td>
                 ) : null}
@@ -723,8 +830,8 @@ export function AdvancedMeasurementGroupsStep({
 
       {viewer ? null : (
         <div className={`flex flex-wrap items-center gap-3 ${onBack ? 'justify-between' : 'justify-end'}`}>
-          {onBack ? <Button type="button" variant="outline" onClick={onBack}>Back</Button> : null}
-          <Button type="button" disabled={hasUnsavedGroupDraft} onClick={onContinue}>{groups.length === 0 && !hasUnsavedGroupDraft ? 'Continue without groups' : 'Continue'}</Button>
+          {onBack ? <Button type="button" variant="outline" className="min-h-11" onClick={onBack}>Back</Button> : null}
+          <Button type="button" className="min-h-11" disabled={hasUnsavedGroupDraft} onClick={onContinue}>{groups.length === 0 && !hasUnsavedGroupDraft ? 'Continue without groups' : 'Continue'}</Button>
         </div>
       )}
     </section>
@@ -784,7 +891,7 @@ export function AdvancedMeasurementReviewStep({
             </div>
             {sitemapReview.exceptionCount > 0 ? (
               <details className="border-y border-caution-800/30 py-3">
-                <summary className="cursor-pointer text-sm font-medium text-heading">URLs not added to Properties ({sitemapReview.exceptionCount})</summary>
+                <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">URLs not added to Properties ({sitemapReview.exceptionCount})</summary>
                 {sitemapItems.length > 0 ? (
                   <ul className="mt-3 space-y-3 text-sm">
                     {shownSitemapItems.map(item => (
@@ -798,7 +905,7 @@ export function AdvancedMeasurementReviewStep({
                 <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-secondary">
                   <span>Showing {shownSitemapItems.length} of {sitemapItems.length}</span>
                   {shownSitemapItems.length < sitemapItems.length ? (
-                    <Button type="button" variant="outline" size="sm" onClick={() => setSitemapItemLimit(limit => limit + REVIEW_ITEM_PAGE_SIZE)}>Show next 50 URLs</Button>
+                    <Button type="button" variant="outline" size="sm" className="min-h-11" onClick={() => setSitemapItemLimit(limit => limit + REVIEW_ITEM_PAGE_SIZE)}>Show next 50 URLs</Button>
                   ) : null}
                 </div>
               </details>
@@ -810,7 +917,7 @@ export function AdvancedMeasurementReviewStep({
                     <legend className="text-sm font-medium text-heading">For changed Property URLs</legend>
                     <p className="text-sm text-secondary">This choice applies to all {sitemapReview.coverageReviewCount} changed {sitemapReview.coverageReviewCount === 1 ? 'Property' : 'Properties'}.</p>
                     <details className="border-y border-caution-800/30 py-3">
-                      <summary className="cursor-pointer text-sm font-medium text-heading">Review Property URL changes ({sitemapReview.coverageReviewCount})</summary>
+                      <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">Review Property URL changes ({sitemapReview.coverageReviewCount})</summary>
                       {shownCoverageItems.length > 0 ? (
                         <div className="mt-3 space-y-4">
                           {shownCoverageItems.map(item => (
@@ -825,7 +932,7 @@ export function AdvancedMeasurementReviewStep({
                           <div className="flex flex-wrap items-center gap-3 text-sm text-secondary">
                             <span>Showing {shownCoverageItems.length} of {coverageItems.length}</span>
                             {shownCoverageItems.length < coverageItems.length ? (
-                              <Button type="button" variant="outline" size="sm" onClick={() => setCoverageItemLimit(limit => limit + REVIEW_ITEM_PAGE_SIZE)}>Show next 50 URL changes</Button>
+                              <Button type="button" variant="outline" size="sm" className="min-h-11" onClick={() => setCoverageItemLimit(limit => limit + REVIEW_ITEM_PAGE_SIZE)}>Show next 50 URL changes</Button>
                             ) : null}
                           </div>
                         </div>
@@ -851,7 +958,7 @@ export function AdvancedMeasurementReviewStep({
                     </label>
                   </fieldset>
                 ) : null}
-                <Button type="button" onClick={() => { void sitemapReview.onResolve() }}>Confirm sitemap changes</Button>
+                <Button type="button" className="min-h-11" onClick={() => { void sitemapReview.onResolve() }}>Confirm sitemap changes</Button>
               </>
             )}
           </div>
@@ -860,7 +967,7 @@ export function AdvancedMeasurementReviewStep({
 
       <div className="overflow-x-auto border-y border-default">
         <table className="evidence-table min-w-[480px]">
-          <thead><tr><th>Properties</th><th>Queries</th><th>Groups</th></tr></thead>
+          <thead><tr><th>Properties</th><th>Questions</th><th>Groups</th></tr></thead>
           <tbody><tr><td className="tabular-nums text-heading">{counts.properties}</td><td className="tabular-nums text-heading">{counts.queries}</td><td className="tabular-nums text-heading">{counts.groups}</td></tr></tbody>
         </table>
       </div>
@@ -876,11 +983,11 @@ export function AdvancedMeasurementReviewStep({
         </section>
       ) : null}
 
-      <div className="space-y-3">
-        <h4 className="text-sm font-medium text-heading">Flagged exceptions</h4>
+      <section aria-labelledby="advanced-measurement-flagged-exceptions-title" className="space-y-3">
+        <h4 id="advanced-measurement-flagged-exceptions-title" className="text-sm font-medium text-heading">Flagged exceptions</h4>
         {flaggedExceptions.length === 0 ? <p className="text-sm text-secondary">No flagged exceptions.</p> : (
           <div className="space-y-3">
-            <div role="alert" aria-atomic="true" className="divide-y divide-default border-y border-default">
+            <div className="divide-y divide-default border-y border-default">
               {shownFlaggedExceptions.map(exception => (
                 <div key={exception.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
                   <div><p className="font-medium text-heading">{exception.title}</p>{exception.detail ? <p className="mt-1 text-sm text-secondary">{exception.detail}</p> : null}</div>
@@ -891,22 +998,22 @@ export function AdvancedMeasurementReviewStep({
             <div className="flex flex-wrap items-center gap-3 text-sm text-secondary">
               <span>Showing {shownFlaggedExceptions.length} of {flaggedExceptions.length}</span>
               {shownFlaggedExceptions.length < flaggedExceptions.length ? (
-                <Button type="button" variant="outline" size="sm" onClick={() => setFlaggedExceptionLimit(limit => limit + REVIEW_ITEM_PAGE_SIZE)}>Show next 50 exceptions</Button>
+                <Button type="button" variant="outline" size="sm" className="min-h-11" onClick={() => setFlaggedExceptionLimit(limit => limit + REVIEW_ITEM_PAGE_SIZE)}>Show next 50 exceptions</Button>
               ) : null}
             </div>
           </div>
         )}
-      </div>
+      </section>
 
       {viewer ? null : (
         <>
           {requiresChangeReview && reviewChangesError ? <p role="alert" className="text-sm text-negative">{reviewChangesError}</p> : null}
           <div className={`flex flex-wrap items-center gap-3 ${onBack ? 'justify-between' : 'justify-end'}`}>
-            {onBack ? <Button type="button" variant="outline" onClick={onBack}>Back</Button> : null}
+            {onBack ? <Button type="button" variant="outline" className="min-h-11" onClick={onBack}>Back</Button> : null}
             {onReviewChanges !== undefined && !hasReviewedChanges ? (
-              <Button type="button" disabled={isReviewing || !canReviewChanges} onClick={() => { void onReviewChanges() }}>{isReviewing ? 'Reviewing changes…' : 'Review changes'}</Button>
+              <Button type="button" className="min-h-11" disabled={isReviewing || !canReviewChanges} onClick={() => { void onReviewChanges() }}>{isReviewing ? 'Reviewing changes…' : 'Review changes'}</Button>
             ) : (
-              <Button type="button" disabled={!canPublish || isPublishing} onClick={() => { void onPublish() }}>{isPublishing ? 'Publishing setup…' : 'Publish setup'}</Button>
+              <Button type="button" className="min-h-11" disabled={!canPublish || isPublishing} onClick={() => { void onPublish() }}>{isPublishing ? 'Publishing setup…' : 'Publish setup'}</Button>
             )}
           </div>
         </>

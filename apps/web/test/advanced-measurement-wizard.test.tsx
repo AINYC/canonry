@@ -16,7 +16,7 @@ describe('advanced measurement setup shell', () => {
     expect(screen.getAllByRole('listitem').map(item => item.textContent)).toEqual([
       'Import',
       'Properties',
-      'Queries',
+      'Questions',
       'Groups (optional)',
       'Review and publish',
     ])
@@ -61,7 +61,7 @@ describe('advanced measurement setup shell', () => {
     expect(onStepChange).toHaveBeenCalledWith('review')
   })
 
-  it('shows draft state and requires an explicit discard confirmation', () => {
+  it('shows draft state and requires a focused explicit discard confirmation', async () => {
     const onDiscard = vi.fn()
     render(
       <AdvancedMeasurementSetupWizard currentStep="import" hasDraft canEdit onDiscard={onDiscard}>
@@ -73,8 +73,12 @@ describe('advanced measurement setup shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
     expect(onDiscard).not.toHaveBeenCalled()
     expect(screen.getByText('Discard all unpublished changes?')).toBeTruthy()
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Keep editing' })))
+    expect(screen.getByRole('button', { name: 'Keep editing' }).className).toContain('min-h-11')
+    expect(screen.getByRole('button', { name: 'Discard unpublished changes' }).className).toContain('min-h-11')
     fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
     expect(screen.queryByText('Discard all unpublished changes?')).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Discard changes' })))
 
     fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
     fireEvent.click(screen.getByRole('button', { name: 'Discard unpublished changes' }))

@@ -11,6 +11,7 @@ import {
   getApiV1ProjectsByNameMeasurementPlanDraft,
   getApiV1ProjectsByNameMeasurementSetup,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignments,
+  postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignments,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsApplySitemapSelection,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsCompilePreview,
   postApiV1ProjectsByNameMeasurementPlanDraftActionsCreate,
@@ -58,6 +59,7 @@ export interface AdvancedMeasurementService {
     selectedTargetKeys: string[],
   ): Promise<DraftMutationResponse>
   applyAssignments(projectName: string, etag: string, targetKeys: string[], queryIds: string[]): Promise<DraftMutationResponse>
+  applyPairedAssignments(projectName: string, etag: string, pairs: { targetKey: string; queryId: string }[]): Promise<DraftMutationResponse>
   removeAssignment(projectName: string, etag: string, targetKeys: string[], queryId: string): Promise<DraftMutationResponse>
   excludeTarget(projectName: string, etag: string, targetKey: string): Promise<DraftMutationResponse>
   upsertTarget(projectName: string, etag: string, target: MeasurementDraftAuthoring['targets'][number]): Promise<DraftMutationResponse>
@@ -136,6 +138,12 @@ export const advancedMeasurementService: AdvancedMeasurementService = {
     path: { name: projectName },
     headers: mutationHeaders(etag),
     body: { targetKeys, queryIds },
+  })),
+  applyPairedAssignments: (projectName, etag, pairs) => invokeWeb(() => postApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignments({
+    client: heyClient,
+    path: { name: projectName },
+    headers: mutationHeaders(etag),
+    body: { pairs },
   })),
   removeAssignment: (projectName, etag, targetKeys, queryId) => invokeWeb(() => postApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignment({
     client: heyClient,

@@ -80,6 +80,23 @@ export function proposeQueryClass(queryText: string, brandNames: readonly string
   return matcherMatchesText(matcher, queryText) ? 'branded' : 'non-brand'
 }
 
+/**
+ * A question that names the Property it is assigned to is branded for that
+ * Property, even when the Property's own name is not a project brand alias.
+ * "is <community> a good place to live" is asked by someone who already knows
+ * the community, so pooling it with discovery questions overstates non-brand
+ * reach — and the project brand list holds the parent brand, not 200 community
+ * names, so the plain classifier called every one of them non-brand.
+ */
+export function proposeQueryClassForTarget(
+  queryText: string,
+  brandNames: readonly string[],
+  target: { label: string; aliases: readonly string[] } | undefined,
+): MeasurementDraftQueryClass {
+  const names = target ? [...brandNames, target.label, ...target.aliases] : brandNames
+  return proposeQueryClass(queryText, names)
+}
+
 /** True for the host itself and for its dot-boundary subdomains, never for a suffix match. */
 function isOwnedHost(host: string, ownedHosts: readonly string[]): boolean {
   return ownedHosts.some(owned => host === owned || host.endsWith(`.${owned}`))

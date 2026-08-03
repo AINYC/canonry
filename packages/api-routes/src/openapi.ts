@@ -502,6 +502,13 @@ const measurementOverviewCursorParameter: OpenApiParameter = {
   schema: stringSchema,
 }
 
+const measurementPropertyEvidenceCursorParameter: OpenApiParameter = {
+  name: 'cursor',
+  in: 'query',
+  description: 'Opaque cursor from the previous page. It pins pagination to the active revision, displayed run, evidence snapshot, and same filters; a mismatch or newly appended evidence is rejected rather than silently paged across.',
+  schema: stringSchema,
+}
+
 const measurementLimitParameter: OpenApiParameter = {
   name: 'limit',
   in: 'query',
@@ -920,6 +927,12 @@ const routeCatalog: OpenApiOperation[] = [
     request: 'MeasurementDraftApplyAssignmentsRequest',
   }),
   measurementDraftAction({
+    action: 'apply-paired-assignments',
+    summary: 'Assign each query to the one Target it names',
+    description: 'Takes explicit (targetKey, queryId) pairs, so N pairs create at most N assignments. Use it when each question names its own Property; `apply-assignments` is a cross product and would multiply the two lists together.',
+    request: 'MeasurementDraftApplyPairedAssignmentsRequest',
+  }),
+  measurementDraftAction({
     action: 'remove-assignment',
     summary: 'Remove one query assignment from draft Targets',
     description: 'Accepts the compatible singular `targetKey` or a bulk `targetKeys` selection. It removes assignments only; the project query behind them is never deleted.',
@@ -1033,6 +1046,29 @@ const routeCatalog: OpenApiOperation[] = [
       200: jsonResponse('Scoped measurement overview returned.', 'MeasurementOverviewResponse'),
       400: errorResponse('The scope or its required key is invalid.'),
       404: errorResponse('Project not found.'),
+      422: errorResponse('The named run is pinned to a different plan revision.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/measurement-property-evidence',
+    summary: 'Page one Property\'s source evidence',
+    description: 'Returns the attribution evidence rows for exactly one Property out of one revision-pinned run, optionally narrowed to a question class, provider, or location. Run selection matches the overview: the most recent completed run pinned to the active revision unless runId names another. Use this rather than GET /measurement-report when you want one Property — the report reconstructs every group and Target for a revision and does not paginate. Not available for a schema v1 revision, which records no question class to scope by. An empty page under measurement.state = not_measured means the Property has not been measured, which is not the same statement as a measured Property with no evidence.',
+    tags: ['measurement-plans'],
+    parameters: [
+      nameParameter,
+      { name: 'targetKey', in: 'query', required: true, description: 'Target stable key of the Property to read.', schema: stringSchema },
+      { name: 'queryClass', in: 'query', description: 'Restrict to one question class. Never pooled across classes.', schema: { type: 'string', enum: ['all', 'branded', 'non-brand'] } },
+      { name: 'provider', in: 'query', description: 'Restrict to one answer provider.', schema: stringSchema },
+      { name: 'location', in: 'query', description: 'Restrict to one execution location label.', schema: stringSchema },
+      { name: 'runId', in: 'query', description: 'Display this run. It must be pinned to the active revision.', schema: stringSchema },
+      measurementPropertyEvidenceCursorParameter,
+      measurementLimitParameter,
+    ],
+    responses: {
+      200: jsonResponse('One Property\'s evidence page returned.', 'MeasurementPropertyEvidenceResponse'),
+      400: errorResponse('The Property key, cursor, or revision schema version is invalid.'),
+      404: errorResponse('Project, active measurement plan, or requested run not found.'),
       422: errorResponse('The named run is pinned to a different plan revision.'),
     },
   },

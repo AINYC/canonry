@@ -417,11 +417,28 @@ export const measurementOverviewQuerySchema = z.object({
 }).strict()
 export type MeasurementOverviewQuery = z.output<typeof measurementOverviewQuerySchema>
 
+/**
+ * One answer engine's share of a Property's own population.
+ *
+ * The rates are taken over the slots that engine actually answered, so they do
+ * not average back to the Property total and must never be summed into one. An
+ * engine that produced no slot for this Property is absent from the array
+ * rather than present with a zero.
+ */
+export const measurementPropertyProviderRowSchema = z.object({
+  provider: providerNameSchema,
+  mentionCoverage: measurementMetricValueSchema,
+  citationCoverage: measurementMetricValueSchema,
+}).strict()
+export type MeasurementPropertyProviderRow = z.output<typeof measurementPropertyProviderRowSchema>
+
 export const measurementPropertyRowSchema = z.object({
   targetKey: measurementV2StableKeySchema,
   label: z.string().min(1),
   mentionCoverage: measurementMetricValueSchema,
   citationCoverage: measurementMetricValueSchema,
+  /** Per-answer-engine split of the same population, in stable provider order. */
+  providers: z.array(measurementPropertyProviderRowSchema),
   flags: z.number().int().nonnegative(),
 }).strict()
 export type MeasurementPropertyRow = z.output<typeof measurementPropertyRowSchema>
@@ -486,3 +503,23 @@ export const measurementOverviewResponseSchema = z.object({
   namedShareOfVoice: measurementNamedShareOfVoiceSchema.optional(),
 }).strict()
 export type MeasurementOverviewResponse = z.output<typeof measurementOverviewResponseSchema>
+
+/**
+ * Source evidence for exactly one Property.
+ *
+ * `targetKey` is required rather than optional: the whole point of this read is
+ * that a Property page must not pull every group and every Target to find its
+ * own rows. Run selection matches the overview — the most recent completed run
+ * pinned to the active revision unless `runId` names another one.
+ */
+export const measurementPropertyEvidenceQuerySchema = z.object({
+  targetKey: measurementV2StableKeySchema,
+  /** Restrict to one question class. Never pooled across classes. */
+  queryClass: measurementQueryClassFilterSchema.optional(),
+  provider: providerNameSchema.optional(),
+  location: z.string().trim().min(1).optional(),
+  runId: z.string().trim().min(1).optional(),
+  cursor: z.string().trim().min(1).optional(),
+  limit: z.number().int().positive().max(MEASUREMENT_PAGE_MAX_LIMIT).optional(),
+}).strict()
+export type MeasurementPropertyEvidenceQuery = z.output<typeof measurementPropertyEvidenceQuerySchema>

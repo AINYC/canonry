@@ -29,6 +29,7 @@ import {
   type MeasurementOverviewResponse,
   type MeasurementOverviewSort,
   type MeasurementPlanV2,
+  type MeasurementPropertyProviderRow,
   type MeasurementPropertyRow,
   type MeasurementQueryClassFilter,
   type MeasurementState,
@@ -70,7 +71,7 @@ const CURRENT_RUN_STATUSES: readonly RunStatus[] = [
   RunStatuses.failed,
 ]
 
-interface ActiveMeasurementPlan {
+export interface ActiveMeasurementPlan {
   version: typeof measurementPlanVersions.$inferSelect
   plan: StoredMeasurementPlan
 }
@@ -175,7 +176,7 @@ function parseOverviewQuery(raw: Record<string, unknown>): MeasurementOverviewQu
   return parsed.data
 }
 
-function activeMeasurementPlan(db: DatabaseClient, projectId: string): ActiveMeasurementPlan | null {
+export function activeMeasurementPlan(db: DatabaseClient, projectId: string): ActiveMeasurementPlan | null {
   const pointer = db.select().from(measurementPlans).where(eq(measurementPlans.projectId, projectId)).get()
   if (!pointer) return null
   const version = db.select().from(measurementPlanVersions).where(and(
@@ -208,6 +209,19 @@ function unavailable(reason: MeasurementMetricUnavailableReason): MetricValue {
 function coverageMetric(rate: MeasurementRate): MetricValue {
   if (rate.rate === null) return unavailable(metricReason(rate.reason))
   return { state: 'available', value: rate.rate, numerator: rate.numerator, denominator: rate.denominator }
+}
+
+/**
+ * The kernel's per-engine split, in the wire vocabulary. An engine that
+ * produced no slot for this Property never reaches here, so the array is short
+ * rather than padded with zeroes.
+ */
+function providerRows(property: MeasurementOverviewPropertyRow): MeasurementPropertyProviderRow[] {
+  return property.providers.map(row => ({
+    provider: row.provider,
+    mentionCoverage: coverageMetric(row.mentionCoverage),
+    citationCoverage: coverageMetric(row.citationCoverage),
+  }))
 }
 
 /** A count metric reads out as the numerator, with the eligible population beside it. */
@@ -443,7 +457,7 @@ function pageOf(
  * run pinned to none answered questions this revision never asked. Neither may
  * be joined into these numbers, so naming one is refused rather than mixed in.
  */
-function runRevisionMismatch(runId: string, runRevision: number | null, activeRevision: number): AppError {
+export function runRevisionMismatch(runId: string, runRevision: number | null, activeRevision: number): AppError {
   if (runRevision === null) {
     return new AppError(
       'MEASUREMENT_RUN_REVISION_MISMATCH',
@@ -455,7 +469,7 @@ function runRevisionMismatch(runId: string, runRevision: number | null, activeRe
   return measurementRunRevisionMismatch(runId, runRevision, activeRevision)
 }
 
-function displayedState(status: string): MeasurementState {
+export function displayedState(status: string): MeasurementState {
   switch (status) {
     case RunStatuses.completed:
       return 'complete'
@@ -640,6 +654,7 @@ function planV1Overview(
         ...row,
         mentionCoverage: unavailable('plan_v1'),
         citationCoverage: unavailable('plan_v1'),
+        providers: [],
         flags: 0,
       })),
     query,
@@ -695,6 +710,7 @@ function planV2Overview(
           ...row,
           mentionCoverage: unavailable('no_completed_run'),
           citationCoverage: unavailable('no_completed_run'),
+          providers: [],
           flags: 0,
         })),
       query,
@@ -770,6 +786,7 @@ function planV2Overview(
           ...row,
           mentionCoverage: property ? coverageMetric(property.mentionCoverage) : unavailable('no_population'),
           citationCoverage: property ? coverageMetric(property.citationCoverage) : unavailable('no_population'),
+          providers: property ? providerRows(property) : [],
           flags: property?.flags ?? 0,
         }
       }),

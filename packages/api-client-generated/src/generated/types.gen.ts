@@ -2878,6 +2878,20 @@ export type MeasurementDraftApplyAssignmentsRequest = {
     };
 };
 
+export type MeasurementDraftApplyPairedAssignmentsRequest = {
+    pairs: Array<{
+        targetKey: string;
+        queryId: string;
+    }>;
+    contextOverride?: {
+        providers?: Array<string>;
+        models?: {
+            [key: string]: string;
+        };
+        locations?: Array<string>;
+    };
+};
+
 export type MeasurementDraftApplySitemapSelectionRequest = {
     selections: Array<{
         discoveryIdentity: string;
@@ -3498,6 +3512,27 @@ export type MeasurementOverviewResponse = {
                 state: 'unavailable';
                 reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
             };
+            providers: Array<{
+                provider: string;
+                mentionCoverage: {
+                    state: 'available';
+                    value: number;
+                    numerator?: number;
+                    denominator?: number;
+                } | {
+                    state: 'unavailable';
+                    reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+                };
+                citationCoverage: {
+                    state: 'available';
+                    value: number;
+                    numerator?: number;
+                    denominator?: number;
+                } | {
+                    state: 'unavailable';
+                    reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+                };
+            }>;
             flags: number;
         }>;
         nextCursor: string | null;
@@ -4611,6 +4646,41 @@ export type MeasurementPlanVersionsResponse = {
         createdAt: string;
         active: boolean;
     }>;
+};
+
+export type MeasurementPropertyEvidenceResponse = {
+    property: {
+        targetKey: string;
+        label: string;
+    };
+    queryClass: 'all' | 'branded' | 'non-brand';
+    measurement: {
+        state: 'not_measured' | 'queued' | 'running' | 'complete' | 'partial' | 'failed';
+        displayedRunId?: string;
+        completedAt?: string;
+    };
+    evidence: {
+        items: Array<{
+            observationId: string;
+            expectedSlotId: string;
+            executionId: string;
+            usageEdgeId: string;
+            usageEdgeType: 'baseline' | 'target';
+            provider: string;
+            queryText: string;
+            location: string | null;
+            sourceUrl: string;
+            bridged: boolean;
+            historical: boolean;
+            evidenceComplete: boolean;
+            classification: 'assigned' | 'sibling' | 'ownedUnmapped' | 'external' | 'ambiguous' | 'invalid';
+            normalizedUrl: string | null;
+            matchedTargetIds: Array<string>;
+            matchedUrlIds: Array<string>;
+        }>;
+        nextCursor: string | null;
+        totalEstimate?: number;
+    };
 };
 
 export type MeasurementQuerySetDetail = {
@@ -8610,6 +8680,66 @@ export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsRe
 
 export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsResponse = PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsResponses[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyAssignmentsResponses];
 
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsData = {
+    body: MeasurementDraftApplyPairedAssignmentsRequest;
+    headers: {
+        /**
+         * Current draft ETag. Missing returns 428; stale returns 412.
+         */
+        'If-Match': string;
+        /**
+         * Replay key. The same key with a different request body returns 409.
+         */
+        'Idempotency-Key': string;
+    };
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/measurement-plan/draft/actions/apply-paired-assignments';
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsErrors = {
+    /**
+     * The action payload is invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The caller may read the draft but not mutate it.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project or draft not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The idempotency key was already used with a different request body.
+     */
+    409: ErrorEnvelope;
+    /**
+     * The draft changed since it was loaded.
+     */
+    412: ErrorEnvelope;
+    /**
+     * The draft ETag was not supplied in `If-Match`.
+     */
+    428: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsError = PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsErrors[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsErrors];
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsResponses = {
+    /**
+     * Draft mutated; the new ETag and counts are returned.
+     */
+    200: MeasurementDraftMutationResponse;
+};
+
+export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsResponse = PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsResponses[keyof PostApiV1ProjectsByNameMeasurementPlanDraftActionsApplyPairedAssignmentsResponses];
+
 export type PostApiV1ProjectsByNameMeasurementPlanDraftActionsRemoveAssignmentData = {
     body: MeasurementDraftRemoveAssignmentRequest;
     headers: {
@@ -9360,6 +9490,73 @@ export type GetApiV1ProjectsByNameMeasurementOverviewResponses = {
 };
 
 export type GetApiV1ProjectsByNameMeasurementOverviewResponse = GetApiV1ProjectsByNameMeasurementOverviewResponses[keyof GetApiV1ProjectsByNameMeasurementOverviewResponses];
+
+export type GetApiV1ProjectsByNameMeasurementPropertyEvidenceData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query: {
+        /**
+         * Target stable key of the Property to read.
+         */
+        targetKey: string;
+        /**
+         * Restrict to one question class. Never pooled across classes.
+         */
+        queryClass?: 'all' | 'branded' | 'non-brand';
+        /**
+         * Restrict to one answer provider.
+         */
+        provider?: string;
+        /**
+         * Restrict to one execution location label.
+         */
+        location?: string;
+        /**
+         * Display this run. It must be pinned to the active revision.
+         */
+        runId?: string;
+        /**
+         * Opaque cursor from the previous page. It pins pagination to the active revision, displayed run, evidence snapshot, and same filters; a mismatch or newly appended evidence is rejected rather than silently paged across.
+         */
+        cursor?: string;
+        /**
+         * Page size. Defaults to 50, maximum 100.
+         */
+        limit?: number;
+    };
+    url: '/api/v1/projects/{name}/measurement-property-evidence';
+};
+
+export type GetApiV1ProjectsByNameMeasurementPropertyEvidenceErrors = {
+    /**
+     * The Property key, cursor, or revision schema version is invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project, active measurement plan, or requested run not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * The named run is pinned to a different plan revision.
+     */
+    422: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPropertyEvidenceError = GetApiV1ProjectsByNameMeasurementPropertyEvidenceErrors[keyof GetApiV1ProjectsByNameMeasurementPropertyEvidenceErrors];
+
+export type GetApiV1ProjectsByNameMeasurementPropertyEvidenceResponses = {
+    /**
+     * One Property's evidence page returned.
+     */
+    200: MeasurementPropertyEvidenceResponse;
+};
+
+export type GetApiV1ProjectsByNameMeasurementPropertyEvidenceResponse = GetApiV1ProjectsByNameMeasurementPropertyEvidenceResponses[keyof GetApiV1ProjectsByNameMeasurementPropertyEvidenceResponses];
 
 export type GetApiV1ProjectsByNameMeasurementQuerySetsData = {
     body?: never;
