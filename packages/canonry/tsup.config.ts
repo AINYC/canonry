@@ -24,6 +24,9 @@ export default defineConfig({
     'better-sqlite3',
     'drizzle-orm',
     'fastify',
+    // api-routes registers this at runtime. Its CommonJS graph requires
+    // node:net dynamically, which an ESM bundle cannot emulate safely.
+    '@fastify/rate-limit',
     '@fastify/static',
     'openai',
     '@google/genai',
