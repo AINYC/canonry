@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import { parse } from 'yaml'
 import {
@@ -55,6 +56,119 @@ export async function publishMeasurementPlan(project: string, source: string): P
 
 export async function retireMeasurementPlanSegment(project: string, stableKey: string): Promise<void> {
   console.log(JSON.stringify(await createApiClient().retireMeasurementPlanSegment(project, stableKey), null, 2))
+}
+
+export interface MeasurementAssignmentApplyOptions {
+  groupKeys?: string[]
+  targetKeys?: string[]
+  queryIds: string[]
+  allProperties?: boolean
+}
+
+async function measurementAssignmentRequest(project: string, opts: MeasurementAssignmentApplyOptions) {
+  const client = createApiClient()
+  const current = await client.getMeasurementPlanDraft(project)
+  if (!current.draft || !current.etag) {
+    throw new Error(`Project "${project}" has no Advanced Measurement draft. Start setup in the dashboard or create a draft first.`)
+  }
+  const targetKeys = opts.allProperties
+    ? current.draft.authoring.targets
+      .filter(target => target.status === 'included')
+      .map(target => target.stableKey)
+    : opts.targetKeys
+  return {
+    client,
+    request: {
+      ...(targetKeys?.length ? { targetKeys } : {}),
+      ...(opts.groupKeys?.length ? { groupKeys: opts.groupKeys } : {}),
+      queryIds: opts.queryIds,
+    },
+  }
+}
+
+export async function previewMeasurementPlanAssignments(
+  project: string,
+  opts: MeasurementAssignmentApplyOptions,
+): Promise<void> {
+  const { client, request } = await measurementAssignmentRequest(project, opts)
+  console.log(JSON.stringify(await client.previewMeasurementDraftAssignments(project, request), null, 2))
+}
+
+/** Preview the exact resolved audience and execution impact before one ETag-bound write. */
+export async function applyMeasurementPlanAssignments(
+  project: string,
+  opts: MeasurementAssignmentApplyOptions,
+): Promise<void> {
+  const { client, request } = await measurementAssignmentRequest(project, opts)
+  const preview = await client.previewMeasurementDraftAssignments(project, request)
+  const result = await client.applyMeasurementDraftAssignments(
+    project,
+    request,
+    crypto.randomUUID(),
+    preview.draftEtag,
+  )
+  console.log(JSON.stringify({ preview, result }, null, 2))
+}
+
+/** Preview first, then atomically replace the named questions at that ETag. */
+export async function replaceMeasurementPlanAssignments(
+  project: string,
+  opts: MeasurementAssignmentApplyOptions,
+): Promise<void> {
+  const { client, request } = await measurementAssignmentRequest(project, opts)
+  const preview = await client.previewMeasurementDraftAssignments(project, request)
+  const result = await client.replaceMeasurementDraftAssignments(
+    project,
+    request,
+    crypto.randomUUID(),
+    preview.draftEtag,
+  )
+  console.log(JSON.stringify({ preview, result }, null, 2))
+}
+
+function readGroupMembershipCsv(source: string): string {
+  return source === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(source, 'utf8')
+}
+
+export async function previewMeasurementPlanGroups(project: string, source: string): Promise<void> {
+  const preview = await createApiClient().previewMeasurementDraftGroupMembership(project, {
+    csv: readGroupMembershipCsv(source),
+  })
+  console.log(JSON.stringify(preview, null, 2))
+}
+
+export interface MeasurementGroupApplyOptions {
+  acceptedRows?: number[]
+  acceptAllMatched?: boolean
+  acknowledgeSkipped?: boolean
+}
+
+/** Re-preview source and bind the confirmed mutation to the returned checksum and ETag. */
+export async function applyMeasurementPlanGroups(
+  project: string,
+  source: string,
+  opts: MeasurementGroupApplyOptions,
+): Promise<void> {
+  const client = createApiClient()
+  const csv = readGroupMembershipCsv(source)
+  const preview = await client.previewMeasurementDraftGroupMembership(project, { csv })
+  if (preview.counts.needsAttention > 0 && !opts.acknowledgeSkipped) {
+    throw new Error(
+      `${preview.counts.needsAttention} CSV rows need attention. Correct them or add --acknowledge-skipped `
+      + 'to apply only the selected matched rows.',
+    )
+  }
+  const acceptedRows = opts.acceptAllMatched
+    ? preview.rows.filter(row => row.status === 'matched').map(row => row.dataRow)
+    : opts.acceptedRows ?? []
+  if (acceptedRows.length === 0) throw new Error('No matched CSV rows were selected for apply.')
+  const result = await client.applyMeasurementDraftGroupMembership(project, {
+    csv,
+    sourceChecksum: preview.sourceChecksum,
+    previewChecksum: preview.previewChecksum,
+    acceptedRows,
+  }, crypto.randomUUID(), preview.draftEtag)
+  console.log(JSON.stringify({ preview, result }, null, 2))
 }
 
 export async function discoverMeasurementTargets(

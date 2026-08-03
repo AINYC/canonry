@@ -3,11 +3,14 @@ import {
   MEASUREMENT_DRAFT_ETAG_PREFIX,
   measurementDraftAuthoringSchema,
   measurementDraftApplyAssignmentsRequestSchema,
+  measurementDraftAssignmentAudienceRequestSchema,
   measurementDraftClassifyAssignmentsRequestSchema,
   measurementDraftExcludeTargetRequestSchema,
   measurementDraftEtag,
   measurementDraftMutationResponseSchema,
+  measurementDraftPreviewAssignmentsResponseSchema,
   measurementDraftPublishRequestSchema,
+  measurementDraftReplaceAssignmentsRequestSchema,
   measurementDraftRemoveAssignmentRequestSchema,
   measurementDraftTargetPageSchema,
   measurementDraftUpsertGroupRequestSchema,
@@ -112,6 +115,33 @@ describe('measurement draft action payloads', () => {
     expect(measurementDraftRemoveAssignmentRequestSchema.parse(bulkRemove)).toEqual(bulkRemove)
     expect(() => measurementDraftRemoveAssignmentRequestSchema.parse({ queryId: 'q-best' })).toThrow()
     expect(() => measurementDraftRemoveAssignmentRequestSchema.parse({ ...singleRemove, targetKeys: ['river-point'] })).toThrow()
+  })
+
+  it('accepts group or mixed audiences for bulk apply, preview, and replace while preserving legacy singular apply', () => {
+    const groupOnly = { groupKeys: ['northbridge-portfolio'], queryIds: ['q-best'] }
+    const mixed = { targetKeys: ['harbor-point'], groupKeys: ['northbridge-portfolio'], queryIds: ['q-best'] }
+    expect(measurementDraftAssignmentAudienceRequestSchema.parse(groupOnly)).toEqual(groupOnly)
+    expect(measurementDraftApplyAssignmentsRequestSchema.parse(groupOnly)).toEqual(groupOnly)
+    expect(measurementDraftReplaceAssignmentsRequestSchema.parse(mixed)).toEqual(mixed)
+    expect(measurementDraftReplaceAssignmentsRequestSchema.parse({ targetKeys: ['harbor-point', 'harbor-point'], queryIds: ['q-best'] }))
+      .toEqual({ targetKeys: ['harbor-point', 'harbor-point'], queryIds: ['q-best'] })
+    expect(() => measurementDraftAssignmentAudienceRequestSchema.parse({ queryIds: ['q-best'] })).toThrow()
+    expect(() => measurementDraftAssignmentAudienceRequestSchema.parse({ targetKeys: [], groupKeys: [], queryIds: ['q-best'] })).toThrow()
+    expect(() => measurementDraftAssignmentAudienceRequestSchema.parse({ targetKey: 'harbor-point', queryIds: ['q-best'] })).toThrow()
+  })
+
+  it('strictly shapes an assignment-impact preview', () => {
+    const response = {
+      draftEtag: '"mpd_7"',
+      groups: [{ groupKey: 'northbridge-portfolio', label: 'Northbridge portfolio', memberCount: 1 }],
+      resolvedTargetKeys: ['harbor-point'],
+      overlapCount: 0,
+      assignments: { requested: 2, added: 1, alreadyPresent: 1 },
+      execution: { addedNodes: 1, addedProviderCalls: 2, fullRunNodes: 2, fullRunProviderCalls: 4 },
+    }
+    expect(measurementDraftPreviewAssignmentsResponseSchema.parse(response)).toEqual(response)
+    expect(() => measurementDraftPreviewAssignmentsResponseSchema.parse({ ...response, execution: { ...response.execution, unknown: true } }))
+      .toThrow()
   })
 
   it('rejects a group payload that carries queries or execution context', () => {

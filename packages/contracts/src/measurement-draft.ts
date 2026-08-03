@@ -134,6 +134,16 @@ export type MeasurementPlanDraft = z.output<typeof measurementPlanDraftSchema>
 export const MEASUREMENT_DRAFT_ETAG_PREFIX = 'mpd_'
 
 /**
+ * Mutation ceilings are contract-level so every caller can explain the same
+ * refusal before it sends a write. The compiler keeps the corresponding
+ * published-document byte ceiling; these protect the mutable authoring row.
+ */
+export const MEASUREMENT_DRAFT_MAX_ASSIGNMENTS_PER_ACTION = 5_000
+export const MEASUREMENT_DRAFT_MAX_GROUPS = 1_000
+export const MEASUREMENT_DRAFT_MAX_ASSIGNMENTS = 20_000
+export const MEASUREMENT_DRAFT_MAX_AUTHORING_BYTES = 4 * 1024 * 1024
+
+/**
  * Backed by the monotonic `etag_version` counter, never a content hash: the tag
  * must change after every mutation and must not repeat when content returns to
  * a previous value.
@@ -254,19 +264,86 @@ export const measurementDraftRebindTargetRequestSchema = z.object({
   discoveredUrl: z.string().url(),
 }).strict()
 
-/** A caller may preserve the singular v2 contract or mutate a reviewed Target selection atomically. */
+/**
+ * An audience is resolved by the server at apply time. Groups are an
+ * authoring shortcut, never an execution owner, so the resolved output is
+ * always concrete Target keys.
+ */
+const measurementDraftAudienceFields = {
+  targetKeys: z.array(measurementV2StableKeySchema).optional(),
+  groupKeys: z.array(measurementV2StableKeySchema).optional(),
+}
+
+function requireMeasurementDraftAudience(
+  value: { targetKeys?: string[]; groupKeys?: string[] },
+  context: z.RefinementCtx,
+) {
+  if ((value.targetKeys?.length ?? 0) === 0 && (value.groupKeys?.length ?? 0) === 0) {
+    context.addIssue({
+      code: 'custom',
+      message: 'At least one Target or group selector is required.',
+    })
+  }
+}
+
+export const measurementDraftAudienceSchema = z.object(measurementDraftAudienceFields)
+  .strict()
+  .superRefine(requireMeasurementDraftAudience)
+export type MeasurementDraftAudience = z.output<typeof measurementDraftAudienceSchema>
+
+/** Shared non-legacy assignment body used by preview, additive apply and replace. */
+export const measurementDraftAssignmentAudienceRequestSchema = z.object({
+  ...measurementDraftAudienceFields,
+  queryIds: z.array(measurementDraftQueryIdSchema).min(1),
+  contextOverride: measurementDraftContextOverrideSchema.optional(),
+}).strict().superRefine(requireMeasurementDraftAudience)
+export type MeasurementDraftAssignmentAudienceRequest = z.output<typeof measurementDraftAssignmentAudienceRequestSchema>
+
+/** A caller may preserve the singular v2 contract or mutate a reviewed audience atomically. */
 export const measurementDraftApplyAssignmentsRequestSchema = z.union([
   z.object({
     targetKey: measurementV2StableKeySchema,
     queryIds: z.array(measurementDraftQueryIdSchema).min(1),
     contextOverride: measurementDraftContextOverrideSchema.optional(),
   }).strict(),
-  z.object({
-    targetKeys: z.array(measurementV2StableKeySchema).min(1),
-    queryIds: z.array(measurementDraftQueryIdSchema).min(1),
-    contextOverride: measurementDraftContextOverrideSchema.optional(),
-  }).strict(),
+  measurementDraftAssignmentAudienceRequestSchema,
 ])
+export type MeasurementDraftApplyAssignmentsRequest = z.output<typeof measurementDraftApplyAssignmentsRequestSchema>
+
+/** Replacement clears every prior audience for the named questions, then writes this exact audience. */
+export const measurementDraftReplaceAssignmentsRequestSchema = measurementDraftAssignmentAudienceRequestSchema
+export type MeasurementDraftReplaceAssignmentsRequest = z.output<typeof measurementDraftReplaceAssignmentsRequestSchema>
+
+/** Preview is read-semantic but accepts the exact body that the bulk mutation would use. */
+export const measurementDraftPreviewAssignmentsRequestSchema = measurementDraftAssignmentAudienceRequestSchema
+export type MeasurementDraftPreviewAssignmentsRequest = z.output<typeof measurementDraftPreviewAssignmentsRequestSchema>
+
+export const measurementDraftResolvedAudienceGroupSchema = z.object({
+  groupKey: measurementV2StableKeySchema,
+  label: z.string().trim().min(1),
+  memberCount: z.number().int().positive(),
+}).strict()
+export type MeasurementDraftResolvedAudienceGroup = z.output<typeof measurementDraftResolvedAudienceGroupSchema>
+
+/** Exact assignment and provider impact for a candidate audience mutation. */
+export const measurementDraftPreviewAssignmentsResponseSchema = z.object({
+  draftEtag: z.string().trim().min(1),
+  groups: z.array(measurementDraftResolvedAudienceGroupSchema),
+  resolvedTargetKeys: z.array(measurementV2StableKeySchema),
+  overlapCount: z.number().int().nonnegative(),
+  assignments: z.object({
+    requested: z.number().int().nonnegative(),
+    added: z.number().int().nonnegative(),
+    alreadyPresent: z.number().int().nonnegative(),
+  }).strict(),
+  execution: z.object({
+    addedNodes: z.number().int().nonnegative(),
+    addedProviderCalls: z.number().int().nonnegative(),
+    fullRunNodes: z.number().int().nonnegative(),
+    fullRunProviderCalls: z.number().int().nonnegative(),
+  }).strict(),
+}).strict()
+export type MeasurementDraftPreviewAssignmentsResponse = z.output<typeof measurementDraftPreviewAssignmentsResponseSchema>
 
 /**
  * One question paired with the one Target it is about.

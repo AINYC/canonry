@@ -649,6 +649,8 @@ test('cached setup and queries remain usable when their background refresh fails
   expect(screen.getByRole('heading', { name: 'Properties' })).toBeTruthy()
   expect(screen.queryByText('Could not load the active measurement setup.')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Groups' })).toBeTruthy())
+  fireEvent.click(screen.getByRole('button', { name: 'Continue without groups' }))
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Questions' })).toBeTruthy())
   expect(screen.getByText('old service query')).toBeTruthy()
 })
