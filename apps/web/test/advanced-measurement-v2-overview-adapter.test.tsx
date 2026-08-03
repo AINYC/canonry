@@ -191,7 +191,7 @@ describe('version-two measurement overview adapter', () => {
       act(() => vi.advanceTimersByTime(250))
       expect(onViewChange).toHaveBeenCalledTimes(1)
 
-      fireEvent.click(screen.getByRole('radio', { name: 'Branded' }))
+      fireEvent.change(screen.getByLabelText('Question type'), { target: { value: 'branded' } })
       expect(onViewChange).toHaveBeenLastCalledWith({
         scope: 'group',
         groupKey: 'downtown',
