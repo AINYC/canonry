@@ -368,7 +368,7 @@ function PropertyDetails({ property, onRetryEvidence }: { property: AdvancedMeas
 function CompetitorShareOfVoice({ values }: { values: readonly AdvancedMeasurementShareOfVoice[] }) {
   return (
     <section aria-labelledby="advanced-measurement-share-of-voice" className="border-y border-default py-4">
-      <h2 id="advanced-measurement-share-of-voice" className="text-sm font-medium text-heading">Competitor share of voice</h2>
+      <h2 id="advanced-measurement-share-of-voice" className="text-sm font-medium text-heading">Brand share of voice</h2>
       <div className="mt-3 overflow-x-auto">
         <table className="evidence-table min-w-[420px]">
           <thead><tr><th>Name</th><th>Share of voice</th></tr></thead>

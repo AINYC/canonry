@@ -89,9 +89,15 @@ export function AdvancedMeasurementLanding({
 
   return (
     <div className="space-y-4">
-      {(mode.setupAction === 'edit' || (mode.setupAction === 'republish' && !report)) && canEdit && onOpenSetup ? (
+      {/*
+        Editing a published plan lives in Settings. On the results surface it
+        was a control with nothing to do with reading the numbers, breaking the
+        page between the headline and the table. Republish stays here because
+        it reports pending work rather than offering a detour.
+      */}
+      {mode.setupAction === 'republish' && !report && canEdit && onOpenSetup ? (
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="button" size="sm" variant={mode.setupAction === 'republish' ? 'default' : 'outline'} disabled={isOpeningSetup} onClick={onOpenSetup}>
+          <Button type="button" size="sm" disabled={isOpeningSetup} onClick={onOpenSetup}>
             {isOpeningSetup ? 'Opening setup…' : setupActionLabel(mode)}
           </Button>
           <p className="supporting-copy m-0">{setupActionDetail(mode)}</p>

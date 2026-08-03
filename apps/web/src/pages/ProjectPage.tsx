@@ -1647,13 +1647,13 @@ function ProjectPageContent({
   })
   const activeMeasurementPlanQuery = useQuery({
     ...getApiV1ProjectsByNameMeasurementPlanOptions({ client: heyClient, path: { name: projectName } }),
-    enabled: !isEmbed() && (tab === 'portfolio' || tab === 'overview') && Boolean(projectName),
+    enabled: !isEmbed() && (tab === 'portfolio' || tab === 'overview' || tab === 'settings') && Boolean(projectName),
     staleTime: 0,
     refetchOnMount: 'always',
   })
   const measurementSetupQuery = useQuery({
     ...getApiV1ProjectsByNameMeasurementSetupOptions({ client: heyClient, path: { name: projectName } }),
-    enabled: !isEmbed() && (tab === 'portfolio' || tab === 'overview') && Boolean(projectName),
+    enabled: !isEmbed() && (tab === 'portfolio' || tab === 'overview' || tab === 'settings') && Boolean(projectName),
     staleTime: 0,
     refetchOnMount: 'always',
   })
@@ -2534,6 +2534,19 @@ function ProjectPageContent({
         <>
           <ProjectSettingsSection project={{ ...model.project, displayName: model.project.displayName ?? model.project.name, defaultLocation: model.project.defaultLocation ?? null }} onUpdateProject={async (name, updates) => { await handleUpdateProject(name, updates) }} onRefresh={() => void refetch()} />
           <ProjectEngineSettingsSection project={model.project} onSave={async next => { await handleUpdateProject(model.project.name, next) }} />
+          {canWrite && !isEmbed() && advancedMeasurementMode.surface !== 'simple-overview' ? (
+            <section className="page-section-divider">
+              <h2 className="text-lg font-semibold text-heading">Advanced measurement</h2>
+              <p className="supporting-copy mt-1 mb-3">Change which Properties and questions are measured.</p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => { void navigate({ to: '/projects/$projectName/portfolio', params: { projectName } }) }}
+              >
+                Edit setup
+              </Button>
+            </section>
+          ) : null}
           <ScheduleSection projectName={model.project.name} />
           <NotificationsSection projectName={model.project.name} />
         </>

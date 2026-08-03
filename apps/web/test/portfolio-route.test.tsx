@@ -321,7 +321,10 @@ test('a version-two setup never renders version-one class metrics as if they wer
     overview: measurementOverviewResponse(),
   })
 
-  expect(html).toContain('Edit setup')
+  // Was: asserted 'Edit setup' rendered here. Editing a published plan moved to
+  // Settings; on the results surface it was a control unrelated to reading the
+  // numbers, sitting between the headline and the table.
+  expect(html).not.toContain('Edit setup')
   expect(html).toContain('Harbor House')
   expect(html).toContain('1 of 1 (100%)')
   expect(html).not.toContain('Republish setup')
