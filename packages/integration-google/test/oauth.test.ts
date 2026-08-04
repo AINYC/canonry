@@ -84,6 +84,14 @@ describe('exchangeCode', () => {
       () => exchangeCode('cid', 'csecret', 'bad-code', 'http://localhost/cb'),
     ).rejects.toThrow(/400/)
   })
+
+  it('sanitizes secrets when error response JSON parsing fails', async () => {
+    globalThis.fetch = async () => new Response('Plain text error featuring client_secret csecret and code bad-code and client_id cid', { status: 400 })
+
+    await expect(
+      () => exchangeCode('cid', 'csecret', 'bad-code', 'http://localhost/cb'),
+    ).rejects.toThrow(/Token exchange failed \(400\): Plain text error featuring client_secret \*\*\* and code \*\*\* and client_id \*\*\*/)
+  })
 })
 
 describe('refreshAccessToken', () => {
@@ -123,5 +131,13 @@ describe('refreshAccessToken', () => {
     await expect(
       () => refreshAccessToken('cid', 'csecret', 'expired-token'),
     ).rejects.toThrow(/Token refresh failed/)
+  })
+
+  it('sanitizes secrets when error response JSON parsing fails', async () => {
+    globalThis.fetch = async () => new Response('Plain text error featuring client_secret csecret and refresh_token expired-token and client_id cid', { status: 401 })
+
+    await expect(
+      () => refreshAccessToken('cid', 'csecret', 'expired-token'),
+    ).rejects.toThrow(/Token refresh failed \(401\): Plain text error featuring client_secret \*\*\* and refresh_token \*\*\* and client_id \*\*\*/)
   })
 })

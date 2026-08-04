@@ -588,6 +588,26 @@ describe('GA4 retry on transient errors', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
+  it('sanitizes the access token from the error details on report failure', async () => {
+    fetchSpy.mockImplementation(async () => new Response('Bad request containing fake-token', { status: 400 }))
+
+    const promise = verifyConnectionWithToken('fake-token', '123456')
+    const settled = promise.catch((e: unknown) => e)
+    await vi.runAllTimersAsync()
+    const err = (await settled) as Error
+    expect(err.message).toMatch(/GA4 API error \(400\): Bad request containing \*\*\*/)
+  })
+
+  it('sanitizes the access token from the error details on batch report failure', async () => {
+    fetchSpy.mockImplementation(async () => new Response('Batch request failing with fake-token', { status: 400 }))
+
+    const promise = fetchAggregateSummary('fake-token', '123456', 30)
+    const settled = promise.catch((e: unknown) => e)
+    await vi.runAllTimersAsync()
+    const err = (await settled) as Error
+    expect(err.message).toMatch(/GA4 API error \(400\): Batch request failing with \*\*\*/)
+  })
+
   it('retries 5xx server errors', async () => {
     let callCount = 0
     fetchSpy.mockImplementation(async () => {

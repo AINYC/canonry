@@ -161,7 +161,14 @@ async function fetchJson<T>(
 
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new WordpressApiError('UPSTREAM_ERROR', `WordPress API error (${res.status}): ${text || res.statusText}`, res.status)
+    let detail = text || res.statusText
+    if (connection.appPassword) {
+      detail = detail.replace(new RegExp(escapeRegExp(connection.appPassword), 'g'), '***')
+    }
+    if (connection.username) {
+      detail = detail.replace(new RegExp(escapeRegExp(connection.username), 'g'), '***')
+    }
+    throw new WordpressApiError('UPSTREAM_ERROR', `WordPress API error (${res.status}): ${detail}`, res.status)
   }
 
   return {

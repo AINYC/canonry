@@ -118,7 +118,11 @@ export async function exchangeCode(
         detail += detail ? `: ${sanitized}` : sanitized
       }
     } catch {
-      detail = body.length <= 120 ? body : `${body.slice(0, 120)}...`
+      const truncated = body.length <= 120 ? body : `${body.slice(0, 120)}...`
+      detail = truncated
+        .replace(new RegExp(escapeRegExp(clientId), 'g'), '***')
+        .replace(new RegExp(escapeRegExp(clientSecret), 'g'), '***')
+        .replace(new RegExp(escapeRegExp(code), 'g'), '***')
     }
     throw new GoogleAuthError(`Token exchange failed (${res.status}): ${detail}`)
   }
@@ -170,7 +174,11 @@ export async function refreshAccessToken(
         detail += detail ? `: ${sanitized}` : sanitized
       }
     } catch {
-      detail = body.length <= 120 ? body : `${body.slice(0, 120)}...`
+      const truncated = body.length <= 120 ? body : `${body.slice(0, 120)}...`
+      detail = truncated
+        .replace(new RegExp(escapeRegExp(clientId), 'g'), '***')
+        .replace(new RegExp(escapeRegExp(clientSecret), 'g'), '***')
+        .replace(new RegExp(escapeRegExp(currentRefreshToken), 'g'), '***')
     }
     throw new GoogleAuthError(`Token refresh failed (${res.status}): ${detail}`)
   }

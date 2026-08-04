@@ -515,4 +515,12 @@ describe('wordpress client', () => {
       'application password is incorrect',
     )
   })
+
+  it('sanitizes the application password and username from the error details on failure', async () => {
+    globalThis.fetch = async () => new Response('Internal Server Error containing app-pass and admin username', { status: 500 })
+
+    await expect(() => verifyWordpressConnection(createConnection())).rejects.toThrow(
+      'WordPress API error (500): Internal Server Error containing *** and *** username',
+    )
+  })
 })
