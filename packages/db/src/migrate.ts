@@ -2824,6 +2824,20 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
         ON measurement_operation_receipts(expires_at)`,
     ],
   },
+  {
+    version: 124,
+    name: 'measurement-foundation-named-indexes',
+    statements: [
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_measurement_plan_versions_project_revision
+        ON measurement_plan_versions(project_id, revision)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_measurement_plan_versions_project_id
+        ON measurement_plan_versions(project_id, id)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_measurement_segments_project_key
+        ON measurement_segments(project_id, stable_key)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_measurement_segments_project_id
+        ON measurement_segments(project_id, id)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {
