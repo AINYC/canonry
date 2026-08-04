@@ -130,7 +130,10 @@ describe('advanced measurement landing', () => {
     expect(screen.queryByRole('button')).toBeNull()
   })
 
-  it('renders the active current setup with Run measurement and a secondary Edit setup action', () => {
+  // Was: asserted an Edit setup action beside Run measurement. Editing a
+  // published plan moved to Settings — on the results surface it was a control
+  // unrelated to reading the numbers, sitting between headline and table.
+  it('renders the active current setup with Run measurement', () => {
     const onOpenSetup = vi.fn()
     const onRunMeasurement = vi.fn()
     render(
@@ -145,9 +148,8 @@ describe('advanced measurement landing', () => {
     )
 
     expect(screen.queryByText('Existing project overview')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Edit setup' }))
+    expect(screen.queryByRole('button', { name: 'Edit setup' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Run measurement' }))
-    expect(onOpenSetup).toHaveBeenCalledTimes(1)
     expect(onRunMeasurement).toHaveBeenCalledTimes(1)
   })
 
@@ -164,8 +166,7 @@ describe('advanced measurement landing', () => {
     )
 
     expect(screen.getByLabelText('Loading advanced measurement report')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Edit setup' }))
-    expect(onOpenSetup).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: 'Edit setup' })).toBeNull()
 
     const onRetryReport = vi.fn()
     view.rerender(
@@ -182,7 +183,7 @@ describe('advanced measurement landing', () => {
     expect(screen.getByRole('alert').textContent).toContain('Could not load the advanced measurement report.')
     fireEvent.click(screen.getByRole('button', { name: 'Retry report' }))
     expect(onRetryReport).toHaveBeenCalledTimes(1)
-    expect(screen.getByRole('button', { name: 'Edit setup' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Edit setup' })).toBeNull()
   })
 
   it('preserves loaded Properties and retries a failed later page inline', () => {
@@ -238,5 +239,32 @@ describe('the setup action leads its row instead of floating at the right', () =
       />,
     )
     expect(screen.getByText(/Measure each Property on its own questions/)).toBeTruthy()
+  })
+})
+
+describe('editing a published plan is not a control on the results page', () => {
+  it('does not offer Edit setup once results are being read', () => {
+    render(
+      <AdvancedMeasurementLanding
+        mode={{ surface: 'advanced', setupAction: 'edit' }}
+        canEdit
+        report={report}
+        onOpenSetup={vi.fn()}
+      />,
+    )
+    // Was a button between the headline numbers and the property table. It
+    // lives in Settings now; nothing here changes what is measured.
+    expect(screen.queryByRole('button', { name: 'Edit setup' })).toBeNull()
+  })
+
+  it('still surfaces unpublished changes, which report pending work', () => {
+    render(
+      <AdvancedMeasurementLanding
+        mode={{ surface: 'advanced', setupAction: 'republish' }}
+        canEdit
+        onOpenSetup={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Republish setup' })).toBeTruthy()
   })
 })

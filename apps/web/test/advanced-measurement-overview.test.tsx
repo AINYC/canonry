@@ -340,13 +340,13 @@ describe('AdvancedMeasurementOverview', () => {
     renderOverview()
 
     expect(screen.getByText('Question type')).toBeTruthy()
-    expect(screen.queryByText('Competitor share of voice')).toBeNull()
+    expect(screen.queryByText('Brand share of voice')).toBeNull()
     fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'metro' } })
-    expect(screen.getByText('Competitor share of voice')).toBeTruthy()
+    expect(screen.getByText('Brand share of voice')).toBeTruthy()
     expect(screen.getByText('Example Co.')).toBeTruthy()
     expect(screen.getByText('Rival Co.')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Question type'), { target: { value: 'branded' } })
-    expect(screen.queryByText('Competitor share of voice')).toBeNull()
+    expect(screen.queryByText('Brand share of voice')).toBeNull()
     expect((screen.getByText('Flagged results (1)').closest('details') as HTMLDetailsElement).open).toBe(false)
   })
 
@@ -367,7 +367,7 @@ describe('AdvancedMeasurementOverview', () => {
     })
 
     fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'metro' } })
-    expect(screen.queryByText('Competitor share of voice')).toBeNull()
+    expect(screen.queryByText('Brand share of voice')).toBeNull()
   })
 
   it('treats an invalid metric denominator as unavailable', () => {
