@@ -1,5 +1,6 @@
 import type { MeasurementEvidenceShape, MeasurementQueryClassFilter } from '@ainyc/canonry-contracts'
 import {
+  ADVANCED_MEASUREMENT_OPERATIONS,
   applyMeasurementPlanAssignments,
   applyMeasurementPlanGroups,
   discoverMeasurementTargets,
@@ -13,6 +14,7 @@ import {
   showMeasurementProperty,
   showMeasurementPropertyEvidence,
   showMeasurementReport,
+  runAdvancedMeasurementOperation,
 } from '../commands/measurement-plan.js'
 import type { CliCommandInput, CliCommandSpec } from '../cli-dispatch.js'
 import {
@@ -88,6 +90,12 @@ function assignmentAudience(input: CliCommandInput, command: string, usage: stri
   return { project, options: { groupKeys, targetKeys, queryIds, allProperties } }
 }
 
+function advancedMeasurementOperation(value: string | undefined, usage: string) {
+  const operation = ADVANCED_MEASUREMENT_OPERATIONS.find(candidate => candidate === value)
+  if (operation) return operation
+  throw usageError(`Error: unsupported Advanced Measurement operation: ${value ?? '(none)'}\nUsage: ${usage}`)
+}
+
 export const MEASUREMENT_PLAN_CLI_COMMANDS: readonly CliCommandSpec[] = [
   { path: ['measurement-plan', 'show'], usage: 'canonry measurement-plan show <project> [--revision N] [--format json]', options: { revision: stringOption() }, run: async input => {
     const value = getString(input.values, 'revision')
@@ -108,6 +116,16 @@ export const MEASUREMENT_PLAN_CLI_COMMANDS: readonly CliCommandSpec[] = [
     if (!stableKey) throw usageError('stable segment key is required')
     return retireMeasurementPlanSegment(project, stableKey)
   } },
+  {
+    path: ['measurement-plan', 'advanced'],
+    usage: 'canonry measurement-plan advanced <project> <operation> [<json|->] [--format json|jsonl]',
+    run: input => {
+      const usage = 'canonry measurement-plan advanced <project> <operation> [<json|->] [--format json|jsonl]'
+      const project = requireProject(input, 'measurement-plan.advanced', usage)
+      const operation = advancedMeasurementOperation(input.positionals[1], usage)
+      return runAdvancedMeasurementOperation(project, operation, input.positionals[2], input.format)
+    },
+  },
   {
     path: ['measurement-plan', 'assignments', 'preview'],
     usage: 'canonry measurement-plan assignments preview <project> [--group KEY ...] [--target-key KEY ... | --all-properties] --query-id ID [--query-id ID ...] [--format json]',
