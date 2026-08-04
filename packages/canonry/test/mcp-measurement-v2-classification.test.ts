@@ -35,6 +35,12 @@ const advancedMeasurementV2Operations = [
   'POST /api/v1/projects/{name}/measurement-plan/actions/deactivate',
   'GET /api/v1/projects/{name}/measurement-overview',
   'GET /api/v1/projects/{name}/measurement-property-evidence',
+  'GET /api/v1/projects/{name}/measurement-portfolio-summary',
+  'GET /api/v1/projects/{name}/measurement-property-questions',
+  'GET /api/v1/projects/{name}/measurement-question-result',
+  'GET /api/v1/projects/{name}/measurement-property-competitors',
+  'GET /api/v1/projects/{name}/measurement-changes',
+  'GET /api/v1/projects/{name}/measurement-data-quality',
   'GET /api/v1/projects/{name}/measurement-query-sets',
   'GET /api/v1/projects/{name}/measurement-query-sets/{setId}',
   'PUT /api/v1/projects/{name}/measurement-query-sets/{setId}',
@@ -51,13 +57,19 @@ function isAdvancedMeasurementV2Operation(operation: string): boolean {
     || operation === 'POST /api/v1/projects/{name}/measurement-plan/actions/deactivate'
     || operation.includes('/measurement-overview')
     || operation.includes('/measurement-property-evidence')
+    || operation.includes('/measurement-portfolio-summary')
+    || operation.includes('/measurement-property-questions')
+    || operation.includes('/measurement-question-result')
+    || operation.includes('/measurement-property-competitors')
+    || operation.includes('/measurement-changes')
+    || operation.includes('/measurement-data-quality')
     || operation.includes('/measurement-query-sets')
     || operation.includes('/measurement-query-templates')
 }
 
 describe('Advanced Measurement v2 MCP OpenAPI classification', () => {
   it('lists every exposed operation', () => {
-    expect(advancedMeasurementV2Operations).toHaveLength(41)
+    expect(advancedMeasurementV2Operations).toHaveLength(47)
 
     const classifiedOperations = Object.keys(MCP_OPENAPI_OPERATION_CLASSIFICATIONS)
       .filter(isAdvancedMeasurementV2Operation)

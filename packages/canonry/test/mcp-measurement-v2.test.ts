@@ -109,6 +109,18 @@ const draftActionCasesRaw = [
     args: [project, { groupKeys: ['group-a'], queryIds: ['query-a'] }, idempotencyKey, etag],
   },
   {
+    action: 'apply-paired-assignments',
+    input: {
+      project,
+      action: 'apply-paired-assignments',
+      request: { pairs: [{ targetKey: 'target-a', queryId: 'query-a' }] },
+      etag,
+      idempotencyKey,
+    },
+    method: 'applyPairedMeasurementDraftAssignments',
+    args: [project, { pairs: [{ targetKey: 'target-a', queryId: 'query-a' }] }, idempotencyKey, etag],
+  },
+  {
     action: 'remove-assignment',
     input: { project, action: 'remove-assignment', request: { targetKey: 'target-a', queryId: 'query-a' }, etag, idempotencyKey },
     method: 'removeMeasurementDraftAssignment',
@@ -376,6 +388,7 @@ function makeClient() {
     applyMeasurementDraftAssignments: vi.fn().mockResolvedValue({}),
     previewMeasurementDraftAssignments: vi.fn().mockResolvedValue({}),
     replaceMeasurementDraftAssignments: vi.fn().mockResolvedValue({}),
+    applyPairedMeasurementDraftAssignments: vi.fn().mockResolvedValue({}),
     removeMeasurementDraftAssignment: vi.fn().mockResolvedValue({}),
     clearMeasurementDraftAssignments: vi.fn().mockResolvedValue({}),
     classifyMeasurementDraftAssignments: vi.fn().mockResolvedValue({}),

@@ -3,9 +3,16 @@ import fs from 'node:fs'
 import { parse } from 'yaml'
 import {
   MeasurementEvidenceShapes,
+  measurementChangesQuerySchema,
+  measurementDataQualityQuerySchema,
+  measurementDraftCollectionQuerySchema,
   measurementDiscoveryRequestSchema,
   measurementDiscoveryRuleSchema,
+  measurementOverviewQuerySchema,
+  measurementPlanDeactivateRequestSchema,
   measurementPlanInputSchema,
+  measurementPortfolioSummaryQuerySchema,
+  measurementPropertyCompetitorsQuerySchema,
   type MeasurementAnswerEvidence,
   type MeasurementAttributionEvidence,
   type MeasurementDiscoveryRequest,
@@ -16,10 +23,17 @@ import {
   type MeasurementPropertyEvidenceResponse,
   type MeasurementQueryClassFilter,
   type MetricValue,
+  measurementPropertyQuestionsQuerySchema,
+  measurementQuestionResultQuerySchema,
+  measurementQuerySetUpsertRequestSchema,
+  measurementQueryTemplateApplyRequestSchema,
+  measurementQueryTemplateUpsertRequestSchema,
 } from '@ainyc/canonry-contracts'
+import { z } from 'zod'
 import { isMachineFormat, systemError } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
 import { createApiClient } from '../client.js'
+import { measurementDraftOperationSchema, runMeasurementDraftAction } from '../measurement-draft-actions.js'
 
 function readPlan(source: string): MeasurementPlanInput {
   const content = source === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(source, 'utf8')
@@ -31,6 +45,200 @@ function readDiscoveryRule(source: string): MeasurementDiscoveryRule {
   const content = source === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(source, 'utf8')
   const parsed: unknown = source.endsWith('.json') ? JSON.parse(content) : parse(content)
   return measurementDiscoveryRuleSchema.parse(parsed)
+}
+
+/**
+ * A compact, file-driven surface for Advanced Measurement operations that are
+ * too structured to express safely as a long list of shell flags. Its JSON
+ * response is the API response unchanged, so agents can use it as an API
+ * replacement without post-processing.
+ */
+export const ADVANCED_MEASUREMENT_OPERATIONS = [
+  'setup',
+  'overview',
+  'portfolio-summary',
+  'property-questions',
+  'question-result',
+  'property-competitors',
+  'changes',
+  'data-quality',
+  'draft',
+  'draft-targets',
+  'draft-assignments',
+  'draft-groups',
+  'draft-action',
+  'deactivate',
+  'query-sets',
+  'query-set-get',
+  'query-set-upsert',
+  'query-set-delete',
+  'query-templates',
+  'query-template-upsert',
+  'query-template-delete',
+  'query-template-apply',
+] as const
+
+export type AdvancedMeasurementOperation = (typeof ADVANCED_MEASUREMENT_OPERATIONS)[number]
+
+const advancedIdempotencyKeySchema = z.string().trim().min(1)
+const advancedResourceIdSchema = z.string().trim().min(1)
+const advancedEmptyInputSchema = z.object({}).strict()
+const advancedQuerySetInputSchema = z.object({ setId: advancedResourceIdSchema }).strict()
+const advancedQuerySetUpsertInputSchema = advancedQuerySetInputSchema.extend({
+  request: measurementQuerySetUpsertRequestSchema,
+}).strict()
+const advancedQueryTemplateInputSchema = z.object({ templateId: advancedResourceIdSchema }).strict()
+const advancedQueryTemplateUpsertInputSchema = advancedQueryTemplateInputSchema.extend({
+  request: measurementQueryTemplateUpsertRequestSchema,
+}).strict()
+const advancedQueryTemplateApplyInputSchema = advancedQueryTemplateInputSchema.extend({
+  request: measurementQueryTemplateApplyRequestSchema,
+  idempotencyKey: advancedIdempotencyKeySchema,
+}).strict()
+const advancedDeactivateInputSchema = z.object({
+  request: measurementPlanDeactivateRequestSchema,
+  idempotencyKey: advancedIdempotencyKeySchema,
+}).strict()
+
+function readAdvancedMeasurementInput(source?: string): unknown {
+  if (source === undefined) return {}
+  const content = source === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(source, 'utf8')
+  return JSON.parse(content) as unknown
+}
+
+const advancedMeasurementCollectionKeys = {
+  'draft-targets': 'items',
+  'draft-assignments': 'items',
+  'draft-groups': 'items',
+  'query-sets': 'querySets',
+  'query-templates': 'templates',
+} as const
+
+function isAdvancedMeasurementCollectionOperation(
+  operation: AdvancedMeasurementOperation,
+): operation is keyof typeof advancedMeasurementCollectionKeys {
+  return operation === 'draft-targets'
+    || operation === 'draft-assignments'
+    || operation === 'draft-groups'
+    || operation === 'query-sets'
+    || operation === 'query-templates'
+}
+
+function emitAdvancedMeasurementJsonl(operation: AdvancedMeasurementOperation, result: unknown): boolean {
+  if (!isAdvancedMeasurementCollectionOperation(operation) || typeof result !== 'object' || result === null || Array.isArray(result)) return false
+  const collectionKey = advancedMeasurementCollectionKeys[operation]
+  const envelope = result as Record<string, unknown>
+  const candidateRows = envelope[collectionKey]
+  if (!Array.isArray(candidateRows)) return false
+  const context: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(envelope)) {
+    if (key !== collectionKey) context[key] = value
+  }
+  emitJsonl([{ kind: 'measurement-advanced-header', operation, ...context }])
+  emitJsonl(candidateRows.map(row => row as unknown))
+  return true
+}
+
+/** Execute one Advanced Measurement API operation through the public client. */
+export async function runAdvancedMeasurementOperation(
+  project: string,
+  operation: AdvancedMeasurementOperation,
+  source?: string,
+  format?: string,
+): Promise<void> {
+  const input = readAdvancedMeasurementInput(source)
+  const client = createApiClient()
+  let result: unknown
+
+  switch (operation) {
+    case 'setup':
+      advancedEmptyInputSchema.parse(input)
+      result = await client.getMeasurementSetup(project)
+      break
+    case 'overview':
+      result = await client.getMeasurementOverview(project, measurementOverviewQuerySchema.parse(input))
+      break
+    case 'portfolio-summary':
+      result = await client.getMeasurementPortfolioSummary(project, measurementPortfolioSummaryQuerySchema.parse(input))
+      break
+    case 'property-questions':
+      result = await client.getMeasurementPropertyQuestions(project, measurementPropertyQuestionsQuerySchema.parse(input))
+      break
+    case 'question-result':
+      result = await client.getMeasurementQuestionResult(project, measurementQuestionResultQuerySchema.parse(input))
+      break
+    case 'property-competitors':
+      result = await client.getMeasurementPropertyCompetitors(project, measurementPropertyCompetitorsQuerySchema.parse(input))
+      break
+    case 'changes':
+      result = await client.getMeasurementChanges(project, measurementChangesQuerySchema.parse(input))
+      break
+    case 'data-quality':
+      result = await client.getMeasurementDataQuality(project, measurementDataQualityQuerySchema.parse(input))
+      break
+    case 'draft':
+      advancedEmptyInputSchema.parse(input)
+      result = await client.getMeasurementPlanDraft(project)
+      break
+    case 'draft-targets':
+      result = await client.getMeasurementDraftTargets(project, measurementDraftCollectionQuerySchema.parse(input))
+      break
+    case 'draft-assignments':
+      result = await client.getMeasurementDraftAssignments(project, measurementDraftCollectionQuerySchema.parse(input))
+      break
+    case 'draft-groups':
+      result = await client.getMeasurementDraftGroups(project, measurementDraftCollectionQuerySchema.parse(input))
+      break
+    case 'draft-action':
+      result = await runMeasurementDraftAction(client, project, measurementDraftOperationSchema.parse(input))
+      break
+    case 'deactivate': {
+      const parsed = advancedDeactivateInputSchema.parse(input)
+      result = await client.deactivateMeasurementPlan(project, parsed.request, parsed.idempotencyKey)
+      break
+    }
+    case 'query-sets':
+      advancedEmptyInputSchema.parse(input)
+      result = await client.listMeasurementQuerySets(project)
+      break
+    case 'query-set-get': {
+      const parsed = advancedQuerySetInputSchema.parse(input)
+      result = await client.getMeasurementQuerySet(project, parsed.setId)
+      break
+    }
+    case 'query-set-upsert': {
+      const parsed = advancedQuerySetUpsertInputSchema.parse(input)
+      result = await client.upsertMeasurementQuerySet(project, parsed.setId, parsed.request)
+      break
+    }
+    case 'query-set-delete': {
+      const parsed = advancedQuerySetInputSchema.parse(input)
+      result = await client.deleteMeasurementQuerySet(project, parsed.setId)
+      break
+    }
+    case 'query-templates':
+      advancedEmptyInputSchema.parse(input)
+      result = await client.listMeasurementQueryTemplates(project)
+      break
+    case 'query-template-upsert': {
+      const parsed = advancedQueryTemplateUpsertInputSchema.parse(input)
+      result = await client.upsertMeasurementQueryTemplate(project, parsed.templateId, parsed.request)
+      break
+    }
+    case 'query-template-delete': {
+      const parsed = advancedQueryTemplateInputSchema.parse(input)
+      result = await client.deleteMeasurementQueryTemplate(project, parsed.templateId)
+      break
+    }
+    case 'query-template-apply': {
+      const parsed = advancedQueryTemplateApplyInputSchema.parse(input)
+      result = await client.applyMeasurementQueryTemplate(project, parsed.templateId, parsed.request, parsed.idempotencyKey)
+      break
+    }
+  }
+
+  if (format === 'jsonl' && emitAdvancedMeasurementJsonl(operation, result)) return
+  console.log(JSON.stringify(result ?? null, null, 2))
 }
 
 export async function showMeasurementPlan(project: string, revision?: number): Promise<void> {

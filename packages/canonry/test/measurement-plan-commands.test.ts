@@ -12,9 +12,12 @@ const discoverMeasurementTargets = vi.fn()
 const getMeasurementReport = vi.fn()
 const getMeasurementOverview = vi.fn()
 const getMeasurementPropertyEvidence = vi.fn()
+const getMeasurementSetup = vi.fn()
+const listMeasurementQuerySets = vi.fn()
 const getMeasurementPlanDraft = vi.fn()
 const previewMeasurementDraftAssignments = vi.fn()
 const applyMeasurementDraftAssignments = vi.fn()
+const applyPairedMeasurementDraftAssignments = vi.fn()
 const replaceMeasurementDraftAssignments = vi.fn()
 const previewMeasurementDraftGroupMembership = vi.fn()
 const applyMeasurementDraftGroupMembership = vi.fn()
@@ -30,9 +33,12 @@ vi.mock('../src/client.js', () => ({
     getMeasurementReport,
     getMeasurementOverview,
     getMeasurementPropertyEvidence,
+    getMeasurementSetup,
+    listMeasurementQuerySets,
     getMeasurementPlanDraft,
     previewMeasurementDraftAssignments,
     applyMeasurementDraftAssignments,
+    applyPairedMeasurementDraftAssignments,
     replaceMeasurementDraftAssignments,
     previewMeasurementDraftGroupMembership,
     applyMeasurementDraftGroupMembership,
@@ -207,6 +213,8 @@ describe('measurement-plan CLI commands', () => {
     getMeasurementReport.mockResolvedValue({ revision: 1, run: null, groups: [], targets: [], evidence: [], diagnostics: {} })
     getMeasurementOverview.mockResolvedValue(OVERVIEW)
     getMeasurementPropertyEvidence.mockResolvedValue(PROPERTY_EVIDENCE)
+    getMeasurementSetup.mockResolvedValue({ mode: 'active-v2' })
+    listMeasurementQuerySets.mockResolvedValue({ querySets: [] })
     getMeasurementPlanDraft.mockResolvedValue({
       etag: '"mpd_7"',
       draft: { authoring: { targets: [{ stableKey: 'harbor-view', status: 'included' }] } },
@@ -220,6 +228,7 @@ describe('measurement-plan CLI commands', () => {
       execution: { addedNodes: 1, addedProviderCalls: 2, fullRunNodes: 1, fullRunProviderCalls: 2 },
     })
     applyMeasurementDraftAssignments.mockResolvedValue({ etag: '"mpd_8"', changed: true })
+    applyPairedMeasurementDraftAssignments.mockResolvedValue({ etag: '"mpd_8"', changed: true })
     replaceMeasurementDraftAssignments.mockResolvedValue({ etag: '"mpd_8"', changed: true })
     previewMeasurementDraftGroupMembership.mockResolvedValue({
       draftEtag: '"mpd_7"',
@@ -246,6 +255,8 @@ describe('measurement-plan CLI commands', () => {
       .toBe('canonry measurement-plan publish <project> <yaml|json|-> [--format json]')
     expect(command('measurement-plan retire').usage)
       .toBe('canonry measurement-plan retire <project> <stable-key> [--format json]')
+    expect(command('measurement-plan advanced').usage)
+      .toBe('canonry measurement-plan advanced <project> <operation> [<json|->] [--format json|jsonl]')
     expect(command('measurement-plan discover').usage)
       .toBe('canonry measurement-plan discover <project> --sitemap-url <url> --rule <yaml|json|-> [--max-urls N] [--format json]')
     expect(command('measurement-plan report').usage)
@@ -255,6 +266,54 @@ describe('measurement-plan CLI commands', () => {
     expect(command('measurement-plan assignments replace').usage).toContain('--confirm')
     expect(command('measurement-plan groups preview').usage).toContain('<csv|->')
     expect(command('measurement-plan groups apply').usage).toContain('--confirm')
+  })
+
+  it('bridges the complete Advanced Measurement surface through typed JSON input', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const inputPath = path.join(tmpDir, 'paired-assignments.json')
+    fs.writeFileSync(inputPath, JSON.stringify({
+      action: 'apply-paired-assignments',
+      request: { pairs: [{ targetKey: 'harbor-view', queryId: 'query-1' }] },
+      etag: '"mpd_7"',
+      idempotencyKey: 'request-1',
+    }))
+
+    await command('measurement-plan advanced').run({
+      positionals: ['acme', 'setup'], values: {}, format: 'json', dryRun: false,
+    })
+    expect(getMeasurementSetup).toHaveBeenCalledWith('acme')
+
+    await command('measurement-plan advanced').run({
+      positionals: ['acme', 'draft-action', inputPath], values: {}, format: 'json', dryRun: false,
+    })
+    expect(applyPairedMeasurementDraftAssignments).toHaveBeenCalledWith(
+      'acme',
+      { pairs: [{ targetKey: 'harbor-view', queryId: 'query-1' }] },
+      'request-1',
+      '"mpd_7"',
+    )
+
+    expect(() => command('measurement-plan advanced').run({
+      positionals: ['acme', 'nope'], values: {}, format: 'json', dryRun: false,
+    })).toThrow('unsupported Advanced Measurement operation')
+  })
+
+  it('streams Advanced Measurement collections as JSONL with paging context', async () => {
+    listMeasurementQuerySets.mockResolvedValueOnce({
+      querySets: [{ id: 'set-1', name: 'Core questions' }],
+    })
+    const written: string[] = []
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(chunk => { written.push(String(chunk)); return true })
+
+    await command('measurement-plan advanced').run({
+      positionals: ['acme', 'query-sets'], values: {}, format: 'jsonl', dryRun: false,
+    })
+
+    write.mockRestore()
+    expect(written.join('').trim().split('\n').map(line => JSON.parse(line))).toEqual([
+      { kind: 'measurement-advanced-header', operation: 'query-sets' },
+      { id: 'set-1', name: 'Core questions' },
+    ])
   })
 
   it('previews then applies one server-resolved assignment audience', async () => {

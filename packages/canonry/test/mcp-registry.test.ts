@@ -534,6 +534,7 @@ describe('MCP tool registry', () => {
       minLength: 1,
       description: 'Canonry project name.',
     })
+    expect(projectSchema.properties).not.toHaveProperty('sitemapIndex')
 
     const runTriggerRequest = schemaProperty(inputSchemaFor('canonry_run_trigger'), 'request')
     expect(schemaProperty(runTriggerRequest, 'kind')).toMatchObject({ const: 'answer-visibility' })
@@ -820,7 +821,7 @@ describe('MCP tool registry', () => {
       .filter(([, classification]) => classification === 'included')
       .map(([operation]) => operation)
 
-    expect([...referencedOperations].sort()).toEqual(expect.arrayContaining(includedOperations.sort()))
+    expect([...referencedOperations].sort()).toEqual(includedOperations.sort())
   })
 
   it('maps Canonry client errors to isError tool results', async () => {
