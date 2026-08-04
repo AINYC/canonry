@@ -48,6 +48,14 @@ describe('listSites', () => {
     await expect(() => listSites('bad-token')).rejects.toMatchObject({ name: 'GoogleApiError' })
   })
 
+  it('sanitizes the access token from the error details on failure', async () => {
+    globalThis.fetch = async () => new Response('Error details containing bad-token', { status: 500 })
+
+    await expect(
+      () => listSites('bad-token'),
+    ).rejects.toThrow(/GSC API error \(500\): Error details containing \*\*\*/)
+  })
+
   it('throws a typed error for an empty successful response', async () => {
     globalThis.fetch = async () => new Response(null, { status: 204 })
     await expect(() => listSites('test-token')).rejects.toMatchObject({

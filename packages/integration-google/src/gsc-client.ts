@@ -106,6 +106,10 @@ function gscClientLog(level: 'info' | 'error', action: string, ctx?: Record<stri
   stream.write(JSON.stringify(entry) + '\n')
 }
 
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 async function gscFetchResponse(accessToken: string, url: string, opts?: { method?: string; body?: unknown }): Promise<Response> {
   const method = opts?.method ?? 'GET'
   const headers: Record<string, string> = {
@@ -135,7 +139,11 @@ async function gscFetchResponse(accessToken: string, url: string, opts?: { metho
     gscClientLog('error', 'http.error', { url, method, httpStatus: res.status })
     // Truncate large error bodies to avoid carrying huge payloads in thrown errors
     const detail = body.length <= 500 ? body : `${body.slice(0, 500)}... [truncated]`
-    throw new GoogleApiError(`GSC API error (${res.status}): ${detail}`, res.status)
+    let sanitizedDetail = detail
+    if (accessToken) {
+      sanitizedDetail = sanitizedDetail.replace(new RegExp(escapeRegExp(accessToken), 'g'), '***')
+    }
+    throw new GoogleApiError(`GSC API error (${res.status}): ${sanitizedDetail}`, res.status)
   }
 
   return res

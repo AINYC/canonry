@@ -288,9 +288,13 @@ async function runReport(
         // not JSON — use raw body if short enough
         if (body.length < 200) detail = ` ${body}`
       }
+      let sanitizedDetail = detail
+      if (accessToken) {
+        sanitizedDetail = sanitizedDetail.replace(new RegExp(escapeRegExp(accessToken), 'g'), '***')
+      }
       ga4Log('error', 'report.auth-failed', { propertyId, httpStatus: res.status })
       throw new GA4ApiError(
-        `GA4 API authentication failed — check service account permissions.${detail}`,
+        `GA4 API authentication failed — check service account permissions.${sanitizedDetail}`,
         res.status,
       )
     }
@@ -306,7 +310,11 @@ async function runReport(
       const retryAfterSeconds = res.status >= 500 ? parseRetryAfter(res.headers.get('retry-after')) : undefined
       ga4Log('error', 'report.error', { propertyId, httpStatus: res.status, retryAfterSeconds })
       const detail = body.length <= 500 ? body : `${body.slice(0, 500)}... [truncated]`
-      throw new GA4ApiError(`GA4 API error (${res.status}): ${detail}`, res.status, retryAfterSeconds)
+      let sanitizedDetail = detail
+      if (accessToken) {
+        sanitizedDetail = sanitizedDetail.replace(new RegExp(escapeRegExp(accessToken), 'g'), '***')
+      }
+      throw new GA4ApiError(`GA4 API error (${res.status}): ${sanitizedDetail}`, res.status, retryAfterSeconds)
     }
 
     return (await res.json()) as GA4RunReportResponse
@@ -338,8 +346,12 @@ async function batchRunReports(
     if (res.status === 401 || res.status === 403) {
       const body = await res.text().catch(() => '')
       ga4Log('error', 'batch-report.auth-failed', { propertyId, httpStatus: res.status })
+      let sanitizedDetail = body
+      if (accessToken) {
+        sanitizedDetail = sanitizedDetail.replace(new RegExp(escapeRegExp(accessToken), 'g'), '***')
+      }
       throw new GA4ApiError(
-        `GA4 API authentication failed — check service account permissions. ${body}`,
+        `GA4 API authentication failed — check service account permissions. ${sanitizedDetail}`,
         res.status,
       )
     }
@@ -355,7 +367,11 @@ async function batchRunReports(
       const retryAfterSeconds = res.status >= 500 ? parseRetryAfter(res.headers.get('retry-after')) : undefined
       ga4Log('error', 'batch-report.error', { propertyId, httpStatus: res.status, retryAfterSeconds })
       const detail = body.length <= 500 ? body : `${body.slice(0, 500)}... [truncated]`
-      throw new GA4ApiError(`GA4 API error (${res.status}): ${detail}`, res.status, retryAfterSeconds)
+      let sanitizedDetail = detail
+      if (accessToken) {
+        sanitizedDetail = sanitizedDetail.replace(new RegExp(escapeRegExp(accessToken), 'g'), '***')
+      }
+      throw new GA4ApiError(`GA4 API error (${res.status}): ${sanitizedDetail}`, res.status, retryAfterSeconds)
     }
 
     const data = (await res.json()) as { reports: GA4RunReportResponse[] }
