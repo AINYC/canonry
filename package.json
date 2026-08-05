@@ -1,13 +1,13 @@
 {
   "name": "canonry",
   "private": true,
-  "version": "4.149.0",
+  "version": "4.149.1",
   "type": "module",
   "packageManager": "pnpm@10.28.2",
   "scripts": {
     "preinstall": "test ! -f scripts/check-node.mjs || node scripts/check-node.mjs",
     "build": "pnpm --filter @canonry/canonry run build",
-    "typecheck": "pnpm -r --no-bail run typecheck && tsc --noEmit -p scripts/tsconfig.json",
+    "typecheck": "pnpm -r --no-bail run typecheck && tsc --noEmit -p scripts/tsconfig.json && tsc --noEmit -p test/tsconfig.json",
     "test": "vitest run",
     "lint": "pnpm -r run lint",
     "plugin:sync": "node scripts/sync-canonry-plugin.mjs",

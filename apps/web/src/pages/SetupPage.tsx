@@ -102,7 +102,7 @@ function SetupStepIndicator({ current, labels }: { current: number; labels: read
 }
 
 /**
- * The setup wizard exists to CREATE things — a project, its questions, its
+ * The setup wizard exists to CREATE things — a project, its queries, its
  * first sweep. There is nothing in it for a view-only account.
  */
 export function SetupPage() {
@@ -896,14 +896,14 @@ function ReadySetupPage({
               )}
             </div>
             <p className="supporting-copy">
-              Enter the questions you want to track, one per line. A rough first list is
+              Enter the queries you want to track, one per line. A rough first list is
               fine: you can edit them, research more, and add to them at any time from the
               project.
             </p>
             <div className="rounded-md border border-base bg-bg-elevated p-3 text-sm">
               <p className="m-0 font-medium text-heading">Tracking more than one location or property?</p>
               <p className="mt-1 mb-2 text-secondary">
-                Questions attach to each property separately in Advanced measurement, so
+                Queries attach to each property separately in Advanced measurement, so
                 there is nothing useful to add here. Skip this and set it up on the project.
               </p>
               <Button

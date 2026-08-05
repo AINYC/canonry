@@ -82,6 +82,16 @@ export default defineConfig({
           environment: 'jsdom',
         },
       },
+      {
+        // Workspace-level concerns that belong to no single package — today the
+        // lint-config guards, which span five trees across packages/ and apps/.
+        test: {
+          name: 'workspace',
+          root: '.',
+          include: ['test/*.test.ts'],
+          setupFiles: SHARED_SETUP,
+        },
+      },
     ],
   },
 })

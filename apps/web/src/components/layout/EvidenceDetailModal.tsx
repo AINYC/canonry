@@ -513,7 +513,7 @@ export function EvidenceDetailModal({
                     <div>
                       <div className="drawer-section-label flex items-center">
                         <span>Web searches the model ran</span>
-                        <InfoTooltip text="The search queries this AI model issued while researching your prompt. They reveal how the model reformulated the question — the phrasings worth optimizing your content for. Distinct from grounding sources (what it found) and citations (what it linked)." />
+                        <InfoTooltip text="The search queries this AI model issued while researching your prompt. They reveal how the model reformulated your query — the phrasings worth optimizing your content for. Distinct from grounding sources (what it found) and citations (what it linked)." />
                       </div>
                       <ul className="grid gap-1">
                         {display.searchQueries.map((q, i) => (

@@ -401,13 +401,13 @@ describe('Property page', () => {
     })
 
     const contrast = await screen.findByRole('table', {
-      name: 'Mention and citation coverage for this Property, split by question class',
+      name: 'Mention and citation coverage for this Property, split by query class',
     })
     const nonBrand = within(contrast).getByText('When they don\'t').closest('tr')!
     expect(within(nonBrand).getByText('75%')).toBeTruthy()
-    expect(screen.getByRole('alert').textContent).toContain('Could not load branded questions.')
+    expect(screen.getByRole('alert').textContent).toContain('Could not load branded queries.')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry branded questions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry branded queries' }))
     await waitFor(() => expect(within(contrast).getAllByText('100%')).toHaveLength(2))
     expect(brandedAttempts).toBe(2)
   })
@@ -430,7 +430,7 @@ describe('Property page', () => {
     })
 
     const contrast = await screen.findByRole('table', {
-      name: 'Mention and citation coverage for this Property, split by question class',
+      name: 'Mention and citation coverage for this Property, split by query class',
     })
     const branded = within(contrast).getByText('When they know your name').closest('tr')!
     expect(within(branded).getAllByText('50%')).toHaveLength(2)
@@ -451,7 +451,7 @@ describe('Property page', () => {
     await screen.findByText('Refresh failed.')
     expect(within(branded).getAllByText('50%')).toHaveLength(2)
     expect(within(evidence).getByText(NEARBY_QUESTION)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry branded questions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry branded queries' }))
     await waitFor(() => expect(within(branded).getAllByText('100%')).toHaveLength(2))
     expect(brandedAttempts).toBe(3)
   })
@@ -468,7 +468,7 @@ describe('Property page', () => {
     })
 
     const contrast = await screen.findByRole('table', {
-      name: 'Mention and citation coverage for this Property, split by question class',
+      name: 'Mention and citation coverage for this Property, split by query class',
     })
     // Same rename as above: the panel's caption follows the answer rows.
     const evidence = await answersTable()
@@ -570,7 +570,7 @@ describe('Property page', () => {
 
     expect(await screen.findByRole('heading', { name: 'Harbor House' })).toBeTruthy()
     const contrast = screen.getByRole('table', {
-      name: 'Mention and citation coverage for this Property, split by question class',
+      name: 'Mention and citation coverage for this Property, split by query class',
     })
     const branded = within(contrast).getByText('When they know your name').closest('tr')!
     const nonBrand = within(contrast).getByText('When they don\'t').closest('tr')!
@@ -596,14 +596,14 @@ describe('Property page', () => {
     })
 
     const contrast = await screen.findByRole('table', {
-      name: 'Mention and citation coverage for this Property, split by question class',
+      name: 'Mention and citation coverage for this Property, split by query class',
     })
     const branded = within(contrast).getByText('When they know your name').closest('tr')!
 
     expect(within(branded).getAllByText('Not measured')).toHaveLength(2)
-    expect(within(branded).getAllByText('No questions of this type are assigned')).toHaveLength(2)
+    expect(within(branded).getAllByText('No queries of this type are assigned')).toHaveLength(2)
     expect(within(branded).queryByText(/%$/)).toBeNull()
-    for (const reason of within(branded).getAllByText('No questions of this type are assigned')) {
+    for (const reason of within(branded).getAllByText('No queries of this type are assigned')) {
       expect(reason.className).toContain('text-sm')
       expect(reason.className).toContain('text-secondary')
     }
@@ -646,7 +646,7 @@ describe('Property page', () => {
       }),
     })
 
-    const questions = await screen.findByRole('table', { name: 'Questions assigned to this Property' })
+    const questions = await screen.findByRole('table', { name: 'Queries assigned to this Property' })
     expect(within(questions).getByText(NEARBY_QUESTION)).toBeTruthy()
 
     const urls = screen.getByRole('table', { name: 'URL matchers configured for this Property' })
@@ -659,7 +659,7 @@ describe('Property page', () => {
     expect(within(evidence).getByText('Matches this Property')).toBeTruthy()
     expect(within(evidence).getByText(OWN_URL)).toBeTruthy()
     expect(screen.queryByText(/revision \d+/i)).toBeNull()
-    expect(screen.getByLabelText('Question type').className).toContain('h-11')
+    expect(screen.getByLabelText('Query type').className).toContain('h-11')
   })
 })
 
@@ -823,7 +823,7 @@ describe('Property answer evidence', () => {
 
     // The panel unmounts while the new class loads, so the table is re-read
     // rather than held across the switch.
-    fireEvent.change(screen.getByLabelText('Question type'), { target: { value: 'branded' } })
+    fireEvent.change(screen.getByLabelText('Query type'), { target: { value: 'branded' } })
     await waitFor(async () => expect(within(await answersTable()).getByText('branded answer')).toBeTruthy())
     expect(requested).toContain('non-brand:answers')
     expect(requested).toContain('branded:answers')
@@ -929,7 +929,7 @@ describe('Property facts and market link', () => {
     // The server's own reason reaches the reader rather than a bare em dash.
     // It appears in the hero rows too, which is why this counts rather than
     // asserting a single node.
-    expect(screen.getAllByText(/No questions of this type are assigned/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/No queries of this type are assigned/).length).toBeGreaterThan(0)
   })
 
   it('names the markets this Property is in, and only those', async () => {
@@ -1045,7 +1045,7 @@ describe('Named instead of this Property', () => {
     expect(within(section).getByText('Harborline Homes')).toBeTruthy()
     expect(within(section).getByText('The Sutton')).toBeTruthy()
     expect(within(section).getByText('openai, gemini')).toBeTruthy()
-    expect(within(section).getByText(/3 of 4 non-brand questions answers did not name this Property/)).toBeTruthy()
+    expect(within(section).getByText(/3 of 4 answers to non-brand queries did not name this Property/)).toBeTruthy()
   })
 
   it('says so plainly when no rival was named, rather than showing an empty table', async () => {

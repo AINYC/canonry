@@ -45,9 +45,9 @@ function setupActionLabel(mode: AdvancedMeasurementMode): string {
  */
 function setupActionDetail(mode: AdvancedMeasurementMode): string {
   if (mode.setupAction === 'continue') return 'Setup is unfinished. Pick up where you left off.'
-  if (mode.setupAction === 'edit') return 'Change which Properties and questions are measured.'
+  if (mode.setupAction === 'edit') return 'Change which Properties and queries are measured.'
   if (mode.setupAction === 'republish') return 'Unpublished changes are waiting to go live.'
-  return 'Measure each Property on its own questions, not just the project as a whole.'
+  return 'Measure each Property on its own queries, not just the project as a whole.'
 }
 
 export function AdvancedMeasurementLanding({

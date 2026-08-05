@@ -238,7 +238,7 @@ describe('the setup action leads its row instead of floating at the right', () =
         onOpenSetup={vi.fn()}
       />,
     )
-    expect(screen.getByText(/Measure each Property on its own questions/)).toBeTruthy()
+    expect(screen.getByText(/Measure each Property on its own queries/)).toBeTruthy()
   })
 })
 

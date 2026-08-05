@@ -560,7 +560,7 @@ export function AdvancedMeasurementOverview({
           </select>
         </div>
         <div className="space-y-1">
-          <label htmlFor="advanced-measurement-class" className="block text-sm font-medium text-heading">Question type</label>
+          <label htmlFor="advanced-measurement-class" className="block text-sm font-medium text-heading">Query type</label>
           <select
             id="advanced-measurement-class"
             disabled={!classReportingAvailable}
@@ -572,7 +572,7 @@ export function AdvancedMeasurementOverview({
             }}
             className="h-9 rounded-md border border-default bg-surface px-3 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-mono-400"
           >
-            <option value="all">All questions</option>
+            <option value="all">All queries</option>
             <option value="non-brand">Non-brand</option>
             <option value="branded">Branded</option>
           </select>

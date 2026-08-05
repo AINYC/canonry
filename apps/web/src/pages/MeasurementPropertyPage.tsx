@@ -49,8 +49,8 @@ const EVIDENCE_PAGE_SIZE = 50
  * reader never has to guess which one they are looking at.
  */
 const CLASS_LABELS: Record<QueryClass, { headline: string; technical: string }> = {
-  branded: { headline: 'When they know your name', technical: 'Branded questions' },
-  'non-brand': { headline: 'When they don\'t', technical: 'Non-brand questions' },
+  branded: { headline: 'When they know your name', technical: 'Branded queries' },
+  'non-brand': { headline: 'When they don\'t', technical: 'Non-brand queries' },
 }
 
 /**
@@ -61,7 +61,7 @@ const CLASS_LABELS: Record<QueryClass, { headline: string; technical: string }> 
 const UNAVAILABLE_REASONS: Record<string, string> = {
   plan_v1: 'Setup update required',
   no_completed_run: 'No completed measurement yet',
-  no_population: 'No questions of this type are assigned',
+  no_population: 'No queries of this type are assigned',
   evidence_incomplete: 'Source evidence is incomplete',
   not_applicable: 'Not applicable for this Property',
 }
@@ -175,7 +175,7 @@ function AnswerSources({ row }: { row: AnswerRow }) {
  *
  * The row above it can only ever say whether this Property was named. It cannot
  * say what the engine actually recommended, and that is the thing an operator
- * opens the row to find out: a "not mentioned" row on a Buckhead question turns
+ * opens the row to find out: a "not mentioned" row on a Buckhead query turns
  * out to be an answer recommending two OTHER buildings from the same brand.
  * None of that is visible in a signal badge or a source count.
  *
@@ -454,7 +454,7 @@ function CoverageHero({
 
 /**
  * The comparison the product is an argument about: the same Property, measured
- * against the questions that name it and the questions that do not.
+ * against the queries that name it and the queries that do not.
  */
 function BrandContrast({
   branded,
@@ -480,16 +480,16 @@ function BrandContrast({
           <p className="eyebrow eyebrow-soft">The gap</p>
           <h2 id="property-brand-contrast" className="text-base font-semibold text-heading">
             Named versus not named
-            <InfoTooltip text="Branded questions already contain your name, so an answer engine has an easy path back to you. Non-brand questions describe the need instead, and that is the demand you have to earn. Each row is measured only over the questions assigned to this Property in that class; a class with no assigned question reads Not measured rather than 0%." />
+            <InfoTooltip text="Branded queries already contain your name, so an answer engine has an easy path back to you. Non-brand queries describe the need instead, and that is the demand you have to earn. Each row is measured only over the queries assigned to this Property in that class; a class with no assigned query reads Not measured rather than 0%." />
           </h2>
         </div>
       </div>
       <div className="overflow-x-auto rounded-md border border-default">
         <table className="evidence-table min-w-[560px]">
-          <caption className="sr-only">Mention and citation coverage for this Property, split by question class</caption>
+          <caption className="sr-only">Mention and citation coverage for this Property, split by query class</caption>
           <thead>
             <tr>
-              <th>Question type</th>
+              <th>Query type</th>
               <th>Mentioned in the answer</th>
               <th>Cited as a source</th>
             </tr>
@@ -557,12 +557,12 @@ function ProviderBreakdown({ row, queryClass, isError }: { row: PropertyRow | un
         <div>
           <h2 id="property-providers" className="text-base font-semibold text-heading">
             Which engines answer for this Property
-            <InfoTooltip text="Each row is measured over the questions that engine actually answered for this Property, so the rows are a split of the same population rather than parts that add up to the Property total. An engine that answered nothing for this Property is absent instead of shown at 0%." />
+            <InfoTooltip text="Each row is measured over the queries that engine actually answered for this Property, so the rows are a split of the same population rather than parts that add up to the Property total. An engine that answered nothing for this Property is absent instead of shown at 0%." />
           </h2>
         </div>
       </div>
       {row === undefined && isError ? (
-        <p className="text-sm text-secondary">Details for {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} are unavailable. Retry that question type above.</p>
+        <p className="text-sm text-secondary">Details for {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} are unavailable. Retry that query type above.</p>
       ) : row === undefined ? (
         <p className="text-sm text-secondary">Loading…</p>
       ) : row.providers.length === 0 ? (
@@ -645,7 +645,7 @@ function NamedInstead({ project, targetKey, queryClass }: { project: string; tar
                   <th>Named</th>
                   <th>Answers</th>
                   <th>Engines</th>
-                  <th>Questions</th>
+                  <th>Queries</th>
                 </tr>
               </thead>
               <tbody>
@@ -668,7 +668,7 @@ function NamedInstead({ project, targetKey, queryClass }: { project: string; tar
           </div>
           {basis?.state === 'available' ? (
             <p className="supporting-copy mt-2">
-              {basis.targetMissResults} of {basis.answeredResults} {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} answers did not name this Property.
+              {basis.targetMissResults} of {basis.answeredResults} answers to {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} did not name this Property.
             </p>
           ) : null}
         </>
@@ -695,8 +695,8 @@ function AssignedQuestions({ questions, queryClass }: { questions: readonly stri
       ) : (
         <div className="overflow-x-auto rounded-md border border-default">
           <table className="evidence-table min-w-[420px]">
-            <caption className="sr-only">Questions assigned to this Property</caption>
-            <thead><tr><th>Question</th></tr></thead>
+            <caption className="sr-only">Queries assigned to this Property</caption>
+            <thead><tr><th>Query</th></tr></thead>
             <tbody>{questions.map(question => <tr key={question}><td className="text-secondary">{question}</td></tr>)}</tbody>
           </table>
         </div>
@@ -971,7 +971,7 @@ export function MeasurementPropertyPage() {
 
       <div className="flex flex-wrap items-end gap-4 border-y border-default py-4">
         <div className="space-y-1">
-          <label htmlFor="property-query-class" className="block text-sm font-medium text-heading">Question type</label>
+          <label htmlFor="property-query-class" className="block text-sm font-medium text-heading">Query type</label>
           <select
             id="property-query-class"
             value={queryClass}
@@ -1002,13 +1002,13 @@ export function MeasurementPropertyPage() {
           <div>
             <h2 id="property-evidence" className="text-base font-semibold text-heading">
               Answers the engines gave
-              <InfoTooltip text="One row per answer an engine gave for the questions assigned to this Property in the displayed measurement. Mentioned and cited are independent: an answer can name this Property without linking it, or link it without naming it. Answers that did neither are listed first, because those are what a gap is made of. Where the answer text was not stored the mention reads Not measured, never a zero. Open a row to read what the engine actually said, followed by the source URLs it returned, this Property's own first. The answer is where a miss becomes actionable: a question this Property was not named in may still have named a sibling building." />
+              <InfoTooltip text="One row per answer an engine gave for the queries assigned to this Property in the displayed measurement. Mentioned and cited are independent: an answer can name this Property without linking it, or link it without naming it. Answers that did neither are listed first, because those are what a gap is made of. Where the answer text was not stored the mention reads Not measured, never a zero. Open a row to read what the engine actually said, followed by the source URLs it returned, this Property's own first. The answer is where a miss becomes actionable: a query this Property was not named in may still have named a sibling building." />
             </h2>
           </div>
           {evidenceRows.length > 0 ? <p className="supporting-copy">{evidenceRows.length} of {evidenceTotal}</p> : null}
         </div>
         {selectedClassUnavailable ? (
-          <p className="text-sm text-secondary">Evidence for {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} is unavailable. Retry that question type above.</p>
+          <p className="text-sm text-secondary">Evidence for {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} is unavailable. Retry that query type above.</p>
         ) : evidenceQuery.isPending && evidenceRows.length === 0 ? (
           <p className="text-sm text-secondary">Loading evidence…</p>
         ) : evidenceQuery.isError && evidenceRows.length === 0 ? (
@@ -1034,7 +1034,7 @@ export function MeasurementPropertyPage() {
                 <caption className="sr-only">Answers measured for this Property</caption>
                 <thead>
                   <tr>
-                    <th>Question</th>
+                    <th>Query</th>
                     <th>Mentioned in the answer</th>
                     <th>Cited as a source</th>
                     <th>Sources</th>

@@ -139,7 +139,7 @@ export function ResearchQueriesSection({ projectName }: { projectName: string })
             <div>
               <p className="eyebrow eyebrow-soft">New batch</p>
               <h3>Research queries</h3>
-              <p className="mt-1 max-w-xl text-sm leading-6 text-muted">Run specific questions against one API model and keep the answers as a separate research record.</p>
+              <p className="mt-1 max-w-xl text-sm leading-6 text-muted">Run specific queries against one API model and keep the answers as a separate research record.</p>
             </div>
           </div>
           <div className="mt-4 space-y-4">
@@ -233,7 +233,7 @@ export function ResearchQueriesSection({ projectName }: { projectName: string })
             {runsQuery.isFetching && <ToneBadge tone="neutral">Loading</ToneBadge>}
           </div>
           {runs.length === 0 ? (
-            <p className="mt-4 text-sm text-muted">No research batches yet. Add one or more questions to begin.</p>
+            <p className="mt-4 text-sm text-muted">No research batches yet. Add one or more queries to begin.</p>
           ) : (
             <div className="mt-4 overflow-x-auto">
               <table className="evidence-table min-w-[680px]">

@@ -9,7 +9,7 @@ const setupSteps: readonly { id: AdvancedMeasurementSetupStep; label: string }[]
   { id: 'import', label: 'Import' },
   { id: 'properties', label: 'Properties' },
   { id: 'groups', label: 'Groups' },
-  { id: 'queries', label: 'Questions' },
+  { id: 'queries', label: 'Queries' },
   { id: 'review', label: 'Review and publish' },
 ]
 
@@ -67,7 +67,7 @@ export function AdvancedMeasurementSetupWizard({
         <div className="min-w-0 w-full sm:flex-1">
           <h2>Advanced measurement setup</h2>
           <p className="mt-1 max-w-2xl text-sm text-secondary">
-            Choose the Properties and questions you want to measure.
+            Choose the Properties and queries you want to measure.
           </p>
         </div>
         {hasDraft ? (

@@ -133,11 +133,11 @@ function renderReview(overrides: Partial<ComponentProps<typeof AdvancedMeasureme
   return { ...render(<AdvancedMeasurementReviewStep {...props} />), props }
 }
 
-test('uses Questions without exposing source taxonomy or assignment mechanics', () => {
+test('uses Queries without exposing source taxonomy or assignment mechanics', () => {
   const view = renderQueries({ onCreateQueries: vi.fn() })
 
-  expect(screen.getByRole('heading', { name: 'Questions' })).toBeTruthy()
-  expect(screen.getAllByText('Add questions').find(element => element.tagName === 'SUMMARY')?.closest('details')?.open).toBe(false)
+  expect(screen.getByRole('heading', { name: 'Queries' })).toBeTruthy()
+  expect(screen.getAllByText('Add queries').find(element => element.tagName === 'SUMMARY')?.closest('details')?.open).toBe(false)
   expect(screen.queryByText('Saved project queries')).toBeNull()
   expect(screen.queryByText('Query sets')).toBeNull()
   expect(screen.queryByText('Generated drafts from templates')).toBeNull()
@@ -146,20 +146,20 @@ test('uses Questions without exposing source taxonomy or assignment mechanics', 
   expect(view.container.textContent?.toLowerCase()).not.toContain('competitor')
 })
 
-test('opens Question creation only when the library is empty', () => {
+test('opens Query creation only when the library is empty', () => {
   renderQueries({ queries: [], selectedQueryIds: [], onCreateQueries: vi.fn() })
 
-  expect(screen.getAllByText('Add questions').find(element => element.tagName === 'SUMMARY')?.closest('details')?.open).toBe(true)
+  expect(screen.getAllByText('Add queries').find(element => element.tagName === 'SUMMARY')?.closest('details')?.open).toBe(true)
 })
 
-test('shows Property scope before dependent question patterns and previews cross-product impact', () => {
+test('shows Property scope before dependent query patterns and previews cross-product impact', () => {
   const { props } = renderQueries({ onCreateQueries: vi.fn() })
   const scope = screen.getByLabelText('Apply to').closest('fieldset')
-  const creation = screen.getAllByText('Add questions').find(element => element.tagName === 'SUMMARY')?.closest('details')
+  const creation = screen.getAllByText('Add queries').find(element => element.tagName === 'SUMMARY')?.closest('details')
 
   expect(scope?.compareDocumentPosition(creation!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   expect(screen.getByText(/2 new, 0 already assigned/)).toBeTruthy()
-  const apply = screen.getByRole('button', { name: 'Assign 1 question to all 2 Properties' })
+  const apply = screen.getByRole('button', { name: 'Assign 1 query to all 2 Properties' })
   expect(apply.className).toContain('min-h-11')
   expect(apply.className).toContain('bg-accent')
   expect(screen.getByRole('button', { name: 'Continue' }).className).toContain('border')
@@ -173,16 +173,16 @@ test('shows Property scope before dependent question patterns and previews cross
 test('clears an individual query assignment with explicit wording', () => {
   const { props } = renderQueries()
 
-  fireEvent.click(screen.getByRole('button', { name: 'Clear question assignments for Harbor House events' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Clear query assignments for Harbor House events' }))
 
   expect(props.onRemoveQuery).toHaveBeenCalledWith('q-saved')
 })
 
-test('offers an explicit replacement editor for an already assigned question', () => {
+test('offers an explicit replacement editor for an already assigned query', () => {
   const onReplaceAssignments = vi.fn()
   renderQueries({ onReplaceAssignments })
 
-  fireEvent.click(screen.getByRole('button', { name: 'Replace question assignments for Harbor House events' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Replace query assignments for Harbor House events' }))
   expect(screen.getByRole('heading', { name: 'Replace assigned Properties' })).toBeTruthy()
   fireEvent.click(screen.getAllByRole('button', { name: 'Clear selection' }).at(-1)!)
   fireEvent.click(screen.getAllByLabelText('Select North Hall').at(-1)!)
@@ -203,9 +203,9 @@ test('keeps a missing tracked query visible only for clearing its assignments', 
     selectedQueryIds: [],
   })
 
-  expect(screen.getAllByText('Unavailable tracked question').length).toBeGreaterThan(0)
-  expect(screen.queryByLabelText('Select question Removed event query')).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Clear question assignments for Unavailable tracked question' }))
+  expect(screen.getAllByText('Unavailable tracked query').length).toBeGreaterThan(0)
+  expect(screen.queryByLabelText('Select query Removed event query')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Clear query assignments for Unavailable tracked query' }))
   expect(props.onRemoveQuery).toHaveBeenCalledWith('q-missing')
 })
 
@@ -214,9 +214,9 @@ test('supports bulk query selection through the live audience control', () => {
 
   expect((screen.getByLabelText('Apply to') as HTMLSelectElement).value).toBe('all')
   expect(screen.queryByText('Specific Properties')).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Select all shown questions' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Select all shown queries' }))
   expect(props.onSelectedQueryIdsChange).toHaveBeenCalledWith(queries.map(query => query.id))
-  fireEvent.click(screen.getByRole('button', { name: 'Clear question selection' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Clear query selection' }))
   expect(props.onSelectedQueryIdsChange).toHaveBeenLastCalledWith([])
 })
 
@@ -244,10 +244,10 @@ test('uses one audience control for all Properties, groups, and the Specific Pro
   })
 
   expect((screen.getByLabelText('Apply to') as HTMLSelectElement).value).toBe('group:waterfront-venues')
-  expect(screen.getByText('1 question → 1 Property assignment · 1 new, 0 already assigned · 4 provider requests per full run · 2 new · 1 unique Property. Existing assignments stay in place.')).toBeTruthy()
+  expect(screen.getByText('1 query → 1 Property assignment · 1 new, 0 already assigned · 4 provider requests per full run · 2 new · 1 unique Property. Existing assignments stay in place.')).toBeTruthy()
   fireEvent.change(screen.getByLabelText('Add another group'), { target: { value: 'downtown' } })
   expect(onAudienceChange).toHaveBeenLastCalledWith({ kind: 'groups', groupIds: ['waterfront-venues', 'downtown'] })
-  fireEvent.click(screen.getByRole('button', { name: 'Assign 1 question to Waterfront venues' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Assign 1 query to Waterfront venues' }))
   expect(onApplySelectedQueries).toHaveBeenCalledWith({
     queryIds: ['q-saved'],
     propertyIds: ['harbor-house'],
@@ -270,10 +270,10 @@ test('shows zero new provider requests when the execution nodes are already reus
     },
   })
 
-  expect(screen.getByText('1 question → 1 Property assignment · 0 new, 1 already assigned · 4 provider requests per full run · 0 new · 1 unique Property. Existing assignments stay in place.')).toBeTruthy()
+  expect(screen.getByText('1 query → 1 Property assignment · 0 new, 1 already assigned · 4 provider requests per full run · 0 new · 1 unique Property. Existing assignments stay in place.')).toBeTruthy()
 })
 
-test('keeps selected questions visible and disables assignment when the server impact cannot be calculated', () => {
+test('keeps selected queries visible and disables assignment when the server impact cannot be calculated', () => {
   const onRetryAssignmentImpact = vi.fn()
   const view = renderQueries({
     audience: { kind: 'all' },
@@ -284,8 +284,8 @@ test('keeps selected questions visible and disables assignment when the server i
   })
 
   expect(screen.getByRole('alert').textContent).toContain('Could not calculate assignment impact.')
-  expect(screen.getByRole('button', { name: 'Assign 1 question to all 2 Properties' })).toHaveProperty('disabled', true)
-  expect((screen.getByLabelText('Select question Harbor House events') as HTMLInputElement).checked).toBe(true)
+  expect(screen.getByRole('button', { name: 'Assign 1 query to all 2 Properties' })).toHaveProperty('disabled', true)
+  expect((screen.getByLabelText('Select query Harbor House events') as HTMLInputElement).checked).toBe(true)
   fireEvent.click(screen.getByRole('button', { name: 'Retry impact' }))
   expect(onRetryAssignmentImpact).toHaveBeenCalledTimes(1)
   fireEvent.click(screen.getByRole('button', { name: 'Back to Groups' }))
@@ -295,19 +295,19 @@ test('keeps selected questions visible and disables assignment when the server i
 test('keeps a large query library searchable, capped, and explicit about bulk selection', () => {
   const view = renderQueries({ queries: manyQueries, selectedQueryIds: [] })
 
-  expect(screen.getByText(/Showing 50 of 55 questions/)).toBeTruthy()
-  expect(screen.queryByLabelText('Select question Service query 51')).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Select all shown questions' }))
+  expect(screen.getByText(/Showing 50 of 55 queries/)).toBeTruthy()
+  expect(screen.queryByLabelText('Select query Service query 51')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Select all shown queries' }))
   expect(view.props.onSelectedQueryIdsChange).toHaveBeenCalledWith(manyQueries.slice(0, 50).map(query => query.id))
 
-  fireEvent.change(screen.getByRole('searchbox', { name: 'Search questions' }), { target: { value: 'Service query 55' } })
-  expect(screen.getByText(/Showing 1 of 1 questions/)).toBeTruthy()
-  expect(screen.getByLabelText('Select question Service query 55')).toBeTruthy()
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Search queries' }), { target: { value: 'Service query 55' } })
+  expect(screen.getByText(/Showing 1 of 1 queries/)).toBeTruthy()
+  expect(screen.getByLabelText('Select query Service query 55')).toBeTruthy()
 
-  fireEvent.change(screen.getByRole('searchbox', { name: 'Search questions' }), { target: { value: '' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Show all questions' }))
-  expect(screen.getByText(/Showing 55 of 55 questions/)).toBeTruthy()
-  expect(screen.getByLabelText('Select question Service query 51')).toBeTruthy()
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Search queries' }), { target: { value: '' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Show all queries' }))
+  expect(screen.getByText(/Showing 55 of 55 queries/)).toBeTruthy()
+  expect(screen.getByLabelText('Select query Service query 51')).toBeTruthy()
 })
 
 test('makes the query Property picker searchable and bounded for large portfolios', () => {
@@ -354,10 +354,10 @@ test('shares the bounded, searchable Property picker with group setup', () => {
 
 // Previously this asserted the copy "Add queries to this project first. Then
 // return here to apply them to Properties." — an instruction to leave the
-// wizard. On a new project that was a dead end: the step consumed questions and
+// wizard. On a new project that was a dead end: the step consumed queries and
 // could not create them, so the only way forward was out and back. It now
 // creates them in place, and the assertion moves with the behaviour.
-test('lets an empty query library add questions without leaving setup', () => {
+test('lets an empty query library add queries without leaving setup', () => {
   const onCreateQueries = vi.fn()
   renderQueries({
     queries: [],
@@ -365,10 +365,10 @@ test('lets an empty query library add questions without leaving setup', () => {
     onCreateQueries,
   })
 
-  fireEvent.change(screen.getByLabelText('New questions, one per line'), {
+  fireEvent.change(screen.getByLabelText('New queries, one per line'), {
     target: { value: 'best apartments in dallas\nluxury apartments atlanta' },
   })
-  fireEvent.click(screen.getByRole('button', { name: /Add 2 questions/ }))
+  fireEvent.click(screen.getByRole('button', { name: /Add 2 queries/ }))
 
   expect(onCreateQueries).toHaveBeenCalledTimes(1)
   expect(onCreateQueries.mock.calls[0]![0]).toEqual([
@@ -377,11 +377,11 @@ test('lets an empty query library add questions without leaving setup', () => {
   ])
 })
 
-// The portfolio shape. Typing one generic question and applying it to 213
-// Properties measures the portfolio; a question per Property measures the
+// The portfolio shape. Typing one generic query and applying it to 213
+// Properties measures the portfolio; a query per Property measures the
 // Properties. The count is shown before the click because 213 is a surprising
 // number to produce from one line of text.
-test('writes one question per selected Property from a pattern, paired to it', () => {
+test('writes one query per selected Property from a pattern, paired to it', () => {
   // Was: this handed the expanded texts to onCreateQueries and nothing carried
   // the pairing, so the caller could only cross-product them back onto every
   // Property. The pattern now emits (Property, text) pairs.
@@ -393,18 +393,18 @@ test('writes one question per selected Property from a pattern, paired to it', (
     onCreateAndPairQuestions,
   })
 
-  fireEvent.change(screen.getByLabelText('Question pattern'), {
+  fireEvent.change(screen.getByLabelText('Query pattern'), {
     target: { value: 'apartments near {property}' },
   })
 
   // The expansion is visible before it is committed.
   expect(screen.getByText('apartments near Harbor House')).toBeTruthy()
 
-  fireEvent.click(screen.getByRole('button', { name: /Add \d+ questions?/ }))
+  fireEvent.click(screen.getByRole('button', { name: /Add \d+ quer(y|ies)/ }))
 
   const pairs = onCreateAndPairQuestions.mock.calls[0]![0] as { propertyId: string; text: string }[]
   expect(pairs.every(pair => pair.text.startsWith('apartments near '))).toBe(true)
-  // One question per Property, each naming the Property it is assigned to.
+  // One query per Property, each naming the Property it is assigned to.
   expect(new Set(pairs.map(pair => pair.propertyId)).size).toBe(pairs.length)
   for (const pair of pairs) expect(pair.text.includes('{property}')).toBe(false)
 })
@@ -417,7 +417,7 @@ test('states how many assignments the pattern will create', () => {
     onCreateAndPairQuestions: vi.fn(),
   })
 
-  fireEvent.change(screen.getByLabelText('Question pattern'), {
+  fireEvent.change(screen.getByLabelText('Query pattern'), {
     target: { value: 'apartments near {property}' },
   })
 
@@ -428,7 +428,7 @@ test('states how many assignments the pattern will create', () => {
 test('removes the legacy name-matched recovery banner in favor of the pattern path', () => {
   renderQueries({ onCreateQueries: vi.fn(), onCreateAndPairQuestions: vi.fn() })
   expect(screen.queryByText(/suggested question-to-Property match/)).toBeNull()
-  expect(screen.getByText('Write one question for every Property')).toBeTruthy()
+  expect(screen.getByText('Write one query for every Property')).toBeTruthy()
 })
 
 test('does not show a no-op pagination action for a fully shown unapplied filter', () => {
@@ -439,8 +439,8 @@ test('does not show a no-op pagination action for a fully shown unapplied filter
   renderQueries({ queries: mostlyApplied, selectedQueryIds: [] })
 
   fireEvent.click(screen.getByRole('button', { name: 'Show the 5 not applied' }))
-  expect(screen.getAllByRole('button', { name: 'Show all questions' })).toHaveLength(1)
-  expect(screen.getByText(/Showing 5 of 5 questions/)).toBeTruthy()
+  expect(screen.getAllByRole('button', { name: 'Show all queries' })).toHaveLength(1)
+  expect(screen.getByText(/Showing 5 of 5 queries/)).toBeTruthy()
 })
 
 test('does not guess recovery matches for partial or overlapping Property names', () => {
@@ -465,10 +465,10 @@ test('blocks writes and navigation while another setup change is saving', () => 
   const onContinue = vi.fn()
   renderQueries({ queries: [], selectedQueryIds: [], isBusy: true, onCreateQueries, onContinue })
 
-  fireEvent.change(screen.getByLabelText('New questions, one per line'), {
+  fireEvent.change(screen.getByLabelText('New queries, one per line'), {
     target: { value: 'best apartments in dallas' },
   })
-  const add = screen.getByRole('button', { name: 'Add 1 question' })
+  const add = screen.getByRole('button', { name: 'Add 1 query' })
   expect(add).toHaveProperty('disabled', true)
   expect(screen.getByRole('button', { name: 'Continue' })).toHaveProperty('disabled', true)
   fireEvent.click(add)
@@ -477,26 +477,26 @@ test('blocks writes and navigation while another setup change is saving', () => 
   expect(onContinue).not.toHaveBeenCalled()
 })
 
-test('asks for a placeholder rather than writing the same question repeatedly', () => {
+test('asks for a placeholder rather than writing the same query repeatedly', () => {
   renderQueries({ queries: [], selectedQueryIds: [], onCreateQueries: vi.fn() })
 
-  fireEvent.change(screen.getByLabelText('Question pattern'), {
+  fireEvent.change(screen.getByLabelText('Query pattern'), {
     target: { value: 'best apartments' },
   })
 
   expect(screen.getByText(/Add \{property\} to the pattern/)).toBeTruthy()
 })
 
-// Clearing the box on failure means retyping every question to retry, which is
+// Clearing the box on failure means retyping every query to retry, which is
 // worst for the pattern case where the operator may have written one line that
 // expanded to two hundred.
 test('keeps what was typed when creation fails', async () => {
   const onCreateQueries = vi.fn().mockRejectedValue(new Error('Query is already tracked.'))
   renderQueries({ queries: [], selectedQueryIds: [], onCreateQueries })
 
-  const box = screen.getByLabelText('New questions, one per line')
+  const box = screen.getByLabelText('New queries, one per line')
   fireEvent.change(box, { target: { value: 'best apartments in dallas' } })
-  fireEvent.click(screen.getByRole('button', { name: /Add 1 question/ }))
+  fireEvent.click(screen.getByRole('button', { name: /Add 1 query/ }))
 
   await waitFor(() => expect(onCreateQueries).toHaveBeenCalled())
   expect((box as HTMLTextAreaElement).value).toBe('best apartments in dallas')
@@ -506,14 +506,14 @@ test('clears the box only once creation succeeds', async () => {
   const onCreateQueries = vi.fn().mockResolvedValue(undefined)
   renderQueries({ queries: [], selectedQueryIds: [], onCreateQueries })
 
-  const box = screen.getByLabelText('New questions, one per line')
+  const box = screen.getByLabelText('New queries, one per line')
   fireEvent.change(box, { target: { value: 'best apartments in dallas' } })
-  fireEvent.click(screen.getByRole('button', { name: /Add 1 question/ }))
+  fireEvent.click(screen.getByRole('button', { name: /Add 1 query/ }))
 
   await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe(''))
 })
 
-test('surfaces the server reason when adding questions fails', () => {
+test('surfaces the server reason when adding queries fails', () => {
   renderQueries({
     queries: [],
     selectedQueryIds: [],
@@ -525,7 +525,7 @@ test('surfaces the server reason when adding questions fails', () => {
     .toContain('Query "best apartments in dallas" is already tracked.')
 })
 
-test('keeps question creation away from viewers', () => {
+test('keeps query creation away from viewers', () => {
   renderQueries({
     access: 'viewer',
     queries: [],
@@ -534,15 +534,15 @@ test('keeps question creation away from viewers', () => {
     onManageProjectQueries: vi.fn(),
   })
 
-  expect(screen.queryByLabelText('New questions, one per line')).toBeNull()
-  expect(screen.queryByRole('button', { name: /Add .* question/ })).toBeNull()
-  expect(screen.queryByRole('button', { name: 'Manage project questions' })).toBeNull()
+  expect(screen.queryByLabelText('New queries, one per line')).toBeNull()
+  expect(screen.queryByRole('button', { name: /Add .* quer(y|ies)/ })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Manage project queries' })).toBeNull()
 })
 
 test('uses an accessible hit target for each table query checkbox', () => {
   renderQueries()
 
-  expect(screen.getByLabelText('Select question Harbor House events').className).toContain('size-6')
+  expect(screen.getByLabelText('Select query Harbor House events').className).toContain('size-6')
 })
 
 test('places competitors only in groups and uses one clear continuation action', () => {
@@ -741,7 +741,7 @@ test('provides a predictable Back action on every step after Properties', () => 
 test('blocks query continuation until an applied query is available', () => {
   renderQueries({ canContinue: false })
 
-  expect(screen.getByText('Apply at least one question to a Property before continuing.')).toBeTruthy()
+  expect(screen.getByText('Apply at least one query to a Property before continuing.')).toBeTruthy()
   expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true)
 })
 
@@ -873,7 +873,7 @@ test('viewer access is inspect-only across the three steps', () => {
   const queryView = renderQueries({ access: 'viewer' })
   expect(screen.getByText('Viewer access')).toBeTruthy()
   expect(queryView.container.querySelectorAll('button, select, textarea, input:not([type="search"])')).toHaveLength(0)
-  expect(screen.getByRole('searchbox', { name: 'Search questions' })).toBeTruthy()
+  expect(screen.getByRole('searchbox', { name: 'Search queries' })).toBeTruthy()
   queryView.unmount()
 
   const groupView = renderGroups({ access: 'viewer' })
@@ -913,7 +913,7 @@ test('renders an unavailable state without controls', () => {
   expect(container.querySelectorAll('button, input, select, textarea')).toHaveLength(0)
 })
 
-test('review states why assignments outrun questions, and never puts a button name in a number column', () => {
+test('review states why assignments outrun queries, and never puts a button name in a number column', () => {
   renderReview({
     counts: { properties: 6, queries: 1, groups: 3, assignments: 3 },
   })
@@ -923,17 +923,17 @@ test('review states why assignments outrun questions, and never puts a button na
   // a value rather than as "not computed yet".
   expect(screen.queryByText('Review changes', { selector: 'td' })).toBeNull()
 
-  // One question aimed at a market writes one assignment per Property in it, so
-  // 1 question and 3 assignments is correct and needs saying.
-  expect(screen.getByText(/a question aimed at a market is measured on every Property in it/)).toBeTruthy()
+  // One query aimed at a market writes one assignment per Property in it, so
+  // 1 query and 3 assignments is correct and needs saying.
+  expect(screen.getByText(/a query aimed at a market is measured on every Property in it/)).toBeTruthy()
 })
 
 test('the assignment impact slot keeps a reserved height so ticking a box cannot move the table', () => {
   // Four mutually exclusive states share this slot — calculating, the impact
   // sentence, an error with buttons, and the fallback count — and the sentence
   // itself rewraps as the counts grow. Without a reserved height, selecting a
-  // question shifted the table under the operator's cursor.
-  // The apply controls only render once questions exist, so use the defaults.
+  // query shifted the table under the operator's cursor.
+  // The apply controls only render once queries exist, so use the defaults.
   const { container } = renderQueries({ onCreateQueries: vi.fn() })
 
   const slot = container.querySelector('.min-h-\\[2\\.75rem\\]')

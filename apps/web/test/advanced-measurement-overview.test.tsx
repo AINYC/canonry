@@ -339,13 +339,13 @@ describe('AdvancedMeasurementOverview', () => {
   it('shows competitor share of voice only for a selected non-brand group', () => {
     renderOverview()
 
-    expect(screen.getByText('Question type')).toBeTruthy()
+    expect(screen.getByText('Query type')).toBeTruthy()
     expect(screen.queryByText('Brand share of voice')).toBeNull()
     fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'metro' } })
     expect(screen.getByText('Brand share of voice')).toBeTruthy()
     expect(screen.getByText('Example Co.')).toBeTruthy()
     expect(screen.getByText('Rival Co.')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('Question type'), { target: { value: 'branded' } })
+    fireEvent.change(screen.getByLabelText('Query type'), { target: { value: 'branded' } })
     expect(screen.queryByText('Brand share of voice')).toBeNull()
     expect((screen.getByText('Flagged results (1)').closest('details') as HTMLDetailsElement).open).toBe(false)
   })
@@ -415,7 +415,7 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.queryByText('Date unavailable')).toBeNull()
     // Was a disabled radio labelled 'Non-brand'. The control is now one select,
     // so the disabled state belongs to it rather than to each option.
-    expect((screen.getByLabelText('Question type') as HTMLSelectElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Query type') as HTMLSelectElement).disabled).toBe(true)
     expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
     fireEvent.click(screen.getByRole('button', { name: 'Republish setup' }))
     expect(onRepublishSetup).toHaveBeenCalledTimes(1)
@@ -511,16 +511,16 @@ describe('AdvancedMeasurementOverview', () => {
   })
 })
 
-describe('question type offers every lane the API accepts', () => {
-  it('includes All questions, which the radio pair never exposed', () => {
+describe('query type offers every lane the API accepts', () => {
+  it('includes All queries, which the radio pair never exposed', () => {
     renderOverview()
-    const control = screen.getByLabelText('Question type') as HTMLSelectElement
+    const control = screen.getByLabelText('Query type') as HTMLSelectElement
     expect([...control.options].map(option => option.value)).toEqual(['all', 'non-brand', 'branded'])
   })
 
   it('selecting All keeps the control on All rather than snapping back', () => {
     renderOverview()
-    const control = screen.getByLabelText('Question type') as HTMLSelectElement
+    const control = screen.getByLabelText('Query type') as HTMLSelectElement
     fireEvent.change(control, { target: { value: 'all' } })
     expect(control.value).toBe('all')
   })

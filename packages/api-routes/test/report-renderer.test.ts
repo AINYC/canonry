@@ -820,11 +820,11 @@ describe('renderReportHtml', () => {
     }
 
     const clientHtml = renderReportHtml(report, { audience: 'client' })
-	    // Questions mentioned (mentioned-query count) → rounded raw delta in the visible
+	    // Queries mentioned (mentioned-query count) → rounded raw delta in the visible
 	    // tile subtitle, never the unrounded float. (The raw DTO is still embedded
 	    // in the hydration <script>, so we assert the rendered .delta div, not the
 	    // whole document.)
-	    expect(clientHtml).toContain('Questions AI mentioned you in')
+	    expect(clientHtml).toContain('Queries AI mentioned you in')
     expect(clientHtml).toContain('<div class="delta">+0.3 vs 3.3</div>')
     // The visible subtitle never shows the unrounded float copy.
     expect(clientHtml).not.toContain('<div class="delta">+0.33333')
@@ -1100,8 +1100,8 @@ describe('renderReportHtml', () => {
     expect(visible).toContain('How often each AI tool mentions you')
     // Mentions vs links explainer must exist
     expect(visible).toContain('Mentions and links are different')
-    // Customer questions list must render the queries
-    expect(visible).toContain('Customer questions we tested')
+    // Customer queries list must render the queries
+    expect(visible).toContain('Customer queries we tested')
     expect(visible).toContain('aeo platform')
     // Action plan + evidence
     expect(visible).toContain('What to do next')

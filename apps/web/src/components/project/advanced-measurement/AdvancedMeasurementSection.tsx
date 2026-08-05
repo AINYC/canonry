@@ -59,7 +59,7 @@ export interface AdvancedMeasurementSectionProps {
   onRetryQueries?: () => void
   publishedPlan?: MeasurementPlanResponse['active']
   canEdit?: boolean
-  /** Adds tracked questions to the project from inside setup. */
+  /** Adds tracked queries to the project from inside setup. */
   /** Returns the project's queries AFTER the write, so a pairing can resolve text -> id. */
   onCreateQueries?: (texts: readonly string[]) => Promise<readonly { id: string; query: string }[]>
   onManageProjectQueries?: () => void
@@ -304,7 +304,7 @@ function groupLocation(context: ReviewCheckContext, check: MeasurementDraftCompi
 function assignmentLocation(context: ReviewCheckContext, check: MeasurementDraftCompileCheck): string | undefined {
   const assignment = assignmentAtPath(context.authoring, check.path)
   if (!assignment) return undefined
-  const question = context.queries.find(candidate => candidate.id === assignment.queryId)?.query ?? 'an unavailable question'
+  const question = context.queries.find(candidate => candidate.id === assignment.queryId)?.query ?? 'an unavailable query'
   return `${propertyLabel(context.authoring, assignment.targetKey)} — ${question}`
 }
 
@@ -400,7 +400,7 @@ function reviewCheckMeaning(check: MeasurementDraftCompileCheck, context: Review
     case 'invalid-location':
       return {
         title: 'Fix a location',
-        detail: 'Choose a location configured for this project, or remove it from the question.',
+        detail: 'Choose a location configured for this project, or remove it from the query.',
         tone: 'negative',
         affected: [affected, contextValue(context, check, 'locations')].filter(Boolean).join(' — ') || undefined,
       }
@@ -455,49 +455,49 @@ function reviewCheckMeaning(check: MeasurementDraftCompileCheck, context: Review
       }
     case 'duplicate-assignment':
       return {
-        title: 'Remove a duplicate question',
-        detail: 'Assign each question to a Property only once.',
+        title: 'Remove a duplicate query',
+        detail: 'Assign each query to a Property only once.',
         tone: 'negative',
         affected,
       }
     case 'assignment-unknown-target':
       return {
-        title: 'Fix a question assignment',
-        detail: 'This question is assigned to a Property that is no longer in setup. Remove the assignment or add the Property back.',
+        title: 'Fix a query assignment',
+        detail: 'This query is assigned to a Property that is no longer in setup. Remove the assignment or add the Property back.',
         tone: 'negative',
         affected,
       }
     case 'assignment-excluded-target':
       return {
         title: 'Include or unassign a Property',
-        detail: 'This question is assigned to an excluded Property. Include it or remove the assignment.',
+        detail: 'This query is assigned to an excluded Property. Include it or remove the assignment.',
         tone: 'negative',
         affected,
       }
     case 'assignment-unknown-query':
       return {
-        title: 'Remove an unavailable question',
-        detail: 'This assignment refers to a tracked question that is no longer available. Remove it or add the question back to the project.',
+        title: 'Remove an unavailable query',
+        detail: 'This assignment refers to a tracked query that is no longer available. Remove it or add the query back to the project.',
         tone: 'negative',
         affected,
       }
     case 'assignment-unclassified':
       return {
-        title: 'Classify a question',
-        detail: 'Choose Branded or Non-brand for this question before publishing.',
+        title: 'Classify a query',
+        detail: 'Choose Branded or Non-brand for this query before publishing.',
         tone: 'negative',
         affected,
       }
     case 'query-limit-exceeded':
       return {
-        title: 'Reduce questions',
-        detail: 'This setup exceeds the distinct-question publishing limit. Remove some question assignments, then review again.',
+        title: 'Reduce queries',
+        detail: 'This setup exceeds the distinct-query publishing limit. Remove some query assignments, then review again.',
         tone: 'negative',
       }
     case 'target-without-assignments':
       return {
-        title: 'Assign questions',
-        detail: 'Assign at least one question to measure a Property.',
+        title: 'Assign queries',
+        detail: 'Assign at least one query to measure a Property.',
         tone: 'caution',
         affected,
       }
@@ -511,7 +511,7 @@ function reviewCheckMeaning(check: MeasurementDraftCompileCheck, context: Review
     case 'compiled-plan-too-large':
       return {
         title: 'Reduce setup size',
-        detail: 'This setup is too large to publish. Remove Properties, questions, or groups, then review again.',
+        detail: 'This setup is too large to publish. Remove Properties, queries, or groups, then review again.',
         tone: 'negative',
       }
     case 'active-revision-schema-v1':
@@ -547,11 +547,11 @@ function reviewCheckDetail(ruleId: string, detail: string, count: number, affect
   const detailWithCount = (() => {
   switch (ruleId) {
     case 'execution-context-no-provider':
-      return `${detail} ${pluralized(count, 'question assignment')} need${count === 1 ? 's' : ''} a provider.`
+      return `${detail} ${pluralized(count, 'query assignment')} need${count === 1 ? 's' : ''} a provider.`
     case 'target-without-aliases':
       return `${detail} ${pluralized(count, 'Property', 'Properties')} need${count === 1 ? 's' : ''} aliases.`
     case 'target-without-assignments':
-      return `${detail} ${pluralized(count, 'Property', 'Properties')} need${count === 1 ? 's' : ''} questions.`
+      return `${detail} ${pluralized(count, 'Property', 'Properties')} need${count === 1 ? 's' : ''} queries.`
     default:
       return count > 1 ? `${detail} ${pluralized(count, 'item')} need review.` : detail
   }
@@ -622,8 +622,8 @@ function warningFlag(
     case 'excluded-target-has-assignments':
       return {
         ...base,
-        title: 'Review excluded Property questions',
-        detail: `An excluded Property still has assigned questions. Include it or remove those questions before publishing.${suffix}`,
+        title: 'Review excluded Property queries',
+        detail: `An excluded Property still has assigned queries. Include it or remove those queries before publishing.${suffix}`,
       }
     case 'group-unknown-target':
       return {
@@ -672,7 +672,7 @@ function reviewedChanges(diff: MeasurementDraftDiff, preservesHistoricalResults 
   const groupChanges = diff.groups.added.length + diff.groups.removed.length + diff.groups.changed.length
   const assignmentChanges = diff.assignments.added + diff.assignments.removed + diff.assignments.reclassified
   if (targetChanges > 0) items.push(`${targetChanges} Property ${targetChanges === 1 ? 'change' : 'changes'}`)
-  if (assignmentChanges > 0) items.push(`${assignmentChanges} question assignment ${assignmentChanges === 1 ? 'change' : 'changes'}`)
+  if (assignmentChanges > 0) items.push(`${assignmentChanges} query assignment ${assignmentChanges === 1 ? 'change' : 'changes'}`)
   if (groupChanges > 0) items.push(`${groupChanges} group ${groupChanges === 1 ? 'change' : 'changes'}`)
   if (preservesHistoricalResults) items.unshift('Existing results remain visible after you publish this setup.')
   return {
@@ -1045,24 +1045,24 @@ export function AdvancedMeasurementSection({
   const reviewFlags = useMemo<AdvancedMeasurementFlaggedException[]>(() => [
     ...(assignmentCount === 0 ? [{
       id: 'no-query-assignments',
-      title: 'Assign at least one question',
-      detail: 'Apply a tracked question to at least one Property before publishing.',
+      title: 'Assign at least one query',
+      detail: 'Apply a tracked query to at least one Property before publishing.',
       tone: 'negative' as const,
     }] : []),
     ...((viewDraft?.authoring.assignments.some(assignment => assignment.queryClass === 'unclassified')
       && !(publishedDraftView && publishedPlan?.plan.schemaVersion === 1)) ? [{
       id: 'unclassified-query-assignments',
-      title: 'Remove an unavailable question',
-      detail: 'One or more saved assignments no longer have a tracked question. Clear them before publishing.',
+      title: 'Remove an unavailable query',
+      detail: 'One or more saved assignments no longer have a tracked query. Clear them before publishing.',
       tone: 'negative' as const,
     }] : []),
     ...serverFlags,
   ], [assignmentCount, publishedDraftView, publishedPlan, serverFlags, viewDraft])
 
   const queryAvailability = isQueryLoading
-    ? { status: 'unavailable' as const, message: 'Tracked questions are loading.' }
+    ? { status: 'unavailable' as const, message: 'Tracked queries are loading.' }
     : isQueryError
-      ? { status: 'unavailable' as const, message: 'Tracked questions could not be loaded. Retry before assigning Properties.' }
+      ? { status: 'unavailable' as const, message: 'Tracked queries could not be loaded. Retry before assigning Properties.' }
       : { status: 'available' as const }
 
   async function reviewSitemap(nextImportDraft: AdvancedMeasurementImportDraft): Promise<void> {
@@ -1096,12 +1096,12 @@ export function AdvancedMeasurementSection({
     try {
       return await onCreateQueries(texts)
     } catch (error) {
-      // The server says which question was rejected and why. Replacing that with
+      // The server says which query was rejected and why. Replacing that with
       // a house string is what sent an operator round in circles on the sitemap.
       setCreateQueriesError(extractErrorMessage(error))
       // Rethrow so the step keeps what the operator typed. Resolving here would
       // report failure and clear the box in the same breath, and they would have
-      // to retype every question to try again.
+      // to retype every query to try again.
       throw error
     } finally {
       setBusyAction(null)
@@ -1149,13 +1149,13 @@ export function AdvancedMeasurementSection({
       : { targetKeys: uniqueSorted(selection.propertyIds), queryIds: uniqueSorted(selection.queryIds) }
     if (!assignmentPreview || assignmentPreviewSelectionKey !== JSON.stringify(input)
       || !etag || assignmentPreview.draftEtag !== etag) {
-      setActionError('Review the latest assignment impact before assigning questions.')
+      setActionError('Review the latest assignment impact before assigning queries.')
       return
     }
     const next = await mutate(
       'assignments',
       currentEtag => service.applyAssignments(projectName, currentEtag, input),
-      'Could not apply these questions.',
+      'Could not apply these queries.',
     )
     if (next) {
       setSelectedQueryIds([])
@@ -1171,11 +1171,11 @@ export function AdvancedMeasurementSection({
         targetKeys: unique(selection.propertyIds),
         queryIds: [selection.queryId],
       }),
-      'Could not replace this question assignment.',
+      'Could not replace this query assignment.',
     )
     if (next) {
       setSelectedQueryIds(current => current.filter(queryId => queryId !== selection.queryId))
-      setAssignmentNotice('Question assignments replaced.')
+      setAssignmentNotice('Query assignments replaced.')
     }
   }
 
@@ -1196,13 +1196,13 @@ export function AdvancedMeasurementSection({
     const next = await mutate(
       'paired-assignments',
       currentEtag => service.applyPairedAssignments(projectName, currentEtag, [...pairs]),
-      'Could not assign these questions.',
+      'Could not assign these queries.',
       { preserveBusyAction },
     )
     // mutate reports failure by returning null, not by throwing. Swallowing that
     // let a failed assignment read as success: the questions were created, none
     // were assigned, and the authored pattern was cleared as if it had worked.
-    if (!next) throw new Error('Could not assign these questions.')
+    if (!next) throw new Error('Could not assign these queries.')
   }
 
   /**
@@ -1233,14 +1233,14 @@ export function AdvancedMeasurementSection({
         .map(pair => ({ targetKey: pair.propertyId, queryId: idByText.get(pair.text) }))
         .filter((pair): pair is { targetKey: string; queryId: string } => pair.queryId !== undefined)
       if (assignmentPairs.length !== pairs.length) {
-        const error = new Error('The created questions could not be matched to their Properties.')
-        setCreateQueriesError('The questions were added, but could not be paired with every Property. Try again to pair them.')
+        const error = new Error('The created queries could not be matched to their Properties.')
+        setCreateQueriesError('The queries were added, but could not be paired with every Property. Try again to pair them.')
         throw error
       }
       try {
         await applyPairedQuestions(assignmentPairs, true)
       } catch (error) {
-        setCreateQueriesError('The questions were added, but could not be assigned to their Properties. Try again to pair them.')
+        setCreateQueriesError('The queries were added, but could not be assigned to their Properties. Try again to pair them.')
         throw error
       }
     } finally {
@@ -1257,7 +1257,7 @@ export function AdvancedMeasurementSection({
     const next = await mutate(
       `remove-${queryId}`,
       currentEtag => service.removeAssignment(projectName, currentEtag, targetKeys, queryId),
-      'Could not clear this question assignment.',
+      'Could not clear this query assignment.',
     )
     if (next) setSelectedQueryIds(current => current.filter(id => id !== queryId))
   }
@@ -1555,7 +1555,7 @@ export function AdvancedMeasurementSection({
   }
 
   const retryQueries = isQueryError && onRetryQueries ? (
-    <div className="flex justify-end"><Button type="button" size="sm" variant="outline" className="min-h-11" onClick={onRetryQueries}>Retry questions</Button></div>
+    <div className="flex justify-end"><Button type="button" size="sm" variant="outline" className="min-h-11" onClick={onRetryQueries}>Retry queries</Button></div>
   ) : null
 
   return (
