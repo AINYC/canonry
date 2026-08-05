@@ -1,4 +1,5 @@
-import { BING_WMT_API_BASE, BING_SUBMIT_URL_BATCH_LIMIT, BING_SUBMIT_URL_DAILY_LIMIT, BING_REQUEST_TIMEOUT_MS } from './constants.js'
+import { withRetry, isRetryableHttpError, retryAfterDelayMs } from '@ainyc/canonry-contracts'
+import { BING_WMT_API_BASE, BING_SUBMIT_URL_BATCH_LIMIT, BING_SUBMIT_URL_DAILY_LIMIT, BING_REQUEST_TIMEOUT_MS, BING_MAX_RETRIES, BING_RETRY_BASE_DELAY_MS, BING_RETRY_MAX_DELAY_MS } from './constants.js'
 import type {
   BingSite,
   BingUrlInfo,
@@ -51,7 +52,7 @@ function validateUrls(urls: string[]): void {
   }
 }
 
-function bingClientLog(level: 'info' | 'error', action: string, ctx?: Record<string, unknown>): void {
+function bingClientLog(level: 'info' | 'warn' | 'error', action: string, ctx?: Record<string, unknown>): void {
   const entry: Record<string, unknown> = {
     ts: new Date().toISOString(),
     level,
@@ -71,7 +72,30 @@ function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-async function bingFetch<T>(apiKey: string, endpoint: string, opts?: { method?: string; body?: unknown }): Promise<T> {
+/**
+ * Pull Bing's `ErrorCode` out of an error body.
+ *
+ * Bing sometimes wraps the payload (`{"d":{...}}`) and sometimes does not, and
+ * a throttle body is small, so a tolerant parse beats a schema here — the
+ * caller only needs the number, and a miss degrades to "not a throttle".
+ */
+function parseBingErrorCode(body: string): number | null {
+  try {
+    const parsed = JSON.parse(body) as unknown
+    const root = parsed != null && typeof parsed === 'object' && 'd' in parsed
+      ? (parsed as { d: unknown }).d
+      : parsed
+    if (root != null && typeof root === 'object' && 'ErrorCode' in root) {
+      const code = (root as { ErrorCode: unknown }).ErrorCode
+      if (typeof code === 'number') return code
+    }
+  } catch {
+    // Non-JSON body (an HTML error page, say) — nothing to read.
+  }
+  return null
+}
+
+async function bingFetchOnce<T>(apiKey: string, endpoint: string, opts?: { method?: string; body?: unknown }): Promise<T> {
   const method = opts?.method ?? 'GET'
   const separator = endpoint.includes('?') ? '&' : '?'
   const url = `${BING_WMT_API_BASE}/${endpoint}${separator}apikey=${encodeURIComponent(apiKey)}`
@@ -99,11 +123,22 @@ async function bingFetch<T>(apiKey: string, endpoint: string, opts?: { method?: 
 
   if (!res.ok) {
     const body = await res.text()
-    bingClientLog('error', 'http.error', { endpoint, method, httpStatus: res.status })
     // Sanitize: avoid leaking API key from error messages if it appears in the body
     let detail = body.length <= 500 ? body : `${body.slice(0, 500)}... [truncated]`
     detail = detail.replace(new RegExp(escapeRegExp(apiKey), 'g'), '***')
-    throw new BingApiError(`Bing API error (${res.status}): ${detail}`, res.status)
+
+    // Bing reports throttling as a 400 with the condition in the body, so the
+    // status alone cannot tell a throttle from a bad request. Pull out its
+    // ErrorCode and let BingApiError classify it.
+    const bingErrorCode = parseBingErrorCode(body)
+    const err = new BingApiError(`Bing API error (${res.status}): ${detail}`, res.status, bingErrorCode)
+    bingClientLog('error', err.isThrottle ? 'http.throttled' : 'http.error', {
+      endpoint,
+      method,
+      httpStatus: res.status,
+      bingErrorCode,
+    })
+    throw err
   }
 
   const text = await res.text()
@@ -121,6 +156,55 @@ async function bingFetch<T>(apiKey: string, endpoint: string, opts?: { method?: 
   } catch {
     throw new BingApiError('Bing API returned invalid JSON', 502)
   }
+}
+
+/**
+ * Every Bing call goes through here, so retry is the default rather than
+ * something each call site remembers.
+ *
+ * Bing throttles per host and per API key, and a host limit is shared by every
+ * project on the instance — so a refresh that inspects a few dozen URLs will
+ * hit it no matter how careful one project is. Without backoff those calls
+ * simply failed: a live instance logged 229 throttle failures in three days,
+ * the first ten calls succeeding and the rest giving up immediately.
+ *
+ * `isRetryableHttpError` recognizes the throttle through `BingApiError`, which
+ * carries Bing's own ErrorCode, and honours a `Retry-After` when one is sent.
+ * Auth, validation, and not-found still fail on the first attempt.
+ *
+ * **What is retried depends on the method**, because not every Bing call is
+ * safe to replay. `SubmitUrl` / `SubmitUrlBatch` spend a daily quota
+ * (`BING_SUBMIT_URL_DAILY_LIMIT`) and `AddSite` mutates the account:
+ *
+ *   - A **throttle** is retried on any method. Bing rejects a throttled request
+ *     at the gate rather than acting on it, so a repeat cannot double-submit.
+ *     This is the case the retry exists for.
+ *   - A **5xx or network failure** is retried only on GET. Those are ambiguous
+ *     — the request may have been processed and the response lost — so
+ *     replaying a POST could submit the same URLs twice and burn quota that
+ *     cannot be reclaimed. A read costs nothing to repeat.
+ */
+async function bingFetch<T>(apiKey: string, endpoint: string, opts?: { method?: string; body?: unknown }): Promise<T> {
+  const isIdempotent = (opts?.method ?? 'GET') === 'GET'
+
+  return withRetry(() => bingFetchOnce<T>(apiKey, endpoint, opts), {
+    maxRetries: BING_MAX_RETRIES,
+    baseDelayMs: BING_RETRY_BASE_DELAY_MS,
+    maxDelayMs: BING_RETRY_MAX_DELAY_MS,
+    isRetryable: (err) => {
+      if (err instanceof BingApiError && err.isThrottle) return true
+      return isIdempotent && isRetryableHttpError(err)
+    },
+    computeDelayMs: (_attempt, err, defaultMs) => retryAfterDelayMs(err) ?? defaultMs,
+    onRetry: ({ attempt, err, delayMs }) => {
+      bingClientLog('warn', 'http.retry', {
+        endpoint,
+        attempt,
+        delayMs: Math.round(delayMs),
+        throttled: err instanceof BingApiError ? err.isThrottle : false,
+      })
+    },
+  })
 }
 
 export async function getSites(apiKey: string): Promise<BingSite[]> {
