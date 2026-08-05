@@ -254,3 +254,87 @@ export function normalizeUrlPath(input: string | null | undefined): string | nul
   if (pairs.length === 0) return pathPart
   return `${pathPart}?${encodeQuery(pairs)}`
 }
+
+/**
+ * Resolve landing paths that are truncated forms of a real page.
+ *
+ * Analytics landing paths arrive cut short when a URL was line-wrapped in a
+ * plain-text context or pasted out of chat output: `/aeo-met`, `/aeo-meth` and
+ * `/aeo-methodolo` all standing in for `/aeo-methodology`, each carrying a
+ * slice of that page's sessions. Nothing in the string itself distinguishes a
+ * truncation from a genuine 404, so this resolves only against a list of pages
+ * known to exist, and only when the answer is unambiguous:
+ *
+ *   - the observed path is not itself a known page — a real page keeps its own
+ *     identity even when it prefixes others;
+ *   - it is a STRICT prefix of exactly one known page;
+ *   - both have the same number of path segments, so a section root never
+ *     folds into one of its children.
+ *
+ * Everything else is left alone. Two known pages sharing a prefix, or an empty
+ * known list, produce no folds at all.
+ *
+ * Returns observed → known for the paths that fold; a path absent from the map
+ * keeps its own identity.
+ */
+export function resolveTruncatedPaths(
+  observed: Iterable<string>,
+  knownPaths: Iterable<string>,
+): Map<string, string> {
+  const folds = new Map<string, string>()
+
+  const known = new Set<string>()
+  for (const path of knownPaths) {
+    if (path) known.add(path)
+  }
+  if (known.size === 0) return folds
+
+  // Sorted, so every page sharing a given prefix forms one contiguous run that
+  // a binary search can jump straight to. Comparing each observed path against
+  // the whole page list instead is quadratic: on a store with a few thousand of
+  // each it cost ~220ms per request, which is not a price a dashboard read
+  // should pay.
+  const sorted = [...known].sort()
+
+  const depthOf = (path: string): number => path.split('/').filter(Boolean).length
+
+  /** Index of the first known path that is not ordered before `prefix`. */
+  const lowerBound = (prefix: string): number => {
+    let lo = 0
+    let hi = sorted.length
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if (sorted[mid]! < prefix) lo = mid + 1
+      else hi = mid
+    }
+    return lo
+  }
+
+  for (const path of observed) {
+    if (!path || known.has(path)) continue
+
+    const depth = depthOf(path)
+    let match: string | null = null
+    let ambiguous = false
+
+    for (let i = lowerBound(path); i < sorted.length; i++) {
+      const candidate = sorted[i]!
+      // The prefix run is contiguous, so the first miss ends it.
+      if (!candidate.startsWith(path)) break
+      // Strict prefix: a candidate no longer than the observed path cannot be
+      // the fuller form of it.
+      if (candidate.length <= path.length) continue
+      if (depthOf(candidate) !== depth) continue
+
+      if (match !== null) {
+        ambiguous = true
+        break
+      }
+      match = candidate
+    }
+
+    if (match !== null && !ambiguous) folds.set(path, match)
+  }
+
+  return folds
+}

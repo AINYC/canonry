@@ -2,8 +2,8 @@ import crypto from 'node:crypto'
 import { eq, desc, and, sql } from 'drizzle-orm'
 import type { SQL, SQLWrapper } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
-import { gaTrafficSnapshots, gaTrafficSummaries, gaTrafficWindowSummaries, gaDailyTotals, gaAiReferrals, gaSocialReferrals, gaAcquisitionDaily, gaLeadEventsDaily, gaMeasurementSyncStates, runs } from '@ainyc/canonry-db'
-import { classifyAiReferralTrafficClass, validationError, notFound, RunKinds, RunStatuses, RunTriggers, resolveDateRange, normalizeUrlPath } from '@ainyc/canonry-contracts'
+import { gaTrafficSnapshots, gaTrafficSummaries, gaTrafficWindowSummaries, gaDailyTotals, gaAiReferrals, gaSocialReferrals, gaAcquisitionDaily, gaLeadEventsDaily, gaMeasurementSyncStates, siteAuditPages, siteAuditSnapshots, runs } from '@ainyc/canonry-db'
+import { classifyAiReferralTrafficClass, validationError, notFound, RunKinds, RunStatuses, RunTriggers, resolveDateRange, normalizeUrlPath, resolveTruncatedPaths } from '@ainyc/canonry-contracts'
 import type { GA4ChannelBreakdownDto, ResolvedDateRange } from '@ainyc/canonry-contracts'
 import { resolveProject, writeAuditLog } from './helpers.js'
 import { buildSessionHistory } from './ga-session-history.js'
@@ -59,6 +59,88 @@ const UNATTRIBUTED_LANDING_PAGE = '(not set)'
  */
 function landingPageGroupKey(normalized: SQLWrapper, raw: SQLWrapper): SQL<string> {
   return sql<string>`COALESCE(${normalized}, NULLIF(NULLIF(TRIM(${raw}), ''), ${UNATTRIBUTED_LANDING_PAGE}), ${UNATTRIBUTED_LANDING_PAGE})`
+}
+
+/**
+ * The paths of the pages the most recent site audit actually crawled.
+ *
+ * This is the only authority we have on which paths exist, and it is what makes
+ * folding truncated landing paths safe — without it there is no way to tell
+ * `/aeo-met` from a real page. Returns an empty list when the project has never
+ * been audited, which turns the fold into a no-op rather than a guess.
+ */
+function auditedPagePaths(db: FastifyInstance['db'], projectId: string): string[] {
+  const latest = db
+    .select({ runId: siteAuditSnapshots.runId })
+    .from(siteAuditSnapshots)
+    .where(eq(siteAuditSnapshots.projectId, projectId))
+    .orderBy(desc(siteAuditSnapshots.createdAt))
+    .limit(1)
+    .get()
+  if (!latest) return []
+
+  const paths: string[] = []
+  for (const row of db.select({ url: siteAuditPages.url }).from(siteAuditPages).where(eq(siteAuditPages.runId, latest.runId)).all()) {
+    let pathname: string
+    try {
+      pathname = new URL(row.url).pathname
+    } catch {
+      continue
+    }
+    const normalized = normalizeUrlPath(pathname)
+    if (normalized) paths.push(normalized)
+  }
+  return paths
+}
+
+interface LandingPageRow {
+  landingPage: string
+  sessions: number | null
+  organicSessions: number | null
+  users: number | null
+  /** Present on the `/ga/traffic` rows, absent on `/ga/coverage`. */
+  directSessions?: number | null
+}
+
+/**
+ * Merge landing-page rows whose path is a truncated form of a real page.
+ *
+ * A URL that was line-wrapped in a plain-text context or pasted out of chat
+ * output arrives cut short, so one page's sessions land under several paths —
+ * `/aeo-met`, `/aeo-meth` and `/aeo-methodolo` each holding a slice of
+ * `/aeo-methodology`. `resolveTruncatedPaths` decides what folds; this applies
+ * the decision and re-sorts, since a merged row can outrank rows above it.
+ *
+ * Callers MUST fold before applying any top-N limit. Folding a truncated
+ * fragment into a page that the limit already cut would drop those sessions.
+ */
+function foldTruncatedLandingPages<T extends LandingPageRow>(rows: T[], knownPaths: readonly string[]): T[] {
+  const folds = resolveTruncatedPaths(rows.map((r) => r.landingPage), knownPaths)
+  if (folds.size === 0) return rows
+
+  const merged = new Map<string, T>()
+  for (const row of rows) {
+    const target = folds.get(row.landingPage) ?? row.landingPage
+    const existing = merged.get(target)
+    if (!existing) {
+      merged.set(target, { ...row, landingPage: target })
+      continue
+    }
+    merged.set(target, {
+      ...existing,
+      sessions: (existing.sessions ?? 0) + (row.sessions ?? 0),
+      organicSessions: (existing.organicSessions ?? 0) + (row.organicSessions ?? 0),
+      ...(existing.directSessions === undefined && row.directSessions === undefined
+        ? {}
+        : { directSessions: (existing.directSessions ?? 0) + (row.directSessions ?? 0) }),
+      // `users` is a COUNT DISTINCT at the grain GA was asked for. Summing it
+      // across merged rows would count one visitor once per fragment, so the
+      // merged row keeps the larger input rather than inventing a total.
+      users: Math.max(existing.users ?? 0, row.users ?? 0),
+    })
+  }
+
+  return [...merged.values()].sort((a, b) => (b.sessions ?? 0) - (a.sessions ?? 0))
 }
 
 // Format a session-share as a display string. Returns "<1%" for non-zero shares
@@ -1139,7 +1221,21 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     // the same page collapse, partially-backfilled state (where older rows have
     // null normalized) still aggregates correctly, and GA4's unattributed
     // sentinels land in one bucket rather than one row each.
-    const rows = app.db
+    // Read the page list first, because whether it is empty decides how this
+    // query is bounded.
+    //
+    // When a fold is possible the limit CANNOT run in SQL: a fragment and the
+    // page that absorbs it can sit either side of the cut, and folding into a
+    // page the limit had already dropped would lose its sessions entirely. So
+    // the query comes back whole and `slice` applies the limit after.
+    //
+    // When there is no page list nothing can fold, and pulling every grouped
+    // row to return `limit` of them is waste that scales with the site — the
+    // largest project on a live instance has over three thousand distinct
+    // landing paths. There, SQL bounds it as it did before.
+    const knownPaths = auditedPagePaths(app.db, project.id)
+
+    const topPagesQuery = app.db
       .select({
         landingPage: landingPageGroupKey(gaTrafficSnapshots.landingPageNormalized, gaTrafficSnapshots.landingPage),
         sessions: sql<number>`SUM(${gaTrafficSnapshots.sessions})`,
@@ -1151,8 +1247,10 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       .where(and(...snapshotConditions))
       .groupBy(landingPageGroupKey(gaTrafficSnapshots.landingPageNormalized, gaTrafficSnapshots.landingPage))
       .orderBy(sql`SUM(${gaTrafficSnapshots.sessions}) DESC`)
-      .limit(limit)
-      .all()
+
+    const rows = knownPaths.length === 0
+      ? topPagesQuery.limit(limit).all()
+      : foldTruncatedLandingPages(topPagesQuery.all(), knownPaths).slice(0, limit)
 
     const aiReferralRows = app.db
       .select({
@@ -1767,8 +1865,10 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       .orderBy(sql`SUM(${gaTrafficSnapshots.sessions}) DESC`)
       .all()
 
+    const foldedPages = foldTruncatedLandingPages(trafficPages, auditedPagePaths(app.db, project.id))
+
     return {
-      pages: trafficPages.map((r) => ({
+      pages: foldedPages.map((r) => ({
         landingPage: r.landingPage,
         sessions: r.sessions ?? 0,
         organicSessions: r.organicSessions ?? 0,
