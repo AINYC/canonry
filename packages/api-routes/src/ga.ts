@@ -30,6 +30,37 @@ function gaLog(level: 'info' | 'warn' | 'error', action: string, ctx?: Record<st
   stream.write(JSON.stringify(entry) + '\n')
 }
 
+/**
+ * The label GA4 itself uses for a session it could not attribute to a landing
+ * page. It is also the single bucket every unattributed variant collapses into,
+ * so the dashboard shows one such row instead of several.
+ */
+const UNATTRIBUTED_LANDING_PAGE = '(not set)'
+
+/**
+ * Group key for a landing page.
+ *
+ * `landing_page_normalized` is NULL for two unrelated reasons, and a plain
+ * `COALESCE(normalized, raw)` cannot tell them apart:
+ *
+ *   1. the row predates the normalizer, so the raw value is the best we have
+ *      and falling back to it is correct;
+ *   2. `normalizeUrlPath` looked at the raw value and deliberately mapped it to
+ *      nothing — GA4's `(not set)` placeholder, the empty string, or whitespace.
+ *
+ * In case 2 the fallback resurrects the very sentinel normalization discarded,
+ * and because GA4 emits both `(not set)` and `''` for the same condition they
+ * land as two separate rows for one thing. Blanking the sentinels before the
+ * fallback collapses them into a single `(not set)` bucket while leaving case 1
+ * untouched. The trailing `COALESCE` arm keeps the key total: both landing-page
+ * columns are NOT NULL today, so it is defensive rather than reachable.
+ *
+ * Keep the sentinel list in step with `normalizeUrlPath`.
+ */
+function landingPageGroupKey(normalized: SQLWrapper, raw: SQLWrapper): SQL<string> {
+  return sql<string>`COALESCE(${normalized}, NULLIF(NULLIF(TRIM(${raw}), ''), ${UNATTRIBUTED_LANDING_PAGE}), ${UNATTRIBUTED_LANDING_PAGE})`
+}
+
 // Format a session-share as a display string. Returns "<1%" for non-zero shares
 // that round below 1%, so 18 AI sessions out of 6000 reads "<1%" instead of
 // "0%" — the display matches the integer pct field exactly otherwise.
@@ -1104,12 +1135,13 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       .where(eq(gaTrafficSummaries.projectId, project.id))
       .get()
 
-    // Group by COALESCE(normalized, raw) so click-ID-fragmented variants
-    // of the same page collapse, and partially-backfilled state (where
-    // older rows have null normalized) still aggregates correctly.
+    // Group by the shared landing-page key so click-ID-fragmented variants of
+    // the same page collapse, partially-backfilled state (where older rows have
+    // null normalized) still aggregates correctly, and GA4's unattributed
+    // sentinels land in one bucket rather than one row each.
     const rows = app.db
       .select({
-        landingPage: sql<string>`COALESCE(${gaTrafficSnapshots.landingPageNormalized}, ${gaTrafficSnapshots.landingPage})`,
+        landingPage: landingPageGroupKey(gaTrafficSnapshots.landingPageNormalized, gaTrafficSnapshots.landingPage),
         sessions: sql<number>`SUM(${gaTrafficSnapshots.sessions})`,
         organicSessions: sql<number>`SUM(${gaTrafficSnapshots.organicSessions})`,
         directSessions: sql<number>`COALESCE(SUM(${gaTrafficSnapshots.directSessions}), 0)`,
@@ -1117,7 +1149,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       })
       .from(gaTrafficSnapshots)
       .where(and(...snapshotConditions))
-      .groupBy(sql`COALESCE(${gaTrafficSnapshots.landingPageNormalized}, ${gaTrafficSnapshots.landingPage})`)
+      .groupBy(landingPageGroupKey(gaTrafficSnapshots.landingPageNormalized, gaTrafficSnapshots.landingPage))
       .orderBy(sql`SUM(${gaTrafficSnapshots.sessions}) DESC`)
       .limit(limit)
       .all()
@@ -1141,7 +1173,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         medium: gaAiReferrals.medium,
         trafficClass: gaAiReferrals.trafficClass,
         sourceDimension: gaAiReferrals.sourceDimension,
-        landingPage: sql<string>`COALESCE(${gaAiReferrals.landingPageNormalized}, ${gaAiReferrals.landingPage})`,
+        landingPage: landingPageGroupKey(gaAiReferrals.landingPageNormalized, gaAiReferrals.landingPage),
         sessions: sql<number>`SUM(${gaAiReferrals.sessions})`,
       })
       .from(gaAiReferrals)
@@ -1151,7 +1183,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         gaAiReferrals.medium,
         gaAiReferrals.trafficClass,
         gaAiReferrals.sourceDimension,
-        sql`COALESCE(${gaAiReferrals.landingPageNormalized}, ${gaAiReferrals.landingPage})`,
+        landingPageGroupKey(gaAiReferrals.landingPageNormalized, gaAiReferrals.landingPage),
       )
       .all()
 
@@ -1358,7 +1390,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         source: gaAiReferrals.source,
         medium: gaAiReferrals.medium,
         trafficClass: gaAiReferrals.trafficClass,
-        landingPage: sql<string>`COALESCE(${gaAiReferrals.landingPageNormalized}, ${gaAiReferrals.landingPage})`,
+        landingPage: landingPageGroupKey(gaAiReferrals.landingPageNormalized, gaAiReferrals.landingPage),
         sourceDimension: gaAiReferrals.sourceDimension,
         sessions: sql<number>`SUM(${gaAiReferrals.sessions})`,
         users: sql<number>`SUM(${gaAiReferrals.users})`,
@@ -1371,7 +1403,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         gaAiReferrals.medium,
         gaAiReferrals.trafficClass,
         gaAiReferrals.sourceDimension,
-        sql`COALESCE(${gaAiReferrals.landingPageNormalized}, ${gaAiReferrals.landingPage})`,
+        landingPageGroupKey(gaAiReferrals.landingPageNormalized, gaAiReferrals.landingPage),
       )
       .orderBy(gaAiReferrals.date)
       .all()
@@ -1718,20 +1750,20 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     const project = resolveProject(app.db, request.params.name)
     requireGa4Connection(opts, project.name, project.canonicalDomain)
 
-    // Group by COALESCE(normalized, raw) so click-ID-fragmented variants of
+    // Group by the shared landing-page key so click-ID-fragmented variants of
     // the same page collapse — same identity rule as /ga/traffic. Mirrored
     // here so `canonry ga coverage` and the MCP `canonry_ga_coverage` tool
     // see the same canonicalized page list as the dashboard.
     const trafficPages = app.db
       .select({
-        landingPage: sql<string>`COALESCE(${gaTrafficSnapshots.landingPageNormalized}, ${gaTrafficSnapshots.landingPage})`,
+        landingPage: landingPageGroupKey(gaTrafficSnapshots.landingPageNormalized, gaTrafficSnapshots.landingPage),
         sessions: sql<number>`SUM(${gaTrafficSnapshots.sessions})`,
         organicSessions: sql<number>`SUM(${gaTrafficSnapshots.organicSessions})`,
         users: sql<number>`SUM(${gaTrafficSnapshots.users})`,
       })
       .from(gaTrafficSnapshots)
       .where(eq(gaTrafficSnapshots.projectId, project.id))
-      .groupBy(sql`COALESCE(${gaTrafficSnapshots.landingPageNormalized}, ${gaTrafficSnapshots.landingPage})`)
+      .groupBy(landingPageGroupKey(gaTrafficSnapshots.landingPageNormalized, gaTrafficSnapshots.landingPage))
       .orderBy(sql`SUM(${gaTrafficSnapshots.sessions}) DESC`)
       .all()
 

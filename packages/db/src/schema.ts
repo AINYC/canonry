@@ -785,9 +785,15 @@ export const gaTrafficSnapshots = sqliteTable('ga_traffic_snapshots', {
   /**
    * Canonicalized form of `landingPage` produced by `normalizeUrlPath()` in
    * `@ainyc/canonry-contracts`. Nullable so existing rows survive migration;
-   * new GA4 sync writes populate it. Per-page aggregations should
-   * `GROUP BY COALESCE(landing_page_normalized, landing_page)` so
-   * partially-backfilled state still aggregates correctly.
+   * new GA4 sync writes populate it.
+   *
+   * NULL means two different things — the row predates the normalizer, or the
+   * normalizer looked at the raw value and deliberately mapped it to nothing
+   * (GA4's `(not set)` placeholder, an empty string, whitespace). A bare
+   * `COALESCE(landing_page_normalized, landing_page)` cannot tell them apart
+   * and resurrects the sentinels as their own rows. Per-page aggregations go
+   * through `landingPageGroupKey()` in `packages/api-routes/src/ga.ts`, which
+   * blanks the sentinels before the fallback.
    */
   landingPageNormalized: text('landing_page_normalized'),
   sessions: integer('sessions').notNull().default(0),
