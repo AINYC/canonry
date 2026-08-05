@@ -878,6 +878,22 @@ This is not optional. If you add a table to the schema but omit the migration, t
 - [ ] Matching migration added to `MIGRATIONS` in `migrate.ts`
 - [ ] `pnpm typecheck && pnpm lint && pnpm test` all pass before committing
 
+## Third-party HTTP calls (Critical)
+
+**Every integration that talks to a third party over HTTP must back off when that service pushes back.** Wrap the package's HTTP layer in `withRetry` from `@ainyc/canonry-contracts` — one private `fetchOnce`, one exported wrapper — so retry is the default rather than something each call site remembers. `packages/integration-bing/src/bing-client.ts` is the reference shape.
+
+### Rules
+
+1. **Retry is a property of the client, not the caller.** If a call site can forget it, it will.
+2. **Do not write a status-code check by hand.** Use `isRetryableHttpError`, which retries rate limiting, 5xx, and network errors, and refuses auth/validation/not-found.
+3. **Rate limiting is not always HTTP 429.** A service may report a throttle on a 4xx, or a 200, with the condition in the body — Bing answers `400` with `{"ErrorCode":5,"Message":"ERROR!!! ThrottleHost"}`. `isRateLimitError` therefore tests semantically: `Retry-After`, then 429, then documented throttle markers in the message. If a service signals throttling through a private numeric code, surface that code's meaning in the error message or set `retryAfter` on the error, or the shared predicate cannot see it (see `BingApiError`).
+4. **Honour `Retry-After`.** Pass `computeDelayMs: (_a, err, defaultMs) => retryAfterDelayMs(err) ?? defaultMs`. Backing off 1s against a limiter asking for 60 just burns the remaining attempts.
+5. **Tune the base delay to the service.** The 1s default is for one-off blips. A service that throttles a burst needs a base above the window it throttles over — Bing uses 2s doubling to a 30s ceiling.
+6. **Test both directions.** A retry test that only proves "transient failure eventually succeeds" is half a test. Also assert that auth and validation failures are *not* retried — retrying a permanent failure multiplies load for nothing.
+
+`packages/contracts/test/integration-retry-coverage.test.ts` enforces this: a new HTTP-calling integration without `withRetry` fails CI. Packages that predate the rule are listed there explicitly, and the list may only shrink.
+
+
 ## Authentication Storage
 
 - The local config file at `~/.canonry/config.yaml` is the source of truth for authentication credentials.
@@ -1059,7 +1075,7 @@ This repo uses per-package `AGENTS.md` files for local context. **These must sta
 | Add a new MCP toolkit | Add the toolkit name to `packages/canonry/src/mcp/toolkits.ts`, tag the relevant tools with the new tier, and update the toolkit table in `docs/mcp.md` |
 | Add a new UI dashboard section or widget | Verify backing API endpoint + CLI command exist first (UI/CLI parity rule) |
 | Add a new provider package | Update `docs/providers/README.md` and create `docs/providers/<name>.md` |
-| Add a new integration package | Create `packages/integration-<name>/AGENTS.md` |
+| Add a new integration package | Create `packages/integration-<name>/AGENTS.md`; wrap its HTTP layer in `withRetry` (see "Third-party HTTP calls" below) |
 | Change a critical pattern (error handling, DB access, auth) | Update the relevant package's AGENTS.md patterns section |
 | Add a new dependency between packages | Update `docs/architecture.md` module dependency graph |
 | Add a generic utility (formatter, parser, normalizer) | Add it to `packages/contracts/src/<topic>.ts`, re-export from `index.ts`, add tests in `packages/contracts/test/<topic>.test.ts`. Update the "Where utilities live" table in this file if introducing a new category. |
