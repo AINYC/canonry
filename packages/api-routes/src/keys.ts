@@ -27,20 +27,42 @@ import { auditFromRequest, writeAuditLog } from './helpers.js'
  */
 export const KEYS_WRITE_SCOPE = 'keys.write'
 
-/** Map a raw `api_keys` row to the SAFE public DTO (never exposes `keyHash`). */
-function toApiKeyDto(row: typeof apiKeys.$inferSelect): ApiKeyDto {
+/**
+ * Map a raw `api_keys` row to the SAFE public DTO (never exposes `keyHash`).
+ *
+ * `projectNames` maps project id to name so a scoped key can report which
+ * project it reaches. A key whose project has since been deleted keeps its
+ * `projectId` and reports a null name: the scope is still real and still
+ * enforced, so reporting it as full-instance would be a lie in the dangerous
+ * direction.
+ */
+function toApiKeyDto(
+  row: typeof apiKeys.$inferSelect,
+  projectNames: ReadonlyMap<string, string>,
+): ApiKeyDto {
   const scopes = Array.isArray(row.scopes) ? row.scopes : []
+  const projectId = row.projectId ?? null
   return {
     id: row.id,
     name: row.name,
     keyPrefix: row.keyPrefix,
     scopes,
-    projectId: row.projectId ?? null,
+    projectId,
+    projectName: projectId ? projectNames.get(projectId) ?? null : null,
     readOnly: isReadOnlyKey(scopes),
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt ?? null,
     revokedAt: row.revokedAt ?? null,
   }
+}
+
+/**
+ * Project id to name for every project a key could be scoped to. Read once per
+ * request rather than per row: the list is small and unfiltered here because a
+ * caller who can list keys can already list projects.
+ */
+function projectNameById(db: FastifyInstance['db']): Map<string, string> {
+  return new Map(db.select().from(projects).all().map(p => [p.id, p.name]))
 }
 
 export async function keysRoutes(app: FastifyInstance) {
@@ -64,7 +86,8 @@ export async function keysRoutes(app: FastifyInstance) {
         .from(apiKeys)
         .orderBy(desc(apiKeys.createdAt))
         .all()
-    return { keys: rows.map(toApiKeyDto) }
+    const names = projectNameById(app.db)
+    return { keys: rows.map(row => toApiKeyDto(row, names)) }
   })
 
   // Introspect the CURRENT key — the one that authenticated this request.
@@ -83,7 +106,7 @@ export async function keysRoutes(app: FastifyInstance) {
     if (!row) {
       throw notFound('API key', id)
     }
-    return toApiKeyDto(row)
+    return toApiKeyDto(row, projectNameById(app.db))
   })
 
   // Create a key — requires the keys.write scope. Mints a `cnry_…` token,
@@ -150,6 +173,9 @@ export async function keysRoutes(app: FastifyInstance) {
       keyPrefix,
       scopes: effectiveScopes,
       projectId: projectId ?? null,
+      // Resolved from the project the caller just named, so the response says
+      // what the key reaches without a second round trip.
+      projectName: projectId ? projectNameById(app.db).get(projectId) ?? null : null,
       readOnly: isReadOnlyKey(effectiveScopes),
       createdAt: now,
       lastUsedAt: null,
@@ -186,7 +212,7 @@ export async function keysRoutes(app: FastifyInstance) {
 
     // Idempotent: already revoked → return as-is, no second audit entry.
     if (row.revokedAt) {
-      return toApiKeyDto(row)
+      return toApiKeyDto(row, projectNameById(app.db))
     }
 
     const now = new Date().toISOString()
@@ -201,6 +227,6 @@ export async function keysRoutes(app: FastifyInstance) {
       }))
     })
 
-    return toApiKeyDto({ ...row, revokedAt: now })
+    return toApiKeyDto({ ...row, revokedAt: now }, projectNameById(app.db))
   })
 }

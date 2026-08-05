@@ -18,6 +18,14 @@ export const apiKeyDtoSchema = z.object({
    */
   projectId: z.string().nullable(),
   /**
+   * The scoped project's name, or `null` for a full-instance key. Resolved
+   * server-side so a surface listing keys does not have to fetch every project
+   * to turn an id into something a person can read — the id alone cannot answer
+   * "is this key safe to hand to someone", which is the question the list is
+   * usually open to answer. Additive field.
+   */
+  projectName: z.string().nullable(),
+  /**
    * Server-derived convenience flag: `true` when this key is read-only (carries
    * the `read` scope and no write-granting scope), in which case the API rejects
    * every write HTTP method for it. Derived from `scopes` via `isReadOnlyKey`

@@ -31,16 +31,33 @@ export async function listApiKeys(format?: string): Promise<void> {
   }
 
   console.log(
-    `${'NAME'.padEnd(20)} ${'PREFIX'.padEnd(11)} ${'SCOPES'.padEnd(20)} ${'CREATED'.padEnd(12)} ${'LAST USED'.padEnd(12)} STATUS`,
+    `${'NAME'.padEnd(20)} ${'PREFIX'.padEnd(11)} ${'SCOPES'.padEnd(20)} ${'REACH'.padEnd(18)} ${'CREATED'.padEnd(12)} ${'LAST USED'.padEnd(12)} STATUS`,
   )
   for (const key of keys) {
     const scopes = key.scopes.join(',')
     const lastUsed = key.lastUsedAt ? formatIsoDate(key.lastUsedAt) : '—'
     console.log(
-      `${key.name.padEnd(20)} ${key.keyPrefix.padEnd(11)} ${scopes.padEnd(20)} ` +
+      `${key.name.padEnd(20)} ${key.keyPrefix.padEnd(11)} ${scopes.padEnd(20)} ${keyReach(key).padEnd(18)} ` +
       `${formatIsoDate(key.createdAt).padEnd(12)} ${lastUsed.padEnd(12)} ${keyStatus(key)}`,
     )
   }
+}
+
+/**
+ * How far a key reaches. Worth its own column because it is the question an
+ * operator is usually holding this list open to answer — whether a key can be
+ * handed to somebody — and `scopes` alone does not answer it: a `read` key with
+ * no project still reads every project on the install.
+ */
+function keyReach(key: ApiKeyDto): string {
+  if (!key.projectId) return 'full instance'
+  if (typeof key.projectName === 'string') return key.projectName
+  // Absent and null mean different things and must not collapse. A server
+  // older than this field sends nothing, so fall back to the id rather than
+  // claim the project is gone; only an explicit null is the server saying it
+  // looked and found no project. The scope is real either way, so neither
+  // renders as full instance.
+  return key.projectName === null ? '(deleted project)' : key.projectId.slice(0, 8)
 }
 
 export async function createApiKey(opts: {
