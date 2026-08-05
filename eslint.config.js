@@ -205,7 +205,7 @@ export default tseslint.config(
     // Rules of Hooks. A hook called after an early return changes the hook
     // count between renders and throws at runtime; the embed shell hit this on
     // every cold load because it always renders the loading branch first.
-    files: ['apps/web/**/*.tsx'],
+    files: ['apps/web/**/*.ts', 'apps/web/**/*.tsx'],
     plugins: { 'react-hooks': reactHooksPlugin },
     rules: {
       'react-hooks/rules-of-hooks': 'error',
