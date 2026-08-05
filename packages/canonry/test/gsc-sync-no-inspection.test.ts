@@ -110,4 +110,43 @@ describe('gsc-sync does not inspect URLs', () => {
     expect(requested.filter((u) => u.includes('searchAnalytics')).length).toBe(3)
     expect(db.runUpdates.some((u) => u.status === 'completed')).toBe(true)
   })
+
+  it('writes coverage for every page from impressions, inspecting nothing', async () => {
+    globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      requested.push(url)
+      if (url.includes('oauth2') || url.includes('token')) {
+        return new Response(JSON.stringify({ access_token: 'tok', expires_in: 3600 }), { status: 200 })
+      }
+      return new Response(JSON.stringify({
+        rows: [
+          // Two pages that Google actually served — provably indexed, free.
+          { keys: ['q1', 'https://example.com/a', 'US', 'DESKTOP', '2026-08-01'], clicks: 9, impressions: 90, position: 3 },
+          { keys: ['q2', 'https://example.com/b', 'US', 'DESKTOP', '2026-08-01'], clicks: 0, impressions: 4, position: 40 },
+          // One page present in the data with no impressions at all: unknown,
+          // NOT "not indexed" — nothing here proves Google excluded it.
+          { keys: ['q3', 'https://example.com/c', 'US', 'DESKTOP', '2026-08-01'], clicks: 0, impressions: 0, position: 90 },
+        ],
+      }), { status: 200 })
+    }) as unknown as typeof globalThis.fetch
+
+    const db = makeDb({ id: 'proj-1', canonicalDomain: 'example.com' })
+    await executeGscSync(db as never, 'run-1', 'proj-1', { config: CONFIG as never })
+
+    const snapshot = db.inserted.find((row) => row && typeof row === 'object' && 'unknownPages' in row) as {
+      indexed: number; notIndexed: number; unknownPages: number
+      verifiedByInspection: number; derivedFromImpressions: number
+    } | undefined
+
+    expect(snapshot, 'gsc-sync should still write a coverage snapshot').toBeDefined()
+    expect(snapshot!.indexed).toBe(2)
+    expect(snapshot!.unknownPages).toBe(1)
+    // The load-bearing assertion: a page with no impressions is unknown, never
+    // reported as excluded from the index.
+    expect(snapshot!.notIndexed).toBe(0)
+    // All of it came free — no inspection was performed or needed.
+    expect(snapshot!.derivedFromImpressions).toBe(2)
+    expect(snapshot!.verifiedByInspection).toBe(0)
+    expect(requested.filter((u) => u.includes(GSC_INSPECT_ENDPOINT))).toEqual([])
+  })
 })
