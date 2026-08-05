@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { backoffDelayMs, isRetryableHttpError, withRetry } from '../src/retry.js'
+import { backoffDelayMs, isRateLimitError, isRetryableHttpError, retryAfterDelayMs, withRetry } from '../src/retry.js'
 
 describe('backoffDelayMs', () => {
   it('returns `base * 2^attempt` with no jitter', () => {
@@ -155,5 +155,114 @@ describe('isRetryableHttpError', () => {
 
   it('does NOT confuse a string message with a status field', () => {
     expect(isRetryableHttpError({ status: 'rate-limited' })).toBe(true)  // no number status → treated as network
+  })
+})
+
+/**
+ * Rate limiting does not always arrive as HTTP 429. The payload below is the
+ * verbatim response Bing Webmaster Tools returns when it throttles, and it
+ * comes back on a 400 — which the status-only predicate classified as a
+ * permanent client error, so a throttled request failed instead of backing
+ * off. These pin the semantic test that replaced it.
+ */
+const BING_THROTTLE_HOST = 'Bing API error (400): {"ErrorCode":5,"Message":"ERROR!!! ThrottleHost"}'
+const BING_THROTTLE_USER = 'Bing API error (400): {"ErrorCode":4,"Message":"ERROR!!! ThrottleUser"}'
+
+describe('isRateLimitError', () => {
+  it('recognizes a throttle reported on a non-429 status', () => {
+    expect(isRateLimitError(Object.assign(new Error(BING_THROTTLE_HOST), { status: 400 }))).toBe(true)
+    expect(isRateLimitError(Object.assign(new Error(BING_THROTTLE_USER), { status: 400 }))).toBe(true)
+  })
+
+  it('recognizes the documented phrasings whatever the status', () => {
+    for (const message of [
+      'Rate limit exceeded',
+      'RateLimit reached for this key',
+      'Too Many Requests',
+      'Quota exceeded for quota metric',
+      'User is over quota',
+      'Please slow down',
+    ]) {
+      expect(isRateLimitError(new Error(message))).toBe(true)
+    }
+  })
+
+  it('recognizes HTTP 429 with no helpful message', () => {
+    expect(isRateLimitError({ status: 429 })).toBe(true)
+  })
+
+  it('treats a Retry-After as proof on its own', () => {
+    expect(isRateLimitError({ status: 503, retryAfter: 30 })).toBe(true)
+    expect(isRateLimitError({ 'retry-after': '120' })).toBe(true)
+  })
+
+  it('does not fire on ordinary client errors', () => {
+    expect(isRateLimitError(Object.assign(new Error('Invalid site URL'), { status: 400 }))).toBe(false)
+    expect(isRateLimitError(Object.assign(new Error('API key is invalid'), { status: 401 }))).toBe(false)
+    expect(isRateLimitError(Object.assign(new Error('Not found'), { status: 404 }))).toBe(false)
+    expect(isRateLimitError(new Error('fetch failed'))).toBe(false)
+    expect(isRateLimitError(null)).toBe(false)
+  })
+})
+
+describe('isRetryableHttpError with body-reported throttling', () => {
+  it('retries a throttle that arrived on a 400', () => {
+    // The regression this whole change exists for.
+    expect(isRetryableHttpError(Object.assign(new Error(BING_THROTTLE_HOST), { status: 400 }))).toBe(true)
+    expect(isRetryableHttpError(Object.assign(new Error(BING_THROTTLE_USER), { status: 400 }))).toBe(true)
+  })
+
+  it('still refuses a genuine 400', () => {
+    expect(isRetryableHttpError(Object.assign(new Error('Invalid site URL'), { status: 400 }))).toBe(false)
+  })
+
+  it('still refuses auth and not-found', () => {
+    expect(isRetryableHttpError(Object.assign(new Error('unauthorized'), { status: 401 }))).toBe(false)
+    expect(isRetryableHttpError(Object.assign(new Error('nope'), { status: 404 }))).toBe(false)
+  })
+})
+
+describe('retryAfterDelayMs', () => {
+  it('reads delta-seconds in both numeric and string form', () => {
+    expect(retryAfterDelayMs({ retryAfter: 30 })).toBe(30_000)
+    expect(retryAfterDelayMs({ retryAfter: '30' })).toBe(30_000)
+    expect(retryAfterDelayMs({ 'retry-after': '5' })).toBe(5_000)
+  })
+
+  it('reads an HTTP date relative to now', () => {
+    const now = Date.parse('2026-08-05T12:00:00Z')
+    expect(retryAfterDelayMs({ retryAfter: 'Wed, 05 Aug 2026 12:01:00 GMT' }, now)).toBe(60_000)
+  })
+
+  it('never returns a negative delay for a date already past', () => {
+    const now = Date.parse('2026-08-05T12:00:00Z')
+    expect(retryAfterDelayMs({ retryAfter: 'Wed, 05 Aug 2026 11:00:00 GMT' }, now)).toBe(0)
+  })
+
+  it('returns null when there is nothing usable to read', () => {
+    expect(retryAfterDelayMs({})).toBeNull()
+    expect(retryAfterDelayMs({ retryAfter: '' })).toBeNull()
+    expect(retryAfterDelayMs({ retryAfter: 'soon' })).toBeNull()
+    expect(retryAfterDelayMs(new Error('nope'))).toBeNull()
+    expect(retryAfterDelayMs(null)).toBeNull()
+  })
+
+  it('drives withRetry when wired through computeDelayMs', async () => {
+    const slept: number[] = []
+    let calls = 0
+    await withRetry(
+      async () => {
+        calls++
+        if (calls === 1) throw Object.assign(new Error('Too Many Requests'), { status: 429, retryAfter: 45 })
+        return 'ok'
+      },
+      {
+        isRetryable: isRetryableHttpError,
+        computeDelayMs: (_attempt, err, defaultMs) => retryAfterDelayMs(err) ?? defaultMs,
+        sleep: async (ms) => { slept.push(ms) },
+      },
+    )
+    // The server's instruction, not our 1s exponential guess.
+    expect(slept).toEqual([45_000])
   })
 })
