@@ -452,7 +452,11 @@ importers:
         specifier: ^0.31.9
         version: 0.31.9
 
-  packages/integration-bing: {}
+  packages/integration-bing:
+    dependencies:
+      '@ainyc/canonry-contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
   packages/integration-cloud-run:
     dependencies:
