@@ -25,7 +25,17 @@ function makeDb(project: unknown) {
     runUpdates,
     inserted,
     update: () => ({ set: (vals: { status?: string }) => ({ where: () => ({ run: () => { runUpdates.push(vals); return { changes: 1 } } }) }) }),
-    select: () => ({ from: () => ({ where: () => ({ get: () => project, all: () => [] }) }) }),
+    // `where()` must also answer the ordered/limited form the coverage writer
+    // uses to find the latest site audit.
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          get: () => project,
+          all: () => [],
+          orderBy: () => ({ limit: () => ({ get: () => undefined, all: () => [] }), get: () => undefined, all: () => [] }),
+        }),
+      }),
+    }),
     insert: () => ({ values: (v: unknown) => ({ run: () => { inserted.push(v); return { changes: 1 } } }) }),
     delete: () => ({ where: () => ({ run: () => ({ changes: 0 }) }) }),
   }

@@ -1,8 +1,8 @@
 import crypto from 'node:crypto'
-import { and, eq, gte } from 'drizzle-orm'
+import { and, desc, eq, gte } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { gscCoverageSnapshots, gscSearchData, gscUrlInspections } from '@ainyc/canonry-db'
-import { deriveIndexCoverage } from '@ainyc/canonry-contracts'
+import { gscCoverageSnapshots, gscSearchData, gscUrlInspections, siteAuditPages, siteAuditSnapshots } from '@ainyc/canonry-db'
+import { deriveIndexCoverage, normalizeUrlPath } from '@ainyc/canonry-contracts'
 
 /**
  * The ONE place a GSC index-coverage snapshot is written.
@@ -29,6 +29,35 @@ export interface CoverageSnapshotResult {
   unknown: number
   verifiedByInspection: number
   derivedFromImpressions: number
+}
+
+/**
+ * Reduce a URL from any of the three sources to a comparable key.
+ *
+ * The sources do not agree on spelling, and matching them raw invents facts:
+ *
+ *     sitemap    https://canonry.ai/privacy      no trailing slash
+ *     GSC page   https://canonry.ai/             trailing slash
+ *     inspection http://ainyc.ai/                pre-migration scheme AND host
+ *
+ * A raw union counts the same page two or three times and reports sitemap
+ * pages as unmeasured purely because GSC spelled them differently. Keying on
+ * the normalized PATH collapses scheme, host, and trailing-slash differences —
+ * which is what we want here, because a project is one site and the legacy host
+ * is the same pages under an old name.
+ *
+ * The trade: a project genuinely serving different content on two hosts would
+ * have those paths merged. `canonicalDomain` is per project, so that is out of
+ * scope today; revisit if multi-host projects arrive.
+ */
+function pageKey(raw: string): string | null {
+  if (!raw) return null
+  try {
+    return normalizeUrlPath(new URL(raw).pathname)
+  } catch {
+    // Already a path, or unparseable — normalize what we were given.
+    return normalizeUrlPath(raw)
+  }
 }
 
 function isoDaysAgo(days: number): string {
@@ -65,17 +94,50 @@ export function writeCoverageSnapshot(
     .where(eq(gscUrlInspections.projectId, projectId))
     .all()
 
-  // Latest verdict per URL — the table keeps history.
-  const latestByUrl = new Map<string, typeof allInspections[number]>()
+  // Pages we know exist because we crawled them. Without this the `unknown`
+  // state is unreachable: GSC only returns rows for pages that HAD an
+  // impression, so every page in the other two sources already resolves. A
+  // sitemap page that never ranked and was never inspected is precisely the
+  // page nobody has measured, and it is invisible unless we seed it here.
+  // Latest audit only — an older run lists pages that may since have gone.
+  const latestAudit = db
+    .select({ runId: siteAuditSnapshots.runId })
+    .from(siteAuditSnapshots)
+    .where(eq(siteAuditSnapshots.projectId, projectId))
+    .orderBy(desc(siteAuditSnapshots.createdAt))
+    .limit(1)
+    .get()
+
+  const sitemapUrls = latestAudit
+    ? db.select({ url: siteAuditPages.url }).from(siteAuditPages).where(eq(siteAuditPages.runId, latestAudit.runId)).all()
+    : []
+
+  // Impressions per page key, so differently-spelled rows for one page add up.
+  const impressionsByKey = new Map<string, number>()
+  for (const row of pageRows) {
+    const key = pageKey(row.page)
+    if (key) impressionsByKey.set(key, (impressionsByKey.get(key) ?? 0) + row.impressions)
+  }
+  // A crawled page contributes itself at zero impressions unless GSC saw it.
+  for (const row of sitemapUrls) {
+    const key = pageKey(row.url)
+    if (key && !impressionsByKey.has(key)) impressionsByKey.set(key, 0)
+  }
+
+  // Latest verdict per page key — the table keeps history, and the same page
+  // may have been inspected under the pre-migration host.
+  const latestByKey = new Map<string, typeof allInspections[number]>()
   for (const row of allInspections) {
-    const existing = latestByUrl.get(row.url)
-    if (!existing || row.inspectedAt > existing.inspectedAt) latestByUrl.set(row.url, row)
+    const key = pageKey(row.url)
+    if (!key) continue
+    const existing = latestByKey.get(key)
+    if (!existing || row.inspectedAt > existing.inspectedAt) latestByKey.set(key, row)
   }
 
   const coverage = deriveIndexCoverage({
-    pages: pageRows.map((r) => ({ page: r.page, impressions: r.impressions })),
-    inspections: [...latestByUrl.values()].map((r) => ({
-      url: r.url,
+    pages: [...impressionsByKey].map(([page, impressions]) => ({ page, impressions })),
+    inspections: [...latestByKey].map(([key, r]) => ({
+      url: key,
       indexingState: r.indexingState,
       coverageState: r.coverageState,
     })),
