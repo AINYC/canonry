@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { getSites, addSite, getUrlInfo, submitUrl, submitUrlBatch, getKeywordStats, getCrawlStats, getCrawlIssues } from '../src/bing-client.js'
 import { BING_WMT_API_BASE } from '../src/constants.js'
 
@@ -66,10 +66,32 @@ describe('getSites', () => {
     await expect(() => getSites('bad-key')).rejects.toMatchObject({ name: 'BingApiError' })
   })
 
-  it('throws BingApiError on 429', async () => {
-    globalThis.fetch = async () => new Response('Rate limited', { status: 429 })
+  it('throws BingApiError on 429 after exhausting retries', async () => {
+    // 429 is retryable now, so this asserts the error still surfaces once the
+    // budget is spent rather than on the first attempt. Fake timers keep the
+    // backoff sleeps from making the test wait for real.
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      globalThis.fetch = async () => {
+        calls++
+        return new Response('Rate limited', { status: 429 })
+      }
 
-    await expect(() => getSites('key')).rejects.toThrow(/rate limit/)
+      const settled = getSites('key').then(
+        () => ({ ok: true as const }),
+        (err: unknown) => ({ ok: false as const, err }),
+      )
+      await vi.runAllTimersAsync()
+      const outcome = await settled
+
+      expect(outcome.ok).toBe(false)
+      expect(outcome.ok === false && outcome.err).toMatchObject({ name: 'BingApiError', isThrottle: true })
+      expect(String(outcome.ok === false ? outcome.err : '')).toMatch(/rate limit/)
+      expect(calls).toBe(5)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

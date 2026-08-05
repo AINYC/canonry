@@ -75,11 +75,33 @@ export interface BingSubmitUrlBatchResponse {
   d?: null
 }
 
+/**
+ * Bing Webmaster Tools error codes that mean "you are going too fast".
+ *
+ * Bing does not use HTTP 429 for this. A throttled request comes back as a
+ * `400` whose body carries the real condition, e.g.
+ * `{"ErrorCode":5,"Message":"ERROR!!! ThrottleHost"}` — 5 is a per-host limit
+ * (every project on this instance shares it) and 4 is per-API-key.
+ */
+export const BING_THROTTLE_ERROR_CODES = new Set([4, 5])
+
 export class BingApiError extends Error {
   public status: number
-  constructor(message: string, status: number) {
+  /** Bing's own `ErrorCode` from the response body, when it sent one. */
+  public bingErrorCode: number | null
+  /**
+   * True when Bing was throttling. Kept as a field rather than re-derived from
+   * the message so `isRetryableHttpError` sees the condition structurally and
+   * callers do not have to parse prose.
+   */
+  public isThrottle: boolean
+
+  constructor(message: string, status: number, bingErrorCode: number | null = null) {
     super(message)
     this.name = 'BingApiError'
     this.status = status
+    this.bingErrorCode = bingErrorCode
+    // 429 is rate limiting by definition; Bing's own codes cover the 400 form.
+    this.isThrottle = status === 429 || (bingErrorCode != null && BING_THROTTLE_ERROR_CODES.has(bingErrorCode))
   }
 }
