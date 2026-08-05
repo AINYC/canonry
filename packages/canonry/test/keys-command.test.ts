@@ -268,3 +268,35 @@ describe('key revoke', () => {
     expect(JSON.parse(cap.logs.join(''))).toEqual(revoked)
   })
 })
+
+describe('keyReach', () => {
+  const base = {
+    id: 'k1', name: 'k', keyPrefix: 'cnry_aaaa', scopes: ['read'],
+    readOnly: true, createdAt: '2026-01-01', lastUsedAt: null, revokedAt: null,
+  }
+
+  it('reports a key with no project as reaching the whole instance', async () => {
+    const { keyReach } = await import('../src/commands/keys.js')
+    expect(keyReach({ ...base, projectId: null, projectName: null })).toBe('full instance')
+  })
+
+  it('names the project a scoped key reaches', async () => {
+    const { keyReach } = await import('../src/commands/keys.js')
+    expect(keyReach({ ...base, projectId: 'p1', projectName: 'acme' })).toBe('acme')
+  })
+
+  it('still reports a scoped key when the server resolved no name', async () => {
+    // Unreachable while api_keys.project_id cascade-deletes, kept so relaxing
+    // that FK degrades to "scoped, unknown" rather than to full instance.
+    const { keyReach } = await import('../src/commands/keys.js')
+    expect(keyReach({ ...base, projectId: 'p1', projectName: null })).toBe('(deleted project)')
+  })
+
+  it('falls back to the id when the server predates the field', async () => {
+    // ApiClient casts rather than parses, so an older server really does send
+    // an object with no projectName. That must not read as a deleted project.
+    const { keyReach } = await import('../src/commands/keys.js')
+    const fromOldServer = { ...base, projectId: '6b44f2fb-aaaa-bbbb-cccc-dddddddddddd' }
+    expect(keyReach(fromOldServer)).toBe('6b44f2fb')
+  })
+})

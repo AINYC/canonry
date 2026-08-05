@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createClient, migrate, apiKeys, type DatabaseClient } from '@ainyc/canonry-db'
+import { createClient, migrate, apiKeys, projects, type DatabaseClient } from '@ainyc/canonry-db'
 import { apiRoutes } from '../src/index.js'
 import { hashApiKey } from '../src/auth.js'
 
@@ -205,6 +205,46 @@ describe('API key management routes', () => {
     // Never leaks key material.
     expect(res.body).not.toContain('keyHash')
     expect(dto).not.toHaveProperty('key')
+  })
+
+  it('reports how far each key reaches, by project name', async () => {
+    // A key bound to a project, and one that is not. The id alone cannot tell
+    // an operator whether a key is safe to hand over, so the name is resolved
+    // server-side rather than left to every caller.
+    const projectId = crypto.randomUUID()
+    db.insert(projects).values({
+      id: projectId,
+      name: 'scoped-project',
+      displayName: 'Scoped Project',
+      canonicalDomain: 'example.com',
+      country: 'US',
+      language: 'en',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }).run()
+    const scopedId = crypto.randomUUID()
+    db.insert(apiKeys).values({
+      id: scopedId,
+      name: 'scoped',
+      keyHash: hashApiKey('cnry_scopedtoken'),
+      keyPrefix: 'cnry_scop',
+      scopes: ['read'],
+      projectId,
+      createdAt: new Date().toISOString(),
+    }).run()
+
+    const res = await authed('GET', '/api/v1/keys', ROOT_KEY)
+    expect(res.statusCode).toBe(200)
+    const { keys } = res.json() as { keys: { name: string; projectId: string | null; projectName: string | null }[] }
+
+    const scoped = keys.find(k => k.name === 'scoped')
+    expect(scoped?.projectId).toBe(projectId)
+    expect(scoped?.projectName).toBe('scoped-project')
+
+    // A full-instance key reaches every project, and says so by carrying no name.
+    const root = keys.find(k => k.name === 'root')
+    expect(root?.projectId).toBeNull()
+    expect(root?.projectName).toBeNull()
   })
 
   it('GET /keys/self for the wildcard key reports readOnly=false', async () => {

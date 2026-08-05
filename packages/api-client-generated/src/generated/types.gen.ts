@@ -1011,6 +1011,7 @@ export type ApiKeyDto = {
     keyPrefix: string;
     scopes: Array<string>;
     projectId: string | null;
+    projectName: string | null;
     readOnly: boolean;
     createdAt: string;
     lastUsedAt: string | null;
@@ -1024,6 +1025,7 @@ export type ApiKeyListDto = {
         keyPrefix: string;
         scopes: Array<string>;
         projectId: string | null;
+        projectName: string | null;
         readOnly: boolean;
         createdAt: string;
         lastUsedAt: string | null;
@@ -1656,6 +1658,7 @@ export type CreatedApiKeyDto = {
     keyPrefix: string;
     scopes: Array<string>;
     projectId: string | null;
+    projectName: string | null;
     readOnly: boolean;
     createdAt: string;
     lastUsedAt: string | null;
