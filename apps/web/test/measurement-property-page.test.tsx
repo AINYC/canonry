@@ -336,6 +336,28 @@ function propertyPageResponses({
         : jsonResponse(nonBrand)
     }
     if (path.includes('/measurement-property-evidence')) return jsonResponse(evidence)
+    if (path.includes('/measurement-property-competitors')) {
+      return jsonResponse({
+        property: { targetKey: TARGET_KEY, label: 'Harbor House' },
+        measurement: { state: 'complete', displayedRunId: RUN_ID, planRevision: 7, completedAt: '2026-08-02T12:05:00.000Z' },
+        queryClass: 'non-brand',
+        basis: { state: 'available', answeredResults: 4, targetMissResults: 3, recommendationOccurrences: 5 },
+        competitors: [
+          {
+            name: 'Harborline Homes', occurrences: 3, providers: ['openai', 'gemini'],
+            providerTotal: 2, providersTruncated: false,
+            questions: [NEARBY_QUESTION], questionTotal: 1, questionsTruncated: false,
+          },
+          {
+            name: 'The Sutton', occurrences: 1, providers: ['gemini'],
+            providerTotal: 1, providersTruncated: false,
+            questions: [NEARBY_QUESTION], questionTotal: 1, questionsTruncated: false,
+          },
+        ],
+        total: 2,
+        truncated: false,
+      })
+    }
     if (path.includes('/measurement-question-result')) {
       return jsonResponse({
         property: { targetKey: TARGET_KEY, label: 'Harbor House' },
@@ -1009,5 +1031,39 @@ describe('Reading the answer', () => {
     fireEvent.click(screen.getByRole('button', { name: `Read the answer for ${NEARBY_QUESTION}` }))
     await screen.findByText(/Harborline Homes and The Sutton/)
     expect(paths.some(path => path.includes('/measurement-question-result'))).toBe(true)
+  })
+})
+
+describe('Named instead of this Property', () => {
+  it('names who the engines recommended in the answers this Property missed', async () => {
+    // Coverage says there is a gap. Only this says what is in it — and the
+    // occurrence counts are meaningless without the basis, which states how
+    // many answers they were counted over.
+    await renderPropertyPageFromApi(propertyPageResponses())
+
+    const section = await screen.findByRole('region', { name: /Named instead of this Property/ })
+    expect(within(section).getByText('Harborline Homes')).toBeTruthy()
+    expect(within(section).getByText('The Sutton')).toBeTruthy()
+    expect(within(section).getByText('openai, gemini')).toBeTruthy()
+    expect(within(section).getByText(/3 of 4 non-brand questions answers did not name this Property/)).toBeTruthy()
+  })
+
+  it('says so plainly when no rival was named, rather than showing an empty table', async () => {
+    await renderPropertyPageFromApi(url => {
+      if (pathOf(url).includes('/measurement-property-competitors')) {
+        return jsonResponse({
+          property: { targetKey: TARGET_KEY, label: 'Harbor House' },
+          measurement: { state: 'complete', displayedRunId: RUN_ID, planRevision: 7, completedAt: '2026-08-02T12:05:00.000Z' },
+          queryClass: 'non-brand',
+          basis: { state: 'unavailable', reason: 'no_population' },
+          competitors: [], total: 0, truncated: false,
+        })
+      }
+      return propertyPageResponses()(url)
+    })
+
+    const section = await screen.findByRole('region', { name: /Named instead of this Property/ })
+    expect(within(section).getByText(/No rival was named/)).toBeTruthy()
+    expect(section.querySelector('table')).toBeNull()
   })
 })

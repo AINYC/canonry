@@ -11,6 +11,7 @@ import type {
 import {
   getApiV1ProjectsByNameMeasurementOverviewOptions,
   getApiV1ProjectsByNameMeasurementPlanOptions,
+  getApiV1ProjectsByNameMeasurementPropertyCompetitorsOptions,
   getApiV1ProjectsByNameMeasurementPropertyEvidenceInfiniteOptions,
   getApiV1ProjectsByNameMeasurementQuestionResultOptions,
 } from '@ainyc/canonry-api-client/react-query'
@@ -590,6 +591,92 @@ function ProviderBreakdown({ row, queryClass, isError }: { row: PropertyRow | un
   )
 }
 
+/**
+ * Who the engines named when they did not name this Property.
+ *
+ * This is the answer to the question the coverage numbers raise and cannot
+ * settle: a Property at 0% tells you there is a gap, not what is in it. The
+ * evidence table below can only show that an answer happened; this says who won
+ * it. On a real Property, four answers that never mentioned it named nine
+ * different rival buildings, five of which had their own sites cited.
+ *
+ * Server-ranked and Property-scoped. Doing this in the browser would mean
+ * counting names across answers here, which the parity rule forbids and which
+ * would also lose the `basis` — the count of answers this Property actually
+ * missed, without which the occurrence numbers have no denominator.
+ */
+function NamedInstead({ project, targetKey, queryClass }: { project: string; targetKey: string; queryClass: QueryClass }) {
+  const query = useQuery({
+    ...getApiV1ProjectsByNameMeasurementPropertyCompetitorsOptions({
+      client: heyClient,
+      path: { name: project },
+      query: { targetKey, queryClass },
+    }),
+  })
+
+  // Nothing to say yet, and a heading over a spinner is noise on a page that
+  // already has four sections. The section appears when it has something.
+  if (query.isPending || query.isError) return null
+  const competitors = query.data?.competitors ?? []
+  const basis = query.data?.basis
+
+  return (
+    <section aria-labelledby="property-named-instead" className="page-section-divider">
+      <div className="section-head section-head-inline">
+        <div>
+          <h2 id="property-named-instead" className="text-base font-semibold text-heading">
+            Named instead of this Property
+            <InfoTooltip text="Counted from the answers that did not name this Property, so a name here is one an engine recommended in its place. Occurrences count answers, not positions: an engine naming the same rival in two answers counts twice, and one naming it twice in a single answer counts once." />
+          </h2>
+        </div>
+        {competitors.length > 0 ? <p className="supporting-copy">{query.data?.total ?? competitors.length} named</p> : null}
+      </div>
+      {competitors.length === 0 ? (
+        <p className="text-sm text-secondary">
+          No rival was named in the answers this Property missed. Nothing to compete with here yet.
+        </p>
+      ) : (
+        <>
+          <div className="overflow-x-auto rounded-md border border-default">
+            <table className="evidence-table min-w-[420px]">
+              <caption className="sr-only">Names the engines gave instead of this Property</caption>
+              <thead>
+                <tr>
+                  <th>Named</th>
+                  <th>Answers</th>
+                  <th>Engines</th>
+                  <th>Questions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {competitors.map(row => (
+                  <tr key={row.name}>
+                    <td className="text-strong">{row.name}</td>
+                    <td className="tabular-nums text-secondary">{row.occurrences}</td>
+                    <td className="text-secondary">
+                      {row.providers.join(', ')}
+                      {row.providersTruncated ? ` +${row.providerTotal - row.providers.length}` : ''}
+                    </td>
+                    <td className="text-secondary">
+                      {row.questions.join(' · ')}
+                      {row.questionsTruncated ? ` +${row.questionTotal - row.questions.length}` : ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {basis?.state === 'available' ? (
+            <p className="supporting-copy mt-2">
+              {basis.targetMissResults} of {basis.answeredResults} {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} answers did not name this Property.
+            </p>
+          ) : null}
+        </>
+      )}
+    </section>
+  )
+}
+
 function AssignedQuestions({ questions, queryClass }: { questions: readonly string[]; queryClass: QueryClass }) {
   return (
     <section aria-labelledby="property-questions" className="page-section-divider">
@@ -903,6 +990,9 @@ export function MeasurementPropertyPage() {
       </div>
 
       <ProviderBreakdown row={selectedRow} queryClass={queryClass} isError={selectedClassUnavailable} />
+      {/* Directly under coverage, because it is what coverage raises and cannot
+          answer. The evidence table below is the receipts; this is the finding. */}
+      <NamedInstead project={project} targetKey={property} queryClass={queryClass} />
       <AssignedQuestions questions={questions} queryClass={queryClass} />
       <PropertyUrls urls={urls} />
       <MarketLink project={project} groups={memberGroups} />
