@@ -783,3 +783,52 @@ describe('Property answer evidence', () => {
     expect(requested).toContain('branded:answers')
   })
 })
+
+describe('Coverage hero', () => {
+  it('leads with non-brand and shows the count behind each rate', async () => {
+    await renderPropertyPage({
+      branded: overviewResponse('branded', {
+        mentionCoverage: available(12, 12),
+        citationCoverage: available(12, 12),
+      }),
+      nonBrand: overviewResponse('non-brand', {
+        mentionCoverage: available(4, 20),
+        citationCoverage: available(3, 20),
+      }),
+    })
+
+    const hero = await screen.findByRole('region', { name: 'Coverage for this Property' })
+    // Non-brand is the demand a Property has to earn, so it reads first.
+    const eyebrows = within(hero).getAllByText(/the demand to earn|already named/)
+    expect(eyebrows[0]!.textContent).toContain('the demand to earn')
+
+    // The rate is never shown without the count it came from.
+    expect(within(hero).getByText('20')).toBeTruthy()
+    expect(within(hero).getByText('4 of 20')).toBeTruthy()
+    expect(within(hero).getByText('3 of 20')).toBeTruthy()
+    expect(within(hero).getAllByText('12 of 12').length).toBe(2)
+  })
+
+  it('renders no bar at all for an unmeasured class, so it cannot read as a measured zero', async () => {
+    await renderPropertyPage({
+      branded: overviewResponse('branded', {
+        mentionCoverage: available(12, 12),
+        citationCoverage: available(12, 12),
+      }),
+      nonBrand: overviewResponse('non-brand', {
+        mentionCoverage: unavailable('no_population'),
+        citationCoverage: unavailable('no_population'),
+      }),
+    })
+
+    const hero = await screen.findByRole('region', { name: 'Coverage for this Property' })
+    expect(within(hero).getAllByText('Not measured').length).toBe(2)
+
+    // A zero-width track beside "Not measured" would read as a measured zero.
+    // Branded is measured and keeps its two bars; the unmeasured pair has none.
+    // eslint-disable-next-line no-console
+    console.log('DEBUG rows:', hero.querySelectorAll('.aeo-hero-row').length, 'bars:', hero.querySelectorAll('.aeo-hero-row-bar').length, 'notmeasured:', within(hero).getAllByText('Not measured').length)
+    expect(hero.querySelectorAll('.aeo-hero-row-bar').length).toBe(2)
+    expect(within(hero).queryByText('0%')).toBeNull()
+  })
+})

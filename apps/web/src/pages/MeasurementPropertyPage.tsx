@@ -210,6 +210,86 @@ function propertyRowOf(overview: MeasurementOverviewResponse | undefined): Prope
 }
 
 /**
+ * The four coverage numbers as a scannable hero, in the same visual language as
+ * the project overview's AEO hero (`aeo-hero-row`), so a Property reads like a
+ * smaller version of the project rather than a different kind of page.
+ *
+ * Non-brand leads because it is the demand a Property has to earn; branded
+ * follows as the control. That ordering is the argument the page exists to make.
+ *
+ * Bars are deliberately `progress-fill-neutral`. `MetricValue` carries no tone,
+ * and a coverage rate has no product-defined "good" threshold: 20% non-brand may
+ * be strong in a dense market and weak in a thin one. Coloring the bar would be
+ * a verdict the API never issued and a value derived in the UI, which the parity
+ * rule forbids. The bar encodes magnitude; the reader supplies the judgment.
+ *
+ * An unavailable metric renders NO bar rather than a zero-width one. An empty
+ * track beside "Not measured" reads as a measured zero, which is the one thing
+ * this surface must never say.
+ */
+function CoverageHeroRow({ label, metric }: { label: string; metric: MetricValue | undefined }) {
+  if (metric === undefined) {
+    return (
+      <div className="aeo-hero-row">
+        <p className="aeo-hero-row-label">{label}</p>
+        <p className="aeo-hero-row-value text-secondary">&hellip;</p>
+        <div className="aeo-hero-row-bar" aria-hidden="true" />
+        <p className="aeo-hero-row-detail">Loading</p>
+      </div>
+    )
+  }
+  if (metric.state === 'unavailable') {
+    // `reasonText` falls back to "Not measured" for a reason this build does not
+    // know, which would print the same words twice across two columns and read
+    // as a rendering fault. Drop the detail when it says nothing the value did
+    // not already say.
+    const reason = reasonText(metric)
+    return (
+      <div className="aeo-hero-row">
+        <p className="aeo-hero-row-label">{label}</p>
+        <p className="aeo-hero-row-value text-base font-semibold text-secondary">Not measured</p>
+        <div />
+        <p className="aeo-hero-row-detail">{reason === 'Not measured' ? '' : reason}</p>
+      </div>
+    )
+  }
+  const percent = Math.round(metric.value * 100)
+  const counted = metric.numerator === undefined || metric.denominator === undefined
+    ? null
+    : `${metric.numerator} of ${metric.denominator}`
+  return (
+    <div className="aeo-hero-row">
+      <p className="aeo-hero-row-label">{label}</p>
+      <p className="aeo-hero-row-value text-heading">{percent}<span className="text-faint">%</span></p>
+      <div className="aeo-hero-row-bar" aria-hidden="true">
+        <div className="metric-card-bar-fill progress-fill-neutral" style={{ width: `${percent}%` }} />
+      </div>
+      <p className="aeo-hero-row-detail tabular-nums">{counted ?? ''}</p>
+    </div>
+  )
+}
+
+function CoverageHero({ branded, nonBrand }: { branded: PropertyRow | undefined; nonBrand: PropertyRow | undefined }) {
+  return (
+    <section aria-labelledby="property-coverage-hero">
+      <h2 id="property-coverage-hero" className="sr-only">Coverage for this Property</h2>
+      <div className="space-y-5">
+        <div className="space-y-2">
+          <p className="eyebrow eyebrow-soft">Non-brand &middot; the demand to earn</p>
+          <CoverageHeroRow label="Mentioned" metric={nonBrand?.mentionCoverage} />
+          <CoverageHeroRow label="Cited" metric={nonBrand?.citationCoverage} />
+        </div>
+        <div className="space-y-2">
+          <p className="eyebrow eyebrow-soft">Branded &middot; already named</p>
+          <CoverageHeroRow label="Mentioned" metric={branded?.mentionCoverage} />
+          <CoverageHeroRow label="Cited" metric={branded?.citationCoverage} />
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/**
  * The comparison the product is an argument about: the same Property, measured
  * against the questions that name it and the questions that do not.
  */
@@ -592,6 +672,8 @@ export function MeasurementPropertyPage() {
           ) : null}
         </div>
       </div>
+
+      <CoverageHero branded={brandedRow} nonBrand={nonBrandRow} />
 
       <BrandContrast
         branded={brandedRow}
