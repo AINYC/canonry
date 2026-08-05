@@ -16,6 +16,20 @@ import { Link } from '@tanstack/react-router'
 export function ProjectsPage() {
   const { dashboard, isLoading, refetch } = useDashboard()
 
+  // Hooks run before the skeleton return for the reason described in
+  // OverviewPage: React counts them by call order, so a return placed between
+  // two of them changes the count between renders and throws.
+  const navigate = useNavigate()
+
+  const [showForm, setShowForm] = useState(false)
+  const [projectName, setProjectName] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [domain, setDomain] = useState('')
+  const [country, setCountry] = useState('US')
+  const [language, setLanguage] = useState('en')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
   if (!dashboard || isLoading) {
     return (
       <div className="page-skeleton">
@@ -47,16 +61,6 @@ export function ProjectsPage() {
   }
 
   const projects = dashboard.projects
-  const navigate = useNavigate()
-
-  const [showForm, setShowForm] = useState(false)
-  const [projectName, setProjectName] = useState('')
-  const [displayName, setDisplayName] = useState('')
-  const [domain, setDomain] = useState('')
-  const [country, setCountry] = useState('US')
-  const [language, setLanguage] = useState('en')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   const slug = projectName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
 

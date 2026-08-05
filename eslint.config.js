@@ -1,6 +1,7 @@
 import js from '@eslint/js'
 import globals from 'globals'
 import regexpPlugin from 'eslint-plugin-regexp'
+import reactHooksPlugin from 'eslint-plugin-react-hooks'
 import tseslint from 'typescript-eslint'
 import { noLiteralPaletteRule } from './eslint-rules/no-literal-palette.js'
 
@@ -198,6 +199,16 @@ export default tseslint.config(
       '@typescript-eslint/require-await': 'off',
       '@typescript-eslint/only-throw-error': 'off',
       '@typescript-eslint/no-unnecessary-type-assertion': 'off',
+    },
+  },
+  {
+    // Rules of Hooks. A hook called after an early return changes the hook
+    // count between renders and throws at runtime; the embed shell hit this on
+    // every cold load because it always renders the loading branch first.
+    files: ['apps/web/**/*.tsx'],
+    plugins: { 'react-hooks': reactHooksPlugin },
+    rules: {
+      'react-hooks/rules-of-hooks': 'error',
     },
   },
   {
