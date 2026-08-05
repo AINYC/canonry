@@ -18,6 +18,7 @@ import { heyClient } from '../api.js'
 import { getEmbedConfig } from '../api.js'
 import { isEmbedProjectTabAllowed } from '../embed.js'
 import { Button } from '../components/ui/button.js'
+import { formatObservedInstantLabel, observedInstant } from '../components/shared/ChartPrimitives.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
 import { useAccount } from '../contexts/account-context.js'
@@ -207,6 +208,109 @@ function overviewOptions(projectName: string, targetKey: string, queryClass: Que
 
 function propertyRowOf(overview: MeasurementOverviewResponse | undefined): PropertyRow | undefined {
   return overview?.properties.items.at(0)
+}
+
+/**
+ * The secondary facts the project overview carries as metric cards: how much is
+ * being measured, by how many engines, over what, and when.
+ *
+ * No progress bars. These are unbounded counts, and DESIGN.md reserves linear
+ * progress for a real bounded target: a bar under "7 questions" would imply a
+ * ceiling that does not exist.
+ */
+function PropertyFacts({
+  questionCount,
+  urlCount,
+  engineCount,
+  measuredAt,
+  queryClass,
+}: {
+  questionCount: number
+  urlCount: number
+  engineCount: number | null
+  measuredAt: string | null
+  queryClass: QueryClass
+}) {
+  return (
+    <section aria-labelledby="property-facts" className="page-section-divider">
+      <h2 id="property-facts" className="sr-only">What was measured</h2>
+      <div className="metric-grid">
+        <div className="metric-card">
+          <p className="metric-card-eyebrow">Questions assigned</p>
+          <p className="metric-card-big-value">{questionCount}</p>
+          <p className="metric-card-detail">{CLASS_LABELS[queryClass].technical}</p>
+        </div>
+        <div className="metric-card">
+          <p className="metric-card-eyebrow">Owned URLs</p>
+          <p className="metric-card-big-value">{urlCount}</p>
+          <p className="metric-card-detail">Used to attribute a citation to this Property</p>
+        </div>
+        <div className="metric-card">
+          <p className="metric-card-eyebrow">Answer engines</p>
+          <p className="metric-card-big-value">{engineCount ?? String.fromCharCode(8212)}</p>
+          <p className="metric-card-detail">
+            {engineCount === null
+              ? 'Not measured'
+              : engineCount === 0
+                ? 'No engine answered for this Property'
+                : 'Answered at least one assigned question'}
+          </p>
+        </div>
+        <div className="metric-card">
+          <p className="metric-card-eyebrow">Last measured</p>
+          <p className="metric-card-big-value text-base font-semibold">
+            {measuredAt ? formatObservedInstantLabel(observedInstant(measuredAt)) : 'Never'}
+          </p>
+          <p className="metric-card-detail">
+            {measuredAt ? 'The sweep these numbers came from' : 'No completed sweep yet'}
+          </p>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/**
+ * Competitors belong to a market, not to a building: a single Property has
+ * nobody to be compared against. Rather than render an empty competitor card,
+ * which would read as missing data, point at the market where the comparison
+ * actually exists. A Property can sit in several markets, so all are offered.
+ */
+function MarketLink({
+  project,
+  groups,
+}: {
+  project: string
+  groups: readonly { stableKey: string; label: string; competitors: readonly unknown[] }[]
+}) {
+  if (groups.length === 0) return null
+  return (
+    <section aria-labelledby="property-market" className="page-section-divider">
+      <div className="section-head section-head-inline">
+        <div>
+          <p className="eyebrow eyebrow-soft">Competitive comparison</p>
+          <h2 id="property-market" className="text-base font-semibold text-heading">
+            Measured at the market level
+            <InfoTooltip text="Competitors are attached to a market rather than to a single Property, because one building has nobody to be compared against. Share of voice and competitor pressure are reported for the market this Property sits in." />
+          </h2>
+        </div>
+      </div>
+      <ul className="flex flex-wrap gap-2">
+        {groups.map(group => (
+          <li key={group.stableKey}>
+            <Button asChild type="button" size="sm" variant="outline" className="h-11 px-4 text-sm md:h-11">
+              <Link to="/projects/$projectName" params={{ projectName: project }}>
+                {group.label}
+                <span className="ml-2 text-xs text-muted">
+                  {group.competitors.length} {group.competitors.length === 1 ? 'competitor' : 'competitors'}
+                </span>
+              </Link>
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
 }
 
 /**
@@ -549,6 +653,13 @@ export function MeasurementPropertyPage() {
   }, [planV2, property, queryClass])
 
   const urls = useMemo(() => target?.urlMatchers.map(matcherLabel) ?? [], [target])
+  // Every market this Property belongs to. Membership is a plain lookup rather
+  // than a field on the target: a Property can sit in several markets, and the
+  // plan stores the relation on the group.
+  const memberGroups = useMemo(
+    () => planV2?.groups.filter(group => group.targetKeys.includes(property)) ?? [],
+    [planV2, property],
+  )
   const evidenceRows = useMemo(
     () => {
       // A page that carries no `answers` key is a response in the source shape,
@@ -716,9 +827,18 @@ export function MeasurementPropertyPage() {
         <p className="supporting-copy">Everything below is measured over {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} only.</p>
       </div>
 
+      <PropertyFacts
+        questionCount={questions.length}
+        urlCount={urls.length}
+        engineCount={selectedRow ? selectedRow.providers.length : null}
+        measuredAt={selected?.measurement.completedAt ?? null}
+        queryClass={queryClass}
+      />
+
       <ProviderBreakdown row={selectedRow} queryClass={queryClass} isError={selectedClassUnavailable} />
       <AssignedQuestions questions={questions} queryClass={queryClass} />
       <PropertyUrls urls={urls} />
+      <MarketLink project={project} groups={memberGroups} />
 
       <section aria-labelledby="property-evidence" className="page-section-divider">
         <div className="section-head section-head-inline">

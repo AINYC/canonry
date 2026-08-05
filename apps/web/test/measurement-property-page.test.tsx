@@ -832,3 +832,51 @@ describe('Coverage hero', () => {
     expect(within(hero).queryByText('0%')).toBeNull()
   })
 })
+
+describe('Property facts and market link', () => {
+  it('counts what was measured without implying a ceiling', async () => {
+    await renderPropertyPage({
+      branded: overviewResponse('branded', {
+        mentionCoverage: available(4, 4),
+        citationCoverage: available(4, 4),
+      }),
+      nonBrand: overviewResponse('non-brand', {
+        mentionCoverage: available(1, 4),
+        citationCoverage: available(0, 4),
+        providers: [
+          { provider: 'openai', mentionCoverage: available(1, 2), citationCoverage: available(0, 2) },
+          { provider: 'gemini', mentionCoverage: available(0, 2), citationCoverage: available(0, 2) },
+        ],
+      }),
+    })
+
+    const facts = await screen.findByRole('region', { name: 'What was measured' })
+    expect(within(facts).getByText('Questions assigned')).toBeTruthy()
+    expect(within(facts).getByText('Owned URLs')).toBeTruthy()
+    expect(within(facts).getByText('Answer engines')).toBeTruthy()
+
+    // Counts are unbounded, so a progress bar would imply a ceiling that does
+    // not exist. DESIGN.md reserves linear progress for a real bounded target.
+    expect(facts.querySelectorAll('.metric-card-bar').length).toBe(0)
+    expect(facts.querySelectorAll('.aeo-hero-row-bar').length).toBe(0)
+  })
+
+  it('offers the market where the competitor comparison actually lives', async () => {
+    await renderPropertyPage({
+      branded: overviewResponse('branded', {
+        mentionCoverage: available(4, 4),
+        citationCoverage: available(4, 4),
+      }),
+      nonBrand: overviewResponse('non-brand', {
+        mentionCoverage: available(1, 4),
+        citationCoverage: available(0, 4),
+      }),
+    })
+
+    // A single Property has nobody to compare against, so the page links out
+    // rather than rendering an empty competitor card that reads as missing data.
+    const market = await screen.findByRole('region', { name: /Measured at the market level/ })
+    expect(within(market).getByText('North')).toBeTruthy()
+    expect(within(market).getByText(/competitors?$/)).toBeTruthy()
+  })
+})
