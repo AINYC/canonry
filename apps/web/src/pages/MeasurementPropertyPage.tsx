@@ -592,6 +592,24 @@ function ProviderBreakdown({ row, queryClass, isError }: { row: PropertyRow | un
 }
 
 /**
+ * The full query list behind the count in the "Named instead" table's Queries
+ * cell. Kept behind an `InfoTooltip` rather than inline: this page is already
+ * scoped to one Property and one query class, so the same one or two queries
+ * repeat down nearly every row — the joined text is the widest column in the
+ * table and carries almost no information once you have read it twice. The
+ * count is the signal that survives (one rival named across more queries than
+ * another); the text itself stays reachable here, not deleted.
+ */
+function competitorQueriesTooltipText(row: {
+  questions: readonly string[]
+  questionsTruncated: boolean
+  questionTotal: number
+}): string {
+  const shown = row.questions.join(' · ')
+  return row.questionsTruncated ? `${shown} +${row.questionTotal - row.questions.length} more` : shown
+}
+
+/**
  * Who the engines named when they did not name this Property.
  *
  * This is the answer to the question the coverage numbers raise and cannot
@@ -657,9 +675,11 @@ function NamedInstead({ project, targetKey, queryClass }: { project: string; tar
                       {row.providers.join(', ')}
                       {row.providersTruncated ? ` +${row.providerTotal - row.providers.length}` : ''}
                     </td>
-                    <td className="text-secondary">
-                      {row.questions.join(' · ')}
-                      {row.questionsTruncated ? ` +${row.questionTotal - row.questions.length}` : ''}
+                    <td className="text-right">
+                      <span className="inline-flex items-center justify-end gap-1">
+                        <span className="tabular-nums text-secondary">{row.questionTotal}</span>
+                        <InfoTooltip text={competitorQueriesTooltipText(row)} />
+                      </span>
                     </td>
                   </tr>
                 ))}
