@@ -627,7 +627,7 @@ export function AdvancedMeasurementOverview({
                           {property.historical ? <ToneBadge tone="caution">Historical</ToneBadge> : null}
                         </span>
                       </td>
-                      <td className="text-right"><Button size="sm" variant="ghost" aria-expanded={expanded} aria-label={expanded ? `Hide details for ${property.name}` : `Show details for ${property.name}`} onClick={() => toggleProperty(property.id)}><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" /></Button></td>
+                      <td className="text-right"><Button size="icon" variant="ghost" aria-expanded={expanded} aria-label={expanded ? `Hide details for ${property.name}` : `Show details for ${property.name}`} onClick={() => toggleProperty(property.id)}><ChevronDown className={`h-4 w-4 transition-transform duration-200 motion-reduce:transition-none ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" /></Button></td>
                     </tr>
                     {expanded ? <tr key={`${property.id}:details`}><td colSpan={5} className="bg-surface-subtle px-4"><PropertyDetails property={property} onRetryEvidence={onRetryEvidence} /></td></tr> : null}
                   </Fragment>
