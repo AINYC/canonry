@@ -31,10 +31,14 @@ export const KEYS_WRITE_SCOPE = 'keys.write'
  * Map a raw `api_keys` row to the SAFE public DTO (never exposes `keyHash`).
  *
  * `projectNames` maps project id to name so a scoped key can report which
- * project it reaches. A key whose project has since been deleted keeps its
- * `projectId` and reports a null name: the scope is still real and still
- * enforced, so reporting it as full-instance would be a lie in the dangerous
- * direction.
+ * project it reaches.
+ *
+ * The null-name arm is unreachable today and deliberately kept: `projectId`
+ * cascade-deletes with the project (`schema.ts`), so a scoped key cannot
+ * outlive the project it names and a lookup miss cannot happen. It is here so
+ * that relaxing the cascade later degrades to "scoped, name unknown" rather
+ * than silently to full-instance, which is the dangerous direction to be wrong
+ * in on a list an operator reads to decide who may hold a key.
  */
 function toApiKeyDto(
   row: typeof apiKeys.$inferSelect,

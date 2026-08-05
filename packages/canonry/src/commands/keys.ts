@@ -44,12 +44,21 @@ export async function listApiKeys(format?: string): Promise<void> {
 }
 
 /**
+ * A key as it arrives over the wire. `projectName` is REQUIRED by the DTO, but
+ * `ApiClient` casts the response rather than parsing it, so a server older than
+ * the field really does deliver an object without it. Typing that possibility
+ * here is what makes the absent branch expressible and testable instead of
+ * dead code the compiler insists cannot happen.
+ */
+export type KeyReachInput = Omit<ApiKeyDto, 'projectName'> & { projectName?: string | null }
+
+/**
  * How far a key reaches. Worth its own column because it is the question an
  * operator is usually holding this list open to answer — whether a key can be
  * handed to somebody — and `scopes` alone does not answer it: a `read` key with
  * no project still reads every project on the install.
  */
-function keyReach(key: ApiKeyDto): string {
+export function keyReach(key: KeyReachInput): string {
   if (!key.projectId) return 'full instance'
   if (typeof key.projectName === 'string') return key.projectName
   // Absent and null mean different things and must not collapse. A server
@@ -106,7 +115,7 @@ export async function createApiKey(opts: {
   console.log(`  Prefix:    ${created.keyPrefix}`)
   console.log(`  Scopes:    ${created.scopes.join(', ')}`)
   console.log(`  Read-only: ${created.readOnly ? 'yes' : 'no'}`)
-  console.log(`  Project:   ${opts.project ?? '(full instance)'}`)
+  console.log(`  Reach:     ${keyReach(created)}`)
   console.log('\nSave this now — it will not be shown again.')
 }
 
@@ -123,6 +132,7 @@ export async function showApiKeySelf(format?: string): Promise<void> {
   console.log(`API key "${key.name}" (${key.keyPrefix})`)
   console.log(`  Scopes:    ${key.scopes.join(', ')}`)
   console.log(`  Read-only: ${key.readOnly ? 'yes' : 'no'}`)
+  console.log(`  Reach:     ${keyReach(key)}`)
   console.log(`  Status:    ${keyStatus(key)}`)
 }
 
