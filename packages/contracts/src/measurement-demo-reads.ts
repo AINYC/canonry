@@ -76,6 +76,25 @@ export const measurementPortfolioWeakestPropertySchema = measurementDemoProperty
 })
 export type MeasurementPortfolioWeakestProperty = z.output<typeof measurementPortfolioWeakestPropertySchema>
 
+/**
+ * One market's roll-up, so a portfolio owner can compare markets side by side
+ * instead of selecting each from a dropdown in turn.
+ *
+ * `propertyCount` is the market's membership, NOT a denominator. Coverage
+ * denominators count measured answers, and a question aimed at a market is one
+ * answer serving every member, so the two never reconcile and must never be
+ * rendered as though they do.
+ */
+export const measurementPortfolioMarketSchema = z.object({
+  groupKey: measurementV2StableKeySchema,
+  label: measurementDemoLabelSchema,
+  propertyCount: measurementDemoCountSchema,
+  propertiesMentioned: measurementMetricValueSchema,
+  mentionCoverage: measurementMetricValueSchema,
+  citationCoverage: measurementMetricValueSchema,
+}).strict()
+export type MeasurementPortfolioMarket = z.output<typeof measurementPortfolioMarketSchema>
+
 export const measurementPortfolioSummaryResponseSchema = z.object({
   /** A null group key means no named reporting group; spot checks may still narrow the effective Property set. */
   portfolio: z.object({
@@ -91,6 +110,12 @@ export const measurementPortfolioSummaryResponseSchema = z.object({
     citationCoverage: measurementMetricValueSchema,
   }).strict(),
   weakestProperties: z.array(measurementPortfolioWeakestPropertySchema),
+  /**
+   * Every named market, worst-first. Empty when the request already narrowed to
+   * one group (a roll-up would only restate the scope) and when the plan defines
+   * no groups. Additive field.
+   */
+  markets: z.array(measurementPortfolioMarketSchema),
   totalProperties: measurementDemoCountSchema,
   truncated: z.boolean(),
 }).strict()

@@ -30,6 +30,7 @@ import {
   type MeasurementDataQualityResponse,
   type MeasurementMetricUnavailableReason,
   type MeasurementPlanV2,
+  type MeasurementPortfolioMarket,
   type MeasurementPortfolioSummaryQuery,
   type MeasurementPortfolioSummaryResponse,
   type MeasurementPropertyCompetitorsQuery,
@@ -175,7 +176,13 @@ function filteredOverviewWithDb(
   run: RunRow,
   filters: MeasurementFilters,
   targetKeys: readonly string[],
-): { materialized: MaterializedRun; overview: MeasurementOverview } {
+): {
+  materialized: MaterializedRun
+  overview: MeasurementOverview
+  /** The filtered inputs, exposed so a caller can re-scope them without re-reading the database. */
+  expectedSlots: MaterializedRun['input']['expectedSlots']
+  usageEdges: MaterializedRun['input']['usageEdges']
+} {
   const materialized = materializeWithDb(db, active, plan, run)
   const provider = filters.provider === undefined ? undefined : normalizeText(filters.provider)
   const location = filters.location === undefined ? undefined : normalizeMeasurementLocation(filters.location)
@@ -188,6 +195,8 @@ function filteredOverviewWithDb(
   ))
   return {
     materialized,
+    expectedSlots,
+    usageEdges,
     overview: buildMeasurementOverview({
       ...materialized.input,
       expectedSlots,
@@ -370,6 +379,52 @@ function targetKeysForRun(
   return selected
 }
 
+/**
+ * Roll every named market up from the run that is already materialized.
+ *
+ * `buildMeasurementOverview` is pure over the materialized input, so each market
+ * is a re-scope of data already in memory rather than another database read.
+ * Doing this server-side is what keeps the dashboard to one request and gives
+ * the CLI and MCP the same table for free.
+ *
+ * Returns [] when the caller already narrowed to one group: repeating that
+ * group's own numbers under a "compare markets" heading says nothing.
+ */
+function marketRollup(
+  plan: MeasurementPlanV2,
+  materialized: MaterializedRun,
+  expectedSlots: MaterializedRun['input']['expectedSlots'],
+  usageEdges: MaterializedRun['input']['usageEdges'],
+  scopedToOneGroup: boolean,
+): MeasurementPortfolioMarket[] {
+  if (scopedToOneGroup) return []
+  return plan.groups.map(group => {
+    const overview = buildMeasurementOverview({
+      ...materialized.input,
+      expectedSlots,
+      usageEdges,
+      scopeTargetIds: [...group.targetKeys],
+    })
+    return {
+      groupKey: group.stableKey,
+      label: group.label,
+      propertyCount: group.targetKeys.length,
+      propertiesMentioned: countMetric(overview.propertiesMentioned),
+      mentionCoverage: coverageMetric(overview.mentionCoverage),
+      citationCoverage: coverageMetric(overview.citationCoverage),
+    }
+  }).sort(compareWeakestMarket)
+}
+
+/**
+ * Worst-first, so the market that needs attention is the first one read. An
+ * unavailable rate sorts last: it is not a bad result, it is the absence of one.
+ */
+function compareWeakestMarket(a: MeasurementPortfolioMarket, b: MeasurementPortfolioMarket): number {
+  const rate = (m: MeasurementPortfolioMarket) => m.mentionCoverage.state === 'available' ? m.mentionCoverage.value : Number.POSITIVE_INFINITY
+  return rate(a) - rate(b) || a.label.localeCompare(b.label)
+}
+
 function portfolioResponse(
   db: DatabaseClient,
   active: ActiveMeasurementPlan,
@@ -409,12 +464,20 @@ function portfolioResponse(
         citationCoverage: unavailable('no_completed_run'),
       },
       weakestProperties: rows.slice(0, limit),
+      markets: group !== undefined ? [] : plan.groups.map(g => ({
+        groupKey: g.stableKey,
+        label: g.label,
+        propertyCount: g.targetKeys.length,
+        propertiesMentioned: unavailable('no_completed_run'),
+        mentionCoverage: unavailable('no_completed_run'),
+        citationCoverage: unavailable('no_completed_run'),
+      })),
       totalProperties: rows.length,
       truncated: rows.length > limit,
     })
   }
 
-  const { materialized, overview } = filteredOverviewWithDb(db, active, plan, run, filters, targetKeys)
+  const { materialized, overview, expectedSlots: filteredSlots, usageEdges: filteredEdges } = filteredOverviewWithDb(db, active, plan, run, filters, targetKeys)
   const measured = new Map(overview.properties.map(row => [row.targetId, row]))
   const rows = targets.map(target => {
     const row = measured.get(target.stableKey)
@@ -444,6 +507,7 @@ function portfolioResponse(
       citationCoverage: coverageMetric(overview.citationCoverage),
     },
     weakestProperties: rows.slice(0, limit),
+    markets: marketRollup(plan, materialized, filteredSlots, filteredEdges, group !== undefined),
     totalProperties: rows.length,
     truncated: rows.length > limit,
   })

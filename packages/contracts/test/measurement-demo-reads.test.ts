@@ -47,6 +47,14 @@ describe('advanced measurement demo reads', () => {
         recommendedInsteadTotal: 1,
         recommendedInsteadTruncated: false,
       }],
+      markets: [{
+        groupKey: 'harbor-district',
+        label: 'Harbor District',
+        propertyCount: 3,
+        propertiesMentioned: METRIC,
+        mentionCoverage: METRIC,
+        citationCoverage: METRIC,
+      }],
       totalProperties: 1,
       truncated: false,
     })).toMatchObject({ measurement: { displayedRunId: 'run-cedar-01' } })
@@ -56,7 +64,7 @@ describe('advanced measurement demo reads', () => {
       measurement: MEASUREMENT,
       queryClass: 'non-brand',
       metrics: { propertiesMentioned: METRIC, mentionCoverage: METRIC, citationCoverage: METRIC },
-      weakestProperties: [], totalProperties: 0, truncated: false, extra: true,
+      weakestProperties: [], markets: [], totalProperties: 0, truncated: false, extra: true,
     }).success).toBe(false)
   })
 

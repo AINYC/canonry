@@ -258,6 +258,70 @@ describe('measurement portfolio reads', () => {
       .toEqual([{ name: 'Rival One', occurrences: 1 }])
   })
 
+  it('scopes each market to its own members, worst-first, and agrees with a group-scoped read', async () => {
+    // A market that is a STRICT SUBSET of the portfolio. With one group holding
+    // every target, scoping a market to the whole portfolio produces identical
+    // numbers and the bug this guards against is invisible.
+    plan = {
+      ...plan,
+      groups: [
+        ...plan.groups,
+        { stableKey: 'harbor-only', label: 'Harbor only', targetKeys: ['harbor'], competitors: [] },
+      ],
+    }
+    const versionId = seedVersion(1)
+    activate(versionId)
+    seedFullRun(versionId, { createdAt: '2026-08-02T09:00:00.000Z' })
+
+    const { status, body } = await portfolio()
+    expect(status).toBe(200)
+    expect(body.markets.map(market => market.groupKey).sort()).toEqual(['harbor-only', 'regional'])
+
+    const harborOnly = body.markets.find(market => market.groupKey === 'harbor-only')!
+    const regional = body.markets.find(market => market.groupKey === 'regional')!
+
+    // Membership, not a denominator. A question aimed at a market is one answer
+    // serving every member, so the two never have to reconcile.
+    expect(harborOnly.propertyCount).toBe(1)
+    expect(regional.propertyCount).toBe(2)
+
+    // Coverage denominators count ANSWERS, and one shared execution serves both
+    // scopes, so those legitimately match. The metric that must differ is
+    // propertiesMentioned, which counts Properties: it is the assertion that
+    // fails if every market is scoped to all targets rather than its members.
+    expect(harborOnly.propertiesMentioned.state).toBe('available')
+    expect(regional.propertiesMentioned.state).toBe('available')
+    if (harborOnly.propertiesMentioned.state === 'available' && regional.propertiesMentioned.state === 'available') {
+      expect(harborOnly.propertiesMentioned.denominator).toBe(1)
+      expect(regional.propertiesMentioned.denominator).toBe(2)
+    }
+
+    // Same computation as the group-scoped read, so the dashboard and the CLI
+    // can never report different numbers for the same market.
+    for (const market of body.markets) {
+      const scoped = await portfolio(`groupKey=${market.groupKey}`)
+      expect(scoped.status).toBe(200)
+      expect(market.mentionCoverage).toEqual(scoped.body.metrics.mentionCoverage)
+      expect(market.citationCoverage).toEqual(scoped.body.metrics.citationCoverage)
+      expect(market.propertiesMentioned).toEqual(scoped.body.metrics.propertiesMentioned)
+    }
+
+    // Worst-first: an available rate never sorts after a weaker one.
+    const rates = body.markets.map(m => m.mentionCoverage.state === 'available' ? m.mentionCoverage.value : Number.POSITIVE_INFINITY)
+    expect([...rates].sort((a, b) => a - b)).toEqual(rates)
+  })
+
+  it('omits the roll-up when the request already narrowed to one market', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    seedFullRun(versionId, { createdAt: '2026-08-02T09:00:00.000Z' })
+
+    // Repeating the selected group's own numbers under a compare-markets
+    // heading says nothing, so the array is empty rather than a single row.
+    const { body } = await portfolio('groupKey=regional')
+    expect(body.markets).toEqual([])
+  })
+
   it('counts Property competitors only from target-miss answers and preserves their provider and question evidence', async () => {
     const versionId = seedVersion(1)
     activate(versionId)
