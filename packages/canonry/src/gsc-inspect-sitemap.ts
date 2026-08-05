@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
-import { eq, and } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { runs, projects, gscUrlInspections, gscCoverageSnapshots } from '@ainyc/canonry-db'
+import { runs, projects, gscUrlInspections } from '@ainyc/canonry-db'
 import {
   inspectUrl,
   refreshAccessToken,
@@ -10,6 +10,7 @@ import type { CanonryConfig } from './config.js'
 import { saveConfigPatch } from './config.js'
 import { getGoogleAuthConfig, getGoogleConnection, patchGoogleConnection } from './google-config.js'
 import { fetchAndParseSitemap } from './sitemap-parser.js'
+import { writeCoverageSnapshot } from './gsc-coverage-snapshot.js'
 import { createLogger } from './logger.js'
 import { inspectUrlsPaced, INSPECT_FAILFAST_THRESHOLD } from './gsc-inspect-paced.js'
 
@@ -129,47 +130,13 @@ export async function executeInspectSitemap(
     }
 
     // Record coverage snapshot
-    const allInspections = db
-      .select()
-      .from(gscUrlInspections)
-      .where(eq(gscUrlInspections.projectId, projectId))
-      .all()
-
-    const latestByUrl = new Map<string, typeof allInspections[number]>()
-    for (const row of allInspections) {
-      const existing = latestByUrl.get(row.url)
-      if (!existing || row.inspectedAt > existing.inspectedAt) {
-        latestByUrl.set(row.url, row)
-      }
-    }
-
-    let snapIndexed = 0
-    let snapNotIndexed = 0
-    const reasonCounts: Record<string, number> = {}
-    for (const [, row] of latestByUrl) {
-      if (row.indexingState === 'INDEXING_ALLOWED') {
-        snapIndexed++
-      } else {
-        snapNotIndexed++
-        const reason = row.coverageState ?? 'Unknown'
-        reasonCounts[reason] = (reasonCounts[reason] ?? 0) + 1
-      }
-    }
-
-    const snapshotDate = new Date().toISOString().split('T')[0]!
-    db.delete(gscCoverageSnapshots)
-      .where(and(eq(gscCoverageSnapshots.projectId, projectId), eq(gscCoverageSnapshots.date, snapshotDate)))
-      .run()
-    db.insert(gscCoverageSnapshots).values({
-      id: crypto.randomUUID(),
-      projectId,
-      syncRunId: runId,
-      date: snapshotDate,
-      indexed: snapIndexed,
-      notIndexed: snapNotIndexed,
-      reasonBreakdown: reasonCounts,
-      createdAt: new Date().toISOString(),
-    }).run()
+    // Single writer — see gsc-coverage-snapshot.ts. This run chains off
+    // gsc-sync and rewrites the same (project, date) row, so computing coverage
+    // independently here silently overwrote what gsc-sync derived and reset the
+    // provenance columns to their defaults.
+    const coverage = writeCoverageSnapshot(db, projectId, runId)
+    const snapIndexed = coverage.indexed
+    const snapNotIndexed = coverage.notIndexed
 
     // Mark run as completed (or partial if some failed)
     const status = errors > 0 && inspected > 0 ? 'partial' : errors === urls.length ? 'failed' : 'completed'

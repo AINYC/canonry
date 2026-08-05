@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { eq, and, sql } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { runs, projects, gscSearchData, gscDailyTotals, gscQueryDailyTotals, gscUrlInspections, gscCoverageSnapshots } from '@ainyc/canonry-db'
+import { runs, projects, gscSearchData, gscDailyTotals, gscQueryDailyTotals } from '@ainyc/canonry-db'
 import {
   fetchSearchAnalytics,
   refreshAccessToken,
@@ -9,7 +9,7 @@ import {
 } from '@ainyc/canonry-integration-google'
 import type { CanonryConfig } from './config.js'
 import { saveConfigPatch } from './config.js'
-import { deriveIndexCoverage } from '@ainyc/canonry-contracts'
+import { writeCoverageSnapshot } from './gsc-coverage-snapshot.js'
 import { getGoogleAuthConfig, getGoogleConnection, patchGoogleConnection } from './google-config.js'
 import { createLogger } from './logger.js'
 
@@ -232,52 +232,10 @@ export async function executeGscSync(
     // same URLs per cycle, spending quota to confirm what search analytics had
     // already reported for free.
 
-    // Record coverage snapshot from all inspections for this project (latest per URL)
-    const allInspections = db
-      .select()
-      .from(gscUrlInspections)
-      .where(eq(gscUrlInspections.projectId, projectId))
-      .all()
-
-    const latestByUrl = new Map<string, typeof allInspections[number]>()
-    for (const row of allInspections) {
-      const existing = latestByUrl.get(row.url)
-      if (!existing || row.inspectedAt > existing.inspectedAt) {
-        latestByUrl.set(row.url, row)
-      }
-    }
-
-    // Coverage now spans EVERY page the property showed in the window, not just
-    // the handful that carry an inspection. A page with an impression is
-    // provably indexed — Google served it — which costs no quota and works at
-    // any site size. Inspection still wins where it exists, and a page with
-    // neither signal is `unknown` rather than a manufactured "not indexed".
-    const coverage = deriveIndexCoverage({
-      pages: rows.map((row) => ({ page: row.keys[1] ?? '', impressions: row.impressions })),
-      inspections: [...latestByUrl.values()].map((row) => ({
-        url: row.url,
-        indexingState: row.indexingState,
-        coverageState: row.coverageState,
-      })),
-    })
-
-    const snapshotDate = formatDate(new Date())
-    db.delete(gscCoverageSnapshots)
-      .where(and(eq(gscCoverageSnapshots.projectId, projectId), eq(gscCoverageSnapshots.date, snapshotDate)))
-      .run()
-    db.insert(gscCoverageSnapshots).values({
-      id: crypto.randomUUID(),
-      projectId,
-      syncRunId: runId,
-      date: snapshotDate,
-      indexed: coverage.indexed,
-      notIndexed: coverage.notIndexed,
-      unknownPages: coverage.unknown,
-      verifiedByInspection: coverage.verifiedByInspection,
-      derivedFromImpressions: coverage.derivedFromImpressions,
-      reasonBreakdown: coverage.reasonBreakdown,
-      createdAt: new Date().toISOString(),
-    }).run()
+    // Single writer — see gsc-coverage-snapshot.ts. `inspect-sitemap` chains
+    // off this run and rewrites the same row, so both must compute it the same
+    // way or the chained run silently overwrites what this one derived.
+    const coverage = writeCoverageSnapshot(db, projectId, runId)
 
     // Mark run as completed
     db.update(runs)
