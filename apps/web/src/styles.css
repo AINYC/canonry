@@ -2111,8 +2111,17 @@
     @apply mt-1.5 text-[12px] leading-5 text-muted;
   }
 
+  /* Fixed 3-row template (label / value / caption) — every stat cell that
+     uses this class renders all three rows, always, even when the caption
+     is empty (see `.metric-inline-caption`). Explicit (non-`auto`) row
+     sizes keep the block's total height identical regardless of content —
+     a longer caption on one cell can't push its row's height past the
+     fixed track, so sibling stat cells stay the same total height and
+     `.project-row`'s `lg:items-center` centers their values onto one
+     shared baseline instead of drifting per cell. */
   .metric-inline-block {
-    @apply space-y-0.5;
+    @apply grid items-center gap-y-0.5;
+    grid-template-rows: 1rem 1.5rem 1.125rem;
   }
 
   .metric-inline-label {
@@ -2123,8 +2132,8 @@
     @apply text-base font-semibold tracking-[-0.02em] text-heading;
   }
 
-  .metric-inline-delta {
-    @apply text-[12px] text-faint;
+  .metric-inline-caption {
+    @apply truncate text-[12px] text-faint;
   }
 
   /* ── Run row ── */

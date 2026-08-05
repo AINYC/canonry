@@ -39,14 +39,39 @@ function OverviewProjectCard({
         <div className="metric-inline-block">
           <p className="metric-inline-label">Mentioned</p>
           <p className={`metric-inline-value ${project.mentionTone === 'caution' ? 'text-caution-400' : ''}`}>{project.mentionScore}</p>
-          <p className="metric-inline-delta">{project.mentionDelta}</p>
-          {project.providerCoverage && <p className="text-[13px] font-medium text-caution">{project.providerCoverage}</p>}
+          {/* `providerCoverage` is only set when the sweep covered a SUBSET of
+              configured providers, and it is why the tone shifted to caution:
+              the score above is built on incomplete data and is not comparable
+              to a full sweep. It therefore keeps the caution tone and takes the
+              caption slot outright — folding it into the faint delta text would
+              bury a data-validity caveat, and appending it would just truncate.
+              The query counts it displaces are still on `project.insight`. */}
+          <p
+            className={`metric-inline-caption${project.providerCoverage ? ' text-caution' : ''}`}
+            title={project.providerCoverage}
+          >
+            {project.providerCoverage
+              ? <><span className="sr-only">Partial sweep: </span>{project.providerCoverage}</>
+              : project.mentionDelta}
+          </p>
         </div>
       </div>
       <div className="project-row-stat">
         <div className="metric-inline-block">
-          <p className="metric-inline-label">Competitor Pressure</p>
+          {/* `aria-label` does NOT work here: a bare <p> has role `paragraph`,
+              which does not support an accessible name, so screen readers are
+              free to ignore it and most do. The visually-hidden span is what
+              actually carries "competitor" to assistive tech. */}
+          <p className="metric-inline-label">
+            <span aria-hidden="true">Pressure</span>
+            <span className="sr-only">Competitor pressure</span>
+          </p>
           <p className="metric-inline-value">{project.competitorPressureLabel}</p>
+          {/* Empty caption slot, always rendered (not conditionally omitted) so
+              this cell keeps the same three-row template as the "Mentioned"
+              cell above — that's what keeps the two VALUES on a shared
+              baseline when `.project-row` centers each stat cell. */}
+          <p className="metric-inline-caption" aria-hidden="true"></p>
         </div>
       </div>
       <span className="project-row-link">
