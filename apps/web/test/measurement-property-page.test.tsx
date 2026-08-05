@@ -63,7 +63,13 @@ function planResponse() {
           mentionNotApplicable: false,
           discoveryIdentity: 'sitemap:harbor-house',
         }],
-        groups: [{ stableKey: 'north', label: 'North', targetKeys: [TARGET_KEY], competitors: [] }],
+        // TWO markets, and this Property is in exactly one of them. A fixture
+        // whose only group contains the only target cannot see a membership
+        // filter at all: deleting the filter outright left every test green.
+        groups: [
+          { stableKey: 'north', label: 'North', targetKeys: [TARGET_KEY], competitors: ['rival.example', 'other.example'] },
+          { stableKey: 'south', label: 'South', targetKeys: ['other-property'], competitors: ['southern.example'] },
+        ],
         querySnapshots: [{
           queryId: 'query-nearby',
           queryText: 'boutique hotels near the harbor',
@@ -826,8 +832,6 @@ describe('Coverage hero', () => {
 
     // A zero-width track beside "Not measured" would read as a measured zero.
     // Branded is measured and keeps its two bars; the unmeasured pair has none.
-    // eslint-disable-next-line no-console
-    console.log('DEBUG rows:', hero.querySelectorAll('.aeo-hero-row').length, 'bars:', hero.querySelectorAll('.aeo-hero-row-bar').length, 'notmeasured:', within(hero).getAllByText('Not measured').length)
     expect(hero.querySelectorAll('.aeo-hero-row-bar').length).toBe(2)
     expect(within(hero).queryByText('0%')).toBeNull()
   })
@@ -851,17 +855,54 @@ describe('Property facts and market link', () => {
     })
 
     const facts = await screen.findByRole('region', { name: 'What was measured' })
-    expect(within(facts).getByText('Questions assigned')).toBeTruthy()
-    expect(within(facts).getByText('Owned URLs')).toBeTruthy()
-    expect(within(facts).getByText('Answer engines')).toBeTruthy()
+
+    // Assert the VALUES, not the labels. The label-only version of this test
+    // passed with `engineCount` forced to 0 and `measuredAt` forced to null,
+    // which were the two bugs it was written to prevent.
+    const cardFor = (label: string) => {
+      const card = within(facts).getByText(label).closest('.metric-card')
+      expect(card).toBeTruthy()
+      return card as HTMLElement
+    }
+    expect(within(cardFor('Questions assigned')).getByText('1')).toBeTruthy()
+    expect(within(cardFor('Owned URLs')).getByText('1')).toBeTruthy()
+    expect(within(cardFor('Answer engines')).getByText('2')).toBeTruthy()
+    expect(within(cardFor('Answer engines')).getByText('Answered at least one assigned question')).toBeTruthy()
+    expect(within(cardFor('Last measured')).getByText('Aug 2, 2026')).toBeTruthy()
+    expect(within(facts).queryByText('Never')).toBeNull()
 
     // Counts are unbounded, so a progress bar would imply a ceiling that does
     // not exist. DESIGN.md reserves linear progress for a real bounded target.
     expect(facts.querySelectorAll('.metric-card-bar').length).toBe(0)
-    expect(facts.querySelectorAll('.aeo-hero-row-bar').length).toBe(0)
   })
 
-  it('offers the market where the competitor comparison actually lives', async () => {
+  it('states no engine count for a class the run never measured', async () => {
+    await renderPropertyPage({
+      branded: overviewResponse('branded', {
+        mentionCoverage: available(4, 4),
+        citationCoverage: available(4, 4),
+      }),
+      // The server ships `providers: []` next to an unavailable metric, so the
+      // row exists and its provider list is empty for a reason that is NOT
+      // "no engine answered". Counting it printed "0 / No engine answered"
+      // while the hero on the same screen said "Not measured".
+      nonBrand: overviewResponse('non-brand', {
+        mentionCoverage: unavailable('no_population'),
+        citationCoverage: unavailable('no_population'),
+      }),
+    })
+
+    const facts = await screen.findByRole('region', { name: 'What was measured' })
+    const engines = within(facts).getByText('Answer engines').closest('.metric-card') as HTMLElement
+    expect(within(engines).queryByText('0')).toBeNull()
+    expect(within(engines).queryByText('No engine answered for this Property')).toBeNull()
+    expect(engines.textContent).toContain('—')
+    // It carries the server's own reason rather than a generic "not measured",
+    // so the card says WHY there is no count.
+    expect(within(engines).getByText('No questions of this type are assigned')).toBeTruthy()
+  })
+
+  it('names the markets this Property is in, and only those', async () => {
     await renderPropertyPage({
       branded: overviewResponse('branded', {
         mentionCoverage: available(4, 4),
@@ -873,10 +914,59 @@ describe('Property facts and market link', () => {
       }),
     })
 
-    // A single Property has nobody to compare against, so the page links out
-    // rather than rendering an empty competitor card that reads as missing data.
+    // A single Property has nobody to compare against, so the page points at
+    // the market rather than rendering an empty competitor card that reads as
+    // missing data. "South" exists in the plan and does not contain this
+    // Property, so naming it here would attribute a comparison that is not this
+    // Property's.
     const market = await screen.findByRole('region', { name: /Measured at the market level/ })
     expect(within(market).getByText('North')).toBeTruthy()
-    expect(within(market).getByText(/competitors?$/)).toBeTruthy()
+    expect(within(market).queryByText('South')).toBeNull()
+    expect(within(market).getByText('2 competitors')).toBeTruthy()
+
+    // One destination, one control. Per-market buttons all resolved to this
+    // same unscoped URL, so the market a reader picked was silently dropped.
+    const links = within(market).getAllByRole('link')
+    expect(links).toHaveLength(1)
+    expect(links[0]!.textContent).toBe('Open measurement overview')
+  })
+
+  it('does not claim the Property was never swept while a class is failing', async () => {
+    // The facts grid read `selected?.measurement.completedAt ?? null`, which
+    // collapses "this response was never read" into "there has never been a
+    // completed sweep" and prints "Last measured: Never / No completed sweep
+    // yet" about a Property that was measured this morning.
+    await renderPropertyPageFromApi(url => {
+      const path = pathOf(url)
+      if (path.includes('/measurement-overview') && new URL(url).searchParams.get('queryClass') === 'non-brand') {
+        return new Response(JSON.stringify({ message: 'temporary failure' }), { status: 500, headers: { 'content-type': 'application/json' } })
+      }
+      return propertyPageResponses()(url)
+    })
+
+    const facts = await screen.findByRole('region', { name: 'What was measured' })
+    const lastMeasured = within(facts).getByText('Last measured').closest('.metric-card') as HTMLElement
+    expect(within(lastMeasured).queryByText('Never')).toBeNull()
+    expect(within(lastMeasured).queryByText('No completed sweep yet')).toBeNull()
+    expect(lastMeasured.textContent).toContain('—')
+
+    // And the hero says the class failed rather than spinning forever: the
+    // retry is in the table below, so "Loading" is a promise nothing will keep.
+    const hero = screen.getByRole('region', { name: 'Coverage for this Property' })
+    expect(within(hero).getAllByText('Unavailable')).toHaveLength(2)
+    expect(within(hero).queryByText('Loading')).toBeNull()
+  })
+
+  it('uses the singular for a market with one competitor', async () => {
+    const plan = planResponse()
+    plan.active.plan.groups[0]!.competitors = ['rival.example']
+    await renderPropertyPage({
+      plan,
+      branded: overviewResponse('branded', { mentionCoverage: available(4, 4), citationCoverage: available(4, 4) }),
+      nonBrand: overviewResponse('non-brand', { mentionCoverage: available(1, 4), citationCoverage: available(0, 4) }),
+    })
+
+    const market = await screen.findByRole('region', { name: /Measured at the market level/ })
+    expect(within(market).getByText('1 competitor')).toBeTruthy()
   })
 })
