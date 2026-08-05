@@ -13,6 +13,8 @@ import { DashboardProvider } from '../src/contexts/dashboard-context.js'
 import { createDashboardFixture } from '../src/mock-data.js'
 import { createAppRouter } from '../src/router/router.js'
 import { preloadAllLazyRoutes } from '../src/router/routes.js'
+import { getApiV1ProjectsByNameMeasurementPlanQueryKey } from '@ainyc/canonry-api-client/react-query'
+import { heyClient } from '../src/api.js'
 
 const stylesPath = resolve(import.meta.dirname, '../src/styles.css')
 const sourceRoot = resolve(import.meta.dirname, '../src')
@@ -25,6 +27,15 @@ beforeAll(async () => {
 async function renderRoute(pathname: string): Promise<string> {
   const fixture = createDashboardFixture({})
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // One synchronous render pass, so no query settles. The project overview now
+  // waits for the measurement-plan read before picking a surface, so seed the
+  // "no advanced plan" answer this baseline is describing.
+  for (const entry of fixture.dashboard.projects) {
+    queryClient.setQueryData(
+      getApiV1ProjectsByNameMeasurementPlanQueryKey({ client: heyClient, path: { name: entry.project.name } }),
+      { active: null },
+    )
+  }
   const router = createAppRouter(queryClient, { initialEntries: [pathname] })
   await router.load()
 

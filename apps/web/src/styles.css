@@ -1847,6 +1847,15 @@
     stroke: var(--chart-tone-neutral);
   }
 
+  /*
+   * Too few readings to draw a trend. Deliberately toneless: the dots say how
+   * many measurements exist, and colouring them would imply a direction that is
+   * exactly what this state exists to withhold.
+   */
+  .sparkline-baseline circle {
+    fill: var(--chart-neutral-grid-line);
+  }
+
   /* ── Grids ── */
 
   .insight-grid,

@@ -5,7 +5,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 
-import { fetchHealthCheck, fetchServiceStatus } from '../src/api.js'
+import { getApiV1ProjectsByNameMeasurementPlanQueryKey } from '@ainyc/canonry-api-client/react-query'
+import { fetchHealthCheck, fetchServiceStatus, heyClient } from '../src/api.js'
 import { createDashboardFixture } from '../src/mock-data.js'
 import { createAppRouter } from '../src/router/router.js'
 import { DashboardProvider } from '../src/contexts/dashboard-context.js'
@@ -27,6 +28,25 @@ type TestWindowConfig = {
   }
 }
 
+/**
+ * These render ONE synchronous pass with renderToStaticMarkup, so no query ever
+ * settles. The project overview now waits for the measurement-plan read before
+ * choosing between the legacy and advanced surfaces — previously "pending" and
+ * "no plan" were the same value, which is the flash that guard removes — so a
+ * never-settling plan query paints a skeleton forever here.
+ *
+ * Seeding "this project has no advanced plan" is the state these tests are
+ * actually describing, and it is the same setup portfolio-route.test.tsx uses.
+ */
+function seedNoMeasurementPlan(queryClient: QueryClient, fixture: ReturnType<typeof createDashboardFixture>): void {
+  for (const entry of fixture.dashboard.projects) {
+    queryClient.setQueryData(
+      getApiV1ProjectsByNameMeasurementPlanQueryKey({ client: heyClient, path: { name: entry.project.name } }),
+      { active: null },
+    )
+  }
+}
+
 async function renderApp(
   pathname: string,
   options: Parameters<typeof createDashboardFixture>[0] = {},
@@ -41,6 +61,8 @@ async function renderApp(
   for (const [projectName, queries] of Object.entries(trackedQueries)) {
     queryClient.setQueryData(['setup', 'resume-queries', projectName], queries)
   }
+
+  seedNoMeasurementPlan(queryClient, fixture)
 
   const router = createAppRouter(queryClient, { initialEntries: [pathname] })
   await router.load()
