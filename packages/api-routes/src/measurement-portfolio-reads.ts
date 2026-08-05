@@ -389,9 +389,18 @@ function targetKeysForRun(
  *
  * Returns [] when the caller already narrowed to one group: repeating that
  * group's own numbers under a "compare markets" heading says nothing.
+ *
+ * Every market is scoped through `targetKeysForRun`, the same narrowing the
+ * group-scoped read applies. Scoping on raw `group.targetKeys` instead made one
+ * response contradict itself on a spot check: the roll-up credited Properties
+ * the run never measured, so `markets[x]` and `?groupKey=x` reported different
+ * rates and different populations for the same market in the same revision. A
+ * market with no member inside the spot check reported a rate at all, which is
+ * the measured-zero failure this surface exists to prevent.
  */
 function marketRollup(
   plan: MeasurementPlanV2,
+  run: RunRow,
   materialized: MaterializedRun,
   expectedSlots: MaterializedRun['input']['expectedSlots'],
   usageEdges: MaterializedRun['input']['usageEdges'],
@@ -399,16 +408,22 @@ function marketRollup(
 ): MeasurementPortfolioMarket[] {
   if (scopedToOneGroup) return []
   return plan.groups.map(group => {
+    // A market with no member inside the displayed run still goes through the
+    // kernel with an empty scope rather than short-circuiting to a hand-picked
+    // reason. The kernel is what decides why a metric is unavailable, and the
+    // group-scoped read of the same market reaches it the same way — inventing
+    // a reason here is how the two surfaces start disagreeing again.
+    const targetKeys = targetKeysForRun(plan, run, group.targetKeys, false)
     const overview = buildMeasurementOverview({
       ...materialized.input,
       expectedSlots,
       usageEdges,
-      scopeTargetIds: [...group.targetKeys],
+      scopeTargetIds: targetKeys,
     })
     return {
       groupKey: group.stableKey,
       label: group.label,
-      propertyCount: group.targetKeys.length,
+      propertyCount: targetKeys.length,
       propertiesMentioned: countMetric(overview.propertiesMentioned),
       mentionCoverage: coverageMetric(overview.mentionCoverage),
       citationCoverage: coverageMetric(overview.citationCoverage),
@@ -419,10 +434,32 @@ function marketRollup(
 /**
  * Worst-first, so the market that needs attention is the first one read. An
  * unavailable rate sorts last: it is not a bad result, it is the absence of one.
+ *
+ * Ranking on mention alone sorted a market whose mention rate was withheld but
+ * whose citation rate was a measured worst-in-portfolio 0% dead last. This
+ * mirrors `compareWeakest`, which the Property rows already use: a row is
+ * demoted when EITHER metric is missing, and citation breaks a mention tie.
+ *
+ * Exported for its own unit test. Several of its branches need a market whose
+ * two metrics disagree about availability, which no arrangement of the seeded
+ * fixture can produce: the markets there share executions, so their capture
+ * state is shared too.
  */
-function compareWeakestMarket(a: MeasurementPortfolioMarket, b: MeasurementPortfolioMarket): number {
-  const rate = (m: MeasurementPortfolioMarket) => m.mentionCoverage.state === 'available' ? m.mentionCoverage.value : Number.POSITIVE_INFINITY
-  return rate(a) - rate(b) || a.label.localeCompare(b.label)
+export function compareWeakestMarket(a: MeasurementPortfolioMarket, b: MeasurementPortfolioMarket): number {
+  const aUnavailable = a.mentionCoverage.state === 'unavailable' || a.citationCoverage.state === 'unavailable'
+  const bUnavailable = b.mentionCoverage.state === 'unavailable' || b.citationCoverage.state === 'unavailable'
+  if (aUnavailable !== bUnavailable) return aUnavailable ? 1 : -1
+  if (aUnavailable || bUnavailable) return compareText(a.label, b.label) || compareText(a.groupKey, b.groupKey)
+  // Both rows are fully measured after the guard above.
+  if (a.mentionCoverage.state === 'available' && b.mentionCoverage.state === 'available'
+    && a.mentionCoverage.value !== b.mentionCoverage.value) {
+    return a.mentionCoverage.value - b.mentionCoverage.value
+  }
+  if (a.citationCoverage.state === 'available' && b.citationCoverage.state === 'available'
+    && a.citationCoverage.value !== b.citationCoverage.value) {
+    return a.citationCoverage.value - b.citationCoverage.value
+  }
+  return compareText(a.label, b.label) || compareText(a.groupKey, b.groupKey)
 }
 
 function portfolioResponse(
@@ -464,6 +501,9 @@ function portfolioResponse(
         citationCoverage: unavailable('no_completed_run'),
       },
       weakestProperties: rows.slice(0, limit),
+      // Sorted through the same comparator as the measured branch. Plan order
+      // is `stableKey`, so emitting it raw put markets in an order the schema
+      // documents as worst-first and that changes the moment a run lands.
       markets: group !== undefined ? [] : plan.groups.map(g => ({
         groupKey: g.stableKey,
         label: g.label,
@@ -471,7 +511,7 @@ function portfolioResponse(
         propertiesMentioned: unavailable('no_completed_run'),
         mentionCoverage: unavailable('no_completed_run'),
         citationCoverage: unavailable('no_completed_run'),
-      })),
+      })).sort(compareWeakestMarket),
       totalProperties: rows.length,
       truncated: rows.length > limit,
     })
@@ -507,7 +547,7 @@ function portfolioResponse(
       citationCoverage: coverageMetric(overview.citationCoverage),
     },
     weakestProperties: rows.slice(0, limit),
-    markets: marketRollup(plan, materialized, filteredSlots, filteredEdges, group !== undefined),
+    markets: marketRollup(plan, run, materialized, filteredSlots, filteredEdges, group !== undefined),
     totalProperties: rows.length,
     truncated: rows.length > limit,
   })

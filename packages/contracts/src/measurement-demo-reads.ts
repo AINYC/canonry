@@ -80,10 +80,18 @@ export type MeasurementPortfolioWeakestProperty = z.output<typeof measurementPor
  * One market's roll-up, so a portfolio owner can compare markets side by side
  * instead of selecting each from a dropdown in turn.
  *
- * `propertyCount` is the market's membership, NOT a denominator. Coverage
- * denominators count measured answers, and a question aimed at a market is one
- * answer serving every member, so the two never reconcile and must never be
- * rendered as though they do.
+ * `propertyCount` is the market's membership IN THE DISPLAYED RUN, NOT a
+ * denominator. It matches the `totalProperties` the same market reports when
+ * read with `groupKey`, so a spot check never states two populations for one
+ * market. Coverage denominators count measured answers, and a question aimed at
+ * a market is one answer serving every member, so the two never reconcile and
+ * must never be rendered as though they do.
+ *
+ * Markets may SHARE Properties: nothing stops a Property belonging to two, and
+ * a portfolio may have Properties in none. So `propertyCount` and
+ * `propertiesMentioned.numerator` do not sum to the portfolio totals in either
+ * direction, and a surface that adds them up is reporting a number the plan
+ * does not contain.
  */
 export const measurementPortfolioMarketSchema = z.object({
   groupKey: measurementV2StableKeySchema,
