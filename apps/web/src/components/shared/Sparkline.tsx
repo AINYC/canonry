@@ -36,22 +36,13 @@ export function Sparkline({ points, tone }: { points: number[]; tone: MetricTone
   const plotHeight = innerHeight - GUIDE_GAP
   const xOf = (index: number): number => padding + (index / Math.max(points.length - 1, 1)) * innerWidth
 
-  // Too few readings to claim a direction, so don't draw one. The readings are
-  // shown as evenly spaced dots instead of being connected into a trend the
-  // sample cannot support. Both report renderers already refuse here and say
-  // "building baseline"; this is the same refusal, sized for a 132px slot.
-  if (isTrendBaseline(points)) {
-    const y = padding + plotHeight / 2
-    return (
-      <svg
-        className={`sparkline sparkline-${tone} sparkline-baseline`}
-        viewBox={`0 0 ${width} ${height}`}
-        aria-hidden="true"
-      >
-        {points.map((_, index) => <circle key={index} cx={xOf(index)} cy={y} r="1.5" />)}
-      </svg>
-    )
-  }
+  // Below the meaningful-sample floor the line is still DRAWN — a portfolio row
+  // without a chart loses the shape a reader scans for — but drawn dashed, so
+  // the sample size is visible in the mark itself rather than only in a caption
+  // nobody reads. Suppressing it entirely was the first attempt and it removed
+  // the graph, which is the wrong trade: the honest fix for an over-dramatic
+  // line is scaling it truthfully, not deleting it.
+  const provisional = isTrendBaseline(points)
 
   const min = Math.min(...points)
   const max = Math.max(...points)
@@ -64,7 +55,11 @@ export function Sparkline({ points, tone }: { points: number[]; tone: MetricTone
     .join(' ')
 
   return (
-    <svg className={`sparkline sparkline-${tone}`} viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
+    <svg
+      className={`sparkline sparkline-${tone}${provisional ? ' sparkline-provisional' : ''}`}
+      viewBox={`0 0 ${width} ${height}`}
+      aria-hidden="true"
+    >
       <defs>
         <clipPath id={clipId}>
           <rect x={padding} y={padding} width={innerWidth} height={innerHeight} rx="8" />

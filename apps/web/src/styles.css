@@ -1848,12 +1848,12 @@
   }
 
   /*
-   * Too few readings to draw a trend. Deliberately toneless: the dots say how
-   * many measurements exist, and colouring them would imply a direction that is
-   * exactly what this state exists to withhold.
+   * Fewer readings than a trend needs. The line is still drawn — a portfolio row
+   * without a chart loses the shape a reader scans for — but dashed, so the
+   * sample size shows in the mark instead of only in a caption.
    */
-  .sparkline-baseline circle {
-    fill: var(--chart-neutral-grid-line);
+  .sparkline-provisional polyline {
+    stroke-dasharray: 3 3;
   }
 
   /* ── Grids ── */

@@ -18,17 +18,23 @@ function pointsOf(html: string): Array<{ x: number; y: number }> {
 }
 
 describe('Sparkline', () => {
-  it('draws readings as dots, with no trend line, below the meaningful-sample floor', () => {
+  it('still draws the line below the sample floor, but marks it provisional', () => {
     // The real series that prompted this: three runs, 11 of 16 queries mentioned
-    // becoming 10. The report renderers already refuse to call three points a
-    // trend; the portfolio tile drew a full-height cliff for the same data.
+    // becoming 10. Suppressing the line entirely was the first attempt and it
+    // took the graph off the portfolio row, which is the wrong trade — a reader
+    // scans that row FOR the shape. The sample size shows in the mark instead.
     const html = renderToStaticMarkup(<Sparkline points={[69, 69, 63]} tone="caution" />)
 
-    expect(html).not.toContain('<polyline')
-    expect(html.match(/<circle/g)).toHaveLength(3)
-    // Toneless on purpose: colouring the dots would imply the direction this
-    // state exists to withhold.
-    expect(html).toContain('sparkline-baseline')
+    expect(html).toContain('<polyline')
+    expect(pointsOf(html)).toHaveLength(3)
+    expect(html).toContain('sparkline-provisional')
+  })
+
+  it('does not mark a full-sample series provisional', () => {
+    const html = renderToStaticMarkup(<Sparkline points={[69, 69, 63, 64]} tone="caution" />)
+
+    expect(html).toContain('<polyline')
+    expect(html).not.toContain('sparkline-provisional')
   })
 
   it('never lets the lowest point sit on the guide line, which reads as zero', () => {
