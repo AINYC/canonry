@@ -61,6 +61,16 @@ export function OverviewPage() {
   const { dashboard, isLoading } = useDashboard()
   const safeDashboard = dashboard ?? contextDashboard?.dashboard
 
+  // Every hook has to run on every render, so they all sit above the skeleton
+  // return. React identifies hooks by call order, so a return placed between
+  // two of them changes the count from one render to the next and throws
+  // "rendered more hooks than during the previous render". The embed shell has
+  // no server-rendered dashboard to fall back on, so it always takes the
+  // skeleton branch first and hit this on every cold load.
+  const enableLiveStatus = !contextDashboard
+  const healthQuery = useHealth(enableLiveStatus, contextDashboard?.health)
+  const { openRun } = useDrawer()
+
   if (!safeDashboard || isLoading) {
     return (
       <div className="page-skeleton">
@@ -87,12 +97,8 @@ export function OverviewPage() {
 
   const model = safeDashboard.portfolioOverview
 
-  const enableLiveStatus = !contextDashboard
-  const healthQuery = useHealth(enableLiveStatus, contextDashboard?.health)
   const healthSnapshot = healthQuery.data ?? contextDashboard?.health ?? { apiStatus: { label: 'API', state: 'checking', detail: 'Checking service health' }, workerStatus: { label: 'Worker', state: 'checking', detail: 'Checking service health' } }
   const systemHealth = buildSystemHealthCards(model.systemHealth, healthSnapshot, safeDashboard.settings)
-
-  const { openRun } = useDrawer()
 
   return (
     <div className="page-container">

@@ -103,8 +103,13 @@ describe('every mutation hook carries the guard', () => {
     const mutations = await import('../src/queries/mutations.js')
     const fs = await import('node:fs')
     const path = await import('node:path')
-    // Run from the workspace root, so name the app explicitly.
-    const source = fs.readFileSync(path.resolve('apps/web/src/queries/mutations.ts'), 'utf8')
+    const url = await import('node:url')
+    // Resolve from this file, not from the working directory. A cwd-relative
+    // path only holds when vitest is started at the workspace root, so the
+    // per-package run (`pnpm --filter … test`) reported this guard as broken
+    // when it was fine.
+    const here = path.dirname(url.fileURLToPath(import.meta.url))
+    const source = fs.readFileSync(path.join(here, '../src/queries/mutations.ts'), 'utf8')
 
     const hookNames = Object.keys(mutations).filter(name => /^use[A-Z]/.test(name))
     expect(hookNames.length).toBeGreaterThan(5)
