@@ -1,19 +1,7 @@
 /**
- * Pure trend-meaningfulness predicate.
- *
- * A 5%→1% trend on N=2 reads as a crisis to a non-analyst reader, but is
- * pure noise on a sample of two runs. Anywhere a trend is consumed — the
- * report renderer's line chart, the dashboard's project tile, Aero's
- * narration — should suppress the trend visualization until enough runs
- * exist to support it.
- *
- * `MIN_TREND_POINTS` is the minimum sample size before a trend is shown.
- * Tuned conservatively: 4 = at least one full direction-change is observable.
+ * Re-export only. The predicate moved to `@ainyc/canonry-contracts` when the
+ * browser needed it as well — `apps/web` depends on contracts and not on this
+ * package, and the dashboard sparkline is one of the consumers the original
+ * doc comment named. Kept here so existing imports do not have to move.
  */
-
-export const MIN_TREND_POINTS = 4
-
-/** True when the series is too small to support a meaningful trend display. */
-export function isTrendBaseline(points: readonly unknown[]): boolean {
-  return points.length < MIN_TREND_POINTS
-}
+export { MIN_TREND_POINTS, isTrendBaseline } from '@ainyc/canonry-contracts'

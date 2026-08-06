@@ -835,6 +835,10 @@ function SearchConsoleSection({
     })
 
     const failures: string[] = []
+    // Things that are neither success nor failure: work that is still running
+    // and will land on its own. Reporting these keeps a slow-but-healthy sync
+    // from reading as either "done" or "broken".
+    const notices: string[] = []
 
     try {
       // --- Google: trigger a background GSC sync job and poll to completion ---
@@ -855,13 +859,28 @@ function SearchConsoleSection({
           if (!detail) break
           if (['completed', 'failed', 'cancelled'].includes(detail.status)) {
             if (detail.status !== 'completed') failures.push(`Google sync ${detail.status}`)
-            break
+            return
           }
         }
+
+        // Deadline reached with the run still going. This used to fall out of
+        // the loop recording nothing, so the refresh reported success while the
+        // panels below reloaded pre-sync numbers — indistinguishable from "the
+        // button did nothing". Say what is actually true instead: the sync is
+        // still running and its data will appear on its own.
+        notices.push('Google sync is still running — search data will appear shortly')
       }
 
       // --- Bing: re-inspect previously known URLs, or fall back to sitemap ---
-      const BING_CONCURRENCY = 10
+      // Bing throttles per HOST, shared by every project on the instance, and
+      // reports it as a 400 rather than a 429. Ten simultaneous inspections
+      // reliably tripped it: the first batch landed, everything behind it was
+      // rejected. The engine now retries with backoff, but ten synchronised
+      // callers back off and retry together — a thundering herd that keeps the
+      // throttle asserted. Fewer in flight, spaced apart, gets more work done
+      // than more in flight being rejected.
+      const BING_CONCURRENCY = 3
+      const BING_BATCH_SPACING_MS = 1000
       async function syncBing() {
         if (!bingConnection?.connected) return
         const inspections = await queryClient.fetchQuery({
@@ -877,6 +896,10 @@ function SearchConsoleSection({
         }
 
         for (let i = 0; i < uniqueUrls.length; i += BING_CONCURRENCY) {
+          if (signal.aborted) return
+          // Space the batches. Back-to-back bursts are what sustained the
+          // throttle; the pause lets the host-level limit recover between them.
+          if (i > 0) await new Promise<void>((resolve) => setTimeout(resolve, BING_BATCH_SPACING_MS))
           if (signal.aborted) return
           const batch = uniqueUrls.slice(i, i + BING_CONCURRENCY)
           const results = await Promise.allSettled(batch.map((url) => inspectBingUrl(projectName, url)))
@@ -904,11 +927,21 @@ function SearchConsoleSection({
       setWorkspaceRefreshNonce((current) => current + 1)
 
       if (failures.length > 0) {
-        const message = `Partial refresh: ${failures.join('; ')}`
+        const message = `Partial refresh: ${[...failures, ...notices].join('; ')}`
         setError(message)
         addToast({
           title: 'Search coverage partially refreshed',
           detail: message,
+          tone: 'caution',
+          dedupeKey: `search-console-refresh:${projectName}`,
+          dedupeMode: 'replace',
+        })
+      } else if (notices.length > 0) {
+        // Nothing failed; something is simply still in flight. Not an error, so
+        // `setError` stays untouched and the tone stays neutral.
+        addToast({
+          title: 'Search coverage refreshed',
+          detail: notices.join('; '),
           tone: 'caution',
           dedupeKey: `search-console-refresh:${projectName}`,
           dedupeMode: 'replace',
@@ -1730,6 +1763,28 @@ function ProjectPageContent({
     activePlanSchemaVersion: measurementSetupQuery.data?.activeSchemaVersion ?? activeMeasurementPlanSchemaVersion,
     hasDraft: measurementSetupQuery.data?.draft !== null && measurementSetupQuery.data?.draft !== undefined,
   })
+  /**
+   * Which overview to show is not known until one of the two plan reads lands.
+   * Until then the expression above is `undefined ?? null`, and `null` is what
+   * `resolveAdvancedMeasurementMode` reads as "this project has no plan" — so a
+   * project WITH a plan rendered the legacy overview first and swapped it out a
+   * moment later. Pending and absent cannot share a value here.
+   *
+   * Known as soon as EITHER read has data, because the setup read only refines
+   * a decision the plan read can already make (it is the `??` fallback above).
+   * Waiting on both would hold a skeleton over an answer already in hand.
+   *
+   * `isLoading`, not `isPending`: both queries are disabled on tabs that do not
+   * read the plan, and a disabled TanStack v5 query reports `isPending` forever,
+   * which would strand those tabs on a skeleton. `isLoading` is false when
+   * disabled and false while refetching over cached data, so this fires once per
+   * cold load and never again. Once both have settled — data or error — `null`
+   * means what it says, and the legacy overview is the right answer.
+   */
+  const isMeasurementModeUnresolved =
+    measurementSetupQuery.data === undefined
+    && activeMeasurementPlanQuery.data === undefined
+    && (activeMeasurementPlanQuery.isLoading || measurementSetupQuery.isLoading)
   const advancedMeasurementOverviewPagesInconsistent = useMemo(() => {
     const pages = advancedMeasurementOverviewQuery.data?.pages
     return pages ? !areV2OverviewPagesCompatible(pages) : false
@@ -2204,6 +2259,12 @@ function ProjectPageContent({
           }}
         />
       ) : tab === 'overview' ? (
+        isMeasurementModeUnresolved ? (
+          <div role="status" aria-live="polite">
+            <span className="sr-only">Loading project overview</span>
+            <div className="h-32 animate-pulse rounded-md bg-surface-subtle" aria-hidden="true" />
+          </div>
+        ) : (
         <>
           {isActiveMeasurementPlanError ? (
             <div role="alert" className="mb-5 flex flex-wrap items-center gap-3 border-y border-negative-800/40 bg-negative-950/20 py-4 text-sm text-negative">
@@ -2530,6 +2591,7 @@ function ProjectPageContent({
             viewSearch={advancedMeasurementView.search ?? ''}
           />
         </>
+        )
       ) : tab === 'settings' ? (
         <>
           <ProjectSettingsSection project={{ ...model.project, displayName: model.project.displayName ?? model.project.name, defaultLocation: model.project.defaultLocation ?? null }} onUpdateProject={async (name, updates) => { await handleUpdateProject(name, updates) }} onRefresh={() => void refetch()} />
