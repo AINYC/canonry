@@ -835,6 +835,10 @@ function SearchConsoleSection({
     })
 
     const failures: string[] = []
+    // Things that are neither success nor failure: work that is still running
+    // and will land on its own. Reporting these keeps a slow-but-healthy sync
+    // from reading as either "done" or "broken".
+    const notices: string[] = []
 
     try {
       // --- Google: trigger a background GSC sync job and poll to completion ---
@@ -855,34 +859,60 @@ function SearchConsoleSection({
           if (!detail) break
           if (['completed', 'failed', 'cancelled'].includes(detail.status)) {
             if (detail.status !== 'completed') failures.push(`Google sync ${detail.status}`)
-            break
+            return
           }
         }
+
+        // Deadline reached with the run still going. This used to fall out of
+        // the loop recording nothing, so the refresh reported success while the
+        // panels below reloaded pre-sync numbers — indistinguishable from "the
+        // button did nothing". Say what is actually true instead: the sync is
+        // still running and its data will appear on its own.
+        notices.push('Google sync is still running — search data will appear shortly')
       }
 
-      // --- Bing: re-inspect previously known URLs, or fall back to sitemap ---
-      const BING_CONCURRENCY = 10
+      // --- Bing: trigger the server-side sweep and poll, like syncGoogle ---
+      //
+      // This used to loop here, issuing one HTTP call per URL from the browser.
+      // Every failure mode traced to that: the sweep died when you navigated
+      // away (it is client JS guarded by `signal.aborted`), a cached bundle
+      // silently kept the old batch size, and the burst size was tuned in the
+      // UI against a limit enforced on the server. Bing throttles per HOST,
+      // shared by every project on the instance, so a browser is the wrong
+      // place to decide the rate.
+      //
+      // `bing-inspect-sitemap` already walks the sitemap server-side at ~1
+      // req/sec. Triggering it means the run survives closing the tab, the
+      // pacing lives in one place, and the CLI/MCP get the same capability —
+      // the UI/CLI parity rule this loop was violating.
       async function syncBing() {
         if (!bingConnection?.connected) return
-        const inspections = await queryClient.fetchQuery({
-          ...getApiV1ProjectsByNameBingInspectionsOptions({ client: heyClient, path: { name: projectName } }),
-          staleTime: 0,
-        }).catch(() => [] as ApiBingInspection[])
-        const uniqueUrls = [...new Set(inspections.map((i) => i.url))]
-
-        if (uniqueUrls.length === 0) {
-          // No prior inspections — launch a sitemap inspection to discover URLs
-          await inspectBingSitemap(projectName).catch(() => null)
+        const run = await inspectBingSitemap(projectName).catch(() => null)
+        if (!run?.id) {
+          failures.push('Bing sweep could not be started')
           return
         }
 
-        for (let i = 0; i < uniqueUrls.length; i += BING_CONCURRENCY) {
+        const POLL_INTERVAL_MS = 2000
+        const TIMEOUT_MS = 120_000
+        const deadline = Date.now() + TIMEOUT_MS
+
+        while (Date.now() < deadline) {
           if (signal.aborted) return
-          const batch = uniqueUrls.slice(i, i + BING_CONCURRENCY)
-          const results = await Promise.allSettled(batch.map((url) => inspectBingUrl(projectName, url)))
-          const batchFailures = results.filter((r) => r.status === 'rejected').length
-          if (batchFailures > 0) failures.push(`${batchFailures} Bing inspection(s) failed`)
+          await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+          if (signal.aborted) return
+          const detail = await fetchRunDetail(run.id).catch(() => null)
+          if (!detail) break
+          if (['completed', 'failed', 'cancelled', 'partial'].includes(detail.status)) {
+            if (detail.status === 'failed') failures.push('Bing sweep failed')
+            else if (detail.status === 'partial') notices.push('Bing sweep finished with some pages unverified')
+            return
+          }
         }
+
+        // Still running at the deadline. The run continues in the engine — say
+        // so rather than reporting a failure the user cannot act on.
+        notices.push('Bing sweep is still running — coverage will update shortly')
       }
 
       const results = await Promise.allSettled([syncGoogle(), syncBing()])
@@ -904,11 +934,21 @@ function SearchConsoleSection({
       setWorkspaceRefreshNonce((current) => current + 1)
 
       if (failures.length > 0) {
-        const message = `Partial refresh: ${failures.join('; ')}`
+        const message = `Partial refresh: ${[...failures, ...notices].join('; ')}`
         setError(message)
         addToast({
           title: 'Search coverage partially refreshed',
           detail: message,
+          tone: 'caution',
+          dedupeKey: `search-console-refresh:${projectName}`,
+          dedupeMode: 'replace',
+        })
+      } else if (notices.length > 0) {
+        // Nothing failed; something is simply still in flight. Not an error, so
+        // `setError` stays untouched and the tone stays neutral.
+        addToast({
+          title: 'Search coverage refreshed',
+          detail: notices.join('; '),
           tone: 'caution',
           dedupeKey: `search-console-refresh:${projectName}`,
           dedupeMode: 'replace',
@@ -1730,6 +1770,28 @@ function ProjectPageContent({
     activePlanSchemaVersion: measurementSetupQuery.data?.activeSchemaVersion ?? activeMeasurementPlanSchemaVersion,
     hasDraft: measurementSetupQuery.data?.draft !== null && measurementSetupQuery.data?.draft !== undefined,
   })
+  /**
+   * Which overview to show is not known until one of the two plan reads lands.
+   * Until then the expression above is `undefined ?? null`, and `null` is what
+   * `resolveAdvancedMeasurementMode` reads as "this project has no plan" — so a
+   * project WITH a plan rendered the legacy overview first and swapped it out a
+   * moment later. Pending and absent cannot share a value here.
+   *
+   * Known as soon as EITHER read has data, because the setup read only refines
+   * a decision the plan read can already make (it is the `??` fallback above).
+   * Waiting on both would hold a skeleton over an answer already in hand.
+   *
+   * `isLoading`, not `isPending`: both queries are disabled on tabs that do not
+   * read the plan, and a disabled TanStack v5 query reports `isPending` forever,
+   * which would strand those tabs on a skeleton. `isLoading` is false when
+   * disabled and false while refetching over cached data, so this fires once per
+   * cold load and never again. Once both have settled — data or error — `null`
+   * means what it says, and the legacy overview is the right answer.
+   */
+  const isMeasurementModeUnresolved =
+    measurementSetupQuery.data === undefined
+    && activeMeasurementPlanQuery.data === undefined
+    && (activeMeasurementPlanQuery.isLoading || measurementSetupQuery.isLoading)
   const advancedMeasurementOverviewPagesInconsistent = useMemo(() => {
     const pages = advancedMeasurementOverviewQuery.data?.pages
     return pages ? !areV2OverviewPagesCompatible(pages) : false
@@ -2204,6 +2266,12 @@ function ProjectPageContent({
           }}
         />
       ) : tab === 'overview' ? (
+        isMeasurementModeUnresolved ? (
+          <div role="status" aria-live="polite">
+            <span className="sr-only">Loading project overview</span>
+            <div className="h-32 animate-pulse rounded-md bg-surface-subtle" aria-hidden="true" />
+          </div>
+        ) : (
         <>
           {isActiveMeasurementPlanError ? (
             <div role="alert" className="mb-5 flex flex-wrap items-center gap-3 border-y border-negative-800/40 bg-negative-950/20 py-4 text-sm text-negative">
@@ -2530,6 +2598,7 @@ function ProjectPageContent({
             viewSearch={advancedMeasurementView.search ?? ''}
           />
         </>
+        )
       ) : tab === 'settings' ? (
         <>
           <ProjectSettingsSection project={{ ...model.project, displayName: model.project.displayName ?? model.project.name, defaultLocation: model.project.defaultLocation ?? null }} onUpdateProject={async (name, updates) => { await handleUpdateProject(name, updates) }} onRefresh={() => void refetch()} />

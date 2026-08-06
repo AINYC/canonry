@@ -1,3 +1,27 @@
 packages:
   - apps/*
   - packages/*
+
+# Refuse to run a script against a node_modules that no longer matches the
+# lockfile, rather than letting the run fail somewhere confusing later.
+#
+# The failure this prevents, hit twice in one afternoon: a commit adds a
+# workspace dependency (`@ainyc/canonry-contracts` to integration-bing), someone
+# pulls or rebases onto it without installing, and the whole api-routes suite
+# dies at import with `Cannot find package '@ainyc/canonry-contracts' imported
+# from packages/integration-bing/src/bing-client.ts`. That reads as a broken
+# import in a package nobody touched, and the actual remedy — `pnpm install` —
+# appears nowhere in the message.
+#
+# `error` is the only mode that fits. `install` would mutate node_modules
+# mid-command, papering over the lockfile problem `--frozen-lockfile` exists to
+# catch; `prompt` blocks on stdin and would hang any non-interactive runner. The
+# value must be the string `error`: `true` parses fine, matches no branch, and
+# is a silent no-op.
+#
+# Costs a few hundredths of a second when in sync — the check short-circuits on
+# manifest mtimes and only reads the lockfile when one is newer than the last
+# install. It cannot fire spuriously in CI, where every job installs before it
+# runs anything (.github/actions/setup), and it never blocks `pnpm install`
+# itself, so the remedy it names always works.
+verifyDepsBeforeRun: error

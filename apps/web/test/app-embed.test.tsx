@@ -8,6 +8,8 @@ import { createDashboardFixture } from '../src/mock-data.js'
 import { createAppRouter } from '../src/router/router.js'
 import { DashboardProvider } from '../src/contexts/dashboard-context.js'
 import { preloadAllLazyRoutes } from '../src/router/routes.js'
+import { getApiV1ProjectsByNameMeasurementPlanQueryKey } from '@ainyc/canonry-api-client/react-query'
+import { heyClient } from '../src/api.js'
 
 type EmbedBlock = { enabled: boolean; views?: string[]; theme?: Record<string, string> }
 type DashboardBlock = { showResourceLinks?: boolean; showUpdateNotification?: boolean; showAgentBar?: boolean }
@@ -48,6 +50,15 @@ async function renderAt(
     }
   }
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // One synchronous render pass, so no query settles. Seed the "no advanced
+  // plan" answer these embed assertions describe, or the overview paints its
+  // loading skeleton instead of the surface under test.
+  for (const entry of fixture.dashboard.projects) {
+    queryClient.setQueryData(
+      getApiV1ProjectsByNameMeasurementPlanQueryKey({ client: heyClient, path: { name: entry.project.name } }),
+      { active: null },
+    )
+  }
   const router = createAppRouter(queryClient, { initialEntries: [pathname] })
   await router.load()
 

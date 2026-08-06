@@ -1847,6 +1847,15 @@
     stroke: var(--chart-tone-neutral);
   }
 
+  /*
+   * Fewer readings than a trend needs. The line is still drawn — a portfolio row
+   * without a chart loses the shape a reader scans for — but dashed, so the
+   * sample size shows in the mark instead of only in a caption.
+   */
+  .sparkline-provisional polyline {
+    stroke-dasharray: 3 3;
+  }
+
   /* ── Grids ── */
 
   .insight-grid,
