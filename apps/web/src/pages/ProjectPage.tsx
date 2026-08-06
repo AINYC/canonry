@@ -117,6 +117,19 @@ type SearchConsoleWorkspace = 'google' | 'bing'
  * `commandCenter` is built from that entry, the settings form on a
  * previously-visited project then rendered — and saved to — the wrong project.
  */
+/**
+ * How often the "Refresh all" flow polls a triggered sweep, and how long it
+ * waits before reporting the run as still in flight.
+ *
+ * The old 120s deadline was shorter than a normal sweep: a paced Bing run over
+ * ~45 URLs is around 90s healthy and a throttled one ran 335s, so the poll gave
+ * up on runs that were about to succeed and reported "still running" instead of
+ * the real outcome. The run itself is server-side and unaffected by this — only
+ * whether the user is told what happened.
+ */
+const REFRESH_POLL_INTERVAL_MS = 2_000
+const REFRESH_POLL_TIMEOUT_MS = 300_000
+
 export function patchProjectDashboardCache(
   queryClient: ReturnType<typeof useQueryClient>,
   updated: ApiProject,
@@ -850,13 +863,11 @@ function SearchConsoleSection({
         const run = await triggerGscSync(projectName)
         if (!run?.id) return
 
-        const POLL_INTERVAL_MS = 2000
-        const TIMEOUT_MS = 120_000
-        const deadline = Date.now() + TIMEOUT_MS
+        const deadline = Date.now() + REFRESH_POLL_TIMEOUT_MS
 
         while (Date.now() < deadline) {
           if (signal.aborted) return
-          await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+          await new Promise<void>((resolve) => setTimeout(resolve, REFRESH_POLL_INTERVAL_MS))
           if (signal.aborted) return
           const detail = await fetchRunDetail(run.id).catch(() => null)
           if (!detail) break
@@ -896,13 +907,11 @@ function SearchConsoleSection({
           return
         }
 
-        const POLL_INTERVAL_MS = 2000
-        const TIMEOUT_MS = 120_000
-        const deadline = Date.now() + TIMEOUT_MS
+        const deadline = Date.now() + REFRESH_POLL_TIMEOUT_MS
 
         while (Date.now() < deadline) {
           if (signal.aborted) return
-          await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+          await new Promise<void>((resolve) => setTimeout(resolve, REFRESH_POLL_INTERVAL_MS))
           if (signal.aborted) return
           const detail = await fetchRunDetail(run.id).catch(() => null)
           if (!detail) break
@@ -925,14 +934,23 @@ function SearchConsoleSection({
         }
       }
 
-      if (signal.aborted) return
-
-      // Reload both coverage summaries from fresh DB values
-      setRefreshState('reloading')
+      // Invalidate BEFORE the abort check, deliberately.
+      //
+      // The sweeps ran on the server and the stored coverage changed whether or
+      // not this component is still mounted. Discarding the invalidation on
+      // unmount is what made a completed refresh look like it never happened:
+      // the user navigated away, the cached payload stayed "fresh" for its 60s
+      // staleTime, and coming back re-served the PRE-refresh numbers. Cache
+      // state is app-wide, so it must not be conditional on this view's life.
       await Promise.all([
         invalidateProjectQueryDomain(queryClient, 'gsc'),
         invalidateProjectQueryDomain(queryClient, 'bing'),
       ])
+
+      if (signal.aborted) return
+
+      // Everything below touches THIS component's state, so it stays guarded.
+      setRefreshState('reloading')
       await loadSummary(true)
       setWorkspaceRefreshNonce((current) => current + 1)
 
@@ -947,10 +965,13 @@ function SearchConsoleSection({
           dedupeMode: 'replace',
         })
       } else if (notices.length > 0) {
-        // Nothing failed; something is simply still in flight. Not an error, so
-        // `setError` stays untouched and the tone stays neutral.
+        // Nothing failed, but the refresh did NOT finish — so it must not claim
+        // it did. This branch titled itself "Search coverage refreshed" while
+        // the detail said the sweep was still running or had left pages
+        // unverified, and it was the only signal a 0-of-45 sweep produced.
+        // A user reading the title alone was told the opposite of the truth.
         addToast({
-          title: 'Search coverage refreshed',
+          title: 'Search coverage refresh incomplete',
           detail: notices.join('; '),
           tone: 'caution',
           dedupeKey: `search-console-refresh:${projectName}`,

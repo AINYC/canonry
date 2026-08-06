@@ -134,6 +134,12 @@ export async function executeInspectSitemap(
         },
       },
       {
+        // Google meters URL Inspection per PROPERTY, so every sweep on this
+        // property queues behind one clock. Latent rather than urgent here (a
+        // property has one project today), but the per-call gate had the same
+        // defect Bing was bitten by, and a manual sweep racing the chained
+        // coverage refresh is exactly the overlap it fails on.
+        rateGateKey: `gsc:${propertyId}`,
         log: {
           info: (action, ctx) => log.info(action, { runId, projectId, ...ctx }),
           error: (action, ctx) => log.error(action, { runId, projectId, ...ctx }),

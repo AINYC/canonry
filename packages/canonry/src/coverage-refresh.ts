@@ -11,20 +11,43 @@ import { createLogger } from './logger.js'
 const log = createLogger('CoverageRefresh')
 
 /**
- * Minimum spacing between automatic GSC sitemap-coverage refreshes for one
+ * Minimum spacing between AUTOMATIC GSC sitemap-coverage refreshes for one
  * project.
  *
  * A successful `gsc-sync` (search performance) and `bing-inspect-sitemap`
  * (Bing's coverage sync) both chain into a full GSC `inspect-sitemap` so the
- * index-coverage dashboard (`gscUrlInspections`) doesn't go stale — `gsc-sync`
- * only inspects the top 50 pages by clicks, so newly-added / zero-click URLs
- * are never re-inspected and coverage silently drifts. But the URL Inspection
- * API is quota-limited (2000 requests/property/day, ~1 request/sec), so we
- * skip a refresh when one already ran within this window. This also keeps the
- * dashboard "Refresh all" button — which fires a GSC sync and a Bing sync
- * near-simultaneously — from inspecting the whole sitemap twice.
+ * index-coverage dashboard (`gscUrlInspections`) doesn't go stale. The URL
+ * Inspection API is quota-limited (2000 requests/property/day, ~1 request/sec),
+ * so a scheduled chain skips when one already ran within this window.
+ *
+ * The original justification for applying this to EVERY caller was that
+ * "`gsc-sync` only inspects the top 50 pages by clicks", so the full sweep was
+ * a periodic top-up. That stopped being true when inline inspection was removed
+ * from `gsc-sync` — it now inspects nothing at all. Skipping the sweep no
+ * longer means "refresh a bit less thoroughly", it means NO URL is inspected
+ * and index coverage cannot change.
+ *
+ * That is what a user hit: they pressed "Refresh all" 46 minutes after the
+ * daily scheduled refresh, the chain was silently skipped, and the dashboard's
+ * coverage numbers were structurally incapable of moving. Nothing failed and
+ * nothing said so.
  */
 export const COVERAGE_REFRESH_MIN_INTERVAL_MS = 60 * 60 * 1000
+
+/**
+ * Minimum spacing when a PERSON asked for the refresh.
+ *
+ * Short enough that pressing the button does what it says, long enough to
+ * collapse the two arms of "Refresh all" (the GSC sync and the Bing sync both
+ * chain into a coverage refresh, milliseconds apart) into one sweep. The
+ * in-flight check below is what actually dedupes those two; this window covers
+ * the case where the first sweep has already finished.
+ *
+ * Quota is not the binding constraint at this spacing: a sweep is capped at
+ * `INSPECT_SWEEP_MAX_URLS`, real sites here are tens of pages, and the daily
+ * allowance is 2000 per property.
+ */
+export const COVERAGE_REFRESH_MANUAL_MIN_INTERVAL_MS = 2 * 60 * 1000
 
 /**
  * Run states that mean "a coverage refresh already happened, or is about to"
@@ -38,8 +61,27 @@ const ACTIVE_OR_DONE_STATUSES = [
   RunStatuses.partial,
 ]
 
+/**
+ * States that mean a sweep is happening RIGHT NOW. Always blocking, at any
+ * spacing — this is what collapses the GSC and Bing arms of "Refresh all" into
+ * a single sweep, and it is a correctness guard rather than a quota one.
+ */
+const IN_FLIGHT_STATUSES = [RunStatuses.queued, RunStatuses.running]
+
 export interface CoverageRefreshDeps {
   executeInspectSitemap: typeof executeInspectSitemap
+}
+
+/**
+ * Did a person ask for this work, or did a schedule?
+ *
+ * Read from the TRIGGERING run rather than passed down, so the two chain sites
+ * in `server.ts` cannot disagree about it, and so the CLI and the dashboard —
+ * which hit the same endpoints — are classified identically.
+ */
+export function runWasUserInitiated(db: DatabaseClient, runId: string): boolean {
+  const row = db.select({ trigger: runs.trigger }).from(runs).where(eq(runs.id, runId)).get()
+  return row?.trigger === RunTriggers.manual
 }
 
 const defaultDeps: CoverageRefreshDeps = { executeInspectSitemap }
@@ -64,6 +106,7 @@ export async function maybeRefreshGscCoverage(
   projectId: string,
   deps: CoverageRefreshDeps = defaultDeps,
   nowMs: number = Date.now(),
+  opts: { userInitiated?: boolean } = {},
 ): Promise<string | null> {
   const project = db
     .select({ canonicalDomain: projects.canonicalDomain })
@@ -81,8 +124,34 @@ export async function maybeRefreshGscCoverage(
   const conn = getGoogleConnection(config, project.canonicalDomain, 'gsc')
   if (!conn?.refreshToken || !conn.propertyId) return null
 
-  // Spacing guard — skip if a coverage refresh already ran (or is running)
-  // within the window.
+  // In-flight guard — never start a second sweep alongside a running one, at
+  // any spacing. This is what makes the GSC and Bing arms of "Refresh all"
+  // collapse into one sweep, and it holds even when the caller is a person.
+  const inFlight = db
+    .select({ createdAt: runs.createdAt })
+    .from(runs)
+    .where(
+      and(
+        eq(runs.projectId, projectId),
+        eq(runs.kind, RunKinds['inspect-sitemap']),
+        inArray(runs.status, IN_FLIGHT_STATUSES),
+      ),
+    )
+    .orderBy(desc(runs.createdAt))
+    .limit(1)
+    .get()
+  if (inFlight) {
+    log.info('skip.in-flight', { projectId })
+    return null
+  }
+
+  // Spacing guard — skip if a coverage refresh already COMPLETED within the
+  // window. A person pressing the button gets a much shorter window than the
+  // scheduled chain: the quota exists to stop automation looping, not to make
+  // an explicit request do nothing.
+  const windowMs = opts.userInitiated
+    ? COVERAGE_REFRESH_MANUAL_MIN_INTERVAL_MS
+    : COVERAGE_REFRESH_MIN_INTERVAL_MS
   const recent = db
     .select({ createdAt: runs.createdAt })
     .from(runs)
@@ -98,8 +167,8 @@ export async function maybeRefreshGscCoverage(
     .get()
   if (recent) {
     const ageMs = nowMs - Date.parse(recent.createdAt)
-    if (Number.isFinite(ageMs) && ageMs < COVERAGE_REFRESH_MIN_INTERVAL_MS) {
-      log.info('skip.recent', { projectId, ageMs })
+    if (Number.isFinite(ageMs) && ageMs < windowMs) {
+      log.info('skip.recent', { projectId, ageMs, windowMs, userInitiated: opts.userInitiated === true })
       return null
     }
   }

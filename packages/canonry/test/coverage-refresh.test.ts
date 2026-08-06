@@ -8,7 +8,9 @@ import { RunKinds, RunStatuses, RunTriggers } from '@ainyc/canonry-contracts'
 import type { CanonryConfig } from '../src/config.js'
 import {
   maybeRefreshGscCoverage,
+  runWasUserInitiated,
   COVERAGE_REFRESH_MIN_INTERVAL_MS,
+  COVERAGE_REFRESH_MANUAL_MIN_INTERVAL_MS,
   type CoverageRefreshDeps,
 } from '../src/coverage-refresh.js'
 
@@ -71,7 +73,7 @@ function spyExecutor(): CoverageRefreshDeps & { calls: Array<{ runId: string; pr
   }
 }
 
-function insertInspectRun(opts: { status: string; createdAt: string; kind?: string }): string {
+function insertInspectRun(opts: { status: string; createdAt: string; kind?: string; trigger?: string }): string {
   const id = `run-${Math.random().toString(36).slice(2)}`
   db.insert(runs)
     .values({
@@ -79,7 +81,7 @@ function insertInspectRun(opts: { status: string; createdAt: string; kind?: stri
       projectId: PROJECT_ID,
       kind: opts.kind ?? RunKinds['inspect-sitemap'],
       status: opts.status,
-      trigger: RunTriggers.scheduled,
+      trigger: opts.trigger ?? RunTriggers.scheduled,
       createdAt: opts.createdAt,
     })
     .run()
@@ -273,5 +275,124 @@ describe('maybeRefreshGscCoverage', () => {
     expect(runId).toBeTruthy()
     // The run row was still created (the executor owns marking it failed).
     expect(inspectRuns()).toHaveLength(1)
+  })
+})
+
+/**
+ * The bug a user actually hit on 2026-08-06.
+ *
+ * They pressed "Refresh all" at 13:16 UTC, 46 minutes after the daily 12:30
+ * scheduled refresh. The chained `inspect-sitemap` was inside the 60-minute
+ * spacing window, so it was skipped — and because `gsc-sync` inspects no URLs
+ * at all, that skip meant NOTHING could update the index-coverage dashboard.
+ * The sync reported success, the numbers did not move, and nothing said why.
+ *
+ * The window was written when `gsc-sync` still inspected the top 50 pages
+ * inline, so skipping the sweep genuinely only meant "slightly less thorough".
+ * Once inline inspection was removed the same constant started meaning
+ * "measure nothing", and no test noticed because the guard still behaved
+ * exactly as designed.
+ */
+describe('maybeRefreshGscCoverage — user-initiated refresh', () => {
+  it('runs a sweep 46 minutes after a scheduled one when a PERSON asked', async () => {
+    const deps = spyExecutor()
+    const now = Date.now()
+    insertInspectRun({
+      status: RunStatuses.completed,
+      createdAt: new Date(now - 46 * 60_000).toISOString(),
+    })
+
+    const runId = await maybeRefreshGscCoverage(db, connectedConfig(), PROJECT_ID, deps, now, {
+      userInitiated: true,
+    })
+
+    expect(runId).toBeTruthy()
+    expect(deps.calls).toHaveLength(1)
+  })
+
+  it('still skips the SCHEDULED chain at the same 46-minute mark', async () => {
+    // The quota protection is unchanged for automation — only an explicit
+    // human request is allowed through early.
+    const deps = spyExecutor()
+    const now = Date.now()
+    insertInspectRun({
+      status: RunStatuses.completed,
+      createdAt: new Date(now - 46 * 60_000).toISOString(),
+    })
+
+    const runId = await maybeRefreshGscCoverage(db, connectedConfig(), PROJECT_ID, deps, now, {
+      userInitiated: false,
+    })
+
+    expect(runId).toBeNull()
+    expect(deps.calls).toHaveLength(0)
+  })
+
+  it('still collapses the two arms of "Refresh all" into one sweep', async () => {
+    // Both arms are user-initiated, so neither is stopped by the spacing
+    // window — the IN-FLIGHT check is what dedupes them. Losing that would
+    // double every manual refresh's quota spend.
+    const deps = spyExecutor()
+    const now = Date.now()
+    insertInspectRun({ status: RunStatuses.running, createdAt: new Date(now - 1_000).toISOString() })
+
+    const runId = await maybeRefreshGscCoverage(db, connectedConfig(), PROJECT_ID, deps, now, {
+      userInitiated: true,
+    })
+
+    expect(runId).toBeNull()
+    expect(deps.calls).toHaveLength(0)
+  })
+
+  it('rate-limits a user who hammers the button', async () => {
+    const deps = spyExecutor()
+    const now = Date.now()
+    insertInspectRun({
+      status: RunStatuses.completed,
+      createdAt: new Date(now - (COVERAGE_REFRESH_MANUAL_MIN_INTERVAL_MS - 5_000)).toISOString(),
+    })
+
+    const runId = await maybeRefreshGscCoverage(db, connectedConfig(), PROJECT_ID, deps, now, {
+      userInitiated: true,
+    })
+
+    expect(runId).toBeNull()
+  })
+
+  it('defaults to the scheduled window when no caller opinion is given', async () => {
+    const deps = spyExecutor()
+    const now = Date.now()
+    insertInspectRun({
+      status: RunStatuses.completed,
+      createdAt: new Date(now - 46 * 60_000).toISOString(),
+    })
+
+    const runId = await maybeRefreshGscCoverage(db, connectedConfig(), PROJECT_ID, deps, now)
+
+    expect(runId).toBeNull()
+  })
+})
+
+describe('runWasUserInitiated', () => {
+  it('reads the trigger off the run that started the chain', () => {
+    const manual = insertInspectRun({
+      status: RunStatuses.completed,
+      createdAt: new Date().toISOString(),
+      kind: RunKinds['gsc-sync'],
+      trigger: RunTriggers.manual,
+    })
+    const scheduled = insertInspectRun({
+      status: RunStatuses.completed,
+      createdAt: new Date().toISOString(),
+      kind: RunKinds['gsc-sync'],
+      trigger: RunTriggers.scheduled,
+    })
+
+    expect(runWasUserInitiated(db, manual)).toBe(true)
+    expect(runWasUserInitiated(db, scheduled)).toBe(false)
+  })
+
+  it('is false for a run id that does not exist', () => {
+    expect(runWasUserInitiated(db, 'no-such-run')).toBe(false)
   })
 })

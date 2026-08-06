@@ -22,10 +22,15 @@ function statusErr(status: number): Error & { status: number } {
 const FAKE_RESULT = {} as GscUrlInspectionResult
 
 /** Deterministic, instant deps: no real sleeping, no jitter. */
+let gateSeq = 0
 function fastDeps(extra: Partial<PacedInspectDeps> = {}): PacedInspectDeps & { sleeps: number[] } {
   const sleeps: number[] = []
   return {
     sleeps,
+    // A key unique per call, so these tests measure ONE sweep's pacing without
+    // queueing behind a sibling test's gate. Cross-sweep behaviour is covered
+    // in inspect-rate-gate.test.ts, which shares a key on purpose.
+    rateGateKey: `test-gate-${gateSeq++}`,
     jitter: () => 0,
     sleep: async (ms: number) => {
       sleeps.push(ms)
@@ -88,8 +93,12 @@ describe('inspectUrlsPaced', () => {
       { url: 'https://example.com/p1', index: 1 },
       { url: 'https://example.com/p2', index: 2 },
     ])
-    // One pacing sleep between each pair of calls — never after the final URL.
-    expect(deps.sleeps).toEqual([INSPECT_BASE_DELAY_MS, INSPECT_BASE_DELAY_MS])
+    // One pacing sleep per REQUEST, including the first, and never after the
+    // final URL. The first request used to be exempt, which was harmless while
+    // each call owned its gate — but under a shared gate (`rateGateKey`) that
+    // exemption let every concurrent sweep fire one ungated request the instant
+    // it started, which is the burst the gate exists to stop.
+    expect(deps.sleeps).toEqual([INSPECT_BASE_DELAY_MS, INSPECT_BASE_DELAY_MS, INSPECT_BASE_DELAY_MS])
   })
 
   it('retries a transient 403 then records the eventual success', async () => {
@@ -250,7 +259,7 @@ describe('inspectUrlsPaced concurrency', () => {
     await inspectUrlsPaced(urls(8), { inspectOne: async () => FAKE_RESULT, onResult: () => {}, onError: () => {} }, parallel)
 
     expect(parallel.sleeps).toEqual(serial.sleeps)
-    expect(parallel.sleeps).toHaveLength(7)
+    expect(parallel.sleeps).toHaveLength(8)
   })
 
   it('does not burst the opening batch', async () => {
@@ -259,7 +268,7 @@ describe('inspectUrlsPaced concurrency', () => {
     const deps = fastDeps({ concurrency: 5 })
     await inspectUrlsPaced(urls(5), { inspectOne: async () => FAKE_RESULT, onResult: () => {}, onError: () => {} }, deps)
 
-    expect(deps.sleeps).toHaveLength(4)
+    expect(deps.sleeps).toHaveLength(5)
   })
 
   it('inspects every URL exactly once and reports each original index', async () => {
