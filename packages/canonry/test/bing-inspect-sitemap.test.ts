@@ -164,6 +164,9 @@ describe('executeBingInspectSitemap', () => {
     await executeBingInspectSitemap(db, runId, projectId, {
       sitemapUrl: `${s.baseUrl}/sitemap.xml`,
       config: buildConfig('azcoatingsllc.com'),
+      // Instant pacing — the sweep now runs through inspectUrlsPaced, whose
+      // real ~1s spacing plus retry backoff outruns the default timeout.
+      pacedDeps: { sleep: async () => {}, jitter: () => 0 },
     })
 
     const run = db.select().from(runs).where(eq(runs.id, runId)).get()
@@ -217,6 +220,9 @@ describe('executeBingInspectSitemap', () => {
     await executeBingInspectSitemap(db, runId, projectId, {
       sitemapUrl: `${s.baseUrl}/sitemap.xml`,
       config: buildConfig('azcoatingsllc.com'),
+      // Instant pacing — the sweep now runs through inspectUrlsPaced, whose
+      // real ~1s spacing plus retry backoff outruns the default timeout.
+      pacedDeps: { sleep: async () => {}, jitter: () => 0 },
     })
 
     const run = db.select().from(runs).where(eq(runs.id, runId)).get()
@@ -238,6 +244,9 @@ describe('executeBingInspectSitemap', () => {
     await expect(() => executeBingInspectSitemap(db, runId, projectId, {
       sitemapUrl: `${s.baseUrl}/sitemap.xml`,
       config: buildConfig('azcoatingsllc.com'),
+      // Instant pacing — the sweep now runs through inspectUrlsPaced, whose
+      // real ~1s spacing plus retry backoff outruns the default timeout.
+      pacedDeps: { sleep: async () => {}, jitter: () => 0 },
     })).rejects.toThrow('No URLs found in sitemap')
 
     const run = db.select().from(runs).where(eq(runs.id, runId)).get()
@@ -250,6 +259,10 @@ describe('executeBingInspectSitemap', () => {
     await expect(() => executeBingInspectSitemap(db, runId, projectId, {
       sitemapUrl: 'https://azcoatingsllc.com/sitemap.xml',
       config: { apiUrl: 'http://localhost:4100', database: '/tmp/x', apiKey: 'cnry_test' },
+      // Instant pacing: the sweep now goes through inspectUrlsPaced, whose
+      // real ~1s spacing plus retry backoff would otherwise outrun the
+      // default test timeout on a fixture with a failing URL.
+      pacedDeps: { sleep: async () => {}, jitter: () => 0 },
     })).rejects.toThrow('No Bing connection')
 
     const run = db.select().from(runs).where(eq(runs.id, runId)).get()
@@ -295,6 +308,9 @@ describe('executeBingInspectSitemap', () => {
     await executeBingInspectSitemap(db, runId, projectId, {
       sitemapUrl: `${s.baseUrl}/sitemap.xml`,
       config: buildConfig('azcoatingsllc.com'),
+      // Instant pacing — the sweep now runs through inspectUrlsPaced, whose
+      // real ~1s spacing plus retry backoff outruns the default timeout.
+      pacedDeps: { sleep: async () => {}, jitter: () => 0 },
     })
 
     const inspections = db.select().from(bingUrlInspections)

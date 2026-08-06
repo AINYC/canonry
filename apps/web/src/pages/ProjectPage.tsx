@@ -871,41 +871,48 @@ function SearchConsoleSection({
         notices.push('Google sync is still running — search data will appear shortly')
       }
 
-      // --- Bing: re-inspect previously known URLs, or fall back to sitemap ---
-      // Bing throttles per HOST, shared by every project on the instance, and
-      // reports it as a 400 rather than a 429. Ten simultaneous inspections
-      // reliably tripped it: the first batch landed, everything behind it was
-      // rejected. The engine now retries with backoff, but ten synchronised
-      // callers back off and retry together — a thundering herd that keeps the
-      // throttle asserted. Fewer in flight, spaced apart, gets more work done
-      // than more in flight being rejected.
-      const BING_CONCURRENCY = 3
-      const BING_BATCH_SPACING_MS = 1000
+      // --- Bing: trigger the server-side sweep and poll, like syncGoogle ---
+      //
+      // This used to loop here, issuing one HTTP call per URL from the browser.
+      // Every failure mode traced to that: the sweep died when you navigated
+      // away (it is client JS guarded by `signal.aborted`), a cached bundle
+      // silently kept the old batch size, and the burst size was tuned in the
+      // UI against a limit enforced on the server. Bing throttles per HOST,
+      // shared by every project on the instance, so a browser is the wrong
+      // place to decide the rate.
+      //
+      // `bing-inspect-sitemap` already walks the sitemap server-side at ~1
+      // req/sec. Triggering it means the run survives closing the tab, the
+      // pacing lives in one place, and the CLI/MCP get the same capability —
+      // the UI/CLI parity rule this loop was violating.
       async function syncBing() {
         if (!bingConnection?.connected) return
-        const inspections = await queryClient.fetchQuery({
-          ...getApiV1ProjectsByNameBingInspectionsOptions({ client: heyClient, path: { name: projectName } }),
-          staleTime: 0,
-        }).catch(() => [] as ApiBingInspection[])
-        const uniqueUrls = [...new Set(inspections.map((i) => i.url))]
-
-        if (uniqueUrls.length === 0) {
-          // No prior inspections — launch a sitemap inspection to discover URLs
-          await inspectBingSitemap(projectName).catch(() => null)
+        const run = await inspectBingSitemap(projectName).catch(() => null)
+        if (!run?.id) {
+          failures.push('Bing sweep could not be started')
           return
         }
 
-        for (let i = 0; i < uniqueUrls.length; i += BING_CONCURRENCY) {
+        const POLL_INTERVAL_MS = 2000
+        const TIMEOUT_MS = 120_000
+        const deadline = Date.now() + TIMEOUT_MS
+
+        while (Date.now() < deadline) {
           if (signal.aborted) return
-          // Space the batches. Back-to-back bursts are what sustained the
-          // throttle; the pause lets the host-level limit recover between them.
-          if (i > 0) await new Promise<void>((resolve) => setTimeout(resolve, BING_BATCH_SPACING_MS))
+          await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
           if (signal.aborted) return
-          const batch = uniqueUrls.slice(i, i + BING_CONCURRENCY)
-          const results = await Promise.allSettled(batch.map((url) => inspectBingUrl(projectName, url)))
-          const batchFailures = results.filter((r) => r.status === 'rejected').length
-          if (batchFailures > 0) failures.push(`${batchFailures} Bing inspection(s) failed`)
+          const detail = await fetchRunDetail(run.id).catch(() => null)
+          if (!detail) break
+          if (['completed', 'failed', 'cancelled', 'partial'].includes(detail.status)) {
+            if (detail.status === 'failed') failures.push('Bing sweep failed')
+            else if (detail.status === 'partial') notices.push('Bing sweep finished with some pages unverified')
+            return
+          }
         }
+
+        // Still running at the deadline. The run continues in the engine — say
+        // so rather than reporting a failure the user cannot act on.
+        notices.push('Bing sweep is still running — coverage will update shortly')
       }
 
       const results = await Promise.allSettled([syncGoogle(), syncBing()])
