@@ -872,7 +872,15 @@ function SearchConsoleSection({
       }
 
       // --- Bing: re-inspect previously known URLs, or fall back to sitemap ---
-      const BING_CONCURRENCY = 10
+      // Bing throttles per HOST, shared by every project on the instance, and
+      // reports it as a 400 rather than a 429. Ten simultaneous inspections
+      // reliably tripped it: the first batch landed, everything behind it was
+      // rejected. The engine now retries with backoff, but ten synchronised
+      // callers back off and retry together — a thundering herd that keeps the
+      // throttle asserted. Fewer in flight, spaced apart, gets more work done
+      // than more in flight being rejected.
+      const BING_CONCURRENCY = 3
+      const BING_BATCH_SPACING_MS = 1000
       async function syncBing() {
         if (!bingConnection?.connected) return
         const inspections = await queryClient.fetchQuery({
@@ -888,6 +896,10 @@ function SearchConsoleSection({
         }
 
         for (let i = 0; i < uniqueUrls.length; i += BING_CONCURRENCY) {
+          if (signal.aborted) return
+          // Space the batches. Back-to-back bursts are what sustained the
+          // throttle; the pause lets the host-level limit recover between them.
+          if (i > 0) await new Promise<void>((resolve) => setTimeout(resolve, BING_BATCH_SPACING_MS))
           if (signal.aborted) return
           const batch = uniqueUrls.slice(i, i + BING_CONCURRENCY)
           const results = await Promise.allSettled(batch.map((url) => inspectBingUrl(projectName, url)))
