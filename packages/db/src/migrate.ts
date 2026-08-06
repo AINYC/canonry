@@ -2838,6 +2838,36 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
         ON measurement_segments(project_id, id)`,
     ],
   },
+  {
+    version: 125,
+    name: 'gsc-coverage-unknown-and-provenance',
+    statements: [
+      // Create-if-missing first. A database migrating up from a legacy schema
+      // may not have this table yet, and `ALTER TABLE` on a missing table
+      // raises an error the runner does NOT swallow — it only swallows
+      // duplicate-column. Mirrors the original definition so this version is
+      // self-sufficient and safely re-runnable.
+      `CREATE TABLE IF NOT EXISTS gsc_coverage_snapshots (
+        id              TEXT PRIMARY KEY,
+        project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        sync_run_id     TEXT REFERENCES runs(id) ON DELETE CASCADE,
+        date            TEXT NOT NULL,
+        indexed         INTEGER NOT NULL DEFAULT 0,
+        not_indexed     INTEGER NOT NULL DEFAULT 0,
+        reason_breakdown TEXT NOT NULL DEFAULT '{}',
+        created_at      TEXT NOT NULL
+      )`,
+      // A THIRD state, not a rename of anything. Named `unknown_pages`
+      // because bare `unknown` is a reserved SQL keyword. A page with no
+      // impressions and no inspection is unmeasured, and folding it into
+      // `not_indexed` would report every such page as a problem.
+      `ALTER TABLE gsc_coverage_snapshots ADD COLUMN unknown_pages INTEGER NOT NULL DEFAULT 0`,
+      // Provenance: how much of the number is a real Google verdict versus
+      // derived from impressions. Lets the UI say how much it actually checked.
+      `ALTER TABLE gsc_coverage_snapshots ADD COLUMN verified_by_inspection INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE gsc_coverage_snapshots ADD COLUMN derived_from_impressions INTEGER NOT NULL DEFAULT 0`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

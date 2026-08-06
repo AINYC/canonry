@@ -12,11 +12,32 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Fastify from 'fastify'
-import { afterEach, beforeEach, expect, test } from 'vitest'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { apiKeys, createClient, migrate, type DatabaseClient } from '@ainyc/canonry-db'
 import { apiRoutes } from '../src/index.js'
 import { hashApiKey } from '../src/auth.js'
 import { hashUserPassword, verifyUserPassword } from '../src/user-password.js'
+
+/**
+ * Every sign-in in this file pays a REAL scrypt derivation (N=32768,
+ * `user-password.ts`), and the tests that exercise the per-caller budget
+ * deliberately pay thirty of them in sequence, because thirty is where the
+ * budget trips. Measured on an idle 12-core box: 111ms per derivation, and
+ * 4.0-5.1s for the worst tests here — one of them already over vitest's 5000ms
+ * default. On slower CI hardware they would fail outright, and the failure
+ * would look like a hang rather than the arithmetic it is.
+ *
+ * The cost is the point: these tests assert that an expensive, unauthenticated
+ * derivation is admitted under a budget and kept off the event loop, and a
+ * cheaper hash would not exercise either property. The cost factor is also not
+ * recorded in the stored digest (`scrypt$1$<salt>$<digest>`), so it is a global
+ * invariant every stored password depends on — not something to make
+ * environment-dependent for a faster suite.
+ *
+ * So: raise the ceiling for this file only. 30s still surfaces a real hang,
+ * and every other suite keeps the 5s default.
+ */
+vi.setConfig({ testTimeout: 30_000 })
 
 const ROOT_KEY = 'cnry_login_cost_root'
 const ADMIN_PASSWORD = 'a-long-enough-admin-password'
@@ -111,20 +132,30 @@ test('one exhausted caller does not lock everybody else out', async () => {
   expect(other.statusCode).toBe(401)
 })
 
-test('a burst of sign-in attempts leaves the server answering other requests', async () => {
-  const burst = Array.from({ length: 24 }, (_, index) =>
-    login(`nobody-${index}`, `198.51.100.${index % 200}`))
+test('the server still answers an unrelated request during a burst of sign-ins', async () => {
+  // This asserted `elapsed < 400` for a while. That is a claim about how fast
+  // the machine is, not about the server, and it flaked on any loaded or slower
+  // one. It also never earned its name: forcing the derivation back onto the
+  // event loop (`scryptSync`) leaves this test green in every formulation I
+  // tried — a wall-clock bound, a settled-before-me ordering check, and the same
+  // with the handlers given a tick to start. The two tests above are what
+  // actually hold that property, and they DO fail under that mutation, because
+  // they assert on a timer queued around the derivation rather than on a clock.
+  //
+  // So this is an integration smoke check and is written as one: 24 concurrent
+  // unauthenticated derivations are in flight, and an unrelated route still
+  // answers. No timing claim, nothing that can rot into a false guarantee.
+  const burst = Promise.all(Array.from({ length: 24 }, (_, index) =>
+    login(`nobody-${index}`, `198.51.100.${index % 200}`)))
 
-  const started = Date.now()
   const health = await app.inject({ method: 'GET', url: '/api/v1/openapi.json' })
-  const elapsed = Date.now() - started
-
   expect(health.statusCode).toBe(200)
-  // Generous: the point is that it is not serialized behind two dozen
-  // derivations, which measured about three quarters of a second.
-  expect(elapsed).toBeLessThan(400)
 
-  await Promise.all(burst)
+  // And the burst itself still resolves — every attempt gets an answer rather
+  // than hanging behind the budget.
+  const statuses = (await burst).map(response => response.statusCode)
+  expect(statuses).toHaveLength(24)
+  expect(statuses.every(status => status === 401 || status === 429)).toBe(true)
 })
 
 test('a correct password still signs in once the guessing stops', async () => {

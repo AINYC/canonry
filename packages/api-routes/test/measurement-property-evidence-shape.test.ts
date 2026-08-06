@@ -18,7 +18,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   canonicalMeasurementPlanV2Json,
   type MeasurementAnswerEvidence,
@@ -49,6 +49,21 @@ import {
   PAGING_NODE_COUNTS,
   seedPagingSnapshots,
 } from './measurement-property-evidence-paging-fixture.js'
+
+/**
+ * The paging walk below is quadratic, and that is a fact about the ROUTE, not
+ * about the test. `measurement-property-evidence.ts` rebuilds the entire
+ * evidence set on every request and then linear-scans it to resolve the cursor,
+ * so walking one 156-row fixture at limit=1,2,3,7,50,100 issues 315 HTTP
+ * injects to return 156 rows. Measured at ~2.6s on an idle 12-core box, which
+ * is inside the 5000ms default with less headroom than it looks — the limit=1
+ * and limit=2 passes alone are ~216 of those 315 requests.
+ *
+ * The ceiling is raised so this does not flake on slower hardware. It is NOT a
+ * fix: deep paging re-derives the whole set per page in production too, and
+ * that belongs in its own change against the route.
+ */
+vi.setConfig({ testTimeout: 30_000 })
 
 const NOW = '2026-08-01T12:00:00.000Z'
 const VERSION_ID = 'version-paging'

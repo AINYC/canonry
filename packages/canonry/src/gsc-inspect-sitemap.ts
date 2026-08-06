@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
-import { eq, and } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { runs, projects, gscUrlInspections, gscCoverageSnapshots } from '@ainyc/canonry-db'
+import { runs, projects, gscUrlInspections } from '@ainyc/canonry-db'
 import {
   inspectUrl,
   refreshAccessToken,
@@ -10,8 +10,9 @@ import type { CanonryConfig } from './config.js'
 import { saveConfigPatch } from './config.js'
 import { getGoogleAuthConfig, getGoogleConnection, patchGoogleConnection } from './google-config.js'
 import { fetchAndParseSitemap } from './sitemap-parser.js'
+import { writeCoverageSnapshot } from './gsc-coverage-snapshot.js'
 import { createLogger } from './logger.js'
-import { inspectUrlsPaced, INSPECT_FAILFAST_THRESHOLD } from './gsc-inspect-paced.js'
+import { inspectUrlsPaced, INSPECT_FAILFAST_THRESHOLD, INSPECT_SWEEP_MAX_URLS, INSPECT_DAILY_QUOTA } from './gsc-inspect-paced.js'
 
 const log = createLogger('InspectSitemap')
 
@@ -77,8 +78,27 @@ export async function executeInspectSitemap(
       throw new Error('No URLs found in sitemap')
     }
 
+    // A sweep larger than the budget cannot finish: at ~7.1s and one quota unit
+    // per URL it would run for hours, exhaust the property's 2000/day partway,
+    // and trip the consecutive-failure breaker — surfacing as a failure when
+    // what actually happened is that the allowance ran out. Cap it and say so,
+    // rather than starting work that cannot complete.
+    const skipped = Math.max(0, urls.length - INSPECT_SWEEP_MAX_URLS)
+    const targetUrls = skipped > 0 ? urls.slice(0, INSPECT_SWEEP_MAX_URLS) : urls
+    if (skipped > 0) {
+      log.warn('sitemap.over-budget', {
+        runId,
+        projectId,
+        sitemapUrls: urls.length,
+        inspecting: targetUrls.length,
+        skipped,
+        dailyQuota: INSPECT_DAILY_QUOTA,
+        note: `Sitemap has ${urls.length} pages; Google allows ${INSPECT_DAILY_QUOTA} URL inspections per property per day. Inspecting the first ${targetUrls.length}; ${skipped} pages will not have a verdict from this run.`,
+      })
+    }
+
     const { inspected, errors, aborted, abortError } = await inspectUrlsPaced(
-      urls,
+      targetUrls,
       {
         inspectOne: (pageUrl) => inspectUrl(accessToken, pageUrl, propertyId),
         onResult: (pageUrl, result, index) => {
@@ -129,50 +149,19 @@ export async function executeInspectSitemap(
     }
 
     // Record coverage snapshot
-    const allInspections = db
-      .select()
-      .from(gscUrlInspections)
-      .where(eq(gscUrlInspections.projectId, projectId))
-      .all()
-
-    const latestByUrl = new Map<string, typeof allInspections[number]>()
-    for (const row of allInspections) {
-      const existing = latestByUrl.get(row.url)
-      if (!existing || row.inspectedAt > existing.inspectedAt) {
-        latestByUrl.set(row.url, row)
-      }
-    }
-
-    let snapIndexed = 0
-    let snapNotIndexed = 0
-    const reasonCounts: Record<string, number> = {}
-    for (const [, row] of latestByUrl) {
-      if (row.indexingState === 'INDEXING_ALLOWED') {
-        snapIndexed++
-      } else {
-        snapNotIndexed++
-        const reason = row.coverageState ?? 'Unknown'
-        reasonCounts[reason] = (reasonCounts[reason] ?? 0) + 1
-      }
-    }
-
-    const snapshotDate = new Date().toISOString().split('T')[0]!
-    db.delete(gscCoverageSnapshots)
-      .where(and(eq(gscCoverageSnapshots.projectId, projectId), eq(gscCoverageSnapshots.date, snapshotDate)))
-      .run()
-    db.insert(gscCoverageSnapshots).values({
-      id: crypto.randomUUID(),
-      projectId,
-      syncRunId: runId,
-      date: snapshotDate,
-      indexed: snapIndexed,
-      notIndexed: snapNotIndexed,
-      reasonBreakdown: reasonCounts,
-      createdAt: new Date().toISOString(),
-    }).run()
+    // Single writer — see gsc-coverage-snapshot.ts. This run chains off
+    // gsc-sync and rewrites the same (project, date) row, so computing coverage
+    // independently here silently overwrote what gsc-sync derived and reset the
+    // provenance columns to their defaults.
+    const coverage = writeCoverageSnapshot(db, projectId, runId)
+    const snapIndexed = coverage.indexed
+    const snapNotIndexed = coverage.notIndexed
 
     // Mark run as completed (or partial if some failed)
-    const status = errors > 0 && inspected > 0 ? 'partial' : errors === urls.length ? 'failed' : 'completed'
+    const attempted = targetUrls.length
+    // Over-budget is a partial result even when every attempted URL succeeded —
+    // pages were left unverified and the run should not read as complete.
+    const status = skipped > 0 || (errors > 0 && inspected > 0) ? 'partial' : errors === attempted ? 'failed' : 'completed'
     db.update(runs)
       .set({ status, finishedAt: new Date().toISOString() })
       .where(eq(runs.id, runId))

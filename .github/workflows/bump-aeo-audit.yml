@@ -2,12 +2,23 @@ name: Bump aeo-audit
 
 # Keeps the pinned @ainyc/aeo-audit engine current. aeo-audit ships often, so
 # this checks npm on a schedule, bumps the exact pin, and — only if the bump
-# survives typecheck, lint, build, and the full test suite — opens a PR. The
-# build gate matters: aeo-audit is bundled into the published package via tsup,
-# so a breaking major can break the bundle without failing typecheck. Gating
-# happens IN this job (not just on the PR), so a breaking aeo-audit release
-# fails here and never produces a green PR. Run it on demand from the Actions
-# tab via "Run workflow".
+# survives typecheck, lint, build, and the full test suite — opens a PR.
+#
+# Why the gates run IN this job rather than only on the PR: aeo-audit is an
+# EXTERNAL runtime dependency, not a bundled one. tsup externalizes everything
+# in `dependencies`, and aeo-audit is not in `noExternal`, so the pinned version
+# is what `npm i -g @canonry/canonry` resolves and installs on a user's machine.
+# The pin is therefore a supply-chain decision, and a breaking aeo-audit release
+# must fail here and never produce a green PR.
+#
+# Run it on demand from the Actions tab via "Run workflow".
+#
+# NOTE: the final "Open pull request" step needs AEO_AUDIT_BUMP_TOKEN. The
+# GITHUB_TOKEN fallback cannot open a PR while the Canonry org disallows
+# "Allow GitHub Actions to create and approve pull requests" — the job runs
+# every gate green and then dies on the last step, leaving a bump on the branch
+# with no PR behind it. That silently froze the pin at 4.0.1 from 2026-06-22
+# until #950 landed 4.2.0 by hand.
 
 on:
   schedule:
@@ -72,9 +83,11 @@ jobs:
         if: steps.bump.outputs.changed == 'true'
         run: pnpm run lint
 
-      # Build all packages recursively (matches ci.yml's build job). tsup bundles
-      # @ainyc/aeo-audit into the published canonry, so this catches a breaking
-      # major that typecheck misses. Runs before the long test suite to fail fast.
+      # Build all packages recursively (matches ci.yml's build job) — a bump that
+      # typechecks can still break the SPA build or the asset copy. aeo-audit
+      # itself is external (see the header), so a breaking engine change surfaces
+      # in typecheck and the test suite, not here. Runs before the long test suite
+      # to fail fast.
       - name: Build (gate the bump)
         if: steps.bump.outputs.changed == 'true'
         run: pnpm -r run build

@@ -6,6 +6,9 @@ import { RunStatuses } from '@ainyc/canonry-contracts'
 import { getUrlInfo, getCrawlIssues } from '@ainyc/canonry-integration-bing'
 import type { CanonryConfig } from './config.js'
 import { fetchAndParseSitemap } from './sitemap-parser.js'
+import { inspectUrlsPaced, INSPECT_SWEEP_MAX_URLS, INSPECT_DAILY_QUOTA } from './gsc-inspect-paced.js'
+import type { PacedInspectDeps } from './gsc-inspect-paced.js'
+import { isRetryableHttpError } from '@ainyc/canonry-contracts'
 import { createLogger } from './logger.js'
 
 const log = createLogger('BingInspectSitemap')
@@ -13,6 +16,13 @@ const log = createLogger('BingInspectSitemap')
 interface BingInspectSitemapOptions {
   sitemapUrl?: string
   config: CanonryConfig
+  /**
+   * Pacing/backoff seam for tests. Production leaves it unset and gets the real
+   * ~1 req/sec spacing; a test injects an instant `sleep` so a sweep with
+   * retries does not spend real seconds. Without this a 3-URL fixture with one
+   * failing URL takes longer than a default test timeout.
+   */
+  pacedDeps?: Pick<PacedInspectDeps, 'sleep' | 'jitter'>
 }
 
 function parseBingDate(value: string | undefined | null): string | null {
@@ -102,71 +112,106 @@ export async function executeBingInspectSitemap(
       blockedUrls = new Set()
     }
 
+    // Same budget guard as the GSC sweep: a sitemap larger than the daily
+    // allowance cannot finish, and grinding into the wall surfaces as a failure
+    // rather than as "the quota ran out".
+    const skipped = Math.max(0, sitemapUrls.length - INSPECT_SWEEP_MAX_URLS)
+    const targetUrls = skipped > 0 ? sitemapUrls.slice(0, INSPECT_SWEEP_MAX_URLS) : sitemapUrls
+    if (skipped > 0) {
+      log.warn('sitemap.over-budget', {
+        runId,
+        projectId,
+        sitemapUrls: sitemapUrls.length,
+        inspecting: targetUrls.length,
+        skipped,
+        dailyQuota: INSPECT_DAILY_QUOTA,
+        note: `Sitemap has ${sitemapUrls.length} pages; inspecting the first ${targetUrls.length}. ${skipped} pages will not have a verdict from this run.`,
+      })
+    }
+
+    // Narrowed once here — the guard above proves it, but TypeScript cannot
+    // carry that through the callback closure below.
+    const siteUrl = conn.siteUrl
+
     let inspected = 0
     let errors = 0
 
-    for (const pageUrl of sitemapUrls) {
-      try {
-        const result = await getUrlInfo(conn.apiKey, conn.siteUrl, pageUrl)
-        const inspectedAt = new Date().toISOString()
-        const httpCode = result.HttpStatus ?? result.HttpCode ?? null
-        const lastCrawledDate = parseBingDate(result.LastCrawledDate)
-        const inIndexDate = parseBingDate(result.InIndexDate)
-        const discoveryDate = parseBingDate(result.DiscoveryDate)
+    // Paced through the shared driver rather than a bare setTimeout loop: it
+    // adds jitter (so two overlapping sweeps don't phase-lock), per-URL retry,
+    // and a consecutive-failure circuit breaker. Without the breaker a wholly
+    // throttled property grinds the entire sitemap against a wall, spending the
+    // daily allowance to produce nothing.
+    //
+    // The retry predicate is Bing's, not the GSC default: Bing reports a
+    // throttle as `400` with `ErrorCode 5`, which the GSC predicate does not
+    // recognise — so the breaker would never trip and every failure would look
+    // permanent.
+    const outcome = await inspectUrlsPaced(
+      targetUrls,
+      {
+        inspectOne: (pageUrl) => getUrlInfo(conn.apiKey, siteUrl, pageUrl),
+        onResult: (pageUrl, result) => {
+          const inspectedAt = new Date().toISOString()
+          const httpCode = result.HttpStatus ?? result.HttpCode ?? null
+          const lastCrawledDate = parseBingDate(result.LastCrawledDate)
+          const inIndexDate = parseBingDate(result.InIndexDate)
+          const discoveryDate = parseBingDate(result.DiscoveryDate)
 
-        // Mirrors the derivation in packages/api-routes/src/bing.ts inspect-url:
-        // GetUrlInfo no longer ships an InIndex flag, so DocumentSize and a
-        // recent successful crawl are the positive signals.
-        let derivedInIndex: boolean | null = null
-        if (result.DocumentSize != null && result.DocumentSize > 0) {
-          derivedInIndex = true
-        } else if (lastCrawledDate != null) {
-          derivedInIndex = httpCode != null && httpCode >= 400 ? false : true
-        } else if (discoveryDate != null) {
-          derivedInIndex = false
-        }
-        if (derivedInIndex === true && blockedUrls.has(pageUrl)) {
-          derivedInIndex = false
-        }
+          // Mirrors the derivation in packages/api-routes/src/bing.ts inspect-url:
+          // GetUrlInfo no longer ships an InIndex flag, so DocumentSize and a
+          // recent successful crawl are the positive signals.
+          let derivedInIndex: boolean | null = null
+          if (result.DocumentSize != null && result.DocumentSize > 0) {
+            derivedInIndex = true
+          } else if (lastCrawledDate != null) {
+            derivedInIndex = httpCode != null && httpCode >= 400 ? false : true
+          } else if (discoveryDate != null) {
+            derivedInIndex = false
+          }
+          if (derivedInIndex === true && blockedUrls.has(pageUrl)) {
+            derivedInIndex = false
+          }
 
-        db.insert(bingUrlInspections).values({
-          id: crypto.randomUUID(),
-          projectId,
-          url: pageUrl,
-          httpCode,
-          inIndex: derivedInIndex,
-          lastCrawledDate,
-          inIndexDate,
-          inspectedAt,
-          syncRunId: runId,
-          createdAt: inspectedAt,
-          documentSize: result.DocumentSize ?? null,
-          anchorCount: result.AnchorCount ?? null,
-          discoveryDate,
-        }).run()
+          db.insert(bingUrlInspections).values({
+            id: crypto.randomUUID(),
+            projectId,
+            url: pageUrl,
+            httpCode,
+            inIndex: derivedInIndex,
+            lastCrawledDate,
+            inIndexDate,
+            inspectedAt,
+            syncRunId: runId,
+            createdAt: inspectedAt,
+            documentSize: result.DocumentSize ?? null,
+            anchorCount: result.AnchorCount ?? null,
+            discoveryDate,
+          }).run()
 
-        inspected++
-        log.info('inspect.url-done', {
-          runId,
-          projectId,
-          url: pageUrl,
-          progress: `${inspected}/${sitemapUrls.length}`,
-        })
-      } catch (err) {
-        errors++
-        log.error('inspect.url-failed', {
-          runId,
-          projectId,
-          url: pageUrl,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
+          inspected++
+          log.info('inspect.url-done', { runId, projectId, url: pageUrl, progress: `${inspected}/${targetUrls.length}` })
+        },
+        onError: (pageUrl, err) => {
+          errors++
+          log.error('inspect.url-failed', {
+            runId,
+            projectId,
+            url: pageUrl,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        },
+      },
+      { isRetryable: isRetryableHttpError, concurrency: 1, log, ...opts.pacedDeps },
+    )
 
-      // Rate limit: keep below Bing's per-key throughput so a large sitemap
-      // doesn't trip the 429 ceiling on GetUrlInfo.
-      if (inspected + errors < sitemapUrls.length) {
-        await new Promise((r) => setTimeout(r, 1000))
-      }
+    if (outcome.aborted) {
+      log.error('inspect.circuit-break', {
+        runId,
+        projectId,
+        inspected,
+        errors,
+        note: 'Bing inspection stopped early after sustained failures; the remaining pages were not attempted.',
+      })
     }
 
     // Coverage snapshot — pick the latest definitive (non-null) inspection per
