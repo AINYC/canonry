@@ -663,7 +663,7 @@ test('cached setup and queries remain usable when their background refresh fails
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Groups' })).toBeTruthy())
   fireEvent.click(screen.getByRole('button', { name: 'Continue without groups' }))
-  await waitFor(() => expect(screen.getByRole('heading', { name: 'Questions' })).toBeTruthy())
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Queries' })).toBeTruthy())
   expect(screen.getByText('old service query')).toBeTruthy()
 })
 

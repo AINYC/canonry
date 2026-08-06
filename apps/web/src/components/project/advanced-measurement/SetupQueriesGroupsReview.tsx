@@ -76,12 +76,12 @@ export interface AdvancedMeasurementQueriesStepProps {
   /** Compatibility fallback for callers that have not split clearing from removal yet. */
   onRemoveQuery: (queryId: string) => void | Promise<void>
   /**
-   * Adds new tracked questions to the project from inside setup. Without this the
-   * step can only consume questions that already exist, which sends a first-time
+   * Adds new tracked queries to the project from inside setup. Without this the
+   * step can only consume queries that already exist, which sends a first-time
    * operator out of the wizard to create them and back again.
    */
   onCreateQueries?: (texts: readonly string[]) => void | Promise<unknown>
-  /** Writes one question per Property and assigns each to the Property it names. */
+  /** Writes one query per Property and assigns each to the Property it names. */
   onCreateAndPairQuestions?: (pairs: readonly { propertyId: string; text: string }[]) => void | Promise<void>
   isCreatingQueries?: boolean
   createQueriesError?: string | null
@@ -344,7 +344,7 @@ function isMissingQuery(query: AdvancedMeasurementQuery): boolean {
 }
 
 function queryLabel(query: AdvancedMeasurementQuery): string {
-  return isMissingQuery(query) ? 'Unavailable tracked question' : query.text?.trim() || 'Unavailable tracked question'
+  return isMissingQuery(query) ? 'Unavailable tracked query' : query.text?.trim() || 'Unavailable tracked query'
 }
 
 function PropertyChecklist({
@@ -655,7 +655,7 @@ export function AdvancedMeasurementQueriesStep({
   const [patternText, setPatternText] = useState('')
   const [replacement, setReplacement] = useState<{ queryId: string; propertyIds: string[] } | null>(null)
   if (isUnavailable(availability)) {
-    return <section aria-label="Questions"><UnavailableState message={availability.message} /></section>
+    return <section aria-label="Queries"><UnavailableState message={availability.message} /></section>
   }
 
   const viewer = isViewer(access)
@@ -683,9 +683,9 @@ export function AdvancedMeasurementQueriesStep({
   const parsedNewQueries = [...new Set(
     newQueriesText.split('\n').map(line => line.trim()).filter(Boolean),
   )]
-  // One pattern, one question per selected Property. This is the portfolio
+  // One pattern, one query per selected Property. This is the portfolio
   // shape: nobody types "apartments near Harbor Point" two hundred times, and
-  // typing two hundred generic questions measures the portfolio rather than the
+  // typing two hundred generic queries measures the portfolio rather than the
   // Properties in it.
   const patternPlaceholders = [...patternText.matchAll(/\{([a-z][\w-]*)\}/gi)].map(match => match[1]!)
   const patternTargets = properties.filter(property => resolvedAudiencePropertyIds.includes(property.id))
@@ -712,8 +712,8 @@ export function AdvancedMeasurementQueriesStep({
     <section aria-labelledby="advanced-measurement-queries-title" className="space-y-5">
       <div className="section-head">
         <div>
-          <h3 id="advanced-measurement-queries-title">Questions</h3>
-          <p className="mt-1 max-w-2xl text-sm text-secondary">Choose questions, then apply them to Properties.</p>
+          <h3 id="advanced-measurement-queries-title">Queries</h3>
+          <p className="mt-1 max-w-2xl text-sm text-secondary">Choose queries, then apply them to Properties.</p>
         </div>
       </div>
 
@@ -817,20 +817,20 @@ export function AdvancedMeasurementQueriesStep({
               />
             </div>
           ) : null}
-          <p className="mt-3 max-w-2xl text-sm text-secondary">Groups are shortcuts resolved when you assign. Changing membership later does not rewrite existing assignments, and a Property added later does not receive earlier group questions.</p>
+          <p className="mt-3 max-w-2xl text-sm text-secondary">Groups are shortcuts resolved when you assign. Changing membership later does not rewrite existing assignments, and a Property added later does not receive earlier group queries.</p>
         </fieldset>
       )}
 
       {viewer || !onCreateQueries ? null : (
         <details open={queries.length === 0} className="border-y border-default py-4">
-          <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">Add questions</summary>
+          <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-heading">Add queries</summary>
           <div className="pt-3">
             <h4 className="m-0 text-sm font-medium text-heading">
-              {queries.length === 0 ? 'Add the questions you want to track' : 'Add more questions'}
+              {queries.length === 0 ? 'Add the queries you want to track' : 'Add more queries'}
             </h4>
             <p className="mt-1 mb-2 text-sm text-secondary">One per line. Add them to the project, then apply them to Properties.</p>
             <textarea
-              aria-label="New questions, one per line"
+              aria-label="New queries, one per line"
               className="w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
               rows={4}
               value={newQueriesText}
@@ -854,23 +854,23 @@ export function AdvancedMeasurementQueriesStep({
               >
                 {isCreatingQueries
                   ? 'Adding…'
-                  : `Add ${parsedNewQueries.length || ''} question${parsedNewQueries.length === 1 ? '' : 's'}`.replace('  ', ' ')}
+                  : `Add ${parsedNewQueries.length || ''} ${parsedNewQueries.length === 1 ? 'query' : 'queries'}`.replace('  ', ' ')}
               </Button>
               {onManageProjectQueries ? (
                 <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={isBusy} onClick={onManageProjectQueries}>
-                  Manage project questions
+                  Manage project queries
                 </Button>
               ) : null}
             </div>
 
             <div className="mt-4 border-t border-default pt-4">
-              <h4 className="m-0 text-sm font-medium text-heading">Write one question for every Property</h4>
+              <h4 className="m-0 text-sm font-medium text-heading">Write one query for every Property</h4>
               <p className="mt-1 mb-2 text-sm text-secondary">
                 Put <code className="rounded bg-bg-elevated px-1">{'{property}'}</code> where the
-                Property name belongs. You get one question per selected Property.
+                Property name belongs. You get one query per selected Property.
               </p>
               <input
-                aria-label="Question pattern"
+                aria-label="Query pattern"
                 className="min-h-11 w-full rounded border border-strong bg-transparent px-3 py-2 text-sm text-strong placeholder-mono-600 focus:border-mono-500 focus:outline-none"
                 value={patternText}
                 onChange={event => setPatternText(event.target.value)}
@@ -878,14 +878,14 @@ export function AdvancedMeasurementQueriesStep({
               />
               {patternText.trim() === '' ? null : patternPlaceholders.length === 0 ? (
                 <p className="mt-2 text-sm text-caution">
-                  Add {'{property}'} to the pattern, or use the box above for a single question.
+                  Add {'{property}'} to the pattern, or use the box above for a single query.
                 </p>
               ) : patternTargets.length === 0 ? (
-                <p className="mt-2 text-sm text-caution">Select at least one Property to write questions for.</p>
+                <p className="mt-2 text-sm text-caution">Select at least one Property to write queries for.</p>
               ) : (
                 <div className="mt-2 rounded-md border border-base bg-bg-elevated p-3">
                   <p className="m-0 text-sm text-secondary">
-                    {patternExpansions.length} question{patternExpansions.length === 1 ? '' : 's'}, one per selected Property:
+                    {patternExpansions.length} {patternExpansions.length === 1 ? 'query' : 'queries'}, one per selected Property:
                   </p>
                   <ul className="mt-1 mb-0 list-none space-y-0.5 p-0">
                     {patternExpansions.slice(0, 3).map(text => (
@@ -913,11 +913,11 @@ export function AdvancedMeasurementQueriesStep({
               >
                 {isCreatingQueries
                   ? 'Adding…'
-                  : `Add ${patternPairs.length || ''} question${patternPairs.length === 1 ? '' : 's'}`.replace('  ', ' ')}
+                  : `Add ${patternPairs.length || ''} ${patternPairs.length === 1 ? 'query' : 'queries'}`.replace('  ', ' ')}
               </Button>
               {patternPairs.length > 0 ? (
                 <p className="mt-2 mb-0 text-sm text-secondary">
-                  Each question is measured on the one Property it names, so this adds{' '}
+                  Each query is measured on the one Property it names, so this adds{' '}
                   {patternPairs.length} assignment{patternPairs.length === 1 ? '' : 's'}.
                 </p>
               ) : null}
@@ -928,7 +928,7 @@ export function AdvancedMeasurementQueriesStep({
 
       {viewer ? null : (
         <div className="space-y-3 border-y border-default py-4">
-          {/* With an empty question library these controls can only be disabled. */}
+          {/* With an empty query library these controls can only be disabled. */}
           {queries.length === 0 ? null : (
           <div className="flex flex-wrap items-center gap-3">
             <Button
@@ -939,7 +939,7 @@ export function AdvancedMeasurementQueriesStep({
               disabled={selectableVisibleQueries.length === 0}
               onClick={selectAllShownQueries}
             >
-              Select all shown questions
+              Select all shown queries
             </Button>
             <Button
               type="button"
@@ -949,7 +949,7 @@ export function AdvancedMeasurementQueriesStep({
               disabled={selectedQueryIds.length === 0}
               onClick={() => onSelectedQueryIdsChange([])}
             >
-              Clear question selection
+              Clear query selection
             </Button>
             <Button
               type="button"
@@ -965,20 +965,20 @@ export function AdvancedMeasurementQueriesStep({
               }}
             >
               {isApplying
-                ? 'Assigning questions…'
-                : `Assign ${selectedQueryIds.length || ''} question${selectedQueryIds.length === 1 ? '' : 's'} to ${audienceLabel(activeAudience, groups, selectedPropertyCount)}`.replace('  ', ' ')}
+                ? 'Assigning queries…'
+                : `Assign ${selectedQueryIds.length || ''} ${selectedQueryIds.length === 1 ? 'query' : 'queries'} to ${audienceLabel(activeAudience, groups, selectedPropertyCount)}`.replace('  ', ' ')}
             </Button>
             {/*
               Four states share this slot and each is a different height, and the
               impact sentence itself rewraps as the counts change. Without a
-              reserved two lines, ticking a box moved the question table under
+              reserved two lines, ticking a box moved the query table under
               the cursor.
             */}
             <div className="min-h-[2.75rem]">
             {isPreviewingAssignmentImpact ? <p role="status" className="text-sm text-secondary">Calculating assignment impact…</p> : null}
             {assignmentImpact ? (
               <p className="text-sm text-secondary">
-                {selectedQueryIds.length} question{selectedQueryIds.length === 1 ? '' : 's'} → {assignmentImpact.assignmentCount} Property assignment{assignmentImpact.assignmentCount === 1 ? '' : 's'}
+                {selectedQueryIds.length} {selectedQueryIds.length === 1 ? 'query' : 'queries'} → {assignmentImpact.assignmentCount} Property assignment{assignmentImpact.assignmentCount === 1 ? '' : 's'}
                 {' · '}{assignmentImpact.addedAssignments} new, {assignmentImpact.alreadyPresentAssignments} already assigned
                 {' · '}{assignmentImpact.fullRunProviderCalls} provider request{assignmentImpact.fullRunProviderCalls === 1 ? '' : 's'} per full run
                 {' · '}{assignmentImpact.addedProviderCalls} new
@@ -992,7 +992,7 @@ export function AdvancedMeasurementQueriesStep({
                 {onBack ? <Button type="button" size="sm" variant="outline" className="min-h-11" onClick={onBack}>Back to Groups</Button> : null}
               </div>
             ) : (
-              <p className="text-sm text-secondary">{selectedQueryIds.length} question{selectedQueryIds.length === 1 ? '' : 's'} × {selectedPropertyCount} Properties = {selectedQueryIds.length * selectedPropertyCount} assignments</p>
+              <p className="text-sm text-secondary">{selectedQueryIds.length} {selectedQueryIds.length === 1 ? 'query' : 'queries'} × {selectedPropertyCount} Properties = {selectedQueryIds.length * selectedPropertyCount} assignments</p>
             )}
             </div>
             {assignmentNotice ? <p role="status" className="text-sm text-secondary">{assignmentNotice}</p> : null}
@@ -1004,7 +1004,7 @@ export function AdvancedMeasurementQueriesStep({
       {queries.length > 0 ? (
         <div className="space-y-3">
           <label className="block max-w-xl">
-            <span className="text-sm font-medium text-heading">Search questions</span>
+            <span className="text-sm font-medium text-heading">Search queries</span>
             <input
               type="search"
               value={querySearch}
@@ -1013,12 +1013,12 @@ export function AdvancedMeasurementQueriesStep({
                 setShowAllQueries(false)
               }}
               className="mt-1 block min-h-11 w-full rounded-md border border-default bg-surface px-3 py-2 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-400"
-              placeholder="Question text"
+              placeholder="Query text"
             />
           </label>
           <div className="flex flex-wrap items-center gap-3">
             <p className="m-0 text-sm text-secondary">
-              Showing {visibleQueries.length} of {listedQueries.length} questions,{' '}
+              Showing {visibleQueries.length} of {listedQueries.length} queries,{' '}
               {filteredQueries.length - unappliedQueries.length} of {filteredQueries.length} applied
             </p>
             {viewer || unappliedQueries.length === 0 ? null : (
@@ -1029,7 +1029,7 @@ export function AdvancedMeasurementQueriesStep({
                 className="min-h-11"
                 onClick={() => { setShowUnappliedOnly(current => !current); setShowAllQueries(false) }}
               >
-                {showUnappliedOnly ? 'Show all questions' : `Show the ${unappliedQueries.length} not applied`}
+                {showUnappliedOnly ? 'Show all queries' : `Show the ${unappliedQueries.length} not applied`}
               </Button>
             )}
           </div>
@@ -1041,10 +1041,10 @@ export function AdvancedMeasurementQueriesStep({
           <table className="evidence-table min-w-[620px]">
           <thead>
             <tr>
-              {viewer ? null : <th><span className="sr-only">Select question</span></th>}
-              <th>Question</th>
+              {viewer ? null : <th><span className="sr-only">Select query</span></th>}
+              <th>Query</th>
               <th>Properties</th>
-              {viewer ? null : <th><span className="sr-only">Clear question assignments</span></th>}
+              {viewer ? null : <th><span className="sr-only">Clear query assignments</span></th>}
             </tr>
           </thead>
           <tbody>
@@ -1059,7 +1059,7 @@ export function AdvancedMeasurementQueriesStep({
                     <td className="p-0">
                       <label className="flex min-h-11 min-w-11 cursor-pointer items-center justify-center">
                         <input
-                          aria-label={`Select question ${label}`}
+                          aria-label={`Select query ${label}`}
                           checked={selected}
                           type="checkbox"
                           onChange={event => onSelectedQueryIdsChange(changeSelection(selectedQueryIds, query.id, event.currentTarget.checked))}
@@ -1084,12 +1084,12 @@ export function AdvancedMeasurementQueriesStep({
                               className="min-h-11"
                               disabled={isBusy || isReplacingAssignments}
                               onClick={() => setReplacement({ queryId: query.id, propertyIds: [...(query.propertyIds ?? [])] })}
-                              aria-label={`Replace question assignments for ${label}`}
+                              aria-label={`Replace query assignments for ${label}`}
                             >
                               Replace assignments
                             </Button>
                           ) : null}
-                          <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={isBusy} onClick={() => { void clearAssignments(query.id) }} aria-label={`Clear question assignments for ${label}`}>Clear assignments</Button>
+                          <Button type="button" size="sm" variant="ghost" className="min-h-11" disabled={isBusy} onClick={() => { void clearAssignments(query.id) }} aria-label={`Clear query assignments for ${label}`}>Clear assignments</Button>
                         </div>
                       ) : null}
                     </td>
@@ -1100,11 +1100,11 @@ export function AdvancedMeasurementQueriesStep({
           </tbody>
           </table>
         </div>
-      ) : queries.length > 0 ? <p className="text-sm text-secondary">No questions match this search.</p> : null}
+      ) : queries.length > 0 ? <p className="text-sm text-secondary">No queries match this search.</p> : null}
 
       {viewer || !replacement ? null : (() => {
         const query = queries.find(candidate => candidate.id === replacement.queryId)
-        const label = query ? queryLabel(query) : 'this question'
+        const label = query ? queryLabel(query) : 'this query'
         const selected = replacement.propertyIds.filter(propertyId => properties.some(property => property.id === propertyId))
         return (
           <section aria-labelledby="advanced-measurement-replace-assignments-title" className="border-y border-default py-4">
@@ -1112,7 +1112,7 @@ export function AdvancedMeasurementQueriesStep({
             <p className="mt-1 max-w-2xl text-sm text-secondary">This replaces every Property assigned to “{label}”.</p>
             <div className="mt-3">
               <PropertyChecklist
-                legend="Properties for this question"
+                legend="Properties for this query"
                 properties={properties}
                 selectedPropertyIds={selected}
                 onSelectedPropertyIdsChange={propertyIds => setReplacement(current => current ? { ...current, propertyIds: [...propertyIds] } : current)}
@@ -1139,12 +1139,12 @@ export function AdvancedMeasurementQueriesStep({
       })()}
 
       {visibleQueries.length < listedQueries.length ? (
-        <Button type="button" size="sm" variant="outline" className="min-h-11" onClick={() => setShowAllQueries(true)}>Show all questions</Button>
+        <Button type="button" size="sm" variant="outline" className="min-h-11" onClick={() => setShowAllQueries(true)}>Show all queries</Button>
       ) : null}
 
       {viewer ? null : (
         <>
-          {canContinue ? null : <p role="status" className="text-sm text-caution">Apply at least one question to a Property before continuing.</p>}
+          {canContinue ? null : <p role="status" className="text-sm text-caution">Apply at least one query to a Property before continuing.</p>}
           <div className={`flex flex-wrap items-center gap-3 ${onBack ? 'justify-between' : 'justify-end'}`}>
             {onBack ? <Button type="button" variant="outline" className="min-h-11" disabled={isBusy} onClick={onBack}>Back</Button> : null}
             <Button type="button" variant={canApply ? 'outline' : 'default'} className="min-h-11" disabled={!canContinue || isBusy} onClick={onContinue}>Continue</Button>
@@ -1194,7 +1194,7 @@ export function AdvancedMeasurementGroupsStep({
       <div className="section-head">
         <div>
           <h3 id="advanced-measurement-groups-title">Groups</h3>
-          <p className="mt-1 max-w-2xl text-sm text-secondary">Use groups to assign questions by market and compare competitors.</p>
+          <p className="mt-1 max-w-2xl text-sm text-secondary">Use groups to assign queries by market and compare competitors.</p>
         </div>
       </div>
 
@@ -1410,7 +1410,7 @@ export function AdvancedMeasurementReviewStep({
 
       <div className="overflow-x-auto border-y border-default">
         <table className="evidence-table min-w-[720px]">
-          <thead><tr><th>Properties</th><th>Questions</th><th>Groups</th><th>Assignments</th><th>Provider requests / run</th></tr></thead>
+          <thead><tr><th>Properties</th><th>Queries</th><th>Groups</th><th>Assignments</th><th>Provider requests / run</th></tr></thead>
           <tbody><tr>
             <td className="tabular-nums text-heading">{counts.properties}</td>
             <td className="tabular-nums text-heading">{counts.queries}</td>
@@ -1426,13 +1426,13 @@ export function AdvancedMeasurementReviewStep({
         </p>
       ) : null}
       {counts.assignments !== undefined && counts.assignments > counts.queries ? (
-        // Aiming one question at a market writes one assignment per Property in
-        // it, so this number outruns the question count and looks wrong without
+        // Aiming one query at a market writes one assignment per Property in
+        // it, so this number outruns the query count and looks wrong without
         // the reason beside it.
         <p className="supporting-copy">
-          {counts.queries} question{counts.queries === 1 ? '' : 's'} aimed at markets and Properties
+          {counts.queries} {counts.queries === 1 ? 'query' : 'queries'} aimed at markets and Properties
           {' '}produce {counts.assignments} assignment{counts.assignments === 1 ? '' : 's'}:
-          {' '}a question aimed at a market is measured on every Property in it.
+          {' '}a query aimed at a market is measured on every Property in it.
         </p>
       ) : null}
 

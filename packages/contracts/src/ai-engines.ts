@@ -9,7 +9,7 @@
  * `AI_ENGINE_SELF_DOMAINS` so the citation extractors filter it out.
  *
  * ESLint blocks raw use of these hostnames outside this file and test
- * directories via `no-restricted-syntax` in the workspace config.
+ * directories via `canonry-guards/no-inline-ai-hostname` in the workspace config.
  */
 export const AI_ENGINE_DOMAINS = {
   /** OpenAI marketing/blog/API surface. */

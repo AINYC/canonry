@@ -17,7 +17,7 @@ describe('advanced measurement setup shell', () => {
       'Import',
       'Properties',
       'Groups',
-      'Questions',
+      'Queries',
       'Review and publish',
     ])
     expect(screen.getByText('Properties').getAttribute('aria-current')).toBe('step')

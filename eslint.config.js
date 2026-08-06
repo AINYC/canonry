@@ -4,6 +4,7 @@ import regexpPlugin from 'eslint-plugin-regexp'
 import reactHooksPlugin from 'eslint-plugin-react-hooks'
 import tseslint from 'typescript-eslint'
 import { noLiteralPaletteRule } from './eslint-rules/no-literal-palette.js'
+import { createRestrictedSyntaxRule } from './eslint-rules/restricted-syntax.js'
 
 const ALT_CHART_LIB_PATHS = [
   { name: 'chart.js', message: 'Use Recharts via ChartPrimitives instead.' },
@@ -23,17 +24,31 @@ const ALT_CHART_LIB_PATTERNS = [
   { group: ['plotly.js-*'], message: 'Use Recharts via ChartPrimitives instead.' },
 ]
 
+// EVERY GUARD IN THIS FILE HAS ITS OWN RULE ID. That is load-bearing, not
+// stylistic. ESLint flat config resolves rules by id with LAST-WINS OVERRIDE
+// across overlapping config objects, so two blocks that both put options on the
+// core `no-restricted-syntax` rule and both name the same tree do not compose:
+// the later block REPLACES the earlier one's options and the earlier guard stops
+// reporting — silently, with a green `pnpm lint` and no diagnostic at any
+// verbosity. This file had five such blocks and four were dead (verified
+// 2026-08-05 by dropping a probe file into each tree): the vocabulary literal ban
+// fired in NONE of the four trees it named, the GA4 dimension drift guard fired
+// nowhere, and the AI-hostname ban was clobbered in apps/web/src and
+// packages/canonry/src by the two raw-`fetch()` guards. The AGENTS.md rules
+// citing them had been false for as long.
+//
+// So: no `no-restricted-syntax` blocks. Selector bans go through
+// `createRestrictedSyntaxRule` (./eslint-rules/restricted-syntax.js), which is
+// the same behavior under a unique id, and each plugin object is defined ONCE
+// and shared by reference (flat config rejects a namespace redefined with a
+// different object). Two ids are two rules; they both run, whatever the overlap.
+//
 // Design-token migration ratchet (engine issue #767, Phase 3). Flags raw Tailwind
 // palette color utilities in themeable web code so a migrated file can't regress.
 // The rule + its regex live in ./eslint-rules/no-literal-palette.js (shared with
-// the scanner + its test). It is a CUSTOM rule with a unique id rather than
-// another `no-restricted-syntax` block: ESLint flat config does LAST-WINS
-// OVERRIDE for a shared rule id across overlapping config blocks, so a 4th
-// `no-restricted-syntax` on apps/web/src would silently disable the
-// raw-`fetch()`/SDK guard (verified 2026-07-03). A unique id composes instead of
-// clobbering. Phase 3 is COMPLETE: every apps/web/src file is migrated, so the
-// rule now covers the whole tree with only the two permanent exclusions below
-// (the migration allowlist has been emptied and removed).
+// the scanner + its test). Phase 3 is COMPLETE: every apps/web/src file is
+// migrated, so the rule now covers the whole tree with only the two permanent
+// exclusions below (the migration allowlist has been emptied and removed).
 
 // PERMANENT exclusions: ProviderBadge encodes engine identity (not tone) and
 // ChartPrimitives carries the `var(--chart-*, #hex)` fallbacks. Both stay literal.
@@ -41,6 +56,184 @@ const RAW_PALETTE_PERMANENT_EXCLUSIONS = [
   'apps/web/src/components/shared/ProviderBadge.tsx',
   'apps/web/src/components/shared/ChartPrimitives.tsx',
 ]
+
+// Vocabulary ratchet: the tracked entity is a QUERY, never a "question". See
+// AGENTS.md "Vocabulary (Critical) → Query vs question". Advanced measurement
+// was the only surface that called it a question; the copy is now query
+// everywhere and this keeps it there.
+//
+// It deliberately does NOT read comments: "question" has plenty of honest
+// prose uses in a comment ("both questions go out together"), and flagging
+// them would only buy a run of eslint-disable lines.
+const QUESTION_WORD_RE = /\bquestions?\b/i
+
+// Machine tokens carry the word without being copy: the frozen route paths
+// (`/measurement-property-questions`), DOM ids (`property-questions`), and
+// busy-state keys (`create-and-pair-questions`). None of them contain a space.
+// Prose always does — the one exception being a bare one-word label, which is
+// exactly the wizard step that read "Questions".
+export function isQuestionUiCopy(text) {
+  if (typeof text !== 'string' || !QUESTION_WORD_RE.test(text)) return false
+  const trimmed = text.trim()
+  return /\s/.test(trimmed) || /^questions?$/i.test(trimmed)
+}
+
+// Attributes whose value is an identifier or a class list, never prose. A
+// `className` is the realistic one: it is the only non-copy attribute that
+// routinely holds spaces, so the heuristic above cannot see it is not a
+// sentence.
+const QUESTION_COPY_EXEMPT_ATTRIBUTES = new Set([
+  'className', 'id', 'htmlFor', 'key', 'name',
+  'aria-labelledby', 'aria-describedby', 'aria-controls', 'aria-owns',
+])
+
+function isExemptJsxAttributeValue(node) {
+  const parent = node.parent
+  if (!parent || parent.type !== 'JSXAttribute' || parent.value !== node) return false
+  const attribute = parent.name
+  const attributeName = attribute?.type === 'JSXNamespacedName'
+    ? `${attribute.namespace.name}:${attribute.name.name}`
+    : attribute?.name
+  return typeof attributeName === 'string'
+    && (QUESTION_COPY_EXEMPT_ATTRIBUTES.has(attributeName) || attributeName.startsWith('data-'))
+}
+
+export const noQuestionUiCopyRule = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'Disallow "question" in web UI copy — the tracked entity is a query.' },
+    schema: [],
+    messages: {
+      questionCopy:
+        'The tracked entity is a QUERY, not a "question" — say query in UI copy (labels, headings, ' +
+        'buttons, tooltips, aria-labels, placeholders). Mind the plural: "questions" → "queries". ' +
+        'The wire names (/measurement-property-questions, /measurement-question-result, the ' +
+        'canonry_measurement_* MCP tools, and the SDK symbols derived from them) are FROZEN and ' +
+        'exempt. See AGENTS.md "Vocabulary (Critical) → Query vs question".',
+    },
+  },
+  create(context) {
+    const report = node => context.report({ node, messageId: 'questionCopy' })
+    return {
+      // JS strings + JSX attribute values (`text="…"`, `aria-label="…"`, `placeholder="…"`).
+      Literal(node) {
+        if (isQuestionUiCopy(node.value) && !isExemptJsxAttributeValue(node)) report(node)
+      },
+      // Visible JSX children — `<h2>Query type</h2>`. Invisible to a `Literal`
+      // selector, which is most of what a heading or a table header actually is.
+      JSXText(node) {
+        if (isQuestionUiCopy(node.value)) report(node)
+      },
+      // Interpolated copy — `${n} query assignments`.
+      TemplateElement(node) {
+        if (isQuestionUiCopy(node.value.raw)) report(node)
+      },
+    }
+  },
+}
+
+// The two exclusions, both permanent:
+// - DiscoverySection is discovery's GENERATIVE framing ("questions your
+//   customers might ask", "Questions tested"). That is what a person asks
+//   before anything is tracked — a genuinely different noun, not a row in
+//   `queries`. No regex separates "Generate customer questions" from "Assign
+//   each question to a Property", so the boundary is the file.
+// - mock-data.ts is a test fixture: `createDashboardFixture` has no production
+//   consumer (App.tsx imports only `findEvidenceForModal` / `findRunById`).
+const QUESTION_COPY_PERMANENT_EXCLUSIONS = [
+  'apps/web/src/components/project/DiscoverySection.tsx',
+  'apps/web/src/mock-data.ts',
+]
+
+// Vocabulary enforcement: per AGENTS.md "Vocabulary (Critical)", user-facing
+// labels for `answer_mentioned` must say "mentioned" / "not-mentioned" and
+// labels for `citation_state` must say "cited" / "not-cited". The legacy
+// umbrella term "visibility" is permitted only when explicitly disambiguated
+// (e.g. "Visibility Gap (Citations + Mentions)"). The literals below are
+// unambiguous user-facing labels that conflate the two signals — bare
+// `'visible'` is excluded because it has legitimate uses (DOM API, the
+// legacy `VisibilityState` enum value) that lint cannot disambiguate.
+const bannedMetricLiteralRule = createRestrictedSyntaxRule({
+  description: 'Disallow legacy / conflated AEO metric literals in operator-facing code.',
+  restrictions: [{
+    selector: "Literal[value=/^(not-vis|visibility run|visibility sweep|visibility report|answer rate|answer-rate|answerRate)$/]",
+    message: 'Use canonical AEO vocabulary: "mentioned" / "not-mentioned" for answer-text presence, "cited" / "not-cited" for source-list presence. See AGENTS.md "Vocabulary (Critical)".',
+  }, {
+    selector: "Literal[value=/^(paid mentions|paid citations|ad mentions|ad citations|sponsored mentions|sponsored citations|paid-mention|paid-citation)$/]",
+    message: 'Paid-surface metrics are "paid" / "sponsored" (impressions, clicks, spend) — never combined with "mentioned"/"cited", which mean organic answer-text / source-list presence. See AGENTS.md "Vocabulary (Critical)".',
+  }],
+})
+
+// Drift guard: GA4 dimension/metric names must come from `GA4_DIMENSIONS` /
+// `GA4_METRICS` in `packages/integration-google-analytics/src/constants.ts`.
+// CI broke once when source and test drifted on `sessionDefaultChannelGroup`
+// vs `…Grouping`; the constant makes that class of failure impossible.
+const inlineGa4DimensionRule = createRestrictedSyntaxRule({
+  description: 'Disallow inline GA4 dimension/metric name literals outside constants.ts.',
+  restrictions: [{
+    selector: "Literal[value=/^(sessionSource|sessionMedium|sessionManualSource|sessionManualMedium|firstUserSource|firstUserMedium|sessionDefaultChannelGroup|sessionDefaultChannelGrouping|landingPagePlusQueryString)$/]",
+    message: 'Use GA4_DIMENSIONS from ./constants.ts — never inline raw dimension names. See packages/integration-google-analytics/src/constants.ts.',
+  }],
+})
+
+// Drift guard: AI-engine hostnames in production code must come from
+// `AI_ENGINE_DOMAINS` in `packages/contracts/src/ai-engines.ts`. Tests are
+// exempt because fixtures are local to their assertions and don't drift
+// across files.
+const inlineAiHostnameRule = createRestrictedSyntaxRule({
+  description: 'Disallow raw AI-provider hostname literals in production code.',
+  restrictions: [{
+    selector: "Literal[value=/^(openai\\.com|chatgpt\\.com|claude\\.ai|perplexity\\.ai|gemini\\.google\\.com|bard\\.google\\.com|copilot\\.microsoft\\.com|meta\\.ai|grok\\.com|you\\.com|phind\\.com|anthropic\\.com|googleapis\\.com|vertexaisearch\\.cloud\\.google\\.com)$/]",
+    message: 'Use AI_ENGINE_DOMAINS / AI_PROVIDER_INFRA_DOMAINS / ANTHROPIC_API_DOMAIN / GOOGLE_APIS_DOMAIN / VERTEX_AI_SEARCH_PROXY_DOMAIN from @ainyc/canonry-contracts — never inline raw AI-provider hostnames in production code.',
+  }],
+})
+
+// SDK enforcement (web): every web call into the canonry API must flow through
+// the generated `@ainyc/canonry-api-client` SDK (raw call or TanStack helper),
+// with auth + 401/403 handling provided by the shared `heyClient` from
+// `apps/web/src/api.ts`. Raw `fetch()` to API URLs bypasses every spec-derived
+// contract and the auth interceptor.
+const rawHttpWebRule = createRestrictedSyntaxRule({
+  description: 'Disallow raw fetch() / XMLHttpRequest in web code — call the generated SDK.',
+  restrictions: [{
+    selector: "CallExpression[callee.name='fetch']",
+    message: 'Use the generated `@ainyc/canonry-api-client` SDK (via `heyClient` from `apps/web/src/api.ts`) instead of raw `fetch()`. Spec drift + auth interceptor bypass is silent and pernicious. For an endpoint missing a typed DTO, add a Zod schema in `packages/contracts` and flip the route to `jsonResponse(...)` first.',
+  }, {
+    selector: "NewExpression[callee.name='XMLHttpRequest']",
+    message: 'Use the generated `@ainyc/canonry-api-client` SDK (via `heyClient` from `apps/web/src/api.ts`) instead of `XMLHttpRequest`.',
+  }],
+})
+
+// Analog of the web SDK enforcement, for the CLI. Every CLI / job runner /
+// server-internal call into the canonry API must go through `ApiClient` (which
+// delegates to the generated SDK via `invoke()`), not raw `fetch()`.
+const rawHttpCliRule = createRestrictedSyntaxRule({
+  description: 'Disallow raw fetch() in CLI code — call the canonry API through ApiClient.',
+  restrictions: [{
+    selector: "CallExpression[callee.name='fetch']",
+    message: 'Use the generated `@ainyc/canonry-api-client` SDK via `ApiClient` / `createApiClient()` (which routes through `invoke()` for tracing, CliError mapping, and the base-path probe) instead of raw `fetch()`. If you genuinely need raw `fetch()` for an external (non-canonry) HTTP call, add the file to the `ignores` list in `eslint.config.js` with a one-line comment naming the external service.',
+  }],
+})
+
+// One object per plugin namespace, shared BY REFERENCE across every config
+// block that uses it: flat config throws `Cannot redefine plugin` when the same
+// namespace is given two different objects, and both namespaces below back more
+// than one block.
+const canonryVocabularyPlugin = {
+  rules: {
+    'no-banned-metric-literal': bannedMetricLiteralRule,
+    'no-question-ui-copy': noQuestionUiCopyRule,
+  },
+}
+
+const canonryGuardsPlugin = {
+  rules: {
+    'no-inline-ga4-dimension': inlineGa4DimensionRule,
+    'no-inline-ai-hostname': inlineAiHostnameRule,
+    'no-raw-http-web': rawHttpWebRule,
+    'no-raw-http-cli': rawHttpCliRule,
+  },
+}
 
 export default tseslint.config(
   {
@@ -69,14 +262,10 @@ export default tseslint.config(
     },
   },
   {
-    // Vocabulary enforcement: per AGENTS.md "Vocabulary (Critical)", user-facing
-    // labels for `answer_mentioned` must say "mentioned" / "not-mentioned" and
-    // labels for `citation_state` must say "cited" / "not-cited". The legacy
-    // umbrella term "visibility" is permitted only when explicitly disambiguated
-    // (e.g. "Visibility Gap (Citations + Mentions)"). The literals below are
-    // unambiguous user-facing labels that conflate the two signals — bare
-    // `'visible'` is excluded because it has legitimate uses (DOM API, the
-    // legacy `VisibilityState` enum value) that lint cannot disambiguate.
+    // Vocabulary enforcement — see `bannedMetricLiteralRule` above for what and
+    // why. Overlaps the AI-hostname guard on all four trees, the CLI raw-HTTP
+    // guard on the two packages/canonry trees, and the web raw-HTTP guard on
+    // apps/web/src. It composes with all three: each has its own rule id.
     files: [
       'packages/canonry/src/commands/**/*.ts',
       'packages/canonry/src/cli-commands/**/*.ts',
@@ -84,34 +273,20 @@ export default tseslint.config(
       'apps/web/src/**/*.ts',
       'apps/web/src/**/*.tsx',
     ],
-    rules: {
-      'no-restricted-syntax': ['error', {
-        selector: "Literal[value=/^(not-vis|visibility run|visibility sweep|visibility report|answer rate|answer-rate|answerRate)$/]",
-        message: 'Use canonical AEO vocabulary: "mentioned" / "not-mentioned" for answer-text presence, "cited" / "not-cited" for source-list presence. See AGENTS.md "Vocabulary (Critical)".',
-      }, {
-        selector: "Literal[value=/^(paid mentions|paid citations|ad mentions|ad citations|sponsored mentions|sponsored citations|paid-mention|paid-citation)$/]",
-        message: 'Paid-surface metrics are "paid" / "sponsored" (impressions, clicks, spend) — never combined with "mentioned"/"cited", which mean organic answer-text / source-list presence. See AGENTS.md "Vocabulary (Critical)".',
-      }],
-    },
+    plugins: { 'canonry-vocabulary': canonryVocabularyPlugin },
+    rules: { 'canonry-vocabulary/no-banned-metric-literal': 'error' },
   },
   {
-    // Drift guard: GA4 dimension/metric names must come from `GA4_DIMENSIONS` /
-    // `GA4_METRICS` in `packages/integration-google-analytics/src/constants.ts`.
-    // CI broke once when source and test drifted on `sessionDefaultChannelGroup`
-    // vs `…Grouping`; the constant makes that class of failure impossible.
+    // GA4 dimension drift guard — see `inlineGa4DimensionRule` above. This tree
+    // is also matched by the AI-hostname guard's `packages/integration-*` glob.
     files: ['packages/integration-google-analytics/src/**/*.ts'],
     ignores: ['packages/integration-google-analytics/src/constants.ts'],
-    rules: {
-      'no-restricted-syntax': ['error', {
-        selector: "Literal[value=/^(sessionSource|sessionMedium|sessionManualSource|sessionManualMedium|firstUserSource|firstUserMedium|sessionDefaultChannelGroup|sessionDefaultChannelGrouping|landingPagePlusQueryString)$/]",
-        message: 'Use GA4_DIMENSIONS from ./constants.ts — never inline raw dimension names. See packages/integration-google-analytics/src/constants.ts.',
-      }],
-    },
+    plugins: { 'canonry-guards': canonryGuardsPlugin },
+    rules: { 'canonry-guards/no-inline-ga4-dimension': 'error' },
   },
   {
-    // Drift guard: AI-engine hostnames in production code must come from
-    // `AI_ENGINE_DOMAINS` in `packages/contracts/src/ai-engines.ts`. Tests are
-    // exempt because fixtures are local to their assertions and don't drift
+    // AI-provider hostname drift guard — see `inlineAiHostnameRule` above. Tests
+    // are exempt because fixtures are local to their assertions and don't drift
     // across files.
     files: [
       'packages/canonry/src/**/*.ts',
@@ -123,12 +298,8 @@ export default tseslint.config(
       'apps/**/src/**/*.tsx',
     ],
     ignores: ['packages/contracts/src/ai-engines.ts'],
-    rules: {
-      'no-restricted-syntax': ['error', {
-        selector: "Literal[value=/^(openai\\.com|chatgpt\\.com|claude\\.ai|perplexity\\.ai|gemini\\.google\\.com|bard\\.google\\.com|copilot\\.microsoft\\.com|meta\\.ai|grok\\.com|you\\.com|phind\\.com|anthropic\\.com|googleapis\\.com|vertexaisearch\\.cloud\\.google\\.com)$/]",
-        message: 'Use AI_ENGINE_DOMAINS / AI_PROVIDER_INFRA_DOMAINS / ANTHROPIC_API_DOMAIN / GOOGLE_APIS_DOMAIN / VERTEX_AI_SEARCH_PROXY_DOMAIN from @ainyc/canonry-contracts — never inline raw AI-provider hostnames in production code.',
-      }],
-    },
+    plugins: { 'canonry-guards': canonryGuardsPlugin },
+    rules: { 'canonry-guards/no-inline-ai-hostname': 'error' },
   },
   {
     files: ['**/*.js', '**/*.ts', '**/*.tsx'],
@@ -250,11 +421,7 @@ export default tseslint.config(
     },
   },
   {
-    // SDK enforcement: every web call into the canonry API must flow through
-    // the generated `@ainyc/canonry-api-client` SDK (raw call or TanStack
-    // helper), with auth + 401/403 handling provided by the shared
-    // `heyClient` from `apps/web/src/api.ts`. Raw `fetch()` to API URLs
-    // bypasses every spec-derived contract and the auth interceptor.
+    // Web SDK enforcement — see `rawHttpWebRule` above.
     //
     // The two thin shim files (`api.ts` for the typed wrappers around SDK
     // calls; `api-aero.ts` for the SSE prompt stream + transcript reads
@@ -266,24 +433,14 @@ export default tseslint.config(
       'apps/web/src/api.ts',
       'apps/web/src/api-aero.ts',
     ],
-    rules: {
-      'no-restricted-syntax': ['error', {
-        selector: "CallExpression[callee.name='fetch']",
-        message: 'Use the generated `@ainyc/canonry-api-client` SDK (via `heyClient` from `apps/web/src/api.ts`) instead of raw `fetch()`. Spec drift + auth interceptor bypass is silent and pernicious. For an endpoint missing a typed DTO, add a Zod schema in `packages/contracts` and flip the route to `jsonResponse(...)` first.',
-      }, {
-        selector: "NewExpression[callee.name='XMLHttpRequest']",
-        message: 'Use the generated `@ainyc/canonry-api-client` SDK (via `heyClient` from `apps/web/src/api.ts`) instead of `XMLHttpRequest`.',
-      }],
-    },
+    plugins: { 'canonry-guards': canonryGuardsPlugin },
+    rules: { 'canonry-guards/no-raw-http-web': 'error' },
   },
   {
-    // Analog of the apps/web SDK enforcement, for the CLI. Every CLI / job
-    // runner / server-internal call into the canonry API must go through
-    // `ApiClient` (which delegates to the generated SDK via `invoke()`),
-    // not raw `fetch()`. The only legitimate raw fetches are inside
-    // `client.ts` itself: the `/health` probe (bootstrap check that lives
-    // outside `/api/v1`) and the SSE `streamPost()` (the SDK can't
-    // represent text/event-stream cleanly). Both are bounded by file.
+    // CLI SDK enforcement — see `rawHttpCliRule` above. The only legitimate raw
+    // fetches are inside `client.ts` itself: the `/health` probe (bootstrap
+    // check that lives outside `/api/v1`) and the SSE `streamPost()` (the SDK
+    // can't represent text/event-stream cleanly). Both are bounded by file.
     files: ['packages/canonry/src/**/*.ts'],
     ignores: [
       // `ApiClient`'s `/health` probe + SSE prompt stream.
@@ -298,21 +455,26 @@ export default tseslint.config(
       'packages/canonry/src/telemetry.ts',
       'packages/canonry/src/update-check.ts',
     ],
-    rules: {
-      'no-restricted-syntax': ['error', {
-        selector: "CallExpression[callee.name='fetch']",
-        message: 'Use the generated `@ainyc/canonry-api-client` SDK via `ApiClient` / `createApiClient()` (which routes through `invoke()` for tracing, CliError mapping, and the base-path probe) instead of raw `fetch()`. If you genuinely need raw `fetch()` for an external (non-canonry) HTTP call, add the file to the `ignores` list in `eslint.config.js` with a one-line comment naming the external service.',
-      }],
-    },
+    plugins: { 'canonry-guards': canonryGuardsPlugin },
+    rules: { 'canonry-guards/no-raw-http-cli': 'error' },
   },
   {
     // Design-token ratchet (Phase 3 COMPLETE): no raw Tailwind palette utilities
-    // anywhere in themeable web code. Unique rule id (does NOT collide with the
-    // `no-restricted-syntax` blocks above). Only the two permanent exclusions are
+    // anywhere in themeable web code. Only the two permanent exclusions are
     // ignored — the migration allowlist is empty and has been removed.
     files: ['apps/web/src/**/*.ts', 'apps/web/src/**/*.tsx'],
     ignores: [...RAW_PALETTE_PERMANENT_EXCLUSIONS],
     plugins: { 'design-tokens': { rules: { 'no-literal-palette': noLiteralPaletteRule } } },
     rules: { 'design-tokens/no-literal-palette': 'error' },
+  },
+  {
+    // Vocabulary ratchet: web UI copy says "query", never "question". Scoped to
+    // apps/web/src: the frozen route paths and MCP tool names live in
+    // packages/api-routes + packages/canonry, so keeping the rule off those
+    // trees exempts them structurally instead of by regex.
+    files: ['apps/web/src/**/*.ts', 'apps/web/src/**/*.tsx'],
+    ignores: [...QUESTION_COPY_PERMANENT_EXCLUSIONS],
+    plugins: { 'canonry-vocabulary': canonryVocabularyPlugin },
+    rules: { 'canonry-vocabulary/no-question-ui-copy': 'error' },
   },
 )

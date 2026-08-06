@@ -2239,10 +2239,10 @@ function ProjectPageContent({
             // old basket.
             await appendQueries.mutateAsync({ projectName, queries: [...texts] })
             // The step selects from this list, so it has to reflect the new
-            // questions before the operator can apply them. A refetch failure
+            // queries before the operator can apply them. A refetch failure
             // must not read as success, hence throwOnError.
             const refreshed = await portfolioQueriesQuery.refetch({ throwOnError: true })
-            // The caller pairs each question back to the Property it was written
+            // The caller pairs each query back to the Property it was written
             // for, and can only do that once the ids exist.
             return refreshed.data ?? []
           }}
@@ -2606,7 +2606,7 @@ function ProjectPageContent({
           {canWrite && !isEmbed() && advancedMeasurementMode.surface !== 'simple-overview' ? (
             <section className="page-section-divider">
               <h2 className="text-lg font-semibold text-heading">Advanced measurement</h2>
-              <p className="supporting-copy mt-1 mb-3">Change which Properties and questions are measured.</p>
+              <p className="supporting-copy mt-1 mb-3">Change which Properties and queries are measured.</p>
               <Button
                 type="button"
                 variant="outline"

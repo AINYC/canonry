@@ -334,12 +334,12 @@ function ClientSummarySection({ report }: { report: ProjectReportDto }) {
   const totalQ = exec.totalQueryCount
   const heroNumber = totalQ > 0 ? `${exec.mentionRate}%` : '—'
   const heroSentence = totalQ > 0
-    ? `When customers asked AI ${totalQ} ${totalQ === 1 ? 'question' : 'questions'} about your industry, AI mentioned you in ${exec.mentionedQueryCount} of ${totalQ === 1 ? 'them' : 'those answers'}.`
-    : 'No AI check has been run yet. Run a check to see how AI tools answer customer questions about your business.'
+    ? `When customers asked AI ${totalQ} ${totalQ === 1 ? 'query' : 'queries'} about your industry, AI mentioned you in ${exec.mentionedQueryCount} of ${totalQ === 1 ? 'them' : 'those answers'}.`
+    : 'No AI check has been run yet. Run a check to see how AI tools answer customer queries about your business.'
   const trend = clientTrendCopy(report.whatsChanged.mentionRate)
   const providerSubtitle = sc.providers.length > 0
     ? sc.providers.map(providerDisplayName).join(', ')
-    : `${formatNumber(exec.queryCount)} ${exec.queryCount === 1 ? 'question' : 'questions'} tested`
+    : `${formatNumber(exec.queryCount)} ${exec.queryCount === 1 ? 'query' : 'queries'} tested`
 
   return (
     <section className="page-section-divider">
@@ -381,8 +381,8 @@ function ClientSummarySection({ report }: { report: ProjectReportDto }) {
 
       {sc.queries.length > 0 && (
         <div className="mt-5 rounded-xl border border-default bg-surface p-5">
-          <p className="text-sm font-semibold text-heading">Customer questions we tested</p>
-          <p className="mt-1 text-xs text-muted">These are the {sc.queries.length} {sc.queries.length === 1 ? 'question we asked' : 'questions we asked'} every AI tool. The numbers above measure how often you came up.</p>
+          <p className="text-sm font-semibold text-heading">Customer queries we tested</p>
+          <p className="mt-1 text-xs text-muted">These are the {sc.queries.length} {sc.queries.length === 1 ? 'query we asked' : 'queries we asked'} every AI tool. The numbers above measure how often you came up.</p>
           <ol className="mt-4 grid gap-2 sm:grid-cols-2">
             {sc.queries.map((q, i) => (
               <li key={i} className="flex items-start gap-3 rounded-lg border border-default bg-bg/40 px-3 py-2 text-sm text-strong">
@@ -397,7 +397,7 @@ function ClientSummarySection({ report }: { report: ProjectReportDto }) {
       {sc.providerRates.length > 0 && (
         <div className="mt-5 rounded-xl border border-default bg-surface p-5">
           <p className="text-sm font-semibold text-heading">How often each AI tool mentions you</p>
-          <p className="mt-1 text-xs text-muted">Higher is better. Each bar shows the share of customer questions where the AI named you in the answer.</p>
+          <p className="mt-1 text-xs text-muted">Higher is better. Each bar shows the share of customer queries where the AI named you in the answer.</p>
           <div className="mt-4 space-y-3">
             {sc.providerRates.map(r => (
               <div key={r.provider} className="grid grid-cols-[120px_1fr_120px] items-center gap-3">
@@ -636,7 +636,7 @@ function ClientEvidenceSection({ report }: { report: ProjectReportDto }) {
           {ai.length > 0 && (
             <div className="rounded-xl border border-default bg-surface p-5">
               <p className="text-sm font-semibold text-heading">Where AI gets its answers</p>
-              <p className="mt-1 text-xs text-muted">The websites AI tools cited most often when answering customer questions about your industry.</p>
+              <p className="mt-1 text-xs text-muted">The websites AI tools cited most often when answering customer queries about your industry.</p>
               <div className="mt-4 space-y-3">
                 {ai.map(d => (
                   <HorizontalBarRow
@@ -695,7 +695,7 @@ function ClientEvidenceSection({ report }: { report: ProjectReportDto }) {
           {opportunities.length > 0 && (
             <div className="rounded-xl border border-default bg-surface p-5">
               <p className="text-sm font-semibold text-heading">Topics where you could improve</p>
-              <p className="mt-1 text-xs text-muted">Customer questions where better content on your site would help AI cite you.</p>
+              <p className="mt-1 text-xs text-muted">Customer queries where better content on your site would help AI cite you.</p>
               <ul className="mt-4 space-y-2 text-sm text-neutral">
                 {opportunities.map((o, i) => (
                   <li key={i} className="rounded-lg border border-default bg-bg/40 px-3 py-2">
@@ -887,7 +887,7 @@ function WinsLossesTable({
             <tr>
               {!isClient && <th>Severity</th>}
               <th>{isClient ? 'What changed' : 'Title'}</th>
-              <th>{isClient ? 'Customer question' : 'Query'}</th>
+              <th>{isClient ? 'Customer query' : 'Query'}</th>
               <th>{isClient ? 'AI tool' : 'Provider'}</th>
             </tr>
           </thead>
@@ -941,7 +941,7 @@ function WhatsChangedSection({ report, audience }: { report: ProjectReportDto; a
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <RateDeltaTile label={isClient ? 'AI mentions your name' : 'Citation rate'} delta={isClient ? w.mentionRate : w.citationRate} unit="%" />
         <RateDeltaTile label={isClient ? 'AI links to your website' : 'Mention rate'} delta={isClient ? w.citationRate : w.mentionRate} unit="%" />
-        <RateDeltaTile label={isClient ? 'Questions AI mentioned you in' : 'Cited queries'} delta={isClient ? w.mentionedQueryCount : w.citedQueryCount} unit="count" />
+        <RateDeltaTile label={isClient ? 'Queries AI mentioned you in' : 'Cited queries'} delta={isClient ? w.mentionedQueryCount : w.citedQueryCount} unit="count" />
         <TrafficDeltaTile label={isClient ? 'Visitors from Google' : 'GSC clicks'} delta={w.gscClicksDelta} countLabel={isClient ? 'visits' : 'clicks'} comparisonWindowDays={w.comparisonWindowDays} />
         <TrafficDeltaTile label={isClient ? 'Visitors from AI tools' : 'AI referral sessions'} delta={w.aiReferralsDelta} countLabel={isClient ? 'visits' : 'sessions'} comparisonWindowDays={w.comparisonWindowDays} />
       </div>

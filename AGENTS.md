@@ -405,7 +405,7 @@ Canonry tracks two parallel signals for every (query × provider) snapshot. They
 4. **When you need to refer to both at once,** say "citation + mention coverage" or "visibility (cited or mentioned)" — but always disambiguate immediately.
 5. **Public API field names** must use the canonical vocabulary. Renaming a field means a version bump per the API Stability rules, so get it right the first time.
 6. **When rendering snapshot state in CLI/UI output, render both signals.** Don't print a single-cell label that flips between "cited" and "mentioned" depending on which field is populated — readers cannot tell which signal they're looking at. Use a two-glyph cell (`[citation][mention]` — `C/c` for cited/not, `M/m` for mentioned/not, `–` for missing) like `canonry citations` and `canonry run` do, and always print the legend above the table.
-7. **Lint-enforced banned literals.** ESLint blocks the literals `'not-vis'`, `'visibility run'`, `'visibility sweep'`, `'visibility report'`, `'answer rate'`, `'answer-rate'`, and `'answerRate'` in `packages/canonry/src/commands/`, `packages/canonry/src/cli-commands/`, `packages/api-routes/src/`, and `apps/web/src/`. Bare `'visible'` is not banned because it has legitimate uses (DOM `document.visibilityState`, the legacy `VisibilityState` enum value) — the burden of correctness for those falls on review.
+7. **Lint-enforced banned literals.** `canonry-vocabulary/no-banned-metric-literal` blocks the literals `'not-vis'`, `'visibility run'`, `'visibility sweep'`, `'visibility report'`, `'answer rate'`, `'answer-rate'`, and `'answerRate'` — plus the paid/organic conflations `'paid mentions'`, `'paid citations'`, `'ad mentions'`, `'ad citations'`, `'sponsored mentions'`, `'sponsored citations'`, `'paid-mention'`, and `'paid-citation'` — in `packages/canonry/src/commands/`, `packages/canonry/src/cli-commands/`, `packages/api-routes/src/`, and `apps/web/src/`. Bare `'visible'` is not banned because it has legitimate uses (DOM `document.visibilityState`, the legacy `VisibilityState` enum value) — the burden of correctness for those falls on review. The rule has its own id rather than being options on the core `no-restricted-syntax` rule; see "Lint guards" below for why that is what makes this paragraph true.
 
 ### Anti-patterns
 
@@ -430,6 +430,34 @@ if (answerMentioned) mentioned++
 // ✅ Correct — distinct headlines for the two signals
 "Cited by 2 of 4 engines"     // citationState
 "Mentioned in 3 of 4 answers" // answerMentioned
+```
+
+### Query vs question
+
+The tracked thing an operator adds with `canonry query add` — stored in the `queries` / `query_snapshots` tables, carried on the wire as `queryText` / `queryId` / `queryClass` — is a **query**. Advanced measurement is the only surface that ever called it a "question", and even that surface's own API fields say query.
+
+1. **Human-facing copy says `query`.** UI labels, headings, button text, `InfoTooltip` text, `aria-label`, placeholders, sr-only text, CLI output, and both report renderers. Read each string instead of replacing the word — "questions" becomes "queries", "Question type" becomes "Query type", and the agreement has to come out right ("Assign at least one query", "3 query assignments", "Non-brand queries assigned to this Property").
+2. **The wire keeps its historical names and they are FROZEN.** The routes `/measurement-property-questions` and `/measurement-question-result`, and the MCP tools `canonry_measurement_property_questions` and `canonry_measurement_question_result`, stay as they are — renaming them is a breaking change under "API Stability". The freeze extends to the generated SDK symbols derived from those paths (`getApiV1ProjectsByName…Questions…`) and to every schema field, identifier, prop, and file name built on them. The copy/wire mismatch is deliberate and documented, not a bug to fix.
+3. **Discovery's generative framing is the one legitimate other use.** "questions your customers might ask", "Generate customer questions", "Questions tested" describe what a person asks *before* anything is tracked. That is a real-world noun, not a row in `queries`. Once a candidate is promoted into the tracked basket it is a query.
+4. **Lint-enforced in `apps/web/src`.** `canonry-vocabulary/no-question-ui-copy` errors on prose string literals, JSX text, and template quasis containing "question". Machine tokens are exempt structurally (no whitespace: `property-questions`, `create-and-pair-questions`, the frozen route paths), as are `className` / `id` / `aria-labelledby` attribute values. Only two files are excluded, both permanently: `DiscoverySection.tsx` (rule 3 — no regex separates that framing from tracked-entity copy) and `mock-data.ts` (test fixture; `createDashboardFixture` has no production consumer). See "Lint guards" below for why the rule has its own id.
+
+```typescript
+// ❌ Wrong — the tracked entity, called a question in copy
+<label>Question type</label>
+{ title: 'Assign at least one question' }
+`${count} question assignments`
+
+// ✅ Correct — copy says query, and the plural agrees
+<label>Query type</label>
+{ title: 'Assign at least one query' }
+`${count} query assignments`
+
+// ✅ Correct — frozen wire names stay put, on purpose
+GET /api/v1/projects/{name}/measurement-property-questions
+canonry_measurement_question_result
+
+// ✅ Correct — discovery's generative framing is a different noun
+'Generate customer questions and check whether your site is already visible.'
 ```
 
 ## Enum Constants (Critical)
@@ -1054,6 +1082,29 @@ The failure mode this prevents: a new semantics-bearing parameter is wired parse
 - **Never use comments as a substitute for code.** A comment like `// else use project default` is not implementation — it's a wish. If a branch is described in a comment, the code for that branch must exist. ESLint's `no-warning-comments` rule flags `TODO`/`FIXME`/`HACK` as warnings to prevent deferred work from rotting.
 - **No placeholder branches.** If an `if/else if` chain has a case that should do something, write the code. If it intentionally does nothing, add an explicit empty block with a comment explaining why it's a no-op (e.g., `// allLocations handled in the block below`).
 
+## Lint Guards (Critical)
+
+Several rules in this file are true only because a lint guard enforces them. Those guards live in `eslint.config.js`, and **every one of them has its own rule id**.
+
+**Never add options to the core `no-restricted-syntax` rule.** ESLint flat config resolves rules by id with LAST-WINS OVERRIDE across overlapping config objects, so a second block that names an already-guarded tree does not add to the first — it REPLACES the first block's options, and the first guard stops reporting. There is no warning, no duplicate-rule diagnostic, and `pnpm lint` stays green. On 2026-08-05 four of the five `no-restricted-syntax` blocks were found dead this way: the vocabulary literal ban fired in none of the four trees it named, the GA4 dimension drift guard fired nowhere, and the AI-hostname ban was clobbered in `apps/web/src` and `packages/canonry/src` by the two raw-`fetch()` guards. Three AGENTS.md rules had been false for as long, and a dead guard is invisible from the outside — it reads exactly like a clean tree.
+
+| Guard | Scope | Bans |
+|---|---|---|
+| `canonry-vocabulary/no-banned-metric-literal` | `packages/canonry/src/commands`, `…/cli-commands`, `packages/api-routes/src`, `apps/web/src` | Legacy/conflated AEO metric literals ("Vocabulary (Critical)" rule 7) |
+| `canonry-vocabulary/no-question-ui-copy` | `apps/web/src` | "question" in UI copy ("Query vs question") |
+| `canonry-guards/no-inline-ai-hostname` | `packages/canonry`, `api-routes`, `provider-*`, `integration-*`, `intelligence`, `apps/*` src | Raw AI-provider hostnames — use `AI_ENGINE_DOMAINS` |
+| `canonry-guards/no-inline-ga4-dimension` | `packages/integration-google-analytics/src` | Raw GA4 dimension names — use `GA4_DIMENSIONS` |
+| `canonry-guards/no-raw-http-web` | `apps/web/src` | `fetch()` / `XMLHttpRequest` — use the generated SDK |
+| `canonry-guards/no-raw-http-cli` | `packages/canonry/src` | `fetch()` — use `ApiClient` / `createApiClient()` |
+| `design-tokens/no-literal-palette` | `apps/web/src` | Raw Tailwind palette utilities ("Design tokens") |
+
+### Adding a guard
+
+1. Build it with `createRestrictedSyntaxRule` from `eslint-rules/restricted-syntax.js` (same behavior as `no-restricted-syntax`, under an id you choose), or write a custom rule module in `eslint-rules/` when the check needs more than a selector.
+2. Register it in the shared `canonryGuardsPlugin` / `canonryVocabularyPlugin` object — one object per namespace, reused by reference. Flat config throws `Cannot redefine plugin` if a namespace gets two different objects.
+3. Add the rule id to the coverage matrix in `test/eslint-guards.test.ts`, plus any file it deliberately exempts. That test resolves the real config per tree and asserts each guard is enabled at error severity; it is what catches a clobbered or misscoped guard, since lint output cannot.
+4. If an AGENTS.md rule cites the guard, name the rule id there so the claim is checkable.
+
 ## CI Guidance
 
 - Validation CI: `typecheck`, `test`, `lint` across the full workspace on PRs.
@@ -1079,5 +1130,6 @@ This repo uses per-package `AGENTS.md` files for local context. **These must sta
 | Change a critical pattern (error handling, DB access, auth) | Update the relevant package's AGENTS.md patterns section |
 | Add a new dependency between packages | Update `docs/architecture.md` module dependency graph |
 | Add a generic utility (formatter, parser, normalizer) | Add it to `packages/contracts/src/<topic>.ts`, re-export from `index.ts`, add tests in `packages/contracts/test/<topic>.test.ts`. Update the "Where utilities live" table in this file if introducing a new category. |
+| Add a lint guard (selector ban, custom rule) | Give it a UNIQUE rule id via `createRestrictedSyntaxRule` — never `no-restricted-syntax` options — add it to the coverage matrix in `test/eslint-guards.test.ts` and the guard table in "Lint Guards (Critical)" |
 
 **Documentation-only changes do not require a version bump.**

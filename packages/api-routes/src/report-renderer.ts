@@ -1276,7 +1276,7 @@ function renderWinsLosses(
     </tr>`
   }).join('')
   const headers = isClient
-    ? `<tr><th>What changed</th><th>Customer question</th><th>AI tool</th></tr>`
+    ? `<tr><th>What changed</th><th>Customer query</th><th>AI tool</th></tr>`
     : `<tr><th>Severity</th><th>Title</th><th>Query</th><th>Provider</th></tr>`
   return `<div class="chart-card"><h3>${escapeHtml(heading)}</h3>
     <table class="report-table">
@@ -1301,7 +1301,7 @@ function renderWhatsChanged(report: ProjectReportDto, audience: ReportAudience):
   const rateTiles = `<div class="metric-grid">
     ${renderRateDeltaTile(isClient ? 'AI mentions your name' : 'Citation rate', isClient ? w.mentionRate : w.citationRate, '%')}
     ${renderRateDeltaTile(isClient ? 'AI links to your website' : 'Mention rate', isClient ? w.citationRate : w.mentionRate, '%')}
-    ${renderRateDeltaTile(isClient ? 'Questions AI mentioned you in' : 'Cited queries', isClient ? w.mentionedQueryCount : w.citedQueryCount, 'count')}
+    ${renderRateDeltaTile(isClient ? 'Queries AI mentioned you in' : 'Cited queries', isClient ? w.mentionedQueryCount : w.citedQueryCount, 'count')}
     ${renderTrafficDeltaTile(isClient ? 'Visitors from Google' : 'GSC clicks', w.gscClicksDelta, isClient ? 'visits' : 'clicks', w.comparisonWindowDays)}
     ${renderTrafficDeltaTile(isClient ? 'Visitors from AI tools' : 'AI referral sessions', w.aiReferralsDelta, isClient ? 'visits' : 'sessions', w.comparisonWindowDays)}
   </div>`
@@ -2379,8 +2379,8 @@ function renderClientSummary(report: ProjectReportDto): string {
   const totalQ = s.totalQueryCount
   const heroNumber = totalQ > 0 ? `${s.mentionRate}%` : '—'
   const heroSentence = totalQ > 0
-    ? `When customers asked AI ${totalQ} ${pluralize(totalQ, 'question')} about your industry, AI mentioned you in ${s.mentionedQueryCount} of ${totalQ === 1 ? 'them' : 'those answers'}.`
-    : 'No AI check has been run yet. Run a check to see how AI tools answer customer questions about your business.'
+    ? `When customers asked AI ${totalQ} ${pluralize(totalQ, 'query', 'queries')} about your industry, AI mentioned you in ${s.mentionedQueryCount} of ${totalQ === 1 ? 'them' : 'those answers'}.`
+    : 'No AI check has been run yet. Run a check to see how AI tools answer customer queries about your business.'
   const trend = clientTrendCopy(report.whatsChanged.mentionRate)
   const heroTrend = trend
     ? `<p class="client-hero-trend tone-${trend.tone}"><span style="margin-right:6px;">${trend.arrow}</span>${escapeHtml(trend.text)}</p>`
@@ -2394,7 +2394,7 @@ function renderClientSummary(report: ProjectReportDto): string {
 
   const providerSubtitle = sc.providers.length > 0
     ? sc.providers.map(providerDisplayName).join(', ')
-    : `${formatNumber(s.queryCount)} ${pluralize(s.queryCount, 'question')} tested`
+    : `${formatNumber(s.queryCount)} ${pluralize(s.queryCount, 'query', 'queries')} tested`
 
   const tiles = `<div class="client-metric-grid">
     <div class="client-metric-tile">
@@ -2423,8 +2423,8 @@ function renderClientSummary(report: ProjectReportDto): string {
 
   const questions = sc.queries.length > 0
     ? `<div class="client-card">
-        <h3>Customer questions we tested</h3>
-        <p class="card-subtitle">These are the ${sc.queries.length} ${pluralize(sc.queries.length, 'question we asked', 'questions we asked')} every AI tool. The numbers above measure how often you came up.</p>
+        <h3>Customer queries we tested</h3>
+        <p class="card-subtitle">These are the ${sc.queries.length} ${pluralize(sc.queries.length, 'query we asked', 'queries we asked')} every AI tool. The numbers above measure how often you came up.</p>
         <ol class="client-questions-list">
           ${sc.queries.map((q, i) => `<li><span class="qnum">${String(i + 1).padStart(2, '0')}</span><span>"${escapeHtml(q)}"</span></li>`).join('')}
         </ol>
@@ -2434,7 +2434,7 @@ function renderClientSummary(report: ProjectReportDto): string {
   const providerBars = sc.providerRates.length > 0
     ? `<div class="client-card">
         <h3>How often each AI tool mentions you</h3>
-        <p class="card-subtitle">Higher is better. Each bar shows the share of customer questions where the AI named you in the answer.</p>
+        <p class="card-subtitle">Higher is better. Each bar shows the share of customer queries where the AI named you in the answer.</p>
         <div class="client-bar-list">
           ${sc.providerRates.map(r => {
             const pct = Math.max(r.mentionRate, 1.5)
@@ -2469,7 +2469,7 @@ function renderClientEvidenceSummary(report: ProjectReportDto): string {
   if (ai.length > 0) {
     cards.push(`<div class="client-card">
       <h3>Where AI gets its answers</h3>
-      <p class="card-subtitle">The websites AI tools cited most often when answering customer questions about your industry.</p>
+      <p class="card-subtitle">The websites AI tools cited most often when answering customer queries about your industry.</p>
       <div class="client-bar-list">
         ${ai.map(d => {
           const pct = aiMax > 0 ? Math.max((d.count / aiMax) * 100, 1.5) : 0
@@ -2521,7 +2521,7 @@ function renderClientEvidenceSummary(report: ProjectReportDto): string {
   if (opportunities.length > 0) {
     cards.push(`<div class="client-card">
       <h3>Topics where you could improve</h3>
-      <p class="card-subtitle">Customer questions where better content on your site would help AI cite you.</p>
+      <p class="card-subtitle">Customer queries where better content on your site would help AI cite you.</p>
       <ul class="client-opportunity-list">
         ${opportunities.map(o => `<li>
           <div class="op-query">${escapeHtml(o.query)}</div>

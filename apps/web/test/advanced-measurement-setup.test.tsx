@@ -64,7 +64,7 @@ describe('advanced measurement setup composition', () => {
   it.each([
     ['import', 'Sitemap URL'],
     ['properties', 'Properties'],
-    ['queries', 'Questions'],
+    ['queries', 'Queries'],
     ['groups', 'Group name'],
     ['review', 'Flagged exceptions'],
   ] as const)('renders the %s step inside the shared draft shell', (currentStep, expectedText) => {
@@ -104,7 +104,7 @@ describe('advanced measurement setup composition', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Manage project questions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage project queries' }))
     expect(onManageProjectQueries).toHaveBeenCalledTimes(1)
   })
 
@@ -121,7 +121,7 @@ describe('advanced measurement setup composition', () => {
     )
 
     expect(screen.getByText('Flagged exceptions')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Questions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Queries' }))
     expect(onStepChange).toHaveBeenCalledWith('queries')
   })
 })
