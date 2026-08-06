@@ -952,3 +952,49 @@ describe('row detail', () => {
     expect(document.querySelectorAll('tr.measurement-subrow').length).toBe(0)
   })
 })
+
+describe('outcome count row', () => {
+  const withOutcomes = (outcomes: NonNullable<NonNullable<AdvancedMeasurementOverviewReport['currentView']>['outcomes']>) => ({
+    ...report(),
+    currentView: {
+      scope: { kind: 'all' as const },
+      queryClass: 'non-brand' as const,
+      aggregate: report().classScopes!.nonBrand.aggregate,
+      propertyTotal: outcomes.total,
+      nextCursor: null,
+      outcomes,
+    },
+  })
+
+  it('states four counts, collapsing the two one-signal buckets into one label', () => {
+    renderOverview({ report: withOutcomes({
+      bothSignals: 14, mentionedOnly: 11, citedOnly: 6, neither: 9, notMeasured: 7, total: 47,
+    }) })
+
+    const row = screen.getByLabelText('Property outcomes')
+    // Five buckets would be five phrases to read. "one signal" is the pair.
+    expect(within(row).getByText('14')).toBeTruthy()
+    expect(within(row).getByText('17')).toBeTruthy()
+    expect(within(row).getByText('9')).toBeTruthy()
+    expect(within(row).getByText('7')).toBeTruthy()
+    expect(row.textContent).toContain('both')
+    expect(row.textContent).toContain('one signal')
+    expect(row.textContent).toContain('neither')
+    expect(row.textContent).toContain('not measured')
+  })
+
+  it('keeps the cited-only split reachable, since it is the actionable half', () => {
+    renderOverview({ report: withOutcomes({
+      bothSignals: 14, mentionedOnly: 11, citedOnly: 6, neither: 9, notMeasured: 7, total: 47,
+    }) })
+    // Not inline — the tooltip carries it, per the copy rule.
+    const tip = screen.getByRole('button', { name: /which signal/i })
+    expect(tip.getAttribute('aria-label')).toMatch(/11 mentioned/i)
+    expect(tip.getAttribute('aria-label')).toMatch(/6 cited/i)
+  })
+
+  it('renders nothing at all when the server sent no outcomes, rather than zeroes', () => {
+    renderOverview()
+    expect(screen.queryByLabelText('Property outcomes')).toBeNull()
+  })
+})

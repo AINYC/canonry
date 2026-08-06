@@ -257,6 +257,7 @@ export function adaptV2MeasurementOverview({
         ...(shareOfVoice ? { shareOfVoice } : {}),
       },
       propertyTotal: overview.properties.totalEstimate ?? properties.length,
+      outcomes: overview.outcomes,
       nextCursor: overview.properties.nextCursor,
     },
     availableGroups: plan.groups.map(group => ({ id: group.stableKey, label: group.label })),
