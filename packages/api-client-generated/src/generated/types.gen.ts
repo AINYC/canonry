@@ -3837,6 +3837,15 @@ export type MeasurementDraftUpsertTargetRequest = {
     };
 };
 
+export type MeasurementOutcomeCounts = {
+    bothSignals: number;
+    mentionedOnly: number;
+    citedOnly: number;
+    neither: number;
+    notMeasured: number;
+    total: number;
+};
+
 export type MeasurementOverviewResponse = {
     mode: 'active-v1' | 'active-v2';
     scope: {
@@ -3955,6 +3964,14 @@ export type MeasurementOverviewResponse = {
         }>;
         nextCursor: string | null;
         totalEstimate?: number;
+    };
+    outcomes: {
+        bothSignals: number;
+        mentionedOnly: number;
+        citedOnly: number;
+        neither: number;
+        notMeasured: number;
+        total: number;
     };
     flags: {
         total: number;
