@@ -157,16 +157,21 @@ test('embed theme applies allowlisted CSS custom properties to the shell', async
 // control that would 403 on click against the read-only project-scoped key,
 // while keeping every read-only view. Not a security boundary (the API key
 // scope is) — purely UI cleanliness. See isEmbed() in src/api.ts.
-test('embed hides the page-header write cluster (delete / run) that leaks on every tab', async () => {
+test('embed hides the page-header run action that leaks on every tab', async () => {
   const embed = await renderAt('/projects/project_citypoint', { enabled: true })
   const operator = await renderAt('/projects/project_citypoint')
 
-  // Operator sees the header action cluster… (the YAML-export button was
-  // removed in favor of the Settings-tab results downloads + `canonry export`)
-  expect(operator).toContain('Delete project')
-  // …the embed render does not (this cluster renders OUTSIDE the tab switch, so
-  // it would otherwise leak on the default overview embed).
-  expect(embed).not.toContain('Delete project')
+  // Operator sees the header action… (the YAML-export button was removed in
+  // favor of the Settings-tab results downloads + `canonry export`. Deleting
+  // the project is no longer here at all — it moved to the end of the Settings
+  // tab, away from the button next to it.)
+  expect(operator).toContain('AI sweep')
+  // …the embed render does not (this renders OUTSIDE the tab switch, so it
+  // would otherwise leak on the default overview embed).
+  expect(embed).not.toContain('AI sweep')
+  // Delete is absent from BOTH headers now, so its absence in the embed is no
+  // longer evidence of anything — assert it left the header instead.
+  expect(operator).not.toContain('Delete project')
 
   // A read-only view still renders in the embed (the project name + a section
   // heading + a metric label), proving we hid controls, not content.

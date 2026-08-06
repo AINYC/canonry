@@ -14,6 +14,7 @@ import {
   getApiV1ProjectsByNameMeasurementPlanQueryKey,
   getApiV1ProjectsByNameMeasurementReportQueryKey,
   getApiV1ProjectsByNameQueriesQueryKey,
+  getApiV1ProjectsByNameScheduleQueryKey,
 } from '@ainyc/canonry-api-client/react-query'
 
 type EmbedBlock = { enabled: boolean; views?: string[]; projectTabs?: string[] }
@@ -35,13 +36,7 @@ async function renderAt(
     report?: ReturnType<typeof measurementReportResponse>
     overview?: ReturnType<typeof measurementOverviewResponse>
   },
-  /**
-   * Leave the measurement-plan query unseeded, which is the cold-navigation
-   * state: the read is in flight and the surface is not yet decidable. These
-   * render one synchronous pass, so an unseeded query stays pending for the
-   * whole render.
-   */
-  options: { seedPlan?: boolean } = {},
+  options: { schedule?: unknown } = {},
 ): Promise<string> {
   if (embed) window.__CANONRY_CONFIG__ = { embed }
   else delete window.__CANONRY_CONFIG__
@@ -53,12 +48,16 @@ async function renderAt(
     getApiV1ProjectsByNameQueriesQueryKey({ client: heyClient, path: { name: projectName } }),
     [],
   )
-  if (options.seedPlan !== false) {
+  if (options.schedule !== undefined) {
     queryClient.setQueryData(
-      getApiV1ProjectsByNameMeasurementPlanQueryKey({ client: heyClient, path: { name: projectName } }),
-      measurement?.plan ?? { active: null },
+      getApiV1ProjectsByNameScheduleQueryKey({ client: heyClient, path: { name: projectName } }),
+      options.schedule,
     )
   }
+  queryClient.setQueryData(
+    getApiV1ProjectsByNameMeasurementPlanQueryKey({ client: heyClient, path: { name: projectName } }),
+    measurement?.plan ?? { active: null },
+  )
   if (measurement?.report && measurement.plan.active) {
     queryClient.setQueryData(
       getApiV1ProjectsByNameMeasurementReportQueryKey({
@@ -296,7 +295,7 @@ test('the Portfolio route is an explicit non-embed project workspace', async () 
   expect(html).not.toMatch(/href="\/projects\/[^"/]+\/portfolio" class="project-subnav-link/)
   expect(html).toContain('Advanced measurement setup')
   expect(html).toContain('Loading advanced measurement setup')
-  expect(html).toContain('Sweep running')
+  expect(html).toContain('AI sweep running')
   expect(html).not.toContain('Portfolio setup')
   expect(html).not.toContain('Coverage and performance')
 })
@@ -305,7 +304,7 @@ test('a Simple project keeps the existing Overview and exposes setup as one seco
   const html = await renderAt('/projects/project_citypoint')
 
   expect(html).toContain('Where competitors are winning')
-  expect(html).toContain('Sweep running')
+  expect(html).toContain('AI sweep running')
   expect(html).toContain('Set up advanced measurement')
   expect(html).not.toContain('Republish setup')
   expect(html).not.toContain('Latest measurement')
@@ -320,7 +319,7 @@ test('an active setup replaces the Simple Overview with the advanced measurement
   expect(html).toContain('Republish setup')
   expect(html).toContain('Properties mentioned')
   expect(html).toContain('Harbor House')
-  expect(html).toContain('Sweep running')
+  expect(html).toContain('AI sweep running')
   expect(html).not.toContain('Where competitors are winning')
 })
 
@@ -614,7 +613,7 @@ test('a failed setup read keeps project results and the global run action visibl
 
   expect(await page.findByText('Could not check the advanced measurement setup. Existing project-wide results remain available.')).toBeTruthy()
   expect(page.getByText('Where competitors are winning')).toBeTruthy()
-  expect(page.getByRole('button', { name: 'Sweep running…' })).toBeTruthy()
+  expect(page.getByRole('button', { name: 'AI sweep running…' })).toBeTruthy()
   expect(page.queryByRole('button', { name: 'Set up advanced measurement' })).toBeNull()
   expect(page.getByRole('button', { name: 'Retry setup check' })).toBeTruthy()
 })
@@ -675,24 +674,65 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
-test('an unresolved measurement plan shows a skeleton instead of flashing the Simple Overview', async () => {
-  // The bug: `resolveAdvancedMeasurementMode` reads a pending plan read as
-  // `null`, and `null` means "this project has no plan". So a project WITH an
-  // advanced plan painted the legacy overview first and swapped it out once the
-  // read landed — a visible flash on every cold navigation into a project.
-  const html = await renderAt('/projects/project_citypoint', undefined, undefined, { seedPlan: false })
+function schedule(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'sched-1',
+    projectId: 'project_citypoint',
+    kind: 'answer-visibility' as const,
+    cronExpr: '0 6 * * *',
+    preset: 'daily',
+    timezone: 'UTC',
+    enabled: true,
+    providers: [],
+    nextRunAt: '2026-08-07T06:00:00.000Z',
+    lastRunAt: '2026-08-06T06:00:00.000Z',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
 
-  expect(html).toContain('Loading project overview')
-  // The legacy overview's own copy must not appear while the answer is unknown.
-  expect(html).not.toContain('Where competitors are winning')
+// On a managed instance the sweep is scheduled, so the header states when the
+// next one fires and the manual trigger beside it is the override. The button
+// is deliberately secondary: as the primary it told every reader that running
+// the sweep by hand was the normal way to operate the product.
+test('the header states when the next AI sweep fires', async () => {
+  const html = await renderAt('/projects/project_citypoint', undefined, undefined, { schedule: schedule() })
+
+  expect(html).toContain('Next AI sweep')
+  // The fixture has a sweep in flight, so the button sits in its busy state.
+  // The point is the vocabulary: every state of this control names the sweep.
+  expect(html).toContain('AI sweep running')
+  // "Run now" said nothing about WHAT ran, and the page has six other sync
+  // kinds. The disabled state already called it a sweep, so the label only
+  // admitted what it did once you had clicked it.
+  expect(html).not.toContain('Run now')
 })
 
-test('a settled plan read still renders the Simple Overview, so the guard is not a permanent skeleton', async () => {
-  // The other half: once the read settles as "no plan", `null` means what it
-  // says and the legacy surface is correct. A guard that cannot tell pending
-  // from settled would strand this on the skeleton forever.
+test('a DISABLED schedule promises no next sweep, even though the row still carries a stale nextRunAt', async () => {
+  const html = await renderAt('/projects/project_citypoint', undefined, undefined, { schedule: schedule({ enabled: false }) })
+
+  expect(html).not.toContain('Next AI sweep')
+  // The override is still offered — a paused schedule is exactly when someone
+  // needs to run one by hand.
+  expect(html).toContain('AI sweep')
+})
+
+// Deleting a project destroys every query, run and snapshot. It used to be an
+// icon button in the page header, the same size as and immediately beside the
+// most-clicked button on the page.
+test('deleting the project is not reachable from the page header', async () => {
   const html = await renderAt('/projects/project_citypoint')
 
-  expect(html).toContain('Where competitors are winning')
-  expect(html).not.toContain('Loading project overview')
+  expect(html).toContain('AI sweep')
+  expect(html).not.toContain('Delete project')
+})
+
+// The assertion above would also pass if deleting had been removed outright,
+// so prove it still exists — just somewhere a misclick cannot reach.
+test('deleting the project is still offered, at the end of the Settings tab', async () => {
+  const html = await renderAt('/projects/project_citypoint/settings')
+
+  expect(html).toContain('Delete project')
+  expect(html).toContain('Permanently deletes this project and all its queries, competitors, runs, and snapshots.')
 })

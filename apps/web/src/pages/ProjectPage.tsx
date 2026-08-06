@@ -81,6 +81,7 @@ import {
   getApiV1ProjectsByNameGoogleGscCoverageOptions,
   getApiV1ProjectsByNameMeasurementOverviewInfiniteOptions,
   getApiV1ProjectsByNameMeasurementPlanOptions,
+  getApiV1ProjectsByNameScheduleOptions,
   getApiV1ProjectsByNameMeasurementReportOptions,
   getApiV1ProjectsByNameMeasurementSetupOptions,
   getApiV1ProjectsByNameQueriesOptions,
@@ -1685,6 +1686,17 @@ function ProjectPageContent({
     staleTime: 0,
     refetchOnMount: 'always',
   })
+  // The header states when the next AI sweep fires. On a managed instance the
+  // sweep is scheduled, so "it runs itself" is the honest headline and the
+  // manual trigger beside it is the override. `nextRunAt` is computed from the
+  // cron server-side (`schedules.ts`) — the browser never parses a cron.
+  // 404 means no schedule for this project, which the query surfaces as an
+  // error and the header renders as nothing.
+  const sweepScheduleQuery = useQuery({
+    ...getApiV1ProjectsByNameScheduleOptions({ client: heyClient, path: { name: projectName } }),
+    enabled: !isEmbed() && Boolean(projectName),
+    retry: false,
+  })
   const activeMeasurementPlanQuery = useQuery({
     ...getApiV1ProjectsByNameMeasurementPlanOptions({ client: heyClient, path: { name: projectName } }),
     enabled: !isEmbed() && (tab === 'portfolio' || tab === 'overview' || tab === 'settings') && Boolean(projectName),
@@ -1697,6 +1709,14 @@ function ProjectPageContent({
     staleTime: 0,
     refetchOnMount: 'always',
   })
+  // Only claim a next sweep when one is genuinely coming: a schedule that
+  // exists, is enabled, and carries a next-run time. A disabled schedule still
+  // returns a row with a stale `nextRunAt`, and announcing that would promise a
+  // sweep that never fires.
+  const sweepSchedule = sweepScheduleQuery.data
+  const nextSweepLabel = sweepSchedule?.enabled && sweepSchedule.nextRunAt
+    ? `Next AI sweep ${new Date(sweepSchedule.nextRunAt).toLocaleString()}`
+    : null
   const activeMeasurementPlan = activeMeasurementPlanQuery.data?.active ?? null
   const activeMeasurementPlanSchemaVersion = activeMeasurementPlan === null
     ? null
@@ -2133,28 +2153,6 @@ function ProjectPageContent({
 
   return (
     <div className="page-container">
-      {showDeleteConfirm ? (
-        <Card className="surface-card p-6 mb-6 border-negative-800/60">
-          <h3 className="text-base font-semibold text-negative-400 mb-2">Delete project?</h3>
-          <p className="text-sm text-secondary mb-4">
-            This will permanently delete <strong className="text-strong">{model.project.displayName || model.project.name}</strong> and
-            all its queries, competitors, runs, and snapshots. This cannot be undone.
-          </p>
-          <div className="flex items-center gap-3">
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={deleting}
-              onClick={asyncHandler(handleDeleteProject)}
-            >
-              {deleting ? 'Deleting...' : 'Yes, delete project'}
-            </Button>
-            <Button type="button" variant="outline" disabled={deleting} onClick={() => setShowDeleteConfirm(false)}>
-              Cancel
-            </Button>
-          </div>
-        </Card>
-      ) : null}
       <div className="page-header">
         <div className="page-header-left">
           <h1 className="page-title">{model.project.displayName || model.project.name}</h1>
@@ -2176,20 +2174,24 @@ function ProjectPageContent({
         <div className="page-header-right">
           <p className="text-sm text-muted">{model.dateRangeLabel}</p>
           {!isEmbed() && (
-            <div className="flex items-center gap-2">
-              <WriteButton type="button" variant="outline" size="icon" onClick={() => setShowDeleteConfirm(true)} aria-label="Delete project">
-                <Trash2 className="h-4 w-4 text-secondary" />
-              </WriteButton>
+            <div className="flex items-center gap-3">
+              {nextSweepLabel ? <p className="text-sm text-secondary">{nextSweepLabel}</p> : null}
+              {/* Secondary, not primary. The schedule beside it is what actually
+                  runs the sweep; this is the override for when you can't wait
+                  for it. Deleting the project used to sit here too — an
+                  irreversible action one misclick from the page's most-used
+                  button — and now lives at the bottom of the Settings tab. */}
               <WriteButton
                 type="button"
+                variant="outline"
                 disabled={triggerRunMutation.isPending || hasActiveVisibilitySweep}
                 onClick={asyncHandler(handleTriggerRun)}
               >
                 {triggerRunMutation.isPending
                   ? 'Starting…'
                   : hasActiveVisibilitySweep
-                    ? 'Sweep running…'
-                    : 'Run now'}
+                    ? 'AI sweep running…'
+                    : 'Run AI sweep'}
               </WriteButton>
             </div>
           )}
@@ -2618,6 +2620,45 @@ function ProjectPageContent({
           ) : null}
           <ScheduleSection projectName={model.project.name} />
           <NotificationsSection projectName={model.project.name} />
+          {/* Deleting the project lives here, at the far end of Settings, rather
+              than as an icon in the page header where it sat one misclick from
+              "Run AI sweep". It destroys every query, run and snapshot, and a
+              confirm dialog was the only thing standing between the two. */}
+          {canWrite && !isEmbed() ? (
+            <section className="page-section-divider">
+              <h2 className="text-lg font-semibold text-negative-400">Delete project</h2>
+              <p className="supporting-copy mt-1 mb-3">
+                Permanently deletes this project and all its queries, competitors, runs, and snapshots.
+              </p>
+              {showDeleteConfirm ? (
+                <Card className="surface-card p-6 border-negative-800/60">
+                  <h3 className="text-base font-semibold text-negative-400 mb-2">Delete project?</h3>
+                  <p className="text-sm text-secondary mb-4">
+                    This will permanently delete <strong className="text-strong">{model.project.displayName || model.project.name}</strong> and
+                    all its queries, competitors, runs, and snapshots. This cannot be undone.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      disabled={deleting}
+                      onClick={asyncHandler(handleDeleteProject)}
+                    >
+                      {deleting ? 'Deleting...' : 'Yes, delete project'}
+                    </Button>
+                    <Button type="button" variant="outline" disabled={deleting} onClick={() => setShowDeleteConfirm(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                </Card>
+              ) : (
+                <WriteButton type="button" variant="outline" onClick={() => setShowDeleteConfirm(true)}>
+                  <Trash2 className="h-4 w-4 text-secondary" />
+                  Delete project
+                </WriteButton>
+              )}
+            </section>
+          ) : null}
         </>
       ) : tab === 'report' ? (
         <ReportPage projectName={model.project.name} />
