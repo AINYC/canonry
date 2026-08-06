@@ -348,3 +348,47 @@ describe('the All question lane', () => {
     expect(count(all)).toBeGreaterThanOrEqual(count(branded))
   })
 })
+
+describe('property row detail', () => {
+  it('carries the per-engine split, with both signals, in stable provider order', () => {
+    const { activePlan, overview } = fixture(2)
+    overview.properties.items[0]!.mentionCoverage = { state: 'available', value: 1, numerator: 4, denominator: 4 }
+    overview.properties.items[0]!.citationCoverage = { state: 'available', value: .75, numerator: 3, denominator: 4 }
+    overview.properties.items[0]!.providers = [
+      { provider: 'openai', mentionCoverage: { state: 'available', value: 1, numerator: 2, denominator: 2 },
+        citationCoverage: { state: 'available', value: 1, numerator: 2, denominator: 2 } },
+      { provider: 'gemini', mentionCoverage: { state: 'available', value: 1, numerator: 2, denominator: 2 },
+        citationCoverage: { state: 'available', value: .5, numerator: 1, denominator: 2 } },
+    ]
+
+    const report = adaptV2MeasurementOverview({ overview, activePlan })
+    const property = report.currentView!.aggregate.properties[0]!
+
+    expect(property.providers?.map(p => p.provider)).toEqual(['openai', 'gemini'])
+    // The invariant the first design broke: the engine split must ADD UP to the
+    // row it sits under. A panel showing three engines of /2 beneath a row of
+    // /4 reconciles with nothing and cannot both be true.
+    const sum = (pick: 'mentionCoverage' | 'citationCoverage') => property.providers!
+      .reduce((total, p) => total + (p[pick].numerator ?? 0), 0)
+    expect(sum('mentionCoverage')).toBe(property.mentionCoverage.numerator)
+    expect(sum('citationCoverage')).toBe(property.citationCoverage.numerator)
+  })
+
+  it('names the market a property belongs to, so a row is identifiable at portfolio scale', () => {
+    const { activePlan, overview } = fixture(2)
+    const report = adaptV2MeasurementOverview({ overview, activePlan })
+    const property = report.currentView!.aggregate.properties[0]!
+    // The plan puts property-1..12 in the Downtown group.
+    expect(property.market).toBe('Downtown')
+    expect(property.urls.length).toBeGreaterThan(0)
+  })
+
+  it('leaves the market undefined rather than inventing one for an ungrouped property', () => {
+    const { activePlan, overview } = fixture(213)
+    const report = adaptV2MeasurementOverview({ overview, activePlan })
+    // Only the first 12 targets are in a group; a later one belongs to none.
+    const ungrouped = report.currentView!.aggregate.properties.find(p => p.id === 'property-40')
+    expect(ungrouped).toBeTruthy()
+    expect(ungrouped!.market).toBeUndefined()
+  })
+})

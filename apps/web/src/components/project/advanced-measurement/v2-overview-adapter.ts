@@ -189,6 +189,15 @@ export function adaptV2MeasurementOverview({
     pinnedReport,
     overview.queryClass === 'all' ? undefined : overview.queryClass,
   )
+  // One Property belongs to at most one market in practice; when a plan puts it
+  // in several, the first is named rather than a joined string, because the
+  // subtitle is an identifier and not a list.
+  const marketByTarget = new Map<string, string>()
+  for (const group of plan.groups) {
+    for (const targetKey of group.targetKeys) {
+      if (!marketByTarget.has(targetKey)) marketByTarget.set(targetKey, group.label)
+    }
+  }
   const properties = overview.properties.items.map(row => {
     const configured = targetByKey.get(row.targetKey)
     const evidence = evidenceByTarget.get(row.targetKey) ?? []
@@ -198,6 +207,12 @@ export function adaptV2MeasurementOverview({
       mentionCoverage: metric(row.mentionCoverage),
       citationCoverage: metric(row.citationCoverage),
       status: propertyStatus(row),
+      providers: row.providers?.map(entry => ({
+        provider: entry.provider,
+        mentionCoverage: metric(entry.mentionCoverage),
+        citationCoverage: metric(entry.citationCoverage),
+      })),
+      market: marketByTarget.get(row.targetKey),
       assignedQueries: [...(assignmentsByTarget.get(row.targetKey) ?? [])],
       urls: configured?.urlMatchers.map(matcherLabel) ?? [],
       evidence,

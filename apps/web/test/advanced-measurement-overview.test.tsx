@@ -837,3 +837,73 @@ describe('control row (defect 2)', () => {
     }
   })
 })
+
+describe('row detail', () => {
+  const withDetail = () => {
+    const base = report()
+    const scope = base.classScopes!.nonBrand
+    const [first, ...rest] = scope.aggregate.properties
+    return {
+      ...base,
+      classScopes: {
+        ...base.classScopes!,
+        nonBrand: {
+          ...scope,
+          aggregate: {
+            ...scope.aggregate,
+            properties: [{
+              ...first!,
+              market: 'Metro offices',
+              urls: ['example.com/downtown', 'example.com/downtown-2'],
+              mentionCoverage: ratio(3, 4),
+              citationCoverage: ratio(2, 4),
+              providers: [
+                { provider: 'openai', mentionCoverage: ratio(2, 2), citationCoverage: ratio(1, 2) },
+                { provider: 'gemini', mentionCoverage: ratio(1, 2), citationCoverage: ratio(1, 2) },
+              ],
+            }, ...rest],
+          },
+        },
+      },
+    }
+  }
+
+  it('identifies a row by its market and URL count, not the name alone', () => {
+    renderOverview({ report: withDetail() })
+    // At portfolio scale "Downtown Office" is not enough to know which one.
+    expect(screen.getByText('Metro offices · 2 URLs')).toBeTruthy()
+  })
+
+  it('expands into per-engine sub-rows whose numbers add up to the row above', () => {
+    renderOverview({ report: withDetail() })
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Downtown Office' }))
+
+    const engineRows = [...document.querySelectorAll('tr.measurement-subrow')]
+    expect(engineRows.map(row => row.querySelector('.measurement-subrow-name')?.textContent))
+      .toEqual(['openai', 'gemini'])
+
+    // The invariant: read down a column and the sub-rows total the parent.
+    // Cell order matches the header — name, mention, citation.
+    const numerators = (row: Element) => [...row.querySelectorAll('td')]
+      .map(td => /^(\d+) of (\d+)/.exec(td.textContent ?? ''))
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map(match => ({ numerator: Number(match[1]), denominator: Number(match[2]) }))
+
+    const openai = numerators(engineRows[0]!)
+    const gemini = numerators(engineRows[1]!)
+    expect(openai).toHaveLength(2)
+    expect(gemini).toHaveLength(2)
+
+    // Mention: 2 + 1 = 3, matching the parent's 3 of 4. Citation: 1 + 1 = 2 of 4.
+    expect(openai[0]!.numerator + gemini[0]!.numerator).toBe(3)
+    expect(openai[1]!.numerator + gemini[1]!.numerator).toBe(2)
+    // Each engine's denominator is a share of the parent's, never the whole.
+    expect(openai[0]!.denominator + gemini[0]!.denominator).toBe(4)
+  })
+
+  it('renders no engine sub-rows when the split is absent, rather than an empty shell', () => {
+    renderOverview()
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Downtown Office' }))
+    expect(document.querySelectorAll('tr.measurement-subrow').length).toBe(0)
+  })
+})

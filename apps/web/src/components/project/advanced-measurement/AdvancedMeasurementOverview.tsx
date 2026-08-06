@@ -24,11 +24,25 @@ export type AdvancedMeasurementMetric =
   | { numerator: number; denominator: number; reason?: never }
   | { numerator: null; denominator: null; reason: string }
 
+export interface AdvancedMeasurementPropertyProvider {
+  provider: string
+  mentionCoverage: AdvancedMeasurementMetric
+  citationCoverage: AdvancedMeasurementMetric
+}
+
 export interface AdvancedMeasurementProperty {
   id: string
   name: string
   mentionCoverage: AdvancedMeasurementMetric
   citationCoverage: AdvancedMeasurementMetric
+  /**
+   * The same population split by answer engine. Rendered as sub-rows under the
+   * SAME columns as the parent, so the split is read down a column and visibly
+   * adds up to it — the numbers reconcile or the discrepancy is obvious.
+   */
+  providers?: readonly AdvancedMeasurementPropertyProvider[]
+  /** The market this Property sits in. Absent when it belongs to no group. */
+  market?: string
   status: { label: string; tone: MetricTone }
   assignedQueries: readonly string[]
   urls: readonly string[]
@@ -211,6 +225,19 @@ function metricReason(metric: AdvancedMeasurementMetric): string {
   if (isMeasured(metric)) return ''
   const reason = (metric as { reason?: string }).reason ?? 'unavailable'
   return metricReasons[reason] ?? reason
+}
+
+/**
+ * The market and URL count under a Property's name. Both are plan facts, not
+ * measurements, so an absent group leaves the market out rather than inventing
+ * one — and a Property with no configured URL says nothing at all instead of
+ * claiming "0 URLs", which reads as a finding.
+ */
+function propertySubtitle(property: AdvancedMeasurementProperty): string {
+  const parts: string[] = []
+  if (property.market) parts.push(property.market)
+  if (property.urls.length > 0) parts.push(`${property.urls.length} ${property.urls.length === 1 ? 'URL' : 'URLs'}`)
+  return parts.join(' · ')
 }
 
 function slotProgressLabel(completed: number, total: number): string | null {
@@ -740,6 +767,12 @@ export function AdvancedMeasurementOverview({
                         {renderPropertyLink
                           ? renderPropertyLink({ id: property.id, name: property.name })
                           : property.name}
+                        {/* A name alone does not identify a row in a portfolio of
+                            hundreds. Market and URL count are what let a reader
+                            tell two similarly-named Properties apart. */}
+                        {propertySubtitle(property) ? (
+                          <div className="mt-0.5 text-xs font-normal text-faint">{propertySubtitle(property)}</div>
+                        ) : null}
                       </td>
                       <td className="text-secondary"><MetricValue metric={property.mentionCoverage} compact /></td>
                       <td className="text-secondary"><MetricValue metric={property.citationCoverage} compact /></td>
@@ -751,6 +784,14 @@ export function AdvancedMeasurementOverview({
                       </td>
                       <td className="text-right"><Button size="icon" variant="ghost" aria-expanded={expanded} aria-label={expanded ? `Hide details for ${property.name}` : `Show details for ${property.name}`} onClick={() => toggleProperty(property.id)}><ChevronDown className={`h-4 w-4 transition-transform duration-200 motion-reduce:transition-none ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" /></Button></td>
                     </tr>
+                    {expanded ? (property.providers ?? []).map(engine => (
+                      <tr key={`${property.id}:${engine.provider}`} className="measurement-subrow">
+                        <td className="measurement-subrow-name">{engine.provider}</td>
+                        <td className="text-secondary"><MetricValue metric={engine.mentionCoverage} compact /></td>
+                        <td className="text-secondary"><MetricValue metric={engine.citationCoverage} compact /></td>
+                        <td /><td />
+                      </tr>
+                    )) : null}
                     {expanded ? <tr key={`${property.id}:details`}><td colSpan={5} className="bg-surface-subtle px-4"><PropertyDetails property={property} onRetryEvidence={onRetryEvidence} /></td></tr> : null}
                   </Fragment>
                 )
