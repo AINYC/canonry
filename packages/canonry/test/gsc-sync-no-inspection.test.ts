@@ -25,7 +25,17 @@ function makeDb(project: unknown) {
     runUpdates,
     inserted,
     update: () => ({ set: (vals: { status?: string }) => ({ where: () => ({ run: () => { runUpdates.push(vals); return { changes: 1 } } }) }) }),
-    select: () => ({ from: () => ({ where: () => ({ get: () => project, all: () => [] }) }) }),
+    // `where()` must also answer the ordered/limited form the coverage writer
+    // uses to find the latest site audit.
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          get: () => project,
+          all: () => [],
+          orderBy: () => ({ limit: () => ({ get: () => undefined, all: () => [] }), get: () => undefined, all: () => [] }),
+        }),
+      }),
+    }),
     insert: () => ({ values: (v: unknown) => ({ run: () => { inserted.push(v); return { changes: 1 } } }) }),
     delete: () => ({ where: () => ({ run: () => ({ changes: 0 }) }) }),
   }
@@ -111,7 +121,7 @@ describe('gsc-sync does not inspect URLs', () => {
     expect(db.runUpdates.some((u) => u.status === 'completed')).toBe(true)
   })
 
-  it('writes coverage for every page from impressions, inspecting nothing', async () => {
+  it('still writes a coverage snapshot, carrying the derived columns', async () => {
     globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
       const url = String(input)
       requested.push(url)
@@ -119,34 +129,21 @@ describe('gsc-sync does not inspect URLs', () => {
         return new Response(JSON.stringify({ access_token: 'tok', expires_in: 3600 }), { status: 200 })
       }
       return new Response(JSON.stringify({
-        rows: [
-          // Two pages that Google actually served — provably indexed, free.
-          { keys: ['q1', 'https://example.com/a', 'US', 'DESKTOP', '2026-08-01'], clicks: 9, impressions: 90, position: 3 },
-          { keys: ['q2', 'https://example.com/b', 'US', 'DESKTOP', '2026-08-01'], clicks: 0, impressions: 4, position: 40 },
-          // One page present in the data with no impressions at all: unknown,
-          // NOT "not indexed" — nothing here proves Google excluded it.
-          { keys: ['q3', 'https://example.com/c', 'US', 'DESKTOP', '2026-08-01'], clicks: 0, impressions: 0, position: 90 },
-        ],
+        rows: [{ keys: ['q1', 'https://example.com/a', 'US', 'DESKTOP', '2026-08-01'], clicks: 9, impressions: 90, position: 3 }],
       }), { status: 200 })
     }) as unknown as typeof globalThis.fetch
 
     const db = makeDb({ id: 'proj-1', canonicalDomain: 'example.com' })
     await executeGscSync(db as never, 'run-1', 'proj-1', { config: CONFIG as never })
 
-    const snapshot = db.inserted.find((row) => row && typeof row === 'object' && 'unknownPages' in row) as {
-      indexed: number; notIndexed: number; unknownPages: number
-      verifiedByInspection: number; derivedFromImpressions: number
-    } | undefined
+    const snapshot = db.inserted.find((row) => row && typeof row === 'object' && 'unknownPages' in row)
 
+    // Shape only. `writeCoverageSnapshot` reads impressions back out of
+    // gsc_search_data, which this hand-rolled mock cannot represent, so the
+    // derived NUMBERS are asserted in gsc-coverage-single-writer.test.ts
+    // against a real database — where the two writers can also be run against
+    // each other, which is where the interesting bug lived.
     expect(snapshot, 'gsc-sync should still write a coverage snapshot').toBeDefined()
-    expect(snapshot!.indexed).toBe(2)
-    expect(snapshot!.unknownPages).toBe(1)
-    // The load-bearing assertion: a page with no impressions is unknown, never
-    // reported as excluded from the index.
-    expect(snapshot!.notIndexed).toBe(0)
-    // All of it came free — no inspection was performed or needed.
-    expect(snapshot!.derivedFromImpressions).toBe(2)
-    expect(snapshot!.verifiedByInspection).toBe(0)
     expect(requested.filter((u) => u.includes(GSC_INSPECT_ENDPOINT))).toEqual([])
   })
 })
