@@ -123,6 +123,10 @@ function report(overrides: Partial<AdvancedMeasurementOverviewReport> = {}): Adv
   }
 }
 
+function renderOverviewReturning(overrides: Partial<AdvancedMeasurementOverviewProps> = {}) {
+  return render(<AdvancedMeasurementOverview report={report()} canEdit {...overrides} />)
+}
+
 function renderOverview(overrides: Partial<AdvancedMeasurementOverviewProps> = {}) {
   const onRunMeasurement = vi.fn()
   const onRepublishSetup = vi.fn()
@@ -834,6 +838,47 @@ describe('control row (defect 2)', () => {
       expect(onViewChange).toHaveBeenCalledWith({ scope: 'all', queryClass: 'non-brand', search: 'up' })
     } finally {
       vi.useRealTimers()
+    }
+  })
+})
+
+describe('responsive structure', () => {
+  // jsdom cannot lay out Tailwind, so these assert the STRUCTURE that makes the
+  // layout survive a narrow viewport. Each corresponds to a way this surface
+  // has broken or could break at width.
+
+  it('keeps the wide properties table scrolling inside its own container, never the page', () => {
+    const { container } = renderOverviewReturning()
+    const table = container.querySelector('table.evidence-table.min-w-\\[720px\\]')
+    expect(table).toBeTruthy()
+
+    // The min-width belongs to the TABLE. If it sits on the scroll container
+    // (or any ancestor) instead, the container can no longer be narrower than
+    // its content, so the whole page scrolls sideways rather than the table.
+    const scroller = table!.parentElement!
+    expect(scroller.className).toContain('overflow-x-auto')
+    expect(scroller.className).not.toMatch(/min-w-/)
+
+    let ancestor: HTMLElement | null = scroller.parentElement
+    while (ancestor && ancestor !== container) {
+      expect(ancestor.className).not.toMatch(/min-w-\[/)
+      ancestor = ancestor.parentElement
+    }
+  })
+
+  it('lets the control row wrap instead of clipping its controls', () => {
+    const { container } = renderOverviewReturning()
+    const label = container.querySelector('#advanced-measurement-group-label')!
+    const row = label.closest('div')!.parentElement!
+    expect(row.className).toContain('flex-wrap')
+  })
+
+  it('lets a segmented control wrap its options, so many markets do not overflow', () => {
+    const { container } = renderOverviewReturning()
+    for (const group of container.querySelectorAll('[role="radiogroup"]')) {
+      // `.segmented` is inline-flex; without wrap, a tenant with twenty markets
+      // pushes options off the edge with no way to reach them.
+      expect(group.className).toContain('flex-wrap')
     }
   })
 })
