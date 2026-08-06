@@ -33,7 +33,7 @@ function renderAs(role: 'admin' | 'viewer' | null, ui: React.ReactNode) {
  */
 describe('project write controls', () => {
   const controls = [
-    'Run now',
+    'Run AI sweep',
     'Delete project',
     'Add competitor',
     'Manage queries',
