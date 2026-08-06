@@ -11,7 +11,9 @@ import type {
 import {
   getApiV1ProjectsByNameMeasurementOverviewOptions,
   getApiV1ProjectsByNameMeasurementPlanOptions,
+  getApiV1ProjectsByNameMeasurementPropertyCompetitorsOptions,
   getApiV1ProjectsByNameMeasurementPropertyEvidenceInfiniteOptions,
+  getApiV1ProjectsByNameMeasurementQuestionResultOptions,
 } from '@ainyc/canonry-api-client/react-query'
 
 import { heyClient } from '../api.js'
@@ -168,6 +170,53 @@ function AnswerSources({ row }: { row: AnswerRow }) {
   )
 }
 
+/**
+ * The answer itself, fetched when a row is opened.
+ *
+ * The row above it can only ever say whether this Property was named. It cannot
+ * say what the engine actually recommended, and that is the thing an operator
+ * opens the row to find out: a "not mentioned" row on a Buckhead question turns
+ * out to be an answer recommending two OTHER buildings from the same brand.
+ * None of that is visible in a signal badge or a source count.
+ *
+ * Fetched per row rather than with the list because an answer runs to several
+ * thousand characters and most rows are never opened. `observationId` is the
+ * `resultId` this read takes — both are the stored snapshot id — so no new
+ * plumbing is needed to line them up.
+ */
+function AnswerText({ project, targetKey, row }: { project: string; targetKey: string; row: AnswerRow }) {
+  const query = useQuery({
+    ...getApiV1ProjectsByNameMeasurementQuestionResultOptions({
+      client: heyClient,
+      path: { name: project },
+      query: { targetKey, resultId: row.observationId },
+    }),
+  })
+
+  if (query.isPending) {
+    return (
+      <p className="py-2 text-sm text-secondary" role="status" aria-live="polite">Loading the answer&hellip;</p>
+    )
+  }
+  if (query.isError) {
+    return (
+      <p className="py-2 text-sm text-secondary" role="alert">Could not load this answer.</p>
+    )
+  }
+  const answer = query.data?.answer
+  if (answer === null || answer === undefined || answer.trim() === '') {
+    // A measured answer with no stored text is not the same as an empty answer,
+    // and neither is worth dressing up as one.
+    return <p className="py-2 text-sm text-secondary">This answer was measured, but its text was not stored.</p>
+  }
+  return (
+    <div className="py-2">
+      <h4 className="mb-1 text-xs font-medium tracking-wide text-muted uppercase">What {row.provider} answered</h4>
+      <p className="max-h-64 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-secondary">{answer}</p>
+    </div>
+  )
+}
+
 function reasonText(metric: Extract<MetricValue, { state: 'unavailable' }>): string {
   return UNAVAILABLE_REASONS[metric.reason] ?? 'Not measured'
 }
@@ -211,25 +260,23 @@ function propertyRowOf(overview: MeasurementOverviewResponse | undefined): Prope
 }
 
 /**
- * The secondary facts the project overview carries as metric cards: how much is
- * being measured, by how many engines, over what, and when.
+ * Where these numbers came from — one line, not a card grid.
  *
- * No progress bars. These are unbounded counts, and DESIGN.md reserves linear
- * progress for a real bounded target: a bar under "7 questions" would imply a
- * ceiling that does not exist.
+ * This was four metric cards, and three of them restated a count the section
+ * directly below already carried: "Questions assigned 2" sat above a table
+ * headed "2 assigned", "Owned URLs 2" above "2 configured", "Answer engines 2"
+ * above a two-row engine table. Four cards in a three-column grid also left the
+ * fourth stranded on its own row. Cutting the repetition fixes the ragged grid
+ * for free and leaves the one fact nothing else on the page states: WHEN.
+ *
+ * The unmeasured reason rides here rather than in the hero because the hero
+ * says "Not measured" per metric; this says it once, for the whole page.
  */
-function PropertyFacts({
-  questionCount,
-  urlCount,
-  engineCount,
+function PropertyProvenance({
   measuredAt,
   unmeasuredReason,
   queryClass,
 }: {
-  questionCount: number
-  urlCount: number
-  /** `null` when this class was not measured — there is no engine count to state. */
-  engineCount: number | null
   /**
    * Three states, and collapsing any two of them invents a measurement. A run
    * that has not been read yet is not a site that has never been swept, and
@@ -239,59 +286,25 @@ function PropertyFacts({
   measuredAt: string | null | undefined
   /**
    * The reason the server gave for the class being unmeasured. Absent when the
-   * response has not been read at all, in which case the card says nothing
-   * beyond the em dash rather than guessing which of the two it is.
+   * response has not been read at all, in which case the line says nothing
+   * rather than guessing which of the two it is.
    */
   unmeasuredReason?: string
   queryClass: QueryClass
 }) {
+  const when = measuredAt === undefined
+    ? null
+    : measuredAt === null
+      ? 'No completed sweep yet'
+      : `Measured ${formatObservedInstantLabel(observedInstant(measuredAt))}`
+  if (when === null && unmeasuredReason === undefined) return null
   return (
-    <section aria-labelledby="property-facts" className="page-section-divider">
-      <h2 id="property-facts" className="sr-only">What was measured</h2>
-      <div className="metric-grid">
-        <div className="metric-card">
-          <p className="metric-card-eyebrow">Questions assigned</p>
-          <p className="metric-card-big-value">{questionCount}</p>
-          <p className="metric-card-detail">{CLASS_LABELS[queryClass].technical}</p>
-        </div>
-        <div className="metric-card">
-          <p className="metric-card-eyebrow">Owned URLs</p>
-          <p className="metric-card-big-value">{urlCount}</p>
-          <p className="metric-card-detail">Used to attribute a citation to this Property</p>
-        </div>
-        <div className="metric-card">
-          <p className="metric-card-eyebrow">Answer engines</p>
-          <p className="metric-card-big-value">{engineCount ?? EM_DASH}</p>
-          <p className="metric-card-detail">
-            {engineCount === null
-              // No reason means the response has not been read, and "Not
-              // measured" would be a claim about a measurement we have not
-              // looked at. The hero carries loading-vs-failed with the retry.
-              ? unmeasuredReason ?? ''
-              : engineCount === 0
-                ? 'No engine answered for this Property'
-                : 'Answered at least one assigned question'}
-          </p>
-        </div>
-        <div className="metric-card">
-          <p className="metric-card-eyebrow">Last measured</p>
-          <p className="metric-card-big-value text-base font-semibold">
-            {measuredAt === undefined
-              ? EM_DASH
-              : measuredAt === null
-                ? 'Never'
-                : formatObservedInstantLabel(observedInstant(measuredAt))}
-          </p>
-          <p className="metric-card-detail">
-            {measuredAt === undefined
-              ? ''
-              : measuredAt === null
-                ? 'No completed sweep yet'
-                : 'The sweep these numbers came from'}
-          </p>
-        </div>
-      </div>
-    </section>
+    <p className="supporting-copy">
+      {[when, unmeasuredReason].filter(Boolean).join(' · ')}
+      {when !== null && unmeasuredReason === undefined
+        ? ` · ${CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} only`
+        : ''}
+    </p>
   )
 }
 
@@ -542,7 +555,6 @@ function ProviderBreakdown({ row, queryClass, isError }: { row: PropertyRow | un
     <section aria-labelledby="property-providers" className="page-section-divider">
       <div className="section-head section-head-inline">
         <div>
-          <p className="eyebrow eyebrow-soft">By answer engine</p>
           <h2 id="property-providers" className="text-base font-semibold text-heading">
             Which engines answer for this Property
             <InfoTooltip text="Each row is measured over the questions that engine actually answered for this Property, so the rows are a split of the same population rather than parts that add up to the Property total. An engine that answered nothing for this Property is absent instead of shown at 0%." />
@@ -579,12 +591,97 @@ function ProviderBreakdown({ row, queryClass, isError }: { row: PropertyRow | un
   )
 }
 
+/**
+ * Who the engines named when they did not name this Property.
+ *
+ * This is the answer to the question the coverage numbers raise and cannot
+ * settle: a Property at 0% tells you there is a gap, not what is in it. The
+ * evidence table below can only show that an answer happened; this says who won
+ * it. On a real Property, four answers that never mentioned it named nine
+ * different rival buildings, five of which had their own sites cited.
+ *
+ * Server-ranked and Property-scoped. Doing this in the browser would mean
+ * counting names across answers here, which the parity rule forbids and which
+ * would also lose the `basis` — the count of answers this Property actually
+ * missed, without which the occurrence numbers have no denominator.
+ */
+function NamedInstead({ project, targetKey, queryClass }: { project: string; targetKey: string; queryClass: QueryClass }) {
+  const query = useQuery({
+    ...getApiV1ProjectsByNameMeasurementPropertyCompetitorsOptions({
+      client: heyClient,
+      path: { name: project },
+      query: { targetKey, queryClass },
+    }),
+  })
+
+  // Nothing to say yet, and a heading over a spinner is noise on a page that
+  // already has four sections. The section appears when it has something.
+  if (query.isPending || query.isError) return null
+  const competitors = query.data?.competitors ?? []
+  const basis = query.data?.basis
+
+  return (
+    <section aria-labelledby="property-named-instead" className="page-section-divider">
+      <div className="section-head section-head-inline">
+        <div>
+          <h2 id="property-named-instead" className="text-base font-semibold text-heading">
+            Named instead of this Property
+            <InfoTooltip text="Counted from the answers that did not name this Property, so a name here is one an engine recommended in its place. Occurrences count answers, not positions: an engine naming the same rival in two answers counts twice, and one naming it twice in a single answer counts once." />
+          </h2>
+        </div>
+        {competitors.length > 0 ? <p className="supporting-copy">{query.data?.total ?? competitors.length} named</p> : null}
+      </div>
+      {competitors.length === 0 ? (
+        <p className="text-sm text-secondary">
+          No rival was named in the answers this Property missed. Nothing to compete with here yet.
+        </p>
+      ) : (
+        <>
+          <div className="overflow-x-auto rounded-md border border-default">
+            <table className="evidence-table min-w-[420px]">
+              <caption className="sr-only">Names the engines gave instead of this Property</caption>
+              <thead>
+                <tr>
+                  <th>Named</th>
+                  <th>Answers</th>
+                  <th>Engines</th>
+                  <th>Questions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {competitors.map(row => (
+                  <tr key={row.name}>
+                    <td className="text-strong">{row.name}</td>
+                    <td className="tabular-nums text-secondary">{row.occurrences}</td>
+                    <td className="text-secondary">
+                      {row.providers.join(', ')}
+                      {row.providersTruncated ? ` +${row.providerTotal - row.providers.length}` : ''}
+                    </td>
+                    <td className="text-secondary">
+                      {row.questions.join(' · ')}
+                      {row.questionsTruncated ? ` +${row.questionTotal - row.questions.length}` : ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {basis?.state === 'available' ? (
+            <p className="supporting-copy mt-2">
+              {basis.targetMissResults} of {basis.answeredResults} {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} answers did not name this Property.
+            </p>
+          ) : null}
+        </>
+      )}
+    </section>
+  )
+}
+
 function AssignedQuestions({ questions, queryClass }: { questions: readonly string[]; queryClass: QueryClass }) {
   return (
     <section aria-labelledby="property-questions" className="page-section-divider">
       <div className="section-head section-head-inline">
         <div>
-          <p className="eyebrow eyebrow-soft">Questions</p>
           <h2 id="property-questions" className="text-base font-semibold text-heading">
             {CLASS_LABELS[queryClass].technical} assigned to this Property
           </h2>
@@ -613,7 +710,6 @@ function PropertyUrls({ urls }: { urls: readonly string[] }) {
     <section aria-labelledby="property-urls" className="page-section-divider">
       <div className="section-head section-head-inline">
         <div>
-          <p className="eyebrow eyebrow-soft">Pages</p>
           <h2 id="property-urls" className="text-base font-semibold text-heading">
             URLs that count as this Property
             <InfoTooltip text="A cited source URL is credited to this Property when it matches one of these. The most specific matcher wins, so a URL covered by two Properties at the same specificity is flagged for review instead of being credited to either." />
@@ -660,12 +756,10 @@ export function MeasurementPropertyPage() {
   const selectedClassUnavailable = selectedClassError && selectedRow === undefined
   const displayedRunId = selected?.measurement.displayedRunId
 
-  // `providers` is [] for a class the run never covered, not only for a class no
-  // engine answered: the server ships the empty list alongside an `unavailable`
-  // coverage metric (measurement-overview.ts:711, :789). Counting it renders
-  // "0 / No engine answered" — a measured claim about a measurement that never
-  // happened — while the hero directly above renders "Not measured".
-  const engineCount = selectedRow?.mentionCoverage.state === 'available' ? selectedRow.providers.length : null
+  // The engine COUNT is gone from this page: the engine table below states it by
+  // listing one row per engine, and a card above restating it was one of the
+  // three that made the facts grid repeat its own page. What survives is the
+  // reason a class has no numbers at all, which nothing else says once.
   const engineUnmeasuredReason = selectedRow?.mentionCoverage.state === 'unavailable'
     ? reasonText(selectedRow.mentionCoverage)
     : undefined
@@ -888,19 +982,17 @@ export function MeasurementPropertyPage() {
             <option value="branded">{CLASS_LABELS.branded.technical}</option>
           </select>
         </div>
-        <p className="supporting-copy">Everything below is measured over {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} only.</p>
+        <PropertyProvenance
+          measuredAt={measuredAt}
+          unmeasuredReason={engineUnmeasuredReason}
+          queryClass={queryClass}
+        />
       </div>
 
-      <PropertyFacts
-        questionCount={questions.length}
-        urlCount={urls.length}
-        engineCount={engineCount}
-        unmeasuredReason={engineUnmeasuredReason}
-        measuredAt={measuredAt}
-        queryClass={queryClass}
-      />
-
       <ProviderBreakdown row={selectedRow} queryClass={queryClass} isError={selectedClassUnavailable} />
+      {/* Directly under coverage, because it is what coverage raises and cannot
+          answer. The evidence table below is the receipts; this is the finding. */}
+      <NamedInstead project={project} targetKey={property} queryClass={queryClass} />
       <AssignedQuestions questions={questions} queryClass={queryClass} />
       <PropertyUrls urls={urls} />
       <MarketLink project={project} groups={memberGroups} />
@@ -908,10 +1000,9 @@ export function MeasurementPropertyPage() {
       <section aria-labelledby="property-evidence" className="page-section-divider">
         <div className="section-head section-head-inline">
           <div>
-            <p className="eyebrow eyebrow-soft">Evidence</p>
             <h2 id="property-evidence" className="text-base font-semibold text-heading">
               Answers the engines gave
-              <InfoTooltip text="One row per answer an engine gave for the questions assigned to this Property in the displayed measurement. Mentioned and cited are independent: an answer can name this Property without linking it, or link it without naming it. Answers that did neither are listed first, because those are what a gap is made of. Where the answer text was not stored the mention reads Not measured, never a zero. Expand a row for the source URLs the engine returned, this Property's own first." />
+              <InfoTooltip text="One row per answer an engine gave for the questions assigned to this Property in the displayed measurement. Mentioned and cited are independent: an answer can name this Property without linking it, or link it without naming it. Answers that did neither are listed first, because those are what a gap is made of. Where the answer text was not stored the mention reads Not measured, never a zero. Open a row to read what the engine actually said, followed by the source URLs it returned, this Property's own first. The answer is where a miss becomes actionable: a question this Property was not named in may still have named a sibling building." />
             </h2>
           </div>
           {evidenceRows.length > 0 ? <p className="supporting-copy">{evidenceRows.length} of {evidenceTotal}</p> : null}
@@ -981,12 +1072,20 @@ export function MeasurementPropertyPage() {
                                 return next
                               })}
                             >
-                              {expanded ? `Hide sources for ${item.queryText}` : `Show sources for ${item.queryText}`}
+                              {expanded ? `Hide the answer for ${item.queryText}` : `Read the answer for ${item.queryText}`}
                             </Button>
                           </td>
                         </tr>
                         {expanded ? (
-                          <tr><td colSpan={5} className="bg-surface-subtle px-4"><AnswerSources row={item} /></td></tr>
+                          <tr>
+                            <td colSpan={5} className="bg-surface-subtle px-4">
+                              {/* The answer leads. The source list is the supporting
+                                  detail, not the point: a reader who opened this row
+                                  wants to know what was said before who was linked. */}
+                              <AnswerText project={project} targetKey={property} row={item} />
+                              <AnswerSources row={item} />
+                            </td>
+                          </tr>
                         ) : null}
                       </Fragment>
                     )

@@ -336,6 +336,46 @@ function propertyPageResponses({
         : jsonResponse(nonBrand)
     }
     if (path.includes('/measurement-property-evidence')) return jsonResponse(evidence)
+    if (path.includes('/measurement-property-competitors')) {
+      return jsonResponse({
+        property: { targetKey: TARGET_KEY, label: 'Harbor House' },
+        measurement: { state: 'complete', displayedRunId: RUN_ID, planRevision: 7, completedAt: '2026-08-02T12:05:00.000Z' },
+        queryClass: 'non-brand',
+        basis: { state: 'available', answeredResults: 4, targetMissResults: 3, recommendationOccurrences: 5 },
+        competitors: [
+          {
+            name: 'Harborline Homes', occurrences: 3, providers: ['openai', 'gemini'],
+            providerTotal: 2, providersTruncated: false,
+            questions: [NEARBY_QUESTION], questionTotal: 1, questionsTruncated: false,
+          },
+          {
+            name: 'The Sutton', occurrences: 1, providers: ['gemini'],
+            providerTotal: 1, providersTruncated: false,
+            questions: [NEARBY_QUESTION], questionTotal: 1, questionsTruncated: false,
+          },
+        ],
+        total: 2,
+        truncated: false,
+      })
+    }
+    if (path.includes('/measurement-question-result')) {
+      return jsonResponse({
+        property: { targetKey: TARGET_KEY, label: 'Harbor House' },
+        measurement: { state: 'complete', displayedRunId: RUN_ID, planRevision: 7, completedAt: '2026-08-02T12:05:00.000Z' },
+        question: {
+          resultId: 'obs-nearby', queryId: 'query-nearby', text: NEARBY_QUESTION, class: 'non-brand',
+          provider: 'openai', requestedModel: null, servedModel: null, location: null, status: 'answered',
+        },
+        mentioned: false,
+        cited: false,
+        recommendedInstead: [],
+        answer: 'The strongest options nearby are Harborline Homes and The Sutton, both a short walk from the water.',
+        sources: [],
+        captureStatus: 'complete',
+        retrievalStatus: 'used',
+        retrievalContract: 'native-auto-v1',
+      })
+    }
     throw new Error(`Unexpected fetch: ${path}`)
   }
 }
@@ -615,7 +655,7 @@ describe('Property page', () => {
     // The cited URL and its classification moved inside the answer row, so this
     // assertion now expands the answer before reading them.
     const evidence = await answersTable()
-    fireEvent.click(within(evidence).getByRole('button', { name: `Show sources for ${NEARBY_QUESTION}` }))
+    fireEvent.click(within(evidence).getByRole('button', { name: `Read the answer for ${NEARBY_QUESTION}` }))
     expect(within(evidence).getByText('Matches this Property')).toBeTruthy()
     expect(within(evidence).getByText(OWN_URL)).toBeTruthy()
     expect(screen.queryByText(/revision \d+/i)).toBeNull()
@@ -748,7 +788,7 @@ describe('Property answer evidence', () => {
     ])
 
     expect(within(evidence).queryByText(OWN_URL)).toBeNull()
-    const toggle = within(evidence).getByRole('button', { name: 'Show sources for where to stay by the water' })
+    const toggle = within(evidence).getByRole('button', { name: 'Read the answer for where to stay by the water' })
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
 
     fireEvent.click(toggle)
@@ -761,7 +801,7 @@ describe('Property answer evidence', () => {
   it('says an answer cited nothing rather than leaving its detail blank', async () => {
     const evidence = await renderAnswers([answerRow({ slot: 'a', queryText: 'where to stay by the water' })])
 
-    fireEvent.click(within(evidence).getByRole('button', { name: 'Show sources for where to stay by the water' }))
+    fireEvent.click(within(evidence).getByRole('button', { name: 'Read the answer for where to stay by the water' }))
     expect(within(evidence).getByText('This answer returned no source URLs at all.')).toBeTruthy()
   })
 
@@ -838,7 +878,7 @@ describe('Coverage hero', () => {
 })
 
 describe('Property facts and market link', () => {
-  it('counts what was measured without implying a ceiling', async () => {
+  it('states each count once, in the section that owns it, not also in a card above it', async () => {
     await renderPropertyPage({
       branded: overviewResponse('branded', {
         mentionCoverage: available(4, 4),
@@ -854,52 +894,42 @@ describe('Property facts and market link', () => {
       }),
     })
 
-    const facts = await screen.findByRole('region', { name: 'What was measured' })
+    // The page used to open with four metric cards, three of which restated a
+    // count the section directly below already carried. The counts still exist
+    // — in one place each.
+    await screen.findByRole('region', { name: /assigned to this Property/ })
+    expect(screen.queryByText('Questions assigned')).toBeNull()
+    expect(screen.queryByText('Owned URLs')).toBeNull()
+    expect(screen.queryByText('Answer engines')).toBeNull()
+    expect(document.querySelectorAll('.metric-card')).toHaveLength(0)
 
-    // Assert the VALUES, not the labels. The label-only version of this test
-    // passed with `engineCount` forced to 0 and `measuredAt` forced to null,
-    // which were the two bugs it was written to prevent.
-    const cardFor = (label: string) => {
-      const card = within(facts).getByText(label).closest('.metric-card')
-      expect(card).toBeTruthy()
-      return card as HTMLElement
-    }
-    expect(within(cardFor('Questions assigned')).getByText('1')).toBeTruthy()
-    expect(within(cardFor('Owned URLs')).getByText('1')).toBeTruthy()
-    expect(within(cardFor('Answer engines')).getByText('2')).toBeTruthy()
-    expect(within(cardFor('Answer engines')).getByText('Answered at least one assigned question')).toBeTruthy()
-    expect(within(cardFor('Last measured')).getByText('Aug 2, 2026')).toBeTruthy()
-    expect(within(facts).queryByText('Never')).toBeNull()
-
-    // Counts are unbounded, so a progress bar would imply a ceiling that does
-    // not exist. DESIGN.md reserves linear progress for a real bounded target.
-    expect(facts.querySelectorAll('.metric-card-bar').length).toBe(0)
+    // Provenance is the one fact no section states, so it survives as a line.
+    expect(screen.getByText(/Measured Aug 2, 2026/)).toBeTruthy()
+    expect(screen.queryByText(/No completed sweep yet/)).toBeNull()
   })
 
-  it('states no engine count for a class the run never measured', async () => {
+  it('never claims zero engines for a class the run never measured', async () => {
     await renderPropertyPage({
       branded: overviewResponse('branded', {
         mentionCoverage: available(4, 4),
         citationCoverage: available(4, 4),
       }),
-      // The server ships `providers: []` next to an unavailable metric, so the
-      // row exists and its provider list is empty for a reason that is NOT
-      // "no engine answered". Counting it printed "0 / No engine answered"
-      // while the hero on the same screen said "Not measured".
+      // The server ships `providers: []` next to an unavailable metric, so an
+      // empty provider list here means "this class was not measured", not "no
+      // engine answered". Counting it printed "0 / No engine answered" while
+      // the hero on the same screen said "Not measured".
       nonBrand: overviewResponse('non-brand', {
         mentionCoverage: unavailable('no_population'),
         citationCoverage: unavailable('no_population'),
       }),
     })
 
-    const facts = await screen.findByRole('region', { name: 'What was measured' })
-    const engines = within(facts).getByText('Answer engines').closest('.metric-card') as HTMLElement
-    expect(within(engines).queryByText('0')).toBeNull()
-    expect(within(engines).queryByText('No engine answered for this Property')).toBeNull()
-    expect(engines.textContent).toContain('—')
-    // It carries the server's own reason rather than a generic "not measured",
-    // so the card says WHY there is no count.
-    expect(within(engines).getByText('No questions of this type are assigned')).toBeTruthy()
+    await screen.findByRole('region', { name: 'Coverage for this Property' })
+    expect(screen.queryByText('No engine answered for this Property')).toBeNull()
+    // The server's own reason reaches the reader rather than a bare em dash.
+    // It appears in the hero rows too, which is why this counts rather than
+    // asserting a single node.
+    expect(screen.getAllByText(/No questions of this type are assigned/).length).toBeGreaterThan(0)
   })
 
   it('names the markets this Property is in, and only those', async () => {
@@ -944,11 +974,11 @@ describe('Property facts and market link', () => {
       return propertyPageResponses()(url)
     })
 
-    const facts = await screen.findByRole('region', { name: 'What was measured' })
-    const lastMeasured = within(facts).getByText('Last measured').closest('.metric-card') as HTMLElement
-    expect(within(lastMeasured).queryByText('Never')).toBeNull()
-    expect(within(lastMeasured).queryByText('No completed sweep yet')).toBeNull()
-    expect(lastMeasured.textContent).toContain('—')
+    // The provenance line must not appear at all rather than assert a sweep
+    // history nobody has read: "Never" is a measured claim.
+    await screen.findByRole('region', { name: 'Coverage for this Property' })
+    expect(screen.queryByText(/Never/)).toBeNull()
+    expect(screen.queryByText(/No completed sweep yet/)).toBeNull()
 
     // And the hero says the class failed rather than spinning forever: the
     // retry is in the table below, so "Loading" is a promise nothing will keep.
@@ -968,5 +998,72 @@ describe('Property facts and market link', () => {
 
     const market = await screen.findByRole('region', { name: /Measured at the market level/ })
     expect(within(market).getByText('1 competitor')).toBeTruthy()
+  })
+})
+
+describe('Reading the answer', () => {
+  it('leads an opened row with what the engine actually said', async () => {
+    // The row can only say whether this Property was named. The reason to open
+    // it is to find out what was recommended instead — a "not mentioned" row on
+    // a local question can turn out to be an answer naming two rival buildings,
+    // and no badge or source count carries that.
+    await renderPropertyPageFromApi(propertyPageResponses())
+
+    const toggle = await screen.findByRole('button', { name: `Read the answer for ${NEARBY_QUESTION}` })
+    fireEvent.click(toggle)
+
+    expect(await screen.findByText(/Harborline Homes and The Sutton/)).toBeTruthy()
+    expect(screen.getByText(/What openai answered/i)).toBeTruthy()
+  })
+
+  it('fetches the answer only when a row is opened', async () => {
+    // Answers run to thousands of characters and most rows are never opened,
+    // so the list read deliberately does not carry them.
+    const paths: string[] = []
+    await renderPropertyPageFromApi(url => {
+      paths.push(pathOf(url))
+      return propertyPageResponses()(url)
+    })
+
+    await screen.findByRole('button', { name: `Read the answer for ${NEARBY_QUESTION}` })
+    expect(paths.some(path => path.includes('/measurement-question-result'))).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: `Read the answer for ${NEARBY_QUESTION}` }))
+    await screen.findByText(/Harborline Homes and The Sutton/)
+    expect(paths.some(path => path.includes('/measurement-question-result'))).toBe(true)
+  })
+})
+
+describe('Named instead of this Property', () => {
+  it('names who the engines recommended in the answers this Property missed', async () => {
+    // Coverage says there is a gap. Only this says what is in it — and the
+    // occurrence counts are meaningless without the basis, which states how
+    // many answers they were counted over.
+    await renderPropertyPageFromApi(propertyPageResponses())
+
+    const section = await screen.findByRole('region', { name: /Named instead of this Property/ })
+    expect(within(section).getByText('Harborline Homes')).toBeTruthy()
+    expect(within(section).getByText('The Sutton')).toBeTruthy()
+    expect(within(section).getByText('openai, gemini')).toBeTruthy()
+    expect(within(section).getByText(/3 of 4 non-brand questions answers did not name this Property/)).toBeTruthy()
+  })
+
+  it('says so plainly when no rival was named, rather than showing an empty table', async () => {
+    await renderPropertyPageFromApi(url => {
+      if (pathOf(url).includes('/measurement-property-competitors')) {
+        return jsonResponse({
+          property: { targetKey: TARGET_KEY, label: 'Harbor House' },
+          measurement: { state: 'complete', displayedRunId: RUN_ID, planRevision: 7, completedAt: '2026-08-02T12:05:00.000Z' },
+          queryClass: 'non-brand',
+          basis: { state: 'unavailable', reason: 'no_population' },
+          competitors: [], total: 0, truncated: false,
+        })
+      }
+      return propertyPageResponses()(url)
+    })
+
+    const section = await screen.findByRole('region', { name: /Named instead of this Property/ })
+    expect(within(section).getByText(/No rival was named/)).toBeTruthy()
+    expect(section.querySelector('table')).toBeNull()
   })
 })
