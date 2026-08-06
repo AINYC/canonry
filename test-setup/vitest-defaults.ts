@@ -9,7 +9,9 @@
  *   1. Disables canonry telemetry. Even packages that don't import the
  *      telemetry module benefit — invokeCli-style tests sometimes pull
  *      in code paths that fire `cli.command` events.
- *   2. Replaces `globalThis.fetch` with a guard that throws on any
+ *   2. Redirects `CANONRY_CONFIG_DIR` at a throwaway directory, so no test can
+ *      write to the operator's real `~/.canonry/config.yaml`.
+ *   3. Replaces `globalThis.fetch` with a guard that throws on any
  *      non-localhost request, so a test that forgets to mock fetch
  *      can't silently hit the real internet.
  *
@@ -19,6 +21,9 @@
  * the guard back on cleanup. The guard stays in effect between tests.
  */
 
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 process.env.CANONRY_TELEMETRY_DISABLED = '1'
 
 const TELEMETRY_HOSTS = new Set([
@@ -49,6 +54,27 @@ function urlOf(input: string | URL | Request): URL | null {
     return null
   }
   return null
+}
+
+/**
+ * Point every test at a throwaway config directory.
+ *
+ * Several code paths persist to the operator's config as a side effect of
+ * ordinary work — `executeGscSync` writes refreshed OAuth tokens back through
+ * `saveConfigPatch`, for instance. A test that calls one with fixture
+ * credentials will happily overwrite the real `~/.canonry/config.yaml`; on
+ * 2026-08-06 that replaced twelve live Google connections with a single
+ * `example.com` fixture and broke the operator's Search Console auth.
+ *
+ * Same reasoning as the network guard below: a unit test must not reach
+ * outside its own sandbox, and a config write is a side effect on the
+ * developer's machine every bit as real as an HTTP call.
+ *
+ * An explicitly-set `CANONRY_CONFIG_DIR` is respected — a test that wants a
+ * specific directory has already opted in.
+ */
+if (!process.env.CANONRY_CONFIG_DIR?.trim()) {
+  process.env.CANONRY_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-test-config-'))
 }
 
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
