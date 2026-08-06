@@ -955,7 +955,7 @@ export const getApiV1ProjectsByNameMeasurementPropertyEvidence = <ThrowOnError e
 /**
  * Get the weakest measured Properties
  *
- * Returns a compact, revision-pinned portfolio ranking from stored results. It defaults to Non-brand questions, ranks measured mention coverage before citation coverage, and keeps unavailable rows separate from measured weakness. Replacement names come only from stored answer extraction. It never starts provider work.
+ * Returns a compact, revision-pinned portfolio ranking from stored results, plus a worst-first roll-up of every named market. It defaults to Non-brand questions, ranks measured mention coverage before citation coverage, and keeps unavailable rows separate from measured weakness. Every market is scoped to the displayed run, so a market row matches that market read with groupKey; markets may share Properties and never sum to the portfolio totals. The markets array is empty when the request already narrowed to one group. Replacement names come only from stored answer extraction. It never starts provider work.
  */
 export const getApiV1ProjectsByNameMeasurementPortfolioSummary = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameMeasurementPortfolioSummaryData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameMeasurementPortfolioSummaryResponses, GetApiV1ProjectsByNameMeasurementPortfolioSummaryErrors, ThrowOnError>({

@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import Fastify from 'fastify'
 import { eq } from 'drizzle-orm'
-import { afterEach, beforeEach, expect, test } from 'vitest'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import {
   apiKeys,
   createClient,
@@ -29,6 +29,27 @@ import { apiRoutes } from '../src/index.js'
 import { hashApiKey } from '../src/auth.js'
 import { hashSessionToken, UNKNOWN_ACCOUNT_DIGEST, USER_SESSION_COOKIE_NAME, USER_SESSION_TTL_MS } from '../src/user-session.js'
 import { hashUserPassword, verifyUserPassword } from '../src/user-password.js'
+
+/**
+ * Every sign-in in this file pays a REAL scrypt derivation (N=32768,
+ * `user-password.ts`), and the tests that exercise the per-caller budget
+ * deliberately pay thirty of them in sequence, because thirty is where the
+ * budget trips. Measured on an idle 12-core box: 111ms per derivation, and
+ * 4.0-5.1s for the worst tests here — one of them already over vitest's 5000ms
+ * default. On slower CI hardware they would fail outright, and the failure
+ * would look like a hang rather than the arithmetic it is.
+ *
+ * The cost is the point: these tests assert that an expensive, unauthenticated
+ * derivation is admitted under a budget and kept off the event loop, and a
+ * cheaper hash would not exercise either property. The cost factor is also not
+ * recorded in the stored digest (`scrypt$1$<salt>$<digest>`), so it is a global
+ * invariant every stored password depends on — not something to make
+ * environment-dependent for a faster suite.
+ *
+ * So: raise the ceiling for this file only. 30s still surfaces a real hang,
+ * and every other suite keeps the 5s default.
+ */
+vi.setConfig({ testTimeout: 30_000 })
 
 const ROOT_KEY = 'cnry_users_root'
 const READ_KEY = 'cnry_users_read'
