@@ -617,7 +617,10 @@ export function AdvancedMeasurementOverview({
   const [search, setSearch] = useState(viewSearch ?? '')
   const [propertyLimit, setPropertyLimit] = useState(PROPERTY_LIST_LIMIT)
   const [flaggedLimit, setFlaggedLimit] = useState(FLAGGED_RESULTS_INITIAL_LIMIT)
-  const [expandedPropertyIds, setExpandedPropertyIds] = useState<ReadonlySet<string>>(new Set())
+  // One id, not a set: each expansion adds an engine sub-row per provider plus a
+  // details panel, so two open at once push the rest of a several-hundred-row
+  // table off screen. Opening a Property closes whichever one was open.
+  const [expandedPropertyId, setExpandedPropertyId] = useState<string | null>(null)
   const lastRequestedSearch = useRef(viewSearch ?? '')
 
   const legacyScope = classReportingAvailable && !usesServerView && selectedClass !== 'all'
@@ -736,13 +739,8 @@ export function AdvancedMeasurementOverview({
   }
 
   function toggleProperty(propertyId: string) {
-    const willExpand = !expandedPropertyIds.has(propertyId)
-    setExpandedPropertyIds(current => {
-      const next = new Set(current)
-      if (next.has(propertyId)) next.delete(propertyId)
-      else next.add(propertyId)
-      return next
-    })
+    const willExpand = expandedPropertyId !== propertyId
+    setExpandedPropertyId(willExpand ? propertyId : null)
     if (willExpand) onPropertyExpand?.(propertyId)
   }
 
@@ -848,7 +846,7 @@ export function AdvancedMeasurementOverview({
             <thead><tr><th>Property</th><th>Mention</th><th>Citation</th><th>Status</th><th><span className="sr-only">Details</span></th></tr></thead>
             <tbody>
               {shownProperties.map(property => {
-                const expanded = expandedPropertyIds.has(property.id)
+                const expanded = expandedPropertyId === property.id
                 return (
                   <Fragment key={property.id}>
                     <tr
