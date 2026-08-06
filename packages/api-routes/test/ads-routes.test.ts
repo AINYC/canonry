@@ -2030,7 +2030,15 @@ describe('ads routes', () => {
       currentStatus: 'active',
       adsReconcileSweepIntervalMs: 5,
       adsReconcilePendingStaleMs: 1,
-      adsReconcileBackoffBaseMs: 50,
+      // Backoff is `base * 2^(attempts-1)`, and the assertions below prove a
+      // NEGATIVE — that no further attempt happened during a real-time sleep.
+      // A negative like that is only as reliable as the gap between the sleep
+      // and the next scheduled attempt. At base 50 those gaps were 25ms and
+      // 50ms, which ordinary CI scheduling jitter crosses: a `setTimeout(25)`
+      // on a contended runner routinely lands past 50ms, the next attempt
+      // fires, and the assertion fails on a machine slower than the author's.
+      // At base 400 the same sleeps sit 375ms and 750ms clear of the window.
+      adsReconcileBackoffBaseMs: 400,
       adsReconcileMaxAttempts: 3,
     })
     await ctx.app.ready()
@@ -2063,7 +2071,7 @@ describe('ads routes', () => {
         .where(eq(adsOperations.operationKey, operationKey)).get()).toMatchObject({
         state: 'unknown', reconcileAttempts: 2,
       })
-    }, { timeout: 500, interval: 5 })
+    }, { timeout: 2000, interval: 5 })
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(ctx.db.select().from(adsOperations)
       .where(eq(adsOperations.operationKey, operationKey)).get()).toMatchObject({
@@ -2078,7 +2086,7 @@ describe('ads routes', () => {
         errorCode: 'ADS_RECONCILIATION_QUARANTINED',
         leaseOwner: null,
       })
-    }, { timeout: 750, interval: 5 })
+    }, { timeout: 3000, interval: 5 })
     await new Promise((resolve) => setTimeout(resolve, 75))
     expect(ctx.db.select().from(adsOperations)
       .where(eq(adsOperations.operationKey, operationKey)).get()).toMatchObject({
