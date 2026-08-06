@@ -45,6 +45,26 @@ export function parseMeasurementViewSearch(search: { scope?: string; class?: str
 }
 
 /**
+ * Whether a change of plan identity (`"<project>:<revision>"`) should discard
+ * the view the URL is carrying.
+ *
+ * A scope names a group inside one project's plan revision, so carrying it
+ * across a different plan points it at nothing and the reset is right. Two
+ * cases are NOT changes, and both were live bugs:
+ *
+ * - **No previous identity.** On first mount the URL's scope is exactly what
+ *   the reader asked for. Resetting discards every shared or bookmarked link
+ *   the instant it opens.
+ * - **Identity not yet known.** The plan is fetched, so the revision reads as
+ *   unknown for the first render or two and then appears. That appearance is
+ *   the answer arriving, not the plan changing.
+ */
+export function shouldResetMeasurementView(previous: string | null, next: string | null): boolean {
+  if (next === null || previous === null) return false
+  return previous !== next
+}
+
+/**
  * Write view state back to the URL, omitting every default. Returns the two
  * keys only, for spreading over the rest of the existing search params.
  */

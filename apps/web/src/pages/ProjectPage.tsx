@@ -3,7 +3,7 @@ import { ChevronDown, RefreshCw, Trash2 } from 'lucide-react'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { Link } from '@tanstack/react-router'
 
-import { measurementViewSearch, parseMeasurementViewSearch } from '../lib/measurement-view-url.js'
+import { measurementViewSearch, parseMeasurementViewSearch, shouldResetMeasurementView } from '../lib/measurement-view-url.js'
 import { useQueryClient } from '@tanstack/react-query'
 import { RunKinds, RunStatuses } from '@ainyc/canonry-contracts'
 
@@ -1787,10 +1787,21 @@ function ProjectPageContent({
     ? null
     : Number(activeMeasurementPlan.plan.schemaVersion)
   const activeMeasurementRevision = activeMeasurementPlan?.revision ?? 0
+  // Reset the view only when the plan it belongs to actually CHANGES. The
+  // identity is null until the plan resolves, and the first identity we ever
+  // see is not a change — see `shouldResetMeasurementView`, which is where the
+  // two "not a change" cases are pinned by tests.
+  const measurementPlanIdentity = planGroupKeysLoaded
+    ? `${projectName}:${activeMeasurementRevision}`
+    : null
+  const lastMeasurementPlanIdentity = useRef<string | null>(null)
   useEffect(() => {
+    const previous = lastMeasurementPlanIdentity.current
+    if (measurementPlanIdentity !== null) lastMeasurementPlanIdentity.current = measurementPlanIdentity
+    if (!shouldResetMeasurementView(previous, measurementPlanIdentity)) return
     setAdvancedMeasurementView({ scope: 'all', queryClass: 'non-brand' })
     setHasExpandedAdvancedProperty(false)
-  }, [projectName, activeMeasurementRevision])
+  }, [measurementPlanIdentity, setAdvancedMeasurementView])
   const advancedMeasurementOverviewQueryInput = {
     client: heyClient,
     path: { name: projectName },

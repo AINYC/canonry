@@ -523,7 +523,12 @@ export const measurementOverviewResponseSchema = z.object({
     ),
   }).strict(),
   properties: measurementCursorPageSchema(measurementPropertyRowSchema),
-  /** Scope-wide outcome split. Counted over EVERY Property in scope, not the page. */
+  /**
+   * Outcome split over the whole RESULT SET, not the page — so paging through
+   * does not move it. It narrows with `search` exactly as `properties.totalEstimate`
+   * does, because both are computed from the same filtered rows; with no search
+   * that result set is the entire scope.
+   */
   outcomes: measurementOutcomeCountsSchema,
   flags: z.object({ total: z.number().int().nonnegative() }).strict(),
   namedShareOfVoice: measurementNamedShareOfVoiceSchema.optional(),

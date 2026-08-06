@@ -514,20 +514,28 @@ function SegmentedControl<T extends string>({
 /**
  * The two headline rates.
  *
- * Cited and mentioned are rates over the SAME population — one assignment being
- * a Property paired with a query — which is what lets them share a single
- * denominator line. `propertiesMentioned` is deliberately NOT here: it counts
- * PROPERTIES, so printing it under the same denominator would state something
- * false about one of the three. The per-Property picture is the outcome counts
- * below, which give four states rather than one ratio.
+ * The unit of both is an assignment — a Property paired with a query — but the
+ * two POPULATIONS are not guaranteed equal. The API measures mention over the
+ * answered slots and citation over the source-complete ones, and an answer
+ * arriving with incomplete source capture is routine, so the denominators
+ * diverge on real runs. A single shared basis line is therefore printed only
+ * when the two are actually the same number; otherwise each rate carries its
+ * own, because one line reading "of 250" under a 50% that was measured over 300
+ * tells the reader 125 mentions where the measured figure is 150.
+ *
+ * `propertiesMentioned` is deliberately NOT here: it counts PROPERTIES, so
+ * printing it alongside would state something false about one of the three. The
+ * per-Property picture is the outcome counts below.
  */
 function CoverageHero({ cited, mentioned }: {
   cited: AdvancedMeasurementMetric
   mentioned: AdvancedMeasurementMetric
 }) {
-  const denominator = isMeasured(cited) ? cited.denominator
-    : isMeasured(mentioned) ? mentioned.denominator
-    : null
+  const sharedDenominator = isMeasured(cited) && isMeasured(mentioned)
+    ? cited.denominator === mentioned.denominator ? cited.denominator : null
+    : isMeasured(cited) ? cited.denominator
+      : isMeasured(mentioned) ? mentioned.denominator
+        : null
   const percent = (metric: AdvancedMeasurementMetric): string =>
     isMeasured(metric) ? `${Math.round((metric.numerator / metric.denominator) * 100)}%` : 'N/A'
   return (
@@ -541,11 +549,16 @@ function CoverageHero({ cited, mentioned }: {
             {percent(metric)}
           </p>
           <p className="mt-1 text-xs text-secondary">{label}</p>
+          {sharedDenominator === null && isMeasured(metric) ? (
+            <p className="mt-0.5 font-mono text-xs text-faint tabular-nums">
+              {metric.numerator} of {metric.denominator}
+            </p>
+          ) : null}
         </div>
       ))}
-      {denominator === null ? null : (
+      {sharedDenominator === null ? null : (
         <p className="ml-auto self-end font-mono text-xs text-secondary">
-          of {denominator}
+          of {sharedDenominator}
           <InfoTooltip text="One assignment is a Property paired with a query. Branded queries are a separate filter and are never averaged in." />
         </p>
       )}
@@ -561,9 +574,12 @@ function CoverageHero({ cited, mentioned }: {
  * reachable on the tooltip since cited-only is the actionable half — the engine
  * used the page and recommended somebody else.
  *
- * The counts are the server's, over the whole scope. Nothing is computed here,
- * and an absent block renders nothing rather than a row of zeroes, which would
- * read as a measured finding instead of a missing field.
+ * The counts are the server's, over the Properties currently LISTED — they
+ * narrow with the search box exactly as the table and its "N properties" count
+ * do. Saying "in scope" would be a promise the numbers stop keeping the moment
+ * someone types. Nothing is computed here, and an absent block renders nothing
+ * rather than a row of zeroes, which would read as a measured finding instead
+ * of a missing field.
  */
 function OutcomeCounts({ outcomes }: {
   outcomes: NonNullable<NonNullable<AdvancedMeasurementOverviewReport['currentView']>['outcomes']>
@@ -585,7 +601,7 @@ function OutcomeCounts({ outcomes }: {
             <InfoTooltip text={`Which signal: ${outcomes.mentionedOnly} mentioned, not cited. ${outcomes.citedOnly} cited, not mentioned.`} />
           ) : null}
           {entry.key === 'not-measured' ? (
-            <InfoTooltip text={`Sums to ${outcomes.total}. Every Property in scope is in exactly one group.`} />
+            <InfoTooltip text={`Sums to ${outcomes.total}. Every Property listed is in exactly one group.`} />
           ) : null}
         </span>
       ))}
@@ -652,7 +668,12 @@ export function AdvancedMeasurementOverview({
   useEffect(() => {
     if (viewSearch === undefined) return
     lastRequestedSearch.current = viewSearch
-    setSearch(viewSearch)
+    // The parent trims before storing, so what echoes back after a pause can
+    // be the same term minus the space just typed. Writing that into the
+    // controlled input deletes the space and merges the next word onto the
+    // last one. An echo that differs only by surrounding whitespace is this
+    // round trip, not a new term from elsewhere, so the box is left alone.
+    setSearch(current => (current.trim() === viewSearch.trim() ? current : viewSearch))
   }, [viewSearch])
 
   useEffect(() => {
@@ -770,18 +791,18 @@ export function AdvancedMeasurementOverview({
       </header>
 
       {!isViewLoading ? (
-
         <CoverageHero
-
           cited={classMetric(aggregate.metrics.citationCoverage)}
-
           mentioned={classMetric(aggregate.metrics.mentionCoverage)}
-
         />
-
       ) : <div className="h-20 animate-pulse rounded-md bg-surface-subtle" aria-label="Updating measurement results" />}
 
-      {report.currentView?.outcomes ? <OutcomeCounts outcomes={report.currentView.outcomes} /> : null}
+      {/* Gated with the hero and the table: while the new view is in flight the
+          cache still holds the PREVIOUS scope's counts, and a stale split shown
+          under a control that already reads "Branded" is worse than no split. */}
+      {!isViewLoading && report.currentView?.outcomes
+        ? <OutcomeCounts outcomes={report.currentView.outcomes} />
+        : null}
 
       <div className="flex flex-wrap items-end gap-4 border-b border-default pb-4">
         <div className="space-y-1">
