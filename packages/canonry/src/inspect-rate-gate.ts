@@ -8,23 +8,11 @@
  * sweeps share one upstream limit.
  *
  * Bing is the case that exposed it: one API key serves every project on the
- * instance, and the `data-refresh` schedule fires all of them in the same
- * minute — three sweeps, each pacing itself at 1 req/sec, collectively putting
- * 3 req/sec on a single key. Bing answered `400 ErrorCode 4 (ThrottleUser)`,
- * and the throttle outlived the runs by more than an hour; a site untouched for
- * six days was still refused with nothing in flight.
- *
- * Honesty about what this fixes: the throttle was NOT proven to be caused by
- * that overlap. Per-site throttle counts were identical whether one sweep ran
- * or three, because the observed figure is the deterministic ceiling of a fully
- * throttled run (5 breaker failures x 4 driver attempts x 5 client attempts),
- * not a measure of load. The retry amplification that produced that ceiling is
- * fixed separately, at the call sites.
- *
- * This gate is here because the property is worth holding regardless of which
- * incident it prevents: pacing that a second caller can ignore is not a rate
- * limit, and every sweep on a shared credential should be able to state the
- * rate it collectively imposes.
+ * instance and `data-refresh` fires them in the same minute, so three sweeps
+ * each honouring 1 req/sec collectively put 3 req/sec on one credential. This
+ * is hygiene rather than an incident fix — the 2026-08-06 throttle was NOT
+ * shown to be caused by that overlap (see PR #969) — but pacing that a second
+ * caller can ignore is not a rate limit.
  *
  * The key names the SHARED resource, not the caller:
  *
@@ -76,22 +64,6 @@ export function sharedRateGate(key: string): RateGate {
       // reject every future waiter behind it. The returned promise is
       // deliberately not caught, so the caller still sees its own failure.
       held.chain = wait.catch(() => {})
-      return wait
-    },
-  }
-}
-
-/**
- * A gate with no shared identity — the pre-existing per-call behaviour, kept
- * for callers that genuinely own their limit and for tests that assert an exact
- * sleep sequence without cross-test interference.
- */
-export function localRateGate(): RateGate {
-  let chain: Promise<void> = Promise.resolve()
-  return {
-    take(delayMs: number, sleep: SleepFn): Promise<void> {
-      const wait = chain.then(() => sleep(delayMs))
-      chain = wait.catch(() => {})
       return wait
     },
   }

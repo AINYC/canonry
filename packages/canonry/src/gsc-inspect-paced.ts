@@ -1,5 +1,5 @@
 import { withRetry, isRetryableHttpError } from '@ainyc/canonry-contracts'
-import { localRateGate, sharedRateGate, type RateGate } from './inspect-rate-gate.js'
+import { sharedRateGate } from './inspect-rate-gate.js'
 
 /**
  * Paced, rate-aware driver for GSC URL Inspection loops.
@@ -149,12 +149,12 @@ export interface PacedInspectDeps {
   isRetryable?: (err: unknown) => boolean
   /**
    * Names the upstream limit this sweep draws on, so concurrent sweeps sharing
-   * that limit queue behind ONE clock (see `inspect-rate-gate.ts`). Omit only
-   * when the caller genuinely owns its limit — an unkeyed sweep paces itself
-   * and ignores every other sweep, so N concurrent sweeps put N times the
-   * intended rate on a shared credential.
+   * that limit queue behind ONE clock (see `inspect-rate-gate.ts`). REQUIRED,
+   * and it must name the shared resource rather than the caller: an
+   * independently-keyed sweep silently multiplies the rate on a shared
+   * credential by the number of sweeps running.
    */
-  rateGateKey?: string
+  rateGateKey: string
   /**
    * Minimum spacing between request STARTS. Defaults to
    * `INSPECT_BASE_DELAY_MS`; a service that throttles harder than Google needs
@@ -207,7 +207,9 @@ function defaultSleep(ms: number): Promise<void> {
 export async function inspectUrlsPaced<TResult>(
   urls: string[],
   cb: PacedInspectCallbacks<TResult>,
-  deps: PacedInspectDeps = {},
+  // Required, not defaulted: `rateGateKey` has no safe default, and a sweep
+  // that silently picked one would be back to pacing only itself.
+  deps: PacedInspectDeps,
 ): Promise<PacedInspectOutcome> {
   const sleep = deps.sleep ?? defaultSleep
   const jitter = deps.jitter ?? Math.random
@@ -223,11 +225,10 @@ export async function inspectUrlsPaced<TResult>(
   let aborted = false
   let abortError: unknown
 
-  // One gate for the whole pool — and, when `rateGateKey` is set, for every
-  // OTHER sweep drawing on the same upstream limit. Serialising only the WAIT
-  // (not the request) keeps the rate at one start per `spacingMs` while
-  // allowing `concurrency` requests to be in flight.
-  const gate: RateGate = deps.rateGateKey ? sharedRateGate(deps.rateGateKey) : localRateGate()
+  // One gate for this pool AND for every other sweep on the same upstream
+  // limit. Serialising only the WAIT (not the request) keeps the rate at one
+  // start per `spacingMs` while allowing `concurrency` requests in flight.
+  const gate = sharedRateGate(deps.rateGateKey)
   const takeRateSlot = (): Promise<void> => gate.take(spacingMs + jitter() * INSPECT_PACING_JITTER_MS, sleep)
 
   async function worker(): Promise<void> {

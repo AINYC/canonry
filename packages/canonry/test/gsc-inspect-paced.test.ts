@@ -22,10 +22,15 @@ function statusErr(status: number): Error & { status: number } {
 const FAKE_RESULT = {} as GscUrlInspectionResult
 
 /** Deterministic, instant deps: no real sleeping, no jitter. */
+let gateSeq = 0
 function fastDeps(extra: Partial<PacedInspectDeps> = {}): PacedInspectDeps & { sleeps: number[] } {
   const sleeps: number[] = []
   return {
     sleeps,
+    // A key unique per call, so these tests measure ONE sweep's pacing without
+    // queueing behind a sibling test's gate. Cross-sweep behaviour is covered
+    // in inspect-rate-gate.test.ts, which shares a key on purpose.
+    rateGateKey: `test-gate-${gateSeq++}`,
     jitter: () => 0,
     sleep: async (ms: number) => {
       sleeps.push(ms)

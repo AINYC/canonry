@@ -1,10 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import {
-  sharedRateGate,
-  localRateGate,
-  credentialGateKey,
-  resetRateGatesForTest,
-} from '../src/inspect-rate-gate.js'
+import { sharedRateGate, credentialGateKey, resetRateGatesForTest } from '../src/inspect-rate-gate.js'
 import { inspectUrlsPaced, type PacedInspectDeps } from '../src/gsc-inspect-paced.js'
 
 /**
@@ -14,8 +9,8 @@ import { inspectUrlsPaced, type PacedInspectDeps } from '../src/gsc-inspect-pace
  * `inspectUrlsPaced` built its gate in a local variable, so each call paced
  * itself and no other. Bing meters the API key, one key serves every project on
  * the instance, and the daily `data-refresh` fires all of them in the same
- * millisecond — so three sweeps each honouring "1 req/sec" put 3 req/sec on one
- * account, and the resulting throttle outlived the runs.
+ * millisecond, so three sweeps each honouring "1 req/sec" put 3 req/sec on one
+ * account.
  */
 
 beforeEach(() => {
@@ -73,12 +68,6 @@ describe('sharedRateGate', () => {
     })
     expect(served).toBe(true)
   })
-
-  it('localRateGate is per-call, so two of them never see each other', async () => {
-    const { grants, sleep } = recordingSleep()
-    await Promise.all([localRateGate().take(1000, sleep('a')), localRateGate().take(1000, sleep('b'))])
-    expect(grants).toHaveLength(2)
-  })
 })
 
 describe('credentialGateKey', () => {
@@ -102,7 +91,7 @@ describe('credentialGateKey', () => {
  */
 describe('concurrent sweeps sharing one upstream limit', () => {
   function pacedDeps(record: (ms: number) => void, extra: Partial<PacedInspectDeps> = {}): PacedInspectDeps {
-    return { jitter: () => 0, sleep: async (ms) => record(ms), concurrency: 1, ...extra }
+    return { jitter: () => 0, sleep: async (ms) => record(ms), concurrency: 1, rateGateKey: 'unset', ...extra }
   }
 
   it('spaces every request START across all sweeps on one credential', async () => {
@@ -137,20 +126,6 @@ describe('concurrent sweeps sharing one upstream limit', () => {
     expect(sorted).toEqual([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000])
   })
 
-  it('an UNKEYED sweep is the old behaviour and must not be the default for shared limits', async () => {
-    // Documents the trap rather than endorsing it: with no key, each sweep gets
-    // its own budget. This is only correct when the caller genuinely owns the
-    // limit. `bing-inspect-sitemap` and `gsc-inspect-sitemap` both pass a key.
-    const order: string[] = []
-    const run = (tag: string) =>
-      inspectUrlsPaced(
-        ['https://a.test/1'],
-        { inspectOne: async () => ({}), onResult: () => {}, onError: () => {} },
-        { jitter: () => 0, concurrency: 1, sleep: async () => { order.push(tag) } },
-      )
-    await Promise.all([run('a'), run('b')])
-    expect(order).toHaveLength(2)
-  })
 })
 
 /**
@@ -170,7 +145,7 @@ describe('retry layering', () => {
         onResult: () => {},
         onError: () => {},
       },
-      { jitter: () => 0, sleep: async () => {}, concurrency: 1, maxRetries: 0 },
+      { jitter: () => 0, sleep: async () => {}, concurrency: 1, maxRetries: 0, rateGateKey: 'retry-a' },
     )
 
     // The caller's own HTTP client is what retries. Without this, Bing's 5
@@ -193,7 +168,7 @@ describe('retry layering', () => {
         onResult: () => {},
         onError: () => {},
       },
-      { jitter: () => 0, sleep: async (ms) => { sleeps.push(ms) }, concurrency: 1, maxRetries: 2 },
+      { jitter: () => 0, sleep: async (ms) => { sleeps.push(ms) }, concurrency: 1, maxRetries: 2, rateGateKey: 'retry-b' },
     )
 
     // 3 attempts = 1 initial + 2 retries. Each pays a rate slot, and withRetry
