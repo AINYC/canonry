@@ -36,7 +36,13 @@ async function renderAt(
     report?: ReturnType<typeof measurementReportResponse>
     overview?: ReturnType<typeof measurementOverviewResponse>
   },
-  options: { schedule?: unknown } = {},
+  /**
+   * `seedPlan: false` leaves the measurement-plan query unseeded, which is the
+   * cold-navigation state: the read is in flight and the surface is not yet
+   * decidable. These render one synchronous pass, so an unseeded query stays
+   * pending for the whole render.
+   */
+  options: { schedule?: unknown; seedPlan?: boolean } = {},
 ): Promise<string> {
   if (embed) window.__CANONRY_CONFIG__ = { embed }
   else delete window.__CANONRY_CONFIG__
@@ -54,10 +60,12 @@ async function renderAt(
       options.schedule,
     )
   }
-  queryClient.setQueryData(
-    getApiV1ProjectsByNameMeasurementPlanQueryKey({ client: heyClient, path: { name: projectName } }),
-    measurement?.plan ?? { active: null },
-  )
+  if (options.seedPlan !== false) {
+    queryClient.setQueryData(
+      getApiV1ProjectsByNameMeasurementPlanQueryKey({ client: heyClient, path: { name: projectName } }),
+      measurement?.plan ?? { active: null },
+    )
+  }
   if (measurement?.report && measurement.plan.active) {
     queryClient.setQueryData(
       getApiV1ProjectsByNameMeasurementReportQueryKey({
@@ -735,4 +743,29 @@ test('deleting the project is still offered, at the end of the Settings tab', as
 
   expect(html).toContain('Delete project')
   expect(html).toContain('Permanently deletes this project and all its queries, competitors, runs, and snapshots.')
+})
+
+// Restored: these two shipped in #953 and were dropped when a later branch's
+// version of this file was taken wholesale. The guard they cover
+// (`isMeasurementModeUnresolved`) stayed on main the whole time, unguarded.
+test('an unresolved measurement plan shows a skeleton instead of flashing the Simple Overview', async () => {
+  // The bug: `resolveAdvancedMeasurementMode` reads a pending plan read as
+  // `null`, and `null` means "this project has no plan". So a project WITH an
+  // advanced plan painted the legacy overview first and swapped it out once the
+  // read landed — a visible flash on every cold navigation into a project.
+  const html = await renderAt('/projects/project_citypoint', undefined, undefined, { seedPlan: false })
+
+  expect(html).toContain('Loading project overview')
+  // The legacy overview's own copy must not appear while the answer is unknown.
+  expect(html).not.toContain('Where competitors are winning')
+})
+
+test('a settled plan read still renders the Simple Overview, so the guard is not a permanent skeleton', async () => {
+  // The other half: once the read settles as "no plan", `null` means what it
+  // says and the legacy surface is correct. A guard that cannot tell pending
+  // from settled would strand this on the skeleton forever.
+  const html = await renderAt('/projects/project_citypoint')
+
+  expect(html).toContain('Where competitors are winning')
+  expect(html).not.toContain('Loading project overview')
 })
