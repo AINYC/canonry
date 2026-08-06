@@ -1763,6 +1763,28 @@ function ProjectPageContent({
     activePlanSchemaVersion: measurementSetupQuery.data?.activeSchemaVersion ?? activeMeasurementPlanSchemaVersion,
     hasDraft: measurementSetupQuery.data?.draft !== null && measurementSetupQuery.data?.draft !== undefined,
   })
+  /**
+   * Which overview to show is not known until one of the two plan reads lands.
+   * Until then the expression above is `undefined ?? null`, and `null` is what
+   * `resolveAdvancedMeasurementMode` reads as "this project has no plan" — so a
+   * project WITH a plan rendered the legacy overview first and swapped it out a
+   * moment later. Pending and absent cannot share a value here.
+   *
+   * Known as soon as EITHER read has data, because the setup read only refines
+   * a decision the plan read can already make (it is the `??` fallback above).
+   * Waiting on both would hold a skeleton over an answer already in hand.
+   *
+   * `isLoading`, not `isPending`: both queries are disabled on tabs that do not
+   * read the plan, and a disabled TanStack v5 query reports `isPending` forever,
+   * which would strand those tabs on a skeleton. `isLoading` is false when
+   * disabled and false while refetching over cached data, so this fires once per
+   * cold load and never again. Once both have settled — data or error — `null`
+   * means what it says, and the legacy overview is the right answer.
+   */
+  const isMeasurementModeUnresolved =
+    measurementSetupQuery.data === undefined
+    && activeMeasurementPlanQuery.data === undefined
+    && (activeMeasurementPlanQuery.isLoading || measurementSetupQuery.isLoading)
   const advancedMeasurementOverviewPagesInconsistent = useMemo(() => {
     const pages = advancedMeasurementOverviewQuery.data?.pages
     return pages ? !areV2OverviewPagesCompatible(pages) : false
@@ -2237,6 +2259,12 @@ function ProjectPageContent({
           }}
         />
       ) : tab === 'overview' ? (
+        isMeasurementModeUnresolved ? (
+          <div role="status" aria-live="polite">
+            <span className="sr-only">Loading project overview</span>
+            <div className="h-32 animate-pulse rounded-md bg-surface-subtle" aria-hidden="true" />
+          </div>
+        ) : (
         <>
           {isActiveMeasurementPlanError ? (
             <div role="alert" className="mb-5 flex flex-wrap items-center gap-3 border-y border-negative-800/40 bg-negative-950/20 py-4 text-sm text-negative">
@@ -2563,6 +2591,7 @@ function ProjectPageContent({
             viewSearch={advancedMeasurementView.search ?? ''}
           />
         </>
+        )
       ) : tab === 'settings' ? (
         <>
           <ProjectSettingsSection project={{ ...model.project, displayName: model.project.displayName ?? model.project.name, defaultLocation: model.project.defaultLocation ?? null }} onUpdateProject={async (name, updates) => { await handleUpdateProject(name, updates) }} onRefresh={() => void refetch()} />
