@@ -35,6 +35,7 @@ async function renderAt(
     plan: ReturnType<typeof measurementPlanResponse> | ReturnType<typeof measurementPlanV2Response>
     report?: ReturnType<typeof measurementReportResponse>
     overview?: ReturnType<typeof measurementOverviewResponse>
+    overviewKey?: { scope?: 'all' | 'group'; groupKey?: string; queryClass?: 'all' | 'non-brand' | 'branded' }
   },
   /**
    * `seedPlan: false` leaves the measurement-plan query unseeded, which is the
@@ -77,13 +78,24 @@ async function renderAt(
     )
   }
   if (measurement?.overview) {
+    // Seed under the EXACT scope/class the page is expected to request. A test
+    // that seeds `all` and asserts a group rendered proves nothing: the page
+    // would read the seeded `all` page either way. Seeding only the group key
+    // is what makes "did the URL drive the request?" observable — get it wrong
+    // and the surface paints a skeleton instead.
+    const q = {
+      scope: measurement.overviewKey?.scope ?? 'all',
+      ...(measurement.overviewKey?.groupKey ? { groupKey: measurement.overviewKey.groupKey } : {}),
+      queryClass: measurement.overviewKey?.queryClass ?? 'non-brand',
+      limit: 50,
+    }
     queryClient.setQueryData(
       getApiV1ProjectsByNameMeasurementOverviewInfiniteQueryKey({
         client: heyClient,
         path: { name: projectName },
-        query: { scope: 'all', queryClass: 'non-brand', limit: 50 },
+        query: q,
       }),
-      { pages: [measurement.overview], pageParams: [{ path: { name: projectName }, query: { scope: 'all', queryClass: 'non-brand', limit: 50 } }] },
+      { pages: [measurement.overview], pageParams: [{ path: { name: projectName }, query: q }] },
     )
   }
   const router = createAppRouter(queryClient, { initialEntries: [pathname] })
@@ -180,6 +192,7 @@ function measurementOverviewResponse(overrides: {
   totalEstimate?: number
   label?: string
   targetKey?: string
+  queryClass?: 'all' | 'non-brand' | 'branded'
 } = {}) {
   return {
     mode: 'active-v2' as const,
@@ -188,7 +201,7 @@ function measurementOverviewResponse(overrides: {
       ...(overrides.scopeKey ? { key: overrides.scopeKey } : {}),
       label: overrides.scopeLabel ?? 'All Properties',
     },
-    queryClass: 'non-brand' as const,
+    queryClass: (overrides.queryClass ?? 'non-brand') as 'all' | 'non-brand' | 'branded',
     measurement: {
       state: 'complete' as const,
       displayedRunId: 'run-synthetic',
@@ -768,4 +781,61 @@ test('a settled plan read still renders the Simple Overview, so the guard is not
 
   expect(html).toContain('Where competitors are winning')
   expect(html).not.toContain('Loading project overview')
+})
+
+// ── Measurement view state lives in the URL ──────────────────────────────────
+//
+// Scale is the reason. At 47 properties an operator can re-pick a market after
+// every reload; at 200+ markets that is the whole interaction, and a scope that
+// only exists in component state cannot be linked, bookmarked, or reloaded.
+// `?scope=group:<key>` makes a market a place you can send someone.
+
+test('a scope in the URL selects that group on first paint, with no interaction', async () => {
+  const html = await renderAt(
+    '/projects/project_citypoint?scope=group:north',
+    undefined,
+    {
+      plan: measurementPlanV2Response(2),
+      overview: measurementOverviewResponse({ scope: 'group', scopeKey: 'north', scopeLabel: 'North' }),
+      overviewKey: { scope: 'group', groupKey: 'north' },
+    },
+  )
+
+  // The group control reflects the URL rather than defaulting to all-properties.
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const group = doc.querySelector('[aria-labelledby="advanced-measurement-group-label"]')
+  const checked = group?.querySelector('[role="radio"][aria-checked="true"], option[selected]')
+  expect(checked?.textContent).toBe('North')
+})
+
+test('a query class in the URL selects that class on first paint', async () => {
+  const html = await renderAt(
+    '/projects/project_citypoint?class=branded',
+    undefined,
+    {
+      plan: measurementPlanV2Response(2),
+      overview: measurementOverviewResponse({ queryClass: 'branded' }),
+      overviewKey: { queryClass: 'branded' },
+    },
+  )
+
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const control = doc.querySelector('[aria-labelledby="advanced-measurement-class-label"]')
+  const checked = control?.querySelector('[role="radio"][aria-checked="true"]')
+  expect(checked?.textContent).toBe('Branded')
+})
+
+test('a stale group key in the URL falls back to all properties instead of erroring', async () => {
+  // A bookmark outlives the group it names. The page must still render.
+  const html = await renderAt(
+    '/projects/project_citypoint?scope=group:deleted-market',
+    undefined,
+    { plan: measurementPlanV2Response(2), overview: measurementOverviewResponse() },
+  )
+
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const group = doc.querySelector('[aria-labelledby="advanced-measurement-group-label"]')
+  const checked = group?.querySelector('[role="radio"][aria-checked="true"], option[selected]')
+  expect(checked?.textContent).toBe('All properties')
+  expect(html).not.toContain('Something went wrong')
 })
