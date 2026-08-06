@@ -1,5 +1,4 @@
 import { withRetry, isRetryableHttpError } from '@ainyc/canonry-contracts'
-import type { GscUrlInspectionResult } from '@ainyc/canonry-integration-google'
 
 /**
  * Paced, rate-aware driver for GSC URL Inspection loops.
@@ -118,11 +117,11 @@ export interface PacedInspectLogger {
   error: (action: string, ctx?: Record<string, unknown>) => void
 }
 
-export interface PacedInspectCallbacks {
+export interface PacedInspectCallbacks<TResult> {
   /** Perform one inspection (caller binds accessToken + propertyId). */
-  inspectOne: (url: string) => Promise<GscUrlInspectionResult>
+  inspectOne: (url: string) => Promise<TResult>
   /** Persist a successful inspection. `index` is 0-based into the input list. */
-  onResult: (url: string, result: GscUrlInspectionResult, index: number) => void
+  onResult: (url: string, result: TResult, index: number) => void
   /** Record a per-URL failure (after retries were exhausted). */
   onError: (url: string, err: unknown, index: number) => void
 }
@@ -137,6 +136,16 @@ export interface PacedInspectDeps {
    * to at least 1, so `1` restores the old strictly-serial behaviour.
    */
   concurrency?: number
+  /**
+   * Which failures count as transient. Defaults to the GSC predicate, which
+   * treats the endpoint's quota-as-403 as a rate signal.
+   *
+   * Injectable because the predicate decides TWO things: what gets retried, and
+   * what advances the circuit breaker. A caller whose service signals throttling
+   * differently — Bing answers `400` with `ErrorCode 5` — would otherwise never
+   * trip the breaker, and would grind through a whole sitemap against a wall.
+   */
+  isRetryable?: (err: unknown) => boolean
   log?: PacedInspectLogger
 }
 
@@ -171,14 +180,15 @@ function defaultSleep(ms: number): Promise<void> {
  * persist rows are unaffected; a caller rendering sequential progress should
  * expect gaps.
  */
-export async function inspectUrlsPaced(
+export async function inspectUrlsPaced<TResult>(
   urls: string[],
-  cb: PacedInspectCallbacks,
+  cb: PacedInspectCallbacks<TResult>,
   deps: PacedInspectDeps = {},
 ): Promise<PacedInspectOutcome> {
   const sleep = deps.sleep ?? defaultSleep
   const jitter = deps.jitter ?? Math.random
   const concurrency = Math.max(1, Math.min(deps.concurrency ?? INSPECT_MAX_CONCURRENCY, urls.length || 1))
+  const isRetryable = deps.isRetryable ?? isRetryableGscInspectError
 
   let inspected = 0
   let errors = 0
@@ -215,7 +225,7 @@ export async function inspectUrlsPaced(
         maxRetries: INSPECT_MAX_RETRIES,
         baseDelayMs: INSPECT_BASE_DELAY_MS,
         maxDelayMs: INSPECT_MAX_BACKOFF_MS,
-        isRetryable: isRetryableGscInspectError,
+        isRetryable,
         sleep,
         onRetry: ({ attempt, delayMs, err }) =>
           deps.log?.info('inspect.retry', {
@@ -234,7 +244,7 @@ export async function inspectUrlsPaced(
         // Only rate/server/network-shaped failures advance the breaker — a
         // non-retryable per-URL error (bad URL, 404) is a data issue, not a
         // signal that the whole property is throttled or inaccessible.
-        if (isRetryableGscInspectError(err)) {
+        if (isRetryable(err)) {
           consecutiveRetryableFailures++
           if (consecutiveRetryableFailures >= INSPECT_FAILFAST_THRESHOLD) {
             deps.log?.error('inspect.circuit-break', {
