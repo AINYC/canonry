@@ -1027,6 +1027,59 @@ describe('outcome count row', () => {
     renderOverview()
     expect(screen.queryByLabelText('Property outcomes')).toBeNull()
   })
+
+  // The parent trims the term before storing it, so a pause after a space
+  // echoes back a shorter string. Writing that echo into the controlled input
+  // deletes the space the user just typed, and the next word merges onto the
+  // last one: "Downtown " + "Office" becomes "DowntownOffice", which matches
+  // nothing.
+  it('does not eat a trailing space when the trimmed term echoes back', () => {
+    const { rerender } = renderOverviewReturning({
+      report: { ...report(), currentView: undefined },
+      viewSearch: '',
+    })
+    const box = screen.getByPlaceholderText('Search properties') as HTMLInputElement
+
+    fireEvent.change(box, { target: { value: 'Downtown ' } })
+    expect(box.value).toBe('Downtown ')
+
+    rerender(
+      <AdvancedMeasurementOverview
+        report={{ ...report(), currentView: undefined }}
+        canEdit
+        viewSearch="Downtown"
+      />,
+    )
+
+    expect(box.value).toBe('Downtown ')
+  })
+
+  // While a new view loads, the cache still holds the PREVIOUS scope's counts.
+  // Every other data block swaps to a skeleton for exactly that reason; leaving
+  // this one up presents non-brand numbers as the branded view's split.
+  it('hides the counts while a new view is loading rather than showing the old ones', () => {
+    renderOverview({
+      isViewLoading: true,
+      report: withOutcomes({
+        bothSignals: 14, mentionedOnly: 11, citedOnly: 6, neither: 9, notMeasured: 7, total: 47,
+      }),
+    })
+
+    expect(screen.queryByLabelText('Property outcomes')).toBeNull()
+  })
+
+  // The counts narrow with the search box, exactly as the table and its
+  // "N properties" count do. Claiming they cover the whole scope is a promise
+  // the numbers stop keeping the moment someone types.
+  it('describes the counts as covering the listed Properties, not the whole scope', () => {
+    renderOverview({ report: withOutcomes({
+      bothSignals: 1, mentionedOnly: 1, citedOnly: 0, neither: 0, notMeasured: 0, total: 2,
+    }) })
+
+    const tip = screen.getByRole('button', { name: /Sums to 2/ })
+    expect(tip.getAttribute('aria-label')).not.toContain('in scope')
+    expect(tip.getAttribute('aria-label')).toContain('listed')
+  })
 })
 
 describe('coverage hero', () => {
@@ -1041,6 +1094,48 @@ describe('coverage hero', () => {
     expect(hero.textContent).toContain('cited')
     expect(hero.textContent).toContain('mentioned')
     expect(hero.textContent).toContain('of 8')
+  })
+
+  // The two rates are NOT always over the same population: the API measures
+  // mention over answered slots and citation over source-complete slots, and
+  // partial source capture is routine. One shared basis line would misstate
+  // whichever rate it did not come from.
+  it('gives each rate its own basis when the two populations differ', () => {
+    const current = report()
+    renderOverview({
+      report: {
+        ...current,
+        classScopes: {
+          ...current.classScopes!,
+          nonBrand: {
+            ...current.classScopes!.nonBrand,
+            aggregate: {
+              ...current.classScopes!.nonBrand.aggregate,
+              metrics: {
+                ...current.classScopes!.nonBrand.aggregate.metrics,
+                citationCoverage: ratio(50, 250),
+                mentionCoverage: ratio(150, 300),
+              },
+            },
+          },
+        },
+      },
+    })
+    const hero = screen.getByLabelText('Coverage')
+
+    expect(within(hero).getByText('20%')).toBeTruthy()
+    expect(within(hero).getByText('50%')).toBeTruthy()
+    // The killer: one line reading "of 250" under both rates would tell a
+    // reader that 50% meant 125 mentions, when the measured figure is 150.
+    expect(hero.textContent).toContain('50 of 250')
+    expect(hero.textContent).toContain('150 of 300')
+  })
+
+  it('keeps the single shared basis when both rates really do share a population', () => {
+    renderOverview()
+    const hero = screen.getByLabelText('Coverage')
+    expect(hero.textContent).toContain('of 8')
+    expect(hero.textContent).not.toContain('2 of 8')
   })
 
   it('does not put a per-Property count in a hero denominated in assignments', () => {
