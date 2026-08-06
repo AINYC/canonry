@@ -304,6 +304,31 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.getByRole('button', { name: 'Hide details for Downtown Office' })).toBeTruthy()
   })
 
+  // Each expansion adds an engine sub-row per provider plus a details panel, so
+  // two open at once push the rest of a several-hundred-row table off screen.
+  it('opens one Property at a time, collapsing the previously open one', () => {
+    renderOverview()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Downtown Office' }))
+    expect(screen.getByRole('button', { name: 'Hide details for Downtown Office' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Uptown Office' }))
+
+    expect(screen.getByRole('button', { name: 'Hide details for Uptown Office' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show details for Downtown Office' })).toBeTruthy()
+  })
+
+  it('collapses the open Property when it is clicked again, leaving none open', () => {
+    renderOverview()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Downtown Office' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Hide details for Downtown Office' }))
+
+    expect(screen.getByRole('button', { name: 'Show details for Downtown Office' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show details for Uptown Office' })).toBeTruthy()
+    expect(screen.queryByText('Assigned queries')).toBeNull()
+  })
+
   it('badges bridged property and evidence rows as Historical', () => {
     const current = report()
     const first = current.classScopes!.nonBrand.aggregate.properties[0]!
