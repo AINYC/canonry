@@ -1034,6 +1034,58 @@ describe('Reading the answer', () => {
   })
 })
 
+// Two queries repeated down almost every row — the production shape that
+// motivated collapsing the Queries cell into a count. A real screenshot had
+// nine rows where four carried this exact joined string and the rest carried
+// one half of it.
+const REPEATED_QUERY_A = 'best apartments in buckhead atlanta'
+const REPEATED_QUERY_B = 'luxury apartments buckhead atlanta'
+const REPEATED_QUERIES_TEXT = `${REPEATED_QUERY_A} · ${REPEATED_QUERY_B}`
+
+type CompetitorRowFixture = {
+  name: string
+  occurrences: number
+  providers: string[]
+  providerTotal: number
+  providersTruncated: boolean
+  questions: string[]
+  questionTotal: number
+  questionsTruncated: boolean
+}
+
+function competitorRow(
+  overrides: { name: string; questions: string[] } & Partial<CompetitorRowFixture>,
+): CompetitorRowFixture {
+  return {
+    occurrences: 1,
+    providers: ['openai'],
+    providerTotal: 1,
+    providersTruncated: false,
+    questionTotal: overrides.questions.length,
+    questionsTruncated: false,
+    ...overrides,
+  }
+}
+
+function competitorsResponse(rows: CompetitorRowFixture[]) {
+  return {
+    property: { targetKey: TARGET_KEY, label: 'Harbor House' },
+    measurement: { state: 'complete' as const, displayedRunId: RUN_ID, planRevision: 7, completedAt: '2026-08-02T12:05:00.000Z' },
+    queryClass: 'non-brand' as const,
+    basis: { state: 'available' as const, answeredResults: 9, targetMissResults: 9, recommendationOccurrences: 20 },
+    competitors: rows,
+    total: rows.length,
+    truncated: false,
+  }
+}
+
+function renderNamedInsteadWith(rows: CompetitorRowFixture[]) {
+  return renderPropertyPageFromApi(url => {
+    if (pathOf(url).includes('/measurement-property-competitors')) return jsonResponse(competitorsResponse(rows))
+    return propertyPageResponses()(url)
+  })
+}
+
 describe('Named instead of this Property', () => {
   it('names who the engines recommended in the answers this Property missed', async () => {
     // Coverage says there is a gap. Only this says what is in it — and the
@@ -1046,6 +1098,64 @@ describe('Named instead of this Property', () => {
     expect(within(section).getByText('The Sutton')).toBeTruthy()
     expect(within(section).getByText('openai, gemini')).toBeTruthy()
     expect(within(section).getByText(/3 of 4 answers to non-brand queries did not name this Property/)).toBeTruthy()
+  })
+
+  it('collapses a repeated query list into a count, and keeps the text reachable behind disclosure', async () => {
+    // Alpha and Beta are two DIFFERENT rivals that share the exact same query
+    // list — the production shape. Gamma carries only half that list, so its
+    // count must read differently even though its query text overlaps.
+    const rows = [
+      competitorRow({ name: 'Alpha Towers', occurrences: 4, questions: [REPEATED_QUERY_A, REPEATED_QUERY_B] }),
+      competitorRow({ name: 'Beta Lofts', occurrences: 6, questions: [REPEATED_QUERY_A, REPEATED_QUERY_B] }),
+      competitorRow({ name: 'Gamma Flats', occurrences: 5, questions: [REPEATED_QUERY_A] }),
+    ]
+    await renderNamedInsteadWith(rows)
+
+    const section = await screen.findByRole('region', { name: /Named instead of this Property/ })
+
+    // The wide, near-constant text is gone from the row cells on first render
+    // — only the count survives there.
+    expect(within(section).queryByText(REPEATED_QUERIES_TEXT)).toBeNull()
+    expect(within(section).queryByText(REPEATED_QUERY_A)).toBeNull()
+
+    const alphaRow = within(section).getByText('Alpha Towers').closest('tr')!
+    const betaRow = within(section).getByText('Beta Lofts').closest('tr')!
+    const gammaRow = within(section).getByText('Gamma Flats').closest('tr')!
+
+    // The count is the signal that survives: two different rivals both show
+    // "2" — that IS the thing a reader compares row to row.
+    expect(within(alphaRow).getByText('2')).toBeTruthy()
+    expect(within(betaRow).getByText('2')).toBeTruthy()
+    expect(within(gammaRow).getByText('1')).toBeTruthy()
+
+    // The disclosure control is a real, named, keyboard-reachable button, and
+    // activating it exposes the exact joined query text.
+    const alphaToggle = within(alphaRow).getByRole('button', { name: REPEATED_QUERIES_TEXT })
+    fireEvent.click(alphaToggle)
+    expect(await screen.findByText(REPEATED_QUERIES_TEXT)).toBeTruthy()
+  })
+
+  it('surfaces the truncation indicator behind the disclosure control, worded exactly', async () => {
+    const rows = [
+      competitorRow({
+        name: 'Delta Suites',
+        occurrences: 9,
+        questions: [REPEATED_QUERY_A, REPEATED_QUERY_B],
+        questionTotal: 5,
+        questionsTruncated: true,
+      }),
+    ]
+    await renderNamedInsteadWith(rows)
+
+    const section = await screen.findByRole('region', { name: /Named instead of this Property/ })
+    const deltaRow = within(section).getByText('Delta Suites').closest('tr')!
+
+    // The count is the SERVER total (5), not the length of the sample array (2).
+    expect(within(deltaRow).getByText('5')).toBeTruthy()
+
+    const deltaToggle = within(deltaRow).getByRole('button', { name: `${REPEATED_QUERIES_TEXT} +3 more` })
+    fireEvent.click(deltaToggle)
+    expect(await screen.findByText(`${REPEATED_QUERIES_TEXT} +3 more`)).toBeTruthy()
   })
 
   it('says so plainly when no rival was named, rather than showing an empty table', async () => {

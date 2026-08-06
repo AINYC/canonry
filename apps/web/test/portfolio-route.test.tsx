@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, expect, onTestFinished, test } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 
@@ -426,7 +426,8 @@ test('a version-two Overview uses server scope, search and pagination and defers
   expect(await page.findByText('Harbor Annex')).toBeTruthy()
   expect(observed.some(path => path.includes('cursor=cursor-2') && path.includes('runId=run-synthetic'))).toBe(true)
 
-  fireEvent.change(page.getByLabelText('Group'), { target: { value: 'north' } })
+  // Group is a segmented radiogroup at <=5 groups, so pick the option by label.
+  fireEvent.click(within(page.getByLabelText('Group')).getByRole('radio', { name: 'North' }))
   expect(await page.findByText('North Property')).toBeTruthy()
   expect(observed.some(path => path.includes('scope=group') && path.includes('groupKey=north'))).toBe(true)
 

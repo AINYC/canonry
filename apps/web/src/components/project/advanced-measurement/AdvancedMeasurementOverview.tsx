@@ -1,6 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown } from 'lucide-react'
-import type { ReactNode } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import type { MetricTone } from '../../../view-models.js'
 
 import { ToneBadge } from '../../shared/ToneBadge.js'
@@ -157,6 +156,14 @@ const DETAIL_LIST_LIMIT = 50
 const FLAGGED_RESULTS_INITIAL_LIMIT = 20
 const FLAGGED_RESULTS_INCREMENT = 50
 const SEARCH_DEBOUNCE_MS = 250
+/** Above this many groups a segmented control gets unwieldy; fall back to a select. */
+const GROUP_SEGMENTED_CONTROL_LIMIT = 5
+
+const QUERY_CLASS_OPTIONS: readonly { value: AdvancedMeasurementClass; label: string }[] = [
+  { value: 'all', label: 'All queries' },
+  { value: 'non-brand', label: 'Non-brand' },
+  { value: 'branded', label: 'Branded' },
+]
 
 const evidenceLabels: Record<AdvancedMeasurementEvidenceKind, string> = {
   'this-property': 'Matches this Property',
@@ -385,6 +392,83 @@ function CompetitorShareOfVoice({ values }: { values: readonly AdvancedMeasureme
   )
 }
 
+interface SegmentedControlOption<T extends string> {
+  value: T
+  label: string
+}
+
+/**
+ * A real ARIA radiogroup, not a select: every option is visible at once so the
+ * current state reads without a click, and arrow keys move both focus and
+ * selection like a native radio group (roving tabindex on the checked option).
+ *
+ * Wears the house `.segmented` skin so it is visually identical to the five
+ * segmented controls already in the dashboard (GSC, Activity, Visibility trend,
+ * Technical AEO). The SEMANTICS deliberately differ from `VisibilityTrendSection`'s
+ * `Segmented`, which is a `role="group"` of `aria-pressed` toggles: these options
+ * are mutually exclusive filters, and radiogroup is the WAI-ARIA pattern for
+ * "choose exactly one", giving arrow-key navigation a toggle group does not.
+ * Same paint, stricter semantics — not a second visual language.
+ */
+function SegmentedControl<T extends string>({
+  ariaLabelledBy,
+  value,
+  options,
+  onChange,
+  disabled = false,
+}: {
+  ariaLabelledBy: string
+  value: T
+  options: readonly SegmentedControlOption<T>[]
+  onChange: (value: T) => void
+  disabled?: boolean
+}) {
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (disabled) return
+    const currentIndex = options.findIndex(option => option.value === value)
+    let nextIndex: number | null = null
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % options.length
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + options.length) % options.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = options.length - 1
+    if (nextIndex === null) return
+    event.preventDefault()
+    const nextOption = options[nextIndex]
+    onChange(nextOption.value)
+    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')[nextIndex].focus()
+  }
+
+  return (
+    <div
+      role="radiogroup"
+      aria-labelledby={ariaLabelledBy}
+      aria-disabled={disabled}
+      className="segmented flex-wrap"
+      onKeyDown={handleKeyDown}
+    >
+      {options.map((option) => {
+        const checked = option.value === value
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            tabIndex={checked ? 0 : -1}
+            disabled={disabled}
+            onClick={() => onChange(option.value)}
+            className={`segmented-option disabled:cursor-not-allowed disabled:opacity-50 ${
+              checked ? 'segmented-option-active' : ''
+            }`}
+          >
+            {option.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export function AdvancedMeasurementOverview({
   report,
   canEdit,
@@ -450,11 +534,12 @@ export function AdvancedMeasurementOverview({
     return () => window.clearTimeout(timer)
   }, [onViewChange, requestView, search, usesServerView])
 
+  const groupOptions = report.availableGroups ?? scope.groups
+
   useEffect(() => {
-    const groups = report.availableGroups ?? scope.groups
-    if (selectedView === ALL_PROPERTIES || groups.some(group => group.id === selectedView)) return
+    if (selectedView === ALL_PROPERTIES || groupOptions.some(group => group.id === selectedView)) return
     setSelectedView(ALL_PROPERTIES)
-  }, [report.availableGroups, scope, selectedView])
+  }, [groupOptions, selectedView])
 
   const selectedGroup = usesServerView ? undefined : scope.groups.find(group => group.id === selectedView)
   const aggregate = selectedGroup?.aggregate ?? scope.aggregate
@@ -488,9 +573,43 @@ export function AdvancedMeasurementOverview({
         ? `${unavailableProperties} ${unavailableProperties === 1 ? 'property is' : 'properties are'} unavailable.`
         : flaggedResultsTotal > 0
           ? `${flaggedResultsTotal} flagged ${flaggedResultsTotal === 1 ? 'result needs' : 'results need'} review.`
-          : 'No action needed.')
-  const progressLabel = slotProgressLabel(report.latestMeasurement.completedSlots, report.latestMeasurement.totalSlots)
+          : null)
+  // Slot progress is only informative while the measurement hasn't reached a
+  // terminal state — a completed run always has completedSlots === totalSlots,
+  // so "32 of 32" would be true (and useless) on every finished measurement.
+  // Two independent guards, because neither alone is right.
+  //
+  // The slot comparison is what keeps the label from ever being a constant: a
+  // finished run has completedSlots === totalSlots, so "32 of 32" cannot render.
+  // Tone alone would miss this — a run that finished but carries a warning is
+  // toned `caution`, which is neither positive nor negative, and would print the
+  // very constant this removes.
+  //
+  // Failure is a separate question from progress, and tone is the only signal
+  // for it the report carries (`status` is just a label and a tone). A failed
+  // run's partial count is not progress toward anything, so it stays hidden.
+  const measurementFailed = report.latestMeasurement.status.tone === 'negative'
+  const measurementInProgress = !measurementFailed
+    && report.latestMeasurement.completedSlots < report.latestMeasurement.totalSlots
+  const progressLabel = measurementInProgress
+    ? slotProgressLabel(report.latestMeasurement.completedSlots, report.latestMeasurement.totalSlots)
+    : null
   const measurementDate = availableLabel(report.latestMeasurement.date)
+  const groupSegmentOptions = [
+    { value: ALL_PROPERTIES, label: 'All properties' },
+    ...groupOptions.map(group => ({ value: group.id, label: group.label })),
+  ]
+  const useGroupSelect = groupOptions.length > GROUP_SEGMENTED_CONTROL_LIMIT
+
+  function handleGroupChange(value: string) {
+    setSelectedView(value)
+    requestView(value === ALL_PROPERTIES ? { scope: 'all' } : { scope: 'group', groupKey: value })
+  }
+
+  function handleClassChange(value: AdvancedMeasurementClass) {
+    setSelectedClass(value)
+    requestView({ queryClass: value })
+  }
 
   function toggleProperty(propertyId: string) {
     const willExpand = !expandedPropertyIds.has(propertyId)
@@ -513,7 +632,7 @@ export function AdvancedMeasurementOverview({
               {report.latestMeasurement.includesBridgedHistory ? <ToneBadge tone="caution">Includes historical data</ToneBadge> : null}
               {progressLabel ? <span className="text-sm text-secondary tabular-nums">{progressLabel}</span> : null}
               {measurementDate ? <span className="text-sm text-secondary">{measurementDate}</span> : null}
-              <span className="text-sm text-secondary">{statusMessage}</span>
+              {statusMessage ? <span className="text-sm text-secondary">{statusMessage}</span> : null}
               {canEdit && classReportingAvailable && onRunMeasurement ? (
                 <Button className="ml-auto" size="sm" onClick={() => { void onRunMeasurement() }} disabled={isRunningMeasurement}>
                   {isRunningMeasurement ? 'Starting measurement…' : 'Run measurement'}
@@ -545,40 +664,42 @@ export function AdvancedMeasurementOverview({
 
       <div className="flex flex-wrap items-end gap-4 border-b border-default pb-4">
         <div className="space-y-1">
-          <label htmlFor="advanced-measurement-group" className="block text-sm font-medium text-heading">Group</label>
-          <select
-            id="advanced-measurement-group"
-            value={selectedView}
-            onChange={event => {
-              const value = event.target.value
-              setSelectedView(value)
-              requestView(value === ALL_PROPERTIES ? { scope: 'all' } : { scope: 'group', groupKey: value })
-            }}
-            className="h-9 rounded-md border border-default bg-surface px-3 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-mono-400"
+          <label
+            id="advanced-measurement-group-label"
+            htmlFor={useGroupSelect ? 'advanced-measurement-group' : undefined}
+            className="block text-sm font-medium text-heading"
           >
-            <option value={ALL_PROPERTIES}>All properties</option>
-            {(report.availableGroups ?? scope.groups).map(group => <option key={group.id} value={group.id}>{group.label}</option>)}
-          </select>
+            Group
+          </label>
+          {useGroupSelect ? (
+            <select
+              id="advanced-measurement-group"
+              value={selectedView}
+              onChange={event => handleGroupChange(event.target.value)}
+              className="h-9 rounded-md border border-default bg-surface px-3 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-mono-400"
+            >
+              {groupSegmentOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          ) : (
+            <SegmentedControl
+              ariaLabelledBy="advanced-measurement-group-label"
+              value={selectedView}
+              options={groupSegmentOptions}
+              onChange={handleGroupChange}
+            />
+          )}
         </div>
         <div className="space-y-1">
-          <label htmlFor="advanced-measurement-class" className="block text-sm font-medium text-heading">Query type</label>
-          <select
-            id="advanced-measurement-class"
-            disabled={!classReportingAvailable}
+          <label id="advanced-measurement-class-label" className="block text-sm font-medium text-heading">Query type</label>
+          <SegmentedControl
+            ariaLabelledBy="advanced-measurement-class-label"
             value={selectedClass}
-            onChange={event => {
-              const value = event.target.value as AdvancedMeasurementClass
-              setSelectedClass(value)
-              requestView({ queryClass: value })
-            }}
-            className="h-9 rounded-md border border-default bg-surface px-3 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-mono-400"
-          >
-            <option value="all">All queries</option>
-            <option value="non-brand">Non-brand</option>
-            <option value="branded">Branded</option>
-          </select>
+            options={QUERY_CLASS_OPTIONS}
+            onChange={handleClassChange}
+            disabled={!classReportingAvailable}
+          />
         </div>
-        <div className="min-w-52 flex-1 space-y-1">
+        <div className="ml-auto min-w-52 max-w-xs flex-1 space-y-1">
           <label htmlFor="advanced-measurement-search" className="block text-sm font-medium text-heading">Search properties</label>
           <input
             id="advanced-measurement-search"
@@ -627,7 +748,7 @@ export function AdvancedMeasurementOverview({
                           {property.historical ? <ToneBadge tone="caution">Historical</ToneBadge> : null}
                         </span>
                       </td>
-                      <td className="text-right"><Button size="icon" variant="ghost" aria-expanded={expanded} aria-label={expanded ? `Hide details for ${property.name}` : `Show details for ${property.name}`} onClick={() => toggleProperty(property.id)}><ChevronDown className={`h-4 w-4 transition-transform duration-200 motion-reduce:transition-none ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" /></Button></td>
+                      <td className="text-right"><Button size="sm" variant="ghost" aria-expanded={expanded} onClick={() => toggleProperty(property.id)}>{expanded ? `Hide details for ${property.name}` : `Show details for ${property.name}`}</Button></td>
                     </tr>
                     {expanded ? <tr key={`${property.id}:details`}><td colSpan={5} className="bg-surface-subtle px-4"><PropertyDetails property={property} onRetryEvidence={onRetryEvidence} /></td></tr> : null}
                   </Fragment>

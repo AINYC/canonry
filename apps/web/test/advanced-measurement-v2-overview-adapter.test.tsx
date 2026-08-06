@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   MeasurementOverviewResponse,
@@ -126,7 +126,9 @@ describe('version-two measurement overview adapter', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show 50 more' }))
     expect(onLoadMore).toHaveBeenCalledWith('page-2')
 
-    fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'downtown' } })
+    // Group renders as a segmented radiogroup at <=5 groups, so it is clicked
+    // by option label rather than driven with a `change` event.
+    fireEvent.click(within(screen.getByLabelText('Group')).getByRole('radio', { name: 'Downtown' }))
     expect(onViewChange).toHaveBeenCalledWith({ scope: 'group', groupKey: 'downtown', queryClass: 'non-brand' })
 
     const row = screen.getByRole('button', { name: 'Show details for Property 1' }).closest('tr')!
@@ -180,7 +182,7 @@ describe('version-two measurement overview adapter', () => {
 
       onViewChange.mockClear()
       fireEvent.change(search, { target: { value: 'queued' } })
-      fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'downtown' } })
+      fireEvent.click(within(screen.getByLabelText('Group')).getByRole('radio', { name: 'Downtown' }))
       expect(onViewChange).toHaveBeenCalledTimes(1)
       expect(onViewChange).toHaveBeenLastCalledWith({
         scope: 'group',
@@ -191,7 +193,7 @@ describe('version-two measurement overview adapter', () => {
       act(() => vi.advanceTimersByTime(250))
       expect(onViewChange).toHaveBeenCalledTimes(1)
 
-      fireEvent.change(screen.getByLabelText('Query type'), { target: { value: 'branded' } })
+      fireEvent.click(within(screen.getByLabelText('Query type')).getByRole('radio', { name: 'Branded' }))
       expect(onViewChange).toHaveBeenLastCalledWith({
         scope: 'group',
         groupKey: 'downtown',

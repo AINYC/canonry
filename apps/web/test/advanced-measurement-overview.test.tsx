@@ -147,7 +147,6 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.getAllByText('3 of 4 (75%)').length).toBeGreaterThan(0)
     expect(screen.getByText('6 of 8 (75%)')).toBeTruthy()
     expect(screen.getByText('2 of 8 (25%)')).toBeTruthy()
-    expect(screen.getByText('8 of 8')).toBeTruthy()
     expect(screen.getByText('Aug 2, 2026')).toBeTruthy()
   })
 
@@ -184,7 +183,9 @@ describe('AdvancedMeasurementOverview', () => {
 
     const statusLine = screen.getByLabelText('Measurement status and next action')
     expect(statusLine.textContent).toContain('Complete')
-    expect(statusLine.textContent).toContain('8 of 8')
+    // A completed measurement's progress slots are always full (8 of 8) and
+    // tell the reader nothing, so the strip omits them once the run is done.
+    expect(statusLine.textContent).not.toContain('8 of 8')
     expect(statusLine.textContent).not.toContain('slots completed')
     expect(statusLine.textContent).toContain('Aug 2, 2026')
     expect(statusLine.textContent).toContain('1 flagged result needs review.')
@@ -209,7 +210,7 @@ describe('AdvancedMeasurementOverview', () => {
   it('swaps to the selected group precomputed aggregate', () => {
     renderOverview()
 
-    fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'metro' } })
+    fireEvent.click(within(screen.getByLabelText('Group')).getByRole('radio', { name: 'Metro offices' }))
 
     expect(screen.getAllByText('1 of 2 (50%)').length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Show details for Downtown Office' })).toBeTruthy()
@@ -294,27 +295,6 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.getByRole('button', { name: 'Hide details for Downtown Office' })).toBeTruthy()
   })
 
-  it('points the row chevron down when collapsed and up when expanded', () => {
-    renderOverview()
-
-    // The toggle carries no visible text, so the chevron IS the affordance: an
-    // empty button and a button whose icon never turns both leave the row
-    // looking inert, and neither is visible to the accessible-name lookups the
-    // rest of this suite uses.
-    const toggle = screen.getByRole('button', { name: 'Show details for Downtown Office' })
-    const chevron = toggle.querySelector('svg')
-    expect(chevron).toBeTruthy()
-    expect(chevron!.getAttribute('class')).not.toContain('rotate-180')
-    // Reduced motion is honoured the way the repo's other chevron is
-    // (`.task-center-chevron`), not left to an unguarded transition.
-    expect(chevron!.getAttribute('class')).toContain('motion-reduce:transition-none')
-
-    fireEvent.click(toggle)
-
-    const expandedToggle = screen.getByRole('button', { name: 'Hide details for Downtown Office' })
-    expect(expandedToggle.querySelector('svg')!.getAttribute('class')).toContain('rotate-180')
-  })
-
   it('badges bridged property and evidence rows as Historical', () => {
     const current = report()
     const first = current.classScopes!.nonBrand.aggregate.properties[0]!
@@ -362,11 +342,11 @@ describe('AdvancedMeasurementOverview', () => {
 
     expect(screen.getByText('Query type')).toBeTruthy()
     expect(screen.queryByText('Brand share of voice')).toBeNull()
-    fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'metro' } })
+    fireEvent.click(within(screen.getByLabelText('Group')).getByRole('radio', { name: 'Metro offices' }))
     expect(screen.getByText('Brand share of voice')).toBeTruthy()
     expect(screen.getByText('Example Co.')).toBeTruthy()
     expect(screen.getByText('Rival Co.')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('Query type'), { target: { value: 'branded' } })
+    fireEvent.click(within(screen.getByLabelText('Query type')).getByRole('radio', { name: 'Branded' }))
     expect(screen.queryByText('Brand share of voice')).toBeNull()
     expect((screen.getByText('Flagged results (1)').closest('details') as HTMLDetailsElement).open).toBe(false)
   })
@@ -387,7 +367,7 @@ describe('AdvancedMeasurementOverview', () => {
       },
     })
 
-    fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'metro' } })
+    fireEvent.click(within(screen.getByLabelText('Group')).getByRole('radio', { name: 'Metro offices' }))
     expect(screen.queryByText('Brand share of voice')).toBeNull()
   })
 
@@ -434,9 +414,13 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.queryByText('Republish setup to enable Non-brand and Branded reporting.')).toBeNull()
     expect(screen.queryByText('Measurement progress unavailable')).toBeNull()
     expect(screen.queryByText('Date unavailable')).toBeNull()
-    // Was a disabled radio labelled 'Non-brand'. The control is now one select,
-    // so the disabled state belongs to it rather than to each option.
-    expect((screen.getByLabelText('Query type') as HTMLSelectElement).disabled).toBe(true)
+    // Query type is a radiogroup; while setup needs republishing the whole
+    // group and every option inside it are disabled.
+    const queryTypeGroup = screen.getByLabelText('Query type')
+    expect(queryTypeGroup.getAttribute('aria-disabled')).toBe('true')
+    for (const radio of within(queryTypeGroup).getAllByRole('radio')) {
+      expect((radio as HTMLButtonElement).disabled).toBe(true)
+    }
     expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
     fireEvent.click(screen.getByRole('button', { name: 'Republish setup' }))
     expect(onRepublishSetup).toHaveBeenCalledTimes(1)
@@ -533,16 +517,302 @@ describe('AdvancedMeasurementOverview', () => {
 })
 
 describe('query type offers every lane the API accepts', () => {
-  it('includes All queries, which the radio pair never exposed', () => {
+  it('shows All queries, Non-brand, and Branded simultaneously as radio options', () => {
     renderOverview()
-    const control = screen.getByLabelText('Query type') as HTMLSelectElement
-    expect([...control.options].map(option => option.value)).toEqual(['all', 'non-brand', 'branded'])
+    const control = screen.getByLabelText('Query type')
+    const radios = within(control).getAllByRole('radio')
+    expect(radios.map(radio => radio.textContent)).toEqual(['All queries', 'Non-brand', 'Branded'])
   })
 
   it('selecting All keeps the control on All rather than snapping back', () => {
     renderOverview()
-    const control = screen.getByLabelText('Query type') as HTMLSelectElement
-    fireEvent.change(control, { target: { value: 'all' } })
-    expect(control.value).toBe('all')
+    const control = screen.getByLabelText('Query type')
+    fireEvent.click(within(control).getByRole('radio', { name: 'All queries' }))
+    expect(within(control).getByRole('radio', { name: 'All queries' }).getAttribute('aria-checked')).toBe('true')
+    expect(within(control).getByRole('radio', { name: 'Non-brand' }).getAttribute('aria-checked')).toBe('false')
+  })
+})
+
+describe('status strip (defect 1)', () => {
+  it('does not render "32 of 32"-style progress once the measurement is complete', () => {
+    // The default fixture's latestMeasurement is { label: 'Complete', tone: 'positive', completedSlots: 8, totalSlots: 8 }.
+    renderOverview()
+    expect(screen.queryByText('8 of 8')).toBeNull()
+  })
+
+  it('renders the progress label while a measurement is genuinely in progress', () => {
+    renderOverview({
+      report: {
+        ...report(),
+        latestMeasurement: {
+          ...report().latestMeasurement,
+          status: { label: 'Running', tone: 'neutral' },
+          completedSlots: 5,
+          totalSlots: 32,
+        },
+      },
+    })
+    expect(screen.getByText('5 of 32')).toBeTruthy()
+  })
+
+  it('hides the progress label for a failed measurement even when slots are partially filled', () => {
+    renderOverview({
+      report: {
+        ...report(),
+        latestMeasurement: {
+          ...report().latestMeasurement,
+          status: { label: 'Failed', tone: 'negative' },
+          completedSlots: 5,
+          totalSlots: 32,
+        },
+      },
+    })
+    expect(screen.queryByText('5 of 32')).toBeNull()
+  })
+
+  it('hides the progress label on a FINISHED measurement that carries a warning', () => {
+    // The regression this locks: deriving "in progress" from tone alone treats
+    // `caution` as running, so a complete-but-warned run printed "32 of 32" —
+    // the exact constant the whole change removes. Slots are complete here, so
+    // nothing may render regardless of what the tone says.
+    renderOverview({
+      report: {
+        ...report(),
+        latestMeasurement: {
+          ...report().latestMeasurement,
+          status: { label: 'Complete with warnings', tone: 'caution' },
+          completedSlots: 32,
+          totalSlots: 32,
+        },
+      },
+    })
+    expect(screen.queryByText('32 of 32')).toBeNull()
+  })
+
+  it('never renders "No action needed." — the ToneBadge already says the state is healthy', () => {
+    renderOverview({ canEdit: false, report: { ...report(), flaggedResults: [] } })
+
+    expect(screen.queryByText('No action needed.')).toBeNull()
+    expect(screen.queryByText(/No action/)).toBeNull()
+    // With nothing left to say, the status line is just the badge and the date —
+    // no empty/placeholder span takes the old fallback's place.
+    const statusLine = screen.getByLabelText('Measurement status and next action')
+    expect(statusLine.textContent).toBe('CompleteAug 2, 2026')
+  })
+
+  it('renders nextActionText verbatim when the server supplies one', () => {
+    renderOverview({ report: { ...report(), nextActionText: 'Finish setup.' } })
+    expect(screen.getByText('Finish setup.')).toBeTruthy()
+  })
+
+  it('renders the unavailable-properties count with correct singular/plural agreement', () => {
+    const current = report()
+    renderOverview({
+      report: {
+        ...current,
+        flaggedResults: [],
+        classScopes: {
+          ...current.classScopes!,
+          nonBrand: {
+            ...current.classScopes!.nonBrand,
+            aggregate: { ...current.classScopes!.nonBrand.aggregate, unavailablePropertyCount: 2 },
+          },
+        },
+      },
+    })
+    expect(screen.getByText('2 properties are unavailable.')).toBeTruthy()
+
+    cleanup()
+    renderOverview({
+      report: {
+        ...current,
+        flaggedResults: [],
+        classScopes: {
+          ...current.classScopes!,
+          nonBrand: {
+            ...current.classScopes!.nonBrand,
+            aggregate: { ...current.classScopes!.nonBrand.aggregate, unavailablePropertyCount: 1 },
+          },
+        },
+      },
+    })
+    expect(screen.getByText('1 property is unavailable.')).toBeTruthy()
+  })
+
+  it('renders the flagged-results count with correct singular/plural agreement', () => {
+    const current = report()
+    renderOverview({
+      report: {
+        ...current,
+        flaggedResults: [{ id: 'flag-1', property: 'Downtown Office', summary: 'x', tone: 'caution', count: 3 }],
+      },
+    })
+    expect(screen.getByText('3 flagged results need review.')).toBeTruthy()
+  })
+
+  it('falls through to metricReasons.plan_v1 when the setup needs republishing', () => {
+    renderOverview({ report: { ...report(), classReporting: 'plan-v1', classScopes: undefined } })
+    expect(screen.getByText('Setup update required.')).toBeTruthy()
+  })
+
+  it('still surfaces a headline-metric unavailable reason ahead of the unavailable/flagged fallbacks', () => {
+    const current = report()
+    renderOverview({
+      report: {
+        ...current,
+        flaggedResults: [],
+        classScopes: {
+          ...current.classScopes!,
+          nonBrand: {
+            ...current.classScopes!.nonBrand,
+            aggregate: {
+              ...current.classScopes!.nonBrand.aggregate,
+              metrics: {
+                ...current.classScopes!.nonBrand.aggregate.metrics,
+                mentionCoverage: unavailable('no_completed_run'),
+              },
+            },
+          },
+        },
+      },
+    })
+    expect(screen.getByText('Not measured yet.')).toBeTruthy()
+  })
+})
+
+describe('control row (defect 2)', () => {
+  function serverViewReport(overrides: Partial<AdvancedMeasurementOverviewReport> = {}): AdvancedMeasurementOverviewReport {
+    const base = report()
+    const nonBrand = base.classScopes!.nonBrand
+    return {
+      ...base,
+      currentView: {
+        scope: { kind: 'all' },
+        queryClass: 'non-brand',
+        aggregate: nonBrand.aggregate,
+        propertyTotal: nonBrand.aggregate.properties.length,
+        nextCursor: null,
+      },
+      availableGroups: nonBrand.groups.map(group => ({ id: group.id, label: group.label })),
+      ...overrides,
+    }
+  }
+
+  function manyGroups(count: number) {
+    return Array.from({ length: count }, (_, index) => ({
+      id: `group-${index + 1}`,
+      label: `Group ${index + 1}`,
+      confirmedCompetitorCount: 0,
+      aggregate: {
+        metrics: { propertiesMentioned: ratio(1, 1), mentionCoverage: ratio(1, 1), citationCoverage: ratio(1, 1) },
+        properties: [],
+      },
+    }))
+  }
+
+  it('renders Query type as a radiogroup wearing the shared segmented skin, with aria-checked state', () => {
+    renderOverview()
+    const control = screen.getByLabelText('Query type')
+    expect(control.getAttribute('role')).toBe('radiogroup')
+    // The house classes, not bespoke utilities: `.segmented` / `.segmented-option`
+    // are what the GSC, Activity, Visibility-trend and Technical-AEO controls
+    // already use, and `.segmented-option` is where the focus-visible ring is
+    // defined (styles.css). Asserting the shared class is what stops this
+    // control drifting into a second visual language for the same widget.
+    expect(control.className).toContain('segmented')
+    const nonBrandRadio = within(control).getByRole('radio', { name: 'Non-brand' })
+    expect(nonBrandRadio.getAttribute('aria-checked')).toBe('true')
+    expect(nonBrandRadio.className).toContain('segmented-option')
+    expect(nonBrandRadio.className).toContain('segmented-option-active')
+    // An unchecked option wears the base class WITHOUT the active modifier.
+    const brandedRadio = within(control).getByRole('radio', { name: 'Branded' })
+    expect(brandedRadio.className).toContain('segmented-option')
+    expect(brandedRadio.className).not.toContain('segmented-option-active')
+  })
+
+  it('is keyboard operable: ArrowLeft moves both focus and the checked option', () => {
+    renderOverview()
+    const control = screen.getByLabelText('Query type')
+    const allRadio = within(control).getByRole('radio', { name: 'All queries' })
+    const nonBrandRadio = within(control).getByRole('radio', { name: 'Non-brand' })
+    expect(nonBrandRadio.getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.keyDown(nonBrandRadio, { key: 'ArrowLeft' })
+
+    expect(allRadio.getAttribute('aria-checked')).toBe('true')
+    expect(nonBrandRadio.getAttribute('aria-checked')).toBe('false')
+    expect(document.activeElement).toBe(allRadio)
+  })
+
+  it('selecting a Query type option issues the same server-view request a select would have', () => {
+    const onViewChange = vi.fn()
+    renderOverview({ report: serverViewReport(), onViewChange })
+
+    fireEvent.click(within(screen.getByLabelText('Query type')).getByRole('radio', { name: 'Branded' }))
+
+    expect(onViewChange).toHaveBeenCalledTimes(1)
+    expect(onViewChange).toHaveBeenCalledWith({ scope: 'all', queryClass: 'branded' })
+  })
+
+  it('renders Group as a segmented control (radiogroup) when five or fewer groups exist', () => {
+    renderOverview()
+    const control = screen.getByLabelText('Group')
+    expect(control.getAttribute('role')).toBe('radiogroup')
+    const radios = within(control).getAllByRole('radio')
+    expect(radios.map(radio => radio.textContent)).toEqual(['All properties', 'Metro offices'])
+  })
+
+  it('selecting a Group segment issues the same server-view request a select would have', () => {
+    const onViewChange = vi.fn()
+    renderOverview({ report: serverViewReport(), onViewChange })
+
+    fireEvent.click(within(screen.getByLabelText('Group')).getByRole('radio', { name: 'Metro offices' }))
+
+    expect(onViewChange).toHaveBeenCalledTimes(1)
+    expect(onViewChange).toHaveBeenCalledWith({ scope: 'group', groupKey: 'metro', queryClass: 'non-brand' })
+  })
+
+  it('renders Group as a <select> once more than five groups exist, and still requests the chosen group', () => {
+    const onViewChange = vi.fn()
+    const withManyGroups = serverViewReport({
+      availableGroups: manyGroups(6).map(group => ({ id: group.id, label: group.label })),
+    })
+    renderOverview({ report: withManyGroups, onViewChange })
+
+    const control = screen.getByLabelText('Group')
+    expect(control.tagName).toBe('SELECT')
+    expect([...(control as HTMLSelectElement).options].map(option => option.textContent)).toEqual([
+      'All properties', 'Group 1', 'Group 2', 'Group 3', 'Group 4', 'Group 5', 'Group 6',
+    ])
+
+    fireEvent.change(control, { target: { value: 'group-3' } })
+    expect(onViewChange).toHaveBeenCalledWith({ scope: 'group', groupKey: 'group-3', queryClass: 'non-brand' })
+  })
+
+  it('moves Search out of the filter cluster to the right side of the row (ml-auto)', () => {
+    renderOverview()
+    const search = screen.getByLabelText('Search properties')
+    const searchWrapper = search.closest('div')
+    expect(searchWrapper?.className).toContain('ml-auto')
+  })
+
+  it('debounces the search box before requesting a server view, then requests it with the typed text', () => {
+    vi.useFakeTimers()
+    try {
+      const onViewChange = vi.fn()
+      renderOverview({ report: serverViewReport(), onViewChange })
+
+      fireEvent.change(screen.getByLabelText('Search properties'), { target: { value: 'up' } })
+      expect(onViewChange).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(249)
+      expect(onViewChange).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(1)
+      expect(onViewChange).toHaveBeenCalledTimes(1)
+      expect(onViewChange).toHaveBeenCalledWith({ scope: 'all', queryClass: 'non-brand', search: 'up' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
