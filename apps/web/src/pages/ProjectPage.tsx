@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { ChevronDown, RefreshCw, Trash2 } from 'lucide-react'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { Link } from '@tanstack/react-router'
+
+import { measurementViewSearch, parseMeasurementViewSearch } from '../lib/measurement-view-url.js'
 import { useQueryClient } from '@tanstack/react-query'
 import { RunKinds, RunStatuses } from '@ainyc/canonry-contracts'
 
@@ -1668,12 +1670,30 @@ function ProjectPageContent({
   const [competitorFilter, setCompetitorFilter] = useState<string | null>(null)
   const [locationTimeline, setLocationTimeline] = useState<import('../api.js').ApiTimelineEntry[] | null>(null)
   const [_locationTimelineLoading, setLocationTimelineLoading] = useState(false)
-  const [advancedMeasurementView, setAdvancedMeasurementView] = useState<{
+  // Scope and query class come from the URL so a market is a place you can
+  // link, bookmark and reload — at hundreds of markets, re-picking one after
+  // every navigation IS the interaction. `search` stays local: it changes on
+  // every keystroke and belongs in neither the URL nor the history stack.
+  const measurementSearchParams = useSearch({ strict: false }) as { scope?: string; class?: string }
+  const urlMeasurementView = parseMeasurementViewSearch(measurementSearchParams)
+  const [advancedMeasurementSearch, setAdvancedMeasurementSearch] = useState<string | undefined>(undefined)
+  const setAdvancedMeasurementView = useCallback((next: {
     scope: 'all' | 'group'
     groupKey?: string
     queryClass: 'all' | 'non-brand' | 'branded'
     search?: string
-  }>({ scope: 'all', queryClass: 'non-brand' })
+  }) => {
+    setAdvancedMeasurementSearch(next.search)
+    // Scope and class are deliberate, low-frequency choices, so they PUSH:
+    // pressing back after picking a market should return to the previous
+    // market, which is what a reader expects of a control that changes what
+    // the page is about.
+    void navigate({
+      to: '.',
+      search: (prev: Record<string, unknown>) => ({ ...prev, ...measurementViewSearch(next) }),
+      replace: false,
+    })
+  }, [navigate])
   const [hasExpandedAdvancedProperty, setHasExpandedAdvancedProperty] = useState(false)
 
   const visibilityEvidence = model?.visibilityEvidence ?? []
@@ -1718,6 +1738,30 @@ function ProjectPageContent({
     ? `Next AI sweep ${new Date(sweepSchedule.nextRunAt).toLocaleString()}`
     : null
   const activeMeasurementPlan = activeMeasurementPlanQuery.data?.active ?? null
+
+  // A bookmark outlives the group it names. Once the plan has actually loaded
+  // and we can see which groups exist, a URL naming one that does not is
+  // resolved to all-properties BEFORE any request goes out — otherwise the page
+  // asks the server for a scope that cannot exist and paints a skeleton at
+  // someone who simply followed an old link. While the plan is still in flight
+  // the key is left alone: absence of an answer is not evidence the group is
+  // gone.
+  const planGroupKeysLoaded = activeMeasurementPlanQuery.data !== undefined
+  const planGroupKeys = new Set(
+    activeMeasurementPlan && Number(activeMeasurementPlan.plan.schemaVersion) === 2
+      ? (activeMeasurementPlan.plan as { groups?: { stableKey: string }[] }).groups?.map(group => group.stableKey) ?? []
+      : [],
+  )
+  const measurementScopeIsStale = urlMeasurementView.scope === 'group'
+    && Boolean(urlMeasurementView.groupKey)
+    && planGroupKeysLoaded
+    && !planGroupKeys.has(urlMeasurementView.groupKey!)
+  const advancedMeasurementView = {
+    ...(measurementScopeIsStale
+      ? { scope: 'all' as const, queryClass: urlMeasurementView.queryClass }
+      : urlMeasurementView),
+    ...(advancedMeasurementSearch ? { search: advancedMeasurementSearch } : {}),
+  }
   const activeMeasurementPlanSchemaVersion = activeMeasurementPlan === null
     ? null
     : Number(activeMeasurementPlan.plan.schemaVersion)

@@ -75,6 +75,15 @@ type SearchParams = {
   runProject?: string
   runWindow?: string
   runQuery?: string
+  /**
+   * Advanced-measurement view state, in the URL so a market is a place you can
+   * link, bookmark, and reload. `all` (the default) is omitted rather than
+   * written, so the common case leaves a clean URL.
+   *   scope=group:<stableKey> | scope=all
+   *   class=all | non-brand | branded
+   */
+  scope?: string
+  class?: string
 }
 
 function RootLayoutWithErrorBoundary() {
@@ -96,6 +105,8 @@ export const rootRoute = createRootRouteWithContext<RouterContext>()({
     runProject: typeof search.runProject === 'string' ? search.runProject : undefined,
     runWindow: typeof search.runWindow === 'string' ? search.runWindow : undefined,
     runQuery: typeof search.runQuery === 'string' ? search.runQuery : undefined,
+    scope: typeof search.scope === 'string' ? search.scope : undefined,
+    class: typeof search.class === 'string' ? search.class : undefined,
   }),
 })
 
