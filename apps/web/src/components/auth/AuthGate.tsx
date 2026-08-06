@@ -254,7 +254,14 @@ export function AuthGate() {
 
   return (
     <div className="min-h-screen bg-bg px-4 py-8">
-      <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-md items-center justify-center">
+      <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-md flex-col items-center justify-center gap-5">
+        {/* The first screen a client ever sees, often before they know what
+            the product is. Plain markup rather than <BrandLockup>, which is
+            built on router <Link>s — this gate renders before the router. */}
+        <div data-testid="auth-brand" className="flex items-center gap-2.5">
+          <img className="size-7" src="./favicon.svg" alt="" aria-hidden="true" />
+          <span className="text-lg font-semibold tracking-tight text-heading">Canonry</span>
+        </div>
         <Card className="surface-card w-full">
           {authState === 'checking' ? (
             <CardContent className="py-8">
@@ -265,9 +272,6 @@ export function AuthGate() {
               <CardHeader>
                 <p className="eyebrow eyebrow-soft">Dashboard access</p>
                 <CardTitle>Sign in to Canonry</CardTitle>
-                <CardDescription>
-                  Enter the name and password for your account.
-                </CardDescription>
               </CardHeader>
               <CardContent>
                 {sessionExpired ? (

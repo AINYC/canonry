@@ -91,7 +91,10 @@ test('project route renders a concise visibility summary with progressive detail
   const html = await renderApp('/projects/project_citypoint')
 
   expect(html).toMatch(/Citypoint Dental NYC/)
-  expect(html).toMatch(/Overview/)
+  // The tab is labelled for what it shows. The route id stays `overview` —
+  // embed configs pass that id on the wire (CANONRY_EMBED_PROJECT_TABS), so
+  // renaming it would break an existing install's allowlist.
+  expect(html).toMatch(/AI Visibility/)
   expect(html).toMatch(/Search Engines/)
   expect(html).toMatch(/Technical AEO/)
   expect(html).toMatch(/Query Discovery/)
