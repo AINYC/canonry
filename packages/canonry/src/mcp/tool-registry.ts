@@ -2049,7 +2049,7 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_measurement_portfolio_summary',
     title: 'Summarize measured Properties',
-    description: 'Start here to rank the weakest measured Properties and their stored replacement names. Reads stored data only; it never starts provider work.',
+    description: 'Start here to rank the weakest measured Properties and their stored replacement names, and to compare every named market worst-first. Each market is scoped to the displayed run; markets may share Properties, so they never sum to the portfolio totals. Reads stored data only; it never starts provider work.',
     access: 'read',
     tier: 'monitoring',
     inputSchema: measurementPortfolioSummaryInputSchema,

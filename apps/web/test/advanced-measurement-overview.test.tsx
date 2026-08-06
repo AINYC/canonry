@@ -294,6 +294,27 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.getByRole('button', { name: 'Hide details for Downtown Office' })).toBeTruthy()
   })
 
+  it('points the row chevron down when collapsed and up when expanded', () => {
+    renderOverview()
+
+    // The toggle carries no visible text, so the chevron IS the affordance: an
+    // empty button and a button whose icon never turns both leave the row
+    // looking inert, and neither is visible to the accessible-name lookups the
+    // rest of this suite uses.
+    const toggle = screen.getByRole('button', { name: 'Show details for Downtown Office' })
+    const chevron = toggle.querySelector('svg')
+    expect(chevron).toBeTruthy()
+    expect(chevron!.getAttribute('class')).not.toContain('rotate-180')
+    // Reduced motion is honoured the way the repo's other chevron is
+    // (`.task-center-chevron`), not left to an unguarded transition.
+    expect(chevron!.getAttribute('class')).toContain('motion-reduce:transition-none')
+
+    fireEvent.click(toggle)
+
+    const expandedToggle = screen.getByRole('button', { name: 'Hide details for Downtown Office' })
+    expect(expandedToggle.querySelector('svg')!.getAttribute('class')).toContain('rotate-180')
+  })
+
   it('badges bridged property and evidence rows as Historical', () => {
     const current = report()
     const first = current.classScopes!.nonBrand.aggregate.properties[0]!

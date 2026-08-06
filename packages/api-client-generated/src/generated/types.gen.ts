@@ -2422,6 +2422,9 @@ export type GscCoverageSnapshotDto = {
     date: string;
     indexed: number;
     notIndexed: number;
+    unknownPages: number;
+    verifiedByInspection: number;
+    derivedFromImpressions: number;
     reasonBreakdown: {
         [key: string]: number;
     };
@@ -4041,6 +4044,38 @@ export type MeasurementPortfolioSummaryResponse = {
         }>;
         recommendedInsteadTotal: number;
         recommendedInsteadTruncated: boolean;
+    }>;
+    markets: Array<{
+        groupKey: string;
+        label: string;
+        propertyCount: number;
+        propertiesMentioned: {
+            state: 'available';
+            value: number;
+            numerator?: number;
+            denominator?: number;
+        } | {
+            state: 'unavailable';
+            reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+        };
+        mentionCoverage: {
+            state: 'available';
+            value: number;
+            numerator?: number;
+            denominator?: number;
+        } | {
+            state: 'unavailable';
+            reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+        };
+        citationCoverage: {
+            state: 'available';
+            value: number;
+            numerator?: number;
+            denominator?: number;
+        } | {
+            state: 'unavailable';
+            reason: 'no_completed_run' | 'plan_v1' | 'no_population' | 'evidence_incomplete' | 'not_applicable';
+        };
     }>;
     totalProperties: number;
     truncated: boolean;
