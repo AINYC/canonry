@@ -142,15 +142,15 @@ function renderOverview(overrides: Partial<AdvancedMeasurementOverviewProps> = {
 }
 
 describe('AdvancedMeasurementOverview', () => {
-  it('shows truthful ratios for the three headline metrics', () => {
+  it('leads with the two headline rates and the measurement date', () => {
     renderOverview()
 
-    expect(screen.getByText('Properties mentioned')).toBeTruthy()
-    expect(screen.getByText('Mention coverage')).toBeTruthy()
-    expect(screen.getByText('Citation coverage')).toBeTruthy()
-    expect(screen.getAllByText('3 of 4 (75%)').length).toBeGreaterThan(0)
-    expect(screen.getByText('6 of 8 (75%)')).toBeTruthy()
-    expect(screen.getByText('2 of 8 (25%)')).toBeTruthy()
+    // The hero carries the two rates that share a denominator: cited 2 of 8,
+    // mentioned 6 of 8. The per-Property picture is the outcome counts, not a
+    // third number under the same denominator line.
+    const hero = screen.getByLabelText('Coverage')
+    expect(within(hero).getByText('25%')).toBeTruthy()
+    expect(within(hero).getByText('75%')).toBeTruthy()
     expect(screen.getByText('Aug 2, 2026')).toBeTruthy()
   })
 
@@ -216,7 +216,9 @@ describe('AdvancedMeasurementOverview', () => {
 
     fireEvent.click(within(screen.getByLabelText('Group')).getByRole('radio', { name: 'Metro offices' }))
 
-    expect(screen.getAllByText('1 of 2 (50%)').length).toBeGreaterThan(0)
+    // The group's precomputed aggregate is 1 of 2 on both signals; the
+    // all-properties view was 25/75, so 50% proves the swap actually happened.
+    expect(within(screen.getByLabelText('Coverage')).getAllByText('50%').length).toBe(2)
     expect(screen.getByRole('button', { name: 'Show details for Downtown Office' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Show details for Uptown Office' })).toBeNull()
   })
@@ -226,8 +228,11 @@ describe('AdvancedMeasurementOverview', () => {
 
     fireEvent.change(screen.getByLabelText('Search properties'), { target: { value: 'uptown' } })
 
-    expect(screen.getAllByText('3 of 4 (75%)').length).toBeGreaterThan(0)
-    expect(screen.getByText('6 of 8 (75%)')).toBeTruthy()
+    // Searching narrows the table, never the headline. The hero still reports
+    // the whole scope: cited 2 of 8, mentioned 6 of 8.
+    const heroAfterSearch = screen.getByLabelText('Coverage')
+    expect(within(heroAfterSearch).getByText('25%')).toBeTruthy()
+    expect(within(heroAfterSearch).getByText('75%')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Show details for Uptown Office' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Show details for Downtown Office' })).toBeNull()
     expect(screen.queryByText('Flagged results (1)')).toBeNull()
@@ -950,5 +955,100 @@ describe('row detail', () => {
     renderOverview()
     fireEvent.click(screen.getByRole('button', { name: 'Show details for Downtown Office' }))
     expect(document.querySelectorAll('tr.measurement-subrow').length).toBe(0)
+  })
+})
+
+describe('outcome count row', () => {
+  const withOutcomes = (outcomes: NonNullable<NonNullable<AdvancedMeasurementOverviewReport['currentView']>['outcomes']>) => ({
+    ...report(),
+    currentView: {
+      scope: { kind: 'all' as const },
+      queryClass: 'non-brand' as const,
+      aggregate: report().classScopes!.nonBrand.aggregate,
+      propertyTotal: outcomes.total,
+      nextCursor: null,
+      outcomes,
+    },
+  })
+
+  it('states four counts, collapsing the two one-signal buckets into one label', () => {
+    renderOverview({ report: withOutcomes({
+      bothSignals: 14, mentionedOnly: 11, citedOnly: 6, neither: 9, notMeasured: 7, total: 47,
+    }) })
+
+    const row = screen.getByLabelText('Property outcomes')
+    // Five buckets would be five phrases to read. "one signal" is the pair.
+    expect(within(row).getByText('14')).toBeTruthy()
+    expect(within(row).getByText('17')).toBeTruthy()
+    expect(within(row).getByText('9')).toBeTruthy()
+    expect(within(row).getByText('7')).toBeTruthy()
+    expect(row.textContent).toContain('both')
+    expect(row.textContent).toContain('one signal')
+    expect(row.textContent).toContain('neither')
+    expect(row.textContent).toContain('not measured')
+  })
+
+  it('keeps the cited-only split reachable, since it is the actionable half', () => {
+    renderOverview({ report: withOutcomes({
+      bothSignals: 14, mentionedOnly: 11, citedOnly: 6, neither: 9, notMeasured: 7, total: 47,
+    }) })
+    // Not inline — the tooltip carries it, per the copy rule.
+    const tip = screen.getByRole('button', { name: /which signal/i })
+    expect(tip.getAttribute('aria-label')).toMatch(/11 mentioned/i)
+    expect(tip.getAttribute('aria-label')).toMatch(/6 cited/i)
+  })
+
+  it('renders nothing at all when the server sent no outcomes, rather than zeroes', () => {
+    renderOverview()
+    expect(screen.queryByLabelText('Property outcomes')).toBeNull()
+  })
+})
+
+describe('coverage hero', () => {
+  it('leads with the two rates that share a denominator, and states what that is', () => {
+    renderOverview()
+    const hero = screen.getByLabelText('Coverage')
+
+    // 2 of 8 cited, 6 of 8 mentioned. Both are rates over the SAME population,
+    // which is what lets them sit side by side under one denominator line.
+    expect(within(hero).getByText('25%')).toBeTruthy()
+    expect(within(hero).getByText('75%')).toBeTruthy()
+    expect(hero.textContent).toContain('cited')
+    expect(hero.textContent).toContain('mentioned')
+    expect(hero.textContent).toContain('of 8')
+  })
+
+  it('does not put a per-Property count in a hero denominated in assignments', () => {
+    renderOverview()
+    const hero = screen.getByLabelText('Coverage')
+    // `propertiesMentioned` counts PROPERTIES; the hero's two rates count
+    // assignments. Printing all three under one denominator line states
+    // something false about one of them.
+    expect(hero.textContent).not.toContain('Properties mentioned')
+  })
+
+  it('shows an unavailable rate as unavailable, never as 0%', () => {
+    const current = report()
+    renderOverview({
+      report: {
+        ...current,
+        classScopes: {
+          ...current.classScopes!,
+          nonBrand: {
+            ...current.classScopes!.nonBrand,
+            aggregate: {
+              ...current.classScopes!.nonBrand.aggregate,
+              metrics: {
+                ...current.classScopes!.nonBrand.aggregate.metrics,
+                citationCoverage: unavailable('Not measured yet.'),
+              },
+            },
+          },
+        },
+      },
+    })
+    const hero = screen.getByLabelText('Coverage')
+    expect(hero.textContent).not.toContain('0%')
+    expect(within(hero).getByText('N/A')).toBeTruthy()
   })
 })

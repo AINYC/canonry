@@ -338,7 +338,10 @@ test('an active setup replaces the Simple Overview with the advanced measurement
   })
 
   expect(html).toContain('Republish setup')
-  expect(html).toContain('Properties mentioned')
+  // The advanced surface's coverage hero. Was 'Properties mentioned' until that
+  // per-Property count left the hero — it counts PROPERTIES while the hero's
+  // two rates count assignments, so it could not share their denominator line.
+  expect(html).toContain('aria-label="Coverage"')
   expect(html).toContain('Harbor House')
   expect(html).toContain('AI sweep running')
   expect(html).not.toContain('Where competitors are winning')

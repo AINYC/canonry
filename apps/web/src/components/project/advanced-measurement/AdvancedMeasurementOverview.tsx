@@ -3,6 +3,7 @@ import { ChevronDown } from 'lucide-react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import type { MetricTone } from '../../../view-models.js'
 
+import { InfoTooltip } from '../../shared/InfoTooltip.js'
 import { ToneBadge } from '../../shared/ToneBadge.js'
 import { Button } from '../../ui/button.js'
 
@@ -125,6 +126,19 @@ export interface AdvancedMeasurementOverviewReport {
     aggregate: AdvancedMeasurementAggregate
     propertyTotal: number
     nextCursor: string | null
+    /**
+     * Scope-wide outcome split, counted by the server over every Property in
+     * scope. Absent when the server predates the field — the row then renders
+     * nothing rather than a set of zeroes, which would read as a finding.
+     */
+    outcomes?: {
+      bothSignals: number
+      mentionedOnly: number
+      citedOnly: number
+      neither: number
+      notMeasured: number
+      total: number
+    }
   }
   availableGroups?: readonly { id: string; label: string }[]
   nextActionText?: string
@@ -497,6 +511,88 @@ function SegmentedControl<T extends string>({
   )
 }
 
+/**
+ * The two headline rates.
+ *
+ * Cited and mentioned are rates over the SAME population — one assignment being
+ * a Property paired with a query — which is what lets them share a single
+ * denominator line. `propertiesMentioned` is deliberately NOT here: it counts
+ * PROPERTIES, so printing it under the same denominator would state something
+ * false about one of the three. The per-Property picture is the outcome counts
+ * below, which give four states rather than one ratio.
+ */
+function CoverageHero({ cited, mentioned }: {
+  cited: AdvancedMeasurementMetric
+  mentioned: AdvancedMeasurementMetric
+}) {
+  const denominator = isMeasured(cited) ? cited.denominator
+    : isMeasured(mentioned) ? mentioned.denominator
+    : null
+  const percent = (metric: AdvancedMeasurementMetric): string =>
+    isMeasured(metric) ? `${Math.round((metric.numerator / metric.denominator) * 100)}%` : 'N/A'
+  return (
+    <div aria-label="Coverage" className="flex flex-wrap items-start gap-x-10 gap-y-3 border-b border-default py-4">
+      {([['cited', cited], ['mentioned', mentioned]] as const).map(([label, metric]) => (
+        <div key={label}>
+          <p
+            className="font-mono text-3xl leading-none tabular-nums text-primary"
+            title={metricReason(metric) || undefined}
+          >
+            {percent(metric)}
+          </p>
+          <p className="mt-1 text-xs text-secondary">{label}</p>
+        </div>
+      ))}
+      {denominator === null ? null : (
+        <p className="ml-auto self-end font-mono text-xs text-secondary">
+          of {denominator}
+          <InfoTooltip text="One assignment is a Property paired with a query. Branded queries are a separate filter and are never averaged in." />
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * How many Properties got which signals.
+ *
+ * Four counts, not five: `mentionedOnly` and `citedOnly` collapse into "one
+ * signal" because five phrases is a paragraph to read, and the split stays
+ * reachable on the tooltip since cited-only is the actionable half — the engine
+ * used the page and recommended somebody else.
+ *
+ * The counts are the server's, over the whole scope. Nothing is computed here,
+ * and an absent block renders nothing rather than a row of zeroes, which would
+ * read as a measured finding instead of a missing field.
+ */
+function OutcomeCounts({ outcomes }: {
+  outcomes: NonNullable<NonNullable<AdvancedMeasurementOverviewReport['currentView']>['outcomes']>
+}) {
+  const oneSignal = outcomes.mentionedOnly + outcomes.citedOnly
+  const entries: readonly { key: string; count: number; label: string; tone: string }[] = [
+    { key: 'both', count: outcomes.bothSignals, label: 'both', tone: 'text-positive' },
+    { key: 'one', count: oneSignal, label: 'one signal', tone: 'text-caution' },
+    { key: 'neither', count: outcomes.neither, label: 'neither', tone: 'text-negative' },
+    { key: 'not-measured', count: outcomes.notMeasured, label: 'not measured', tone: 'text-faint' },
+  ]
+  return (
+    <div aria-label="Property outcomes" className="flex flex-wrap items-baseline gap-x-6 gap-y-1 border-b border-default py-3">
+      {entries.map(entry => (
+        <span key={entry.key} className="whitespace-nowrap text-sm text-secondary">
+          <span className={`mr-1 font-mono text-[15px] font-semibold tabular-nums ${entry.tone}`}>{entry.count}</span>
+          {entry.label}
+          {entry.key === 'one' ? (
+            <InfoTooltip text={`Which signal: ${outcomes.mentionedOnly} mentioned, not cited. ${outcomes.citedOnly} cited, not mentioned.`} />
+          ) : null}
+          {entry.key === 'not-measured' ? (
+            <InfoTooltip text={`Sums to ${outcomes.total}. Every Property in scope is in exactly one group.`} />
+          ) : null}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 export function AdvancedMeasurementOverview({
   report,
   canEdit,
@@ -675,20 +771,19 @@ export function AdvancedMeasurementOverview({
         </div>
       </header>
 
-      {!isViewLoading ? <dl className="grid gap-4 border-y border-default py-4 md:grid-cols-3">
-        <div>
-          <dt className="text-sm text-secondary">Properties mentioned</dt>
-          <dd className="mt-1"><MetricValue metric={classMetric(aggregate.metrics.propertiesMentioned)} /></dd>
-        </div>
-        <div>
-          <dt className="text-sm text-secondary">Mention coverage</dt>
-          <dd className="mt-1"><MetricValue metric={classMetric(aggregate.metrics.mentionCoverage)} /></dd>
-        </div>
-        <div>
-          <dt className="text-sm text-secondary">Citation coverage</dt>
-          <dd className="mt-1"><MetricValue metric={classMetric(aggregate.metrics.citationCoverage)} /></dd>
-        </div>
-      </dl> : <div className="h-20 animate-pulse rounded-md bg-surface-subtle" aria-label="Updating measurement results" />}
+      {!isViewLoading ? (
+
+        <CoverageHero
+
+          cited={classMetric(aggregate.metrics.citationCoverage)}
+
+          mentioned={classMetric(aggregate.metrics.mentionCoverage)}
+
+        />
+
+      ) : <div className="h-20 animate-pulse rounded-md bg-surface-subtle" aria-label="Updating measurement results" />}
+
+      {report.currentView?.outcomes ? <OutcomeCounts outcomes={report.currentView.outcomes} /> : null}
 
       <div className="flex flex-wrap items-end gap-4 border-b border-default pb-4">
         <div className="space-y-1">

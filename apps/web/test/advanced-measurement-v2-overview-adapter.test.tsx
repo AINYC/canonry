@@ -392,3 +392,26 @@ describe('property row detail', () => {
     expect(ungrouped!.market).toBeUndefined()
   })
 })
+
+describe('outcome counts', () => {
+  it('carries the scope-wide split through to the report', () => {
+    const { activePlan, overview } = fixture(47)
+    overview.outcomes = {
+      bothSignals: 14, mentionedOnly: 11, citedOnly: 6, neither: 9, notMeasured: 7, total: 47,
+    }
+    const report = adaptV2MeasurementOverview({ overview, activePlan })
+
+    // "one signal" is the pair collapsed for display; the split survives for the
+    // tooltip because cited-only is the actionable half and must stay legible.
+    expect(report.currentView!.outcomes).toEqual({
+      bothSignals: 14, mentionedOnly: 11, citedOnly: 6, neither: 9, notMeasured: 7, total: 47,
+    })
+  })
+
+  it('does not invent outcome counts when the server omits them', () => {
+    const { activePlan, overview } = fixture(2)
+    delete (overview as { outcomes?: unknown }).outcomes
+    const report = adaptV2MeasurementOverview({ overview, activePlan })
+    expect(report.currentView!.outcomes).toBeUndefined()
+  })
+})

@@ -3956,6 +3956,14 @@ export type MeasurementOverviewResponse = {
         nextCursor: string | null;
         totalEstimate?: number;
     };
+    outcomes: {
+        bothSignals: number;
+        mentionedOnly: number;
+        citedOnly: number;
+        neither: number;
+        notMeasured: number;
+        total: number;
+    };
     flags: {
         total: number;
     };
