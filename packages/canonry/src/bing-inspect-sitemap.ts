@@ -7,6 +7,7 @@ import { getUrlInfo, getCrawlIssues } from '@ainyc/canonry-integration-bing'
 import type { CanonryConfig } from './config.js'
 import { fetchAndParseSitemap } from './sitemap-parser.js'
 import { inspectUrlsPaced, INSPECT_SWEEP_MAX_URLS, INSPECT_DAILY_QUOTA } from './gsc-inspect-paced.js'
+import type { PacedInspectDeps } from './gsc-inspect-paced.js'
 import { isRetryableHttpError } from '@ainyc/canonry-contracts'
 import { createLogger } from './logger.js'
 
@@ -15,6 +16,13 @@ const log = createLogger('BingInspectSitemap')
 interface BingInspectSitemapOptions {
   sitemapUrl?: string
   config: CanonryConfig
+  /**
+   * Pacing/backoff seam for tests. Production leaves it unset and gets the real
+   * ~1 req/sec spacing; a test injects an instant `sleep` so a sweep with
+   * retries does not spend real seconds. Without this a 3-URL fixture with one
+   * failing URL takes longer than a default test timeout.
+   */
+  pacedDeps?: Pick<PacedInspectDeps, 'sleep' | 'jitter'>
 }
 
 function parseBingDate(value: string | undefined | null): string | null {
@@ -193,7 +201,7 @@ export async function executeBingInspectSitemap(
           })
         },
       },
-      { isRetryable: isRetryableHttpError, concurrency: 1, log },
+      { isRetryable: isRetryableHttpError, concurrency: 1, log, ...opts.pacedDeps },
     )
 
     if (outcome.aborted) {
