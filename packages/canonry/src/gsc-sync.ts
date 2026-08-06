@@ -9,6 +9,7 @@ import {
 } from '@ainyc/canonry-integration-google'
 import type { CanonryConfig } from './config.js'
 import { saveConfigPatch } from './config.js'
+import { deriveIndexCoverage } from '@ainyc/canonry-contracts'
 import { getGoogleAuthConfig, getGoogleConnection, patchGoogleConnection } from './google-config.js'
 import { createLogger } from './logger.js'
 
@@ -246,18 +247,19 @@ export async function executeGscSync(
       }
     }
 
-    let snapIndexed = 0
-    let snapNotIndexed = 0
-    const reasonCounts: Record<string, number> = {}
-    for (const [, row] of latestByUrl) {
-      if (row.indexingState === 'INDEXING_ALLOWED') {
-        snapIndexed++
-      } else {
-        snapNotIndexed++
-        const reason = row.coverageState ?? 'Unknown'
-        reasonCounts[reason] = (reasonCounts[reason] ?? 0) + 1
-      }
-    }
+    // Coverage now spans EVERY page the property showed in the window, not just
+    // the handful that carry an inspection. A page with an impression is
+    // provably indexed — Google served it — which costs no quota and works at
+    // any site size. Inspection still wins where it exists, and a page with
+    // neither signal is `unknown` rather than a manufactured "not indexed".
+    const coverage = deriveIndexCoverage({
+      pages: rows.map((row) => ({ page: row.keys[1] ?? '', impressions: row.impressions })),
+      inspections: [...latestByUrl.values()].map((row) => ({
+        url: row.url,
+        indexingState: row.indexingState,
+        coverageState: row.coverageState,
+      })),
+    })
 
     const snapshotDate = formatDate(new Date())
     db.delete(gscCoverageSnapshots)
@@ -268,9 +270,12 @@ export async function executeGscSync(
       projectId,
       syncRunId: runId,
       date: snapshotDate,
-      indexed: snapIndexed,
-      notIndexed: snapNotIndexed,
-      reasonBreakdown: reasonCounts,
+      indexed: coverage.indexed,
+      notIndexed: coverage.notIndexed,
+      unknownPages: coverage.unknown,
+      verifiedByInspection: coverage.verifiedByInspection,
+      derivedFromImpressions: coverage.derivedFromImpressions,
+      reasonBreakdown: coverage.reasonBreakdown,
       createdAt: new Date().toISOString(),
     }).run()
 
@@ -280,7 +285,7 @@ export async function executeGscSync(
       .where(eq(runs.id, runId))
       .run()
 
-    log.info('sync.completed', { runId, projectId, searchDataRows: rows.length, indexed: snapIndexed, notIndexed: snapNotIndexed })
+    log.info('sync.completed', { runId, projectId, searchDataRows: rows.length, indexed: coverage.indexed, notIndexed: coverage.notIndexed, unknown: coverage.unknown, verifiedByInspection: coverage.verifiedByInspection })
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err)
     db.update(runs)
