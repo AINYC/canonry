@@ -18,6 +18,7 @@ import { heyClient } from '../api.js'
 import { getEmbedConfig } from '../api.js'
 import { isEmbedProjectTabAllowed } from '../embed.js'
 import { Button } from '../components/ui/button.js'
+import { formatObservedInstantLabel, observedInstant } from '../components/shared/ChartPrimitives.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
 import { useAccount } from '../contexts/account-context.js'
@@ -207,6 +208,235 @@ function overviewOptions(projectName: string, targetKey: string, queryClass: Que
 
 function propertyRowOf(overview: MeasurementOverviewResponse | undefined): PropertyRow | undefined {
   return overview?.properties.items.at(0)
+}
+
+/**
+ * The secondary facts the project overview carries as metric cards: how much is
+ * being measured, by how many engines, over what, and when.
+ *
+ * No progress bars. These are unbounded counts, and DESIGN.md reserves linear
+ * progress for a real bounded target: a bar under "7 questions" would imply a
+ * ceiling that does not exist.
+ */
+function PropertyFacts({
+  questionCount,
+  urlCount,
+  engineCount,
+  measuredAt,
+  unmeasuredReason,
+  queryClass,
+}: {
+  questionCount: number
+  urlCount: number
+  /** `null` when this class was not measured — there is no engine count to state. */
+  engineCount: number | null
+  /**
+   * Three states, and collapsing any two of them invents a measurement. A run
+   * that has not been read yet is not a site that has never been swept, and
+   * neither is a class the run did not cover. `undefined` is "not read",
+   * `null` is "read, and there has genuinely never been a completed sweep".
+   */
+  measuredAt: string | null | undefined
+  /**
+   * The reason the server gave for the class being unmeasured. Absent when the
+   * response has not been read at all, in which case the card says nothing
+   * beyond the em dash rather than guessing which of the two it is.
+   */
+  unmeasuredReason?: string
+  queryClass: QueryClass
+}) {
+  return (
+    <section aria-labelledby="property-facts" className="page-section-divider">
+      <h2 id="property-facts" className="sr-only">What was measured</h2>
+      <div className="metric-grid">
+        <div className="metric-card">
+          <p className="metric-card-eyebrow">Questions assigned</p>
+          <p className="metric-card-big-value">{questionCount}</p>
+          <p className="metric-card-detail">{CLASS_LABELS[queryClass].technical}</p>
+        </div>
+        <div className="metric-card">
+          <p className="metric-card-eyebrow">Owned URLs</p>
+          <p className="metric-card-big-value">{urlCount}</p>
+          <p className="metric-card-detail">Used to attribute a citation to this Property</p>
+        </div>
+        <div className="metric-card">
+          <p className="metric-card-eyebrow">Answer engines</p>
+          <p className="metric-card-big-value">{engineCount ?? EM_DASH}</p>
+          <p className="metric-card-detail">
+            {engineCount === null
+              // No reason means the response has not been read, and "Not
+              // measured" would be a claim about a measurement we have not
+              // looked at. The hero carries loading-vs-failed with the retry.
+              ? unmeasuredReason ?? ''
+              : engineCount === 0
+                ? 'No engine answered for this Property'
+                : 'Answered at least one assigned question'}
+          </p>
+        </div>
+        <div className="metric-card">
+          <p className="metric-card-eyebrow">Last measured</p>
+          <p className="metric-card-big-value text-base font-semibold">
+            {measuredAt === undefined
+              ? EM_DASH
+              : measuredAt === null
+                ? 'Never'
+                : formatObservedInstantLabel(observedInstant(measuredAt))}
+          </p>
+          <p className="metric-card-detail">
+            {measuredAt === undefined
+              ? ''
+              : measuredAt === null
+                ? 'No completed sweep yet'
+                : 'The sweep these numbers came from'}
+          </p>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/**
+ * Competitors belong to a market, not to a building: a single Property has
+ * nobody to be compared against. Rather than render an empty competitor card,
+ * which would read as missing data, name the market(s) where the comparison
+ * actually exists and point at the overview that reports them.
+ *
+ * The market names are TEXT, not controls. There is no market-scoped route: the
+ * overview picks its group from local state (`AdvancedMeasurementOverview`), so
+ * every per-market button would have carried the reader to the same unscoped
+ * URL and silently dropped the market they chose. One link with one destination
+ * is honest; N buttons offering a choice the app cannot act on is not. Making
+ * the market selectable from a URL is a routing change, not a label change.
+ */
+function MarketLink({
+  project,
+  groups,
+}: {
+  project: string
+  groups: readonly { stableKey: string; label: string; competitors: readonly unknown[] }[]
+}) {
+  if (groups.length === 0) return null
+  return (
+    <section aria-labelledby="property-market" className="page-section-divider">
+      <div className="section-head section-head-inline">
+        <div>
+          <p className="eyebrow eyebrow-soft">Competitive comparison</p>
+          <h2 id="property-market" className="text-base font-semibold text-heading">
+            Measured at the market level
+            <InfoTooltip text="Competitors are attached to a market rather than to a single Property, because one building has nobody to be compared against. Share of voice and competitor pressure are reported for the market this Property sits in." />
+          </h2>
+        </div>
+        <Button asChild type="button" size="sm" variant="outline">
+          <Link to="/projects/$projectName" params={{ projectName: project }}>Open measurement overview</Link>
+        </Button>
+      </div>
+      <ul className="flex flex-wrap gap-2">
+        {groups.map(group => (
+          <li key={group.stableKey} className="rounded-md border border-default px-3 py-1.5 text-sm text-strong">
+            {group.label}
+            <span className="ml-2 text-xs text-muted">
+              {group.competitors.length} {group.competitors.length === 1 ? 'competitor' : 'competitors'}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+/**
+ * The four coverage numbers as a scannable hero, in the same visual language as
+ * the project overview's AEO hero (`aeo-hero-row`), so a Property reads like a
+ * smaller version of the project rather than a different kind of page.
+ *
+ * Non-brand leads because it is the demand a Property has to earn; branded
+ * follows as the control. That ordering is the argument the page exists to make.
+ *
+ * Bars are deliberately `progress-fill-neutral`. `MetricValue` carries no tone,
+ * and a coverage rate has no product-defined "good" threshold: 20% non-brand may
+ * be strong in a dense market and weak in a thin one. Coloring the bar would be
+ * a verdict the API never issued and a value derived in the UI, which the parity
+ * rule forbids. The bar encodes magnitude; the reader supplies the judgment.
+ *
+ * An unavailable metric renders NO bar rather than a zero-width one. An empty
+ * track beside "Not measured" reads as a measured zero, which is the one thing
+ * this surface must never say.
+ */
+function CoverageHeroRow({ label, metric, failed = false }: { label: string; metric: MetricValue | undefined; failed?: boolean }) {
+  if (metric === undefined) {
+    // A class whose fetch failed also has no metric, and reporting that as
+    // "Loading" is a spinner that never resolves: the retry lives in
+    // `BrandContrast` below, so the reader is waiting on something that already
+    // stopped. `failed` separates the two so the lead element of the page and
+    // the alert beneath it stop disagreeing about the same class.
+    return (
+      <div className="aeo-hero-row">
+        <p className="aeo-hero-row-label">{label}</p>
+        <p className="aeo-hero-row-value text-base font-semibold text-secondary">{failed ? 'Unavailable' : '…'}</p>
+        {failed ? <div /> : <div className="aeo-hero-row-bar" aria-hidden="true" />}
+        <p className="aeo-hero-row-detail">{failed ? 'Could not be loaded' : 'Loading'}</p>
+      </div>
+    )
+  }
+  if (metric.state === 'unavailable') {
+    // `reasonText` falls back to "Not measured" for a reason this build does not
+    // know, which would print the same words twice across two columns and read
+    // as a rendering fault. Drop the detail when it says nothing the value did
+    // not already say.
+    const reason = reasonText(metric)
+    return (
+      <div className="aeo-hero-row">
+        <p className="aeo-hero-row-label">{label}</p>
+        <p className="aeo-hero-row-value text-base font-semibold text-secondary">Not measured</p>
+        <div />
+        <p className="aeo-hero-row-detail">{reason === 'Not measured' ? '' : reason}</p>
+      </div>
+    )
+  }
+  const percent = Math.round(metric.value * 100)
+  const counted = metric.numerator === undefined || metric.denominator === undefined
+    ? null
+    : `${metric.numerator} of ${metric.denominator}`
+  return (
+    <div className="aeo-hero-row">
+      <p className="aeo-hero-row-label">{label}</p>
+      <p className="aeo-hero-row-value text-heading">{percent}<span className="text-faint">%</span></p>
+      <div className="aeo-hero-row-bar" aria-hidden="true">
+        <div className="metric-card-bar-fill progress-fill-neutral" style={{ width: `${percent}%` }} />
+      </div>
+      <p className="aeo-hero-row-detail tabular-nums">{counted ?? ''}</p>
+    </div>
+  )
+}
+
+function CoverageHero({
+  branded,
+  nonBrand,
+  brandedFailed = false,
+  nonBrandFailed = false,
+}: {
+  branded: PropertyRow | undefined
+  nonBrand: PropertyRow | undefined
+  brandedFailed?: boolean
+  nonBrandFailed?: boolean
+}) {
+  return (
+    <section aria-labelledby="property-coverage-hero">
+      <h2 id="property-coverage-hero" className="sr-only">Coverage for this Property</h2>
+      <div className="space-y-5">
+        <div className="space-y-2">
+          <p className="eyebrow eyebrow-soft">Non-brand &middot; the demand to earn</p>
+          <CoverageHeroRow label="Mentioned" metric={nonBrand?.mentionCoverage} failed={nonBrandFailed} />
+          <CoverageHeroRow label="Cited" metric={nonBrand?.citationCoverage} failed={nonBrandFailed} />
+        </div>
+        <div className="space-y-2">
+          <p className="eyebrow eyebrow-soft">Branded &middot; already named</p>
+          <CoverageHeroRow label="Mentioned" metric={branded?.mentionCoverage} failed={brandedFailed} />
+          <CoverageHeroRow label="Cited" metric={branded?.citationCoverage} failed={brandedFailed} />
+        </div>
+      </div>
+    </section>
+  )
 }
 
 /**
@@ -430,6 +660,19 @@ export function MeasurementPropertyPage() {
   const selectedClassUnavailable = selectedClassError && selectedRow === undefined
   const displayedRunId = selected?.measurement.displayedRunId
 
+  // `providers` is [] for a class the run never covered, not only for a class no
+  // engine answered: the server ships the empty list alongside an `unavailable`
+  // coverage metric (measurement-overview.ts:711, :789). Counting it renders
+  // "0 / No engine answered" — a measured claim about a measurement that never
+  // happened — while the hero directly above renders "Not measured".
+  const engineCount = selectedRow?.mentionCoverage.state === 'available' ? selectedRow.providers.length : null
+  const engineUnmeasuredReason = selectedRow?.mentionCoverage.state === 'unavailable'
+    ? reasonText(selectedRow.mentionCoverage)
+    : undefined
+  // Undefined while the response is unread, so a pending or failed fetch never
+  // asserts this Property has never been swept.
+  const measuredAt = selected === undefined ? undefined : selected.measurement.completedAt ?? null
+
   const evidenceInput = {
     client: heyClient,
     path: { name: project },
@@ -469,6 +712,13 @@ export function MeasurementPropertyPage() {
   }, [planV2, property, queryClass])
 
   const urls = useMemo(() => target?.urlMatchers.map(matcherLabel) ?? [], [target])
+  // Every market this Property belongs to. Membership is a plain lookup rather
+  // than a field on the target: a Property can sit in several markets, and the
+  // plan stores the relation on the group.
+  const memberGroups = useMemo(
+    () => planV2?.groups.filter(group => group.targetKeys.includes(property)) ?? [],
+    [planV2, property],
+  )
   const evidenceRows = useMemo(
     () => {
       // A page that carries no `answers` key is a response in the source shape,
@@ -593,6 +843,13 @@ export function MeasurementPropertyPage() {
         </div>
       </div>
 
+      <CoverageHero
+        branded={brandedRow}
+        nonBrand={nonBrandRow}
+        brandedFailed={brandedUnavailable}
+        nonBrandFailed={nonBrandUnavailable}
+      />
+
       <BrandContrast
         branded={brandedRow}
         nonBrand={nonBrandRow}
@@ -634,9 +891,19 @@ export function MeasurementPropertyPage() {
         <p className="supporting-copy">Everything below is measured over {CLASS_LABELS[queryClass].technical.toLocaleLowerCase()} only.</p>
       </div>
 
+      <PropertyFacts
+        questionCount={questions.length}
+        urlCount={urls.length}
+        engineCount={engineCount}
+        unmeasuredReason={engineUnmeasuredReason}
+        measuredAt={measuredAt}
+        queryClass={queryClass}
+      />
+
       <ProviderBreakdown row={selectedRow} queryClass={queryClass} isError={selectedClassUnavailable} />
       <AssignedQuestions questions={questions} queryClass={queryClass} />
       <PropertyUrls urls={urls} />
+      <MarketLink project={project} groups={memberGroups} />
 
       <section aria-labelledby="property-evidence" className="page-section-divider">
         <div className="section-head section-head-inline">
