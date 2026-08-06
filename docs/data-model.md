@@ -153,7 +153,7 @@ configuration value into an observation. Treat NULL as unknown.
 | **gsc_daily_totals** | GSC property-level daily totals (no query/page dimensions). Headline clicks/impressions/CTR/position + daily trend source. Unique: `(project_id, date)` |
 | **gsc_query_daily_totals** | Per-QUERY daily totals fetched with `dimensions: ['date','query']` (no `page`). Summing `gsc_search_data` by query fans one SERP into one row per ranking page, inflating impressions ~0% for single-page queries but ~500% for terms where several pages rank together. Complete for queries Google NAMES; anonymized rare queries are still absent, so it does not sum to the property total. Unique: `(project_id, date, query)` |
 | **gsc_url_inspections** | URL inspection results from GSC |
-| **gsc_coverage_snapshots** | Index coverage snapshots from GSC |
+| **gsc_coverage_snapshots** | Index coverage snapshots from GSC. `indexed` / `not_indexed` / `unknown_pages` are three distinct states — a page with no impressions and no inspection is UNKNOWN, never not-indexed. `verified_by_inspection` / `derived_from_impressions` record how much of the number is a real Google verdict versus derived free from search analytics. |
 
 ### Integrations — Bing
 

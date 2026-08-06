@@ -835,6 +835,10 @@ function SearchConsoleSection({
     })
 
     const failures: string[] = []
+    // Things that are neither success nor failure: work that is still running
+    // and will land on its own. Reporting these keeps a slow-but-healthy sync
+    // from reading as either "done" or "broken".
+    const notices: string[] = []
 
     try {
       // --- Google: trigger a background GSC sync job and poll to completion ---
@@ -855,9 +859,16 @@ function SearchConsoleSection({
           if (!detail) break
           if (['completed', 'failed', 'cancelled'].includes(detail.status)) {
             if (detail.status !== 'completed') failures.push(`Google sync ${detail.status}`)
-            break
+            return
           }
         }
+
+        // Deadline reached with the run still going. This used to fall out of
+        // the loop recording nothing, so the refresh reported success while the
+        // panels below reloaded pre-sync numbers — indistinguishable from "the
+        // button did nothing". Say what is actually true instead: the sync is
+        // still running and its data will appear on its own.
+        notices.push('Google sync is still running — search data will appear shortly')
       }
 
       // --- Bing: re-inspect previously known URLs, or fall back to sitemap ---
@@ -904,11 +915,21 @@ function SearchConsoleSection({
       setWorkspaceRefreshNonce((current) => current + 1)
 
       if (failures.length > 0) {
-        const message = `Partial refresh: ${failures.join('; ')}`
+        const message = `Partial refresh: ${[...failures, ...notices].join('; ')}`
         setError(message)
         addToast({
           title: 'Search coverage partially refreshed',
           detail: message,
+          tone: 'caution',
+          dedupeKey: `search-console-refresh:${projectName}`,
+          dedupeMode: 'replace',
+        })
+      } else if (notices.length > 0) {
+        // Nothing failed; something is simply still in flight. Not an error, so
+        // `setError` stays untouched and the tone stays neutral.
+        addToast({
+          title: 'Search coverage refreshed',
+          detail: notices.join('; '),
           tone: 'caution',
           dedupeKey: `search-console-refresh:${projectName}`,
           dedupeMode: 'replace',

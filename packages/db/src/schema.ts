@@ -648,6 +648,17 @@ export const gscCoverageSnapshots = sqliteTable('gsc_coverage_snapshots', {
   date: text('date').notNull(),
   indexed: integer('indexed').notNull().default(0),
   notIndexed: integer('not_indexed').notNull().default(0),
+  /**
+   * Pages we have no evidence either way for: no impressions in the window and
+   * never inspected. Deliberately NOT folded into `notIndexed` — absence of
+   * impressions is not evidence of exclusion, and collapsing the two would
+   * report every unmeasured page as a problem.
+   */
+  unknownPages: integer('unknown_pages').notNull().default(0),
+  /** Of the above, how many carry a real URL Inspection verdict. */
+  verifiedByInspection: integer('verified_by_inspection').notNull().default(0),
+  /** Pages proven indexed by impressions alone, costing no inspection quota. */
+  derivedFromImpressions: integer('derived_from_impressions').notNull().default(0),
   reasonBreakdown: text('reason_breakdown', { mode: 'json' }).$type<Record<string, number>>().notNull().default({}),
   createdAt: text('created_at').notNull(),
 }, (table) => [

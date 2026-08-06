@@ -1301,6 +1301,9 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
         date: r.date,
         indexed: r.indexed,
         notIndexed: r.notIndexed,
+        unknownPages: r.unknownPages,
+        verifiedByInspection: r.verifiedByInspection,
+        derivedFromImpressions: r.derivedFromImpressions,
         reasonBreakdown: r.reasonBreakdown,
       }))
       .reverse()

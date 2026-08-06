@@ -2422,6 +2422,9 @@ export type GscCoverageSnapshotDto = {
     date: string;
     indexed: number;
     notIndexed: number;
+    unknownPages: number;
+    verifiedByInspection: number;
+    derivedFromImpressions: number;
     reasonBreakdown: {
         [key: string]: number;
     };

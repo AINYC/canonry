@@ -150,7 +150,7 @@ describe('inspectUrlsPaced', () => {
         onResult: () => {},
         onError: () => {},
       },
-      fastDeps(),
+      fastDeps({ concurrency: 1 }),
     )
 
     expect(outcome.aborted).toBe(true)
@@ -162,6 +162,11 @@ describe('inspectUrlsPaced', () => {
 
   it('resets the breaker on success so scattered failures do not abort', async () => {
     // 4 fail, 1 success, 4 fail — max run of consecutive failures is 4 (< threshold of 5).
+    //
+    // Pinned to one worker: the breaker counts failures consecutive in
+    // COMPLETION order, and with several in flight a success can land before
+    // failures that started earlier, so the run length is not a property of the
+    // input any more. Concurrent breaker behaviour is covered separately below.
     const outcome = await inspectUrlsPaced(
       urls(9),
       {
@@ -172,7 +177,7 @@ describe('inspectUrlsPaced', () => {
         onResult: () => {},
         onError: () => {},
       },
-      fastDeps(),
+      fastDeps({ concurrency: 1 }),
     )
 
     expect(outcome.aborted).toBe(false)
@@ -200,5 +205,87 @@ describe('inspectUrlsPaced', () => {
     expect(outcome.errors).toBe(6)
     // No retries on a non-retryable status: exactly one call per URL.
     expect(calls).toBe(6)
+  })
+})
+
+/**
+ * Concurrency was added because the loop was serial, not because the rate limit
+ * required it: Google documents 600 QPM per site and the pacing allows 60, but
+ * running one call at a time meant throughput was bounded by Google's ~6.3s
+ * per-call latency instead — about 9.5 QPM.
+ */
+describe('inspectUrlsPaced concurrency', () => {
+  it('never exceeds the configured number in flight', async () => {
+    let inFlight = 0
+    let peak = 0
+    await inspectUrlsPaced(
+      urls(20),
+      {
+        inspectOne: async () => {
+          inFlight++
+          peak = Math.max(peak, inFlight)
+          await Promise.resolve()
+          inFlight--
+          return FAKE_RESULT
+        },
+        onResult: () => {},
+        onError: () => {},
+      },
+      fastDeps({ concurrency: 4 }),
+    )
+
+    expect(peak).toBeLessThanOrEqual(4)
+  })
+
+  it('keeps the request rate identical to the serial loop', async () => {
+    // The whole safety argument: workers take start slots from one shared
+    // clock, so N URLs cost N-1 spacings no matter how many run at once.
+    const serial = fastDeps({ concurrency: 1 })
+    await inspectUrlsPaced(urls(8), { inspectOne: async () => FAKE_RESULT, onResult: () => {}, onError: () => {} }, serial)
+
+    const parallel = fastDeps({ concurrency: 5 })
+    await inspectUrlsPaced(urls(8), { inspectOne: async () => FAKE_RESULT, onResult: () => {}, onError: () => {} }, parallel)
+
+    expect(parallel.sleeps).toEqual(serial.sleeps)
+    expect(parallel.sleeps).toHaveLength(7)
+  })
+
+  it('does not burst the opening batch', async () => {
+    // An earlier version skipped the gate for the first `concurrency` requests,
+    // which fired 5 at once before any pacing applied.
+    const deps = fastDeps({ concurrency: 5 })
+    await inspectUrlsPaced(urls(5), { inspectOne: async () => FAKE_RESULT, onResult: () => {}, onError: () => {} }, deps)
+
+    expect(deps.sleeps).toHaveLength(4)
+  })
+
+  it('inspects every URL exactly once and reports each original index', async () => {
+    const seen: Array<{ url: string; index: number }> = []
+    const outcome = await inspectUrlsPaced(
+      urls(12),
+      {
+        inspectOne: async () => FAKE_RESULT,
+        onResult: (url, _r, index) => { seen.push({ url, index }) },
+        onError: () => {},
+      },
+      fastDeps({ concurrency: 5 }),
+    )
+
+    expect(outcome.inspected).toBe(12)
+    expect(new Set(seen.map((s) => s.url)).size).toBe(12)
+    // Results may arrive out of order, but each carries its own index.
+    for (const { url, index } of seen) expect(url).toBe(`https://example.com/p${index}`)
+  })
+
+  it('still trips the breaker when the whole property is failing', async () => {
+    const outcome = await inspectUrlsPaced(
+      urls(50),
+      { inspectOne: async () => { throw statusErr(403) }, onResult: () => {}, onError: () => {} },
+      fastDeps({ concurrency: 5 }),
+    )
+
+    expect(outcome.aborted).toBe(true)
+    // Stopped early rather than burning the daily quota on all 50.
+    expect(outcome.errors).toBeLessThan(50)
   })
 })

@@ -221,6 +221,17 @@ export const gscCoverageSnapshotDtoSchema = z.object({
   date: z.string(),
   indexed: z.number(),
   notIndexed: z.number(),
+  /**
+   * Pages with no evidence either way — no impressions in the window and never
+   * inspected. Deliberately NOT folded into `notIndexed`: absence of
+   * impressions is not evidence of exclusion, and merging the two would report
+   * every unmeasured page as a problem.
+   */
+  unknownPages: z.number().default(0),
+  /** Of the total, how many carry a real URL Inspection verdict. */
+  verifiedByInspection: z.number().default(0),
+  /** Pages proven indexed by impressions alone, costing no inspection quota. */
+  derivedFromImpressions: z.number().default(0),
   reasonBreakdown: z.record(z.string(), z.number()).default({}),
 })
 export type GscCoverageSnapshotDto = z.infer<typeof gscCoverageSnapshotDtoSchema>
