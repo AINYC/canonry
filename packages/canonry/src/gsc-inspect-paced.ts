@@ -52,6 +52,29 @@ export const INSPECT_BASE_DELAY_MS = 1000
  * sites past the quota — those need derived coverage, not more parallelism.
  */
 export const INSPECT_MAX_CONCURRENCY = 5
+
+/**
+ * Google's per-site daily cap on URL Inspection calls.
+ *
+ * A hard wall that concurrency does not move: 2000 requests per property per
+ * day, on a sliding 24-hour window rather than a midnight reset.
+ */
+export const INSPECT_DAILY_QUOTA = 2000
+
+/**
+ * The most URLs one sweep will attempt.
+ *
+ * Below the quota on purpose. A sweep is not the only consumer — scheduled
+ * refreshes, a second sweep later in the day, and manual inspections all draw
+ * on the same 2000 — so a single run taking the entire allowance would starve
+ * everything else and leave nothing for the rest of the day.
+ *
+ * Beyond this a sweep cannot finish regardless: at ~7.1s per URL it would run
+ * for hours, exhaust the quota partway, and trip the consecutive-failure
+ * breaker — reporting a failure that is really a budget being spent. Capping
+ * and saying so is more honest than starting work that cannot complete.
+ */
+export const INSPECT_SWEEP_MAX_URLS = 1500
 /**
  * Extra random jitter (0..N ms) added to the base spacing so two overlapping
  * inspection runs (e.g. a manual run racing the coverage-refresh chain) do not

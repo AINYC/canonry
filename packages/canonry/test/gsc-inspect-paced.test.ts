@@ -6,6 +6,9 @@ import {
   INSPECT_MAX_RETRIES,
   INSPECT_FAILFAST_THRESHOLD,
   INSPECT_BASE_DELAY_MS,
+  INSPECT_MAX_CONCURRENCY,
+  INSPECT_SWEEP_MAX_URLS,
+  INSPECT_DAILY_QUOTA,
   type PacedInspectDeps,
 } from '../src/gsc-inspect-paced.js'
 
@@ -287,5 +290,21 @@ describe('inspectUrlsPaced concurrency', () => {
     expect(outcome.aborted).toBe(true)
     // Stopped early rather than burning the daily quota on all 50.
     expect(outcome.errors).toBeLessThan(50)
+  })
+})
+
+describe('sweep budget', () => {
+  it('caps a sweep below the daily quota, leaving room for other consumers', () => {
+    // A sweep is not the only draw on the 2000/day: scheduled refreshes, a
+    // second sweep, and manual inspections share it.
+    expect(INSPECT_SWEEP_MAX_URLS).toBeLessThan(INSPECT_DAILY_QUOTA)
+    expect(INSPECT_DAILY_QUOTA).toBe(2000)
+  })
+
+  it('is small enough that a full sweep finishes in a working session', () => {
+    // At ~7.1s serial the cap would be ~3 hours; at concurrency 5 it is ~30 min.
+    const serialHours = (INSPECT_SWEEP_MAX_URLS * 7.1) / 3600
+    const concurrentHours = serialHours / INSPECT_MAX_CONCURRENCY
+    expect(concurrentHours).toBeLessThan(1)
   })
 })
