@@ -897,7 +897,24 @@ export function GscSection({
               <span className="text-mono-700">·</span>
               <code className="text-secondary">{gscConn.domain}</code>
               <span className="text-mono-700">·</span>
-              <span>Last updated {formatTimestamp(gscConn.updatedAt)}</span>
+              {/*
+                * Freshness must describe the DATA, not the credential.
+                *
+                * This read `gscConn.updatedAt`, which is when the OAuth
+                * connection row was last written — i.e. when the access token
+                * was last refreshed. A sync that inspected every URL left it
+                * untouched (the token was still valid), while an idle hour that
+                * happened to rotate the token moved it. A user pressed refresh,
+                * watched the sync succeed, and saw "Last updated" stay pinned to
+                * the token's rotation time.
+                *
+                * `lastInspectedAt` is the newest `inspectedAt` across stored
+                * inspections — the moment a URL was genuinely last measured.
+                */}
+              <span>
+                Coverage measured{' '}
+                {coverage?.lastInspectedAt ? formatTimestamp(coverage.lastInspectedAt) : 'never'}
+              </span>
               <button
                 type="button"
                 className="ml-auto text-muted transition-colors hover:text-negative-400"

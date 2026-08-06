@@ -8,10 +8,35 @@ import type { CanonryConfig } from './config.js'
 import { fetchAndParseSitemap } from './sitemap-parser.js'
 import { inspectUrlsPaced, INSPECT_SWEEP_MAX_URLS, INSPECT_DAILY_QUOTA } from './gsc-inspect-paced.js'
 import type { PacedInspectDeps } from './gsc-inspect-paced.js'
+import { credentialGateKey } from './inspect-rate-gate.js'
 import { isRetryableHttpError } from '@ainyc/canonry-contracts'
 import { createLogger } from './logger.js'
 
 const log = createLogger('BingInspectSitemap')
+
+/**
+ * Minimum spacing between Bing inspection request starts, across every sweep
+ * sharing the API key.
+ *
+ * Twice the GSC figure, because Bing's ceiling is unpublished and the cost of
+ * probing it is high: once the account throttles, the block outlasts the run
+ * and takes every other project on the key with it. The volume does not need
+ * the speed — a full daily refresh across all connected projects is ~100 URLs,
+ * so 2s spacing finishes everything in about three minutes.
+ */
+export const BING_INSPECT_SPACING_MS = 2_000
+
+/** Render an `unknown` thrown value as text a human can act on. */
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  if (err == null) return 'unknown error'
+  try {
+    return JSON.stringify(err)
+  } catch {
+    return 'unserializable error'
+  }
+}
 
 interface BingInspectSitemapOptions {
   sitemapUrl?: string
@@ -201,7 +226,23 @@ export async function executeBingInspectSitemap(
           })
         },
       },
-      { isRetryable: isRetryableHttpError, concurrency: 1, log, ...opts.pacedDeps },
+      {
+        isRetryable: isRetryableHttpError,
+        concurrency: 1,
+        // Bing meters the ACCOUNT, and one API key serves every project here,
+        // so all sweeps on that key must queue behind one clock. Without this
+        // the daily `data-refresh` fired three sweeps in the same millisecond,
+        // each politely pacing itself and collectively tripling the rate.
+        rateGateKey: credentialGateKey('bing', conn.apiKey),
+        spacingMs: BING_INSPECT_SPACING_MS,
+        // The Bing client already retries (BING_MAX_RETRIES, Retry-After aware).
+        // Retrying again here MULTIPLIED it: 5 client attempts x 4 driver
+        // attempts = 20 requests for one throttled URL, so the breaker's
+        // five-failure budget spent ~100 requests and inspected nothing.
+        maxRetries: 0,
+        log,
+        ...opts.pacedDeps,
+      },
     )
 
     if (outcome.aborted) {
@@ -212,6 +253,26 @@ export async function executeBingInspectSitemap(
         errors,
         note: 'Bing inspection stopped early after sustained failures; the remaining pages were not attempted.',
       })
+    }
+
+    // A sweep that measured NOTHING must not publish a coverage snapshot.
+    //
+    // The snapshot is built from all stored inspections, so writing one here
+    // re-stamps months-old rows with a fresh `created_at` — the dashboard then
+    // shows a freshly-dated coverage figure that no request contributed to.
+    // Worse, the run was recorded `partial` with a NULL error (errors=5 !=
+    // sitemapUrls=45), so a totally failed sweep was indistinguishable from a
+    // mostly-successful one. The GSC sweep already throws in this situation;
+    // this brings Bing in line.
+    if (outcome.aborted && inspected === 0) {
+      // `abortError` is `unknown`; stringifying it blind renders a plain object
+      // as "[object Object]", which is exactly the useless error text this
+      // branch exists to replace.
+      const detail = describeError(outcome.abortError)
+      throw new Error(
+        `Bing inspection failed for every URL attempted (${errors} of ${targetUrls.length}); ` +
+          `coverage was left unchanged rather than re-dated from stored inspections. Last error: ${detail}`,
+      )
     }
 
     // Coverage snapshot — pick the latest definitive (non-null) inspection per
@@ -268,15 +329,29 @@ export async function executeBingInspectSitemap(
       },
     }).run()
 
+    // Measured against what was ATTEMPTED, not against the sitemap. Comparing
+    // to `sitemapUrls.length` meant a breaker trip after 5 failures out of a
+    // 45-URL sitemap reported `partial` — five-of-five failed reads presented
+    // as a mostly-successful sweep.
     const status: typeof RunStatuses[keyof typeof RunStatuses] =
-      errors === sitemapUrls.length
+      errors > 0 && errors >= targetUrls.length
         ? RunStatuses.failed
-        : errors > 0
+        : errors > 0 || outcome.aborted
           ? RunStatuses.partial
           : RunStatuses.completed
 
+    // A `partial` run used to carry a NULL error, so the one surface that could
+    // have told the operator "0 of 45 URLs were inspected" said nothing at all.
+    // Whatever degraded the run gets written down.
+    const degradedReason =
+      status === RunStatuses.completed
+        ? null
+        : outcome.aborted
+          ? `Stopped early after sustained failures; ${targetUrls.length - inspected} of ${targetUrls.length} pages were not inspected.`
+          : `${errors} of ${targetUrls.length} pages could not be inspected.`
+
     db.update(runs)
-      .set({ status, finishedAt: new Date().toISOString() })
+      .set({ status, error: degradedReason, finishedAt: new Date().toISOString() })
       .where(eq(runs.id, runId))
       .run()
 

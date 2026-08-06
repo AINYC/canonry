@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { getSites, addSite, getUrlInfo, submitUrl, submitUrlBatch, getKeywordStats, getCrawlStats, getCrawlIssues } from '../src/bing-client.js'
+import { getSites, addSite, getUrlInfo, submitUrl, submitUrlBatch, getKeywordStats, getCrawlStats, getCrawlIssues, __resetBingThrottleCooldownForTest } from '../src/bing-client.js'
 import { BING_WMT_API_BASE } from '../src/constants.js'
+
+// The throttle cooldown is module-level state keyed by API key — global on
+// purpose, since the limit it models is on the Bing account rather than on any
+// one call site. That makes it shared across test files in a worker, so a
+// sibling suite that exhausts a retry budget would otherwise leave every test
+// here failing fast on a cooldown it never opened.
+beforeEach(() => {
+  __resetBingThrottleCooldownForTest()
+})
 
 describe('getSites', () => {
   let originalFetch: typeof globalThis.fetch

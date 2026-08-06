@@ -1,4 +1,5 @@
 import { withRetry, isRetryableHttpError } from '@ainyc/canonry-contracts'
+import { localRateGate, sharedRateGate, type RateGate } from './inspect-rate-gate.js'
 
 /**
  * Paced, rate-aware driver for GSC URL Inspection loops.
@@ -146,6 +147,29 @@ export interface PacedInspectDeps {
    * trip the breaker, and would grind through a whole sitemap against a wall.
    */
   isRetryable?: (err: unknown) => boolean
+  /**
+   * Names the upstream limit this sweep draws on, so concurrent sweeps sharing
+   * that limit queue behind ONE clock (see `inspect-rate-gate.ts`). Omit only
+   * when the caller genuinely owns its limit — an unkeyed sweep paces itself
+   * and ignores every other sweep, so N concurrent sweeps put N times the
+   * intended rate on a shared credential.
+   */
+  rateGateKey?: string
+  /**
+   * Minimum spacing between request STARTS. Defaults to
+   * `INSPECT_BASE_DELAY_MS`; a service that throttles harder than Google needs
+   * its own figure rather than inheriting the GSC one.
+   */
+  spacingMs?: number
+  /**
+   * Per-URL retries at THIS layer. Defaults to `INSPECT_MAX_RETRIES`.
+   *
+   * Pass 0 when the caller's own HTTP client already retries. Two retry layers
+   * multiply rather than add: Bing's client retries 4 times inside a driver
+   * that retried 3 more, so one throttled URL cost 5 x 4 = 20 requests and the
+   * breaker's five-failure budget spent 100 requests to inspect nothing.
+   */
+  maxRetries?: number
   log?: PacedInspectLogger
 }
 
@@ -189,6 +213,8 @@ export async function inspectUrlsPaced<TResult>(
   const jitter = deps.jitter ?? Math.random
   const concurrency = Math.max(1, Math.min(deps.concurrency ?? INSPECT_MAX_CONCURRENCY, urls.length || 1))
   const isRetryable = deps.isRetryable ?? isRetryableGscInspectError
+  const spacingMs = deps.spacingMs ?? INSPECT_BASE_DELAY_MS
+  const maxRetries = deps.maxRetries ?? INSPECT_MAX_RETRIES
 
   let inspected = 0
   let errors = 0
@@ -197,15 +223,12 @@ export async function inspectUrlsPaced<TResult>(
   let aborted = false
   let abortError: unknown
 
-  // One shared gate for the whole pool. Serialising only the WAIT (not the
-  // request) is what keeps the rate at one start per INSPECT_BASE_DELAY_MS
-  // while allowing `concurrency` requests to be in flight.
-  let ratePromise: Promise<void> = Promise.resolve()
-  const takeRateSlot = (): Promise<void> => {
-    const wait = ratePromise.then(() => sleep(INSPECT_BASE_DELAY_MS + jitter() * INSPECT_PACING_JITTER_MS))
-    ratePromise = wait
-    return wait
-  }
+  // One gate for the whole pool — and, when `rateGateKey` is set, for every
+  // OTHER sweep drawing on the same upstream limit. Serialising only the WAIT
+  // (not the request) keeps the rate at one start per `spacingMs` while
+  // allowing `concurrency` requests to be in flight.
+  const gate: RateGate = deps.rateGateKey ? sharedRateGate(deps.rateGateKey) : localRateGate()
+  const takeRateSlot = (): Promise<void> => gate.take(spacingMs + jitter() * INSPECT_PACING_JITTER_MS, sleep)
 
   async function worker(): Promise<void> {
     for (;;) {
@@ -214,16 +237,26 @@ export async function inspectUrlsPaced<TResult>(
       if (index >= urls.length) return
       const url = urls[index]!
 
-      // Only the very first request starts immediately. Every other start —
-      // including the rest of the opening batch — waits its turn on the shared
-      // gate, so the pool never bursts `concurrency` requests at once.
-      if (index > 0) await takeRateSlot()
+      // EVERY start waits its turn, including the first. Exempting index 0 was
+      // safe while the gate was per-call, but under a shared gate it would let
+      // each concurrent sweep fire one ungated request the instant it began —
+      // reproducing, at run granularity, exactly the opening burst the gate
+      // exists to prevent.
+      await takeRateSlot()
       if (aborted) return
 
       try {
-      const result = await withRetry(() => cb.inspectOne(url), {
-        maxRetries: INSPECT_MAX_RETRIES,
-        baseDelayMs: INSPECT_BASE_DELAY_MS,
+      // Retries take a rate slot too. The gate used to cover only fresh-URL
+      // starts, so a throttled sweep's retry traffic — the overwhelming
+      // majority of its requests once things go wrong — bypassed rate control
+      // entirely and hammered the limit that was already refusing it.
+      let attempt = 0
+      const result = await withRetry(async () => {
+        if (attempt++ > 0) await takeRateSlot()
+        return cb.inspectOne(url)
+      }, {
+        maxRetries,
+        baseDelayMs: spacingMs,
         maxDelayMs: INSPECT_MAX_BACKOFF_MS,
         isRetryable,
         sleep,
