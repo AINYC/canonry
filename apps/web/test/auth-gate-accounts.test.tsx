@@ -79,6 +79,24 @@ describe('signing in with an account', () => {
     expect(screen.queryByText('Create a dashboard password')).toBeNull()
   })
 
+  // This screen is the first thing a client sees, often before they know what
+  // the product is. An unbranded name/password box on a black page reads like a
+  // staging server, so the product identifies itself here.
+  test('identifies the product before asking for credentials', async () => {
+    serveAccounts({ authRequired: true, user: null })
+
+    render(<AuthGate />)
+    await screen.findByText('Sign in to Canonry')
+
+    const brand = screen.getByTestId('auth-brand')
+    expect(brand.textContent).toContain('Canonry')
+    expect(brand.querySelector('img')).toBeTruthy()
+
+    // Two labelled fields already say what to type; a sentence repeating it is
+    // noise on the one screen that should be shortest.
+    expect(screen.queryByText('Enter the name and password for your account.')).toBeNull()
+  })
+
   test('opens the dashboard once the name and password are accepted', async () => {
     let signedIn = false
     mockFetch((url, init) => {

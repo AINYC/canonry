@@ -2191,7 +2191,9 @@ function ProjectPageContent({
   // convention). "Local Presence" only appears once GBP is connected.
   const projectTabBase = `/projects/${encodeURIComponent(model.project.name)}`
   const projectTabItemsAll: ProjectTabItem[] = [
-    { key: 'overview', label: 'Overview', href: projectTabBase },
+    // `key` is a WIRE value: embed installs list it in CANONRY_EMBED_PROJECT_TABS
+    // and it appears in saved URLs, so it stays `overview` however the label reads.
+    { key: 'overview', label: 'AI Visibility', href: projectTabBase },
     { key: 'search-console', label: 'Search Engines', href: `${projectTabBase}/search-console` },
     { key: 'activity', label: 'Activity', href: `${projectTabBase}/activity` },
     { key: 'technical-aeo', label: 'Technical AEO', href: `${projectTabBase}/technical-aeo` },
