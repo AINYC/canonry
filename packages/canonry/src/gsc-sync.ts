@@ -4,7 +4,6 @@ import type { DatabaseClient } from '@ainyc/canonry-db'
 import { runs, projects, gscSearchData, gscDailyTotals, gscQueryDailyTotals, gscUrlInspections, gscCoverageSnapshots } from '@ainyc/canonry-db'
 import {
   fetchSearchAnalytics,
-  inspectUrl,
   refreshAccessToken,
   GSC_DATA_LAG_DAYS,
 } from '@ainyc/canonry-integration-google'
@@ -12,7 +11,6 @@ import type { CanonryConfig } from './config.js'
 import { saveConfigPatch } from './config.js'
 import { getGoogleAuthConfig, getGoogleConnection, patchGoogleConnection } from './google-config.js'
 import { createLogger } from './logger.js'
-import { inspectUrlsPaced } from './gsc-inspect-paced.js'
 
 const log = createLogger('GscSync')
 
@@ -215,77 +213,23 @@ export async function executeGscSync(
 
     log.info('query-totals.complete', { runId, projectId, rowCount: queryTotalRows.length })
 
-    // URL inspections — inspect top pages from the fetched data
-    // Aggregate clicks per page, take top N
-    const pageClicks = new Map<string, number>()
-    for (const row of rows) {
-      const page = row.keys[1]
-      if (page) {
-        pageClicks.set(page, (pageClicks.get(page) ?? 0) + row.clicks)
-      }
-    }
-
-    const topPages = [...pageClicks.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 50) // Inspect top 50 pages by clicks
-      .map(([page]) => page)
-
-    log.info('inspect.start', { runId, projectId, urlCount: topPages.length })
-
-    // Inspection here is best-effort secondary work — the search-analytics data
-    // above is already saved. Pace + retry to stay under the URL Inspection
-    // quota, but never fail the sync over it (an early circuit-break is logged).
-    const inspectOutcome = await inspectUrlsPaced(
-      topPages,
-      {
-        inspectOne: (pageUrl) => inspectUrl(accessToken, pageUrl, propertyId),
-        onResult: (pageUrl, result) => {
-          const ir = result.inspectionResult
-          const idx = ir.indexStatusResult
-          const mob = ir.mobileUsabilityResult
-          const rich = ir.richResultsResult
-          const inspectedAt = new Date().toISOString()
-
-          db.insert(gscUrlInspections).values({
-            id: crypto.randomUUID(),
-            projectId,
-            syncRunId: runId,
-            url: pageUrl,
-            indexingState: idx?.indexingState ?? null,
-            verdict: idx?.verdict ?? null,
-            coverageState: idx?.coverageState ?? null,
-            pageFetchState: idx?.pageFetchState ?? null,
-            robotsTxtState: idx?.robotsTxtState ?? null,
-            crawlTime: idx?.lastCrawlTime ?? null,
-            lastCrawlResult: idx?.crawlResult ?? null,
-            isMobileFriendly: mob?.verdict === 'PASS' ? true : mob?.verdict === 'FAIL' ? false : null,
-            richResults: rich?.detectedItems?.map((d) => d.richResultType) ?? [],
-            referringUrls: idx?.referringUrls ?? [],
-            inspectedAt,
-            createdAt: inspectedAt,
-          }).run()
-        },
-        onError: (pageUrl, err) => {
-          // Log but don't fail the whole sync for individual inspection errors
-          log.error('inspect.url-failed', { runId, projectId, url: pageUrl, error: err instanceof Error ? err.message : String(err) })
-        },
-      },
-      {
-        log: {
-          info: (action, ctx) => log.info(action, { runId, projectId, ...ctx }),
-          error: (action, ctx) => log.error(action, { runId, projectId, ...ctx }),
-        },
-      },
-    )
-
-    if (inspectOutcome.aborted) {
-      log.error('inspect.stopped-early', {
-        runId,
-        projectId,
-        inspected: inspectOutcome.inspected,
-        note: 'URL inspection stopped early after sustained rate/access failures; search-analytics data was still saved',
-      })
-    }
+    // URL inspection deliberately does NOT happen here.
+    //
+    // Each call to Google's URL Inspection API costs ~7.1s (≈6.3s of Google's
+    // own latency for a live index lookup, plus the ~1.1s pacing the API's
+    // 1 req/sec soft limit requires) and one unit of a 2000/property/day quota.
+    // Inspecting inline made the run scale with the site: measured at 240.9s of
+    // a 241.9s sync for 31 URLs — 99.6% of the run — while the search-analytics
+    // work above finished in 1.07s. The dashboard polls this run for 120s, so
+    // every sync on a site with more than ~17 indexed pages timed out, silently,
+    // and showed pre-sync numbers.
+    //
+    // Coverage is instead owned by `inspect-sitemap`, which the server already
+    // chains off a successful sync via `maybeRefreshGscCoverage`. That walks the
+    // whole sitemap rather than the top 50 by clicks, so it is both more complete
+    // and no longer duplicated — the two loops previously re-inspected 33 of the
+    // same URLs per cycle, spending quota to confirm what search analytics had
+    // already reported for free.
 
     // Record coverage snapshot from all inspections for this project (latest per URL)
     const allInspections = db
@@ -336,7 +280,7 @@ export async function executeGscSync(
       .where(eq(runs.id, runId))
       .run()
 
-    log.info('sync.completed', { runId, projectId, searchDataRows: rows.length, urlInspections: topPages.length, indexed: snapIndexed, notIndexed: snapNotIndexed })
+    log.info('sync.completed', { runId, projectId, searchDataRows: rows.length, indexed: snapIndexed, notIndexed: snapNotIndexed })
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err)
     db.update(runs)
