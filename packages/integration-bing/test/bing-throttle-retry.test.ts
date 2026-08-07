@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { getUrlInfo, getSites, submitUrlBatch } from '../src/bing-client.js'
+import { getUrlInfo, getSites, submitUrlBatch, __resetBingThrottleCooldownForTest } from '../src/bing-client.js'
 import { BingApiError, BING_THROTTLE_ERROR_CODES } from '../src/types.js'
 import { isRetryableHttpError } from '@ainyc/canonry-contracts'
 
@@ -51,6 +51,10 @@ describe('bingFetch retry behaviour', () => {
   beforeEach(() => {
     originalFetch = globalThis.fetch
     vi.useFakeTimers()
+    // The throttle cooldown is module state keyed by API key. A test that
+    // exhausts its retries opens it, so without this reset the NEXT test would
+    // fail fast on a cooldown it never asked for.
+    __resetBingThrottleCooldownForTest()
   })
 
   afterEach(() => {
@@ -185,5 +189,120 @@ describe('bingFetch retry behaviour', () => {
 
     await expect(withTimersRun(getSites('key'))).rejects.toThrow(/Bing API error \(400\)/)
     expect(calls).toBe(1)
+  })
+})
+
+/**
+ * Retrying is the right answer to a momentary throttle and the wrong answer to
+ * a sustained one.
+ *
+ * Measured on 2026-08-06: once the account was throttled, every call kept
+ * returning `ThrottleUser` for over an hour — including calls for a site that
+ * had not been touched in six days, with nothing else in flight. The limit is
+ * on the ACCOUNT, and continued requests are what hold it open. So a call that
+ * burns its whole retry budget and is STILL throttled is treated as evidence
+ * about the key rather than about that URL.
+ */
+describe('throttle cooldown', () => {
+  let originalFetch: typeof globalThis.fetch
+  let clock: number
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch
+    clock = 1_000_000
+    vi.useFakeTimers()
+    __resetBingThrottleCooldownForTest(() => clock)
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+    vi.useRealTimers()
+    __resetBingThrottleCooldownForTest()
+  })
+
+  async function withTimersRun<T>(p: Promise<T>): Promise<T> {
+    const settled = p.then(
+      (value) => ({ ok: true as const, value }),
+      (err: unknown) => ({ ok: false as const, err }),
+    )
+    await vi.runAllTimersAsync()
+    const outcome = await settled
+    if (!outcome.ok) throw outcome.err
+    return outcome.value
+  }
+
+  it('stops calling the API once a full retry budget ends in a throttle', async () => {
+    let calls = 0
+    globalThis.fetch = vi.fn(async () => {
+      calls++
+      return errorResponse(400, THROTTLE_USER_BODY)
+    }) as unknown as typeof globalThis.fetch
+
+    await expect(withTimersRun(getUrlInfo('key-a', 'https://a.test/', 'https://a.test/p'))).rejects.toThrow()
+    const afterFirst = calls
+    expect(afterFirst).toBeGreaterThan(1) // it did retry
+
+    // Second call: refused locally, no HTTP issued at all.
+    await expect(withTimersRun(getUrlInfo('key-a', 'https://a.test/', 'https://a.test/q'))).rejects.toThrow(
+      /cooldown/i,
+    )
+    expect(calls).toBe(afterFirst)
+  })
+
+  it('cools down the CREDENTIAL, so every site on that key stops too', async () => {
+    // The failure that made this necessary: a per-site cooldown would have let
+    // the other projects on the same key keep hammering the account.
+    globalThis.fetch = vi.fn(async () => errorResponse(400, THROTTLE_USER_BODY)) as unknown as typeof globalThis.fetch
+    await expect(withTimersRun(getUrlInfo('key-a', 'https://a.test/', 'https://a.test/p'))).rejects.toThrow()
+
+    const before = (globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length
+    await expect(withTimersRun(getUrlInfo('key-a', 'https://other.test/', 'https://other.test/p'))).rejects.toThrow(
+      /cooldown/i,
+    )
+    expect((globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(before)
+  })
+
+  it('leaves a DIFFERENT credential untouched', async () => {
+    globalThis.fetch = vi.fn(async (input: unknown) => {
+      return String(input).includes('key-a') ? errorResponse(400, THROTTLE_USER_BODY) : jsonResponse({ Url: 'ok' })
+    }) as unknown as typeof globalThis.fetch
+
+    await expect(withTimersRun(getUrlInfo('key-a', 'https://a.test/', 'https://a.test/p'))).rejects.toThrow()
+    // Two Bing accounts on one instance must not take each other down.
+    await expect(withTimersRun(getUrlInfo('key-b', 'https://b.test/', 'https://b.test/p'))).resolves.toBeTruthy()
+  })
+
+  it('expires, so a throttle does not disable the integration forever', async () => {
+    globalThis.fetch = vi.fn(async () => errorResponse(400, THROTTLE_USER_BODY)) as unknown as typeof globalThis.fetch
+    await expect(withTimersRun(getUrlInfo('key-a', 'https://a.test/', 'https://a.test/p'))).rejects.toThrow()
+    await expect(withTimersRun(getUrlInfo('key-a', 'https://a.test/', 'https://a.test/q'))).rejects.toThrow(/cooldown/i)
+
+    clock += 11 * 60 * 1000 // past BING_THROTTLE_COOLDOWN_MS
+    globalThis.fetch = vi.fn(async () => jsonResponse({ Url: 'ok' })) as unknown as typeof globalThis.fetch
+    await expect(withTimersRun(getUrlInfo('key-a', 'https://a.test/', 'https://a.test/r'))).resolves.toBeTruthy()
+  })
+
+  it('is not opened by a non-throttle failure', async () => {
+    // A 404 says something about the URL, not about the account.
+    globalThis.fetch = vi.fn(async () =>
+      errorResponse(404, '{"ErrorCode":2,"Message":"Not found"}'),
+    ) as unknown as typeof globalThis.fetch
+    await expect(withTimersRun(getUrlInfo('key-a', 'https://a.test/', 'https://a.test/p'))).rejects.toThrow()
+
+    globalThis.fetch = vi.fn(async () => jsonResponse({ Url: 'ok' })) as unknown as typeof globalThis.fetch
+    await expect(withTimersRun(getUrlInfo('key-a', 'https://a.test/', 'https://a.test/q'))).resolves.toBeTruthy()
+  })
+
+  it('is not opened when a throttle eventually succeeds on retry', async () => {
+    let calls = 0
+    globalThis.fetch = vi.fn(async () => {
+      calls++
+      return calls === 1 ? errorResponse(400, THROTTLE_HOST_BODY) : jsonResponse({ Url: 'ok' })
+    }) as unknown as typeof globalThis.fetch
+
+    await expect(withTimersRun(getUrlInfo('key-a', 'https://a.test/', 'https://a.test/p'))).resolves.toBeTruthy()
+    // A momentary throttle is exactly what retry is for — it must not trigger
+    // the heavier account-level backoff.
+    await expect(withTimersRun(getUrlInfo('key-a', 'https://a.test/', 'https://a.test/q'))).resolves.toBeTruthy()
   })
 })

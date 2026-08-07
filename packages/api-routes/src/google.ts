@@ -171,8 +171,20 @@ function signState(payload: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(payload).digest('hex')
 }
 
+/**
+ * Signed OAuth states are otherwise valid forever (the HMAC has no expiry
+ * built in). A captured `state` — e.g. leaked via a proxy's access log, a
+ * browser history entry, or a referrer header on the redirect leg — would
+ * stay replayable indefinitely as long as the initiating project still
+ * exists with the same id/name/domain. `issuedAt` + this ceiling closes that
+ * window; 15 minutes comfortably covers the real user-facing consent flow
+ * (redirect to Google, user reviews the consent screen, redirect back)
+ * while keeping a stale/leaked state from being useful later.
+ */
+const OAUTH_STATE_MAX_AGE_MS = 15 * 60 * 1000
+
 function buildSignedState(data: Record<string, unknown>, secret: string): string {
-  const payload = JSON.stringify(data)
+  const payload = JSON.stringify({ ...data, issuedAt: Date.now() })
   const sig = signState(payload, secret)
   return Buffer.from(JSON.stringify({ payload, sig })).toString('base64url')
 }
@@ -182,7 +194,14 @@ function verifySignedState(encoded: string, secret: string): Record<string, unkn
     const { payload, sig } = JSON.parse(Buffer.from(encoded, 'base64url').toString()) as { payload: string; sig: string }
     const expected = signState(payload, secret)
     if (!crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'))) return null
-    return JSON.parse(payload) as Record<string, unknown>
+    const parsed = JSON.parse(payload) as Record<string, unknown>
+    // States minted before this field existed (`issuedAt` absent) are
+    // treated as expired rather than ageless — see the pre-`projectId`
+    // handling at the call site for the same "stale state, restart the
+    // flow" precedent.
+    const issuedAt = typeof parsed.issuedAt === 'number' ? parsed.issuedAt : null
+    if (issuedAt === null || Date.now() - issuedAt > OAUTH_STATE_MAX_AGE_MS) return null
+    return parsed
   } catch {
     return null
   }

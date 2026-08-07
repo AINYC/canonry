@@ -30,6 +30,7 @@ import {
   type MeasurementOverviewSort,
   type MeasurementPlanV2,
   type MeasurementPropertyProviderRow,
+  type MeasurementOutcomeCounts,
   type MeasurementPropertyRow,
   type MeasurementQueryClassFilter,
   type MeasurementState,
@@ -407,13 +408,54 @@ function validatedCursor(query: MeasurementOverviewQuery, activePlanVersionId: s
   return cursor
 }
 
+/**
+ * Split a scope's Properties by which signals they got.
+ *
+ * Counted over EVERY row in scope, never the page — a bucket derived from the
+ * loaded page would change as someone paged, which is not what a total means.
+ *
+ * A Property lands in one of the four measured buckets only when BOTH signals
+ * were measured. Mentioned-with-citation-unmeasured is NOT "mentioned only":
+ * that phrasing asserts the Property was not cited, and nothing measured that.
+ * Half-measured therefore counts as `notMeasured`, which is the honest reading
+ * and keeps the buckets disjoint.
+ */
+export function measurementOutcomeCounts(
+  rows: readonly MeasurementPropertyRow[],
+): MeasurementOutcomeCounts {
+  const counts = {
+    bothSignals: 0, mentionedOnly: 0, citedOnly: 0, neither: 0, notMeasured: 0, total: rows.length,
+  }
+  for (const row of rows) {
+    const mention = row.mentionCoverage
+    const citation = row.citationCoverage
+    if (mention.state !== 'available' || citation.state !== 'available') {
+      counts.notMeasured += 1
+      continue
+    }
+    // `numerator` is optional on an available metric; a metric that reports a
+    // rate without one still says whether the signal occurred at all.
+    const mentioned = (mention.numerator ?? mention.value) > 0
+    const cited = (citation.numerator ?? citation.value) > 0
+    if (mentioned && cited) counts.bothSignals += 1
+    else if (mentioned) counts.mentionedOnly += 1
+    else if (cited) counts.citedOnly += 1
+    else counts.neither += 1
+  }
+  return counts
+}
+
 function pageOf(
   rows: readonly MeasurementPropertyRow[],
   query: MeasurementOverviewQuery,
   displayedRunId: string | null,
   activePlanVersionId: string,
   evidenceFingerprint: string,
-): MeasurementOverviewResponse['properties'] {
+  // Returned together on purpose: the counts are over the FULL row set this
+  // function was handed, and the page is a slice of that same set. Computing
+  // them apart is how a total ends up describing a different population than
+  // the rows beneath it.
+): { page: MeasurementOverviewResponse['properties']; outcomes: MeasurementOutcomeCounts } {
   const sort = query.sort ?? MEASUREMENT_OVERVIEW_DEFAULT_SORT
   const ordered = [...rows].sort((left, right) => compareRows(left, right, sort))
   const limit = query.limit ?? MEASUREMENT_PAGE_DEFAULT_LIMIT
@@ -437,18 +479,21 @@ function pageOf(
   const items = ordered.slice(offset, offset + limit)
   const last = items.at(-1)
   return {
-    items,
-    nextCursor: last === undefined || ordered.at(offset + limit) === undefined
-      ? null
-      : cursorOf(
-          last,
-          sort,
-          displayedRunId,
-          overviewFilterFingerprint(query),
-          activePlanVersionId,
-          evidenceFingerprint,
-        ),
-    totalEstimate: ordered.length,
+    page: {
+      items,
+      nextCursor: last === undefined || ordered.at(offset + limit) === undefined
+        ? null
+        : cursorOf(
+            last,
+            sort,
+            displayedRunId,
+            overviewFilterFingerprint(query),
+            activePlanVersionId,
+            evidenceFingerprint,
+          ),
+      totalEstimate: ordered.length,
+    },
+    outcomes: measurementOutcomeCounts(ordered),
   }
 }
 
@@ -647,7 +692,7 @@ function planV1Overview(
   scope: ScopeSelection,
 ): MeasurementOverviewResponse {
   const displayed = selectDisplayedRun(db, projectId, active, query)
-  const page = pageOf(
+  const { page, outcomes } = pageOf(
     propertyLabels(active.plan, scope)
       .filter(row => matchesSearch(row, query.search))
       .map(row => ({
@@ -684,6 +729,7 @@ function planV1Overview(
       sov: unavailable('plan_v1'),
     },
     properties: page,
+    outcomes,
     flags: { total: 0 },
   }
 }
@@ -703,7 +749,7 @@ function planV2Overview(
   const currentDto = current ? { currentRunId: current.id } : {}
 
   if (!displayed) {
-    const page = pageOf(
+    const { page, outcomes } = pageOf(
       propertyLabels(plan, scope)
         .filter(row => matchesSearch(row, query.search))
         .map(row => ({
@@ -737,6 +783,7 @@ function planV2Overview(
         sov: unavailable('no_completed_run'),
       },
       properties: page,
+      outcomes,
       flags: { total: 0 },
     }
   }
@@ -777,7 +824,7 @@ function planV2Overview(
   const measured = new Map<string, MeasurementOverviewPropertyRow>(
     overview.properties.map(row => [row.targetId, row]),
   )
-  const page = pageOf(
+  const { page, outcomes } = pageOf(
     propertyLabels(plan, scope)
       .filter(row => matchesSearch(row, query.search))
       .map(row => {
@@ -837,6 +884,7 @@ function planV2Overview(
       sov: brandPresence,
     },
     properties: page,
+    outcomes,
     flags: { total: overview.flags },
     ...(namedShareOfVoice === undefined ? {} : { namedShareOfVoice }),
   }

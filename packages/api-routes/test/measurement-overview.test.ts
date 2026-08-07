@@ -3,13 +3,18 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Fastify, { type FastifyInstance } from 'fastify'
+
+import { measurementOutcomeCounts } from '../src/measurement-overview.js'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   canonicalMeasurementPlanJson,
   canonicalMeasurementPlanV2Json,
   compileMeasurementPlan,
+  type MeasurementMetricUnavailableReason,
   type MeasurementOverviewResponse,
   type MeasurementPlanV2,
+  type MeasurementPropertyRow,
+  type MetricValue,
 } from '@ainyc/canonry-contracts'
 import {
   createClient,
@@ -419,6 +424,26 @@ describe('measurement overview', () => {
     expect(overviewBuilds).toBe(1)
   })
 
+  it('counts outcomes over the whole scope, not the page the caller happened to ask for', async () => {
+    const versionId = seedVersion(1)
+    activate(versionId)
+    seedMeasuredRun(versionId)
+
+    // The bug this prevents: buckets derived from the loaded rows change as
+    // someone pages, so a "total" describes a different population on page two
+    // than on page one. A one-row page must report the same scope-wide split as
+    // the unpaged read.
+    const full = await overview('scope=all')
+    const firstPage = await overview('scope=all&limit=1')
+
+    expect(firstPage.body.properties.items).toHaveLength(1)
+    expect(firstPage.body.outcomes).toEqual(full.body.outcomes)
+    expect(firstPage.body.outcomes.total).toBe(full.body.properties.totalEstimate)
+
+    const o = full.body.outcomes
+    expect(o.bothSignals + o.mentionedOnly + o.citedOnly + o.neither + o.notMeasured).toBe(o.total)
+  })
+
   it('pages Properties deterministically through an opaque cursor', async () => {
     const versionId = seedVersion(1)
     activate(versionId)
@@ -744,5 +769,61 @@ describe('measurement overview', () => {
         flags: 0,
       },
     ])
+  })
+})
+
+// ── Outcome counts ───────────────────────────────────────────────────────────
+describe('measurementOutcomeCounts', () => {
+  const avail = (numerator: number, denominator = 4): MetricValue =>
+    ({ state: 'available', value: numerator / denominator, numerator, denominator })
+  const gone = (reason: MeasurementMetricUnavailableReason = 'no_completed_run'): MetricValue =>
+    ({ state: 'unavailable', reason })
+  const row = (targetKey: string, mention: MetricValue, citation: MetricValue) =>
+    ({ targetKey, label: targetKey, mentionCoverage: mention, citationCoverage: citation, providers: [], flags: 0 }) as MeasurementPropertyRow
+
+  it('splits a scope into disjoint outcomes that sum to its property total', () => {
+    const counts = measurementOutcomeCounts([
+      row('a', avail(3), avail(2)),   // both
+      row('b', avail(2), avail(0)),   // mentioned, not cited
+      row('c', avail(0), avail(1)),   // cited, not mentioned
+      row('d', avail(0), avail(0)),   // neither
+      row('e', gone(), gone()),       // not measured
+    ])
+
+    expect(counts).toEqual({
+      bothSignals: 1, mentionedOnly: 1, citedOnly: 1, neither: 1, notMeasured: 1, total: 5,
+    })
+    const parts = counts.bothSignals + counts.mentionedOnly + counts.citedOnly + counts.neither + counts.notMeasured
+    expect(parts).toBe(counts.total)
+  })
+
+  it('counts a HALF-measured property as not measured, never as an absence of the missing signal', () => {
+    // Mentioned but citation unmeasured is NOT "mentioned only" — that phrasing
+    // asserts the Property was not cited, which nothing measured. Classifying
+    // it requires both signals.
+    const counts = measurementOutcomeCounts([
+      row('a', avail(3), gone()),
+      row('b', gone(), avail(2)),
+    ])
+    expect(counts.mentionedOnly).toBe(0)
+    expect(counts.citedOnly).toBe(0)
+    expect(counts.notMeasured).toBe(2)
+    expect(counts.total).toBe(2)
+  })
+
+  it('is exhaustive over any mix, so the parts always reconcile', () => {
+    const metrics = [avail(0), avail(2), gone(), gone('no_population')]
+    const rows = metrics.flatMap((mention, i) =>
+      metrics.map((citation, j) => row(`r${i}-${j}`, mention, citation)))
+    const counts = measurementOutcomeCounts(rows)
+    const parts = counts.bothSignals + counts.mentionedOnly + counts.citedOnly + counts.neither + counts.notMeasured
+    expect(parts).toBe(rows.length)
+    expect(counts.total).toBe(rows.length)
+  })
+
+  it('reports an empty scope as all zeroes rather than throwing', () => {
+    expect(measurementOutcomeCounts([])).toEqual({
+      bothSignals: 0, mentionedOnly: 0, citedOnly: 0, neither: 0, notMeasured: 0, total: 0,
+    })
   })
 })

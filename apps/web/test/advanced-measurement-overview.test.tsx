@@ -123,8 +123,20 @@ function report(overrides: Partial<AdvancedMeasurementOverviewReport> = {}): Adv
   }
 }
 
+/**
+ * The default view is All queries, which reads `report.overall`. The base
+ * fixture sets `overall: nonBrand`, but a test that overrides
+ * `classScopes.nonBrand` replaces only that half — leaving `overall` pointing
+ * at the unmodified scope and the override invisible. This keeps the two in
+ * step, exactly as the base fixture does.
+ */
+function syncOverall(r: AdvancedMeasurementOverviewReport): AdvancedMeasurementOverviewReport {
+  return r.classScopes ? { ...r, overall: r.classScopes.nonBrand } : r
+}
+
 function renderOverviewReturning(overrides: Partial<AdvancedMeasurementOverviewProps> = {}) {
-  return render(<AdvancedMeasurementOverview report={report()} canEdit {...overrides} />)
+  const props = { report: report(), canEdit: true, ...overrides }
+  return render(<AdvancedMeasurementOverview {...props} report={syncOverall(props.report)} />)
 }
 
 function renderOverview(overrides: Partial<AdvancedMeasurementOverviewProps> = {}) {
@@ -137,21 +149,21 @@ function renderOverview(overrides: Partial<AdvancedMeasurementOverviewProps> = {
     onRepublishSetup,
     ...overrides,
   }
-  render(<AdvancedMeasurementOverview {...props} />)
+  render(<AdvancedMeasurementOverview {...props} report={syncOverall(props.report)} />)
   return { onRunMeasurement, onRepublishSetup }
 }
 
 describe('AdvancedMeasurementOverview', () => {
-  it('shows truthful ratios for the three headline metrics', () => {
+  // The section counts Properties and nothing else. An assignment-denominated
+  // rate beside a Property count is what made the two rows irreconcilable, so
+  // the aggregate percentages are gone; per-Property rates stay in the table.
+  it('leads with the measurement date and no assignment-denominated rate', () => {
     renderOverview()
 
-    expect(screen.getByText('Properties mentioned')).toBeTruthy()
-    expect(screen.getByText('Mention coverage')).toBeTruthy()
-    expect(screen.getByText('Citation coverage')).toBeTruthy()
-    expect(screen.getAllByText('3 of 4 (75%)').length).toBeGreaterThan(0)
-    expect(screen.getByText('6 of 8 (75%)')).toBeTruthy()
-    expect(screen.getByText('2 of 8 (25%)')).toBeTruthy()
     expect(screen.getByText('Aug 2, 2026')).toBeTruthy()
+    expect(screen.queryByLabelText('Coverage')).toBeNull()
+    expect(screen.queryByText('25%')).toBeNull()
+    expect(screen.queryByText('75%')).toBeNull()
   })
 
   it('keeps unavailable measurements unavailable instead of rendering zero or repeating their reason', () => {
@@ -176,10 +188,11 @@ describe('AdvancedMeasurementOverview', () => {
       },
     })
 
-    expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
+    // The aggregate rates are gone with the hero, so an unavailable aggregate
+    // is reported once, in words, on the status line — never as a 0.
     expect(screen.getAllByText('No complete source evidence is available.')).toHaveLength(1)
-    expect(screen.getAllByTitle('No complete source evidence is available.').length).toBeGreaterThan(0)
     expect(screen.queryByText('0 of 0 (0%)')).toBeNull()
+    expect(screen.queryByText('0%')).toBeNull()
   })
 
   it('keeps measurement status and the next action on one concise line', () => {
@@ -216,7 +229,7 @@ describe('AdvancedMeasurementOverview', () => {
 
     fireEvent.click(within(screen.getByLabelText('Group')).getByRole('radio', { name: 'Metro offices' }))
 
-    expect(screen.getAllByText('1 of 2 (50%)').length).toBeGreaterThan(0)
+    // The group holds only Downtown, so the row set is what proves the swap.
     expect(screen.getByRole('button', { name: 'Show details for Downtown Office' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Show details for Uptown Office' })).toBeNull()
   })
@@ -226,8 +239,6 @@ describe('AdvancedMeasurementOverview', () => {
 
     fireEvent.change(screen.getByLabelText('Search properties'), { target: { value: 'uptown' } })
 
-    expect(screen.getAllByText('3 of 4 (75%)').length).toBeGreaterThan(0)
-    expect(screen.getByText('6 of 8 (75%)')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Show details for Uptown Office' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Show details for Downtown Office' })).toBeNull()
     expect(screen.queryByText('Flagged results (1)')).toBeNull()
@@ -299,6 +310,31 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.getByRole('button', { name: 'Hide details for Downtown Office' })).toBeTruthy()
   })
 
+  // Each expansion adds an engine sub-row per provider plus a details panel, so
+  // two open at once push the rest of a several-hundred-row table off screen.
+  it('opens one Property at a time, collapsing the previously open one', () => {
+    renderOverview()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Downtown Office' }))
+    expect(screen.getByRole('button', { name: 'Hide details for Downtown Office' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Uptown Office' }))
+
+    expect(screen.getByRole('button', { name: 'Hide details for Uptown Office' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show details for Downtown Office' })).toBeTruthy()
+  })
+
+  it('collapses the open Property when it is clicked again, leaving none open', () => {
+    renderOverview()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Downtown Office' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Hide details for Downtown Office' }))
+
+    expect(screen.getByRole('button', { name: 'Show details for Downtown Office' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show details for Uptown Office' })).toBeTruthy()
+    expect(screen.queryByText('Assigned queries')).toBeNull()
+  })
+
   it('badges bridged property and evidence rows as Historical', () => {
     const current = report()
     const first = current.classScopes!.nonBrand.aggregate.properties[0]!
@@ -347,6 +383,10 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.getByText('Query type')).toBeTruthy()
     expect(screen.queryByText('Brand share of voice')).toBeNull()
     fireEvent.click(within(screen.getByLabelText('Group')).getByRole('radio', { name: 'Metro offices' }))
+    // Share of voice is a NON-BRAND question — a brand's share of its own name
+    // is meaningless — so the default All-queries view must not show it.
+    expect(screen.queryByText('Brand share of voice')).toBeNull()
+    fireEvent.click(within(screen.getByLabelText('Query type')).getByRole('radio', { name: 'Non-brand' }))
     expect(screen.getByText('Brand share of voice')).toBeTruthy()
     expect(screen.getByText('Example Co.')).toBeTruthy()
     expect(screen.getByText('Rival Co.')).toBeTruthy()
@@ -375,28 +415,31 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.queryByText('Brand share of voice')).toBeNull()
   })
 
+  // Rates live on the Property rows now that the aggregate hero is gone. An
+  // impossible ratio (numerator above denominator) must read as unavailable
+  // there rather than as a number somebody could act on.
   it('treats an invalid metric denominator as unavailable', () => {
     const current = report()
+    const scope = current.classScopes!.nonBrand
+    const [first, ...rest] = scope.aggregate.properties
     renderOverview({
       report: {
         ...current,
         classScopes: {
           ...current.classScopes!,
           nonBrand: {
-            ...current.classScopes!.nonBrand,
+            ...scope,
             aggregate: {
-              ...current.classScopes!.nonBrand.aggregate,
-              metrics: {
-                ...current.classScopes!.nonBrand.aggregate.metrics,
-                mentionCoverage: { numerator: 2, denominator: 1 },
-              },
+              ...scope.aggregate,
+              properties: [{ ...first!, mentionCoverage: { numerator: 2, denominator: 1 } }, ...rest],
             },
           },
         },
       },
     })
 
-    expect(screen.getByText('N/A')).toBeTruthy()
+    expect(screen.queryByText('2 of 1 (200%)')).toBeNull()
+    expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
   })
 
   it('makes version-one class reporting visibly unavailable and offers republish to editors', () => {
@@ -425,7 +468,7 @@ describe('AdvancedMeasurementOverview', () => {
     for (const radio of within(queryTypeGroup).getAllByRole('radio')) {
       expect((radio as HTMLButtonElement).disabled).toBe(true)
     }
-    expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
+    expect(screen.getByText('Setup update required.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Republish setup' }))
     expect(onRepublishSetup).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('button', { name: 'Run measurement' })).toBeNull()
@@ -745,28 +788,29 @@ describe('control row (defect 2)', () => {
     // defined (styles.css). Asserting the shared class is what stops this
     // control drifting into a second visual language for the same widget.
     expect(control.className).toContain('segmented')
-    const nonBrandRadio = within(control).getByRole('radio', { name: 'Non-brand' })
-    expect(nonBrandRadio.getAttribute('aria-checked')).toBe('true')
-    expect(nonBrandRadio.className).toContain('segmented-option')
-    expect(nonBrandRadio.className).toContain('segmented-option-active')
+    const allRadio = within(control).getByRole('radio', { name: 'All queries' })
+    expect(allRadio.getAttribute('aria-checked')).toBe('true')
+    expect(allRadio.className).toContain('segmented-option')
+    expect(allRadio.className).toContain('segmented-option-active')
     // An unchecked option wears the base class WITHOUT the active modifier.
     const brandedRadio = within(control).getByRole('radio', { name: 'Branded' })
     expect(brandedRadio.className).toContain('segmented-option')
     expect(brandedRadio.className).not.toContain('segmented-option-active')
+    expect(within(control).getByRole('radio', { name: 'Non-brand' }).getAttribute('aria-checked')).toBe('false')
   })
 
-  it('is keyboard operable: ArrowLeft moves both focus and the checked option', () => {
+  it('is keyboard operable: an arrow key moves both focus and the checked option', () => {
     renderOverview()
     const control = screen.getByLabelText('Query type')
     const allRadio = within(control).getByRole('radio', { name: 'All queries' })
     const nonBrandRadio = within(control).getByRole('radio', { name: 'Non-brand' })
-    expect(nonBrandRadio.getAttribute('aria-checked')).toBe('true')
-
-    fireEvent.keyDown(nonBrandRadio, { key: 'ArrowLeft' })
-
     expect(allRadio.getAttribute('aria-checked')).toBe('true')
-    expect(nonBrandRadio.getAttribute('aria-checked')).toBe('false')
-    expect(document.activeElement).toBe(allRadio)
+
+    fireEvent.keyDown(allRadio, { key: 'ArrowRight' })
+
+    expect(nonBrandRadio.getAttribute('aria-checked')).toBe('true')
+    expect(allRadio.getAttribute('aria-checked')).toBe('false')
+    expect(document.activeElement).toBe(nonBrandRadio)
   })
 
   it('selecting a Query type option issues the same server-view request a select would have', () => {
@@ -880,5 +924,259 @@ describe('responsive structure', () => {
       // pushes options off the edge with no way to reach them.
       expect(group.className).toContain('flex-wrap')
     }
+  })
+})
+
+describe('row detail', () => {
+  const withDetail = () => {
+    const base = report()
+    const scope = base.classScopes!.nonBrand
+    const [first, ...rest] = scope.aggregate.properties
+    return {
+      ...base,
+      classScopes: {
+        ...base.classScopes!,
+        nonBrand: {
+          ...scope,
+          aggregate: {
+            ...scope.aggregate,
+            properties: [{
+              ...first!,
+              market: 'Metro offices',
+              urls: ['example.com/downtown', 'example.com/downtown-2'],
+              mentionCoverage: ratio(3, 4),
+              citationCoverage: ratio(2, 4),
+              providers: [
+                { provider: 'openai', mentionCoverage: ratio(2, 2), citationCoverage: ratio(1, 2) },
+                { provider: 'gemini', mentionCoverage: ratio(1, 2), citationCoverage: ratio(1, 2) },
+              ],
+            }, ...rest],
+          },
+        },
+      },
+    }
+  }
+
+  it('identifies a row by its market and URL count, not the name alone', () => {
+    renderOverview({ report: withDetail() })
+    // At portfolio scale "Downtown Office" is not enough to know which one.
+    expect(screen.getByText('Metro offices · 2 URLs')).toBeTruthy()
+  })
+
+  it('expands into per-engine sub-rows whose numbers add up to the row above', () => {
+    renderOverview({ report: withDetail() })
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Downtown Office' }))
+
+    const engineRows = [...document.querySelectorAll('tr.measurement-subrow')]
+    expect(engineRows.map(row => row.querySelector('.measurement-subrow-name')?.textContent))
+      .toEqual(['openai', 'gemini'])
+
+    // The invariant: read down a column and the sub-rows total the parent.
+    // Cell order matches the header — name, mention, citation.
+    const numerators = (row: Element) => [...row.querySelectorAll('td')]
+      .map(td => /^(\d+) of (\d+)/.exec(td.textContent ?? ''))
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map(match => ({ numerator: Number(match[1]), denominator: Number(match[2]) }))
+
+    const openai = numerators(engineRows[0]!)
+    const gemini = numerators(engineRows[1]!)
+    expect(openai).toHaveLength(2)
+    expect(gemini).toHaveLength(2)
+
+    // Mention: 2 + 1 = 3, matching the parent's 3 of 4. Citation: 1 + 1 = 2 of 4.
+    expect(openai[0]!.numerator + gemini[0]!.numerator).toBe(3)
+    expect(openai[1]!.numerator + gemini[1]!.numerator).toBe(2)
+    // Each engine's denominator is a share of the parent's, never the whole.
+    expect(openai[0]!.denominator + gemini[0]!.denominator).toBe(4)
+  })
+
+  it('renders no engine sub-rows when the split is absent, rather than an empty shell', () => {
+    renderOverview()
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Downtown Office' }))
+    expect(document.querySelectorAll('tr.measurement-subrow').length).toBe(0)
+  })
+})
+
+describe('outcome count row', () => {
+  const withOutcomes = (outcomes: NonNullable<NonNullable<AdvancedMeasurementOverviewReport['currentView']>['outcomes']>) => ({
+    ...report(),
+    currentView: {
+      scope: { kind: 'all' as const },
+      queryClass: 'non-brand' as const,
+      aggregate: report().classScopes!.nonBrand.aggregate,
+      propertyTotal: outcomes.total,
+      nextCursor: null,
+      outcomes,
+    },
+  })
+
+  // "one signal" pooled two states with OPPOSITE fixes — cited-but-not-mentioned
+  // means the engine read the page and recommended somebody else — and hid the
+  // actionable half behind a hover. Each state is now named on screen.
+  it('names each outcome instead of pooling the two one-signal states', () => {
+    renderOverview({ report: withOutcomes({
+      bothSignals: 14, mentionedOnly: 11, citedOnly: 6, neither: 9, notMeasured: 7, total: 47,
+    }) })
+
+    const row = screen.getByLabelText('Property outcomes')
+    expect(within(row).getByText('14')).toBeTruthy()
+    expect(within(row).getByText('11')).toBeTruthy()
+    expect(within(row).getByText('6')).toBeTruthy()
+    expect(within(row).getByText('9')).toBeTruthy()
+    expect(row.textContent).toContain('mentioned and cited')
+    expect(row.textContent).toContain('mentioned only')
+    expect(row.textContent).toContain('cited only')
+    expect(row.textContent).toContain('neither signal')
+    // The pooled label and its tooltip are gone.
+    expect(row.textContent).not.toContain('one signal')
+    expect(screen.queryByRole('button', { name: /which signal/i })).toBeNull()
+  })
+
+  // A rendered 0 in the exception bucket reads as a measured finding.
+  it('hides not-measured when nothing is unmeasured, and shows it when something is', () => {
+    const { unmount } = renderOverviewReturning({ report: withOutcomes({
+      bothSignals: 1, mentionedOnly: 0, citedOnly: 1, neither: 4, notMeasured: 0, total: 6,
+    }) })
+    expect(screen.getByLabelText('Property outcomes').textContent).not.toContain('not measured')
+    unmount()
+
+    renderOverview({ report: withOutcomes({
+      bothSignals: 1, mentionedOnly: 0, citedOnly: 1, neither: 3, notMeasured: 1, total: 6,
+    }) })
+    expect(screen.getByLabelText('Property outcomes').textContent).toContain('not measured')
+  })
+
+  it('renders nothing at all when the server sent no outcomes, rather than zeroes', () => {
+    renderOverview()
+    expect(screen.queryByLabelText('Property outcomes')).toBeNull()
+  })
+
+  // The parent trims the term before storing it, so a pause after a space
+  // echoes back a shorter string. Writing that echo into the controlled input
+  // deletes the space the user just typed, and the next word merges onto the
+  // last one: "Downtown " + "Office" becomes "DowntownOffice", which matches
+  // nothing.
+  it('does not eat a trailing space when the trimmed term echoes back', () => {
+    const { rerender } = renderOverviewReturning({
+      report: { ...report(), currentView: undefined },
+      viewSearch: '',
+    })
+    const box = screen.getByPlaceholderText('Search properties') as HTMLInputElement
+
+    fireEvent.change(box, { target: { value: 'Downtown ' } })
+    expect(box.value).toBe('Downtown ')
+
+    rerender(
+      <AdvancedMeasurementOverview
+        report={{ ...report(), currentView: undefined }}
+        canEdit
+        viewSearch="Downtown"
+      />,
+    )
+
+    expect(box.value).toBe('Downtown ')
+  })
+
+  // While a new view loads, the cache still holds the PREVIOUS scope's counts.
+  // Every other data block swaps to a skeleton for exactly that reason; leaving
+  // this one up presents non-brand numbers as the branded view's split.
+  it('hides the counts while a new view is loading rather than showing the old ones', () => {
+    renderOverview({
+      isViewLoading: true,
+      report: withOutcomes({
+        bothSignals: 14, mentionedOnly: 11, citedOnly: 6, neither: 9, notMeasured: 7, total: 47,
+      }),
+    })
+
+    expect(screen.queryByLabelText('Property outcomes')).toBeNull()
+  })
+
+  // The unit is stated once, on the heading line the row sits under, and the
+  // row sums to it — there is no second population on screen to reconcile with.
+  it('states the unit once, on the line the counts sum to', () => {
+    renderOverview({ report: withOutcomes({
+      bothSignals: 1, mentionedOnly: 0, citedOnly: 1, neither: 4, notMeasured: 0, total: 6,
+    }) })
+
+    expect(screen.getByText('6 properties')).toBeTruthy()
+    const row = screen.getByLabelText('Property outcomes')
+    // 1 + 0 + 1 + 4 = 6, visibly.
+    expect(row.textContent).not.toContain('assignment')
+    expect(screen.queryByRole('button', { name: /Sums to/ })).toBeNull()
+  })
+})
+
+
+describe('sorting and status', () => {
+  const serverView = (overrides = {}) => {
+    const base = report()
+    return {
+      ...base,
+      currentView: {
+        scope: { kind: 'all' as const },
+        queryClass: 'all' as const,
+        aggregate: base.classScopes!.nonBrand.aggregate,
+        propertyTotal: 2,
+        nextCursor: null,
+        ...overrides,
+      },
+    }
+  }
+
+  // At portfolio scale the whole job is finding the Properties that are
+  // failing. The API has supported six sort tokens all along; the table never
+  // sent one, so the only ordering available was alphabetical.
+  it('sorts by a column, and toggles direction on a second click', () => {
+    const onViewChange = vi.fn()
+    renderOverview({ report: serverView(), onViewChange })
+
+    const mention = screen.getByRole('button', { name: /sort by mention/i })
+    fireEvent.click(mention)
+    expect(onViewChange).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'mentionCoverage-asc' }))
+
+    fireEvent.click(screen.getByRole('button', { name: /sort by mention/i }))
+    expect(onViewChange).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'mentionCoverage-desc' }))
+  })
+
+  it('tells assistive tech which column is sorted and which way', () => {
+    renderOverview({ report: serverView({ sort: 'citationCoverage-desc' }), onViewChange: vi.fn() })
+    const header = screen.getByRole('columnheader', { name: /citation/i })
+    expect(header.getAttribute('aria-sort')).toBe('descending')
+    expect(screen.getByRole('columnheader', { name: /mention/i }).getAttribute('aria-sort')).toBe('none')
+  })
+
+  // A column of identical green "Complete" badges spends a full column of
+  // portfolio width saying nothing. The exceptions are the only part worth
+  // reading, so they move beside the name and the column goes.
+  it('drops the status column and badges only the rows that need attention', () => {
+    const base = report()
+    const scope = base.classScopes!.nonBrand
+    const [first, second] = scope.aggregate.properties
+    renderOverview({
+      report: {
+        ...base,
+        classScopes: {
+          ...base.classScopes!,
+          nonBrand: {
+            ...scope,
+            aggregate: {
+              ...scope.aggregate,
+              properties: [
+                { ...first!, status: { label: 'Complete', tone: 'positive' as const } },
+                { ...second!, status: { label: 'Review', tone: 'caution' as const } },
+              ],
+            },
+          },
+        },
+      },
+    })
+
+    expect(screen.queryByRole('columnheader', { name: 'Status' })).toBeNull()
+    const table = screen.getByRole('table', { name: /property measurement results/i })
+    // The unremarkable case earns no badge at all. (The run's own "Complete"
+    // status lives in the header, outside this table.)
+    expect(within(table).queryByText('Complete')).toBeNull()
+    // The exception still shows, next to the Property it belongs to.
+    expect(within(table).getByText('Review')).toBeTruthy()
   })
 })

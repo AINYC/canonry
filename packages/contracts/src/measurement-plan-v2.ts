@@ -432,6 +432,30 @@ export const measurementPropertyProviderRowSchema = z.object({
 }).strict()
 export type MeasurementPropertyProviderRow = z.output<typeof measurementPropertyProviderRowSchema>
 
+/**
+ * Every Property in a scope, split by which of the two signals it actually got.
+ *
+ * The buckets are DISJOINT and EXHAUSTIVE, so they always sum to `total` — a UI
+ * can state the total beside them and a drift becomes visible rather than
+ * quietly wrong. `citedOnly` is called out separately because it is the most
+ * actionable group: the engine used the page as a source and still recommended
+ * somebody else.
+ *
+ * A Property is only classified into the four measured buckets when BOTH
+ * signals were measured for it. One signal alone cannot support "mentioned but
+ * not cited" — that phrasing asserts an absence nothing measured — so a
+ * half-measured Property counts as `notMeasured`.
+ */
+export const measurementOutcomeCountsSchema = z.object({
+  bothSignals: z.number().int().nonnegative(),
+  mentionedOnly: z.number().int().nonnegative(),
+  citedOnly: z.number().int().nonnegative(),
+  neither: z.number().int().nonnegative(),
+  notMeasured: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+}).strict()
+export type MeasurementOutcomeCounts = z.output<typeof measurementOutcomeCountsSchema>
+
 export const measurementPropertyRowSchema = z.object({
   targetKey: measurementV2StableKeySchema,
   label: z.string().min(1),
@@ -499,6 +523,13 @@ export const measurementOverviewResponseSchema = z.object({
     ),
   }).strict(),
   properties: measurementCursorPageSchema(measurementPropertyRowSchema),
+  /**
+   * Outcome split over the whole RESULT SET, not the page — so paging through
+   * does not move it. It narrows with `search` exactly as `properties.totalEstimate`
+   * does, because both are computed from the same filtered rows; with no search
+   * that result set is the entire scope.
+   */
+  outcomes: measurementOutcomeCountsSchema,
   flags: z.object({ total: z.number().int().nonnegative() }).strict(),
   namedShareOfVoice: measurementNamedShareOfVoiceSchema.optional(),
 }).strict()

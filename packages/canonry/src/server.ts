@@ -158,7 +158,7 @@ import {
 } from "@ainyc/canonry-integration-openai-ads";
 import { executeInspectSitemap } from "./gsc-inspect-sitemap.js";
 import { executeBingInspectSitemap } from "./bing-inspect-sitemap.js";
-import { maybeRefreshGscCoverage } from "./coverage-refresh.js";
+import { maybeRefreshGscCoverage, runWasUserInitiated } from "./coverage-refresh.js";
 import { executeReleaseSync } from "./commoncrawl-sync.js";
 import { executeBacklinkExtract } from "./backlink-extract.js";
 import { executeDiscoveryRun } from "./discovery-run.js";
@@ -2107,9 +2107,14 @@ export async function createServer(opts: {
       })
         // executeGscSync resolves only when the sync completed, so a full
         // sitemap-coverage refresh chains directly off success. `gsc-sync`
-        // alone only inspects the top 50 pages by clicks, leaving newly-added
-        // URLs out of the coverage dashboard until the next manual inspection.
-        .then(() => maybeRefreshGscCoverage(opts.db, opts.config, projectId))
+        // itself inspects NO URLs, so this chain is the only thing that can
+        // move index coverage — which is why a user-initiated sync is not
+        // subject to the hour-long scheduled spacing.
+        .then(() =>
+          maybeRefreshGscCoverage(opts.db, opts.config, projectId, undefined, Date.now(), {
+            userInitiated: runWasUserInitiated(opts.db, runId),
+          }),
+        )
         .catch((err: unknown) => {
           app.log.error({ runId, err }, "GSC sync failed");
         });
@@ -2345,7 +2350,14 @@ export async function createServer(opts: {
             finished?.status === RunStatuses.completed ||
             finished?.status === RunStatuses.partial
           ) {
-            return maybeRefreshGscCoverage(opts.db, opts.config, projectId);
+            return maybeRefreshGscCoverage(
+              opts.db,
+              opts.config,
+              projectId,
+              undefined,
+              Date.now(),
+              { userInitiated: runWasUserInitiated(opts.db, runId) },
+            );
           }
           return null;
         })

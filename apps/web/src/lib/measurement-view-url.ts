@@ -18,7 +18,13 @@ export interface MeasurementViewState {
   queryClass: MeasurementQueryClass
 }
 
-export const DEFAULT_MEASUREMENT_VIEW: MeasurementViewState = { scope: 'all', queryClass: 'non-brand' }
+/**
+ * All queries, not non-brand. Branded and non-brand answer different questions
+ * and are never pooled into one rate, but an operator arriving at the page has
+ * not yet said which one he is asking — and defaulting to non-brand silently
+ * hid half the basket behind a control he had no reason to touch.
+ */
+export const DEFAULT_MEASUREMENT_VIEW: MeasurementViewState = { scope: 'all', queryClass: 'all' }
 
 const QUERY_CLASSES: readonly MeasurementQueryClass[] = ['all', 'non-brand', 'branded']
 
@@ -42,6 +48,26 @@ export function parseMeasurementViewSearch(search: { scope?: string; class?: str
   // `group:` with nothing after it names no group, so it is not a group scope.
   if (!groupKey) return { scope: 'all', queryClass }
   return { scope: 'group', groupKey, queryClass }
+}
+
+/**
+ * Whether a change of plan identity (`"<project>:<revision>"`) should discard
+ * the view the URL is carrying.
+ *
+ * A scope names a group inside one project's plan revision, so carrying it
+ * across a different plan points it at nothing and the reset is right. Two
+ * cases are NOT changes, and both were live bugs:
+ *
+ * - **No previous identity.** On first mount the URL's scope is exactly what
+ *   the reader asked for. Resetting discards every shared or bookmarked link
+ *   the instant it opens.
+ * - **Identity not yet known.** The plan is fetched, so the revision reads as
+ *   unknown for the first render or two and then appears. That appearance is
+ *   the answer arriving, not the plan changing.
+ */
+export function shouldResetMeasurementView(previous: string | null, next: string | null): boolean {
+  if (next === null || previous === null) return false
+  return previous !== next
 }
 
 /**

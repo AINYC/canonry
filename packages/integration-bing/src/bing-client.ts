@@ -1,5 +1,6 @@
 import { withRetry, isRetryableHttpError, retryAfterDelayMs } from '@ainyc/canonry-contracts'
-import { BING_WMT_API_BASE, BING_SUBMIT_URL_BATCH_LIMIT, BING_SUBMIT_URL_DAILY_LIMIT, BING_REQUEST_TIMEOUT_MS, BING_MAX_RETRIES, BING_RETRY_BASE_DELAY_MS, BING_RETRY_MAX_DELAY_MS } from './constants.js'
+import crypto from 'node:crypto'
+import { BING_WMT_API_BASE, BING_SUBMIT_URL_BATCH_LIMIT, BING_SUBMIT_URL_DAILY_LIMIT, BING_REQUEST_TIMEOUT_MS, BING_MAX_RETRIES, BING_RETRY_BASE_DELAY_MS, BING_RETRY_MAX_DELAY_MS, BING_THROTTLE_COOLDOWN_MS } from './constants.js'
 import type {
   BingSite,
   BingUrlInfo,
@@ -159,6 +160,42 @@ async function bingFetchOnce<T>(apiKey: string, endpoint: string, opts?: { metho
 }
 
 /**
+ * Per-key throttle cooldowns, keyed by a digest so the secret is never a Map
+ * key. Module-level because the limit is on the ACCOUNT: every project, run,
+ * and route on this instance shares one entry per credential.
+ */
+const throttleCooldownUntil = new Map<string, number>()
+
+/** Injectable clock — tests move time instead of waiting ten minutes. */
+let cooldownNow: () => number = () => Date.now()
+
+function cooldownKey(apiKey: string): string {
+  return crypto.createHash('sha256').update(apiKey).digest('hex').slice(0, 12)
+}
+
+function throttleCooldownRemainingMs(apiKey: string): number {
+  const until = throttleCooldownUntil.get(cooldownKey(apiKey))
+  if (until == null) return 0
+  const remaining = until - cooldownNow()
+  if (remaining <= 0) {
+    throttleCooldownUntil.delete(cooldownKey(apiKey))
+    return 0
+  }
+  return remaining
+}
+
+function openThrottleCooldown(apiKey: string): void {
+  throttleCooldownUntil.set(cooldownKey(apiKey), cooldownNow() + BING_THROTTLE_COOLDOWN_MS)
+  bingClientLog('error', 'http.cooldown-open', { cooldownMs: BING_THROTTLE_COOLDOWN_MS })
+}
+
+/** Test seam: reset cooldown state and optionally pin the clock. */
+export function __resetBingThrottleCooldownForTest(now?: () => number): void {
+  throttleCooldownUntil.clear()
+  cooldownNow = now ?? (() => Date.now())
+}
+
+/**
  * Every Bing call goes through here, so retry is the default rather than
  * something each call site remembers.
  *
@@ -187,24 +224,42 @@ async function bingFetchOnce<T>(apiKey: string, endpoint: string, opts?: { metho
 async function bingFetch<T>(apiKey: string, endpoint: string, opts?: { method?: string; body?: unknown }): Promise<T> {
   const isIdempotent = (opts?.method ?? 'GET') === 'GET'
 
-  return withRetry(() => bingFetchOnce<T>(apiKey, endpoint, opts), {
-    maxRetries: BING_MAX_RETRIES,
-    baseDelayMs: BING_RETRY_BASE_DELAY_MS,
-    maxDelayMs: BING_RETRY_MAX_DELAY_MS,
-    isRetryable: (err) => {
-      if (err instanceof BingApiError && err.isThrottle) return true
-      return isIdempotent && isRetryableHttpError(err)
-    },
-    computeDelayMs: (_attempt, err, defaultMs) => retryAfterDelayMs(err) ?? defaultMs,
-    onRetry: ({ attempt, err, delayMs }) => {
-      bingClientLog('warn', 'http.retry', {
-        endpoint,
-        attempt,
-        delayMs: Math.round(delayMs),
-        throttled: err instanceof BingApiError ? err.isThrottle : false,
-      })
-    },
-  })
+  const cooling = throttleCooldownRemainingMs(apiKey)
+  if (cooling > 0) {
+    bingClientLog('warn', 'http.cooldown-skip', { endpoint, remainingMs: cooling })
+    throw new BingApiError(
+      `Bing API key is in a throttle cooldown for another ${Math.ceil(cooling / 1000)}s; ` +
+        'the account was still throttled after a full retry budget, so this call was not attempted.',
+      429,
+    )
+  }
+
+  try {
+    return await withRetry(() => bingFetchOnce<T>(apiKey, endpoint, opts), {
+      maxRetries: BING_MAX_RETRIES,
+      baseDelayMs: BING_RETRY_BASE_DELAY_MS,
+      maxDelayMs: BING_RETRY_MAX_DELAY_MS,
+      isRetryable: (err) => {
+        if (err instanceof BingApiError && err.isThrottle) return true
+        return isIdempotent && isRetryableHttpError(err)
+      },
+      computeDelayMs: (_attempt, err, defaultMs) => retryAfterDelayMs(err) ?? defaultMs,
+      onRetry: ({ attempt, err, delayMs }) => {
+        bingClientLog('warn', 'http.retry', {
+          endpoint,
+          attempt,
+          delayMs: Math.round(delayMs),
+          throttled: err instanceof BingApiError ? err.isThrottle : false,
+        })
+      },
+    })
+  } catch (err) {
+    // Still throttled after every retry: that is a statement about the ACCOUNT,
+    // not about this URL. Continuing to call is what keeps the limit asserted,
+    // so the key goes quiet for a while and every caller fails fast meanwhile.
+    if (err instanceof BingApiError && err.isThrottle) openThrottleCooldown(apiKey)
+    throw err
+  }
 }
 
 export async function getSites(apiKey: string): Promise<BingSite[]> {

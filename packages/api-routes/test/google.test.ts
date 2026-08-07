@@ -9,12 +9,25 @@ import { createClient, migrate, projects, runs, auditLog, gscCoverageSnapshots, 
 import { AppError } from '@ainyc/canonry-contracts'
 import { googleOAuthSuccessHtml, googleRoutes } from '../src/google.js'
 
-// Reproduce state signing functions from google.ts to verify behavior
+// Reproduce state signing functions from google.ts to verify behavior.
+// Kept in sync with `OAUTH_STATE_MAX_AGE_MS` / `buildSignedState` /
+// `verifySignedState` there — `buildSignedState` stamps `issuedAt` by
+// default (matching production), and tests that need to emulate a
+// pre-TTL "legacy" state or an expired one pass `issuedAt` explicitly.
+const OAUTH_STATE_MAX_AGE_MS = 15 * 60 * 1000
+
 function signState(payload: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(payload).digest('hex')
 }
 
 function buildSignedState(data: Record<string, unknown>, secret: string): string {
+  const payload = JSON.stringify({ issuedAt: Date.now(), ...data })
+  const sig = signState(payload, secret)
+  return Buffer.from(JSON.stringify({ payload, sig })).toString('base64url')
+}
+
+/** Build a state payload with no `issuedAt` at all — emulates a state minted before the TTL field existed. */
+function buildSignedStateWithoutIssuedAt(data: Record<string, unknown>, secret: string): string {
   const payload = JSON.stringify(data)
   const sig = signState(payload, secret)
   return Buffer.from(JSON.stringify({ payload, sig })).toString('base64url')
@@ -25,7 +38,10 @@ function verifySignedState(encoded: string, secret: string): Record<string, unkn
     const { payload, sig } = JSON.parse(Buffer.from(encoded, 'base64url').toString()) as { payload: string; sig: string }
     const expected = signState(payload, secret)
     if (!crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'))) return null
-    return JSON.parse(payload) as Record<string, unknown>
+    const parsed = JSON.parse(payload) as Record<string, unknown>
+    const issuedAt = typeof parsed.issuedAt === 'number' ? parsed.issuedAt : null
+    if (issuedAt === null || Date.now() - issuedAt > OAUTH_STATE_MAX_AGE_MS) return null
+    return parsed
   } catch {
     return null
   }
@@ -134,6 +150,29 @@ describe('state signing', () => {
 
   it('rejects garbage input', () => {
     const result = verifySignedState('not-valid-base64url!!!', 'secret')
+    expect(result).toBeNull()
+  })
+
+  it('rejects a state older than the TTL — closes the indefinite-replay window', () => {
+    const secret = 'my-test-secret'
+    const staleIssuedAt = Date.now() - OAUTH_STATE_MAX_AGE_MS - 1000
+    const encoded = buildSignedState({ domain: 'example.com', type: 'gsc', issuedAt: staleIssuedAt }, secret)
+    const result = verifySignedState(encoded, secret)
+    expect(result).toBeNull()
+  })
+
+  it('accepts a state right at the edge of the TTL window', () => {
+    const secret = 'my-test-secret'
+    const freshIssuedAt = Date.now() - OAUTH_STATE_MAX_AGE_MS + 5000
+    const encoded = buildSignedState({ domain: 'example.com', type: 'gsc', issuedAt: freshIssuedAt }, secret)
+    const result = verifySignedState(encoded, secret)
+    expect(result).not.toBeNull()
+  })
+
+  it('rejects a correctly-signed state with no issuedAt at all (pre-TTL-migration state)', () => {
+    const secret = 'my-test-secret'
+    const encoded = buildSignedStateWithoutIssuedAt({ domain: 'example.com', type: 'gsc' }, secret)
+    const result = verifySignedState(encoded, secret)
     expect(result).toBeNull()
   })
 })

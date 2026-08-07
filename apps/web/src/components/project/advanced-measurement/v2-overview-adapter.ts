@@ -9,6 +9,7 @@ import type {
   AdvancedMeasurementMetric,
   AdvancedMeasurementOverviewReport,
   AdvancedMeasurementProperty,
+  AdvancedMeasurementSort,
 } from './AdvancedMeasurementOverview.js'
 
 type ActivePlan = NonNullable<MeasurementPlanResponse['active']>
@@ -21,6 +22,8 @@ export interface AdaptV2MeasurementOverviewInput {
   activePlan: ActivePlan
   report?: MeasurementReportResponse | null
   reportState?: 'loading' | 'ready' | 'error'
+  /** The ordering the caller requested; the response does not echo it. */
+  sort?: AdvancedMeasurementSort
 }
 
 export function areV2OverviewPagesCompatible(pages: readonly MeasurementOverviewResponse[]): boolean {
@@ -150,6 +153,7 @@ export function adaptV2MeasurementOverview({
   activePlan,
   report,
   reportState = report ? 'ready' : 'loading',
+  sort,
 }: AdaptV2MeasurementOverviewInput): AdvancedMeasurementOverviewReport {
   if (activePlan.plan.schemaVersion !== 2 || overview.mode !== 'active-v2') {
     throw new Error('The current overview requires an active version-two setup.')
@@ -189,6 +193,15 @@ export function adaptV2MeasurementOverview({
     pinnedReport,
     overview.queryClass === 'all' ? undefined : overview.queryClass,
   )
+  // One Property belongs to at most one market in practice; when a plan puts it
+  // in several, the first is named rather than a joined string, because the
+  // subtitle is an identifier and not a list.
+  const marketByTarget = new Map<string, string>()
+  for (const group of plan.groups) {
+    for (const targetKey of group.targetKeys) {
+      if (!marketByTarget.has(targetKey)) marketByTarget.set(targetKey, group.label)
+    }
+  }
   const properties = overview.properties.items.map(row => {
     const configured = targetByKey.get(row.targetKey)
     const evidence = evidenceByTarget.get(row.targetKey) ?? []
@@ -198,6 +211,12 @@ export function adaptV2MeasurementOverview({
       mentionCoverage: metric(row.mentionCoverage),
       citationCoverage: metric(row.citationCoverage),
       status: propertyStatus(row),
+      providers: row.providers?.map(entry => ({
+        provider: entry.provider,
+        mentionCoverage: metric(entry.mentionCoverage),
+        citationCoverage: metric(entry.citationCoverage),
+      })),
+      market: marketByTarget.get(row.targetKey),
       assignedQueries: [...(assignmentsByTarget.get(row.targetKey) ?? [])],
       urls: configured?.urlMatchers.map(matcherLabel) ?? [],
       evidence,
@@ -242,7 +261,12 @@ export function adaptV2MeasurementOverview({
         ...(shareOfVoice ? { shareOfVoice } : {}),
       },
       propertyTotal: overview.properties.totalEstimate ?? properties.length,
+      outcomes: overview.outcomes,
       nextCursor: overview.properties.nextCursor,
+      // The response does not echo the ordering it applied, so the requested
+      // sort is threaded through here — the header state must reflect what was
+      // actually asked for, not what the table happens to look like.
+      ...(sort ? { sort } : {}),
     },
     availableGroups: plan.groups.map(group => ({ id: group.stableKey, label: group.label })),
     ...(nextActionText(overview) ? { nextActionText: nextActionText(overview) } : {}),

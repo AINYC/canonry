@@ -234,6 +234,94 @@ describe('executeBingInspectSitemap', () => {
     expect(inspections[0]!.url).toBe('https://azcoatingsllc.com/ok')
   })
 
+  /**
+   * A sweep that measured NOTHING must not look like a successful one.
+   *
+   * On 2026-08-06 a throttled sweep inspected 0 of 45 URLs, tripped the
+   * circuit breaker after 5 consecutive failures, and was recorded `partial`
+   * with a NULL error — because the status test compared `errors` (capped at 5
+   * by the breaker) against the whole 45-URL sitemap. It then rewrote the
+   * coverage snapshot from months-old stored inspections with a fresh
+   * `created_at`, so the dashboard showed freshly-dated coverage that no
+   * request had contributed to. Nothing in the product could tell that apart
+   * from a healthy refresh.
+   */
+  it('fails the run and leaves coverage untouched when every URL is throttled', async () => {
+    const urls = Array.from({ length: 12 }, (_, i) => `  <url><loc>https://azcoatingsllc.com/p${i}</loc></url>`).join('\n')
+    const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset>\n${urls}\n</urlset>`
+    const s = await startSitemapServer({ '/sitemap.xml': sitemapXml })
+    server = s.server
+
+    // A pre-existing snapshot standing in for "what the dashboard shows now".
+    const earlierRunId = await queueRun()
+    const staleDate = new Date().toISOString().split('T')[0]!
+    db.insert(bingCoverageSnapshots).values({
+      id: crypto.randomUUID(),
+      projectId,
+      syncRunId: earlierRunId,
+      date: staleDate,
+      indexed: 65,
+      notIndexed: 0,
+      unknown: 12,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    }).run()
+
+    const bingModule = await import('@ainyc/canonry-integration-bing')
+    vi.spyOn(bingModule, 'getUrlInfo').mockImplementation(async () => {
+      throw Object.assign(new Error('Bing API error (400): {"ErrorCode":4,"Message":"ERROR!!! ThrottleUser"}'), {
+        status: 429,
+      })
+    })
+
+    const runId = await queueRun()
+    await expect(
+      executeBingInspectSitemap(db, runId, projectId, {
+        sitemapUrl: `${s.baseUrl}/sitemap.xml`,
+        config: buildConfig('azcoatingsllc.com'),
+        pacedDeps: { sleep: async () => {}, jitter: () => 0 },
+      }),
+    ).rejects.toThrow(/failed for every URL/i)
+
+    const run = db.select().from(runs).where(eq(runs.id, runId)).get()
+    expect(run?.status).toBe(RunStatuses.failed)
+    // The reason has to be legible; a NULL error is what hid this for a day.
+    expect(run?.error).toBeTruthy()
+
+    // The stale snapshot must be exactly as it was — not re-dated.
+    const snap = db.select().from(bingCoverageSnapshots)
+      .where(eq(bingCoverageSnapshots.projectId, projectId)).all()
+    expect(snap).toHaveLength(1)
+    expect(snap[0]!.createdAt).toBe('2026-08-01T00:00:00.000Z')
+    expect(snap[0]!.syncRunId).toBe(earlierRunId)
+  })
+
+  it('records WHY a degraded run was degraded', async () => {
+    const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset>
+  <url><loc>https://azcoatingsllc.com/ok</loc></url>
+  <url><loc>https://azcoatingsllc.com/fail</loc></url>
+</urlset>`
+    const s = await startSitemapServer({ '/sitemap.xml': sitemapXml })
+    server = s.server
+
+    const bingModule = await import('@ainyc/canonry-integration-bing')
+    vi.spyOn(bingModule, 'getUrlInfo').mockImplementation(async (_apiKey, _site, url) => {
+      if (url.endsWith('/fail')) throw new Error('Bing API error')
+      return { Url: url, HttpStatus: 200, DocumentSize: 1000 }
+    })
+
+    const runId = await queueRun()
+    await executeBingInspectSitemap(db, runId, projectId, {
+      sitemapUrl: `${s.baseUrl}/sitemap.xml`,
+      config: buildConfig('azcoatingsllc.com'),
+      pacedDeps: { sleep: async () => {}, jitter: () => 0 },
+    })
+
+    const run = db.select().from(runs).where(eq(runs.id, runId)).get()
+    expect(run?.status).toBe(RunStatuses.partial)
+    expect(run?.error).toMatch(/1 of 2/)
+  })
+
   it('marks the run failed when sitemap is empty', async () => {
     const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>`

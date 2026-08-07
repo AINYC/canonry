@@ -86,7 +86,7 @@ async function renderAt(
     const q = {
       scope: measurement.overviewKey?.scope ?? 'all',
       ...(measurement.overviewKey?.groupKey ? { groupKey: measurement.overviewKey.groupKey } : {}),
-      queryClass: measurement.overviewKey?.queryClass ?? 'non-brand',
+      queryClass: measurement.overviewKey?.queryClass ?? 'all',
       limit: 50,
     }
     queryClient.setQueryData(
@@ -338,7 +338,13 @@ test('an active setup replaces the Simple Overview with the advanced measurement
   })
 
   expect(html).toContain('Republish setup')
-  expect(html).toContain('Properties mentioned')
+  // The advanced surface counts Properties and only Properties. The
+  // assignment-denominated hero was removed: two populations side by side, with
+  // the unit printed on neither, is what made the section unreadable.
+  // That fixture carries no outcome counts, so the row correctly renders
+  // nothing; what matters is that the assignment-denominated hero is gone.
+  expect(html).not.toContain('aria-label="Coverage"')
+  expect(html).toContain('advanced-measurement-properties-title')
   expect(html).toContain('Harbor House')
   expect(html).toContain('AI sweep running')
   expect(html).not.toContain('Where competitors are winning')
@@ -438,7 +444,9 @@ test('a version-two Overview uses server scope, search and pagination and defers
   expect(await page.findByText('Harbor House')).toBeTruthy()
   const firstOverviewUrl = observed.find(path => path.includes('/measurement-overview?'))
   expect(firstOverviewUrl).toContain('scope=all')
-  expect(firstOverviewUrl).toContain('queryClass=non-brand')
+  // All queries is the default now — the operator has not yet said which lane
+  // he is asking about, and defaulting to one silently hid the other.
+  expect(firstOverviewUrl).toContain('queryClass=all')
   expect(firstOverviewUrl).toContain('limit=50')
   expect(observed.some(path => path.includes('/measurement-report?'))).toBe(false)
 

@@ -193,3 +193,13 @@ describe('filterEmbedProjectTabs', () => {
     expect(filterEmbedProjectTabs(['portfolio', 'not-a-tab'])).toEqual(['overview'])
   })
 })
+
+// The project tab's visible label is "AI Visibility", but its id stays
+// `overview`. Embed installs list that id in CANONRY_EMBED_PROJECT_TABS and it
+// appears in saved URLs, so renaming it would silently empty an existing
+// allowlist and fall every embed back to a different tab.
+it('keeps the overview tab id on the wire however the label reads', () => {
+  expect(isEmbedProjectTabAllowed('overview', ['overview'])).toBe(true)
+  expect(resolveEmbedProjectTab('overview', ['overview', 'technical-aeo'])).toBe('overview')
+  expect(isEmbedProjectTabAllowed('ai-visibility', ['overview'])).toBe(false)
+})

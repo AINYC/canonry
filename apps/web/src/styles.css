@@ -2145,6 +2145,24 @@
     @apply truncate text-[12px] text-faint;
   }
 
+  /* ── Measurement engine sub-rows ──
+     The per-engine split of a Property row, rendered in the PARENT table's
+     columns so the numbers are read down a column and visibly total the row
+     above. The tick marks them as subordinate without a second visual
+     language: an indent alone reads as an accident at a glance. */
+  .measurement-subrow {
+    @apply bg-surface-subtle;
+  }
+
+  .measurement-subrow-name {
+    @apply relative pl-6 text-sm text-secondary;
+  }
+
+  .measurement-subrow-name::before {
+    content: '';
+    @apply absolute left-2 top-1/2 h-px w-2 bg-mono-700;
+  }
+
   /* ── Run row ── */
 
   .run-row {

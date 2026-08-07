@@ -3,9 +3,10 @@ import { ChevronDown, RefreshCw, Trash2 } from 'lucide-react'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { Link } from '@tanstack/react-router'
 
-import { measurementViewSearch, parseMeasurementViewSearch } from '../lib/measurement-view-url.js'
+import { measurementViewSearch, parseMeasurementViewSearch, shouldResetMeasurementView } from '../lib/measurement-view-url.js'
 import { useQueryClient } from '@tanstack/react-query'
 import { RunKinds, RunStatuses } from '@ainyc/canonry-contracts'
+import type { MeasurementOverviewSort } from '@ainyc/canonry-contracts'
 
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
@@ -117,6 +118,19 @@ type SearchConsoleWorkspace = 'google' | 'bing'
  * `commandCenter` is built from that entry, the settings form on a
  * previously-visited project then rendered — and saved to — the wrong project.
  */
+/**
+ * How often the "Refresh all" flow polls a triggered sweep, and how long it
+ * waits before reporting the run as still in flight.
+ *
+ * The old 120s deadline was shorter than a normal sweep: a paced Bing run over
+ * ~45 URLs is around 90s healthy and a throttled one ran 335s, so the poll gave
+ * up on runs that were about to succeed and reported "still running" instead of
+ * the real outcome. The run itself is server-side and unaffected by this — only
+ * whether the user is told what happened.
+ */
+const REFRESH_POLL_INTERVAL_MS = 2_000
+const REFRESH_POLL_TIMEOUT_MS = 300_000
+
 export function patchProjectDashboardCache(
   queryClient: ReturnType<typeof useQueryClient>,
   updated: ApiProject,
@@ -850,13 +864,11 @@ function SearchConsoleSection({
         const run = await triggerGscSync(projectName)
         if (!run?.id) return
 
-        const POLL_INTERVAL_MS = 2000
-        const TIMEOUT_MS = 120_000
-        const deadline = Date.now() + TIMEOUT_MS
+        const deadline = Date.now() + REFRESH_POLL_TIMEOUT_MS
 
         while (Date.now() < deadline) {
           if (signal.aborted) return
-          await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+          await new Promise<void>((resolve) => setTimeout(resolve, REFRESH_POLL_INTERVAL_MS))
           if (signal.aborted) return
           const detail = await fetchRunDetail(run.id).catch(() => null)
           if (!detail) break
@@ -896,13 +908,11 @@ function SearchConsoleSection({
           return
         }
 
-        const POLL_INTERVAL_MS = 2000
-        const TIMEOUT_MS = 120_000
-        const deadline = Date.now() + TIMEOUT_MS
+        const deadline = Date.now() + REFRESH_POLL_TIMEOUT_MS
 
         while (Date.now() < deadline) {
           if (signal.aborted) return
-          await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+          await new Promise<void>((resolve) => setTimeout(resolve, REFRESH_POLL_INTERVAL_MS))
           if (signal.aborted) return
           const detail = await fetchRunDetail(run.id).catch(() => null)
           if (!detail) break
@@ -925,14 +935,23 @@ function SearchConsoleSection({
         }
       }
 
-      if (signal.aborted) return
-
-      // Reload both coverage summaries from fresh DB values
-      setRefreshState('reloading')
+      // Invalidate BEFORE the abort check, deliberately.
+      //
+      // The sweeps ran on the server and the stored coverage changed whether or
+      // not this component is still mounted. Discarding the invalidation on
+      // unmount is what made a completed refresh look like it never happened:
+      // the user navigated away, the cached payload stayed "fresh" for its 60s
+      // staleTime, and coming back re-served the PRE-refresh numbers. Cache
+      // state is app-wide, so it must not be conditional on this view's life.
       await Promise.all([
         invalidateProjectQueryDomain(queryClient, 'gsc'),
         invalidateProjectQueryDomain(queryClient, 'bing'),
       ])
+
+      if (signal.aborted) return
+
+      // Everything below touches THIS component's state, so it stays guarded.
+      setRefreshState('reloading')
       await loadSummary(true)
       setWorkspaceRefreshNonce((current) => current + 1)
 
@@ -947,10 +966,13 @@ function SearchConsoleSection({
           dedupeMode: 'replace',
         })
       } else if (notices.length > 0) {
-        // Nothing failed; something is simply still in flight. Not an error, so
-        // `setError` stays untouched and the tone stays neutral.
+        // Nothing failed, but the refresh did NOT finish — so it must not claim
+        // it did. This branch titled itself "Search coverage refreshed" while
+        // the detail said the sweep was still running or had left pages
+        // unverified, and it was the only signal a 0-of-45 sweep produced.
+        // A user reading the title alone was told the opposite of the truth.
         addToast({
-          title: 'Search coverage refreshed',
+          title: 'Search coverage refresh incomplete',
           detail: notices.join('; '),
           tone: 'caution',
           dedupeKey: `search-console-refresh:${projectName}`,
@@ -1677,13 +1699,18 @@ function ProjectPageContent({
   const measurementSearchParams = useSearch({ strict: false }) as { scope?: string; class?: string }
   const urlMeasurementView = parseMeasurementViewSearch(measurementSearchParams)
   const [advancedMeasurementSearch, setAdvancedMeasurementSearch] = useState<string | undefined>(undefined)
+  // Sort is a within-view refinement, not what the page is ABOUT, so it stays
+  // in component state rather than the URL alongside scope and class.
+  const [advancedMeasurementSort, setAdvancedMeasurementSort] = useState<MeasurementOverviewSort | undefined>(undefined)
   const setAdvancedMeasurementView = useCallback((next: {
     scope: 'all' | 'group'
     groupKey?: string
     queryClass: 'all' | 'non-brand' | 'branded'
     search?: string
+    sort?: MeasurementOverviewSort
   }) => {
     setAdvancedMeasurementSearch(next.search)
+    if (next.sort) setAdvancedMeasurementSort(next.sort)
     // Scope and class are deliberate, low-frequency choices, so they PUSH:
     // pressing back after picking a market should return to the previous
     // market, which is what a reader expects of a control that changes what
@@ -1766,10 +1793,21 @@ function ProjectPageContent({
     ? null
     : Number(activeMeasurementPlan.plan.schemaVersion)
   const activeMeasurementRevision = activeMeasurementPlan?.revision ?? 0
+  // Reset the view only when the plan it belongs to actually CHANGES. The
+  // identity is null until the plan resolves, and the first identity we ever
+  // see is not a change — see `shouldResetMeasurementView`, which is where the
+  // two "not a change" cases are pinned by tests.
+  const measurementPlanIdentity = planGroupKeysLoaded
+    ? `${projectName}:${activeMeasurementRevision}`
+    : null
+  const lastMeasurementPlanIdentity = useRef<string | null>(null)
   useEffect(() => {
-    setAdvancedMeasurementView({ scope: 'all', queryClass: 'non-brand' })
+    const previous = lastMeasurementPlanIdentity.current
+    if (measurementPlanIdentity !== null) lastMeasurementPlanIdentity.current = measurementPlanIdentity
+    if (!shouldResetMeasurementView(previous, measurementPlanIdentity)) return
+    setAdvancedMeasurementView({ scope: 'all', queryClass: 'all' })
     setHasExpandedAdvancedProperty(false)
-  }, [projectName, activeMeasurementRevision])
+  }, [measurementPlanIdentity, setAdvancedMeasurementView])
   const advancedMeasurementOverviewQueryInput = {
     client: heyClient,
     path: { name: projectName },
@@ -1778,6 +1816,7 @@ function ProjectPageContent({
       ...(advancedMeasurementView.groupKey ? { groupKey: advancedMeasurementView.groupKey } : {}),
       queryClass: advancedMeasurementView.queryClass,
       ...(advancedMeasurementView.search ? { search: advancedMeasurementView.search } : {}),
+      ...(advancedMeasurementSort ? { sort: advancedMeasurementSort } : {}),
       limit: 50,
     },
   } as const
@@ -1885,6 +1924,7 @@ function ProjectPageContent({
       ? adaptV2MeasurementOverview({
           overview: mergedAdvancedMeasurementOverview,
           activePlan: activeMeasurementPlan,
+          sort: advancedMeasurementSort,
           report: advancedMeasurementReportQuery.data,
           reportState: mergedAdvancedMeasurementOverview.measurement.displayedRunId === undefined
             ? 'ready'
@@ -2159,7 +2199,9 @@ function ProjectPageContent({
   // convention). "Local Presence" only appears once GBP is connected.
   const projectTabBase = `/projects/${encodeURIComponent(model.project.name)}`
   const projectTabItemsAll: ProjectTabItem[] = [
-    { key: 'overview', label: 'Overview', href: projectTabBase },
+    // `key` is a WIRE value: embed installs list it in CANONRY_EMBED_PROJECT_TABS
+    // and it appears in saved URLs, so it stays `overview` however the label reads.
+    { key: 'overview', label: 'AI Visibility', href: projectTabBase },
     { key: 'search-console', label: 'Search Engines', href: `${projectTabBase}/search-console` },
     { key: 'activity', label: 'Activity', href: `${projectTabBase}/activity` },
     { key: 'technical-aeo', label: 'Technical AEO', href: `${projectTabBase}/technical-aeo` },

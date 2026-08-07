@@ -207,6 +207,7 @@ describe('measurement overview response', () => {
         sov: unavailable,
       },
       properties: { items: [], nextCursor: null },
+      outcomes: { bothSignals: 1, mentionedOnly: 0, citedOnly: 0, neither: 0, notMeasured: 0, total: 1 },
       flags: { total: 0 },
     }
   }
