@@ -6,12 +6,12 @@ export const STATIC_VISIBILITY_STALE_MS = 30 * 60_000
 export const TRAFFIC_STALE_MS = 30_000
 export const GSC_STALE_MS = 60_000
 export const RUNS_STALE_MS = 30_000
-// Projects list polls quickly so CLI-driven mutations (e.g.
-// `canonry project create`) show up in the dashboard sidebar within
-// seconds — the entire project-card fan-out cascades from this query
-// on first mount, so a fast poll here makes the overview reactive
-// end-to-end. Trade-off: ~30 req/min from one tab to a SQLite SELECT.
+// Projects list poll: CLI mutations (`canonry project create`) bypass React Query,
+// so the sidebar needs a poll to pick them up after alt-tab. Fixed 2s = 30 req/min
+// per tab to a SQLite SELECT — adaptive interval (see use-dashboard-overview.ts)
+// polls fast only when zero projects or active runs, otherwise 30s idle (1 req/min).
 export const PROJECTS_REFRESH_MS = 2_000
+export const PROJECTS_REFRESH_IDLE_MS = 30_000
 
 /**
  * The cache the app is currently rendering from.

@@ -1,8 +1,15 @@
-# Canonry native plugin
+# Canonry Agent Plugin
 
-This directory is the shared Canonry plugin for Codex and Claude Code. Both
-clients load the same generated `canonry` and `aero` skills and start the
-published `canonry-mcp` stdio server.
+This directory is an [Agent Plugins 1.0.0](https://agent-plugins.org/) package.
+Portable clients discover `plugin.json`, the immediate children of `skills/`,
+and `mcp.json`. The package starts the published `canonry-mcp` stdio server.
+
+Codex consumes this root portable core and uses `.codex-plugin/` as a client
+overlay and older-client fallback. Claude Code continues to use
+`.claude-plugin/` with `.mcp.json`. All formats load the same generated
+`canonry` and `aero` skills and the same MCP executable. Distribution and
+marketplace metadata are client-owned and are not part of the portable
+specification.
 
 ## Prerequisite
 
@@ -60,4 +67,5 @@ plugin's cached manifest version does not match the running Canonry version.
 
 Do not hand-edit `skills/canonry/` or `skills/aero/` in this directory. Run
 `pnpm plugin:sync` from the repository root after changing the canonical trees
-under `skills/`, and use `pnpm plugin:check` to verify drift.
+under `skills/`, and use `pnpm plugin:check` to verify skill, portable manifest,
+and client-adapter drift.

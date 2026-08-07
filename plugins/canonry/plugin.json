@@ -1,7 +1,6 @@
 {
-  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "canonry",
-  "displayName": "Canonry",
   "version": "4.151.1",
   "description": "Operate Canonry AEO projects through guided skills and the typed Canonry MCP server.",
   "author": {
@@ -17,7 +16,5 @@
     "citations",
     "mentions",
     "mcp"
-  ],
-  "skills": "./skills/",
-  "mcpServers": "./.mcp.json"
+  ]
 }

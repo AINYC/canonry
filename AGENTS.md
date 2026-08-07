@@ -47,11 +47,22 @@ packages/integration-bing/       Bing Webmaster Tools integration
 packages/integration-openai-ads/  OpenAI Advertiser API (ChatGPT ads) integration
 packages/integration-wordpress/  WordPress integration
 docs/                            Architecture, data model, setup guides, testing
-plugins/canonry/                  Shared native Codex + Claude Code plugin
+plugins/canonry/                  Portable Agent Plugin + Codex/Claude adapters
 ```
 
 Start with `docs/README.md` when you need the current doc map, active plans,
-ADR index, or canonical roadmap.
+ADR index, or canonical roadmap. For file-level navigation use `docs/CODEMAP.md`
+(apps/web src tree, per-package key files, API call patterns) and the per-package
+`AGENTS.md` nearest your change.
+
+## Agent Quick Start (read this first)
+
+1. **Read `AGENTS.md` deployment posture above** — single-tenant, `notProbeRun()` contract, read-only + `requirePaidReadScope` gates.
+2. **Pick the nearest `AGENTS.md`**: `apps/web/AGENTS.md` for UI, `packages/api-routes/AGENTS.md` for HTTP, `packages/canonry/AGENTS.md` for CLI/server. Root `AGENTS.md` owns the map; per-package files own durable rules.
+3. **Use `docs/CODEMAP.md` for file lookup** — one-line role per file + recipe table (`change first-run → App.tsx → SetupPage.tsx → execute-site-audit.ts`). Regenerated file list, not stale prose.
+4. **Search with `muse.search` (ripgrep, bounded)** — `muse.bash` fan-out (`find /`, `ls -R`) saturates the host. `muse.read_file` caps at 500 lines; chunk `SetupPage.tsx` (1260), `ProjectPage.tsx` (2728), `server.ts` (2969).
+5. **Web API calls MUST use `@ainyc/canonry-api-client`** (`heyClient` in `apps/web/src/api.ts`) — raw `fetch` is ESLint-banned. New route = `contracts` Zod → `api-routes` handler → `openapi.ts` → `pnpm gen` → web query.
+6. **Verify with `pnpm run typecheck && pnpm run test && pnpm run lint`** and `pnpm plugin:check` if you touched `plugins/` or `skills/`.
 
 ## Commands
 
@@ -63,8 +74,8 @@ pnpm install
 pnpm run typecheck
 pnpm run test
 pnpm run lint
-pnpm plugin:sync                  # refresh plugin skill mirrors + manifest versions
-pnpm plugin:check                 # fail on plugin skill/version drift (CI gate)
+pnpm plugin:sync                  # refresh plugin skill mirrors + portable/client manifest versions
+pnpm plugin:check                 # fail on plugin spec, skill, or version drift (CI gate)
 pnpm run dev:web
 
 # CLI
@@ -355,16 +366,22 @@ the matching tool, or explicitly classify the OpenAPI operation as `deferred`
 or `excluded-protocol` with a short security/protocol/product rationale in
 `openapi-classification.ts`. Do not silently skip MCP.
 
-### Native Codex + Claude Code plugins
+### Portable Agent Plugin + client adapters
 
-`plugins/canonry/` is one self-contained distribution bundle with separate
-`.codex-plugin/plugin.json` and `.claude-plugin/plugin.json` manifests, a shared
-`.mcp.json`, and generated mirrors of `skills/canonry/` + `skills/aero/`. The
-repository marketplaces live at `.agents/plugins/marketplace.json` (Codex) and
-`.claude-plugin/marketplace.json` (Claude Code).
+`plugins/canonry/` targets Agent Plugins 1.0.0 with root `plugin.json`, fixed
+`skills/` children, and root `mcp.json`. Current Codex and Claude Code
+distribution remains backward-compatible through `.codex-plugin/plugin.json`,
+`.claude-plugin/plugin.json`, and `.mcp.json`. The repository marketplaces live
+at `.agents/plugins/marketplace.json` (Codex) and
+`.claude-plugin/marketplace.json` (Claude Code); distribution is outside the
+portable specification.
 
 - The plugin launches the published `canonry-mcp` binary; it must never grow a
   second server, private API, credential store, hook, or automatic sweep.
+- Keep root `plugin.json` closed to Agent Plugins fields and root `mcp.json`
+  closed to `$schema` + `mcpServers`. Client-only metadata stays in the adapter
+  manifests. Bundled `SKILL.md` frontmatter follows Agent Skills, including
+  string-valued `metadata` entries.
 - Canonical skill edits happen only under `skills/`. Run `pnpm plugin:sync`
   afterward and commit the mirrors; CI runs `pnpm plugin:check`.
 - Native-plugin setup uses `canonry init --skip-skills --skip-mcp`; those flags
@@ -1058,7 +1075,7 @@ The failure mode this prevents: a new semantics-bearing parameter is wired parse
 - Documentation-only changes (README, docs/, CLAUDE.md) do not require a bump.
 - Small non-documentation changes of 100 changed lines or fewer do not require a bump.
 - Larger changes — features, bug fixes, refactors, dependency updates, test additions that accompany code changes — require a semver bump in both `package.json` files when they exceed the 100-line threshold.
-- **Native-plugin exception:** any change shipped through `plugins/canonry/` or its canonical `skills/canonry/` / `skills/aero/` sources must bump Canonry and both plugin manifests even when the diff is small; clients use the manifest version to discover updates. `pnpm plugin:sync` copies the package version into both manifests.
+- **Native-plugin exception:** any change shipped through `plugins/canonry/` or its canonical `skills/canonry/` / `skills/aero/` sources must bump Canonry, the portable manifest, and both client manifests even when the diff is small; clients use the manifest version to discover updates. `pnpm plugin:sync` copies the package version into all three manifests.
 - Use semver: patch for fixes, minor for features, major for breaking changes.
 
 ## Testing

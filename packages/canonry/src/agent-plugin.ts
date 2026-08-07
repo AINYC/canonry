@@ -10,6 +10,8 @@ interface DetectAgentPluginOptions {
 
 const CANONRY_PLUGIN_ID = 'canonry@canonry'
 const REQUIRED_SKILLS = ['canonry', 'aero'] as const
+const AGENT_PLUGINS_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json'
+const AGENT_PLUGINS_MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json'
 
 interface ParsedSemver {
   core: [number, number, number]
@@ -113,6 +115,37 @@ function readCodexPluginConfigured(filePath: string): boolean {
 }
 
 function verifiedPluginVersion(root: string, client: AgentPluginClient): string | null {
+  if (client === 'codex' && fs.existsSync(path.join(root, 'plugin.json'))) {
+    const manifest = readJson(path.join(root, 'plugin.json'))
+    if (manifest && typeof manifest === 'object') {
+      const plugin = manifest as { $schema?: unknown; name?: unknown; version?: unknown }
+      if (plugin.$schema === AGENT_PLUGINS_SCHEMA) {
+        if (plugin.name !== 'canonry' || typeof plugin.version !== 'string' || !parseSemver(plugin.version)) {
+          return null
+        }
+        const mcp = readJson(path.join(root, 'mcp.json'))
+        if (!mcp || typeof mcp !== 'object') return null
+        const portableMcp = mcp as {
+          $schema?: unknown
+          mcpServers?: { canonry?: { type?: unknown; command?: unknown } }
+        }
+        if (
+          portableMcp.$schema !== AGENT_PLUGINS_MCP_SCHEMA
+          || portableMcp.mcpServers?.canonry?.type !== 'stdio'
+          || portableMcp.mcpServers.canonry.command !== 'canonry-mcp'
+        ) {
+          return null
+        }
+        return REQUIRED_SKILLS.every((name) => fs.existsSync(path.join(root, 'skills', name, 'SKILL.md')))
+          ? plugin.version
+          : null
+      }
+      if (typeof plugin.$schema === 'string' && plugin.$schema.startsWith('https://agent-plugins.org/schemas/')) {
+        return null
+      }
+    }
+  }
+
   const manifestDir = client === 'claude-code' ? '.claude-plugin' : '.codex-plugin'
   const manifest = readJson(path.join(root, manifestDir, 'plugin.json'))
   if (!manifest || typeof manifest !== 'object') return null
