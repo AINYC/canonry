@@ -13,6 +13,12 @@ import { Button } from '../../ui/button.js'
  */
 export type AdvancedMeasurementClass = 'all' | 'non-brand' | 'branded'
 
+/** The six tokens the API accepts. Unmeasured sorts FIRST either way: unknown is not zero. */
+export type AdvancedMeasurementSort =
+  | 'label-asc' | 'label-desc'
+  | 'citationCoverage-asc' | 'citationCoverage-desc'
+  | 'mentionCoverage-asc' | 'mentionCoverage-desc'
+
 export type AdvancedMeasurementEvidenceKind =
   | 'this-property'
   | 'another-property'
@@ -126,6 +132,8 @@ export interface AdvancedMeasurementOverviewReport {
     aggregate: AdvancedMeasurementAggregate
     propertyTotal: number
     nextCursor: string | null
+    /** The ordering the server applied. Absent means the default, label-asc. */
+    sort?: AdvancedMeasurementSort
     /**
      * Scope-wide outcome split, counted by the server over every Property in
      * scope. Absent when the server predates the field — the row then renders
@@ -152,6 +160,7 @@ export interface AdvancedMeasurementViewRequest {
   groupKey?: string
   queryClass: AdvancedMeasurementClass
   search?: string
+  sort?: AdvancedMeasurementSort
 }
 
 export interface AdvancedMeasurementOverviewProps {
@@ -177,6 +186,22 @@ export interface AdvancedMeasurementOverviewProps {
    * plain text and the row still expands in place.
    */
   renderPropertyLink?: (property: { id: string; name: string }) => ReactNode
+}
+
+const SORTABLE_COLUMNS: readonly { key: 'label' | 'mentionCoverage' | 'citationCoverage'; label: string; numeric: boolean }[] = [
+  { key: 'label', label: 'Property', numeric: false },
+  { key: 'mentionCoverage', label: 'Mention', numeric: true },
+  { key: 'citationCoverage', label: 'Citation', numeric: true },
+]
+
+/**
+ * Whether a row's status is worth the reader's attention.
+ *
+ * "Complete" is the unremarkable case and it is most rows, so badging it fills
+ * a column with a constant. Only the exceptions earn a badge.
+ */
+function isRemarkableStatus(status: AdvancedMeasurementProperty['status']): boolean {
+  return status.label !== 'Complete'
 }
 
 const ALL_PROPERTIES = '__all_properties__'
@@ -512,98 +537,49 @@ function SegmentedControl<T extends string>({
 }
 
 /**
- * The two headline rates.
+ * How many Properties got which signal.
  *
- * The unit of both is an assignment — a Property paired with a query — but the
- * two POPULATIONS are not guaranteed equal. The API measures mention over the
- * answered slots and citation over the source-complete ones, and an answer
- * arriving with incomplete source capture is routine, so the denominators
- * diverge on real runs. A single shared basis line is therefore printed only
- * when the two are actually the same number; otherwise each rate carries its
- * own, because one line reading "of 250" under a 50% that was measured over 300
- * tells the reader 125 mentions where the measured figure is 150.
+ * FIVE named states, not four. "one signal" pooled `mentionedOnly` with
+ * `citedOnly` and hid the split on a tooltip — but those two have OPPOSITE
+ * fixes. Cited-but-not-mentioned means the engine read the page and then
+ * recommended somebody else; mentioned-but-not-cited means the opposite. A
+ * label that averages them tells the reader nothing they can act on.
  *
- * `propertiesMentioned` is deliberately NOT here: it counts PROPERTIES, so
- * printing it alongside would state something false about one of the three. The
- * per-Property picture is the outcome counts below.
- */
-function CoverageHero({ cited, mentioned }: {
-  cited: AdvancedMeasurementMetric
-  mentioned: AdvancedMeasurementMetric
-}) {
-  const sharedDenominator = isMeasured(cited) && isMeasured(mentioned)
-    ? cited.denominator === mentioned.denominator ? cited.denominator : null
-    : isMeasured(cited) ? cited.denominator
-      : isMeasured(mentioned) ? mentioned.denominator
-        : null
-  const percent = (metric: AdvancedMeasurementMetric): string =>
-    isMeasured(metric) ? `${Math.round((metric.numerator / metric.denominator) * 100)}%` : 'N/A'
-  return (
-    <div aria-label="Coverage" className="flex flex-wrap items-start gap-x-10 gap-y-3 border-b border-default py-4">
-      {([['cited', cited], ['mentioned', mentioned]] as const).map(([label, metric]) => (
-        <div key={label}>
-          <p
-            className="font-mono text-3xl leading-none tabular-nums text-primary"
-            title={metricReason(metric) || undefined}
-          >
-            {percent(metric)}
-          </p>
-          <p className="mt-1 text-xs text-secondary">{label}</p>
-          {sharedDenominator === null && isMeasured(metric) ? (
-            <p className="mt-0.5 font-mono text-xs text-faint tabular-nums">
-              {metric.numerator} of {metric.denominator}
-            </p>
-          ) : null}
-        </div>
-      ))}
-      {sharedDenominator === null ? null : (
-        <p className="ml-auto self-end font-mono text-xs text-secondary">
-          of {sharedDenominator}
-          <InfoTooltip text="One assignment is a Property paired with a query. Branded queries are a separate filter and are never averaged in." />
-        </p>
-      )}
-    </div>
-  )
-}
-
-/**
- * How many Properties got which signals.
+ * The unit is stated ONCE, as "N properties" on the heading line this row sits
+ * under, and every number here counts the same thing — so there is nothing to
+ * reconcile. That is why the assignment-denominated rates were removed: two
+ * populations side by side, with the unit printed on neither, is what made the
+ * section unreadable.
  *
- * Four counts, not five: `mentionedOnly` and `citedOnly` collapse into "one
- * signal" because five phrases is a paragraph to read, and the split stays
- * reachable on the tooltip since cited-only is the actionable half — the engine
- * used the page and recommended somebody else.
- *
- * The counts are the server's, over the Properties currently LISTED — they
- * narrow with the search box exactly as the table and its "N properties" count
- * do. Saying "in scope" would be a promise the numbers stop keeping the moment
- * someone types. Nothing is computed here, and an absent block renders nothing
- * rather than a row of zeroes, which would read as a measured finding instead
- * of a missing field.
+ * `notMeasured` renders only when it is non-zero: it is the exception bucket,
+ * and a rendered 0 reads as a measured finding rather than an absence.
  */
 function OutcomeCounts({ outcomes }: {
   outcomes: NonNullable<NonNullable<AdvancedMeasurementOverviewReport['currentView']>['outcomes']>
 }) {
-  const oneSignal = outcomes.mentionedOnly + outcomes.citedOnly
   const entries: readonly { key: string; count: number; label: string; tone: string }[] = [
-    { key: 'both', count: outcomes.bothSignals, label: 'both', tone: 'text-positive' },
-    { key: 'one', count: oneSignal, label: 'one signal', tone: 'text-caution' },
-    { key: 'neither', count: outcomes.neither, label: 'neither', tone: 'text-negative' },
-    { key: 'not-measured', count: outcomes.notMeasured, label: 'not measured', tone: 'text-faint' },
+    { key: 'both', count: outcomes.bothSignals, label: 'mentioned and cited', tone: 'text-primary' },
+    { key: 'mentioned-only', count: outcomes.mentionedOnly, label: 'mentioned only', tone: 'text-primary' },
+    { key: 'cited-only', count: outcomes.citedOnly, label: 'cited only', tone: 'text-primary' },
+    // Colour carries exactly one meaning here. Ranking mentioned-only against
+    // cited-only with a tone ramp would assert an ordering the copy refuses.
+    { key: 'neither', count: outcomes.neither, label: 'neither signal', tone: 'text-negative' },
+    ...(outcomes.notMeasured > 0
+      ? [{ key: 'not-measured', count: outcomes.notMeasured, label: 'not measured', tone: 'text-faint' }]
+      : []),
   ]
   return (
-    <div aria-label="Property outcomes" className="flex flex-wrap items-baseline gap-x-6 gap-y-1 border-b border-default py-3">
+    <div aria-label="Property outcomes" className="flex flex-wrap gap-x-8 gap-y-3 py-3">
       {entries.map(entry => (
-        <span key={entry.key} className="whitespace-nowrap text-sm text-secondary">
-          <span className={`mr-1 font-mono text-[15px] font-semibold tabular-nums ${entry.tone}`}>{entry.count}</span>
-          {entry.label}
-          {entry.key === 'one' ? (
-            <InfoTooltip text={`Which signal: ${outcomes.mentionedOnly} mentioned, not cited. ${outcomes.citedOnly} cited, not mentioned.`} />
-          ) : null}
-          {entry.key === 'not-measured' ? (
-            <InfoTooltip text={`Sums to ${outcomes.total}. Every Property listed is in exactly one group.`} />
-          ) : null}
-        </span>
+        <div key={entry.key} className="whitespace-nowrap">
+          <p className={`font-mono text-xl font-semibold leading-none tabular-nums ${entry.tone}`}>{entry.count}</p>
+          <p className="mt-1 text-[13px] text-secondary">
+            {entry.label}
+            {entry.key === 'not-measured' ? (
+              <InfoTooltip text="One or both signals missing. Not the same as neither." />
+            ) : null}
+          </p>
+        </div>
       ))}
     </div>
   )
@@ -628,7 +604,7 @@ export function AdvancedMeasurementOverview({
 }: AdvancedMeasurementOverviewProps) {
   const usesServerView = report.currentView != null
   const classReportingAvailable = report.classReporting === 'available' && (usesServerView || report.classScopes != null)
-  const [selectedClass, setSelectedClass] = useState<AdvancedMeasurementClass>(report.currentView?.queryClass ?? 'non-brand')
+  const [selectedClass, setSelectedClass] = useState<AdvancedMeasurementClass>(report.currentView?.queryClass ?? 'all')
   const [selectedView, setSelectedView] = useState(report.currentView?.scope.key ?? ALL_PROPERTIES)
   const [search, setSearch] = useState(viewSearch ?? '')
   const [propertyLimit, setPropertyLimit] = useState(PROPERTY_LIST_LIMIT)
@@ -636,6 +612,7 @@ export function AdvancedMeasurementOverview({
   // One id, not a set: each expansion adds an engine sub-row per provider plus a
   // details panel, so two open at once push the rest of a several-hundred-row
   // table off screen. Opening a Property closes whichever one was open.
+  const [selectedSort, setSelectedSort] = useState<AdvancedMeasurementSort>(report.currentView?.sort ?? 'label-asc')
   const [expandedPropertyId, setExpandedPropertyId] = useState<string | null>(null)
   const lastRequestedSearch = useRef(viewSearch ?? '')
 
@@ -656,6 +633,7 @@ export function AdvancedMeasurementOverview({
       ...(nextScope === 'group' ? { groupKey: next.groupKey ?? selectedView } : {}),
       queryClass: next.queryClass ?? selectedClass,
       ...(nextSearch ? { search: nextSearch } : {}),
+      ...(next.sort ? { sort: next.sort } : {}),
     })
   }, [onViewChange, search, selectedClass, selectedView, usesServerView])
 
@@ -663,6 +641,7 @@ export function AdvancedMeasurementOverview({
     if (!report.currentView || isViewLoading) return
     setSelectedClass(report.currentView.queryClass)
     setSelectedView(report.currentView.scope.key ?? ALL_PROPERTIES)
+    if (report.currentView.sort) setSelectedSort(report.currentView.sort)
   }, [isViewLoading, report.currentView])
 
   useEffect(() => {
@@ -694,6 +673,7 @@ export function AdvancedMeasurementOverview({
   const classMetric = (metric: AdvancedMeasurementMetric): AdvancedMeasurementMetric => (
     classReportingAvailable ? metric : planV1Metric
   )
+  const activeSort: AdvancedMeasurementSort = selectedSort
   const normalizedSearch = search.trim().toLocaleLowerCase()
   const filteredProperties = useMemo(() => (
     !usesServerView && normalizedSearch
@@ -790,20 +770,6 @@ export function AdvancedMeasurementOverview({
         </div>
       </header>
 
-      {!isViewLoading ? (
-        <CoverageHero
-          cited={classMetric(aggregate.metrics.citationCoverage)}
-          mentioned={classMetric(aggregate.metrics.mentionCoverage)}
-        />
-      ) : <div className="h-20 animate-pulse rounded-md bg-surface-subtle" aria-label="Updating measurement results" />}
-
-      {/* Gated with the hero and the table: while the new view is in flight the
-          cache still holds the PREVIOUS scope's counts, and a stale split shown
-          under a control that already reads "Branded" is worse than no split. */}
-      {!isViewLoading && report.currentView?.outcomes
-        ? <OutcomeCounts outcomes={report.currentView.outcomes} />
-        : null}
-
       <div className="flex flex-wrap items-end gap-4 border-b border-default pb-4">
         <div className="space-y-1">
           <label
@@ -858,13 +824,52 @@ export function AdvancedMeasurementOverview({
 
       {!isViewLoading ? <section aria-labelledby="advanced-measurement-properties-title">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 id="advanced-measurement-properties-title" className="text-base font-semibold text-heading">Properties</h2>
+          <h2 id="advanced-measurement-properties-title" className="text-base font-semibold text-heading">
+            Properties
+            <InfoTooltip text="Mentioned = brand in the answer. Cited = domain in the sources. Neither implies the other." />
+          </h2>
           <span className="text-sm text-secondary">{report.currentView?.propertyTotal ?? filteredProperties.length} {(report.currentView?.propertyTotal ?? filteredProperties.length) === 1 ? 'property' : 'properties'}</span>
         </div>
+        {/* Directly under the count it partitions, so the unit is stated once
+            and the row visibly sums to it. */}
+        {report.currentView?.outcomes ? <OutcomeCounts outcomes={report.currentView.outcomes} /> : null}
         <div className="overflow-x-auto rounded-md border border-default">
           <table className="evidence-table min-w-[720px]">
             <caption className="sr-only">Property measurement results</caption>
-            <thead><tr><th>Property</th><th>Mention</th><th>Citation</th><th>Status</th><th><span className="sr-only">Details</span></th></tr></thead>
+            <thead>
+              <tr>
+                {SORTABLE_COLUMNS.map(column => {
+                  const active = activeSort.startsWith(`${column.key}-`)
+                  const direction = active && activeSort.endsWith('-desc') ? 'descending' : active ? 'ascending' : 'none'
+                  return (
+                    <th key={column.key} aria-sort={direction} className={column.numeric ? undefined : undefined}>
+                      {onViewChange ? (
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 text-inherit hover:text-heading"
+                          // Second click on the same column flips direction; a new
+                          // column starts ascending, which for a coverage metric
+                          // puts the worst Properties first — the reason to sort.
+                          onClick={() => {
+                            const next = `${column.key}-${active && activeSort.endsWith('-asc') ? 'desc' : 'asc'}` as AdvancedMeasurementSort
+                            setSelectedSort(next)
+                            requestView({ sort: next })
+                          }}
+                          aria-label={`Sort by ${column.label.toLowerCase()}`}
+                        >
+                          {column.label}
+                          <ChevronDown
+                            className={`h-3 w-3 transition-transform ${active ? 'opacity-100' : 'opacity-0'} ${direction === 'ascending' ? 'rotate-180' : ''}`}
+                            aria-hidden="true"
+                          />
+                        </button>
+                      ) : column.label}
+                    </th>
+                  )
+                })}
+                <th><span className="sr-only">Details</span></th>
+              </tr>
+            </thead>
             <tbody>
               {shownProperties.map(property => {
                 const expanded = expandedPropertyId === property.id
@@ -884,18 +889,23 @@ export function AdvancedMeasurementOverview({
                         {/* A name alone does not identify a row in a portfolio of
                             hundreds. Market and URL count are what let a reader
                             tell two similarly-named Properties apart. */}
+                        {/* Exceptions only. A column of identical "Complete"
+                            badges spends portfolio width saying nothing; what a
+                            reader needs is the row that is NOT fine. */}
+                        {isRemarkableStatus(property.status) || property.historical ? (
+                          <span className="ml-2 inline-flex flex-wrap items-center gap-1 align-middle">
+                            {isRemarkableStatus(property.status)
+                              ? <ToneBadge tone={property.status.tone}>{property.status.label}</ToneBadge>
+                              : null}
+                            {property.historical ? <ToneBadge tone="caution">Historical</ToneBadge> : null}
+                          </span>
+                        ) : null}
                         {propertySubtitle(property) ? (
                           <div className="mt-0.5 text-xs font-normal text-faint">{propertySubtitle(property)}</div>
                         ) : null}
                       </td>
                       <td className="text-secondary"><MetricValue metric={property.mentionCoverage} compact /></td>
                       <td className="text-secondary"><MetricValue metric={property.citationCoverage} compact /></td>
-                      <td>
-                        <span className="flex flex-wrap items-center gap-1">
-                          <ToneBadge tone={property.status.tone}>{property.status.label}</ToneBadge>
-                          {property.historical ? <ToneBadge tone="caution">Historical</ToneBadge> : null}
-                        </span>
-                      </td>
                       <td className="text-right"><Button size="icon" variant="ghost" aria-expanded={expanded} aria-label={expanded ? `Hide details for ${property.name}` : `Show details for ${property.name}`} onClick={() => toggleProperty(property.id)}><ChevronDown className={`h-4 w-4 transition-transform duration-200 motion-reduce:transition-none ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" /></Button></td>
                     </tr>
                     {expanded ? (property.providers ?? []).map(engine => (
@@ -903,14 +913,14 @@ export function AdvancedMeasurementOverview({
                         <td className="measurement-subrow-name">{engine.provider}</td>
                         <td className="text-secondary"><MetricValue metric={engine.mentionCoverage} compact /></td>
                         <td className="text-secondary"><MetricValue metric={engine.citationCoverage} compact /></td>
-                        <td /><td />
+                        <td />
                       </tr>
                     )) : null}
-                    {expanded ? <tr key={`${property.id}:details`}><td colSpan={5} className="bg-surface-subtle px-4"><PropertyDetails property={property} onRetryEvidence={onRetryEvidence} /></td></tr> : null}
+                    {expanded ? <tr key={`${property.id}:details`}><td colSpan={4} className="bg-surface-subtle px-4"><PropertyDetails property={property} onRetryEvidence={onRetryEvidence} /></td></tr> : null}
                   </Fragment>
                 )
               })}
-              {shownProperties.length === 0 ? <tr><td colSpan={5} className="py-8 text-center text-sm text-secondary">No properties match this search.</td></tr> : null}
+              {shownProperties.length === 0 ? <tr><td colSpan={4} className="py-8 text-center text-sm text-secondary">No properties match this search.</td></tr> : null}
             </tbody>
           </table>
         </div>

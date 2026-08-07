@@ -30,6 +30,7 @@ import {
 } from '../shared/ChartPrimitives.js'
 import { addToast } from '../../lib/toast-store.js'
 import { Button } from '../ui/button.js'
+import { WriteButton } from '../shared/AccessControls.js'
 import { Card } from '../ui/card.js'
 import {
   DataTablePagination,
@@ -240,14 +241,14 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
         </p>
         {!isEmbed() && (
           <div className="mt-5 flex items-center justify-center gap-3">
-            <Button type="button" onClick={startAudit} disabled={auditBusy}>
+            <WriteButton type="button" onClick={startAudit} disabled={auditBusy}>
               {auditBusy ? (
                 <LoaderCircle className="mr-1.5 h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
               ) : (
                 <Play className="mr-1.5 h-4 w-4" aria-hidden="true" />
               )}
               {auditBusy ? auditStatusLabel : 'Run first audit'}
-            </Button>
+            </WriteButton>
           </div>
         )}
         {auditBusy ? (
@@ -340,14 +341,14 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
             {isManualRefreshing ? 'Refreshing…' : 'Refresh'}
           </Button>
           {!isEmbed() && (
-            <Button type="button" size="sm" onClick={startAudit} disabled={auditBusy}>
+            <WriteButton type="button" size="sm" onClick={startAudit} disabled={auditBusy}>
               {auditBusy ? (
                 <LoaderCircle className="mr-1.5 h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
               ) : (
                 <Play className="mr-1.5 h-4 w-4" aria-hidden="true" />
               )}
               {auditBusy ? auditStatusLabel : 'Re-run audit'}
-            </Button>
+            </WriteButton>
           )}
         </div>
       </section>

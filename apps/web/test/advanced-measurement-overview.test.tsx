@@ -123,8 +123,20 @@ function report(overrides: Partial<AdvancedMeasurementOverviewReport> = {}): Adv
   }
 }
 
+/**
+ * The default view is All queries, which reads `report.overall`. The base
+ * fixture sets `overall: nonBrand`, but a test that overrides
+ * `classScopes.nonBrand` replaces only that half — leaving `overall` pointing
+ * at the unmodified scope and the override invisible. This keeps the two in
+ * step, exactly as the base fixture does.
+ */
+function syncOverall(r: AdvancedMeasurementOverviewReport): AdvancedMeasurementOverviewReport {
+  return r.classScopes ? { ...r, overall: r.classScopes.nonBrand } : r
+}
+
 function renderOverviewReturning(overrides: Partial<AdvancedMeasurementOverviewProps> = {}) {
-  return render(<AdvancedMeasurementOverview report={report()} canEdit {...overrides} />)
+  const props = { report: report(), canEdit: true, ...overrides }
+  return render(<AdvancedMeasurementOverview {...props} report={syncOverall(props.report)} />)
 }
 
 function renderOverview(overrides: Partial<AdvancedMeasurementOverviewProps> = {}) {
@@ -137,21 +149,21 @@ function renderOverview(overrides: Partial<AdvancedMeasurementOverviewProps> = {
     onRepublishSetup,
     ...overrides,
   }
-  render(<AdvancedMeasurementOverview {...props} />)
+  render(<AdvancedMeasurementOverview {...props} report={syncOverall(props.report)} />)
   return { onRunMeasurement, onRepublishSetup }
 }
 
 describe('AdvancedMeasurementOverview', () => {
-  it('leads with the two headline rates and the measurement date', () => {
+  // The section counts Properties and nothing else. An assignment-denominated
+  // rate beside a Property count is what made the two rows irreconcilable, so
+  // the aggregate percentages are gone; per-Property rates stay in the table.
+  it('leads with the measurement date and no assignment-denominated rate', () => {
     renderOverview()
 
-    // The hero carries the two rates that share a denominator: cited 2 of 8,
-    // mentioned 6 of 8. The per-Property picture is the outcome counts, not a
-    // third number under the same denominator line.
-    const hero = screen.getByLabelText('Coverage')
-    expect(within(hero).getByText('25%')).toBeTruthy()
-    expect(within(hero).getByText('75%')).toBeTruthy()
     expect(screen.getByText('Aug 2, 2026')).toBeTruthy()
+    expect(screen.queryByLabelText('Coverage')).toBeNull()
+    expect(screen.queryByText('25%')).toBeNull()
+    expect(screen.queryByText('75%')).toBeNull()
   })
 
   it('keeps unavailable measurements unavailable instead of rendering zero or repeating their reason', () => {
@@ -176,10 +188,11 @@ describe('AdvancedMeasurementOverview', () => {
       },
     })
 
-    expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
+    // The aggregate rates are gone with the hero, so an unavailable aggregate
+    // is reported once, in words, on the status line — never as a 0.
     expect(screen.getAllByText('No complete source evidence is available.')).toHaveLength(1)
-    expect(screen.getAllByTitle('No complete source evidence is available.').length).toBeGreaterThan(0)
     expect(screen.queryByText('0 of 0 (0%)')).toBeNull()
+    expect(screen.queryByText('0%')).toBeNull()
   })
 
   it('keeps measurement status and the next action on one concise line', () => {
@@ -216,9 +229,7 @@ describe('AdvancedMeasurementOverview', () => {
 
     fireEvent.click(within(screen.getByLabelText('Group')).getByRole('radio', { name: 'Metro offices' }))
 
-    // The group's precomputed aggregate is 1 of 2 on both signals; the
-    // all-properties view was 25/75, so 50% proves the swap actually happened.
-    expect(within(screen.getByLabelText('Coverage')).getAllByText('50%').length).toBe(2)
+    // The group holds only Downtown, so the row set is what proves the swap.
     expect(screen.getByRole('button', { name: 'Show details for Downtown Office' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Show details for Uptown Office' })).toBeNull()
   })
@@ -228,11 +239,6 @@ describe('AdvancedMeasurementOverview', () => {
 
     fireEvent.change(screen.getByLabelText('Search properties'), { target: { value: 'uptown' } })
 
-    // Searching narrows the table, never the headline. The hero still reports
-    // the whole scope: cited 2 of 8, mentioned 6 of 8.
-    const heroAfterSearch = screen.getByLabelText('Coverage')
-    expect(within(heroAfterSearch).getByText('25%')).toBeTruthy()
-    expect(within(heroAfterSearch).getByText('75%')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Show details for Uptown Office' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Show details for Downtown Office' })).toBeNull()
     expect(screen.queryByText('Flagged results (1)')).toBeNull()
@@ -377,6 +383,10 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.getByText('Query type')).toBeTruthy()
     expect(screen.queryByText('Brand share of voice')).toBeNull()
     fireEvent.click(within(screen.getByLabelText('Group')).getByRole('radio', { name: 'Metro offices' }))
+    // Share of voice is a NON-BRAND question — a brand's share of its own name
+    // is meaningless — so the default All-queries view must not show it.
+    expect(screen.queryByText('Brand share of voice')).toBeNull()
+    fireEvent.click(within(screen.getByLabelText('Query type')).getByRole('radio', { name: 'Non-brand' }))
     expect(screen.getByText('Brand share of voice')).toBeTruthy()
     expect(screen.getByText('Example Co.')).toBeTruthy()
     expect(screen.getByText('Rival Co.')).toBeTruthy()
@@ -405,28 +415,31 @@ describe('AdvancedMeasurementOverview', () => {
     expect(screen.queryByText('Brand share of voice')).toBeNull()
   })
 
+  // Rates live on the Property rows now that the aggregate hero is gone. An
+  // impossible ratio (numerator above denominator) must read as unavailable
+  // there rather than as a number somebody could act on.
   it('treats an invalid metric denominator as unavailable', () => {
     const current = report()
+    const scope = current.classScopes!.nonBrand
+    const [first, ...rest] = scope.aggregate.properties
     renderOverview({
       report: {
         ...current,
         classScopes: {
           ...current.classScopes!,
           nonBrand: {
-            ...current.classScopes!.nonBrand,
+            ...scope,
             aggregate: {
-              ...current.classScopes!.nonBrand.aggregate,
-              metrics: {
-                ...current.classScopes!.nonBrand.aggregate.metrics,
-                mentionCoverage: { numerator: 2, denominator: 1 },
-              },
+              ...scope.aggregate,
+              properties: [{ ...first!, mentionCoverage: { numerator: 2, denominator: 1 } }, ...rest],
             },
           },
         },
       },
     })
 
-    expect(screen.getByText('N/A')).toBeTruthy()
+    expect(screen.queryByText('2 of 1 (200%)')).toBeNull()
+    expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
   })
 
   it('makes version-one class reporting visibly unavailable and offers republish to editors', () => {
@@ -455,7 +468,7 @@ describe('AdvancedMeasurementOverview', () => {
     for (const radio of within(queryTypeGroup).getAllByRole('radio')) {
       expect((radio as HTMLButtonElement).disabled).toBe(true)
     }
-    expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
+    expect(screen.getByText('Setup update required.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Republish setup' }))
     expect(onRepublishSetup).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('button', { name: 'Run measurement' })).toBeNull()
@@ -775,28 +788,29 @@ describe('control row (defect 2)', () => {
     // defined (styles.css). Asserting the shared class is what stops this
     // control drifting into a second visual language for the same widget.
     expect(control.className).toContain('segmented')
-    const nonBrandRadio = within(control).getByRole('radio', { name: 'Non-brand' })
-    expect(nonBrandRadio.getAttribute('aria-checked')).toBe('true')
-    expect(nonBrandRadio.className).toContain('segmented-option')
-    expect(nonBrandRadio.className).toContain('segmented-option-active')
+    const allRadio = within(control).getByRole('radio', { name: 'All queries' })
+    expect(allRadio.getAttribute('aria-checked')).toBe('true')
+    expect(allRadio.className).toContain('segmented-option')
+    expect(allRadio.className).toContain('segmented-option-active')
     // An unchecked option wears the base class WITHOUT the active modifier.
     const brandedRadio = within(control).getByRole('radio', { name: 'Branded' })
     expect(brandedRadio.className).toContain('segmented-option')
     expect(brandedRadio.className).not.toContain('segmented-option-active')
+    expect(within(control).getByRole('radio', { name: 'Non-brand' }).getAttribute('aria-checked')).toBe('false')
   })
 
-  it('is keyboard operable: ArrowLeft moves both focus and the checked option', () => {
+  it('is keyboard operable: an arrow key moves both focus and the checked option', () => {
     renderOverview()
     const control = screen.getByLabelText('Query type')
     const allRadio = within(control).getByRole('radio', { name: 'All queries' })
     const nonBrandRadio = within(control).getByRole('radio', { name: 'Non-brand' })
-    expect(nonBrandRadio.getAttribute('aria-checked')).toBe('true')
-
-    fireEvent.keyDown(nonBrandRadio, { key: 'ArrowLeft' })
-
     expect(allRadio.getAttribute('aria-checked')).toBe('true')
-    expect(nonBrandRadio.getAttribute('aria-checked')).toBe('false')
-    expect(document.activeElement).toBe(allRadio)
+
+    fireEvent.keyDown(allRadio, { key: 'ArrowRight' })
+
+    expect(nonBrandRadio.getAttribute('aria-checked')).toBe('true')
+    expect(allRadio.getAttribute('aria-checked')).toBe('false')
+    expect(document.activeElement).toBe(nonBrandRadio)
   })
 
   it('selecting a Query type option issues the same server-view request a select would have', () => {
@@ -996,31 +1010,40 @@ describe('outcome count row', () => {
     },
   })
 
-  it('states four counts, collapsing the two one-signal buckets into one label', () => {
+  // "one signal" pooled two states with OPPOSITE fixes — cited-but-not-mentioned
+  // means the engine read the page and recommended somebody else — and hid the
+  // actionable half behind a hover. Each state is now named on screen.
+  it('names each outcome instead of pooling the two one-signal states', () => {
     renderOverview({ report: withOutcomes({
       bothSignals: 14, mentionedOnly: 11, citedOnly: 6, neither: 9, notMeasured: 7, total: 47,
     }) })
 
     const row = screen.getByLabelText('Property outcomes')
-    // Five buckets would be five phrases to read. "one signal" is the pair.
     expect(within(row).getByText('14')).toBeTruthy()
-    expect(within(row).getByText('17')).toBeTruthy()
+    expect(within(row).getByText('11')).toBeTruthy()
+    expect(within(row).getByText('6')).toBeTruthy()
     expect(within(row).getByText('9')).toBeTruthy()
-    expect(within(row).getByText('7')).toBeTruthy()
-    expect(row.textContent).toContain('both')
-    expect(row.textContent).toContain('one signal')
-    expect(row.textContent).toContain('neither')
-    expect(row.textContent).toContain('not measured')
+    expect(row.textContent).toContain('mentioned and cited')
+    expect(row.textContent).toContain('mentioned only')
+    expect(row.textContent).toContain('cited only')
+    expect(row.textContent).toContain('neither signal')
+    // The pooled label and its tooltip are gone.
+    expect(row.textContent).not.toContain('one signal')
+    expect(screen.queryByRole('button', { name: /which signal/i })).toBeNull()
   })
 
-  it('keeps the cited-only split reachable, since it is the actionable half', () => {
-    renderOverview({ report: withOutcomes({
-      bothSignals: 14, mentionedOnly: 11, citedOnly: 6, neither: 9, notMeasured: 7, total: 47,
+  // A rendered 0 in the exception bucket reads as a measured finding.
+  it('hides not-measured when nothing is unmeasured, and shows it when something is', () => {
+    const { unmount } = renderOverviewReturning({ report: withOutcomes({
+      bothSignals: 1, mentionedOnly: 0, citedOnly: 1, neither: 4, notMeasured: 0, total: 6,
     }) })
-    // Not inline — the tooltip carries it, per the copy rule.
-    const tip = screen.getByRole('button', { name: /which signal/i })
-    expect(tip.getAttribute('aria-label')).toMatch(/11 mentioned/i)
-    expect(tip.getAttribute('aria-label')).toMatch(/6 cited/i)
+    expect(screen.getByLabelText('Property outcomes').textContent).not.toContain('not measured')
+    unmount()
+
+    renderOverview({ report: withOutcomes({
+      bothSignals: 1, mentionedOnly: 0, citedOnly: 1, neither: 3, notMeasured: 1, total: 6,
+    }) })
+    expect(screen.getByLabelText('Property outcomes').textContent).toContain('not measured')
   })
 
   it('renders nothing at all when the server sent no outcomes, rather than zeroes', () => {
@@ -1068,107 +1091,92 @@ describe('outcome count row', () => {
     expect(screen.queryByLabelText('Property outcomes')).toBeNull()
   })
 
-  // The counts narrow with the search box, exactly as the table and its
-  // "N properties" count do. Claiming they cover the whole scope is a promise
-  // the numbers stop keeping the moment someone types.
-  it('describes the counts as covering the listed Properties, not the whole scope', () => {
+  // The unit is stated once, on the heading line the row sits under, and the
+  // row sums to it — there is no second population on screen to reconcile with.
+  it('states the unit once, on the line the counts sum to', () => {
     renderOverview({ report: withOutcomes({
-      bothSignals: 1, mentionedOnly: 1, citedOnly: 0, neither: 0, notMeasured: 0, total: 2,
+      bothSignals: 1, mentionedOnly: 0, citedOnly: 1, neither: 4, notMeasured: 0, total: 6,
     }) })
 
-    const tip = screen.getByRole('button', { name: /Sums to 2/ })
-    expect(tip.getAttribute('aria-label')).not.toContain('in scope')
-    expect(tip.getAttribute('aria-label')).toContain('listed')
+    expect(screen.getByText('6 properties')).toBeTruthy()
+    const row = screen.getByLabelText('Property outcomes')
+    // 1 + 0 + 1 + 4 = 6, visibly.
+    expect(row.textContent).not.toContain('assignment')
+    expect(screen.queryByRole('button', { name: /Sums to/ })).toBeNull()
   })
 })
 
-describe('coverage hero', () => {
-  it('leads with the two rates that share a denominator, and states what that is', () => {
-    renderOverview()
-    const hero = screen.getByLabelText('Coverage')
 
-    // 2 of 8 cited, 6 of 8 mentioned. Both are rates over the SAME population,
-    // which is what lets them sit side by side under one denominator line.
-    expect(within(hero).getByText('25%')).toBeTruthy()
-    expect(within(hero).getByText('75%')).toBeTruthy()
-    expect(hero.textContent).toContain('cited')
-    expect(hero.textContent).toContain('mentioned')
-    expect(hero.textContent).toContain('of 8')
+describe('sorting and status', () => {
+  const serverView = (overrides = {}) => {
+    const base = report()
+    return {
+      ...base,
+      currentView: {
+        scope: { kind: 'all' as const },
+        queryClass: 'all' as const,
+        aggregate: base.classScopes!.nonBrand.aggregate,
+        propertyTotal: 2,
+        nextCursor: null,
+        ...overrides,
+      },
+    }
+  }
+
+  // At portfolio scale the whole job is finding the Properties that are
+  // failing. The API has supported six sort tokens all along; the table never
+  // sent one, so the only ordering available was alphabetical.
+  it('sorts by a column, and toggles direction on a second click', () => {
+    const onViewChange = vi.fn()
+    renderOverview({ report: serverView(), onViewChange })
+
+    const mention = screen.getByRole('button', { name: /sort by mention/i })
+    fireEvent.click(mention)
+    expect(onViewChange).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'mentionCoverage-asc' }))
+
+    fireEvent.click(screen.getByRole('button', { name: /sort by mention/i }))
+    expect(onViewChange).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'mentionCoverage-desc' }))
   })
 
-  // The two rates are NOT always over the same population: the API measures
-  // mention over answered slots and citation over source-complete slots, and
-  // partial source capture is routine. One shared basis line would misstate
-  // whichever rate it did not come from.
-  it('gives each rate its own basis when the two populations differ', () => {
-    const current = report()
+  it('tells assistive tech which column is sorted and which way', () => {
+    renderOverview({ report: serverView({ sort: 'citationCoverage-desc' }), onViewChange: vi.fn() })
+    const header = screen.getByRole('columnheader', { name: /citation/i })
+    expect(header.getAttribute('aria-sort')).toBe('descending')
+    expect(screen.getByRole('columnheader', { name: /mention/i }).getAttribute('aria-sort')).toBe('none')
+  })
+
+  // A column of identical green "Complete" badges spends a full column of
+  // portfolio width saying nothing. The exceptions are the only part worth
+  // reading, so they move beside the name and the column goes.
+  it('drops the status column and badges only the rows that need attention', () => {
+    const base = report()
+    const scope = base.classScopes!.nonBrand
+    const [first, second] = scope.aggregate.properties
     renderOverview({
       report: {
-        ...current,
+        ...base,
         classScopes: {
-          ...current.classScopes!,
+          ...base.classScopes!,
           nonBrand: {
-            ...current.classScopes!.nonBrand,
+            ...scope,
             aggregate: {
-              ...current.classScopes!.nonBrand.aggregate,
-              metrics: {
-                ...current.classScopes!.nonBrand.aggregate.metrics,
-                citationCoverage: ratio(50, 250),
-                mentionCoverage: ratio(150, 300),
-              },
+              ...scope.aggregate,
+              properties: [
+                { ...first!, status: { label: 'Complete', tone: 'positive' as const } },
+                { ...second!, status: { label: 'Review', tone: 'caution' as const } },
+              ],
             },
           },
         },
       },
     })
-    const hero = screen.getByLabelText('Coverage')
 
-    expect(within(hero).getByText('20%')).toBeTruthy()
-    expect(within(hero).getByText('50%')).toBeTruthy()
-    // The killer: one line reading "of 250" under both rates would tell a
-    // reader that 50% meant 125 mentions, when the measured figure is 150.
-    expect(hero.textContent).toContain('50 of 250')
-    expect(hero.textContent).toContain('150 of 300')
-  })
-
-  it('keeps the single shared basis when both rates really do share a population', () => {
-    renderOverview()
-    const hero = screen.getByLabelText('Coverage')
-    expect(hero.textContent).toContain('of 8')
-    expect(hero.textContent).not.toContain('2 of 8')
-  })
-
-  it('does not put a per-Property count in a hero denominated in assignments', () => {
-    renderOverview()
-    const hero = screen.getByLabelText('Coverage')
-    // `propertiesMentioned` counts PROPERTIES; the hero's two rates count
-    // assignments. Printing all three under one denominator line states
-    // something false about one of them.
-    expect(hero.textContent).not.toContain('Properties mentioned')
-  })
-
-  it('shows an unavailable rate as unavailable, never as 0%', () => {
-    const current = report()
-    renderOverview({
-      report: {
-        ...current,
-        classScopes: {
-          ...current.classScopes!,
-          nonBrand: {
-            ...current.classScopes!.nonBrand,
-            aggregate: {
-              ...current.classScopes!.nonBrand.aggregate,
-              metrics: {
-                ...current.classScopes!.nonBrand.aggregate.metrics,
-                citationCoverage: unavailable('Not measured yet.'),
-              },
-            },
-          },
-        },
-      },
-    })
-    const hero = screen.getByLabelText('Coverage')
-    expect(hero.textContent).not.toContain('0%')
-    expect(within(hero).getByText('N/A')).toBeTruthy()
+    expect(screen.queryByRole('columnheader', { name: 'Status' })).toBeNull()
+    const table = screen.getByRole('table', { name: /property measurement results/i })
+    // The unremarkable case earns no badge at all. (The run's own "Complete"
+    // status lives in the header, outside this table.)
+    expect(within(table).queryByText('Complete')).toBeNull()
+    // The exception still shows, next to the Property it belongs to.
+    expect(within(table).getByText('Review')).toBeTruthy()
   })
 })

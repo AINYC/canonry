@@ -18,7 +18,13 @@ export interface MeasurementViewState {
   queryClass: MeasurementQueryClass
 }
 
-export const DEFAULT_MEASUREMENT_VIEW: MeasurementViewState = { scope: 'all', queryClass: 'non-brand' }
+/**
+ * All queries, not non-brand. Branded and non-brand answer different questions
+ * and are never pooled into one rate, but an operator arriving at the page has
+ * not yet said which one he is asking — and defaulting to non-brand silently
+ * hid half the basket behind a control he had no reason to touch.
+ */
+export const DEFAULT_MEASUREMENT_VIEW: MeasurementViewState = { scope: 'all', queryClass: 'all' }
 
 const QUERY_CLASSES: readonly MeasurementQueryClass[] = ['all', 'non-brand', 'branded']
 

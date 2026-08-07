@@ -9,6 +9,7 @@ import type {
   AdvancedMeasurementMetric,
   AdvancedMeasurementOverviewReport,
   AdvancedMeasurementProperty,
+  AdvancedMeasurementSort,
 } from './AdvancedMeasurementOverview.js'
 
 type ActivePlan = NonNullable<MeasurementPlanResponse['active']>
@@ -21,6 +22,8 @@ export interface AdaptV2MeasurementOverviewInput {
   activePlan: ActivePlan
   report?: MeasurementReportResponse | null
   reportState?: 'loading' | 'ready' | 'error'
+  /** The ordering the caller requested; the response does not echo it. */
+  sort?: AdvancedMeasurementSort
 }
 
 export function areV2OverviewPagesCompatible(pages: readonly MeasurementOverviewResponse[]): boolean {
@@ -150,6 +153,7 @@ export function adaptV2MeasurementOverview({
   activePlan,
   report,
   reportState = report ? 'ready' : 'loading',
+  sort,
 }: AdaptV2MeasurementOverviewInput): AdvancedMeasurementOverviewReport {
   if (activePlan.plan.schemaVersion !== 2 || overview.mode !== 'active-v2') {
     throw new Error('The current overview requires an active version-two setup.')
@@ -259,6 +263,10 @@ export function adaptV2MeasurementOverview({
       propertyTotal: overview.properties.totalEstimate ?? properties.length,
       outcomes: overview.outcomes,
       nextCursor: overview.properties.nextCursor,
+      // The response does not echo the ordering it applied, so the requested
+      // sort is threaded through here — the header state must reflect what was
+      // actually asked for, not what the table happens to look like.
+      ...(sort ? { sort } : {}),
     },
     availableGroups: plan.groups.map(group => ({ id: group.stableKey, label: group.label })),
     ...(nextActionText(overview) ? { nextActionText: nextActionText(overview) } : {}),

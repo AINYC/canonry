@@ -20,6 +20,7 @@ import {
 import { addToast } from '../../lib/toast-store.js'
 import { invalidateProjectQueryDomain } from '../../queries/query-invalidation.js'
 import { Button } from '../ui/button.js'
+import { WriteButton } from '../shared/AccessControls.js'
 import { Card } from '../ui/card.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
 import { ResearchQueriesSection } from './ResearchQueriesSection.js'
@@ -271,7 +272,7 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
                 </span>
               </label>
               {!isEmbed() && (
-                <Button
+                <WriteButton
                   type="button"
                   size="sm"
                   disabled={startMutation.isPending}
@@ -279,7 +280,7 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
                 >
                   <Play size={14} />
                   {startMutation.isPending ? 'Starting…' : 'Find queries'}
-                </Button>
+                </WriteButton>
               )}
             </div>
           </Card>
@@ -387,7 +388,7 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
                   <h3>Choose queries to track</h3>
                 </div>
                 {!isEmbed() && (
-                  <Button
+                  <WriteButton
                     type="button"
                     size="sm"
                     disabled={promoteMutation.isPending || safeDefaultCount === 0}
@@ -395,7 +396,7 @@ function FindQueriesSection({ projectName }: { projectName: string }) {
                   >
                     <CheckCircle2 size={14} />
                     {promoteMutation.isPending ? 'Adding…' : 'Add recommended queries'}
-                  </Button>
+                  </WriteButton>
                 )}
               </div>
               {previewQuery.isLoading ? (

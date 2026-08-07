@@ -22,3 +22,6 @@ package-lock.json
 # The native Canonry plugin ships a repository-owned MCP declaration.
 !plugins/canonry/.mcp.json
 .spec-completion-map.txt
+
+# npm pack output — a release tarball is never source
+*.tgz
