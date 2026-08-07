@@ -15,7 +15,7 @@ Your entire AEO + web analytics stack, agent-first. **Open source. Self-hosted. 
 - Manage many clients declaratively — config-as-code YAML + `cnry apply`
 - Schedule recurring visibility checks, traffic syncs, and Business Profile syncs, with webhook alerts on regressions
 - Generate client-ready HTML reports — `cnry report <project>`
-- Drive from your own agent via the [MCP adapter](docs/mcp.md), a [native Codex or Claude Code plugin](docs/plugins.md), or webhooks
+- Drive from your own agent via the [MCP adapter](docs/mcp.md), the [portable Agent Plugin](docs/plugins.md), or webhooks
 - Or use **Aero** — Canonry's built-in agent that wakes up after every run
 
 Every dashboard view has a matching CLI command and API endpoint. The CLI is the surface; the UI consumes the same API your agent does.
@@ -92,7 +92,7 @@ Configure during `cnry init`, in the dashboard `/settings`, or as env vars.
 |---|---|
 | **Architecture & data model** | [docs/architecture.md](docs/architecture.md) · [docs/data-model.md](docs/data-model.md) |
 | **Aero — built-in agent** | [skills/aero/SKILL.md](skills/aero/SKILL.md) |
-| **Native plugins — Codex / Claude Code** | [docs/plugins.md](docs/plugins.md) |
+| **Agent Plugin — portable core + Codex / Claude adapters** | [docs/plugins.md](docs/plugins.md) |
 | **MCP — Claude Desktop / Cursor / Codex** | [docs/mcp.md](docs/mcp.md) |
 | **Integrations** | [GSC](docs/google-search-console-setup.md) · [GA4](docs/google-analytics-setup.md) · [Bing](docs/bing-webmaster-setup.md) · [Google Business Profile](skills/canonry/references/google-business-profile.md) · [WordPress](docs/wordpress-setup.md) · [Server-side traffic (Cloud Run + Vercel + WordPress logs)](skills/canonry/references/server-side-traffic.md) |
 | **Deployment** — Docker, Railway, Render, systemd, Tailscale | [docs/deployment.md](docs/deployment.md) |

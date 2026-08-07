@@ -13,15 +13,32 @@ function write(relativePath: string, content: string, base = homeDir): string {
   return filePath
 }
 
-function seedPluginRoot(root: string, client: 'claude-code' | 'codex', version = '1.0.0'): void {
-  const manifestDir = client === 'claude-code' ? '.claude-plugin' : '.codex-plugin'
-  write(path.join(manifestDir, 'plugin.json'), JSON.stringify({
-    name: 'canonry',
-    version,
-    skills: './skills/',
-    mcpServers: './.mcp.json',
-  }), root)
-  write('.mcp.json', JSON.stringify({ mcpServers: { canonry: { command: 'canonry-mcp' } } }), root)
+function seedPluginRoot(
+  root: string,
+  client: 'claude-code' | 'codex',
+  version = '1.0.0',
+  codexFormat: 'portable' | 'legacy' = 'portable',
+): void {
+  if (client === 'codex' && codexFormat === 'portable') {
+    write('plugin.json', JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+      name: 'canonry',
+      version,
+    }), root)
+    write('mcp.json', JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+      mcpServers: { canonry: { type: 'stdio', command: 'canonry-mcp' } },
+    }), root)
+  } else {
+    const manifestDir = client === 'claude-code' ? '.claude-plugin' : '.codex-plugin'
+    write(path.join(manifestDir, 'plugin.json'), JSON.stringify({
+      name: 'canonry',
+      version,
+      skills: './skills/',
+      mcpServers: './.mcp.json',
+    }), root)
+    write('.mcp.json', JSON.stringify({ mcpServers: { canonry: { command: 'canonry-mcp' } } }), root)
+  }
   write('skills/canonry/SKILL.md', '# canonry', root)
   write('skills/aero/SKILL.md', '# aero', root)
 }
@@ -101,6 +118,55 @@ describe('detectCanonryAgentPlugin', () => {
       configuredClients: ['codex'],
       verifiedClients: ['codex'],
       verifiedClientVersions: { codex: '1.0.0' },
+    })
+  })
+
+  it('continues to verify legacy Codex plugin caches during the migration', () => {
+    const codexHome = path.join(homeDir, '.codex')
+    write('.codex/config.toml', '[plugins."canonry@canonry"]\nenabled = true\n')
+    seedPluginRoot(
+      path.join(codexHome, 'plugins', 'cache', 'canonry', 'canonry', '1.0.0'),
+      'codex',
+      '1.0.0',
+      'legacy',
+    )
+
+    expect(detectCanonryAgentPlugin({ home: homeDir })).toEqual({
+      configuredClients: ['codex'],
+      verifiedClients: ['codex'],
+      verifiedClientVersions: { codex: '1.0.0' },
+    })
+  })
+
+  it('falls back to legacy Codex metadata when root plugin.json is unrelated', () => {
+    const codexHome = path.join(homeDir, '.codex')
+    const pluginRoot = path.join(codexHome, 'plugins', 'cache', 'canonry', 'canonry', '1.0.0')
+    write('.codex/config.toml', '[plugins."canonry@canonry"]\nenabled = true\n')
+    seedPluginRoot(pluginRoot, 'codex', '1.0.0', 'legacy')
+    write('plugin.json', JSON.stringify({ name: 'unrelated-format' }), pluginRoot)
+
+    expect(detectCanonryAgentPlugin({ home: homeDir })).toEqual({
+      configuredClients: ['codex'],
+      verifiedClients: ['codex'],
+      verifiedClientVersions: { codex: '1.0.0' },
+    })
+  })
+
+  it('rejects unsupported Agent Plugins schemas instead of trusting a legacy fallback', () => {
+    const codexHome = path.join(homeDir, '.codex')
+    const pluginRoot = path.join(codexHome, 'plugins', 'cache', 'canonry', 'canonry', '1.0.0')
+    write('.codex/config.toml', '[plugins."canonry@canonry"]\nenabled = true\n')
+    seedPluginRoot(pluginRoot, 'codex', '1.0.0', 'legacy')
+    write('plugin.json', JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/2.0.0/plugin.schema.json',
+      name: 'canonry',
+      version: '1.0.0',
+    }), pluginRoot)
+
+    expect(detectCanonryAgentPlugin({ home: homeDir })).toEqual({
+      configuredClients: ['codex'],
+      verifiedClients: [],
+      verifiedClientVersions: {},
     })
   })
 

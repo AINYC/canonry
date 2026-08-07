@@ -22,6 +22,8 @@ export default defineConfig({
         // below the 500 kB warning threshold and big libs cache independently
         // of app code.
         manualChunks(id) {
+          if (id.includes('lucide-react')) return 'vendor-lucide'
+          if (id.includes('yaml')) return 'vendor-yaml'
           if (!id.includes('node_modules')) return undefined
           if (id.includes('recharts')) return 'vendor-recharts'
           if (id.includes('@tanstack')) return 'vendor-tanstack'

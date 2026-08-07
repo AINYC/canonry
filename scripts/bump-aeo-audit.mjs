@@ -42,6 +42,7 @@ const DEP_MANIFESTS = ['packages/canonry/package.json', 'apps/worker/package.jso
 const VERSION_MANIFESTS = [
   'package.json',
   'packages/canonry/package.json',
+  'plugins/canonry/plugin.json',
   'plugins/canonry/.codex-plugin/plugin.json',
   'plugins/canonry/.claude-plugin/plugin.json',
 ]

@@ -1,6 +1,13 @@
-# Native Codex and Claude Code Plugins
+# Portable Agent Plugin with Codex and Claude Code adapters
 
-Canonry's native plugin is a thin distribution layer for agent clients. It bundles the Canonry and Aero playbooks and launches the existing `canonry-mcp` stdio adapter. It does not add a second API, execution path, or credential store.
+Canonry's plugin targets the [Agent Plugins 1.0.0 format](https://agent-plugins.org/). The portable core is `plugins/canonry/plugin.json`, `skills/`, and `mcp.json`. It bundles the Canonry and Aero playbooks and launches the existing `canonry-mcp` stdio adapter. It does not add a second API, execution path, or credential store.
+
+Codex consumes the root Agent Plugins core today and uses
+`.codex-plugin/plugin.json` as a client overlay and older-client fallback.
+Claude Code distribution still uses `.claude-plugin/plugin.json` plus the
+legacy `.mcp.json`. The portable files are canonical; the compatibility files
+are generated adapters. Marketplaces remain client-owned and intentionally
+outside the Agent Plugins specification.
 
 ## Prerequisites
 
@@ -40,6 +47,7 @@ claude plugin install canonry@canonry
 ```
 
 Both clients install from their own marketplace manifest in this repository.
+Those catalogs point at the same portable plugin directory.
 Ensure Canonry's local daemon is running, then verify the live advisory plugin
 check:
 

@@ -9,9 +9,37 @@ const managedSkills = ['aero', 'canonry']
 const pluginRoot = path.join(repoRoot, 'plugins', 'canonry')
 const packageManifestPath = path.join(repoRoot, 'packages', 'canonry', 'package.json')
 const rootManifestPath = path.join(repoRoot, 'package.json')
-const pluginManifestPaths = [
+const portablePluginManifestPath = path.join(pluginRoot, 'plugin.json')
+const portableMcpPath = path.join(pluginRoot, 'mcp.json')
+const legacyMcpPath = path.join(pluginRoot, '.mcp.json')
+const clientPluginManifestPaths = [
   path.join(pluginRoot, '.codex-plugin', 'plugin.json'),
   path.join(pluginRoot, '.claude-plugin', 'plugin.json'),
+]
+const pluginManifestPaths = [portablePluginManifestPath, ...clientPluginManifestPaths]
+const portablePluginSchema = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json'
+const portableMcpSchema = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json'
+const portablePluginFields = new Set([
+  '$schema',
+  'name',
+  'version',
+  'description',
+  'author',
+  'homepage',
+  'repository',
+  'license',
+  'keywords',
+  'extensions',
+])
+const sharedPluginFields = [
+  'name',
+  'version',
+  'description',
+  'author',
+  'homepage',
+  'repository',
+  'license',
+  'keywords',
 ]
 
 function parseArgs(args) {
@@ -53,6 +81,14 @@ function readJson(filePath) {
 
 function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function jsonEqual(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right)
 }
 
 function walkFiles(dir, prefix = '') {
@@ -147,6 +183,128 @@ function compareSemver(left, right) {
   return 0
 }
 
+function validatePortablePlugin(failures) {
+  const manifest = readJson(portablePluginManifestPath)
+  if (!isPlainObject(manifest)) {
+    failures.push('plugins/canonry/plugin.json must contain a JSON object')
+    return
+  }
+  if (manifest.$schema !== portablePluginSchema) {
+    failures.push(`plugins/canonry/plugin.json must target ${portablePluginSchema}`)
+  }
+  if (manifest.name !== 'canonry' || !/^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(manifest.name)) {
+    failures.push('plugins/canonry/plugin.json must declare name "canonry"')
+  }
+  for (const field of Object.keys(manifest)) {
+    if (!portablePluginFields.has(field)) {
+      failures.push(`plugins/canonry/plugin.json contains non-portable field "${field}"`)
+    }
+  }
+  for (const field of ['version', 'description', 'homepage', 'repository', 'license']) {
+    if (manifest[field] !== undefined && typeof manifest[field] !== 'string') {
+      failures.push(`plugins/canonry/plugin.json field "${field}" must be a string`)
+    }
+  }
+  if (manifest.version !== undefined && !parseSemver(manifest.version)) {
+    failures.push('plugins/canonry/plugin.json version must use Semantic Versioning')
+  }
+  if (manifest.author !== undefined) {
+    const authorFields = isPlainObject(manifest.author) ? Object.keys(manifest.author) : []
+    if (
+      !isPlainObject(manifest.author)
+      || authorFields.some((field) => !['name', 'email', 'url'].includes(field))
+      || Object.values(manifest.author).some((value) => typeof value !== 'string')
+    ) {
+      failures.push('plugins/canonry/plugin.json author must contain only string name, email, and url fields')
+    }
+  }
+  if (manifest.keywords !== undefined && (
+    !Array.isArray(manifest.keywords)
+    || manifest.keywords.some((keyword) => typeof keyword !== 'string')
+  )) {
+    failures.push('plugins/canonry/plugin.json keywords must be an array of strings')
+  }
+  if (manifest.extensions !== undefined && (
+    !isPlainObject(manifest.extensions)
+    || Object.values(manifest.extensions).some((extension) => !isPlainObject(extension))
+  )) {
+    failures.push('plugins/canonry/plugin.json extensions must map namespaces to objects')
+  }
+
+  const mcp = readJson(portableMcpPath)
+  if (!isPlainObject(mcp)) {
+    failures.push('plugins/canonry/mcp.json must contain a JSON object')
+    return
+  }
+  if (mcp.$schema !== portableMcpSchema) {
+    failures.push(`plugins/canonry/mcp.json must target ${portableMcpSchema}`)
+  }
+  const mcpFields = Object.keys(mcp)
+  if (mcpFields.some((field) => field !== '$schema' && field !== 'mcpServers')) {
+    failures.push('plugins/canonry/mcp.json may contain only "$schema" and "mcpServers"')
+  }
+  const canonryServer = isPlainObject(mcp.mcpServers) ? mcp.mcpServers.canonry : undefined
+  if (
+    !isPlainObject(mcp.mcpServers)
+    || Object.keys(mcp.mcpServers).length !== 1
+    || !isPlainObject(canonryServer)
+    || Object.keys(canonryServer).some((field) => !['type', 'command', 'args'].includes(field))
+    || canonryServer.type !== 'stdio'
+    || canonryServer.command !== 'canonry-mcp'
+    || !Array.isArray(canonryServer.args)
+    || canonryServer.args.some((arg) => typeof arg !== 'string')
+  ) {
+    failures.push('plugins/canonry/mcp.json must declare the canonry-mcp stdio server')
+  }
+}
+
+function syncClientAdapters(failures) {
+  const portableManifest = readJson(portablePluginManifestPath)
+  if (!isPlainObject(portableManifest)) return
+  for (const manifestPath of clientPluginManifestPaths) {
+    const manifest = readJson(manifestPath)
+    if (!isPlainObject(manifest)) {
+      failures.push(`${path.relative(repoRoot, manifestPath)} must contain a JSON object`)
+      continue
+    }
+    let changed = false
+    for (const field of sharedPluginFields) {
+      if (jsonEqual(manifest[field], portableManifest[field])) continue
+      if (checkOnly) {
+        failures.push(`${path.relative(repoRoot, manifestPath)} field "${field}" does not match portable plugin.json`)
+      } else if (portableManifest[field] === undefined) {
+        delete manifest[field]
+        changed = true
+      } else {
+        manifest[field] = portableManifest[field]
+        changed = true
+      }
+    }
+    if (!checkOnly && changed) writeJson(manifestPath, manifest)
+  }
+
+  const portableMcp = readJson(portableMcpPath)
+  if (
+    !isPlainObject(portableMcp)
+    || !isPlainObject(portableMcp.mcpServers)
+    || Object.values(portableMcp.mcpServers).some((server) => !isPlainObject(server))
+  ) {
+    return
+  }
+  const expectedLegacyMcp = {
+    mcpServers: Object.fromEntries(Object.entries(portableMcp.mcpServers).map(([name, server]) => {
+      const { type: _type, ...legacyServer } = server
+      return [name, legacyServer]
+    })),
+  }
+  const legacyMcpMatches = fs.existsSync(legacyMcpPath) && jsonEqual(readJson(legacyMcpPath), expectedLegacyMcp)
+  if (checkOnly && !legacyMcpMatches) {
+    failures.push('plugins/canonry/.mcp.json does not match portable mcp.json')
+  } else if (!checkOnly && !legacyMcpMatches) {
+    writeJson(legacyMcpPath, expectedLegacyMcp)
+  }
+}
+
 function checkVersionAdvancement(ref, failures) {
   let mergeBase
   try {
@@ -197,6 +355,8 @@ const packageVersion = readJson(packageManifestPath).version
 const rootVersion = readJson(rootManifestPath).version
 const failures = []
 
+validatePortablePlugin(failures)
+
 if (rootVersion !== packageVersion) {
   failures.push(`root package version ${rootVersion} does not match @canonry/canonry ${packageVersion}`)
 }
@@ -213,6 +373,8 @@ for (const manifestPath of pluginManifestPaths) {
   }
 }
 
+syncClientAdapters(failures)
+
 for (const skill of managedSkills) {
   const source = path.join(repoRoot, 'skills', skill)
   const target = path.join(pluginRoot, 'skills', skill)
@@ -226,6 +388,34 @@ for (const skill of managedSkills) {
   }
 }
 
+function checkCodemap(failures) {
+  const codemapPath = path.join(repoRoot, 'docs', 'CODEMAP.md')
+  if (!fs.existsSync(codemapPath)) {
+    failures.push('docs/CODEMAP.md is missing — run pnpm plugin:sync to regenerate the file index')
+    return
+  }
+  const content = fs.readFileSync(codemapPath, 'utf8')
+  const requiredEntries = [
+    { file: 'packages/api-routes/src/visibility-attribution.ts', marker: 'visibility-attribution' },
+    { file: 'packages/canonry/src/gsc-sitemap-submission.ts', marker: 'gsc-sitemap-submission' },
+    { file: 'docs/GUARDS.md', marker: 'GUARDS.md' },
+    { file: 'docs/DOC_UPDATE.md', marker: 'DOC_UPDATE.md' },
+  ]
+  for (const { file, marker } of requiredEntries) {
+    if (!content.includes(marker)) {
+      failures.push(`docs/CODEMAP.md missing entry for ${file} — run pnpm plugin:sync or update CODEMAP.md`)
+    }
+    if (!fs.existsSync(path.join(repoRoot, file))) {
+      failures.push(`CODEMAP entry ${file} points to missing file`)
+    }
+  }
+  if (!content.includes('find apps packages -type f -name')) {
+    failures.push('docs/CODEMAP.md missing regenerate note — add: find apps packages -type f -name')
+  }
+}
+
+checkCodemap(failures)
+
 if (checkOnly && baseRef) {
   checkVersionAdvancement(baseRef, failures)
 }
@@ -236,5 +426,5 @@ if (failures.length > 0) {
 } else if (checkOnly) {
   process.stdout.write(`Canonry plugin matches v${packageVersion}.\n`)
 } else {
-  process.stdout.write(`Synced Canonry plugin skills and manifests to v${packageVersion}.\n`)
+  process.stdout.write(`Synced Canonry plugin skills, portable core, and client adapters to v${packageVersion}.\n`)
 }

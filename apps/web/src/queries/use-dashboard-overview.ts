@@ -12,7 +12,7 @@ import {
 import { buildDashboard } from '../build-dashboard.js'
 import type { ProjectData } from '../build-dashboard.js'
 import type { DashboardVm } from '../view-models.js'
-import { PROJECTS_REFRESH_MS, RUNS_STALE_MS, STATIC_VISIBILITY_STALE_MS } from './query-client.js'
+import { PROJECTS_REFRESH_IDLE_MS, PROJECTS_REFRESH_MS, RUNS_STALE_MS, STATIC_VISIBILITY_STALE_MS } from './query-client.js'
 import { useAccount } from '../contexts/account-context.js'
 import { useInitialDashboard } from '../contexts/dashboard-context.js'
 
@@ -55,12 +55,6 @@ export function useDashboardOverview(initialDashboard?: DashboardVm | null, opti
   const includeSettings = options.includeSettings ?? true
   const { isAdmin } = useAccount()
 
-  const projectsQuery = useQuery({
-    ...getApiV1ProjectsOptions({ client: heyClient }),
-    enabled: !effectiveInitial,
-    refetchInterval: PROJECTS_REFRESH_MS,
-  })
-
   // Scope to answer-visibility so integration syncs don't fill the 500-row
   // server cap and starve the dashboard of sweep runs (see PR #590).
   const runsQuery = useQuery({
@@ -71,6 +65,21 @@ export function useDashboardOverview(initialDashboard?: DashboardVm | null, opti
       const runs = query.state.data
       const hasActive = runs?.some(r => r.status === 'running' || r.status === 'queued')
       return hasActive ? 3000 : RUNS_STALE_MS
+    },
+  })
+
+  const projectsQuery = useQuery({
+    ...getApiV1ProjectsOptions({ client: heyClient }),
+    enabled: !effectiveInitial,
+    refetchInterval: (query) => {
+      const data = query.state.data as unknown[] | undefined
+      // Fast poll only when setup needs it (zero projects) or a sweep is active;
+      // otherwise idle at 30s — cuts 30 req/min → ~2 req/min per tab.
+      const hasActive = (runsQuery.data as { status: string }[] | undefined)?.some(
+        r => r.status === 'running' || r.status === 'queued',
+      )
+      const needsFast = (data?.length ?? 0) === 0 || !!hasActive
+      return needsFast ? PROJECTS_REFRESH_MS : PROJECTS_REFRESH_IDLE_MS
     },
   })
 

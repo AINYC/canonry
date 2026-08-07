@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const pluginRoot = path.join(repoRoot, 'plugins', 'canonry')
@@ -22,6 +23,11 @@ interface PluginManifest extends VersionManifest {
   name: string
   skills: string
   mcpServers: string
+}
+
+interface PortablePluginManifest extends VersionManifest {
+  $schema: string
+  name: string
 }
 
 interface CodexMarketplace {
@@ -52,22 +58,50 @@ function writeJson(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`)
 }
 
+function readSkillFrontmatter(skillDir: string): Record<string, unknown> {
+  const body = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8')
+  const match = /^---\n([\s\S]*?)\n---/.exec(body)
+  expect(match, `${skillDir}/SKILL.md frontmatter`).not.toBeNull()
+  return parse(match![1]!) as Record<string, unknown>
+}
+
 describe('native Canonry plugin bundle', () => {
-  it('keeps both client manifests on the published Canonry version', () => {
+  it('keeps the portable and client manifests on the published Canonry version', () => {
     const rootPackage = readJson<VersionManifest>(path.join(repoRoot, 'package.json'))
     const canonryPackage = readJson<VersionManifest>(path.join(repoRoot, 'packages', 'canonry', 'package.json'))
+    const portableManifest = readJson<PortablePluginManifest>(path.join(pluginRoot, 'plugin.json'))
     const codexManifest = readJson<PluginManifest>(path.join(pluginRoot, '.codex-plugin', 'plugin.json'))
     const claudeManifest = readJson<PluginManifest>(path.join(pluginRoot, '.claude-plugin', 'plugin.json'))
 
     expect(rootPackage.version).toBe(canonryPackage.version)
+    expect(portableManifest.version).toBe(canonryPackage.version)
     expect(codexManifest.version).toBe(canonryPackage.version)
     expect(claudeManifest.version).toBe(canonryPackage.version)
+    expect(portableManifest.$schema).toBe('https://agent-plugins.org/schemas/1.0.0/plugin.schema.json')
+    expect(portableManifest.name).toBe('canonry')
+    expect(Object.keys(portableManifest).sort()).toEqual([
+      '$schema',
+      'author',
+      'description',
+      'homepage',
+      'keywords',
+      'license',
+      'name',
+      'repository',
+      'version',
+    ])
     expect(codexManifest.name).toBe('canonry')
     expect(claudeManifest.name).toBe('canonry')
     expect(codexManifest.skills).toBe('./skills/')
     expect(claudeManifest.skills).toBe('./skills/')
     expect(codexManifest.mcpServers).toBe('./.mcp.json')
     expect(claudeManifest.mcpServers).toBe('./.mcp.json')
+    const sharedFields = ['name', 'version', 'description', 'author', 'homepage', 'repository', 'license', 'keywords']
+    for (const field of sharedFields) {
+      const portableValue = (portableManifest as unknown as Record<string, unknown>)[field]
+      expect((codexManifest as unknown as Record<string, unknown>)[field]).toEqual(portableValue)
+      expect((claudeManifest as unknown as Record<string, unknown>)[field]).toEqual(portableValue)
+    }
   })
 
   it('contains exact generated mirrors of the canonical skill trees', () => {
@@ -88,9 +122,57 @@ describe('native Canonry plugin bundle', () => {
     }
   })
 
+  it('bundles Agent Skills-compliant frontmatter', () => {
+    const allowedFields = new Set([
+      'name',
+      'description',
+      'license',
+      'compatibility',
+      'metadata',
+      'allowed-tools',
+    ])
+
+    for (const skill of managedSkills) {
+      const frontmatter = readSkillFrontmatter(path.join(pluginRoot, 'skills', skill))
+      expect(frontmatter.name).toBe(skill)
+      expect(skill).toMatch(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/)
+      expect(skill).not.toContain('--')
+      expect(skill.length).toBeLessThanOrEqual(64)
+      expect(typeof frontmatter.description).toBe('string')
+      expect((frontmatter.description as string).length).toBeGreaterThan(0)
+      expect((frontmatter.description as string).length).toBeLessThanOrEqual(1024)
+      expect(Object.keys(frontmatter).every((field) => allowedFields.has(field))).toBe(true)
+      for (const field of ['license', 'allowed-tools']) {
+        if (frontmatter[field] !== undefined) expect(typeof frontmatter[field]).toBe('string')
+      }
+      if (frontmatter.compatibility !== undefined) {
+        expect(typeof frontmatter.compatibility).toBe('string')
+        expect((frontmatter.compatibility as string).length).toBeLessThanOrEqual(500)
+      }
+      if (frontmatter.metadata !== undefined) {
+        expect(frontmatter.metadata).not.toBeNull()
+        expect(Array.isArray(frontmatter.metadata)).toBe(false)
+        expect(typeof frontmatter.metadata).toBe('object')
+        expect(Object.values(frontmatter.metadata as Record<string, unknown>)
+          .every((value) => typeof value === 'string')).toBe(true)
+      }
+    }
+  })
+
   it('launches only the installed canonry-mcp binary and embeds no credentials', () => {
-    const mcp = readJson<unknown>(path.join(pluginRoot, '.mcp.json'))
-    expect(mcp).toEqual({
+    const portableMcp = readJson<unknown>(path.join(pluginRoot, 'mcp.json'))
+    const legacyMcp = readJson<unknown>(path.join(pluginRoot, '.mcp.json'))
+    expect(portableMcp).toEqual({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+      mcpServers: {
+        canonry: {
+          type: 'stdio',
+          command: 'canonry-mcp',
+          args: [],
+        },
+      },
+    })
+    expect(legacyMcp).toEqual({
       mcpServers: {
         canonry: {
           command: 'canonry-mcp',
@@ -98,8 +180,8 @@ describe('native Canonry plugin bundle', () => {
         },
       },
     })
-    expect(JSON.stringify(mcp)).not.toMatch(/cnry_[a-z0-9]+/i)
-    expect(JSON.stringify(mcp)).not.toMatch(/api[_-]?key/i)
+    expect(JSON.stringify([portableMcp, legacyMcp])).not.toMatch(/cnry_[a-z0-9]+/i)
+    expect(JSON.stringify([portableMcp, legacyMcp])).not.toMatch(/api[_-]?key/i)
   })
 
   it('publishes matching repository marketplaces for both clients', () => {
@@ -127,6 +209,7 @@ describe('native Canonry plugin bundle', () => {
     const versionedFiles = [
       'package.json',
       'packages/canonry/package.json',
+      'plugins/canonry/plugin.json',
       'plugins/canonry/.codex-plugin/plugin.json',
       'plugins/canonry/.claude-plugin/plugin.json',
     ]
@@ -135,9 +218,38 @@ describe('native Canonry plugin bundle', () => {
       fs.mkdirSync(path.dirname(scriptPath), { recursive: true })
       fs.copyFileSync(path.join(repoRoot, 'scripts', 'sync-canonry-plugin.mjs'), scriptPath)
 
-      for (const relativePath of versionedFiles) {
-        writeJson(path.join(scratch, relativePath), { version: '1.0.0' })
+      const sharedPluginMetadata = {
+        name: 'canonry',
+        version: '1.0.0',
+        description: 'Canonry test plugin',
+        author: { name: 'Canonry' },
+        homepage: 'https://canonry.ai',
+        repository: 'https://github.com/Canonry/canonry',
+        license: 'FSL-1.1-ALv2',
+        keywords: ['aeo'],
       }
+      for (const relativePath of versionedFiles) {
+        const value = relativePath === 'package.json' || relativePath === 'packages/canonry/package.json'
+          ? { version: '1.0.0' }
+          : relativePath === 'plugins/canonry/plugin.json'
+            ? {
+                $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+                ...sharedPluginMetadata,
+              }
+            : sharedPluginMetadata
+        writeJson(path.join(scratch, relativePath), value)
+      }
+      writeJson(path.join(scratch, 'plugins/canonry/mcp.json'), {
+        $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+        mcpServers: {
+          canonry: { type: 'stdio', command: 'canonry-mcp', args: [] },
+        },
+      })
+      writeJson(path.join(scratch, 'plugins/canonry/.mcp.json'), {
+        mcpServers: {
+          canonry: { command: 'canonry-mcp', args: [] },
+        },
+      })
       for (const skill of managedSkills) {
         const content = `${skill} skill\n`
         const relativePath = path.join('skills', skill, 'SKILL.md')
@@ -146,10 +258,26 @@ describe('native Canonry plugin bundle', () => {
         fs.mkdirSync(path.join(scratch, 'plugins', 'canonry', path.dirname(relativePath)), { recursive: true })
         fs.writeFileSync(path.join(scratch, 'plugins', 'canonry', relativePath), content)
       }
+      for (const file of [
+        'packages/api-routes/src/visibility-attribution.ts',
+        'packages/canonry/src/gsc-sitemap-submission.ts',
+        'docs/GUARDS.md',
+        'docs/DOC_UPDATE.md',
+      ]) {
+        const full = path.join(scratch, file)
+        fs.mkdirSync(path.dirname(full), { recursive: true })
+        fs.writeFileSync(full, `// ${path.basename(file)}\n`)
+      }
+      fs.mkdirSync(path.join(scratch, 'docs'), { recursive: true })
+      fs.writeFileSync(
+        path.join(scratch, 'docs', 'CODEMAP.md'),
+        '# CODEMAP\nvisibility-attribution\ngsc-sitemap-submission\nGUARDS.md\nDOC_UPDATE.md\nfind apps packages -type f -name\n',
+      )
 
       execFileSync('git', ['init', '--quiet'], { cwd: scratch })
       execFileSync('git', ['config', 'user.email', 'plugin-test@canonry.invalid'], { cwd: scratch })
       execFileSync('git', ['config', 'user.name', 'Canonry plugin test'], { cwd: scratch })
+      execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: scratch })
       execFileSync('git', ['add', '.'], { cwd: scratch })
       execFileSync('git', ['commit', '--quiet', '-m', 'baseline'], { cwd: scratch })
       const baseRef = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: scratch, encoding: 'utf8' }).trim()
@@ -169,7 +297,8 @@ describe('native Canonry plugin bundle', () => {
       expect(historyCheck.stderr).toContain('version must advance beyond 1.0.0')
 
       for (const relativePath of versionedFiles) {
-        writeJson(path.join(scratch, relativePath), { version: '1.0.1' })
+        const manifestPath = path.join(scratch, relativePath)
+        writeJson(manifestPath, { ...readJson<Record<string, unknown>>(manifestPath), version: '1.0.1' })
       }
       const advancedCheck = spawnSync(process.execPath, [scriptPath, '--check', '--base-ref', baseRef], {
         cwd: scratch,

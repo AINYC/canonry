@@ -21,6 +21,9 @@ on:
       - 'plugins/**'
       - '.agents/**'
       - '.claude-plugin/**'
+      - 'docs/CODEMAP.md'
+      - 'docs/GUARDS.md'
+      - 'docs/DOC_UPDATE.md'
       - 'AGENTS.md'
   pull_request:
     # No `branches:` filter — run CI on every PR, including stacked PRs
@@ -44,6 +47,9 @@ on:
       - 'plugins/**'
       - '.agents/**'
       - '.claude-plugin/**'
+      - 'docs/CODEMAP.md'
+      - 'docs/GUARDS.md'
+      - 'docs/DOC_UPDATE.md'
       - 'AGENTS.md'
 
 jobs:
@@ -84,6 +90,17 @@ jobs:
         name: Check documentation coverage (AGENTS.md per package)
       - run: pnpm run lint
 
+  ts-prune:
+    # Lightweight dead-export check via npx (no heavy dep in repo). Reports unused exports not used outside their module; filtered to exclude "used in module" noise. Non-blocking — surfaces in logs without failing CI.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: npx --yes ts-prune -p tsconfig.base.json -s ".*\\.test\\.ts" 2>&1 | tee /tmp/ts-prune.txt; echo "--- ts-prune (filtered) ---"; grep -v "used in module" /tmp/ts-prune.txt | head -n 50 || true
+        name: Report unused exports (ts-prune, no heavy dep)
+
   codegen-drift:
     # Regenerates the hey-api client from the OpenAPI spec and fails if the
     # committed output differs. Run separately from `lint` so a stale client
@@ -100,8 +117,7 @@ jobs:
 
   plugin-drift:
     # The native plugin mirrors the canonical Canonry/Aero skills and package
-    # version. Fail with a focused check when a generated copy is stale or a
-    # plugin-affecting change reuses the version already present on the base.
+    # version, and CODEMAP.md indexes key files. Fail with a focused check when a generated copy is stale, CODEMAP is stale, or a plugin-affecting change reuses the version already present on the base.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -174,7 +190,7 @@ jobs:
 
   validate:
     runs-on: ubuntu-latest
-    needs: [typecheck, test, lint, codegen-drift, plugin-drift, build, publish-smoke-test]
+    needs: [typecheck, test, lint, ts-prune, codegen-drift, plugin-drift, build, publish-smoke-test]
     if: always()
     steps:
       - name: Verify all validate jobs succeeded
@@ -182,6 +198,7 @@ jobs:
           if [ "${{ needs.typecheck.result }}" != "success" ] || \
              [ "${{ needs.test.result }}" != "success" ] || \
              [ "${{ needs.lint.result }}" != "success" ] || \
+             [ "${{ needs.ts-prune.result }}" != "success" ] || \
              [ "${{ needs.codegen-drift.result }}" != "success" ] || \
              [ "${{ needs.plugin-drift.result }}" != "success" ] || \
              [ "${{ needs.build.result }}" != "success" ] || \

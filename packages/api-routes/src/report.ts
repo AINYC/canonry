@@ -13,6 +13,7 @@ import {
   gaTrafficWindowSummaries,
   groupRunsByCreatedAt,
   gscCoverageSnapshots,
+  gscDailyTotals,
   gscSearchData,
   insights,
   pickGroupRepresentative,
@@ -197,22 +198,36 @@ function buildGscSection(
   trackedQueries: string[],
   windowDays: number,
 ): ProjectReportDto['gsc'] {
-  const allRows = db.select().from(gscSearchData).where(eq(gscSearchData.projectId, projectId)).all()
-  const allDailyTotals = readGscDailyTotals(db, projectId, '', '9999-12-31')
-
-  // Constrain to the most recent `windowDays` of data so the GSC section
-  // aligns with the GA section. GSC retains up to 16 months, but the report
-  // only ever shows the selected window. Anchor on the latest date in the
-  // dataset rather than "today" — when GSC sync is a few days behind the
-  // report should still cover a full window of real data.
-  let maxDate = ''
-  for (const r of allRows) if (r.date > maxDate) maxDate = r.date
-  for (const r of allDailyTotals) if (r.date > maxDate) maxDate = r.date
+  // Anchor on the latest date in the dataset rather than "today" — when GSC
+  // sync is a few days behind the report should still cover a full window of
+  // real data. Push the window into SQL so a 16-month retain doesn't load
+  // ~50k rows to keep 30 days (~94% less I/O).
+  const maxSearch = db
+    .select({ m: sql<string>`MAX(${gscSearchData.date})` })
+    .from(gscSearchData)
+    .where(eq(gscSearchData.projectId, projectId))
+    .get()?.m ?? ''
+  const maxDaily = db
+    .select({ m: sql<string>`MAX(${gscDailyTotals.date})` })
+    .from(gscDailyTotals)
+    .where(eq(gscDailyTotals.projectId, projectId))
+    .get()?.m ?? ''
+  const maxDate = maxSearch > maxDaily ? maxSearch : maxDaily
   if (!maxDate) return null
 
   const startDate = windowStartDate(maxDate, windowDays)
-  const rows = allRows.filter(r => r.date >= startDate && r.date <= maxDate)
-  const dailyTotals = allDailyTotals.filter(r => r.date >= startDate && r.date <= maxDate)
+  const rows = db
+    .select()
+    .from(gscSearchData)
+    .where(
+      and(
+        eq(gscSearchData.projectId, projectId),
+        gte(gscSearchData.date, startDate),
+        lte(gscSearchData.date, maxDate),
+      ),
+    )
+    .all()
+  const dailyTotals = readGscDailyTotals(db, projectId, startDate, maxDate)
   if (rows.length === 0 && dailyTotals.length === 0) return null
 
   // Per-query / per-page aggregation stays on the dimensioned rows — these
@@ -384,23 +399,31 @@ function buildGaSection(db: DatabaseClient, projectId: string, windowDays: numbe
         .limit(1)
         .get()
 
-  const allSnapshotRows = db
-    .select()
-    .from(gaTrafficSnapshots)
-    .where(eq(gaTrafficSnapshots.projectId, projectId))
-    .all()
+  // Per-page snapshots: push the window into SQL — a retained GA history
+  // of many months otherwise loads 10k+ rows to keep 30 days.
+  const snapshotMaxDate =
+    db
+      .select({ m: sql<string>`MAX(${gaTrafficSnapshots.date})` })
+      .from(gaTrafficSnapshots)
+      .where(eq(gaTrafficSnapshots.projectId, projectId))
+      .get()?.m ?? ''
 
-  if (!windowSummary && !fallbackSummary && allSnapshotRows.length === 0) return null
+  if (!windowSummary && !fallbackSummary && !snapshotMaxDate) return null
 
-  // Match the GSC section: filter per-page snapshots to the most recent
-  // `windowDays` so the landing-page table and channel mix describe the same
-  // window the headline totals do.
-  let snapshotMaxDate = ''
-  for (const r of allSnapshotRows) if (r.date > snapshotMaxDate) snapshotMaxDate = r.date
   const snapshotStartDate = snapshotMaxDate ? windowStartDate(snapshotMaxDate, windowDays) : ''
   const snapshotRows = snapshotStartDate
-    ? allSnapshotRows.filter(r => r.date >= snapshotStartDate && r.date <= snapshotMaxDate)
-    : allSnapshotRows
+    ? db
+        .select()
+        .from(gaTrafficSnapshots)
+        .where(
+          and(
+            eq(gaTrafficSnapshots.projectId, projectId),
+            gte(gaTrafficSnapshots.date, snapshotStartDate),
+            lte(gaTrafficSnapshots.date, snapshotMaxDate),
+          ),
+        )
+        .all()
+    : db.select().from(gaTrafficSnapshots).where(eq(gaTrafficSnapshots.projectId, projectId)).all()
 
   const totalSessions = windowSummary?.totalSessions
     ?? fallbackSummary?.totalSessions

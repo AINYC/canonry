@@ -19,11 +19,12 @@ Canonry is API-first. The API is the source of truth, the CLI is the standard op
 
 | Document | Label | Audience | Purpose |
 | --- | --- | --- | --- |
+| [`CODEMAP.md`](CODEMAP.md) | current | engineers, agents | File-level index: every `apps/` + `packages/` key file, navigation recipes, and agent efficiency tips — start here for “where is …?” |
 | [`architecture.md`](architecture.md) | current | engineers | System architecture, dependency graph, run lifecycle, provider system |
 | [`data-model.md`](data-model.md) | current | engineers | ER diagram, table groups, JSON column shapes |
 | [`deployment.md`](deployment.md) | current | operators | Current deployment and runtime guidance |
 | [`testing.md`](testing.md) | current | contributors | Validation and test workflow guidance |
-| [`plugins.md`](plugins.md) | current | Codex and Claude Code users | Native plugin installation, coexistence, and security boundaries |
+| [`plugins.md`](plugins.md) | current | agent users | Portable Agent Plugin structure, client adapters, installation, coexistence, and security boundaries |
 | [`mcp.md`](mcp.md) | current | operators, agent users, contributors | MCP stdio adapter rationale, setup, auth model, safety rules, and limitations |
 | [`providers/README.md`](providers/README.md) | current | engineers | Provider system overview, ProviderAdapter interface, how to add a provider |
 | [`providers/gemini.md`](providers/gemini.md) | current | engineers | Gemini provider behavior and constraints |
