@@ -258,10 +258,26 @@ describe('native Canonry plugin bundle', () => {
         fs.mkdirSync(path.join(scratch, 'plugins', 'canonry', path.dirname(relativePath)), { recursive: true })
         fs.writeFileSync(path.join(scratch, 'plugins', 'canonry', relativePath), content)
       }
+      for (const file of [
+        'packages/api-routes/src/visibility-attribution.ts',
+        'packages/canonry/src/gsc-sitemap-submission.ts',
+        'docs/GUARDS.md',
+        'docs/DOC_UPDATE.md',
+      ]) {
+        const full = path.join(scratch, file)
+        fs.mkdirSync(path.dirname(full), { recursive: true })
+        fs.writeFileSync(full, `// ${path.basename(file)}\n`)
+      }
+      fs.mkdirSync(path.join(scratch, 'docs'), { recursive: true })
+      fs.writeFileSync(
+        path.join(scratch, 'docs', 'CODEMAP.md'),
+        '# CODEMAP\nvisibility-attribution\ngsc-sitemap-submission\nGUARDS.md\nDOC_UPDATE.md\nfind apps packages -type f -name\n',
+      )
 
       execFileSync('git', ['init', '--quiet'], { cwd: scratch })
       execFileSync('git', ['config', 'user.email', 'plugin-test@canonry.invalid'], { cwd: scratch })
       execFileSync('git', ['config', 'user.name', 'Canonry plugin test'], { cwd: scratch })
+      execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: scratch })
       execFileSync('git', ['add', '.'], { cwd: scratch })
       execFileSync('git', ['commit', '--quiet', '-m', 'baseline'], { cwd: scratch })
       const baseRef = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: scratch, encoding: 'utf8' }).trim()
