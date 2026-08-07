@@ -20,7 +20,7 @@ import {
 import { addToast } from '../../lib/toast-store.js'
 import { invalidateProjectQueryDomain } from '../../queries/query-invalidation.js'
 import { safeExternalUrl } from '../../lib/safe-url.js'
-import { Button } from '../ui/button.js'
+import { WriteButton } from '../shared/AccessControls.js'
 import { Card } from '../ui/card.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
 
@@ -204,7 +204,7 @@ export function ResearchQueriesSection({ projectName }: { projectName: string })
 
             <div className="flex flex-wrap items-center gap-3 border-t border-default pt-4">
               {!isEmbed() && (
-                <Button
+                <WriteButton
                   type="button"
                   size="sm"
                   disabled={submittedQueries.length === 0 || submittedQueries.length > 50 || noConfiguredApiProviders || researchMutation.isPending}
@@ -212,7 +212,7 @@ export function ResearchQueriesSection({ projectName }: { projectName: string })
                 >
                   <Play size={14} />
                   {researchMutation.isPending ? 'Starting research…' : `Run ${submittedQueries.length || ''} research ${submittedQueries.length === 1 ? 'query' : 'queries'}`}
-                </Button>
+                </WriteButton>
               )}
               <p className="text-xs leading-5 text-muted">Saved to research history. Nothing is added to tracked queries.</p>
             </div>

@@ -29,6 +29,7 @@ import {
 } from '@ainyc/canonry-contracts'
 
 import { Button } from '../ui/button.js'
+import { WriteButton } from '../shared/AccessControls.js'
 import { Card } from '../ui/card.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
@@ -285,7 +286,7 @@ export function GbpSection({ projectName, projectId }: { projectName: string; pr
           <div className="flex items-center gap-2">
             <ToneBadge tone="positive">Connected</ToneBadge>
             {!isEmbed() && (
-              <Button
+              <WriteButton
                 type="button"
                 variant="outline"
                 size="sm"
@@ -293,7 +294,7 @@ export function GbpSection({ projectName, projectId }: { projectName: string; pr
                 onClick={() => syncMutation.mutate({ client: heyClient, path: { name: projectName }, body: {} })}
               >
                 {isSyncing ? 'Syncing…' : 'Sync'}
-              </Button>
+              </WriteButton>
             )}
           </div>
         </div>
@@ -453,7 +454,7 @@ export function GbpSection({ projectName, projectId }: { projectName: string; pr
                         </td>
                         {!isEmbed() && (
                           <td className="text-right">
-                            <Button
+                            <WriteButton
                               type="button"
                               variant="outline"
                               size="sm"
@@ -465,7 +466,7 @@ export function GbpSection({ projectName, projectId }: { projectName: string; pr
                               })}
                             >
                               {loc.selected ? 'Untrack' : 'Track'}
-                            </Button>
+                            </WriteButton>
                           </td>
                         )}
                       </tr>

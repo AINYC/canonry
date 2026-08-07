@@ -1799,7 +1799,7 @@ function ProjectPageContent({
     const previous = lastMeasurementPlanIdentity.current
     if (measurementPlanIdentity !== null) lastMeasurementPlanIdentity.current = measurementPlanIdentity
     if (!shouldResetMeasurementView(previous, measurementPlanIdentity)) return
-    setAdvancedMeasurementView({ scope: 'all', queryClass: 'non-brand' })
+    setAdvancedMeasurementView({ scope: 'all', queryClass: 'all' })
     setHasExpandedAdvancedProperty(false)
   }, [measurementPlanIdentity, setAdvancedMeasurementView])
   const advancedMeasurementOverviewQueryInput = {

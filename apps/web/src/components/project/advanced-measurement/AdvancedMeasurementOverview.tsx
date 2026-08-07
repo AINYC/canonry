@@ -512,98 +512,49 @@ function SegmentedControl<T extends string>({
 }
 
 /**
- * The two headline rates.
+ * How many Properties got which signal.
  *
- * The unit of both is an assignment — a Property paired with a query — but the
- * two POPULATIONS are not guaranteed equal. The API measures mention over the
- * answered slots and citation over the source-complete ones, and an answer
- * arriving with incomplete source capture is routine, so the denominators
- * diverge on real runs. A single shared basis line is therefore printed only
- * when the two are actually the same number; otherwise each rate carries its
- * own, because one line reading "of 250" under a 50% that was measured over 300
- * tells the reader 125 mentions where the measured figure is 150.
+ * FIVE named states, not four. "one signal" pooled `mentionedOnly` with
+ * `citedOnly` and hid the split on a tooltip — but those two have OPPOSITE
+ * fixes. Cited-but-not-mentioned means the engine read the page and then
+ * recommended somebody else; mentioned-but-not-cited means the opposite. A
+ * label that averages them tells the reader nothing they can act on.
  *
- * `propertiesMentioned` is deliberately NOT here: it counts PROPERTIES, so
- * printing it alongside would state something false about one of the three. The
- * per-Property picture is the outcome counts below.
- */
-function CoverageHero({ cited, mentioned }: {
-  cited: AdvancedMeasurementMetric
-  mentioned: AdvancedMeasurementMetric
-}) {
-  const sharedDenominator = isMeasured(cited) && isMeasured(mentioned)
-    ? cited.denominator === mentioned.denominator ? cited.denominator : null
-    : isMeasured(cited) ? cited.denominator
-      : isMeasured(mentioned) ? mentioned.denominator
-        : null
-  const percent = (metric: AdvancedMeasurementMetric): string =>
-    isMeasured(metric) ? `${Math.round((metric.numerator / metric.denominator) * 100)}%` : 'N/A'
-  return (
-    <div aria-label="Coverage" className="flex flex-wrap items-start gap-x-10 gap-y-3 border-b border-default py-4">
-      {([['cited', cited], ['mentioned', mentioned]] as const).map(([label, metric]) => (
-        <div key={label}>
-          <p
-            className="font-mono text-3xl leading-none tabular-nums text-primary"
-            title={metricReason(metric) || undefined}
-          >
-            {percent(metric)}
-          </p>
-          <p className="mt-1 text-xs text-secondary">{label}</p>
-          {sharedDenominator === null && isMeasured(metric) ? (
-            <p className="mt-0.5 font-mono text-xs text-faint tabular-nums">
-              {metric.numerator} of {metric.denominator}
-            </p>
-          ) : null}
-        </div>
-      ))}
-      {sharedDenominator === null ? null : (
-        <p className="ml-auto self-end font-mono text-xs text-secondary">
-          of {sharedDenominator}
-          <InfoTooltip text="One assignment is a Property paired with a query. Branded queries are a separate filter and are never averaged in." />
-        </p>
-      )}
-    </div>
-  )
-}
-
-/**
- * How many Properties got which signals.
+ * The unit is stated ONCE, as "N properties" on the heading line this row sits
+ * under, and every number here counts the same thing — so there is nothing to
+ * reconcile. That is why the assignment-denominated rates were removed: two
+ * populations side by side, with the unit printed on neither, is what made the
+ * section unreadable.
  *
- * Four counts, not five: `mentionedOnly` and `citedOnly` collapse into "one
- * signal" because five phrases is a paragraph to read, and the split stays
- * reachable on the tooltip since cited-only is the actionable half — the engine
- * used the page and recommended somebody else.
- *
- * The counts are the server's, over the Properties currently LISTED — they
- * narrow with the search box exactly as the table and its "N properties" count
- * do. Saying "in scope" would be a promise the numbers stop keeping the moment
- * someone types. Nothing is computed here, and an absent block renders nothing
- * rather than a row of zeroes, which would read as a measured finding instead
- * of a missing field.
+ * `notMeasured` renders only when it is non-zero: it is the exception bucket,
+ * and a rendered 0 reads as a measured finding rather than an absence.
  */
 function OutcomeCounts({ outcomes }: {
   outcomes: NonNullable<NonNullable<AdvancedMeasurementOverviewReport['currentView']>['outcomes']>
 }) {
-  const oneSignal = outcomes.mentionedOnly + outcomes.citedOnly
   const entries: readonly { key: string; count: number; label: string; tone: string }[] = [
-    { key: 'both', count: outcomes.bothSignals, label: 'both', tone: 'text-positive' },
-    { key: 'one', count: oneSignal, label: 'one signal', tone: 'text-caution' },
-    { key: 'neither', count: outcomes.neither, label: 'neither', tone: 'text-negative' },
-    { key: 'not-measured', count: outcomes.notMeasured, label: 'not measured', tone: 'text-faint' },
+    { key: 'both', count: outcomes.bothSignals, label: 'mentioned and cited', tone: 'text-primary' },
+    { key: 'mentioned-only', count: outcomes.mentionedOnly, label: 'mentioned only', tone: 'text-primary' },
+    { key: 'cited-only', count: outcomes.citedOnly, label: 'cited only', tone: 'text-primary' },
+    // Colour carries exactly one meaning here. Ranking mentioned-only against
+    // cited-only with a tone ramp would assert an ordering the copy refuses.
+    { key: 'neither', count: outcomes.neither, label: 'neither signal', tone: 'text-negative' },
+    ...(outcomes.notMeasured > 0
+      ? [{ key: 'not-measured', count: outcomes.notMeasured, label: 'not measured', tone: 'text-faint' }]
+      : []),
   ]
   return (
-    <div aria-label="Property outcomes" className="flex flex-wrap items-baseline gap-x-6 gap-y-1 border-b border-default py-3">
+    <div aria-label="Property outcomes" className="flex flex-wrap gap-x-8 gap-y-3 py-3">
       {entries.map(entry => (
-        <span key={entry.key} className="whitespace-nowrap text-sm text-secondary">
-          <span className={`mr-1 font-mono text-[15px] font-semibold tabular-nums ${entry.tone}`}>{entry.count}</span>
-          {entry.label}
-          {entry.key === 'one' ? (
-            <InfoTooltip text={`Which signal: ${outcomes.mentionedOnly} mentioned, not cited. ${outcomes.citedOnly} cited, not mentioned.`} />
-          ) : null}
-          {entry.key === 'not-measured' ? (
-            <InfoTooltip text={`Sums to ${outcomes.total}. Every Property listed is in exactly one group.`} />
-          ) : null}
-        </span>
+        <div key={entry.key} className="whitespace-nowrap">
+          <p className={`font-mono text-xl font-semibold leading-none tabular-nums ${entry.tone}`}>{entry.count}</p>
+          <p className="mt-1 text-[13px] text-secondary">
+            {entry.label}
+            {entry.key === 'not-measured' ? (
+              <InfoTooltip text="One or both signals missing. Not the same as neither." />
+            ) : null}
+          </p>
+        </div>
       ))}
     </div>
   )
@@ -628,7 +579,7 @@ export function AdvancedMeasurementOverview({
 }: AdvancedMeasurementOverviewProps) {
   const usesServerView = report.currentView != null
   const classReportingAvailable = report.classReporting === 'available' && (usesServerView || report.classScopes != null)
-  const [selectedClass, setSelectedClass] = useState<AdvancedMeasurementClass>(report.currentView?.queryClass ?? 'non-brand')
+  const [selectedClass, setSelectedClass] = useState<AdvancedMeasurementClass>(report.currentView?.queryClass ?? 'all')
   const [selectedView, setSelectedView] = useState(report.currentView?.scope.key ?? ALL_PROPERTIES)
   const [search, setSearch] = useState(viewSearch ?? '')
   const [propertyLimit, setPropertyLimit] = useState(PROPERTY_LIST_LIMIT)
@@ -790,20 +741,6 @@ export function AdvancedMeasurementOverview({
         </div>
       </header>
 
-      {!isViewLoading ? (
-        <CoverageHero
-          cited={classMetric(aggregate.metrics.citationCoverage)}
-          mentioned={classMetric(aggregate.metrics.mentionCoverage)}
-        />
-      ) : <div className="h-20 animate-pulse rounded-md bg-surface-subtle" aria-label="Updating measurement results" />}
-
-      {/* Gated with the hero and the table: while the new view is in flight the
-          cache still holds the PREVIOUS scope's counts, and a stale split shown
-          under a control that already reads "Branded" is worse than no split. */}
-      {!isViewLoading && report.currentView?.outcomes
-        ? <OutcomeCounts outcomes={report.currentView.outcomes} />
-        : null}
-
       <div className="flex flex-wrap items-end gap-4 border-b border-default pb-4">
         <div className="space-y-1">
           <label
@@ -858,9 +795,15 @@ export function AdvancedMeasurementOverview({
 
       {!isViewLoading ? <section aria-labelledby="advanced-measurement-properties-title">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 id="advanced-measurement-properties-title" className="text-base font-semibold text-heading">Properties</h2>
+          <h2 id="advanced-measurement-properties-title" className="text-base font-semibold text-heading">
+            Properties
+            <InfoTooltip text="Mentioned = brand in the answer. Cited = domain in the sources. Neither implies the other." />
+          </h2>
           <span className="text-sm text-secondary">{report.currentView?.propertyTotal ?? filteredProperties.length} {(report.currentView?.propertyTotal ?? filteredProperties.length) === 1 ? 'property' : 'properties'}</span>
         </div>
+        {/* Directly under the count it partitions, so the unit is stated once
+            and the row visibly sums to it. */}
+        {report.currentView?.outcomes ? <OutcomeCounts outcomes={report.currentView.outcomes} /> : null}
         <div className="overflow-x-auto rounded-md border border-default">
           <table className="evidence-table min-w-[720px]">
             <caption className="sr-only">Property measurement results</caption>
