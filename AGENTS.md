@@ -63,6 +63,17 @@ ADR index, or canonical roadmap. For file-level navigation use `docs/CODEMAP.md`
 4. **Search with `muse.search` (ripgrep, bounded)** — `muse.bash` fan-out (`find /`, `ls -R`) saturates the host. `muse.read_file` caps at 500 lines; chunk `SetupPage.tsx` (1260), `ProjectPage.tsx` (2728), `server.ts` (2969).
 5. **Web API calls MUST use `@ainyc/canonry-api-client`** (`heyClient` in `apps/web/src/api.ts`) — raw `fetch` is ESLint-banned. New route = `contracts` Zod → `api-routes` handler → `openapi.ts` → `pnpm gen` → web query.
 6. **Verify with `pnpm run typecheck && pnpm run test && pnpm run lint`** and `pnpm plugin:check` if you touched `plugins/` or `skills/`.
+7. **Use architecture diagrams when they clarify complicated topics.** New ideas and discussions warrant a back-and-forth.
+
+## Response sections and feedback
+
+Use these sections only for review handoffs. Keep simple answers and routine status updates short.
+
+When proposing work, requesting feedback, or showcasing changes:
+
+- Use indexed items so the user can answer precisely: `1`, `2`, `3` for one section; `A1`, `A2`, `B1` when there are multiple sections.
+- Put completed or proposed changes under a clearly labeled `SHOWCASE` section when presenting them for review.
+- Add a clearly labeled `FEEDBACK NEEDED` section only when a real user question or decision is needed. Put every question there, indexed, and keep it separate from `SHOWCASE`; omit the section when there are no questions.
 
 ## Commands
 
