@@ -13,6 +13,12 @@ import { Button } from '../../ui/button.js'
  */
 export type AdvancedMeasurementClass = 'all' | 'non-brand' | 'branded'
 
+/** The six tokens the API accepts. Unmeasured sorts FIRST either way: unknown is not zero. */
+export type AdvancedMeasurementSort =
+  | 'label-asc' | 'label-desc'
+  | 'citationCoverage-asc' | 'citationCoverage-desc'
+  | 'mentionCoverage-asc' | 'mentionCoverage-desc'
+
 export type AdvancedMeasurementEvidenceKind =
   | 'this-property'
   | 'another-property'
@@ -126,6 +132,8 @@ export interface AdvancedMeasurementOverviewReport {
     aggregate: AdvancedMeasurementAggregate
     propertyTotal: number
     nextCursor: string | null
+    /** The ordering the server applied. Absent means the default, label-asc. */
+    sort?: AdvancedMeasurementSort
     /**
      * Scope-wide outcome split, counted by the server over every Property in
      * scope. Absent when the server predates the field — the row then renders
@@ -152,6 +160,7 @@ export interface AdvancedMeasurementViewRequest {
   groupKey?: string
   queryClass: AdvancedMeasurementClass
   search?: string
+  sort?: AdvancedMeasurementSort
 }
 
 export interface AdvancedMeasurementOverviewProps {
@@ -177,6 +186,22 @@ export interface AdvancedMeasurementOverviewProps {
    * plain text and the row still expands in place.
    */
   renderPropertyLink?: (property: { id: string; name: string }) => ReactNode
+}
+
+const SORTABLE_COLUMNS: readonly { key: 'label' | 'mentionCoverage' | 'citationCoverage'; label: string; numeric: boolean }[] = [
+  { key: 'label', label: 'Property', numeric: false },
+  { key: 'mentionCoverage', label: 'Mention', numeric: true },
+  { key: 'citationCoverage', label: 'Citation', numeric: true },
+]
+
+/**
+ * Whether a row's status is worth the reader's attention.
+ *
+ * "Complete" is the unremarkable case and it is most rows, so badging it fills
+ * a column with a constant. Only the exceptions earn a badge.
+ */
+function isRemarkableStatus(status: AdvancedMeasurementProperty['status']): boolean {
+  return status.label !== 'Complete'
 }
 
 const ALL_PROPERTIES = '__all_properties__'
@@ -587,6 +612,7 @@ export function AdvancedMeasurementOverview({
   // One id, not a set: each expansion adds an engine sub-row per provider plus a
   // details panel, so two open at once push the rest of a several-hundred-row
   // table off screen. Opening a Property closes whichever one was open.
+  const [selectedSort, setSelectedSort] = useState<AdvancedMeasurementSort>(report.currentView?.sort ?? 'label-asc')
   const [expandedPropertyId, setExpandedPropertyId] = useState<string | null>(null)
   const lastRequestedSearch = useRef(viewSearch ?? '')
 
@@ -607,6 +633,7 @@ export function AdvancedMeasurementOverview({
       ...(nextScope === 'group' ? { groupKey: next.groupKey ?? selectedView } : {}),
       queryClass: next.queryClass ?? selectedClass,
       ...(nextSearch ? { search: nextSearch } : {}),
+      ...(next.sort ? { sort: next.sort } : {}),
     })
   }, [onViewChange, search, selectedClass, selectedView, usesServerView])
 
@@ -614,6 +641,7 @@ export function AdvancedMeasurementOverview({
     if (!report.currentView || isViewLoading) return
     setSelectedClass(report.currentView.queryClass)
     setSelectedView(report.currentView.scope.key ?? ALL_PROPERTIES)
+    if (report.currentView.sort) setSelectedSort(report.currentView.sort)
   }, [isViewLoading, report.currentView])
 
   useEffect(() => {
@@ -645,6 +673,7 @@ export function AdvancedMeasurementOverview({
   const classMetric = (metric: AdvancedMeasurementMetric): AdvancedMeasurementMetric => (
     classReportingAvailable ? metric : planV1Metric
   )
+  const activeSort: AdvancedMeasurementSort = selectedSort
   const normalizedSearch = search.trim().toLocaleLowerCase()
   const filteredProperties = useMemo(() => (
     !usesServerView && normalizedSearch
@@ -807,7 +836,40 @@ export function AdvancedMeasurementOverview({
         <div className="overflow-x-auto rounded-md border border-default">
           <table className="evidence-table min-w-[720px]">
             <caption className="sr-only">Property measurement results</caption>
-            <thead><tr><th>Property</th><th>Mention</th><th>Citation</th><th>Status</th><th><span className="sr-only">Details</span></th></tr></thead>
+            <thead>
+              <tr>
+                {SORTABLE_COLUMNS.map(column => {
+                  const active = activeSort.startsWith(`${column.key}-`)
+                  const direction = active && activeSort.endsWith('-desc') ? 'descending' : active ? 'ascending' : 'none'
+                  return (
+                    <th key={column.key} aria-sort={direction} className={column.numeric ? undefined : undefined}>
+                      {onViewChange ? (
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 text-inherit hover:text-heading"
+                          // Second click on the same column flips direction; a new
+                          // column starts ascending, which for a coverage metric
+                          // puts the worst Properties first — the reason to sort.
+                          onClick={() => {
+                            const next = `${column.key}-${active && activeSort.endsWith('-asc') ? 'desc' : 'asc'}` as AdvancedMeasurementSort
+                            setSelectedSort(next)
+                            requestView({ sort: next })
+                          }}
+                          aria-label={`Sort by ${column.label.toLowerCase()}`}
+                        >
+                          {column.label}
+                          <ChevronDown
+                            className={`h-3 w-3 transition-transform ${active ? 'opacity-100' : 'opacity-0'} ${direction === 'ascending' ? 'rotate-180' : ''}`}
+                            aria-hidden="true"
+                          />
+                        </button>
+                      ) : column.label}
+                    </th>
+                  )
+                })}
+                <th><span className="sr-only">Details</span></th>
+              </tr>
+            </thead>
             <tbody>
               {shownProperties.map(property => {
                 const expanded = expandedPropertyId === property.id
@@ -827,18 +889,23 @@ export function AdvancedMeasurementOverview({
                         {/* A name alone does not identify a row in a portfolio of
                             hundreds. Market and URL count are what let a reader
                             tell two similarly-named Properties apart. */}
+                        {/* Exceptions only. A column of identical "Complete"
+                            badges spends portfolio width saying nothing; what a
+                            reader needs is the row that is NOT fine. */}
+                        {isRemarkableStatus(property.status) || property.historical ? (
+                          <span className="ml-2 inline-flex flex-wrap items-center gap-1 align-middle">
+                            {isRemarkableStatus(property.status)
+                              ? <ToneBadge tone={property.status.tone}>{property.status.label}</ToneBadge>
+                              : null}
+                            {property.historical ? <ToneBadge tone="caution">Historical</ToneBadge> : null}
+                          </span>
+                        ) : null}
                         {propertySubtitle(property) ? (
                           <div className="mt-0.5 text-xs font-normal text-faint">{propertySubtitle(property)}</div>
                         ) : null}
                       </td>
                       <td className="text-secondary"><MetricValue metric={property.mentionCoverage} compact /></td>
                       <td className="text-secondary"><MetricValue metric={property.citationCoverage} compact /></td>
-                      <td>
-                        <span className="flex flex-wrap items-center gap-1">
-                          <ToneBadge tone={property.status.tone}>{property.status.label}</ToneBadge>
-                          {property.historical ? <ToneBadge tone="caution">Historical</ToneBadge> : null}
-                        </span>
-                      </td>
                       <td className="text-right"><Button size="icon" variant="ghost" aria-expanded={expanded} aria-label={expanded ? `Hide details for ${property.name}` : `Show details for ${property.name}`} onClick={() => toggleProperty(property.id)}><ChevronDown className={`h-4 w-4 transition-transform duration-200 motion-reduce:transition-none ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" /></Button></td>
                     </tr>
                     {expanded ? (property.providers ?? []).map(engine => (
@@ -846,14 +913,14 @@ export function AdvancedMeasurementOverview({
                         <td className="measurement-subrow-name">{engine.provider}</td>
                         <td className="text-secondary"><MetricValue metric={engine.mentionCoverage} compact /></td>
                         <td className="text-secondary"><MetricValue metric={engine.citationCoverage} compact /></td>
-                        <td /><td />
+                        <td />
                       </tr>
                     )) : null}
-                    {expanded ? <tr key={`${property.id}:details`}><td colSpan={5} className="bg-surface-subtle px-4"><PropertyDetails property={property} onRetryEvidence={onRetryEvidence} /></td></tr> : null}
+                    {expanded ? <tr key={`${property.id}:details`}><td colSpan={4} className="bg-surface-subtle px-4"><PropertyDetails property={property} onRetryEvidence={onRetryEvidence} /></td></tr> : null}
                   </Fragment>
                 )
               })}
-              {shownProperties.length === 0 ? <tr><td colSpan={5} className="py-8 text-center text-sm text-secondary">No properties match this search.</td></tr> : null}
+              {shownProperties.length === 0 ? <tr><td colSpan={4} className="py-8 text-center text-sm text-secondary">No properties match this search.</td></tr> : null}
             </tbody>
           </table>
         </div>

@@ -1106,3 +1106,77 @@ describe('outcome count row', () => {
   })
 })
 
+
+describe('sorting and status', () => {
+  const serverView = (overrides = {}) => {
+    const base = report()
+    return {
+      ...base,
+      currentView: {
+        scope: { kind: 'all' as const },
+        queryClass: 'all' as const,
+        aggregate: base.classScopes!.nonBrand.aggregate,
+        propertyTotal: 2,
+        nextCursor: null,
+        ...overrides,
+      },
+    }
+  }
+
+  // At portfolio scale the whole job is finding the Properties that are
+  // failing. The API has supported six sort tokens all along; the table never
+  // sent one, so the only ordering available was alphabetical.
+  it('sorts by a column, and toggles direction on a second click', () => {
+    const onViewChange = vi.fn()
+    renderOverview({ report: serverView(), onViewChange })
+
+    const mention = screen.getByRole('button', { name: /sort by mention/i })
+    fireEvent.click(mention)
+    expect(onViewChange).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'mentionCoverage-asc' }))
+
+    fireEvent.click(screen.getByRole('button', { name: /sort by mention/i }))
+    expect(onViewChange).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'mentionCoverage-desc' }))
+  })
+
+  it('tells assistive tech which column is sorted and which way', () => {
+    renderOverview({ report: serverView({ sort: 'citationCoverage-desc' }), onViewChange: vi.fn() })
+    const header = screen.getByRole('columnheader', { name: /citation/i })
+    expect(header.getAttribute('aria-sort')).toBe('descending')
+    expect(screen.getByRole('columnheader', { name: /mention/i }).getAttribute('aria-sort')).toBe('none')
+  })
+
+  // A column of identical green "Complete" badges spends a full column of
+  // portfolio width saying nothing. The exceptions are the only part worth
+  // reading, so they move beside the name and the column goes.
+  it('drops the status column and badges only the rows that need attention', () => {
+    const base = report()
+    const scope = base.classScopes!.nonBrand
+    const [first, second] = scope.aggregate.properties
+    renderOverview({
+      report: {
+        ...base,
+        classScopes: {
+          ...base.classScopes!,
+          nonBrand: {
+            ...scope,
+            aggregate: {
+              ...scope.aggregate,
+              properties: [
+                { ...first!, status: { label: 'Complete', tone: 'positive' as const } },
+                { ...second!, status: { label: 'Review', tone: 'caution' as const } },
+              ],
+            },
+          },
+        },
+      },
+    })
+
+    expect(screen.queryByRole('columnheader', { name: 'Status' })).toBeNull()
+    const table = screen.getByRole('table', { name: /property measurement results/i })
+    // The unremarkable case earns no badge at all. (The run's own "Complete"
+    // status lives in the header, outside this table.)
+    expect(within(table).queryByText('Complete')).toBeNull()
+    // The exception still shows, next to the Property it belongs to.
+    expect(within(table).getByText('Review')).toBeTruthy()
+  })
+})

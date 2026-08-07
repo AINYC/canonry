@@ -6,6 +6,7 @@ import { Link } from '@tanstack/react-router'
 import { measurementViewSearch, parseMeasurementViewSearch, shouldResetMeasurementView } from '../lib/measurement-view-url.js'
 import { useQueryClient } from '@tanstack/react-query'
 import { RunKinds, RunStatuses } from '@ainyc/canonry-contracts'
+import type { MeasurementOverviewSort } from '@ainyc/canonry-contracts'
 
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
@@ -1698,13 +1699,18 @@ function ProjectPageContent({
   const measurementSearchParams = useSearch({ strict: false }) as { scope?: string; class?: string }
   const urlMeasurementView = parseMeasurementViewSearch(measurementSearchParams)
   const [advancedMeasurementSearch, setAdvancedMeasurementSearch] = useState<string | undefined>(undefined)
+  // Sort is a within-view refinement, not what the page is ABOUT, so it stays
+  // in component state rather than the URL alongside scope and class.
+  const [advancedMeasurementSort, setAdvancedMeasurementSort] = useState<MeasurementOverviewSort | undefined>(undefined)
   const setAdvancedMeasurementView = useCallback((next: {
     scope: 'all' | 'group'
     groupKey?: string
     queryClass: 'all' | 'non-brand' | 'branded'
     search?: string
+    sort?: MeasurementOverviewSort
   }) => {
     setAdvancedMeasurementSearch(next.search)
+    if (next.sort) setAdvancedMeasurementSort(next.sort)
     // Scope and class are deliberate, low-frequency choices, so they PUSH:
     // pressing back after picking a market should return to the previous
     // market, which is what a reader expects of a control that changes what
@@ -1810,6 +1816,7 @@ function ProjectPageContent({
       ...(advancedMeasurementView.groupKey ? { groupKey: advancedMeasurementView.groupKey } : {}),
       queryClass: advancedMeasurementView.queryClass,
       ...(advancedMeasurementView.search ? { search: advancedMeasurementView.search } : {}),
+      ...(advancedMeasurementSort ? { sort: advancedMeasurementSort } : {}),
       limit: 50,
     },
   } as const
@@ -1917,6 +1924,7 @@ function ProjectPageContent({
       ? adaptV2MeasurementOverview({
           overview: mergedAdvancedMeasurementOverview,
           activePlan: activeMeasurementPlan,
+          sort: advancedMeasurementSort,
           report: advancedMeasurementReportQuery.data,
           reportState: mergedAdvancedMeasurementOverview.measurement.displayedRunId === undefined
             ? 'ready'
