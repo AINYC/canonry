@@ -21,6 +21,9 @@ on:
       - 'plugins/**'
       - '.agents/**'
       - '.claude-plugin/**'
+      - 'docs/CODEMAP.md'
+      - 'docs/GUARDS.md'
+      - 'docs/DOC_UPDATE.md'
       - 'AGENTS.md'
   pull_request:
     # No `branches:` filter — run CI on every PR, including stacked PRs
@@ -44,6 +47,9 @@ on:
       - 'plugins/**'
       - '.agents/**'
       - '.claude-plugin/**'
+      - 'docs/CODEMAP.md'
+      - 'docs/GUARDS.md'
+      - 'docs/DOC_UPDATE.md'
       - 'AGENTS.md'
 
 jobs:
@@ -100,8 +106,7 @@ jobs:
 
   plugin-drift:
     # The native plugin mirrors the canonical Canonry/Aero skills and package
-    # version. Fail with a focused check when a generated copy is stale or a
-    # plugin-affecting change reuses the version already present on the base.
+    # version, and CODEMAP.md indexes key files. Fail with a focused check when a generated copy is stale, CODEMAP is stale, or a plugin-affecting change reuses the version already present on the base.
     runs-on: ubuntu-latest
     permissions:
       contents: read

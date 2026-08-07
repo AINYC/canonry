@@ -10,6 +10,8 @@ Start with `AGENTS.md` (project overview + deployment posture), then `docs/READM
 |------|------|
 | `AGENTS.md` | Primary agent guidance — deployment posture, workspace map, commands, agent layer, doctor |
 | `CLAUDE.md` | Claude overlay (imports AGENTS.md + UI design system) |
+| `docs/GUARDS.md` | Lint guard table + adding-a-guard procedure (extracted from AGENTS.md) |
+| `docs/DOC_UPDATE.md` | Keeping-docs-current table (extracted from AGENTS.md) |
 | `PRODUCT.md` / `DESIGN.md` | Dashboard purpose, hierarchy, copy, controls — read before UI work |
 | `CONTRIBUTING.md` | Setup, `pnpm install` / `typecheck` / `test` / `lint` |
 | `canonry-install.sh` | One-command dev setup: install + build + global link |

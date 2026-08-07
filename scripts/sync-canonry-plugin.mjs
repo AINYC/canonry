@@ -388,6 +388,34 @@ for (const skill of managedSkills) {
   }
 }
 
+function checkCodemap(failures) {
+  const codemapPath = path.join(repoRoot, 'docs', 'CODEMAP.md')
+  if (!fs.existsSync(codemapPath)) {
+    failures.push('docs/CODEMAP.md is missing — run pnpm plugin:sync to regenerate the file index')
+    return
+  }
+  const content = fs.readFileSync(codemapPath, 'utf8')
+  const requiredEntries = [
+    { file: 'packages/api-routes/src/visibility-attribution.ts', marker: 'visibility-attribution' },
+    { file: 'packages/canonry/src/gsc-sitemap-submission.ts', marker: 'gsc-sitemap-submission' },
+    { file: 'docs/GUARDS.md', marker: 'GUARDS.md' },
+    { file: 'docs/DOC_UPDATE.md', marker: 'DOC_UPDATE.md' },
+  ]
+  for (const { file, marker } of requiredEntries) {
+    if (!content.includes(marker)) {
+      failures.push(`docs/CODEMAP.md missing entry for ${file} — run pnpm plugin:sync or update CODEMAP.md`)
+    }
+    if (!fs.existsSync(path.join(repoRoot, file))) {
+      failures.push(`CODEMAP entry ${file} points to missing file`)
+    }
+  }
+  if (!content.includes('find apps packages -type f -name')) {
+    failures.push('docs/CODEMAP.md missing regenerate note — add: find apps packages -type f -name')
+  }
+}
+
+checkCodemap(failures)
+
 if (checkOnly && baseRef) {
   checkVersionAdvancement(baseRef, failures)
 }
