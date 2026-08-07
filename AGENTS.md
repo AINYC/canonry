@@ -65,6 +65,8 @@ ADR index, or canonical roadmap. For file-level navigation use `docs/CODEMAP.md`
 6. **Verify with `pnpm run typecheck && pnpm run test && pnpm run lint`** and `pnpm plugin:check` if you touched `plugins/` or `skills/`.
 7. **Use architecture diagrams when they clarify complicated topics.** New ideas and discussions warrant a back-and-forth.
 
+**Recipes:** `add API route` → `packages/contracts/src/*.ts` Zod → `packages/api-routes/src/<domain>.ts` → `openapi.ts` → `pnpm gen` → `apps/web/src/queries/*.ts`; `add CLI command` → `packages/canonry/src/cli-commands/<cmd>.ts` → `src/mcp/tool-registry.ts` tier + `openapi-classification.ts` → test; `add web section` → `PRODUCT.md` + `apps/web/src/pages/ProjectPage.tsx` tab → `apps/web/src/components/project/*` → update per-package `AGENTS.md`.
+
 ## Response sections and feedback
 
 Use these sections only for review handoffs. Keep simple answers and routine status updates short.
@@ -88,6 +90,10 @@ pnpm run lint
 pnpm plugin:sync                  # refresh plugin skill mirrors + portable/client manifest versions
 pnpm plugin:check                 # fail on plugin spec, skill, or version drift (CI gate)
 pnpm run dev:web
+
+# MCP workflows (agent): inspect → diagnose → act
+# inspect: get-project / report / property / property-evidence / visibility-stats ; diagnose: doctor / coverage-refresh / technical-aeo score ; act: query add/replace, measurement-plan publish, gsc sitemap submit (gsc-sitemap-submission), discovery promote
+# Use tier=core tools for read; write requires `*` scope — see Deployment Posture. Prefer `canonry_help` + `canonry_load_toolkit` over raw fetch.
 
 # CLI
 canonry init
@@ -1112,26 +1118,7 @@ The failure mode this prevents: a new semantics-bearing parameter is wired parse
 
 ## Lint Guards (Critical)
 
-Several rules in this file are true only because a lint guard enforces them. Those guards live in `eslint.config.js`, and **every one of them has its own rule id**.
-
-**Never add options to the core `no-restricted-syntax` rule.** ESLint flat config resolves rules by id with LAST-WINS OVERRIDE across overlapping config objects, so a second block that names an already-guarded tree does not add to the first — it REPLACES the first block's options, and the first guard stops reporting. There is no warning, no duplicate-rule diagnostic, and `pnpm lint` stays green. On 2026-08-05 four of the five `no-restricted-syntax` blocks were found dead this way: the vocabulary literal ban fired in none of the four trees it named, the GA4 dimension drift guard fired nowhere, and the AI-hostname ban was clobbered in `apps/web/src` and `packages/canonry/src` by the two raw-`fetch()` guards. Three AGENTS.md rules had been false for as long, and a dead guard is invisible from the outside — it reads exactly like a clean tree.
-
-| Guard | Scope | Bans |
-|---|---|---|
-| `canonry-vocabulary/no-banned-metric-literal` | `packages/canonry/src/commands`, `…/cli-commands`, `packages/api-routes/src`, `apps/web/src` | Legacy/conflated AEO metric literals ("Vocabulary (Critical)" rule 7) |
-| `canonry-vocabulary/no-question-ui-copy` | `apps/web/src` | "question" in UI copy ("Query vs question") |
-| `canonry-guards/no-inline-ai-hostname` | `packages/canonry`, `api-routes`, `provider-*`, `integration-*`, `intelligence`, `apps/*` src | Raw AI-provider hostnames — use `AI_ENGINE_DOMAINS` |
-| `canonry-guards/no-inline-ga4-dimension` | `packages/integration-google-analytics/src` | Raw GA4 dimension names — use `GA4_DIMENSIONS` |
-| `canonry-guards/no-raw-http-web` | `apps/web/src` | `fetch()` / `XMLHttpRequest` — use the generated SDK |
-| `canonry-guards/no-raw-http-cli` | `packages/canonry/src` | `fetch()` — use `ApiClient` / `createApiClient()` |
-| `design-tokens/no-literal-palette` | `apps/web/src` | Raw Tailwind palette utilities ("Design tokens") |
-
-### Adding a guard
-
-1. Build it with `createRestrictedSyntaxRule` from `eslint-rules/restricted-syntax.js` (same behavior as `no-restricted-syntax`, under an id you choose), or write a custom rule module in `eslint-rules/` when the check needs more than a selector.
-2. Register it in the shared `canonryGuardsPlugin` / `canonryVocabularyPlugin` object — one object per namespace, reused by reference. Flat config throws `Cannot redefine plugin` if a namespace gets two different objects.
-3. Add the rule id to the coverage matrix in `test/eslint-guards.test.ts`, plus any file it deliberately exempts. That test resolves the real config per tree and asserts each guard is enabled at error severity; it is what catches a clobbered or misscoped guard, since lint output cannot.
-4. If an AGENTS.md rule cites the guard, name the rule id there so the claim is checkable.
+Several rules in this file are true only because a lint guard enforces them — see `docs/GUARDS.md` for the full guard table and `Adding a guard` procedure. Every guard has its own rule id in `eslint.config.js`; **never add options to core `no-restricted-syntax`** (flat config last-wins override clobbers prior guards with no diagnostic — 4 dead guards found 2026-08-05). Key guards: `canonry-guards/no-raw-http-web` (apps/web → SDK), `canonry-guards/no-raw-http-cli` (canonry → ApiClient), `canonry-vocabulary/no-banned-metric-literal`, `design-tokens/no-literal-palette` — full list in `docs/GUARDS.md`.
 
 ## CI Guidance
 
@@ -1141,23 +1128,6 @@ Several rules in this file are true only because a lint guard enforces them. Tho
 
 ## Keeping Documentation Current
 
-This repo uses per-package `AGENTS.md` files for local context. **These must stay in sync with the code.** Update the relevant documentation when making structural changes:
-
-| When you... | Update... |
-|-------------|-----------|
-| Add a new package under `packages/` or `apps/` | Create `AGENTS.md` + `CLAUDE.md` (`@AGENTS.md`) in the new package |
-| Add a new table or column in `packages/db/src/schema.ts` | Update `docs/data-model.md` (ER diagram + table groups) |
-| Add a new API route file in `packages/api-routes/src/` | Update `packages/api-routes/AGENTS.md` key files table |
-| Add a new CLI command | Update `packages/canonry/AGENTS.md`; add the equivalent MCP tool or document the explicit classification exception |
-| Add or change an MCP tool | Update `packages/canonry/src/mcp/tool-registry.ts` (tag with a `tier`), `openapi-classification.ts`, `docs/mcp.md`, and the `mcp-registry`/`mcp-stdio` tests. The built-in Aero agent picks the new tool up automatically through `agent/mcp-to-agent-tool.ts` — no second registration in `agent/tools.ts`. Add the name to `AERO_EXCLUDED_MCP_TOOLS` only if Aero must not invoke it (e.g. `canonry_agent_clear`). |
-| Add a new doctor check | Add a `CheckDefinition` in `packages/api-routes/src/doctor/checks/<topic>.ts`, register in `doctor/registry.ts`, add tests in `packages/api-routes/test/doctor-*`, document the new check ID in `AGENTS.md`'s "Doctor" section |
-| Add a new MCP toolkit | Add the toolkit name to `packages/canonry/src/mcp/toolkits.ts`, tag the relevant tools with the new tier, and update the toolkit table in `docs/mcp.md` |
-| Add a new UI dashboard section or widget | Verify backing API endpoint + CLI command exist first (UI/CLI parity rule) |
-| Add a new provider package | Update `docs/providers/README.md` and create `docs/providers/<name>.md` |
-| Add a new integration package | Create `packages/integration-<name>/AGENTS.md`; wrap its HTTP layer in `withRetry` (see "Third-party HTTP calls" below) |
-| Change a critical pattern (error handling, DB access, auth) | Update the relevant package's AGENTS.md patterns section |
-| Add a new dependency between packages | Update `docs/architecture.md` module dependency graph |
-| Add a generic utility (formatter, parser, normalizer) | Add it to `packages/contracts/src/<topic>.ts`, re-export from `index.ts`, add tests in `packages/contracts/test/<topic>.test.ts`. Update the "Where utilities live" table in this file if introducing a new category. |
-| Add a lint guard (selector ban, custom rule) | Give it a UNIQUE rule id via `createRestrictedSyntaxRule` — never `no-restricted-syntax` options — add it to the coverage matrix in `test/eslint-guards.test.ts` and the guard table in "Lint Guards (Critical)" |
+Per-package `AGENTS.md` must stay in sync — see `docs/DOC_UPDATE.md` for the full “When you… → Update…” table (route/CLI/MCP/doctor/guard/provider etc.).
 
 **Documentation-only changes do not require a version bump.**

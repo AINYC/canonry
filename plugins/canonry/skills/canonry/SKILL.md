@@ -1,6 +1,6 @@
 ---
 name: canonry
-description: "Set up and operate Canonry AEO projects: inspect mention and citation coverage, diagnose regressions, run technical audits, and act through the Canonry CLI or MCP tools."
+description: "Set up and operate Canonry AEO projects: inspect mention and citation coverage, diagnose regressions, run technical audits, and act through the Canonry CLI or MCP tools. Examples: inspect project acme coverage (run + report), diagnose query drift via attribution (report.html + visibility-attribution), submit GSC sitemaps (gsc-sitemap-submission batched)."
 compatibility: Requires Node.js 22.14+ and globally installed @canonry/canonry; canonry-mcp must be on PATH.
 metadata:
   agent: >-

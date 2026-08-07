@@ -64,6 +64,7 @@ CLI + Fastify server + job runner + scheduler + bundled SPA. Only published pack
 | `src/scheduler.ts` | Cron kinds: `answer-visibility`, `traffic-sync`, `gbp-sync`, `data-refresh`, `backlinks-sync`, `site-audit`, `ads-sync` |
 | `src/agent/*` | Aero agent: `session.ts` (pi-agent-core), `session-registry.ts` (hybrid mem+DB), `tools.ts` (exposes MCP registry via `mcp-to-agent-tool.ts`), `memory-store.ts`, `compaction.ts` |
 | `src/mcp/*` | `canonry-mcp` stdio adapter, `tool-registry.ts` (177 tools), `toolkits.ts`, `dynamic-catalog.ts` |
+| `src/gsc-sitemap-submission.ts` | GSC sitemap helpers (`dedupeGscSitemapUrls`, `resolveDiscoveredGscSitemapUrls`, `submitGscSitemapBatches`) — dedupe + index expansion (4× parallel) + 50-url batched submit |
 | `src/cli.ts` / `src/cli-commands.ts` / `src/commands/*` | CLI dispatch, command impls |
 | `src/client.ts` | `ApiClient` + `createApiClient()` |
 | `assets/` | Bundled SPA output (do not edit by hand; `build-web.ts` regenerates) |
@@ -86,6 +87,7 @@ CLI + Fastify server + job runner + scheduler + bundled SPA. Only published pack
 | `src/doctor/*` | Health checks — `registry.ts`, `runner.ts`, `checks/*` (8 checks) |
 | `src/discovery/*` | Discovery orchestrator + routes |
 | `src/measurement-*` | Advanced measurement plans, overview, property evidence |
+| `src/visibility-attribution.ts` | Query attribution helpers (`buildQueryAttribution`, `resolveCurrentQuery`) — by-id then by-text fallback for historical snapshots |
 | `AGENTS.md` | Route file map, `notProbeRun` contract, SDK layering |
 
 ### `packages/contracts/` — DTOs, enums, Zod schemas, error codes
@@ -127,3 +129,4 @@ Schema in `src/schema.ts`. ER diagram in `docs/data-model.md`.
 - `pnpm run typecheck` / `pnpm run test` / `pnpm run lint` must pass before PR — see `CONTRIBUTING.md`.
 - `pnpm gen` regenerates SDK after contract/route changes.
 - `pnpm plugin:sync` / `pnpm plugin:check` for skill drift.
+- Regenerate file list: `find apps packages -type f -name '*.ts' -o -name '*.tsx' | sort` then update this file; run `pnpm plugin:sync` after touching `skills/` or `plugins/canonry/`.
