@@ -2868,6 +2868,211 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE gsc_coverage_snapshots ADD COLUMN derived_from_impressions INTEGER NOT NULL DEFAULT 0`,
     ],
   },
+  {
+    // Crawl persistence is intentionally separate from the legacy
+    // site_audit_snapshots/site_audit_pages scorecard model. Older engines can
+    // keep reading and writing that legacy surface after a rollback; new tables
+    // only enrich an audit run when the crawler writes them.
+    version: 126,
+    name: 'site-crawl-persistence',
+    statements: [
+      // Composite child FKs below enforce that project_id and run_id are a
+      // matched pair. `runs.id` is globally unique already; this named unique
+      // index provides SQLite's required parent key for the composite check.
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_project_id ON runs(project_id, id)`,
+      `CREATE TABLE IF NOT EXISTS site_crawl_run_requests (
+        run_id           TEXT PRIMARY KEY,
+        project_id       TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        identity_key     TEXT NOT NULL,
+        effective_options TEXT NOT NULL,
+        created_at       TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id) REFERENCES runs(project_id, id) ON DELETE CASCADE
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_run_requests_project
+        ON site_crawl_run_requests(project_id, run_id)`,
+      `CREATE TABLE IF NOT EXISTS site_crawl_attempts (
+        id                  TEXT PRIMARY KEY,
+        project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        run_id              TEXT NOT NULL,
+        attempt_number      INTEGER NOT NULL,
+        state               TEXT NOT NULL DEFAULT 'queued',
+        last_event_sequence INTEGER NOT NULL DEFAULT 0,
+        last_event_checksum TEXT,
+        pages_discovered    INTEGER NOT NULL DEFAULT 0,
+        pages_fetched       INTEGER NOT NULL DEFAULT 0,
+        pages_eligible      INTEGER NOT NULL DEFAULT 0,
+        pages_errored       INTEGER NOT NULL DEFAULT 0,
+        edges_discovered    INTEGER NOT NULL DEFAULT 0,
+        started_at          TEXT,
+        finished_at         TEXT,
+        error               TEXT,
+        created_at          TEXT NOT NULL,
+        updated_at          TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id) REFERENCES runs(project_id, id) ON DELETE CASCADE
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_crawl_attempts_run_number
+        ON site_crawl_attempts(run_id, attempt_number)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_crawl_attempts_project_run_id
+        ON site_crawl_attempts(project_id, run_id, id)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_attempts_project_run
+        ON site_crawl_attempts(project_id, run_id)`,
+      `CREATE TABLE IF NOT EXISTS site_crawl_snapshots (
+        id                    TEXT PRIMARY KEY,
+        project_id            TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        run_id                TEXT NOT NULL,
+        attempt_id            TEXT,
+        root_url              TEXT NOT NULL,
+        crawl_schema_version  TEXT NOT NULL DEFAULT '1.0',
+        engine_version        TEXT NOT NULL DEFAULT '',
+        normalization_version TEXT NOT NULL DEFAULT '',
+        indexability_version  TEXT NOT NULL DEFAULT '',
+        link_score_version    TEXT NOT NULL DEFAULT '',
+        effective_options     TEXT NOT NULL DEFAULT '{}',
+        page_budget           INTEGER,
+        edge_budget           INTEGER,
+        max_depth             INTEGER,
+        check_dead_links      INTEGER NOT NULL DEFAULT 0,
+        complete              INTEGER NOT NULL DEFAULT 0,
+        termination           TEXT NOT NULL DEFAULT 'unknown',
+        details_available     INTEGER NOT NULL DEFAULT 0,
+        pages_discovered      INTEGER NOT NULL DEFAULT 0,
+        pages_fetched         INTEGER NOT NULL DEFAULT 0,
+        pages_eligible        INTEGER NOT NULL DEFAULT 0,
+        pages_errored         INTEGER NOT NULL DEFAULT 0,
+        edges_discovered      INTEGER NOT NULL DEFAULT 0,
+        findings_count        INTEGER NOT NULL DEFAULT 0,
+        dead_link_state       TEXT NOT NULL DEFAULT 'disabled',
+        dead_links_checked    INTEGER NOT NULL DEFAULT 0,
+        dead_links_found      INTEGER NOT NULL DEFAULT 0,
+        created_at            TEXT NOT NULL,
+        updated_at            TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id) REFERENCES runs(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, run_id, attempt_id)
+          REFERENCES site_crawl_attempts(project_id, run_id, id)
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_crawl_snapshots_run ON site_crawl_snapshots(run_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_snapshots_project_created
+        ON site_crawl_snapshots(project_id, created_at)`,
+      `CREATE TABLE IF NOT EXISTS site_crawl_pages (
+        id                   TEXT PRIMARY KEY,
+        project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        run_id               TEXT NOT NULL,
+        attempt_id           TEXT NOT NULL,
+        node_key             TEXT NOT NULL,
+        url                  TEXT NOT NULL,
+        path                 TEXT NOT NULL,
+        parent_path          TEXT NOT NULL,
+        discovery_source     TEXT NOT NULL DEFAULT 'crawl',
+        discovery_provenance TEXT NOT NULL DEFAULT '[]',
+        sitemap_metadata     TEXT NOT NULL DEFAULT '{}',
+        fetch_state          TEXT NOT NULL DEFAULT 'queued',
+        fetched_at           TEXT,
+        http_status          INTEGER,
+        content_type         TEXT,
+        final_url            TEXT,
+        redirect_chain       TEXT NOT NULL DEFAULT '[]',
+        directives           TEXT NOT NULL DEFAULT '{}',
+        canonical_url        TEXT,
+        canonical_node_key   TEXT,
+        indexability_state   TEXT NOT NULL DEFAULT 'unknown',
+        indexability_reasons TEXT NOT NULL DEFAULT '[]',
+        audit_state          TEXT NOT NULL DEFAULT 'pending',
+        audit_score          REAL,
+        audit_fields         TEXT NOT NULL DEFAULT '{}',
+        inventory_eligible   INTEGER NOT NULL DEFAULT 0,
+        depth                INTEGER,
+        inbound_unique_edges INTEGER NOT NULL DEFAULT 0,
+        outbound_unique_edges INTEGER NOT NULL DEFAULT 0,
+        inbound_occurrences  INTEGER NOT NULL DEFAULT 0,
+        outbound_occurrences INTEGER NOT NULL DEFAULT 0,
+        link_score_raw       REAL,
+        link_score_normalized REAL,
+        created_at           TEXT NOT NULL,
+        updated_at           TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id, attempt_id)
+          REFERENCES site_crawl_attempts(project_id, run_id, id) ON DELETE CASCADE
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_crawl_pages_attempt_node
+        ON site_crawl_pages(project_id, run_id, attempt_id, node_key)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_pages_read
+        ON site_crawl_pages(project_id, run_id, attempt_id, inventory_eligible, audit_score, url)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_pages_parent
+        ON site_crawl_pages(project_id, run_id, attempt_id, parent_path, path)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_pages_url
+        ON site_crawl_pages(project_id, run_id, attempt_id, url)`,
+      `CREATE TABLE IF NOT EXISTS site_crawl_edges (
+        id              TEXT PRIMARY KEY,
+        project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        run_id          TEXT NOT NULL,
+        attempt_id      TEXT NOT NULL,
+        edge_key        TEXT NOT NULL,
+        source_node_key TEXT NOT NULL,
+        source_url      TEXT NOT NULL,
+        target_node_key TEXT,
+        target_url      TEXT NOT NULL,
+        relation        TEXT NOT NULL DEFAULT 'link',
+        internal        INTEGER NOT NULL DEFAULT 1,
+        followable      INTEGER NOT NULL DEFAULT 1,
+        occurrences     INTEGER NOT NULL DEFAULT 1,
+        followable_occurrences INTEGER NOT NULL DEFAULT 1,
+        nofollow_occurrences   INTEGER NOT NULL DEFAULT 0,
+        anchors         TEXT NOT NULL DEFAULT '[]',
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id, attempt_id)
+          REFERENCES site_crawl_attempts(project_id, run_id, id) ON DELETE CASCADE
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_crawl_edges_attempt_key
+        ON site_crawl_edges(project_id, run_id, attempt_id, edge_key)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_edges_outbound
+        ON site_crawl_edges(project_id, run_id, attempt_id, source_node_key, edge_key)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_edges_inbound
+        ON site_crawl_edges(project_id, run_id, attempt_id, target_node_key, edge_key)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_edges_source_url
+        ON site_crawl_edges(project_id, run_id, attempt_id, source_url)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_edges_target_url
+        ON site_crawl_edges(project_id, run_id, attempt_id, target_url)`,
+      `CREATE TABLE IF NOT EXISTS site_crawl_findings (
+        id              TEXT PRIMARY KEY,
+        project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        run_id          TEXT NOT NULL,
+        attempt_id      TEXT NOT NULL,
+        finding_key     TEXT NOT NULL,
+        finding_type    TEXT NOT NULL,
+        severity        TEXT NOT NULL DEFAULT 'info',
+        source_node_key TEXT,
+        source_url      TEXT,
+        target_node_key TEXT,
+        target_url      TEXT,
+        evidence        TEXT NOT NULL DEFAULT '{}',
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id, attempt_id)
+          REFERENCES site_crawl_attempts(project_id, run_id, id) ON DELETE CASCADE
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_crawl_findings_attempt_key
+        ON site_crawl_findings(project_id, run_id, attempt_id, finding_key)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_findings_type
+        ON site_crawl_findings(project_id, run_id, attempt_id, finding_type, finding_key)`,
+      `CREATE TABLE IF NOT EXISTS site_crawl_event_receipts (
+        id         TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        run_id     TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        sequence   INTEGER NOT NULL,
+        batch_id   TEXT NOT NULL,
+        checksum   TEXT NOT NULL,
+        receipt    TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id, attempt_id)
+          REFERENCES site_crawl_attempts(project_id, run_id, id) ON DELETE CASCADE
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_crawl_receipts_attempt_event
+        ON site_crawl_event_receipts(attempt_id, sequence, batch_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_receipts_project_run
+        ON site_crawl_event_receipts(project_id, run_id, attempt_id)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

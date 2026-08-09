@@ -1,7 +1,16 @@
 import crypto from 'node:crypto'
 import { and, desc, eq, gte } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { gscCoverageSnapshots, gscSearchData, gscUrlInspections, siteAuditPages, siteAuditSnapshots } from '@ainyc/canonry-db'
+import {
+  gscCoverageSnapshots,
+  gscSearchData,
+  gscUrlInspections,
+  siteAuditPages,
+  siteAuditSnapshots,
+  siteCrawlPages,
+  siteCrawlSnapshots,
+  runs,
+} from '@ainyc/canonry-db'
 import { deriveIndexCoverage, normalizeUrlPath } from '@ainyc/canonry-contracts'
 
 /**
@@ -99,6 +108,33 @@ export function writeCoverageSnapshot(
   // impression, so every page in the other two sources already resolves. A
   // sitemap page that never ranked and was never inspected is precisely the
   // page nobody has measured, and it is invisible unless we seed it here.
+  // The complete graph is the authoritative current inventory. A partial,
+  // cancelled, or failed crawl never publishes a graph snapshot and therefore
+  // cannot replace the last good page universe. Until the first complete graph
+  // exists, retain the legacy scorecard fallback for backward compatibility.
+  const latestCrawl = db
+    .select({ runId: siteCrawlSnapshots.runId, attemptId: siteCrawlSnapshots.attemptId })
+    .from(siteCrawlSnapshots)
+    .innerJoin(runs, eq(siteCrawlSnapshots.runId, runs.id))
+    .where(and(
+      eq(siteCrawlSnapshots.projectId, projectId),
+      eq(siteCrawlSnapshots.complete, true),
+      eq(runs.status, 'completed'),
+    ))
+    .orderBy(desc(siteCrawlSnapshots.createdAt))
+    .limit(1)
+    .get()
+
+  // Legacy audit pages predate the crawl graph. Once any v126 traversal has
+  // been recorded, a partial snapshot must not fall through to its legacy
+  // scorecard rows and silently become the GSC inventory.
+  const hasCrawlHistory = Boolean(db
+    .select({ id: siteCrawlSnapshots.id })
+    .from(siteCrawlSnapshots)
+    .where(eq(siteCrawlSnapshots.projectId, projectId))
+    .limit(1)
+    .get())
+
   // Latest audit only — an older run lists pages that may since have gone.
   const latestAudit = db
     .select({ runId: siteAuditSnapshots.runId })
@@ -108,9 +144,19 @@ export function writeCoverageSnapshot(
     .limit(1)
     .get()
 
-  const sitemapUrls = latestAudit
-    ? db.select({ url: siteAuditPages.url }).from(siteAuditPages).where(eq(siteAuditPages.runId, latestAudit.runId)).all()
-    : []
+  const sitemapUrls = latestCrawl?.attemptId
+    ? db.select({ url: siteCrawlPages.url })
+      .from(siteCrawlPages)
+      .where(and(
+        eq(siteCrawlPages.projectId, projectId),
+        eq(siteCrawlPages.runId, latestCrawl.runId),
+        eq(siteCrawlPages.attemptId, latestCrawl.attemptId),
+        eq(siteCrawlPages.inventoryEligible, true),
+      ))
+      .all()
+    : !hasCrawlHistory && latestAudit
+      ? db.select({ url: siteAuditPages.url }).from(siteAuditPages).where(eq(siteAuditPages.runId, latestAudit.runId)).all()
+      : []
 
   // Impressions per page key, so differently-spelled rows for one page add up.
   const impressionsByKey = new Map<string, number>()

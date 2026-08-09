@@ -872,10 +872,67 @@ const technicalAeoTrendInputSchema = z.object({
   limit: z.number().int().positive().max(365).optional(),
 })
 
+const technicalAeoCrawlInputSchema = z.object({
+  project: projectNameSchema,
+  runId: runIdSchema.optional().describe('Historical crawl-bearing site-audit run ID. Omit for the latest persisted crawl.'),
+})
+
+const technicalAeoCrawlPagesInputSchema = z.object({
+  project: projectNameSchema,
+  runId: runIdSchema.optional(),
+  inventoryEligible: z.boolean().optional().describe('Filter Canonry technical-inventory eligibility. This is not actual Google index coverage.'),
+  fetchState: z.string().min(1).optional().describe('Filter crawler fetch state, for example html, redirect, non-html, or fetch-error.'),
+  indexabilityState: z.string().min(1).optional().describe('Filter crawler-derived indexability state. This is not Google index coverage.'),
+  auditState: z.string().min(1).optional().describe('Filter audit state.'),
+  sort: z.enum(['url', 'path', 'score-asc', 'score-desc']).optional(),
+  cursor: z.string().min(1).optional().describe('Opaque cursor from the previous crawl-pages result.'),
+  limit: z.number().int().positive().max(200).optional(),
+})
+
+const technicalAeoStructureInputSchema = z.object({
+  project: projectNameSchema,
+  runId: runIdSchema.optional(),
+  parentPath: z.string().min(1).optional().describe('Path whose immediate children to list. Defaults to /. This never returns a whole site tree.'),
+  cursor: z.string().min(1).optional().describe('Opaque cursor from the previous structure result.'),
+  limit: z.number().int().positive().max(100).optional(),
+})
+
+const technicalAeoInternalLinksInputSchema = z.object({
+  project: projectNameSchema,
+  runId: runIdSchema.optional(),
+  sourceUrl: z.string().url().optional(),
+  targetUrl: z.string().url().optional(),
+  followable: z.boolean().optional(),
+  cursor: z.string().min(1).optional().describe('Opaque cursor from the previous internal-links result.'),
+  limit: z.number().int().positive().max(200).optional(),
+})
+
+const technicalAeoLinkNeighborsInputSchema = z.object({
+  project: projectNameSchema,
+  runId: runIdSchema.optional(),
+  nodeKey: z.string().min(1).optional(),
+  url: z.string().url().optional(),
+  limit: z.number().int().positive().max(100).optional(),
+}).refine((value) => Boolean(value.nodeKey || value.url), {
+  message: 'Provide nodeKey or url.',
+  path: ['nodeKey'],
+})
+
+const technicalAeoDeadLinksInputSchema = z.object({
+  project: projectNameSchema,
+  runId: runIdSchema.optional(),
+  cursor: z.string().min(1).optional().describe('Opaque cursor from the previous dead-links result.'),
+  limit: z.number().int().positive().max(200).optional(),
+})
+
 const technicalAeoRunInputSchema = z.object({
   project: projectNameSchema,
   sitemapUrl: z.string().url().optional().describe('Override the sitemap URL. Defaults to https://<canonicalDomain>/sitemap.xml.'),
-  limit: z.number().int().positive().max(2000).optional().describe('Cap pages audited (highest sitemap <priority> first).'),
+  limit: z.number().int().positive().max(2000).optional().describe('Deprecated compatibility alias for maxPages.'),
+  maxPages: z.number().int().positive().max(50_000).optional().describe('Maximum pages crawled and audited. Defaults to 1,000; hard maximum 50,000.'),
+  maxEdges: z.number().int().positive().max(1_000_000).optional().describe('Maximum link observations retained for this crawl. Defaults to 100,000; hard maximum 1,000,000.'),
+  maxDepth: z.number().int().min(0).max(100).optional().describe('Maximum internal-link depth from the root page.'),
+  checkDeadLinks: z.boolean().optional().describe('Opt in to internal dead-link checks. Omitted and false both disable checks.'),
 })
 
 const AGENT_WEBHOOK_EVENTS = [
@@ -2686,10 +2743,106 @@ export const canonryMcpTools = [
     handler: (client, input) => client.getTechnicalAeoTrend(input.project, input.limit !== undefined ? { limit: input.limit } : undefined),
   }),
   defineTool({
+    name: 'canonry_technical_aeo_crawl',
+    title: 'Get persisted Technical AEO crawl',
+    description: 'Read persisted full-crawl metadata for the latest or selected Technical AEO site-audit run: root URL, crawl/indexability/link-score versions, effective budgets, completeness, counts, and explicit dead-link check state. This does not fabricate a graph from older scorecard-only audits.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: technicalAeoCrawlInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/technical-aeo/crawl'],
+    handler: (client, input) => client.getTechnicalAeoCrawl(input.project, { runId: input.runId }),
+  }),
+  defineTool({
+    name: 'canonry_technical_aeo_crawl_pages',
+    title: 'List Technical AEO crawl pages',
+    description: 'Read one bounded, cursor-paged list of canonical crawl nodes. Filter crawler-derived indexability and audit state, then follow nextCursor; this is technical inventory eligibility, not a claim about Google index coverage.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: technicalAeoCrawlPagesInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/technical-aeo/crawl/pages'],
+    handler: (client, input) => client.getTechnicalAeoCrawlPages(input.project, {
+      runId: input.runId,
+      inventoryEligible: input.inventoryEligible,
+      fetchState: input.fetchState,
+      indexabilityState: input.indexabilityState,
+      auditState: input.auditState,
+      sort: input.sort,
+      cursor: input.cursor,
+      limit: input.limit,
+    }),
+  }),
+  defineTool({
+    name: 'canonry_technical_aeo_structure',
+    title: 'List Technical AEO site structure',
+    description: 'Read one bounded level of the persisted site hierarchy below parentPath. Follow nextCursor for more siblings; request a child path separately rather than attempting to materialize the entire website tree.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: technicalAeoStructureInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/technical-aeo/structure'],
+    handler: (client, input) => client.getTechnicalAeoStructure(input.project, {
+      runId: input.runId,
+      parentPath: input.parentPath,
+      cursor: input.cursor,
+      limit: input.limit,
+    }),
+  }),
+  defineTool({
+    name: 'canonry_technical_aeo_internal_links',
+    title: 'List Technical AEO internal links',
+    description: 'Read a bounded, cursor-paged list of persisted internal crawl edges. Filter by source URL, target URL, or followability. Use the neighbors tool for one page rather than loading a graph.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: technicalAeoInternalLinksInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/technical-aeo/internal-links'],
+    handler: (client, input) => client.getTechnicalAeoInternalLinks(input.project, {
+      runId: input.runId,
+      sourceUrl: input.sourceUrl,
+      targetUrl: input.targetUrl,
+      followable: input.followable,
+      cursor: input.cursor,
+      limit: input.limit,
+    }),
+  }),
+  defineTool({
+    name: 'canonry_technical_aeo_link_neighbors',
+    title: 'Get Technical AEO page link neighbors',
+    description: 'Read bounded inbound and outbound internal links for exactly one crawl node, selected by nodeKey or URL. It returns independent truncation flags for inbound and outbound edges, not a transitive traversal.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: technicalAeoLinkNeighborsInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/technical-aeo/internal-links/neighbors'],
+    handler: (client, input) => client.getTechnicalAeoInternalLinkNeighbors(input.project, {
+      runId: input.runId,
+      nodeKey: input.nodeKey,
+      url: input.url,
+      limit: input.limit,
+    }),
+  }),
+  defineTool({
+    name: 'canonry_technical_aeo_dead_links',
+    title: 'List Technical AEO dead links',
+    description: 'Read the persisted dead-link check state and a bounded, cursor-paged list of findings. A disabled result means the crawl was run without opt-in checks; it never means zero dead links.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: technicalAeoDeadLinksInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/technical-aeo/dead-links'],
+    handler: (client, input) => client.getTechnicalAeoDeadLinks(input.project, {
+      runId: input.runId,
+      cursor: input.cursor,
+      limit: input.limit,
+    }),
+  }),
+  defineTool({
     name: 'canonry_technical_aeo_run',
     title: 'Run Technical AEO site audit',
     description:
-      'Trigger a site-audit run: crawl the project sitemap and audit every reachable page across the aeo-audit ranking factors. Returns {runId, status}; the audit runs in the background (a large site can take minutes). Idempotent — if a site-audit is already in flight it returns that run. Poll canonry_run_get with the returned runId, then read canonry_technical_aeo_score.',
+      'Start a site-audit run. The run discovers root, sitemap, and linked pages. Its unattended default is 1,000 pages and 100,000 link observations; callers may explicitly raise either to its hard maximum. It returns {runId, status} and continues in the background. If an active run has identical effective options, this tool returns it; different options are refused. Poll canonry_run_get, then read the crawl and score tools.',
     access: 'write',
     tier: 'monitoring',
     inputSchema: technicalAeoRunInputSchema,
@@ -2698,6 +2851,10 @@ export const canonryMcpTools = [
     handler: (client, input) => client.triggerSiteAudit(input.project, {
       sitemapUrl: input.sitemapUrl,
       limit: input.limit,
+      maxPages: input.maxPages,
+      maxEdges: input.maxEdges,
+      maxDepth: input.maxDepth,
+      checkDeadLinks: input.checkDeadLinks,
     }),
   }),
   // ----- OpenAI ads (ChatGPT ads) -----

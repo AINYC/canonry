@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm'
 import { check, foreignKey, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
-import type { AdsActivationEntityType, AdsActivationGrantState, AdsActivationManifest, AdsOperationStepState, AdsReconcileFields, BacklinkSource, ContentBriefDto, DiscoveryCompetitorMapEntry, DiscoveryCompetitorType, AiReferralTrafficClass, LocationContext, ProviderModels, ProviderName, SiteAuditCrossCuttingIssueDto, SiteAuditFactorSummaryDto, SiteAuditPageFactorDto, MeasurementConfig, GaLeadAttributionScope, GaMeasurementComponentStatus } from '@ainyc/canonry-contracts'
+import type { AdsActivationEntityType, AdsActivationGrantState, AdsActivationManifest, AdsOperationStepState, AdsReconcileFields, BacklinkSource, ContentBriefDto, DiscoveryCompetitorMapEntry, DiscoveryCompetitorType, AiReferralTrafficClass, LocationContext, ProviderModels, ProviderName, SiteAuditCrossCuttingIssueDto, SiteAuditEffectiveRequest, SiteAuditFactorSummaryDto, SiteAuditPageFactorDto, MeasurementConfig, GaLeadAttributionScope, GaMeasurementComponentStatus } from '@ainyc/canonry-contracts'
 
 export const projects = sqliteTable('projects', {
   id: text('id').primaryKey(),
@@ -269,6 +269,9 @@ export const runs = sqliteTable('runs', {
   createdAt: text('created_at').notNull(),
 }, (table) => [
   index('idx_runs_project').on(table.projectId),
+  // Enables child tables that carry project + run to enforce that the two IDs
+  // belong together, rather than trusting a caller-provided project ID.
+  uniqueIndex('idx_runs_project_id').on(table.projectId, table.id),
   index('idx_runs_status').on(table.status),
   index('idx_runs_source').on(table.sourceId),
   index('idx_runs_measurement_plan').on(table.projectId, table.measurementPlanVersionId, table.createdAt),
@@ -710,6 +713,242 @@ export const siteAuditPages = sqliteTable('site_audit_pages', {
 }, (table) => [
   index('idx_site_audit_pages_run').on(table.runId),
   index('idx_site_audit_pages_project_score').on(table.projectId, table.overallScore),
+])
+
+/**
+ * Production identity for a queued site crawl. It exists before an attempt so
+ * an identical request can reuse an active run while a different request gets
+ * an explicit conflict instead of silently inheriting the wrong crawl.
+ */
+export const siteCrawlRunRequests = sqliteTable('site_crawl_run_requests', {
+  runId: text('run_id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  identityKey: text('identity_key').notNull(),
+  effectiveOptions: text('effective_options', { mode: 'json' }).$type<SiteAuditEffectiveRequest>().notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  index('idx_site_crawl_run_requests_project').on(table.projectId, table.runId),
+  foreignKey({
+    name: 'site_crawl_run_requests_project_run_fk',
+    columns: [table.projectId, table.runId],
+    foreignColumns: [runs.projectId, runs.id],
+  }).onDelete('cascade'),
+])
+
+/**
+ * A crawl attempt is a durable event checkpoint for one site-audit run.
+ * `project_id + run_id` is a real FK to runs, so an attempt cannot be attached
+ * to a run owned by a different project.
+ */
+export const siteCrawlAttempts = sqliteTable('site_crawl_attempts', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  runId: text('run_id').notNull(),
+  attemptNumber: integer('attempt_number').notNull(),
+  state: text('state').notNull().default('queued'),
+  lastEventSequence: integer('last_event_sequence').notNull().default(0),
+  lastEventChecksum: text('last_event_checksum'),
+  pagesDiscovered: integer('pages_discovered').notNull().default(0),
+  pagesFetched: integer('pages_fetched').notNull().default(0),
+  pagesEligible: integer('pages_eligible').notNull().default(0),
+  pagesErrored: integer('pages_errored').notNull().default(0),
+  edgesDiscovered: integer('edges_discovered').notNull().default(0),
+  startedAt: text('started_at'),
+  finishedAt: text('finished_at'),
+  error: text('error'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_site_crawl_attempts_run_number').on(table.runId, table.attemptNumber),
+  uniqueIndex('idx_site_crawl_attempts_project_run_id').on(table.projectId, table.runId, table.id),
+  index('idx_site_crawl_attempts_project_run').on(table.projectId, table.runId),
+  foreignKey({
+    name: 'site_crawl_attempts_project_run_fk',
+    columns: [table.projectId, table.runId],
+    foreignColumns: [runs.projectId, runs.id],
+  }).onDelete('cascade'),
+])
+
+/**
+ * One immutable crawl summary per site-audit run. It deliberately lives beside
+ * (rather than inside) the legacy scorecard tables so old score/pages/trend
+ * consumers preserve their historic semantics.
+ */
+export const siteCrawlSnapshots = sqliteTable('site_crawl_snapshots', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  runId: text('run_id').notNull(),
+  attemptId: text('attempt_id'),
+  rootUrl: text('root_url').notNull(),
+  crawlSchemaVersion: text('crawl_schema_version').notNull().default('1.0'),
+  engineVersion: text('engine_version').notNull().default(''),
+  normalizationVersion: text('normalization_version').notNull().default(''),
+  indexabilityVersion: text('indexability_version').notNull().default(''),
+  linkScoreVersion: text('link_score_version').notNull().default(''),
+  effectiveOptions: text('effective_options', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+  pageBudget: integer('page_budget'),
+  edgeBudget: integer('edge_budget'),
+  maxDepth: integer('max_depth'),
+  checkDeadLinks: integer('check_dead_links', { mode: 'boolean' }).notNull().default(false),
+  complete: integer('complete', { mode: 'boolean' }).notNull().default(false),
+  termination: text('termination').notNull().default('unknown'),
+  detailsAvailable: integer('details_available', { mode: 'boolean' }).notNull().default(false),
+  pagesDiscovered: integer('pages_discovered').notNull().default(0),
+  pagesFetched: integer('pages_fetched').notNull().default(0),
+  pagesEligible: integer('pages_eligible').notNull().default(0),
+  pagesErrored: integer('pages_errored').notNull().default(0),
+  edgesDiscovered: integer('edges_discovered').notNull().default(0),
+  findingsCount: integer('findings_count').notNull().default(0),
+  deadLinkState: text('dead_link_state').notNull().default('disabled'),
+  deadLinksChecked: integer('dead_links_checked').notNull().default(0),
+  deadLinksFound: integer('dead_links_found').notNull().default(0),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_site_crawl_snapshots_run').on(table.runId),
+  index('idx_site_crawl_snapshots_project_created').on(table.projectId, table.createdAt),
+  foreignKey({
+    name: 'site_crawl_snapshots_project_run_fk',
+    columns: [table.projectId, table.runId],
+    foreignColumns: [runs.projectId, runs.id],
+  }).onDelete('cascade'),
+  foreignKey({
+    name: 'site_crawl_snapshots_attempt_fk',
+    columns: [table.projectId, table.runId, table.attemptId],
+    foreignColumns: [siteCrawlAttempts.projectId, siteCrawlAttempts.runId, siteCrawlAttempts.id],
+  }),
+])
+
+/** One canonical crawl node/page, scoped to the exact attempt that observed it. */
+export const siteCrawlPages = sqliteTable('site_crawl_pages', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  runId: text('run_id').notNull(),
+  attemptId: text('attempt_id').notNull(),
+  nodeKey: text('node_key').notNull(),
+  url: text('url').notNull(),
+  path: text('path').notNull(),
+  parentPath: text('parent_path').notNull(),
+  discoverySource: text('discovery_source').notNull().default('crawl'),
+  discoveryProvenance: text('discovery_provenance', { mode: 'json' }).$type<Record<string, unknown>[]>().notNull().default([]),
+  sitemapMetadata: text('sitemap_metadata', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+  fetchState: text('fetch_state').notNull().default('queued'),
+  fetchedAt: text('fetched_at'),
+  httpStatus: integer('http_status'),
+  contentType: text('content_type'),
+  finalUrl: text('final_url'),
+  redirectChain: text('redirect_chain', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  directives: text('directives', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+  canonicalUrl: text('canonical_url'),
+  canonicalNodeKey: text('canonical_node_key'),
+  indexabilityState: text('indexability_state').notNull().default('unknown'),
+  indexabilityReasons: text('indexability_reasons', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  auditState: text('audit_state').notNull().default('pending'),
+  auditScore: real('audit_score'),
+  auditFields: text('audit_fields', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+  inventoryEligible: integer('inventory_eligible', { mode: 'boolean' }).notNull().default(false),
+  depth: integer('depth'),
+  inboundUniqueEdges: integer('inbound_unique_edges').notNull().default(0),
+  outboundUniqueEdges: integer('outbound_unique_edges').notNull().default(0),
+  inboundOccurrences: integer('inbound_occurrences').notNull().default(0),
+  outboundOccurrences: integer('outbound_occurrences').notNull().default(0),
+  linkScoreRaw: real('link_score_raw'),
+  linkScoreNormalized: real('link_score_normalized'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_site_crawl_pages_attempt_node').on(table.projectId, table.runId, table.attemptId, table.nodeKey),
+  index('idx_site_crawl_pages_read').on(table.projectId, table.runId, table.attemptId, table.inventoryEligible, table.auditScore, table.url),
+  index('idx_site_crawl_pages_parent').on(table.projectId, table.runId, table.attemptId, table.parentPath, table.path),
+  index('idx_site_crawl_pages_url').on(table.projectId, table.runId, table.attemptId, table.url),
+  foreignKey({
+    name: 'site_crawl_pages_attempt_fk',
+    columns: [table.projectId, table.runId, table.attemptId],
+    foreignColumns: [siteCrawlAttempts.projectId, siteCrawlAttempts.runId, siteCrawlAttempts.id],
+  }).onDelete('cascade'),
+])
+
+/** Bounded, canonical internal-link observations. */
+export const siteCrawlEdges = sqliteTable('site_crawl_edges', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  runId: text('run_id').notNull(),
+  attemptId: text('attempt_id').notNull(),
+  edgeKey: text('edge_key').notNull(),
+  sourceNodeKey: text('source_node_key').notNull(),
+  sourceUrl: text('source_url').notNull(),
+  targetNodeKey: text('target_node_key'),
+  targetUrl: text('target_url').notNull(),
+  relation: text('relation').notNull().default('link'),
+  internal: integer('internal', { mode: 'boolean' }).notNull().default(true),
+  followable: integer('followable', { mode: 'boolean' }).notNull().default(true),
+  occurrences: integer('occurrences').notNull().default(1),
+  followableOccurrences: integer('followable_occurrences').notNull().default(1),
+  nofollowOccurrences: integer('nofollow_occurrences').notNull().default(0),
+  anchors: text('anchors', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_site_crawl_edges_attempt_key').on(table.projectId, table.runId, table.attemptId, table.edgeKey),
+  index('idx_site_crawl_edges_outbound').on(table.projectId, table.runId, table.attemptId, table.sourceNodeKey, table.edgeKey),
+  index('idx_site_crawl_edges_inbound').on(table.projectId, table.runId, table.attemptId, table.targetNodeKey, table.edgeKey),
+  index('idx_site_crawl_edges_source_url').on(table.projectId, table.runId, table.attemptId, table.sourceUrl),
+  index('idx_site_crawl_edges_target_url').on(table.projectId, table.runId, table.attemptId, table.targetUrl),
+  foreignKey({
+    name: 'site_crawl_edges_attempt_fk',
+    columns: [table.projectId, table.runId, table.attemptId],
+    foreignColumns: [siteCrawlAttempts.projectId, siteCrawlAttempts.runId, siteCrawlAttempts.id],
+  }).onDelete('cascade'),
+])
+
+/** Deterministic findings; `dead-link` rows are written only when opted in. */
+export const siteCrawlFindings = sqliteTable('site_crawl_findings', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  runId: text('run_id').notNull(),
+  attemptId: text('attempt_id').notNull(),
+  findingKey: text('finding_key').notNull(),
+  findingType: text('finding_type').notNull(),
+  severity: text('severity').notNull().default('info'),
+  sourceNodeKey: text('source_node_key'),
+  sourceUrl: text('source_url'),
+  targetNodeKey: text('target_node_key'),
+  targetUrl: text('target_url'),
+  evidence: text('evidence', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_site_crawl_findings_attempt_key').on(table.projectId, table.runId, table.attemptId, table.findingKey),
+  index('idx_site_crawl_findings_type').on(table.projectId, table.runId, table.attemptId, table.findingType, table.findingKey),
+  foreignKey({
+    name: 'site_crawl_findings_attempt_fk',
+    columns: [table.projectId, table.runId, table.attemptId],
+    foreignColumns: [siteCrawlAttempts.projectId, siteCrawlAttempts.runId, siteCrawlAttempts.id],
+  }).onDelete('cascade'),
+])
+
+/**
+ * One receipt per logical event. The uniqueness key intentionally excludes
+ * checksum: retry handlers read it and reject a same-event different payload.
+ */
+export const siteCrawlEventReceipts = sqliteTable('site_crawl_event_receipts', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  runId: text('run_id').notNull(),
+  attemptId: text('attempt_id').notNull(),
+  sequence: integer('sequence').notNull(),
+  batchId: text('batch_id').notNull(),
+  checksum: text('checksum').notNull(),
+  receipt: text('receipt', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_site_crawl_receipts_attempt_event').on(table.attemptId, table.sequence, table.batchId),
+  index('idx_site_crawl_receipts_project_run').on(table.projectId, table.runId, table.attemptId),
+  foreignKey({
+    name: 'site_crawl_receipts_attempt_fk',
+    columns: [table.projectId, table.runId, table.attemptId],
+    foreignColumns: [siteCrawlAttempts.projectId, siteCrawlAttempts.runId, siteCrawlAttempts.id],
+  }).onDelete('cascade'),
 ])
 
 export const bingCoverageSnapshots = sqliteTable('bing_coverage_snapshots', {

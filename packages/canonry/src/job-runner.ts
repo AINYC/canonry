@@ -4,9 +4,9 @@ import path from 'node:path'
 import os from 'node:os'
 import { and, eq, inArray, ne, sql } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { runs, queries, competitors, projects, querySnapshots, usageCounters } from '@ainyc/canonry-db'
+import { runs, queries, competitors, projects, querySnapshots, siteCrawlAttempts, usageCounters } from '@ainyc/canonry-db'
 import type { ProviderName, LocationContext, MeasurementRunManifestV1 } from '@ainyc/canonry-contracts'
-import { CITED_URL_CAPTURE_VERSION, ONBOARDING_FLOW_VERSION, bucketOnboardingCount, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, normalizeMeasurementExecutionQueryText, parseMeasurementRunManifestV1, providerSupportsLocationContext, serializeRunError } from '@ainyc/canonry-contracts'
+import { CITED_URL_CAPTURE_VERSION, ONBOARDING_FLOW_VERSION, RunKinds, bucketOnboardingCount, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, normalizeMeasurementExecutionQueryText, parseMeasurementRunManifestV1, providerSupportsLocationContext, serializeRunError } from '@ainyc/canonry-contracts'
 import type { ProviderRegistry, RegisteredProvider } from './provider-registry.js'
 import { trackEvent } from './telemetry.js'
 import { buildRunCompletedProps, hashDomain, type RunPhaseTimings } from './run-telemetry.js'
@@ -253,7 +253,7 @@ export class JobRunner {
 
   recoverStaleRuns(): void {
     const stale = this.db
-      .select({ id: runs.id, status: runs.status })
+      .select({ id: runs.id, projectId: runs.projectId, kind: runs.kind, status: runs.status })
       .from(runs)
       .where(inArray(runs.status, ['running', 'queued']))
       .all()
@@ -262,11 +262,33 @@ export class JobRunner {
 
     const now = new Date().toISOString()
     for (const run of stale) {
-      this.db
-        .update(runs)
-        .set({ status: 'failed', finishedAt: now, error: 'Server restarted while run was in progress' })
-        .where(eq(runs.id, run.id))
-        .run()
+      const recovered = this.db.transaction((tx) => {
+        // The status predicate is the recovery claim. Do not overwrite a
+        // terminal transition made after this boot-time scan.
+        const claim = tx
+          .update(runs)
+          .set({ status: 'failed', finishedAt: now, error: 'Server restarted while run was in progress' })
+          .where(and(eq(runs.id, run.id), eq(runs.status, run.status)))
+          .run()
+        if (claim.changes === 0) return false
+
+        if (run.kind === RunKinds['site-audit']) {
+          // The crawl cannot resume from event receipts: they only make
+          // writes idempotent within one attempt. Close the claimed attempt
+          // with the parent so a reboot never leaves a zombie graph writer.
+          tx
+            .update(siteCrawlAttempts)
+            .set({ state: 'failed', finishedAt: now, updatedAt: now, error: 'Server restarted while run was in progress' })
+            .where(and(
+              eq(siteCrawlAttempts.projectId, run.projectId),
+              eq(siteCrawlAttempts.runId, run.id),
+              inArray(siteCrawlAttempts.state, ['queued', 'running']),
+            ))
+            .run()
+        }
+        return true
+      })
+      if (!recovered) continue
       log.warn('run.recovered-stale', { runId: run.id, previousStatus: run.status })
     }
   }

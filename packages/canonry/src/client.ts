@@ -55,6 +55,12 @@ import type {
   SiteAuditPagesResponseDto,
   SiteAuditTrendResponseDto,
   SiteAuditRunResponseDto,
+  SiteCrawlSummaryDto,
+  SiteCrawlPagesResponseDto,
+  SiteCrawlStructureResponseDto,
+  SiteCrawlInternalLinksResponseDto,
+  SiteCrawlNeighborsResponseDto,
+  SiteCrawlDeadLinksResponseDto,
   SnapshotDiffResponse,
   SnapshotListResponse,
   ScheduleDto,
@@ -411,6 +417,12 @@ import {
   getApiV1ProjectsByNameTechnicalAeo,
   getApiV1ProjectsByNameTechnicalAeoPages,
   getApiV1ProjectsByNameTechnicalAeoTrend,
+  getApiV1ProjectsByNameTechnicalAeoCrawl,
+  getApiV1ProjectsByNameTechnicalAeoCrawlPages,
+  getApiV1ProjectsByNameTechnicalAeoStructure,
+  getApiV1ProjectsByNameTechnicalAeoInternalLinks,
+  getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighbors,
+  getApiV1ProjectsByNameTechnicalAeoDeadLinks,
   postApiV1ProjectsByNameTechnicalAeoRuns,
   // Wordpress
   postApiV1ProjectsByNameWordpressConnect,
@@ -3291,9 +3303,129 @@ export class ApiClient {
     )
   }
 
+  /** Persisted full-crawl metadata. This never synthesizes a graph from legacy audit rows. */
+  async getTechnicalAeoCrawl(project: string, opts?: { runId?: string }): Promise<SiteCrawlSummaryDto> {
+    return this.invoke<SiteCrawlSummaryDto>(() =>
+      getApiV1ProjectsByNameTechnicalAeoCrawl({
+        client: this.heyClient,
+        path: { name: project },
+        query: { runId: opts?.runId },
+      }),
+    )
+  }
+
+  /** Bounded, cursor-paged crawl nodes. */
+  async getTechnicalAeoCrawlPages(
+    project: string,
+    opts?: {
+      runId?: string
+      inventoryEligible?: boolean
+      fetchState?: string
+      indexabilityState?: string
+      auditState?: string
+      sort?: 'url' | 'path' | 'score-asc' | 'score-desc'
+      cursor?: string
+      limit?: number
+    },
+  ): Promise<SiteCrawlPagesResponseDto> {
+    return this.invoke<SiteCrawlPagesResponseDto>(() =>
+      getApiV1ProjectsByNameTechnicalAeoCrawlPages({
+        client: this.heyClient,
+        path: { name: project },
+        query: {
+          runId: opts?.runId,
+          inventoryEligible: opts?.inventoryEligible,
+          fetchState: opts?.fetchState,
+          indexabilityState: opts?.indexabilityState,
+          auditState: opts?.auditState,
+          sort: opts?.sort,
+          cursor: opts?.cursor,
+          limit: opts?.limit !== undefined ? String(opts.limit) : undefined,
+        } as never,
+      }),
+    )
+  }
+
+  /** One bounded path level from a persisted crawl. */
+  async getTechnicalAeoStructure(
+    project: string,
+    opts?: { runId?: string; parentPath?: string; cursor?: string; limit?: number },
+  ): Promise<SiteCrawlStructureResponseDto> {
+    return this.invoke<SiteCrawlStructureResponseDto>(() =>
+      getApiV1ProjectsByNameTechnicalAeoStructure({
+        client: this.heyClient,
+        path: { name: project },
+        query: {
+          runId: opts?.runId,
+          parentPath: opts?.parentPath,
+          cursor: opts?.cursor,
+          limit: opts?.limit !== undefined ? String(opts.limit) : undefined,
+        } as never,
+      }),
+    )
+  }
+
+  /** Bounded, cursor-paged internal crawl edges. */
+  async getTechnicalAeoInternalLinks(
+    project: string,
+    opts?: { runId?: string; sourceUrl?: string; targetUrl?: string; followable?: boolean; cursor?: string; limit?: number },
+  ): Promise<SiteCrawlInternalLinksResponseDto> {
+    return this.invoke<SiteCrawlInternalLinksResponseDto>(() =>
+      getApiV1ProjectsByNameTechnicalAeoInternalLinks({
+        client: this.heyClient,
+        path: { name: project },
+        query: {
+          runId: opts?.runId,
+          sourceUrl: opts?.sourceUrl,
+          targetUrl: opts?.targetUrl,
+          followable: opts?.followable,
+          cursor: opts?.cursor,
+          limit: opts?.limit !== undefined ? String(opts.limit) : undefined,
+        } as never,
+      }),
+    )
+  }
+
+  /** Bounded inbound/outbound internal edges for one crawl node. */
+  async getTechnicalAeoInternalLinkNeighbors(
+    project: string,
+    opts: { runId?: string; nodeKey?: string; url?: string; limit?: number },
+  ): Promise<SiteCrawlNeighborsResponseDto> {
+    return this.invoke<SiteCrawlNeighborsResponseDto>(() =>
+      getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighbors({
+        client: this.heyClient,
+        path: { name: project },
+        query: {
+          runId: opts.runId,
+          nodeKey: opts.nodeKey,
+          url: opts.url,
+          limit: opts.limit !== undefined ? String(opts.limit) : undefined,
+        } as never,
+      }),
+    )
+  }
+
+  /** Dead-link state/findings; `disabled` means the crawl did not opt in. */
+  async getTechnicalAeoDeadLinks(
+    project: string,
+    opts?: { runId?: string; cursor?: string; limit?: number },
+  ): Promise<SiteCrawlDeadLinksResponseDto> {
+    return this.invoke<SiteCrawlDeadLinksResponseDto>(() =>
+      getApiV1ProjectsByNameTechnicalAeoDeadLinks({
+        client: this.heyClient,
+        path: { name: project },
+        query: {
+          runId: opts?.runId,
+          cursor: opts?.cursor,
+          limit: opts?.limit !== undefined ? String(opts.limit) : undefined,
+        } as never,
+      }),
+    )
+  }
+
   async triggerSiteAudit(
     project: string,
-    body?: { sitemapUrl?: string; limit?: number },
+    body?: { sitemapUrl?: string; limit?: number; maxPages?: number; maxEdges?: number; maxDepth?: number; checkDeadLinks?: boolean },
   ): Promise<SiteAuditRunResponseDto> {
     return this.invoke<SiteAuditRunResponseDto>(() =>
       postApiV1ProjectsByNameTechnicalAeoRuns({

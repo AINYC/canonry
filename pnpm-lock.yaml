@@ -269,12 +269,12 @@ importers:
 
   packages/canonry:
     dependencies:
-      '@ainyc/aeo-audit':
-        specifier: 4.0.1
-        version: 4.0.1
       '@anthropic-ai/sdk':
         specifier: ^0.91.1
         version: 0.91.1(zod@4.3.6)
+      '@canonry/aeo-audit':
+        specifier: 4.6.2
+        version: 4.6.2
       '@fastify/rate-limit':
         specifier: ^11.2.0
         version: 11.2.0
@@ -592,11 +592,6 @@ importers:
 
 packages:
 
-  '@ainyc/aeo-audit@4.0.1':
-    resolution: {integrity: sha512-8K0fjY5uxcJSEaYW0ccNxxr3BM+nBbMrrltHaKAso6+SFJybK57gLDeIp5h7f+GSJ2QaeZR51XUxGYBgqkQKEQ==}
-    engines: {node: '>=20'}
-    hasBin: true
-
   '@ainyc/aeo-audit@4.2.0':
     resolution: {integrity: sha512-He2hE8xXvUj2BxxLnCf3tAn38nBDKtj9lzLILvuw1AIdm+K35U8PkuHvJ00pLb3dXLlh/9znkhNHtf20x2VDSw==}
     engines: {node: '>=20'}
@@ -848,6 +843,11 @@ packages:
 
   '@bramus/specificity@2.4.2':
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
+    hasBin: true
+
+  '@canonry/aeo-audit@4.6.2':
+    resolution: {integrity: sha512-hp5kk4lsiPZ5mlFdSaS7Y7vvy7fb73zuqW0NGOd8MnzYxFL+7TpcK8lX46R6ejxB4Cg4PeCTkKUi/arSrfZ7LQ==}
+    engines: {node: '>=20'}
     hasBin: true
 
   '@csstools/color-helpers@6.0.2':
@@ -4866,11 +4866,6 @@ packages:
 
 snapshots:
 
-  '@ainyc/aeo-audit@4.0.1':
-    dependencies:
-      cheerio: 1.2.0
-      ipaddr.js: 2.3.0
-
   '@ainyc/aeo-audit@4.2.0':
     dependencies:
       cheerio: 1.2.0
@@ -5396,6 +5391,12 @@ snapshots:
   '@bramus/specificity@2.4.2':
     dependencies:
       css-tree: 3.2.1
+
+  '@canonry/aeo-audit@4.6.2':
+    dependencies:
+      cheerio: 1.2.0
+      ipaddr.js: 2.3.0
+      undici: 7.24.4
 
   '@csstools/color-helpers@6.0.2': {}
 

@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { eq } from 'drizzle-orm'
-import { createClient, migrate, projects, schedules, runs } from '@ainyc/canonry-db'
+import { createClient, migrate, projects, schedules, runs, siteCrawlRunRequests } from '@ainyc/canonry-db'
 import { Scheduler } from '../src/scheduler.js'
 
 /**
@@ -599,6 +599,58 @@ test('ads-sync trigger skips (no new run, no callback) when one is already in fl
   const adsRuns = db.select().from(runs).where(eq(runs.projectId, 'proj_ads2')).all()
     .filter((r) => r.kind === 'ads-sync')
   expect(adsRuns).toHaveLength(1)
+
+  scheduler.stop()
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+})
+
+test('site-audit schedule persists default request identity before dispatch', () => {
+  const { db, tmpDir } = createTempDb()
+  const now = new Date().toISOString()
+  db.insert(projects).values({
+    id: 'proj_site_audit',
+    name: 'site-audit-project',
+    displayName: 'Site Audit Project',
+    canonicalDomain: 'example.com',
+    country: 'US',
+    language: 'en',
+    createdAt: now,
+    updatedAt: now,
+  }).run()
+  db.insert(schedules).values({
+    id: 'sched_site_audit',
+    projectId: 'proj_site_audit',
+    kind: 'site-audit',
+    cronExpr: '0 5 * * *',
+    timezone: 'UTC',
+    enabled: true,
+    providers: [],
+    sourceId: null,
+    createdAt: now,
+    updatedAt: now,
+  }).run()
+
+  const calls: Array<{ runId: string; projectId: string }> = []
+  const scheduler = new Scheduler(db, {
+    onRunCreated: () => {},
+    onSiteAuditRequested: (runId, projectId) => calls.push({ runId, projectId }),
+  })
+  ;(scheduler as unknown as {
+    triggerRun: (scheduleId: string, projectId: string, kind: 'site-audit') => void
+  }).triggerRun('sched_site_audit', 'proj_site_audit', 'site-audit')
+
+  expect(calls).toHaveLength(1)
+  expect(db.select().from(siteCrawlRunRequests).where(eq(siteCrawlRunRequests.runId, calls[0]!.runId)).get()).toMatchObject({
+    projectId: 'proj_site_audit',
+    effectiveOptions: {
+      schemaVersion: 1,
+      sitemapUrl: null,
+      maxPages: 1_000,
+      maxEdges: 100_000,
+      maxDepth: null,
+      checkDeadLinks: false,
+    },
+  })
 
   scheduler.stop()
   fs.rmSync(tmpDir, { recursive: true, force: true })

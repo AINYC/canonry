@@ -431,7 +431,15 @@ function isOverviewRead(url: string): boolean {
 
 function isTechnicalAeoRead(url: string): boolean {
   const rest = projectRouteRest(url)
-  return rest === 'technical-aeo' || rest === 'technical-aeo/pages' || rest === 'technical-aeo/trend'
+  return rest === 'technical-aeo'
+    || rest === 'technical-aeo/pages'
+    || rest === 'technical-aeo/trend'
+    || rest === 'technical-aeo/crawl'
+    || rest === 'technical-aeo/crawl/pages'
+    || rest === 'technical-aeo/structure'
+    || rest === 'technical-aeo/internal-links'
+    || rest === 'technical-aeo/internal-links/neighbors'
+    || rest === 'technical-aeo/dead-links'
 }
 
 function isReportRead(url: string): boolean {

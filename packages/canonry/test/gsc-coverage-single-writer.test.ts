@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import crypto from 'node:crypto'
-import { createClient, migrate, gscSearchData, gscUrlInspections, gscCoverageSnapshots, projects, runs, siteAuditPages, siteAuditSnapshots } from '@ainyc/canonry-db'
+import { createClient, migrate, gscSearchData, gscUrlInspections, gscCoverageSnapshots, projects, runs, siteAuditPages, siteAuditSnapshots, siteCrawlAttempts, siteCrawlPages, siteCrawlSnapshots } from '@ainyc/canonry-db'
 import { eq } from 'drizzle-orm'
 import { writeCoverageSnapshot } from '../src/gsc-coverage-snapshot.js'
 
@@ -168,5 +168,70 @@ describe('coverage snapshot has a single writer', () => {
     // quietly exclude the one page we actually know nothing about.
     expect(c.unknown).toBe(2) // /brand-new and the seeded /quiet
     expect(c.indexed + c.notIndexed + c.unknown).toBe(4)
+  })
+
+  it('uses only inventory-eligible pages from the latest complete graph once a graph exists', () => {
+    const now = new Date().toISOString()
+    db.insert(runs).values({
+      id: 'legacy-audit', projectId, kind: 'site-audit', status: 'completed', trigger: 'manual', createdAt: now,
+    }).run()
+    db.insert(siteAuditSnapshots).values({
+      id: crypto.randomUUID(), projectId, runId: 'legacy-audit', sitemapUrl: 'https://example.com/sitemap.xml', auditedAt: now, createdAt: now,
+    }).run()
+    db.insert(siteAuditPages).values({
+      id: crypto.randomUUID(), projectId, runId: 'legacy-audit', url: 'https://example.com/legacy-only', status: 'success', createdAt: now,
+    }).run()
+
+    db.insert(runs).values({
+      id: 'graph-audit', projectId, kind: 'site-audit', status: 'completed', trigger: 'manual', createdAt: now,
+    }).run()
+    db.insert(siteCrawlAttempts).values({
+      id: 'graph-attempt', projectId, runId: 'graph-audit', attemptNumber: 1, state: 'completed', createdAt: now, updatedAt: now,
+    }).run()
+    db.insert(siteCrawlSnapshots).values({
+      id: crypto.randomUUID(), projectId, runId: 'graph-audit', attemptId: 'graph-attempt', rootUrl: 'https://example.com/', complete: true, detailsAvailable: true, createdAt: now, updatedAt: now,
+    }).run()
+    for (const [url, eligible] of [['https://example.com/live-new', true], ['https://example.com/redirect', false]] as const) {
+      db.insert(siteCrawlPages).values({
+        id: crypto.randomUUID(), projectId, runId: 'graph-audit', attemptId: 'graph-attempt', nodeKey: `node:${url}`, url,
+        path: new URL(url).pathname, parentPath: '/', fetchState: eligible ? 'html' : 'redirect',
+        indexabilityState: eligible ? 'indexable' : 'unknown', inventoryEligible: eligible, createdAt: now, updatedAt: now,
+      }).run()
+    }
+
+    const c = writeCoverageSnapshot(db, projectId, 'run-sync')
+
+    // GSC supplies /a, /b and /quiet; the graph supplies /live-new. Neither
+    // the old scorecard page nor a redirect/error node may inflate inventory.
+    expect(c.indexed + c.notIndexed + c.unknown).toBe(4)
+    expect(c.unknown).toBe(2) // /quiet and /live-new
+  })
+
+  it('does not fall back to a partial v126 crawl legacy scorecard', () => {
+    const now = new Date().toISOString()
+    db.insert(runs).values({
+      id: 'partial-audit', projectId, kind: 'site-audit', status: 'partial', trigger: 'manual', createdAt: now,
+    }).run()
+    db.insert(siteCrawlAttempts).values({
+      id: 'partial-attempt', projectId, runId: 'partial-audit', attemptNumber: 1, state: 'partial', createdAt: now, updatedAt: now,
+    }).run()
+    db.insert(siteCrawlSnapshots).values({
+      id: crypto.randomUUID(), projectId, runId: 'partial-audit', attemptId: 'partial-attempt',
+      rootUrl: 'https://example.com/', complete: false, termination: 'max-pages', detailsAvailable: true, createdAt: now, updatedAt: now,
+    }).run()
+    // The compatibility scorecard exists for this partial run, but its pages
+    // are not a published inventory and must not affect GSC coverage.
+    db.insert(siteAuditSnapshots).values({
+      id: crypto.randomUUID(), projectId, runId: 'partial-audit', sitemapUrl: 'https://example.com/sitemap.xml', auditedAt: now, createdAt: now,
+    }).run()
+    db.insert(siteAuditPages).values({
+      id: crypto.randomUUID(), projectId, runId: 'partial-audit', url: 'https://example.com/partial-only', status: 'success', createdAt: now,
+    }).run()
+
+    const c = writeCoverageSnapshot(db, projectId, 'run-sync')
+
+    // Only the three GSC-observed paths remain. /partial-only cannot seed
+    // unknown coverage until a complete graph has published it.
+    expect(c.indexed + c.notIndexed + c.unknown).toBe(3)
   })
 })

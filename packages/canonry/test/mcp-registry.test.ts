@@ -166,6 +166,12 @@ const expectedToolNames = [
   'canonry_technical_aeo_score',
   'canonry_technical_aeo_pages',
   'canonry_technical_aeo_trend',
+  'canonry_technical_aeo_crawl',
+  'canonry_technical_aeo_crawl_pages',
+  'canonry_technical_aeo_structure',
+  'canonry_technical_aeo_internal_links',
+  'canonry_technical_aeo_link_neighbors',
+  'canonry_technical_aeo_dead_links',
   'canonry_technical_aeo_run',
   'canonry_ads_status',
   'canonry_ads_account',
@@ -196,6 +202,46 @@ const expectedToolNames = [
 ] as const
 
 describe('MCP tool registry', () => {
+  it('exposes bounded crawl reads as read-only monitoring tools', () => {
+    const expected = [
+      ['canonry_technical_aeo_crawl', 'GET /api/v1/projects/{name}/technical-aeo/crawl'],
+      ['canonry_technical_aeo_crawl_pages', 'GET /api/v1/projects/{name}/technical-aeo/crawl/pages'],
+      ['canonry_technical_aeo_structure', 'GET /api/v1/projects/{name}/technical-aeo/structure'],
+      ['canonry_technical_aeo_internal_links', 'GET /api/v1/projects/{name}/technical-aeo/internal-links'],
+      ['canonry_technical_aeo_link_neighbors', 'GET /api/v1/projects/{name}/technical-aeo/internal-links/neighbors'],
+      ['canonry_technical_aeo_dead_links', 'GET /api/v1/projects/{name}/technical-aeo/dead-links'],
+    ] as const
+
+    for (const [name, operation] of expected) {
+      const tool = canonryMcpTools.find(candidate => candidate.name === name)
+      expect(tool, name).toMatchObject({
+        access: 'read',
+        tier: 'monitoring',
+        openApiOperations: [operation],
+        annotations: { readOnlyHint: true },
+      })
+      expect(MCP_OPENAPI_OPERATION_CLASSIFICATIONS[operation]).toBe('included')
+    }
+
+    expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(expect.arrayContaining(
+      expected.map(([name]) => name),
+    ))
+
+    const pages = canonryMcpTools.find(candidate => candidate.name === 'canonry_technical_aeo_crawl_pages')!
+    expect(pages.inputSchema.safeParse({ project: 'acme', limit: 200, cursor: 'next' }).success).toBe(true)
+    expect(pages.inputSchema.safeParse({ project: 'acme', limit: 201 }).success).toBe(false)
+
+    const neighbors = canonryMcpTools.find(candidate => candidate.name === 'canonry_technical_aeo_link_neighbors')!
+    expect(neighbors.inputSchema.safeParse({ project: 'acme', nodeKey: 'node-1', limit: 100 }).success).toBe(true)
+    expect(neighbors.inputSchema.safeParse({ project: 'acme', limit: 100 }).success).toBe(false)
+
+    const run = canonryMcpTools.find(candidate => candidate.name === 'canonry_technical_aeo_run')!
+    expect(run.description).toContain('1,000 pages and 100,000 link observations')
+    expect(run.inputSchema.safeParse({ project: 'acme', maxPages: 50_000, maxEdges: 1_000_000, maxDepth: 100, checkDeadLinks: true }).success).toBe(true)
+    expect(run.inputSchema.safeParse({ project: 'acme', maxPages: 50_001 }).success).toBe(false)
+    expect(run.inputSchema.safeParse({ project: 'acme', maxEdges: 1_000_001 }).success).toBe(false)
+  })
+
   it('includes the complete measurement-plan API surface', async () => {
     const expected = [
       ['canonry_measurement_discovery', 'write', 'POST /api/v1/projects/{name}/measurement-discovery'],
@@ -468,8 +514,8 @@ describe('MCP tool registry', () => {
   })
 
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(177)
-    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(113)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(183)
+    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(119)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(readNames)
@@ -505,7 +551,7 @@ describe('MCP tool registry', () => {
     for (const tool of canonryMcpTools) {
       counts.set(tool.tier, (counts.get(tool.tier) ?? 0) + 1)
     }
-    expect(counts.get('monitoring')).toBe(34)
+    expect(counts.get('monitoring')).toBe(40)
     expect(counts.get('setup')).toBe(50)
     expect(counts.get('gsc')).toBe(10)
     expect(counts.get('ga')).toBe(10)
@@ -1300,6 +1346,43 @@ const handlerCases: HandlerCase[] = [
   { tool: 'canonry_discover_harvest', input: { project: 'acme', sessionId: 'sess-1' }, methods: ['getDiscoveryHarvest'] },
   { tool: 'canonry_discover_promote_preview', input: { project: 'acme', sessionId: 'sess-1' }, methods: ['previewDiscoveryPromote'] },
   { tool: 'canonry_discover_promote', input: { project: 'acme', sessionId: 'sess-1' }, methods: ['promoteDiscovery'] },
+  { tool: 'canonry_technical_aeo_crawl', input: { project: 'acme', runId: 'run-1' }, methods: ['getTechnicalAeoCrawl'], expectedArgs: [['acme', { runId: 'run-1' }]] },
+  {
+    tool: 'canonry_technical_aeo_crawl_pages',
+    input: { project: 'acme', runId: 'run-1', inventoryEligible: true, fetchState: 'html', indexabilityState: 'indexable', auditState: 'success', sort: 'score-asc', cursor: 'page-2', limit: 25 },
+    methods: ['getTechnicalAeoCrawlPages'],
+    expectedArgs: [['acme', { runId: 'run-1', inventoryEligible: true, fetchState: 'html', indexabilityState: 'indexable', auditState: 'success', sort: 'score-asc', cursor: 'page-2', limit: 25 }]],
+  },
+  {
+    tool: 'canonry_technical_aeo_structure',
+    input: { project: 'acme', runId: 'run-1', parentPath: '/guides', cursor: 'page-2', limit: 25 },
+    methods: ['getTechnicalAeoStructure'],
+    expectedArgs: [['acme', { runId: 'run-1', parentPath: '/guides', cursor: 'page-2', limit: 25 }]],
+  },
+  {
+    tool: 'canonry_technical_aeo_internal_links',
+    input: { project: 'acme', runId: 'run-1', sourceUrl: 'https://acme.test/a', targetUrl: 'https://acme.test/b', followable: false, cursor: 'page-2', limit: 25 },
+    methods: ['getTechnicalAeoInternalLinks'],
+    expectedArgs: [['acme', { runId: 'run-1', sourceUrl: 'https://acme.test/a', targetUrl: 'https://acme.test/b', followable: false, cursor: 'page-2', limit: 25 }]],
+  },
+  {
+    tool: 'canonry_technical_aeo_link_neighbors',
+    input: { project: 'acme', runId: 'run-1', nodeKey: 'node-1', limit: 25 },
+    methods: ['getTechnicalAeoInternalLinkNeighbors'],
+    expectedArgs: [['acme', { runId: 'run-1', nodeKey: 'node-1', url: undefined, limit: 25 }]],
+  },
+  {
+    tool: 'canonry_technical_aeo_dead_links',
+    input: { project: 'acme', runId: 'run-1', cursor: 'page-2', limit: 25 },
+    methods: ['getTechnicalAeoDeadLinks'],
+    expectedArgs: [['acme', { runId: 'run-1', cursor: 'page-2', limit: 25 }]],
+  },
+  {
+    tool: 'canonry_technical_aeo_run',
+    input: { project: 'acme', sitemapUrl: 'https://acme.test/sitemap.xml', maxPages: 50_000, maxEdges: 1_000_000, maxDepth: 12, checkDeadLinks: true },
+    methods: ['triggerSiteAudit'],
+    expectedArgs: [['acme', { sitemapUrl: 'https://acme.test/sitemap.xml', limit: undefined, maxPages: 50_000, maxEdges: 1_000_000, maxDepth: 12, checkDeadLinks: true }]],
+  },
 ]
 
 function makeClient(calls: Array<{ method: string; args: unknown[] }>, fixture?: 'agent-notification'): ApiClient {

@@ -359,5 +359,11 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'GET /api/v1/projects/{name}/technical-aeo': 'included',
   'GET /api/v1/projects/{name}/technical-aeo/pages': 'included',
   'GET /api/v1/projects/{name}/technical-aeo/trend': 'included',
+  'GET /api/v1/projects/{name}/technical-aeo/crawl': 'included',
+  'GET /api/v1/projects/{name}/technical-aeo/crawl/pages': 'included',
+  'GET /api/v1/projects/{name}/technical-aeo/structure': 'included',
+  'GET /api/v1/projects/{name}/technical-aeo/internal-links': 'included',
+  'GET /api/v1/projects/{name}/technical-aeo/internal-links/neighbors': 'included',
+  'GET /api/v1/projects/{name}/technical-aeo/dead-links': 'included',
   'POST /api/v1/projects/{name}/technical-aeo/runs': 'included',
 } as const satisfies Record<string, OpenApiMcpClassification>

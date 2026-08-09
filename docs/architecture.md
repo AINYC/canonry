@@ -172,7 +172,11 @@ Canonry ships as a **self-hosted single-process install** — that is the only s
 
 ## Service Boundaries
 
-- **`@ainyc/aeo-audit`** — external npm dependency. Technical audit engine, CLI, formatters.
+- **`@canonry/aeo-audit`** — published audit engine used by the local
+  `packages/canonry` Technical AEO executor. It provides the full-site crawl
+  event and graph contract.
+- **`apps/worker`** — retains its explicit `@ainyc/aeo-audit@4.2.0` pin.
+  The local crawl work does not change or wire cloud execution.
 - **`packages/api-routes/`** — HTTP surface, validation, orchestration, read APIs.
 - **`packages/canonry/`** — CLI, local server, job runner (the publishable artifact).
 - **`packages/provider-*/`** — Provider adapters and normalization layers.
@@ -185,14 +189,16 @@ Canonry ships as a **self-hosted single-process install** — that is the only s
 ## Design Constraints
 
 - This repo remains independent from the audit package repo
-- Consume only published `@ainyc/aeo-audit` releases
+- Consume only published audit-engine releases; keep the local
+  `@canonry/aeo-audit` and worker `@ainyc/aeo-audit@4.2.0` pins explicit
 - API key-based auth
 - Raw observation snapshots only; transitions computed at query time
 
 ## Score Families
 
 - **Answer visibility**: multi-provider query tracking and citation outcomes across all providers
-- **Technical readiness**: `@ainyc/aeo-audit` and future site-audit rollups
+- **Technical readiness**: local `@canonry/aeo-audit` full crawls plus the
+  retained worker audit path
 
 These remain separate to avoid mixing technical readiness with live-answer visibility.
 

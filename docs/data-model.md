@@ -24,6 +24,14 @@ erDiagram
   runs ||--o{ health_snapshots : "scored in"
   queries ||--o{ query_snapshots : "tracked in"
 
+  runs ||--o| site_crawl_run_requests : "freezes request identity"
+  runs ||--o{ site_crawl_attempts : "executes"
+  runs ||--o| site_crawl_snapshots : "publishes"
+  site_crawl_attempts ||--o{ site_crawl_pages : "observes"
+  site_crawl_attempts ||--o{ site_crawl_edges : "observes"
+  site_crawl_attempts ||--o{ site_crawl_findings : "derives"
+  site_crawl_attempts ||--o{ site_crawl_event_receipts : "checkpoints"
+
   projects ||--o| ga_connections : "has (1:1)"
   projects ||--o{ ga_traffic_snapshots : has
   projects ||--o{ ga_daily_totals : has
@@ -101,6 +109,25 @@ reporting edges are derived from member Target assignments and never own query
 intent. A plan-aware runner can later pin the exact revision and manifest so
 historical execution remains reproducible after the active plan or tracked-query
 library changes.
+
+### Technical AEO Crawl Persistence
+
+Migration 126 adds the local full-crawl graph beside the legacy
+`site_audit_snapshots` and `site_audit_pages` scorecard tables.
+
+| Table | Purpose | Key Constraints |
+|-------|---------|----------------|
+| **site_crawl_run_requests** | Canonical effective options and identity for a queued crawl. Identical requests may reuse one active run; different options receive a conflict. | PK: `runId`; composite FK `(projectId, runId)` → runs |
+| **site_crawl_attempts** | Mutable event-stream progress for one execution attempt. | Unique: `(runId, attemptNumber)`; composite FK to runs |
+| **site_crawl_snapshots** | Immutable terminal crawl metadata. Default reads select only the latest complete snapshot; explicitly selected partial runs remain historical. | Unique: `runId`; composite FK to runs and attempt |
+| **site_crawl_pages** | URL inventory with discovery provenance, fetch/indexability state, depth, internal-link counts, and link score. | Unique: `(projectId, runId, attemptId, nodeKey)` |
+| **site_crawl_edges** | Bounded typed link observations with occurrence, followability, and anchor summaries. | Unique: `(projectId, runId, attemptId, edgeKey)` |
+| **site_crawl_findings** | Deterministic crawl findings. Dead-link rows exist only when that run opted in. | Unique: `(projectId, runId, attemptId, findingKey)` |
+| **site_crawl_event_receipts** | Idempotency receipts for streamed page, edge, metric, progress, and summary batches. | Unique: `(attemptId, sequence, batchId)` |
+
+All detail rows carry the project, run, and attempt tuple. Composite foreign
+keys prevent data from crossing project or attempt boundaries. The mutable
+attempt is not the current graph; only a complete terminal snapshot is.
 
 #### `projects.provider_models`
 

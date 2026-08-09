@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { and, eq, asc, desc, or, sql } from 'drizzle-orm'
+import { and, eq, asc, desc, inArray, or, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { runs, querySnapshots, queries, projects, parseJsonColumn } from '@ainyc/canonry-db'
 import type { LocationContext, MeasurementExecutionIdentity, MeasurementRunScope } from '@ainyc/canonry-contracts'
@@ -27,6 +27,11 @@ import { assertMeasurementRunStampable, hasActiveMeasurementPlan, queueRunIfProj
 
 export interface RunRoutesOptions {
   onRunCreated?: (runId: string, projectId: string, providers?: string[], location?: LocationContext | null) => void
+  /**
+   * Lets a local host interrupt in-process work after the durable status flip.
+   * The route remains storage-only when no host has an executor to abort.
+   */
+  onRunCancelled?: (runId: string, projectId: string) => void
   /** Valid provider names from registered adapters — used to reject unknown providers */
   validProviderNames?: string[]
   /** Current provider registry membership. When omitted, activation preflight is disabled. */
@@ -548,11 +553,19 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
     if (terminalStatuses.has(run.status)) throw runNotCancellable(run.id, run.status)
 
     const now = new Date().toISOString()
-    app.db
+    const cancelled = app.db
       .update(runs)
       .set({ status: 'cancelled', finishedAt: now, error: serializeRunError({ message: 'Cancelled by user' }) })
-      .where(eq(runs.id, run.id))
+      // The read above is only an early error message. This conditional write
+      // is the real state transition: a terminal executor must never be
+      // overwritten by a stale cancellation request.
+      .where(and(eq(runs.id, run.id), inArray(runs.status, ['queued', 'running'])))
       .run()
+    if (cancelled.changes === 0) {
+      const current = app.db.select().from(runs).where(eq(runs.id, run.id)).get()
+      if (!current) throw notFound('Run', run.id)
+      throw runNotCancellable(run.id, current.status)
+    }
 
     writeAuditLog(app.db, {
       projectId: run.projectId,
@@ -561,6 +574,10 @@ export async function runRoutes(app: FastifyInstance, opts: RunRoutesOptions) {
       entityType: 'run',
       entityId: run.id,
     })
+
+    // Update durable state first. A host callback may synchronously abort a
+    // worker that throws, and its CAS finalization must observe `cancelled`.
+    opts.onRunCancelled?.(run.id, run.projectId)
 
     const updated = app.db.select().from(runs).where(eq(runs.id, run.id)).get()!
     return reply.send(formatRun(updated))
