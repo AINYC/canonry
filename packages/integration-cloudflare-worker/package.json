@@ -17,6 +17,7 @@
     "lint": "eslint src/ test/"
   },
   "dependencies": {
-    "@ainyc/canonry-contracts": "workspace:*"
+    "@ainyc/canonry-contracts": "workspace:*",
+    "@ainyc/canonry-integration-traffic": "workspace:*"
   }
 }

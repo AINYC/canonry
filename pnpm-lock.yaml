@@ -484,6 +484,9 @@ importers:
       '@ainyc/canonry-contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@ainyc/canonry-integration-traffic':
+        specifier: workspace:*
+        version: link:../integration-traffic
 
   packages/integration-commoncrawl:
     dependencies:

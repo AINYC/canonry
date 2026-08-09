@@ -1,4 +1,7 @@
-import { AI_ENGINE_DOMAINS } from '@ainyc/canonry-contracts'
+import {
+  DEFAULT_AI_CRAWLER_USER_AGENT_SUBSTRINGS,
+  DEFAULT_AI_REFERRER_RULES,
+} from '@ainyc/canonry-integration-traffic'
 import { canonicalizeCloudflareJson } from './canonical-json.js'
 import {
   CLOUDFLARE_DIRECT_PUSH_SECRET_BINDINGS,
@@ -18,23 +21,18 @@ import {
 export const DEFAULT_BOT_LIST: CloudflareWorkerBotList = {
   version: '2026-08-09',
   uaKeywords: [
+    ...DEFAULT_AI_CRAWLER_USER_AGENT_SUBSTRINGS,
+    // Preserve a small forward-looking machine-traffic net. The shared
+    // classifier still drops unknown products after delivery.
     'bot',
     'crawler',
     'spider',
-    'agent',
-    'gpt',
-    'claude',
-    'ai',
-    'perplexity',
-    'chatgpt',
-    'openai',
-    'anthropic',
   ],
-  refererDomains: Object.values(AI_ENGINE_DOMAINS),
+  refererDomains: DEFAULT_AI_REFERRER_RULES.map(rule => rule.domain),
   utmSourceTokens: [
     ...new Set([
-      ...Object.values(AI_ENGINE_DOMAINS),
-      ...Object.values(AI_ENGINE_DOMAINS).map(domain => domain.split('.')[0]!),
+      ...DEFAULT_AI_REFERRER_RULES.map(rule => rule.domain),
+      ...DEFAULT_AI_REFERRER_RULES.map(rule => rule.domain.split('.')[0]!),
       // Legacy chat.openai.com referrals classify from their first label.
       'chat',
     ]),
@@ -90,7 +88,7 @@ function uaMatches(ua) {
   const lc = lower(ua)
   if (!lc) return false
   for (const kw of UA_KEYWORDS) {
-    if (lc.indexOf(kw) !== -1) return true
+    if (lc.indexOf(lower(kw)) !== -1) return true
   }
   return false
 }

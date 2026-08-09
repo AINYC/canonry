@@ -1,4 +1,7 @@
-import { AI_ENGINE_DOMAINS } from '@ainyc/canonry-contracts'
+import {
+  DEFAULT_AI_CRAWLER_USER_AGENT_SUBSTRINGS,
+  DEFAULT_AI_REFERRER_RULES,
+} from '@ainyc/canonry-integration-traffic'
 import { describe, expect, it, vi } from 'vitest'
 import { canonicalizeCloudflareJson } from '../src/canonical-json.js'
 import {
@@ -67,9 +70,9 @@ function generatedShouldForward(): (request: GeneratedRequest) => boolean {
   return scope.shouldForward!
 }
 
-function request(url: string, referer?: string): GeneratedRequest {
+function request(url: string, referer?: string, userAgent = 'Mozilla/5.0'): GeneratedRequest {
   const headers = new Map<string, string>()
-  headers.set('user-agent', 'Mozilla/5.0')
+  headers.set('user-agent', userAgent)
   if (referer) headers.set('referer', referer)
   return {
     url,
@@ -157,15 +160,22 @@ describe('generateWorkerScript', () => {
 
   it('forwards every canonical AI referrer domain and its subdomains', () => {
     const shouldForward = generatedShouldForward()
-    for (const domain of Object.values(AI_ENGINE_DOMAINS)) {
+    for (const { domain } of DEFAULT_AI_REFERRER_RULES) {
       expect(shouldForward(request('https://example.com/', `https://${domain}/answer`))).toBe(true)
       expect(shouldForward(request('https://example.com/', `https://chat.${domain}/answer`))).toBe(true)
     }
   })
 
+  it('forwards every canonical crawler and AI user-fetch UA token', () => {
+    const shouldForward = generatedShouldForward()
+    for (const token of DEFAULT_AI_CRAWLER_USER_AGENT_SUBSTRINGS) {
+      expect(shouldForward(request('https://example.com/', undefined, `Mozilla/5.0 ${token}1.0`))).toBe(true)
+    }
+  })
+
   it('forwards AI utm_source evidence on the request or same-site referrer URL', () => {
     const shouldForward = generatedShouldForward()
-    for (const domain of Object.values(AI_ENGINE_DOMAINS)) {
+    for (const { domain } of DEFAULT_AI_REFERRER_RULES) {
       const token = domain.split('.')[0]!
       expect(shouldForward(request(`https://example.com/?utm_source=${token}`))).toBe(true)
       expect(shouldForward(request(
@@ -269,12 +279,14 @@ describe('generateWorkerScript', () => {
 describe('DEFAULT_BOT_LIST', () => {
   it('includes the canonical AI UA tokens', () => {
     expect(DEFAULT_BOT_LIST.uaKeywords).toEqual(
-      expect.arrayContaining(['bot', 'crawler', 'gpt', 'claude', 'perplexity', 'openai', 'anthropic']),
+      expect.arrayContaining(DEFAULT_AI_CRAWLER_USER_AGENT_SUBSTRINGS),
     )
   })
 
   it('includes the canonical AI referer hosts', () => {
-    expect(DEFAULT_BOT_LIST.refererDomains).toEqual(expect.arrayContaining(Object.values(AI_ENGINE_DOMAINS)))
+    expect(DEFAULT_BOT_LIST.refererDomains).toEqual(
+      expect.arrayContaining(DEFAULT_AI_REFERRER_RULES.map(rule => rule.domain)),
+    )
   })
 
   it('has a non-empty, dated version string so the staleness check can compare', () => {
