@@ -252,19 +252,27 @@ cnry visibility-compare <project> --from 2026-05 --to 2026-06 --format json
 
 ## Technical AEO (site audit)
 
-Site-wide technical audit (structured data, AI-readable content, AI-crawler access, content depth/freshness/extractability, …) powered by `@ainyc/aeo-audit`'s `runSitemapAudit`. Runs as the `site-audit` run kind — crawls the project's `sitemap.xml` and scores every reachable page, then rolls up into one 0–100 site score. Pure HTTP, no LLM cost; a large site can take minutes, so it runs in the background.
+Site-wide technical audit (structured data, AI-readable content, AI-crawler access, content depth/freshness/extractability, …) powered by `@canonry/aeo-audit`'s `runSiteCrawl`. Runs as the `site-audit` run kind — discovers in-scope URLs from the project root, sitemaps, and internal links; stores the URL/link graph; audits eligible HTML pages; and rolls the results into one 0–100 site score. Pure HTTP, no LLM cost; a large site can take minutes, so it runs in the background.
 
 ```bash
-cnry technical-aeo run <project> --wait                 # crawl + audit; --wait polls to terminal. Idempotent: returns the in-flight run if one is active.
-cnry technical-aeo run <project> --sitemap-url <url> --limit 200   # override the sitemap / cap pages (highest <priority> first; default 500, max 2000)
+cnry technical-aeo run <project> --wait                 # full crawl + audit; defaults to 1,000 pages / 100,000 edges; waits for terminal state
+cnry technical-aeo run <project> --sitemap-url <url> --max-pages 5000 --max-edges 250000 --max-depth 12   # optional crawl seeds and custom budgets; hard caps are 50,000 pages / 1,000,000 edges
+cnry technical-aeo run <project> --check-dead-links --wait   # opt in to dead-link checks; they are off by default
+cnry technical-aeo crawl <project> [--run-id <id>] [--format json]   # crawl metadata, budgets, completeness, and termination
+cnry technical-aeo crawl-pages <project> [--fetch-state <state>] [--indexability-state <state>] [--sort url|path|score-asc|score-desc] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]   # bounded URL inventory with depth and link score
+cnry technical-aeo structure <project> [--parent-path <path>] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]   # one level of the path hierarchy
+cnry technical-aeo links <project> [--source-url <url>] [--target-url <url>] [--followable|--nofollow] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]   # bounded internal-link edges
+cnry technical-aeo links neighbors <project> (--node-key <key>|--url <url>) [--limit <n>] [--format json]   # bounded inbound/outbound neighborhood
+cnry technical-aeo dead-links <project> [--cursor <cursor>] [--limit <n>] [--format json|jsonl]   # disabled unless the run opted in
 cnry technical-aeo score <project> [--format json]      # site score + per-factor scorecard (avg + pass/partial/fail per page) + delta vs the previous audit
-cnry technical-aeo pages <project> [--status error] [--sort score-asc|score-desc|url] [--format json|jsonl]   # per-page breakdown of the latest run (worst-first by default)
+cnry technical-aeo pages <project> [--status error] [--sort score-asc|score-desc|url] [--format json|jsonl]   # audited-page compatibility view (worst-first by default)
 cnry technical-aeo trend <project> [--format json|jsonl] # aggregate-score history across past audits
 cnry schedule set <project> --kind site-audit --preset weekly   # keep it fresh
 ```
 
 - The score is only available after at least one audit runs — `score` returns `hasData: false` until then.
-- Reads reflect the latest **completed/partial** site-audit run; probe runs are excluded.
+- A failed, cancelled, or budget-terminated attempt stays inspectable but never replaces the latest complete crawl graph.
+- Graph reads are server-paged and bounded. Use `--run-id` to inspect a specific retained run.
 
 ## Intelligence
 
@@ -342,7 +350,7 @@ cnry schedule set <project> --preset daily     # or: weekly, twice-daily, daily@
 cnry schedule set <project> --cron "0 9 * * *" --timezone America/New_York
 cnry schedule set <project> --kind data-refresh --preset daily   # refresh all connected GSC/Bing/GA/GBP integrations (no --source)
 cnry schedule set <project> --kind backlinks-sync --preset weekly # re-probe Common Crawl; sync only when a newer rolling window is published (no --source/--provider)
-cnry schedule set <project> --kind site-audit --preset weekly     # Technical AEO: crawl the sitemap + audit every page (no --source/--provider)
+cnry schedule set <project> --kind site-audit --preset weekly     # Technical AEO: bounded full-site crawl and audit (no --source/--provider)
 cnry schedule show <project>
 cnry schedule enable <project>
 cnry schedule disable <project>

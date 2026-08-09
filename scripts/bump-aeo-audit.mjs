@@ -36,7 +36,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 const DEP = '@canonry/aeo-audit'
 // The local Canonry runtime uses the full-crawl engine. apps/worker intentionally
-// remains on the legacy @ainyc/aeo-audit contract and is not part of this bump.
+// remains pinned to @ainyc/aeo-audit@4.2.0 and is not part of this bump.
 const DEP_MANIFESTS = ['packages/canonry/package.json']
 // Published package + native-plugin manifests that must stay in lockstep (see
 // AGENTS.md → Versioning and scripts/sync-canonry-plugin.mjs).
