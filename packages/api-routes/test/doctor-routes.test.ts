@@ -9,7 +9,12 @@ import { apiRoutes } from '../src/index.js'
 import type { ApiRoutesOptions } from '../src/index.js'
 import type { GoogleConnectionRecord, GoogleConnectionStore } from '../src/google.js'
 import type { Ga4CredentialStore } from '../src/ga.js'
-import type { VercelTrafficCredentialRecord, VercelTrafficCredentialStore } from '../src/traffic.js'
+import type {
+  CloudflareTrafficCredentialRecord,
+  CloudflareTrafficCredentialStore,
+  VercelTrafficCredentialRecord,
+  VercelTrafficCredentialStore,
+} from '../src/traffic.js'
 import { VercelLogsApiError } from '@ainyc/canonry-integration-vercel'
 import { TrafficSourceStatuses, TrafficSourceTypes } from '@ainyc/canonry-contracts'
 import type { DoctorReportDto } from '@ainyc/canonry-contracts'
@@ -294,6 +299,105 @@ describe('traffic.source.credentials — Vercel validator', () => {
     expect(check.status).toBe('fail')
     const detail = check.details as { sources: Array<{ code: string }> }
     expect(detail.sources[0]!.code).toBe('traffic.credentials.missing')
+  })
+})
+
+describe('traffic.source.credentials — Cloudflare direct-push validator', () => {
+  const sourceId = 'src_cloudflare_doctor'
+  const bearerToken = 'cnry_cfw_doctor_bearer'
+  const hmacSecret = 'doctor-hmac-secret'
+
+  function cloudflareStore(
+    record?: CloudflareTrafficCredentialRecord,
+  ): CloudflareTrafficCredentialStore {
+    return {
+      getConnection: projectName =>
+        record?.projectName === projectName ? record : undefined,
+      getConnectionBySourceId: id => record?.sourceId === id ? record : undefined,
+      upsertConnection: value => value,
+      deleteConnection: () => true,
+    }
+  }
+
+  function credential(
+    overrides: Partial<CloudflareTrafficCredentialRecord> = {},
+  ): CloudflareTrafficCredentialRecord {
+    return {
+      projectName: 'demo',
+      deliveryMode: 'direct-push',
+      sourceId,
+      bearerToken,
+      hmacSecret,
+      workerVersion: '1.0.0',
+      expectedBotListVersion: 'test-list',
+      zoneId: 'zone_1',
+      accountId: 'account_1',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      ...overrides,
+    }
+  }
+
+  async function runCloudflareCredentialCheck(opts: {
+    record?: CloudflareTrafficCredentialRecord
+    ingestTokenHash?: string | null
+  }): Promise<DoctorReportDto> {
+    const { app, db } = buildApp({
+      cloudflareTrafficCredentialStore: cloudflareStore(opts.record),
+    })
+    const projectRow = db.select().from(projects).all()[0]!
+    const now = new Date().toISOString()
+    db.insert(trafficSources).values({
+      id: sourceId,
+      projectId: projectRow.id,
+      sourceType: TrafficSourceTypes.cloudflare,
+      displayName: 'Cloudflare · example.com',
+      status: TrafficSourceStatuses.connected,
+      configJson: { deliveryMode: 'direct-push', workerVersion: '1.0.0' },
+      ingestTokenHash: opts.ingestTokenHash === undefined
+        ? crypto.createHash('sha256').update(bearerToken).digest('hex')
+        : opts.ingestTokenHash,
+      createdAt: now,
+      updatedAt: now,
+    }).run()
+    await app.ready()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/demo/doctor?check=traffic.source.credentials',
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.payload).not.toContain(bearerToken)
+    expect(res.payload).not.toContain(hmacSecret)
+    const report = JSON.parse(res.payload) as DoctorReportDto
+    await app.close()
+    return report
+  }
+
+  it('returns ok when mode, source, and bearer hash match', async () => {
+    const body = await runCloudflareCredentialCheck({ record: credential() })
+    const check = body.checks[0]!
+    expect(check.status).toBe('ok')
+    expect(check.code).toBe('traffic.credentials.ok')
+  })
+
+  it('detects a missing credential without exposing secret material', async () => {
+    const body = await runCloudflareCredentialCheck({})
+    const detail = body.checks[0]!.details as { sources: Array<{ code: string }> }
+    expect(body.checks[0]!.status).toBe('fail')
+    expect(detail.sources[0]!.code).toBe('traffic.credentials.missing')
+  })
+
+  it.each([
+    ['missing delivery mode', credential({ deliveryMode: undefined } as unknown as Partial<CloudflareTrafficCredentialRecord>), undefined, 'traffic.credentials.mode-mismatch'],
+    ['delivery mode', credential({ deliveryMode: 'queue-pull' } as Partial<CloudflareTrafficCredentialRecord>), undefined, 'traffic.credentials.mode-mismatch'],
+    ['source id', credential({ sourceId: 'src_other' }), undefined, 'traffic.credentials.source-mismatch'],
+    ['missing bearer hash', credential(), null, 'traffic.credentials.bearer-mismatch'],
+    ['bearer hash', credential(), '0'.repeat(64), 'traffic.credentials.bearer-mismatch'],
+  ])('detects a %s mismatch', async (_label, record, ingestTokenHash, expectedCode) => {
+    const body = await runCloudflareCredentialCheck({ record, ingestTokenHash })
+    const detail = body.checks[0]!.details as { sources: Array<{ code: string }> }
+    expect(body.checks[0]!.status).toBe('fail')
+    expect(detail.sources[0]!.code).toBe(expectedCode)
   })
 })
 

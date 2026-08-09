@@ -5685,7 +5685,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/traffic/connect/cloudflare',
     summary: 'Connect a Cloudflare Worker traffic source',
     description:
-      'Issues a per-source bearer token + HMAC secret, generates a Cloudflare Worker script with those secrets embedded, and creates / updates the project\'s active Cloudflare `traffic_sources` row. The DB only stores the sha256 of the bearer; both cleartext secrets live in `~/.canonry/config.yaml`. Idempotent: reconnect rotates both secrets, re-emits the script, and reuses the same source row so existing rollups stay attached. The operator deploys the returned script to their Cloudflare zone — no upstream probe is performed at connect time.',
+      'Creates or updates a Cloudflare `direct-push` traffic source and returns a secret-free ES-module Worker plus Wrangler configuration. Per-source bearer and HMAC credentials remain in Canonry\'s credential store and are installed as Worker secret bindings; neither secret appears in source, TOML, API, or MCP output. Reconnect is idempotent: it reuses a matching source and credentials, preserves omitted metadata, and emits the current deployment package. Wrangler deploys the Worker without a route. The operator must attach the exact site route manually and set its Request limit failure mode to Fail open. No upstream probe is performed at connect time.',
     tags: ['traffic'],
     parameters: [nameParameter],
     requestBody: {
@@ -5707,8 +5707,9 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/traffic/cloudflare/ingest',
     summary: 'Ingest a batch of Cloudflare Worker events',
     description:
-      'Push-receive endpoint. The customer-deployed Cloudflare Worker `fetch()`-es each filtered request to this endpoint. Authentication is per-source bearer + HMAC-SHA256 over `${timestamp}.${body}` — the global cnry_* bearer is NOT accepted. Headers: `Authorization: Bearer <per-source-token>`, `X-Canonry-Timestamp` (unix seconds), `X-Canonry-Signature` (hex hmac), `X-Canonry-Source-Id`, `X-Canonry-Worker-Version`. Auth failures return a single 401 envelope — never disambiguate which leg of the auth failed. After auth: validates payload, normalizes each event, runs the shared classifier + rollup pipeline, and updates `last_worker_version`.',
+      'Direct-push protocol endpoint. The customer Worker sends selected edge-event batches authenticated by a per-source bearer and HMAC-SHA256 over `${timestamp}.${canonicalJson(payload)}`; object keys are sorted recursively before signing. The global cnry_* bearer does not apply. Headers: `Authorization: Bearer <per-source-token>`, `X-Canonry-Timestamp` (unix seconds), `X-Canonry-Signature` (hex HMAC), `X-Canonry-Source-Id`, and `X-Canonry-Worker-Version`. Authentication completes before project resolution and every auth/path/source mismatch returns the same 401. Accepted event ids are claimed durably in the same transaction as shared crawler, user-fetch, and paid/organic referral rollups.',
     tags: ['traffic'],
+    auth: false,
     parameters: [nameParameter],
     requestBody: {
       required: true,
@@ -5719,10 +5720,14 @@ const routeCatalog: OpenApiOperation[] = [
       },
     },
     responses: {
-      200: jsonResponse('Ingest acknowledged.', 'CloudflareWorkerIngestResponse'),
+      200: jsonResponse(
+        'Ingest acknowledged; droppedEvents includes normalization failures and durable-receipt duplicates.',
+        'CloudflareWorkerIngestResponse',
+      ),
       400: errorResponse('Invalid ingest payload.'),
       401: errorResponse('Authentication failed (bearer, signature, timestamp, or source id mismatch).'),
-      404: errorResponse('Project not found.'),
+      413: errorResponse('The ingest payload exceeds 256 KiB.'),
+      429: errorResponse('The per-IP or authenticated-source ingest request budget was exceeded.'),
     },
   },
   {

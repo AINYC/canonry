@@ -1,5 +1,6 @@
 import { and, eq, gte, ne, sql } from 'drizzle-orm'
 import {
+  CloudflareTrafficDeliveryModes,
   CheckCategories,
   CheckScopes,
   CheckStatuses,
@@ -8,6 +9,7 @@ import {
 } from '@ainyc/canonry-contracts'
 import {
   aiReferralEventsHourly,
+  aiUserFetchEventsHourly,
   crawlerEventsHourly,
   trafficSources,
 } from '@ainyc/canonry-db'
@@ -28,10 +30,22 @@ import type { CheckDefinition, CheckOutput, DoctorContext, TrafficSourceProbe } 
 const RECENT_DATA_WARN_DAYS = 7
 const RECENT_DATA_FAIL_DAYS = 30
 
+/**
+ * Only the current direct-push Cloudflare transport has no Canonry-side pull
+ * watermark. Missing mode is the legacy direct-push shape. Reserved/future
+ * modes must flow through normal pull checks instead of inheriting behavior
+ * from `sourceType = cloudflare`.
+ */
+function isCloudflareDirectPush(source: TrafficSourceProbe): boolean {
+  if (source.sourceType !== TrafficSourceTypes.cloudflare) return false
+  const deliveryMode = source.configJson.deliveryMode
+  return deliveryMode === undefined
+    || deliveryMode === CloudflareTrafficDeliveryModes['direct-push']
+}
+
 function recentDataRemediation(sources: TrafficSourceProbe[], lastSyncedAt: string | null): string {
-  const sourceTypes = new Set(sources.map((s) => s.sourceType))
-  const hasCloudflare = sourceTypes.has(TrafficSourceTypes.cloudflare)
-  const hasPullSource = [...sourceTypes].some((type) => type !== TrafficSourceTypes.cloudflare)
+  const hasCloudflare = sources.some(isCloudflareDirectPush)
+  const hasPullSource = sources.some(source => !isCloudflareDirectPush(source))
 
   if (hasCloudflare && !hasPullSource) {
     return 'Confirm the Cloudflare Worker is deployed on the zone route and forwarding to canonry; reconnect Cloudflare to regenerate the Worker if needed.'
@@ -73,6 +87,8 @@ function loadProbes(ctx: DoctorContext): TrafficSourceProbe[] {
     displayName: r.displayName,
     status: r.status,
     lastSyncedAt: r.lastSyncedAt,
+    lastWorkerVersion: r.lastWorkerVersion,
+    ingestTokenHash: r.ingestTokenHash,
     skippedThroughAt: r.skippedThroughAt,
     lastError: r.lastError,
     configJson: r.configJson,
@@ -170,12 +186,29 @@ const recentDataCheck: CheckDefinition = {
         )
         .get()?.total ?? 0,
     )
-    if (recentCrawlers > 0 || recentReferrals > 0) {
+    const recentUserFetches = Number(
+      ctx.db
+        .select({ total: sql<number>`COALESCE(SUM(${aiUserFetchEventsHourly.hits}), 0)` })
+        .from(aiUserFetchEventsHourly)
+        .where(
+          and(
+            eq(aiUserFetchEventsHourly.projectId, ctx.project.id),
+            gte(aiUserFetchEventsHourly.tsHour, warnCutoff),
+          ),
+        )
+        .get()?.total ?? 0,
+    )
+    if (recentCrawlers > 0 || recentUserFetches > 0 || recentReferrals > 0) {
       return {
         status: CheckStatuses.ok,
         code: 'traffic.recent-data.fresh',
-        summary: `${recentCrawlers} crawler hit(s) and ${recentReferrals} AI-referral arrival(s) in the last ${RECENT_DATA_WARN_DAYS} days.`,
-        details: { crawlerHits: recentCrawlers, referralArrivals: recentReferrals, windowDays: RECENT_DATA_WARN_DAYS },
+        summary: `${recentCrawlers} crawler hit(s), ${recentUserFetches} AI user-fetch hit(s), and ${recentReferrals} AI-referral arrival(s) in the last ${RECENT_DATA_WARN_DAYS} days.`,
+        details: {
+          crawlerHits: recentCrawlers,
+          aiUserFetchHits: recentUserFetches,
+          referralArrivals: recentReferrals,
+          windowDays: RECENT_DATA_WARN_DAYS,
+        },
       }
     }
 
@@ -204,15 +237,27 @@ const recentDataCheck: CheckDefinition = {
         )
         .get()?.total ?? 0,
     )
+    const olderUserFetches = Number(
+      ctx.db
+        .select({ total: sql<number>`COALESCE(SUM(${aiUserFetchEventsHourly.hits}), 0)` })
+        .from(aiUserFetchEventsHourly)
+        .where(
+          and(
+            eq(aiUserFetchEventsHourly.projectId, ctx.project.id),
+            gte(aiUserFetchEventsHourly.tsHour, failCutoff),
+          ),
+        )
+        .get()?.total ?? 0,
+    )
     const lastSyncedAt = sources.map((s) => s.lastSyncedAt).filter(Boolean).sort().at(-1) ?? null
-    const hasOlderData = olderCrawlers > 0 || olderReferrals > 0
+    const hasOlderData = olderCrawlers > 0 || olderUserFetches > 0 || olderReferrals > 0
     if (hasOlderData || lastSyncedAt) {
       return {
         status: CheckStatuses.warn,
         code: 'traffic.recent-data.stale',
         summary: hasOlderData
-          ? `No crawler hits or AI-referral sessions in the last ${RECENT_DATA_WARN_DAYS} days, though older data exists.`
-          : `No crawler hits or AI-referral sessions in the last ${RECENT_DATA_WARN_DAYS} days.`,
+          ? `No crawler, AI user-fetch, or AI-referral hits in the last ${RECENT_DATA_WARN_DAYS} days, though older data exists.`
+          : `No crawler, AI user-fetch, or AI-referral hits in the last ${RECENT_DATA_WARN_DAYS} days.`,
         remediation: recentDataRemediation(sources, lastSyncedAt),
         details: { lastSyncedAt, sourceCount: sources.length },
       }
@@ -467,7 +512,7 @@ const syncLagCheck: CheckDefinition = {
   run: (ctx) => {
     if (!ctx.project) return skippedNoProject()
     const allSources = loadProbes(ctx)
-    const sources = allSources.filter((source) => source.sourceType !== TrafficSourceTypes.cloudflare)
+    const sources = allSources.filter(source => !isCloudflareDirectPush(source))
     if (allSources.length > 0 && sources.length === 0) {
       return {
         status: CheckStatuses.skipped,
@@ -595,10 +640,79 @@ const syncLagCheck: CheckDefinition = {
   },
 }
 
+const workerVersionCheck: CheckDefinition = {
+  id: 'traffic.source.worker-version',
+  category: CheckCategories.integrations,
+  scope: CheckScopes.project,
+  title: 'Cloudflare Worker version',
+  run: (ctx) => {
+    if (!ctx.project) return skippedNoProject()
+
+    const sources = loadProbes(ctx).filter(isCloudflareDirectPush)
+    if (sources.length === 0) {
+      return {
+        status: CheckStatuses.skipped,
+        code: 'traffic.worker-version.not-applicable',
+        summary: 'No Cloudflare direct-push source is connected.',
+      }
+    }
+
+    const measured = sources.map((source) => {
+      const expected = source.configJson.workerVersion
+      const expectedVersion = typeof expected === 'string' && expected.length > 0
+        ? expected
+        : null
+      const observedVersion = source.lastWorkerVersion
+      const state = observedVersion === null
+        ? 'waiting-for-first-event'
+        : expectedVersion !== null && observedVersion === expectedVersion
+          ? 'current'
+          : 'stale'
+      return {
+        sourceId: source.id,
+        displayName: source.displayName,
+        expectedVersion,
+        observedVersion,
+        state,
+      }
+    })
+    const details = { sources: measured }
+    const stale = measured.filter(source => source.state === 'stale')
+    if (stale.length > 0) {
+      return {
+        status: CheckStatuses.warn,
+        code: 'traffic.worker-version.stale',
+        summary: `${stale.length} Cloudflare Worker source(s) report a version that differs from the generated version.`,
+        remediation: 'Redeploy the generated Worker from the credential-owning host. Use `canonry traffic connect cloudflare <project> --zone-id <id> --deploy --confirm-route --confirm-fail-open`, then attach the route manually.',
+        details,
+      }
+    }
+
+    const waiting = measured.filter(source => source.state === 'waiting-for-first-event')
+    if (waiting.length > 0) {
+      return {
+        status: CheckStatuses.warn,
+        code: 'traffic.worker-version.waiting-for-first-event',
+        summary: `${waiting.length} Cloudflare Worker source(s) have not delivered an event yet.`,
+        remediation: 'Send a smoke-test request through the Worker. Then run `canonry doctor --project <project>` again.',
+        details,
+      }
+    }
+
+    return {
+      status: CheckStatuses.ok,
+      code: 'traffic.worker-version.current',
+      summary: 'All Cloudflare direct-push Workers report the generated version.',
+      details,
+    }
+  },
+}
+
 export const TRAFFIC_SOURCE_CHECKS: readonly CheckDefinition[] = [
   sourceConnectedCheck,
   recentDataCheck,
   syncLagCheck,
+  workerVersionCheck,
   credentialsCheck,
   scopesCheck,
   cacheBlindSpotCheck,

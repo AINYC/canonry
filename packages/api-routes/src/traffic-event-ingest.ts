@@ -1,0 +1,328 @@
+import crypto from 'node:crypto'
+import { and, eq, gte, lt, lte, sql } from 'drizzle-orm'
+import type { DatabaseClient } from '@ainyc/canonry-db'
+import {
+  aiReferralEventsHourly,
+  aiUserFetchEventsHourly,
+  crawlerEventsHourly,
+  rawEventSamples,
+  trafficEventReceipts,
+  trafficSources,
+} from '@ainyc/canonry-db'
+import type { NormalizedTrafficRequest } from '@ainyc/canonry-contracts'
+import { buildTrafficProbeReport } from '@ainyc/canonry-integration-traffic'
+
+// Signatures expire after five minutes. Keep receipts for one additional
+// replay window so clock skew and an edge retry cannot double-count, without
+// retaining a full day of high-volume event ids.
+export const DIRECT_PUSH_RECEIPT_TTL_MS = 10 * 60_000
+
+type TrafficSourceRow = typeof trafficSources.$inferSelect
+type TrafficSourceIngestUpdate = Partial<Pick<
+  TrafficSourceRow,
+  'lastCursor' | 'lastError' | 'lastSyncedAt' | 'lastWorkerVersion' | 'status' | 'updatedAt'
+>>
+
+export interface WriteTrafficEventBatchOptions {
+  db: DatabaseClient
+  projectId: string
+  sourceId: string
+  events: readonly NormalizedTrafficRequest[]
+  receivedAt: string
+  receiptTtlMs: number
+  sampleLimit: number
+  /** Re-evaluated inside the write transaction so archive/revoke races fail closed. */
+  validateSource: (source: TrafficSourceRow | undefined) => void
+  /** Adapter-owned progress fields committed atomically with receipts and rollups. */
+  sourceUpdate: TrafficSourceIngestUpdate
+}
+
+export interface WriteTrafficEventBatchResult {
+  acceptedEvents: number
+  duplicateEvents: number
+  crawlerBucketRows: number
+  aiUserFetchBucketRows: number
+  aiReferralBucketRows: number
+  sampleRows: number
+}
+
+function observedUtcHourBounds(observedAt: string): { start: string; end: string } | null {
+  const instant = new Date(observedAt)
+  if (Number.isNaN(instant.getTime())) return null
+  instant.setUTCMinutes(0, 0, 0)
+  const start = instant.toISOString()
+  instant.setUTCHours(instant.getUTCHours() + 1)
+  return { start, end: instant.toISOString() }
+}
+
+/**
+ * Claim transport-neutral event ids and write their shared rollups atomically.
+ *
+ * Direct push and a future Queue pull consumer use the same boundary: the
+ * adapter supplies normalized events, its receipt horizon, source validation,
+ * and progress fields. A receipt exists iff every rollup write committed, so an
+ * upstream redelivery is safe after a process crash or acknowledgement loss.
+ */
+export function writeTrafficEventBatch(
+  opts: WriteTrafficEventBatchOptions,
+): WriteTrafficEventBatchResult {
+  const expiresAt = new Date(Date.parse(opts.receivedAt) + opts.receiptTtlMs).toISOString()
+  let acceptedEvents = 0
+  let duplicateEvents = 0
+  let crawlerBucketRows = 0
+  let aiUserFetchBucketRows = 0
+  let aiReferralBucketRows = 0
+  let sampleRows = 0
+
+  opts.db.transaction((tx) => {
+    // Serialize writers for one source before checking its hourly sample
+    // count. Receipt uniqueness protects rollups independently, while this
+    // source-row lock keeps concurrent one-event pushes under the shared raw
+    // sample cap. The no-op write participates in the transaction and leaves
+    // the stored timestamp unchanged.
+    tx
+      .update(trafficSources)
+      .set({ updatedAt: sql`${trafficSources.updatedAt}` })
+      .where(eq(trafficSources.id, opts.sourceId))
+      .run()
+
+    const source = tx
+      .select()
+      .from(trafficSources)
+      .where(eq(trafficSources.id, opts.sourceId))
+      .get()
+    opts.validateSource(source)
+
+    // Opportunistic, source-local sweep. The expiry index keeps this bounded,
+    // and scoping prevents one noisy source from doing cleanup work for all.
+    tx
+      .delete(trafficEventReceipts)
+      .where(and(
+        eq(trafficEventReceipts.sourceId, opts.sourceId),
+        lte(trafficEventReceipts.expiresAt, opts.receivedAt),
+      ))
+      .run()
+
+    const claimedEvents: NormalizedTrafficRequest[] = []
+    for (const event of opts.events) {
+      const claim = tx
+        .insert(trafficEventReceipts)
+        .values({
+          sourceId: opts.sourceId,
+          eventId: event.eventId,
+          receivedAt: opts.receivedAt,
+          expiresAt,
+        })
+        .onConflictDoNothing()
+        .run()
+      if (claim.changes === 1) claimedEvents.push(event)
+      else duplicateEvents += 1
+    }
+    acceptedEvents = claimedEvents.length
+
+    if (claimedEvents.length > 0) {
+      // Build every eligible sample from this bounded batch. The durable
+      // source/hour cap below, not the transport batch size, decides which
+      // samples persist. This keeps one-event push and future Queue batches
+      // on the same storage boundary.
+      const report = buildTrafficProbeReport(claimedEvents, { sampleLimit: claimedEvents.length })
+
+      for (const bucket of report.crawlerEventsHourly) {
+        const status = bucket.status ?? 0
+        tx
+          .insert(crawlerEventsHourly)
+          .values({
+            projectId: opts.projectId,
+            sourceId: opts.sourceId,
+            tsHour: bucket.tsHour,
+            botId: bucket.botId,
+            operator: bucket.operator,
+            verificationStatus: bucket.verificationStatus,
+            pathNormalized: bucket.pathNormalized,
+            status,
+            hits: bucket.hits,
+            sampledUserAgent: bucket.sampledUserAgent,
+            createdAt: opts.receivedAt,
+            updatedAt: opts.receivedAt,
+          })
+          .onConflictDoUpdate({
+            target: [
+              crawlerEventsHourly.projectId,
+              crawlerEventsHourly.sourceId,
+              crawlerEventsHourly.tsHour,
+              crawlerEventsHourly.botId,
+              crawlerEventsHourly.verificationStatus,
+              crawlerEventsHourly.pathNormalized,
+              crawlerEventsHourly.status,
+            ],
+            set: {
+              hits: sql`${crawlerEventsHourly.hits} + ${bucket.hits}`,
+              sampledUserAgent: bucket.sampledUserAgent,
+              updatedAt: opts.receivedAt,
+            },
+          })
+          .run()
+        crawlerBucketRows += 1
+      }
+
+      for (const bucket of report.aiUserFetchEventsHourly) {
+        const status = bucket.status ?? 0
+        tx
+          .insert(aiUserFetchEventsHourly)
+          .values({
+            projectId: opts.projectId,
+            sourceId: opts.sourceId,
+            tsHour: bucket.tsHour,
+            botId: bucket.botId,
+            operator: bucket.operator,
+            verificationStatus: bucket.verificationStatus,
+            pathNormalized: bucket.pathNormalized,
+            status,
+            hits: bucket.hits,
+            sampledUserAgent: bucket.sampledUserAgent,
+            createdAt: opts.receivedAt,
+            updatedAt: opts.receivedAt,
+          })
+          .onConflictDoUpdate({
+            target: [
+              aiUserFetchEventsHourly.projectId,
+              aiUserFetchEventsHourly.sourceId,
+              aiUserFetchEventsHourly.tsHour,
+              aiUserFetchEventsHourly.botId,
+              aiUserFetchEventsHourly.verificationStatus,
+              aiUserFetchEventsHourly.pathNormalized,
+              aiUserFetchEventsHourly.status,
+            ],
+            set: {
+              hits: sql`${aiUserFetchEventsHourly.hits} + ${bucket.hits}`,
+              sampledUserAgent: bucket.sampledUserAgent,
+              updatedAt: opts.receivedAt,
+            },
+          })
+          .run()
+        aiUserFetchBucketRows += 1
+      }
+
+      for (const bucket of report.aiReferralEventsHourly) {
+        const status = bucket.status ?? 0
+        tx
+          .insert(aiReferralEventsHourly)
+          .values({
+            projectId: opts.projectId,
+            sourceId: opts.sourceId,
+            tsHour: bucket.tsHour,
+            product: bucket.product,
+            operator: bucket.operator,
+            sourceDomain: bucket.sourceDomain,
+            evidenceType: bucket.evidenceType,
+            landingPathNormalized: bucket.landingPathNormalized,
+            status,
+            sessionsOrHits: bucket.hits,
+            paidSessionsOrHits: bucket.paidHits,
+            organicSessionsOrHits: bucket.organicHits,
+            usersEstimated: null,
+            createdAt: opts.receivedAt,
+            updatedAt: opts.receivedAt,
+          })
+          .onConflictDoUpdate({
+            target: [
+              aiReferralEventsHourly.projectId,
+              aiReferralEventsHourly.sourceId,
+              aiReferralEventsHourly.tsHour,
+              aiReferralEventsHourly.product,
+              aiReferralEventsHourly.sourceDomain,
+              aiReferralEventsHourly.evidenceType,
+              aiReferralEventsHourly.landingPathNormalized,
+              aiReferralEventsHourly.status,
+            ],
+            set: {
+              sessionsOrHits: sql`${aiReferralEventsHourly.sessionsOrHits} + ${bucket.hits}`,
+              paidSessionsOrHits: sql`${aiReferralEventsHourly.paidSessionsOrHits} + ${bucket.paidHits}`,
+              organicSessionsOrHits: sql`${aiReferralEventsHourly.organicSessionsOrHits} + ${bucket.organicHits}`,
+              updatedAt: opts.receivedAt,
+            },
+          })
+          .run()
+        aiReferralBucketRows += 1
+      }
+
+      const hourlySampleLimit = Math.max(0, Math.floor(opts.sampleLimit))
+      const remainingSamplesByHour = new Map<string, number>()
+      for (const sample of report.samples) {
+        const hour = observedUtcHourBounds(sample.observedAt)
+        if (!hour || hourlySampleLimit === 0) continue
+        let remaining = remainingSamplesByHour.get(hour.start)
+        if (remaining === undefined) {
+          const existing = tx
+            .select({ total: sql<number>`COUNT(*)` })
+            .from(rawEventSamples)
+            .where(and(
+              eq(rawEventSamples.sourceId, opts.sourceId),
+              gte(rawEventSamples.ts, hour.start),
+              lt(rawEventSamples.ts, hour.end),
+            ))
+            .get()
+          remaining = Math.max(0, hourlySampleLimit - Number(existing?.total ?? 0))
+        }
+        if (remaining === 0) {
+          remainingSamplesByHour.set(hour.start, 0)
+          continue
+        }
+
+        const eventType = sample.crawler
+          ? 'crawler'
+          : sample.aiUserFetch
+            ? 'ai_user_fetch'
+            : sample.aiReferral
+              ? 'ai_referral'
+              : 'unknown'
+        const refererHost = (() => {
+          if (!sample.referer) return null
+          try {
+            return new URL(sample.referer).hostname
+          } catch {
+            return null
+          }
+        })()
+        tx
+          .insert(rawEventSamples)
+          .values({
+            id: crypto.randomUUID(),
+            projectId: opts.projectId,
+            sourceId: opts.sourceId,
+            ts: sample.observedAt,
+            eventType,
+            ipHash: null,
+            userAgent: sample.userAgent,
+            pathNormalized: sample.pathNormalized,
+            status: sample.status,
+            refererHost,
+            classifierDetailsJson: {
+              crawler: sample.crawler,
+              aiUserFetch: sample.aiUserFetch,
+              aiReferral: sample.aiReferral,
+            },
+            createdAt: opts.receivedAt,
+          })
+          .run()
+        sampleRows += 1
+        remainingSamplesByHour.set(hour.start, remaining - 1)
+      }
+    }
+
+    tx
+      .update(trafficSources)
+      .set(opts.sourceUpdate)
+      .where(eq(trafficSources.id, opts.sourceId))
+      .run()
+  })
+
+  return {
+    acceptedEvents,
+    duplicateEvents,
+    crawlerBucketRows,
+    aiUserFetchBucketRows,
+    aiReferralBucketRows,
+    sampleRows,
+  }
+}

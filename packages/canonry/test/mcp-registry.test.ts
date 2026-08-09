@@ -207,6 +207,13 @@ const expectedToolNames = [
 ] as const
 
 describe('MCP tool registry', () => {
+  it('defers Cloudflare connect to the local secret-safe CLI workflow', () => {
+    expect(canonryMcpTools.some(tool => tool.name === 'canonry_traffic_connect_cloudflare')).toBe(false)
+    expect(MCP_OPENAPI_OPERATION_CLASSIFICATIONS[
+      'POST /api/v1/projects/{name}/traffic/connect/cloudflare'
+    ]).toBe('deferred')
+  })
+
   it('exposes bounded Site Health reads as read-only monitoring tools', () => {
     const expected = [
       ['canonry_site_health_overview', 'GET /api/v1/projects/{name}/technical-aeo/crawl'],

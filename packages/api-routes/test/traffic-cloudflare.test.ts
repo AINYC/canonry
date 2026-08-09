@@ -14,8 +14,10 @@ import {
   aiReferralEventsHourly,
   rawEventSamples,
   auditLog,
+  trafficEventReceipts,
 } from '@ainyc/canonry-db'
 import { TrafficSourceStatuses, TrafficSourceTypes } from '@ainyc/canonry-contracts'
+import { canonicalizeCloudflareJson } from '@ainyc/canonry-integration-cloudflare-worker'
 import { apiRoutes } from '../src/index.js'
 import type {
   CloudflareTrafficCredentialRecord,
@@ -24,7 +26,13 @@ import type {
 
 const INGEST_URL = 'https://canonry.test/api/v1/projects/{name}/traffic/cloudflare/ingest'
 
-async function buildHarness(opts: { ingestUrl?: string } = {}) {
+async function buildHarness(opts: {
+  ingestUrl?: string
+  ingestRateLimitMax?: number
+  ingestIpRateLimitMax?: number
+  sampleLimit?: number
+  canonicalDomain?: string
+} = {}) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-traffic-routes-test-'))
   const dbPath = path.join(tmpDir, 'test.db')
   const db = createClient(dbPath)
@@ -52,6 +60,9 @@ async function buildHarness(opts: { ingestUrl?: string } = {}) {
     skipAuth: true,
     cloudflareTrafficCredentialStore,
     cloudflareTrafficIngestUrl: opts.ingestUrl ?? INGEST_URL,
+    cloudflareIngestRateLimitMax: opts.ingestRateLimitMax,
+    cloudflareIngestIpRateLimitMax: opts.ingestIpRateLimitMax,
+    defaultTrafficSampleLimit: opts.sampleLimit,
   })
   await app.ready()
 
@@ -61,7 +72,7 @@ async function buildHarness(opts: { ingestUrl?: string } = {}) {
     url: '/api/v1/projects/test-project',
     payload: {
       displayName: 'Test Project',
-      canonicalDomain: 'example.com',
+      canonicalDomain: opts.canonicalDomain ?? 'example.com',
       country: 'US',
       language: 'en',
     },
@@ -81,6 +92,10 @@ async function buildHarness(opts: { ingestUrl?: string } = {}) {
 
 function sign(timestamp: number, body: string, secret: string): string {
   return createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')
+}
+
+function signPayload(timestamp: number, payload: unknown, secret: string): string {
+  return sign(timestamp, canonicalizeCloudflareJson(payload), secret)
 }
 
 function buildIngestEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -115,12 +130,17 @@ describe('POST /traffic/connect/cloudflare', () => {
 
     const body = JSON.parse(res.payload) as Record<string, unknown>
     expect(body.sourceId).toMatch(/.+/)
+    expect(body.deliveryMode).toBe('direct-push')
     expect(typeof body.workerScript).toBe('string')
-    expect((body.workerScript as string)).toContain('addEventListener')
+    expect((body.workerScript as string)).toContain('export default')
     expect(body.wranglerToml).toContain('workers_dev = false')
     expect(body.wranglerToml).toContain('example.com/*')
     expect(typeof body.workerVersion).toBe('string')
     expect(typeof body.instructions).toBe('string')
+    expect(body.instructions).toMatch(/inspect existing Cloudflare Worker routes/i)
+    expect(body.instructions).toContain('Request limit failure mode to Fail open')
+    expect(body.instructions).toContain('Wrangler cannot set this toggle')
+    expect(body.wranglerToml).not.toContain('[[routes]]')
 
     const rows = h.db.select().from(trafficSources).all()
     expect(rows).toHaveLength(1)
@@ -132,21 +152,24 @@ describe('POST /traffic/connect/cloudflare', () => {
     const credential = h.cloudflareCredentials.get('test-project')
     expect(credential).toBeDefined()
     expect(credential?.sourceId).toBe(body.sourceId)
+    expect(credential?.deliveryMode).toBe('direct-push')
     expect(credential?.bearerToken).toMatch(/.+/)
     expect(credential?.hmacSecret).toMatch(/.+/)
   })
 
-  it('embeds the bearer token, HMAC secret, and source id into the generated Worker script', async () => {
+  it('keeps credentials out of generated Worker source and Wrangler config', async () => {
     const res = await h.app.inject({
       method: 'POST',
       url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
       payload: { displayName: 'CF' },
     })
-    const body = JSON.parse(res.payload) as { workerScript: string; sourceId: string }
+    const body = JSON.parse(res.payload) as { workerScript: string; wranglerToml: string; sourceId: string }
     const credential = h.cloudflareCredentials.get('test-project')!
-    expect(body.workerScript).toContain(credential.bearerToken)
-    expect(body.workerScript).toContain(credential.hmacSecret)
-    expect(body.workerScript).toContain(body.sourceId)
+    expect(body.workerScript).not.toContain(credential.bearerToken)
+    expect(body.workerScript).not.toContain(credential.hmacSecret)
+    expect(body.wranglerToml).not.toContain(credential.bearerToken)
+    expect(body.wranglerToml).not.toContain(credential.hmacSecret)
+    expect(body.wranglerToml).toContain(body.sourceId)
   })
 
   it('writes an audit log entry tagged traffic.cloudflare.connected', async () => {
@@ -161,14 +184,25 @@ describe('POST /traffic/connect/cloudflare', () => {
     expect(connect?.entityType).toBe('traffic_source')
   })
 
-  it('is idempotent — reconnect rotates secrets but reuses the same source row', async () => {
+  it('is idempotent — reconnect reuses credentials, source row, and omitted metadata', async () => {
     const first = await h.app.inject({
       method: 'POST',
       url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
-      payload: {},
+      payload: { displayName: 'CF production', zoneId: 'zone_1', accountId: 'account_1' },
     })
     const firstBody = JSON.parse(first.payload) as { sourceId: string }
     const firstCred = { ...h.cloudflareCredentials.get('test-project')! }
+    const firstSource = h.db
+      .select()
+      .from(trafficSources)
+      .where(eq(trafficSources.id, firstBody.sourceId))
+      .get()!
+    const { deliveryMode: _legacyMissingDeliveryMode, ...legacyConfig } = firstSource.configJson
+    h.db
+      .update(trafficSources)
+      .set({ configJson: legacyConfig })
+      .where(eq(trafficSources.id, firstBody.sourceId))
+      .run()
 
     const second = await h.app.inject({
       method: 'POST',
@@ -180,11 +214,19 @@ describe('POST /traffic/connect/cloudflare', () => {
     expect(secondBody.sourceId).toBe(firstBody.sourceId)
 
     const secondCred = h.cloudflareCredentials.get('test-project')!
-    expect(secondCred.bearerToken).not.toBe(firstCred.bearerToken)
-    expect(secondCred.hmacSecret).not.toBe(firstCred.hmacSecret)
+    expect(secondCred.bearerToken).toBe(firstCred.bearerToken)
+    expect(secondCred.hmacSecret).toBe(firstCred.hmacSecret)
+    expect(secondCred.zoneId).toBe('zone_1')
+    expect(secondCred.accountId).toBe('account_1')
 
     const rows = h.db.select().from(trafficSources).all()
     expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ displayName: 'CF production' })
+    expect(rows[0]!.configJson).toMatchObject({
+      deliveryMode: 'direct-push',
+      zoneId: 'zone_1',
+      accountId: 'account_1',
+    })
   })
 
   it('persists the bot list version in the source config', async () => {
@@ -195,16 +237,41 @@ describe('POST /traffic/connect/cloudflare', () => {
     })
     const body = JSON.parse(res.payload) as { sourceId: string; wranglerToml: string }
     const sourceId = body.sourceId
-    expect(body.wranglerToml).toContain('pattern = "example.com/*"')
-    expect(body.wranglerToml).toContain('zone_id = "zone_abc"')
+    expect(body.wranglerToml).toContain('#   example.com/*')
+    expect(body.wranglerToml).toContain('# Target zone id: "zone_abc"')
+    expect(body.wranglerToml).toContain('account_id = "acct_xyz"')
     const row = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
     expect(row.configJson).toMatchObject({
       schemaVersion: 1,
+      deliveryMode: 'direct-push',
       workerVersion: expect.any(String),
       expectedBotListVersion: expect.any(String),
       zoneId: 'zone_abc',
       accountId: 'acct_xyz',
     })
+  })
+
+  it('refuses to reconnect credentials from another delivery mode', async () => {
+    const first = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {},
+    })
+    expect(first.statusCode).toBe(200)
+    const credential = h.cloudflareCredentials.get('test-project')!
+    h.cloudflareCredentials.set('test-project', {
+      ...credential,
+      deliveryMode: 'queue-pull',
+    } as unknown as CloudflareTrafficCredentialRecord)
+
+    const reconnect = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {},
+    })
+
+    expect(reconnect.statusCode).toBe(400)
+    expect(reconnect.payload).toMatch(/delivery mode/i)
   })
 
   it('rejects a loopback HTTP ingest URL that Cloudflare edge cannot reach', async () => {
@@ -222,6 +289,108 @@ describe('POST /traffic/connect/cloudflare', () => {
     expect(res.statusCode).toBe(400)
     expect(res.payload).toMatch(/public Cloudflare edge/i)
     expect(h.db.select().from(trafficSources).all()).toHaveLength(0)
+  })
+
+  it('rejects an ingest URL on the exact Worker route hostname before mutation', async () => {
+    await h.close()
+    h = await buildHarness({
+      ingestUrl: 'https://EXAMPLE.com./api/v1/projects/{name}/traffic/cloudflare/ingest',
+    })
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {},
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.payload).toMatch(/recursive ingestion/i)
+    expect(h.db.select().from(trafficSources).all()).toHaveLength(0)
+    expect(h.cloudflareCredentials.size).toBe(0)
+  })
+
+  it.each([
+    ['userinfo', 'https://user@canonry.test/api/v1/projects/{name}/traffic/cloudflare/ingest'],
+    ['a query', 'https://canonry.test/api/v1/projects/{name}/traffic/cloudflare/ingest?token=bad'],
+    ['a fragment', 'https://canonry.test/api/v1/projects/{name}/traffic/cloudflare/ingest#secret'],
+  ])('rejects ingest URLs with %s before mutation', async (_label, ingestUrl) => {
+    await h.close()
+    h = await buildHarness({ ingestUrl })
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {},
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.payload).toMatch(/credential-free public HTTPS URL/i)
+    expect(h.db.select().from(trafficSources).all()).toHaveLength(0)
+    expect(h.cloudflareCredentials.size).toBe(0)
+  })
+
+  it('normalizes a root URL into one exact route hostname and preserves www', async () => {
+    await h.close()
+    h = await buildHarness({ canonicalDomain: 'https://WWW.Example.com./' })
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: { zoneId: 'zone_www' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.payload)).toMatchObject({
+      wranglerToml: expect.stringContaining('www.example.com/*'),
+    })
+  })
+
+  it('rejects a canonical domain with a non-root path before mutation', async () => {
+    await h.close()
+    h = await buildHarness({ canonicalDomain: 'https://example.com/site' })
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {},
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.payload).toMatch(/bare hostname or root HTTP/i)
+    expect(h.db.select().from(trafficSources).all()).toHaveLength(0)
+    expect(h.cloudflareCredentials.size).toBe(0)
+  })
+
+  it('rejects a canonical domain with a non-default port before mutation', async () => {
+    await h.close()
+    h = await buildHarness({ canonicalDomain: 'https://example.com:8443/' })
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {},
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.payload).toMatch(/non-default port/i)
+    expect(h.db.select().from(trafficSources).all()).toHaveLength(0)
+    expect(h.cloudflareCredentials.size).toBe(0)
+  })
+
+  it('rejects an IP address because Cloudflare routes require a zone hostname', async () => {
+    await h.close()
+    h = await buildHarness({ canonicalDomain: '203.0.113.10' })
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {},
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.payload).toMatch(/public hostname/i)
+    expect(h.db.select().from(trafficSources).all()).toHaveLength(0)
+    expect(h.cloudflareCredentials.size).toBe(0)
   })
 
   it('returns 404 for an unknown project', async () => {
@@ -262,14 +431,18 @@ describe('POST /traffic/cloudflare/ingest', () => {
     timestamp?: number
     signatureOverride?: string
     sourceIdHeader?: string
+    rawBody?: string
+    url?: string
+    remoteAddress?: string
   }) {
-    const bodyStr = JSON.stringify(opts.body)
+    const bodyStr = opts.rawBody ?? JSON.stringify(opts.body)
     const timestamp = opts.timestamp ?? Math.floor(Date.now() / 1000)
-    const signature = opts.signatureOverride ?? sign(timestamp, bodyStr, secret)
+    const signature = opts.signatureOverride ?? signPayload(timestamp, opts.body, secret)
     return h.app.inject({
       method: 'POST',
-      url: '/api/v1/projects/test-project/traffic/cloudflare/ingest',
+      url: opts.url ?? '/api/v1/projects/test-project/traffic/cloudflare/ingest',
       payload: bodyStr,
+      remoteAddress: opts.remoteAddress,
       headers: {
         'content-type': 'application/json',
         'Authorization': `Bearer ${opts.bearer ?? bearer}`,
@@ -302,6 +475,55 @@ describe('POST /traffic/cloudflare/ingest', () => {
     expect(crawlerRows[0]!.projectId).toBe(projectId)
   })
 
+  it('accepts an exact event hostname after case and trailing-dot normalization', async () => {
+    const res = await ingest({
+      body: {
+        schemaVersion: 1,
+        workerVersion: '1.0.0',
+        events: [buildIngestEvent({ host: 'EXAMPLE.COM.' })],
+      },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.payload)).toMatchObject({ acceptedEvents: 1 })
+  })
+
+  it('rejects a signed wrong-host batch before receipts or rollups are written', async () => {
+    const res = await ingest({
+      body: {
+        schemaVersion: 1,
+        workerVersion: '1.0.0',
+        events: [
+          buildIngestEvent({ eventId: 'right-host' }),
+          buildIngestEvent({ eventId: 'wrong-host', host: 'www.example.com' }),
+        ],
+      },
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.payload).toMatch(/does not belong to project domain/i)
+    expect(h.db.select().from(trafficEventReceipts).all()).toHaveLength(0)
+    expect(h.db.select().from(crawlerEventsHourly).all()).toHaveLength(0)
+    expect(h.db.select().from(rawEventSamples).all()).toHaveLength(0)
+  })
+
+  it('verifies the canonical payload independent of JSON key order and whitespace', async () => {
+    const body = {
+      schemaVersion: 1,
+      workerVersion: '1.0.0',
+      events: [buildIngestEvent({ eventId: 'ray-canonical' })],
+    }
+    const rawBody = JSON.stringify({
+      events: body.events,
+      workerVersion: body.workerVersion,
+      schemaVersion: body.schemaVersion,
+    }, null, 2)
+
+    const res = await ingest({ body, rawBody })
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.payload)).toMatchObject({ acceptedEvents: 1, droppedEvents: 0 })
+  })
+
   it('updates last_worker_version on every successful ingest', async () => {
     await ingest({
       body: {
@@ -327,6 +549,19 @@ describe('POST /traffic/cloudflare/ingest', () => {
       },
     })
     expect(res.statusCode).toBe(401)
+  })
+
+  it('authenticates before project resolution so unknown paths return the generic 401', async () => {
+    const res = await ingest({
+      body: { schemaVersion: 1, workerVersion: '1.0.0', events: [buildIngestEvent()] },
+      bearer: 'wrong-token',
+      url: '/api/v1/projects/unknown/traffic/cloudflare/ingest',
+    })
+
+    expect(res.statusCode).toBe(401)
+    expect(JSON.parse(res.payload)).toMatchObject({
+      error: { code: 'AUTH_REQUIRED', message: 'Authentication required' },
+    })
   })
 
   it('rejects a wrong bearer token with 401', async () => {
@@ -363,6 +598,39 @@ describe('POST /traffic/cloudflare/ingest', () => {
     })
     expect(res.statusCode).toBe(401)
     expect(h.db.select().from(crawlerEventsHourly).all()).toHaveLength(0)
+  })
+
+  it('rejects a source whose persisted delivery mode is not direct-push', async () => {
+    const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+    h.db
+      .update(trafficSources)
+      .set({ configJson: { ...source.configJson, deliveryMode: 'queue-pull' } })
+      .where(eq(trafficSources.id, sourceId))
+      .run()
+
+    const res = await ingest({
+      body: { schemaVersion: 1, workerVersion: '1.0.0', events: [buildIngestEvent()] },
+    })
+
+    expect(res.statusCode).toBe(401)
+    expect(h.db.select().from(crawlerEventsHourly).all()).toHaveLength(0)
+  })
+
+  it('defaults a legacy source with no delivery mode to direct-push', async () => {
+    const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+    const { deliveryMode: _legacyMissingDeliveryMode, ...legacyConfig } = source.configJson
+    h.db
+      .update(trafficSources)
+      .set({ configJson: legacyConfig })
+      .where(eq(trafficSources.id, sourceId))
+      .run()
+
+    const res = await ingest({
+      body: { schemaVersion: 1, workerVersion: '1.0.0', events: [buildIngestEvent()] },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.payload)).toMatchObject({ acceptedEvents: 1, droppedEvents: 0 })
   })
 
   it('rejects a tampered body with 401', async () => {
@@ -414,6 +682,17 @@ describe('POST /traffic/cloudflare/ingest', () => {
       body: { schemaVersion: 2, workerVersion: '1.0.0', events: [buildIngestEvent()] },
     })
     expect(res.statusCode).toBe(400)
+  })
+
+  it('rejects ingest payloads larger than 256 KiB', async () => {
+    const body = {
+      schemaVersion: 1,
+      workerVersion: 'x'.repeat(270 * 1024),
+      events: [buildIngestEvent()],
+    }
+    const res = await ingest({ body })
+
+    expect(res.statusCode).toBe(413)
   })
 
   it('routes an AI-referral event into the referral bucket, not the crawler bucket', async () => {
@@ -493,13 +772,66 @@ describe('POST /traffic/cloudflare/ingest', () => {
     expect(samples.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('dedupes replayed Cloudflare event ids across ingest requests', async () => {
+  it('caps raw samples source-wide per observed UTC hour across one-event pushes', async () => {
+    await h.close()
+    h = await buildHarness({ sampleLimit: 1 })
+    const connect = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {},
+    })
+    sourceId = (JSON.parse(connect.payload) as { sourceId: string }).sourceId
+    const credential = h.cloudflareCredentials.get('test-project')!
+    bearer = credential.bearerToken
+    secret = credential.hmacSecret
+
+    for (const [eventId, observedAt] of [
+      ['sample-hour-a', '2026-05-27T15:01:00.000Z'],
+      ['sample-hour-b', '2026-05-27T15:59:59.000Z'],
+      ['sample-next-hour', '2026-05-27T16:00:00.000Z'],
+    ] as const) {
+      const res = await ingest({
+        body: {
+          schemaVersion: 1,
+          workerVersion: '1.0.0',
+          events: [buildIngestEvent({ eventId, observedAt })],
+        },
+      })
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.payload)).toMatchObject({ acceptedEvents: 1 })
+    }
+
+    expect(h.db.select().from(trafficEventReceipts).all()).toHaveLength(3)
+    expect(h.db.select().from(crawlerEventsHourly).all().reduce((sum, row) => sum + row.hits, 0))
+      .toBe(3)
+    expect(h.db.select().from(rawEventSamples).all().map(row => row.ts).sort()).toEqual([
+      '2026-05-27T15:01:00.000Z',
+      '2026-05-27T16:00:00.000Z',
+    ])
+  })
+
+  it('dedupes the 1,001st event after the legacy replay ring is cleared', async () => {
     const event = buildIngestEvent({ eventId: 'ray-replay' })
+    const legacyReplayRing = Array.from({ length: 1_000 }, (_, index) => `pull-event-${index}`)
+    h.db
+      .update(trafficSources)
+      .set({ lastEventIds: legacyReplayRing })
+      .where(eq(trafficSources.id, sourceId))
+      .run()
     const first = await ingest({
       body: { schemaVersion: 1, workerVersion: '1.0.0', events: [event] },
     })
     expect(first.statusCode).toBe(200)
     expect(JSON.parse(first.payload)).toMatchObject({ acceptedEvents: 1, droppedEvents: 0 })
+    expect(
+      h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!.lastEventIds,
+    ).toEqual(legacyReplayRing)
+
+    h.db
+      .update(trafficSources)
+      .set({ lastEventIds: [] })
+      .where(eq(trafficSources.id, sourceId))
+      .run()
 
     const second = await ingest({
       body: { schemaVersion: 1, workerVersion: '1.0.0', events: [event] },
@@ -509,6 +841,36 @@ describe('POST /traffic/cloudflare/ingest', () => {
 
     const [crawlerRow] = h.db.select().from(crawlerEventsHourly).all()
     expect(crawlerRow?.hits).toBe(1)
+    expect(
+      h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!.lastEventIds,
+    ).toEqual([])
+
+    const receipts = h.db.select().from(trafficEventReceipts).all()
+    expect(receipts).toHaveLength(1)
+    expect(receipts[0]).toMatchObject({ sourceId, eventId: 'cloudflare-worker:ray-replay' })
+    expect(Date.parse(receipts[0]!.expiresAt) - Date.parse(receipts[0]!.receivedAt))
+      .toBe(10 * 60_000)
+  })
+
+  it('prunes expired durable receipts while claiming the next event', async () => {
+    h.db.insert(trafficEventReceipts).values({
+      sourceId,
+      eventId: 'ray-expired',
+      receivedAt: '2000-01-01T00:00:00.000Z',
+      expiresAt: '2000-01-02T00:00:00.000Z',
+    }).run()
+
+    const res = await ingest({
+      body: {
+        schemaVersion: 1,
+        workerVersion: '1.0.0',
+        events: [buildIngestEvent({ eventId: 'ray-current' })],
+      },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(h.db.select().from(trafficEventReceipts).all().map(row => row.eventId))
+      .toEqual(['cloudflare-worker:ray-current'])
   })
 
   it('dedupes duplicate Cloudflare event ids inside one batch', async () => {
@@ -527,25 +889,70 @@ describe('POST /traffic/cloudflare/ingest', () => {
     expect(crawlerRow?.hits).toBe(1)
   })
 
-  it('drops events that fail normalization but counts them in droppedEvents', async () => {
-    const res = await ingest({
-      body: {
-        schemaVersion: 1,
-        workerVersion: '1.0.0',
-        events: [
-          buildIngestEvent(),
-          // Missing path is caught by the zod schema (path.min(1)), so this
-          // would 400 — use a different drop case via an empty host that still
-          // validates but yields a different rollup grouping. Actually, the
-          // schema forbids empty path; the normalizer drops empty path. The
-          // schema runs first → this case is a 400. Cover the drop semantics
-          // via the schema instead and assert no rollup row was written.
-        ],
-      },
+  it('claims concurrent identical ingests once', async () => {
+    const event = buildIngestEvent({ eventId: 'ray-concurrent' })
+    const responses = await Promise.all([
+      ingest({ body: { schemaVersion: 1, workerVersion: '1.0.0', events: [event] } }),
+      ingest({ body: { schemaVersion: 1, workerVersion: '1.0.0', events: [event] } }),
+    ])
+
+    expect(responses.map(response => response.statusCode)).toEqual([200, 200])
+    const acknowledgements = responses.map(response => JSON.parse(response.payload) as {
+      acceptedEvents: number
+      droppedEvents: number
     })
-    expect(res.statusCode).toBe(200)
-    const body = JSON.parse(res.payload) as Record<string, unknown>
-    expect(body.acceptedEvents).toBe(1)
-    expect(body.droppedEvents).toBe(0)
+    expect(acknowledgements.reduce((sum, ack) => sum + ack.acceptedEvents, 0)).toBe(1)
+    expect(acknowledgements.reduce((sum, ack) => sum + ack.droppedEvents, 0)).toBe(1)
+    expect(h.db.select().from(trafficEventReceipts).all()).toHaveLength(1)
+    expect(h.db.select().from(crawlerEventsHourly).all()[0]?.hits).toBe(1)
+  })
+
+  it('rate-limits valid traffic per source without charging invalid paths to that bucket', async () => {
+    await h.close()
+    h = await buildHarness({ ingestRateLimitMax: 1 })
+    const connect = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {},
+    })
+    sourceId = (JSON.parse(connect.payload) as { sourceId: string }).sourceId
+    const credential = h.cloudflareCredentials.get('test-project')!
+    bearer = credential.bearerToken
+    secret = credential.hmacSecret
+
+    const invalid = await ingest({
+      body: { schemaVersion: 1, workerVersion: '1.0.0', events: [buildIngestEvent()] },
+      url: '/api/v1/projects/unknown/traffic/cloudflare/ingest',
+    })
+    expect(invalid.statusCode).toBe(401)
+
+    const first = await ingest({
+      body: { schemaVersion: 1, workerVersion: '1.0.0', events: [buildIngestEvent()] },
+      remoteAddress: '203.0.113.10',
+    })
+    expect(first.statusCode).toBe(200)
+
+    const second = await ingest({
+      body: { schemaVersion: 1, workerVersion: '1.0.0', events: [buildIngestEvent()] },
+      remoteAddress: '198.51.100.20',
+    })
+    expect(second.statusCode).toBe(429)
+  })
+
+  it('meters malformed JSON by caller IP before body parsing', async () => {
+    await h.close()
+    h = await buildHarness({ ingestIpRateLimitMax: 1 })
+
+    const sendMalformed = () => h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/cloudflare/ingest',
+      payload: '{"schemaVersion":',
+      headers: { 'content-type': 'application/json' },
+    })
+    const first = await sendMalformed()
+    const second = await sendMalformed()
+
+    expect(first.statusCode).toBe(400)
+    expect(second.statusCode).toBe(429)
   })
 })

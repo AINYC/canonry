@@ -69,6 +69,7 @@ export default defineConfig({
     '@ainyc/canonry-provider-perplexity',
     '@ainyc/canonry-integration-google',
     '@ainyc/canonry-integration-bing',
+    '@ainyc/canonry-integration-cloudflare-worker',
     '@ainyc/canonry-integration-commoncrawl',
   ],
 })

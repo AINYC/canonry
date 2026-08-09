@@ -316,9 +316,10 @@ export type CloudflareWorkerIngestRequest = CloudflareEdgeEventBatch
 
 /**
  * Acknowledgement returned by `POST /traffic/cloudflare/ingest`. `acceptedEvents`
- * is the count that normalized and reached the rollup pipeline; `droppedEvents`
- * is the count that failed normalization. The `*BucketRows` / `sampleRows`
- * fields report how many hourly-rollup and sample rows the batch touched —
+ * is the count that normalized and reached the rollup pipeline.
+ * `droppedEvents` includes normalization failures and duplicate durable receipts.
+ * The `*BucketRows` / `sampleRows` fields report how many hourly-rollup and
+ * sample rows the batch touched —
  * diagnostic only; the Worker ignores the body.
  */
 export const cloudflareWorkerIngestResponseSchema = z.object({

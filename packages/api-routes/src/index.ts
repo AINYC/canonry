@@ -64,7 +64,11 @@ import { wordpressRoutes } from './wordpress.js'
 import type { WordpressRoutesOptions } from './wordpress.js'
 import { backlinksRoutes } from './backlinks.js'
 import type { BacklinksRoutesOptions } from './backlinks.js'
-import { trafficRoutes, defaultResolveAccessToken } from './traffic.js'
+import {
+  trafficRoutes,
+  defaultResolveAccessToken,
+  hashCloudflareBearerToken,
+} from './traffic.js'
 import type { TrafficRoutesOptions, CloudRunCredentialStore } from './traffic.js'
 import {
   listWordpressTrafficEvents,
@@ -249,6 +253,12 @@ export interface ApiRoutesOptions {
   cloudflareTrafficCredentialStore?: TrafficRoutesOptions['cloudflareTrafficCredentialStore']
   /** Override the canonry ingest URL embedded into generated Worker scripts (tests) */
   cloudflareTrafficIngestUrl?: TrafficRoutesOptions['cloudflareTrafficIngestUrl']
+  /** Per-source Cloudflare direct-push request budget per minute (tests/hosts). */
+  cloudflareIngestRateLimitMax?: TrafficRoutesOptions['cloudflareIngestRateLimitMax']
+  /** Early public Cloudflare ingest request budget per caller IP. */
+  cloudflareIngestIpRateLimitMax?: TrafficRoutesOptions['cloudflareIngestIpRateLimitMax']
+  /** Raw traffic evidence samples retained per source and observed UTC hour. */
+  defaultTrafficSampleLimit?: TrafficRoutesOptions['defaultSampleLimit']
   /** Fired after every traffic sync (success OR failure). Used by canonry to emit `traffic.synced` telemetry. */
   onTrafficSynced?: TrafficRoutesOptions['onTrafficSynced']
   /** Discovery feature callback — fires after a discovery_sessions row + matching runs row are inserted. */
@@ -561,6 +571,9 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       vercelSyncDeadlineMs: opts.vercelSyncDeadlineMs,
       cloudflareTrafficCredentialStore: opts.cloudflareTrafficCredentialStore,
       cloudflareTrafficIngestUrl: opts.cloudflareTrafficIngestUrl,
+      cloudflareIngestRateLimitMax: opts.cloudflareIngestRateLimitMax,
+      cloudflareIngestIpRateLimitMax: opts.cloudflareIngestIpRateLimitMax,
+      defaultSampleLimit: opts.defaultTrafficSampleLimit,
       onTrafficSynced: opts.onTrafficSynced,
       onScheduleUpdated: opts.onScheduleUpdated,
       allowLoopbackWebhooks: opts.allowLoopbackWebhooks,
@@ -846,6 +859,65 @@ function buildTrafficSourceValidators(opts: ApiRoutesOptions): Record<string, Tr
       // inherits the user's team access, so there is no "missing scope"
       // failure mode. Surface a skipped result so the framework stays
       // uniform without producing a false signal.
+      validateScopes: () => null,
+    }
+  }
+  if (opts.cloudflareTrafficCredentialStore) {
+    const store = opts.cloudflareTrafficCredentialStore
+    validators[TrafficSourceTypes.cloudflare] = {
+      validateCredentials: (source: TrafficSourceProbe): CheckOutput | null => {
+        const sourceMode = source.configJson.deliveryMode
+        if (sourceMode !== undefined && sourceMode !== 'direct-push') return null
+
+        const record = store.getConnection(source.projectName)
+        if (!record) {
+          return {
+            status: CheckStatuses.fail,
+            code: 'traffic.credentials.missing',
+            summary: `No Cloudflare direct-push credential is stored for project "${source.projectName}".`,
+            remediation: 'Re-run `canonry traffic connect cloudflare <project> --zone-id <id>` from the credential-owning host.',
+          }
+        }
+        const recordMode: unknown = record.deliveryMode
+        if (recordMode !== 'direct-push') {
+          return {
+            status: CheckStatuses.fail,
+            code: 'traffic.credentials.mode-mismatch',
+            summary: `The stored Cloudflare credential mode does not match direct-push source "${source.displayName}".`,
+            remediation: 'Reconnect the Cloudflare source from the credential-owning host.',
+          }
+        }
+        if (record.sourceId !== source.id) {
+          return {
+            status: CheckStatuses.fail,
+            code: 'traffic.credentials.source-mismatch',
+            summary: `The stored Cloudflare credential belongs to a different source than "${source.displayName}".`,
+            remediation: 'Reconnect the Cloudflare source to pair the credential and source row.',
+          }
+        }
+        const bearerToken: unknown = record.bearerToken
+        const hmacSecret: unknown = record.hmacSecret
+        if (
+          typeof bearerToken !== 'string'
+          || bearerToken.length === 0
+          || typeof hmacSecret !== 'string'
+          || hmacSecret.length === 0
+          || !source.ingestTokenHash
+          || hashCloudflareBearerToken(bearerToken) !== source.ingestTokenHash
+        ) {
+          return {
+            status: CheckStatuses.fail,
+            code: 'traffic.credentials.bearer-mismatch',
+            summary: `The stored Cloudflare push credential does not match source "${source.displayName}".`,
+            remediation: 'Reconnect the Cloudflare source and redeploy the generated Worker secrets.',
+          }
+        }
+        return {
+          status: CheckStatuses.ok,
+          code: 'traffic.credentials.resolved',
+          summary: `Cloudflare direct-push credentials match source "${source.displayName}".`,
+        }
+      },
       validateScopes: () => null,
     }
   }

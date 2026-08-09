@@ -4,7 +4,7 @@ import path from 'node:path'
 import { test, expect, beforeEach, afterEach } from 'vitest'
 import { parse, stringify } from 'yaml'
 
-import { saveConfig, loadConfigRaw, getConfigPath } from '../src/config.js'
+import { saveConfig, loadConfig, loadConfigRaw, getConfigPath } from '../src/config.js'
 import type { CanonryConfig } from '../src/config.js'
 
 let tmpDir: string
@@ -178,6 +178,29 @@ test('saveConfig does not persist basePath-derived apiUrl mutation when basePath
 test('loadConfigRaw returns null when no config file exists', () => {
   const result = loadConfigRaw()
   expect(result).toBeNull()
+})
+
+test('loadConfig defaults legacy Cloudflare credentials to direct-push', () => {
+  const initial = baseConfig() as CanonryConfig & {
+    cloudflareTraffic: { connections: Array<Record<string, unknown>> }
+  }
+  initial.cloudflareTraffic = {
+    connections: [{
+      projectName: 'demo',
+      sourceId: 'src_legacy',
+      bearerToken: 'bearer',
+      hmacSecret: 'hmac',
+      workerVersion: '1.0.0',
+      expectedBotListVersion: '2026-05-27',
+      zoneId: null,
+      accountId: null,
+      createdAt: '2026-05-27T00:00:00Z',
+      updatedAt: '2026-05-27T00:00:00Z',
+    }],
+  }
+  fs.writeFileSync(getConfigPath(), stringify(initial), 'utf-8')
+
+  expect(loadConfig().cloudflareTraffic?.connections?.[0]?.deliveryMode).toBe('direct-push')
 })
 
 test('loadConfigRaw reads config without applying env-var transformations', () => {

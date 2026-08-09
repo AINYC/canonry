@@ -14,6 +14,6 @@ import type { CanonryConfig } from './config.js'
 export function buildCloudflareIngestUrlTemplate(
   config: Pick<CanonryConfig, 'publicUrl' | 'apiUrl'>,
 ): string {
-  const base = (config.publicUrl ?? config.apiUrl).replace(/\/$/, '')
+  const base = (config.publicUrl ?? config.apiUrl).replace(/\/+$/, '')
   return `${base}/api/v1/projects/{name}/traffic/cloudflare/ingest`
 }

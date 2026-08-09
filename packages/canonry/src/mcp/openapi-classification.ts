@@ -256,7 +256,12 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'POST /api/v1/projects/{name}/traffic/connect/cloud-run': 'included',
   'POST /api/v1/projects/{name}/traffic/connect/wordpress': 'included',
   'POST /api/v1/projects/{name}/traffic/connect/vercel': 'included',
-  'POST /api/v1/projects/{name}/traffic/connect/cloudflare': 'included',
+  // Cloudflare setup generates per-source secrets and installs them into
+  // Worker secret bindings from the local Canonry credential store. Keep the
+  // operation out of MCP so neither credentials nor deployment material can
+  // enter an agent transcript; use the local `canonry traffic connect
+  // cloudflare ...` CLI workflow instead.
+  'POST /api/v1/projects/{name}/traffic/connect/cloudflare': 'deferred',
   // The ingest endpoint uses per-source HMAC auth, not the cnry_* bearer
   // an MCP agent would carry. Routing it through MCP would also be the
   // wrong shape — events are pushed by a customer-deployed Worker, not

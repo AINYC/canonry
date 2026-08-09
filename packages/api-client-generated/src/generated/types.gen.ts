@@ -8153,6 +8153,7 @@ export type TrafficBackfillResponse = {
 };
 
 export type TrafficConnectCloudflareRequest = {
+    deliveryMode: 'direct-push';
     displayName?: string;
     zoneId?: string;
     accountId?: string;
@@ -8160,6 +8161,7 @@ export type TrafficConnectCloudflareRequest = {
 
 export type TrafficConnectCloudflareResponse = {
     sourceId: string;
+    deliveryMode: 'direct-push';
     workerScript: string;
     wranglerToml: string;
     workerVersion: string;
@@ -20175,16 +20177,20 @@ export type PostApiV1ProjectsByNameTrafficCloudflareIngestErrors = {
      */
     401: ErrorEnvelope;
     /**
-     * Project not found.
+     * The ingest payload exceeds 256 KiB.
      */
-    404: ErrorEnvelope;
+    413: ErrorEnvelope;
+    /**
+     * The per-IP or authenticated-source ingest request budget was exceeded.
+     */
+    429: ErrorEnvelope;
 };
 
 export type PostApiV1ProjectsByNameTrafficCloudflareIngestError = PostApiV1ProjectsByNameTrafficCloudflareIngestErrors[keyof PostApiV1ProjectsByNameTrafficCloudflareIngestErrors];
 
 export type PostApiV1ProjectsByNameTrafficCloudflareIngestResponses = {
     /**
-     * Ingest acknowledged.
+     * Ingest acknowledged; droppedEvents includes normalization failures and durable-receipt duplicates.
      */
     200: CloudflareWorkerIngestResponse;
 };

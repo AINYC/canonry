@@ -41,7 +41,6 @@ import {
   trafficConnectCloudRunRequestSchema,
   trafficConnectWordpressRequestSchema,
   trafficConnectVercelRequestSchema,
-  trafficConnectCloudflareRequestSchema,
   trafficEventKindSchema,
   trafficSeriesGranularitySchema,
   measurementPlanAuthoringSchema,
@@ -720,11 +719,6 @@ const trafficConnectWordpressInputSchema = z.object({
 const trafficConnectVercelInputSchema = z.object({
   project: projectNameSchema,
   request: trafficConnectVercelRequestSchema,
-})
-
-const trafficConnectCloudflareInputSchema = z.object({
-  project: projectNameSchema,
-  request: trafficConnectCloudflareRequestSchema,
 })
 
 const trafficSyncInputSchema = z.object({
@@ -1973,17 +1967,6 @@ export const canonryMcpTools = [
     annotations: writeAnnotations({ idempotentHint: true, openWorldHint: true }),
     openApiOperations: ['POST /api/v1/projects/{name}/traffic/connect/vercel'],
     handler: (client, input) => client.trafficConnectVercel(input.project, input.request),
-  }),
-  defineTool({
-    name: 'canonry_traffic_connect_cloudflare',
-    title: 'Connect Cloudflare Worker traffic source',
-    description: 'Connect a Cloudflare zone as a server-side traffic source via a customer-deployed Worker. Issues a per-source bearer + HMAC secret, generates a Worker script with those secrets embedded, and returns the script for deployment to the customer\'s Cloudflare zone. Reconnect reuses the source row but rotates both secrets, immediately invalidating the previously deployed script. No upstream probe — the Worker is deployed by the operator after this call. The bearer and HMAC secret live in ~/.canonry/config.yaml (not the DB) and never appear again after the connect response.',
-    access: 'write',
-    tier: 'traffic',
-    inputSchema: trafficConnectCloudflareInputSchema,
-    annotations: writeAnnotations({ idempotentHint: false, openWorldHint: false }),
-    openApiOperations: ['POST /api/v1/projects/{name}/traffic/connect/cloudflare'],
-    handler: (client, input) => client.trafficConnectCloudflare(input.project, input.request),
   }),
   defineTool({
     name: 'canonry_traffic_sync',

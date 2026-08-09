@@ -20,6 +20,7 @@ function makeEntry(overrides: Partial<CloudflareTrafficConnectionConfigEntry> = 
   return {
     projectName: 'demo',
     sourceId: 'src_abc',
+    deliveryMode: 'direct-push',
     bearerToken: 'tok_secret',
     hmacSecret: 'hmac_secret',
     workerVersion: '1.0.0',
@@ -55,6 +56,27 @@ describe('cloudflare-traffic-config', () => {
       const entry = makeEntry({ projectName: 'demo' })
       config.cloudflareTraffic = { connections: [entry] }
       expect(getCloudflareTrafficConnection(config, 'demo')).toEqual(entry)
+    })
+
+    it('normalizes a legacy connection with no delivery mode to direct-push', () => {
+      const config = emptyConfig()
+      const legacy = makeEntry() as CloudflareTrafficConnectionConfigEntry & { deliveryMode?: string }
+      delete legacy.deliveryMode
+      config.cloudflareTraffic = { connections: [legacy as CloudflareTrafficConnectionConfigEntry] }
+
+      expect(getCloudflareTrafficConnection(config, 'demo')?.deliveryMode).toBe('direct-push')
+    })
+
+    it('rejects an unsupported transport instead of treating it as direct-push', () => {
+      const config = emptyConfig()
+      const unsupported = {
+        ...makeEntry(),
+        deliveryMode: 'queue-pull',
+      } as unknown as CloudflareTrafficConnectionConfigEntry
+      config.cloudflareTraffic = { connections: [unsupported] }
+
+      expect(() => getCloudflareTrafficConnection(config, 'demo')).toThrow(/unsupported.*queue-pull/i)
+      expect(() => listCloudflareTrafficConnections(config)).toThrow(/unsupported.*queue-pull/i)
     })
   })
 

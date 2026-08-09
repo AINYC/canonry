@@ -1,7 +1,8 @@
 import crypto from 'node:crypto'
+import { isIP } from 'node:net'
 import { Agent as UndiciAgent } from 'undici'
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { DEFAULT_VERCEL_SYNC_DEADLINE_MS, VERCEL_MAX_SYNC_WINDOW_MS } from './traffic-limits.js'
 import {
   trafficSources,
@@ -11,6 +12,7 @@ import {
   rawEventSamples,
   runs,
   schedules,
+  type DatabaseClient,
 } from '@ainyc/canonry-db'
 import {
   aiReferralClassCounts,
@@ -26,6 +28,8 @@ import {
   TrafficSourceAuthModes,
   TrafficEventKinds,
   TrafficSeriesGranularities,
+  CloudflareTrafficDeliveryModes,
+  cloudflareTrafficSourceConfigSchema,
   trafficConnectWordpressRequestSchema,
   trafficConnectVercelRequestSchema,
   trafficResetRequestSchema,
@@ -91,6 +95,10 @@ import {
 } from '@ainyc/canonry-contracts'
 import { auditFromRequest, resolveProject, writeAuditLog } from './helpers.js'
 import { resolveWebhookTarget } from './webhooks.js'
+import {
+  DIRECT_PUSH_RECEIPT_TTL_MS,
+  writeTrafficEventBatch,
+} from './traffic-event-ingest.js'
 
 export interface CloudRunCredentialRecord {
   projectName: string
@@ -150,6 +158,8 @@ export interface VercelTrafficCredentialStore {
 
 export interface CloudflareTrafficCredentialRecord {
   projectName: string
+  /** Discriminator for the credential/auth mechanism used by this source. */
+  deliveryMode: 'direct-push'
   /** `traffic_sources.id` — pairs the credential row with the DB row. */
   sourceId: string
   /** Bearer token authenticating ingest requests. Verified against sha256(bearer) === ingestTokenHash. */
@@ -240,6 +250,10 @@ export interface TrafficRoutesOptions {
   cloudflareTrafficCredentialStore?: CloudflareTrafficCredentialStore
   /** Override the canonry ingest URL embedded into generated Worker scripts (for tests). */
   cloudflareTrafficIngestUrl?: string
+  /** Per-source direct-push request budget per minute. Invalid auth is budgeted by caller IP. */
+  cloudflareIngestRateLimitMax?: number
+  /** Early public-endpoint request budget per caller IP, before body parsing. */
+  cloudflareIngestIpRateLimitMax?: number
   /** Default lookback window in minutes when a sync is triggered without an explicit `since`. */
   defaultSyncWindowMinutes?: number
   /** Default page size for entries.list pulls. */
@@ -341,14 +355,20 @@ const BACKFILL_MAX_PAGES = 1_000
 const BACKFILL_SAMPLE_LIMIT = 500
 // Semver of the canonry-issued Worker bundle. Bump when the Worker's
 // generic edge-side filter, payload shape, or auth header set changes —
-// the doctor check `cloudflare.worker.version-stale` will then surface
+// the doctor check `traffic.source.worker-version` will then surface
 // deployments still running an older revision so the operator
 // regenerates and redeploys.
 const CLOUDFLARE_WORKER_VERSION = '1.0.0'
+const CLOUDFLARE_INGEST_BODY_LIMIT = 256 * 1024
+const DEFAULT_CLOUDFLARE_INGEST_RATE_LIMIT_MAX = 6_000
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i
 
 function sha256Hex(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex')
+}
+
+export function hashCloudflareBearerToken(value: string): string {
+  return sha256Hex(value)
 }
 
 function timingSafeEqualHex(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -359,23 +379,81 @@ function timingSafeEqualHex(a: string | null | undefined, b: string | null | und
   return left.length === right.length && crypto.timingSafeEqual(left, right)
 }
 
-function nextEventIdRing(
-  newEvents: NormalizedTrafficRequest[],
-  previousIds: readonly string[],
-): string[] {
-  const newSorted = newEvents
-    .slice()
-    .sort((a, b) => (a.observedAt < b.observedAt ? 1 : a.observedAt > b.observedAt ? -1 : 0))
-    .map(e => e.eventId)
-  const merged: string[] = []
-  const seen = new Set<string>()
-  for (const id of [...newSorted, ...previousIds]) {
-    if (seen.has(id)) continue
-    seen.add(id)
-    merged.push(id)
-    if (merged.length >= MAX_TRACKED_EVENT_IDS) break
+function parseDirectPushCloudflareSourceConfig(config: unknown) {
+  const parsed = cloudflareTrafficSourceConfigSchema.safeParse(config)
+  return parsed.success ? parsed.data : null
+}
+
+function isDirectPushCloudflareDeliveryMode(value: unknown): value is 'direct-push' {
+  return value === CloudflareTrafficDeliveryModes['direct-push']
+}
+
+interface AuthenticatedCloudflareIngest {
+  bearerHash: string
+  credential: CloudflareTrafficCredentialRecord
+}
+
+/** Authenticate the transport only. Project/source authorization follows separately. */
+function authenticateCloudflareIngest(
+  request: FastifyRequest,
+  store: CloudflareTrafficCredentialStore | undefined,
+): AuthenticatedCloudflareIngest | null {
+  if (!store) return null
+  const authHeader = request.headers.authorization
+  const sourceIdHeader = request.headers['x-canonry-source-id']
+  const timestampHeader = request.headers['x-canonry-timestamp']
+  const signatureHeader = request.headers['x-canonry-signature']
+
+  const bearerToken = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7)
+    : ''
+  const sourceId = typeof sourceIdHeader === 'string' ? sourceIdHeader : ''
+  const timestamp = typeof timestampHeader === 'string' ? timestampHeader : ''
+  const signature = typeof signatureHeader === 'string' ? signatureHeader : ''
+  if (!bearerToken || !sourceId || !timestamp || !signature) return null
+
+  const credential = store.getConnectionBySourceId(sourceId)
+  if (!credential || !isDirectPushCloudflareDeliveryMode(credential.deliveryMode)) return null
+  const bearerHash = sha256Hex(bearerToken)
+  if (!timingSafeEqualHex(bearerHash, sha256Hex(credential.bearerToken))) return null
+  if (!verifyRequestSignature({
+    timestamp,
+    signature,
+    payload: request.body,
+    secret: credential.hmacSecret,
+  }).ok) return null
+
+  return { bearerHash, credential }
+}
+
+function cloudflareIngestRateLimitKey(
+  request: FastifyRequest,
+  store: CloudflareTrafficCredentialStore | undefined,
+  db: DatabaseClient,
+): string {
+  const authenticated = authenticateCloudflareIngest(request, store)
+  const params = request.params as { name?: unknown }
+  if (
+    authenticated
+    && typeof params.name === 'string'
+    && authenticated.credential.projectName === params.name
+  ) {
+    const source = db
+      .select()
+      .from(trafficSources)
+      .where(eq(trafficSources.id, authenticated.credential.sourceId))
+      .get()
+    if (
+      source
+      && source.sourceType === TrafficSourceTypes.cloudflare
+      && source.status !== TrafficSourceStatuses.archived
+      && parseDirectPushCloudflareSourceConfig(source.configJson)
+      && timingSafeEqualHex(authenticated.bearerHash, source.ingestTokenHash)
+    ) {
+      return `cloudflare-source:${authenticated.credential.sourceId}`
+    }
   }
-  return merged
+  return `cloudflare-invalid:${request.ip}`
 }
 
 function assertCloudflareIngestUrlIsPublicHttps(value: string): void {
@@ -413,9 +491,82 @@ function assertCloudflareIngestUrlIsPublicHttps(value: string): void {
     || privateIpv6
     || privateIpv4
 
-  if (url.protocol !== 'https:' || privateHostname) {
+  if (
+    url.protocol !== 'https:'
+    || privateHostname
+    || url.username.length > 0
+    || url.password.length > 0
+    || url.search.length > 0
+    || url.hash.length > 0
+  ) {
     throw validationError(
-      'Cloudflare ingest URL must use HTTPS and be reachable from the public Cloudflare edge; configure publicUrl to a public origin',
+      'Cloudflare ingest URL must be a credential-free public HTTPS URL without a query or fragment and reachable from the public Cloudflare edge; configure publicUrl to a public origin',
+    )
+  }
+}
+
+function normalizeDnsHostname(value: string): string | null {
+  const normalized = value.trim().toLowerCase().replace(/\.+$/, '')
+  if (
+    normalized.length === 0
+    || normalized.length > 253
+    || normalized.includes('*')
+    || !normalized.includes('.')
+  ) return null
+  const valid = normalized.split('.').every(label =>
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label),
+  )
+  return valid ? normalized : null
+}
+
+/** Resolve the exact hostname that the generated `host/*` Worker route owns. */
+function resolveCloudflareWorkerRouteHost(value: string): string {
+  const trimmed = value.trim()
+  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+  if (hasScheme && !/^https?:\/\//i.test(trimmed)) {
+    throw validationError('Project canonicalDomain must use an HTTP or HTTPS URL')
+  }
+
+  let url: URL
+  try {
+    url = new URL(hasScheme ? trimmed : `https://${trimmed}`)
+  } catch {
+    throw validationError('Project canonicalDomain must resolve to one exact public hostname')
+  }
+
+  if (
+    url.username.length > 0
+    || url.password.length > 0
+    || (url.pathname !== '' && url.pathname !== '/')
+    || url.search.length > 0
+    || url.hash.length > 0
+    || url.port.length > 0
+  ) {
+    throw validationError(
+      'Project canonicalDomain must be a bare hostname or root HTTP(S) URL without credentials, a non-default port, path, query, or fragment',
+    )
+  }
+
+  const hostname = normalizeDnsHostname(url.hostname)
+  if (!hostname || isIP(hostname) !== 0) {
+    throw validationError('Project canonicalDomain must resolve to one exact public hostname without wildcards')
+  }
+  return hostname
+}
+
+function normalizeCloudflareEventHost(value: string | null): string | null {
+  if (!value || /[/:@?#*]/.test(value)) return null
+  return normalizeDnsHostname(value)
+}
+
+function assertCloudflareIngestUrlOutsideWorkerRoute(
+  ingestUrl: string,
+  workerRouteHost: string,
+): void {
+  const ingestHost = normalizeDnsHostname(new URL(ingestUrl).hostname)
+  if (ingestHost && ingestHost === workerRouteHost) {
+    throw validationError(
+      'Cloudflare ingest URL hostname must be outside the generated Worker route hostname to prevent recursive ingestion',
     )
   }
 }
@@ -880,6 +1031,14 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
   const pageSize = opts.defaultPageSize ?? DEFAULT_PAGE_SIZE
   const maxPages = opts.defaultMaxPages ?? DEFAULT_MAX_PAGES
   const sampleLimit = opts.defaultSampleLimit ?? DEFAULT_SAMPLE_LIMIT
+  // This limiter has its own child store. It does not share Fastify's
+  // request-level `rateLimitRan` marker with the public onRequest IP budget.
+  const checkCloudflareSourceRateLimit = app.createRateLimit({
+    max: opts.cloudflareIngestRateLimitMax ?? DEFAULT_CLOUDFLARE_INGEST_RATE_LIMIT_MAX,
+    timeWindow: '1 minute',
+    keyGenerator: request =>
+      cloudflareIngestRateLimitKey(request, opts.cloudflareTrafficCredentialStore, app.db),
+  })
 
   // POST /projects/:name/traffic/connect/cloud-run
   app.post<{
@@ -1352,17 +1511,14 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
 
   // POST /projects/:name/traffic/connect/cloudflare
   //
-  // Push-receive adapter — no upstream probe. canonry issues a per-source
-  // bearer + HMAC secret, embeds them into a generated Worker script, and
-  // returns the script for the operator to deploy onto their Cloudflare
-  // zone. The DB stores only the sha256 of the bearer (`ingest_token_hash`);
-  // both cleartext secrets live in `~/.canonry/config.yaml`.
-  //
-  // Reconnect reuses the same `traffic_sources.id`, but rotates both secrets
-  // and immediately invalidates the previously emitted Worker script.
+  // Direct-push adapter — no upstream probe. Canonry issues per-source
+  // credentials but generated source/config only references Worker bindings.
+  // Reconnect is safe to repeat: a matching source reuses its credentials and
+  // omitted metadata instead of invalidating the deployed Worker.
   app.post<{
     Params: { name: string }
     Body: {
+      deliveryMode?: 'direct-push'
       displayName?: string
       zoneId?: string
       accountId?: string
@@ -1381,7 +1537,8 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     if (!parsed.success) {
       throw validationError(parsed.error.issues.map((i) => i.message).join('; '))
     }
-    const { displayName, zoneId, accountId } = parsed.data
+    const { deliveryMode, displayName, zoneId, accountId } = parsed.data
+    const workerRouteHost = resolveCloudflareWorkerRouteHost(project.canonicalDomain)
 
     const now = new Date().toISOString()
 
@@ -1396,46 +1553,76 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       )
 
     const sourceId = activeSource?.id ?? crypto.randomUUID()
-    const bearerToken = `cnry_cfw_${crypto.randomBytes(32).toString('hex')}`
-    const hmacSecret = crypto.randomBytes(32).toString('hex')
+    const parsedActiveConfig = activeSource
+      ? parseDirectPushCloudflareSourceConfig(activeSource.configJson)
+      : null
+    if (activeSource && !parsedActiveConfig) {
+      throw validationError('Existing Cloudflare source is not configured for direct-push delivery')
+    }
+    const previousCredential = credentialStore.getConnection(project.name)
+    if (previousCredential && !isDirectPushCloudflareDeliveryMode(previousCredential.deliveryMode)) {
+      throw validationError(
+        `Cloudflare credential delivery mode "${previousCredential.deliveryMode}" does not match "${deliveryMode}"`,
+      )
+    }
+    const reusableCredential = previousCredential?.sourceId === sourceId
+      ? previousCredential
+      : undefined
+    const previousZoneId = reusableCredential?.zoneId
+      ?? parsedActiveConfig?.zoneId
+      ?? null
+    const previousAccountId = reusableCredential?.accountId
+      ?? parsedActiveConfig?.accountId
+      ?? null
+    const effectiveZoneId = zoneId ?? previousZoneId
+    const effectiveAccountId = accountId ?? previousAccountId
+    const bearerToken = reusableCredential?.bearerToken
+      ?? `cnry_cfw_${crypto.randomBytes(32).toString('hex')}`
+    const hmacSecret = reusableCredential?.hmacSecret
+      ?? crypto.randomBytes(32).toString('hex')
     const ingestTokenHash = sha256Hex(bearerToken)
     const ingestUrl = opts.cloudflareTrafficIngestUrl.replace('{name}', encodeURIComponent(project.name))
     assertCloudflareIngestUrlIsPublicHttps(ingestUrl)
+    assertCloudflareIngestUrlOutsideWorkerRoute(ingestUrl, workerRouteHost)
 
     const workerVersion = CLOUDFLARE_WORKER_VERSION
     const workerScript = generateWorkerScript({
-      sourceId,
-      ingestUrl,
-      bearerToken,
-      hmacSecret,
+      deliveryMode,
       workerVersion,
       botList: DEFAULT_BOT_LIST,
     })
     const wranglerToml = generateWranglerToml({
+      deliveryMode,
       sourceId,
-      hostname: project.canonicalDomain,
-      zoneId,
+      hostname: workerRouteHost,
+      ingestUrl,
+      workerVersion,
+      zoneId: effectiveZoneId,
+      accountId: effectiveAccountId,
     })
 
     const config: Record<string, unknown> = {
       schemaVersion: 1,
+      deliveryMode,
       workerVersion,
       expectedBotListVersion: DEFAULT_BOT_LIST.version,
-      zoneId: zoneId ?? null,
-      accountId: accountId ?? null,
+      zoneId: effectiveZoneId,
+      accountId: effectiveAccountId,
     }
-    const fallbackName = displayName ?? `Cloudflare · ${zoneId ?? sourceId.slice(0, 8)}`
+    const fallbackName = displayName
+      ?? activeSource?.displayName
+      ?? `Cloudflare · ${effectiveZoneId ?? sourceId.slice(0, 8)}`
 
-    const previousCredential = credentialStore.getConnection(project.name)
     credentialStore.upsertConnection({
       projectName: project.name,
+      deliveryMode,
       sourceId,
       bearerToken,
       hmacSecret,
       workerVersion,
       expectedBotListVersion: DEFAULT_BOT_LIST.version,
-      zoneId: zoneId ?? null,
-      accountId: accountId ?? null,
+      zoneId: effectiveZoneId,
+      accountId: effectiveAccountId,
       createdAt: previousCredential?.createdAt ?? activeSource?.createdAt ?? now,
       updatedAt: now,
     })
@@ -1470,9 +1657,8 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             displayName: fallbackName,
             status: TrafficSourceStatuses.connected,
             // Seed `lastSyncedAt` to NOW so the `traffic.source.recent-data`
-            // doctor check has a non-null baseline. Ingest doesn't advance
-            // it (push model — every event already carries its own timestamp);
-            // the field exists for the receiver's "last activity" UI.
+            // doctor check has a non-null baseline. Successful ingest advances
+            // it as the receiver's last-activity timestamp.
             lastSyncedAt: now,
             lastCursor: null,
             lastError: null,
@@ -1511,14 +1697,18 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       entityId: sourceRow.id,
     })
 
-    const routeInstruction = zoneId
-      ? `  2. Deploy with \`wrangler deploy\`; wrangler.toml attaches \`${project.canonicalDomain}/*\` to zone ${zoneId}`
-      : `  2. Attach the exact route \`${project.canonicalDomain}/*\` in Dashboard → Workers Routes (wrangler.toml intentionally has no route without zoneId)`
+    const routeInstruction = effectiveZoneId
+      ? `  4. Deploy with \`wrangler deploy\`; wrangler.toml records zone ${effectiveZoneId} but does not claim a route`
+      : '  4. Deploy with `wrangler deploy`; wrangler.toml intentionally does not claim a route'
     const instructions = [
       'Deploy this Worker to your Cloudflare zone:',
-      '  1. Paste worker.js into Dashboard → Workers & Pages → Create → paste source',
+      '  1. Save worker.js and wrangler.toml; neither file contains credentials',
+      '  2. Install the required bearer and HMAC Worker secret bindings locally; never paste their values into source or chat',
+      `  3. Inspect existing Cloudflare Worker routes first; confirm the generated \`${workerRouteHost}/*\` catch-all will not replace or collide with another Worker`,
       routeInstruction,
-      '  3. Keep the Canonry ingest hostname outside this Worker route to avoid recursion',
+      `  5. In the Cloudflare Dashboard route form, select \`${workerRouteHost}/*\` and this Worker`,
+      '  6. Set Request limit failure mode to Fail open, then save the route; Wrangler cannot set this toggle',
+      '  7. Keep the Canonry ingest hostname outside this Worker route to avoid recursion',
       '',
       `Source id: ${sourceRow.id}`,
       'After deploy, check `canonry doctor --project ' + project.name + '` to confirm events are arriving.',
@@ -1526,6 +1716,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
 
     return {
       sourceId: sourceRow.id,
+      deliveryMode,
       workerScript,
       wranglerToml,
       workerVersion,
@@ -1546,70 +1737,53 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
   // (defends against credential-leg enumeration).
   app.post<{
     Params: { name: string }
-  }>('/projects/:name/traffic/cloudflare/ingest', async (request, reply) => {
-    const project = resolveProject(app.db, request.params.name)
-    if (!opts.cloudflareTrafficCredentialStore) {
-      throw validationError('Cloudflare traffic credential storage is not configured for this deployment')
-    }
-    const credentialStore = opts.cloudflareTrafficCredentialStore
+    Body: unknown
+  }>('/projects/:name/traffic/cloudflare/ingest', {
+    bodyLimit: CLOUDFLARE_INGEST_BODY_LIMIT,
+    preHandler: async (request, reply) => {
+      const key = cloudflareIngestRateLimitKey(
+        request,
+        opts.cloudflareTrafficCredentialStore,
+        app.db,
+      )
+      // The onRequest budget below already meters unauthenticated callers by
+      // IP. Keep this independent second budget per authenticated source.
+      if (key.startsWith('cloudflare-invalid:')) return
 
-    const authHeader = request.headers.authorization
-    const sourceIdHeader = request.headers['x-canonry-source-id']
-    const timestampHeader = request.headers['x-canonry-timestamp']
-    const signatureHeader = request.headers['x-canonry-signature']
-
-    const bearerToken = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
-      ? authHeader.slice(7)
-      : ''
-    const sourceId = typeof sourceIdHeader === 'string' ? sourceIdHeader : ''
-    const timestamp = typeof timestampHeader === 'string' ? timestampHeader : ''
-    const signature = typeof signatureHeader === 'string' ? signatureHeader : ''
-
-    if (!bearerToken || !sourceId || !timestamp || !signature) {
+      const result = await checkCloudflareSourceRateLimit(request)
+      if (result.isAllowed || !result.isExceeded) return
+      reply.header('retry-after', result.ttlInSeconds)
+      return reply.status(429).send({
+        statusCode: 429,
+        error: 'Too Many Requests',
+        message: `Rate limit exceeded, retry in ${result.ttlInSeconds} second(s)`,
+      })
+    },
+    config: {
+      rateLimit: {
+        hook: 'onRequest',
+        max: opts.cloudflareIngestIpRateLimitMax ?? DEFAULT_CLOUDFLARE_INGEST_RATE_LIMIT_MAX,
+        timeWindow: '1 minute',
+        groupId: 'cloudflare-direct-push-ip',
+        keyGenerator: request => `cloudflare-ingest-ip:${request.ip}`,
+      },
+    },
+  }, async (request, reply) => {
+    // Authenticate the transport before resolving the path's project. Invalid
+    // source, bearer, timestamp, signature, mode, and path all share one 401.
+    const authenticated = authenticateCloudflareIngest(
+      request,
+      opts.cloudflareTrafficCredentialStore,
+    )
+    if (
+      !authenticated
+      || authenticated.credential.projectName !== request.params.name
+      || !isDirectPushCloudflareDeliveryMode(authenticated.credential.deliveryMode)
+    ) {
       throw authRequired()
     }
-
-    const credential = credentialStore.getConnectionBySourceId(sourceId)
-    if (!credential) {
-      throw authRequired()
-    }
-    if (credential.projectName !== project.name) {
-      throw authRequired()
-    }
-
-    const presentedHash = sha256Hex(bearerToken)
-    if (!timingSafeEqualHex(presentedHash, sha256Hex(credential.bearerToken))) {
-      throw authRequired()
-    }
-
-    const rawBody = request.body !== undefined && request.body !== null
-      ? typeof request.body === 'string'
-        ? request.body
-        : JSON.stringify(request.body)
-      : ''
-
-    const verifyResult = verifyRequestSignature({
-      timestamp,
-      signature,
-      body: rawBody,
-      secret: credential.hmacSecret,
-    })
-    if (!verifyResult.ok) {
-      throw authRequired()
-    }
-
-    // Auth cleared — now validate the payload shape.
-    let parsedBody: unknown
-    try {
-      parsedBody = typeof request.body === 'string' ? JSON.parse(request.body) : request.body
-    } catch {
-      throw validationError('Request body must be valid JSON')
-    }
-    const parsed = cloudflareWorkerIngestRequestSchema.safeParse(parsedBody)
-    if (!parsed.success) {
-      throw validationError(parsed.error.issues.map((i) => i.message).join('; '))
-    }
-    const { workerVersion, events } = parsed.data
+    const { bearerHash, credential } = authenticated
+    const sourceId = credential.sourceId
 
     const sourceRow = app.db
       .select()
@@ -1618,256 +1792,80 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       .get()
     if (
       !sourceRow
-      || sourceRow.projectId !== project.id
       || sourceRow.sourceType !== TrafficSourceTypes.cloudflare
       || sourceRow.status === TrafficSourceStatuses.archived
-      || !timingSafeEqualHex(presentedHash, sourceRow.ingestTokenHash)
+      || !parseDirectPushCloudflareSourceConfig(sourceRow.configJson)
+      || !timingSafeEqualHex(bearerHash, sourceRow.ingestTokenHash)
     ) {
       throw authRequired()
     }
 
-    // Normalize → classify → upsert rollups in a single transaction.
+    // Only authenticated callers can reach project resolution or payload
+    // validation, so an arbitrary path cannot enumerate project names.
+    const project = resolveProject(app.db, request.params.name)
+    if (sourceRow.projectId !== project.id) throw authRequired()
+
+    const parsed = cloudflareWorkerIngestRequestSchema.safeParse(request.body)
+    if (!parsed.success) {
+      throw validationError(parsed.error.issues.map((i) => i.message).join('; '))
+    }
+    const { workerVersion, events } = parsed.data
+
+    const canonicalHost = resolveCloudflareWorkerRouteHost(project.canonicalDomain)
+    const wrongHostIndex = events.findIndex(event =>
+      normalizeCloudflareEventHost(event.host) !== canonicalHost,
+    )
+    if (wrongHostIndex !== -1) {
+      throw validationError(
+        `Cloudflare event at index ${wrongHostIndex} does not belong to project domain "${project.canonicalDomain}"`,
+      )
+    }
+
     const normalized: NormalizedTrafficRequest[] = []
-    let droppedEvents = 0
+    let normalizationDrops = 0
     for (const event of events) {
       const result = normalizeCloudflareWorkerEvent(event)
       if (result) normalized.push(result)
-      else droppedEvents += 1
+      else normalizationDrops += 1
     }
 
-    let crawlerBucketRows = 0
-    let aiUserFetchBucketRows = 0
-    let aiReferralBucketRows = 0
-    let sampleRows = 0
-
-    let acceptedEvents = 0
-    const finishedAt = new Date().toISOString()
-
-    app.db.transaction((tx) => {
-      const latestRow = tx
-        .select()
-        .from(trafficSources)
-        .where(eq(trafficSources.id, sourceRow.id))
-        .get()
-      if (
-        !latestRow
-        || latestRow.projectId !== project.id
-        || latestRow.sourceType !== TrafficSourceTypes.cloudflare
-        || latestRow.status === TrafficSourceStatuses.archived
-        || !timingSafeEqualHex(presentedHash, latestRow.ingestTokenHash)
-      ) {
-        throw authRequired()
-      }
-
-      const seenEventIds = new Set(latestRow.lastEventIds ?? [])
-      const dedupedEvents: NormalizedTrafficRequest[] = []
-      for (const event of normalized) {
-        if (seenEventIds.has(event.eventId)) {
-          droppedEvents += 1
-          continue
+    const receivedAt = new Date().toISOString()
+    const writeResult = writeTrafficEventBatch({
+      db: app.db,
+      projectId: project.id,
+      sourceId,
+      events: normalized,
+      receivedAt,
+      receiptTtlMs: DIRECT_PUSH_RECEIPT_TTL_MS,
+      sampleLimit,
+      validateSource: (latestRow) => {
+        if (
+          !latestRow
+          || latestRow.projectId !== project.id
+          || latestRow.sourceType !== TrafficSourceTypes.cloudflare
+          || latestRow.status === TrafficSourceStatuses.archived
+          || !parseDirectPushCloudflareSourceConfig(latestRow.configJson)
+          || !timingSafeEqualHex(bearerHash, latestRow.ingestTokenHash)
+        ) {
+          throw authRequired()
         }
-        seenEventIds.add(event.eventId)
-        dedupedEvents.push(event)
-      }
-      acceptedEvents = dedupedEvents.length
-      const nextEventIds = nextEventIdRing(dedupedEvents, latestRow.lastEventIds ?? [])
-
-      if (dedupedEvents.length > 0) {
-        const report = buildTrafficProbeReport(dedupedEvents, { sampleLimit: DEFAULT_SAMPLE_LIMIT })
-        for (const bucket of report.crawlerEventsHourly) {
-          const status = bucket.status ?? 0
-          tx
-            .insert(crawlerEventsHourly)
-            .values({
-              projectId: project.id,
-              sourceId: sourceRow.id,
-              tsHour: bucket.tsHour,
-              botId: bucket.botId,
-              operator: bucket.operator,
-              verificationStatus: bucket.verificationStatus,
-              pathNormalized: bucket.pathNormalized,
-              status,
-              hits: bucket.hits,
-              sampledUserAgent: bucket.sampledUserAgent,
-              createdAt: finishedAt,
-              updatedAt: finishedAt,
-            })
-            .onConflictDoUpdate({
-              target: [
-                crawlerEventsHourly.projectId,
-                crawlerEventsHourly.sourceId,
-                crawlerEventsHourly.tsHour,
-                crawlerEventsHourly.botId,
-                crawlerEventsHourly.verificationStatus,
-                crawlerEventsHourly.pathNormalized,
-                crawlerEventsHourly.status,
-              ],
-              set: {
-                hits: sql`${crawlerEventsHourly.hits} + ${bucket.hits}`,
-                sampledUserAgent: bucket.sampledUserAgent,
-                updatedAt: finishedAt,
-              },
-            })
-            .run()
-          crawlerBucketRows += 1
-        }
-
-        for (const bucket of report.aiUserFetchEventsHourly) {
-          const status = bucket.status ?? 0
-          tx
-            .insert(aiUserFetchEventsHourly)
-            .values({
-              projectId: project.id,
-              sourceId: sourceRow.id,
-              tsHour: bucket.tsHour,
-              botId: bucket.botId,
-              operator: bucket.operator,
-              verificationStatus: bucket.verificationStatus,
-              pathNormalized: bucket.pathNormalized,
-              status,
-              hits: bucket.hits,
-              sampledUserAgent: bucket.sampledUserAgent,
-              createdAt: finishedAt,
-              updatedAt: finishedAt,
-            })
-            .onConflictDoUpdate({
-              target: [
-                aiUserFetchEventsHourly.projectId,
-                aiUserFetchEventsHourly.sourceId,
-                aiUserFetchEventsHourly.tsHour,
-                aiUserFetchEventsHourly.botId,
-                aiUserFetchEventsHourly.verificationStatus,
-                aiUserFetchEventsHourly.pathNormalized,
-                aiUserFetchEventsHourly.status,
-              ],
-              set: {
-                hits: sql`${aiUserFetchEventsHourly.hits} + ${bucket.hits}`,
-                sampledUserAgent: bucket.sampledUserAgent,
-                updatedAt: finishedAt,
-              },
-            })
-            .run()
-          aiUserFetchBucketRows += 1
-        }
-
-        for (const bucket of report.aiReferralEventsHourly) {
-          const status = bucket.status ?? 0
-          tx
-            .insert(aiReferralEventsHourly)
-            .values({
-              projectId: project.id,
-              sourceId: sourceRow.id,
-              tsHour: bucket.tsHour,
-              product: bucket.product,
-              operator: bucket.operator,
-              sourceDomain: bucket.sourceDomain,
-              evidenceType: bucket.evidenceType,
-              landingPathNormalized: bucket.landingPathNormalized,
-              status,
-              sessionsOrHits: bucket.hits,
-              paidSessionsOrHits: bucket.paidHits,
-              organicSessionsOrHits: bucket.organicHits,
-              usersEstimated: null,
-              createdAt: finishedAt,
-              updatedAt: finishedAt,
-            })
-            .onConflictDoUpdate({
-              target: [
-                aiReferralEventsHourly.projectId,
-                aiReferralEventsHourly.sourceId,
-                aiReferralEventsHourly.tsHour,
-                aiReferralEventsHourly.product,
-                aiReferralEventsHourly.sourceDomain,
-                aiReferralEventsHourly.evidenceType,
-                aiReferralEventsHourly.landingPathNormalized,
-                aiReferralEventsHourly.status,
-              ],
-              set: {
-                sessionsOrHits: sql`${aiReferralEventsHourly.sessionsOrHits} + ${bucket.hits}`,
-                paidSessionsOrHits: sql`${aiReferralEventsHourly.paidSessionsOrHits} + ${bucket.paidHits}`,
-                organicSessionsOrHits: sql`${aiReferralEventsHourly.organicSessionsOrHits} + ${bucket.organicHits}`,
-                updatedAt: finishedAt,
-              },
-            })
-            .run()
-          aiReferralBucketRows += 1
-        }
-
-        for (const sample of report.samples) {
-          const eventType = sample.crawler
-            ? 'crawler'
-            : sample.aiUserFetch
-              ? 'ai_user_fetch'
-              : sample.aiReferral
-                ? 'ai_referral'
-                : 'unknown'
-          const refererHost = (() => {
-            if (!sample.referer) return null
-            try {
-              return new URL(sample.referer).hostname
-            } catch {
-              return null
-            }
-          })()
-          tx
-            .insert(rawEventSamples)
-            .values({
-              id: crypto.randomUUID(),
-              projectId: project.id,
-              sourceId: sourceRow.id,
-              ts: sample.observedAt,
-              eventType,
-              ipHash: null,
-              userAgent: sample.userAgent,
-              pathNormalized: sample.pathNormalized,
-              status: sample.status,
-              refererHost,
-              classifierDetailsJson: {
-                crawler: sample.crawler,
-                aiUserFetch: sample.aiUserFetch,
-                aiReferral: sample.aiReferral,
-              },
-              createdAt: finishedAt,
-            })
-            .run()
-          sampleRows += 1
-        }
-
-        tx
-          .update(trafficSources)
-          .set({
-            lastWorkerVersion: workerVersion,
-            lastSyncedAt: finishedAt,
-            lastError: null,
-            lastEventIds: nextEventIds,
-            updatedAt: finishedAt,
-          })
-          .where(eq(trafficSources.id, sourceRow.id))
-          .run()
-      } else {
-        // Even with 0 accepted events, refresh `last_worker_version` so the
-        // staleness check stays accurate.
-        tx
-          .update(trafficSources)
-          .set({
-            lastWorkerVersion: workerVersion,
-            lastSyncedAt: finishedAt,
-            lastEventIds: nextEventIds,
-            updatedAt: finishedAt,
-          })
-          .where(eq(trafficSources.id, sourceRow.id))
-          .run()
-      }
+      },
+      sourceUpdate: {
+        lastWorkerVersion: workerVersion,
+        lastSyncedAt: receivedAt,
+        lastError: null,
+        updatedAt: receivedAt,
+      },
     })
 
     return reply.status(200).send({
-      acceptedEvents,
-      droppedEvents,
+      acceptedEvents: writeResult.acceptedEvents,
+      droppedEvents: normalizationDrops + writeResult.duplicateEvents,
       workerVersionAck: workerVersion,
-      crawlerBucketRows,
-      aiUserFetchBucketRows,
-      aiReferralBucketRows,
-      sampleRows,
+      crawlerBucketRows: writeResult.crawlerBucketRows,
+      aiUserFetchBucketRows: writeResult.aiUserFetchBucketRows,
+      aiReferralBucketRows: writeResult.aiReferralBucketRows,
+      sampleRows: writeResult.sampleRows,
     })
   })
 

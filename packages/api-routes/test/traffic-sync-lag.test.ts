@@ -22,7 +22,13 @@ import type { DoctorContext } from '../src/doctor/types.js'
 const syncLagCheck = TRAFFIC_SOURCE_CHECKS.find(c => c.id === 'traffic.source.sync-lag')!
 const recentDataCheck = TRAFFIC_SOURCE_CHECKS.find(c => c.id === 'traffic.source.recent-data')!
 
-function seed(opts: { lagMs: number | null; sourceType?: string; withRecentEvents?: boolean; skippedThroughAt?: string | null }) {
+function seed(opts: {
+  lagMs: number | null
+  sourceType?: string
+  withRecentEvents?: boolean
+  skippedThroughAt?: string | null
+  configJson?: Record<string, unknown>
+}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cnry-lag-'))
   const db = createClient(path.join(tmp, 'test.db'))
   migrate(db)
@@ -44,6 +50,7 @@ function seed(opts: { lagMs: number | null; sourceType?: string; withRecentEvent
     lastSyncedAt: opts.lagMs === null ? null : new Date(now.getTime() - opts.lagMs).toISOString(),
     lastError: null,
     skippedThroughAt: opts.skippedThroughAt ?? null,
+    configJson: opts.configJson ?? {},
     createdAt: iso, updatedAt: iso,
   }).run()
 
@@ -109,11 +116,28 @@ describe('traffic sync lag', () => {
   })
 
   it('skips pull sync lag for a Cloudflare push source', async () => {
-    const { ctx, cleanup } = seed({ lagMs: VERCEL_MAX_SYNC_WINDOW_MS * 3, sourceType: 'cloudflare' })
+    const { ctx, cleanup } = seed({
+      lagMs: VERCEL_MAX_SYNC_WINDOW_MS * 3,
+      sourceType: 'cloudflare',
+      configJson: { deliveryMode: 'direct-push' },
+    })
     try {
       const out = await syncLagCheck.run(ctx)
       expect(out.status).toBe('skipped')
       expect(out.code).toBe('traffic.sync-lag.push-only')
+    } finally { cleanup() }
+  })
+
+  it('does not skip a future Cloudflare queue-pull source by provider type alone', async () => {
+    const { ctx, cleanup } = seed({
+      lagMs: 5 * 3_600_000,
+      sourceType: 'cloudflare',
+      configJson: { deliveryMode: 'queue-pull' },
+    })
+    try {
+      const out = await syncLagCheck.run(ctx)
+      expect(out.status).toBe('warn')
+      expect(out.code).toBe('traffic.sync-lag.behind')
     } finally { cleanup() }
   })
 

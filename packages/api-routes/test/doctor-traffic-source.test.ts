@@ -9,6 +9,7 @@ import {
   projects,
   trafficSources,
   crawlerEventsHourly,
+  aiUserFetchEventsHourly,
   aiReferralEventsHourly,
 } from '@ainyc/canonry-db'
 import { TRAFFIC_SOURCE_CHECKS } from '../src/doctor/checks/traffic-source.js'
@@ -26,6 +27,7 @@ const recentDataCheck = checkById('traffic.source.recent-data')
 const credentialsCheck = checkById('traffic.source.credentials')
 const scopesCheck = checkById('traffic.source.scopes')
 const cacheBlindSpotCheck = checkById('traffic.source.cache-blindspot')
+const workerVersionCheck = checkById('traffic.source.worker-version')
 
 interface Harness {
   db: ReturnType<typeof createClient>
@@ -73,6 +75,8 @@ function insertTrafficSource(
     displayName?: string
     lastSyncedAt?: string | null
     lastError?: string | null
+    configJson?: Record<string, unknown>
+    lastWorkerVersion?: string | null
   } = {},
 ): string {
   const id = crypto.randomUUID()
@@ -86,9 +90,10 @@ function insertTrafficSource(
     lastSyncedAt: args.lastSyncedAt ?? null,
     lastCursor: null,
     lastError: args.lastError ?? null,
+    lastWorkerVersion: args.lastWorkerVersion ?? null,
     lastEventIds: null,
     archivedAt: args.status === 'archived' ? now : null,
-    configJson: {},
+    configJson: args.configJson ?? {},
     createdAt: now,
     updatedAt: now,
   }).run()
@@ -125,6 +130,23 @@ function insertReferralHit(h: Harness, sourceId: string, opts: { tsHour?: string
     status: 200,
     sessionsOrHits: opts.hits ?? 1,
     usersEstimated: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run()
+}
+
+function insertUserFetchHit(h: Harness, sourceId: string, opts: { tsHour?: string; hits?: number } = {}) {
+  h.db.insert(aiUserFetchEventsHourly).values({
+    projectId: h.project.id,
+    sourceId,
+    tsHour: opts.tsHour ?? isoMinusDays(1),
+    botId: 'chatgpt-user',
+    operator: 'OpenAI',
+    verificationStatus: 'self-declared',
+    pathNormalized: '/blog',
+    status: 200,
+    hits: opts.hits ?? 1,
+    sampledUserAgent: 'ChatGPT-User/1.0',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   }).run()
@@ -198,6 +220,15 @@ describe('traffic.source.recent-data', () => {
     expect(r.code).toBe('traffic.recent-data.fresh')
   })
 
+  it('returns ok when only AI user-fetch hits exist in the last 7 days', async () => {
+    const sourceId = insertTrafficSource(h)
+    insertUserFetchHit(h, sourceId, { tsHour: isoMinusDays(2), hits: 3 })
+    const r = await recentDataCheck.run(ctxFor(h))
+    expect(r.status).toBe('ok')
+    expect(r.code).toBe('traffic.recent-data.fresh')
+    expect(r.details).toMatchObject({ aiUserFetchHits: 3 })
+  })
+
   it('warns when older data exists but recent window is empty', async () => {
     const sourceId = insertTrafficSource(h, { lastSyncedAt: isoMinusDays(15) })
     insertCrawlerHit(h, sourceId, { tsHour: isoMinusDays(15) })
@@ -213,6 +244,14 @@ describe('traffic.source.recent-data', () => {
     // without advancing the cursor) would be misreported as `empty`.
     const sourceId = insertTrafficSource(h, { lastSyncedAt: null })
     insertReferralHit(h, sourceId, { tsHour: isoMinusDays(15) })
+    const r = await recentDataCheck.run(ctxFor(h))
+    expect(r.status).toBe('warn')
+    expect(r.code).toBe('traffic.recent-data.stale')
+  })
+
+  it('warns when only older AI user-fetch data exists', async () => {
+    const sourceId = insertTrafficSource(h, { lastSyncedAt: null })
+    insertUserFetchHit(h, sourceId, { tsHour: isoMinusDays(15) })
     const r = await recentDataCheck.run(ctxFor(h))
     expect(r.status).toBe('warn')
     expect(r.code).toBe('traffic.recent-data.stale')
@@ -377,6 +416,58 @@ describe('traffic.source.cache-blindspot', () => {
   })
 })
 
+describe('traffic.source.worker-version', () => {
+  it.each([
+    ['a non-Cloudflare source', { sourceType: 'cloud-run' }],
+    ['a Cloudflare queue-pull source', {
+      sourceType: 'cloudflare',
+      configJson: { deliveryMode: 'queue-pull', workerVersion: '1.2.3' },
+    }],
+  ])('skips for %s', async (_label, source) => {
+    insertTrafficSource(h, source)
+    const r = await workerVersionCheck.run(ctxFor(h))
+    expect(r.status).toBe('skipped')
+    expect(r.code).toBe('traffic.worker-version.not-applicable')
+  })
+
+  it('warns while a direct-push source waits for its first event', async () => {
+    insertTrafficSource(h, {
+      sourceType: 'cloudflare',
+      configJson: { deliveryMode: 'direct-push', workerVersion: '1.2.3' },
+    })
+    const r = await workerVersionCheck.run(ctxFor(h))
+    expect(r.status).toBe('warn')
+    expect(r.code).toBe('traffic.worker-version.waiting-for-first-event')
+    expect(r.remediation).toContain('smoke-test request')
+    expect(r.details).toMatchObject({
+      sources: [{ expectedVersion: '1.2.3', observedVersion: null, state: 'waiting-for-first-event' }],
+    })
+  })
+
+  it('warns and requests redeployment when the observed version differs', async () => {
+    insertTrafficSource(h, {
+      sourceType: 'cloudflare',
+      configJson: { deliveryMode: 'direct-push', workerVersion: '1.2.3' },
+      lastWorkerVersion: '1.2.2',
+    })
+    const r = await workerVersionCheck.run(ctxFor(h))
+    expect(r.status).toBe('warn')
+    expect(r.code).toBe('traffic.worker-version.stale')
+    expect(r.remediation).toContain('--deploy --confirm-route')
+  })
+
+  it('reports current for an equal legacy direct-push version', async () => {
+    insertTrafficSource(h, {
+      sourceType: 'cloudflare',
+      configJson: { workerVersion: '1.2.3' },
+      lastWorkerVersion: '1.2.3',
+    })
+    const r = await workerVersionCheck.run(ctxFor(h))
+    expect(r.status).toBe('ok')
+    expect(r.code).toBe('traffic.worker-version.current')
+  })
+})
+
 describe('check definitions', () => {
   it('exports the checks at well-known IDs', () => {
     const ids = TRAFFIC_SOURCE_CHECKS.map((c) => c.id)
@@ -384,6 +475,7 @@ describe('check definitions', () => {
       'traffic.source.connected',
       'traffic.source.recent-data',
       'traffic.source.sync-lag',
+      'traffic.source.worker-version',
       'traffic.source.credentials',
       'traffic.source.scopes',
       'traffic.source.cache-blindspot',

@@ -21,6 +21,10 @@ export interface TrafficSourceProbe {
   displayName: string
   status: string
   lastSyncedAt: string | null
+  /** Worker version reported by the most recent pushed event, if any. */
+  lastWorkerVersion: string | null
+  /** Hash of the bearer accepted by a push receiver. Never contains plaintext credentials. */
+  ingestTokenHash: string | null
   /** Newest instant a sync clamped past without ingesting; null when none known. */
   skippedThroughAt?: string | null
   lastError: string | null

@@ -1,22 +1,39 @@
 import type { CanonryConfig, CloudflareTrafficConnectionConfigEntry } from './config.js'
 
+function unsupportedDeliveryMode(deliveryMode: unknown): Error {
+  const label = typeof deliveryMode === 'string' ? ` "${deliveryMode}"` : ''
+  return new Error(`Unsupported Cloudflare traffic delivery mode${label}`)
+}
+
 function ensureConnections(config: CanonryConfig): CloudflareTrafficConnectionConfigEntry[] {
   if (!config.cloudflareTraffic) config.cloudflareTraffic = {}
   if (!config.cloudflareTraffic.connections) config.cloudflareTraffic.connections = []
   return config.cloudflareTraffic.connections
 }
 
+function normalizeDirectPushConnection(
+  connection: CloudflareTrafficConnectionConfigEntry,
+): CloudflareTrafficConnectionConfigEntry {
+  const deliveryMode = (connection as { deliveryMode?: unknown }).deliveryMode
+  if (deliveryMode !== undefined && deliveryMode !== 'direct-push') {
+    throw unsupportedDeliveryMode(deliveryMode)
+  }
+  if (deliveryMode === 'direct-push') return connection
+  return { ...connection, deliveryMode: 'direct-push' }
+}
+
 export function listCloudflareTrafficConnections(
   config: CanonryConfig,
 ): CloudflareTrafficConnectionConfigEntry[] {
-  return config.cloudflareTraffic?.connections ?? []
+  return (config.cloudflareTraffic?.connections ?? []).map(normalizeDirectPushConnection)
 }
 
 export function getCloudflareTrafficConnection(
   config: CanonryConfig,
   projectName: string,
 ): CloudflareTrafficConnectionConfigEntry | undefined {
-  return (config.cloudflareTraffic?.connections ?? []).find((c) => c.projectName === projectName)
+  const connection = (config.cloudflareTraffic?.connections ?? []).find((c) => c.projectName === projectName)
+  return connection ? normalizeDirectPushConnection(connection) : undefined
 }
 
 /**
@@ -30,13 +47,18 @@ export function getCloudflareTrafficConnectionBySourceId(
   config: CanonryConfig,
   sourceId: string,
 ): CloudflareTrafficConnectionConfigEntry | undefined {
-  return (config.cloudflareTraffic?.connections ?? []).find((c) => c.sourceId === sourceId)
+  const connection = (config.cloudflareTraffic?.connections ?? []).find((c) => c.sourceId === sourceId)
+  return connection ? normalizeDirectPushConnection(connection) : undefined
 }
 
 export function upsertCloudflareTrafficConnection(
   config: CanonryConfig,
   connection: CloudflareTrafficConnectionConfigEntry,
 ): CloudflareTrafficConnectionConfigEntry {
+  const deliveryMode = (connection as { deliveryMode?: unknown }).deliveryMode
+  if (deliveryMode !== 'direct-push') {
+    throw unsupportedDeliveryMode(deliveryMode)
+  }
   const connections = ensureConnections(config)
   const index = connections.findIndex((c) => c.projectName === connection.projectName)
 

@@ -1562,6 +1562,7 @@ export async function createServer(opts: {
     upsertConnection: (record: {
       projectName: string;
       sourceId: string;
+      deliveryMode: "direct-push";
       bearerToken: string;
       hmacSecret: string;
       workerVersion: string;

@@ -33,6 +33,12 @@ describe('buildCloudflareIngestUrlTemplate', () => {
     )
   })
 
+  it('normalizes multiple trailing slashes', () => {
+    expect(buildCloudflareIngestUrlTemplate({ apiUrl: 'https://canonry.example/base///' })).toBe(
+      `https://canonry.example/base${SUFFIX}`,
+    )
+  })
+
   it('keeps the {name} placeholder for per-project substitution', () => {
     expect(buildCloudflareIngestUrlTemplate({ apiUrl: 'http://localhost:4100' })).toContain(
       '/projects/{name}/traffic/cloudflare/ingest',

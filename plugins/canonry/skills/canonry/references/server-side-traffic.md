@@ -37,6 +37,7 @@ Adapters today:
 | `cloud-run` | GCP Cloud Run request logs via Logging API | Any service running on Cloud Run |
 | `wordpress` | The Canonry Traffic Logger WP plugin's REST endpoint | WordPress sites where you control wp-admin |
 | `vercel` | Vercel project logs via the Vercel API | Sites deployed on Vercel (Next.js, SvelteKit, etc.) |
+| `cloudflare` | A zone Worker selecting edge request events, delivered by direct push | Sites whose public traffic already passes through Cloudflare |
 
 Future adapters slot in by implementing the same contract.
 
@@ -190,6 +191,160 @@ Run `cnry traffic backfill <project> --source <id> --days N` (capped at
 history. It's an explicit operator action; the connect flow never pulls
 it implicitly.
 
+## Connecting a Cloudflare source (direct push)
+
+Cloudflare direct push runs a small ES-module Worker on the site's exact
+zone route. It applies a broad AI filter and sends selected edge events
+to Canonry in `ctx.waitUntil()`. The origin response remains independent
+from filtering, scheduling, and delivery errors. The event shape is also
+the contract for the later Queue pull transport.
+
+### Current support boundary
+
+Direct push currently supports a local `canonry serve` instance. The CLI
+and server must read the same `~/.canonry/config.yaml` credential store.
+You can expose that local server through a stable HTTPS tunnel.
+
+The Cloud Run `apps/api` service has no Cloudflare credential store.
+Therefore, `apps/api` cannot retain the per-source bearer and HMAC values
+that deployment requires.
+
+CAUTION: Use one authoritative server-traffic source for the canonical
+site. Overlapping adapters capture the same requests and double-count
+project totals. This is a current limitation. Queue support must define
+source coverage before it permits a transport change.
+
+### Prerequisites and route preflight
+
+1. Set `publicUrl` in `~/.canonry/config.yaml` to a stable public HTTPS URL.
+   If `canonry serve` is local, use a stable HTTPS tunnel URL.
+2. Put the ingest host outside the Worker route. For `www.example.com/*`,
+   use a different host such as `canonry-ops.example.net`.
+3. Install a current Wrangler release and run `wrangler login`.
+   If Wrangler lists multiple accounts, pass the exact `--account-id`.
+4. Verify that Cloudflare proxies the canonical hostname in DNS.
+5. Open **Workers & Pages → existing Worker → Settings → Domains &
+   Routes** for the zone. Verify that `<canonical-host>/*` is unclaimed.
+6. If another Worker owns that route, stop. Integrate Canonry into that
+   Worker instead of attaching a second Worker.
+7. Review the account request volume. A route invokes the Worker for every
+   matching request. The filter does not reduce Worker invocations.
+
+Workers Free includes 100,000 requests per account each day. The quota
+resets at midnight UTC. A fail-closed route returns Cloudflare error 1027
+after the account exhausts this quota. A fail-open route bypasses the
+Worker and keeps the origin available. See [Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/).
+
+### Generate or deploy
+
+```bash
+# Generate secret-free worker.js and wrangler.toml in
+# ./canonry-cloudflare-<project-slug>:
+canonry traffic connect cloudflare <project> \
+  --zone-id <cloudflare-zone-id> \
+  --account-id <cloudflare-account-id>
+
+# Deploy only the Worker after the route preflight.
+# Both safety acknowledgements are mandatory:
+canonry traffic connect cloudflare <project> \
+  --zone-id <cloudflare-zone-id> \
+  --account-id <cloudflare-account-id> \
+  --deploy --confirm-route --confirm-fail-open
+
+# Optional artifact directory / source label:
+canonry traffic connect cloudflare <project> \
+  --display-name "Cloudflare · production" \
+  --output-dir ./infra/canonry-cloudflare
+```
+
+`--confirm-route` records that you inspected the exact route.
+`--confirm-fail-open` records that you will configure the required route
+toggle. Neither flag changes Cloudflare by itself.
+
+With `--deploy`, Canonry reads `wrangler deploy --help` before it connects
+the source. Wrangler must support `--secrets-file` and `--strict`. An old
+Wrangler stops this step before Canonry changes state.
+
+The generated TOML never declares `[[routes]]`. Thus, Wrangler deploys the
+Worker without placing it on production traffic. After deployment, open
+Cloudflare Dashboard and attach the exact `<canonical-host>/*` route shown
+in the command output. Set **Request limit failure mode** to **Fail open**
+as part of this manual activation. Wrangler cannot configure this toggle.
+
+The generated source and TOML contain no credential values. Non-secret
+configuration values are Worker vars. The `--account-id` option makes
+connect write `account_id` at the top level.
+
+The bearer and HMAC values stay in the local Canonry credential store.
+They become `CANONRY_BEARER_TOKEN` and `CANONRY_HMAC_SECRET` Worker
+secrets. With `--deploy`, the CLI uses a mode-0600 temporary secrets file.
+Then it invokes Wrangler with `--secrets-file ... --strict` and removes
+the file.
+
+Rerun the same connect command to update an old generated Worker. Canonry
+atomically replaces recognizable Canonry-generated files. It refuses
+operator-owned files and symlinks. Therefore, doctor remediation does not
+require manual file deletion.
+
+Cloudflare connect is absent from MCP because deployment reads local
+secrets. An agent can guide the CLI command. It must not request, print,
+or send either secret through chat.
+
+### Direct-push behavior and smoke test
+
+Direct push has bounded retries for network failures and HTTP 408, 425,
+429, and 5xx responses (250 ms, then 1 s). Delivery is asynchronous and
+never changes the site's response. If Canonry remains unavailable after
+the retry budget, the selected event is lost. Direct push has no durable
+edge buffer. This limit is the primary reason to add Queue pull next.
+
+Smoke-test all of these before considering the source live:
+
+1. Request a normal page with an ordinary browser UA. Verify that the
+   origin status, headers, and body remain unchanged. No Canonry event must land.
+2. Request a harmless page with `utm_source=chatgpt` or a known AI crawler
+   UA. Verify that one event contains the expected path, status, and UA.
+3. Repeat the request without AI evidence. Verify that Canonry receives
+   no event.
+4. Verify that the site route excludes the Canonry ingest hostname.
+   This condition prevents delivery recursion.
+5. In the route form, select the exact route and Worker. Set **Request limit
+   failure mode** to **Fail open**. Save the route only after both values are correct.
+6. Cause a non-production receiver failure in staging. Verify that the
+   origin remains healthy and retries stay bounded.
+7. Inspect Worker logs. Verify that logs contain no secret values.
+8. Run `canonry doctor --project <project>`. Inspect
+   `traffic.source.recent-data` and `traffic.source.worker-version`.
+9. If the Worker version is stale, rerun the connect command. Then deploy
+   with both acknowledgement flags.
+10. Rehearse rollback in staging. Detach the route and verify that the
+    origin remains healthy without the Worker.
+
+A direct-push source does not use `canonry traffic sync` or a traffic-sync
+schedule.
+
+### Rollback and teardown
+
+1. Detach the exact site route from the Worker.
+2. Request an ordinary site page. Make sure that the origin status,
+   headers, and body remain healthy.
+3. Delete the Worker after the origin test succeeds.
+4. Run the doctor. Expect source-health warnings until Canonry supports
+   Cloudflare disconnect.
+
+The current CLI and API have no Cloudflare disconnect operation. The source
+row and local credential store remain after teardown. A follow-up must add
+source archival and local credential cleanup.
+
+### Queue pull seam (not shipped yet)
+
+`deliveryMode: direct-push` is explicit in the source config. The reserved
+`queue-pull` mode will keep the Worker filter, `CloudflareEdgeEventBatch`,
+canonical JSON encoding, normalizer, classifier, and rollups unchanged.
+Only delivery changes to a Queue binding, and Canonry gains a polling
+adapter. A source must use one mode at a time so the same edge event cannot
+arrive through both transports and double-count.
+
 ## Syncing data
 
 ```bash
@@ -282,8 +437,8 @@ schema change, the stored rollups are untouched.
 | Project dashboard `/projects/:name/activity` | Live source table + 24h totals + GA4 referrals (combined view) |
 | Top-level `/traffic` route | Cross-project source admin (connect, sync, archive) |
 | `cnry report <project>` (HTML + SPA) | "AI Visibility — Server-Side" section, ranked above Indexing Health |
-| `cnry doctor --project <name>` | `traffic.source.connected`, `recent-data`, `credentials`, `scopes`, `cache-blindspot` checks |
-| MCP toolkit `traffic` | Tools: `canonry_traffic_status`, `_sources_list`, `_source_get`, `_events`, `_connect_cloud_run`, `_sync` |
+| `cnry doctor --project <name>` | Source health checks, including Cloudflare `traffic.source.worker-version` deployment drift |
+| MCP toolkit `traffic` | Read/status tools plus pull-source setup/sync tools. Cloudflare connect is local-CLI-only so Worker secrets cannot enter an MCP transcript. |
 
 ## Doctor signals
 
@@ -297,10 +452,19 @@ The doctor checks are adapter-agnostic. When they fail or warn:
 | `traffic.source.recent-data` | `traffic.recent-data.empty` | Source connected but no data in 30d. Verify config and credentials with `cnry traffic sources <project>`. |
 | `traffic.source.credentials` | `traffic.credentials.resolve-failed` | Service-account key in `~/.canonry/config.yaml` is invalid or expired. Re-connect. |
 | `traffic.source.cache-blindspot` | `traffic.cache-blindspot.wordpress-plugin` | A WordPress source is connected, so the plugin cannot see cache-served page views. Exclude AI user-agents from the page cache and any CDN, or switch to a log/edge source. Warns only, not a failure. |
+| `traffic.source.worker-version` | `traffic.worker-version.waiting-for-first-event` | Send a smoke-test request through the Worker. Then run the doctor again. |
+| `traffic.source.worker-version` | `traffic.worker-version.stale` | Redeploy the generated Worker from the credential-owning host. Use `--deploy --confirm-route --confirm-fail-open`. Attach the route manually. |
+
+Cloudflare doctor behavior is capability-driven: only
+`deliveryMode=direct-push` (and legacy Cloudflare rows with no mode) skips
+pull-watermark lag. The same mode enables `traffic.source.worker-version`.
+That check compares `configJson.workerVersion` with `lastWorkerVersion`.
+The reserved Queue pull mode uses pull checks and skips the version check.
 
 ## Scheduling
 
-`cnry schedule` supports `--kind traffic-sync`. Recurring syncs are
+`cnry schedule` supports `--kind traffic-sync` for pull sources. Cloudflare
+direct push is event-driven and must not receive a traffic-sync schedule. Recurring syncs are
 safe because of the `last_event_ids` cross-sync dedupe ring buffer
 described above. Recommended cadence:
 
@@ -365,8 +529,8 @@ domains, or PII are surfaced.
   no client IP, so every Vercel crawler hit is unverified by
   construction (UA-only). A Vercel source reading 100% unverified is
   expected, not a misconfiguration.
-- **Three adapters shipped (Cloud Run + WordPress + Vercel); more
-  planned.** The doctor checks and the report renderer are
+- **Four adapters ship: Cloud Run, WordPress, Vercel, and Cloudflare
+  direct push. More adapters are planned.** The doctor checks and report renderer are
   adapter-agnostic — adding a new adapter is just a new entry in
   `traffic_sources.source_type` and a `TrafficSourceValidator`
   registration.

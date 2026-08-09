@@ -40,6 +40,7 @@ describe('traffic CLI commands', () => {
 
     const config = {
       apiUrl: 'http://localhost:0',
+      publicUrl: 'https://canonry.test',
       database: dbPath,
       apiKey: apiKeyPlain,
       providers: {},
@@ -116,6 +117,82 @@ describe('traffic CLI commands', () => {
     ])
     expect(result.exitCode).not.toBe(0)
     expect(result.stderr).toMatch(/failed to read --service-account-key/i)
+  })
+
+  it('connects Cloudflare and writes secret-free Worker artifacts', async () => {
+    const outputDirectory = path.join(tmpDir, 'cloudflare-worker')
+    const result = await invokeCli([
+      'traffic',
+      'connect',
+      'cloudflare',
+      'test-proj',
+      '--zone-id',
+      'zone_abc',
+      '--account-id',
+      'account_xyz',
+      '--output-dir',
+      outputDirectory,
+      '--format',
+      'json',
+    ])
+
+    expect(result.exitCode, result.stderr).toBeUndefined()
+    const summary = parseJsonOutput(result.stdout) as {
+      sourceId: string
+      deliveryMode: string
+      outputDirectory: string
+      files: { workerScript: string; wranglerConfig: string }
+      deployment: string
+    }
+    expect(summary.deliveryMode).toBe('direct-push')
+    expect(summary.outputDirectory).toBe(outputDirectory)
+    expect(summary.deployment).toBe('not-requested')
+    expect(summary.files.workerScript).toBe(path.join(outputDirectory, 'worker.js'))
+    expect(summary.files.wranglerConfig).toBe(path.join(outputDirectory, 'wrangler.toml'))
+
+    const configOnDisk = parse(fs.readFileSync(path.join(tmpDir, 'config.yaml'), 'utf-8')) as {
+      cloudflareTraffic?: {
+        connections?: Array<{
+          sourceId: string
+          deliveryMode: string
+          bearerToken: string
+          hmacSecret: string
+        }>
+      }
+    }
+    const credential = configOnDisk.cloudflareTraffic?.connections?.[0]
+    expect(credential?.sourceId).toBe(summary.sourceId)
+    expect(credential?.deliveryMode).toBe('direct-push')
+
+    const workerScript = fs.readFileSync(summary.files.workerScript, 'utf-8')
+    const wranglerToml = fs.readFileSync(summary.files.wranglerConfig, 'utf-8')
+    for (const output of [result.stdout, workerScript, wranglerToml]) {
+      expect(output).not.toContain(credential!.bearerToken)
+      expect(output).not.toContain(credential!.hmacSecret)
+    }
+    expect(workerScript).toContain('CANONRY_BEARER_TOKEN')
+    expect(workerScript).toContain('CANONRY_HMAC_SECRET')
+    expect(wranglerToml).toContain('CANONRY_DELIVERY_MODE')
+    expect(wranglerToml).toContain('CANONRY_BEARER_TOKEN')
+
+    const row = db.select().from(trafficSources).all()[0]
+    expect(row?.sourceType).toBe('cloudflare')
+    expect(row?.configJson).toMatchObject({ deliveryMode: 'direct-push' })
+  })
+
+  it('requires a zone id and explicit route acknowledgement before Cloudflare deploy', async () => {
+    const withoutZone = await invokeCli([
+      'traffic', 'connect', 'cloudflare', 'test-proj', '--deploy', '--confirm-route',
+    ])
+    expect(withoutZone.exitCode).not.toBe(0)
+    expect(withoutZone.stderr).toMatch(/--zone-id/)
+
+    const withoutConfirmation = await invokeCli([
+      'traffic', 'connect', 'cloudflare', 'test-proj', '--deploy', '--zone-id', 'zone_abc',
+    ])
+    expect(withoutConfirmation.exitCode).not.toBe(0)
+    expect(withoutConfirmation.stderr).toMatch(/--confirm-route/)
+    expect(db.select().from(trafficSources).all()).toHaveLength(0)
   })
 
   it('connects via service-account key file and persists creds + source row', async () => {

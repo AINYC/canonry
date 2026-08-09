@@ -1,6 +1,7 @@
 import type {
   RunDetailDto,
   TrafficBackfillResponse,
+  TrafficConnectCloudflareResponse,
   TrafficEventEntry,
   TrafficEventsResponse,
   TrafficSeriesGranularity,
@@ -10,9 +11,20 @@ import type {
   TrafficSyncResponse,
 } from '@ainyc/canonry-contracts'
 import { RunStatuses, TrafficEventKinds, TrafficSeriesGranularities } from '@ainyc/canonry-contracts'
+import { getCloudflareTrafficConnection } from '../cloudflare-traffic-config.js'
+import {
+  assertCloudflareArtifactsDoNotContainSecrets,
+  deployCloudflareWorker,
+  preflightCloudflareWrangler,
+  prepareCloudflareWorkerOutputDirectory,
+  redactCloudflareSecrets,
+  resolveCloudflareWorkerOutputDirectory,
+  writeCloudflareWorkerArtifacts,
+} from '../cloudflare-worker-deploy.js'
 import { createApiClient } from '../client.js'
 import { CliError, isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
+import { loadConfigRaw } from '../config.js'
 
 function getClient() {
   return createApiClient()
@@ -20,6 +32,202 @@ function getClient() {
 
 function configString(value: unknown, fallback = '(unset)'): string {
   return typeof value === 'string' ? value : fallback
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+export async function trafficConnectCloudflare(project: string, opts: {
+  displayName?: string
+  zoneId?: string
+  accountId?: string
+  outputDirectory?: string
+  deploy?: boolean
+  confirmRoute?: boolean
+  confirmFailOpen?: boolean
+  format?: string
+}, deps: {
+  client?: Pick<ReturnType<typeof createApiClient>, 'trafficConnectCloudflare'>
+  loadLocalConfig?: typeof loadConfigRaw
+  deployWorker?: typeof deployCloudflareWorker
+  preflightWrangler?: typeof preflightCloudflareWrangler
+} = {}): Promise<void> {
+  if (opts.deploy && !opts.zoneId) {
+    throw new CliError({
+      code: 'TRAFFIC_CLOUDFLARE_DEPLOY_ZONE_REQUIRED',
+      message: '--zone-id is required with --deploy',
+      displayMessage: 'Error: --zone-id <id> is required with --deploy',
+      details: { project },
+    })
+  }
+  if (opts.deploy && !opts.confirmRoute) {
+    throw new CliError({
+      code: 'TRAFFIC_CLOUDFLARE_ROUTE_CONFIRMATION_REQUIRED',
+      message: '--confirm-route is required with --deploy',
+      displayMessage:
+        'Error: inspect existing Worker routes first. Pass --confirm-route to acknowledge the required manual route attachment after Worker deployment.',
+      details: { project, zoneId: opts.zoneId },
+    })
+  }
+  if (opts.deploy && !opts.confirmFailOpen) {
+    throw new CliError({
+      code: 'TRAFFIC_CLOUDFLARE_FAIL_OPEN_CONFIRMATION_REQUIRED',
+      message: '--confirm-fail-open is required with --deploy',
+      displayMessage:
+        'Error: pass --confirm-fail-open to acknowledge the required Fail open setting during manual route attachment after Worker deployment.',
+      details: { project, zoneId: opts.zoneId },
+    })
+  }
+  if (opts.deploy) {
+    try {
+      await (deps.preflightWrangler ?? preflightCloudflareWrangler)()
+    } catch {
+      throw new CliError({
+        code: 'TRAFFIC_CLOUDFLARE_WRANGLER_UNSUPPORTED',
+        message: 'Wrangler is unavailable or lacks the required deploy safety flags',
+        displayMessage:
+          'Error: install or update Wrangler. Its `deploy --help` output must include --secrets-file and --strict.',
+        details: { project },
+      })
+    }
+  }
+
+  const outputDirectory = resolveCloudflareWorkerOutputDirectory(project, opts.outputDirectory)
+  let artifacts
+  try {
+    artifacts = prepareCloudflareWorkerOutputDirectory(outputDirectory)
+  } catch (error) {
+    const message = errorMessage(error)
+    throw new CliError({
+      code: 'TRAFFIC_CLOUDFLARE_OUTPUT_INVALID',
+      message,
+      displayMessage: `Error: cannot use Cloudflare Worker output directory: ${message}`,
+      details: { project, outputDirectory },
+    })
+  }
+
+  const client = deps.client ?? getClient()
+  const result: TrafficConnectCloudflareResponse = await client.trafficConnectCloudflare(project, {
+    deliveryMode: 'direct-push',
+    displayName: opts.displayName,
+    zoneId: opts.zoneId,
+    accountId: opts.accountId,
+  })
+
+  const localConfig = (deps.loadLocalConfig ?? loadConfigRaw)()
+  const localCredential = localConfig
+    ? getCloudflareTrafficConnection(localConfig, project)
+    : undefined
+  const deploymentCredential = localCredential?.sourceId === result.sourceId
+    ? localCredential
+    : undefined
+
+  if (deploymentCredential) {
+    try {
+      assertCloudflareArtifactsDoNotContainSecrets(result, deploymentCredential)
+    } catch {
+      throw new CliError({
+        code: 'TRAFFIC_CLOUDFLARE_SECRET_EXPOSURE',
+        message: 'Cloudflare setup response unexpectedly contained a cleartext secret',
+        displayMessage: 'Error: refused to write Cloudflare artifacts because the response contained a cleartext secret',
+        details: { project, sourceId: result.sourceId },
+      })
+    }
+  }
+
+  try {
+    writeCloudflareWorkerArtifacts(artifacts, result)
+  } catch (error) {
+    const message = errorMessage(error)
+    throw new CliError({
+      code: 'TRAFFIC_CLOUDFLARE_ARTIFACT_WRITE_FAILED',
+      message,
+      displayMessage: `Error: Cloudflare source connected, but artifact writing failed: ${message}`,
+      details: { project, sourceId: result.sourceId, outputDirectory },
+    })
+  }
+
+  if (opts.deploy && !deploymentCredential) {
+    throw new CliError({
+      code: 'TRAFFIC_CLOUDFLARE_DEPLOY_CONFIG_UNSHARED',
+      message: 'Cloudflare auto-deploy requires the CLI and Canonry server to share the same local config',
+      displayMessage:
+        'Error: source connected and artifacts written, but auto-deploy is unavailable because this CLI cannot read the server-stored Worker credentials. Ask the Canonry server operator to deploy the Worker and install its secrets.',
+      details: {
+        project,
+        sourceId: result.sourceId,
+        outputDirectory,
+      },
+    })
+  }
+
+  if (opts.deploy && deploymentCredential) {
+    try {
+      await (deps.deployWorker ?? deployCloudflareWorker)({
+        wranglerTomlPath: artifacts.wranglerTomlPath,
+        secrets: deploymentCredential,
+      })
+    } catch (error) {
+      const message = redactCloudflareSecrets(errorMessage(error), deploymentCredential)
+      throw new CliError({
+        code: 'TRAFFIC_CLOUDFLARE_DEPLOY_FAILED',
+        message,
+        displayMessage:
+          `Error: Cloudflare source connected and artifacts written, but Wrangler deploy failed: ${message}`,
+        details: { project, sourceId: result.sourceId, outputDirectory },
+      })
+    }
+  }
+
+  const summary = {
+    sourceId: result.sourceId,
+    deliveryMode: result.deliveryMode,
+    workerVersion: result.workerVersion,
+    outputDirectory: artifacts.outputDirectory,
+    files: {
+      workerScript: artifacts.workerScriptPath,
+      wranglerConfig: artifacts.wranglerTomlPath,
+    },
+    autoDeployAvailable: Boolean(deploymentCredential),
+    deployment: opts.deploy ? 'worker-deployed-route-unattached' : 'not-requested',
+    routeAttachment: 'required-manual',
+    requestLimitFailureMode: {
+      required: 'fail-open',
+      status: 'required-during-manual-route-attachment',
+      configuredBy: 'cloudflare-dashboard',
+      configuredByWrangler: false,
+    },
+    postDeployInstructions: result.instructions,
+  }
+
+  if (isMachineFormat(opts.format)) {
+    console.log(JSON.stringify(summary, null, 2))
+    return
+  }
+
+  console.log(`Cloudflare direct-push traffic source connected for project "${project}".`)
+  console.log(`  Source ID:       ${result.sourceId}`)
+  console.log(`  Worker version:  ${result.workerVersion}`)
+  console.log(`  Worker script:   ${artifacts.workerScriptPath}`)
+  console.log(`  Wrangler config: ${artifacts.wranglerTomlPath}`)
+  console.log(`  Deployment:      ${opts.deploy ? 'Worker deployed; route not attached' : 'not requested'}`)
+  console.log('')
+  console.log('The required manual route is a catch-all. Inspect existing Worker routes before deployment.')
+  console.log('Wrangler deployment does not attach the route. Attach it manually after the Worker deploys.')
+  console.log('Required: set the route Request limit failure mode to Fail open before route activation.')
+  console.log('Wrangler cannot configure this toggle. Workers Free includes 100,000 requests per day for the account.')
+  console.log('Use one authoritative server-traffic source for this site. Overlapping adapters double-count project totals.')
+  if (opts.deploy) {
+    console.log('')
+    console.log('Required Cloudflare Dashboard steps:')
+    console.log(result.instructions)
+    console.log('Keep the Canonry public HTTPS URL reachable so the Worker can push events.')
+  } else if (deploymentCredential) {
+    console.log('Next: install and authenticate Wrangler. Inspect the route, then rerun with --deploy --confirm-route --confirm-fail-open and --zone-id <id>.')
+  } else {
+    console.log('Auto-deploy is unavailable because this CLI and the Canonry server do not share local config. Ask the server operator to deploy and install the Worker secrets.')
+  }
 }
 
 export async function trafficConnectWordpress(project: string, opts: {

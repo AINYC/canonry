@@ -1,5 +1,6 @@
 import {
   trafficBackfill,
+  trafficConnectCloudflare,
   trafficConnectCloudRun,
   trafficConnectVercel,
   trafficConnectWordpress,
@@ -13,6 +14,36 @@ import type { CliCommandSpec } from '../cli-dispatch.js'
 import { getBoolean, getString, parseIntegerOption, requireProject, stringOption, unknownSubcommand } from '../cli-command-helpers.js'
 
 export const TRAFFIC_CLI_COMMANDS: readonly CliCommandSpec[] = [
+  {
+    path: ['traffic', 'connect', 'cloudflare'],
+    usage: 'canonry traffic connect cloudflare <project> [--display-name <name>] [--zone-id <id>] [--account-id <id>] [--output-dir <dir>] [--deploy --confirm-route --confirm-fail-open] [--format json]',
+    options: {
+      'display-name': stringOption(),
+      'zone-id': stringOption(),
+      'account-id': stringOption(),
+      'output-dir': stringOption(),
+      deploy: { type: 'boolean' },
+      'confirm-route': { type: 'boolean' },
+      'confirm-fail-open': { type: 'boolean' },
+    },
+    run: async (input) => {
+      const project = requireProject(
+        input,
+        'traffic.connect.cloudflare',
+        'canonry traffic connect cloudflare <project> [--zone-id <id>] [--output-dir <dir>] [--deploy --confirm-route --confirm-fail-open]',
+      )
+      await trafficConnectCloudflare(project, {
+        displayName: getString(input.values, 'display-name'),
+        zoneId: getString(input.values, 'zone-id'),
+        accountId: getString(input.values, 'account-id'),
+        outputDirectory: getString(input.values, 'output-dir'),
+        deploy: getBoolean(input.values, 'deploy'),
+        confirmRoute: getBoolean(input.values, 'confirm-route'),
+        confirmFailOpen: getBoolean(input.values, 'confirm-fail-open'),
+        format: input.format,
+      })
+    },
+  },
   {
     path: ['traffic', 'connect', 'cloud-run'],
     usage: 'canonry traffic connect cloud-run <project> --gcp-project <id> --service-account-key <path> [--service <name>] [--location <region>] [--display-name <name>] [--format json]',
@@ -115,7 +146,7 @@ export const TRAFFIC_CLI_COMMANDS: readonly CliCommandSpec[] = [
       unknownSubcommand(input.positionals[0], {
         command: 'traffic connect',
         usage: 'canonry traffic connect <provider> <project> [args]',
-        available: ['cloud-run', 'wordpress', 'vercel'],
+        available: ['cloud-run', 'cloudflare', 'wordpress', 'vercel'],
       })
     },
   },
