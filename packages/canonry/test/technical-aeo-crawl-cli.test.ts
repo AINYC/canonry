@@ -36,6 +36,28 @@ function captureStdout(fn: () => Promise<void>): { run: Promise<void>; lines: ()
 }
 
 describe('Technical AEO full-crawl CLI', () => {
+  it('leaves omitted budgets for the API to normalize into the shared default identity', async () => {
+    mocked.triggerSiteAudit.mockResolvedValue({ runId: 'run-defaults', status: 'queued' })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    try {
+      await command(['technical-aeo', 'run']).run({
+        positionals: ['acme'],
+        values: { wait: false },
+        format: 'json',
+        dryRun: false,
+      })
+    } finally {
+      log.mockRestore()
+    }
+
+    expect(mocked.triggerSiteAudit).toHaveBeenLastCalledWith('acme', expect.objectContaining({
+      limit: undefined,
+      maxPages: undefined,
+      maxEdges: undefined,
+      checkDeadLinks: false,
+    }))
+  })
+
   it('keeps dead-link checks off unless --check-dead-links is explicitly supplied', async () => {
     mocked.triggerSiteAudit.mockResolvedValue({ runId: 'run-1', status: 'queued' })
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)

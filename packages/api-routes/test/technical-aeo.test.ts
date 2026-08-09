@@ -507,10 +507,21 @@ describe('POST /technical-aeo/runs', () => {
         schemaVersion: 1,
         sitemapUrl: null,
         maxPages: 50,
-        maxEdges: 250_000,
+        maxEdges: 100_000,
         maxDepth: null,
         checkDeadLinks: false,
       },
+    })
+  })
+
+  it('persists the conservative default identity for omitted crawl budgets', async () => {
+    const first = await ctx.app.inject({ method: 'POST', url: '/api/v1/projects/tech-aeo/technical-aeo/runs', payload: {} })
+    const second = await ctx.app.inject({ method: 'POST', url: '/api/v1/projects/tech-aeo/technical-aeo/runs', payload: {} })
+    const runId = (first.json() as { runId: string }).runId
+
+    expect((second.json() as { runId: string }).runId).toBe(runId)
+    expect(ctx.db.select().from(siteCrawlRunRequests).where(eq(siteCrawlRunRequests.runId, runId)).get()).toMatchObject({
+      effectiveOptions: { maxPages: 1_000, maxEdges: 100_000 },
     })
   })
 

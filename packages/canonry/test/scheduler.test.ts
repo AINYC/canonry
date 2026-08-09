@@ -645,8 +645,8 @@ test('site-audit schedule persists default request identity before dispatch', ()
     effectiveOptions: {
       schemaVersion: 1,
       sitemapUrl: null,
-      maxPages: 5_000,
-      maxEdges: 250_000,
+      maxPages: 1_000,
+      maxEdges: 100_000,
       maxDepth: null,
       checkDeadLinks: false,
     },

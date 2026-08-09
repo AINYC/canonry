@@ -21,6 +21,12 @@ const GSC_INSPECT_ENDPOINT = 'urlInspection/index:inspect'
 function makeDb(project: unknown) {
   const runUpdates: Array<{ status?: string }> = []
   const inserted: unknown[] = []
+  const emptyRows = {
+    get: () => undefined,
+    all: () => [],
+    limit: () => ({ get: () => undefined, all: () => [] }),
+    orderBy: () => ({ limit: () => ({ get: () => undefined, all: () => [] }), get: () => undefined, all: () => [] }),
+  }
   return {
     runUpdates,
     inserted,
@@ -29,11 +35,8 @@ function makeDb(project: unknown) {
     // uses to find the latest site audit.
     select: () => ({
       from: () => ({
-        where: () => ({
-          get: () => project,
-          all: () => [],
-          orderBy: () => ({ limit: () => ({ get: () => undefined, all: () => [] }), get: () => undefined, all: () => [] }),
-        }),
+        where: () => ({ ...emptyRows, get: () => project }),
+        innerJoin: () => ({ where: () => emptyRows }),
       }),
     }),
     insert: () => ({ values: (v: unknown) => ({ run: () => { inserted.push(v); return { changes: 1 } } }) }),

@@ -929,8 +929,8 @@ const technicalAeoRunInputSchema = z.object({
   project: projectNameSchema,
   sitemapUrl: z.string().url().optional().describe('Override the sitemap URL. Defaults to https://<canonicalDomain>/sitemap.xml.'),
   limit: z.number().int().positive().max(2000).optional().describe('Deprecated compatibility alias for maxPages.'),
-  maxPages: z.number().int().positive().max(50_000).optional().describe('Maximum pages crawled and audited.'),
-  maxEdges: z.number().int().positive().max(1_000_000).optional().describe('Maximum link observations retained for this crawl.'),
+  maxPages: z.number().int().positive().max(50_000).optional().describe('Maximum pages crawled and audited. Defaults to 1,000; hard maximum 50,000.'),
+  maxEdges: z.number().int().positive().max(1_000_000).optional().describe('Maximum link observations retained for this crawl. Defaults to 100,000; hard maximum 1,000,000.'),
   maxDepth: z.number().int().min(0).max(100).optional().describe('Maximum internal-link depth from the root page.'),
   checkDeadLinks: z.boolean().optional().describe('Opt in to internal dead-link checks. Omitted and false both disable checks.'),
 })
@@ -2842,7 +2842,7 @@ export const canonryMcpTools = [
     name: 'canonry_technical_aeo_run',
     title: 'Run Technical AEO site audit',
     description:
-      'Start a site-audit run. The run discovers root, sitemap, and linked pages. It returns {runId, status} and continues in the background. If a run is active, this tool returns it. Poll canonry_run_get, then read the crawl and score tools.',
+      'Start a site-audit run. The run discovers root, sitemap, and linked pages. Its unattended default is 1,000 pages and 100,000 link observations; callers may explicitly raise either to its hard maximum. It returns {runId, status} and continues in the background. If an active run has identical effective options, this tool returns it; different options are refused. Poll canonry_run_get, then read the crawl and score tools.',
     access: 'write',
     tier: 'monitoring',
     inputSchema: technicalAeoRunInputSchema,

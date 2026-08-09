@@ -736,7 +736,7 @@ export const siteCrawlRunRequests = sqliteTable('site_crawl_run_requests', {
 ])
 
 /**
- * A crawl attempt is a local, resumable checkpoint for one site-audit run.
+ * A crawl attempt is a durable event checkpoint for one site-audit run.
  * `project_id + run_id` is a real FK to runs, so an attempt cannot be attached
  * to a run owned by a different project.
  */

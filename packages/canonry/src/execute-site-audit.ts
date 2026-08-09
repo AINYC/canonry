@@ -60,6 +60,10 @@ type AuditPage = Pick<CrawlPageObservation, 'audit'>
 type AuditFactor = NonNullable<NonNullable<AuditPage['audit']>['factors']>[number]
 type DatabaseTransaction = Parameters<Parameters<DatabaseClient['transaction']>[0]>[0]
 
+class SiteAuditCancelledError extends Error {
+  override name = 'SiteAuditCancelledError'
+}
+
 function toHomepageUrl(canonicalDomain: string): string {
   const trimmed = canonicalDomain.trim().replace(/\/+$/, '')
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
@@ -149,8 +153,37 @@ function isInventoryEligible(page: CrawlPageObservation): boolean {
 }
 
 function isCancelled(error: unknown, signal: AbortSignal | undefined): boolean {
-  if (signal?.aborted) return true
-  return error instanceof Error && /\b(?:abort|cancel)/i.test(error.name + error.message)
+  // A caller aborting its signal does not make every concurrent failure a
+  // cancellation. Only the signal's exact reason (or Fetch's typed abort)
+  // carries that meaning.
+  if (error instanceof SiteAuditCancelledError) return true
+  if (signal?.aborted && signal.reason !== undefined && error === signal.reason) return true
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
+function isLegacyScorecardPage(page: CrawlPageObservation): boolean {
+  // Legacy `site_audit_pages` means a page received a scorecard, or the
+  // request itself failed. Crawl-only observations (robots, redirects,
+  // non-HTML, and depth-budget stubs) have useful graph state but no legacy
+  // audit failure to report.
+  return page.audit != null || page.state === 'fetch-error'
+}
+
+function emptyCompleteCrawlError(rootUrl: string, finalRootUrl: string | null, pagesObserved: number): Error {
+  if (!finalRootUrl) return new Error(`Site audit could not successfully audit any of ${pagesObserved} observed page(s).`)
+  try {
+    const rootHost = new URL(rootUrl).hostname
+    const finalRootHost = new URL(finalRootUrl).hostname
+    if (rootHost !== finalRootHost) {
+      return new Error(
+        `Site audit could not successfully audit any of ${pagesObserved} observed page(s): `
+        + `root URL redirected off-host from ${rootHost} to ${finalRootHost} (${finalRootUrl}).`,
+      )
+    }
+  } catch {
+    // The generic error below is still truthful when an upstream URL is malformed.
+  }
+  return new Error(`Site audit could not successfully audit any of ${pagesObserved} observed page(s).`)
 }
 
 function toLegacyIssue(summary: SiteAuditFactorSummaryDto, totalPages: number): SiteAuditCrossCuttingIssueDto | null {
@@ -337,7 +370,9 @@ export async function executeSiteAudit(
         discoveryProvenance: [{ discoveredFrom: page.provenance.discoveredFrom, sitemapSources: page.provenance.sitemapSources, root: page.provenance.root }],
         sitemapMetadata: { sources: page.provenance.sitemapSources },
         fetchState: page.state,
-        fetchedAt: page.state === 'discovered' || page.state === 'robots-blocked' ? null : now,
+        fetchedAt: page.state === 'discovered' || page.state === 'robots-blocked'
+          ? null
+          : sql`coalesce(${siteCrawlPages.fetchedAt}, ${now})`,
         httpStatus: page.statusCode,
         contentType: page.contentType,
         finalUrl: page.finalUrl,
@@ -506,7 +541,7 @@ export async function executeSiteAudit(
     const crawlSummary = report.summary
     const hasAuditedPages = crawlSummary.auditRollup.auditedPages > 0
     if (crawlSummary.complete && !hasAuditedPages) {
-      throw new Error(`Site audit could not successfully audit any of ${crawlSummary.pagesObserved} observed page(s).`)
+      throw emptyCompleteCrawlError(crawlSummary.rootUrl, crawlSummary.finalRootUrl, crawlSummary.pagesObserved)
     }
 
     const finishedAt = new Date().toISOString()
@@ -535,7 +570,7 @@ export async function executeSiteAudit(
           auditedAt: crawlSummary.completedAt,
           aggregateScore: crawlSummary.auditRollup.aggregateScore ?? 0,
           pagesDiscovered: crawlSummary.pagesDiscovered,
-          pagesAudited: crawlSummary.pagesObserved,
+          pagesAudited: crawlSummary.auditRollup.auditedPages,
           pagesSkipped: Math.max(0, crawlSummary.pagesDiscovered - crawlSummary.pagesObserved),
           pagesErrored: errorCount,
           factorAverages: factors,
@@ -544,6 +579,7 @@ export async function executeSiteAudit(
           createdAt: finishedAt,
         }).run()
         for (const page of observedPages.values()) {
+          if (!isLegacyScorecardPage(page)) continue
           tx.insert(siteAuditPages).values({
             id: crypto.randomUUID(), projectId, runId,
             url: page.finalUrl ?? page.requestedUrl,
@@ -618,7 +654,7 @@ export async function executeSiteAudit(
 
     if (!published) {
       const current = db.select({ status: runs.status }).from(runs).where(eq(runs.id, runId)).get()
-      if (current?.status === 'cancelled') throw new Error(`Site audit cancelled before publication: ${runId}`)
+      if (current?.status === 'cancelled') throw new SiteAuditCancelledError(`Site audit cancelled before publication: ${runId}`)
       throw new Error(`Site audit run was no longer running before publication: ${runId}`)
     }
 

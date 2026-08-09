@@ -175,7 +175,10 @@ describe('executeSiteAudit', () => {
     vi.mocked(runSiteCrawl).mockReset()
   })
 
-  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }))
+  afterEach(() => {
+    vi.useRealTimers()
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
 
   function seedRun(): string {
     const id = crypto.randomUUID()
@@ -214,6 +217,61 @@ describe('executeSiteAudit', () => {
     await executeSiteAudit(db, runId, projectId)
     const row = db.select().from(siteCrawlPages).where(eq(siteCrawlPages.nodeKey, 'page:analysis-failed')).get()
     expect(row).toMatchObject({ inventoryEligible: true, auditState: 'not-applicable' })
+  })
+
+  it('keeps legacy scorecard rows to audited pages and genuine fetch failures', async () => {
+    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
+      const audited = page('page:root', 'https://example.com/')
+      const fetchError = page('page:fetch-error', 'https://example.com/unreachable', {
+        state: 'fetch-error', statusCode: null, audit: null, error: 'timeout',
+        indexability: { state: 'unknown', reasons: ['fetch-error'], rulesetVersion: '1.0.0' },
+      })
+      const robotsBlocked = page('page:robots', 'https://example.com/private', {
+        state: 'robots-blocked', statusCode: null, audit: null, error: null,
+        indexability: { state: 'blocked', reasons: ['robots-blocked'], rulesetVersion: '1.0.0' },
+      })
+      const redirect = page('page:redirect', 'https://example.com/old', {
+        state: 'redirect', finalUrl: 'https://example.com/new', audit: null, error: null,
+        indexability: { state: 'redirect', reasons: ['redirect'], rulesetVersion: '1.0.0' },
+      })
+      const nonHtml = page('page:pdf', 'https://example.com/brochure.pdf', {
+        state: 'non-html', contentType: 'application/pdf', audit: null, error: null,
+        indexability: { state: 'non-html', reasons: ['non-html'], rulesetVersion: '1.0.0' },
+      })
+      const discovered = page('page:depth', 'https://example.com/deep', {
+        state: 'discovered', statusCode: null, audit: null, error: null,
+        indexability: { state: 'unknown', reasons: ['max-depth'], rulesetVersion: '1.0.0' },
+      })
+      await options.onEvent?.({
+        type: 'pages', sequence: 1, batchId: 'legacy-row-semantics', checksum: 'legacy-row-semantics',
+        rows: [audited, fetchError, robotsBlocked, redirect, nonHtml, discovered],
+      })
+      const endSummary = summary({
+        pagesDiscovered: 6,
+        pagesFetched: 4,
+        pagesObserved: 6,
+        auditRollup: { auditedPages: 1, aggregateScore: 88, factors: [] },
+      })
+      await options.onEvent?.({ type: 'summary', sequence: 2, batchId: 'summary', checksum: 'summary', summary: endSummary })
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+    })
+    const runId = seedRun()
+
+    await executeSiteAudit(db, runId, projectId)
+
+    expect(db.select().from(siteAuditSnapshots).where(eq(siteAuditSnapshots.runId, runId)).get()).toMatchObject({
+      pagesAudited: 1,
+      pagesErrored: 1,
+    })
+    expect(db.select({ url: siteAuditPages.url, status: siteAuditPages.status, overallScore: siteAuditPages.overallScore, error: siteAuditPages.error })
+      .from(siteAuditPages)
+      .where(eq(siteAuditPages.runId, runId))
+      .all()
+      .sort((a, b) => a.url.localeCompare(b.url)))
+      .toEqual([
+        { url: 'https://example.com/', status: 'success', overallScore: 88, error: null },
+        { url: 'https://example.com/unreachable', status: 'error', overallScore: 0, error: 'timeout' },
+      ])
   })
 
   it('backfills an inbound edge node key when its target page arrives later', async () => {
@@ -369,6 +427,34 @@ describe('executeSiteAudit', () => {
     expect(db.select().from(siteAuditPages).where(eq(siteAuditPages.runId, runId)).all()).toEqual([])
   })
 
+  it('names an off-host root redirect when a complete crawl produces no audits', async () => {
+    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
+      const redirectedRoot = page('page:root', 'https://example.com/', {
+        finalUrl: 'https://www.example.com/', state: 'redirect', audit: null,
+        indexability: { state: 'redirect', reasons: ['redirect'], rulesetVersion: '1.0.0' },
+      })
+      await options.onEvent?.({ type: 'pages', sequence: 1, batchId: 'off-host-root', checksum: 'off-host-root', rows: [redirectedRoot] })
+      const endSummary = summary({
+        finalRootUrl: 'https://www.example.com/',
+        terminationReason: 'root-host-redirect',
+        pagesDiscovered: 1,
+        pagesFetched: 1,
+        pagesObserved: 1,
+        edgesObserved: 0,
+        auditRollup: { auditedPages: 0, aggregateScore: null, factors: [] },
+      })
+      await options.onEvent?.({ type: 'summary', sequence: 2, batchId: 'summary', checksum: 'summary', summary: endSummary })
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+    })
+    const runId = seedRun()
+
+    await expect(executeSiteAudit(db, runId, projectId)).rejects.toThrow(
+      'root URL redirected off-host from example.com to www.example.com (https://www.example.com/)',
+    )
+    expect(db.select().from(runs).where(eq(runs.id, runId)).get()).toMatchObject({ status: 'failed' })
+    expect(db.select().from(siteAuditSnapshots).where(eq(siteAuditSnapshots.runId, runId)).get()).toBeUndefined()
+  })
+
   it('keeps fetchedAt null for robots-blocked page inserts and upserts', async () => {
     vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
       const robotsPage = (key: string, url: string) => page(key, url, {
@@ -404,6 +490,30 @@ describe('executeSiteAudit', () => {
     expect(rows.map((row) => row.fetchedAt)).toEqual([null, null])
   })
 
+  it('preserves the first fetchedAt timestamp when a fetched page is upserted', async () => {
+    vi.useFakeTimers()
+    const firstFetchedAt = new Date('2026-08-08T01:00:00.000Z')
+    const updatedAt = new Date('2026-08-08T02:00:00.000Z')
+    vi.setSystemTime(firstFetchedAt)
+    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
+      const fetched = page('page:root', 'https://example.com/')
+      await options.onEvent?.({ type: 'pages', sequence: 1, batchId: 'fetched-first', checksum: 'fetched-first', rows: [fetched] })
+      vi.setSystemTime(updatedAt)
+      await options.onEvent?.({ type: 'pages', sequence: 2, batchId: 'fetched-update', checksum: 'fetched-update', rows: [fetched] })
+      const endSummary = summary({ pagesDiscovered: 1, pagesFetched: 1, pagesObserved: 1, edgesObserved: 0, auditRollup: { auditedPages: 1, aggregateScore: 88, factors: [] } })
+      await options.onEvent?.({ type: 'summary', sequence: 3, batchId: 'summary', checksum: 'summary', summary: endSummary })
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+    })
+    const runId = seedRun()
+
+    await executeSiteAudit(db, runId, projectId)
+
+    expect(db.select().from(siteCrawlPages).where(eq(siteCrawlPages.nodeKey, 'page:root')).get()).toMatchObject({
+      fetchedAt: firstFetchedAt.toISOString(),
+      updatedAt: updatedAt.toISOString(),
+    })
+  })
+
   it('replays matching event receipts without duplicating graph rows and rejects a mismatched replay', async () => {
     vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
       const event = { type: 'pages', sequence: 1, batchId: 'pages-1', checksum: 'same', rows: [page('page:root', 'https://example.com/')] }
@@ -429,6 +539,33 @@ describe('executeSiteAudit', () => {
     await expect(executeSiteAudit(db, runId, projectId, { signal: controller.signal })).rejects.toThrow('Cancelled by user')
     expect(db.select().from(runs).where(eq(runs.id, runId)).get()?.status).toBe('cancelled')
     expect(db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, runId)).get()).toBeUndefined()
+  })
+
+  it('keeps a typed AbortError cancelled without relying on its message text', async () => {
+    vi.mocked(runSiteCrawl).mockImplementation(async () => { throw new DOMException('operation stopped', 'AbortError') })
+    const runId = seedRun()
+
+    await expect(executeSiteAudit(db, runId, projectId)).rejects.toThrow('operation stopped')
+
+    expect(db.select().from(runs).where(eq(runs.id, runId)).get()).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('fails an unrelated engine error after the caller aborts', async () => {
+    const controller = new AbortController()
+    controller.abort(new Error('Cancelled by user'))
+    vi.mocked(runSiteCrawl).mockImplementation(async () => { throw new Error('provider connection failed') })
+    const runId = seedRun()
+
+    await expect(executeSiteAudit(db, runId, projectId, { signal: controller.signal })).rejects.toThrow('provider connection failed')
+
+    expect(db.select().from(runs).where(eq(runs.id, runId)).get()).toMatchObject({
+      status: 'failed',
+      error: 'provider connection failed',
+    })
+    expect(db.select().from(siteCrawlAttempts).where(eq(siteCrawlAttempts.runId, runId)).get()).toMatchObject({
+      state: 'failed',
+      error: 'provider connection failed',
+    })
   })
 
   it('does not publish audit snapshots when cancellation wins after the crawl completes', async () => {

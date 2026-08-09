@@ -20678,11 +20678,11 @@ export type PostApiV1ProjectsByNameTechnicalAeoRunsData = {
          */
         limit?: number;
         /**
-         * Crawl page budget. Max 50000.
+         * Crawl page budget. Defaults to 1000; max 50000.
          */
         maxPages?: number;
         /**
-         * Internal-link observation budget. Max 1000000.
+         * Internal-link observation budget. Defaults to 100000; max 1000000.
          */
         maxEdges?: number;
         /**

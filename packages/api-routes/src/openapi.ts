@@ -6165,8 +6165,8 @@ const routeCatalog: OpenApiOperation[] = [
             properties: {
               sitemapUrl: { ...stringSchema, description: 'Deprecated compatibility alias for the sitemap override.' },
               limit: { ...integerSchema, minimum: 1, maximum: 2_000, description: 'Deprecated compatibility alias for maxPages. Max 2000.' },
-              maxPages: { ...integerSchema, minimum: 1, maximum: 50_000, description: 'Crawl page budget. Max 50000.' },
-              maxEdges: { ...integerSchema, minimum: 1, maximum: 1_000_000, description: 'Internal-link observation budget. Max 1000000.' },
+              maxPages: { ...integerSchema, minimum: 1, maximum: 50_000, description: 'Crawl page budget. Defaults to 1000; max 50000.' },
+              maxEdges: { ...integerSchema, minimum: 1, maximum: 1_000_000, description: 'Internal-link observation budget. Defaults to 100000; max 1000000.' },
               maxDepth: { ...integerSchema, minimum: 0, maximum: 100, description: 'Maximum crawl depth from the root. Max 100.' },
               checkDeadLinks: { ...booleanSchema, default: false, description: 'Enable dead-link checking. Defaults to false.' },
             },

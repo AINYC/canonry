@@ -325,9 +325,9 @@ export const siteCrawlDeadLinksResponseSchema = z.discriminatedUnion('state', [
 export type SiteCrawlDeadLinksResponseDto = z.infer<typeof siteCrawlDeadLinksResponseSchema>
 
 /** Canonry-local crawl defaults. These are part of request identity. */
-export const SITE_AUDIT_DEFAULT_PAGE_LIMIT = 5_000
+export const SITE_AUDIT_DEFAULT_PAGE_LIMIT = 1_000
 export const SITE_AUDIT_MAX_PAGE_LIMIT = 50_000
-export const SITE_AUDIT_DEFAULT_EDGE_LIMIT = 250_000
+export const SITE_AUDIT_DEFAULT_EDGE_LIMIT = 100_000
 export const SITE_AUDIT_MAX_EDGE_LIMIT = 1_000_000
 
 /** Body for `POST /projects/:name/technical-aeo/runs`. */
@@ -336,9 +336,9 @@ export const siteAuditRunRequestSchema = z.object({
   sitemapUrl: z.string().url().optional(),
   /** @deprecated Prefer `maxPages`; retained for compatibility. */
   limit: z.number().int().positive().max(2000).optional(),
-  /** Crawl page budget. When omitted, the runtime applies its project default. */
+  /** Crawl page budget. When omitted, Canonry crawls up to 1,000 pages. */
   maxPages: z.number().int().positive().max(50_000).optional(),
-  /** Maximum internal-link observations retained for this crawl. */
+  /** Internal-link observation budget. When omitted, Canonry retains up to 100,000 edges. */
   maxEdges: z.number().int().positive().max(1_000_000).optional(),
   /** Maximum crawl depth from the root. */
   maxDepth: z.number().int().min(0).max(100).optional(),

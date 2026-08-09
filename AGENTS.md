@@ -196,7 +196,7 @@ canonry ads live-delivery <project> [--campaign <id>] [--lookback-days <n>]  # L
 canonry ads disconnect <project>
 
 # Technical AEO — site-wide crawl and audit (powered by the `site-audit` run kind + @canonry/aeo-audit's runSiteCrawl)
-canonry technical-aeo run <project> [--sitemap-url <url>] [--max-pages <n>] [--max-edges <n>] [--max-depth <n>] [--check-dead-links] [--wait] [--format json] # crawl sitemap and internal-link discoveries; defaults: 5,000 pages / 250,000 edges; hard limits: 50,000 / 1,000,000; dead-link analysis is off unless requested
+canonry technical-aeo run <project> [--sitemap-url <url>] [--max-pages <n>] [--max-edges <n>] [--max-depth <n>] [--check-dead-links] [--wait] [--format json] # crawl sitemap and internal-link discoveries; defaults: 1,000 pages / 100,000 edges; hard limits: 50,000 / 1,000,000; dead-link analysis is off unless requested
 canonry technical-aeo crawl <project> [--run-id <id>] [--format json]                         # persisted crawl metadata and completeness
 canonry technical-aeo crawl-pages <project> [--run-id <id>] [--limit <n>] [--format json|jsonl] # cursor-paged URL inventory with indexability, depth, and link score
 canonry technical-aeo structure <project> [--run-id <id>] [--parent-path <path>] [--limit <n>] [--format json|jsonl] # one level of the lexical path hierarchy

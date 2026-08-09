@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  SITE_AUDIT_DEFAULT_EDGE_LIMIT,
+  SITE_AUDIT_DEFAULT_PAGE_LIMIT,
+  SITE_AUDIT_MAX_EDGE_LIMIT,
+  SITE_AUDIT_MAX_PAGE_LIMIT,
   normalizeSiteAuditRunRequest,
   siteAuditRequestIdentity,
   siteAuditRunRequestSchema,
@@ -8,6 +12,14 @@ import {
 } from '../src/technical-aeo.js'
 
 describe('Technical AEO crawl contracts', () => {
+  it('uses conservative unattended budgets while retaining the explicit hard caps', () => {
+    expect(SITE_AUDIT_DEFAULT_PAGE_LIMIT).toBe(1_000)
+    expect(SITE_AUDIT_DEFAULT_EDGE_LIMIT).toBe(100_000)
+    expect(SITE_AUDIT_MAX_PAGE_LIMIT).toBe(50_000)
+    expect(SITE_AUDIT_MAX_EDGE_LIMIT).toBe(1_000_000)
+    expect(normalizeSiteAuditRunRequest({})).toMatchObject({ maxPages: 1_000, maxEdges: 100_000 })
+  })
+
   it('defaults dead-link checking off while retaining the legacy sitemapUrl and limit aliases', () => {
     expect(siteAuditRunRequestSchema.parse({ sitemapUrl: 'https://example.com/sitemap.xml', limit: 20 })).toMatchObject({
       sitemapUrl: 'https://example.com/sitemap.xml',

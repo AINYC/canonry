@@ -60,7 +60,7 @@ CLI + Fastify server + job runner + scheduler + bundled SPA. Only published pack
 | `build-web.ts` | Builds `apps/web` then `cp apps/web/dist → assets/` (preserves `agent-workspace/`, verifies hashed refs) |
 | `src/embed.ts` | `resolveEmbedConfig(env, config)` — env over `config.yaml` `embed:` (origins/views/projectTabs/theme), fail-closed `frame-ancestors 'none'` |
 | `src/config.ts` | `CanonryConfig` + `.canonry/config.yaml` load/save, provider creds, `embed`, `agent.mode`, `basePath` |
-| `src/execute-site-audit.ts` | `executeSiteAudit` — runs `@canonry/aeo-audit` `runSiteCrawl`, upserts the live attempt graph from events, then publishes an immutable complete snapshot. Partial attempts remain historical. Defaults: 5,000 pages / 250,000 edges; caps: 50,000 / 1,000,000. Dead-link checks are opt-in. |
+| `src/execute-site-audit.ts` | `executeSiteAudit` — runs `@canonry/aeo-audit` `runSiteCrawl`, upserts the live attempt graph from events, then publishes an immutable complete snapshot. Partial attempts remain historical. Defaults: 1,000 pages / 100,000 edges; caps: 50,000 / 1,000,000. Dead-link checks are opt-in. |
 | `src/job-runner.ts` | In-process queue: `answer-visibility`, `site-audit`, `discovery`, `research`, etc. |
 | `src/provider-registry.ts` | Collects `ProviderAdapter` impls |
 | `src/scheduler.ts` | Cron kinds: `answer-visibility`, `traffic-sync`, `gbp-sync`, `data-refresh`, `backlinks-sync`, `site-audit`, `ads-sync` |
