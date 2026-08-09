@@ -282,3 +282,47 @@ test('the light theme gives visibility chart titles a semantic text color', asyn
 
   expect(rule).toContain('color: var(--color-text-heading)')
 })
+
+test('Site Health uses a color-vision-safe graph palette in both themes', async () => {
+  const source = await readFile(stylesPath, 'utf8')
+  const light = source.match(/\[data-theme='light'\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
+
+  for (const declaration of [
+    '--chart-site-health-eligible: #56b4e9',
+    '--chart-site-health-hidden: #e69f00',
+    '--chart-site-health-failed: #d55e00',
+    '--chart-site-health-unchecked: #a1a1aa',
+  ]) {
+    expect(source, `dark graph palette must contain "${declaration}"`).toContain(declaration)
+  }
+
+  for (const declaration of [
+    '--chart-site-health-eligible: #0072b2',
+    '--chart-site-health-hidden: #a86f00',
+    '--chart-site-health-failed: #b23a2b',
+    '--chart-site-health-unchecked: #52525b',
+  ]) {
+    expect(light, `light graph palette must contain "${declaration}"`).toContain(declaration)
+  }
+
+  const channel = (hex: string, offset: number) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255
+  const luminance = (hex: string) => {
+    const linear = [channel(hex, 1), channel(hex, 3), channel(hex, 5)].map((value) => (
+      value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+    ))
+    return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!
+  }
+  const contrast = (foreground: string, background: string) => {
+    const values = [luminance(foreground), luminance(background)].sort((left, right) => right - left)
+    return (values[0]! + 0.05) / (values[1]! + 0.05)
+  }
+
+  for (const color of ['#56b4e9', '#e69f00', '#d55e00', '#a1a1aa']) {
+    expect(contrast(color, '#18181b'), `${color} must remain visible on the dark graph`).toBeGreaterThanOrEqual(3)
+  }
+  for (const color of ['#0072b2', '#a86f00', '#b23a2b', '#52525b']) {
+    expect(contrast(color, '#ffffff'), `${color} must remain visible on the light graph`).toBeGreaterThanOrEqual(3)
+  }
+  expect(contrast('#71717a', '#18181b'), 'default links must remain visible on the dark graph').toBeGreaterThanOrEqual(3)
+  expect(contrast('#71717a', '#ffffff'), 'default links must remain visible on the light graph').toBeGreaterThanOrEqual(3)
+})

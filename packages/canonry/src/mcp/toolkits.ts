@@ -15,8 +15,8 @@ export const CANONRY_MCP_TOOLKITS: readonly CanonryMcpToolkit[] = [
   {
     name: 'monitoring',
     title: 'Measurement, runs, insights, health',
-    description: 'Inspect portfolio and Property measurement, question results, run history, intelligence insights, and health timelines.',
-    whenToLoad: 'Load when finding weak Properties, reviewing answers and competitors, checking data quality, comparing runs, or investigating regressions.',
+    description: 'Inspect portfolio and Property measurement, question results, run history, intelligence insights, health timelines, and bounded Site Health reads (overview, focused subgraphs, paths, and scan changes).',
+    whenToLoad: 'Load when finding weak Properties, reviewing answers and competitors, checking data quality, investigating Site Health architecture, comparing scans, or diagnosing regressions.',
   },
   {
     name: 'setup',

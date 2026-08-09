@@ -26,10 +26,10 @@ Bundled via `packages/canonry/build-web.ts` → `packages/canonry/assets/`. Lowe
 | `src/App.tsx` | Root layout, first-run redirect (`/` → `/setup` when 0 projects), health, notifications, AeroBar host | Check before changing first-open flow |
 | `src/router/routes.tsx` | TanStack Router tree (`/`, `/projects`, `/projects/$projectName`, `/runs`, `/traffic`, etc.) | Route = one lazy chunk |
 | `src/pages/SetupPage.tsx` | 1260 LOC wizard: `System check → Create project → Queries → Competitors → Launch` | Largest page — state machine `deriveSetupStep`, resume from `useDashboard` |
-| `src/pages/ProjectPage.tsx` | 2728 LOC project shell + tab router (`overview`, `portfolio`, `search-console`, `local`, `discovery`, `report`, `activity`, `backlinks`, `technical-aeo`, `history`, `settings`) | Extract before adding hooks |
+| `src/pages/ProjectPage.tsx` | Project shell + tab router (`overview`, `portfolio`, `search-console`, `local`, `discovery`, `report`, `activity`, `backlinks`, `technical-aeo`, `history`, `settings`); stable `technical-aeo` key/route is labeled **Site Health** | Extract before adding hooks |
 | `src/pages/OverviewPage.tsx` | Portfolio overview (project list, sparkline, health cards) | |
 | `src/pages/ProjectsPage.tsx` / `HistoryPage.tsx` / `RunsPage.tsx` / `SettingsPage.tsx` / `BacklinksPage.tsx` / `TrafficPage.tsx` | One file per route | |
-| `src/components/project/*` | Section components: `GscSection`, `BingSummaryMetric`, `TechnicalAeoSection`, `DiscoverySection`, `CitationVisibilitySection`, `VisibilityTrendSection`, `ActivitySection`, `BacklinksSection`, `GbpSection`, etc. | |
+| `src/components/project/*` | Section components: `GscSection`, `BingSummaryMetric`, `SiteHealthSection`, `SiteGraphSigma`, `TechnicalAeoSection`, `DiscoverySection`, `CitationVisibilitySection`, `VisibilityTrendSection`, `ActivitySection`, `BacklinksSection`, `GbpSection`, etc. | Site Health's map is Sigma v3 WebGL + Graphology; browser consumes published coordinates and never runs layout physics. |
 | `src/components/project/advanced-measurement/*` | Advanced measurement UI (`AdvancedMeasurementSection`, `SetupWizard`, adapters) | |
 | `src/components/shared/*` | `ChartPrimitives` (Recharts wrapper), `AeroBar`, `BrandLockup`, `ToneBadge`, `ProviderBadge`, `StatusBadge` | |
 | `src/components/ui/*` | `button`, `card`, `badge`, `sheet` (Radix + Tailwind) | |
@@ -60,7 +60,8 @@ CLI + Fastify server + job runner + scheduler + bundled SPA. Only published pack
 | `build-web.ts` | Builds `apps/web` then `cp apps/web/dist → assets/` (preserves `agent-workspace/`, verifies hashed refs) |
 | `src/embed.ts` | `resolveEmbedConfig(env, config)` — env over `config.yaml` `embed:` (origins/views/projectTabs/theme), fail-closed `frame-ancestors 'none'` |
 | `src/config.ts` | `CanonryConfig` + `.canonry/config.yaml` load/save, provider creds, `embed`, `agent.mode`, `basePath` |
-| `src/execute-site-audit.ts` | `executeSiteAudit` — runs `@canonry/aeo-audit` `runSiteCrawl`, upserts the live attempt graph from events, then publishes an immutable complete snapshot. Partial attempts remain historical. Defaults: 1,000 pages / 100,000 edges; caps: 50,000 / 1,000,000. Dead-link checks are opt-in. |
+| `src/execute-site-audit.ts` | `executeSiteAudit` — runs `@canonry/aeo-audit` `runSiteCrawl`, upserts the live attempt graph from events, then publishes immutable complete/selected-partial snapshots. It also materializes the deterministic Site Health 20k-node / 50k-edge graph sample. Defaults: 1,000 pages / 100,000 edges; caps: 50,000 / 1,000,000. Dead-link checks are opt-in. |
+| `src/site-crawl-graph-layout.ts` | Publication-time Graphology/ForceAtlas2 worker: deterministic hierarchy seed → bounded layout → persisted coordinates/edge sample; timeout or failure records an unavailable layout without failing the crawl. |
 | `src/job-runner.ts` | In-process queue: `answer-visibility`, `site-audit`, `discovery`, `research`, etc. |
 | `src/provider-registry.ts` | Collects `ProviderAdapter` impls |
 | `src/scheduler.ts` | Cron kinds: `answer-visibility`, `traffic-sync`, `gbp-sync`, `data-refresh`, `backlinks-sync`, `site-audit`, `ads-sync` |
@@ -82,7 +83,7 @@ CLI + Fastify server + job runner + scheduler + bundled SPA. Only published pack
 | `src/projects.ts` | `PUT /projects/:name` upsert (largest route file) |
 | `src/runs.ts` | Run CRUD + batch `POST /runs` |
 | `src/queries.ts` / `src/query-replace.ts` | Query basket ops — `replaceProjectQueries` is only declarative replace (preserves FKs) |
-| `src/technical-aeo.ts` | Exact-identity `POST /technical-aeo/runs`; legacy score/page/trend reads; bounded crawl summary, page inventory, path structure, internal-link, neighbor, and opt-in dead-link reads. All use `notProbeRun()`. |
+| `src/technical-aeo.ts` | Exact-identity `POST /technical-aeo/runs`; legacy score/page/trend reads; bounded crawl summary, page inventory, hierarchy, links/neighbors, semantic subgraph/path, complete-run changes, opt-in dead-links, and persisted `/technical-aeo/graph` visualization projection. All use `notProbeRun()`. |
 | `src/composites.ts` / `src/db-derived-dtos.ts` | Composite reads, `drizzle-zod` row schemas |
 | `src/analytics.ts` / `visibility-stats.ts` / `visibility-compare.ts` | Aggregated metrics, per-query rates, month compare |
 | `src/google.ts` / `src/bing.ts` / `src/ga.ts` / `src/traffic.ts` / `src/backlinks.ts` / `src/ads.ts` | Integration routes |
@@ -120,7 +121,7 @@ Schema in `src/schema.ts`. ER diagram in `docs/data-model.md`.
 | Add a dashboard section | `apps/web/src/pages/ProjectPage.tsx` → `apps/web/src/components/project/` → `apps/web/src/queries/use-project-dashboard.ts` | New API data needs `packages/api-routes` + `packages/contracts` + regenerate `api-client-generated` |
 | Add an API route | `packages/contracts/src/*.ts` (Zod) → `packages/api-routes/src/<domain>.ts` → `packages/api-routes/src/openapi.ts` → `pnpm gen` → `apps/web/src/api.ts` or `apps/web/src/queries/*` | Respect `notProbeRun()` + `requireScope`/`requirePaidReadScope` |
 | Change SPA serving / embed | `packages/canonry/src/server.ts` (`sendSpaDocument`, `assetsDir`) + `packages/canonry/src/embed.ts` + `apps/web/src/embed.ts` | `CANONRY_EMBED` / `CANONRY_EMBED_ORIGINS` env, `window.__CANONRY_CONFIG__.embed` |
-| Touch Technical AEO plumbing | `packages/canonry/src/execute-site-audit.ts` → `packages/api-routes/src/technical-aeo.ts` → `packages/contracts/src/technical-aeo.ts` → regenerate `api-client-generated` | Local runtime uses `@canonry/aeo-audit`; keep the cloud worker pinned to `@ainyc/aeo-audit@4.2.0`. UI graph/product work is a separate decision. |
+| Touch Site Health / Technical AEO | `packages/canonry/src/execute-site-audit.ts` → `site-crawl-graph-layout.ts` → `packages/api-routes/src/technical-aeo.ts` → `packages/contracts/src/technical-aeo.ts` → regenerate `api-client-generated` → `packages/canonry/src/mcp/tool-registry.ts` → `apps/web/src/components/project/SiteHealthSection.tsx` | Keep `technical-aeo` as the stable route/API/embed key; label it **Site Health**. Every operator-visible graph state must have a shared API/MCP semantic field or task-shaped read. Sigma receives persisted positions; agents receive bounded subgraphs, paths, and run diffs rather than the visualization payload. |
 | Touch Aero agent | `packages/canonry/src/agent/session.ts` → `session-registry.ts` → `tools.ts` → `apps/web/src/components/shared/AeroBar.tsx` | `agent.mode: 'disabled'` / `CANONRY_AGENT_DISABLED` kill-switch |
 | Debug auth / keys | `packages/api-routes/src/auth.ts` → `packages/api-routes/src/keys.ts` → `packages/canonry/src/commands/keys.ts` | `isReadOnlyKey` in `contracts`, single-tenant posture in `AGENTS.md` |
 

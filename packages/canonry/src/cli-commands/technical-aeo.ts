@@ -1,13 +1,16 @@
 import {
   technicalAeoCrawl,
   technicalAeoCrawlPages,
+  technicalAeoChanges,
   technicalAeoDeadLinks,
   technicalAeoInternalLinks,
   technicalAeoLinkNeighbors,
+  technicalAeoPath,
   technicalAeoPages,
   technicalAeoRun,
   technicalAeoScore,
   technicalAeoStructure,
+  technicalAeoSubgraph,
   technicalAeoTrend,
 } from '../commands/technical-aeo.js'
 import { usageError } from '../cli-error.js'
@@ -35,7 +38,15 @@ function parseOptionalBoolean(
   })
 }
 
-export const TECHNICAL_AEO_CLI_COMMANDS: readonly CliCommandSpec[] = [
+function isSiteHealthScope(value: string | undefined): value is 'all' | 'pages' | 'links' {
+  return value === 'all' || value === 'pages' || value === 'links'
+}
+
+function isSiteHealthChange(value: string | undefined): value is 'all' | 'added' | 'removed' | 'changed' {
+  return value === 'all' || value === 'added' || value === 'removed' || value === 'changed'
+}
+
+const TECHNICAL_AEO_CLI_COMMANDS_BASE: readonly CliCommandSpec[] = [
   {
     path: ['technical-aeo', 'score'],
     usage: 'canonry technical-aeo score <project> [--run-id <id>] [--format json]',
@@ -140,6 +151,96 @@ export const TECHNICAL_AEO_CLI_COMMANDS: readonly CliCommandSpec[] = [
       const usage = 'canonry technical-aeo crawl <project> [--run-id <id>] [--format json]'
       const project = requireProject(input, 'technical-aeo.crawl', usage)
       await technicalAeoCrawl(project, { runId: getString(input.values, 'run-id'), format: input.format })
+    },
+  },
+  {
+    path: ['technical-aeo', 'subgraph'],
+    usage: 'canonry technical-aeo subgraph <project> [--run-id <id>] [--node-key <key>|--url <url>] [--hops <n>] [--max-nodes <n>] [--max-edges <n>] [--format json]',
+    options: {
+      'run-id': stringOption(), 'node-key': stringOption(), url: stringOption(), hops: stringOption(),
+      'max-nodes': stringOption(), 'max-edges': stringOption(),
+    },
+    run: async (input) => {
+      const usage = 'canonry technical-aeo subgraph <project> [--run-id <id>] [--node-key <key>|--url <url>] [--hops <n>] [--max-nodes <n>] [--max-edges <n>] [--format json]'
+      const project = requireProject(input, 'technical-aeo.subgraph', usage)
+      const nodeKey = getString(input.values, 'node-key')
+      const url = getString(input.values, 'url')
+      if (nodeKey && url) {
+        throw usageError(`Error: --node-key and --url cannot be combined\nUsage: ${usage}`, {
+          message: '--node-key and --url cannot be combined', details: { command: 'technical-aeo.subgraph', usage },
+        })
+      }
+      await technicalAeoSubgraph(project, {
+        runId: getString(input.values, 'run-id'), nodeKey, url,
+        hops: parseIntegerOption(input, 'hops', { command: 'technical-aeo.subgraph', usage, message: '--hops must be an integer' }),
+        maxNodes: parseIntegerOption(input, 'max-nodes', { command: 'technical-aeo.subgraph', usage, message: '--max-nodes must be an integer' }),
+        maxEdges: parseIntegerOption(input, 'max-edges', { command: 'technical-aeo.subgraph', usage, message: '--max-edges must be an integer' }),
+        format: input.format,
+      })
+    },
+  },
+  {
+    path: ['technical-aeo', 'path'],
+    usage: 'canonry technical-aeo path <project> (--to-node-key <key>|--to-url <url>) [--run-id <id>] [--from-node-key <key>|--from-url <url>] [--max-depth <n>] [--format json]',
+    options: {
+      'run-id': stringOption(), 'from-node-key': stringOption(), 'from-url': stringOption(),
+      'to-node-key': stringOption(), 'to-url': stringOption(), 'max-depth': stringOption(),
+    },
+    run: async (input) => {
+      const usage = 'canonry technical-aeo path <project> (--to-node-key <key>|--to-url <url>) [--run-id <id>] [--from-node-key <key>|--from-url <url>] [--max-depth <n>] [--format json]'
+      const project = requireProject(input, 'technical-aeo.path', usage)
+      const fromNodeKey = getString(input.values, 'from-node-key')
+      const fromUrl = getString(input.values, 'from-url')
+      const toNodeKey = getString(input.values, 'to-node-key')
+      const toUrl = getString(input.values, 'to-url')
+      if (!toNodeKey && !toUrl) {
+        throw usageError(`Error: --to-node-key or --to-url is required\nUsage: ${usage}`, {
+          message: '--to-node-key or --to-url is required', details: { command: 'technical-aeo.path', usage },
+        })
+      }
+      if ((fromNodeKey && fromUrl) || (toNodeKey && toUrl)) {
+        throw usageError(`Error: node-key and URL selectors cannot be combined\nUsage: ${usage}`, {
+          message: 'node-key and URL selectors cannot be combined', details: { command: 'technical-aeo.path', usage },
+        })
+      }
+      await technicalAeoPath(project, {
+        runId: getString(input.values, 'run-id'), fromNodeKey, fromUrl, toNodeKey, toUrl,
+        maxDepth: parseIntegerOption(input, 'max-depth', { command: 'technical-aeo.path', usage, message: '--max-depth must be an integer' }),
+        format: input.format,
+      })
+    },
+  },
+  {
+    path: ['technical-aeo', 'changes'],
+    usage: 'canonry technical-aeo changes <project> [--from-run-id <id>] [--to-run-id <id>] [--scope all|pages|links] [--change all|added|removed|changed] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]',
+    options: {
+      'from-run-id': stringOption(), 'to-run-id': stringOption(), scope: stringOption(), change: stringOption(),
+      cursor: stringOption(), limit: stringOption(),
+    },
+    run: async (input) => {
+      const usage = 'canonry technical-aeo changes <project> [--from-run-id <id>] [--to-run-id <id>] [--scope all|pages|links] [--change all|added|removed|changed] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]'
+      const project = requireProject(input, 'technical-aeo.changes', usage)
+      const fromRunId = getString(input.values, 'from-run-id')
+      const toRunId = getString(input.values, 'to-run-id')
+      const scope = getString(input.values, 'scope')
+      const change = getString(input.values, 'change')
+      if (scope !== undefined && !isSiteHealthScope(scope)) {
+        throw usageError(`Error: --scope must be all, pages, or links\nUsage: ${usage}`, {
+          message: '--scope must be all, pages, or links', details: { command: 'technical-aeo.changes', usage, option: 'scope', value: scope },
+        })
+      }
+      if (change !== undefined && !isSiteHealthChange(change)) {
+        throw usageError(`Error: --change must be all, added, removed, or changed\nUsage: ${usage}`, {
+          message: '--change must be all, added, removed, or changed', details: { command: 'technical-aeo.changes', usage, option: 'change', value: change },
+        })
+      }
+      await technicalAeoChanges(project, {
+        fromRunId, toRunId, scope,
+        change,
+        cursor: getString(input.values, 'cursor'),
+        limit: parseIntegerOption(input, 'limit', { command: 'technical-aeo.changes', usage, message: '--limit must be an integer' }),
+        format: input.format,
+      })
     },
   },
   {
@@ -266,4 +367,70 @@ export const TECHNICAL_AEO_CLI_COMMANDS: readonly CliCommandSpec[] = [
       })
     },
   },
+]
+
+function siteHealthAlias(
+  sourcePath: readonly string[],
+  path: string[],
+  usage: string,
+): CliCommandSpec {
+  const source = TECHNICAL_AEO_CLI_COMMANDS_BASE.find(
+    (candidate) => candidate.path.join(' ') === sourcePath.join(' '),
+  )
+  if (!source) throw new Error(`Missing Site Health compatibility source: ${sourcePath.join(' ')}`)
+  return { ...source, path, usage }
+}
+
+const SITE_HEALTH_COMPATIBILITY_COMMANDS: readonly CliCommandSpec[] = [
+  siteHealthAlias(
+    ['technical-aeo', 'crawl'],
+    ['site-health', 'overview'],
+    'canonry site-health overview <project> [--run-id <id>] [--format json]',
+  ),
+  siteHealthAlias(
+    ['technical-aeo', 'crawl-pages'],
+    ['site-health', 'pages'],
+    'canonry site-health pages <project> [--run-id <id>] [--inventory-eligible true|false] [--fetch-state <state>] [--indexability-state <state>] [--audit-state <state>] [--sort url|path|score-asc|score-desc] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]',
+  ),
+  siteHealthAlias(
+    ['technical-aeo', 'structure'],
+    ['site-health', 'structure'],
+    'canonry site-health structure <project> [--run-id <id>] [--parent-path <path>] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]',
+  ),
+  siteHealthAlias(
+    ['technical-aeo', 'links'],
+    ['site-health', 'links'],
+    'canonry site-health links <project> [--run-id <id>] [--source-url <url>] [--target-url <url>] [--followable|--nofollow] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]',
+  ),
+  siteHealthAlias(
+    ['technical-aeo', 'links', 'neighbors'],
+    ['site-health', 'neighbors'],
+    'canonry site-health neighbors <project> (--node-key <key>|--url <url>) [--run-id <id>] [--limit <n>] [--format json]',
+  ),
+  siteHealthAlias(
+    ['technical-aeo', 'dead-links'],
+    ['site-health', 'dead-links'],
+    'canonry site-health dead-links <project> [--run-id <id>] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]',
+  ),
+  siteHealthAlias(
+    ['technical-aeo', 'subgraph'],
+    ['site-health', 'subgraph'],
+    'canonry site-health subgraph <project> [--run-id <id>] [--node-key <key>|--url <url>] [--hops <n>] [--max-nodes <n>] [--max-edges <n>] [--format json]',
+  ),
+  siteHealthAlias(
+    ['technical-aeo', 'path'],
+    ['site-health', 'path'],
+    'canonry site-health path <project> (--to-node-key <key>|--to-url <url>) [--run-id <id>] [--from-node-key <key>|--from-url <url>] [--max-depth <n>] [--format json]',
+  ),
+  siteHealthAlias(
+    ['technical-aeo', 'changes'],
+    ['site-health', 'changes'],
+    'canonry site-health changes <project> [--from-run-id <id>] [--to-run-id <id>] [--scope all|pages|links] [--change all|added|removed|changed] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]',
+  ),
+]
+
+/** Site Health is the operator-facing name; technical-aeo commands remain compatible. */
+export const TECHNICAL_AEO_CLI_COMMANDS: readonly CliCommandSpec[] = [
+  ...TECHNICAL_AEO_CLI_COMMANDS_BASE,
+  ...SITE_HEALTH_COMPATIBILITY_COMMANDS,
 ]

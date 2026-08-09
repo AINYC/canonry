@@ -89,17 +89,30 @@ function formatAuditedAtLabel(value: any): string {
   return formatObservedInstantLabel(observedInstant(String(value)))
 }
 
-export function TechnicalAeoSection({ projectName, projectId }: { projectName: string; projectId: string }) {
+export function TechnicalAeoSection({
+  projectName,
+  projectId,
+  runId,
+  integrated = false,
+}: {
+  projectName: string
+  projectId: string
+  /** When supplied, keep every scorecard read pinned to the parent Site Health scan. */
+  runId?: string | null
+  /** Hide duplicate history and run controls when rendered inside Site Health. */
+  integrated?: boolean
+}) {
   const [errorsOnly, setErrorsOnly] = useState(false)
   const [expandedFactor, setExpandedFactor] = useState<string | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const effectiveRunId = runId === undefined ? selectedRunId : runId
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
   const lastAutoRefreshedRun = useRef<string | null>(null)
 
   const scoreQuery = useQuery(getApiV1ProjectsByNameTechnicalAeoOptions({
     client: heyClient,
     path: { name: projectName },
-    ...(selectedRunId ? { query: { runId: selectedRunId } } : {}),
+    ...(effectiveRunId ? { query: { runId: effectiveRunId } } : {}),
   }))
   const trendQuery = useQuery(getApiV1ProjectsByNameTechnicalAeoTrendOptions({
     client: heyClient,
@@ -114,7 +127,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
     query: {
       limit: PAGES_FETCH_LIMIT,
       sort: 'score-asc',
-      ...(selectedRunId ? { runId: selectedRunId } : {}),
+      ...(effectiveRunId ? { runId: effectiveRunId } : {}),
     },
   }))
   const auditRunsQuery = useQuery({
@@ -156,7 +169,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
   }, [pagesQuery.refetch, scoreQuery.refetch, trendQuery.refetch])
 
   useEffect(() => {
-    if (selectedRunId) return
+    if (effectiveRunId) return
     if (!latestAudit || (latestAudit.status !== 'completed' && latestAudit.status !== 'partial')) return
     if (scoreQuery.data?.runId === latestAudit.id || lastAutoRefreshedRun.current === latestAudit.id) return
     lastAutoRefreshedRun.current = latestAudit.id
@@ -169,7 +182,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
         dedupeMode: 'replace',
       })
     })
-  }, [latestAudit?.id, latestAudit?.status, projectName, refreshAll, scoreQuery.data?.runId, selectedRunId])
+  }, [effectiveRunId, latestAudit?.id, latestAudit?.status, projectName, refreshAll, scoreQuery.data?.runId])
 
   const handleManualRefresh = async () => {
     setIsManualRefreshing(true)
@@ -223,7 +236,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
   useEffect(() => {
     setErrorsOnly(false)
     setExpandedFactor(null)
-  }, [selectedRunId])
+  }, [effectiveRunId])
 
   if (scoreQuery.isLoading) {
     return <p className="supporting-copy mt-6">Loading technical audit…</p>
@@ -239,7 +252,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
           A technical AEO audit crawls your sitemap and scores every page for structured data, AI-readable content,
           crawler access, freshness, and more, then rolls it up into one site score.
         </p>
-        {!isEmbed() && (
+        {!isEmbed() && !integrated && (
           <div className="mt-5 flex items-center justify-center gap-3">
             <WriteButton type="button" onClick={startAudit} disabled={auditBusy}>
               {auditBusy ? (
@@ -267,7 +280,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
 
   const trendPoints = trendQuery.data?.points ?? []
   const trendRows = trendPoints.map((p) => ({ runId: p.runId, date: p.auditedAt, score: p.aggregateScore }))
-  const viewingHistorical = selectedRunId !== null
+  const viewingHistorical = runId === undefined && selectedRunId !== null
   const successPages = allPages.filter((p) => p.status === 'success')
 
   // For a factor, the audited pages scoring below pass (< 70) on that factor,
@@ -321,7 +334,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
           ) : null}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {trendPoints.length > 1 ? (
+          {!integrated && runId === undefined && trendPoints.length > 1 ? (
             <select
               aria-label="View a Technical AEO audit"
               value={selectedRunId ?? ''}
@@ -336,11 +349,13 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
               ))}
             </select>
           ) : null}
-          <Button type="button" variant="outline" size="sm" onClick={() => void handleManualRefresh()} disabled={isManualRefreshing}>
-            <RefreshCw className={`mr-1.5 h-4 w-4 ${isManualRefreshing ? 'motion-safe:animate-spin' : ''}`} aria-hidden="true" />
-            {isManualRefreshing ? 'Refreshing…' : 'Refresh'}
-          </Button>
-          {!isEmbed() && (
+          {!integrated && (
+            <Button type="button" variant="outline" size="sm" onClick={() => void handleManualRefresh()} disabled={isManualRefreshing}>
+              <RefreshCw className={`mr-1.5 h-4 w-4 ${isManualRefreshing ? 'motion-safe:animate-spin' : ''}`} aria-hidden="true" />
+              {isManualRefreshing ? 'Refreshing…' : 'Refresh'}
+            </Button>
+          )}
+          {!isEmbed() && !integrated && (
             <WriteButton type="button" size="sm" onClick={startAudit} disabled={auditBusy}>
               {auditBusy ? (
                 <LoaderCircle className="mr-1.5 h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />

@@ -34,6 +34,11 @@ import {
 } from '@ainyc/canonry-contracts'
 import { resolveWebhookTarget } from '@ainyc/canonry-api-routes'
 import { createLogger } from './logger.js'
+import {
+  deleteSiteCrawlGraphLayout,
+  persistSiteCrawlGraphLayout,
+  prepareSiteCrawlGraphLayout,
+} from './site-crawl-graph-layout.js'
 
 const log = createLogger('SiteAudit')
 
@@ -54,6 +59,8 @@ export interface SiteAuditOptions {
   checkDeadLinks?: boolean
   /** The local server owns this controller; never accepted from an HTTP body. */
   signal?: AbortSignal
+  /** Internal test/operations seam; never accepted from an HTTP body. */
+  graphLayoutTimeoutMs?: number
 }
 
 type AuditPage = Pick<CrawlPageObservation, 'audit'>
@@ -544,6 +551,12 @@ export async function executeSiteAudit(
       throw emptyCompleteCrawlError(crawlSummary.rootUrl, crawlSummary.finalRootUrl, crawlSummary.pagesObserved)
     }
 
+    const graphLayout = await prepareSiteCrawlGraphLayout(db, {
+      projectId,
+      runId,
+      attemptId,
+      rootUrl: crawlSummary.finalRootUrl ?? crawlSummary.rootUrl,
+    }, { signal: opts.signal, timeoutMs: opts.graphLayoutTimeoutMs })
     const finishedAt = new Date().toISOString()
     const factors = computeFactorAverages([...observedPages.values()])
     const errorCount = observedErrorCount(observedPages.values())
@@ -551,6 +564,42 @@ export async function executeSiteAudit(
     const deadLinksChecked = opts.checkDeadLinks ? deadLinkCheckedCount(observedEdges.values(), observedPages.values()) : 0
     const deadLinksFound = report.deadLinks.findings.length
     const legacyIssues = factors.map((factor) => toLegacyIssue(factor, crawlSummary.auditRollup.auditedPages)).filter((issue): issue is SiteAuditCrossCuttingIssueDto => issue !== null)
+
+    // Derived layout persistence is isolated from the canonical crawl
+    // publication. A worker timeout, package/runtime incompatibility, or row
+    // write failure leaves a truthful unavailable graph but can never turn a
+    // successful crawl into a failed run. Persist before the terminal CAS so a
+    // completed run never exposes a transient "layout pending" state.
+    try {
+      persistSiteCrawlGraphLayout(db, { projectId, runId, attemptId }, graphLayout, finishedAt)
+    } catch (error) {
+      log.warn('graph-layout.persist-failed', {
+        runId,
+        projectId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      // A failed node/edge batch rolls its transaction back. Persist the
+      // minimal unavailable marker separately so this new snapshot cannot be
+      // mistaken for a pre-layout legacy snapshot at read time.
+      try {
+        persistSiteCrawlGraphLayout(db, { projectId, runId, attemptId }, {
+          state: 'unavailable',
+          failureCode: 'layout-error',
+          totalNodes: graphLayout.totalNodes,
+          totalEdges: graphLayout.totalEdges,
+          nodeCount: 0,
+          edgeCount: 0,
+          nodes: [],
+          edges: [],
+        }, finishedAt)
+      } catch (markerError) {
+        log.warn('graph-layout.marker-persist-failed', {
+          runId,
+          projectId,
+          error: markerError instanceof Error ? markerError.message : String(markerError),
+        })
+      }
+    }
 
     const published = db.transaction((tx) => {
       // Claim terminal publication first, in the same transaction as every
@@ -653,6 +702,10 @@ export async function executeSiteAudit(
     })
 
     if (!published) {
+      // Layout publication deliberately precedes the terminal CAS so a
+      // completed run never exposes a pending graph. If cancellation won the
+      // CAS, remove that unpublished derived data (nodes/edges cascade).
+      deleteSiteCrawlGraphLayout(db, { projectId, runId, attemptId })
       const current = db.select({ status: runs.status }).from(runs).where(eq(runs.id, runId)).get()
       if (current?.status === 'cancelled') throw new SiteAuditCancelledError(`Site audit cancelled before publication: ${runId}`)
       throw new Error(`Site audit run was no longer running before publication: ${runId}`)

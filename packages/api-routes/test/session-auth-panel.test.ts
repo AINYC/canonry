@@ -503,6 +503,23 @@ test('a caller-supplied embed-tabs header still narrows within the configured al
 
 // ─── P2.5 sessions that never end ──────────────────────────────────────────
 
+test('the technical-aeo embed tab permits its Site Health graph and semantic reads', async () => {
+  const embedded = await bootEmbedApp(['technical-aeo'])
+  try {
+    for (const url of [
+      '/api/v1/projects/sample/technical-aeo/graph',
+      '/api/v1/projects/sample/technical-aeo/subgraph',
+      '/api/v1/projects/sample/technical-aeo/path?toUrl=https%3A%2F%2Fsample.example%2Ftarget',
+      '/api/v1/projects/sample/technical-aeo/changes',
+    ]) {
+      const response = await embedded.inject({ method: 'GET', url, headers: withKey(ROOT_KEY) })
+      expect(response.statusCode, `${url} must be available to the embedded Site Health tab`).toBe(200)
+    }
+  } finally {
+    await embedded.close()
+  }
+})
+
 test('a session cannot be renewed past its absolute lifetime', async () => {
   await createAccount('owner', ADMIN_PASSWORD, 'admin')
   const session = await signIn('owner', ADMIN_PASSWORD)

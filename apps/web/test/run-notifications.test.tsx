@@ -527,7 +527,7 @@ test('tracks a queued Technical AEO audit for the global task center', async () 
       sourceAction: 'site-audit',
     })
   })
-  expect(getToasts().some((toast) => toast.title === 'Technical audit queued')).toBe(true)
+  expect(getToasts().some((toast) => toast.title === 'Site Health scan queued')).toBe(true)
 })
 
 test('useTriggerGscSync invalidates GSC project queries when the mutation succeeds', async () => {

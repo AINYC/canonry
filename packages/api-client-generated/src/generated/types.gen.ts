@@ -7370,6 +7370,50 @@ export type SiteCrawlDeadLinksResponseDto = {
     }>;
 };
 
+export type SiteCrawlGraphResponseDto = {
+    project: string;
+    hasCrawlData: boolean;
+    runId: string | null;
+    layout: {
+        state: 'ready';
+        version: string;
+        computedAt: string;
+    } | {
+        state: 'unavailable';
+        version: null;
+        reason: 'no-crawl' | 'legacy-snapshot' | 'details-unavailable' | 'layout-failed' | 'empty-crawl';
+    };
+    totalNodes: number;
+    totalEdges: number;
+    nodes: Array<{
+        nodeKey: string;
+        url: string;
+        path: string;
+        depth: number | null;
+        indexabilityState: string;
+        fetchState: string;
+        auditState: string;
+        auditScore: number | null;
+        inventoryEligible: boolean;
+        inboundUniqueEdges: number;
+        outboundUniqueEdges: number;
+        linkScoreNormalized: number | null;
+        healthState: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+        x: number;
+        y: number;
+    }>;
+    edges: Array<{
+        edgeKey: string;
+        sourceNodeKey: string;
+        targetNodeKey: string;
+        followable: boolean;
+        occurrences: number;
+    }>;
+    omittedNodes: number;
+    omittedEdges: number;
+    sampled: boolean;
+};
+
 export type SiteCrawlInternalLinksResponseDto = {
     project: string;
     hasCrawlData: boolean;
@@ -7458,6 +7502,7 @@ export type SiteCrawlPagesResponseDto = {
         outboundOccurrences: number;
         linkScoreRaw: number | null;
         linkScoreNormalized: number | null;
+        healthState: 'eligible' | 'hidden' | 'failed' | 'unchecked';
     }>;
 };
 
@@ -7515,6 +7560,254 @@ export type SiteCrawlSummaryDto = {
         checked: number;
         found: number;
     };
+};
+
+export type SiteHealthChangesResponseDto = {
+    project: string;
+    state: 'unavailable';
+    reason: 'no-crawl' | 'insufficient-history' | 'details-unavailable' | 'partial-not-comparable';
+    fromRunId: string | null;
+    toRunId: string | null;
+} | {
+    project: string;
+    state: 'incompatible';
+    reason: 'incompatible-versions';
+    fromRunId: string;
+    toRunId: string;
+    mismatchedVersions: Array<string>;
+} | {
+    project: string;
+    state: 'ready';
+    fromRunId: string;
+    toRunId: string;
+    versions: {
+        crawlSchema: string;
+        normalization: string;
+        indexability: string;
+        linkScore: string;
+    };
+    filters: {
+        scope: 'all' | 'pages' | 'links';
+        change: 'all' | 'added' | 'removed' | 'changed';
+    };
+    summaryState: 'exact' | 'omitted-on-continuation';
+    summary: {
+        pages: {
+            added: number;
+            removed: number;
+            changed: number;
+        };
+        links: {
+            added: number;
+            removed: number;
+            changed: number;
+        };
+    } | null;
+    total: number | null;
+    nextCursor: string | null;
+    changes: Array<{
+        entity: 'page';
+        change: 'added' | 'removed' | 'changed';
+        key: string;
+        changedFields: Array<string>;
+        before: {
+            nodeKey: string;
+            url: string;
+            finalUrl: string | null;
+            path: string;
+            parentPath: string;
+            discoverySource: string;
+            fetchState: string;
+            httpStatus: number | null;
+            canonicalUrl: string | null;
+            indexabilityState: string;
+            indexabilityReasons: Array<string>;
+            auditState: string;
+            auditScore: number | null;
+            inventoryEligible: boolean;
+            depth: number | null;
+            inboundUniqueEdges: number;
+            outboundUniqueEdges: number;
+            inboundOccurrences: number;
+            outboundOccurrences: number;
+            linkScoreRaw: number | null;
+            linkScoreNormalized: number | null;
+            healthState: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+        } | null;
+        after: {
+            nodeKey: string;
+            url: string;
+            finalUrl: string | null;
+            path: string;
+            parentPath: string;
+            discoverySource: string;
+            fetchState: string;
+            httpStatus: number | null;
+            canonicalUrl: string | null;
+            indexabilityState: string;
+            indexabilityReasons: Array<string>;
+            auditState: string;
+            auditScore: number | null;
+            inventoryEligible: boolean;
+            depth: number | null;
+            inboundUniqueEdges: number;
+            outboundUniqueEdges: number;
+            inboundOccurrences: number;
+            outboundOccurrences: number;
+            linkScoreRaw: number | null;
+            linkScoreNormalized: number | null;
+            healthState: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+        } | null;
+    } | {
+        entity: 'link';
+        change: 'added' | 'removed' | 'changed';
+        key: string;
+        changedFields: Array<string>;
+        before: {
+            edgeKey: string;
+            sourceNodeKey: string;
+            sourceUrl: string;
+            targetNodeKey: string | null;
+            targetUrl: string;
+            relation: string;
+            internal: boolean;
+            followable: boolean;
+            occurrences: number;
+            followableOccurrences: number;
+            nofollowOccurrences: number;
+            anchors: Array<string>;
+        } | null;
+        after: {
+            edgeKey: string;
+            sourceNodeKey: string;
+            sourceUrl: string;
+            targetNodeKey: string | null;
+            targetUrl: string;
+            relation: string;
+            internal: boolean;
+            followable: boolean;
+            occurrences: number;
+            followableOccurrences: number;
+            nofollowOccurrences: number;
+            anchors: Array<string>;
+        } | null;
+    }>;
+};
+
+export type SiteHealthPathResponseDto = {
+    project: string;
+    runId: string | null;
+    complete: boolean;
+    termination: string | null;
+    state: 'no-crawl' | 'details-unavailable' | 'found' | 'unreachable' | 'truncated';
+    from: {
+        nodeKey: string;
+        url: string;
+        path: string;
+    } | null;
+    to: {
+        nodeKey: string;
+        url: string;
+        path: string;
+    } | null;
+    maxDepth: number;
+    visitedNodes: number;
+    nodes: Array<{
+        nodeKey: string;
+        url: string;
+        finalUrl: string | null;
+        path: string;
+        parentPath: string;
+        discoverySource: string;
+        fetchState: string;
+        httpStatus: number | null;
+        canonicalUrl: string | null;
+        indexabilityState: string;
+        indexabilityReasons: Array<string>;
+        auditState: string;
+        auditScore: number | null;
+        inventoryEligible: boolean;
+        depth: number | null;
+        inboundUniqueEdges: number;
+        outboundUniqueEdges: number;
+        inboundOccurrences: number;
+        outboundOccurrences: number;
+        linkScoreRaw: number | null;
+        linkScoreNormalized: number | null;
+        healthState: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+    }>;
+    edges: Array<{
+        edgeKey: string;
+        sourceNodeKey: string;
+        sourceUrl: string;
+        targetNodeKey: string | null;
+        targetUrl: string;
+        relation: string;
+        internal: boolean;
+        followable: boolean;
+        occurrences: number;
+        followableOccurrences: number;
+        nofollowOccurrences: number;
+        anchors: Array<string>;
+    }>;
+};
+
+export type SiteHealthSubgraphResponseDto = {
+    project: string;
+    hasCrawlData: boolean;
+    runId: string | null;
+    complete: boolean;
+    termination: string | null;
+    state: 'no-crawl' | 'details-unavailable' | 'ready';
+    focusNodeKey: string | null;
+    focusUrl: string | null;
+    hops: number;
+    totalNodes: number;
+    totalEdges: number;
+    nodes: Array<{
+        nodeKey: string;
+        url: string;
+        finalUrl: string | null;
+        path: string;
+        parentPath: string;
+        discoverySource: string;
+        fetchState: string;
+        httpStatus: number | null;
+        canonicalUrl: string | null;
+        indexabilityState: string;
+        indexabilityReasons: Array<string>;
+        auditState: string;
+        auditScore: number | null;
+        inventoryEligible: boolean;
+        depth: number | null;
+        inboundUniqueEdges: number;
+        outboundUniqueEdges: number;
+        inboundOccurrences: number;
+        outboundOccurrences: number;
+        linkScoreRaw: number | null;
+        linkScoreNormalized: number | null;
+        healthState: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+        distance: number;
+        relationToFocus: 'focus' | 'inbound' | 'outbound' | 'both' | 'transitive';
+    }>;
+    edges: Array<{
+        edgeKey: string;
+        sourceNodeKey: string;
+        sourceUrl: string;
+        targetNodeKey: string | null;
+        targetUrl: string;
+        relation: string;
+        internal: boolean;
+        followable: boolean;
+        occurrences: number;
+        followableOccurrences: number;
+        nofollowOccurrences: number;
+        anchors: Array<string>;
+    }>;
+    omittedNodes: number;
+    omittedEdges: number;
+    countAccuracy: 'exact' | 'lower-bound';
+    truncated: boolean;
 };
 
 export type SnapshotDiffResponse = {
@@ -20407,6 +20700,222 @@ export type GetApiV1ProjectsByNameTechnicalAeoCrawlResponses = {
 };
 
 export type GetApiV1ProjectsByNameTechnicalAeoCrawlResponse = GetApiV1ProjectsByNameTechnicalAeoCrawlResponses[keyof GetApiV1ProjectsByNameTechnicalAeoCrawlResponses];
+
+export type GetApiV1ProjectsByNameTechnicalAeoGraphData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Historical site-audit run ID. Omit for the latest complete crawl.
+         */
+        runId?: string;
+        /**
+         * Maximum graph nodes. Defaults to and is capped at 20,000.
+         */
+        maxNodes?: number;
+        /**
+         * Maximum graph edges. Defaults to and is capped at 50,000.
+         */
+        maxEdges?: number;
+    };
+    url: '/api/v1/projects/{name}/technical-aeo/graph';
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoGraphErrors = {
+    /**
+     * Project or crawl-bearing site-audit run not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoGraphError = GetApiV1ProjectsByNameTechnicalAeoGraphErrors[keyof GetApiV1ProjectsByNameTechnicalAeoGraphErrors];
+
+export type GetApiV1ProjectsByNameTechnicalAeoGraphResponses = {
+    /**
+     * Bounded Site Health graph projection returned.
+     */
+    200: SiteCrawlGraphResponseDto;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoGraphResponse = GetApiV1ProjectsByNameTechnicalAeoGraphResponses[keyof GetApiV1ProjectsByNameTechnicalAeoGraphResponses];
+
+export type GetApiV1ProjectsByNameTechnicalAeoSubgraphData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Historical site-audit run ID. Omit for the latest complete crawl.
+         */
+        runId?: string;
+        /**
+         * Focus page canonical node key. Omit nodeKey and url to use the crawl root.
+         */
+        nodeKey?: string;
+        /**
+         * Focus page canonical URL. Omit nodeKey and url to use the crawl root.
+         */
+        url?: string;
+        /**
+         * Undirected neighborhood radius. Defaults to 1; maximum 3.
+         */
+        hops?: number;
+        /**
+         * Maximum canonical nodes. Defaults to 25; maximum 200.
+         */
+        maxNodes?: number;
+        /**
+         * Maximum canonical edges. Defaults to 50; maximum 500.
+         */
+        maxEdges?: number;
+    };
+    url: '/api/v1/projects/{name}/technical-aeo/subgraph';
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoSubgraphErrors = {
+    /**
+     * Project, crawl-bearing run, or focus page not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoSubgraphError = GetApiV1ProjectsByNameTechnicalAeoSubgraphErrors[keyof GetApiV1ProjectsByNameTechnicalAeoSubgraphErrors];
+
+export type GetApiV1ProjectsByNameTechnicalAeoSubgraphResponses = {
+    /**
+     * Bounded canonical Site Health neighborhood returned.
+     */
+    200: SiteHealthSubgraphResponseDto;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoSubgraphResponse = GetApiV1ProjectsByNameTechnicalAeoSubgraphResponses[keyof GetApiV1ProjectsByNameTechnicalAeoSubgraphResponses];
+
+export type GetApiV1ProjectsByNameTechnicalAeoPathData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Historical site-audit run ID. Omit for the latest complete crawl.
+         */
+        runId?: string;
+        /**
+         * Source canonical node key. Omit both source selectors to start at the crawl root.
+         */
+        fromNodeKey?: string;
+        /**
+         * Source canonical URL. Omit both source selectors to start at the crawl root.
+         */
+        fromUrl?: string;
+        /**
+         * Target canonical node key. Required when toUrl is omitted.
+         */
+        toNodeKey?: string;
+        /**
+         * Target canonical URL. Required when toNodeKey is omitted.
+         */
+        toUrl?: string;
+        /**
+         * Maximum directed link depth. Defaults to 12; maximum 24.
+         */
+        maxDepth?: number;
+    };
+    url: '/api/v1/projects/{name}/technical-aeo/path';
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoPathErrors = {
+    /**
+     * A target selector is required.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project, crawl-bearing run, source page, or target page not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoPathError = GetApiV1ProjectsByNameTechnicalAeoPathErrors[keyof GetApiV1ProjectsByNameTechnicalAeoPathErrors];
+
+export type GetApiV1ProjectsByNameTechnicalAeoPathResponses = {
+    /**
+     * Directed internal-link path result returned.
+     */
+    200: SiteHealthPathResponseDto;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoPathResponse = GetApiV1ProjectsByNameTechnicalAeoPathResponses[keyof GetApiV1ProjectsByNameTechnicalAeoPathResponses];
+
+export type GetApiV1ProjectsByNameTechnicalAeoChangesData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Baseline complete crawl. Omit for the complete crawl immediately before the target.
+         */
+        fromRunId?: string;
+        /**
+         * Target complete crawl. Omit for the latest complete crawl.
+         */
+        toRunId?: string;
+        /**
+         * Restrict records and first-page summary counts to pages, links, or both.
+         */
+        scope?: 'all' | 'pages' | 'links';
+        /**
+         * Restrict records and first-page summary counts to one change kind.
+         */
+        change?: 'all' | 'added' | 'removed' | 'changed';
+        /**
+         * Opaque keyset cursor bound to both run IDs and the selected filters.
+         */
+        cursor?: string;
+        /**
+         * Maximum change records. Defaults to 25; maximum 100.
+         */
+        limit?: number;
+    };
+    url: '/api/v1/projects/{name}/technical-aeo/changes';
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoChangesErrors = {
+    /**
+     * Invalid filters, run direction, or cursor context.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project or selected crawl-bearing run not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoChangesError = GetApiV1ProjectsByNameTechnicalAeoChangesErrors[keyof GetApiV1ProjectsByNameTechnicalAeoChangesErrors];
+
+export type GetApiV1ProjectsByNameTechnicalAeoChangesResponses = {
+    /**
+     * Canonical Site Health snapshot comparison returned.
+     */
+    200: SiteHealthChangesResponseDto;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoChangesResponse = GetApiV1ProjectsByNameTechnicalAeoChangesResponses[keyof GetApiV1ProjectsByNameTechnicalAeoChangesResponses];
 
 export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesData = {
     body?: never;

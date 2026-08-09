@@ -88,6 +88,9 @@ each choice.
 - Normal text must meet WCAG AA contrast. Interactive controls have visible
   focus states and at least a 44px touch target where they stand alone.
 - Do not communicate state through color alone.
+- Site Health graph states use the dedicated color-vision-safe
+  `--chart-site-health-*` palette plus matching status glyphs in labels, search,
+  and the legend. Node size remains reserved for internal-link importance.
 - Dense tables may scroll horizontally; controls and headings must reflow
   without clipping at narrow widths.
 - Respect reduced-motion preferences. Motion only explains state changes.

@@ -1450,6 +1450,9 @@ describe('canonry', () => {
     await client.getAnalyticsSources('acme')
     await client.getTechnicalAeoScore('acme')
     await client.getTechnicalAeoCrawl('acme', { runId: 'run-1' })
+    await client.getSiteHealthSubgraph('acme', { nodeKey: 'page:root', hops: 2, maxNodes: 25, maxEdges: 50 })
+    await client.getSiteHealthPath('acme', { fromNodeKey: 'page:root', toUrl: 'https://acme.test/pricing', maxDepth: 8 })
+    await client.getSiteHealthChanges('acme', { fromRunId: 'run-1', toRunId: 'run-2', scope: 'pages', change: 'changed', cursor: 'changes-2', limit: 25 })
     await client.getTechnicalAeoCrawlPages('acme', { inventoryEligible: true, limit: 25, cursor: 'page-2' })
     await client.getTechnicalAeoStructure('acme', { parentPath: '/guides', limit: 20 })
     await client.getTechnicalAeoInternalLinks('acme', { followable: false, limit: 20 })
@@ -1463,6 +1466,9 @@ describe('canonry', () => {
       'https://example.test/canonry/api/v1/projects/acme/analytics/sources',
       'https://example.test/canonry/api/v1/projects/acme/technical-aeo',
       'https://example.test/canonry/api/v1/projects/acme/technical-aeo/crawl?runId=run-1',
+      'https://example.test/canonry/api/v1/projects/acme/technical-aeo/subgraph?nodeKey=page%3Aroot&hops=2&maxNodes=25&maxEdges=50',
+      'https://example.test/canonry/api/v1/projects/acme/technical-aeo/path?fromNodeKey=page%3Aroot&toUrl=https%3A%2F%2Facme.test%2Fpricing&maxDepth=8',
+      'https://example.test/canonry/api/v1/projects/acme/technical-aeo/changes?fromRunId=run-1&toRunId=run-2&scope=pages&change=changed&cursor=changes-2&limit=25',
       'https://example.test/canonry/api/v1/projects/acme/technical-aeo/crawl/pages?inventoryEligible=true&cursor=page-2&limit=25',
       'https://example.test/canonry/api/v1/projects/acme/technical-aeo/structure?parentPath=%2Fguides&limit=20',
       'https://example.test/canonry/api/v1/projects/acme/technical-aeo/internal-links?followable=false&limit=20',

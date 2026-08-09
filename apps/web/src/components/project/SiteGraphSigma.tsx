@@ -1,0 +1,700 @@
+import {
+  Component,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type CSSProperties,
+  type ReactNode,
+} from 'react'
+import { Maximize2, Minus, Plus, Search } from 'lucide-react'
+import type Sigma from 'sigma'
+import type { Settings } from 'sigma/settings'
+import type {
+  CameraState,
+  SigmaNodeEventPayload,
+  SigmaStageEventPayload,
+} from 'sigma/types'
+import type { AnimateOptions } from 'sigma/utils'
+
+import { cn } from '../../lib/utils.js'
+import { Button } from '../ui/button.js'
+import {
+  buildSigmaSiteGraph,
+  createSigmaSiteGraphReducers,
+  findSiteGraphNodes,
+  isSigmaWebGlColor,
+  SITE_GRAPH_COLOR_TOKENS,
+  SITE_GRAPH_SIGMA_COLOR_TOKENS,
+  SITE_GRAPH_OVERVIEW_CAMERA_RATIO,
+  siteGraphStatusGlyph,
+  siteGraphStatusLabel,
+  siteGraphVisualState,
+  type SigmaSiteGraph,
+  type SigmaSiteGraphEdgeAttributes,
+  type SigmaSiteGraphNodeAttributes,
+  type SigmaSiteGraphTheme,
+  type SiteGraphSigmaEdge,
+  type SiteGraphSigmaNode,
+} from './site-graph-sigma.js'
+
+export type { SiteGraphSigmaEdge, SiteGraphSigmaNode } from './site-graph-sigma.js'
+
+export interface SiteGraphSigmaProps {
+  nodes: readonly SiteGraphSigmaNode[]
+  edges: readonly SiteGraphSigmaEdge[]
+  layoutState?: 'ready' | 'unavailable'
+  selectedNodeKey?: string | null
+  onSelectNode?: (node: SiteGraphSigmaNode) => void
+  ariaLabel?: string
+  className?: string
+}
+
+interface HoveredNode {
+  nodeKey: string
+  left: number
+  top: number
+}
+
+interface CameraActions {
+  zoomIn: () => void
+  zoomOut: () => void
+  reset: () => void
+  gotoNode: (nodeKey: string) => void
+}
+
+interface ReactSigmaEventHandlers {
+  enterNode: (payload: SigmaNodeEventPayload) => void
+  leaveNode: (payload: SigmaNodeEventPayload) => void
+  clickNode: (payload: SigmaNodeEventPayload) => void
+  clickStage: (payload: SigmaStageEventPayload) => void
+  updated: (state: CameraState) => void
+}
+
+interface CameraHook {
+  zoomIn: (options?: Partial<AnimateOptions> & { factor?: number }) => void
+  zoomOut: (options?: Partial<AnimateOptions> & { factor?: number }) => void
+  reset: (options?: Partial<AnimateOptions>) => void
+  gotoNode: (nodeKey: string, options?: Partial<AnimateOptions>) => void
+}
+
+interface SigmaContainerProps {
+  graph?: SigmaSiteGraph
+  settings?: Partial<Settings<SigmaSiteGraphNodeAttributes, SigmaSiteGraphEdgeAttributes>>
+  children?: ReactNode
+  className?: string
+  style?: CSSProperties
+}
+
+interface ReactSigmaBindings {
+  SigmaContainer: ComponentType<SigmaContainerProps>
+  useCamera: () => CameraHook
+  useRegisterEvents: () => (handlers: Partial<ReactSigmaEventHandlers>) => void
+  useSigma: () => Sigma<SigmaSiteGraphNodeAttributes, SigmaSiteGraphEdgeAttributes>
+}
+
+interface GraphRenderBoundaryProps {
+  children: ReactNode
+  fallback: ReactNode
+  resetToken: unknown
+}
+
+interface GraphRenderBoundaryState {
+  failed: boolean
+}
+
+class GraphRenderBoundary extends Component<GraphRenderBoundaryProps, GraphRenderBoundaryState> {
+  override state: GraphRenderBoundaryState = { failed: false }
+
+  static getDerivedStateFromError(): GraphRenderBoundaryState {
+    return { failed: true }
+  }
+
+  override componentDidCatch(error: Error): void {
+    console.error('[SiteGraphSigma] WebGL renderer failed', error)
+  }
+
+  override componentDidUpdate(previousProps: GraphRenderBoundaryProps): void {
+    if (this.state.failed && previousProps.resetToken !== this.props.resetToken) {
+      this.setState({ failed: false })
+    }
+  }
+
+  override render(): ReactNode {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
+
+const CAMERA_ANIMATION_MS = 220
+
+function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+  return `${count.toLocaleString()} ${count === 1 ? singular : pluralForm}`
+}
+
+function resolvedCssColor(
+  element: HTMLElement,
+  customProperty: string,
+  fallback: string,
+): string {
+  const computed = window.getComputedStyle(element)
+  const direct = computed.getPropertyValue(customProperty).trim()
+  if (direct && !direct.includes('var(') && isSigmaWebGlColor(direct)) return direct
+
+  const probe = document.createElement('span')
+  probe.style.position = 'absolute'
+  probe.style.visibility = 'hidden'
+  probe.style.color = `var(${customProperty})`
+  element.appendChild(probe)
+  const resolved = window.getComputedStyle(probe).color.trim()
+  probe.remove()
+  return resolved && !resolved.includes('var(') && isSigmaWebGlColor(resolved) ? resolved : fallback
+}
+
+function sigmaTheme(element: HTMLElement): SigmaSiteGraphTheme {
+  const color = (binding: keyof typeof SITE_GRAPH_SIGMA_COLOR_TOKENS) => {
+    const token = SITE_GRAPH_SIGMA_COLOR_TOKENS[binding]
+    return resolvedCssColor(element, token.property, token.fallback)
+  }
+  return {
+    eligible: color('eligible'),
+    hidden: color('hidden'),
+    failed: color('failed'),
+    unchecked: color('unchecked'),
+    dimmedNode: color('dimmedNode'),
+    edge: color('edge'),
+    edgeDimmed: color('edgeDimmed'),
+    edgeActive: color('edgeActive'),
+    label: color('label'),
+    background: color('background'),
+  }
+}
+
+function supportsWebGl(): boolean {
+  if (typeof document === 'undefined') return false
+  try {
+    const canvas = document.createElement('canvas')
+    return Boolean(canvas.getContext('webgl2') || canvas.getContext('webgl'))
+  } catch {
+    return false
+  }
+}
+
+function GraphUnavailableState() {
+  return (
+    <div className="flex h-full min-h-80 items-center justify-center px-6 text-center">
+      <div className="max-w-md">
+        <p className="text-sm font-medium text-heading">Interactive map unavailable</p>
+        <p className="mt-1 text-sm text-secondary">
+          This browser could not start WebGL. The page inventory remains available for the complete crawl.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+interface SigmaRuntimeProps {
+  reactSigma: ReactSigmaBindings
+  graph: SigmaSiteGraph
+  theme: SigmaSiteGraphTheme
+  selectedNodeKey: string | null
+  onSelectNodeKey: (nodeKey: string) => void
+  onHoverNode: (hovered: HoveredNode | null) => void
+  onCameraReady: (actions: CameraActions | null) => void
+}
+
+function SigmaRuntime({
+  reactSigma,
+  graph,
+  theme,
+  selectedNodeKey,
+  onSelectNodeKey,
+  onHoverNode,
+  onCameraReady,
+}: SigmaRuntimeProps) {
+  const { useSigma, useRegisterEvents, useCamera } = reactSigma
+  const sigma = useSigma()
+  const registerEvents = useRegisterEvents()
+  const { zoomIn, zoomOut, reset, gotoNode } = useCamera()
+  const [hoveredNodeKey, setHoveredNodeKey] = useState<string | null>(null)
+  const [isOverview, setIsOverview] = useState(
+    () => sigma.getCamera().getState().ratio > SITE_GRAPH_OVERVIEW_CAMERA_RATIO,
+  )
+  const overviewRef = useRef(isOverview)
+  const focusNodeKey = hoveredNodeKey ?? selectedNodeKey
+
+  useEffect(() => {
+    onCameraReady({
+      zoomIn: () => zoomIn({ duration: CAMERA_ANIMATION_MS }),
+      zoomOut: () => zoomOut({ duration: CAMERA_ANIMATION_MS }),
+      reset: () => reset({ duration: CAMERA_ANIMATION_MS }),
+      gotoNode: (nodeKey) => gotoNode(nodeKey, { duration: CAMERA_ANIMATION_MS }),
+    })
+    return () => onCameraReady(null)
+  }, [gotoNode, onCameraReady, reset, zoomIn, zoomOut])
+
+  useEffect(() => {
+    registerEvents({
+      enterNode: ({ node, event }) => {
+        setHoveredNodeKey(node)
+        onHoverNode({
+          nodeKey: node,
+          left: Number.isFinite(event.x) ? event.x + 14 : 20,
+          top: Number.isFinite(event.y) ? event.y + 14 : 20,
+        })
+      },
+      leaveNode: () => {
+        setHoveredNodeKey(null)
+        onHoverNode(null)
+      },
+      clickNode: ({ node }) => onSelectNodeKey(node),
+      clickStage: () => onHoverNode(null),
+      updated: (state) => {
+        const nextOverview = state.ratio > SITE_GRAPH_OVERVIEW_CAMERA_RATIO
+        if (overviewRef.current === nextOverview) return
+        overviewRef.current = nextOverview
+        setIsOverview(nextOverview)
+      },
+    })
+  }, [onHoverNode, onSelectNodeKey, registerEvents])
+
+  useEffect(() => {
+    // Reducers only distinguish the zoomed-out overview from a focused view.
+    // Preserve that one bit of camera state so pan/zoom frames do not trigger
+    // a full 20k/50k graph refresh.
+    const reducers = createSigmaSiteGraphReducers(
+      graph,
+      focusNodeKey,
+      isOverview
+        ? SITE_GRAPH_OVERVIEW_CAMERA_RATIO + Number.EPSILON
+        : SITE_GRAPH_OVERVIEW_CAMERA_RATIO,
+      theme,
+    )
+    sigma.setSetting('nodeReducer', reducers.nodeReducer)
+    sigma.setSetting('edgeReducer', reducers.edgeReducer)
+    sigma.refresh()
+    // Do not reset settings during cleanup. React Sigma kills its WebGL
+    // programs before descendant effects can clean up; reconfiguring that
+    // destroyed instance schedules a refresh with no `circle` program. A live
+    // instance is overwritten by the next effect, and an unmounted one needs
+    // no reset.
+  }, [focusNodeKey, graph, isOverview, sigma, theme])
+
+  return null
+}
+
+export function SiteGraphSigma({
+  nodes,
+  edges,
+  layoutState = 'ready',
+  selectedNodeKey,
+  onSelectNode,
+  ariaLabel,
+  className,
+}: SiteGraphSigmaProps) {
+  const wrapperRef = useRef<HTMLElement>(null)
+  const cameraActionsRef = useRef<CameraActions | null>(null)
+  const searchId = useId()
+  const listboxId = useId()
+  const instructionsId = useId()
+  const [theme, setTheme] = useState<SigmaSiteGraphTheme | null>(null)
+  const [reactSigma, setReactSigma] = useState<ReactSigmaBindings | null>(null)
+  const [rendererState, setRendererState] = useState<'checking' | 'ready' | 'unavailable'>('checking')
+  const [cameraReady, setCameraReady] = useState(false)
+  const [internalSelectedNodeKey, setInternalSelectedNodeKey] = useState<string | null>(null)
+  const [hovered, setHovered] = useState<HoveredNode | null>(null)
+  const [searchValue, setSearchValue] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [activeResultIndex, setActiveResultIndex] = useState(0)
+  const [statusMessage, setStatusMessage] = useState('')
+  const lastControlledFocusRef = useRef<string | null>(null)
+  const deferredSearchValue = useDeferredValue(searchValue)
+  const effectiveSelectedNodeKey = selectedNodeKey === undefined
+    ? internalSelectedNodeKey
+    : selectedNodeKey
+  const nodeByKey = useMemo(
+    () => new Map(nodes.map((node) => [node.nodeKey, node])),
+    [nodes],
+  )
+  const selectedNode = effectiveSelectedNodeKey
+    ? nodeByKey.get(effectiveSelectedNodeKey) ?? null
+    : null
+  const hoveredNode = hovered ? nodeByKey.get(hovered.nodeKey) ?? null : null
+  const searchResults = useMemo(
+    () => findSiteGraphNodes(nodes, deferredSearchValue),
+    [deferredSearchValue, nodes],
+  )
+  const hasFinitePosition = nodes.some((node) => Number.isFinite(node.x) && Number.isFinite(node.y))
+  const builtGraph = useMemo(
+    () => theme ? buildSigmaSiteGraph(nodes, edges, theme) : null,
+    [edges, nodes, theme],
+  )
+  const sigmaSettings = useMemo<Partial<Settings<SigmaSiteGraphNodeAttributes, SigmaSiteGraphEdgeAttributes>> | null>(() => theme ? ({
+    allowInvalidContainer: true,
+    defaultNodeColor: theme.unchecked,
+    defaultEdgeColor: theme.edge,
+    defaultEdgeType: 'line' as const,
+    enableCameraPanning: true,
+    enableCameraZooming: true,
+    enableCameraRotation: false,
+    enableEdgeEvents: false,
+    hideEdgesOnMove: true,
+    hideLabelsOnMove: true,
+    itemSizesReference: 'screen' as const,
+    labelColor: { color: theme.label },
+    labelDensity: 0.2,
+    labelFont: 'Geist Sans, sans-serif',
+    labelRenderedSizeThreshold: 8,
+    labelSize: 13,
+    labelWeight: '600',
+    maxCameraRatio: 12,
+    minCameraRatio: 0.04,
+    minEdgeThickness: 0.35,
+    renderEdgeLabels: false,
+    renderLabels: true,
+    stagePadding: 42,
+    zIndex: true,
+  }) : null, [theme])
+
+  useEffect(() => {
+    const element = wrapperRef.current
+    if (!element) return
+    const updateTheme = () => setTheme(sigmaTheme(element))
+    updateTheme()
+
+    if (typeof MutationObserver === 'undefined') return
+    const observer = new MutationObserver(updateTheme)
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class', 'data-theme', 'style'],
+    })
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (nodes.length === 0 || layoutState === 'unavailable' || !hasFinitePosition) {
+      setRendererState('checking')
+      return
+    }
+    setRendererState(supportsWebGl() ? 'ready' : 'unavailable')
+  }, [hasFinitePosition, layoutState, nodes.length])
+
+  useEffect(() => {
+    if (rendererState !== 'ready') {
+      setReactSigma(null)
+      return
+    }
+    let active = true
+    void import('@react-sigma/core')
+      .then((module) => {
+        if (active) setReactSigma(module as unknown as ReactSigmaBindings)
+      })
+      .catch(() => {
+        if (active) setRendererState('unavailable')
+      })
+    return () => {
+      active = false
+    }
+  }, [rendererState])
+
+  useEffect(() => {
+    setActiveResultIndex(0)
+  }, [deferredSearchValue])
+
+  const handleCameraReady = useCallback((actions: CameraActions | null) => {
+    cameraActionsRef.current = actions
+    setCameraReady(Boolean(actions))
+  }, [])
+
+  const handleHoverNode = useCallback((nextHovered: HoveredNode | null) => {
+    setHovered(nextHovered)
+  }, [])
+
+  const selectNode = useCallback((nodeKey: string, moveCamera: boolean) => {
+    const node = nodeByKey.get(nodeKey)
+    if (!node) return
+    if (selectedNodeKey === undefined) setInternalSelectedNodeKey(nodeKey)
+    onSelectNode?.(node)
+    if (moveCamera) cameraActionsRef.current?.gotoNode(nodeKey)
+    setStatusMessage(`Focused ${node.path || '/'}`)
+  }, [nodeByKey, onSelectNode, selectedNodeKey])
+
+  const handleSigmaSelect = useCallback((nodeKey: string) => {
+    selectNode(nodeKey, false)
+  }, [selectNode])
+
+  useEffect(() => {
+    if (!cameraReady || !selectedNodeKey || !nodeByKey.has(selectedNodeKey)) {
+      if (!selectedNodeKey) lastControlledFocusRef.current = null
+      return
+    }
+    if (lastControlledFocusRef.current === selectedNodeKey) return
+    cameraActionsRef.current?.gotoNode(selectedNodeKey)
+    lastControlledFocusRef.current = selectedNodeKey
+  }, [cameraReady, nodeByKey, selectedNodeKey])
+
+  const chooseSearchResult = (node: SiteGraphSigmaNode) => {
+    selectNode(node.nodeKey, true)
+    setSearchValue(node.path || node.url)
+    setSearchOpen(false)
+  }
+
+  const defaultAriaLabel = `Interactive site map showing ${plural(nodes.length, 'page')} and ${plural(edges.length, 'internal link')}`
+  const optionId = (nodeKey: string) => `${listboxId}-${nodeKey.replaceAll(/[^\w-]/g, '-')}`
+
+  if (layoutState === 'unavailable') {
+    return (
+      <section
+        ref={wrapperRef}
+        role="group"
+        aria-label={ariaLabel ?? defaultAriaLabel}
+        className={cn('flex min-h-80 items-center justify-center rounded-lg border border-default bg-surface-inset px-6 text-center', className)}
+      >
+        <div className="max-w-md">
+          <p className="text-sm font-medium text-heading">Graph layout unavailable</p>
+          <p className="mt-1 text-sm text-secondary">This scan does not have a published graph layout yet.</p>
+        </div>
+      </section>
+    )
+  }
+
+  if (nodes.length === 0) {
+    return (
+      <section
+        ref={wrapperRef}
+        role="group"
+        aria-label={ariaLabel ?? defaultAriaLabel}
+        className={cn('flex min-h-80 items-center justify-center rounded-lg border border-default bg-surface-inset px-6 text-center', className)}
+      >
+        <p className="max-w-md text-sm text-secondary">No page graph is available for this scan.</p>
+      </section>
+    )
+  }
+
+  if (!hasFinitePosition) {
+    return (
+      <section
+        ref={wrapperRef}
+        role="group"
+        aria-label={ariaLabel ?? defaultAriaLabel}
+        className={cn('flex min-h-80 items-center justify-center rounded-lg border border-default bg-surface-inset px-6 text-center', className)}
+      >
+        <div className="max-w-md">
+          <p className="text-sm font-medium text-heading">Graph layout unavailable</p>
+          <p className="mt-1 text-sm text-secondary">This scan does not have a published graph layout yet.</p>
+        </div>
+      </section>
+    )
+  }
+
+  const activeResult = searchResults.at(activeResultIndex)
+  const fallback = <GraphUnavailableState />
+  const SigmaContainerComponent = reactSigma?.SigmaContainer
+
+  return (
+    <section
+      ref={wrapperRef}
+      role="group"
+      aria-label={ariaLabel ?? defaultAriaLabel}
+      aria-describedby={instructionsId}
+      className={cn(
+        'flex h-[clamp(460px,62vh,680px)] min-h-[460px] flex-col overflow-hidden rounded-lg border border-default bg-surface-inset',
+        className,
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-2 border-b border-subtle bg-bg-elevated/70 px-3 py-2">
+        <label htmlFor={searchId} className="sr-only">Focus a page in the site map</label>
+        <div className="relative min-w-56 max-w-lg flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" aria-hidden="true" />
+          <input
+            id={searchId}
+            role="combobox"
+            type="search"
+            autoComplete="off"
+            aria-label="Focus a page in the site map"
+            aria-autocomplete="list"
+            aria-controls={listboxId}
+            aria-expanded={searchOpen}
+            aria-activedescendant={searchOpen && activeResult ? optionId(activeResult.nodeKey) : undefined}
+            value={searchValue}
+            placeholder={selectedNode ? `Focused: ${selectedNode.path || '/'}` : 'Find a page'}
+            className="h-10 w-full rounded-md border border-base bg-bg py-2 pl-9 pr-3 text-sm text-primary placeholder-mono-600 outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
+            onFocus={() => setSearchOpen(true)}
+            onChange={(event) => {
+              setSearchValue(event.target.value)
+              setSearchOpen(true)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault()
+                setSearchOpen(true)
+                setActiveResultIndex((current) => Math.max(0, Math.min(searchResults.length - 1, current + 1)))
+              } else if (event.key === 'ArrowUp') {
+                event.preventDefault()
+                setActiveResultIndex((current) => Math.max(0, current - 1))
+              } else if (event.key === 'Enter' && searchOpen && activeResult) {
+                event.preventDefault()
+                chooseSearchResult(activeResult)
+              } else if (event.key === 'Escape') {
+                setSearchOpen(false)
+              }
+            }}
+          />
+          {searchOpen && (
+            <div className="absolute left-0 right-0 top-[calc(100%+0.25rem)] z-30 overflow-hidden rounded-md border border-base bg-bg shadow-lg">
+              <div id={listboxId} role="listbox" aria-label="Matching pages" className="max-h-72 overflow-auto py-1">
+                {searchResults.length > 0 ? searchResults.map((node, index) => {
+                  const status = siteGraphVisualState(node)
+                  return (
+                    <button
+                      key={node.nodeKey}
+                      id={optionId(node.nodeKey)}
+                      type="button"
+                      role="option"
+                      aria-selected={index === activeResultIndex}
+                      tabIndex={-1}
+                      className={cn(
+                        'flex min-h-11 w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm outline-none',
+                        index === activeResultIndex ? 'bg-surface-active text-primary' : 'text-secondary hover:bg-surface-hover hover:text-primary',
+                      )}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onMouseEnter={() => setActiveResultIndex(index)}
+                      onClick={() => chooseSearchResult(node)}
+                    >
+                      <span className="min-w-0 truncate font-mono">{node.path || '/'}</span>
+                      <span className="flex shrink-0 items-center gap-1.5 text-[13px] text-muted">
+                        <span
+                          className="font-mono font-semibold"
+                          style={{ color: `var(${SITE_GRAPH_COLOR_TOKENS[status].property})` }}
+                          aria-hidden="true"
+                        >
+                          {siteGraphStatusGlyph(status)}
+                        </span>
+                        <span>{siteGraphStatusLabel(status)}</span>
+                      </span>
+                    </button>
+                  )
+                }) : (
+                  <p className="px-3 py-4 text-sm text-secondary">No rendered pages match.</p>
+                )}
+              </div>
+              {searchResults.length === 50 && (
+                <p className="border-t border-subtle px-3 py-2 text-[13px] text-muted">
+                  First 50 matches. Refine the search or use the full page inventory.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+        <span className="text-[13px] tabular-nums text-muted">
+          {plural(nodes.length, 'page')} · {plural(edges.length, 'link')}
+        </span>
+      </div>
+
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        {rendererState === 'unavailable' ? fallback : rendererState === 'checking' || !theme || !builtGraph || !sigmaSettings || !reactSigma || !SigmaContainerComponent ? (
+          <div className="flex h-full min-h-80 items-center justify-center px-6 text-center" role="status">
+            <p className="text-sm text-secondary">Preparing the interactive site map...</p>
+          </div>
+        ) : (
+          <GraphRenderBoundary fallback={fallback} resetToken={builtGraph.graph}>
+            <div aria-hidden="true" className="absolute inset-0">
+              <SigmaContainerComponent
+                graph={builtGraph.graph}
+                className="relative size-full bg-bg [&_.sigma-container]:size-full"
+                style={{ width: '100%', height: '100%', background: theme.background }}
+                settings={sigmaSettings}
+              >
+                <SigmaRuntime
+                  reactSigma={reactSigma}
+                  graph={builtGraph.graph}
+                  theme={theme}
+                  selectedNodeKey={effectiveSelectedNodeKey}
+                  onSelectNodeKey={handleSigmaSelect}
+                  onHoverNode={handleHoverNode}
+                  onCameraReady={handleCameraReady}
+                />
+              </SigmaContainerComponent>
+            </div>
+
+            <div className="absolute right-3 top-3 z-20 flex flex-col overflow-hidden rounded-md border border-base bg-bg shadow-lg">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="rounded-none border-b border-subtle"
+                aria-label="Zoom in"
+                disabled={!cameraReady}
+                onClick={() => cameraActionsRef.current?.zoomIn()}
+              >
+                <Plus className="size-4" aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="rounded-none border-b border-subtle"
+                aria-label="Zoom out"
+                disabled={!cameraReady}
+                onClick={() => cameraActionsRef.current?.zoomOut()}
+              >
+                <Minus className="size-4" aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="rounded-none"
+                aria-label="Fit site map"
+                disabled={!cameraReady}
+                onClick={() => cameraActionsRef.current?.reset()}
+              >
+                <Maximize2 className="size-4" aria-hidden="true" />
+              </Button>
+            </div>
+
+            {hoveredNode && hovered && (
+              <div
+                role="tooltip"
+                className="pointer-events-none absolute z-20 max-w-64 rounded-md border border-base bg-bg/95 px-3 py-2 shadow-lg"
+                style={{ left: hovered.left, top: hovered.top }}
+              >
+                <p className="truncate font-mono text-[13px] font-medium text-heading">{hoveredNode.path || '/'}</p>
+                <p className="mt-1 text-[13px] text-secondary">
+                  {siteGraphStatusLabel(siteGraphVisualState(hoveredNode))} · depth {hoveredNode.depth ?? 'unknown'}
+                </p>
+              </div>
+            )}
+          </GraphRenderBoundary>
+        )}
+      </div>
+
+      <div aria-label="Site map legend" className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-subtle bg-bg-elevated/50 px-3 py-2 text-[13px] text-secondary">
+        {(['eligible', 'hidden', 'failed', 'unchecked'] as const).map((status) => (
+          <span key={status} className="inline-flex items-center gap-1.5">
+            <span
+              className="w-3 text-center font-mono text-[15px] font-semibold leading-none"
+              style={{ color: `var(${SITE_GRAPH_COLOR_TOKENS[status].property})` }}
+              aria-hidden="true"
+            >
+              {siteGraphStatusGlyph(status)}
+            </span>
+            {siteGraphStatusLabel(status)}
+          </span>
+        ))}
+        <span className="ml-auto">Size shows internal-link importance</span>
+        {builtGraph && (builtGraph.omittedNodes > 0 || builtGraph.omittedEdges > 0) && (
+          <span className="text-caution">Some records lacked valid layout data.</span>
+        )}
+      </div>
+
+      <p id={instructionsId} className="sr-only">
+        The WebGL map supports pointer, wheel, and touch navigation. Use the page search to focus a rendered page. Use the full page inventory for an accessible list of every crawled page and its links.
+      </p>
+      <p role="status" aria-live="polite" className="sr-only">{statusMessage}</p>
+    </section>
+  )
+}

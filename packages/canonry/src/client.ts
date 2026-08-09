@@ -61,6 +61,9 @@ import type {
   SiteCrawlInternalLinksResponseDto,
   SiteCrawlNeighborsResponseDto,
   SiteCrawlDeadLinksResponseDto,
+  SiteHealthChangesResponseDto,
+  SiteHealthPathResponseDto,
+  SiteHealthSubgraphResponseDto,
   SnapshotDiffResponse,
   SnapshotListResponse,
   ScheduleDto,
@@ -418,8 +421,11 @@ import {
   getApiV1ProjectsByNameTechnicalAeoPages,
   getApiV1ProjectsByNameTechnicalAeoTrend,
   getApiV1ProjectsByNameTechnicalAeoCrawl,
+  getApiV1ProjectsByNameTechnicalAeoChanges,
   getApiV1ProjectsByNameTechnicalAeoCrawlPages,
   getApiV1ProjectsByNameTechnicalAeoStructure,
+  getApiV1ProjectsByNameTechnicalAeoPath,
+  getApiV1ProjectsByNameTechnicalAeoSubgraph,
   getApiV1ProjectsByNameTechnicalAeoInternalLinks,
   getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighbors,
   getApiV1ProjectsByNameTechnicalAeoDeadLinks,
@@ -3310,6 +3316,69 @@ export class ApiClient {
         client: this.heyClient,
         path: { name: project },
         query: { runId: opts?.runId },
+      }),
+    )
+  }
+
+  /** Bounded semantic Site Health neighborhood; this never returns visualization layout. */
+  async getSiteHealthSubgraph(
+    project: string,
+    opts?: { runId?: string; nodeKey?: string; url?: string; hops?: number; maxNodes?: number; maxEdges?: number },
+  ): Promise<SiteHealthSubgraphResponseDto> {
+    return this.invoke<SiteHealthSubgraphResponseDto>(() =>
+      getApiV1ProjectsByNameTechnicalAeoSubgraph({
+        client: this.heyClient,
+        path: { name: project },
+        query: {
+          runId: opts?.runId,
+          nodeKey: opts?.nodeKey,
+          url: opts?.url,
+          hops: opts?.hops,
+          maxNodes: opts?.maxNodes,
+          maxEdges: opts?.maxEdges,
+        },
+      }),
+    )
+  }
+
+  /** Directed shortest path over persisted, followable internal links. */
+  async getSiteHealthPath(
+    project: string,
+    opts: { runId?: string; fromNodeKey?: string; fromUrl?: string; toNodeKey?: string; toUrl?: string; maxDepth?: number },
+  ): Promise<SiteHealthPathResponseDto> {
+    return this.invoke<SiteHealthPathResponseDto>(() =>
+      getApiV1ProjectsByNameTechnicalAeoPath({
+        client: this.heyClient,
+        path: { name: project },
+        query: {
+          runId: opts.runId,
+          fromNodeKey: opts.fromNodeKey,
+          fromUrl: opts.fromUrl,
+          toNodeKey: opts.toNodeKey,
+          toUrl: opts.toUrl,
+          maxDepth: opts.maxDepth,
+        },
+      }),
+    )
+  }
+
+  /** Cursor-paged canonical page/link changes between immutable complete crawls. */
+  async getSiteHealthChanges(
+    project: string,
+    opts?: { fromRunId?: string; toRunId?: string; scope?: 'all' | 'pages' | 'links'; change?: 'all' | 'added' | 'removed' | 'changed'; cursor?: string; limit?: number },
+  ): Promise<SiteHealthChangesResponseDto> {
+    return this.invoke<SiteHealthChangesResponseDto>(() =>
+      getApiV1ProjectsByNameTechnicalAeoChanges({
+        client: this.heyClient,
+        path: { name: project },
+        query: {
+          fromRunId: opts?.fromRunId,
+          toRunId: opts?.toRunId,
+          scope: opts?.scope,
+          change: opts?.change,
+          cursor: opts?.cursor,
+          limit: opts?.limit,
+        },
       }),
     )
   }

@@ -250,15 +250,20 @@ cnry visibility-compare <project> --from 2026-05 --to 2026-06 --format json
 - **`groupBy` in the payload:** present (`"provider"`) only with `--by-provider`; omitted otherwise (absent = no breakdown) — the generated SDK types it `groupBy?: 'provider'`.
 - **mention vs cited stay independent** — a model can do either, both, or neither. Don't read one from the other.
 
-## Technical AEO (site audit)
+## Site Health (technical-aeo compatibility)
 
-Site-wide technical audit (structured data, AI-readable content, AI-crawler access, content depth/freshness/extractability, …) powered by `@canonry/aeo-audit`'s `runSiteCrawl`. Runs as the `site-audit` run kind — discovers in-scope URLs from the project root, sitemaps, and internal links; stores the URL/link graph; audits eligible HTML pages; and rolls the results into one 0–100 site score. Pure HTTP, no LLM cost; a large site can take minutes, so it runs in the background.
+Site-wide technical audit (structured data, AI-readable content, AI-crawler access, content depth/freshness/extractability, …) powered by `@canonry/aeo-audit`'s `runSiteCrawl`. Runs as the `site-audit` run kind — discovers in-scope URLs from the project root, sitemaps, and internal links; stores the URL/link graph; audits eligible HTML pages; and rolls the results into one 0–100 site score. Pure HTTP, no LLM cost; a large site can take minutes, so it runs in the background. `site-health` is the operator-facing CLI name; `technical-aeo` remains compatible.
 
 ```bash
 cnry technical-aeo run <project> --wait                 # full crawl + audit; defaults to 1,000 pages / 100,000 edges; waits for terminal state
 cnry technical-aeo run <project> --sitemap-url <url> --max-pages 5000 --max-edges 250000 --max-depth 12   # optional crawl seeds and custom budgets; hard caps are 50,000 pages / 1,000,000 edges
 cnry technical-aeo run <project> --check-dead-links --wait   # opt in to dead-link checks; they are off by default
 cnry technical-aeo crawl <project> [--run-id <id>] [--format json]   # crawl metadata, budgets, completeness, and termination
+cnry site-health overview <project> [--run-id <id>] [--format json] # operator-facing alias for crawl metadata
+cnry site-health subgraph <project> [--node-key <key>|--url <url>] [--hops <n>] [--max-nodes <n>] [--max-edges <n>] [--format json] # focused semantic graph (MCP defaults to 25 nodes / 50 edges)
+cnry site-health path <project> (--to-node-key <key>|--to-url <url>) [--from-node-key <key>|--from-url <url>] [--max-depth <n>] [--format json] # directed shortest followable-link path
+cnry site-health changes <project> [--from-run-id <id>] [--to-run-id <id>] [--scope all|pages|links] [--change all|added|removed|changed] [--cursor <cursor>] [--limit <n>] [--format json|jsonl] # canonical scan diff; either scan ID is optional; JSONL begins with scan/cursor/filter metadata
+cnry technical-aeo changes <project> [--from-run-id <id>] [--to-run-id <id>] [--scope all|pages|links] [--change all|added|removed|changed] [--cursor <cursor>] [--limit <n>] [--format json|jsonl] # compatibility alias with the same independently optional scan IDs
 cnry technical-aeo crawl-pages <project> [--fetch-state <state>] [--indexability-state <state>] [--sort url|path|score-asc|score-desc] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]   # bounded URL inventory with depth and link score
 cnry technical-aeo structure <project> [--parent-path <path>] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]   # one level of the path hierarchy
 cnry technical-aeo links <project> [--source-url <url>] [--target-url <url>] [--followable|--nofollow] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]   # bounded internal-link edges
@@ -270,9 +275,14 @@ cnry technical-aeo trend <project> [--format json|jsonl] # aggregate-score histo
 cnry schedule set <project> --kind site-audit --preset weekly   # keep it fresh
 ```
 
+For agent investigation, begin with `cnry site-health overview <project>`. Then request a focused neighborhood, a shortest path, or scan-to-scan changes. Do not ask an agent to materialize the interactive graph: it can exceed the MCP tool-result limit. The matching MCP tools are `canonry_site_health_overview`, `canonry_site_health_subgraph`, `canonry_site_health_path`, and `canonry_site_health_changes`; the subgraph tool defaults to a small focused result and should be expanded only when needed.
+
 - The score is only available after at least one audit runs — `score` returns `hasData: false` until then.
 - A failed, cancelled, or budget-terminated attempt stays inspectable but never replaces the latest complete crawl graph.
 - Graph reads are server-paged and bounded. Use `--run-id` to inspect a specific retained run.
+- A subgraph with `countAccuracy: "lower-bound"` hit a traversal cap: totals and omissions are minimums, not site-wide counts. Its `complete` and `termination` fields apply to every observation.
+- Treat an `unreachable` or `truncated` path from `complete: false` as limited to persisted crawl observations; use `termination` to explain that qualification.
+- `changes` returns its resolved filters and an exact post-filter summary only on its first page. JSONL headers retain `filters`, `summaryState`, nullable `summary`/`total`, and `nextCursor`; continuation records remain safe to stream without recomputing totals.
 
 ## Intelligence
 

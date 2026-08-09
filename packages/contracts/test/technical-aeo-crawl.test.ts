@@ -4,10 +4,12 @@ import {
   SITE_AUDIT_DEFAULT_PAGE_LIMIT,
   SITE_AUDIT_MAX_EDGE_LIMIT,
   SITE_AUDIT_MAX_PAGE_LIMIT,
+  deriveSiteHealthState,
   normalizeSiteAuditRunRequest,
   siteAuditRequestIdentity,
   siteAuditRunRequestSchema,
   siteCrawlDeadLinksResponseSchema,
+  siteCrawlGraphResponseSchema,
   siteCrawlSummarySchema,
 } from '../src/technical-aeo.js'
 
@@ -58,5 +60,51 @@ describe('Technical AEO crawl contracts', () => {
     expect(siteCrawlDeadLinksResponseSchema.parse({
       project: 'example', runId: 'run-1', state: 'disabled', checkDeadLinks: false,
     }).state).toBe('disabled')
+  })
+
+  it('models a bounded graph projection separately from the full crawl', () => {
+    expect(siteCrawlGraphResponseSchema.parse({
+      project: 'example', hasCrawlData: true, runId: 'run-1',
+      layout: { state: 'ready', version: 'site-health-fa2-v1', computedAt: '2026-08-09T12:00:00.000Z' },
+      totalNodes: 1_284, totalEdges: 18_402,
+      nodes: [{
+        nodeKey: 'home', url: 'https://example.com/', path: '/', fetchState: 'fetched',
+        indexabilityState: 'eligible', auditState: 'success', auditScore: 94,
+        inventoryEligible: true, depth: 0, inboundUniqueEdges: 10, outboundUniqueEdges: 20,
+        linkScoreNormalized: 1, healthState: 'eligible',
+        x: 0, y: 0,
+      }], edges: [], omittedNodes: 684, omittedEdges: 15_402, sampled: true,
+    })).toMatchObject({
+      project: 'example', runId: 'run-1', sampled: true,
+      layout: { state: 'ready', version: 'site-health-fa2-v1' },
+      nodes: [{ nodeKey: 'home', x: 0, y: 0 }],
+    })
+
+    expect(siteCrawlGraphResponseSchema.parse({
+      project: 'example', hasCrawlData: false, runId: null,
+      layout: { state: 'unavailable', version: null, reason: 'no-crawl' },
+      totalNodes: 0, totalEdges: 0,
+      nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
+    }).hasCrawlData).toBe(false)
+
+    expect(siteCrawlGraphResponseSchema.parse({
+      project: 'example', hasCrawlData: true, runId: 'legacy-run',
+      layout: { state: 'unavailable', version: null, reason: 'legacy-snapshot' },
+      totalNodes: 0, totalEdges: 0,
+      nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
+    }).layout).toEqual({ state: 'unavailable', version: null, reason: 'legacy-snapshot' })
+  })
+
+  it('derives one shared Site Health state for API, agent, and UI consumers', () => {
+    expect(deriveSiteHealthState({ fetchState: 'fetched', indexabilityState: 'eligible' })).toBe('eligible')
+    expect(deriveSiteHealthState({ fetchState: 'fetched', indexabilityState: 'noindex' })).toBe('hidden')
+    expect(deriveSiteHealthState({ fetchState: 'fetch-error', indexabilityState: 'eligible' })).toBe('failed')
+    expect(deriveSiteHealthState({ fetchState: 'pending', indexabilityState: 'eligible' })).toBe('unchecked')
+    expect(deriveSiteHealthState({ fetchState: 'redirect', indexabilityState: 'unknown' })).toBe('hidden')
+    expect(deriveSiteHealthState({
+      fetchState: 'html',
+      indexabilityState: 'unknown',
+      indexabilityReasons: ['canonical-to-other'],
+    })).toBe('hidden')
   })
 })

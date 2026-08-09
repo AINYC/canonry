@@ -877,6 +877,51 @@ const technicalAeoCrawlInputSchema = z.object({
   runId: runIdSchema.optional().describe('Historical crawl-bearing site-audit run ID. Omit for the latest persisted crawl.'),
 })
 
+const SITE_HEALTH_MCP_MAX_NODES = 25
+const SITE_HEALTH_MCP_MAX_EDGES = 50
+
+const siteHealthSubgraphInputSchema = z.object({
+  project: projectNameSchema,
+  runId: runIdSchema.optional().describe('Historical crawl-bearing site-audit run ID. Omit for the latest complete crawl.'),
+  nodeKey: z.string().min(1).optional().describe('Focus crawl node key. Omit with url to focus the crawl root.'),
+  url: z.string().url().optional().describe('Focus canonical URL. Omit with nodeKey to focus the crawl root.'),
+  hops: z.number().int().min(0).max(3).optional().describe('Neighborhood depth from the focus node. Keep this small.'),
+  maxNodes: z.number().int().positive().max(SITE_HEALTH_MCP_MAX_NODES).default(SITE_HEALTH_MCP_MAX_NODES).describe('Hard MCP cap: at most 25 nodes. Narrow or refocus instead of loading the site.'),
+  maxEdges: z.number().int().positive().max(SITE_HEALTH_MCP_MAX_EDGES).default(SITE_HEALTH_MCP_MAX_EDGES).describe('Hard MCP cap: at most 50 edges. Narrow or refocus instead of loading the site.'),
+}).refine((value) => !(value.nodeKey && value.url), {
+  message: 'Provide nodeKey or url, not both.',
+  path: ['nodeKey'],
+})
+
+const siteHealthPathInputSchema = z.object({
+  project: projectNameSchema,
+  runId: runIdSchema.optional().describe('Historical crawl-bearing site-audit run ID. Omit for the latest complete crawl.'),
+  fromNodeKey: z.string().min(1).optional().describe('Origin node key. Omit with fromUrl to start at the crawl root.'),
+  fromUrl: z.string().url().optional().describe('Origin URL. Omit with fromNodeKey to start at the crawl root.'),
+  toNodeKey: z.string().min(1).optional().describe('Required destination node key.'),
+  toUrl: z.string().url().optional().describe('Required destination URL.'),
+  maxDepth: z.number().int().positive().max(24).optional().describe('Maximum directed-link depth to search.'),
+}).refine((value) => !(value.fromNodeKey && value.fromUrl), {
+  message: 'Provide fromNodeKey or fromUrl, not both.',
+  path: ['fromNodeKey'],
+}).refine((value) => Boolean(value.toNodeKey || value.toUrl), {
+  message: 'Provide toNodeKey or toUrl.',
+  path: ['toNodeKey'],
+}).refine((value) => !(value.toNodeKey && value.toUrl), {
+  message: 'Provide toNodeKey or toUrl, not both.',
+  path: ['toNodeKey'],
+})
+
+const siteHealthChangesInputSchema = z.object({
+  project: projectNameSchema,
+  fromRunId: runIdSchema.optional().describe('Earlier complete crawl run ID. Omit to compare the previous complete crawl.'),
+  toRunId: runIdSchema.optional().describe('Later complete crawl run ID. Omit to compare the latest complete crawl.'),
+  scope: z.enum(['all', 'pages', 'links']).optional().describe('Limit the diff to page or link changes. Omit or use all for both.'),
+  change: z.enum(['all', 'added', 'removed', 'changed']).optional().describe('Limit the diff to one change kind. Omit or use all for every kind.'),
+  cursor: z.string().min(1).optional().describe('Opaque cursor from the previous Site Health changes result.'),
+  limit: z.number().int().positive().max(25).default(25).describe('Hard MCP cap: 25 records, because each change carries before and after DTOs.'),
+})
+
 const technicalAeoCrawlPagesInputSchema = z.object({
   project: projectNameSchema,
   runId: runIdSchema.optional(),
@@ -2700,6 +2745,71 @@ export const canonryMcpTools = [
     annotations: writeAnnotations({ idempotentHint: true }),
     openApiOperations: ['POST /api/v1/projects/{name}/discover/sessions/{id}/promote'],
     handler: (client, input) => client.promoteDiscovery(input.project, input.sessionId, input.request),
+  }),
+  defineTool({
+    name: 'canonry_site_health_overview',
+    title: 'Get Site Health overview',
+    description: 'Start a Site Health investigation with the latest or selected scan summary: root URL, completeness, crawl and link counts, budgets, versions, termination, and dead-link check state. Follow with a focused Site Health subgraph, shortest path, or scan changes; never request the interactive graph projection through MCP.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: technicalAeoCrawlInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/technical-aeo/crawl'],
+    handler: (client, input) => client.getTechnicalAeoCrawl(input.project, { runId: input.runId }),
+  }),
+  defineTool({
+    name: 'canonry_site_health_subgraph',
+    title: 'Inspect focused Site Health subgraph',
+    description: 'Read a compact canonical neighborhood around one page or the crawl root. Defaults to 25 nodes and 50 edges; expand hops or refocus only when needed. `countAccuracy=lower-bound` means traversal reached a cap, and `complete`/`termination` qualify partial-crawl results. This intentionally omits visualization coordinates and never materializes the full site graph.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: siteHealthSubgraphInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/technical-aeo/subgraph'],
+    handler: (client, input) => client.getSiteHealthSubgraph(input.project, {
+      runId: input.runId,
+      nodeKey: input.nodeKey,
+      url: input.url,
+      hops: input.hops,
+      maxNodes: input.maxNodes,
+      maxEdges: input.maxEdges,
+    }),
+  }),
+  defineTool({
+    name: 'canonry_site_health_path',
+    title: 'Find shortest Site Health path',
+    description: 'Find the shortest directed path of followable internal links from the crawl root or a selected page to one required destination. Use `complete` and `termination` to qualify unreachable or truncated outcomes from a partial crawl; it returns one path, not a graph traversal.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: siteHealthPathInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/technical-aeo/path'],
+    handler: (client, input) => client.getSiteHealthPath(input.project, {
+      runId: input.runId,
+      fromNodeKey: input.fromNodeKey,
+      fromUrl: input.fromUrl,
+      toNodeKey: input.toNodeKey,
+      toUrl: input.toUrl,
+      maxDepth: input.maxDepth,
+    }),
+  }),
+  defineTool({
+    name: 'canonry_site_health_changes',
+    title: 'Compare Site Health scans',
+    description: 'Compare two immutable complete scans (or the latest pair) for added, removed, and changed canonical pages or links. Results echo resolved filters and scan IDs; the first page has an exact summary, while continuations omit summary/total. MCP pages cap at 25 because every change carries before/after DTOs; filter before paging.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: siteHealthChangesInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/technical-aeo/changes'],
+    handler: (client, input) => client.getSiteHealthChanges(input.project, {
+      fromRunId: input.fromRunId,
+      toRunId: input.toRunId,
+      scope: input.scope,
+      change: input.change,
+      cursor: input.cursor,
+      limit: input.limit,
+    }),
   }),
   defineTool({
     name: 'canonry_technical_aeo_score',

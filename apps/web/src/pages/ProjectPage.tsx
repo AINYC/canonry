@@ -26,7 +26,7 @@ import { BacklinksSection } from '../components/project/BacklinksSection.js'
 import { CitationVisibilitySection } from '../components/project/CitationVisibilitySection.js'
 import { VisibilityTrendSection } from '../components/project/VisibilityTrendSection.js'
 import { DiscoverySection } from '../components/project/DiscoverySection.js'
-import { TechnicalAeoSection } from '../components/project/TechnicalAeoSection.js'
+import { SiteHealthSection } from '../components/project/SiteHealthSection.js'
 import { ProjectHistorySection } from '../components/project/ProjectHistorySection.js'
 import { AdvancedMeasurementSection } from '../components/project/advanced-measurement/AdvancedMeasurementSection.js'
 import { AdvancedMeasurementLanding } from '../components/project/advanced-measurement/AdvancedMeasurementLanding.js'
@@ -2204,7 +2204,8 @@ function ProjectPageContent({
     { key: 'overview', label: 'AI Visibility', href: projectTabBase },
     { key: 'search-console', label: 'Search Engines', href: `${projectTabBase}/search-console` },
     { key: 'activity', label: 'Activity', href: `${projectTabBase}/activity` },
-    { key: 'technical-aeo', label: 'Technical AEO', href: `${projectTabBase}/technical-aeo` },
+    // `technical-aeo` is a stable route and embed token. Site Health is the product label.
+    { key: 'technical-aeo', label: 'Site Health', href: `${projectTabBase}/technical-aeo` },
     { key: 'local', label: 'Local Presence', href: `${projectTabBase}/local` },
     { key: 'discovery', label: 'Query Discovery', href: `${projectTabBase}/discovery` },
     { key: 'backlinks', label: 'Backlinks', href: `${projectTabBase}/backlinks` },
@@ -2751,7 +2752,7 @@ function ProjectPageContent({
       ) : tab === 'discovery' ? (
         <DiscoverySection projectName={projectName} />
       ) : tab === 'technical-aeo' ? (
-        <TechnicalAeoSection projectName={model.project.name} projectId={model.project.id} />
+        <SiteHealthSection projectName={model.project.name} projectId={model.project.id} />
       ) : tab === 'history' ? (
         <ProjectHistorySection projectName={model.project.name} />
       ) : tab === 'activity' ? (

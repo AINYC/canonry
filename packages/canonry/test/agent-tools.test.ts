@@ -136,6 +136,10 @@ describe('buildAllTools', () => {
     expect(tools.map((t) => t.name)).not.toContain(CanonryMcpToolNames.canonry_agent_clear)
     // Spot-check that every other tool from the registry is exposed.
     expect(tools.map((t) => t.name)).toContain(CanonryMcpToolNames.canonry_project_overview)
+    expect(tools.map((t) => t.name)).toContain(CanonryMcpToolNames.canonry_site_health_overview)
+    expect(tools.map((t) => t.name)).toContain(CanonryMcpToolNames.canonry_site_health_subgraph)
+    expect(tools.map((t) => t.name)).toContain(CanonryMcpToolNames.canonry_site_health_path)
+    expect(tools.map((t) => t.name)).toContain(CanonryMcpToolNames.canonry_site_health_changes)
     expect(tools.map((t) => t.name)).toContain(CanonryMcpToolNames.canonry_run_trigger)
     expect(tools.map((t) => t.name)).toContain(CanonryMcpToolNames.canonry_memory_list)
     expect(tools.map((t) => t.name)).toContain(CanonryMcpToolNames.canonry_memory_set)
@@ -155,6 +159,12 @@ describe('buildReadTools', () => {
     // Read scope must not include any write-only tool.
     expect(tools.map((t) => t.name)).not.toContain(CanonryMcpToolNames.canonry_run_trigger)
     expect(tools.map((t) => t.name)).not.toContain(CanonryMcpToolNames.canonry_memory_set)
+    expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining([
+      CanonryMcpToolNames.canonry_site_health_overview,
+      CanonryMcpToolNames.canonry_site_health_subgraph,
+      CanonryMcpToolNames.canonry_site_health_path,
+      CanonryMcpToolNames.canonry_site_health_changes,
+    ]))
   })
 })
 

@@ -1,3 +1,4 @@
+import type { SiteHealthChangeRecordDto } from '@ainyc/canonry-contracts'
 import { createApiClient } from '../client.js'
 import { isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
@@ -133,6 +134,128 @@ export async function technicalAeoCrawl(
   console.log(lines.join('\n'))
 }
 
+/** `canonry technical-aeo subgraph <project>` — bounded semantic crawl neighborhood. */
+export async function technicalAeoSubgraph(
+  project: string,
+  opts: { runId?: string; nodeKey?: string; url?: string; hops?: number; maxNodes?: number; maxEdges?: number; format?: string },
+): Promise<void> {
+  const res = await getClient().getSiteHealthSubgraph(project, opts)
+  if (isMachineFormat(opts.format)) {
+    console.log(JSON.stringify(res, null, 2))
+    return
+  }
+  if (!res.hasCrawlData) {
+    console.log(`No persisted Site Health crawl for "${project}". Run \`canonry technical-aeo run ${project}\` first.`)
+    return
+  }
+  if (res.state !== 'ready') {
+    console.log(`Site Health subgraph details are unavailable for crawl ${res.runId ?? '-'}.`)
+    return
+  }
+  const focus = res.focusUrl ?? res.focusNodeKey ?? 'crawl root'
+  const totalQualifier = res.countAccuracy === 'lower-bound' ? 'at least ' : ''
+  const lines = [
+    `Site Health subgraph: ${focus} (${res.hops} hop${res.hops === 1 ? '' : 's'})`,
+    `${res.nodes.length} of ${totalQualifier}${res.totalNodes} node(s) · ${res.edges.length} of ${totalQualifier}${res.totalEdges} edge(s)`,
+    `Crawl: ${res.complete ? 'complete' : `partial (${res.termination ?? 'incomplete'})`}`,
+  ]
+  if (res.countAccuracy === 'lower-bound') lines.push('Count accuracy: lower bound; traversal reached a cap, so totals and omissions may be higher.')
+  if (res.truncated) lines.push(`Truncated: at least ${res.omittedNodes} node(s) and ${res.omittedEdges} edge(s) omitted. Narrow or refocus the request.`)
+  if (!res.complete) lines.push(`Partial crawl: ${res.termination ?? 'incomplete'}. Results describe only persisted observations.`)
+  console.log(lines.join('\n'))
+}
+
+/** `canonry technical-aeo path <project>` — directed shortest internal-link path. */
+export async function technicalAeoPath(
+  project: string,
+  opts: { runId?: string; fromNodeKey?: string; fromUrl?: string; toNodeKey?: string; toUrl?: string; maxDepth?: number; format?: string },
+): Promise<void> {
+  const res = await getClient().getSiteHealthPath(project, opts)
+  if (isMachineFormat(opts.format)) {
+    console.log(JSON.stringify(res, null, 2))
+    return
+  }
+  if (res.state === 'no-crawl') {
+    console.log(`No persisted Site Health crawl for "${project}". Run \`canonry technical-aeo run ${project}\` first.`)
+    return
+  }
+  if (res.state === 'details-unavailable') {
+    console.log(`Site Health path details are unavailable for crawl ${res.runId ?? '-'}.`)
+    return
+  }
+  if (res.state === 'unreachable') {
+    const qualification = res.complete ? '' : ` in the partial crawl (${res.termination ?? 'incomplete'}); this is not a site-wide conclusion`
+    console.log(`No directed followable path found${qualification} to ${res.to?.url ?? 'the requested destination'} within ${res.maxDepth} hop(s).`)
+    return
+  }
+  if (res.state === 'truncated') {
+    const qualification = res.complete ? '' : ` The crawl is partial (${res.termination ?? 'incomplete'}), so this is not a site-wide conclusion.`
+    console.log(`Path search reached its exploration cap before resolving ${res.to?.url ?? 'the requested destination'}. Narrow the route or reduce max depth.${qualification}`)
+    return
+  }
+  const lines = [res.nodes.map((node) => node.url).join('\n→ ')]
+  if (!res.complete) lines.push('', `Partial crawl: ${res.termination ?? 'incomplete'}. This path covers only persisted observations.`)
+  console.log(lines.join('\n'))
+}
+
+/** `canonry technical-aeo changes <project>` — cursor-paged canonical scan diff. */
+export async function technicalAeoChanges(
+  project: string,
+  opts: { fromRunId?: string; toRunId?: string; scope?: 'all' | 'pages' | 'links'; change?: 'all' | 'added' | 'removed' | 'changed'; cursor?: string; limit?: number; format?: string },
+): Promise<void> {
+  const res = await getClient().getSiteHealthChanges(project, opts)
+  if (opts.format === 'jsonl') {
+    if (res.state === 'ready') {
+      const { changes, ...header } = res
+      emitJsonl([{ kind: 'site-health-changes-header', ...header }])
+      emitJsonl(changes.map((record) => ({ project, fromRunId: res.fromRunId, toRunId: res.toRunId, ...record })))
+    } else {
+      emitJsonl([{ kind: 'site-health-changes-header', ...res }])
+    }
+    return
+  }
+  if (isMachineFormat(opts.format)) {
+    console.log(JSON.stringify(res, null, 2))
+    return
+  }
+  if (res.state === 'unavailable') {
+    console.log(`Site Health changes unavailable: ${res.reason.replaceAll('-', ' ')}.`)
+    return
+  }
+  if (res.state === 'incompatible') {
+    console.log(`Site Health changes unavailable: snapshots use incompatible ${res.mismatchedVersions.join(', ')} versions.`)
+    return
+  }
+  const lines = [
+    `Site Health changes: ${res.fromRunId} → ${res.toRunId}`,
+    `Filters: ${res.filters.scope} · ${res.filters.change}`,
+  ]
+  if (res.summaryState === 'exact' && res.summary !== null && res.total !== null) {
+    lines.push(`Pages: +${res.summary.pages.added} / -${res.summary.pages.removed} / ${res.summary.pages.changed} changed`)
+    lines.push(`Links: +${res.summary.links.added} / -${res.summary.links.removed} / ${res.summary.links.changed}`)
+    lines.push(`${res.changes.length} of ${res.total} change(s)${res.nextCursor ? ' (more available)' : ''}`)
+  } else {
+    lines.push(`Summary: omitted on continuation; ${res.changes.length} returned change(s)${res.nextCursor ? ' (more available)' : ''}`)
+  }
+  if (res.changes.length > 0) {
+    lines.push('', 'Changes:')
+    for (const record of res.changes) lines.push(`  ${formatSiteHealthChangeRecord(record)}`)
+  }
+  if (res.nextCursor) lines.push(`Next cursor: ${res.nextCursor}`)
+  console.log(lines.join('\n'))
+}
+
+function formatSiteHealthChangeRecord(record: SiteHealthChangeRecordDto): string {
+  const target = record.entity === 'page'
+    ? record.after?.url ?? record.before?.url ?? record.key
+    : (() => {
+        const edge = record.after ?? record.before
+        return edge ? `${edge.sourceUrl} → ${edge.targetUrl}` : record.key
+      })()
+  const fields = record.changedFields.length > 0 ? ` (${record.changedFields.join(', ')})` : ''
+  return `${record.entity} ${record.change}: ${target}${fields}`
+}
+
 /** `canonry technical-aeo crawl-pages <project>` — cursor-paged crawl nodes. */
 export async function technicalAeoCrawlPages(
   project: string,
@@ -150,6 +273,13 @@ export async function technicalAeoCrawlPages(
 ): Promise<void> {
   const res = await getClient().getTechnicalAeoCrawlPages(project, opts)
   if (opts.format === 'jsonl') {
+    emitJsonl([{
+      kind: 'technical-aeo-crawl-pages-header',
+      project,
+      runId: res.runId,
+      total: res.total,
+      nextCursor: res.nextCursor,
+    }])
     emitJsonl(res.pages.map((page) => ({ project, runId: res.runId, ...page })))
     return
   }
@@ -177,6 +307,14 @@ export async function technicalAeoStructure(
 ): Promise<void> {
   const res = await getClient().getTechnicalAeoStructure(project, opts)
   if (opts.format === 'jsonl') {
+    emitJsonl([{
+      kind: 'technical-aeo-structure-header',
+      project,
+      runId: res.runId,
+      parentPath: res.parentPath,
+      returned: res.children.length,
+      nextCursor: res.nextCursor,
+    }])
     emitJsonl(res.children.map((child) => ({ project, runId: res.runId, parentPath: res.parentPath, ...child })))
     return
   }
@@ -203,6 +341,13 @@ export async function technicalAeoInternalLinks(
 ): Promise<void> {
   const res = await getClient().getTechnicalAeoInternalLinks(project, opts)
   if (opts.format === 'jsonl') {
+    emitJsonl([{
+      kind: 'technical-aeo-internal-links-header',
+      project,
+      runId: res.runId,
+      total: res.total,
+      nextCursor: res.nextCursor,
+    }])
     emitJsonl(res.edges.map((edge) => ({ project, runId: res.runId, ...edge })))
     return
   }

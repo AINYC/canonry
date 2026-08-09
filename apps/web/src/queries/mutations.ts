@@ -248,8 +248,8 @@ export function useTriggerSiteAudit() {
         lastAnnouncedStatus: result.status,
       })
       addToast({
-        title: result.status === 'running' ? 'Technical audit already running' : 'Technical audit queued',
-        detail: `${variables.projectLabel ?? variables.projectName} will refresh automatically when the audit finishes.`,
+        title: result.status === 'running' ? 'Site Health scan already running' : 'Site Health scan queued',
+        detail: `${variables.projectLabel ?? variables.projectName} will refresh automatically when the scan finishes.`,
         tone: 'neutral',
         dedupeKey: `run:${result.runId}`,
         dedupeMode: 'replace',

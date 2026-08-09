@@ -150,11 +150,17 @@ test('invalidates GBP operations for gbp-sync runs', () => {
   expect(predicateMatches('getApiV1ProjectsByNameGbpKeywords')).toBe(true)
 })
 
-test('invalidates Technical AEO operations for site-audit runs', () => {
+test('invalidates every Site Health operation for site-audit runs', () => {
   invalidateQueriesForRunKind(queryClient, RunKinds['site-audit'], 'demo')
   expect(predicateMatches('getApiV1ProjectsByNameTechnicalAeo')).toBe(true)
   expect(predicateMatches('getApiV1ProjectsByNameTechnicalAeoPages')).toBe(true)
   expect(predicateMatches('getApiV1ProjectsByNameTechnicalAeoTrend')).toBe(true)
+  expect(predicateMatches('getApiV1ProjectsByNameTechnicalAeoCrawl')).toBe(true)
+  expect(predicateMatches('getApiV1ProjectsByNameTechnicalAeoCrawlPages')).toBe(true)
+  expect(predicateMatches('getApiV1ProjectsByNameTechnicalAeoGraph')).toBe(true)
+  expect(predicateMatches('getApiV1ProjectsByNameTechnicalAeoStructure')).toBe(true)
+  expect(predicateMatches('getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighbors')).toBe(true)
+  expect(predicateMatches('getApiV1ProjectsByNameTechnicalAeoDeadLinks')).toBe(true)
 })
 
 test('does not invalidate domain-scoped operations for answer-visibility runs', () => {

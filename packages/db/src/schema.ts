@@ -894,10 +894,122 @@ export const siteCrawlEdges = sqliteTable('site_crawl_edges', {
   index('idx_site_crawl_edges_inbound').on(table.projectId, table.runId, table.attemptId, table.targetNodeKey, table.edgeKey),
   index('idx_site_crawl_edges_source_url').on(table.projectId, table.runId, table.attemptId, table.sourceUrl),
   index('idx_site_crawl_edges_target_url').on(table.projectId, table.runId, table.attemptId, table.targetUrl),
+  // Publish-time graph sampling filters this exact scope and consumes the
+  // highest-occurrence internal anchors first. The mixed-direction suffix
+  // avoids a million-row temporary ORDER BY at the maximum crawl budget.
+  index('idx_site_crawl_edges_graph_sample').on(
+    table.projectId,
+    table.runId,
+    table.attemptId,
+    table.internal,
+    table.relation,
+    sql`${table.occurrences} desc`,
+    table.edgeKey,
+  ),
   foreignKey({
     name: 'site_crawl_edges_attempt_fk',
     columns: [table.projectId, table.runId, table.attemptId],
     foreignColumns: [siteCrawlAttempts.projectId, siteCrawlAttempts.runId, siteCrawlAttempts.id],
+  }).onDelete('cascade'),
+])
+
+/**
+ * One immutable, publish-time graph layout per crawl attempt. Keeping layout
+ * metadata separate from crawl pages makes the visualization optional: legacy
+ * snapshots have no row and remain fully readable without nullable x/y fields
+ * contaminating the canonical URL inventory.
+ */
+export const siteCrawlGraphLayouts = sqliteTable('site_crawl_graph_layouts', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  runId: text('run_id').notNull(),
+  attemptId: text('attempt_id').notNull(),
+  state: text('state').notNull(),
+  layoutVersion: text('layout_version'),
+  failureCode: text('failure_code'),
+  totalNodes: integer('total_nodes').notNull().default(0),
+  totalEdges: integer('total_edges').notNull().default(0),
+  nodeCount: integer('node_count').notNull().default(0),
+  edgeCount: integer('edge_count').notNull().default(0),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_site_crawl_graph_layouts_attempt').on(table.projectId, table.runId, table.attemptId),
+  index('idx_site_crawl_graph_layouts_run').on(table.projectId, table.runId),
+  check('site_crawl_graph_layouts_state_check', sql`${table.state} in ('ready', 'unavailable')`),
+  foreignKey({
+    name: 'site_crawl_graph_layouts_attempt_fk',
+    columns: [table.projectId, table.runId, table.attemptId],
+    foreignColumns: [siteCrawlAttempts.projectId, siteCrawlAttempts.runId, siteCrawlAttempts.id],
+  }).onDelete('cascade'),
+])
+
+/** Persisted ForceAtlas2 coordinates for only the bounded graph sample. */
+export const siteCrawlGraphNodes = sqliteTable('site_crawl_graph_nodes', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  runId: text('run_id').notNull(),
+  attemptId: text('attempt_id').notNull(),
+  nodeKey: text('node_key').notNull(),
+  sampleRank: integer('sample_rank').notNull(),
+  x: real('x').notNull(),
+  y: real('y').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_site_crawl_graph_nodes_attempt_node').on(table.projectId, table.runId, table.attemptId, table.nodeKey),
+  uniqueIndex('idx_site_crawl_graph_nodes_attempt_rank').on(table.projectId, table.runId, table.attemptId, table.sampleRank),
+  index('idx_site_crawl_graph_nodes_read').on(table.projectId, table.runId, table.attemptId, table.sampleRank),
+  check('site_crawl_graph_nodes_rank_check', sql`${table.sampleRank} >= 0`),
+  foreignKey({
+    name: 'site_crawl_graph_nodes_layout_fk',
+    columns: [table.projectId, table.runId, table.attemptId],
+    foreignColumns: [siteCrawlGraphLayouts.projectId, siteCrawlGraphLayouts.runId, siteCrawlGraphLayouts.attemptId],
+  }).onDelete('cascade'),
+  foreignKey({
+    name: 'site_crawl_graph_nodes_page_fk',
+    columns: [table.projectId, table.runId, table.attemptId, table.nodeKey],
+    foreignColumns: [siteCrawlPages.projectId, siteCrawlPages.runId, siteCrawlPages.attemptId, siteCrawlPages.nodeKey],
+  }).onDelete('cascade'),
+])
+
+/** The exact bounded edge sample consumed by ForceAtlas2 and the renderer. */
+export const siteCrawlGraphEdges = sqliteTable('site_crawl_graph_edges', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  runId: text('run_id').notNull(),
+  attemptId: text('attempt_id').notNull(),
+  edgeKey: text('edge_key').notNull(),
+  sampleRank: integer('sample_rank').notNull(),
+  sourceNodeKey: text('source_node_key').notNull(),
+  targetNodeKey: text('target_node_key').notNull(),
+  followable: integer('followable', { mode: 'boolean' }).notNull(),
+  occurrences: integer('occurrences').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_site_crawl_graph_edges_attempt_edge').on(table.projectId, table.runId, table.attemptId, table.edgeKey),
+  uniqueIndex('idx_site_crawl_graph_edges_attempt_rank').on(table.projectId, table.runId, table.attemptId, table.sampleRank),
+  index('idx_site_crawl_graph_edges_read').on(table.projectId, table.runId, table.attemptId, table.sampleRank),
+  check('site_crawl_graph_edges_rank_check', sql`${table.sampleRank} >= 0`),
+  check('site_crawl_graph_edges_occurrences_check', sql`${table.occurrences} > 0`),
+  foreignKey({
+    name: 'site_crawl_graph_edges_layout_fk',
+    columns: [table.projectId, table.runId, table.attemptId],
+    foreignColumns: [siteCrawlGraphLayouts.projectId, siteCrawlGraphLayouts.runId, siteCrawlGraphLayouts.attemptId],
+  }).onDelete('cascade'),
+  foreignKey({
+    name: 'site_crawl_graph_edges_source_node_fk',
+    columns: [table.projectId, table.runId, table.attemptId, table.sourceNodeKey],
+    foreignColumns: [siteCrawlGraphNodes.projectId, siteCrawlGraphNodes.runId, siteCrawlGraphNodes.attemptId, siteCrawlGraphNodes.nodeKey],
+  }).onDelete('cascade'),
+  foreignKey({
+    name: 'site_crawl_graph_edges_target_node_fk',
+    columns: [table.projectId, table.runId, table.attemptId, table.targetNodeKey],
+    foreignColumns: [siteCrawlGraphNodes.projectId, siteCrawlGraphNodes.runId, siteCrawlGraphNodes.attemptId, siteCrawlGraphNodes.nodeKey],
+  }).onDelete('cascade'),
+  foreignKey({
+    name: 'site_crawl_graph_edges_canonical_edge_fk',
+    columns: [table.projectId, table.runId, table.attemptId, table.edgeKey],
+    foreignColumns: [siteCrawlEdges.projectId, siteCrawlEdges.runId, siteCrawlEdges.attemptId, siteCrawlEdges.edgeKey],
   }).onDelete('cascade'),
 ])
 

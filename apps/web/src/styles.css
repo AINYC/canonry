@@ -149,6 +149,12 @@
   --chart-tone-caution: #fbbf24;
   --chart-tone-negative: #fb7185;
   --chart-tone-neutral: #a1a1aa;
+  /* Site Health's four-way state palette is Okabe-Ito-derived. These literals
+     are WebGL-safe and remain distinct under common color-vision deficiencies. */
+  --chart-site-health-eligible: #56b4e9;
+  --chart-site-health-hidden: #e69f00;
+  --chart-site-health-failed: #d55e00;
+  --chart-site-health-unchecked: #a1a1aa;
   --chart-neutral-text: #a1a1aa;
   --chart-neutral-text-dim: #71717a;
   --chart-neutral-text-faint: #52525b;
@@ -297,6 +303,10 @@
   --chart-tone-caution: #d97706;
   --chart-tone-negative: #e11d48;
   --chart-tone-neutral: #71717a;
+  --chart-site-health-eligible: #0072b2;
+  --chart-site-health-hidden: #a86f00;
+  --chart-site-health-failed: #b23a2b;
+  --chart-site-health-unchecked: #52525b;
   --chart-neutral-text: #52525b;
   --chart-neutral-text-dim: #71717a;
   --chart-neutral-text-faint: #a1a1aa;
