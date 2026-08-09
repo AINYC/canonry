@@ -13,6 +13,7 @@ import {
 } from 'react'
 import { Maximize2, Minus, Plus, Search } from 'lucide-react'
 import type Sigma from 'sigma'
+import type { NodeHoverDrawingFunction } from 'sigma/rendering'
 import type { Settings } from 'sigma/settings'
 import type {
   CameraState,
@@ -170,6 +171,70 @@ function sigmaTheme(element: HTMLElement): SigmaSiteGraphTheme {
     edgeActive: color('edgeActive'),
     label: color('label'),
     background: color('background'),
+  }
+}
+
+function roundedRectPath(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const corner = Math.min(radius, width / 2, height / 2)
+  context.beginPath()
+  context.moveTo(x + corner, y)
+  context.lineTo(x + width - corner, y)
+  context.arcTo(x + width, y, x + width, y + corner, corner)
+  context.lineTo(x + width, y + height - corner)
+  context.arcTo(x + width, y + height, x + width - corner, y + height, corner)
+  context.lineTo(x + corner, y + height)
+  context.arcTo(x, y + height, x, y + height - corner, corner)
+  context.lineTo(x, y + corner)
+  context.arcTo(x, y, x + corner, y, corner)
+  context.closePath()
+}
+
+function createSiteGraphNodeHoverRenderer(
+  theme: SigmaSiteGraphTheme,
+): NodeHoverDrawingFunction<SigmaSiteGraphNodeAttributes, SigmaSiteGraphEdgeAttributes> {
+  return (context, data, settings) => {
+    const label = typeof data.label === 'string' ? data.label : null
+    const labelHeight = settings.labelSize + 10
+    const labelX = data.x + data.size + 7
+    const labelY = data.y - labelHeight / 2
+
+    context.save()
+    context.font = `${settings.labelWeight} ${settings.labelSize}px ${settings.labelFont}`
+
+    // Repaint the hovered node so its status color survives the contrast ring.
+    context.fillStyle = theme.background
+    context.strokeStyle = theme.edgeActive
+    context.lineWidth = 1.5
+    context.beginPath()
+    context.arc(data.x, data.y, data.size + 3, 0, Math.PI * 2)
+    context.fill()
+    context.stroke()
+    context.fillStyle = data.color
+    context.beginPath()
+    context.arc(data.x, data.y, data.size, 0, Math.PI * 2)
+    context.fill()
+
+    if (label) {
+      const labelWidth = Math.ceil(context.measureText(label).width) + 16
+      roundedRectPath(context, labelX, labelY, labelWidth, labelHeight, 5)
+      context.fillStyle = theme.background
+      context.fill()
+      context.strokeStyle = theme.edgeActive
+      context.lineWidth = 1
+      context.stroke()
+      context.fillStyle = theme.label
+      context.textBaseline = 'middle'
+      context.fillText(label, labelX + 8, data.y)
+    }
+
+    context.restore()
   }
 }
 
@@ -344,6 +409,7 @@ export function SiteGraphSigma({
     hideEdgesOnMove: true,
     hideLabelsOnMove: true,
     itemSizesReference: 'screen' as const,
+    defaultDrawNodeHover: createSiteGraphNodeHoverRenderer(theme),
     labelColor: { color: theme.label },
     labelDensity: 0.2,
     labelFont: 'Geist Sans, sans-serif',

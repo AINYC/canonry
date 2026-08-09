@@ -17,6 +17,7 @@ const sigmaMocks = vi.hoisted(() => ({
     settings?: {
       defaultNodeColor?: string
       defaultEdgeColor?: string
+      defaultDrawNodeHover?: (...args: never[]) => void
       labelColor?: { color?: string }
     }
   } | null,
@@ -31,6 +32,7 @@ vi.mock('@react-sigma/core', async () => {
       settings?: {
         defaultNodeColor?: string
         defaultEdgeColor?: string
+        defaultDrawNodeHover?: (...args: never[]) => void
         labelColor?: { color?: string }
       }
     }) => {
@@ -187,6 +189,60 @@ describe('SiteGraphSigma', () => {
       const parsed = parseColor(color!)
       expect([parsed.r, parsed.g, parsed.b], color).not.toEqual([0, 0, 0])
     }
+  })
+
+  it('draws hovered labels with the theme contrast pair instead of Sigma white', async () => {
+    mockWebGl(true)
+    render(<SiteGraphSigma nodes={nodes} edges={edges} />)
+
+    await waitFor(() => expect(sigmaMocks.containerProps).not.toBeNull())
+    const drawHover = sigmaMocks.containerProps?.settings?.defaultDrawNodeHover
+    expect(drawHover).toBeTypeOf('function')
+
+    let currentFillStyle = ''
+    const paintedFillStyles: string[] = []
+    const textFillStyles: string[] = []
+    const strokeStyles: string[] = []
+    const context = {
+      arc: vi.fn(),
+      arcTo: vi.fn(),
+      beginPath: vi.fn(),
+      closePath: vi.fn(),
+      fill: vi.fn(() => paintedFillStyles.push(currentFillStyle)),
+      fillText: vi.fn(() => textFillStyles.push(currentFillStyle)),
+      font: '',
+      lineTo: vi.fn(),
+      lineWidth: 0,
+      measureText: vi.fn(() => ({ width: 120 })),
+      moveTo: vi.fn(),
+      restore: vi.fn(),
+      save: vi.fn(),
+      stroke: vi.fn(),
+    }
+    Object.defineProperty(context, 'fillStyle', {
+      set: (color: string) => {
+        currentFillStyle = color
+      },
+    })
+    Object.defineProperty(context, 'strokeStyle', {
+      set: (color: string) => strokeStyles.push(color),
+    })
+
+    drawHover!(
+      context as never,
+      { x: 40, y: 30, size: 10, label: '/pricing', color: '#56b4e9' } as never,
+      {
+        labelFont: 'Geist Sans, sans-serif',
+        labelSize: 13,
+        labelWeight: '600',
+      } as never,
+    )
+
+    expect(paintedFillStyles.at(-1)).toBe('#18181b')
+    expect(textFillStyles).toEqual(['#e4e4e7'])
+    expect(paintedFillStyles).not.toContain('#FFF')
+    expect(strokeStyles).toContain('#a1a1aa')
+    expect(context.fillText).toHaveBeenCalledWith('/pricing', expect.any(Number), expect.any(Number))
   })
 
   it('selects a node from Sigma events and reports it to the parent', async () => {
