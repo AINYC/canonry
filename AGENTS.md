@@ -135,7 +135,7 @@ canonry schedule set <project> --kind traffic-sync --cron "*/15 * * * *" --sourc
 canonry schedule set <project> --kind gbp-sync --preset daily                                # gbp-sync (no source; syncs selected locations)
 canonry schedule set <project> --kind data-refresh --preset daily                            # data-refresh (refreshes connected GSC/Bing/GA/GBP; no source)
 canonry schedule set <project> --kind backlinks-sync --preset weekly                         # backlinks-sync (re-probe Common Crawl; sync only when a newer rolling window is published; no source/providers)
-canonry schedule set <project> --kind site-audit --preset weekly                             # site-audit / Technical AEO (crawl the sitemap + audit every page; no source/providers)
+canonry schedule set <project> --kind site-audit --preset weekly                             # site-audit / Technical AEO (bounded full-site crawl; no source/providers)
 canonry schedule show <project> [--kind answer-visibility|traffic-sync|gbp-sync|data-refresh|backlinks-sync|site-audit] # default kind is answer-visibility
 canonry schedule enable  <project> [--kind ...]
 canonry schedule disable <project> [--kind ...]
@@ -195,8 +195,14 @@ canonry ads delivery-diagnostics <project>            # stored snapshot provenan
 canonry ads live-delivery <project> [--campaign <id>] [--lookback-days <n>]  # LIVE provider read (status + metrics as the provider gave them) plus the stored-snapshot delta; read-only, bounded, at most one per project per minute
 canonry ads disconnect <project>
 
-# Technical AEO — site-wide technical audit (powered by the `site-audit` run kind + @ainyc/aeo-audit's runSitemapAudit)
-canonry technical-aeo run <project> [--sitemap-url <url>] [--limit <n>] [--wait] [--format json]   # crawl the sitemap + audit every page; idempotent (returns the in-flight run); default page cap 500, hard max 2000
+# Technical AEO — site-wide crawl and audit (powered by the `site-audit` run kind + @canonry/aeo-audit's runSiteCrawl)
+canonry technical-aeo run <project> [--sitemap-url <url>] [--max-pages <n>] [--max-edges <n>] [--max-depth <n>] [--check-dead-links] [--wait] [--format json] # crawl sitemap and internal-link discoveries; defaults: 5,000 pages / 250,000 edges; hard limits: 50,000 / 1,000,000; dead-link analysis is off unless requested
+canonry technical-aeo crawl <project> [--run-id <id>] [--format json]                         # persisted crawl metadata and completeness
+canonry technical-aeo crawl-pages <project> [--run-id <id>] [--limit <n>] [--format json|jsonl] # cursor-paged URL inventory with indexability, depth, and link score
+canonry technical-aeo structure <project> [--run-id <id>] [--parent-path <path>] [--limit <n>] [--format json|jsonl] # one level of the lexical path hierarchy
+canonry technical-aeo links <project> [--run-id <id>] [--source-url <url>] [--target-url <url>] [--limit <n>] [--format json|jsonl] # bounded internal-link edge list
+canonry technical-aeo links neighbors <project> (--node-key <key>|--url <url>) [--run-id <id>] [--limit <n>] [--format json] # bounded inbound/outbound page neighborhood
+canonry technical-aeo dead-links <project> [--run-id <id>] [--limit <n>] [--format json|jsonl] # reports disabled unless the run used --check-dead-links
 canonry technical-aeo score <project> [--format json]                                # latest site score (0–100) + per-factor scorecard + delta vs the previous audit
 canonry technical-aeo pages <project> [--status success|error] [--sort score-asc|score-desc|url] [--limit <n>] [--format json|jsonl]  # per-page breakdown of the latest run (worst-first by default)
 canonry technical-aeo trend <project> [--limit <n>] [--format json|jsonl]            # aggregate-score history across past audits

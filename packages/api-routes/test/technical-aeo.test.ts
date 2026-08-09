@@ -12,12 +12,24 @@ import {
   runs,
   siteAuditSnapshots,
   siteAuditPages,
+  siteCrawlAttempts,
+  siteCrawlEdges,
+  siteCrawlFindings,
+  siteCrawlPages,
+  siteCrawlRunRequests,
+  siteCrawlSnapshots,
 } from '@ainyc/canonry-db'
 import type {
   SiteAuditFactorSummaryDto,
   SiteAuditPagesResponseDto,
   SiteAuditScoreDto,
   SiteAuditTrendResponseDto,
+  SiteCrawlDeadLinksResponseDto,
+  SiteCrawlInternalLinksResponseDto,
+  SiteCrawlNeighborsResponseDto,
+  SiteCrawlPagesResponseDto,
+  SiteCrawlStructureResponseDto,
+  SiteCrawlSummaryDto,
 } from '@ainyc/canonry-contracts'
 import { apiRoutes } from '../src/index.js'
 
@@ -29,7 +41,18 @@ interface Ctx {
   runA: string
   runB: string
   probeRun: string
-  siteAuditRequested: Array<{ runId: string; projectId: string; opts?: { sitemapUrl?: string; limit?: number } }>
+  siteAuditRequested: Array<{
+    runId: string
+    projectId: string
+    opts?: {
+      sitemapUrl?: string
+      limit?: number
+      maxPages?: number
+      maxEdges?: number
+      maxDepth?: number
+      checkDeadLinks?: boolean
+    }
+  }>
 }
 
 const FACTORS_B: SiteAuditFactorSummaryDto[] = [
@@ -103,6 +126,64 @@ function buildCtx(): Ctx {
     { id: crypto.randomUUID(), projectId, runId: runB, url: 'https://example.com/weak', overallScore: 30, overallGrade: 'F', status: 'success', error: null, factors: [], createdAt: tB },
     { id: crypto.randomUUID(), projectId, runId: runB, url: 'https://example.com/dead', overallScore: 0, overallGrade: 'F', status: 'error', error: 'TIMEOUT', factors: [], createdAt: tB },
   ]).run()
+
+  // New persisted crawl data for run B. It deliberately coexists with the
+  // legacy scorecard rows above; callers must never infer it from them.
+  const crawlAttemptId = crypto.randomUUID()
+  db.insert(siteCrawlAttempts).values({
+    id: crawlAttemptId, projectId, runId: runB, attemptNumber: 1, state: 'completed',
+    pagesDiscovered: 3, pagesFetched: 3, pagesEligible: 2, edgesDiscovered: 2,
+    startedAt: tB, finishedAt: tB, createdAt: tB, updatedAt: tB,
+  }).run()
+  db.insert(siteCrawlSnapshots).values({
+    id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId,
+    rootUrl: 'https://example.com/', crawlSchemaVersion: '1.0', engineVersion: 'crawl-test',
+    normalizationVersion: 'url-v1', indexabilityVersion: 'index-v1', linkScoreVersion: 'links-v1',
+    effectiveOptions: { maxPages: 100, checkDeadLinks: true }, checkDeadLinks: true,
+    complete: true, termination: 'completed', detailsAvailable: true,
+    pagesDiscovered: 3, pagesFetched: 3, pagesEligible: 2, edgesDiscovered: 2, findingsCount: 1,
+    deadLinkState: 'complete', deadLinksChecked: 2, deadLinksFound: 1, createdAt: tB, updatedAt: tB,
+  }).run()
+  db.insert(siteCrawlPages).values([
+    {
+      id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'home',
+      url: 'https://example.com/', finalUrl: 'https://example.com/', path: '/', parentPath: '/', discoverySource: 'sitemap',
+      fetchState: 'fetched', httpStatus: 200, indexabilityState: 'eligible', auditState: 'complete', auditScore: 88,
+      inventoryEligible: true, depth: 0, outboundUniqueEdges: 2, outboundOccurrences: 3, linkScoreRaw: 10, linkScoreNormalized: 1,
+      createdAt: tB, updatedAt: tB,
+    },
+    {
+      id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'guide',
+      url: 'https://example.com/guide', finalUrl: 'https://example.com/guide', path: '/guide', parentPath: '/', discoverySource: 'link',
+      fetchState: 'fetched', httpStatus: 200, indexabilityState: 'eligible', auditState: 'complete', auditScore: 42,
+      inventoryEligible: true, depth: 1, inboundUniqueEdges: 1, inboundOccurrences: 2, linkScoreRaw: 4, linkScoreNormalized: 0.4,
+      createdAt: tB, updatedAt: tB,
+    },
+    {
+      id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'gone',
+      url: 'https://example.com/gone', path: '/gone', parentPath: '/', discoverySource: 'link', fetchState: 'fetched', httpStatus: 404,
+      indexabilityState: 'ineligible', auditState: 'skipped', inventoryEligible: false, depth: 1, createdAt: tB, updatedAt: tB,
+    },
+  ]).run()
+  db.insert(siteCrawlEdges).values([
+    {
+      id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, edgeKey: 'home-guide',
+      sourceNodeKey: 'home', sourceUrl: 'https://example.com/', targetNodeKey: 'guide', targetUrl: 'https://example.com/guide',
+      relation: 'a', internal: true, followable: true, occurrences: 2, followableOccurrences: 2, nofollowOccurrences: 0,
+      anchors: ['Guide'], createdAt: tB, updatedAt: tB,
+    },
+    {
+      id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, edgeKey: 'home-gone',
+      sourceNodeKey: 'home', sourceUrl: 'https://example.com/', targetNodeKey: 'gone', targetUrl: 'https://example.com/gone',
+      relation: 'a', internal: true, followable: false, occurrences: 1, followableOccurrences: 0, nofollowOccurrences: 1,
+      anchors: ['Old'], createdAt: tB, updatedAt: tB,
+    },
+  ]).run()
+  db.insert(siteCrawlFindings).values({
+    id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, findingKey: 'dead:gone', findingType: 'dead-link', severity: 'high',
+    sourceNodeKey: 'home', sourceUrl: 'https://example.com/', targetNodeKey: 'gone', targetUrl: 'https://example.com/gone', evidence: { status: 404 },
+    createdAt: tB, updatedAt: tB,
+  }).run()
 
   // Probe run — newest, intentionally a wildly different score. MUST be excluded.
   const probeRun = seedRun('completed', 'probe', tProbe)
@@ -216,6 +297,186 @@ describe('GET /technical-aeo/trend', () => {
   })
 })
 
+describe('GET /technical-aeo crawl reads', () => {
+  it('returns only the latest real persisted crawl, with separate legacy availability', async () => {
+    const { body } = await get<SiteCrawlSummaryDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl')
+    expect(body).toMatchObject({
+      hasCrawlData: true,
+      legacyAuditAvailable: true,
+      runId: ctx.runB,
+      complete: true,
+      detailsAvailable: true,
+      deadLinks: { state: 'complete', checked: 2, found: 1 },
+    })
+    expect(body.counts.pagesEligible).toBe(2)
+    expect(body.runId).not.toBe(ctx.probeRun)
+  })
+
+  it('keeps the last complete graph current when a newer partial crawl exists', async () => {
+    const now = new Date(Date.now() + 60_000).toISOString()
+    const partialRun = crypto.randomUUID()
+    const partialAttempt = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: partialRun, projectId: ctx.projectId, kind: 'site-audit', status: 'partial', trigger: 'manual', createdAt: now, finishedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlAttempts).values({
+      id: partialAttempt, projectId: ctx.projectId, runId: partialRun, attemptNumber: 1, state: 'partial', createdAt: now, updatedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlSnapshots).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: partialRun, attemptId: partialAttempt,
+      rootUrl: 'https://example.com/', complete: false, termination: 'max-pages', detailsAvailable: true, createdAt: now, updatedAt: now,
+    }).run()
+
+    const current = await get<SiteCrawlSummaryDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl')
+    const historical = await get<SiteCrawlSummaryDto>(`/api/v1/projects/tech-aeo/technical-aeo/crawl?runId=${partialRun}`)
+    expect(current.body.runId).toBe(ctx.runB)
+    expect(historical.body.runId).toBe(partialRun)
+    expect(historical.body.complete).toBe(false)
+  })
+
+  it('does not turn a legacy-only scorecard into crawl data', async () => {
+    const now = new Date().toISOString()
+    const projectId = crypto.randomUUID()
+    const runId = crypto.randomUUID()
+    ctx.db.insert(projects).values({
+      id: projectId, name: 'legacy-only', displayName: 'Legacy', canonicalDomain: 'legacy.example',
+      country: 'US', language: 'en', providers: [], locations: [], createdAt: now, updatedAt: now,
+    }).run()
+    ctx.db.insert(runs).values({ id: runId, projectId, kind: 'site-audit', status: 'completed', trigger: 'manual', createdAt: now, finishedAt: now }).run()
+    ctx.db.insert(siteAuditSnapshots).values({
+      id: crypto.randomUUID(), projectId, runId, sitemapUrl: 'https://legacy.example/sitemap.xml', auditedAt: now,
+      aggregateScore: 60, aggregateGrade: 'D-', pagesDiscovered: 1, pagesAudited: 1, pagesSkipped: 0, pagesErrored: 0,
+      factorAverages: [], crossCuttingIssues: [], prioritizedFixes: [], createdAt: now,
+    }).run()
+    const { body } = await get<SiteCrawlSummaryDto>('/api/v1/projects/legacy-only/technical-aeo/crawl')
+    expect(body.hasCrawlData).toBe(false)
+    expect(body.legacyAuditAvailable).toBe(true)
+    expect(body.deadLinks).toEqual({ state: 'unavailable' })
+  })
+
+  it('keeps historical crawl resolution project-scoped', async () => {
+    const now = new Date().toISOString()
+    const projectId = crypto.randomUUID()
+    ctx.db.insert(projects).values({
+      id: projectId, name: 'other', displayName: 'Other', canonicalDomain: 'other.example',
+      country: 'US', language: 'en', providers: [], locations: [], createdAt: now, updatedAt: now,
+    }).run()
+    const { status } = await get(`/api/v1/projects/other/technical-aeo/crawl?runId=${ctx.runB}`)
+    expect(status).toBe(404)
+  })
+
+  it('cursor-pages crawl inventory and preserves technical inventory eligibility', async () => {
+    const first = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?limit=1&sort=path&inventoryEligible=true')
+    expect(first.body.total).toBe(2)
+    expect(first.body.pages).toHaveLength(1)
+    expect(first.body.pages[0]!.inventoryEligible).toBe(true)
+    expect(first.body.nextCursor).toEqual(expect.any(String))
+    const second = await get<SiteCrawlPagesResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?limit=1&sort=path&inventoryEligible=true&cursor=${encodeURIComponent(first.body.nextCursor!)}`)
+    expect(second.body.pages).toHaveLength(1)
+    expect(second.body.nextCursor).toBeNull()
+  })
+
+  it('bounds structure, internal links, neighbors, and dead-link output', async () => {
+    const structure = await get<SiteCrawlStructureResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/structure?parentPath=/&limit=1')
+    expect(structure.body.children).toHaveLength(1)
+    expect(structure.body.nextCursor).toEqual(expect.any(String))
+
+    const links = await get<SiteCrawlInternalLinksResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/internal-links?limit=1')
+    expect(links.body.edges).toHaveLength(1)
+    expect(links.body.nextCursor).toEqual(expect.any(String))
+
+    const neighbors = await get<SiteCrawlNeighborsResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/internal-links/neighbors?nodeKey=home&limit=1')
+    expect(neighbors.body.outbound).toHaveLength(1)
+    expect(neighbors.body.outboundTruncated).toBe(true)
+
+    const dead = await get<SiteCrawlDeadLinksResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/dead-links?limit=1')
+    expect(dead.body).toMatchObject({ state: 'complete', total: 1, deadLinks: [{ targetUrl: 'https://example.com/gone' }] })
+  })
+
+  it('surfaces synthetic folder levels when no folder landing page exists', async () => {
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    const now = new Date().toISOString()
+    ctx.db.insert(siteCrawlPages).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'deep-guide',
+      url: 'https://example.com/docs/guides/start', finalUrl: 'https://example.com/docs/guides/start',
+      path: '/docs/guides/start', parentPath: '/docs/guides', discoverySource: 'link', fetchState: 'html', httpStatus: 200,
+      indexabilityState: 'indexable', auditState: 'success', inventoryEligible: true, depth: 3, createdAt: now, updatedAt: now,
+    }).run()
+
+    const root = await get<SiteCrawlStructureResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/structure?parentPath=/&limit=100')
+    expect(root.body.children).toContainEqual(expect.objectContaining({ path: '/docs', url: null, hasPage: false, pageCount: 1 }))
+    const docs = await get<SiteCrawlStructureResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/structure?parentPath=/docs&limit=100')
+    expect(docs.body.children).toContainEqual(expect.objectContaining({ path: '/docs/guides', url: null, hasPage: false, pageCount: 1 }))
+    const guides = await get<SiteCrawlStructureResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/structure?parentPath=/docs/guides&limit=100')
+    expect(guides.body.children).toContainEqual(expect.objectContaining({
+      path: '/docs/guides/start', url: 'https://example.com/docs/guides/start', hasPage: true, pageCount: 1,
+    }))
+  })
+
+  it('treats a trailing-slash folder landing page as the folder, not its child', async () => {
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    const now = new Date().toISOString()
+    ctx.db.insert(siteCrawlPages).values([
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'catalog',
+        url: 'https://example.com/catalog/', finalUrl: 'https://example.com/catalog/',
+        path: '/catalog/', parentPath: '/', discoverySource: 'link', fetchState: 'html', httpStatus: 200,
+        indexabilityState: 'indexable', auditState: 'success', inventoryEligible: true, depth: 1, createdAt: now, updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'catalog-item',
+        url: 'https://example.com/catalog/items/one', finalUrl: 'https://example.com/catalog/items/one',
+        path: '/catalog/items/one', parentPath: '/catalog/items', discoverySource: 'link', fetchState: 'html', httpStatus: 200,
+        indexabilityState: 'indexable', auditState: 'success', inventoryEligible: true, depth: 3, createdAt: now, updatedAt: now,
+      },
+    ]).run()
+
+    const root = await get<SiteCrawlStructureResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/structure?parentPath=/&limit=100')
+    expect(root.body.children).toContainEqual(expect.objectContaining({
+      path: '/catalog', url: 'https://example.com/catalog/', hasPage: true, pageCount: 2,
+    }))
+    const catalog = await get<SiteCrawlStructureResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/structure?parentPath=/catalog&limit=100')
+    expect(catalog.body.children.map((child) => child.path)).toEqual(['/catalog/items'])
+  })
+
+  it('treats percent and underscore path characters literally in structure parents', async () => {
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    const now = new Date().toISOString()
+    ctx.db.insert(siteCrawlPages).values([
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'underscore-real',
+        url: 'https://example.com/literal_underscore/only', path: '/literal_underscore/only', parentPath: '/literal_underscore',
+        discoverySource: 'link', fetchState: 'html', indexabilityState: 'indexable', auditState: 'success', inventoryEligible: true,
+        createdAt: now, updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'underscore-wildcard-sibling',
+        url: 'https://example.com/literalXunderscore/wrong', path: '/literalXunderscore/wrong', parentPath: '/literalXunderscore',
+        discoverySource: 'link', fetchState: 'html', indexabilityState: 'indexable', auditState: 'success', inventoryEligible: true,
+        createdAt: now, updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'percent-real',
+        url: 'https://example.com/literal%25percent/only', path: '/literal%25percent/only', parentPath: '/literal%25percent',
+        discoverySource: 'link', fetchState: 'html', indexabilityState: 'indexable', auditState: 'success', inventoryEligible: true,
+        createdAt: now, updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'percent-wildcard-sibling',
+        url: 'https://example.com/literalZZ25percent/wrong', path: '/literalZZ25percent/wrong', parentPath: '/literalZZ25percent',
+        discoverySource: 'link', fetchState: 'html', indexabilityState: 'indexable', auditState: 'success', inventoryEligible: true,
+        createdAt: now, updatedAt: now,
+      },
+    ]).run()
+
+    const underscore = await get<SiteCrawlStructureResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/structure?parentPath=${encodeURIComponent('/literal_underscore')}`)
+    expect(underscore.body.children.map((child) => child.path)).toEqual(['/literal_underscore/only'])
+
+    const percent = await get<SiteCrawlStructureResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/structure?parentPath=${encodeURIComponent('/literal%25percent')}`)
+    expect(percent.body.children.map((child) => child.path)).toEqual(['/literal%25percent/only'])
+  })
+})
+
 describe('POST /technical-aeo/runs', () => {
   it('creates a queued site-audit run and fires the callback', async () => {
     const res = await ctx.app.inject({ method: 'POST', url: '/api/v1/projects/tech-aeo/technical-aeo/runs', payload: { limit: 50 } })
@@ -229,17 +490,72 @@ describe('POST /technical-aeo/runs', () => {
   })
 
   it('is idempotent — returns the in-flight run instead of starting a second', async () => {
-    const first = await ctx.app.inject({ method: 'POST', url: '/api/v1/projects/tech-aeo/technical-aeo/runs', payload: {} })
+    const first = await ctx.app.inject({ method: 'POST', url: '/api/v1/projects/tech-aeo/technical-aeo/runs', payload: { limit: 50 } })
     const firstId = (first.json() as { runId: string }).runId
-    const second = await ctx.app.inject({ method: 'POST', url: '/api/v1/projects/tech-aeo/technical-aeo/runs', payload: {} })
+    const second = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/tech-aeo/technical-aeo/runs',
+      payload: { maxPages: 50, checkDeadLinks: false },
+    })
     const secondId = (second.json() as { runId: string }).runId
     expect(secondId).toBe(firstId)
     // Only one callback fired (the second was a no-op dedupe).
     expect(ctx.siteAuditRequested).toHaveLength(1)
+    expect(ctx.db.select().from(siteCrawlRunRequests).where(eq(siteCrawlRunRequests.runId, firstId)).get()).toMatchObject({
+      projectId: ctx.projectId,
+      effectiveOptions: {
+        schemaVersion: 1,
+        sitemapUrl: null,
+        maxPages: 50,
+        maxEdges: 250_000,
+        maxDepth: null,
+        checkDeadLinks: false,
+      },
+    })
+  })
+
+  it('refuses to consolidate semantically different crawl requests onto an active run', async () => {
+    const first = await ctx.app.inject({ method: 'POST', url: '/api/v1/projects/tech-aeo/technical-aeo/runs', payload: {} })
+    const firstId = (first.json() as { runId: string }).runId
+    const variants = [
+      { sitemapUrl: 'https://example.com/custom-sitemap.xml' },
+      { limit: 50 },
+      { maxPages: 60 },
+      { maxEdges: 500 },
+      { maxDepth: 4 },
+      { checkDeadLinks: true },
+    ]
+
+    for (const payload of variants) {
+      const response = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/tech-aeo/technical-aeo/runs',
+        payload,
+      })
+      expect(response.statusCode, JSON.stringify(payload)).toBe(409)
+      expect(response.json()).toMatchObject({
+        error: {
+          code: 'OPERATION_IN_PROGRESS',
+          details: { activeRunId: firstId },
+        },
+      })
+    }
+
+    expect(ctx.siteAuditRequested).toHaveLength(1)
+    expect(ctx.db.select().from(runs).where(eq(runs.projectId, ctx.projectId)).all().filter((run) => run.status === 'queued')).toHaveLength(1)
   })
 
   it('rejects an invalid limit over the cap', async () => {
     const res = await ctx.app.inject({ method: 'POST', url: '/api/v1/projects/tech-aeo/technical-aeo/runs', payload: { limit: 99999 } })
     expect(res.statusCode).toBe(400)
+  })
+
+  it('accepts additive crawl budgets and defaults dead-link checks off', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/projects/tech-aeo/technical-aeo/runs',
+      payload: { maxPages: 60, maxEdges: 500, maxDepth: 4 },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(ctx.siteAuditRequested[0]!.opts).toMatchObject({ maxPages: 60, maxEdges: 500, maxDepth: 4, checkDeadLinks: false })
   })
 })

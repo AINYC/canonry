@@ -123,6 +123,8 @@ export interface ApiRoutesOptions {
 
   /** Callback when a run is created (wire up job runner) */
   onRunCreated?: (runId: string, projectId: string, providers?: string[], location?: import('@ainyc/canonry-contracts').LocationContext | null) => void
+  /** Callback after a run is durably cancelled; local hosts use this to abort active work. */
+  onRunCancelled?: RunRoutesOptions['onRunCancelled']
   /** Returns providers currently registered and runnable by the host worker. */
   getRunnableProviderNames?: () => readonly string[]
   /**
@@ -423,6 +425,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
     await api.register(competitorRoutes)
     await api.register(runRoutes, {
       onRunCreated: opts.onRunCreated,
+      onRunCancelled: opts.onRunCancelled,
       validProviderNames: opts.providerAdapters?.map(a => a.name),
       getRunnableProviderNames: opts.getRunnableProviderNames,
       getEffectiveProviderModels: opts.getEffectiveProviderModels,

@@ -477,6 +477,20 @@ const measurementCursorParameter: OpenApiParameter = {
   schema: stringSchema,
 }
 
+const crawlCursorParameter: OpenApiParameter = {
+  name: 'cursor',
+  in: 'query',
+  description: 'Opaque cursor from the previous bounded crawl response.',
+  schema: stringSchema,
+}
+
+const crawlLimitParameter: OpenApiParameter = {
+  name: 'limit',
+  in: 'query',
+  description: 'Page size. Defaults to 100 (50 for structure/neighbors); maximum 200 (100 for structure/neighbors).',
+  schema: { type: 'integer', minimum: 1, maximum: 200 },
+}
+
 const measurementOverviewSortParameter: OpenApiParameter = {
   name: 'sort',
   in: 'query',
@@ -6024,11 +6038,122 @@ const routeCatalog: OpenApiOperation[] = [
     },
   },
   {
+    method: 'get',
+    path: '/api/v1/projects/{name}/technical-aeo/crawl',
+    summary: 'Get persisted Technical AEO crawl metadata',
+    description: 'Returns the latest complete non-probe site-audit crawl, or the selected historical run (which may be partial). `hasCrawlData=false` never synthesizes a graph from legacy scorecard rows; `legacyAuditAvailable` says that the old score/pages/trend data can still be read separately.',
+    tags: ['technical-aeo'],
+    parameters: [
+      nameParameter,
+      { name: 'runId', in: 'query', description: 'Historical site-audit run ID. Omit for the latest crawl.', schema: stringSchema },
+    ],
+    responses: {
+      200: jsonResponse('Persisted crawl summary returned.', 'SiteCrawlSummaryDto'),
+      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/technical-aeo/crawl/pages',
+    summary: 'List persisted Technical AEO crawl pages',
+    description: 'Cursor-paged canonical crawl nodes for the latest or selected crawl. `inventoryEligible` is Canonry technical-inventory eligibility, not a statement about actual Google index state.',
+    tags: ['technical-aeo'],
+    parameters: [
+      nameParameter,
+      { name: 'runId', in: 'query', description: 'Historical site-audit run ID. Omit for the latest crawl.', schema: stringSchema },
+      { name: 'inventoryEligible', in: 'query', description: 'Filter Canonry technical inventory eligibility (`true` or `false`).', schema: booleanSchema },
+      { name: 'fetchState', in: 'query', description: 'Filter by persisted fetch state.', schema: stringSchema },
+      { name: 'indexabilityState', in: 'query', description: 'Filter by crawler-derived indexability state; this is not Google index coverage.', schema: stringSchema },
+      { name: 'auditState', in: 'query', description: 'Filter by audit state.', schema: stringSchema },
+      { name: 'sort', in: 'query', description: 'Sort order. Defaults to `url`.', schema: { type: 'string', enum: ['url', 'path', 'score-asc', 'score-desc'] } },
+      crawlCursorParameter,
+      crawlLimitParameter,
+    ],
+    responses: {
+      200: jsonResponse('Crawl pages returned.', 'SiteCrawlPagesResponseDto'),
+      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/technical-aeo/structure',
+    summary: 'List one level of Technical AEO crawl structure',
+    description: 'Returns immediate children under `parentPath` only. It is deliberately bounded and never emits a full site tree.',
+    tags: ['technical-aeo'],
+    parameters: [
+      nameParameter,
+      { name: 'runId', in: 'query', description: 'Historical site-audit run ID. Omit for the latest crawl.', schema: stringSchema },
+      { name: 'parentPath', in: 'query', description: 'Parent URL path. Defaults to `/`.', schema: stringSchema },
+      crawlCursorParameter,
+      { name: 'limit', in: 'query', description: 'Maximum immediate children. Defaults to 50; maximum 100.', schema: { type: 'integer', minimum: 1, maximum: 100 } },
+    ],
+    responses: {
+      200: jsonResponse('Immediate crawl children returned.', 'SiteCrawlStructureResponseDto'),
+      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/technical-aeo/internal-links',
+    summary: 'List persisted internal crawl links',
+    description: 'Cursor-paged internal edges for the latest or selected crawl. Optional source/target/followability filters remain project-, run-, and attempt-scoped.',
+    tags: ['technical-aeo'],
+    parameters: [
+      nameParameter,
+      { name: 'runId', in: 'query', description: 'Historical site-audit run ID. Omit for the latest crawl.', schema: stringSchema },
+      { name: 'sourceUrl', in: 'query', description: 'Restrict to a source URL.', schema: stringSchema },
+      { name: 'targetUrl', in: 'query', description: 'Restrict to a target URL.', schema: stringSchema },
+      { name: 'followable', in: 'query', description: 'Restrict to followable or nofollow link observations.', schema: booleanSchema },
+      crawlCursorParameter,
+      crawlLimitParameter,
+    ],
+    responses: {
+      200: jsonResponse('Internal crawl links returned.', 'SiteCrawlInternalLinksResponseDto'),
+      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/technical-aeo/internal-links/neighbors',
+    summary: 'Get a bounded internal-link neighborhood',
+    description: 'Returns bounded inbound and outbound internal edges for one `nodeKey` or URL; this is not a full graph traversal.',
+    tags: ['technical-aeo'],
+    parameters: [
+      nameParameter,
+      { name: 'runId', in: 'query', description: 'Historical site-audit run ID. Omit for the latest crawl.', schema: stringSchema },
+      { name: 'nodeKey', in: 'query', description: 'Canonical crawl node key.', schema: stringSchema },
+      { name: 'url', in: 'query', description: 'Canonical crawl URL.', schema: stringSchema },
+      { name: 'limit', in: 'query', description: 'Maximum inbound and outbound edges independently. Defaults to 50; maximum 100.', schema: { type: 'integer', minimum: 1, maximum: 100 } },
+    ],
+    responses: {
+      200: jsonResponse('Bounded internal-link neighborhood returned.', 'SiteCrawlNeighborsResponseDto'),
+      400: errorResponse('A nodeKey or URL is required.'),
+      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/technical-aeo/dead-links',
+    summary: 'List dead-link findings when checks were enabled',
+    description: 'Returns a discriminated `disabled`, `complete`, `partial`, or `unavailable` state. A disabled check is never returned as an empty zero-result list.',
+    tags: ['technical-aeo'],
+    parameters: [
+      nameParameter,
+      { name: 'runId', in: 'query', description: 'Historical site-audit run ID. Omit for the latest crawl.', schema: stringSchema },
+      crawlCursorParameter,
+      crawlLimitParameter,
+    ],
+    responses: {
+      200: jsonResponse('Dead-link status and findings returned.', 'SiteCrawlDeadLinksResponseDto'),
+      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+    },
+  },
+  {
     method: 'post',
     path: '/api/v1/projects/{name}/technical-aeo/runs',
     summary: 'Trigger a Technical AEO site-audit run',
     description:
-      'Queues a `site-audit` run that crawls the project sitemap and audits every reachable page. Idempotent: if a site-audit run is already queued/running for the project, returns that run instead of starting a second.',
+      'Queues a `site-audit` run. The run discovers pages from the root, recursive sitemaps, and internal links. An active run is reused only when its persisted effective sitemap, budgets, depth, and dead-link option match exactly; a semantic mismatch returns 409.',
     tags: ['technical-aeo'],
     parameters: [nameParameter],
     requestBody: {
@@ -6038,8 +6163,12 @@ const routeCatalog: OpenApiOperation[] = [
           schema: {
             type: 'object',
             properties: {
-              sitemapUrl: { ...stringSchema, description: 'Override the sitemap URL. Defaults to https://<canonicalDomain>/sitemap.xml.' },
-              limit: { ...integerSchema, description: 'Cap pages audited (highest sitemap <priority> first). Max 2000.' },
+              sitemapUrl: { ...stringSchema, description: 'Deprecated compatibility alias for the sitemap override.' },
+              limit: { ...integerSchema, minimum: 1, maximum: 2_000, description: 'Deprecated compatibility alias for maxPages. Max 2000.' },
+              maxPages: { ...integerSchema, minimum: 1, maximum: 50_000, description: 'Crawl page budget. Max 50000.' },
+              maxEdges: { ...integerSchema, minimum: 1, maximum: 1_000_000, description: 'Internal-link observation budget. Max 1000000.' },
+              maxDepth: { ...integerSchema, minimum: 0, maximum: 100, description: 'Maximum crawl depth from the root. Max 100.' },
+              checkDeadLinks: { ...booleanSchema, default: false, description: 'Enable dead-link checking. Defaults to false.' },
             },
           },
         },
@@ -6048,6 +6177,7 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('Site-audit run queued (or the in-flight run returned).', 'SiteAuditRunResponseDto'),
       400: errorResponse('Invalid site-audit request.'),
+      409: errorResponse('A crawl with different effective options is already queued or running.'),
       404: errorResponse('Project not found.'),
     },
   },

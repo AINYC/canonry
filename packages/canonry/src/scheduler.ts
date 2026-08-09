@@ -3,9 +3,16 @@ import cron from 'node-cron'
 import { and, eq, inArray, notExists, sql } from 'drizzle-orm'
 import { queueRunIfProjectIdle, nextRunFromCron, ensureCurrentQueryBasketRevision, latestQueryBasketRevision } from '@ainyc/canonry-api-routes'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { schedules, projects, runs } from '@ainyc/canonry-db'
+import { schedules, projects, runs, siteCrawlRunRequests } from '@ainyc/canonry-db'
 import type { ProviderName, LocationContext, SchedulableRunKind } from '@ainyc/canonry-contracts'
-import { SchedulableRunKinds, RunKinds, RunStatuses, RunTriggers } from '@ainyc/canonry-contracts'
+import {
+  SchedulableRunKinds,
+  RunKinds,
+  RunStatuses,
+  RunTriggers,
+  normalizeSiteAuditRunRequest,
+  siteAuditRequestIdentity,
+} from '@ainyc/canonry-contracts'
 import { createLogger } from './logger.js'
 
 const log = createLogger('Scheduler')
@@ -459,7 +466,7 @@ export class Scheduler {
       }
 
       if (kind === SchedulableRunKinds['site-audit']) {
-        // Technical AEO: crawl the project sitemap + audit every page. Like
+        // Technical AEO: crawl root, sitemap, and linked pages. Like
         // gbp-sync, the scheduler creates the run row and hands the host a
         // runId. A full-site crawl can run for minutes, so skip (without
         // orphaning a run row) when one is already queued/running.
@@ -482,14 +489,24 @@ export class Scheduler {
           return
         }
         const runId = crypto.randomUUID()
-        this.db.insert(runs).values({
-          id: runId,
-          projectId,
-          kind: RunKinds['site-audit'],
-          status: RunStatuses.queued,
-          trigger: RunTriggers.scheduled,
-          createdAt: now,
-        }).run()
+        const effectiveRequest = normalizeSiteAuditRunRequest({})
+        this.db.transaction((tx) => {
+          tx.insert(runs).values({
+            id: runId,
+            projectId,
+            kind: RunKinds['site-audit'],
+            status: RunStatuses.queued,
+            trigger: RunTriggers.scheduled,
+            createdAt: now,
+          }).run()
+          tx.insert(siteCrawlRunRequests).values({
+            runId,
+            projectId,
+            identityKey: siteAuditRequestIdentity(effectiveRequest),
+            effectiveOptions: effectiveRequest,
+            createdAt: now,
+          }).run()
+        })
         this.db.update(schedules).set({
           lastRunAt: now,
           nextRunAt,

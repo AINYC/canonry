@@ -1,4 +1,4 @@
-import { runAeoAudit } from '@ainyc/aeo-audit'
+import { runAeoAudit } from '@canonry/aeo-audit'
 import {
   determineAnswerMentioned,
   hostMatchesDomain,

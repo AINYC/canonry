@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Bump the pinned @ainyc/aeo-audit dependency to a target version.
+// Bump the pinned @canonry/aeo-audit dependency to a target version.
 //
-// aeo-audit is the real audit engine (runAeoAudit / runSitemapAudit). canonry
+// aeo-audit is the real audit engine (runAeoAudit / runSiteCrawl). canonry
 // pins it to an EXACT version on purpose: aeo-audit ships breaking majors
 // (e.g. 3.x -> 4.x), and an exact pin forces every bump through CI (typecheck +
 // the 4000+ test suite) instead of a floating `^` silently pulling a release
@@ -34,9 +34,10 @@ import { dirname, join } from 'node:path'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-const DEP = '@ainyc/aeo-audit'
-// Every package.json that pins the dependency. Add new consumers here.
-const DEP_MANIFESTS = ['packages/canonry/package.json', 'apps/worker/package.json']
+const DEP = '@canonry/aeo-audit'
+// The local Canonry runtime uses the full-crawl engine. apps/worker intentionally
+// remains on the legacy @ainyc/aeo-audit contract and is not part of this bump.
+const DEP_MANIFESTS = ['packages/canonry/package.json']
 // Published package + native-plugin manifests that must stay in lockstep (see
 // AGENTS.md → Versioning and scripts/sync-canonry-plugin.mjs).
 const VERSION_MANIFESTS = [
@@ -68,7 +69,7 @@ function replaceField(relPath, key, expectedValue, nextValue) {
 
 function resolveLatestVersion() {
   // `npm view` reads the npm registry; the `latest` dist-tag is the version a
-  // bare `npm install @ainyc/aeo-audit` would resolve to.
+  // bare `npm install @canonry/aeo-audit` would resolve to.
   const out = execFileSync('npm', ['view', DEP, 'dist-tags.latest'], { encoding: 'utf8' })
   const version = out.trim()
   if (!/^\d+\.\d+\.\d+/.test(version)) {

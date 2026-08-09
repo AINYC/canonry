@@ -1434,7 +1434,7 @@ describe('canonry', () => {
     }
   })
 
-  it('ApiClient keeps analytics, visibility stats, and Technical AEO under /api/v1 for an external base URL', async () => {
+  it('ApiClient keeps analytics, visibility stats, and bounded Technical AEO reads under /api/v1 for an external base URL', async () => {
     const fakeFetch = vi.fn(async () =>
       new Response('{}', {
         status: 200,
@@ -1449,6 +1449,12 @@ describe('canonry', () => {
     await client.getAnalyticsGaps('acme')
     await client.getAnalyticsSources('acme')
     await client.getTechnicalAeoScore('acme')
+    await client.getTechnicalAeoCrawl('acme', { runId: 'run-1' })
+    await client.getTechnicalAeoCrawlPages('acme', { inventoryEligible: true, limit: 25, cursor: 'page-2' })
+    await client.getTechnicalAeoStructure('acme', { parentPath: '/guides', limit: 20 })
+    await client.getTechnicalAeoInternalLinks('acme', { followable: false, limit: 20 })
+    await client.getTechnicalAeoInternalLinkNeighbors('acme', { nodeKey: 'node-1', limit: 20 })
+    await client.getTechnicalAeoDeadLinks('acme', { limit: 20 })
 
     expect(fakeFetch.mock.calls.map(([request]) => (request as Request).url)).toEqual([
       'https://example.test/canonry/api/v1/projects/acme/visibility-stats',
@@ -1456,6 +1462,12 @@ describe('canonry', () => {
       'https://example.test/canonry/api/v1/projects/acme/analytics/gaps',
       'https://example.test/canonry/api/v1/projects/acme/analytics/sources',
       'https://example.test/canonry/api/v1/projects/acme/technical-aeo',
+      'https://example.test/canonry/api/v1/projects/acme/technical-aeo/crawl?runId=run-1',
+      'https://example.test/canonry/api/v1/projects/acme/technical-aeo/crawl/pages?inventoryEligible=true&cursor=page-2&limit=25',
+      'https://example.test/canonry/api/v1/projects/acme/technical-aeo/structure?parentPath=%2Fguides&limit=20',
+      'https://example.test/canonry/api/v1/projects/acme/technical-aeo/internal-links?followable=false&limit=20',
+      'https://example.test/canonry/api/v1/projects/acme/technical-aeo/internal-links/neighbors?nodeKey=node-1&limit=20',
+      'https://example.test/canonry/api/v1/projects/acme/technical-aeo/dead-links?limit=20',
     ])
   })
 

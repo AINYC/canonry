@@ -108,15 +108,196 @@ export async function technicalAeoTrend(
   console.log(lines.join('\n'))
 }
 
+/** `canonry technical-aeo crawl <project>` — persisted crawl metadata, not a graph dump. */
+export async function technicalAeoCrawl(
+  project: string,
+  opts: { runId?: string; format?: string },
+): Promise<void> {
+  const crawl = await getClient().getTechnicalAeoCrawl(project, { runId: opts.runId })
+  if (isMachineFormat(opts.format)) {
+    console.log(JSON.stringify(crawl, null, 2))
+    return
+  }
+  if (!crawl.hasCrawlData) {
+    console.log(`No persisted site crawl for "${project}". Run \`canonry technical-aeo run ${project}\` first.`)
+    return
+  }
+  const lines = [
+    `Site crawl: ${crawl.complete ? 'complete' : 'partial'} (${crawl.runStatus ?? 'unknown'})`,
+    `Root: ${crawl.rootUrl ?? '-'}`,
+    `Pages: ${crawl.counts.pagesFetched} fetched · ${crawl.counts.pagesDiscovered} discovered · ${crawl.counts.pagesEligible} eligible`,
+    `Links: ${crawl.counts.edges} internal/external observations · ${crawl.counts.findings} findings`,
+    `Dead links: ${formatDeadLinkState(crawl.deadLinks)}`,
+  ]
+  if (crawl.termination) lines.push(`Stopped: ${crawl.termination}`)
+  console.log(lines.join('\n'))
+}
+
+/** `canonry technical-aeo crawl-pages <project>` — cursor-paged crawl nodes. */
+export async function technicalAeoCrawlPages(
+  project: string,
+  opts: {
+    runId?: string
+    inventoryEligible?: boolean
+    fetchState?: string
+    indexabilityState?: string
+    auditState?: string
+    sort?: 'url' | 'path' | 'score-asc' | 'score-desc'
+    cursor?: string
+    limit?: number
+    format?: string
+  },
+): Promise<void> {
+  const res = await getClient().getTechnicalAeoCrawlPages(project, opts)
+  if (opts.format === 'jsonl') {
+    emitJsonl(res.pages.map((page) => ({ project, runId: res.runId, ...page })))
+    return
+  }
+  if (opts.format === 'json') {
+    console.log(JSON.stringify(res, null, 2))
+    return
+  }
+  if (res.pages.length === 0) {
+    console.log(`No persisted crawl pages for "${project}".`)
+    return
+  }
+  const lines = [`${res.pages.length} of ${res.total} crawl page(s)${res.nextCursor ? ' (more available)' : ''}:`, '']
+  lines.push(`${'Depth'.padStart(5)}  ${'Score'.padStart(5)}  ${'Indexability'.padEnd(15)}  URL`)
+  for (const page of res.pages) {
+    lines.push(`${String(page.depth ?? '-').padStart(5)}  ${String(page.auditScore ?? '-').padStart(5)}  ${page.indexabilityState.slice(0, 15).padEnd(15)}  ${page.url}`)
+  }
+  if (res.nextCursor) lines.push(`\nNext cursor: ${res.nextCursor}`)
+  console.log(lines.join('\n'))
+}
+
+/** `canonry technical-aeo structure <project>` — exactly one site-hierarchy level. */
+export async function technicalAeoStructure(
+  project: string,
+  opts: { runId?: string; parentPath?: string; cursor?: string; limit?: number; format?: string },
+): Promise<void> {
+  const res = await getClient().getTechnicalAeoStructure(project, opts)
+  if (opts.format === 'jsonl') {
+    emitJsonl(res.children.map((child) => ({ project, runId: res.runId, parentPath: res.parentPath, ...child })))
+    return
+  }
+  if (opts.format === 'json') {
+    console.log(JSON.stringify(res, null, 2))
+    return
+  }
+  if (res.children.length === 0) {
+    console.log(`No crawl structure below ${res.parentPath} for "${project}".`)
+    return
+  }
+  const lines = [`${res.children.length} child path(s) below ${res.parentPath}${res.nextCursor ? ' (more available)' : ''}:`, '']
+  for (const child of res.children) {
+    lines.push(`${String(child.pageCount).padStart(5)} pages  ${String(child.inventoryEligibleCount).padStart(5)} eligible  ${child.path}`)
+  }
+  if (res.nextCursor) lines.push(`\nNext cursor: ${res.nextCursor}`)
+  console.log(lines.join('\n'))
+}
+
+/** `canonry technical-aeo links <project>` — bounded internal-link edge list. */
+export async function technicalAeoInternalLinks(
+  project: string,
+  opts: { runId?: string; sourceUrl?: string; targetUrl?: string; followable?: boolean; cursor?: string; limit?: number; format?: string },
+): Promise<void> {
+  const res = await getClient().getTechnicalAeoInternalLinks(project, opts)
+  if (opts.format === 'jsonl') {
+    emitJsonl(res.edges.map((edge) => ({ project, runId: res.runId, ...edge })))
+    return
+  }
+  if (opts.format === 'json') {
+    console.log(JSON.stringify(res, null, 2))
+    return
+  }
+  if (res.edges.length === 0) {
+    console.log(`No persisted internal links for "${project}".`)
+    return
+  }
+  const lines = [`${res.edges.length} of ${res.total} internal link(s)${res.nextCursor ? ' (more available)' : ''}:`, '']
+  for (const edge of res.edges) {
+    lines.push(`${edge.followable ? 'follow' : 'nofollow'} ×${edge.occurrences}  ${edge.sourceUrl} → ${edge.targetUrl}`)
+  }
+  if (res.nextCursor) lines.push(`\nNext cursor: ${res.nextCursor}`)
+  console.log(lines.join('\n'))
+}
+
+/** `canonry technical-aeo links neighbors <project>` — bounded inbound/outbound edges for one page. */
+export async function technicalAeoLinkNeighbors(
+  project: string,
+  opts: { runId?: string; nodeKey?: string; url?: string; limit?: number; format?: string },
+): Promise<void> {
+  const res = await getClient().getTechnicalAeoInternalLinkNeighbors(project, opts)
+  if (isMachineFormat(opts.format)) {
+    console.log(JSON.stringify(res, null, 2))
+    return
+  }
+  const title = res.url ?? res.nodeKey ?? 'page'
+  const lines = [`Internal links for ${title}:`, '', 'Inbound:']
+  for (const edge of res.inbound) lines.push(`  ${edge.sourceUrl} → ${edge.targetUrl}`)
+  if (res.inbound.length === 0) lines.push('  (none)')
+  if (res.inboundTruncated) lines.push('  (truncated)')
+  lines.push('', 'Outbound:')
+  for (const edge of res.outbound) lines.push(`  ${edge.sourceUrl} → ${edge.targetUrl}`)
+  if (res.outbound.length === 0) lines.push('  (none)')
+  if (res.outboundTruncated) lines.push('  (truncated)')
+  console.log(lines.join('\n'))
+}
+
+/** `canonry technical-aeo dead-links <project>` — opt-in check state and bounded findings. */
+export async function technicalAeoDeadLinks(
+  project: string,
+  opts: { runId?: string; cursor?: string; limit?: number; format?: string },
+): Promise<void> {
+  const res = await getClient().getTechnicalAeoDeadLinks(project, opts)
+  if (opts.format === 'jsonl') {
+    if ('deadLinks' in res) {
+      const { deadLinks, ...header } = res
+      emitJsonl([{ kind: 'technical-aeo-dead-links-header', ...header }])
+      emitJsonl(deadLinks.map((finding) => ({ project, runId: res.runId, state: res.state, ...finding })))
+    } else {
+      emitJsonl([{ kind: 'technical-aeo-dead-links-header', ...res }])
+    }
+    return
+  }
+  if (isMachineFormat(opts.format)) {
+    console.log(JSON.stringify(res, null, 2))
+    return
+  }
+  if (res.state === 'disabled') {
+    console.log(`Dead-link checks were disabled for crawl ${res.runId}. Re-run with \`--check-dead-links\` to enable them.`)
+    return
+  }
+  if (res.state === 'unavailable') {
+    console.log(`No dead-link check is available for "${project}".`)
+    return
+  }
+  const lines = [`Dead links: ${res.found} found from ${res.checked} checked (${res.state})`]
+  for (const finding of res.deadLinks) lines.push(`${finding.sourceUrl ?? '-'} → ${finding.targetUrl ?? '-'}`)
+  if (res.nextCursor) lines.push(`Next cursor: ${res.nextCursor}`)
+  console.log(lines.join('\n'))
+}
+
+function formatDeadLinkState(value: { state: string; checked?: number; found?: number }): string {
+  if (value.state === 'disabled') return 'disabled (opt in with --check-dead-links)'
+  if (value.state === 'unavailable') return 'unavailable'
+  return `${value.found ?? 0} found / ${value.checked ?? 0} checked (${value.state})`
+}
+
 /** `canonry technical-aeo run <project>` — trigger a site-audit run. Mutation → json (not jsonl). */
 export async function technicalAeoRun(
   project: string,
-  opts: { sitemapUrl?: string; limit?: number; wait?: boolean; format?: string },
+  opts: { sitemapUrl?: string; limit?: number; maxPages?: number; maxEdges?: number; maxDepth?: number; checkDeadLinks?: boolean; wait?: boolean; format?: string },
 ): Promise<void> {
   const client = getClient()
   const { runId, status } = await client.triggerSiteAudit(project, {
     sitemapUrl: opts.sitemapUrl,
     limit: opts.limit,
+    maxPages: opts.maxPages,
+    maxEdges: opts.maxEdges,
+    maxDepth: opts.maxDepth,
+    // Explicit opt-in: absence and false are both intentionally disabled.
+    checkDeadLinks: opts.checkDeadLinks === true,
   })
 
   if (!opts.wait) {

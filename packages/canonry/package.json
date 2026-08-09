@@ -1,6 +1,6 @@
 {
   "name": "@canonry/canonry",
-  "version": "4.154.1",
+  "version": "4.155.0",
   "type": "module",
   "description": "Agent-first open-source AEO operating platform - track how answer engines cite your domain",
   "license": "FSL-1.1-ALv2",
@@ -47,7 +47,7 @@
     "lint": "eslint src/ test/"
   },
   "dependencies": {
-    "@ainyc/aeo-audit": "4.0.1",
+    "@canonry/aeo-audit": "4.6.0",
     "@anthropic-ai/sdk": "^0.91.1",
     "@fastify/rate-limit": "^11.2.0",
     "@fastify/static": "^9.1.1",

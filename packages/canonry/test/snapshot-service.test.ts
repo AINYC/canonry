@@ -21,7 +21,7 @@ vi.mock('../src/site-fetch.js', () => ({
   fetchSiteText: fetchSiteTextMock,
 }))
 
-vi.mock('@ainyc/aeo-audit', () => ({
+vi.mock('@canonry/aeo-audit', () => ({
   runAeoAudit: runAeoAuditMock,
 }))
 

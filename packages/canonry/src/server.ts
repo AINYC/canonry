@@ -796,17 +796,35 @@ export async function createServer(opts: {
 
   // Shared Technical-AEO site-audit worker. Used by BOTH the manual
   // `POST /technical-aeo/runs` route and the scheduled `site-audit` kind. The
-  // run row is created by the caller; this runs the sitemap crawl + audit and
+  // run row is created by the caller. This runs the full crawl and audit, then
   // hands off to the post-run coordinator on completion.
+  //
+  // This map deliberately lives only in `canonry serve`: it is the bridge from
+  // a durable cancel mutation to the matching in-process fetch controller.
+  const siteAuditAbortControllers = new Map<string, AbortController>();
   const runSiteAudit = (
     runId: string,
     projectId: string,
-    auditOpts?: { sitemapUrl?: string; limit?: number },
+    auditOpts?: {
+      sitemapUrl?: string;
+      limit?: number;
+      maxPages?: number;
+      maxEdges?: number;
+      maxDepth?: number;
+      checkDeadLinks?: boolean;
+    },
   ): void => {
-    executeSiteAudit(opts.db, runId, projectId, auditOpts ?? {})
+    const controller = new AbortController();
+    siteAuditAbortControllers.set(runId, controller);
+    executeSiteAudit(opts.db, runId, projectId, { ...(auditOpts ?? {}), signal: controller.signal })
       .then(() => runCoordinator.onRunCompleted(runId, projectId))
       .catch((err: unknown) => {
         app.log.error({ runId, err }, "Site audit failed");
+      })
+      .finally(() => {
+        if (siteAuditAbortControllers.get(runId) === controller) {
+          siteAuditAbortControllers.delete(runId);
+        }
       });
   };
 
@@ -2272,7 +2290,14 @@ export async function createServer(opts: {
     onSiteAuditRequested: (
       runId: string,
       projectId: string,
-      auditOpts?: { sitemapUrl?: string; limit?: number },
+      auditOpts?: {
+        sitemapUrl?: string;
+        limit?: number;
+        maxPages?: number;
+        maxEdges?: number;
+        maxDepth?: number;
+        checkDeadLinks?: boolean;
+      },
     ) => {
       // The route already created the site-audit run row; run the shared worker.
       runSiteAudit(runId, projectId, auditOpts);
@@ -2402,6 +2427,12 @@ export async function createServer(opts: {
         .catch((err: unknown) => {
           app.log.error({ runId, err }, "Job runner failed");
         });
+    },
+    onRunCancelled: (runId: string) => {
+      const controller = siteAuditAbortControllers.get(runId);
+      if (controller && !controller.signal.aborted) {
+        controller.abort(new Error("Cancelled by user"));
+      }
     },
     getRunnableProviderNames: () =>
       registry.getAll().map((provider) => provider.adapter.name),
