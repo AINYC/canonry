@@ -22,7 +22,7 @@ instance, never to a canonry-hosted SaaS relay.
 
 | File | Role |
 |------|------|
-| `src/script.ts` | `generateWorkerScript` — produces an ES-module Worker with env/secret bindings and a transport-neutral capture path. `generateWranglerToml` emits non-secret vars plus an exact zone route when `zoneId` is known. |
+| `src/script.ts` | `generateWorkerScript` — produces an ES-module Worker with env/secret bindings and a transport-neutral capture path. `generateWranglerToml` emits non-secret vars and the account id, but never attaches a route. Operators attach the exact route manually with Fail open. |
 | `src/canonical-json.ts` | Deterministic JSON encoding embedded into the generated Worker and reused by receiver signature verification. |
 | `src/normalize.ts` | `normalizeCloudflareEdgeEvent` — one edge event → `NormalizedTrafficRequest`; the old Worker-named export is a compatibility alias. |
 | `src/verify.ts` | `verifyRequestSignature` — timestamp window + HMAC-SHA256 check. Constant-time once inputs are well-formed. |
@@ -43,8 +43,8 @@ instance, never to a canonry-hosted SaaS relay.
   the generated script and stored on the source row as
   `configJson.expectedBotListVersion`. The Worker reports its
   `workerVersion` on every ingest call; the receiver records it on
-  `traffic_sources.lastWorkerVersion` so the `cloudflare.worker.version-stale`
-  doctor check can flag drift.
+  `traffic_sources.lastWorkerVersion`. The `traffic.source.worker-version`
+  doctor check compares it with `configJson.workerVersion`.
 - **HMAC-SHA256 with timestamp binding.** The Worker signs
   `timestamp + "." + canonicalJson(batch)` with the per-source HMAC secret and sends
   `X-Canonry-Timestamp` + `X-Canonry-Signature`. The receiver verifies a

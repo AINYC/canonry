@@ -405,6 +405,22 @@ describe('cloudflareWorkerEventSchema', () => {
       cf: null,
     })).toThrow()
   })
+
+  it('rejects an invalid observation timestamp', () => {
+    expect(() => cloudflareWorkerEventSchema.parse({
+      eventId: 'ray-id',
+      observedAt: 'not-a-timestamp',
+      method: null,
+      host: null,
+      path: '/',
+      queryString: null,
+      status: null,
+      userAgent: null,
+      remoteIp: null,
+      referer: null,
+      cf: null,
+    })).toThrow()
+  })
 })
 
 describe('cloudflareWorkerIngestRequestSchema', () => {

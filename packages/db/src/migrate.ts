@@ -3190,7 +3190,7 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
         PRIMARY KEY (source_id, event_id)
       )`,
       `CREATE INDEX IF NOT EXISTS idx_traffic_event_receipts_expires
-        ON traffic_event_receipts(expires_at)`,
+        ON traffic_event_receipts(source_id, expires_at)`,
     ],
   },
 ]

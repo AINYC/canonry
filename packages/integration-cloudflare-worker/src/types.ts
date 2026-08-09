@@ -1,8 +1,7 @@
 /**
  * Bot list manifest baked into the generated Worker script. Bumping
- * `version` means the deployed Worker is out of date — the
- * `cloudflare.worker.version-stale` doctor check reads this field on the
- * source row and compares it against the current package constant.
+ * `version` means the deployed Worker is out of date. Also increment the
+ * generated Worker version so `traffic.source.worker-version` detects drift.
  *
  * Edge-side classification is intentionally broad — the server-side
  * classifier in `packages/integration-traffic` does the real
@@ -34,6 +33,12 @@ export const CLOUDFLARE_DIRECT_PUSH_SECRET_BINDINGS = [
   CLOUDFLARE_WORKER_BINDINGS.hmacSecret,
 ] as const
 
+/** Markers let the CLI update Canonry-owned artifacts without replacing operator files. */
+export const CLOUDFLARE_WORKER_GENERATED_MARKER =
+  '// canonry traffic Worker — generated; do not edit by hand'
+export const CLOUDFLARE_WRANGLER_GENERATED_MARKER =
+  '# canonry traffic Worker configuration — generated; do not edit by hand'
+
 export interface GenerateWorkerScriptOptions {
   /** Queue pull becomes a second discriminated generator branch later. */
   deliveryMode: 'direct-push'
@@ -49,5 +54,6 @@ export interface GenerateWranglerTomlOptions {
   hostname: string
   ingestUrl: string
   workerVersion: string
+  accountId?: string | null
   zoneId?: string | null
 }

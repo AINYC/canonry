@@ -5,7 +5,9 @@ import {
 import { canonicalizeCloudflareJson } from './canonical-json.js'
 import {
   CLOUDFLARE_DIRECT_PUSH_SECRET_BINDINGS,
+  CLOUDFLARE_WORKER_GENERATED_MARKER,
   CLOUDFLARE_WORKER_BINDINGS,
+  CLOUDFLARE_WRANGLER_GENERATED_MARKER,
   type CloudflareWorkerBotList,
   type GenerateWorkerScriptOptions,
   type GenerateWranglerTomlOptions,
@@ -15,8 +17,8 @@ import {
  * Generic edge-side filter list. Intentionally broad — the strict
  * bot/referer classification happens server-side in
  * `packages/integration-traffic`. Bump `version` whenever this set
- * structurally changes so the `cloudflare.worker.version-stale`
- * doctor check can flag stale deployments.
+ * structurally changes. Also increment the generated Worker version so
+ * `traffic.source.worker-version` detects stale deployments.
  */
 export const DEFAULT_BOT_LIST: CloudflareWorkerBotList = {
   version: '2026-08-09',
@@ -63,7 +65,7 @@ export function generateWorkerScript(opts: GenerateWorkerScriptOptions): string 
   const botScoreMax = opts.botScoreMaxForward ?? DEFAULT_BOT_SCORE_MAX_FORWARD
   const canonicalJsonFunction = canonicalizeCloudflareJson.toString()
 
-  return `// canonry traffic Worker — generated; do not edit by hand
+  return `${CLOUDFLARE_WORKER_GENERATED_MARKER}
 // worker version: ${opts.workerVersion}
 // bot-list version: ${opts.botList.version}
 // delivery mode: ${opts.deliveryMode}
@@ -185,6 +187,14 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+async function cancelUnusedResponseBody(response) {
+  try {
+    if (response.body) await response.body.cancel()
+  } catch (_) {
+    // The ingest response body is unused. Cancellation failure is non-fatal.
+  }
+}
+
 async function withRetry(operation) {
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     let response
@@ -196,9 +206,12 @@ async function withRetry(operation) {
       continue
     }
 
-    if (response.ok) return response
-    if (!isRetryableStatus(response.status) || attempt === RETRY_DELAYS_MS.length) {
-      throw new Error('Canonry ingest returned HTTP ' + response.status)
+    const status = response.status
+    const ok = response.ok
+    await cancelUnusedResponseBody(response)
+    if (ok) return
+    if (!isRetryableStatus(status) || attempt === RETRY_DELAYS_MS.length) {
+      throw new Error('Canonry ingest returned HTTP ' + status)
     }
     await sleep(RETRY_DELAYS_MS[attempt])
   }
@@ -288,22 +301,50 @@ async function deliverSelectedRequest(env, request, status, observedAt) {
   }
 }
 
+function shouldForwardSafely(env, request) {
+  try {
+    return shouldForward(request)
+  } catch (err) {
+    console.warn('Canonry traffic filter failed', {
+      sourceId: typeof env.${CLOUDFLARE_WORKER_BINDINGS.sourceId} === 'string'
+        ? env.${CLOUDFLARE_WORKER_BINDINGS.sourceId}
+        : null,
+      message: err instanceof Error ? err.message : String(err),
+    })
+    return false
+  }
+}
+
+function scheduleSelectedRequest(ctx, env, request, status, observedAt) {
+  try {
+    ctx.waitUntil(deliverSelectedRequest(env, request, status, observedAt))
+  } catch (err) {
+    console.warn('Canonry traffic delivery scheduling failed', {
+      sourceId: typeof env.${CLOUDFLARE_WORKER_BINDINGS.sourceId} === 'string'
+        ? env.${CLOUDFLARE_WORKER_BINDINGS.sourceId}
+        : null,
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const observedAt = new Date().toISOString()
-    const shouldLog = shouldForward(request)
+    const shouldLog = shouldForwardSafely(env, request)
+    let response
     try {
-      const response = await fetch(request)
-      if (shouldLog) {
-        ctx.waitUntil(deliverSelectedRequest(env, request, response.status, observedAt))
-      }
-      return response
+      response = await fetch(request)
     } catch (err) {
       if (shouldLog) {
-        ctx.waitUntil(deliverSelectedRequest(env, request, null, observedAt))
+        scheduleSelectedRequest(ctx, env, request, null, observedAt)
       }
       throw err
     }
+    if (shouldLog) {
+      scheduleSelectedRequest(ctx, env, request, response.status, observedAt)
+    }
+    return response
   },
 }
 `
@@ -316,18 +357,16 @@ export default {
  */
 export function generateWranglerToml(opts: GenerateWranglerTomlOptions): string {
   const hostname = opts.hostname.trim().toLowerCase().replace(/\.$/, '')
-  const routeConfig = opts.zoneId
-    ? `[[routes]]
-pattern = ${jsString(`${hostname}/*`)}
-zone_id = ${jsString(opts.zoneId)}
-`
-    : `# No route is declared because connect did not receive a zoneId.
-# After deploy, attach this exact route in the Cloudflare dashboard:
-#   ${hostname}/*
-`
+  const accountConfig = opts.accountId
+    ? `account_id = ${jsString(opts.accountId)}\n`
+    : ''
+  const zoneHint = opts.zoneId
+    ? `# Target zone id: ${jsString(opts.zoneId)}\n`
+    : '# Target zone id was not provided. Select the canonical site zone.\n'
 
-  return `name = "canonry-traffic-${opts.sourceId}"
-main = "worker.js"
+  return `${CLOUDFLARE_WRANGLER_GENERATED_MARKER}
+name = "canonry-traffic-${opts.sourceId}"
+${accountConfig}main = "worker.js"
 compatibility_date = "${WORKER_COMPATIBILITY_DATE}"
 workers_dev = false
 
@@ -346,6 +385,10 @@ ${CLOUDFLARE_DIRECT_PUSH_SECRET_BINDINGS.map(name => `#   wrangler secret put ${
 
 # Deploy this Worker via:
 #   wrangler deploy
-${routeConfig}
+# Canonry intentionally does not declare a route in this file.
+# After deploy, attach this exact route in the Cloudflare dashboard:
+#   ${hostname}/*
+${zoneHint}# Set the route Request limit failure mode to Fail open before activation.
+# Wrangler cannot configure this route toggle.
 `
 }

@@ -87,17 +87,24 @@ async function runGeneratedWorker(
 ): Promise<{
   ingestCalls: number
   ingestInit: RequestInit | undefined
+  cancelledBodies: number
   warn: ReturnType<typeof vi.fn>
 }> {
   const waitUntilTasks: Promise<unknown>[] = []
   const warn = vi.fn()
+  const cancelBody = vi.fn(async () => {})
   let ingestCalls = 0
   let ingestInit: RequestInit | undefined
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (typeof input !== 'string') return new Response('origin', { status: 200 })
     ingestCalls += 1
     ingestInit = init
-    return new Response('', { status: ingestStatuses.shift() ?? 200 })
+    const status = ingestStatuses.shift() ?? 200
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      body: { cancel: cancelBody },
+    } as unknown as Response
   })
   const immediateTimeout = (callback: () => void): number => {
     callback()
@@ -125,7 +132,7 @@ async function runGeneratedWorker(
   )
   expect(await response.text()).toBe('origin')
   await Promise.all(waitUntilTasks)
-  return { ingestCalls, ingestInit, warn }
+  return { ingestCalls, ingestInit, cancelledBodies: cancelBody.mock.calls.length, warn }
 }
 
 describe('generateWorkerScript', () => {
@@ -205,6 +212,109 @@ describe('generateWorkerScript', () => {
     expect(script).toMatch(/ctx\.waitUntil/)
   })
 
+  it('returns the origin response when edge filtering throws', async () => {
+    const warn = vi.fn()
+    const fetchMock = vi.fn(async () => new Response('origin', { status: 200 }))
+    const scope: { generatedWorker?: GeneratedWorker } = {}
+    const evaluate = new Function(
+      'globalThis',
+      'fetch',
+      'crypto',
+      'console',
+      'setTimeout',
+      executableModuleSource(generateWorkerScript(BASE_OPTS)),
+    )
+    evaluate(scope, fetchMock, globalThis.crypto, { warn }, setTimeout)
+    const brokenRequest = {
+      url: 'https://example.com/',
+      headers: { get: () => { throw new Error('broken header accessor') } },
+      cf: null,
+    } as unknown as Request
+
+    const response = await scope.generatedWorker!.fetch(
+      brokenRequest,
+      WORKER_ENV,
+      { waitUntil: () => { throw new Error('must not schedule') } },
+    )
+
+    expect(await response.text()).toBe('origin')
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(warn).toHaveBeenCalledWith(
+      'Canonry traffic filter failed',
+      expect.objectContaining({ sourceId: WORKER_ENV.CANONRY_SOURCE_ID }),
+    )
+  })
+
+  it('returns the origin response when waitUntil scheduling throws', async () => {
+    const warn = vi.fn()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (typeof input !== 'string') return new Response('origin', { status: 200 })
+      return new Response('', { status: 200 })
+    })
+    const scope: { generatedWorker?: GeneratedWorker } = {}
+    const evaluate = new Function(
+      'globalThis',
+      'fetch',
+      'crypto',
+      'console',
+      'setTimeout',
+      executableModuleSource(generateWorkerScript(BASE_OPTS)),
+    )
+    evaluate(scope, fetchMock, globalThis.crypto, { warn }, setTimeout)
+    const generatedRequest = new Request('https://example.com/?utm_source=chatgpt', {
+      headers: { 'cf-ray': 'evt_wait_until_failure', 'user-agent': 'Mozilla/5.0' },
+    })
+    Object.defineProperty(generatedRequest, 'cf', { value: null })
+
+    const response = await scope.generatedWorker!.fetch(
+      generatedRequest,
+      WORKER_ENV,
+      { waitUntil: () => { throw new Error('waitUntil unavailable') } },
+    )
+
+    expect(await response.text()).toBe('origin')
+    expect(warn).toHaveBeenCalledWith(
+      'Canonry traffic delivery scheduling failed',
+      expect.objectContaining({ sourceId: WORKER_ENV.CANONRY_SOURCE_ID }),
+    )
+  })
+
+  it.each([404, 500])('preserves an origin %s response byte for byte', async (status) => {
+    const waitUntilTasks: Promise<unknown>[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (typeof input !== 'string') {
+        return new Response('origin response body', {
+          status,
+          headers: { 'x-origin-proof': 'unchanged' },
+        })
+      }
+      return new Response('', { status: 200 })
+    })
+    const scope: { generatedWorker?: GeneratedWorker } = {}
+    const evaluate = new Function(
+      'globalThis',
+      'fetch',
+      'crypto',
+      'console',
+      'setTimeout',
+      executableModuleSource(generateWorkerScript(BASE_OPTS)),
+    )
+    evaluate(scope, fetchMock, globalThis.crypto, { warn: vi.fn() }, setTimeout)
+    const generatedRequest = new Request('https://example.com/?utm_source=chatgpt')
+    Object.defineProperty(generatedRequest, 'cf', { value: null })
+
+    const response = await scope.generatedWorker!.fetch(
+      generatedRequest,
+      WORKER_ENV,
+      { waitUntil: task => { waitUntilTasks.push(task) } },
+    )
+
+    expect(response.status).toBe(status)
+    expect(response.headers.get('x-origin-proof')).toBe('unchanged')
+    expect(await response.text()).toBe('origin response body')
+    await Promise.all(waitUntilTasks)
+  })
+
   it('keeps filtering/event capture separate from the direct-push delivery adapter', () => {
     const script = generateWorkerScript(BASE_OPTS)
     expect(script).toContain('function buildEdgeEvent(')
@@ -248,6 +358,7 @@ describe('generateWorkerScript', () => {
   it('retries transient ingest failures without blocking the origin response', async () => {
     const result = await runGeneratedWorker([503, 200])
     expect(result.ingestCalls).toBe(2)
+    expect(result.cancelledBodies).toBe(2)
     expect(result.warn).not.toHaveBeenCalled()
   })
 
@@ -306,6 +417,19 @@ describe('generateWranglerToml', () => {
     expect(toml).toContain('CANONRY_WORKER_VERSION = "1.0.0"')
   })
 
+  it('emits the Cloudflare account id as top-level Wrangler configuration', () => {
+    const toml = generateWranglerToml({
+      ...BASE_WRANGLER_OPTS,
+      accountId: 'account_123',
+    })
+    expect(toml).toMatch(/^account_id = "account_123"$/m)
+    expect(toml.indexOf('account_id')).toBeLessThan(toml.indexOf('[vars]'))
+  })
+
+  it('omits account_id when connect did not receive one', () => {
+    expect(generateWranglerToml(BASE_WRANGLER_OPTS)).not.toMatch(/^account_id\s*=/m)
+  })
+
   it('names required secret bindings without containing their values', () => {
     const toml = generateWranglerToml(BASE_WRANGLER_OPTS)
     expect(toml).toContain('[secrets]')
@@ -322,23 +446,28 @@ describe('generateWranglerToml', () => {
     expect(toml).toMatch(/compatibility_date\s*=\s*"\d{4}-\d{2}-\d{2}"/)
   })
 
-  it('declares an exact zone route when zoneId is available', () => {
+  it('leaves route attachment manual and gives the exact safe Dashboard steps', () => {
     const toml = generateWranglerToml({
       ...BASE_WRANGLER_OPTS,
       hostname: 'www.example.com',
       zoneId: 'zone_123',
     })
     expect(toml).toContain('workers_dev = false')
-    expect(toml).toContain('[[routes]]')
-    expect(toml).toContain('pattern = "www.example.com/*"')
-    expect(toml).toContain('zone_id = "zone_123"')
+    expect(toml).not.toContain('[[routes]]')
+    expect(toml).not.toMatch(/^pattern\s*=/m)
+    expect(toml).not.toMatch(/^zone_id\s*=/m)
+    expect(toml).toContain('www.example.com/*')
+    expect(toml).toContain('Target zone id: "zone_123"')
+    expect(toml).toContain('Set the route Request limit failure mode to Fail open')
+    expect(toml).toContain('Wrangler cannot configure this route toggle')
   })
 
-  it('fails closed to dashboard-managed routing when zoneId is omitted', () => {
+  it('keeps routing dashboard-managed when zoneId is omitted', () => {
     const toml = generateWranglerToml(BASE_WRANGLER_OPTS)
     expect(toml).toContain('workers_dev = false')
     expect(toml).not.toContain('[[routes]]')
     expect(toml).toContain('example.com/*')
+    expect(toml).toContain('Target zone id was not provided')
     expect(toml).not.toContain('wrangler route add')
   })
 })

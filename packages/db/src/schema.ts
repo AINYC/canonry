@@ -1692,7 +1692,7 @@ export const trafficEventReceipts = sqliteTable('traffic_event_receipts', {
   expiresAt: text('expires_at').notNull(),
 }, (table) => [
   primaryKey({ columns: [table.sourceId, table.eventId] }),
-  index('idx_traffic_event_receipts_expires').on(table.expiresAt),
+  index('idx_traffic_event_receipts_expires').on(table.sourceId, table.expiresAt),
 ])
 
 // Hourly rollup of server-observed crawler hits. Composite PK so the same

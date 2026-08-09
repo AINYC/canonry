@@ -227,9 +227,9 @@ export const cloudflareTrafficSourceConfigSchema = z.object({
   workerVersion: z.string().min(1),
   /** Identifier of the bot/referer keyword set baked into the deployed Worker. */
   expectedBotListVersion: z.string().min(1),
-  /** Operator-supplied Cloudflare zone id for the deployed Worker. Optional in Phase 1. */
+  /** Target Cloudflare zone for the operator-managed Worker route. */
   zoneId: z.string().nullable(),
-  /** Operator-supplied Cloudflare account id. Optional in Phase 1; required for Phase 2 auto-deploy. */
+  /** Cloudflare account id used to target the correct account during Wrangler deploy. */
   accountId: z.string().nullable(),
 })
 export type CloudflareTrafficSourceConfig = z.infer<typeof cloudflareTrafficSourceConfigSchema>
@@ -242,9 +242,9 @@ export type CloudflareWorkerSourceConfig = CloudflareTrafficSourceConfig
 export const trafficConnectCloudflareRequestSchema = z.object({
   deliveryMode: z.literal(CloudflareTrafficDeliveryModes['direct-push']).default('direct-push'),
   displayName: z.string().min(1).optional(),
-  /** Cloudflare zone id of the deployed Worker (informational; not validated against Cloudflare). */
+  /** Target Cloudflare zone. Canonry does not validate it against Cloudflare. */
   zoneId: z.string().min(1).optional(),
-  /** Cloudflare account id (informational; required when Phase 2 auto-deploy lands). */
+  /** Cloudflare account id. Set it when Wrangler can access more than one account. */
   accountId: z.string().min(1).optional(),
 })
 export type TrafficConnectCloudflareRequest = z.infer<typeof trafficConnectCloudflareRequestSchema>
@@ -274,7 +274,7 @@ export type TrafficConnectCloudflareResponse = z.infer<typeof trafficConnectClou
 export const cloudflareEdgeEventSchema = z.object({
   /** Cloudflare `cf-ray` request id — globally unique per request. */
   eventId: z.string().min(1),
-  observedAt: z.string().min(1),
+  observedAt: z.string().datetime(),
   method: z.string().nullable(),
   host: z.string().nullable(),
   path: z.string().min(1),

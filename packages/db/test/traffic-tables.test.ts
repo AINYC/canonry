@@ -559,6 +559,9 @@ test('traffic_event_receipts durably dedupes per source and cascades with it', (
   expect(db.all(sql.raw(
     "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_traffic_event_receipts_expires'",
   ))).toEqual([{ name: 'idx_traffic_event_receipts_expires' }])
+  expect(db.all(sql.raw(
+    "SELECT name FROM pragma_index_info('idx_traffic_event_receipts_expires') ORDER BY seqno",
+  ))).toEqual([{ name: 'source_id' }, { name: 'expires_at' }])
 
   db.delete(trafficSources).where(eq(trafficSources.id, 'src_receipts')).run()
   expect(db.select().from(trafficEventReceipts).all()).toEqual([])
