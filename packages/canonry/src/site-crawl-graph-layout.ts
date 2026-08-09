@@ -10,6 +10,7 @@ import {
   siteCrawlGraphLayouts,
   siteCrawlGraphNodes,
   siteCrawlPages,
+  siteCrawlSnapshots,
 } from '@ainyc/canonry-db'
 import {
   SITE_CRAWL_GRAPH_MAX_EDGES,
@@ -18,6 +19,8 @@ import {
 
 export const SITE_CRAWL_GRAPH_LAYOUT_VERSION = 'site-health-fa2-v1'
 export const SITE_CRAWL_GRAPH_LAYOUT_TIMEOUT_MS = 15_000
+/** Persisted points are normalized; fresh hash seeds occupy this FA2-scale space. */
+export const SITE_CRAWL_GRAPH_SEED_SCALE = 100
 
 export interface SiteCrawlGraphSeedNode {
   nodeKey: string
@@ -49,6 +52,8 @@ export interface SiteCrawlGraphLayoutInput {
   totalEdges: number
   nodes: SiteCrawlGraphSeedNode[]
   edges: SiteCrawlGraphLayoutEdge[]
+  /** Surviving nodes from the immediately prior compatible complete snapshot. */
+  priorPositions?: ReadonlyMap<string, Pick<PersistedGraphPosition, 'x' | 'y'>>
 }
 
 export interface PersistedGraphPosition {
@@ -173,10 +178,19 @@ function pathSection(path: string): string {
 export function seedSiteCrawlGraphNodes(
   nodes: readonly SiteCrawlGraphSeedNode[],
   rootNodeKey: string | null,
+  priorPositions?: ReadonlyMap<string, Pick<PersistedGraphPosition, 'x' | 'y'>>,
 ): SeededGraphNode[] {
   return [...nodes]
     .sort((a, b) => a.sampleRank - b.sampleRank || a.nodeKey.localeCompare(b.nodeKey))
     .map((node) => {
+      const prior = priorPositions?.get(node.nodeKey)
+      if (prior && Number.isFinite(prior.x) && Number.isFinite(prior.y)) {
+        return {
+          ...node,
+          x: prior.x * SITE_CRAWL_GRAPH_SEED_SCALE,
+          y: prior.y * SITE_CRAWL_GRAPH_SEED_SCALE,
+        }
+      }
       if (node.nodeKey === rootNodeKey) return { ...node, x: 0, y: 0 }
       const section = pathSection(node.path)
       const sectionAngle = hashUnit(`section:${section}`) * Math.PI * 2
@@ -297,7 +311,7 @@ export async function layoutSiteCrawlGraphInput(
       edges: [],
     }
   }
-  const seeded = seedSiteCrawlGraphNodes(input.nodes, input.rootNodeKey)
+  const seeded = seedSiteCrawlGraphNodes(input.nodes, input.rootNodeKey, input.priorPositions)
   try {
     const compute = options.computePositions ?? computeForceAtlasPositions
     const positions = await compute({
@@ -336,6 +350,50 @@ export async function layoutSiteCrawlGraphInput(
 }
 
 /**
+ * The graph is immutable per attempt, so a new publish can read the latest
+ * complete, compatible snapshot without changing it. Its normalized points are
+ * expanded back into the ForceAtlas seed space by `seedSiteCrawlGraphNodes`.
+ */
+function loadPriorSiteCrawlGraphPositions(
+  db: DatabaseClient,
+  scope: { projectId: string; runId: string },
+): ReadonlyMap<string, Pick<PersistedGraphPosition, 'x' | 'y'>> {
+  const prior = db.select({
+    runId: siteCrawlSnapshots.runId,
+    attemptId: siteCrawlSnapshots.attemptId,
+  }).from(siteCrawlSnapshots)
+    .innerJoin(siteCrawlGraphLayouts, and(
+      eq(siteCrawlGraphLayouts.projectId, siteCrawlSnapshots.projectId),
+      eq(siteCrawlGraphLayouts.runId, siteCrawlSnapshots.runId),
+      eq(siteCrawlGraphLayouts.attemptId, siteCrawlSnapshots.attemptId),
+    ))
+    .where(and(
+      eq(siteCrawlSnapshots.projectId, scope.projectId),
+      ne(siteCrawlSnapshots.runId, scope.runId),
+      eq(siteCrawlSnapshots.complete, true),
+      eq(siteCrawlGraphLayouts.state, 'ready'),
+      eq(siteCrawlGraphLayouts.layoutVersion, SITE_CRAWL_GRAPH_LAYOUT_VERSION),
+    ))
+    .orderBy(desc(siteCrawlSnapshots.createdAt), desc(siteCrawlSnapshots.id))
+    .limit(1)
+    .get()
+  if (!prior?.attemptId) return new Map()
+
+  return new Map(db.select({
+    nodeKey: siteCrawlGraphNodes.nodeKey,
+    x: siteCrawlGraphNodes.x,
+    y: siteCrawlGraphNodes.y,
+  }).from(siteCrawlGraphNodes)
+    .where(and(
+      eq(siteCrawlGraphNodes.projectId, scope.projectId),
+      eq(siteCrawlGraphNodes.runId, prior.runId),
+      eq(siteCrawlGraphNodes.attemptId, prior.attemptId),
+    ))
+    .all()
+    .map((node) => [node.nodeKey, { x: node.x, y: node.y }]))
+}
+
+/**
  * Read only the bounded publish sample. The JSON CTE uses one bound parameter
  * for retained keys, avoiding SQLite's variable cap and any 1m-edge scan into
  * JavaScript memory.
@@ -343,8 +401,10 @@ export async function layoutSiteCrawlGraphInput(
 export async function prepareSiteCrawlGraphLayout(
   db: DatabaseClient,
   scope: { projectId: string; runId: string; attemptId: string; rootUrl: string },
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { computePositions?: ComputePositions; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<PreparedSiteCrawlGraphLayout> {
+  let totalNodes = 0
+  let totalEdges = 0
   try {
     const assertNotAborted = () => options.signal?.throwIfAborted()
     assertNotAborted()
@@ -360,9 +420,9 @@ export async function prepareSiteCrawlGraphLayout(
       eq(siteCrawlEdges.internal, true),
       eq(siteCrawlEdges.relation, 'anchor'),
     ]
-    const totalNodes = db.select({ value: count() }).from(siteCrawlPages).where(and(...pageScope)).get()?.value ?? 0
+    totalNodes = db.select({ value: count() }).from(siteCrawlPages).where(and(...pageScope)).get()?.value ?? 0
     assertNotAborted()
-    const totalEdges = db
+    totalEdges = db
       .select({ value: count() })
       .from(siteCrawlEdges)
       .innerJoin(graphSourcePage, and(
@@ -417,6 +477,8 @@ export async function prepareSiteCrawlGraphLayout(
       sampleRank,
     }))
     const rootNodeKey = rootRows[0]?.nodeKey ?? null
+    const priorPositions = loadPriorSiteCrawlGraphPositions(db, scope)
+    assertNotAborted()
     const selectedKeys = JSON.stringify(nodes.map((node) => node.nodeKey))
     const edgeRows = nodes.length === 0 ? [] : db.all(sql`
       WITH selected(node_key) AS (SELECT value FROM json_each(${selectedKeys}))
@@ -444,13 +506,20 @@ export async function prepareSiteCrawlGraphLayout(
       occurrences: number
     }>
     assertNotAborted()
-    return await layoutSiteCrawlGraphInput({ totalNodes, totalEdges, nodes, edges: edgeRows, rootNodeKey }, options)
+    return await layoutSiteCrawlGraphInput({
+      totalNodes,
+      totalEdges,
+      nodes,
+      edges: edgeRows,
+      rootNodeKey,
+      priorPositions,
+    }, options)
   } catch (error) {
     if (options.signal?.aborted) options.signal.throwIfAborted()
     if (error instanceof DOMException && error.name === 'AbortError') throw error
     return {
       state: 'unavailable', failureCode: 'layout-error',
-      totalNodes: 0, totalEdges: 0, nodeCount: 0, edgeCount: 0, nodes: [],
+      totalNodes, totalEdges, nodeCount: 0, edgeCount: 0, nodes: [],
       edges: [],
     }
   }

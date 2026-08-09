@@ -7528,6 +7528,7 @@ export type SiteCrawlSummaryDto = {
     legacyAuditAvailable: boolean;
     runId: string | null;
     runStatus: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled' | null;
+    requestedRootUrl: string | null;
     rootUrl: string | null;
     crawlSchemaVersion?: string | null;
     engineVersion?: string | null;

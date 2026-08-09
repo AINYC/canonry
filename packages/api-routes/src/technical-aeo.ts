@@ -21,6 +21,7 @@ import {
   RunTriggers,
   deriveSiteHealthState,
   SiteAuditTrendDirections,
+  SiteCrawlFetchedStates,
   normalizeSiteAuditRunRequest,
   notFound,
   operationInProgress,
@@ -61,6 +62,14 @@ import {
   SITE_HEALTH_SUBGRAPH_MAX_NODES,
 } from '@ainyc/canonry-contracts'
 import { notProbeRun, resolveProject } from './helpers.js'
+
+const FETCHED_SITE_CRAWL_STATES: ReadonlySet<string> = new Set([
+  ...SiteCrawlFetchedStates,
+  // Snapshots published before the full-crawl contract used this aggregate
+  // state. Keep historical structure counts truthful without admitting it to
+  // the current crawler vocabulary.
+  'fetched',
+])
 
 export interface TechnicalAeoRoutesOptions {
   /**
@@ -435,6 +444,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     legacyAuditAvailable,
     runId: null,
     runStatus: null,
+    requestedRootUrl: null,
     rootUrl: null,
     effectiveOptions: {},
     complete: false,
@@ -644,6 +654,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       legacyAuditAvailable,
       runId: snapshot.runId,
       runStatus: target.runStatus as RunStatus,
+      requestedRootUrl: snapshot.requestedRootUrl,
       rootUrl: snapshot.rootUrl,
       crawlSchemaVersion: snapshot.crawlSchemaVersion,
       engineVersion: snapshot.engineVersion,
@@ -732,8 +743,8 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       depth: siteCrawlPages.depth,
       indexabilityState: siteCrawlPages.indexabilityState,
       indexabilityReasons: siteCrawlPages.indexabilityReasons,
+      canonicalNodeKey: siteCrawlPages.canonicalNodeKey,
       fetchState: siteCrawlPages.fetchState,
-      canonicalUrl: siteCrawlPages.canonicalUrl,
       auditState: siteCrawlPages.auditState,
       auditScore: siteCrawlPages.auditScore,
       inventoryEligible: siteCrawlPages.inventoryEligible,
@@ -749,9 +760,9 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       eq(siteCrawlPages.nodeKey, siteCrawlGraphNodes.nodeKey),
     )).where(and(...graphScope, lt(siteCrawlGraphNodes.sampleRank, maxNodes)))
       .orderBy(asc(siteCrawlGraphNodes.sampleRank)).all()
-    const nodes = nodeRows.map(({ indexabilityReasons, canonicalUrl, ...row }) => ({
+    const nodes = nodeRows.map(({ indexabilityReasons, canonicalNodeKey, ...row }) => ({
       ...row,
-      healthState: deriveSiteHealthState({ ...row, indexabilityReasons, canonicalUrl }),
+      healthState: deriveSiteHealthState({ ...row, indexabilityReasons, canonicalNodeKey }),
     }))
     const edges = app.db.select({
       edgeKey: siteCrawlGraphEdges.edgeKey,
@@ -933,6 +944,26 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       inArray(siteCrawlPages.nodeKey, nodeKeys),
     )).all()
     const persistedNodeKeys = new Set(pageRows.map((row) => row.nodeKey))
+    // Traversal visits edges adjacent to the previous frontier. Links wholly
+    // within the final hop are never visited, so a cheap bounded probe keeps
+    // an induced-neighborhood edge count from being presented as exact.
+    const outermostNodeKeys = pageRows
+      .filter((row) => distances.get(row.nodeKey) === hops)
+      .map((row) => row.nodeKey)
+    const omittedOutermostEdge = outermostNodeKeys.length === 0
+      ? undefined
+      : app.db.select({ edgeKey: siteCrawlEdges.edgeKey }).from(siteCrawlEdges).where(and(
+        eq(siteCrawlEdges.projectId, scope.projectId),
+        eq(siteCrawlEdges.runId, scope.runId),
+        eq(siteCrawlEdges.attemptId, scope.attemptId),
+        eq(siteCrawlEdges.internal, true),
+        isNotNull(siteCrawlEdges.targetNodeKey),
+        inArray(siteCrawlEdges.sourceNodeKey, outermostNodeKeys),
+        inArray(siteCrawlEdges.targetNodeKey, outermostNodeKeys),
+      )).limit(1).get()
+    if (omittedOutermostEdge && !seenEdgeKeys.has(omittedOutermostEdge.edgeKey)) {
+      omittedEdgeKeys.add(omittedOutermostEdge.edgeKey)
+    }
     const nodes = pageRows.map((row) => ({
       ...mapCrawlPage(row),
       distance: distances.get(row.nodeKey) ?? 0,
@@ -1612,7 +1643,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       }
       child.pageCount++
       if (row.inventoryEligible) child.inventoryEligibleCount++
-      if (['html', 'redirect', 'non-html', 'fetch-error', 'fetched'].includes(row.fetchState)) child.fetchedCount++
+      if (FETCHED_SITE_CRAWL_STATES.has(row.fetchState)) child.fetchedCount++
       if (structureHierarchyPath(row.path) === childPath) {
         child.hasPage = true
         // Preserve the old SQL `max(url)` tie break when both `/docs` and

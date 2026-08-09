@@ -13,7 +13,7 @@ import {
   technicalAeoSubgraph,
   technicalAeoTrend,
 } from '../commands/technical-aeo.js'
-import { usageError } from '../cli-error.js'
+import { CliError, usageError } from '../cli-error.js'
 import type { CliCommandInput, CliCommandSpec } from '../cli-dispatch.js'
 import {
   getBoolean,
@@ -378,7 +378,23 @@ function siteHealthAlias(
     (candidate) => candidate.path.join(' ') === sourcePath.join(' '),
   )
   if (!source) throw new Error(`Missing Site Health compatibility source: ${sourcePath.join(' ')}`)
-  return { ...source, path, usage }
+  return {
+    ...source,
+    path,
+    usage,
+    run: async (input) => {
+      try {
+        await source.run(input)
+      } catch (error) {
+        if (!(error instanceof CliError) || error.code !== 'CLI_USAGE_ERROR') throw error
+        const firstLine = error.displayMessage?.split('\n', 1)[0] ?? `Error: ${error.message}`
+        throw usageError(`${firstLine}\nUsage: ${usage}`, {
+          message: error.message,
+          details: { ...error.details, command: path.join('.'), usage },
+        })
+      }
+    },
+  }
 }
 
 const SITE_HEALTH_COMPATIBILITY_COMMANDS: readonly CliCommandSpec[] = [

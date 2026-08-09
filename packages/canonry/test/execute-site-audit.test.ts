@@ -286,6 +286,10 @@ describe('executeSiteAudit', () => {
       eq(siteCrawlGraphNodes.runId, runId),
       eq(siteCrawlGraphNodes.nodeKey, 'page:www-root'),
     )).get()).toMatchObject({ sampleRank: 0, x: 0, y: 0 })
+    expect(db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, runId)).get()).toMatchObject({
+      requestedRootUrl: 'https://example.com/',
+      rootUrl: 'https://www.example.com/',
+    })
   })
 
   it('keeps technically indexable HTML in inventory when factor analysis fails', async () => {
@@ -670,6 +674,21 @@ describe('executeSiteAudit', () => {
     expect(db.select().from(siteCrawlGraphLayouts).where(eq(siteCrawlGraphLayouts.runId, runId)).all()).toEqual([])
     expect(db.select().from(siteCrawlGraphNodes).where(eq(siteCrawlGraphNodes.runId, runId)).all()).toEqual([])
     expect(db.select().from(siteCrawlGraphEdges).where(eq(siteCrawlGraphEdges.runId, runId)).all()).toEqual([])
+  })
+
+  it('keeps the typed cancellation error when graph cleanup loses its storage write', async () => {
+    const runId = seedRun()
+    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
+      const result = await emitCompleteGraph(options)
+      db.update(runs).set({ status: 'cancelled', finishedAt: NOW }).where(eq(runs.id, runId)).run()
+      return result
+    })
+    vi.spyOn(db, 'delete').mockImplementationOnce(() => {
+      throw new Error('graph cleanup storage failed')
+    })
+
+    await expect(executeSiteAudit(db, runId, projectId)).rejects.toThrow(/cancelled before publication/i)
+    expect(db.select().from(runs).where(eq(runs.id, runId)).get()?.status).toBe('cancelled')
   })
 
   it('honors a signal-only cancellation that arrives after the crawl returns', async () => {

@@ -643,7 +643,8 @@ export async function executeSiteAudit(
 
       tx.insert(siteCrawlSnapshots).values({
         id: crypto.randomUUID(), projectId, runId, attemptId,
-        rootUrl: crawlSummary.rootUrl,
+        requestedRootUrl: crawlSummary.rootUrl,
+        rootUrl: crawlSummary.finalRootUrl ?? crawlSummary.rootUrl,
         crawlSchemaVersion: crawlSummary.crawlSchemaVersion,
         engineVersion: crawlSummary.engineVersion,
         normalizationVersion: crawlSummary.urlNormalizationVersion,
@@ -704,8 +705,17 @@ export async function executeSiteAudit(
     if (!published) {
       // Layout publication deliberately precedes the terminal CAS so a
       // completed run never exposes a pending graph. If cancellation won the
-      // CAS, remove that unpublished derived data (nodes/edges cascade).
-      deleteSiteCrawlGraphLayout(db, { projectId, runId, attemptId })
+      // CAS, remove that unpublished derived data (nodes/edges cascade). A
+      // cleanup failure must not replace the typed cancellation result.
+      try {
+        deleteSiteCrawlGraphLayout(db, { projectId, runId, attemptId })
+      } catch (cleanupError) {
+        log.warn('graph-layout.cleanup-failed', {
+          runId,
+          projectId,
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        })
+      }
       const current = db.select({ status: runs.status }).from(runs).where(eq(runs.id, runId)).get()
       if (current?.status === 'cancelled') throw new SiteAuditCancelledError(`Site audit cancelled before publication: ${runId}`)
       throw new Error(`Site audit run was no longer running before publication: ${runId}`)

@@ -1,6 +1,7 @@
 import { MultiDirectedGraph } from 'graphology'
+import { deriveSiteHealthState, type SiteHealthState } from '@ainyc/canonry-contracts'
 
-export type SiteGraphVisualState = 'eligible' | 'hidden' | 'failed' | 'unchecked'
+export type SiteGraphVisualState = SiteHealthState
 
 /**
  * Dedicated Okabe-Ito-derived colors for the WebGL graph. They stay separate
@@ -24,17 +25,24 @@ export const SITE_GRAPH_EDGE_TOKEN = {
  * Structural subset of a published Site Health graph node. Positions are
  * computed with the snapshot and are never recomputed in the browser.
  */
-export interface SiteGraphSigmaNode {
+export interface SiteGraphHealthSource {
+  indexabilityState: string
+  fetchState: string
+  /** Optional server-owned state. Legacy graph snapshots derive it below. */
+  healthState?: SiteGraphVisualState
+  /** Optional legacy canonical identity metadata. New snapshots use healthState. */
+  canonicalNodeKey?: string | null
+  indexabilityReasons?: readonly string[]
+  nodeKey?: string
+}
+
+export interface SiteGraphSigmaNode extends SiteGraphHealthSource {
   nodeKey: string
   url: string
   path: string
   depth: number | null
-  indexabilityState: string
-  fetchState: string
   linkScoreNormalized: number | null
   inventoryEligible?: boolean
-  /** Optional server-owned state. Legacy graph snapshots derive it below. */
-  healthState?: SiteGraphVisualState
   x: number
   y: number
 }
@@ -139,21 +147,13 @@ function normalizedScore(node: SiteGraphSigmaNode): number {
   return Math.max(0, Math.min(1, node.linkScoreNormalized ?? 0))
 }
 
-export function siteGraphVisualState(node: SiteGraphSigmaNode): SiteGraphVisualState {
+/**
+ * Server snapshots own health state. The exact-contract derivation is only a
+ * compatibility path for historical snapshots that predate that field.
+ */
+export function siteGraphVisualState(node: SiteGraphHealthSource): SiteGraphVisualState {
   if (node.healthState) return node.healthState
-  const fetchState = node.fetchState.trim().toLowerCase()
-  const indexabilityState = node.indexabilityState.trim().toLowerCase()
-
-  if (fetchState.includes('fail') || fetchState.includes('error')) return 'failed'
-  if (
-    fetchState.includes('pending')
-    || fetchState.includes('unfetched')
-    || fetchState.includes('not-fetched')
-    || fetchState.includes('not_fetched')
-  ) return 'unchecked'
-  if (indexabilityState === 'indexable' || indexabilityState === 'eligible') return 'eligible'
-  if (!indexabilityState || indexabilityState.includes('unknown')) return 'unchecked'
-  return 'hidden'
+  return deriveSiteHealthState(node)
 }
 
 export function siteGraphStatusLabel(state: SiteGraphVisualState): string {

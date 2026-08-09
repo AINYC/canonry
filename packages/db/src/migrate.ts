@@ -3153,6 +3153,20 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
         ON site_crawl_graph_edges(project_id, run_id, attempt_id, sample_rank)`,
     ],
   },
+  {
+    // Keep the operator-requested root beside the terminal root without
+    // rewriting immutable historical snapshots. The edge indexes make layout
+    // cleanup/cascades linear at the graph's 20k/50k publish cap.
+    version: 128,
+    name: 'site-crawl-requested-root-and-graph-edge-cleanup-indexes',
+    statements: [
+      `ALTER TABLE site_crawl_snapshots ADD COLUMN requested_root_url TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_graph_edges_source_node
+        ON site_crawl_graph_edges(project_id, run_id, attempt_id, source_node_key)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_graph_edges_target_node
+        ON site_crawl_graph_edges(project_id, run_id, attempt_id, target_node_key)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

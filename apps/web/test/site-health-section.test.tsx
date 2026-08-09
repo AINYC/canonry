@@ -74,6 +74,7 @@ function summary(runId: string, pagesDiscovered: number, complete = true) {
     legacyAuditAvailable: true,
     runId,
     runStatus: complete ? 'completed' as const : 'partial' as const,
+    requestedRootUrl: 'https://citypoint.example/',
     rootUrl: 'https://citypoint.example/',
     crawlSchemaVersion: '1',
     engineVersion: '4.6.2',
@@ -117,6 +118,7 @@ const homePage = {
   outboundOccurrences: 10,
   linkScoreRaw: 1,
   linkScoreNormalized: 1,
+  healthState: 'eligible' as const,
 }
 
 const servicesPage = {
@@ -307,6 +309,74 @@ test('leads with the map, truthful crawl metrics, and an explicit disabled dead-
   })).toBe(false)
 })
 
+test('shows the requested and effective hosts when the site moves during a scan', () => {
+  const queryClient = makeClient()
+  seedRun(queryClient, 'run_1', {
+    ...summary('run_1', 42),
+    requestedRootUrl: 'https://citypoint.example/',
+    rootUrl: 'https://www.citypoint.example/',
+  })
+
+  renderSection(queryClient)
+
+  const banner = screen.getByRole('status')
+  expect(within(banner).getByText('Site address changed during this scan.')).not.toBeNull()
+  expect(within(banner).getByText('citypoint.example')).not.toBeNull()
+  expect(within(banner).getByText('www.citypoint.example')).not.toBeNull()
+  expect(within(banner).getByText(/The map and inventory use the new address/)).not.toBeNull()
+})
+
+test('uses the server-owned health state for both the inventory badge and selected-page badge', () => {
+  const queryClient = makeClient()
+  const pagesInput = {
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', limit: 200, sort: 'path' },
+  } as const
+  const failedPage = {
+    ...servicesPage,
+    // Deliberately conflicts with the legacy fields: the server health state wins.
+    fetchState: 'html',
+    indexabilityState: 'indexable',
+    auditState: 'success',
+    inventoryEligible: true,
+    healthState: 'failed' as const,
+  }
+  const pagesResponse = {
+    project: projectName,
+    hasCrawlData: true,
+    runId: 'run_1',
+    total: 2,
+    nextCursor: null,
+    pages: [homePage, failedPage],
+  }
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesQueryKey(pagesInput), pagesResponse)
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteQueryKey(pagesInput), {
+    pages: [pagesResponse],
+    pageParams: [pagesInput],
+  })
+  const graphInput = {
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', maxNodes: 20_000, maxEdges: 50_000 },
+  } as const
+  const graph = queryClient.getQueryData<{ nodes: Array<typeof homePage & { x: number; y: number }> }>(
+    getApiV1ProjectsByNameTechnicalAeoGraphQueryKey(graphInput),
+  )!
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoGraphQueryKey(graphInput), {
+    ...graph,
+    nodes: graph.nodes.map((page) => page.nodeKey === failedPage.nodeKey
+      ? { ...page, ...failedPage }
+      : page),
+  })
+
+  renderSection(queryClient)
+  fireEvent.click(screen.getByRole('tab', { name: 'Inventory' }))
+  fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
+
+  expect(screen.getAllByText('Fetch failed')).toHaveLength(2)
+})
+
 test('uses a labelled, roving-focus tab interface for Site Health views', () => {
   renderSection()
 
@@ -446,6 +516,36 @@ test('loads the complete inventory in 200-page batches', async () => {
   })).toBe(true)
   expect(screen.getByRole('button', { name: '/contact' })).not.toBeNull()
   expect(screen.queryByRole('button', { name: 'Load more pages' })).toBeNull()
+})
+
+test('makes loaded-window inventory search limits explicit', () => {
+  const queryClient = makeClient()
+  const pagesInput = {
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', limit: 200, sort: 'path' as const },
+  }
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteQueryKey(pagesInput), {
+    pages: [{
+      project: projectName,
+      hasCrawlData: true,
+      runId: 'run_1',
+      total: 500,
+      nextCursor: 'cursor_2',
+      pages: [homePage, servicesPage],
+    }],
+    pageParams: [pagesInput],
+  })
+
+  renderSection(queryClient)
+  fireEvent.click(screen.getByRole('tab', { name: 'Inventory' }))
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Search loaded pages' }), {
+    target: { value: '/not-loaded-yet' },
+  })
+
+  expect(screen.getByText('No matches in the 2 loaded pages. Load more pages to continue searching.')).not.toBeNull()
+  expect(screen.getByRole('button', { name: 'Load more pages' })).not.toBeNull()
+  expect(screen.queryByText('No pages match this search.')).toBeNull()
 })
 
 test('expands site sections lazily while preserving the selected run', () => {

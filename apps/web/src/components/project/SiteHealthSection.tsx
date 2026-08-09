@@ -12,6 +12,8 @@ import {
 } from 'lucide-react'
 import {
   RunKinds,
+  SITE_CRAWL_GRAPH_MAX_EDGES,
+  SITE_CRAWL_GRAPH_MAX_NODES,
   type SiteCrawlEdgeDto,
   type SiteCrawlGraphNodeDto,
   type SiteCrawlPageDto,
@@ -32,6 +34,7 @@ import { heyClient, isEmbed } from '../../api.js'
 import { useTriggerSiteAudit } from '../../queries/mutations.js'
 import type { MetricTone } from '../../view-models.js'
 import { SiteGraphSigma } from './SiteGraphSigma.js'
+import { siteGraphStatusLabel, siteGraphVisualState, type SiteGraphVisualState } from './site-graph-sigma.js'
 import { TechnicalAeoSection } from './TechnicalAeoSection.js'
 import { WriteButton } from '../shared/AccessControls.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
@@ -49,8 +52,8 @@ const INVENTORY_LIMIT = 200
 const STRUCTURE_LIMIT = 100
 const NEIGHBOR_LIMIT = 100
 const DEAD_LINK_LIMIT = 50
-const GRAPH_NODE_LIMIT = 20_000
-const GRAPH_EDGE_LIMIT = 50_000
+const GRAPH_NODE_LIMIT = SITE_CRAWL_GRAPH_MAX_NODES
+const GRAPH_EDGE_LIMIT = SITE_CRAWL_GRAPH_MAX_EDGES
 
 const numberFormatter = new Intl.NumberFormat()
 const scanDateFormatter = new Intl.DateTimeFormat(undefined, {
@@ -58,6 +61,13 @@ const scanDateFormatter = new Intl.DateTimeFormat(undefined, {
   day: 'numeric',
   year: 'numeric',
 })
+
+const SITE_HEALTH_STATUS_TONES: Record<SiteGraphVisualState, MetricTone> = {
+  eligible: 'positive',
+  hidden: 'caution',
+  failed: 'negative',
+  unchecked: 'neutral',
+}
 
 function formatScanDate(value: string | null | undefined): string {
   if (!value) return 'Date unavailable'
@@ -75,16 +85,11 @@ function titleCase(value: string): string {
 type InspectableCrawlPage = SiteCrawlPageDto | SiteCrawlGraphNodeDto
 
 function crawlStatus(page: InspectableCrawlPage): { label: string; tone: MetricTone } {
-  const fetchState = page.fetchState.toLowerCase()
-  const auditState = page.auditState.toLowerCase()
-  if (fetchState.includes('error') || fetchState.includes('fail') || auditState.includes('error')) {
-    return { label: 'Fetch failed', tone: 'negative' }
+  const state = siteGraphVisualState(page)
+  return {
+    label: siteGraphStatusLabel(state),
+    tone: SITE_HEALTH_STATUS_TONES[state],
   }
-  if (['queued', 'discovered', 'pending', 'unfetched', 'not-fetched'].includes(fetchState)) {
-    return { label: 'Not checked', tone: 'neutral' }
-  }
-  if (!page.inventoryEligible) return { label: 'Not eligible', tone: 'caution' }
-  return { label: 'Eligible', tone: 'positive' }
 }
 
 function formatImportance(value: number | null): string {
@@ -98,7 +103,21 @@ function formatHealth(page: InspectableCrawlPage): string {
 }
 
 function metricValue(value: number | null | undefined): string {
-  return value == null ? '—' : numberFormatter.format(value)
+  return value == null ? 'Not available' : numberFormatter.format(value)
+}
+
+function movedSiteHosts(requestedRootUrl: string | null, effectiveRootUrl: string | null): {
+  requested: string
+  effective: string
+} | null {
+  if (!requestedRootUrl || !effectiveRootUrl) return null
+  try {
+    const requested = new URL(requestedRootUrl).host
+    const effective = new URL(effectiveRootUrl).host
+    return requested !== effective ? { requested, effective } : null
+  } catch {
+    return null
+  }
 }
 
 function scanTone(status: string | null | undefined): MetricTone {
@@ -303,6 +322,7 @@ function InventoryTable({
       : pages,
     [normalizedSearch, pages],
   )
+  const searchCoversLoadedWindowOnly = normalizedSearch.length > 0 && (hasNextPage || pages.length < total)
 
   return (
     <section aria-labelledby="site-health-inventory-heading">
@@ -314,13 +334,13 @@ function InventoryTable({
           </p>
         </div>
         <label className="relative block w-full sm:w-72">
-          <span className="sr-only">Search page inventory</span>
+          <span className="sr-only">Search loaded pages</span>
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" aria-hidden="true" />
           <input
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search pages"
+            placeholder="Search loaded pages"
             className="h-9 w-full rounded-md border border-base bg-bg pl-9 pr-3 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-600"
           />
         </label>
@@ -370,7 +390,11 @@ function InventoryTable({
       </div>
       {visiblePages.length === 0 && (
         <p className="border-x border-b border-default px-4 py-8 text-center text-sm text-secondary">
-          No pages match this search.
+          {normalizedSearch.length === 0
+            ? 'No pages are available.'
+            : searchCoversLoadedWindowOnly
+              ? `No matches in the ${metricValue(pages.length)} loaded pages. Load more pages to continue searching.`
+              : 'No pages match this search.'}
         </p>
       )}
       {hasNextPage && (
@@ -663,6 +687,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
     deadLinks?.state ?? crawl?.deadLinks.state ?? 'unavailable',
     deadLinks && 'found' in deadLinks ? deadLinks.found : crawl?.deadLinks && 'found' in crawl.deadLinks ? crawl.deadLinks.found : undefined,
   )
+  const movedSite = movedSiteHosts(crawl?.requestedRootUrl ?? null, crawl?.rootUrl ?? null)
   const scanBusy = runMutation.isPending || Boolean(activeAudit)
 
   const selectRun = (runId: string) => {
@@ -818,6 +843,13 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
           The scan is running. The latest completed map remains available until it finishes.
         </div>
       )}
+      {movedSite && (
+        <div className="rounded-lg border border-base bg-surface-subtle px-4 py-3 text-sm text-secondary" role="status">
+          <span className="font-medium text-heading">Site address changed during this scan.</span>{' '}
+          The scan started at <span className="font-mono text-primary">{movedSite.requested}</span> and continued at{' '}
+          <span className="font-mono text-primary">{movedSite.effective}</span>. The map and inventory use the new address.
+        </div>
+      )}
       {crawl?.hasCrawlData && !crawl.complete && view !== 'technical' && (
         <div className="rounded-lg border border-caution bg-caution-soft px-4 py-3 text-sm text-caution" role="status">
           {terminationCopy(crawl.termination)}
@@ -930,6 +962,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
                   nodes={graphQuery.data?.nodes ?? []}
                   edges={graphQuery.data?.edges ?? []}
                   layoutState={graphQuery.data?.layout.state ?? 'unavailable'}
+                  layoutUnavailableReason={graphQuery.data?.layout.state === 'unavailable' ? graphQuery.data.layout.reason : null}
                   selectedNodeKey={effectiveSelectedNodeKey}
                   onSelectNode={(node) => setSelectedNodeKey(node.nodeKey)}
                   ariaLabel={`Interactive site map showing ${metricValue(graphQuery.data?.nodes.length ?? 0)} pages and ${metricValue(graphQuery.data?.edges.length ?? 0)} internal links`}

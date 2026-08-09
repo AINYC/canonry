@@ -186,6 +186,9 @@ export const siteCrawlSummarySchema = z.object({
   legacyAuditAvailable: z.boolean(),
   runId: z.string().nullable(),
   runStatus: nullableRunStatusSchema,
+  /** Root URL originally requested by the operator; null for legacy snapshots. */
+  requestedRootUrl: z.string().nullable(),
+  /** Effective root followed by the crawl after any supported host redirect. */
   rootUrl: z.string().nullable(),
   crawlSchemaVersion: z.string().nullable().optional(),
   engineVersion: z.string().nullable().optional(),
@@ -205,31 +208,97 @@ export type SiteCrawlSummaryDto = z.infer<typeof siteCrawlSummarySchema>
 export const siteHealthStateSchema = z.enum(['eligible', 'hidden', 'failed', 'unchecked'])
 export type SiteHealthState = z.infer<typeof siteHealthStateSchema>
 
-export function deriveSiteHealthState(input: {
+/** Exact state vocabulary emitted by @canonry/aeo-audit's Site Crawl contract. */
+export const SiteCrawlFetchStates = {
+  discovered: 'discovered',
+  robotsBlocked: 'robots-blocked',
+  html: 'html',
+  redirect: 'redirect',
+  nonHtml: 'non-html',
+  fetchError: 'fetch-error',
+} as const
+export type SiteCrawlFetchState = (typeof SiteCrawlFetchStates)[keyof typeof SiteCrawlFetchStates]
+/** States reached only after an HTTP fetch was attempted. */
+export const SiteCrawlFetchedStates = [
+  SiteCrawlFetchStates.html,
+  SiteCrawlFetchStates.redirect,
+  SiteCrawlFetchStates.nonHtml,
+  SiteCrawlFetchStates.fetchError,
+] as const satisfies readonly SiteCrawlFetchState[]
+
+/** Exact indexability vocabulary emitted by @canonry/aeo-audit's Site Crawl contract. */
+export const SiteCrawlIndexabilityStates = {
+  indexable: 'indexable',
+  noindex: 'noindex',
+  blocked: 'blocked',
+  unknown: 'unknown',
+} as const
+export type SiteCrawlIndexabilityState = (typeof SiteCrawlIndexabilityStates)[keyof typeof SiteCrawlIndexabilityStates]
+
+/** Machine reasons that carry a canonical-identity decision from the crawler. */
+export const SiteCrawlIndexabilityReasons = {
+  robotsDisallow: 'robots-disallow',
+  redirectTerminal: 'redirect-terminal',
+  metaRobotsNoindex: 'meta-robots-noindex',
+  xRobotsNoindex: 'x-robots-noindex',
+  canonicalToOther: 'canonical-to-other',
+  notHtmlOrUnavailable: 'not-html-or-unavailable',
+} as const
+export type SiteCrawlIndexabilityReason = (typeof SiteCrawlIndexabilityReasons)[keyof typeof SiteCrawlIndexabilityReasons]
+
+/**
+ * Rows remain string-backed for forward-compatible persisted crawl history, but
+ * classification only recognizes the exact crawler values declared above.
+ */
+export interface SiteHealthStateInput {
   fetchState: string
   indexabilityState: string
   indexabilityReasons?: readonly string[]
-  canonicalUrl?: string | null
-  url?: string
-}): SiteHealthState {
-  const fetchState = input.fetchState.trim().toLowerCase()
-  const indexabilityState = input.indexabilityState.trim().toLowerCase()
-  const indexabilityReasons = new Set((input.indexabilityReasons ?? []).map((reason) => reason.trim().toLowerCase()))
-  if (fetchState.includes('fail') || fetchState.includes('error')) return 'failed'
-  if (
-    fetchState.includes('pending')
-    || fetchState.includes('unfetched')
-    || fetchState.includes('not-fetched')
-    || fetchState.includes('not_fetched')
-  ) return 'unchecked'
-  if (
-    fetchState === 'redirect'
-    || indexabilityReasons.has('canonical-to-other')
-    || (input.canonicalUrl && input.url && input.canonicalUrl !== input.url)
-  ) return 'hidden'
-  if (indexabilityState === 'indexable' || indexabilityState === 'eligible') return 'eligible'
-  if (!indexabilityState || indexabilityState.includes('unknown')) return 'unchecked'
-  return 'hidden'
+  /** Resolved canonical identity. It is null when that target was not a crawl node. */
+  canonicalNodeKey?: string | null
+  /** Stable identity of this persisted crawl page. */
+  nodeKey?: string
+}
+
+function pointsToOtherCanonical(input: SiteHealthStateInput): boolean {
+  return input.indexabilityReasons?.some((reason) => reason === SiteCrawlIndexabilityReasons.canonicalToOther) === true
+    || (input.nodeKey !== undefined
+      && input.canonicalNodeKey !== null
+      && input.canonicalNodeKey !== undefined
+      && input.canonicalNodeKey !== input.nodeKey)
+}
+
+export function deriveSiteHealthState(input: SiteHealthStateInput): SiteHealthState {
+  // Fetch state is decisive: a failed request cannot be visually eligible.
+  switch (input.fetchState) {
+    case SiteCrawlFetchStates.fetchError:
+      return 'failed'
+    case SiteCrawlFetchStates.discovered:
+      return 'unchecked'
+    case SiteCrawlFetchStates.redirect:
+    case SiteCrawlFetchStates.robotsBlocked:
+    case SiteCrawlFetchStates.nonHtml:
+      return 'hidden'
+    case SiteCrawlFetchStates.html:
+      break
+    default:
+      // Unrecognized persisted values are not crawler states and cannot prove a page's health.
+      return 'unchecked'
+  }
+
+  // Never infer canonical identity from textual URL presentation (e.g. trailing slashes).
+  if (pointsToOtherCanonical(input)) return 'hidden'
+
+  switch (input.indexabilityState) {
+    case SiteCrawlIndexabilityStates.indexable:
+      return 'eligible'
+    case SiteCrawlIndexabilityStates.noindex:
+    case SiteCrawlIndexabilityStates.blocked:
+      return 'hidden'
+    case SiteCrawlIndexabilityStates.unknown:
+    default:
+      return 'unchecked'
+  }
 }
 
 export const siteCrawlPageSchema = z.object({

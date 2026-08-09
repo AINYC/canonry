@@ -42,7 +42,7 @@ function node(
     path: `/${nodeKey}`,
     depth: 1,
     indexabilityState: 'indexable',
-    fetchState: 'fetched',
+    fetchState: 'html',
     linkScoreNormalized: 0.5,
     x: 10,
     y: 20,
@@ -75,15 +75,32 @@ describe('buildSigmaSiteGraph', () => {
     expect(isSigmaWebGlColor('rgb(255 255 255 / 0.06)')).toBe(false)
   })
 
-  it('prefers a server-published health state while preserving legacy derivation', () => {
+  it('prefers the server-published health state and uses an exact legacy fallback only when absent', () => {
     expect(siteGraphVisualState(node('server-owned', {
       healthState: 'hidden',
-      fetchState: 'fetched',
+      fetchState: 'html',
       indexabilityState: 'indexable',
     }))).toBe('hidden')
     expect(siteGraphVisualState(node('legacy', {
       fetchState: 'fetch-error',
     }))).toBe('failed')
+    expect(siteGraphVisualState(node('legacy-redirect', {
+      fetchState: 'redirect',
+      indexabilityState: 'indexable',
+    }))).toBe('hidden')
+    expect(siteGraphVisualState(node('legacy-canonical-source', {
+      canonicalNodeKey: 'legacy-canonical-target',
+      fetchState: 'html',
+      indexabilityState: 'indexable',
+    }))).toBe('hidden')
+    expect(siteGraphVisualState(node('legacy-pending', {
+      fetchState: 'discovered',
+      indexabilityState: 'unknown',
+    }))).toBe('unchecked')
+    expect(siteGraphVisualState(node('legacy-unrecognized', {
+      fetchState: 'fetch-error-but-not-a-crawler-state',
+      indexabilityState: 'indexable',
+    }))).toBe('unchecked')
   })
 
   it('adds a distinct status glyph to labels so color is never the only visual cue', () => {
@@ -92,7 +109,7 @@ describe('buildSigmaSiteGraph', () => {
         node('eligible'),
         node('hidden', { indexabilityState: 'noindex' }),
         node('failed', { fetchState: 'fetch-error' }),
-        node('unchecked', { fetchState: 'not-fetched' }),
+        node('unchecked', { fetchState: 'discovered', indexabilityState: 'unknown' }),
       ],
       [],
       theme,

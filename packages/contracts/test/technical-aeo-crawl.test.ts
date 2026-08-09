@@ -52,7 +52,7 @@ describe('Technical AEO crawl contracts', () => {
   it('makes no crawl data distinct from a zero-count crawl and from disabled dead-link checks', () => {
     expect(siteCrawlSummarySchema.parse({
       project: 'example', hasCrawlData: false, legacyAuditAvailable: true, runId: null, runStatus: null,
-      rootUrl: null, complete: false, termination: null, detailsAvailable: false,
+      requestedRootUrl: null, rootUrl: null, complete: false, termination: null, detailsAvailable: false,
       counts: { pagesDiscovered: 0, pagesFetched: 0, pagesEligible: 0, edges: 0, findings: 0 },
       deadLinks: { state: 'unavailable' },
     }).hasCrawlData).toBe(false)
@@ -68,8 +68,8 @@ describe('Technical AEO crawl contracts', () => {
       layout: { state: 'ready', version: 'site-health-fa2-v1', computedAt: '2026-08-09T12:00:00.000Z' },
       totalNodes: 1_284, totalEdges: 18_402,
       nodes: [{
-        nodeKey: 'home', url: 'https://example.com/', path: '/', fetchState: 'fetched',
-        indexabilityState: 'eligible', auditState: 'success', auditScore: 94,
+        nodeKey: 'home', url: 'https://example.com/', path: '/', fetchState: 'html',
+        indexabilityState: 'indexable', auditState: 'success', auditScore: 94,
         inventoryEligible: true, depth: 0, inboundUniqueEdges: 10, outboundUniqueEdges: 20,
         linkScoreNormalized: 1, healthState: 'eligible',
         x: 0, y: 0,
@@ -95,16 +95,43 @@ describe('Technical AEO crawl contracts', () => {
     }).layout).toEqual({ state: 'unavailable', version: null, reason: 'legacy-snapshot' })
   })
 
-  it('derives one shared Site Health state for API, agent, and UI consumers', () => {
-    expect(deriveSiteHealthState({ fetchState: 'fetched', indexabilityState: 'eligible' })).toBe('eligible')
-    expect(deriveSiteHealthState({ fetchState: 'fetched', indexabilityState: 'noindex' })).toBe('hidden')
-    expect(deriveSiteHealthState({ fetchState: 'fetch-error', indexabilityState: 'eligible' })).toBe('failed')
-    expect(deriveSiteHealthState({ fetchState: 'pending', indexabilityState: 'eligible' })).toBe('unchecked')
+  it('derives one shared Site Health state from exact crawl states and canonical identity', () => {
+    expect(deriveSiteHealthState({ fetchState: 'html', indexabilityState: 'indexable' })).toBe('eligible')
+    expect(deriveSiteHealthState({ fetchState: 'html', indexabilityState: 'noindex' })).toBe('hidden')
+    expect(deriveSiteHealthState({ fetchState: 'fetch-error', indexabilityState: 'indexable' })).toBe('failed')
+    expect(deriveSiteHealthState({ fetchState: 'discovered', indexabilityState: 'unknown' })).toBe('unchecked')
     expect(deriveSiteHealthState({ fetchState: 'redirect', indexabilityState: 'unknown' })).toBe('hidden')
     expect(deriveSiteHealthState({
       fetchState: 'html',
       indexabilityState: 'unknown',
       indexabilityReasons: ['canonical-to-other'],
     })).toBe('hidden')
+    expect(deriveSiteHealthState({
+      nodeKey: 'page:source',
+      canonicalNodeKey: 'page:canonical',
+      fetchState: 'html',
+      indexabilityState: 'indexable',
+    })).toBe('hidden')
+    expect(deriveSiteHealthState({
+      nodeKey: 'page:canonical',
+      canonicalNodeKey: 'page:canonical',
+      fetchState: 'html',
+      indexabilityState: 'indexable',
+    })).toBe('eligible')
+  })
+
+  it('does not sniff unpinned string values or compare raw canonical URLs', () => {
+    expect(deriveSiteHealthState({
+      fetchState: 'fetch-error-but-not-a-crawler-state',
+      indexabilityState: 'indexable',
+    })).toBe('unchecked')
+    const trailingSlashDifference = {
+      fetchState: 'html',
+      indexabilityState: 'indexable',
+      // A trailing-slash presentation difference is not canonical-away evidence.
+      canonicalUrl: 'https://example.com/page/',
+      url: 'https://example.com/page',
+    } as unknown as Parameters<typeof deriveSiteHealthState>[0]
+    expect(deriveSiteHealthState(trailingSlashDifference)).toBe('eligible')
   })
 })

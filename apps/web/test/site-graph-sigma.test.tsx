@@ -85,7 +85,7 @@ function node(
     path: nodeKey === 'home' ? '/' : `/${nodeKey}`,
     depth: nodeKey === 'home' ? 0 : 1,
     indexabilityState: 'indexable',
-    fetchState: 'fetched',
+    fetchState: 'html',
     linkScoreNormalized: 0.5,
     x: nodeKey === 'home' ? 0 : 100,
     y: 0,
@@ -161,6 +161,32 @@ describe('SiteGraphSigma', () => {
     expect(sigmaMocks.gotoNode).toHaveBeenCalledWith('page-77', expect.any(Object))
   })
 
+  it('closes the search list on blur without breaking mouse or keyboard selection', async () => {
+    mockWebGl(true)
+    render(<SiteGraphSigma nodes={nodes} edges={edges} />)
+
+    await screen.findByTestId('sigma-container')
+    const search = screen.getByRole('combobox', { name: 'Focus a page in the site map' })
+
+    fireEvent.focus(search)
+    expect(screen.getByRole('listbox', { name: 'Matching pages' })).not.toBeNull()
+    fireEvent.blur(search)
+    await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Matching pages' })).toBeNull())
+
+    fireEvent.focus(search)
+    const pricing = screen.getByRole('option', { name: /pricing/i })
+    fireEvent.pointerDown(pricing)
+    fireEvent.blur(search)
+    fireEvent.click(pricing)
+    expect(sigmaMocks.gotoNode).toHaveBeenCalledWith('pricing', expect.any(Object))
+    expect(screen.queryByRole('listbox', { name: 'Matching pages' })).toBeNull()
+
+    fireEvent.focus(search)
+    fireEvent.keyDown(search, { key: 'ArrowDown' })
+    fireEvent.keyDown(search, { key: 'Enter' })
+    expect(sigmaMocks.gotoNode).toHaveBeenCalled()
+  })
+
   it('only passes Sigma 3 parseable non-black colors to the renderer', async () => {
     mockWebGl(true)
     render(
@@ -169,7 +195,7 @@ describe('SiteGraphSigma', () => {
           node('eligible'),
           node('hidden', { indexabilityState: 'noindex' }),
           node('failed', { fetchState: 'fetch-error' }),
-          node('unchecked', { fetchState: 'not-fetched' }),
+          node('unchecked', { fetchState: 'discovered', indexabilityState: 'unknown' }),
         ]}
         edges={[]}
       />,
@@ -333,5 +359,19 @@ describe('SiteGraphSigma', () => {
 
     rerender(<SiteGraphSigma nodes={[node('home', { x: Number.NaN })]} edges={[]} />)
     expect(screen.getByText('This scan does not have a published graph layout yet.')).toBeTruthy()
+  })
+
+  it('distinguishes a persisted layout failure from an older scan without a layout', () => {
+    const { rerender } = render(
+      <SiteGraphSigma nodes={nodes} edges={edges} layoutState="unavailable" layoutUnavailableReason="legacy-snapshot" />,
+    )
+    expect(screen.getByText('Graph layout unavailable')).toBeTruthy()
+    expect(screen.getByText('This scan does not have a published graph layout yet.')).toBeTruthy()
+
+    rerender(
+      <SiteGraphSigma nodes={nodes} edges={edges} layoutState="unavailable" layoutUnavailableReason="layout-failed" />,
+    )
+    expect(screen.getByText('Graph layout failed')).toBeTruthy()
+    expect(screen.getByText('This scan completed, but its graph layout could not be published. The page inventory remains available.')).toBeTruthy()
   })
 })

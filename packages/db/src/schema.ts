@@ -780,6 +780,8 @@ export const siteCrawlSnapshots = sqliteTable('site_crawl_snapshots', {
   runId: text('run_id').notNull(),
   attemptId: text('attempt_id'),
   rootUrl: text('root_url').notNull(),
+  /** Original requested crawl root; null for snapshots written before v128. */
+  requestedRootUrl: text('requested_root_url'),
   crawlSchemaVersion: text('crawl_schema_version').notNull().default('1.0'),
   engineVersion: text('engine_version').notNull().default(''),
   normalizationVersion: text('normalization_version').notNull().default(''),
@@ -989,6 +991,9 @@ export const siteCrawlGraphEdges = sqliteTable('site_crawl_graph_edges', {
   uniqueIndex('idx_site_crawl_graph_edges_attempt_edge').on(table.projectId, table.runId, table.attemptId, table.edgeKey),
   uniqueIndex('idx_site_crawl_graph_edges_attempt_rank').on(table.projectId, table.runId, table.attemptId, table.sampleRank),
   index('idx_site_crawl_graph_edges_read').on(table.projectId, table.runId, table.attemptId, table.sampleRank),
+  // These FKs otherwise make a layout cascade scan graph edges once per node.
+  index('idx_site_crawl_graph_edges_source_node').on(table.projectId, table.runId, table.attemptId, table.sourceNodeKey),
+  index('idx_site_crawl_graph_edges_target_node').on(table.projectId, table.runId, table.attemptId, table.targetNodeKey),
   check('site_crawl_graph_edges_rank_check', sql`${table.sampleRank} >= 0`),
   check('site_crawl_graph_edges_occurrences_check', sql`${table.occurrences} > 0`),
   foreignKey({

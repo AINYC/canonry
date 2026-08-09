@@ -127,6 +127,23 @@ describe('Technical AEO full-crawl CLI', () => {
     expect(mocked.getTechnicalAeoInternalLinkNeighbors).not.toHaveBeenCalled()
   })
 
+  it('uses Site Health usage in alias handler errors', async () => {
+    await expect(command(['site-health', 'path']).run({
+      positionals: ['acme'],
+      values: {},
+      format: 'json',
+      dryRun: false,
+    })).rejects.toMatchObject({
+      code: 'CLI_USAGE_ERROR',
+      message: '--to-node-key or --to-url is required',
+      displayMessage: expect.stringContaining('Usage: canonry site-health path <project>'),
+      details: expect.objectContaining({
+        command: 'site-health.path',
+        usage: expect.stringContaining('canonry site-health path <project>'),
+      }),
+    })
+  })
+
   it('writes a JSONL header for completed dead-link checks with zero findings', async () => {
     mocked.getTechnicalAeoDeadLinks.mockResolvedValue({
       project: 'acme',

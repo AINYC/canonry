@@ -76,6 +76,29 @@ test('v127 adds attempt-scoped persisted crawl graph layouts without mutating pa
   expect(pageColumns.map((column) => column.name)).not.toContain('graph_y')
 })
 
+test('v128 adds requested root evidence and graph-edge cascade indexes additively', () => {
+  const db = freshDb()
+  const v127 = MIGRATION_VERSIONS.filter((migration) => migration.version <= 127)
+  migrate(db, v127)
+
+  const beforeColumns = db.all(sql.raw("PRAGMA table_info('site_crawl_snapshots')")) as Array<{ name: string }>
+  const beforeIndexes = db.all(sql.raw("PRAGMA index_list('site_crawl_graph_edges')")) as Array<{ name: string }>
+  expect(beforeColumns.map((column) => column.name)).not.toContain('requested_root_url')
+  expect(beforeIndexes.map((index) => index.name)).not.toContain('idx_site_crawl_graph_edges_source_node')
+  expect(beforeIndexes.map((index) => index.name)).not.toContain('idx_site_crawl_graph_edges_target_node')
+
+  migrate(db)
+  migrate(db)
+
+  const columns = db.all(sql.raw("PRAGMA table_info('site_crawl_snapshots')")) as Array<{ name: string; notnull: number }>
+  const indexes = db.all(sql.raw("PRAGMA index_list('site_crawl_graph_edges')")) as Array<{ name: string }>
+  expect(columns.find((column) => column.name === 'requested_root_url')).toMatchObject({ notnull: 0 })
+  expect(indexes.map((index) => index.name)).toEqual(expect.arrayContaining([
+    'idx_site_crawl_graph_edges_source_node',
+    'idx_site_crawl_graph_edges_target_node',
+  ]))
+})
+
 test('crawl rows cannot mix projects, runs, or attempts', () => {
   const db = freshDb()
   migrate(db)

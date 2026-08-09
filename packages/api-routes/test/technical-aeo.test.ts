@@ -144,7 +144,7 @@ function buildCtx(): Ctx {
   }).run()
   db.insert(siteCrawlSnapshots).values({
     id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId,
-    rootUrl: 'https://example.com/', crawlSchemaVersion: '1.0', engineVersion: 'crawl-test',
+    requestedRootUrl: 'https://origin.example.com/', rootUrl: 'https://example.com/', crawlSchemaVersion: '1.0', engineVersion: 'crawl-test',
     normalizationVersion: 'url-v1', indexabilityVersion: 'index-v1', linkScoreVersion: 'links-v1',
     effectiveOptions: { maxPages: 100, checkDeadLinks: true }, checkDeadLinks: true,
     complete: true, termination: 'completed', detailsAvailable: true,
@@ -155,21 +155,21 @@ function buildCtx(): Ctx {
     {
       id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'home',
       url: 'https://example.com/', finalUrl: 'https://example.com/', path: '/', parentPath: '/', discoverySource: 'sitemap',
-      fetchState: 'fetched', httpStatus: 200, indexabilityState: 'eligible', auditState: 'complete', auditScore: 88,
+      fetchState: 'html', httpStatus: 200, indexabilityState: 'indexable', auditState: 'complete', auditScore: 88,
       inventoryEligible: true, depth: 0, outboundUniqueEdges: 2, outboundOccurrences: 3, linkScoreRaw: 10, linkScoreNormalized: 1,
       createdAt: tB, updatedAt: tB,
     },
     {
       id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'guide',
       url: 'https://example.com/guide', finalUrl: 'https://example.com/guide', path: '/guide', parentPath: '/', discoverySource: 'link',
-      fetchState: 'fetched', httpStatus: 200, indexabilityState: 'eligible', auditState: 'complete', auditScore: 42,
+      fetchState: 'html', httpStatus: 200, indexabilityState: 'indexable', auditState: 'complete', auditScore: 42,
       inventoryEligible: true, depth: 1, inboundUniqueEdges: 1, inboundOccurrences: 2, linkScoreRaw: 4, linkScoreNormalized: 0.4,
       createdAt: tB, updatedAt: tB,
     },
     {
       id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'gone',
-      url: 'https://example.com/gone', path: '/gone', parentPath: '/', discoverySource: 'link', fetchState: 'fetched', httpStatus: 404,
-      indexabilityState: 'ineligible', auditState: 'skipped', inventoryEligible: false, depth: 1, createdAt: tB, updatedAt: tB,
+      url: 'https://example.com/gone', path: '/gone', parentPath: '/', discoverySource: 'link', fetchState: 'html', httpStatus: 404,
+      indexabilityState: 'noindex', auditState: 'skipped', inventoryEligible: false, depth: 1, createdAt: tB, updatedAt: tB,
     },
   ]).run()
   db.insert(siteCrawlEdges).values([
@@ -257,14 +257,14 @@ function seedMinimalComparableCrawlForRunA(): void {
   ctx.db.insert(siteCrawlPages).values([
     {
       id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'home',
-      url: 'https://example.com/', path: '/', parentPath: '/', discoverySource: 'sitemap', fetchState: 'fetched',
-      indexabilityState: 'eligible', auditState: 'complete', inventoryEligible: true, depth: 0,
+      url: 'https://example.com/', path: '/', parentPath: '/', discoverySource: 'sitemap', fetchState: 'html',
+      indexabilityState: 'indexable', auditState: 'complete', inventoryEligible: true, depth: 0,
       createdAt, updatedAt: createdAt,
     },
     {
       id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'old',
-      url: 'https://example.com/old', path: '/old', parentPath: '/', discoverySource: 'link', fetchState: 'fetched',
-      indexabilityState: 'eligible', auditState: 'complete', inventoryEligible: true, depth: 1,
+      url: 'https://example.com/old', path: '/old', parentPath: '/', discoverySource: 'link', fetchState: 'html',
+      indexabilityState: 'indexable', auditState: 'complete', inventoryEligible: true, depth: 1,
       createdAt, updatedAt: createdAt,
     },
   ]).run()
@@ -365,6 +365,8 @@ describe('GET /technical-aeo crawl reads', () => {
       hasCrawlData: true,
       legacyAuditAvailable: true,
       runId: ctx.runB,
+      requestedRootUrl: 'https://origin.example.com/',
+      rootUrl: 'https://example.com/',
       complete: true,
       detailsAvailable: true,
       deadLinks: { state: 'complete', checked: 2, found: 1 },
@@ -500,14 +502,20 @@ describe('GET /technical-aeo crawl reads', () => {
     expect(second.body).toEqual(first.body)
   })
 
-  it('uses canonical-away evidence in the shared graph health state', async () => {
+  it('uses resolved canonical identity for the shared inventory and graph health state', async () => {
     ctx.db.update(siteCrawlPages).set({
-      canonicalUrl: 'https://example.com/canonical-guide',
-      indexabilityState: 'unknown',
-      indexabilityReasons: ['canonical-to-other'],
+      // The crawler resolved this identity to home. URL text is intentionally
+      // not used for the health decision.
+      canonicalUrl: 'https://example.com/',
+      canonicalNodeKey: 'home',
+      fetchState: 'html',
+      indexabilityState: 'indexable',
+      indexabilityReasons: [],
     }).where(eq(siteCrawlPages.nodeKey, 'guide')).run()
 
+    const pages = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?sort=path')
     const { body } = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph')
+    expect(pages.body.pages.find((page) => page.nodeKey === 'guide')?.healthState).toBe('hidden')
     expect(body.nodes.find((node) => node.nodeKey === 'guide')?.healthState).toBe('hidden')
   })
 
@@ -517,14 +525,14 @@ describe('GET /technical-aeo crawl reads', () => {
     ctx.db.insert(siteCrawlPages).values([
       {
         id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'alpha',
-        url: 'https://example.com/alpha', path: '/alpha', parentPath: '/', discoverySource: 'link', fetchState: 'fetched', httpStatus: 200,
-        indexabilityState: 'eligible', auditState: 'complete', inventoryEligible: true, depth: 1, linkScoreNormalized: 0.9,
+        url: 'https://example.com/alpha', path: '/alpha', parentPath: '/', discoverySource: 'link', fetchState: 'html', httpStatus: 200,
+        indexabilityState: 'indexable', auditState: 'complete', inventoryEligible: true, depth: 1, linkScoreNormalized: 0.9,
         createdAt: now, updatedAt: now,
       },
       {
         id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'beta',
-        url: 'https://example.com/beta', path: '/beta', parentPath: '/', discoverySource: 'link', fetchState: 'fetched', httpStatus: 200,
-        indexabilityState: 'eligible', auditState: 'complete', inventoryEligible: true, depth: 1, linkScoreNormalized: 0.9,
+        url: 'https://example.com/beta', path: '/beta', parentPath: '/', discoverySource: 'link', fetchState: 'html', httpStatus: 200,
+        indexabilityState: 'indexable', auditState: 'complete', inventoryEligible: true, depth: 1, linkScoreNormalized: 0.9,
         createdAt: now, updatedAt: now,
       },
     ]).run()
@@ -630,8 +638,8 @@ describe('GET /technical-aeo crawl reads', () => {
     ctx.db.insert(siteCrawlPages).values({
       id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'canonical-only',
       url: 'https://example.com/canonical-only', finalUrl: 'https://example.com/canonical-only',
-      path: '/canonical-only', parentPath: '/', discoverySource: 'link', fetchState: 'fetched', httpStatus: 200,
-      indexabilityState: 'eligible', auditState: 'complete', inventoryEligible: true, depth: 2,
+      path: '/canonical-only', parentPath: '/', discoverySource: 'link', fetchState: 'html', httpStatus: 200,
+      indexabilityState: 'indexable', auditState: 'complete', inventoryEligible: true, depth: 2,
       createdAt: now, updatedAt: now,
     }).run()
     ctx.db.insert(siteCrawlEdges).values([
@@ -672,6 +680,31 @@ describe('GET /technical-aeo crawl reads', () => {
       body.nodes.some((node) => node.nodeKey === edge.sourceNodeKey)
       && body.nodes.some((node) => node.nodeKey === edge.targetNodeKey),
     )).toBe(true)
+  })
+
+  it('marks a hop-bounded subgraph as a lower bound when outermost neighbors link together', async () => {
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    const now = new Date().toISOString()
+    ctx.db.insert(siteCrawlEdges).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, edgeKey: 'guide-gone',
+      sourceNodeKey: 'guide', sourceUrl: 'https://example.com/guide', targetNodeKey: 'gone', targetUrl: 'https://example.com/gone',
+      relation: 'anchor', internal: true, followable: true, occurrences: 1, followableOccurrences: 1, nofollowOccurrences: 0,
+      anchors: ['Related page'], createdAt: now, updatedAt: now,
+    }).run()
+
+    const { status, body } = await get<SiteHealthSubgraphResponseDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/subgraph?nodeKey=home&hops=1&maxNodes=3&maxEdges=2',
+    )
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({
+      countAccuracy: 'lower-bound',
+      truncated: true,
+      totalEdges: 3,
+      omittedEdges: 1,
+    })
+    expect(body.edges).toHaveLength(2)
+    expect(body.edges.map((edge) => edge.edgeKey)).not.toContain('guide-gone')
   })
 
   it('finds the shortest directed followable path and ignores a direct nofollow edge', async () => {
@@ -724,21 +757,21 @@ describe('GET /technical-aeo crawl reads', () => {
       {
         id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'home',
         url: 'https://example.com/', finalUrl: 'https://example.com/', path: '/', parentPath: '/', discoverySource: 'sitemap',
-        fetchState: 'fetched', httpStatus: 200, indexabilityState: 'eligible', auditState: 'complete', auditScore: 80,
+        fetchState: 'html', httpStatus: 200, indexabilityState: 'indexable', auditState: 'complete', auditScore: 80,
         inventoryEligible: true, depth: 0, outboundUniqueEdges: 2, outboundOccurrences: 3, linkScoreRaw: 10, linkScoreNormalized: 1,
         createdAt: now, updatedAt: now,
       },
       {
         id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'guide',
         url: 'https://example.com/guide', finalUrl: 'https://example.com/guide', path: '/guide', parentPath: '/', discoverySource: 'link',
-        fetchState: 'fetched', httpStatus: 200, indexabilityState: 'eligible', auditState: 'complete', auditScore: 42,
+        fetchState: 'html', httpStatus: 200, indexabilityState: 'indexable', auditState: 'complete', auditScore: 42,
         inventoryEligible: true, depth: 1, inboundUniqueEdges: 1, inboundOccurrences: 2, linkScoreRaw: 4, linkScoreNormalized: 0.4,
         createdAt: now, updatedAt: now,
       },
       {
         id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'old',
         url: 'https://example.com/old', finalUrl: 'https://example.com/old', path: '/old', parentPath: '/', discoverySource: 'link',
-        fetchState: 'fetched', httpStatus: 200, indexabilityState: 'eligible', auditState: 'complete', auditScore: 50,
+        fetchState: 'html', httpStatus: 200, indexabilityState: 'indexable', auditState: 'complete', auditScore: 50,
         inventoryEligible: true, depth: 1, inboundUniqueEdges: 1, inboundOccurrences: 1,
         createdAt: now, updatedAt: now,
       },
@@ -958,6 +991,23 @@ describe('GET /technical-aeo crawl reads', () => {
     const guides = await get<SiteCrawlStructureResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/structure?parentPath=/docs/guides&limit=100')
     expect(guides.body.children).toContainEqual(expect.objectContaining({
       path: '/docs/guides/start', url: 'https://example.com/docs/guides/start', hasPage: true, pageCount: 1,
+    }))
+  })
+
+  it('counts legacy fetched rows in historical structure snapshots', async () => {
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    const now = new Date().toISOString()
+    ctx.db.insert(siteCrawlPages).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'legacy-fetched',
+      url: 'https://example.com/legacy/page', finalUrl: 'https://example.com/legacy/page',
+      path: '/legacy/page', parentPath: '/legacy', discoverySource: 'sitemap', fetchState: 'fetched', httpStatus: 200,
+      indexabilityState: 'unknown', auditState: 'success', inventoryEligible: true, depth: 2, createdAt: now, updatedAt: now,
+    }).run()
+
+    const structure = await get<SiteCrawlStructureResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/structure?parentPath=/legacy&limit=100')
+    expect(structure.body.children).toContainEqual(expect.objectContaining({
+      path: '/legacy/page',
+      fetchedCount: 1,
     }))
   })
 

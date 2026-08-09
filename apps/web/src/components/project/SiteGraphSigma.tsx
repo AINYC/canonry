@@ -49,10 +49,25 @@ export interface SiteGraphSigmaProps {
   nodes: readonly SiteGraphSigmaNode[]
   edges: readonly SiteGraphSigmaEdge[]
   layoutState?: 'ready' | 'unavailable'
+  layoutUnavailableReason?: string | null
   selectedNodeKey?: string | null
   onSelectNode?: (node: SiteGraphSigmaNode) => void
   ariaLabel?: string
   className?: string
+}
+
+function unavailableLayoutMessage(reason?: string | null): { heading: string; detail: string } {
+  if (reason === 'layout-failed') {
+    return {
+      heading: 'Graph layout failed',
+      detail: 'This scan completed, but its graph layout could not be published. The page inventory remains available.',
+    }
+  }
+
+  return {
+    heading: 'Graph layout unavailable',
+    detail: 'This scan does not have a published graph layout yet.',
+  }
 }
 
 interface HoveredNode {
@@ -355,12 +370,14 @@ export function SiteGraphSigma({
   nodes,
   edges,
   layoutState = 'ready',
+  layoutUnavailableReason,
   selectedNodeKey,
   onSelectNode,
   ariaLabel,
   className,
 }: SiteGraphSigmaProps) {
   const wrapperRef = useRef<HTMLElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const cameraActionsRef = useRef<CameraActions | null>(null)
   const searchId = useId()
   const listboxId = useId()
@@ -508,8 +525,15 @@ export function SiteGraphSigma({
     setSearchOpen(false)
   }
 
+  const closeSearchOnBlur = () => {
+    window.setTimeout(() => {
+      if (document.activeElement !== searchInputRef.current) setSearchOpen(false)
+    }, 0)
+  }
+
   const defaultAriaLabel = `Interactive site map showing ${plural(nodes.length, 'page')} and ${plural(edges.length, 'internal link')}`
   const optionId = (nodeKey: string) => `${listboxId}-${nodeKey.replaceAll(/[^\w-]/g, '-')}`
+  const unavailableLayout = unavailableLayoutMessage(layoutUnavailableReason)
 
   if (layoutState === 'unavailable') {
     return (
@@ -520,8 +544,8 @@ export function SiteGraphSigma({
         className={cn('flex min-h-80 items-center justify-center rounded-lg border border-default bg-surface-inset px-6 text-center', className)}
       >
         <div className="max-w-md">
-          <p className="text-sm font-medium text-heading">Graph layout unavailable</p>
-          <p className="mt-1 text-sm text-secondary">This scan does not have a published graph layout yet.</p>
+          <p className="text-sm font-medium text-heading">{unavailableLayout.heading}</p>
+          <p className="mt-1 text-sm text-secondary">{unavailableLayout.detail}</p>
         </div>
       </section>
     )
@@ -549,8 +573,8 @@ export function SiteGraphSigma({
         className={cn('flex min-h-80 items-center justify-center rounded-lg border border-default bg-surface-inset px-6 text-center', className)}
       >
         <div className="max-w-md">
-          <p className="text-sm font-medium text-heading">Graph layout unavailable</p>
-          <p className="mt-1 text-sm text-secondary">This scan does not have a published graph layout yet.</p>
+          <p className="text-sm font-medium text-heading">{unavailableLayout.heading}</p>
+          <p className="mt-1 text-sm text-secondary">{unavailableLayout.detail}</p>
         </div>
       </section>
     )
@@ -577,6 +601,7 @@ export function SiteGraphSigma({
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" aria-hidden="true" />
           <input
             id={searchId}
+            ref={searchInputRef}
             role="combobox"
             type="search"
             autoComplete="off"
@@ -589,6 +614,7 @@ export function SiteGraphSigma({
             placeholder={selectedNode ? `Focused: ${selectedNode.path || '/'}` : 'Find a page'}
             className="h-10 w-full rounded-md border border-base bg-bg py-2 pl-9 pr-3 text-sm text-primary placeholder-mono-600 outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
             onFocus={() => setSearchOpen(true)}
+            onBlur={closeSearchOnBlur}
             onChange={(event) => {
               setSearchValue(event.target.value)
               setSearchOpen(true)
@@ -626,6 +652,7 @@ export function SiteGraphSigma({
                         'flex min-h-11 w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm outline-none',
                         index === activeResultIndex ? 'bg-surface-active text-primary' : 'text-secondary hover:bg-surface-hover hover:text-primary',
                       )}
+                      onPointerDown={(event) => event.preventDefault()}
                       onMouseDown={(event) => event.preventDefault()}
                       onMouseEnter={() => setActiveResultIndex(index)}
                       onClick={() => chooseSearchResult(node)}

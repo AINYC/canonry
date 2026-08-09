@@ -275,7 +275,7 @@ cnry technical-aeo trend <project> [--format json|jsonl] # aggregate-score histo
 cnry schedule set <project> --kind site-audit --preset weekly   # keep it fresh
 ```
 
-For agent investigation, begin with `cnry site-health overview <project>`. Then request a focused neighborhood, a shortest path, or scan-to-scan changes. Do not ask an agent to materialize the interactive graph: it can exceed the MCP tool-result limit. The matching MCP tools are `canonry_site_health_overview`, `canonry_site_health_subgraph`, `canonry_site_health_path`, and `canonry_site_health_changes`; the subgraph tool defaults to a small focused result and should be expanded only when needed.
+For agent site readiness, begin with `cnry technical-aeo score <project> --format json`. Use `cnry site-health overview <project>` only to add crawl metadata; it never replaces the score. Then request a focused neighborhood, a shortest path, or scan-to-scan changes. Do not ask an agent to materialize the interactive graph: it can exceed the MCP tool-result limit. The matching MCP tools are `canonry_site_health_overview`, `canonry_site_health_subgraph`, `canonry_site_health_path`, and `canonry_site_health_changes`; the subgraph tool defaults to a small focused result and should be expanded only when needed.
 
 - The score is only available after at least one audit runs — `score` returns `hasData: false` until then.
 - A failed, cancelled, or budget-terminated attempt stays inspectable but never replaces the latest complete crawl graph.

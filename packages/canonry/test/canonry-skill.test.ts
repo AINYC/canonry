@@ -37,4 +37,20 @@ describe('canonry skill metadata', () => {
       expect.objectContaining({ package: 'canonry' }),
     ]))
   })
+
+  it('keeps agent site-readiness guidance score-first and uses overview only for crawl metadata', () => {
+    const canonrySkillPath = fileURLToPath(new URL('../../../skills/canonry/SKILL.md', import.meta.url))
+    const canonryReferencePath = fileURLToPath(new URL('../../../skills/canonry/references/canonry-cli.md', import.meta.url))
+    const aeroReferencePath = fileURLToPath(new URL('../../../skills/aero/references/orchestration.md', import.meta.url))
+    const canonrySkill = fs.readFileSync(canonrySkillPath, 'utf-8')
+    const canonryReference = fs.readFileSync(canonryReferencePath, 'utf-8')
+    const aeroReference = fs.readFileSync(aeroReferencePath, 'utf-8')
+
+    expect(canonrySkill).toContain('then `cnry technical-aeo score <project> --format json`')
+    expect(canonrySkill).toContain('only to add crawl metadata')
+    expect(canonryReference).toContain('begin with `cnry technical-aeo score <project> --format json`')
+    expect(canonryReference).toContain('only to add crawl metadata')
+    expect(aeroReference).toContain('then `cnry technical-aeo score <project> --format json` for site readiness')
+    expect(aeroReference).toContain('only to add crawl metadata')
+  })
 })
