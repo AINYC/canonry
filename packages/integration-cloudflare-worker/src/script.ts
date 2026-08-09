@@ -74,6 +74,7 @@ const UA_KEYWORDS = ${jsArray(opts.botList.uaKeywords)}
 const REFERER_DOMAINS = ${jsArray(opts.botList.refererDomains)}
 const UTM_SOURCE_TOKENS = ${jsArray(opts.botList.utmSourceTokens)}
 const BOT_SCORE_MAX_FORWARD = ${String(botScoreMax)}
+const RETRY_DELAYS_MS = [250, 1000]
 
 function lower(value) {
   return typeof value === 'string' ? value.toLowerCase() : ''
@@ -172,6 +173,33 @@ async function signBody(timestamp, body) {
   return toHex(sig)
 }
 
+function isRetryableStatus(status) {
+  return status === 408 || status === 425 || status === 429 || status >= 500
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function withRetry(operation) {
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    let response
+    try {
+      response = await operation()
+    } catch (error) {
+      if (attempt === RETRY_DELAYS_MS.length) throw error
+      await sleep(RETRY_DELAYS_MS[attempt])
+      continue
+    }
+
+    if (response.ok) return response
+    if (!isRetryableStatus(response.status) || attempt === RETRY_DELAYS_MS.length) {
+      throw new Error('Canonry ingest returned HTTP ' + response.status)
+    }
+    await sleep(RETRY_DELAYS_MS[attempt])
+  }
+}
+
 function pickCf(cf) {
   if (!cf) return null
   const bm = cf.botManagement || {}
@@ -212,7 +240,7 @@ async function forward(event, request, status) {
     })
     const timestamp = String(Math.floor(Date.now() / 1000))
     const signature = await signBody(timestamp, body)
-    await fetch(CANONRY_INGEST_URL, {
+    await withRetry(() => fetch(CANONRY_INGEST_URL, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -223,11 +251,15 @@ async function forward(event, request, status) {
         'X-Canonry-Source-Id': CANONRY_SOURCE_ID,
       },
       body,
-    })
-  } catch (_err) {
+    }))
+  } catch (err) {
     // Swallow — AI traffic is statistical, not transactional. Dropped
     // events are acceptable; surfacing the error would mask the customer
-    // response. Cloudflare's own Worker logs capture the failure.
+    // response. Emit only sanitized state to Cloudflare Worker logs.
+    console.warn('Canonry traffic ingest failed', {
+      sourceId: CANONRY_SOURCE_ID,
+      message: err instanceof Error ? err.message : String(err),
+    })
   }
 }
 

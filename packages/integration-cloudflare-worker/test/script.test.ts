@@ -1,5 +1,5 @@
 import { AI_ENGINE_DOMAINS } from '@ainyc/canonry-contracts'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_BOT_LIST,
   generateWorkerScript,
@@ -42,6 +42,48 @@ function request(url: string, referer?: string): GeneratedRequest {
     headers: { get: name => headers.get(name.toLowerCase()) ?? null },
     cf: null,
   }
+}
+
+async function runGeneratedWorker(ingestStatuses: number[]): Promise<{
+  ingestCalls: number
+  warn: ReturnType<typeof vi.fn>
+}> {
+  let handler: ((event: {
+    request: Request
+    respondWith: (response: Promise<Response>) => void
+    waitUntil: (task: Promise<unknown>) => void
+  }) => void) | undefined
+  const waitUntilTasks: Promise<unknown>[] = []
+  const warn = vi.fn()
+  let ingestCalls = 0
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    if (typeof input !== 'string') return new Response('origin', { status: 200 })
+    ingestCalls += 1
+    return new Response('', { status: ingestStatuses.shift() ?? 200 })
+  })
+  const immediateTimeout = (callback: () => void): number => {
+    callback()
+    return 0
+  }
+  const register = (type: string, callback: typeof handler): void => {
+    if (type === 'fetch') handler = callback
+  }
+  const evaluate = new Function('addEventListener', 'fetch', 'crypto', 'console', 'setTimeout', generateWorkerScript(BASE_OPTS))
+  evaluate(register, fetchMock, globalThis.crypto, { warn }, immediateTimeout)
+
+  const generatedRequest = new Request('https://example.com/?utm_source=chatgpt', {
+    headers: { 'cf-ray': 'evt_retry_test', 'user-agent': 'Mozilla/5.0' },
+  })
+  Object.defineProperty(generatedRequest, 'cf', { value: null })
+  let responsePromise: Promise<Response> | undefined
+  handler!({
+    request: generatedRequest,
+    respondWith: (response) => { responsePromise = response },
+    waitUntil: (task) => { waitUntilTasks.push(task) },
+  })
+  await responsePromise
+  await Promise.all(waitUntilTasks)
+  return { ingestCalls, warn }
 }
 
 describe('generateWorkerScript', () => {
@@ -133,6 +175,20 @@ describe('generateWorkerScript', () => {
   it('uses POST as the forward method', () => {
     const script = generateWorkerScript(BASE_OPTS)
     expect(script).toMatch(/method\s*:\s*['"]POST['"]/)
+  })
+
+  it('retries transient ingest failures without blocking the origin response', async () => {
+    const result = await runGeneratedWorker([503, 200])
+    expect(result.ingestCalls).toBe(2)
+    expect(result.warn).not.toHaveBeenCalled()
+  })
+
+  it('does not retry a permanent ingest rejection and logs no secrets', async () => {
+    const result = await runGeneratedWorker([401])
+    expect(result.ingestCalls).toBe(1)
+    expect(result.warn).toHaveBeenCalledOnce()
+    expect(JSON.stringify(result.warn.mock.calls)).not.toContain(BASE_OPTS.bearerToken)
+    expect(JSON.stringify(result.warn.mock.calls)).not.toContain(BASE_OPTS.hmacSecret)
   })
 
   it('parses as JavaScript (smoke test)', () => {
