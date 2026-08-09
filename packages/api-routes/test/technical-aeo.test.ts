@@ -31,6 +31,7 @@ import type {
   SiteCrawlGraphResponseDto,
   SiteCrawlInternalLinksResponseDto,
   SiteCrawlNeighborsResponseDto,
+  SiteCrawlPageAuditDto,
   SiteCrawlPagesResponseDto,
   SiteCrawlStructureResponseDto,
   SiteCrawlSummaryDto,
@@ -156,6 +157,11 @@ function buildCtx(): Ctx {
       id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'home',
       url: 'https://example.com/', finalUrl: 'https://example.com/', path: '/', parentPath: '/', discoverySource: 'sitemap',
       fetchState: 'html', httpStatus: 200, indexabilityState: 'indexable', auditState: 'complete', auditScore: 88,
+      auditFields: {
+        // Pre-evidence crawl shape: scores remain readable, but the detail
+        // endpoint must not claim that empty finding arrays are complete.
+        factors: [{ id: 'structured-data', name: 'Structured Data', weight: 12, score: 88 }],
+      },
       inventoryEligible: true, depth: 0, outboundUniqueEdges: 2, outboundOccurrences: 3, linkScoreRaw: 10, linkScoreNormalized: 1,
       createdAt: tB, updatedAt: tB,
     },
@@ -163,6 +169,17 @@ function buildCtx(): Ctx {
       id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'guide',
       url: 'https://example.com/guide', finalUrl: 'https://example.com/guide', path: '/guide', parentPath: '/', discoverySource: 'link',
       fetchState: 'html', httpStatus: 200, indexabilityState: 'indexable', auditState: 'complete', auditScore: 42,
+      auditFields: {
+        schemaVersion: '1.0',
+        factors: [{
+          id: 'content-depth', name: 'Content Depth', weight: 12, score: 20, status: 'fail', applicable: true,
+          findings: [{ type: 'missing', code: 'content-depth.word-count.low', message: 'Low content depth (120 words).' }],
+          recommendations: ['Add more comprehensive copy covering key user questions.'],
+        }],
+        criticalDefects: [{
+          id: 'missing-h1', severity: 'critical', detail: 'No H1 tag found.', recommendation: 'Add one descriptive H1.',
+        }],
+      },
       inventoryEligible: true, depth: 1, inboundUniqueEdges: 1, inboundOccurrences: 2, linkScoreRaw: 4, linkScoreNormalized: 0.4,
       createdAt: tB, updatedAt: tB,
     },
@@ -517,6 +534,112 @@ describe('GET /technical-aeo crawl reads', () => {
     const { body } = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph')
     expect(pages.body.pages.find((page) => page.nodeKey === 'guide')?.healthState).toBe('hidden')
     expect(body.nodes.find((node) => node.nodeKey === 'guide')?.healthState).toBe('hidden')
+  })
+
+  it('returns exact page audit evidence for one graph node in the selected crawl', async () => {
+    const { status, body } = await get<SiteCrawlPageAuditDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit?nodeKey=guide',
+    )
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({
+      state: 'ready',
+      project: 'tech-aeo',
+      runId: ctx.runB,
+      complete: true,
+      termination: 'completed',
+      nodeKey: 'guide',
+      url: 'https://example.com/guide',
+      auditState: 'complete',
+      auditScore: 42,
+      evidenceState: 'complete',
+      factors: [{
+        id: 'content-depth',
+        score: 20,
+        status: 'fail',
+        applicable: true,
+        findings: [{ code: 'content-depth.word-count.low' }],
+        recommendations: ['Add more comprehensive copy covering key user questions.'],
+      }],
+      criticalDefects: [{ id: 'missing-h1', severity: 'critical' }],
+    })
+  })
+
+  it('distinguishes legacy scores-only evidence from a page that was not audited', async () => {
+    const legacy = await get<SiteCrawlPageAuditDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit?runId=${ctx.runB}&url=${encodeURIComponent('https://example.com/')}`,
+    )
+    const notAudited = await get<SiteCrawlPageAuditDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit?nodeKey=gone',
+    )
+
+    expect(legacy.body).toMatchObject({
+      state: 'ready',
+      nodeKey: 'home',
+      auditScore: 88,
+      evidenceState: 'scores-only',
+      factors: [{
+        id: 'structured-data', score: 88, status: 'pass', applicable: null,
+        findings: [], recommendations: [],
+      }],
+      criticalDefects: [],
+    })
+    expect(notAudited.body).toMatchObject({
+      state: 'not-audited', nodeKey: 'gone', auditScore: null,
+      factors: [], criticalDefects: [],
+    })
+  })
+
+  it('returns explicit page-audit availability states and enforces one selector', async () => {
+    const missing = await get<SiteCrawlPageAuditDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit?nodeKey=missing',
+    )
+    expect(missing.body).toMatchObject({ state: 'not-found', runId: ctx.runB, complete: true })
+
+    const noCrawlProjectId = crypto.randomUUID()
+    const now = new Date().toISOString()
+    ctx.db.insert(projects).values({
+      id: noCrawlProjectId, name: 'no-crawl', displayName: 'No crawl', canonicalDomain: 'none.example',
+      country: 'US', language: 'en', providers: [], locations: [], createdAt: now, updatedAt: now,
+    }).run()
+    const noCrawl = await get<SiteCrawlPageAuditDto>(
+      '/api/v1/projects/no-crawl/technical-aeo/crawl/pages/audit?nodeKey=home',
+    )
+    expect(noCrawl.body).toEqual({ state: 'no-crawl', project: 'no-crawl', runId: null })
+
+    ctx.db.insert(siteCrawlSnapshots).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId: null,
+      rootUrl: 'https://example.com/', complete: true, termination: 'completed', detailsAvailable: false,
+      createdAt: now, updatedAt: now,
+    }).run()
+    const unavailable = await get<SiteCrawlPageAuditDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit?runId=${ctx.runA}&nodeKey=home`,
+    )
+    expect(unavailable.body).toMatchObject({
+      state: 'details-unavailable', runId: ctx.runA, complete: true, termination: 'completed',
+    })
+
+    for (const query of ['', '?nodeKey=home&url=https%3A%2F%2Fexample.com%2F']) {
+      const invalid = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit${query}`,
+      })
+      expect(invalid.statusCode).toBe(400)
+      expect(invalid.json().error.code).toBe('VALIDATION_ERROR')
+    }
+
+    for (const query of [
+      '?nodeKey=guide&nodeKey=home',
+      '?url=https%3A%2F%2Fexample.com%2Fguide&url=https%3A%2F%2Fexample.com%2F',
+      `?nodeKey=guide&runId=${ctx.runB}&runId=${ctx.runA}`,
+    ]) {
+      const repeated = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit${query}`,
+      })
+      expect(repeated.statusCode).toBe(400)
+      expect(repeated.json().error.code).toBe('VALIDATION_ERROR')
+    }
   })
 
   it('does not rebuild or reorder the projection from canonical crawl rows at read time', async () => {

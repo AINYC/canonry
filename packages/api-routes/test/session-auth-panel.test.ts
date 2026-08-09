@@ -508,6 +508,7 @@ test('the technical-aeo embed tab permits its Site Health graph and semantic rea
   try {
     for (const url of [
       '/api/v1/projects/sample/technical-aeo/graph',
+      '/api/v1/projects/sample/technical-aeo/crawl/pages/audit?nodeKey=home',
       '/api/v1/projects/sample/technical-aeo/subgraph',
       '/api/v1/projects/sample/technical-aeo/path?toUrl=https%3A%2F%2Fsample.example%2Ftarget',
       '/api/v1/projects/sample/technical-aeo/changes',

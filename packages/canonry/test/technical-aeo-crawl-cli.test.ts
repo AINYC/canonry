@@ -4,6 +4,7 @@ const mocked = vi.hoisted(() => ({
   triggerSiteAudit: vi.fn(),
   getTechnicalAeoCrawl: vi.fn(),
   getTechnicalAeoCrawlPages: vi.fn(),
+  getTechnicalAeoPageAudit: vi.fn(),
   getTechnicalAeoStructure: vi.fn(),
   getTechnicalAeoInternalLinks: vi.fn(),
   getTechnicalAeoInternalLinkNeighbors: vi.fn(),
@@ -23,6 +24,7 @@ import {
   technicalAeoCrawlPages,
   technicalAeoDeadLinks,
   technicalAeoInternalLinks,
+  technicalAeoPageAudit,
   technicalAeoStructure,
 } from '../src/commands/technical-aeo.js'
 
@@ -95,6 +97,7 @@ describe('Technical AEO full-crawl CLI', () => {
     expect(TECHNICAL_AEO_CLI_COMMANDS.map((spec) => spec.path.join(' '))).toEqual(expect.arrayContaining([
       'technical-aeo crawl',
       'technical-aeo crawl-pages',
+      'technical-aeo page-audit',
       'technical-aeo structure',
       'technical-aeo links',
       'technical-aeo links neighbors',
@@ -104,6 +107,7 @@ describe('Technical AEO full-crawl CLI', () => {
       'technical-aeo changes',
       'site-health overview',
       'site-health pages',
+      'site-health page-audit',
       'site-health structure',
       'site-health links',
       'site-health neighbors',
@@ -112,6 +116,163 @@ describe('Technical AEO full-crawl CLI', () => {
       'site-health path',
       'site-health changes',
     ]))
+  })
+
+  it('requires exactly one page selector for page audit evidence', async () => {
+    await expect(command(['technical-aeo', 'page-audit']).run({
+      positionals: ['acme'],
+      values: {},
+      format: 'json',
+      dryRun: false,
+    })).rejects.toMatchObject({
+      code: 'CLI_USAGE_ERROR',
+      message: '--node-key or --url is required',
+    })
+
+    await expect(command(['site-health', 'page-audit']).run({
+      positionals: ['acme'],
+      values: { 'node-key': 'page:guide', url: 'https://acme.test/guide' },
+      format: 'json',
+      dryRun: false,
+    })).rejects.toMatchObject({
+      code: 'CLI_USAGE_ERROR',
+      message: '--node-key and --url cannot be combined',
+      displayMessage: expect.stringContaining('Usage: canonry site-health page-audit <project>'),
+    })
+    expect(mocked.getTechnicalAeoPageAudit).not.toHaveBeenCalled()
+  })
+
+  it('renders one page score with its exact findings and scan provenance', async () => {
+    mocked.getTechnicalAeoPageAudit.mockResolvedValue({
+      state: 'ready',
+      project: 'acme',
+      runId: 'run-1',
+      complete: false,
+      termination: 'max-pages',
+      nodeKey: 'page:guide',
+      url: 'https://acme.test/guide',
+      auditState: 'success',
+      auditScore: 42,
+      evidenceState: 'complete',
+      factors: [{
+        id: 'content-depth',
+        name: 'Content Depth',
+        weight: 12,
+        score: 20,
+        status: 'fail',
+        applicable: true,
+        findings: [{
+          type: 'missing',
+          code: 'content-depth.word-count.low',
+          message: 'Low content depth (120 words).',
+        }],
+        recommendations: ['Add comprehensive copy.'],
+      }],
+      criticalDefects: [],
+    })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    try {
+      await technicalAeoPageAudit('acme', { nodeKey: 'page:guide', runId: 'run-1' })
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('content-depth.word-count.low'))
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('Partial crawl: max-pages'))
+    } finally {
+      log.mockRestore()
+    }
+    expect(mocked.getTechnicalAeoPageAudit).toHaveBeenCalledWith('acme', {
+      runId: 'run-1',
+      nodeKey: 'page:guide',
+      url: undefined,
+    })
+  })
+
+  it('labels score-independent defects and prints each defect severity', async () => {
+    mocked.getTechnicalAeoPageAudit.mockResolvedValue({
+      state: 'ready',
+      project: 'acme',
+      runId: 'run-1',
+      complete: true,
+      termination: null,
+      nodeKey: 'page:guide',
+      url: 'https://acme.test/guide',
+      auditState: 'success',
+      auditScore: 84,
+      evidenceState: 'complete',
+      factors: [],
+      criticalDefects: [
+        {
+          id: 'robots-blocked',
+          severity: 'critical',
+          detail: 'AI crawlers are blocked.',
+          recommendation: 'Allow supported AI crawlers.',
+        },
+        {
+          id: 'missing-llms-txt',
+          severity: 'warning',
+          detail: 'llms.txt is missing.',
+          recommendation: 'Publish llms.txt.',
+        },
+      ],
+    })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    try {
+      await technicalAeoPageAudit('acme', { nodeKey: 'page:guide', runId: 'run-1' })
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('Score-independent defects:'))
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('[critical] [robots-blocked] AI crawlers are blocked.'))
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('[warning] [missing-llms-txt] llms.txt is missing.'))
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('renders every page-audit availability state without inventing evidence', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    try {
+      mocked.getTechnicalAeoPageAudit.mockResolvedValueOnce({
+        state: 'no-crawl',
+        project: 'acme',
+        runId: null,
+      })
+      await technicalAeoPageAudit('acme', { nodeKey: 'page:guide' })
+      expect(log).toHaveBeenLastCalledWith(expect.stringContaining('No persisted Site Health crawl'))
+
+      mocked.getTechnicalAeoPageAudit.mockResolvedValueOnce({
+        state: 'details-unavailable',
+        project: 'acme',
+        runId: 'run-old',
+        complete: false,
+        termination: 'max-pages',
+      })
+      await technicalAeoPageAudit('acme', { nodeKey: 'page:guide', runId: 'run-old' })
+      expect(log).toHaveBeenLastCalledWith(expect.stringMatching(/details are unavailable[\s\S]*Run: run-old · partial[\s\S]*Partial crawl: max-pages/))
+
+      mocked.getTechnicalAeoPageAudit.mockResolvedValueOnce({
+        state: 'not-found',
+        project: 'acme',
+        runId: 'run-2',
+        complete: true,
+        termination: null,
+      })
+      await technicalAeoPageAudit('acme', { url: 'https://acme.test/missing', runId: 'run-2' })
+      expect(log).toHaveBeenLastCalledWith(expect.stringMatching(/not found[\s\S]*Run: run-2 · complete/))
+
+      mocked.getTechnicalAeoPageAudit.mockResolvedValueOnce({
+        state: 'not-audited',
+        project: 'acme',
+        runId: 'run-2',
+        complete: true,
+        termination: null,
+        nodeKey: 'page:asset',
+        url: 'https://acme.test/image.png',
+        auditState: 'ineligible',
+        auditScore: null,
+        factors: [],
+        criticalDefects: [],
+      })
+      await technicalAeoPageAudit('acme', { nodeKey: 'page:asset', runId: 'run-2' })
+      expect(log).toHaveBeenLastCalledWith(expect.stringMatching(/not scored[\s\S]*page state is ineligible/))
+    } finally {
+      log.mockRestore()
+    }
   })
 
   it('requires a page selector before calling the bounded neighbors endpoint', async () => {

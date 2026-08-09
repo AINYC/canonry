@@ -327,6 +327,79 @@ export const siteCrawlPageSchema = z.object({
 })
 export type SiteCrawlPageDto = z.infer<typeof siteCrawlPageSchema>
 
+/** One stable, page-scoped finding emitted by the audit engine. */
+export const siteCrawlAuditFindingSchema = z.object({
+  type: z.enum(['found', 'missing', 'info', 'timeout', 'unreachable']),
+  /** Stable machine code; UI and agents must not key behavior off `message`. */
+  code: z.string().min(1),
+  message: z.string().min(1),
+})
+export type SiteCrawlAuditFindingDto = z.infer<typeof siteCrawlAuditFindingSchema>
+
+/**
+ * One factor that contributes to a page's aggregate audit score, with the
+ * exact evidence and remediation emitted for that page in the selected run.
+ */
+export const siteCrawlAuditFactorSchema = siteAuditPageFactorSchema.extend({
+  status: siteAuditFactorStatusSchema,
+  /** `null` means the engine did not explicitly classify applicability. */
+  applicable: z.boolean().nullable(),
+  findings: z.array(siteCrawlAuditFindingSchema).default([]),
+  recommendations: z.array(z.string()).default([]),
+})
+export type SiteCrawlAuditFactorDto = z.infer<typeof siteCrawlAuditFactorSchema>
+
+/** High-impact page defect detected independently of the weighted score. */
+export const siteCrawlCriticalDefectSchema = z.object({
+  id: z.string().min(1),
+  severity: z.enum(['critical', 'warning']),
+  detail: z.string().min(1),
+  recommendation: z.string().min(1),
+})
+export type SiteCrawlCriticalDefectDto = z.infer<typeof siteCrawlCriticalDefectSchema>
+
+/**
+ * One-page audit evidence read. This stays separate from the 20k-node graph
+ * projection so selecting a node can load evidence without inflating every
+ * graph node with finding prose.
+ */
+const siteCrawlPageAuditProvenanceSchema = z.object({
+  project: z.string(),
+  runId: z.string(),
+  complete: z.boolean(),
+  termination: z.string().nullable(),
+})
+const siteCrawlPageAuditIdentitySchema = z.object({
+  nodeKey: z.string(),
+  url: z.string(),
+  auditState: z.string(),
+})
+
+export const siteCrawlPageAuditSchema = z.discriminatedUnion('state', [
+  z.object({
+    state: z.literal('no-crawl'),
+    project: z.string(),
+    runId: z.null(),
+  }),
+  siteCrawlPageAuditProvenanceSchema.extend({ state: z.literal('details-unavailable') }),
+  siteCrawlPageAuditProvenanceSchema.extend({ state: z.literal('not-found') }),
+  siteCrawlPageAuditProvenanceSchema.merge(siteCrawlPageAuditIdentitySchema).extend({
+    state: z.literal('not-audited'),
+    auditScore: z.null(),
+    factors: z.array(siteCrawlAuditFactorSchema).length(0).default([]),
+    criticalDefects: z.array(siteCrawlCriticalDefectSchema).length(0).default([]),
+  }),
+  siteCrawlPageAuditProvenanceSchema.merge(siteCrawlPageAuditIdentitySchema).extend({
+    state: z.literal('ready'),
+    auditScore: z.number(),
+    /** Old crawl rows retain factor scores but did not persist evidence prose. */
+    evidenceState: z.enum(['complete', 'scores-only']),
+    factors: z.array(siteCrawlAuditFactorSchema).default([]),
+    criticalDefects: z.array(siteCrawlCriticalDefectSchema).default([]),
+  }),
+])
+export type SiteCrawlPageAuditDto = z.infer<typeof siteCrawlPageAuditSchema>
+
 export const siteCrawlPagesResponseSchema = z.object({
   project: z.string(),
   hasCrawlData: z.boolean(),

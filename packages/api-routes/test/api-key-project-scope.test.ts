@@ -131,6 +131,7 @@ describe('project-scoped API keys', () => {
 
   it('a scoped read-only key can read its own bounded technical crawl surface but not a sibling', async () => {
     expect((await authed('GET', '/api/v1/projects/project-a/technical-aeo/crawl/pages?limit=1', SCOPED_KEY)).statusCode).toBe(200)
+    expect((await authed('GET', '/api/v1/projects/project-a/technical-aeo/crawl/pages/audit?nodeKey=home', SCOPED_KEY)).statusCode).toBe(200)
     expect((await authed('GET', '/api/v1/projects/project-b/technical-aeo/internal-links?limit=1', SCOPED_KEY)).statusCode).toBe(403)
   })
 

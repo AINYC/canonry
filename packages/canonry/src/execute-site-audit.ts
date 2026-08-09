@@ -31,6 +31,8 @@ import {
   type SiteAuditCrossCuttingIssueDto,
   type SiteAuditFactorSummaryDto,
   type SiteAuditPageFactorDto,
+  type SiteCrawlAuditFactorDto,
+  type SiteCrawlCriticalDefectDto,
 } from '@ainyc/canonry-contracts'
 import { resolveWebhookTarget } from '@ainyc/canonry-api-routes'
 import { createLogger } from './logger.js'
@@ -93,6 +95,28 @@ export function clampSiteAuditEdgeLimit(limit: number | undefined): number {
 
 function toPageFactor(factor: AuditFactor): SiteAuditPageFactorDto {
   return { id: factor.id, name: factor.name, weight: factor.weight, score: factor.score }
+}
+
+function toCrawlAuditFactor(factor: AuditFactor): SiteCrawlAuditFactorDto {
+  return {
+    ...toPageFactor(factor),
+    status: factorStatusFromScore(factor.score),
+    applicable: factor.applicable ?? null,
+    findings: factor.findings,
+    recommendations: factor.recommendations,
+  }
+}
+
+function crawlAuditFields(audit: NonNullable<CrawlPageObservation['audit']>): {
+  schemaVersion: '1.0'
+  factors: SiteCrawlAuditFactorDto[]
+  criticalDefects: SiteCrawlCriticalDefectDto[]
+} {
+  return {
+    schemaVersion: '1.0',
+    factors: audit.factors.map(toCrawlAuditFactor),
+    criticalDefects: audit.criticalDefects,
+  }
 }
 
 /** Aggregate the scorecard from crawl observations, not a second full report. */
@@ -356,7 +380,7 @@ export async function executeSiteAudit(
       indexabilityReasons: page.indexability.reasons,
       auditState: pageAuditState(page),
       auditScore: audit?.overallScore ?? null,
-      auditFields: audit ? { factors: audit.factors.map(toPageFactor) } : {},
+      auditFields: audit ? crawlAuditFields(audit) : {},
       inventoryEligible: isInventoryEligible(page),
       depth: page.depth,
       inboundUniqueEdges: page.metrics.inbound.uniqueEdges,
@@ -391,7 +415,7 @@ export async function executeSiteAudit(
         indexabilityReasons: page.indexability.reasons,
         auditState: pageAuditState(page),
         auditScore: audit?.overallScore ?? null,
-        auditFields: audit ? { factors: audit.factors.map(toPageFactor) } : {},
+        auditFields: audit ? crawlAuditFields(audit) : {},
         inventoryEligible: isInventoryEligible(page),
         depth: page.depth,
         inboundUniqueEdges: page.metrics.inbound.uniqueEdges,

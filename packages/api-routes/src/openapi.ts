@@ -6133,6 +6133,24 @@ const routeCatalog: OpenApiOperation[] = [
   },
   {
     method: 'get',
+    path: '/api/v1/projects/{name}/technical-aeo/crawl/pages/audit',
+    summary: 'Get exact audit evidence for one persisted crawl page',
+    description: 'Returns one page score with the exact weighted-factor findings, recommendations, applicability, and independent critical defects persisted for the selected crawl. Exactly one of nodeKey or url is required. The discriminated state preserves crawl completeness and termination provenance, distinguishes a page that was not audited from one that was not found, and marks legacy score-only rows without fabricating missing evidence. This one-page read keeps verbose evidence out of the bounded interactive graph projection.',
+    tags: ['technical-aeo'],
+    parameters: [
+      nameParameter,
+      { name: 'runId', in: 'query', description: 'Historical site-audit run ID. Omit for the latest complete crawl.', schema: stringSchema },
+      { name: 'nodeKey', in: 'query', description: 'Exact canonical crawl node key. Required when url is omitted.', schema: stringSchema },
+      { name: 'url', in: 'query', description: 'Exact persisted crawl URL. Required when nodeKey is omitted.', schema: stringSchema },
+    ],
+    responses: {
+      200: jsonResponse('Page audit evidence state returned.', 'SiteCrawlPageAuditDto'),
+      400: errorResponse('Exactly one page selector is required.'),
+      404: errorResponse('Project or explicitly selected crawl-bearing run not found.'),
+    },
+  },
+  {
+    method: 'get',
     path: '/api/v1/projects/{name}/technical-aeo/crawl/pages',
     summary: 'List persisted Technical AEO crawl pages',
     description: 'Cursor-paged canonical crawl nodes for the latest or selected crawl. `inventoryEligible` is Canonry technical-inventory eligibility, not a statement about actual Google index state.',

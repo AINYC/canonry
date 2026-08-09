@@ -41,6 +41,8 @@ export interface SiteGraphSigmaNode extends SiteGraphHealthSource {
   url: string
   path: string
   depth: number | null
+  /** Page-level Technical AEO score. It does not affect graph color or size. */
+  auditScore?: number | null
   linkScoreNormalized: number | null
   inventoryEligible?: boolean
   x: number

@@ -60,6 +60,34 @@ function score(runId: string, aggregateScore = 84) {
   }
 }
 
+function scoreWithFinding() {
+  return {
+    ...score('audit_old', 52),
+    pagesDiscovered: 2,
+    pagesAudited: 2,
+    pagesSkipped: 0,
+    factors: [{
+      id: 'ai-crawler-access',
+      name: 'AI Crawler Access',
+      weight: 20,
+      avgScore: 30,
+      status: 'fail',
+      pagesPassing: 0,
+      pagesPartial: 0,
+      pagesFailing: 2,
+    }],
+    crossCuttingIssues: [{
+      factorId: 'ai-crawler-access',
+      factorName: 'AI Crawler Access',
+      avgScore: 30,
+      affectedPages: 2,
+      totalPages: 2,
+      affectedPct: 100,
+      topRecommendations: ['Allow GPTBot in robots.txt'],
+    }],
+  }
+}
+
 function run(id: string, status: string) {
   return {
     id,
@@ -218,4 +246,205 @@ test('preserves the crawl error as the tooltip on a truncated page URL', () => {
   const visibleUrl = screen.getByText(`${[...url].slice(0, 54).join('')}…${[...url].slice(-20).join('')}`)
   expect(visibleUrl.parentElement?.getAttribute('title')).toBe('Crawl timed out after 30 seconds')
   expect(visibleUrl.parentElement?.querySelector('.sr-only')?.textContent).toBe(url)
+})
+
+test.each([
+  ['integrated', true],
+  ['standalone', false],
+] as const)('shows a recoverable score-read error in %s mode', async (_mode, integrated) => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
+  let scoreCalls = 0
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = input instanceof Request ? input.url : String(input)
+    if (/\/technical-aeo(?:\?|$)/.test(url)) scoreCalls += 1
+    return new Response('{"error":"unavailable"}', {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TechnicalAeoSection projectName={projectName} projectId={projectId} integrated={integrated} />
+    </QueryClientProvider>,
+  )
+
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain('Technical checks could not load')
+  expect(screen.queryByText('Technical checks unavailable')).toBeNull()
+
+  const callsBeforeRetry = scoreCalls
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await waitFor(() => expect(scoreCalls).toBeGreaterThan(callsBeforeRetry))
+})
+
+test('distills the integrated view to a score and its actionable findings', async () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(scoreKey, {
+    ...score('audit_old', 52),
+    pagesDiscovered: 2,
+    pagesAudited: 2,
+    pagesSkipped: 0,
+    factors: [
+      {
+        id: 'ai-crawler-access',
+        name: 'AI Crawler Access',
+        weight: 20,
+        avgScore: 30,
+        status: 'fail',
+        pagesPassing: 0,
+        pagesPartial: 0,
+        pagesFailing: 2,
+      },
+      {
+        id: 'structured-data',
+        name: 'Structured Data',
+        weight: 15,
+        avgScore: 74,
+        status: 'pass',
+        pagesPassing: 1,
+        pagesPartial: 1,
+        pagesFailing: 0,
+      },
+    ],
+    crossCuttingIssues: [{
+      factorId: 'ai-crawler-access',
+      factorName: 'AI Crawler Access',
+      avgScore: 30,
+      affectedPages: 2,
+      totalPages: 2,
+      affectedPct: 100,
+      topRecommendations: ['Allow GPTBot in robots.txt'],
+    }],
+  })
+  queryClient.setQueryData(pagesKey, {
+    project: projectName,
+    runId: 'audit_old',
+    auditedAt: '2026-07-14T18:16:33.000Z',
+    total: 2,
+    pages: [
+      {
+        url: 'https://citypoint.example/',
+        status: 'success',
+        overallScore: 44,
+        factors: [{ id: 'ai-crawler-access', name: 'AI Crawler Access', weight: 20, score: 30 }],
+      },
+      {
+        url: 'https://citypoint.example/services',
+        status: 'success',
+        overallScore: 60,
+        factors: [{ id: 'ai-crawler-access', name: 'AI Crawler Access', weight: 20, score: 30 }],
+      },
+    ],
+  })
+  queryClient.setQueryData(trendKey, {
+    project: projectName,
+    points: [
+      { runId: 'audit_older', auditedAt: '2026-07-01T18:16:33.000Z', aggregateScore: 48, pagesAudited: 2 },
+      { runId: 'audit_old', auditedAt: '2026-07-14T18:16:33.000Z', aggregateScore: 52, pagesAudited: 2 },
+    ],
+  })
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TechnicalAeoSection projectName={projectName} projectId={projectId} integrated />
+    </QueryClientProvider>,
+  )
+
+  expect(screen.getByLabelText('Site score 52 out of 100')).not.toBeNull()
+  expect(screen.getByText('2 pages checked')).not.toBeNull()
+  expect(screen.getByText('2 checks need attention')).not.toBeNull()
+  expect(screen.getByRole('heading', { name: 'Technical findings' })).not.toBeNull()
+  expect(screen.getByText('Pages affected')).not.toBeNull()
+
+  const failingFactor = screen.getByRole('button', { name: 'AI Crawler Access' })
+  await waitFor(() => expect(failingFactor.getAttribute('aria-expanded')).toBe('true'))
+  expect(screen.getByText('Allow GPTBot in robots.txt')).not.toBeNull()
+  expect(screen.getByRole('link', { name: 'https://citypoint.example/services' })).not.toBeNull()
+
+  expect(screen.queryByRole('heading', { name: 'Site score over time' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Prioritized fixes' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Per-page breakdown' })).toBeNull()
+})
+
+test('keeps the integrated findings table readable while affected pages load', async () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(scoreKey, scoreWithFinding())
+  queryClient.removeQueries({ queryKey: pagesKey })
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => undefined)))
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TechnicalAeoSection projectName={projectName} projectId={projectId} integrated />
+    </QueryClientProvider>,
+  )
+
+  expect(await screen.findByText('Loading affected pages...')).not.toBeNull()
+  expect(screen.getByRole('table').className).toContain('min-w-[42rem]')
+  expect(screen.queryByText('Page details are not available in the loaded audit sample.')).toBeNull()
+  expect(screen.queryByText(/Showing the worst 0 audited pages/)).toBeNull()
+})
+
+test('shows a focused retry when integrated affected pages fail to load', async () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(scoreKey, scoreWithFinding())
+  queryClient.removeQueries({ queryKey: pagesKey })
+  let pageCalls = 0
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = input instanceof Request ? input.url : String(input)
+    if (url.includes('/technical-aeo/pages')) pageCalls += 1
+    return new Response('{"error":"unavailable"}', {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TechnicalAeoSection projectName={projectName} projectId={projectId} integrated />
+    </QueryClientProvider>,
+  )
+
+  expect(await screen.findByText('Affected pages could not load')).not.toBeNull()
+  expect(screen.queryByText('Page details are not available in the loaded audit sample.')).toBeNull()
+  expect(screen.queryByText(/Showing the worst 0 audited pages/)).toBeNull()
+
+  const callsBeforeRetry = pageCalls
+  fireEvent.click(screen.getByRole('button', { name: 'Retry affected pages' }))
+  await waitFor(() => expect(pageCalls).toBeGreaterThan(callsBeforeRetry))
+})
+
+test('keeps recommendation-free integrated findings truthful and single-column', async () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(scoreKey, {
+    ...scoreWithFinding(),
+    crossCuttingIssues: [{
+      ...scoreWithFinding().crossCuttingIssues[0],
+      topRecommendations: [],
+    }],
+  })
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TechnicalAeoSection projectName={projectName} projectId={projectId} integrated />
+    </QueryClientProvider>,
+  )
+
+  expect(screen.getByText('Select a check to see affected pages and score details.')).not.toBeNull()
+  expect(screen.queryByText('Select a check to see affected pages and recommended fixes.')).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Recommended fixes' })).toBeNull()
+
+  const factorButton = screen.getByRole('button', { name: 'AI Crawler Access' })
+  await waitFor(() => expect(factorButton.getAttribute('aria-expanded')).toBe('true'))
+  expect(factorButton.hasAttribute('aria-controls')).toBe(false)
+  const affectedPagesHeading = screen.getByRole('heading', { name: 'Affected pages (2)' })
+  expect(affectedPagesHeading.closest('.grid')?.className).not.toContain('lg:grid-cols-2')
+
+  fireEvent.click(factorButton)
+  expect(factorButton.getAttribute('aria-expanded')).toBe('false')
+  expect(factorButton.hasAttribute('aria-controls')).toBe(false)
 })

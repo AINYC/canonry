@@ -7474,6 +7474,85 @@ export type SiteCrawlNeighborsResponseDto = {
     outboundTruncated: boolean;
 };
 
+export type SiteCrawlPageAuditDto = {
+    state: 'no-crawl';
+    project: string;
+    runId: null;
+} | {
+    project: string;
+    runId: string;
+    complete: boolean;
+    termination: string | null;
+    state: 'details-unavailable';
+} | {
+    project: string;
+    runId: string;
+    complete: boolean;
+    termination: string | null;
+    state: 'not-found';
+} | {
+    project: string;
+    runId: string;
+    complete: boolean;
+    termination: string | null;
+    nodeKey: string;
+    url: string;
+    auditState: string;
+    state: 'not-audited';
+    auditScore: null;
+    factors: Array<{
+        id: string;
+        name: string;
+        weight: number;
+        score: number;
+        status: 'pass' | 'partial' | 'fail';
+        applicable: boolean | null;
+        findings: Array<{
+            type: 'found' | 'missing' | 'info' | 'timeout' | 'unreachable';
+            code: string;
+            message: string;
+        }>;
+        recommendations: Array<string>;
+    }>;
+    criticalDefects: Array<{
+        id: string;
+        severity: 'critical' | 'warning';
+        detail: string;
+        recommendation: string;
+    }>;
+} | {
+    project: string;
+    runId: string;
+    complete: boolean;
+    termination: string | null;
+    nodeKey: string;
+    url: string;
+    auditState: string;
+    state: 'ready';
+    auditScore: number;
+    evidenceState: 'complete' | 'scores-only';
+    factors: Array<{
+        id: string;
+        name: string;
+        weight: number;
+        score: number;
+        status: 'pass' | 'partial' | 'fail';
+        applicable: boolean | null;
+        findings: Array<{
+            type: 'found' | 'missing' | 'info' | 'timeout' | 'unreachable';
+            code: string;
+            message: string;
+        }>;
+        recommendations: Array<string>;
+    }>;
+    criticalDefects: Array<{
+        id: string;
+        severity: 'critical' | 'warning';
+        detail: string;
+        recommendation: string;
+    }>;
+};
+
 export type SiteCrawlPagesResponseDto = {
     project: string;
     hasCrawlData: boolean;
@@ -20917,6 +20996,53 @@ export type GetApiV1ProjectsByNameTechnicalAeoChangesResponses = {
 };
 
 export type GetApiV1ProjectsByNameTechnicalAeoChangesResponse = GetApiV1ProjectsByNameTechnicalAeoChangesResponses[keyof GetApiV1ProjectsByNameTechnicalAeoChangesResponses];
+
+export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Historical site-audit run ID. Omit for the latest complete crawl.
+         */
+        runId?: string;
+        /**
+         * Exact canonical crawl node key. Required when url is omitted.
+         */
+        nodeKey?: string;
+        /**
+         * Exact persisted crawl URL. Required when nodeKey is omitted.
+         */
+        url?: string;
+    };
+    url: '/api/v1/projects/{name}/technical-aeo/crawl/pages/audit';
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditErrors = {
+    /**
+     * Exactly one page selector is required.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project or explicitly selected crawl-bearing run not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditError = GetApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditErrors[keyof GetApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditErrors];
+
+export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditResponses = {
+    /**
+     * Page audit evidence state returned.
+     */
+    200: SiteCrawlPageAuditDto;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditResponse = GetApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditResponses[keyof GetApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditResponses];
 
 export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesData = {
     body?: never;

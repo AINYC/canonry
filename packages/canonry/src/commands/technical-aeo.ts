@@ -300,6 +300,71 @@ export async function technicalAeoCrawlPages(
   console.log(lines.join('\n'))
 }
 
+/** `canonry technical-aeo page-audit <project>` — one score with its exact evidence. */
+export async function technicalAeoPageAudit(
+  project: string,
+  opts: { runId?: string; nodeKey?: string; url?: string; format?: string },
+): Promise<void> {
+  const res = await getClient().getTechnicalAeoPageAudit(project, {
+    runId: opts.runId,
+    nodeKey: opts.nodeKey,
+    url: opts.url,
+  })
+  if (isMachineFormat(opts.format)) {
+    console.log(JSON.stringify(res, null, 2))
+    return
+  }
+  if (res.state === 'no-crawl') {
+    console.log(`No persisted Site Health crawl for "${project}". Run \`canonry technical-aeo run ${project}\` first.`)
+    return
+  }
+  const provenance = [`Run: ${res.runId} · ${res.complete ? 'complete' : 'partial'}`]
+  if (!res.complete) provenance.push(`Partial crawl: ${res.termination ?? 'termination reason unavailable'}`)
+  if (res.state === 'details-unavailable') {
+    console.log([
+      'Page audit details are unavailable for this retained crawl.',
+      ...provenance,
+    ].join('\n'))
+    return
+  }
+  if (res.state === 'not-found') {
+    console.log([
+      'The selected page was not found in this crawl.',
+      ...provenance,
+    ].join('\n'))
+    return
+  }
+
+  const lines = [
+    `Page audit: ${res.auditScore == null ? 'not scored' : `${res.auditScore}/100`} · ${res.url}`,
+    ...provenance,
+  ]
+  if (res.state === 'not-audited') {
+    lines.push(`Audit evidence unavailable: page state is ${res.auditState}.`)
+    console.log(lines.join('\n'))
+    return
+  }
+  if (res.evidenceState === 'scores-only') {
+    lines.push('Evidence: scores only; this historical row predates persisted finding prose.')
+  }
+  if (res.criticalDefects.length > 0) {
+    lines.push('', 'Score-independent defects:')
+    for (const defect of res.criticalDefects) {
+      lines.push(`  [${defect.severity}] [${defect.id}] ${defect.detail}`)
+      lines.push(`    Fix: ${defect.recommendation}`)
+    }
+  }
+  if (res.factors.length > 0) {
+    lines.push('', 'Factors:')
+    for (const factor of res.factors) {
+      lines.push(`  ${factor.name}: ${factor.score}/100 (${factor.status})`)
+      for (const finding of factor.findings) lines.push(`    [${finding.code}] ${finding.message}`)
+      for (const recommendation of factor.recommendations) lines.push(`    Fix: ${recommendation}`)
+    }
+  }
+  console.log(lines.join('\n'))
+}
+
 /** `canonry technical-aeo structure <project>` — exactly one site-hierarchy level. */
 export async function technicalAeoStructure(
   project: string,

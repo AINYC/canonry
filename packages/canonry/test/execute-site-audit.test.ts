@@ -38,7 +38,11 @@ import {
 const NOW = '2026-08-08T00:00:00.000Z'
 
 function scoredFactor(id: string, name: string, weight: number, score: number) {
-  return { id, name, weight, score, findings: [], recommendations: [] }
+  return {
+    id, name, weight, score,
+    findings: [{ type: 'info', code: `${id}.test-evidence`, message: `${name} evidence.` }],
+    recommendations: [`Improve ${name}.`],
+  }
 }
 
 function page(key: string, url: string, overrides: Record<string, unknown> = {}) {
@@ -64,6 +68,12 @@ function page(key: string, url: string, overrides: Record<string, unknown> = {})
       auditedAt: NOW,
       overallScore: 88,
       factors: [scoredFactor('sd', 'Structured Data', 12, 88)],
+      criticalDefects: [{
+        id: 'missing-meta-description',
+        severity: 'warning',
+        detail: 'No meta description found.',
+        recommendation: 'Add a concise meta description.',
+      }],
     },
     error: null,
     metrics: {
@@ -198,7 +208,27 @@ describe('executeSiteAudit', () => {
     const attempt = db.select().from(siteCrawlAttempts).where(eq(siteCrawlAttempts.runId, runId)).get()
     expect(attempt).toMatchObject({ state: 'completed', lastEventSequence: 4 })
     expect(db.select().from(siteCrawlEventReceipts).where(eq(siteCrawlEventReceipts.attemptId, attempt!.id)).all()).toHaveLength(4)
-    expect(db.select().from(siteCrawlPages).where(eq(siteCrawlPages.attemptId, attempt!.id)).all()).toHaveLength(2)
+    const crawlPages = db.select().from(siteCrawlPages).where(eq(siteCrawlPages.attemptId, attempt!.id)).all()
+    expect(crawlPages).toHaveLength(2)
+    expect(crawlPages.find((page) => page.nodeKey === 'page:root')?.auditFields).toEqual({
+      schemaVersion: '1.0',
+      factors: [{
+        id: 'sd',
+        name: 'Structured Data',
+        weight: 12,
+        score: 88,
+        status: 'pass',
+        applicable: null,
+        findings: [{ type: 'info', code: 'sd.test-evidence', message: 'Structured Data evidence.' }],
+        recommendations: ['Improve Structured Data.'],
+      }],
+      criticalDefects: [{
+        id: 'missing-meta-description',
+        severity: 'warning',
+        detail: 'No meta description found.',
+        recommendation: 'Add a concise meta description.',
+      }],
+    })
     expect(db.select().from(siteCrawlEdges).where(eq(siteCrawlEdges.attemptId, attempt!.id)).get()).toMatchObject({ occurrences: 2, followable: true })
     expect(db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, runId)).get()).toMatchObject({ complete: true, detailsAvailable: true })
     expect(db.select().from(siteCrawlGraphLayouts).where(eq(siteCrawlGraphLayouts.runId, runId)).get()).toMatchObject({

@@ -164,6 +164,7 @@ const expectedToolNames = [
   'canonry_discover_promote_preview',
   'canonry_discover_promote',
   'canonry_site_health_overview',
+  'canonry_site_health_page_audit',
   'canonry_site_health_subgraph',
   'canonry_site_health_path',
   'canonry_site_health_changes',
@@ -209,6 +210,7 @@ describe('MCP tool registry', () => {
   it('exposes bounded Site Health reads as read-only monitoring tools', () => {
     const expected = [
       ['canonry_site_health_overview', 'GET /api/v1/projects/{name}/technical-aeo/crawl'],
+      ['canonry_site_health_page_audit', 'GET /api/v1/projects/{name}/technical-aeo/crawl/pages/audit'],
       ['canonry_site_health_subgraph', 'GET /api/v1/projects/{name}/technical-aeo/subgraph'],
       ['canonry_site_health_path', 'GET /api/v1/projects/{name}/technical-aeo/path'],
       ['canonry_site_health_changes', 'GET /api/v1/projects/{name}/technical-aeo/changes'],
@@ -246,6 +248,12 @@ describe('MCP tool registry', () => {
     const neighbors = canonryMcpTools.find(candidate => candidate.name === 'canonry_technical_aeo_link_neighbors')!
     expect(neighbors.inputSchema.safeParse({ project: 'acme', nodeKey: 'node-1', limit: 100 }).success).toBe(true)
     expect(neighbors.inputSchema.safeParse({ project: 'acme', limit: 100 }).success).toBe(false)
+
+    const pageAudit = canonryMcpTools.find(candidate => candidate.name === 'canonry_site_health_page_audit')!
+    expect(pageAudit.inputSchema.safeParse({ project: 'acme', nodeKey: 'node-1' }).success).toBe(true)
+    expect(pageAudit.inputSchema.safeParse({ project: 'acme', url: 'https://acme.test/' }).success).toBe(true)
+    expect(pageAudit.inputSchema.safeParse({ project: 'acme' }).success).toBe(false)
+    expect(pageAudit.inputSchema.safeParse({ project: 'acme', nodeKey: 'node-1', url: 'https://acme.test/' }).success).toBe(false)
 
     const subgraph = canonryMcpTools.find(candidate => candidate.name === 'canonry_site_health_subgraph')!
     expect(subgraph.inputSchema.parse({ project: 'acme' })).toMatchObject({ maxNodes: 25, maxEdges: 50 })
@@ -540,8 +548,8 @@ describe('MCP tool registry', () => {
   })
 
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(187)
-    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(123)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(188)
+    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(124)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(readNames)
@@ -577,7 +585,7 @@ describe('MCP tool registry', () => {
     for (const tool of canonryMcpTools) {
       counts.set(tool.tier, (counts.get(tool.tier) ?? 0) + 1)
     }
-    expect(counts.get('monitoring')).toBe(44)
+    expect(counts.get('monitoring')).toBe(45)
     expect(counts.get('setup')).toBe(50)
     expect(counts.get('gsc')).toBe(10)
     expect(counts.get('ga')).toBe(10)
@@ -1373,6 +1381,12 @@ const handlerCases: HandlerCase[] = [
   { tool: 'canonry_discover_promote_preview', input: { project: 'acme', sessionId: 'sess-1' }, methods: ['previewDiscoveryPromote'] },
   { tool: 'canonry_discover_promote', input: { project: 'acme', sessionId: 'sess-1' }, methods: ['promoteDiscovery'] },
   { tool: 'canonry_site_health_overview', input: { project: 'acme', runId: 'run-1' }, methods: ['getTechnicalAeoCrawl'], expectedArgs: [['acme', { runId: 'run-1' }]] },
+  {
+    tool: 'canonry_site_health_page_audit',
+    input: { project: 'acme', runId: 'run-1', nodeKey: 'page:root' },
+    methods: ['getTechnicalAeoPageAudit'],
+    expectedArgs: [['acme', { runId: 'run-1', nodeKey: 'page:root', url: undefined }]],
+  },
   {
     tool: 'canonry_site_health_subgraph',
     input: { project: 'acme', nodeKey: 'page:root', hops: 2 },

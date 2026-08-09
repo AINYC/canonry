@@ -877,6 +877,19 @@ const technicalAeoCrawlInputSchema = z.object({
   runId: runIdSchema.optional().describe('Historical crawl-bearing site-audit run ID. Omit for the latest persisted crawl.'),
 })
 
+const siteHealthPageAuditInputSchema = z.object({
+  project: projectNameSchema,
+  runId: runIdSchema.optional().describe('Historical crawl-bearing site-audit run ID. Omit for the latest persisted crawl.'),
+  nodeKey: z.string().min(1).optional().describe('Exact crawl node key, as returned by Site Health page or subgraph reads.'),
+  url: z.string().url().optional().describe('Exact page URL. Use this only when a crawl node key is unavailable.'),
+}).refine((value) => Boolean(value.nodeKey || value.url), {
+  message: 'Provide nodeKey or url.',
+  path: ['nodeKey'],
+}).refine((value) => !(value.nodeKey && value.url), {
+  message: 'Provide nodeKey or url, not both.',
+  path: ['nodeKey'],
+})
+
 const SITE_HEALTH_MCP_MAX_NODES = 25
 const SITE_HEALTH_MCP_MAX_EDGES = 50
 
@@ -2756,6 +2769,21 @@ export const canonryMcpTools = [
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/technical-aeo/crawl'],
     handler: (client, input) => client.getTechnicalAeoCrawl(input.project, { runId: input.runId }),
+  }),
+  defineTool({
+    name: 'canonry_site_health_page_audit',
+    title: 'Get Site Health page audit',
+    description: 'Connect one graph page\'s audit score to its exact persisted evidence: factor scores, stable finding codes and messages, recommendations, and critical defects. The response includes crawl provenance and explicit no-crawl, details-unavailable, not-found, not-audited, ready/scores-only states. Use nodeKey from a Site Health page or subgraph read when possible. Link score remains an importance signal, not an audit finding.',
+    access: 'read',
+    tier: 'monitoring',
+    inputSchema: siteHealthPageAuditInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/technical-aeo/crawl/pages/audit'],
+    handler: (client, input) => client.getTechnicalAeoPageAudit(input.project, {
+      runId: input.runId,
+      nodeKey: input.nodeKey,
+      url: input.url,
+    }),
   }),
   defineTool({
     name: 'canonry_site_health_subgraph',

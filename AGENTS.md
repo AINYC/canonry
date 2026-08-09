@@ -199,6 +199,7 @@ canonry ads disconnect <project>
 canonry technical-aeo run <project> [--sitemap-url <url>] [--max-pages <n>] [--max-edges <n>] [--max-depth <n>] [--check-dead-links] [--wait] [--format json] # crawl sitemap and internal-link discoveries; defaults: 1,000 pages / 100,000 edges; hard limits: 50,000 / 1,000,000; dead-link analysis is off unless requested
 canonry technical-aeo crawl <project> [--run-id <id>] [--format json]                         # persisted crawl metadata and completeness
 canonry technical-aeo crawl-pages <project> [--run-id <id>] [--limit <n>] [--format json|jsonl] # cursor-paged URL inventory with indexability, depth, and link score
+canonry technical-aeo page-audit <project> (--node-key <key>|--url <url>) [--run-id <id>] [--format json] # exact page score, findings, fixes, and crawl provenance
 canonry technical-aeo structure <project> [--run-id <id>] [--parent-path <path>] [--limit <n>] [--format json|jsonl] # one level of the lexical path hierarchy
 canonry technical-aeo links <project> [--run-id <id>] [--source-url <url>] [--target-url <url>] [--limit <n>] [--format json|jsonl] # bounded internal-link edge list
 canonry technical-aeo links neighbors <project> (--node-key <key>|--url <url>) [--run-id <id>] [--limit <n>] [--format json] # bounded inbound/outbound page neighborhood
@@ -209,8 +210,8 @@ canonry technical-aeo dead-links <project> [--run-id <id>] [--limit <n>] [--form
 canonry technical-aeo score <project> [--format json]                                # latest site score (0–100) + per-factor scorecard + delta vs the previous audit
 canonry technical-aeo pages <project> [--status success|error] [--sort score-asc|score-desc|url] [--limit <n>] [--format json|jsonl]  # per-page breakdown of the latest run (worst-first by default)
 canonry technical-aeo trend <project> [--limit <n>] [--format json|jsonl]            # aggregate-score history across past audits
-# Agent/operator read aliases: `canonry site-health overview|pages|structure|links|neighbors|dead-links|subgraph|path|changes`.
-# MCP/Aero expose task-shaped Site Health overview/subgraph/path/changes reads; the 20k/50k Sigma layout payload stays API/dashboard-only.
+# Agent/operator read aliases: `canonry site-health overview|pages|page-audit|structure|links|neighbors|dead-links|subgraph|path|changes`.
+# MCP/Aero expose task-shaped Site Health overview/page-audit/subgraph/path/changes reads; the 20k/50k Sigma layout payload stays API/dashboard-only.
 # Schedule it: canonry schedule set <project> --kind site-audit --preset weekly
 
 # Google Search Console reads. The dimensioned search-data table is valid for RANKING and
@@ -229,7 +230,7 @@ canonry-mcp --eager                                  # register all API tools at
 
 # MCP client install helpers (operate on local client config files)
 canonry mcp install --client claude-desktop          # merges a canonry entry into the config
-canonry mcp install --client cursor --read-only      # scope to the 123 read API tools
+canonry mcp install --client cursor --read-only      # scope to the 124 read API tools
 canonry mcp config  --client codex                   # print snippet for clients without auto-install
 
 # Skills — install canonry's agent playbook into a user's project
@@ -362,7 +363,7 @@ Each check returns `status: ok | warn | fail | skipped`, a stable machine-readab
 For MCP clients such as Claude Desktop, Codex, or custom agent shells that
 prefer a typed tool catalog over shell or HTTP, the package ships a separate
 `canonry-mcp` bin. It is a thin stdio adapter over `createApiClient()` — not
-a parallel surface. v1 exposes 187 curated API tools (123 read, 64 write) — including
+a parallel surface. v1 exposes 188 curated API tools (124 read, 64 write) — including
 the `canonry_project_overview` and `canonry_search` core composites; the
 catalog is split across a small **core tier** (always loaded) and nine
 **toolkits** (`monitoring`, `setup`, `gsc`, `ga`, `gbp`, `ads`, `traffic`, `agent`, `discovery`) that the client
@@ -376,7 +377,7 @@ from `~/.canonry/config.yaml`.
 Key files:
 - `packages/canonry/src/mcp/server.ts` — `createCanonryMcpServer` (one client per server instance, registers core tier + meta tools)
 - `packages/canonry/src/mcp/cli.ts` — stdio entrypoint + scope/eager flag parsing
-- `packages/canonry/src/mcp/tool-registry.ts` — single source of truth for all 187 API tools, each tagged with a `tier`
+- `packages/canonry/src/mcp/tool-registry.ts` — single source of truth for all 188 API tools, each tagged with a `tier`
 - `packages/canonry/src/mcp/toolkits.ts` — toolkit catalog (`monitoring`, `setup`, `gsc`, `ga`, `gbp`, `ads`, `traffic`, `agent`, `discovery`) consumed by `canonry_help`
 - `packages/canonry/src/mcp/dynamic-catalog.ts` — `DynamicToolCatalog`: enables tools on `canonry_load_toolkit`, drives `canonry_help`
 - `packages/canonry/src/mcp/openapi-classification.ts` — drift table; every published OpenAPI op is `included`, `deferred`, or `excluded-protocol`

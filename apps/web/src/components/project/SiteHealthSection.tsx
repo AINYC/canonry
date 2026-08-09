@@ -16,6 +16,7 @@ import {
   SITE_CRAWL_GRAPH_MAX_NODES,
   type SiteCrawlEdgeDto,
   type SiteCrawlGraphNodeDto,
+  type SiteCrawlPageAuditDto,
   type SiteCrawlPageDto,
   type SiteCrawlStructureChildDto,
   type SiteCrawlStructureResponseDto,
@@ -23,6 +24,7 @@ import {
 import {
   getApiV1ProjectsByNameRunsOptions,
   getApiV1ProjectsByNameTechnicalAeoCrawlOptions,
+  getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditOptions,
   getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteOptions,
   getApiV1ProjectsByNameTechnicalAeoDeadLinksOptions,
   getApiV1ProjectsByNameTechnicalAeoGraphOptions,
@@ -35,6 +37,7 @@ import { useTriggerSiteAudit } from '../../queries/mutations.js'
 import type { MetricTone } from '../../view-models.js'
 import { SiteGraphSigma } from './SiteGraphSigma.js'
 import { siteGraphStatusLabel, siteGraphVisualState, type SiteGraphVisualState } from './site-graph-sigma.js'
+import { PageAuditEvidence } from './PageAuditEvidence.js'
 import { TechnicalAeoSection } from './TechnicalAeoSection.js'
 import { WriteButton } from '../shared/AccessControls.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
@@ -47,6 +50,12 @@ const SITE_HEALTH_VIEWS = [
   { id: 'inventory', label: 'Inventory' },
   { id: 'technical', label: 'Technical checks' },
 ] as const satisfies ReadonlyArray<{ id: SiteHealthView; label: string }>
+
+const SITE_HEALTH_VIEW_DESCRIPTIONS: Record<SiteHealthView, string> = {
+  map: 'Explore how pages, site sections, and internal links fit together.',
+  inventory: 'Review discovered pages and the links that shape their visibility.',
+  technical: 'Prioritize audit findings and inspect the pages that need work.',
+}
 
 const INVENTORY_LIMIT = 200
 const STRUCTURE_LIMIT = 100
@@ -151,7 +160,7 @@ function deadLinkLabel(state: string, found?: number): { label: string; tone: Me
   return { label: 'Unavailable', tone: 'neutral' }
 }
 
-function PageMetrics({ page }: { page: InspectableCrawlPage }) {
+function LinkMetrics({ page }: { page: InspectableCrawlPage }) {
   return (
     <dl className="grid grid-cols-2 divide-x divide-y divide-default rounded-lg border border-default sm:grid-cols-4 sm:divide-y-0">
       <div className="px-4 py-3">
@@ -234,6 +243,10 @@ function PageInspector({
   outbound,
   inboundTruncated,
   outboundTruncated,
+  audit,
+  auditLoading,
+  auditError,
+  onRetryAudit,
 }: {
   page: InspectableCrawlPage | null
   isLoading: boolean
@@ -242,6 +255,10 @@ function PageInspector({
   outbound: SiteCrawlEdgeDto[]
   inboundTruncated: boolean
   outboundTruncated: boolean
+  audit: SiteCrawlPageAuditDto | undefined
+  auditLoading: boolean
+  auditError: Error | null
+  onRetryAudit: () => void
 }) {
   if (!page) {
     return (
@@ -273,11 +290,22 @@ function PageInspector({
       </div>
 
       <div className="mt-4">
-        <PageMetrics page={page} />
+        <PageAuditEvidence
+          audit={audit}
+          isLoading={auditLoading}
+          error={auditError}
+          onRetry={onRetryAudit}
+        />
       </div>
 
-      <div className="mt-5">
-        {isLoading ? (
+      <section className="mt-5 border-t border-default pt-5" aria-labelledby="site-health-page-links-heading">
+        <h3 id="site-health-page-links-heading" className="text-base font-semibold text-heading">Internal links</h3>
+        <p className="mt-1 text-sm text-secondary">Observed links to and from this page in the selected scan.</p>
+        <div className="mt-4">
+          <LinkMetrics page={page} />
+        </div>
+        <div className="mt-5">
+          {isLoading ? (
           <div className="flex items-center gap-2 py-6 text-sm text-secondary">
             <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
             Loading page links...
@@ -291,8 +319,9 @@ function PageInspector({
             <NeighborTable direction="inbound" edges={inbound} truncated={inboundTruncated} />
             <NeighborTable direction="outbound" edges={outbound} truncated={outboundTruncated} />
           </div>
-        )}
-      </div>
+          )}
+        </div>
+      </section>
     </section>
   )
 }
@@ -357,7 +386,7 @@ function InventoryTable({
               <th scope="col">Links in</th>
               <th scope="col">Links out</th>
               <th scope="col">Internal-link importance</th>
-              <th scope="col">Health</th>
+              <th scope="col">Technical score</th>
             </tr>
           </thead>
           <tbody>
@@ -654,6 +683,17 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
     }),
     enabled: detailsEnabled && Boolean(effectiveSelectedNodeKey),
   })
+  const pageAuditQuery = useQuery({
+    ...getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditOptions({
+      client: heyClient,
+      path: { name: projectName },
+      query: {
+        ...scopedRunQuery,
+        nodeKey: effectiveSelectedNodeKey ?? undefined,
+      },
+    }),
+    enabled: detailsEnabled && Boolean(effectiveSelectedNodeKey),
+  })
 
   const sortedRuns = useMemo(
     () => [...auditRuns]
@@ -733,7 +773,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
               <span className="text-xs text-muted">{formatScanDate(selectedRun.finishedAt ?? selectedRun.startedAt)}</span>
             )}
           </div>
-          <p className="mt-1 text-sm text-secondary">See how pages, site sections, and internal links fit together.</p>
+          <p className="mt-1 text-sm text-secondary">{SITE_HEALTH_VIEW_DESCRIPTIONS[view]}</p>
         </div>
 
         <div className="flex flex-wrap items-start gap-2">
@@ -785,7 +825,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
         </div>
       </header>
 
-      {crawl?.hasCrawlData && (
+      {crawl?.hasCrawlData && view !== 'technical' && (
         <div className="grid grid-cols-2 divide-x divide-y divide-default rounded-lg border border-default bg-surface-subtle sm:grid-cols-4 sm:divide-y-0">
           <div className="px-4 py-3">
             <div className="text-xs text-muted">Pages found</div>
@@ -830,7 +870,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             </button>
           ))}
         </div>
-        {crawl?.hasCrawlData && (
+        {crawl?.hasCrawlData && view !== 'technical' && (
           <div className="flex items-center gap-2 pb-2">
             <span className="text-xs text-muted">Dead-link check</span>
             <ToneBadge tone={deadLinkStatus.tone}>{deadLinkStatus.label}</ToneBadge>
@@ -838,9 +878,9 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
         )}
       </div>
 
-      {!selectedRunId && activeAudit && view !== 'technical' && (
+      {!selectedRunId && activeAudit && (
         <div className="rounded-lg border border-caution bg-caution-soft px-4 py-3 text-sm text-caution" role="status">
-          The scan is running. The latest completed map remains available until it finishes.
+          The scan is running. The latest completed results remain available until it finishes.
         </div>
       )}
       {movedSite && (
@@ -850,20 +890,20 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
           <span className="font-mono text-primary">{movedSite.effective}</span>. The map and inventory use the new address.
         </div>
       )}
-      {crawl?.hasCrawlData && !crawl.complete && view !== 'technical' && (
+      {crawl?.hasCrawlData && !crawl.complete && (
         <div className="rounded-lg border border-caution bg-caution-soft px-4 py-3 text-sm text-caution" role="status">
           {terminationCopy(crawl.termination)}
         </div>
       )}
-      {!activeAudit && newestRunStatus === 'failed' && !selectedRunId && view !== 'technical' && (
+      {!activeAudit && newestRunStatus === 'failed' && !selectedRunId && (
         <div className="flex gap-3 rounded-lg border border-negative bg-negative-soft px-4 py-3 text-sm text-negative" role="alert">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          <span>The latest scan failed. The previous completed map remains available.</span>
+          <span>The latest scan failed. The previous completed results remain available.</span>
         </div>
       )}
 
       {view === 'technical' ? (
-        <div id="site-health-technical-panel" role="tabpanel" aria-labelledby="site-health-technical-tab">
+        <div id="site-health-technical-panel" role="tabpanel" aria-labelledby="site-health-technical-tab" className="min-w-0">
           <TechnicalAeoSection
             projectName={projectName}
             projectId={projectId}
@@ -931,6 +971,10 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             outbound={neighborsQuery.data?.outbound ?? []}
             inboundTruncated={neighborsQuery.data?.inboundTruncated ?? false}
             outboundTruncated={neighborsQuery.data?.outboundTruncated ?? false}
+            audit={pageAuditQuery.data}
+            auditLoading={pageAuditQuery.isLoading && Boolean(selectedPage)}
+            auditError={pageAuditQuery.error}
+            onRetryAudit={() => { void pageAuditQuery.refetch() }}
           />
         </div>
       ) : (
@@ -939,7 +983,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             <div className="mb-3 flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
               <div>
                 <h2 id="site-map-heading" className="text-base font-semibold text-heading">Site map</h2>
-                <p className="mt-1 text-sm text-secondary">Scroll to zoom, drag to move, and select a page to inspect its links.</p>
+                <p className="mt-1 text-sm text-secondary">Scroll to zoom, drag to move, and select a page to inspect its technical findings and links.</p>
               </div>
               {graphQuery.data?.sampled && (
                 <span className="text-xs text-muted">
@@ -997,6 +1041,10 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             outbound={neighborsQuery.data?.outbound ?? []}
             inboundTruncated={neighborsQuery.data?.inboundTruncated ?? false}
             outboundTruncated={neighborsQuery.data?.outboundTruncated ?? false}
+            audit={pageAuditQuery.data}
+            auditLoading={pageAuditQuery.isLoading && Boolean(selectedPage)}
+            auditError={pageAuditQuery.error}
+            onRetryAudit={() => { void pageAuditQuery.refetch() }}
           />
         </div>
       )}

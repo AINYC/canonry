@@ -10,6 +10,7 @@ import {
   siteAuditRunRequestSchema,
   siteCrawlDeadLinksResponseSchema,
   siteCrawlGraphResponseSchema,
+  siteCrawlPageAuditSchema,
   siteCrawlSummarySchema,
 } from '../src/technical-aeo.js'
 
@@ -93,6 +94,61 @@ describe('Technical AEO crawl contracts', () => {
       totalNodes: 0, totalEdges: 0,
       nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
     }).layout).toEqual({ state: 'unavailable', version: null, reason: 'legacy-snapshot' })
+  })
+
+  it('ties one persisted page score to exact audit findings without bloating the graph DTO', () => {
+    expect(siteCrawlPageAuditSchema.parse({
+      state: 'ready',
+      project: 'example',
+      runId: 'run-1',
+      complete: true,
+      termination: null,
+      nodeKey: 'guide',
+      url: 'https://example.com/guide',
+      auditState: 'complete',
+      auditScore: 42,
+      evidenceState: 'complete',
+      factors: [{
+        id: 'content-depth',
+        name: 'Content Depth',
+        weight: 12,
+        score: 20,
+        status: 'fail',
+        applicable: true,
+        findings: [{
+          type: 'missing',
+          code: 'content-depth.word-count.low',
+          message: 'Low content depth (120 words).',
+        }],
+        recommendations: ['Add more comprehensive copy covering key user questions.'],
+      }],
+      criticalDefects: [{
+        id: 'missing-h1',
+        severity: 'critical',
+        detail: 'No H1 tag found.',
+        recommendation: 'Add one descriptive H1.',
+      }],
+    })).toMatchObject({
+      state: 'ready',
+      project: 'example',
+      runId: 'run-1',
+      nodeKey: 'guide',
+      auditScore: 42,
+      evidenceState: 'complete',
+      factors: [{
+        id: 'content-depth',
+        score: 20,
+        status: 'fail',
+        findings: [{ code: 'content-depth.word-count.low' }],
+      }],
+      criticalDefects: [{ id: 'missing-h1', severity: 'critical' }],
+    })
+
+    expect(siteCrawlPageAuditSchema.parse({
+      state: 'not-audited', project: 'example', runId: 'run-1', complete: false,
+      termination: 'max-pages', nodeKey: 'deep', url: 'https://example.com/deep',
+      auditState: 'pending', auditScore: null,
+    })).toMatchObject({ state: 'not-audited', factors: [], criticalDefects: [] })
   })
 
   it('derives one shared Site Health state from exact crawl states and canonical identity', () => {

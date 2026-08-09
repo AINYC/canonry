@@ -284,6 +284,25 @@ describe('SiteGraphSigma', () => {
     expect(onSelectNode).toHaveBeenCalledWith(expect.objectContaining({ nodeKey: 'pricing' }))
   })
 
+  it('shows the page audit score in the graph tooltip without changing the graph encoding', async () => {
+    mockWebGl(true)
+    render(
+      <SiteGraphSigma
+        nodes={[node('home'), node('pricing', { auditScore: 61 })]}
+        edges={edges}
+      />,
+    )
+
+    await waitFor(() => expect(sigmaMocks.handlers.enterNode).toBeTypeOf('function'))
+    act(() => {
+      sigmaMocks.handlers.enterNode!({ node: 'pricing', event: { x: 100, y: 80 } } as never)
+    })
+
+    const tooltip = screen.getByRole('tooltip')
+    expect(within(tooltip).getByText('Technical score 61/100')).not.toBeNull()
+    expect(within(tooltip).getByText(/Technically eligible/)).not.toBeNull()
+  })
+
   it('only refreshes the graph when camera zoom crosses the overview threshold', async () => {
     mockWebGl(true)
     render(<SiteGraphSigma nodes={nodes} edges={edges} />)

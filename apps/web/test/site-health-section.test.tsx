@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   getApiV1ProjectsByNameRunsQueryKey,
   getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteQueryKey,
+  getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditQueryKey,
   getApiV1ProjectsByNameTechnicalAeoCrawlPagesQueryKey,
   getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey,
   getApiV1ProjectsByNameTechnicalAeoDeadLinksQueryKey,
@@ -238,6 +239,33 @@ function seedRun(queryClient: QueryClient, runId: string, crawlSummary = summary
     inboundTruncated: false,
     outboundTruncated: false,
   })
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId, nodeKey: 'page_services' },
+  }), {
+    state: 'ready',
+    project: projectName,
+    runId,
+    complete: crawlSummary.complete,
+    termination: crawlSummary.termination,
+    nodeKey: 'page_services',
+    url: servicesPage.url,
+    auditState: 'complete',
+    auditScore: 61,
+    evidenceState: 'complete',
+    factors: [{
+      id: 'content-depth',
+      name: 'Content depth',
+      weight: 12,
+      score: 35,
+      status: 'fail',
+      applicable: true,
+      findings: [{ type: 'missing', code: 'content-depth.word-count.low', message: 'The page is too thin.' }],
+      recommendations: ['Add complete answers to the page.'],
+    }],
+    criticalDefects: [],
+  })
 }
 
 function makeClient() {
@@ -377,6 +405,22 @@ test('uses the server-owned health state for both the inventory badge and select
   expect(screen.getAllByText('Fetch failed')).toHaveLength(2)
 })
 
+test('connects a selected graph page score to its exact audit finding in the same run', () => {
+  const queryClient = renderSection()
+
+  fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
+
+  expect(screen.getByRole('heading', { name: 'Why this technical score' })).not.toBeNull()
+  expect(screen.getByLabelText('Technical score 61 out of 100')).not.toBeNull()
+  expect(screen.getByText('The page is too thin.')).not.toBeNull()
+  expect(screen.getByText('Add complete answers to the page.')).not.toBeNull()
+  expect(queryClient.getQueryState(getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', nodeKey: 'page_services' },
+  }))).not.toBeUndefined()
+})
+
 test('uses a labelled, roving-focus tab interface for Site Health views', () => {
   renderSection()
 
@@ -450,6 +494,9 @@ test('defaults to the newest terminal run when that scan is partial', () => {
 
   expect(screen.getByText('Partial scan')).not.toBeNull()
   expect(screen.getByText('18')).not.toBeNull()
+  expect(screen.getByText(/configured page limit/i)).not.toBeNull()
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Technical checks' }))
   expect(screen.getByText(/configured page limit/i)).not.toBeNull()
 })
 
@@ -684,5 +731,17 @@ test('keeps the legacy scorecard available as a subordinate technical-checks vie
 
   fireEvent.click(screen.getByRole('tab', { name: 'Technical checks' }))
 
+  expect(screen.getByText('Technical checks for run_1')).not.toBeNull()
+})
+
+test('removes map-specific chrome from the Technical checks view', () => {
+  renderSection()
+
+  expect(screen.getByText('Explore how pages, site sections, and internal links fit together.')).not.toBeNull()
+  fireEvent.click(screen.getByRole('tab', { name: 'Technical checks' }))
+
+  expect(screen.getByText('Prioritize audit findings and inspect the pages that need work.')).not.toBeNull()
+  expect(screen.queryByText('Pages found')).toBeNull()
+  expect(screen.queryByText('Dead-link check')).toBeNull()
   expect(screen.getByText('Technical checks for run_1')).not.toBeNull()
 })

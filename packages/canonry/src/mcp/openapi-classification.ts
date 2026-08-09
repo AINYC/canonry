@@ -367,6 +367,7 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   // have the cursor-paged inventory and bounded page-neighbor reads.
   'GET /api/v1/projects/{name}/technical-aeo/graph': 'deferred',
   'GET /api/v1/projects/{name}/technical-aeo/crawl/pages': 'included',
+  'GET /api/v1/projects/{name}/technical-aeo/crawl/pages/audit': 'included',
   'GET /api/v1/projects/{name}/technical-aeo/structure': 'included',
   'GET /api/v1/projects/{name}/technical-aeo/internal-links': 'included',
   'GET /api/v1/projects/{name}/technical-aeo/internal-links/neighbors': 'included',

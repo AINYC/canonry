@@ -439,6 +439,7 @@ function isTechnicalAeoRead(url: string): boolean {
     || rest === 'technical-aeo/subgraph'
     || rest === 'technical-aeo/path'
     || rest === 'technical-aeo/changes'
+    || rest === 'technical-aeo/crawl/pages/audit'
     || rest === 'technical-aeo/crawl/pages'
     || rest === 'technical-aeo/structure'
     || rest === 'technical-aeo/internal-links'

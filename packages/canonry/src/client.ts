@@ -57,6 +57,7 @@ import type {
   SiteAuditRunResponseDto,
   SiteCrawlSummaryDto,
   SiteCrawlPagesResponseDto,
+  SiteCrawlPageAuditDto,
   SiteCrawlStructureResponseDto,
   SiteCrawlInternalLinksResponseDto,
   SiteCrawlNeighborsResponseDto,
@@ -423,6 +424,7 @@ import {
   getApiV1ProjectsByNameTechnicalAeoCrawl,
   getApiV1ProjectsByNameTechnicalAeoChanges,
   getApiV1ProjectsByNameTechnicalAeoCrawlPages,
+  getApiV1ProjectsByNameTechnicalAeoCrawlPagesAudit,
   getApiV1ProjectsByNameTechnicalAeoStructure,
   getApiV1ProjectsByNameTechnicalAeoPath,
   getApiV1ProjectsByNameTechnicalAeoSubgraph,
@@ -3411,6 +3413,24 @@ export class ApiClient {
           cursor: opts?.cursor,
           limit: opts?.limit !== undefined ? String(opts.limit) : undefined,
         } as never,
+      }),
+    )
+  }
+
+  /** Exact page-scoped audit evidence tied to a persisted crawl node. */
+  async getTechnicalAeoPageAudit(
+    project: string,
+    opts: { runId?: string; nodeKey?: string; url?: string },
+  ): Promise<SiteCrawlPageAuditDto> {
+    return this.invoke<SiteCrawlPageAuditDto>(() =>
+      getApiV1ProjectsByNameTechnicalAeoCrawlPagesAudit({
+        client: this.heyClient,
+        path: { name: project },
+        query: {
+          runId: opts.runId,
+          nodeKey: opts.nodeKey,
+          url: opts.url,
+        },
       }),
     )
   }

@@ -759,6 +759,11 @@ export function SiteGraphSigma({
                 <p className="mt-1 text-[13px] text-secondary">
                   {siteGraphStatusLabel(siteGraphVisualState(hoveredNode))} · depth {hoveredNode.depth ?? 'unknown'}
                 </p>
+                {hoveredNode.auditScore != null && (
+                  <p className="mt-1 font-mono text-[13px] text-heading">
+                    Technical score {Math.round(hoveredNode.auditScore)}/100
+                  </p>
+                )}
               </div>
             )}
           </GraphRenderBoundary>

@@ -10,6 +10,7 @@ test('crawl read routes are public, bounded, and backed by typed OpenAPI schemas
     ['/api/v1/projects/{name}/technical-aeo/subgraph', 'SiteHealthSubgraphResponseDto'],
     ['/api/v1/projects/{name}/technical-aeo/path', 'SiteHealthPathResponseDto'],
     ['/api/v1/projects/{name}/technical-aeo/changes', 'SiteHealthChangesResponseDto'],
+    ['/api/v1/projects/{name}/technical-aeo/crawl/pages/audit', 'SiteCrawlPageAuditDto'],
     ['/api/v1/projects/{name}/technical-aeo/crawl/pages', 'SiteCrawlPagesResponseDto'],
     ['/api/v1/projects/{name}/technical-aeo/structure', 'SiteCrawlStructureResponseDto'],
     ['/api/v1/projects/{name}/technical-aeo/internal-links', 'SiteCrawlInternalLinksResponseDto'],
@@ -27,6 +28,10 @@ test('crawl read routes are public, bounded, and backed by typed OpenAPI schemas
   const pages = paths['/api/v1/projects/{name}/technical-aeo/crawl/pages']!.get!
   expect(pages.parameters?.some((parameter) => parameter.name === 'cursor')).toBe(true)
   expect(pages.parameters?.some((parameter) => parameter.name === 'limit')).toBe(true)
+  const pageAudit = paths['/api/v1/projects/{name}/technical-aeo/crawl/pages/audit']!.get!
+  expect(pageAudit.parameters?.some((parameter) => parameter.name === 'nodeKey')).toBe(true)
+  expect(pageAudit.parameters?.some((parameter) => parameter.name === 'url')).toBe(true)
+  expect(pageAudit.description).toMatch(/legacy score-only/i)
   expect(paths['/api/v1/projects/{name}/technical-aeo/dead-links']!.get?.description).toMatch(/discriminated/i)
 
   const graph = paths['/api/v1/projects/{name}/technical-aeo/graph']!.get!

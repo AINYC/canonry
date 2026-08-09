@@ -5,6 +5,7 @@ import {
   technicalAeoDeadLinks,
   technicalAeoInternalLinks,
   technicalAeoLinkNeighbors,
+  technicalAeoPageAudit,
   technicalAeoPath,
   technicalAeoPages,
   technicalAeoRun,
@@ -280,6 +281,33 @@ const TECHNICAL_AEO_CLI_COMMANDS_BASE: readonly CliCommandSpec[] = [
     },
   },
   {
+    path: ['technical-aeo', 'page-audit'],
+    usage: 'canonry technical-aeo page-audit <project> (--node-key <key>|--url <url>) [--run-id <id>] [--format json]',
+    options: { 'run-id': stringOption(), 'node-key': stringOption(), url: stringOption() },
+    run: async (input) => {
+      const usage = 'canonry technical-aeo page-audit <project> (--node-key <key>|--url <url>) [--run-id <id>] [--format json]'
+      const project = requireProject(input, 'technical-aeo.page-audit', usage)
+      const nodeKey = getString(input.values, 'node-key')
+      const url = getString(input.values, 'url')
+      if (!nodeKey && !url) {
+        throw usageError(`Error: --node-key or --url is required\nUsage: ${usage}`, {
+          message: '--node-key or --url is required', details: { command: 'technical-aeo.page-audit', usage },
+        })
+      }
+      if (nodeKey && url) {
+        throw usageError(`Error: --node-key and --url cannot be combined\nUsage: ${usage}`, {
+          message: '--node-key and --url cannot be combined', details: { command: 'technical-aeo.page-audit', usage },
+        })
+      }
+      await technicalAeoPageAudit(project, {
+        runId: getString(input.values, 'run-id'),
+        nodeKey,
+        url,
+        format: input.format,
+      })
+    },
+  },
+  {
     path: ['technical-aeo', 'structure'],
     usage: 'canonry technical-aeo structure <project> [--run-id <id>] [--parent-path <path>] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]',
     options: { 'run-id': stringOption(), 'parent-path': stringOption(), cursor: stringOption(), limit: stringOption() },
@@ -407,6 +435,11 @@ const SITE_HEALTH_COMPATIBILITY_COMMANDS: readonly CliCommandSpec[] = [
     ['technical-aeo', 'crawl-pages'],
     ['site-health', 'pages'],
     'canonry site-health pages <project> [--run-id <id>] [--inventory-eligible true|false] [--fetch-state <state>] [--indexability-state <state>] [--audit-state <state>] [--sort url|path|score-asc|score-desc] [--cursor <cursor>] [--limit <n>] [--format json|jsonl]',
+  ),
+  siteHealthAlias(
+    ['technical-aeo', 'page-audit'],
+    ['site-health', 'page-audit'],
+    'canonry site-health page-audit <project> (--node-key <key>|--url <url>) [--run-id <id>] [--format json]',
   ),
   siteHealthAlias(
     ['technical-aeo', 'structure'],

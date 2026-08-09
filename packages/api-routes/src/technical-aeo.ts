@@ -20,13 +20,17 @@ import {
   RunStatuses,
   RunTriggers,
   deriveSiteHealthState,
+  factorStatusFromScore,
   SiteAuditTrendDirections,
   SiteCrawlFetchedStates,
   normalizeSiteAuditRunRequest,
   notFound,
   operationInProgress,
+  siteAuditPageFactorSchema,
   siteAuditRequestIdentity,
   siteAuditRunRequestSchema,
+  siteCrawlAuditFactorSchema,
+  siteCrawlCriticalDefectSchema,
   validationError,
   type RunStatus,
   type SiteAuditPageDto,
@@ -39,6 +43,7 @@ import {
   type SiteCrawlInternalLinksResponseDto,
   type SiteCrawlNeighborsResponseDto,
   type SiteCrawlPageDto,
+  type SiteCrawlPageAuditDto,
   type SiteCrawlPagesResponseDto,
   type SiteCrawlStructureResponseDto,
   type SiteCrawlSummaryDto,
@@ -207,6 +212,42 @@ function mapCrawlPage(row: typeof siteCrawlPages.$inferSelect): SiteCrawlPageDto
     linkScoreRaw: row.linkScoreRaw,
     linkScoreNormalized: row.linkScoreNormalized,
     healthState: deriveSiteHealthState(row),
+  }
+}
+
+function mapCrawlPageAuditEvidence(row: typeof siteCrawlPages.$inferSelect): Pick<
+  Extract<SiteCrawlPageAuditDto, { state: 'ready' }>,
+  'evidenceState' | 'factors' | 'criticalDefects'
+> {
+  const fields = row.auditFields
+  const rawFactors = Array.isArray(fields.factors) ? fields.factors : []
+  const rawCriticalDefects = Array.isArray(fields.criticalDefects) ? fields.criticalDefects : []
+  const parsedFactors = rawFactors.map((factor) => siteCrawlAuditFactorSchema.safeParse(factor))
+  const parsedCriticalDefects = rawCriticalDefects.map((defect) => siteCrawlCriticalDefectSchema.safeParse(defect))
+  const complete = fields.schemaVersion === '1.0'
+    && Array.isArray(fields.factors)
+    && Array.isArray(fields.criticalDefects)
+    && parsedFactors.every((result) => result.success)
+    && parsedCriticalDefects.every((result) => result.success)
+
+  const factors = parsedFactors.flatMap((result, index) => {
+    if (result.success) return [result.data]
+    const legacy = siteAuditPageFactorSchema.safeParse(rawFactors[index])
+    return legacy.success
+      ? [{
+          ...legacy.data,
+          status: factorStatusFromScore(legacy.data.score),
+          applicable: null,
+          findings: [],
+          recommendations: [],
+        }]
+      : []
+  })
+
+  return {
+    evidenceState: complete ? 'complete' : 'scores-only',
+    factors,
+    criticalDefects: parsedCriticalDefects.flatMap((result) => result.success ? [result.data] : []),
   }
 }
 
@@ -1521,6 +1562,68 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
         })
         : null,
       changes,
+    }
+  })
+
+  // GET /projects/:name/technical-aeo/crawl/pages/audit — one page's exact
+  // weighted factors and independent critical defects. Evidence is loaded on
+  // selection so the 20k-node visualization DTO stays compact.
+  app.get<{
+    Params: { name: string }
+    Querystring: { runId?: unknown; nodeKey?: unknown; url?: unknown }
+  }>('/projects/:name/technical-aeo/crawl/pages/audit', async (request): Promise<SiteCrawlPageAuditDto> => {
+    const project = resolveProject(app.db, request.params.name)
+    const scalarQueryString = (value: unknown, name: string): string | undefined => {
+      if (value === undefined) return undefined
+      if (typeof value !== 'string') throw validationError(`${name} must be provided once`)
+      return value
+    }
+    const runId = scalarQueryString(request.query.runId, 'runId')
+    const nodeKey = scalarQueryString(request.query.nodeKey, 'nodeKey')?.trim()
+    const url = scalarQueryString(request.query.url, 'url')?.trim()
+    if (Number(Boolean(nodeKey)) + Number(Boolean(url)) !== 1) {
+      throw validationError('Provide exactly one of nodeKey or url')
+    }
+
+    const target = resolveCrawl(project.id, runId)
+    if (!target) {
+      if (runId) throw notFound('Site crawl run', runId)
+      return { state: 'no-crawl', project: project.name, runId: null }
+    }
+    const snapshot = target.snapshot
+    const provenance = {
+      project: project.name,
+      runId: snapshot.runId,
+      complete: snapshot.complete,
+      termination: snapshot.termination,
+    }
+    const scope = detailScopeFor(project.id, snapshot)
+    if (!scope) return { state: 'details-unavailable', ...provenance }
+
+    const page = pageInScope(scope, nodeKey ? { nodeKey } : { url: url! })
+    if (!page) return { state: 'not-found', ...provenance }
+    const identity = {
+      nodeKey: page.nodeKey,
+      url: page.url,
+      auditState: page.auditState,
+    }
+    if (page.auditScore == null) {
+      return {
+        state: 'not-audited',
+        ...provenance,
+        ...identity,
+        auditScore: null,
+        factors: [],
+        criticalDefects: [],
+      }
+    }
+
+    return {
+      state: 'ready',
+      ...provenance,
+      ...identity,
+      auditScore: page.auditScore,
+      ...mapCrawlPageAuditEvidence(page),
     }
   })
 
