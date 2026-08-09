@@ -126,6 +126,8 @@ export interface BuiltSigmaSiteGraph {
 }
 
 const SEARCH_RESULT_LIMIT = 50
+/** Keep high-degree page focus useful without flooding the canvas with labels. */
+export const SITE_GRAPH_FOCUSED_NEIGHBOR_LABEL_LIMIT = 8
 /** Sigma's fitted first paint is ratio 1; deeper labels appear after a real zoom-in. */
 export const SITE_GRAPH_OVERVIEW_CAMERA_RATIO = 0.75
 
@@ -304,6 +306,21 @@ export function createSigmaSiteGraphReducers(
   const hasFocus = Boolean(focusNodeKey && graph.hasNode(focusNodeKey))
   const focused = hasFocus ? focusNodeKey : null
   const overview = cameraRatio > SITE_GRAPH_OVERVIEW_CAMERA_RATIO
+  const focusedNeighborLabelCandidates = new Set(
+    focused && overview
+      ? graph.neighbors(focused)
+        .filter((nodeKey) => nodeKey !== focused)
+        .sort((leftKey, rightKey) => {
+          const left = graph.getNodeAttributes(leftKey)
+          const right = graph.getNodeAttributes(rightKey)
+          return right.size - left.size
+            || (left.depth ?? Number.MAX_SAFE_INTEGER) - (right.depth ?? Number.MAX_SAFE_INTEGER)
+            || lexical(left.path, right.path)
+            || lexical(leftKey, rightKey)
+        })
+        .slice(0, SITE_GRAPH_FOCUSED_NEIGHBOR_LABEL_LIMIT)
+      : [],
+  )
 
   return {
     nodeReducer: (nodeKey, attributes) => {
@@ -317,7 +334,10 @@ export function createSigmaSiteGraphReducers(
           }
         }
         if (graph.areNeighbors(nodeKey, focused)) {
-          return overview ? { ...attributes, forceLabel: true } : attributes
+          if (!overview) return attributes
+          return focusedNeighborLabelCandidates.has(nodeKey)
+            ? { ...attributes, forceLabel: false }
+            : { ...attributes, forceLabel: false, label: '' }
         }
         return {
           ...attributes,

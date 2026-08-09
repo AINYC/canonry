@@ -8,6 +8,7 @@ import {
   createSigmaSiteGraphReducers,
   findSiteGraphNodes,
   SITE_GRAPH_EDGE_TOKEN,
+  SITE_GRAPH_FOCUSED_NEIGHBOR_LABEL_LIMIT,
   SITE_GRAPH_SIGMA_COLOR_TOKENS,
   isSigmaWebGlColor,
   siteGraphNodeSize,
@@ -241,11 +242,87 @@ describe('buildSigmaSiteGraph', () => {
     })
     expect(focusedOverview.nodeReducer('gutter-repair', result.graph.getNodeAttributes('gutter-repair'))).toMatchObject({
       label: '● /services/gutter-repair',
-      forceLabel: true,
+      forceLabel: false,
     })
 
     const zoomedIn = createSigmaSiteGraphReducers(result.graph, null, 0.5, theme)
     expect(zoomedIn.nodeReducer('roof-repair', roofRepair)).toEqual(roofRepair)
+  })
+
+  it('bounds collision-safe label candidates around a high-degree focused page by link importance', () => {
+    const neighbors = Array.from({ length: 24 }, (_, index) => node(`article-${String(index).padStart(2, '0')}`, {
+      path: `/blog/article-${String(index).padStart(2, '0')}`,
+      depth: 2,
+      linkScoreNormalized: index / 23,
+    }))
+    const result = buildSigmaSiteGraph(
+      [node('blog', { path: '/blog', depth: 1, linkScoreNormalized: 1 }), ...neighbors],
+      [
+        edge('blog-self', 'blog', 'blog'),
+        ...neighbors.map((neighbor) => edge(`blog-${neighbor.nodeKey}`, 'blog', neighbor.nodeKey)),
+      ],
+      theme,
+    )
+    const reducers = createSigmaSiteGraphReducers(result.graph, 'blog', 2, theme)
+    const candidateNeighbors = neighbors.filter((neighbor) => {
+      const reduced = reducers.nodeReducer(
+        neighbor.nodeKey,
+        result.graph.getNodeAttributes(neighbor.nodeKey),
+      )
+      return reduced.label !== ''
+    })
+    const suppressedNeighbors = neighbors.filter((neighbor) => !candidateNeighbors.includes(neighbor))
+
+    expect(SITE_GRAPH_FOCUSED_NEIGHBOR_LABEL_LIMIT).toBe(8)
+    expect(candidateNeighbors.map((neighbor) => neighbor.nodeKey)).toEqual([
+      'article-16',
+      'article-17',
+      'article-18',
+      'article-19',
+      'article-20',
+      'article-21',
+      'article-22',
+      'article-23',
+    ])
+    for (const neighbor of candidateNeighbors) {
+      expect(reducers.nodeReducer(
+        neighbor.nodeKey,
+        result.graph.getNodeAttributes(neighbor.nodeKey),
+      )).toMatchObject({ forceLabel: false })
+    }
+    expect(suppressedNeighbors).toHaveLength(16)
+    for (const neighbor of suppressedNeighbors) {
+      expect(reducers.nodeReducer(
+        neighbor.nodeKey,
+        result.graph.getNodeAttributes(neighbor.nodeKey),
+      )).toMatchObject({ color: theme.eligible, forceLabel: false, label: '' })
+    }
+    expect(reducers.nodeReducer('blog', result.graph.getNodeAttributes('blog'))).toMatchObject({
+      label: '● /blog',
+      forceLabel: true,
+    })
+
+    const reversed = buildSigmaSiteGraph(
+      [...neighbors].reverse().concat(node('blog', { path: '/blog', depth: 1, linkScoreNormalized: 1 })),
+      [
+        edge('blog-self', 'blog', 'blog'),
+        ...[...neighbors].reverse().map((neighbor) => edge(`blog-${neighbor.nodeKey}`, 'blog', neighbor.nodeKey)),
+      ],
+      theme,
+    )
+    const reversedReducers = createSigmaSiteGraphReducers(reversed.graph, 'blog', 2, theme)
+    expect(neighbors.filter((neighbor) => reversedReducers.nodeReducer(
+      neighbor.nodeKey,
+      reversed.graph.getNodeAttributes(neighbor.nodeKey),
+    ).label !== '').map((neighbor) => neighbor.nodeKey)).toEqual(
+      candidateNeighbors.map((neighbor) => neighbor.nodeKey),
+    )
+
+    const zoomedIn = createSigmaSiteGraphReducers(result.graph, 'blog', 0.5, theme)
+    expect(zoomedIn.nodeReducer(
+      'article-00',
+      result.graph.getNodeAttributes('article-00'),
+    )).toEqual(result.graph.getNodeAttributes('article-00'))
   })
 })
 
