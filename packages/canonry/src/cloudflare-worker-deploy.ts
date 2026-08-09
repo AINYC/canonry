@@ -3,10 +3,14 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { stripVTControlCharacters } from 'node:util'
 import {
   CLOUDFLARE_WORKER_BINDINGS,
   CLOUDFLARE_WORKER_GENERATED_MARKER,
   CLOUDFLARE_WRANGLER_GENERATED_MARKER,
+  DEFAULT_BOT_LIST,
+  generateWorkerScript,
+  generateWranglerToml,
 } from '@ainyc/canonry-integration-cloudflare-worker'
 
 export interface CloudflareWorkerArtifacts {
@@ -26,11 +30,20 @@ export type WranglerRunner = (
   opts: { cwd: string },
 ) => Promise<void>
 
-export type WranglerHelpRunner = (
+export type WranglerCaptureRunner = (
   command: string,
   args: readonly string[],
   opts: { cwd: string },
 ) => Promise<string>
+
+const MAX_WRANGLER_DIAGNOSTIC_LENGTH = 2_000
+
+function wranglerDiagnostic(output: string): string {
+  const plain = stripVTControlCharacters(output).trim()
+  if (plain.length <= MAX_WRANGLER_DIAGNOSTIC_LENGTH) return plain
+  const half = Math.floor(MAX_WRANGLER_DIAGNOSTIC_LENGTH / 2)
+  return `${plain.slice(0, half)}\n...\n${plain.slice(-half)}`
+}
 
 function projectSlug(project: string): string {
   return project
@@ -259,7 +272,7 @@ async function runWrangler(command: string, args: readonly string[], opts: { cwd
   })
 }
 
-async function runWranglerHelp(
+async function runWranglerCapture(
   command: string,
   args: readonly string[],
   opts: { cwd: string },
@@ -281,28 +294,89 @@ async function runWranglerHelp(
         resolve(output)
         return
       }
+      const diagnostic = wranglerDiagnostic(output)
+      const suffix = diagnostic ? `\n${diagnostic}` : ''
       reject(new Error(
         signal
-          ? `Wrangler help exited after signal ${signal}`
-          : `Wrangler help exited with code ${code ?? 'unknown'}`,
+          ? `Wrangler exited after signal ${signal}${suffix}`
+          : `Wrangler exited with code ${code ?? 'unknown'}${suffix}`,
       ))
     })
   })
 }
 
-/** Make sure that deployment can use the secret-file and strict safety flags. */
+/**
+ * Make sure that Wrangler supports the required safety flags and can parse and
+ * bundle Canonry's current generated artifacts before connect mutates state.
+ */
 export async function preflightCloudflareWrangler(opts: {
-  run?: WranglerHelpRunner
+  run?: WranglerCaptureRunner
   cwd?: string
+  tempRoot?: string
 } = {}): Promise<void> {
-  const help = await (opts.run ?? runWranglerHelp)(
+  const runner = opts.run ?? runWranglerCapture
+  const help = await runner(
     'wrangler',
     ['deploy', '--help'],
     { cwd: path.resolve(opts.cwd ?? process.cwd()) },
   )
-  const missing = ['--secrets-file', '--strict'].filter(flag => !help.includes(flag))
+  const missing = ['--dry-run', '--secrets-file', '--strict'].filter(flag => !help.includes(flag))
   if (missing.length > 0) {
     throw new Error(`Wrangler deploy does not support required flags: ${missing.join(', ')}`)
+  }
+
+  const tempDirectory = fs.mkdtempSync(path.join(
+    opts.tempRoot ?? os.tmpdir(),
+    'canonry-cloudflare-wrangler-preflight-',
+  ))
+  const workerScriptPath = path.join(tempDirectory, 'worker.js')
+  const wranglerTomlPath = path.join(tempDirectory, 'wrangler.toml')
+  const secretsPath = path.join(tempDirectory, 'secrets.json')
+
+  try {
+    fs.chmodSync(tempDirectory, 0o700)
+    fs.writeFileSync(workerScriptPath, generateWorkerScript({
+      deliveryMode: 'direct-push',
+      workerVersion: 'preflight',
+      botList: DEFAULT_BOT_LIST,
+    }), { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
+    fs.writeFileSync(wranglerTomlPath, generateWranglerToml({
+      deliveryMode: 'direct-push',
+      sourceId: 'preflight',
+      hostname: 'example.invalid',
+      ingestUrl: 'https://canonry.example.invalid/api/v1/projects/preflight/traffic/cloudflare/ingest',
+      workerVersion: 'preflight',
+    }), { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
+    fs.writeFileSync(secretsPath, JSON.stringify({
+      [CLOUDFLARE_WORKER_BINDINGS.bearerToken]: 'preflight-bearer',
+      [CLOUDFLARE_WORKER_BINDINGS.hmacSecret]: 'preflight-hmac',
+    }), { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
+
+    const validationOutput = await runner(
+      'wrangler',
+      [
+        'deploy',
+        '--config',
+        wranglerTomlPath,
+        '--secrets-file',
+        secretsPath,
+        '--strict',
+        '--dry-run',
+        '--outdir',
+        path.join(tempDirectory, 'dist'),
+      ],
+      { cwd: tempDirectory },
+    )
+    const hasUnknownFields = /Unexpected fields found/i.test(validationOutput)
+    const hasExperimentalSecrets = /\bexperimental\b/i.test(validationOutput)
+      && /\bsecrets?\b/i.test(validationOutput)
+    if (hasUnknownFields || hasExperimentalSecrets) {
+      throw new Error(
+        `Wrangler reported an incompatible generated configuration:\n${wranglerDiagnostic(validationOutput)}`,
+      )
+    }
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true })
   }
 }
 

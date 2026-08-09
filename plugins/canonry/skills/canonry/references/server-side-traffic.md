@@ -261,9 +261,12 @@ canonry traffic connect cloudflare <project> \
 `--confirm-fail-open` records that you will configure the required route
 toggle. Neither flag changes Cloudflare by itself.
 
-With `--deploy`, Canonry reads `wrangler deploy --help` before it connects
-the source. Wrangler must support `--secrets-file` and `--strict`. An old
-Wrangler stops this step before Canonry changes state.
+With `--deploy`, Canonry checks Wrangler before it connects the source. The
+preflight uses `--dry-run --secrets-file ... --strict` to parse and bundle
+representative generated artifacts. An incompatible Wrangler stops this step
+before Canonry changes state. The generated `[secrets].required` table is an
+[official Wrangler safety check](https://developers.cloudflare.com/changelog/post/2026-03-24-secrets-config-property/);
+it does not contain secret values.
 
 The generated TOML never declares `[[routes]]`. Thus, Wrangler deploys the
 Worker without placing it on production traffic. After deployment, open
@@ -298,26 +301,45 @@ never changes the site's response. If Canonry remains unavailable after
 the retry budget, the selected event is lost. Direct push has no durable
 edge buffer. This limit is the primary reason to add Queue pull next.
 
+The Worker transports the raw client IP, full query string, and full referer
+URL for classification. Canonry does not persist these raw values. Raw samples
+store `ipHash: null`, a normalized path without its query, and only the referer
+host. A later privacy change can send only the query parameters that the
+classifier requires.
+
 Smoke-test all of these before considering the source live:
 
-1. Request a normal page with an ordinary browser UA. Verify that the
+1. Run connect with `--deploy`. Make sure that Canonry's preflight completes
+   without a Wrangler parse or bundle error. It checks the generated TOML,
+   Worker, required secret bindings, and strict mode before it creates the
+   source.
+2. Request a normal page with an ordinary browser UA. Make sure that the
    origin status, headers, and body remain unchanged. No Canonry event must land.
-2. Request a harmless page with `utm_source=chatgpt` or a known AI crawler
-   UA. Verify that one event contains the expected path, status, and UA.
-3. Repeat the request without AI evidence. Verify that Canonry receives
+3. Request a harmless page with `utm_source=chatgpt` or a known AI crawler
+   UA. Make sure that one event contains the expected path, status, and UA.
+4. Repeat the request without AI evidence. Make sure that Canonry receives
    no event.
-4. Verify that the site route excludes the Canonry ingest hostname.
+5. Make sure that the site route excludes the Canonry ingest hostname.
    This condition prevents delivery recursion.
-5. In the route form, select the exact route and Worker. Set **Request limit
-   failure mode** to **Fail open**. Save the route only after both values are correct.
-6. Cause a non-production receiver failure in staging. Verify that the
+6. In the route form, select the exact route and Worker. Set **Request limit
+   failure mode** to **Fail open**. If both values are correct, save the route.
+7. Cause a non-production receiver failure in staging. Make sure that the
    origin remains healthy and retries stay bounded.
-7. Inspect Worker logs. Verify that logs contain no secret values.
-8. Run `canonry doctor --project <project>`. Inspect
+8. Configure the staging receiver to return HTTP 429. Send a burst with a
+   broad bot UA. Measure the receiver load. Each matched request can cause
+   three delivery attempts: one initial attempt and two retries. Confirm that
+   the ingest receiver records three 429 attempts. The browser must receive the
+   unchanged healthy origin response. Server limits bound accepted processing,
+   but they do not prevent the retry requests.
+9. Measure baseline p50 and p95 TTFB without the Worker. Attach the Worker.
+   Repeat the sample under the same cache conditions. Investigate a repeatable
+   increase.
+10. Inspect Worker logs. Make sure that logs contain no secret values.
+11. Run `canonry doctor --project <project>`. Inspect
    `traffic.source.recent-data` and `traffic.source.worker-version`.
-9. If the Worker version is stale, rerun the connect command. Then deploy
+12. If the Worker version is stale, rerun the connect command. Then deploy
    with both acknowledgement flags.
-10. Rehearse rollback in staging. Detach the route and verify that the
+13. Rehearse rollback in staging. Detach the route and make sure that the
     origin remains healthy without the Worker.
 
 A direct-push source does not use `canonry traffic sync` or a traffic-sync
@@ -337,6 +359,14 @@ row and local credential store remain after teardown. A follow-up must add
 source archival and local credential cleanup.
 
 ### Queue pull seam (not shipped yet)
+
+Queue pull is the first follow-up for hosted or platform deployments with
+loopback-only tenant engines. Customer Workers cannot reach those engines.
+The future pull adapter will let Canonry read events without a public
+tenant-ingest endpoint.
+
+Before broad direct-push rollout, consider an edge sampling or batching control
+for high-volume generic bot traffic.
 
 `deliveryMode: direct-push` is explicit in the source config. The reserved
 `queue-pull` mode will keep the Worker filter, `CloudflareEdgeEventBatch`,

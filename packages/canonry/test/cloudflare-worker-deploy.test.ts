@@ -183,26 +183,95 @@ describe('Cloudflare Worker artifacts', () => {
 })
 
 describe('Cloudflare Wrangler deploy', () => {
-  it('feature-detects the required deploy flags before setup mutates state', async () => {
+  it('parses and bundles generated artifacts before setup mutates state', async () => {
+    const root = scratch()
     const calls: Array<{ command: string; args: readonly string[]; cwd: string }> = []
+    let preflightDirectory = ''
     await preflightCloudflareWrangler({
       cwd: '/tmp',
+      tempRoot: root,
       run: async (command, args, opts) => {
         calls.push({ command, args, cwd: opts.cwd })
-        return 'Usage: wrangler deploy [--secrets-file <path>] [--strict]'
+        if (args.includes('--help')) {
+          return 'Usage: wrangler deploy [--dry-run] [--secrets-file <path>] [--strict]'
+        }
+
+        preflightDirectory = opts.cwd
+        expect(path.dirname(preflightDirectory)).toBe(root)
+        expect(args).toEqual([
+          'deploy',
+          '--config',
+          path.join(preflightDirectory, 'wrangler.toml'),
+          '--secrets-file',
+          path.join(preflightDirectory, 'secrets.json'),
+          '--strict',
+          '--dry-run',
+          '--outdir',
+          path.join(preflightDirectory, 'dist'),
+        ])
+        expect(fs.readFileSync(path.join(preflightDirectory, 'worker.js'), 'utf-8'))
+          .toContain('export default')
+        const toml = fs.readFileSync(path.join(preflightDirectory, 'wrangler.toml'), 'utf-8')
+        expect(toml).toContain('[secrets]\nrequired = [')
+        expect(toml).toContain('CANONRY_BEARER_TOKEN')
+        expect(toml).toContain('CANONRY_HMAC_SECRET')
+        const secretsPath = path.join(preflightDirectory, 'secrets.json')
+        expect(fs.statSync(secretsPath).mode & 0o777).toBe(0o600)
+        expect(JSON.parse(fs.readFileSync(secretsPath, 'utf-8'))).toEqual({
+          CANONRY_BEARER_TOKEN: 'preflight-bearer',
+          CANONRY_HMAC_SECRET: 'preflight-hmac',
+        })
+        return '--dry-run: exiting now.'
       },
     })
-    expect(calls).toEqual([{
+    expect(calls[0]).toEqual({
       command: 'wrangler',
       args: ['deploy', '--help'],
       cwd: '/tmp',
-    }])
+    })
+    expect(calls).toHaveLength(2)
+    expect(fs.existsSync(preflightDirectory)).toBe(false)
   })
 
   it('rejects Wrangler when a required deploy flag is unavailable', async () => {
     await expect(preflightCloudflareWrangler({
       run: async () => 'Usage: wrangler deploy [--strict]',
     })).rejects.toThrow(/--secrets-file/)
+  })
+
+  it.each([
+    ['unknown fields', 'Unexpected fields found in secrets'],
+    ['experimental secrets', 'The "secrets" field is experimental'],
+  ])('rejects generated-config %s warnings even when Wrangler exits successfully', async (_label, warning) => {
+    const root = scratch()
+
+    await expect(preflightCloudflareWrangler({
+      tempRoot: root,
+      run: async (_command, args) => {
+        if (args.includes('--help')) {
+          return 'Usage: wrangler deploy [--dry-run] [--secrets-file <path>] [--strict]'
+        }
+        return `▲ [WARNING] Processing wrangler.toml configuration:\n${warning}`
+      },
+    })).rejects.toThrow(warning)
+  })
+
+  it('removes preflight artifacts when Wrangler rejects the generated config', async () => {
+    const root = scratch()
+    let preflightDirectory = ''
+
+    await expect(preflightCloudflareWrangler({
+      tempRoot: root,
+      run: async (_command, args, opts) => {
+        if (args.includes('--help')) {
+          return 'Usage: wrangler deploy [--dry-run] [--secrets-file <path>] [--strict]'
+        }
+        preflightDirectory = opts.cwd
+        throw new Error('unknown config key')
+      },
+    })).rejects.toThrow(/unknown config key/)
+
+    expect(fs.existsSync(preflightDirectory)).toBe(false)
   })
 
   it('passes secrets only through a 0600 temporary file and removes it after success', async () => {

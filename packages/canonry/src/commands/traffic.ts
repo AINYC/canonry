@@ -82,12 +82,12 @@ export async function trafficConnectCloudflare(project: string, opts: {
   if (opts.deploy) {
     try {
       await (deps.preflightWrangler ?? preflightCloudflareWrangler)()
-    } catch {
+    } catch (error) {
+      const message = errorMessage(error)
       throw new CliError({
         code: 'TRAFFIC_CLOUDFLARE_WRANGLER_UNSUPPORTED',
-        message: 'Wrangler is unavailable or lacks the required deploy safety flags',
-        displayMessage:
-          'Error: install or update Wrangler. Its `deploy --help` output must include --secrets-file and --strict.',
+        message,
+        displayMessage: `Error: Wrangler preflight failed before Canonry changed state.\n${message}`,
         details: { project },
       })
     }

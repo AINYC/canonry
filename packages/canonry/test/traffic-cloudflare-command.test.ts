@@ -152,6 +152,9 @@ describe('trafficConnectCloudflare', () => {
       preflightWrangler: async () => { throw new Error('missing --secrets-file') },
     })).rejects.toMatchObject({
       code: 'TRAFFIC_CLOUDFLARE_WRANGLER_UNSUPPORTED',
+      message: 'missing --secrets-file',
+      displayMessage:
+        'Error: Wrangler preflight failed before Canonry changed state.\nmissing --secrets-file',
     })
 
     expect(connectCalled).toBe(false)
