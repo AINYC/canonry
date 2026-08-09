@@ -203,15 +203,26 @@ export const trafficConnectVercelRequestSchema = z.object({
 export type TrafficConnectVercelRequest = z.infer<typeof trafficConnectVercelRequestSchema>
 
 /**
- * Persisted in `traffic_sources.configJson` for `sourceType = 'cloudflare'`
- * when the source is a Worker push (the only Cloudflare delivery shape this
- * release supports). The per-source bearer token + HMAC secret never live
- * here — they go to `~/.canonry/config.yaml` under
- * `cloudflareTraffic.connections.<sourceId>`. The DB only carries the
- * sha256 hash of the bearer for verification.
+ * How a Cloudflare edge Worker hands selected request events to Canonry.
+ * `queue-pull` is reserved for the buffered pull adapter; the current connect
+ * route deliberately accepts only `direct-push` until that adapter ships.
  */
-export const cloudflareWorkerSourceConfigSchema = z.object({
+export const cloudflareTrafficDeliveryModeSchema = z.enum(['direct-push', 'queue-pull'])
+export type CloudflareTrafficDeliveryMode = z.infer<typeof cloudflareTrafficDeliveryModeSchema>
+export const CloudflareTrafficDeliveryModes = cloudflareTrafficDeliveryModeSchema.enum
+
+/**
+ * Persisted in `traffic_sources.configJson` for `sourceType = 'cloudflare'`.
+ * The per-source bearer token + HMAC secret never live here — they go to
+ * `~/.canonry/config.yaml` under `cloudflareTraffic.connections.<sourceId>`.
+ * The DB only carries the sha256 hash of the bearer for verification.
+ *
+ * Missing `deliveryMode` means `direct-push` so source rows written before the
+ * transport discriminator was introduced continue to parse unchanged.
+ */
+export const cloudflareTrafficSourceConfigSchema = z.object({
   schemaVersion: z.literal(1),
+  deliveryMode: z.literal(CloudflareTrafficDeliveryModes['direct-push']).default('direct-push'),
   /** Semver of the Worker script bundle that was generated at connect/rotate time. */
   workerVersion: z.string().min(1),
   /** Identifier of the bot/referer keyword set baked into the deployed Worker. */
@@ -221,9 +232,15 @@ export const cloudflareWorkerSourceConfigSchema = z.object({
   /** Operator-supplied Cloudflare account id. Optional in Phase 1; required for Phase 2 auto-deploy. */
   accountId: z.string().nullable(),
 })
-export type CloudflareWorkerSourceConfig = z.infer<typeof cloudflareWorkerSourceConfigSchema>
+export type CloudflareTrafficSourceConfig = z.infer<typeof cloudflareTrafficSourceConfigSchema>
+
+/** @deprecated Use `cloudflareTrafficSourceConfigSchema`. */
+export const cloudflareWorkerSourceConfigSchema = cloudflareTrafficSourceConfigSchema
+/** @deprecated Use `CloudflareTrafficSourceConfig`. */
+export type CloudflareWorkerSourceConfig = CloudflareTrafficSourceConfig
 
 export const trafficConnectCloudflareRequestSchema = z.object({
+  deliveryMode: z.literal(CloudflareTrafficDeliveryModes['direct-push']).default('direct-push'),
   displayName: z.string().min(1).optional(),
   /** Cloudflare zone id of the deployed Worker (informational; not validated against Cloudflare). */
   zoneId: z.string().min(1).optional(),
@@ -234,11 +251,13 @@ export type TrafficConnectCloudflareRequest = z.infer<typeof trafficConnectCloud
 
 /**
  * Returned by `POST /traffic/connect/cloudflare`. The operator deploys the
- * generated Worker script to their Cloudflare zone; the embedded bearer +
- * HMAC secret authenticate every subsequent ingest request.
+ * generated Worker script to their Cloudflare zone. Per-source bearer + HMAC
+ * credentials are installed as Worker secret bindings and are never returned
+ * in the generated source or Wrangler configuration.
  */
 export const trafficConnectCloudflareResponseSchema = z.object({
   sourceId: z.string().min(1),
+  deliveryMode: z.literal(CloudflareTrafficDeliveryModes['direct-push']),
   workerScript: z.string().min(1),
   wranglerToml: z.string().min(1),
   workerVersion: z.string().min(1),
@@ -247,13 +266,12 @@ export const trafficConnectCloudflareResponseSchema = z.object({
 export type TrafficConnectCloudflareResponse = z.infer<typeof trafficConnectCloudflareResponseSchema>
 
 /**
- * One event row inside a `cloudflareWorkerIngestRequest`. Field shape mirrors
- * what a Cloudflare Worker can pull off a `Request` (`request.url`,
- * `request.headers`, `request.cf`). Every non-mandatory field is nullable —
- * `cf.*` properties depend on the customer's plan tier and are absent on
- * free/Pro plans without Bot Management.
+ * One transport-neutral event observed by a Cloudflare edge Worker. Direct
+ * push and the later Queue pull adapter share this exact shape. Every
+ * non-mandatory field is nullable — `cf.*` properties depend on the customer's
+ * plan tier and are absent on free/Pro plans without Bot Management.
  */
-export const cloudflareWorkerEventSchema = z.object({
+export const cloudflareEdgeEventSchema = z.object({
   /** Cloudflare `cf-ray` request id — globally unique per request. */
   eventId: z.string().min(1),
   observedAt: z.string().min(1),
@@ -273,19 +291,28 @@ export const cloudflareWorkerEventSchema = z.object({
     asOrganization: z.string().nullable(),
   }).nullable(),
 })
-export type CloudflareWorkerEvent = z.infer<typeof cloudflareWorkerEventSchema>
+export type CloudflareEdgeEvent = z.infer<typeof cloudflareEdgeEventSchema>
+
+/** @deprecated Use `cloudflareEdgeEventSchema`. */
+export const cloudflareWorkerEventSchema = cloudflareEdgeEventSchema
+/** @deprecated Use `CloudflareEdgeEvent`. */
+export type CloudflareWorkerEvent = CloudflareEdgeEvent
 
 /**
- * Body of `POST /api/v1/projects/:name/traffic/cloudflare/ingest`. The
- * Worker forwards one event per request in this release; the array shape
- * keeps the door open for a future Logpush sibling adapter that batches.
+ * Transport-neutral batch emitted by the edge Worker. Direct push sends this
+ * as the ingest request body; Queue pull stores and later reads the same shape.
  */
-export const cloudflareWorkerIngestRequestSchema = z.object({
+export const cloudflareEdgeEventBatchSchema = z.object({
   schemaVersion: z.literal(1),
   workerVersion: z.string().min(1),
-  events: z.array(cloudflareWorkerEventSchema).min(1).max(100),
+  events: z.array(cloudflareEdgeEventSchema).min(1).max(100),
 })
-export type CloudflareWorkerIngestRequest = z.infer<typeof cloudflareWorkerIngestRequestSchema>
+export type CloudflareEdgeEventBatch = z.infer<typeof cloudflareEdgeEventBatchSchema>
+
+/** @deprecated Direct push compatibility alias; use `cloudflareEdgeEventBatchSchema`. */
+export const cloudflareWorkerIngestRequestSchema = cloudflareEdgeEventBatchSchema
+/** @deprecated Use `CloudflareEdgeEventBatch`. */
+export type CloudflareWorkerIngestRequest = CloudflareEdgeEventBatch
 
 export const trafficSyncResponseSchema = z.object({
   sourceId: z.string(),

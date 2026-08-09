@@ -808,6 +808,10 @@ const COVERAGE: Record<string, CoverageEntry> = {
     kind: 'internal-only',
     reason: 'Hourly rollup consumed via /traffic/events composite, not directly mapped to a DTO.',
   },
+  trafficEventReceipts: {
+    kind: 'internal-only',
+    reason: 'Transport-neutral transactional idempotency claims; never returned to an API caller.',
+  },
   rawEventSamples: {
     kind: 'internal-only',
     reason: 'Short-retention raw evidence for classifier debugging; not part of the public API.',

@@ -3169,20 +3169,28 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
   },
   {
     version: 129,
-    name: 'traffic-sources-cloudflare-worker-columns',
+    name: 'traffic-ingest-foundation',
     // Push-receive traffic sources (currently only `cloudflare`) need a
     // per-source bearer for the Worker to authenticate against canonry's
-    // ingest endpoint, plus a place to remember the deployed Worker
-    // version so `cloudflare.worker.version-stale` can compare. The
-    // cleartext bearer + HMAC secret stay in ~/.canonry/config.yaml under
-    // `cloudflareTraffic.connections.<sourceId>`; only the sha256 of the
-    // bearer is stored here.
+    // ingest endpoint, plus a place to remember the deployed Worker version.
+    // Durable receipts are transport-neutral: direct push and a future Queue
+    // pull consumer both claim an event in the same transaction as rollups.
+    // Cleartext credentials remain outside the database.
     //
     // Idempotent: `ALTER TABLE ADD COLUMN` errors with "duplicate column
     // name" on retry, which the runner already swallows.
     statements: [
       `ALTER TABLE traffic_sources ADD COLUMN ingest_token_hash TEXT`,
       `ALTER TABLE traffic_sources ADD COLUMN last_worker_version TEXT`,
+      `CREATE TABLE IF NOT EXISTS traffic_event_receipts (
+        source_id  TEXT NOT NULL REFERENCES traffic_sources(id) ON DELETE CASCADE,
+        event_id   TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        PRIMARY KEY (source_id, event_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_traffic_event_receipts_expires
+        ON traffic_event_receipts(expires_at)`,
     ],
   },
 ]

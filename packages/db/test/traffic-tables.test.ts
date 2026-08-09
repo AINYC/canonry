@@ -2,12 +2,13 @@ import { test, expect, onTestFinished } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import {
   createClient,
   migrate,
   projects,
   trafficSources,
+  trafficEventReceipts,
   crawlerEventsHourly,
   aiUserFetchEventsHourly,
   aiReferralEventsHourly,
@@ -509,6 +510,7 @@ test('traffic_sources persists ingest_token_hash and last_worker_version for clo
     status: 'connected',
     configJson: {
       schemaVersion: 1,
+      deliveryMode: 'direct-push',
       workerVersion: '1.0.0',
       expectedBotListVersion: '2026-05-27',
       zoneId: null,
@@ -524,6 +526,42 @@ test('traffic_sources persists ingest_token_hash and last_worker_version for clo
   expect(row.sourceType).toBe('cloudflare')
   expect(row.ingestTokenHash).toBe('a'.repeat(64))
   expect(row.lastWorkerVersion).toBe('1.0.0')
+})
+
+test('traffic_event_receipts durably dedupes per source and cascades with it', () => {
+  const { db, tmpDir } = createTempDb()
+  onTestFinished(() => cleanup(tmpDir))
+
+  seedProject(db)
+  const receivedAt = '2026-08-09T12:00:00.000Z'
+  const expiresAt = '2026-08-10T12:00:00.000Z'
+  db.insert(trafficSources).values({
+    id: 'src_receipts',
+    projectId: 'proj_1',
+    sourceType: 'cloudflare',
+    displayName: 'Cloudflare receipts',
+    status: 'connected',
+    configJson: { schemaVersion: 1, deliveryMode: 'direct-push' },
+    createdAt: receivedAt,
+    updatedAt: receivedAt,
+  }).run()
+
+  const receipt = {
+    sourceId: 'src_receipts',
+    eventId: 'cloudflare-worker:ray-1',
+    receivedAt,
+    expiresAt,
+  }
+  db.insert(trafficEventReceipts).values(receipt).run()
+
+  expect(db.select().from(trafficEventReceipts).all()).toEqual([receipt])
+  expect(() => db.insert(trafficEventReceipts).values(receipt).run()).toThrow()
+  expect(db.all(sql.raw(
+    "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_traffic_event_receipts_expires'",
+  ))).toEqual([{ name: 'idx_traffic_event_receipts_expires' }])
+
+  db.delete(trafficSources).where(eq(trafficSources.id, 'src_receipts')).run()
+  expect(db.select().from(trafficEventReceipts).all()).toEqual([])
 })
 
 test('traffic_sources leaves ingest_token_hash and last_worker_version NULL for pull adapters', () => {
@@ -550,14 +588,14 @@ test('traffic_sources leaves ingest_token_hash and last_worker_version NULL for 
   expect(row.lastWorkerVersion).toBeNull()
 })
 
-test('Cloudflare migration adds ingest_token_hash + last_worker_version without losing traffic source data', () => {
+test('traffic ingest migration adds source auth columns and durable receipts without losing source data', () => {
   const { db, tmpDir } = createTempDb()
   onTestFinished(() => cleanup(tmpDir))
 
-  const cloudflareMigration = MIGRATION_VERSIONS.find(
-    migration => migration.name === 'traffic-sources-cloudflare-worker-columns',
+  const ingestMigration = MIGRATION_VERSIONS.find(
+    migration => migration.name === 'traffic-ingest-foundation',
   )
-  expect(cloudflareMigration).toMatchObject({ version: 126 })
+  expect(ingestMigration).toMatchObject({ version: 127 })
 
   seedProject(db)
 

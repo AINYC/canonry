@@ -1,3 +1,4 @@
+export * from './canonical-json.js'
 export * from './normalize.js'
 export * from './script.js'
 export * from './verify.js'

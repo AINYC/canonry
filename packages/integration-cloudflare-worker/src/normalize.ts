@@ -2,7 +2,7 @@ import {
   TrafficEventConfidences,
   TrafficEvidenceKinds,
   TrafficSourceTypes,
-  type CloudflareWorkerEvent,
+  type CloudflareEdgeEvent,
   type NormalizedTrafficRequest,
 } from '@ainyc/canonry-contracts'
 
@@ -17,7 +17,7 @@ function maybeLabel(value: string | number | boolean | null): string | undefined
   return String(value)
 }
 
-function buildProviderLabels(cf: CloudflareWorkerEvent['cf']): Record<string, string> {
+function buildProviderLabels(cf: CloudflareEdgeEvent['cf']): Record<string, string> {
   if (!cf) return {}
   const candidates: Record<string, string | undefined> = {
     verifiedBot: maybeLabel(cf.verifiedBot),
@@ -49,8 +49,8 @@ function buildProviderLabels(cf: CloudflareWorkerEvent['cf']): Record<string, st
  * is the most reliable signal Cloudflare exposes on the verified bot
  * side and downstream code may consume it directly.
  */
-export function normalizeCloudflareWorkerEvent(
-  event: CloudflareWorkerEvent,
+export function normalizeCloudflareEdgeEvent(
+  event: CloudflareEdgeEvent,
 ): NormalizedTrafficRequest | null {
   if (!event.path) return null
   if (!event.observedAt) return null
@@ -88,3 +88,6 @@ export function normalizeCloudflareWorkerEvent(
     providerLabels: buildProviderLabels(event.cf),
   }
 }
+
+/** @deprecated Use `normalizeCloudflareEdgeEvent`. */
+export const normalizeCloudflareWorkerEvent = normalizeCloudflareEdgeEvent

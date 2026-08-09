@@ -1,18 +1,38 @@
 import { AI_ENGINE_DOMAINS } from '@ainyc/canonry-contracts'
 import { describe, expect, it, vi } from 'vitest'
+import { canonicalizeCloudflareJson } from '../src/canonical-json.js'
 import {
   DEFAULT_BOT_LIST,
   generateWorkerScript,
   generateWranglerToml,
 } from '../src/script.js'
+import {
+  CLOUDFLARE_DIRECT_PUSH_SECRET_BINDINGS,
+  CLOUDFLARE_WORKER_BINDINGS,
+} from '../src/types.js'
+import { verifyRequestSignature } from '../src/verify.js'
 
 const BASE_OPTS = {
-  sourceId: 'src_abc123',
-  ingestUrl: 'https://canonry.example.com/api/v1/projects/foo/traffic/cloudflare/ingest',
-  bearerToken: 'tok_secret_value',
-  hmacSecret: 'hmac_secret_value',
+  deliveryMode: 'direct-push' as const,
   workerVersion: '1.0.0',
   botList: DEFAULT_BOT_LIST,
+}
+
+const WORKER_ENV = {
+  CANONRY_DELIVERY_MODE: 'direct-push',
+  CANONRY_SOURCE_ID: 'src_abc123',
+  CANONRY_INGEST_URL: 'https://canonry.example.com/api/v1/projects/foo/traffic/cloudflare/ingest',
+  CANONRY_WORKER_VERSION: '1.0.0',
+  CANONRY_BEARER_TOKEN: 'tok_secret_value',
+  CANONRY_HMAC_SECRET: 'hmac_secret_value',
+}
+
+const BASE_WRANGLER_OPTS = {
+  deliveryMode: 'direct-push' as const,
+  sourceId: WORKER_ENV.CANONRY_SOURCE_ID,
+  hostname: 'example.com',
+  ingestUrl: WORKER_ENV.CANONRY_INGEST_URL,
+  workerVersion: WORKER_ENV.CANONRY_WORKER_VERSION,
 }
 
 interface GeneratedRequest {
@@ -21,15 +41,29 @@ interface GeneratedRequest {
   cf: null
 }
 
+interface GeneratedWorker {
+  fetch(
+    request: Request,
+    env: Record<string, string>,
+    ctx: { waitUntil(task: Promise<unknown>): void },
+  ): Promise<Response>
+}
+
+function executableModuleSource(script: string): string {
+  return script.replace('export default', 'globalThis.generatedWorker =')
+}
+
 function generatedShouldForward(): (request: GeneratedRequest) => boolean {
-  const generated = generateWorkerScript(BASE_OPTS)
-  const scope: { shouldForward?: (request: GeneratedRequest) => boolean } = {}
+  const scope: {
+    generatedWorker?: GeneratedWorker
+    shouldForward?: (request: GeneratedRequest) => boolean
+  } = {}
   const exposePredicate = new Function(
     'globalThis',
-    'addEventListener',
-    `${generated}\nglobalThis.shouldForward = shouldForward`,
+    `${executableModuleSource(generateWorkerScript(BASE_OPTS))}\n` +
+      'globalThis.shouldForward = shouldForward',
   )
-  exposePredicate(scope, () => undefined)
+  exposePredicate(scope)
   return scope.shouldForward!
 }
 
@@ -44,62 +78,67 @@ function request(url: string, referer?: string): GeneratedRequest {
   }
 }
 
-async function runGeneratedWorker(ingestStatuses: number[]): Promise<{
+async function runGeneratedWorker(
+  ingestStatuses: number[],
+  envOverrides: Record<string, string> = {},
+): Promise<{
   ingestCalls: number
+  ingestInit: RequestInit | undefined
   warn: ReturnType<typeof vi.fn>
 }> {
-  let handler: ((event: {
-    request: Request
-    respondWith: (response: Promise<Response>) => void
-    waitUntil: (task: Promise<unknown>) => void
-  }) => void) | undefined
   const waitUntilTasks: Promise<unknown>[] = []
   const warn = vi.fn()
   let ingestCalls = 0
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  let ingestInit: RequestInit | undefined
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (typeof input !== 'string') return new Response('origin', { status: 200 })
     ingestCalls += 1
+    ingestInit = init
     return new Response('', { status: ingestStatuses.shift() ?? 200 })
   })
   const immediateTimeout = (callback: () => void): number => {
     callback()
     return 0
   }
-  const register = (type: string, callback: typeof handler): void => {
-    if (type === 'fetch') handler = callback
-  }
-  const evaluate = new Function('addEventListener', 'fetch', 'crypto', 'console', 'setTimeout', generateWorkerScript(BASE_OPTS))
-  evaluate(register, fetchMock, globalThis.crypto, { warn }, immediateTimeout)
+  const scope: { generatedWorker?: GeneratedWorker } = {}
+  const evaluate = new Function(
+    'globalThis',
+    'fetch',
+    'crypto',
+    'console',
+    'setTimeout',
+    executableModuleSource(generateWorkerScript(BASE_OPTS)),
+  )
+  evaluate(scope, fetchMock, globalThis.crypto, { warn }, immediateTimeout)
 
   const generatedRequest = new Request('https://example.com/?utm_source=chatgpt', {
     headers: { 'cf-ray': 'evt_retry_test', 'user-agent': 'Mozilla/5.0' },
   })
   Object.defineProperty(generatedRequest, 'cf', { value: null })
-  let responsePromise: Promise<Response> | undefined
-  handler!({
-    request: generatedRequest,
-    respondWith: (response) => { responsePromise = response },
-    waitUntil: (task) => { waitUntilTasks.push(task) },
-  })
-  await responsePromise
+  const response = await scope.generatedWorker!.fetch(
+    generatedRequest,
+    { ...WORKER_ENV, ...envOverrides },
+    { waitUntil: task => { waitUntilTasks.push(task) } },
+  )
+  expect(await response.text()).toBe('origin')
   await Promise.all(waitUntilTasks)
-  return { ingestCalls, warn }
+  return { ingestCalls, ingestInit, warn }
 }
 
 describe('generateWorkerScript', () => {
-  it('produces a non-empty JS string', () => {
+  it('produces an ES-module Worker', () => {
     const script = generateWorkerScript(BASE_OPTS)
-    expect(script).toMatch(/addEventListener\s*\(\s*['"]fetch['"]/)
+    expect(script).toMatch(/export default\s*\{/)
+    expect(script).not.toMatch(/addEventListener\s*\(/)
     expect(script.length).toBeGreaterThan(500)
   })
 
-  it('embeds every required constant', () => {
+  it('contains no bearer or HMAC secret values', () => {
     const script = generateWorkerScript(BASE_OPTS)
-    expect(script).toContain('src_abc123')
-    expect(script).toContain('https://canonry.example.com/api/v1/projects/foo/traffic/cloudflare/ingest')
-    expect(script).toContain('tok_secret_value')
-    expect(script).toContain('hmac_secret_value')
-    expect(script).toContain('1.0.0')
+    expect(script).not.toContain(WORKER_ENV.CANONRY_BEARER_TOKEN)
+    expect(script).not.toContain(WORKER_ENV.CANONRY_HMAC_SECRET)
+    expect(script).toContain(`env.${CLOUDFLARE_WORKER_BINDINGS.bearerToken}`)
+    expect(script).toContain(`env.${CLOUDFLARE_WORKER_BINDINGS.hmacSecret}`)
   })
 
   it('bakes in the bot UA keywords from the supplied bot list', () => {
@@ -143,7 +182,7 @@ describe('generateWorkerScript', () => {
     expect(shouldForward(request('https://example.com/?utm_source=newsletter'))).toBe(false)
   })
 
-  it('records the bot list version somewhere the operator (or doctor) can read it', () => {
+  it('records the bot list version somewhere the operator or doctor can read it', () => {
     const script = generateWorkerScript({
       ...BASE_OPTS,
       botList: { ...DEFAULT_BOT_LIST, version: '2099-12-31' },
@@ -151,28 +190,47 @@ describe('generateWorkerScript', () => {
     expect(script).toContain('2099-12-31')
   })
 
-  it('uses event.waitUntil so the forward fetch never blocks the response', () => {
+  it('uses ctx.waitUntil so delivery never blocks the origin response', () => {
     const script = generateWorkerScript(BASE_OPTS)
-    expect(script).toMatch(/event\.waitUntil/)
+    expect(script).toMatch(/ctx\.waitUntil/)
   })
 
-  it('forwards with the documented headers (Authorization, Timestamp, Signature, Version)', () => {
+  it('keeps filtering/event capture separate from the direct-push delivery adapter', () => {
+    const script = generateWorkerScript(BASE_OPTS)
+    expect(script).toContain('function buildEdgeEvent(')
+    expect(script).toContain('function buildEdgeEventBatch(')
+    expect(script).toContain('function deliverViaDirectPush(')
+    expect(script).toContain('function deliverEdgeEventBatch(')
+  })
+
+  it('forwards with the documented authentication and provenance headers', () => {
     const script = generateWorkerScript(BASE_OPTS)
     expect(script).toContain('Authorization')
-    expect(script).toContain('Bearer')
     expect(script).toContain('X-Canonry-Timestamp')
     expect(script).toContain('X-Canonry-Signature')
     expect(script).toContain('X-Canonry-Worker-Version')
+    expect(script).toContain('X-Canonry-Source-Id')
   })
 
-  it('signs with HMAC-SHA256 via Web Crypto SubtleCrypto', () => {
-    const script = generateWorkerScript(BASE_OPTS)
-    expect(script).toContain('HMAC')
-    expect(script).toContain('SHA-256')
-    expect(script).toMatch(/crypto\.subtle/)
+  it('signs canonical JSON with HMAC-SHA256 via Web Crypto', async () => {
+    const result = await runGeneratedWorker([200])
+    const body = String(result.ingestInit?.body)
+    const payload = JSON.parse(body) as unknown
+    expect(body).toBe(canonicalizeCloudflareJson(payload))
+
+    const headers = new Headers(result.ingestInit?.headers)
+    const timestamp = headers.get('X-Canonry-Timestamp')!
+    expect(verifyRequestSignature({
+      timestamp,
+      signature: headers.get('X-Canonry-Signature')!,
+      payload,
+      secret: WORKER_ENV.CANONRY_HMAC_SECRET,
+      nowSeconds: Number(timestamp),
+      acceptLegacyJson: false,
+    })).toEqual({ ok: true })
   })
 
-  it('uses POST as the forward method', () => {
+  it('uses POST as the direct-push method', () => {
     const script = generateWorkerScript(BASE_OPTS)
     expect(script).toMatch(/method\s*:\s*['"]POST['"]/)
   })
@@ -187,13 +245,19 @@ describe('generateWorkerScript', () => {
     const result = await runGeneratedWorker([401])
     expect(result.ingestCalls).toBe(1)
     expect(result.warn).toHaveBeenCalledOnce()
-    expect(JSON.stringify(result.warn.mock.calls)).not.toContain(BASE_OPTS.bearerToken)
-    expect(JSON.stringify(result.warn.mock.calls)).not.toContain(BASE_OPTS.hmacSecret)
+    expect(JSON.stringify(result.warn.mock.calls)).not.toContain(WORKER_ENV.CANONRY_BEARER_TOKEN)
+    expect(JSON.stringify(result.warn.mock.calls)).not.toContain(WORKER_ENV.CANONRY_HMAC_SECRET)
   })
 
-  it('parses as JavaScript (smoke test)', () => {
-    const script = generateWorkerScript(BASE_OPTS)
-    expect(() => new Function(script)).not.toThrow()
+  it('fails delivery closed for an unsupported mode without masking the origin response', async () => {
+    const result = await runGeneratedWorker([], { CANONRY_DELIVERY_MODE: 'queue-pull' })
+    expect(result.ingestCalls).toBe(0)
+    expect(result.warn).toHaveBeenCalledOnce()
+  })
+
+  it('parses as executable JavaScript after replacing only the module export', () => {
+    const script = executableModuleSource(generateWorkerScript(BASE_OPTS))
+    expect(() => new Function('globalThis', script)).not.toThrow()
   })
 
   it('treats a custom botScoreMaxForward as the score threshold', () => {
@@ -219,20 +283,36 @@ describe('DEFAULT_BOT_LIST', () => {
 })
 
 describe('generateWranglerToml', () => {
-  it('emits a name and a main field for wrangler deploy', () => {
-    const toml = generateWranglerToml({ sourceId: 'src_abc123', hostname: 'example.com' })
+  it('emits module metadata and non-secret direct-push vars', () => {
+    const toml = generateWranglerToml(BASE_WRANGLER_OPTS)
     expect(toml).toMatch(/^name\s*=\s*"canonry-traffic-src_abc123"/m)
     expect(toml).toMatch(/^main\s*=/m)
+    expect(toml).toContain('[vars]')
+    expect(toml).toContain('CANONRY_DELIVERY_MODE = "direct-push"')
+    expect(toml).toContain('CANONRY_SOURCE_ID = "src_abc123"')
+    expect(toml).toContain(`CANONRY_INGEST_URL = "${WORKER_ENV.CANONRY_INGEST_URL}"`)
+    expect(toml).toContain('CANONRY_WORKER_VERSION = "1.0.0"')
+  })
+
+  it('names required secret bindings without containing their values', () => {
+    const toml = generateWranglerToml(BASE_WRANGLER_OPTS)
+    expect(toml).toContain('[secrets]')
+    expect(toml).toContain('required = ["CANONRY_BEARER_TOKEN", "CANONRY_HMAC_SECRET"]')
+    for (const binding of CLOUDFLARE_DIRECT_PUSH_SECRET_BINDINGS) {
+      expect(toml).toContain(`wrangler secret put ${binding}`)
+    }
+    expect(toml).not.toContain(WORKER_ENV.CANONRY_BEARER_TOKEN)
+    expect(toml).not.toContain(WORKER_ENV.CANONRY_HMAC_SECRET)
   })
 
   it('sets compatibility_date to a recent ISO date', () => {
-    const toml = generateWranglerToml({ sourceId: 'src_abc123', hostname: 'example.com' })
+    const toml = generateWranglerToml(BASE_WRANGLER_OPTS)
     expect(toml).toMatch(/compatibility_date\s*=\s*"\d{4}-\d{2}-\d{2}"/)
   })
 
   it('declares an exact zone route when zoneId is available', () => {
     const toml = generateWranglerToml({
-      sourceId: 'src_abc123',
+      ...BASE_WRANGLER_OPTS,
       hostname: 'www.example.com',
       zoneId: 'zone_123',
     })
@@ -243,7 +323,7 @@ describe('generateWranglerToml', () => {
   })
 
   it('fails closed to dashboard-managed routing when zoneId is omitted', () => {
-    const toml = generateWranglerToml({ sourceId: 'src_abc123', hostname: 'example.com' })
+    const toml = generateWranglerToml(BASE_WRANGLER_OPTS)
     expect(toml).toContain('workers_dev = false')
     expect(toml).not.toContain('[[routes]]')
     expect(toml).toContain('example.com/*')

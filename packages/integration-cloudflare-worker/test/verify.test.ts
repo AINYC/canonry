@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { canonicalizeCloudflareJson } from '../src/canonical-json.js'
 import { verifyRequestSignature } from '../src/verify.js'
 
 const SECRET = 'shared-hmac-secret'
@@ -22,6 +23,41 @@ describe('verifyRequestSignature', () => {
       secret: SECRET,
       nowSeconds: now,
     })).toEqual({ ok: true })
+  })
+
+  it('canonicalizes parsed payloads before verification', () => {
+    const ts = String(now)
+    const payload = { workerVersion: '1.0.0', events: [{ path: '/', eventId: 'ray' }], schemaVersion: 1 }
+    const signature = sign(ts, canonicalizeCloudflareJson(payload))
+    expect(verifyRequestSignature({
+      timestamp: ts,
+      signature,
+      payload: { schemaVersion: 1, events: [{ eventId: 'ray', path: '/' }], workerVersion: '1.0.0' },
+      secret: SECRET,
+      nowSeconds: now,
+      acceptLegacyJson: false,
+    })).toEqual({ ok: true })
+  })
+
+  it('accepts legacy JSON insertion-order signatures during rollout', () => {
+    const ts = String(now)
+    const payload = { workerVersion: '1.0.0', schemaVersion: 1, events: [] }
+    const signature = sign(ts, JSON.stringify(payload))
+    expect(verifyRequestSignature({
+      timestamp: ts,
+      signature,
+      payload,
+      secret: SECRET,
+      nowSeconds: now,
+    })).toEqual({ ok: true })
+    expect(verifyRequestSignature({
+      timestamp: ts,
+      signature,
+      payload,
+      secret: SECRET,
+      nowSeconds: now,
+      acceptLegacyJson: false,
+    })).toEqual({ ok: false, reason: 'signature_mismatch' })
   })
 
   it('rejects a mutated body', () => {

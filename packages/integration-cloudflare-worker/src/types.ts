@@ -19,13 +19,35 @@ export interface CloudflareWorkerBotList {
   utmSourceTokens: readonly string[]
 }
 
+/** Stable binding names shared by generated source, Wrangler output, and CLI setup. */
+export const CLOUDFLARE_WORKER_BINDINGS = {
+  deliveryMode: 'CANONRY_DELIVERY_MODE',
+  sourceId: 'CANONRY_SOURCE_ID',
+  ingestUrl: 'CANONRY_INGEST_URL',
+  workerVersion: 'CANONRY_WORKER_VERSION',
+  bearerToken: 'CANONRY_BEARER_TOKEN',
+  hmacSecret: 'CANONRY_HMAC_SECRET',
+} as const
+
+export const CLOUDFLARE_DIRECT_PUSH_SECRET_BINDINGS = [
+  CLOUDFLARE_WORKER_BINDINGS.bearerToken,
+  CLOUDFLARE_WORKER_BINDINGS.hmacSecret,
+] as const
+
 export interface GenerateWorkerScriptOptions {
-  sourceId: string
-  ingestUrl: string
-  bearerToken: string
-  hmacSecret: string
+  /** Queue pull becomes a second discriminated generator branch later. */
+  deliveryMode: 'direct-push'
   workerVersion: string
   botList: CloudflareWorkerBotList
   /** Optional `cf.botManagement.score` threshold below which to forward. */
   botScoreMaxForward?: number
+}
+
+export interface GenerateWranglerTomlOptions {
+  deliveryMode: 'direct-push'
+  sourceId: string
+  hostname: string
+  ingestUrl: string
+  workerVersion: string
+  zoneId?: string | null
 }

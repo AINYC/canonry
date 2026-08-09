@@ -1,5 +1,12 @@
 import { AI_ENGINE_DOMAINS } from '@ainyc/canonry-contracts'
-import type { CloudflareWorkerBotList, GenerateWorkerScriptOptions } from './types.js'
+import { canonicalizeCloudflareJson } from './canonical-json.js'
+import {
+  CLOUDFLARE_DIRECT_PUSH_SECRET_BINDINGS,
+  CLOUDFLARE_WORKER_BINDINGS,
+  type CloudflareWorkerBotList,
+  type GenerateWorkerScriptOptions,
+  type GenerateWranglerTomlOptions,
+} from './types.js'
 
 /**
  * Generic edge-side filter list. Intentionally broad — the strict
@@ -46,35 +53,34 @@ function jsArray(values: readonly string[]): string {
 }
 
 /**
- * Render the JavaScript source the operator drops into a Cloudflare zone.
- * The script runs on every request, applies a broad edge-side filter, and
- * `fetch()`-es each match to the configured canonry ingest URL via
- * `event.waitUntil` so the forward never blocks the response.
+ * Render the ES-module Worker deployed on the customer's Cloudflare zone.
+ * The source contains no connection credentials. Runtime values arrive through
+ * Wrangler vars and the bearer/HMAC values arrive through Worker secrets.
  *
- * Auth: each forward carries a bearer token plus an HMAC-SHA256 signature
- * over `timestamp + "." + body`. Both secrets are embedded at generation
- * time — the operator never sees them in cleartext after the connect
- * response is consumed.
+ * Filtering and event construction are transport-neutral. The final
+ * `deliverEdgeEventBatch` dispatch is the only direct-push-specific seam; the
+ * Queue follow-up adds another delivery branch without changing event capture.
  */
 export function generateWorkerScript(opts: GenerateWorkerScriptOptions): string {
   const botScoreMax = opts.botScoreMaxForward ?? DEFAULT_BOT_SCORE_MAX_FORWARD
+  const canonicalJsonFunction = canonicalizeCloudflareJson.toString()
 
   return `// canonry traffic Worker — generated; do not edit by hand
-// source: ${opts.sourceId}
 // worker version: ${opts.workerVersion}
 // bot-list version: ${opts.botList.version}
+// delivery mode: ${opts.deliveryMode}
 
-const CANONRY_SOURCE_ID = ${jsString(opts.sourceId)}
-const CANONRY_INGEST_URL = ${jsString(opts.ingestUrl)}
-const CANONRY_BEARER_TOKEN = ${jsString(opts.bearerToken)}
-const CANONRY_HMAC_SECRET = ${jsString(opts.hmacSecret)}
-const CANONRY_WORKER_VERSION = ${jsString(opts.workerVersion)}
-const CANONRY_BOT_LIST_VERSION = ${jsString(opts.botList.version)}
 const UA_KEYWORDS = ${jsArray(opts.botList.uaKeywords)}
 const REFERER_DOMAINS = ${jsArray(opts.botList.refererDomains)}
 const UTM_SOURCE_TOKENS = ${jsArray(opts.botList.utmSourceTokens)}
 const BOT_SCORE_MAX_FORWARD = ${String(botScoreMax)}
 const RETRY_DELAYS_MS = [250, 1000]
+const canonicalizeJson = (${canonicalJsonFunction})
+
+function requireBinding(value, name) {
+  if (typeof value === 'string' && value.length > 0) return value
+  throw new Error('Missing required Worker binding: ' + name)
+}
 
 function lower(value) {
   return typeof value === 'string' ? value.toLowerCase() : ''
@@ -157,10 +163,10 @@ function toHex(buffer) {
   return out
 }
 
-async function signBody(timestamp, body) {
+async function signBody(secret, timestamp, body) {
   const key = await crypto.subtle.importKey(
     'raw',
-    new TextEncoder().encode(CANONRY_HMAC_SECRET),
+    new TextEncoder().encode(secret),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign'],
@@ -212,16 +218,16 @@ function pickCf(cf) {
   }
 }
 
-function buildEvent(request) {
+function buildEdgeEvent(request, status, observedAt) {
   const url = new URL(request.url)
   return {
     eventId: request.headers.get('cf-ray') || crypto.randomUUID(),
-    observedAt: new Date().toISOString(),
+    observedAt,
     method: request.method || null,
     host: url.hostname || null,
     path: url.pathname || '/',
     queryString: url.search ? url.search.slice(1) : null,
-    status: null,
+    status: typeof status === 'number' ? status : null,
     userAgent: request.headers.get('user-agent') || null,
     remoteIp: request.headers.get('cf-connecting-ip') || null,
     referer: request.headers.get('referer') || null,
@@ -229,70 +235,86 @@ function buildEvent(request) {
   }
 }
 
-async function forward(event, request, status) {
+function buildEdgeEventBatch(env, request, status, observedAt) {
+  return {
+    schemaVersion: 1,
+    workerVersion: requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.workerVersion}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.workerVersion)}),
+    events: [buildEdgeEvent(request, status, observedAt)],
+  }
+}
+
+async function deliverViaDirectPush(env, batch) {
+  const sourceId = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.sourceId}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.sourceId)})
+  const ingestUrl = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.ingestUrl}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.ingestUrl)})
+  const bearerToken = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.bearerToken}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.bearerToken)})
+  const hmacSecret = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.hmacSecret}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.hmacSecret)})
+  const body = canonicalizeJson(batch)
+  const timestamp = String(Math.floor(Date.now() / 1000))
+  const signature = await signBody(hmacSecret, timestamp, body)
+
+  await withRetry(() => fetch(ingestUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'Authorization': 'Bearer ' + bearerToken,
+      'X-Canonry-Timestamp': timestamp,
+      'X-Canonry-Signature': signature,
+      'X-Canonry-Worker-Version': batch.workerVersion,
+      'X-Canonry-Source-Id': sourceId,
+    },
+    body,
+  }))
+}
+
+async function deliverEdgeEventBatch(env, batch) {
+  const deliveryMode = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.deliveryMode}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.deliveryMode)})
+  if (deliveryMode === 'direct-push') {
+    return deliverViaDirectPush(env, batch)
+  }
+  throw new Error('Unsupported Canonry delivery mode: ' + deliveryMode)
+}
+
+async function deliverSelectedRequest(env, request, status, observedAt) {
   try {
-    const payload = buildEvent(request)
-    payload.status = typeof status === 'number' ? status : payload.status
-    const body = JSON.stringify({
-      schemaVersion: 1,
-      workerVersion: CANONRY_WORKER_VERSION,
-      events: [payload],
-    })
-    const timestamp = String(Math.floor(Date.now() / 1000))
-    const signature = await signBody(timestamp, body)
-    await withRetry(() => fetch(CANONRY_INGEST_URL, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'Authorization': 'Bearer ' + CANONRY_BEARER_TOKEN,
-        'X-Canonry-Timestamp': timestamp,
-        'X-Canonry-Signature': signature,
-        'X-Canonry-Worker-Version': CANONRY_WORKER_VERSION,
-        'X-Canonry-Source-Id': CANONRY_SOURCE_ID,
-      },
-      body,
-    }))
+    const batch = buildEdgeEventBatch(env, request, status, observedAt)
+    await deliverEdgeEventBatch(env, batch)
   } catch (err) {
-    // Swallow — AI traffic is statistical, not transactional. Dropped
-    // events are acceptable; surfacing the error would mask the customer
-    // response. Emit only sanitized state to Cloudflare Worker logs.
-    console.warn('Canonry traffic ingest failed', {
-      sourceId: CANONRY_SOURCE_ID,
+    // Delivery is statistical and must never mask the customer response.
+    // Emit binding names and source id only; never emit secret values.
+    console.warn('Canonry traffic delivery failed', {
+      sourceId: typeof env.${CLOUDFLARE_WORKER_BINDINGS.sourceId} === 'string'
+        ? env.${CLOUDFLARE_WORKER_BINDINGS.sourceId}
+        : null,
       message: err instanceof Error ? err.message : String(err),
     })
   }
 }
 
-addEventListener('fetch', (event) => {
-  const request = event.request
-  const shouldLog = shouldForward(request)
-  const responsePromise = fetch(request)
-  event.respondWith(
-    responsePromise.then((response) => {
+export default {
+  async fetch(request, env, ctx) {
+    const observedAt = new Date().toISOString()
+    const shouldLog = shouldForward(request)
+    try {
+      const response = await fetch(request)
       if (shouldLog) {
-        event.waitUntil(forward(event, request, response.status))
+        ctx.waitUntil(deliverSelectedRequest(env, request, response.status, observedAt))
       }
       return response
-    }).catch((err) => {
+    } catch (err) {
       if (shouldLog) {
-        event.waitUntil(forward(event, request, null))
+        ctx.waitUntil(deliverSelectedRequest(env, request, null, observedAt))
       }
       throw err
-    }),
-  )
-})
+    }
+  },
+}
 `
 }
 
-export interface GenerateWranglerTomlOptions {
-  sourceId: string
-  hostname: string
-  zoneId?: string | null
-}
-
 /**
- * Companion `wrangler.toml` for operators who prefer `wrangler deploy`
- * over pasting into the Cloudflare dashboard.
+ * Companion `wrangler.toml` for operators who prefer `wrangler deploy`.
+ * Non-secret runtime values are regular vars. Secret values are installed
+ * independently and therefore never enter source, TOML, API, or MCP output.
  */
 export function generateWranglerToml(opts: GenerateWranglerTomlOptions): string {
   const hostname = opts.hostname.trim().toLowerCase().replace(/\.$/, '')
@@ -310,6 +332,19 @@ zone_id = ${jsString(opts.zoneId)}
 main = "worker.js"
 compatibility_date = "${WORKER_COMPATIBILITY_DATE}"
 workers_dev = false
+
+[vars]
+${CLOUDFLARE_WORKER_BINDINGS.deliveryMode} = ${jsString(opts.deliveryMode)}
+${CLOUDFLARE_WORKER_BINDINGS.sourceId} = ${jsString(opts.sourceId)}
+${CLOUDFLARE_WORKER_BINDINGS.ingestUrl} = ${jsString(opts.ingestUrl)}
+${CLOUDFLARE_WORKER_BINDINGS.workerVersion} = ${jsString(opts.workerVersion)}
+
+[secrets]
+required = ${jsArray(CLOUDFLARE_DIRECT_PUSH_SECRET_BINDINGS)}
+
+# Install required Worker secrets interactively or through Canonry's deploy
+# command. Never write their values into this file:
+${CLOUDFLARE_DIRECT_PUSH_SECRET_BINDINGS.map(name => `#   wrangler secret put ${name}`).join('\n')}
 
 # Deploy this Worker via:
 #   wrangler deploy

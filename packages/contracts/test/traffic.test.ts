@@ -3,6 +3,11 @@ import {
   TrafficEventConfidences,
   TrafficEvidenceKinds,
   TrafficSourceTypes,
+  CloudflareTrafficDeliveryModes,
+  cloudflareEdgeEventBatchSchema,
+  cloudflareEdgeEventSchema,
+  cloudflareTrafficDeliveryModeSchema,
+  cloudflareTrafficSourceConfigSchema,
   cloudflareWorkerEventSchema,
   cloudflareWorkerIngestRequestSchema,
   cloudflareWorkerSourceConfigSchema,
@@ -186,6 +191,33 @@ describe('cloudflareWorkerSourceConfigSchema', () => {
     })
     expect(parsed.workerVersion).toBe('1.0.0')
     expect(parsed.zoneId).toBe('zone_abc123')
+    expect(parsed.deliveryMode).toBe(CloudflareTrafficDeliveryModes['direct-push'])
+  })
+
+  it('defaults legacy source rows to direct push', () => {
+    const parsed = cloudflareTrafficSourceConfigSchema.parse({
+      schemaVersion: 1,
+      workerVersion: '1.0.0',
+      expectedBotListVersion: '2026-05-27',
+      zoneId: null,
+      accountId: null,
+    })
+    expect(parsed.deliveryMode).toBe('direct-push')
+  })
+
+  it('rejects queue pull until its source-config variant ships', () => {
+    expect(() => cloudflareTrafficSourceConfigSchema.parse({
+      schemaVersion: 1,
+      deliveryMode: 'queue-pull',
+      workerVersion: '1.0.0',
+      expectedBotListVersion: '2026-05-27',
+      zoneId: null,
+      accountId: null,
+    })).toThrow()
+  })
+
+  it('keeps the Worker config name as an exact compatibility alias', () => {
+    expect(cloudflareWorkerSourceConfigSchema).toBe(cloudflareTrafficSourceConfigSchema)
   })
 
   it('allows zoneId and accountId to be null', () => {
@@ -234,6 +266,7 @@ describe('trafficConnectCloudflareRequestSchema', () => {
     expect(parsed.displayName).toBeUndefined()
     expect(parsed.zoneId).toBeUndefined()
     expect(parsed.accountId).toBeUndefined()
+    expect(parsed.deliveryMode).toBe('direct-push')
   })
 
   it('accepts a connect request with every optional field', () => {
@@ -252,12 +285,27 @@ describe('trafficConnectCloudflareRequestSchema', () => {
     expect(() => trafficConnectCloudflareRequestSchema.parse({ zoneId: '' })).toThrow()
     expect(() => trafficConnectCloudflareRequestSchema.parse({ accountId: '' })).toThrow()
   })
+
+  it('rejects the reserved queue-pull mode until that adapter ships', () => {
+    expect(() => trafficConnectCloudflareRequestSchema.parse({ deliveryMode: 'queue-pull' })).toThrow()
+  })
+})
+
+describe('cloudflareTrafficDeliveryModeSchema', () => {
+  it('defines direct push and the reserved Queue pull discriminator', () => {
+    expect(cloudflareTrafficDeliveryModeSchema.options).toEqual(['direct-push', 'queue-pull'])
+  })
+
+  it('rejects unknown delivery modes', () => {
+    expect(() => cloudflareTrafficDeliveryModeSchema.parse('logpush')).toThrow()
+  })
 })
 
 describe('trafficConnectCloudflareResponseSchema', () => {
   it('accepts a populated response', () => {
     const parsed = trafficConnectCloudflareResponseSchema.parse({
       sourceId: 'src_abc123',
+      deliveryMode: 'direct-push',
       workerScript: 'addEventListener("fetch", () => {})',
       wranglerToml: 'name = "canonry-worker"',
       workerVersion: '1.0.0',
@@ -270,6 +318,7 @@ describe('trafficConnectCloudflareResponseSchema', () => {
   it('rejects empty string for any required field', () => {
     expect(() => trafficConnectCloudflareResponseSchema.parse({
       sourceId: '',
+      deliveryMode: 'direct-push',
       workerScript: 'x',
       wranglerToml: 'x',
       workerVersion: 'x',
@@ -279,6 +328,10 @@ describe('trafficConnectCloudflareResponseSchema', () => {
 })
 
 describe('cloudflareWorkerEventSchema', () => {
+  it('keeps the Worker event name as an exact compatibility alias', () => {
+    expect(cloudflareWorkerEventSchema).toBe(cloudflareEdgeEventSchema)
+  })
+
   it('accepts a full event with cf properties populated', () => {
     const parsed = cloudflareWorkerEventSchema.parse({
       eventId: '8a3d2b0c-cf-ray',
@@ -368,6 +421,10 @@ describe('cloudflareWorkerIngestRequestSchema', () => {
     referer: null,
     cf: null,
   }
+
+  it('keeps the direct-push ingest name as an exact edge-batch compatibility alias', () => {
+    expect(cloudflareWorkerIngestRequestSchema).toBe(cloudflareEdgeEventBatchSchema)
+  })
 
   it('accepts a single-event ingest request', () => {
     const parsed = cloudflareWorkerIngestRequestSchema.parse({

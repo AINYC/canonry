@@ -77,6 +77,12 @@ const overlap = JSON.parse(snap.competitorOverlap || '[]') as string[]
 
 The longer-term direction is to migrate the remaining JSON columns to `mode: 'json'` (and boolean columns to `mode: 'boolean'`) table by table. New tables/columns should use the native modes from day one.
 
+Traffic delivery adapters use `traffic_event_receipts` for durable idempotency.
+Claim `(source_id, event_id)` in the same transaction as rollup writes and
+acknowledge an upstream buffer only after commit. Set `expires_at` to cover the
+transport's complete replay or redelivery horizon; do not reuse the bounded
+`traffic_sources.last_event_ids` pull-overlap ring for pushed or buffered events.
+
 ### Transaction boundaries
 
 ```typescript

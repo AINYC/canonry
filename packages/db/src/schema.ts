@@ -1677,6 +1677,24 @@ export const trafficSources = sqliteTable('traffic_sources', {
   index('idx_traffic_sources_project_status').on(table.projectId, table.status),
 ])
 
+/**
+ * Durable, transport-neutral idempotency claims for pushed or buffered raw
+ * traffic events. A delivery adapter claims `(sourceId, eventId)` in the same
+ * transaction as its rollup writes, then acknowledges upstream only after the
+ * transaction commits. `expiresAt` is chosen by the adapter: direct push only
+ * needs to cover its signed-request replay window, while a Queue pull adapter
+ * can retain claims for the queue's full redelivery horizon.
+ */
+export const trafficEventReceipts = sqliteTable('traffic_event_receipts', {
+  sourceId: text('source_id').notNull().references(() => trafficSources.id, { onDelete: 'cascade' }),
+  eventId: text('event_id').notNull(),
+  receivedAt: text('received_at').notNull(),
+  expiresAt: text('expires_at').notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.sourceId, table.eventId] }),
+  index('idx_traffic_event_receipts_expires').on(table.expiresAt),
+])
+
 // Hourly rollup of server-observed crawler hits. Composite PK so the same
 // (project, source, hour, bot, verification, path, status) tuple can be
 // upserted to accumulate `hits` without a surrogate row id.
