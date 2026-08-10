@@ -13,6 +13,7 @@ import {
   siteCrawlPageAuditSchema,
   siteCrawlSummarySchema,
   siteHealthScansResponseSchema,
+  siteHealthStateSchema,
   SITE_HEALTH_SCANS_DEFAULT_LIMIT,
   SITE_HEALTH_SCANS_MAX_LIMIT,
 } from '../src/technical-aeo.js'
@@ -164,7 +165,14 @@ describe('Technical AEO crawl contracts', () => {
     expect(deriveSiteHealthState({ fetchState: 'html', indexabilityState: 'noindex' })).toBe('hidden')
     expect(deriveSiteHealthState({ fetchState: 'fetch-error', indexabilityState: 'indexable' })).toBe('failed')
     expect(deriveSiteHealthState({ fetchState: 'discovered', indexabilityState: 'unknown' })).toBe('unchecked')
-    expect(deriveSiteHealthState({ fetchState: 'redirect', indexabilityState: 'unknown' })).toBe('hidden')
+    // "Hidden" is a claim that the SITE said not to index. A redirect and a
+    // non-HTML resource say no such thing, and calling them hidden reads as a
+    // defect: it is actively wrong for llms.txt, whose purpose is to be read.
+    expect(deriveSiteHealthState({ fetchState: 'redirect', indexabilityState: 'unknown' })).toBe('redirect')
+    expect(deriveSiteHealthState({ fetchState: 'non-html', indexabilityState: 'unknown' })).toBe('resource')
+    expect(deriveSiteHealthState({ fetchState: 'non-html', indexabilityState: 'indexable' })).toBe('resource')
+    // robots.txt IS the site saying no, so it stays with the hidden pages.
+    expect(deriveSiteHealthState({ fetchState: 'robots-blocked', indexabilityState: 'unknown' })).toBe('hidden')
     expect(deriveSiteHealthState({
       fetchState: 'html',
       indexabilityState: 'unknown',
@@ -221,5 +229,44 @@ describe('Technical AEO crawl contracts', () => {
     expect(siteHealthScansResponseSchema.parse({ project: 'example' }).scans).toEqual([])
     expect(SITE_HEALTH_SCANS_DEFAULT_LIMIT).toBe(20)
     expect(SITE_HEALTH_SCANS_MAX_LIMIT).toBe(100)
+  })
+
+  it('does not call an AI-access file hidden', () => {
+    // Reported on the shipped build: /llms-full.txt rendered as "Hidden" over
+    // "Not a reachable HTML page". Both halves were wrong. These files exist
+    // to be fetched by answer engines, so flagging them reads as a defect
+    // when their presence is the good outcome.
+    const llmsFullTxt = {
+      fetchState: 'non-html',
+      indexabilityState: 'unknown',
+      indexabilityReasons: ['not-html-or-unavailable'],
+      nodeKey: 'page:llms-full',
+    }
+    expect(deriveSiteHealthState(llmsFullTxt)).toBe('resource')
+    expect(deriveSiteHealthState(llmsFullTxt)).not.toBe('hidden')
+
+    // A PDF is the same kind of thing.
+    expect(deriveSiteHealthState({ fetchState: 'non-html', indexabilityState: 'noindex' })).toBe('resource')
+  })
+
+  it('keeps every state distinct, so nothing silently rejoins the hidden bucket', () => {
+    const states = new Set(siteHealthStateSchema.options)
+    expect(states).toEqual(new Set(['eligible', 'hidden', 'resource', 'redirect', 'failed', 'unchecked']))
+
+    // Each crawler fetch state maps somewhere deliberate.
+    const byFetchState = Object.fromEntries(
+      ['discovered', 'robots-blocked', 'html', 'redirect', 'non-html', 'fetch-error'].map((fetchState) => [
+        fetchState,
+        deriveSiteHealthState({ fetchState, indexabilityState: 'indexable' }),
+      ]),
+    )
+    expect(byFetchState).toEqual({
+      'discovered': 'unchecked',
+      'robots-blocked': 'hidden',
+      'html': 'eligible',
+      'redirect': 'redirect',
+      'non-html': 'resource',
+      'fetch-error': 'failed',
+    })
   })
 })

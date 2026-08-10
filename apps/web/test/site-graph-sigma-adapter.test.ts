@@ -7,6 +7,7 @@ import {
   buildSigmaSiteGraph,
   createSigmaSiteGraphReducers,
   findSiteGraphNodes,
+  SITE_GRAPH_COLOR_TOKENS,
   SITE_GRAPH_EDGE_TOKEN,
   SITE_GRAPH_FOCUSED_NEIGHBOR_LABEL_LIMIT,
   SITE_GRAPH_LABEL_BUDGETS,
@@ -19,16 +20,22 @@ import {
   isSigmaWebGlColor,
   isSiteGraphRootNode,
   siteGraphNodeSize,
+  siteGraphStatusDescription,
   siteGraphStatusGlyph,
+  siteGraphStatusLabel,
+  siteGraphStatusLegendLabel,
   siteGraphVisualState,
   type SigmaSiteGraphTheme,
   type SiteGraphSigmaEdge,
   type SiteGraphSigmaNode,
 } from '../src/components/project/site-graph-sigma.js'
+import { SITE_GRAPH_LEGEND_STATES } from '@ainyc/canonry-contracts'
 
 const theme: SigmaSiteGraphTheme = {
   eligible: 'rgb(1, 2, 3)',
   hidden: 'rgb(4, 5, 6)',
+  resource: 'rgb(34, 35, 36)',
+  redirect: 'rgb(37, 38, 39)',
   failed: 'rgb(7, 8, 9)',
   unchecked: 'rgb(10, 11, 12)',
   dimmedNode: 'rgb(13, 14, 15)',
@@ -95,7 +102,12 @@ describe('buildSigmaSiteGraph', () => {
     expect(siteGraphVisualState(node('legacy-redirect', {
       fetchState: 'redirect',
       indexabilityState: 'indexable',
-    }))).toBe('hidden')
+    }))).toBe('redirect')
+    // A fetched .txt or PDF is not hidden; it is simply not a page.
+    expect(siteGraphVisualState(node('legacy-resource', {
+      fetchState: 'non-html',
+      indexabilityState: 'indexable',
+    }))).toBe('resource')
     expect(siteGraphVisualState(node('legacy-canonical-source', {
       canonicalNodeKey: 'legacy-canonical-target',
       fetchState: 'html',
@@ -522,5 +534,46 @@ describe('a real template-mesh site (canonry.ai shape: 50 pages, ~1,259 links)',
 
     // Dots stay small enough at this density to read as separate pages.
     expect(siteGraphMaxNodeSize(50)).toBeLessThanOrEqual(9)
+  })
+})
+
+describe('the customer-facing state vocabulary', () => {
+  it('never calls a file or a redirect hidden, at any surface', () => {
+    // /llms-full.txt shipped reading "Hidden" over "Not a reachable HTML
+    // page". Badge, legend, and tooltip all have to agree that it is a file.
+    expect(siteGraphStatusLabel('resource')).toBe('Not a page')
+    expect(siteGraphStatusLegendLabel('resource')).toBe('Not a page')
+    expect(siteGraphStatusDescription('resource')).toMatch(/file rather than a page/i)
+    expect(siteGraphStatusDescription('resource')).not.toMatch(/hidden/i)
+
+    expect(siteGraphStatusLabel('redirect')).toBe('Moved')
+    expect(siteGraphStatusLegendLabel('redirect')).toBe('Moved')
+    expect(siteGraphStatusDescription('redirect')).not.toMatch(/hidden/i)
+
+    // Only the genuinely suppressed state says hidden.
+    expect(siteGraphStatusLabel('hidden')).toBe('Hidden')
+    expect(siteGraphStatusDescription('hidden')).toMatch(/not to index/i)
+  })
+
+  it('colors the non-problem states neutrally, never with the hidden amber', () => {
+    for (const state of ['resource', 'redirect'] as const) {
+      expect(SITE_GRAPH_COLOR_TOKENS[state].fallback).not.toBe(SITE_GRAPH_COLOR_TOKENS.hidden.fallback)
+      expect(SITE_GRAPH_COLOR_TOKENS[state].property).toBe(`--chart-site-health-${state}`)
+    }
+    // Every state is distinctly colored and distinctly glyphed.
+    const colors = SITE_GRAPH_LEGEND_STATES.map((state) => SITE_GRAPH_COLOR_TOKENS[state].fallback)
+    expect(new Set(colors).size).toBe(SITE_GRAPH_LEGEND_STATES.length)
+    const glyphs = SITE_GRAPH_LEGEND_STATES.map(siteGraphStatusGlyph)
+    expect(new Set(glyphs).size).toBe(SITE_GRAPH_LEGEND_STATES.length)
+  })
+
+  it('legends every state the derivation can produce', () => {
+    expect([...SITE_GRAPH_LEGEND_STATES].sort()).toEqual(
+      ['eligible', 'failed', 'hidden', 'redirect', 'resource', 'unchecked'],
+    )
+    for (const state of SITE_GRAPH_LEGEND_STATES) {
+      expect(siteGraphStatusLegendLabel(state)).not.toBe('')
+      expect(siteGraphStatusDescription(state)).not.toBe('')
+    }
   })
 })

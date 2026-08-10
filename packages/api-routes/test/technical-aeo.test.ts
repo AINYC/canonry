@@ -40,7 +40,7 @@ import type {
   SiteHealthScansResponseDto,
   SiteHealthSubgraphResponseDto,
 } from '@ainyc/canonry-contracts'
-import { deriveSiteHealthState } from '@ainyc/canonry-contracts'
+import { deriveSiteHealthState, siteHealthStateSchema } from '@ainyc/canonry-contracts'
 import { apiRoutes } from '../src/index.js'
 
 interface Ctx {
@@ -1461,7 +1461,7 @@ describe('crawl page health-state filter', () => {
     const seeded = seedEveryCombination()
     expect(seeded.length).toBe(FETCH_STATES.length * INDEXABILITY_STATES.length * 3)
 
-    for (const healthState of ['eligible', 'hidden', 'failed', 'unchecked'] as const) {
+    for (const healthState of siteHealthStateSchema.options) {
       const expected = seeded
         .filter((row) => deriveSiteHealthState(row) === healthState)
         .map((row) => row.nodeKey)
@@ -1480,25 +1480,36 @@ describe('crawl page health-state filter', () => {
     }
 
     // Every page lands in exactly one bucket, so the four filters partition the crawl.
-    const totals = await Promise.all((['eligible', 'hidden', 'failed', 'unchecked'] as const).map(async (state) => (
+    const totals = await Promise.all(siteHealthStateSchema.options.map(async (state) => (
       (await get<SiteCrawlPagesResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=${state}&limit=200`)).body.total
     )))
     expect(totals.reduce((sum, value) => sum + value, 0)).toBe(seeded.length)
   })
 
-  it('catches the states a raw indexabilityState filter would miss', async () => {
+  it('means by "hidden" only what the site actually suppressed', async () => {
     seedEveryCombination()
     const hidden = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=hidden&limit=200')
     const noindexOnly = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?indexabilityState=noindex&limit=200')
-
-    // Redirects, robots blocks, non-HTML, and canonical-away pages are hidden
-    // from answer engines without carrying `indexabilityState=noindex`.
-    expect(hidden.body.total).toBeGreaterThan(noindexOnly.body.total)
     const hiddenKeys = new Set(hidden.body.pages.map((page) => page.nodeKey))
-    expect([...hiddenKeys].some((key) => key.startsWith('redirect:indexable'))).toBe(true)
-    expect([...hiddenKeys].some((key) => key.startsWith('robots-blocked:indexable'))).toBe(true)
-    expect([...hiddenKeys].some((key) => key.startsWith('non-html:indexable'))).toBe(true)
+
+    // Still catches what a raw indexabilityState filter misses: robots.txt and
+    // a canonical pointing elsewhere are the site suppressing the page.
+    expect(hidden.body.total).toBeGreaterThan(noindexOnly.body.total)
+    expect([...hiddenKeys].some((key) => key.startsWith('robots-blocked:'))).toBe(true)
     expect([...hiddenKeys].some((key) => key.endsWith(':canonical-away'))).toBe(true)
+
+    // But the chip must NOT sweep up files and redirects. Flagging
+    // llms-full.txt as hidden reads as a defect when it is the opposite.
+    expect([...hiddenKeys].some((key) => key.startsWith('non-html:'))).toBe(false)
+    expect([...hiddenKeys].some((key) => key.startsWith('redirect:'))).toBe(false)
+
+    const resources = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=resource&limit=200')
+    expect(resources.body.pages.every((page) => page.nodeKey.startsWith('non-html:'))).toBe(true)
+    expect(resources.body.total).toBeGreaterThan(0)
+
+    const redirects = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=redirect&limit=200')
+    expect(redirects.body.pages.every((page) => page.nodeKey.startsWith('redirect:'))).toBe(true)
+    expect(redirects.body.total).toBeGreaterThan(0)
   })
 
   it('pages and refuses an unknown health state', async () => {

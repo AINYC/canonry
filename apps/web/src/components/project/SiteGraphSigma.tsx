@@ -22,7 +22,7 @@ import type {
 } from 'sigma/types'
 import type { AnimateOptions } from 'sigma/utils'
 
-import type { SiteCrawlGraphLayoutUnavailableReason } from '@ainyc/canonry-contracts'
+import { SITE_GRAPH_LEGEND_STATES, type SiteCrawlGraphLayoutUnavailableReason } from '@ainyc/canonry-contracts'
 
 import { cn } from '../../lib/utils.js'
 import { displayPageLabel, siteHostFromUrl } from './site-health-paths.js'
@@ -211,6 +211,8 @@ function sigmaTheme(element: HTMLElement): SigmaSiteGraphTheme {
   return {
     eligible: color('eligible'),
     hidden: color('hidden'),
+    resource: color('resource'),
+    redirect: color('redirect'),
     failed: color('failed'),
     unchecked: color('unchecked'),
     dimmedNode: color('dimmedNode'),
@@ -891,7 +893,7 @@ export function SiteGraphSigma({
       </div>
 
       <div aria-label="Site map legend" className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-subtle bg-bg-elevated/50 px-3 py-2 text-[13px] text-secondary">
-        {(['eligible', 'hidden', 'failed', 'unchecked'] as const).map((status) => (
+        {SITE_GRAPH_LEGEND_STATES.map((status) => (
           <span key={status} className="inline-flex items-center gap-1.5" title={siteGraphStatusDescription(status)}>
             <span
               className="w-3 text-center font-mono text-[15px] font-semibold leading-none"

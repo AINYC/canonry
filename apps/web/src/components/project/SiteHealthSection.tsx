@@ -106,7 +106,7 @@ const INDEXABILITY_REASON_COPY: Record<SiteCrawlIndexabilityReason, string> = {
   [SiteCrawlIndexabilityReasons.robotsDisallow]: 'Blocked by robots.txt',
   [SiteCrawlIndexabilityReasons.redirectTerminal]: 'Redirects to another page',
   [SiteCrawlIndexabilityReasons.canonicalToOther]: 'Points to another page as canonical',
-  [SiteCrawlIndexabilityReasons.notHtmlOrUnavailable]: 'Not a reachable HTML page',
+  [SiteCrawlIndexabilityReasons.notHtmlOrUnavailable]: 'Not an HTML page, so it was not scored',
 }
 
 /** Persisted rows stay string-backed, so the lookup must admit a miss. */
@@ -138,6 +138,10 @@ const scanDateFormatter = new Intl.DateTimeFormat(undefined, {
 const SITE_HEALTH_STATUS_TONES: Record<SiteGraphVisualState, MetricTone> = {
   eligible: 'positive',
   hidden: 'caution',
+  // Neutral: a file that is not a page, and a page that moved, are facts about
+  // what the crawler found, not problems to fix.
+  resource: 'neutral',
+  redirect: 'neutral',
   failed: 'negative',
   unchecked: 'neutral',
 }

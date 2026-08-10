@@ -11,6 +11,10 @@ export type SiteGraphVisualState = SiteHealthState
 export const SITE_GRAPH_COLOR_TOKENS = {
   eligible: { property: '--chart-site-health-eligible', fallback: '#56b4e9' },
   hidden: { property: '--chart-site-health-hidden', fallback: '#e69f00' },
+  // Neutral on purpose. A text file or a PDF is not a fault, so it must not
+  // borrow the amber the genuinely hidden pages use.
+  resource: { property: '--chart-site-health-resource', fallback: '#d4d4d8' },
+  redirect: { property: '--chart-site-health-redirect', fallback: '#9aa7b8' },
   failed: { property: '--chart-site-health-failed', fallback: '#d55e00' },
   unchecked: { property: '--chart-site-health-unchecked', fallback: '#a1a1aa' },
 } as const satisfies Record<SiteGraphVisualState, { property: string; fallback: string }>
@@ -97,6 +101,8 @@ export interface SiteGraphSigmaEdge {
 export interface SigmaSiteGraphTheme {
   eligible: string
   hidden: string
+  resource: string
+  redirect: string
   failed: string
   unchecked: string
   dimmedNode: string
@@ -116,6 +122,8 @@ export interface SigmaSiteGraphTheme {
 export const SITE_GRAPH_SIGMA_COLOR_TOKENS = {
   eligible: SITE_GRAPH_COLOR_TOKENS.eligible,
   hidden: SITE_GRAPH_COLOR_TOKENS.hidden,
+  resource: SITE_GRAPH_COLOR_TOKENS.resource,
+  redirect: SITE_GRAPH_COLOR_TOKENS.redirect,
   failed: SITE_GRAPH_COLOR_TOKENS.failed,
   unchecked: SITE_GRAPH_COLOR_TOKENS.unchecked,
   dimmedNode: { property: '--chart-neutral-text-dim', fallback: '#71717a' },
@@ -237,6 +245,8 @@ export function siteGraphStatusLabel(state: SiteGraphVisualState): string {
   switch (state) {
     case 'eligible': return 'Indexable'
     case 'hidden': return 'Hidden'
+    case 'resource': return 'Not a page'
+    case 'redirect': return 'Moved'
     case 'failed': return 'Broken'
     case 'unchecked': return 'Not checked'
   }
@@ -247,6 +257,8 @@ export function siteGraphStatusLegendLabel(state: SiteGraphVisualState): string 
   switch (state) {
     case 'eligible': return 'Indexable'
     case 'hidden': return 'Hidden or points elsewhere'
+    case 'resource': return 'Not a page'
+    case 'redirect': return 'Moved'
     case 'failed': return 'Broken'
     case 'unchecked': return 'Not checked'
   }
@@ -257,6 +269,8 @@ export function siteGraphStatusDescription(state: SiteGraphVisualState): string 
   switch (state) {
     case 'eligible': return 'AI and search engines are allowed to index this page'
     case 'hidden': return 'This page tells them not to index it, or points them to another page'
+    case 'resource': return 'A file rather than a page, such as a text file or a PDF. Answer engines can still read it'
+    case 'redirect': return 'This address sends visitors to another page'
     case 'failed': return 'This page could not be loaded'
     case 'unchecked': return 'This page was found but not checked'
   }
@@ -267,6 +281,8 @@ export function siteGraphStatusGlyph(state: SiteGraphVisualState): string {
   switch (state) {
     case 'eligible': return '●'
     case 'hidden': return '◆'
+    case 'resource': return '▪'
+    case 'redirect': return '↗'
     case 'failed': return '×'
     case 'unchecked': return '○'
   }
@@ -295,6 +311,8 @@ function nodeColor(state: SiteGraphVisualState, theme: SigmaSiteGraphTheme): str
   switch (state) {
     case 'eligible': return theme.eligible
     case 'hidden': return theme.hidden
+    case 'resource': return theme.resource
+    case 'redirect': return theme.redirect
     case 'failed': return theme.failed
     case 'unchecked': return theme.unchecked
   }

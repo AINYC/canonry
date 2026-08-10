@@ -7399,7 +7399,7 @@ export type SiteCrawlGraphResponseDto = {
         inboundUniqueEdges: number;
         outboundUniqueEdges: number;
         linkScoreNormalized: number | null;
-        healthState: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+        healthState: 'eligible' | 'hidden' | 'resource' | 'redirect' | 'failed' | 'unchecked';
         x: number;
         y: number;
     }>;
@@ -7583,7 +7583,7 @@ export type SiteCrawlPagesResponseDto = {
         outboundOccurrences: number;
         linkScoreRaw: number | null;
         linkScoreNormalized: number | null;
-        healthState: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+        healthState: 'eligible' | 'hidden' | 'resource' | 'redirect' | 'failed' | 'unchecked';
     }>;
 };
 
@@ -7714,7 +7714,7 @@ export type SiteHealthChangesResponseDto = {
             outboundOccurrences: number;
             linkScoreRaw: number | null;
             linkScoreNormalized: number | null;
-            healthState: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+            healthState: 'eligible' | 'hidden' | 'resource' | 'redirect' | 'failed' | 'unchecked';
         } | null;
         after: {
             nodeKey: string;
@@ -7738,7 +7738,7 @@ export type SiteHealthChangesResponseDto = {
             outboundOccurrences: number;
             linkScoreRaw: number | null;
             linkScoreNormalized: number | null;
-            healthState: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+            healthState: 'eligible' | 'hidden' | 'resource' | 'redirect' | 'failed' | 'unchecked';
         } | null;
     } | {
         entity: 'link';
@@ -7816,7 +7816,7 @@ export type SiteHealthPathResponseDto = {
         outboundOccurrences: number;
         linkScoreRaw: number | null;
         linkScoreNormalized: number | null;
-        healthState: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+        healthState: 'eligible' | 'hidden' | 'resource' | 'redirect' | 'failed' | 'unchecked';
     }>;
     edges: Array<{
         edgeKey: string;
@@ -7880,7 +7880,7 @@ export type SiteHealthSubgraphResponseDto = {
         outboundOccurrences: number;
         linkScoreRaw: number | null;
         linkScoreNormalized: number | null;
-        healthState: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+        healthState: 'eligible' | 'hidden' | 'resource' | 'redirect' | 'failed' | 'unchecked';
         distance: number;
         relationToFocus: 'focus' | 'inbound' | 'outbound' | 'both' | 'transitive';
     }>;
@@ -21214,9 +21214,9 @@ export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesData = {
          */
         nodeKey?: string;
         /**
-         * Filter by the derived Site Health state shared with the dashboard and agents. Unlike `indexabilityState` this folds fetch state, canonical identity, and the crawler reasons into one decision, so `hidden` also covers redirects, robots blocks, non-HTML, and canonical-away pages. Values: `eligible`, `hidden`, `failed`, `unchecked`.
+         * Filter by the derived Site Health state shared with the dashboard and agents. Unlike `indexabilityState` this folds fetch state, canonical identity, and the crawler reasons into one decision. `hidden` means the SITE told answer engines not to index the page (noindex, canonical-away, robots.txt); a non-HTML file is `resource` and a redirect is `redirect`, because neither is suppressed. Values: `eligible`, `hidden`, `resource`, `redirect`, `failed`, `unchecked`.
          */
-        healthState?: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+        healthState?: 'eligible' | 'hidden' | 'resource' | 'redirect' | 'failed' | 'unchecked';
         /**
          * Filter by audit state.
          */

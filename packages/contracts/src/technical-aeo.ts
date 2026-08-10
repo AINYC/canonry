@@ -233,10 +233,34 @@ export const siteCrawlTerminationSchema = z.enum([
 export type SiteCrawlTermination = z.infer<typeof siteCrawlTerminationSchema>
 
 /** Shared meaning behind Site Health node color across API, agents, and UI. */
-export const siteHealthStateSchema = z.enum(['eligible', 'hidden', 'failed', 'unchecked'])
+/**
+ * What a crawled page is, for a reader.
+ *
+ * `hidden` means the SITE told answer engines not to index it. That is a claim
+ * about intent, so it is kept narrow: only a noindex directive, a canonical
+ * pointing elsewhere, or a robots.txt block earn it. A `.txt`, a PDF, or a
+ * redirect are not hidden, and calling them hidden reads as a defect. It is
+ * actively wrong for `llms.txt` and `llms-full.txt`, whose whole purpose is to
+ * be fetched by answer engines.
+ */
+export const siteHealthStateSchema = z.enum([
+  'eligible',
+  'hidden',
+  /** Fetched, but not an HTML page: a text file, a PDF, an image. Not a fault. */
+  'resource',
+  /** Fetched and redirected elsewhere. Moved, not hidden. */
+  'redirect',
+  'failed',
+  'unchecked',
+])
 export type SiteHealthState = z.infer<typeof siteHealthStateSchema>
 /** Named members so consumers never re-type the literal at a call site. */
 export const SiteHealthStates = siteHealthStateSchema.enum
+/**
+ * Legend order: what a reader should scan first. Derived from the schema so a
+ * new state cannot be added without deciding where it appears.
+ */
+export const SITE_GRAPH_LEGEND_STATES = siteHealthStateSchema.options
 
 /** Exact state vocabulary emitted by @canonry/aeo-audit's Site Crawl contract. */
 export const SiteCrawlFetchStates = {
@@ -305,9 +329,16 @@ export function deriveSiteHealthState(input: SiteHealthStateInput): SiteHealthSt
       return 'failed'
     case SiteCrawlFetchStates.discovered:
       return 'unchecked'
-    case SiteCrawlFetchStates.redirect:
-    case SiteCrawlFetchStates.robotsBlocked:
+    // A non-HTML resource was fetched successfully. It is simply not a page,
+    // which is a fact about its type, not a problem with the site.
     case SiteCrawlFetchStates.nonHtml:
+      return 'resource'
+    // A redirect moved; nothing about it says "do not index me".
+    case SiteCrawlFetchStates.redirect:
+      return 'redirect'
+    // robots.txt IS the site telling engines not to fetch this, so it is the
+    // one fetch state that genuinely belongs with the hidden pages.
+    case SiteCrawlFetchStates.robotsBlocked:
       return 'hidden'
     case SiteCrawlFetchStates.html:
       break

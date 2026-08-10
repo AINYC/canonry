@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { sql } from 'drizzle-orm'
-import { deriveSiteHealthState } from '@ainyc/canonry-contracts'
+import { deriveSiteHealthState, siteHealthStateSchema } from '@ainyc/canonry-contracts'
 import { createClient, migrate, projects, runs, siteCrawlAttempts, siteCrawlPages } from '../src/index.js'
 import { backfillSiteCrawlPageHealthState } from '../src/migrate.js'
 
@@ -86,8 +86,22 @@ test('backfills every legacy page with exactly what the contract derives', () =>
   }
   // Every state is genuinely represented, so this is not a vacuous pass.
   expect(new Set(rows.map((row) => row.healthState))).toEqual(
-    new Set(['eligible', 'hidden', 'failed', 'unchecked']),
+    new Set(['eligible', 'hidden', 'resource', 'redirect', 'failed', 'unchecked']),
   )
+
+  // The persisted values and the DTO vocabulary are the same closed set: a
+  // stored value the contract does not know would break every filter.
+  for (const row of rows) {
+    expect(siteHealthStateSchema.safeParse(row.healthState).success, `${row.nodeKey}=${row.healthState}`).toBe(true)
+  }
+
+  // A fetched .txt or PDF is stored as a resource, never as hidden. This is
+  // the /llms-full.txt case the founder reported.
+  const resources = rows.filter((row) => row.fetchState === 'non-html')
+  expect(resources.length).toBeGreaterThan(0)
+  expect(resources.every((row) => row.healthState === 'resource')).toBe(true)
+  const redirects = rows.filter((row) => row.fetchState === 'redirect')
+  expect(redirects.every((row) => row.healthState === 'redirect')).toBe(true)
 })
 
 test('is idempotent and leaves already-populated rows alone', () => {
