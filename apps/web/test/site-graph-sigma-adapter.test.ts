@@ -12,7 +12,6 @@ import {
   SITE_GRAPH_FOCUSED_NEIGHBOR_LABEL_LIMIT,
   SITE_GRAPH_LABEL_BUDGETS,
   SITE_GRAPH_OVERVIEW_LABEL_BUDGET,
-  SITE_GRAPH_ROOT_TOKEN,
   siteGraphLabelBudget,
   siteGraphMaxNodeSize,
   siteGraphRootNodeSize,
@@ -44,7 +43,6 @@ const theme: SigmaSiteGraphTheme = {
   edgeActive: 'rgb(22, 23, 24)',
   label: 'rgb(25, 26, 27)',
   background: 'rgb(28, 29, 30)',
-  root: 'rgb(31, 32, 33)',
 }
 
 function node(
@@ -153,10 +151,6 @@ describe('buildSigmaSiteGraph', () => {
     expect(SITE_GRAPH_EDGE_TOKEN).toEqual({
       property: '--chart-neutral-text-dim',
       fallback: '#71717a',
-    })
-    expect(SITE_GRAPH_ROOT_TOKEN).toEqual({
-      property: '--chart-site-health-root',
-      fallback: '#cc79a7',
     })
   })
 
@@ -423,10 +417,10 @@ describe('the crawl root', () => {
     const unidentified = buildSigmaSiteGraph([node('home', { path: '/', depth: 0 })], [], theme)
     expect(unidentified.graph.getNodeAttribute('home', 'isRoot')).toBe(false)
     expect(unidentified.graph.getNodeAttribute('home', 'label')).toBe('● /')
-    expect(unidentified.graph.getNodeAttribute('home', 'ringColor')).toBeNull()
+    expect(unidentified.graph.getNodeAttribute('home', 'isRoot')).toBe(false)
   })
 
-  it('is named, always labeled, oversized, and ringed regardless of link score', () => {
+  it('is labeled and oversized regardless of link score, with no alarm marker', () => {
     const root = graphWithRoot().graph.getNodeAttributes('home')
 
     // The root reads as the path it is; the ring and the forced label are
@@ -434,7 +428,9 @@ describe('the crawl root', () => {
     expect(root.label).toBe('● /')
     expect(root.forceLabel).toBe(true)
     expect(root.isRoot).toBe(true)
-    expect(root.ringColor).toBe(theme.root)
+    // No ring: a coloured halo read as "selected" or "broken here", when all
+    // it meant was "you are here". The label and the size say that already.
+    expect(root.ringColor).toBeUndefined()
     // The lowest possible internal-link score must not shrink it.
     expect(root.size).toBeCloseTo(siteGraphRootNodeSize(3), 9)
     expect(root.size).toBeGreaterThan(
@@ -443,7 +439,7 @@ describe('the crawl root', () => {
     expect(root.zIndex).toBeGreaterThan(graphWithRoot().graph.getNodeAttribute('services', 'zIndex'))
   })
 
-  it('keeps its label and ring in the overview and while another page has focus', () => {
+  it('keeps its label in the overview and while another page has focus', () => {
     const built = graphWithRoot()
     const root = built.graph.getNodeAttributes('home')
 
@@ -451,7 +447,6 @@ describe('the crawl root', () => {
     expect(overview.nodeReducer('home', root)).toMatchObject({
       label: '● /',
       forceLabel: true,
-      ringColor: theme.root,
     })
 
     // Focused elsewhere, and not even a neighbor of the focus.
@@ -459,7 +454,6 @@ describe('the crawl root', () => {
     expect(focusedElsewhere.nodeReducer('home', root)).toMatchObject({
       label: '● /',
       forceLabel: true,
-      ringColor: theme.root,
     })
     expect(focusedElsewhere.nodeReducer('home', root).color).toBe(theme.eligible)
 

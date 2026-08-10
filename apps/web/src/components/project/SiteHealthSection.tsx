@@ -314,16 +314,48 @@ function LinkMetrics({ page }: { page: InspectableCrawlPage }) {
   )
 }
 
+/**
+ * What an empty link list MEANS, in plain words with the real numbers.
+ *
+ * A page whose only connections are nav and footer chrome is editorially
+ * orphaned, which is the single most useful thing this map can tell someone.
+ * Drawing nothing and saying nothing turns that finding into what looks like a
+ * broken map, so the counts are always named. Both numbers come from the
+ * neighbours read; nothing here is inferred.
+ */
+export function emptyLinkCopy(
+  direction: 'inbound' | 'outbound',
+  hiddenTemplateCount: number,
+  truncated: boolean,
+): string {
+  if (hiddenTemplateCount === 0) {
+    return direction === 'inbound'
+      ? 'Nothing links to this page.'
+      : 'This page links to nothing.'
+  }
+  const lead = direction === 'inbound'
+    ? 'No content links to this page.'
+    : 'No content links from this page.'
+  // A truncated list can only prove a lower bound, so it says so rather than
+  // rounding a partial count into a fact.
+  const hidden = truncated
+    ? `At least ${metricValue(hiddenTemplateCount)} nav and footer links hidden.`
+    : `${countedLinks(hiddenTemplateCount, 'nav and footer link')} hidden.`
+  return `${lead} ${hidden}`
+}
+
 function NeighborTable({
   direction,
   edges,
   truncated,
   rootHost,
+  hiddenTemplateCount,
 }: {
   direction: 'inbound' | 'outbound'
   edges: SiteCrawlEdgeDto[]
   truncated: boolean
   rootHost: string | null
+  hiddenTemplateCount: number
 }) {
   const heading = direction === 'inbound' ? 'Links in' : 'Links out'
   return (
@@ -336,7 +368,7 @@ function NeighborTable({
       </div>
       {edges.length === 0 ? (
         <p className="rounded-lg border border-subtle bg-surface-subtle px-3 py-4 text-sm text-secondary">
-          No {direction} internal links were observed.
+          {emptyLinkCopy(direction, hiddenTemplateCount, truncated)}
         </p>
       ) : (
         <div className="evidence-table-wrap max-h-64 overflow-auto">
@@ -398,6 +430,7 @@ function PageInspector({
   reasonSource,
   reasonsState,
   onRetryReasons,
+  showTemplateLinks,
 }: {
   page: InspectableCrawlPage | null
   isLoading: boolean
@@ -415,6 +448,8 @@ function PageInspector({
   reasonSource: SiteCrawlPageDto | null
   reasonsState: PageReasonsState
   onRetryReasons: () => void
+  /** Mirrors the map, so the two never disagree about one page. */
+  showTemplateLinks: boolean
 }) {
   if (!page) {
     return (
@@ -427,6 +462,12 @@ function PageInspector({
 
   const status = crawlStatus(page)
   const reasons = indexabilityReasons(reasonSource ?? page)
+  // The inspector shows what the MAP shows. Listing nav links the map is
+  // hiding would make the two disagree about the same page.
+  const visibleInbound = showTemplateLinks ? inbound : inbound.filter((edge) => !edge.isTemplate)
+  const visibleOutbound = showTemplateLinks ? outbound : outbound.filter((edge) => !edge.isTemplate)
+  const hiddenInboundCount = inbound.length - visibleInbound.length
+  const hiddenOutboundCount = outbound.length - visibleOutbound.length
   return (
     <section className="border-t border-default pt-5" aria-labelledby="site-health-page-inspector-title">
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
@@ -487,8 +528,20 @@ function PageInspector({
           </p>
         ) : (
           <div className="grid gap-5 lg:grid-cols-2">
-            <NeighborTable direction="inbound" edges={inbound} truncated={inboundTruncated} rootHost={rootHost} />
-            <NeighborTable direction="outbound" edges={outbound} truncated={outboundTruncated} rootHost={rootHost} />
+            <NeighborTable
+              direction="inbound"
+              edges={visibleInbound}
+              truncated={inboundTruncated}
+              rootHost={rootHost}
+              hiddenTemplateCount={hiddenInboundCount}
+            />
+            <NeighborTable
+              direction="outbound"
+              edges={visibleOutbound}
+              truncated={outboundTruncated}
+              rootHost={rootHost}
+              hiddenTemplateCount={hiddenOutboundCount}
+            />
           </div>
           )}
         </div>
@@ -1325,6 +1378,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             reasonSource={inventoryPage}
             reasonsState={reasonsState}
             onRetryReasons={() => { void selectedPageQuery.refetch() }}
+            showTemplateLinks={showTemplateLinks || templateFilterUnavailable}
           />
         </div>
       ) : (
@@ -1392,7 +1446,11 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
               ) : (
                 <SiteGraphSigma
                   nodes={graphQuery.data?.nodes ?? []}
-                  edges={visibleGraphEdges}
+                  // Every edge, always. Hiding is done by the edge reducer, so
+                  // the graph identity never changes and the renderer is never
+                  // rebuilt when the toggle flips.
+                  edges={graphEdges}
+                  showTemplateLinks={showTemplateLinks || templateFilterUnavailable}
                   layoutState={graphQuery.data?.layout.state ?? 'unavailable'}
                   layoutUnavailableReason={graphQuery.data?.layout.state === 'unavailable' ? graphQuery.data.layout.reason : null}
                   rootNodeKey={graphQuery.data?.rootNodeKey ?? null}
@@ -1440,6 +1498,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             reasonSource={inventoryPage}
             reasonsState={reasonsState}
             onRetryReasons={() => { void selectedPageQuery.refetch() }}
+            showTemplateLinks={showTemplateLinks || templateFilterUnavailable}
           />
         </div>
       )}

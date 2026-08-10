@@ -35,14 +35,34 @@ vi.mock('../src/components/project/TechnicalAeoSection.js', () => ({
   ),
 }))
 
+// Stable ids for the edge arrays the map is handed, so a test can assert the
+// renderer was never given a NEW array (which would rebuild Sigma). Hoisted
+// because the mock factory runs before this module body does.
+const { edgeIdentity } = vi.hoisted(() => {
+  const seen = new WeakMap<object, number>()
+  let next = 0
+  return {
+    edgeIdentity(edges: unknown): number {
+      if (!edges || typeof edges !== 'object') return -1
+      const existing = seen.get(edges as object)
+      if (existing !== undefined) return existing
+      next += 1
+      seen.set(edges as object, next)
+      return next
+    },
+  }
+})
+
 vi.mock('../src/components/project/SiteGraphSigma.js', () => ({
   SiteGraphSigma: ({
     nodes,
     edges,
+    showTemplateLinks,
     onSelectNode,
   }: {
     nodes: Array<{ nodeKey: string; path: string; x: number; y: number }>
     edges?: Array<{ edgeKey: string }>
+    showTemplateLinks?: boolean
     onSelectNode?: (node: { nodeKey: string; path: string; x: number; y: number }) => void
   }) => (
     <div role="img" aria-label="Interactive site map">
@@ -52,6 +72,10 @@ vi.mock('../src/components/project/SiteGraphSigma.js', () => ({
       {/* What the renderer was actually handed, so a test can assert which
           links are drawn and that positions never move. */}
       <span data-testid="site-map-edge-keys">{(edges ?? []).map((edge) => edge.edgeKey).join(',')}</span>
+      <span data-testid="site-map-show-template">{String(showTemplateLinks)}</span>
+      {/* Identity of the edge array the renderer was handed. Toggling must not
+          change it, because a new array rebuilds the whole Sigma instance. */}
+      <span data-testid="site-map-edges-identity">{String(edgeIdentity(edges))}</span>
       <span data-testid="site-map-node-positions">
         {nodes.map((node) => `${node.nodeKey}:${node.x},${node.y}`).join(';')}
       </span>
@@ -1194,8 +1218,11 @@ test('the map opens on content links only and says what it is hiding', () => {
   expect(screen.getByTestId('site-map-link-counts').textContent)
     .toContain('Showing 1 content link. 1 nav and footer link hidden.')
 
-  // Only the content link is drawn.
-  expect(screen.getByTestId('site-map-edge-keys').textContent).toBe('home-services')
+  // The renderer holds EVERY edge and is told to hide the template ones.
+  // Handing it a shorter list instead would rebuild the renderer on a
+  // checkbox, which is what used to kill the map.
+  expect(screen.getByTestId('site-map-edge-keys').textContent).toBe('home-services,nav-contact')
+  expect(screen.getByTestId('site-map-show-template').textContent).toBe('false')
 })
 
 test('switching nav and footer links on draws them without moving a page', () => {
@@ -1205,6 +1232,7 @@ test('switching nav and footer links on draws them without moving a page', () =>
   fireEvent.click(screen.getByRole('checkbox', { name: 'Show nav and footer links' }))
 
   expect(screen.getByTestId('site-map-edge-keys').textContent).toBe('home-services,nav-contact')
+  expect(screen.getByTestId('site-map-show-template').textContent).toBe('true')
   expect(screen.getByTestId('site-map-link-counts').textContent)
     .toContain('Showing 1 content link and 1 nav and footer link.')
   // The layout was published without template links, so drawing them is a
@@ -1245,4 +1273,60 @@ test('says when a map\'s page positions still include the nav mesh', () => {
   }))
 
   expect(screen.getByText(/Page positions on this map were set before nav and footer links were separated/)).not.toBeNull()
+})
+
+test('reads an empty content-link set as a finding, with the real hidden counts', async () => {
+  // canonry.ai: the homepage has 49 inbound / 30 outbound links but only 1
+  // inbound / 5 outbound CONTENT links. With nav and footer hidden (the
+  // default) a page whose only connections are chrome drew nothing and said
+  // nothing, so a correct and interesting result looked like a broken map.
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const queryClient = seedTemplateLinkGraph()
+  const templateEdge = (edgeKey: string, sourceNodeKey: string, targetNodeKey: string) => ({
+    edgeKey,
+    sourceNodeKey,
+    sourceUrl: `https://citypoint.example/${sourceNodeKey}`,
+    targetNodeKey,
+    targetUrl: `https://citypoint.example/${targetNodeKey}`,
+    relation: 'anchor',
+    internal: true,
+    followable: true,
+    occurrences: 1,
+    followableOccurrences: 1,
+    nofollowOccurrences: 0,
+    anchors: ['Home'],
+    isTemplate: true,
+    templateRatio: 0.9,
+  })
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', nodeKey: 'page_services', limit: 100 },
+  }), {
+    project: projectName,
+    hasCrawlData: true,
+    runId: 'run_1',
+    nodeKey: 'page_services',
+    url: servicesPage.url,
+    templateDetection: 'applied',
+    linkKind: 'all',
+    // Only nav links point here, which is the whole finding.
+    inbound: [templateEdge('t1', 'page_home', 'page_services'), templateEdge('t2', 'page_contact', 'page_services')],
+    outbound: [],
+    inboundTruncated: false,
+    outboundTruncated: false,
+  })
+
+  renderSection(queryClient)
+  fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
+
+  // Named counts, not an apology and not silence.
+  expect(await screen.findByText('No content links to this page. 2 nav and footer links hidden.')).toBeTruthy()
+  // Zero of ANY kind is a different fact and says so.
+  expect(screen.getByText('This page links to nothing.')).toBeTruthy()
+
+  // Switching nav links on shows them rather than the finding.
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show nav and footer links' }))
+  expect(screen.queryByText('No content links to this page. 2 nav and footer links hidden.')).toBeNull()
 })
