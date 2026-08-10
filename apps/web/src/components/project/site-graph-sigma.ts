@@ -274,8 +274,8 @@ export function siteGraphStatusGlyph(state: SiteGraphVisualState): string {
 
 /**
  * Root identity is server-owned (`rootNodeKey` on the graph read). There is no
- * path or depth fallback on purpose: renaming the wrong page "Home" on a guess
- * would be worse than leaving the map unlabeled.
+ * path or depth fallback on purpose: marking the wrong page as the site's
+ * entry point on a guess would be worse than marking none.
  */
 export function isSiteGraphRootNode(
   node: SiteGraphHealthSource & { nodeKey: string },
@@ -444,8 +444,11 @@ export function createSigmaSiteGraphReducers(
   })
   const labelRankByKey = new Map(rankedNodeKeys.map((nodeKey, rank) => [nodeKey, rank]))
 
-  const focusedNeighborLabelCandidates = (overview: boolean) => new Set(
-    focused && overview
+  // Computed ONCE per reducer set. It does not depend on the camera, only on
+  // the focus, so building it inside nodeReducer re-sorted the whole
+  // neighbourhood for every node of every frame.
+  const focusedNeighborLabelCandidates = new Set(
+    focused
       ? graph.neighbors(focused)
         .filter((nodeKey) => nodeKey !== focused)
         .sort((leftKey, rightKey) => (labelRankByKey.get(leftKey) ?? 0) - (labelRankByKey.get(rightKey) ?? 0))
@@ -477,7 +480,7 @@ export function createSigmaSiteGraphReducers(
         }
         if (graph.areNeighbors(nodeKey, focused)) {
           if (!overview) return attributes
-          return focusedNeighborLabelCandidates(overview).has(nodeKey)
+          return focusedNeighborLabelCandidates.has(nodeKey)
             ? { ...attributes, forceLabel: false }
             : { ...attributes, forceLabel: false, label: '' }
         }

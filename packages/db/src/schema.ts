@@ -870,7 +870,7 @@ export const siteCrawlPages = sqliteTable('site_crawl_pages', {
   index('idx_site_crawl_pages_read').on(table.projectId, table.runId, table.attemptId, table.inventoryEligible, table.auditScore, table.url),
   index('idx_site_crawl_pages_parent').on(table.projectId, table.runId, table.attemptId, table.parentPath, table.path),
   index('idx_site_crawl_pages_url').on(table.projectId, table.runId, table.attemptId, table.url),
-  index('idx_site_crawl_pages_health').on(table.projectId, table.runId, table.attemptId, table.healthState, table.url),
+  index('idx_site_crawl_pages_health').on(table.projectId, table.runId, table.attemptId, table.healthState, table.path, table.nodeKey),
   foreignKey({
     name: 'site_crawl_pages_attempt_fk',
     columns: [table.projectId, table.runId, table.attemptId],

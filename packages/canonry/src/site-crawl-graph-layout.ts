@@ -139,9 +139,11 @@ const FORCE_ATLAS_SETTINGS = Object.freeze({
 
 /**
  * Publish-time layout has no per-node render size (the browser derives size
- * from the link score), so anti-overlap uses the renderer's LARGEST node as a
- * uniform conservative bound: `SITE_GRAPH_ROOT_MIN_SIZE` in
- * `apps/web/src/components/project/site-graph-sigma.ts`.
+ * from the link score), so anti-overlap uses a uniform conservative bound: the
+ * largest node the renderer will draw, which is the root marker produced by
+ * `siteGraphRootNodeSize` in
+ * `apps/web/src/components/project/site-graph-sigma.ts`. That function scales
+ * down with node count, so this constant is the small-map ceiling.
  */
 const RENDER_MAX_NODE_SIZE = 14
 /**
@@ -523,21 +525,6 @@ function describeComponent(
 }
 
 /**
- * Cells of a square spiral around the origin, ring by ring, starting at ring
- * `firstRing`. Deterministic and O(1) per cell, which is what makes an
- * edgeless 20,000-page crawl (20,000 singleton components) affordable: a
- * pairwise circle-packing search would be quadratic.
- */
-function* squareSpiralCells(firstRing: number): Generator<{ dx: number; dy: number }, never, void> {
-  for (let ring = Math.max(1, firstRing); ; ring++) {
-    for (let dx = -ring; dx <= ring; dx++) yield { dx, dy: -ring }
-    for (let dy = -ring + 1; dy <= ring; dy++) yield { dx: ring, dy }
-    for (let dx = ring - 1; dx >= -ring; dx--) yield { dx, dy: ring }
-    for (let dy = ring - 1; dy >= -ring + 1; dy--) yield { dx: -ring, dy }
-  }
-}
-
-/**
  * Pack disconnected components around the largest one.
  *
  * ForceAtlas2 spatializes each component correctly but has nothing holding the
@@ -566,19 +553,35 @@ export function packSiteCrawlGraphComponents(
   const [anchor, ...rest] = described as [PackedComponent, ...PackedComponent[]]
 
   const spacing = Math.max(nodeSpacing, Number.EPSILON) * COMPONENT_PACKING_SPACING_FACTOR
-  const largestRest = rest.reduce((max, component) => Math.max(max, component.radius), 0)
-  // One uniform cell that fits the largest packed component plus its clearance
-  // keeps placement overlap-free without any pairwise test.
-  const cell = 2 * largestRest + spacing
-  // Start far enough out that the first ring clears the anchor component.
-  const firstRing = Math.max(1, Math.ceil((anchor.radius + largestRest + spacing) / cell))
+  // Largest first, so the big secondary components take the inner rings and
+  // the ring pitch can shrink to the singletons that follow. Sizing every cell
+  // off the single largest component would let one mid-sized component inflate
+  // the whole frame that hundreds of orphans then sit in.
+  const ordered = [...rest].sort((left, right) => (
+    right.radius - left.radius
+    || (left.nodeKeys[0]! < right.nodeKeys[0]! ? -1 : left.nodeKeys[0]! > right.nodeKeys[0]! ? 1 : 0)
+  ))
 
   const moved = new Map<string, ComputedPosition>()
-  const cells = squareSpiralCells(firstRing)
-  for (const component of rest) {
-    const { dx, dy } = cells.next().value
-    const targetX = anchor.centerX + dx * cell
-    const targetY = anchor.centerY + dy * cell
+  // Ring geometry advances with the items actually placed: each ring's pitch
+  // is set by the largest component ON that ring, not by the largest overall.
+  let ringRadius = anchor.radius + spacing
+  let ringPitch = 0
+  let placedOnRing = 0
+  let ringCapacity = 0
+  for (const component of ordered) {
+    if (placedOnRing >= ringCapacity) {
+      // Open a new ring sized for the next (and therefore largest remaining)
+      // component, then fit as many as its circumference allows.
+      ringPitch = 2 * component.radius + spacing
+      ringRadius += ringPitch / 2 + (placedOnRing === 0 ? 0 : ringPitch / 2)
+      ringCapacity = Math.max(1, Math.floor((2 * Math.PI * ringRadius) / ringPitch))
+      placedOnRing = 0
+    }
+    const angle = (placedOnRing / ringCapacity) * Math.PI * 2
+    placedOnRing += 1
+    const targetX = anchor.centerX + Math.cos(angle) * ringRadius
+    const targetY = anchor.centerY + Math.sin(angle) * ringRadius
     const shiftX = targetX - component.centerX
     const shiftY = targetY - component.centerY
     for (const nodeKey of component.nodeKeys) {
@@ -637,17 +640,27 @@ export async function layoutSiteCrawlGraphInput(
     }
   }
   const seeded = seedSiteCrawlGraphNodes(input.nodes, input.rootNodeKey, input.priorPositions)
+  // ONE budget for the whole pipeline. Packing and normalization run on this
+  // thread after the worker resolves, so without a shared deadline they were
+  // unbounded work outside the timeout that is supposed to cap layout.
+  const timeoutMs = options.timeoutMs ?? SITE_CRAWL_GRAPH_LAYOUT_TIMEOUT_MS
+  const deadline = Date.now() + timeoutMs
+  const assertWithinBudget = () => {
+    options.signal?.throwIfAborted()
+    if (Date.now() > deadline) throw new GraphLayoutTimeoutError(`Graph layout exceeded ${timeoutMs}ms`)
+  }
   try {
     const compute = options.computePositions ?? computeForceAtlasPositions
     const { positions, nodeSize } = await compute({
       nodes: seeded,
       edges: input.edges,
       iterations: adaptiveForceAtlasIterations(input.nodes.length, input.edges.length),
-    }, { signal: options.signal, timeoutMs: options.timeoutMs })
-    options.signal?.throwIfAborted()
+    }, { signal: options.signal, timeoutMs: Math.max(1, deadline - Date.now()) })
+    assertWithinBudget()
     // Packing runs last and only ever translates whole components, so it can
     // never undo the anti-overlap the worker just did inside one of them.
     const framed = packSiteCrawlGraphComponents(positions, input.edges, nodeSize)
+    assertWithinBudget()
     return {
       state: 'ready',
       layoutVersion: SITE_CRAWL_GRAPH_LAYOUT_VERSION,

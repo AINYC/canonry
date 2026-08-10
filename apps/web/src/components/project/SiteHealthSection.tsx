@@ -77,6 +77,9 @@ const SITE_HEALTH_VIEW_DESCRIPTIONS: Record<SiteHealthView, string> = {
  */
 type InventoryFilterId = 'all' | 'hidden'
 
+/** Whether the selected page's own row (which carries its reasons) is known. */
+type PageReasonsState = 'idle' | 'loading' | 'ready' | 'error'
+
 /**
  * `hidden` is the DERIVED health state, not `indexabilityState=noindex`: a
  * redirect, a robots block, a non-HTML response, and a canonical pointing
@@ -360,6 +363,8 @@ function PageInspector({
   onRetryAudit,
   rootHost,
   reasonSource,
+  reasonsState,
+  onRetryReasons,
 }: {
   page: InspectableCrawlPage | null
   isLoading: boolean
@@ -375,6 +380,8 @@ function PageInspector({
   rootHost: string | null
   /** The same page from the inventory read, which carries the crawler reasons. */
   reasonSource: SiteCrawlPageDto | null
+  reasonsState: PageReasonsState
+  onRetryReasons: () => void
 }) {
   if (!page) {
     return (
@@ -398,13 +405,20 @@ function PageInspector({
             <ToneBadge tone={status.tone}>{status.label}</ToneBadge>
           </div>
           <p className="mt-1 break-all text-sm text-secondary">{page.url}</p>
-          {reasons.length > 0 && (
+          {reasonsState === 'loading' ? (
+            <p className="mt-2 text-sm text-secondary" role="status">Loading page details...</p>
+          ) : reasonsState === 'error' ? (
+            <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-negative" role="alert">
+              Page details could not be loaded, so any reason this page is hidden is unknown.
+              <Button type="button" variant="secondary" size="sm" onClick={onRetryReasons}>Try again</Button>
+            </p>
+          ) : reasons.length > 0 ? (
             <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-secondary" aria-label="Why this page is hidden">
               {reasons.map((reason) => (
                 <li key={reason}>{indexabilityReasonLabel(reason)}</li>
               ))}
             </ul>
-          )}
+          ) : null}
         </div>
         <Button asChild variant="secondary" size="sm">
           <a href={page.url} target="_blank" rel="noreferrer">
@@ -906,6 +920,21 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
     [graphPages, inventoryPage, selectedNodeKey, selectionFilteredOut],
   )
   const effectiveSelectedNodeKey = selectedPage?.nodeKey ?? null
+  /**
+   * A page whose own row could not be read is NOT a page with nothing to say.
+   * Without this the inspector renders a hidden page with no reasons and no
+   * error, which is indistinguishable from a page that genuinely has none.
+   */
+  const reasonsState: PageReasonsState = !selectedPage
+    ? 'idle'
+    : inventoryPage
+      ? 'ready'
+      : selectedPageQuery.isError
+        ? 'error'
+        : selectedPageNeedsRead && selectedPageQuery.isLoading
+          ? 'loading'
+          : 'ready'
+
   const neighborsQuery = useQuery({
     ...getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsOptions({
       client: heyClient,
@@ -959,11 +988,23 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
   )
   const movedSite = movedSiteHosts(crawl?.requestedRootUrl ?? null, crawl?.rootUrl ?? null)
   const rootHost = siteHostFromUrl(crawl?.rootUrl ?? null)
-  // The root is identified by the server, so the sections list never has to
-  // guess which page is the site's entry point.
+  // The root is identified by the server. Sourcing it from the graph alone
+  // made the row disappear on exactly the scans whose layout is missing, so
+  // the inventory read (which every crawl has) is the fallback.
+  const rootNodeKey = graphQuery.data?.rootNodeKey ?? null
+  const rootPageQuery = useQuery({
+    ...getApiV1ProjectsByNameTechnicalAeoCrawlPagesOptions({
+      client: heyClient,
+      path: { name: projectName },
+      query: { ...scopedRunQuery, nodeKey: rootNodeKey ?? undefined, limit: 1 },
+    }),
+    enabled: Boolean(detailsEnabled && rootNodeKey),
+  })
   const rootGraphPage = useMemo(
-    () => graphPages.find((page) => page.nodeKey === graphQuery.data?.rootNodeKey) ?? null,
-    [graphPages, graphQuery.data?.rootNodeKey],
+    () => graphPages.find((page) => page.nodeKey === rootNodeKey)
+      ?? rootPageQuery.data?.pages[0]
+      ?? null,
+    [graphPages, rootNodeKey, rootPageQuery.data],
   )
   const scanBusy = runMutation.isPending || Boolean(activeAudit)
 
@@ -1217,6 +1258,8 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             onRetryAudit={() => { void pageAuditQuery.refetch() }}
             rootHost={rootHost}
             reasonSource={inventoryPage}
+            reasonsState={reasonsState}
+            onRetryReasons={() => { void selectedPageQuery.refetch() }}
           />
         </div>
       ) : (
@@ -1292,6 +1335,8 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             onRetryAudit={() => { void pageAuditQuery.refetch() }}
             rootHost={rootHost}
             reasonSource={inventoryPage}
+            reasonsState={reasonsState}
+            onRetryReasons={() => { void selectedPageQuery.refetch() }}
           />
         </div>
       )}

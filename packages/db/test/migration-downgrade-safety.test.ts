@@ -76,6 +76,20 @@ const RUN_HOOK_ALLOWLIST: ReadonlySet<number> = new Set([
   // columns and continues to write valid runs; the hook is required because
   // SQLite cannot add a foreign key without a transactional table rebuild.
   118,
+  // v130 adds a nullable column in statements[] and uses run() only to
+  // POPULATE it with the derived Site Health state. Downgrade-safe:
+  // `health_state` is unknown to any binary older than v130, so an older
+  // engine neither reads nor writes it, and the column is nullable so an
+  // older writer's INSERT that omits it still succeeds (the read surface
+  // reports such a row as unfilterable rather than guessing). The hook is
+  // required because the derivation folds fetch state, indexability, the
+  // crawler's reasons, and canonical identity together, which SQL cannot
+  // express without becoming a second implementation that drifts from the
+  // contract; the backfill calls that same contract function directly. It
+  // reads only columns already persisted on the row and invents nothing.
+  // Idempotent via the `health_state IS NULL` guard, which also stops it
+  // overwriting a value the live crawl path recorded.
+  130,
 ])
 
 test(`migrations after v${DOWNGRADE_BASELINE} define no run() hook unless explicitly allowlisted`, () => {

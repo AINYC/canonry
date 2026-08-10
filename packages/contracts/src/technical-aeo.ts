@@ -101,7 +101,7 @@ export const siteAuditScoreSchema = z.object({
   pagesErrored: z.number().int().nonnegative(),
   /** `aggregateScore - previousScore`, or `null` when there is no prior run. */
   deltaScore: z.number().nullable(),
-  trend: siteAuditTrendDirectionSchema.nullable(),
+  trend: z.union([siteAuditTrendDirectionSchema, z.null()]),
   previousScore: z.number().nullable(),
   previousAuditedAt: z.string().nullable(),
   factors: z.array(siteAuditFactorSummarySchema).default([]),
@@ -431,10 +431,14 @@ export const siteCrawlPageAuditSchema = z.discriminatedUnion('state', [
 export type SiteCrawlPageAuditDto = z.infer<typeof siteCrawlPageAuditSchema>
 
 /**
- * Whether a requested `healthState` filter actually ran. Site Health state is
- * persisted at publish time, so a scan published before that column existed
- * cannot be filtered. `unavailable-legacy-scan` says so explicitly rather than
- * letting an empty or unfiltered list read as an answer.
+ * Whether a requested `healthState` filter actually ran.
+ *
+ * Site Health state is persisted at publish time and backfilled for existing
+ * scans, so `applied` is the normal answer. `unavailable-legacy-scan` remains
+ * for the one case a backfill cannot reach: a page written AFTER the migration
+ * by an older engine image that does not know the column. Tenants keep their
+ * provision-time image, so that is a real state, and saying so beats letting an
+ * empty list read as "no hidden pages".
  */
 export const siteCrawlPagesFilterStateSchema = z.enum(['applied', 'unavailable-legacy-scan'])
 export type SiteCrawlPagesFilterState = z.infer<typeof siteCrawlPagesFilterStateSchema>
@@ -446,7 +450,7 @@ export const siteCrawlPagesResponseSchema = z.object({
   total: z.number().int().nonnegative(),
   nextCursor: z.string().nullable(),
   /** Null when no `healthState` filter was requested. */
-  healthStateFilter: siteCrawlPagesFilterStateSchema.nullable().default(null),
+  healthStateFilter: z.union([siteCrawlPagesFilterStateSchema, z.null()]).default(null),
   pages: z.array(siteCrawlPageSchema).default([]),
 })
 export type SiteCrawlPagesResponseDto = z.infer<typeof siteCrawlPagesResponseSchema>

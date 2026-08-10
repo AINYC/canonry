@@ -11,6 +11,7 @@ import {
   getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey,
   getApiV1ProjectsByNameTechnicalAeoDeadLinksQueryKey,
   getApiV1ProjectsByNameTechnicalAeoGraphQueryKey,
+  getApiV1ProjectsByNameTechnicalAeoGraphQueryKey,
   getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsQueryKey,
   getApiV1ProjectsByNameTechnicalAeoStructureInfiniteQueryKey,
   getApiV1ProjectsByNameTechnicalAeoStructureQueryKey,
@@ -925,10 +926,10 @@ test('writes same-site link targets as paths and keeps the full URL on hover', (
   expect(within(linksOut).getByText('https://directory.example/citypoint')).not.toBeNull()
 })
 
-test('inspects a map page that is outside the loaded inventory window', () => {
-  // The map holds every node while the inventory loads 200 at a time, so a
-  // page selected on the map is usually not in the loaded window. Its hidden
-  // reasons must still be readable.
+test('inspects a map page that is outside the loaded inventory window', async () => {
+  // The map holds every node while the inventory pages 200 at a time. This
+  // selects a node that is ONLY on the map, so the by-key read is the only
+  // thing that can supply its reasons.
   const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
   vi.stubGlobal('fetch', fetchMock)
   const queryClient = makeClient()
@@ -941,21 +942,26 @@ test('inspects a map page that is outside the loaded inventory window', () => {
     indexabilityReasons: ['x-robots-noindex'],
     healthState: 'hidden' as const,
   }
-  // The single-page read by node key: what the component asks for when the
-  // selection is not in the loaded list.
+  // On the map, absent from the loaded inventory page.
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoGraphQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', maxNodes: 20_000, maxEdges: 50_000 },
+  }), {
+    project: projectName, hasCrawlData: true, runId: 'run_1', rootNodeKey: 'page_home',
+    layout: { state: 'ready', version: 'site-health-fa2-v2', computedAt: '2026-08-08T18:16:33.000Z' },
+    totalNodes: 3, totalEdges: 1,
+    nodes: [{ ...homePage, x: 0, y: 0 }, { ...servicesPage, x: 1, y: 1 }, { ...offWindowPage, x: 2, y: 2 }],
+    edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
+  })
   const byKeyInput = {
     client: heyClient,
     path: { name: projectName },
     query: { runId: 'run_1', nodeKey: 'page_far', limit: 1 },
   } as const
   queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesQueryKey(byKeyInput), {
-    project: projectName,
-    hasCrawlData: true,
-    runId: 'run_1',
-    total: 1,
-    nextCursor: null,
-    healthStateFilter: null,
-    pages: [offWindowPage],
+    project: projectName, hasCrawlData: true, runId: 'run_1', total: 1, nextCursor: null,
+    healthStateFilter: null, pages: [offWindowPage],
   })
   queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsQueryKey({
     client: heyClient,
@@ -967,17 +973,56 @@ test('inspects a map page that is outside the loaded inventory window', () => {
   })
 
   renderSection(queryClient)
-  fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
-  // Select it the way the map does: by node key, not from the loaded table.
-  fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
-  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesQueryKey(byKeyInput), {
-    project: projectName, hasCrawlData: true, runId: 'run_1', total: 1, nextCursor: null,
-    healthStateFilter: null, pages: [offWindowPage],
+  // Select it from the MAP, which is the only place it appears.
+  fireEvent.click(screen.getByRole('button', { name: '/far' }))
+
+  // The by-key read is what supplies its reasons; without it this page would
+  // render as though the crawler gave no reason at all.
+  await waitFor(() => expect(
+    within(screen.getByRole('list', { name: 'Why this page is hidden' }))
+      .getByText('Hidden by X-Robots-Tag header'),
+  ).not.toBeNull())
+  expect(queryClient.getQueryState(getApiV1ProjectsByNameTechnicalAeoCrawlPagesQueryKey(byKeyInput)))
+    .not.toBeUndefined()
+})
+
+test('says the reasons are unknown when the single-page read fails', async () => {
+  // A failed read is not "this page has no reasons". Rendering it as such is
+  // indistinguishable from a page that genuinely has none.
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
+  queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_1')))
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
+    client: heyClient, path: { name: projectName },
+  }), summary('run_1', 42))
+  seedRun(queryClient, 'run_1')
+  const offWindowPage = {
+    ...contactPage, nodeKey: 'page_far', url: 'https://citypoint.example/far', path: '/far',
+    indexabilityState: 'noindex', indexabilityReasons: ['x-robots-noindex'], healthState: 'hidden' as const,
+  }
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoGraphQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', maxNodes: 20_000, maxEdges: 50_000 },
+  }), {
+    project: projectName, hasCrawlData: true, runId: 'run_1', rootNodeKey: 'page_home',
+    layout: { state: 'ready', version: 'site-health-fa2-v2', computedAt: '2026-08-08T18:16:33.000Z' },
+    totalNodes: 3, totalEdges: 1,
+    nodes: [{ ...homePage, x: 0, y: 0 }, { ...servicesPage, x: 1, y: 1 }, { ...offWindowPage, x: 2, y: 2 }],
+    edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
   })
 
-  // The page the inspector reads comes from the by-key read, so its reasons
-  // are present rather than lost to the window.
-  expect(screen.getByRole('heading', { name: 'Internal links' })).not.toBeNull()
+  renderSection(queryClient)
+  fireEvent.click(screen.getByRole('button', { name: '/far' }))
+
+  // The by-key read is left to fail against the stubbed 500.
+  await waitFor(() => expect(
+    screen.getByText(/any reason this page is hidden is unknown/i),
+  ).not.toBeNull())
+  expect(screen.queryByRole('list', { name: 'Why this page is hidden' })).toBeNull()
 })
 
 test('keeps a filtered selection until the server says it does not match', async () => {

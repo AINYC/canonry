@@ -7283,7 +7283,7 @@ export type SiteAuditScoreDto = {
     pagesSkipped: number;
     pagesErrored: number;
     deltaScore: number | null;
-    trend: 'up' | 'down' | 'flat';
+    trend: 'up' | 'down' | 'flat' | null;
     previousScore: number | null;
     previousAuditedAt: string | null;
     factors: Array<{
@@ -7560,7 +7560,7 @@ export type SiteCrawlPagesResponseDto = {
     runId: string | null;
     total: number;
     nextCursor: string | null;
-    healthStateFilter: 'applied' | 'unavailable-legacy-scan';
+    healthStateFilter: 'applied' | 'unavailable-legacy-scan' | null;
     pages: Array<{
         nodeKey: string;
         url: string;

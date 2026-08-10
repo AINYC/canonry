@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Fastify from 'fastify'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createClient,
@@ -1517,6 +1517,23 @@ describe('crawl page health-state filter', () => {
     expect((await get('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=indexed')).status).toBe(400)
   })
 
+  it('reports a mixed snapshot as unfilterable to every read, not just some', async () => {
+    seedEveryCombination()
+    // A snapshot where only SOME rows predate the column. A probe narrowed by
+    // the request's own filters would answer `applied` for a populated row and
+    // `unavailable-legacy-scan` for the list, disagreeing about one snapshot.
+    ctx.db.update(siteCrawlPages).set({ healthState: null })
+      .where(eq(siteCrawlPages.nodeKey, 'html:noindex:plain')).run()
+
+    const list = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=hidden&limit=200')
+    // A populated row, addressed by key, must give the SAME verdict.
+    const single = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=hidden&nodeKey=redirect:indexable:plain&limit=1')
+
+    expect(list.body.healthStateFilter).toBe('unavailable-legacy-scan')
+    expect(single.body.healthStateFilter).toBe('unavailable-legacy-scan')
+    expect(single.body.pages).toEqual([])
+  })
+
   it('reports that a scan published before the column cannot be filtered', async () => {
     seedEveryCombination()
     // A snapshot from before the derived column existed keeps NULLs. There is
@@ -1535,6 +1552,29 @@ describe('crawl page health-state filter', () => {
     const unfiltered = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?limit=200')
     expect(unfiltered.body.healthStateFilter).toBeNull()
     expect(unfiltered.body.total).toBeGreaterThan(0)
+  })
+
+  it('serves the real filtered query from the index, with no temp b-tree sort', () => {
+    seedEveryCombination()
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    // The exact shape the page list issues: filter on the derived state,
+    // ordered by path. If the index does not cover the ORDER BY, SQLite sorts
+    // every match in a temp b-tree before LIMIT, on every cursor page.
+    const plan = ctx.db.all(sql`
+      EXPLAIN QUERY PLAN
+      SELECT * FROM site_crawl_pages
+      WHERE project_id = ${ctx.projectId}
+        AND run_id = ${ctx.runB}
+        AND attempt_id = ${snapshot.attemptId}
+        AND health_state = 'hidden'
+      ORDER BY path ASC, node_key ASC
+      LIMIT 100
+    `) as Array<{ detail: string }>
+    const detail = plan.map((row) => row.detail).join(' | ')
+
+    expect(detail).toContain('idx_site_crawl_pages_health')
+    expect(detail).not.toContain('TEMP B-TREE')
+    expect(detail).not.toContain('SCAN site_crawl_pages')
   })
 
   it('answers a filtered read without scanning every page row', async () => {

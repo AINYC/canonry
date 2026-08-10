@@ -34,6 +34,8 @@ import {
   isSigmaWebGlColor,
   SITE_GRAPH_COLOR_TOKENS,
   SITE_GRAPH_SIGMA_COLOR_TOKENS,
+  SITE_GRAPH_OVERVIEW_CAMERA_RATIO,
+  siteGraphLabelBudget,
   siteGraphStatusDescription,
   siteGraphStatusGlyph,
   siteGraphStatusLabel,
@@ -53,8 +55,8 @@ export interface SiteGraphSigmaProps {
   nodes: readonly SiteGraphSigmaNode[]
   edges: readonly SiteGraphSigmaEdge[]
   layoutState?: 'ready' | 'unavailable'
-  layoutUnavailableReason?: string | null
-  /** Server-identified crawl root. Without it no page is labeled "Home". */
+  layoutUnavailableReason?: SiteCrawlGraphLayoutUnavailableReason | null
+  /** Server-identified crawl root. Without it no page gets the root marker. */
   rootNodeKey?: string | null
   selectedNodeKey?: string | null
   onSelectNode?: (node: SiteGraphSigmaNode) => void
@@ -91,9 +93,12 @@ const LAYOUT_UNAVAILABLE_COPY: Record<SiteCrawlGraphLayoutUnavailableReason, { h
   },
 }
 
-function unavailableLayoutMessage(reason?: string | null): { heading: string; detail: string } {
-  return LAYOUT_UNAVAILABLE_COPY[reason as SiteCrawlGraphLayoutUnavailableReason]
-    ?? LAYOUT_UNAVAILABLE_COPY['no-crawl']
+function unavailableLayoutMessage(
+  reason?: SiteCrawlGraphLayoutUnavailableReason | null,
+): { heading: string; detail: string } {
+  // Persisted rows stay forward-compatible, so a value outside the union is
+  // possible on the wire even though the type says otherwise.
+  return (reason && LAYOUT_UNAVAILABLE_COPY[reason]) ?? LAYOUT_UNAVAILABLE_COPY['no-crawl']
 }
 
 interface HoveredNode {
@@ -364,6 +369,16 @@ function SigmaRuntime({
   const { zoomIn, zoomOut, reset, gotoNode } = useCamera()
   const [hoveredNodeKey, setHoveredNodeKey] = useState<string | null>(null)
   const focusNodeKey = hoveredNodeKey ?? selectedNodeKey
+  const pendingRefreshRef = useRef<number | null>(null)
+  /** What the last paint was reduced against, so an unchanged zoom is free. */
+  const lastPaintRef = useRef<{ overview: boolean; budget: number }>({
+    overview: true,
+    budget: Number.NaN,
+  })
+
+  useEffect(() => () => {
+    if (pendingRefreshRef.current !== null) cancelAnimationFrame(pendingRefreshRef.current)
+  }, [])
 
   useEffect(() => {
     onCameraReady({
@@ -391,8 +406,27 @@ function SigmaRuntime({
       },
       clickNode: ({ node }) => onSelectNodeKey(node),
       clickStage: () => onHoverNode(null),
+      // Sigma applies reducers only inside its own `process()`, which runs on
+      // `refresh()`. Reading the ratio at paint time therefore fixes the FIRST
+      // paint only: without this listener, zooming never re-evaluates the
+      // label budget and never toggles overview edge hiding. Coalesced onto an
+      // animation frame so a pan-zoom gesture triggers one refresh per frame
+      // rather than one per camera event.
+      updated: () => {
+        if (pendingRefreshRef.current !== null) return
+        pendingRefreshRef.current = requestAnimationFrame(() => {
+          pendingRefreshRef.current = null
+          const nextOverview = sigma.getCamera().getState().ratio > SITE_GRAPH_OVERVIEW_CAMERA_RATIO
+          // Only the overview threshold and the label budget tier change what
+          // the reducers emit, so a refresh is skipped while neither moved.
+          const nextBudget = siteGraphLabelBudget(sigma.getCamera().getState().ratio)
+          if (nextOverview === lastPaintRef.current.overview && nextBudget === lastPaintRef.current.budget) return
+          lastPaintRef.current = { overview: nextOverview, budget: nextBudget }
+          sigma.refresh()
+        })
+      },
     })
-  }, [onHoverNode, onSelectNodeKey, registerEvents])
+  }, [onHoverNode, onSelectNodeKey, registerEvents, sigma])
 
   useEffect(() => {
     // The reducers read the camera ratio at paint time rather than closing
@@ -409,6 +443,11 @@ function SigmaRuntime({
     )
     sigma.setSetting('nodeReducer', reducers.nodeReducer)
     sigma.setSetting('edgeReducer', reducers.edgeReducer)
+    const ratio = sigma.getCamera().getState().ratio
+    lastPaintRef.current = {
+      overview: ratio > SITE_GRAPH_OVERVIEW_CAMERA_RATIO,
+      budget: siteGraphLabelBudget(ratio),
+    }
     sigma.refresh()
     // Do not reset settings during cleanup. React Sigma kills its WebGL
     // programs before descendant effects can clean up; reconfiguring that
@@ -460,8 +499,10 @@ export function SiteGraphSigma({
   // the live region are the accessible route to a page's name. They use the
   // same server-owned root identity the map does, never a path or host guess.
   const rootHost = useMemo(
-    () => siteHostFromUrl(rootNodeKey ? nodeByKey.get(rootNodeKey)?.url : nodes[0]?.url),
-    [nodeByKey, nodes, rootNodeKey],
+    // Only the crawl root defines the site's host. `nodes[0]` is whatever the
+    // sample happened to order first, which may be an off-site alias.
+    () => siteHostFromUrl(rootNodeKey ? nodeByKey.get(rootNodeKey)?.url : null),
+    [nodeByKey, rootNodeKey],
   )
   const pageLabel = useCallback(
     (node: SiteGraphSigmaNode) => displayPageLabel(node, rootHost),
@@ -571,7 +612,7 @@ export function SiteGraphSigma({
     onSelectNode?.(node)
     if (moveCamera) cameraActionsRef.current?.gotoNode(nodeKey)
     setStatusMessage(`Focused ${pageLabel(node)}`)
-  }, [nodeByKey, onSelectNode, selectedNodeKey])
+  }, [nodeByKey, onSelectNode, pageLabel, selectedNodeKey])
 
   const handleSigmaSelect = useCallback((nodeKey: string) => {
     selectNode(nodeKey, false)

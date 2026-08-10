@@ -1728,15 +1728,25 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
           : [asc(siteCrawlPages.url), asc(siteCrawlPages.nodeKey)] as const
 
     // Health state is written at publish time by the contract's own
-    // `deriveSiteHealthState`, so filtering it is an ordinary indexed WHERE.
-    // A snapshot published before that column existed has NULLs, and there is
-    // no correct answer to give for it: recomputing here would be the O(all
-    // pages) read this replaced, and deriving it in SQL would be a second
+    // `deriveSiteHealthState` and backfilled by migration 130, so filtering it
+    // is an ordinary indexed WHERE. A NULL can still appear if an older engine
+    // image wrote the page after that migration; recomputing here would be the
+    // O(all pages) read this replaced, and deriving it in SQL would be a second
     // implementation that drifts. Say the filter did not run instead.
     let healthStateFilter: SiteCrawlPagesFilterState | null = null
     if (healthState) {
+      // Scoped to the SNAPSHOT, never to the request's other filters. A probe
+      // narrowed by nodeKey (or fetch state, or audit state) answers about one
+      // slice, so the same snapshot could report `applied` to the inspector and
+      // `unavailable-legacy-scan` to the list, and `applied` would silently
+      // omit legacy rows that belong in the result.
       const legacyRow = app.db.select({ id: siteCrawlPages.id }).from(siteCrawlPages)
-        .where(and(...filters, isNull(siteCrawlPages.healthState))).limit(1).get()
+        .where(and(
+          eq(siteCrawlPages.projectId, project.id),
+          eq(siteCrawlPages.runId, snapshot.runId),
+          eq(siteCrawlPages.attemptId, snapshot.attemptId),
+          isNull(siteCrawlPages.healthState),
+        )).limit(1).get()
       healthStateFilter = legacyRow ? 'unavailable-legacy-scan' : 'applied'
       if (healthStateFilter === 'applied') filters.push(eq(siteCrawlPages.healthState, healthState))
     }
