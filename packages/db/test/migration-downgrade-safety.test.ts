@@ -107,6 +107,15 @@ const RUN_HOOK_ALLOWLIST: ReadonlySet<number> = new Set([
   // which are immutable per attempt; those rows keep
   // `template_links_excluded = 0` so the map can say so.
   131,
+  // v132 deletes stored self-links and makes NO schema change. It uses run()
+  // only because the statement allowlist is schema-shaped; the work is a
+  // DELETE of rows the crawl engine already excluded from the page metrics
+  // built in the same crawl, so the edge tables disagreed with their own page
+  // rows and every self-linking page read one link higher in each direction.
+  // Downgrade-safe: an older binary sees fewer edge rows, and the ones removed
+  // are exactly the rows it was miscounting, so it is strictly better off.
+  // Idempotent: a re-run deletes nothing once they are gone.
+  132,
 ])
 
 test(`migrations after v${DOWNGRADE_BASELINE} define no run() hook unless explicitly allowlisted`, () => {

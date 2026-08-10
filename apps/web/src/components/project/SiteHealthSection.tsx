@@ -291,26 +291,77 @@ function deadLinkLabel(state: string, found?: number): { label: string; tone: Me
   return { label: 'Broken links: not checked', tone: 'neutral' }
 }
 
-function LinkMetrics({ page }: { page: InspectableCrawlPage }) {
+/**
+ * What one direction's tile should say, given the active link filter.
+ *
+ * The tiles used to always show the crawl's full-graph totals while the tables
+ * beneath them honoured the content-only filter, so one panel read "Links in
+ * 48" directly above a table headed "Links in (1)". Both were right and the
+ * pair was unreadable. The tile now counts exactly what the table lists.
+ */
+export function linkTileCount(counts: {
+  total: number
+  visible: number
+  hidden: number
+  truncated: boolean
+  showTemplateLinks: boolean
+  known: boolean
+}): { value: string; hiddenNote: string | null } {
+  // Filter off, or no per-kind answer to give: the crawl's own total, which is
+  // the only number here that covers every link.
+  if (counts.showTemplateLinks || !counts.known) {
+    return { value: metricValue(counts.total), hiddenNote: null }
+  }
+  // The neighbour read is bounded, so a truncated list can only prove a lower
+  // bound. Say so rather than presenting a partial count as the answer.
+  return {
+    value: counts.truncated ? `${metricValue(counts.visible)}+` : metricValue(counts.visible),
+    hiddenNote: counts.hidden === 0
+      ? null
+      : counts.truncated
+        ? `At least ${metricValue(counts.hidden)} nav and footer hidden`
+        : `${metricValue(counts.hidden)} nav and footer hidden`,
+  }
+}
+
+function LinkMetricTile({ label, value, hiddenNote }: {
+  label: string
+  value: string
+  hiddenNote?: string | null
+}) {
   return (
-    <dl className="grid grid-cols-2 divide-x divide-y divide-default rounded-lg border border-default sm:grid-cols-4 sm:divide-y-0">
-      <div className="px-4 py-3">
-        <dt className="text-xs text-muted">Clicks from home</dt>
-        <dd className="mt-1 text-sm font-medium tabular-nums text-heading">{page.depth ?? 'Not reached'}</dd>
-      </div>
-      <div className="px-4 py-3">
-        <dt className="text-xs text-muted">Links in</dt>
-        <dd className="mt-1 text-sm font-medium tabular-nums text-heading">{metricValue(page.inboundUniqueEdges)}</dd>
-      </div>
-      <div className="px-4 py-3">
-        <dt className="text-xs text-muted">Links out</dt>
-        <dd className="mt-1 text-sm font-medium tabular-nums text-heading">{metricValue(page.outboundUniqueEdges)}</dd>
-      </div>
-      <div className="px-4 py-3">
-        <dt className="text-xs text-muted">Link importance</dt>
-        <dd className="mt-1 text-sm font-medium tabular-nums text-heading">{formatImportance(page.linkScoreNormalized)}</dd>
-      </div>
-    </dl>
+    <div className="px-4 py-3">
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className="mt-1 text-sm font-medium tabular-nums text-heading">{value}</dd>
+      {hiddenNote && <dd className="mt-0.5 text-xs text-muted">{hiddenNote}</dd>}
+    </div>
+  )
+}
+
+function LinkMetrics({ page, inbound, outbound }: {
+  page: InspectableCrawlPage
+  inbound: ReturnType<typeof linkTileCount>
+  outbound: ReturnType<typeof linkTileCount>
+}) {
+  // Depth and link importance are computed by the crawl engine over the FULL
+  // link graph, before nav and footer links are classified, so the filter does
+  // not change them. Saying so is the honest fix: quietly leaving them beside
+  // filtered numbers implies they were filtered too.
+  const filtered = Boolean(inbound.hiddenNote || outbound.hiddenNote)
+  return (
+    <>
+      <dl className="grid grid-cols-2 divide-x divide-y divide-default rounded-lg border border-default sm:grid-cols-4 sm:divide-y-0">
+        <LinkMetricTile label="Clicks from home" value={String(page.depth ?? 'Not reached')} />
+        <LinkMetricTile label="Links in" value={inbound.value} hiddenNote={inbound.hiddenNote} />
+        <LinkMetricTile label="Links out" value={outbound.value} hiddenNote={outbound.hiddenNote} />
+        <LinkMetricTile label="Link importance" value={formatImportance(page.linkScoreNormalized)} />
+      </dl>
+      {filtered && (
+        <p className="mt-2 text-xs text-muted">
+          Clicks from home and link importance always count every link, including nav and footer.
+        </p>
+      )}
+    </>
   )
 }
 
@@ -466,8 +517,29 @@ function PageInspector({
   // hiding would make the two disagree about the same page.
   const visibleInbound = showTemplateLinks ? inbound : inbound.filter((edge) => !edge.isTemplate)
   const visibleOutbound = showTemplateLinks ? outbound : outbound.filter((edge) => !edge.isTemplate)
+  // Until the neighbour read lands there is no per-kind answer, so the tiles
+  // stay on the crawl's own totals rather than briefly showing a zero.
+  const linkCountsKnown = !isLoading && !error
   const hiddenInboundCount = inbound.length - visibleInbound.length
   const hiddenOutboundCount = outbound.length - visibleOutbound.length
+  // The tiles read from exactly the lists the tables render, so the panel
+  // cannot show two different answers for the same page again.
+  const inboundTile = linkTileCount({
+    total: page.inboundUniqueEdges,
+    visible: visibleInbound.length,
+    hidden: hiddenInboundCount,
+    truncated: inboundTruncated,
+    showTemplateLinks,
+    known: linkCountsKnown,
+  })
+  const outboundTile = linkTileCount({
+    total: page.outboundUniqueEdges,
+    visible: visibleOutbound.length,
+    hidden: hiddenOutboundCount,
+    truncated: outboundTruncated,
+    showTemplateLinks,
+    known: linkCountsKnown,
+  })
   return (
     <section className="border-t border-default pt-5" aria-labelledby="site-health-page-inspector-title">
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
@@ -514,7 +586,7 @@ function PageInspector({
         <h3 id="site-health-page-links-heading" className="text-base font-semibold text-heading">Internal links</h3>
         <p className="mt-1 text-sm text-secondary">Observed links to and from this page in the selected scan.</p>
         <div className="mt-4">
-          <LinkMetrics page={page} />
+          <LinkMetrics page={page} inbound={inboundTile} outbound={outboundTile} />
         </div>
         <div className="mt-5">
           {isLoading ? (

@@ -17,7 +17,7 @@ import {
   getApiV1ProjectsByNameTechnicalAeoStructureQueryKey,
 } from '@ainyc/canonry-api-client/react-query'
 
-import { SiteHealthSection } from '../src/components/project/SiteHealthSection.js'
+import { linkTileCount, SiteHealthSection } from '../src/components/project/SiteHealthSection.js'
 import { heyClient } from '../src/api.js'
 
 const mutationMock = vi.hoisted(() => ({ mutate: vi.fn() }))
@@ -1329,4 +1329,187 @@ test('reads an empty content-link set as a finding, with the real hidden counts'
   // Switching nav links on shows them rather than the finding.
   fireEvent.click(screen.getByRole('checkbox', { name: 'Show nav and footer links' }))
   expect(screen.queryByText('No content links to this page. 2 nav and footer links hidden.')).toBeNull()
+})
+
+test('the link tiles count exactly what the tables list, in both toggle states', async () => {
+  // Reported on canonry.ai: the tiles read "Links in 48 / Links out 26" while
+  // the tables directly beneath read "(1)" and "(2)". Both were right, and
+  // side by side with no labels the pair read as a broken table.
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
+  vi.stubGlobal('fetch', fetchMock)
+  // The crawl's own totals for this page must match the links seeded below,
+  // the way a real crawl's do: 5 unique inbound edges, 2 outbound.
+  const servicesWithLinks = { ...servicesPage, inboundUniqueEdges: 5, outboundUniqueEdges: 2 }
+  const queryClient = seedTemplateLinkGraph({
+    nodes: [
+      { ...homePage, x: 0, y: 0 },
+      { ...servicesWithLinks, x: 1, y: 1 },
+      { ...contactPage, x: -1, y: 1 },
+    ],
+  })
+
+  const link = (edgeKey: string, isTemplate: boolean) => ({
+    edgeKey,
+    sourceNodeKey: 'page_home',
+    sourceUrl: 'https://citypoint.example/',
+    targetNodeKey: 'page_services',
+    targetUrl: servicesPage.url,
+    relation: 'anchor',
+    internal: true,
+    followable: true,
+    occurrences: 1,
+    followableOccurrences: 1,
+    nofollowOccurrences: 0,
+    anchors: ['Roof repair'],
+    isTemplate,
+    templateRatio: isTemplate ? 0.9 : 0.1,
+  })
+  // One content link in among four nav links in; two content links out.
+  const inbound = [link('in-content', false), ...Array.from({ length: 4 }, (_, i) => link(`in-nav-${i}`, true))]
+  const outbound = [link('out-a', false), link('out-b', false)]
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', nodeKey: 'page_services', limit: 100 },
+  }), {
+    project: projectName,
+    hasCrawlData: true,
+    runId: 'run_1',
+    nodeKey: 'page_services',
+    url: servicesPage.url,
+    templateDetection: 'applied',
+    linkKind: 'all',
+    inbound,
+    outbound,
+    inboundTruncated: false,
+    outboundTruncated: false,
+  })
+
+  renderSection(queryClient)
+  fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
+
+  const tile = (label: string) => {
+    const term = screen.getByText(label)
+    return term.parentElement as HTMLElement
+  }
+
+  // Filter ON (the default): tile and table agree on the content-only count,
+  // and the hidden amount is named rather than silently dropped.
+  await waitFor(() => expect(within(tile('Links in')).getByText('1')).toBeTruthy())
+  expect(within(tile('Links in')).getByText('4 nav and footer hidden')).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Links in (1)' })).toBeTruthy()
+  // The hidden count is exactly the difference between the two states.
+  expect(within(tile('Links out')).getByText('2')).toBeTruthy()
+  expect(within(tile('Links out')).queryByText(/nav and footer hidden/)).toBeNull()
+  expect(screen.getByRole('region', { name: 'Links out (2)' })).toBeTruthy()
+
+  // Depth and importance are full-graph values, and the panel says so rather
+  // than letting them look filtered.
+  expect(screen.getByText('Clicks from home and link importance always count every link, including nav and footer.')).toBeTruthy()
+
+  // Filter OFF: both show totals and the secondary line disappears.
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show nav and footer links' }))
+  expect(within(tile('Links in')).getByText('5')).toBeTruthy()
+  expect(within(tile('Links in')).queryByText(/nav and footer hidden/)).toBeNull()
+  expect(screen.getByRole('region', { name: 'Links in (5)' })).toBeTruthy()
+  expect(screen.queryByText('Clicks from home and link importance always count every link, including nav and footer.')).toBeNull()
+})
+
+test('a link tile never presents a bounded count as a total', () => {
+  // The neighbour read is capped, so a truncated list proves only a lower
+  // bound. Rounding that into a flat number would be a quiet lie.
+  expect(linkTileCount({ total: 48, visible: 1, hidden: 47, truncated: false, showTemplateLinks: false, known: true }))
+    .toEqual({ value: '1', hiddenNote: '47 nav and footer hidden' })
+
+  expect(linkTileCount({ total: 500, visible: 100, hidden: 400, truncated: true, showTemplateLinks: false, known: true }))
+    .toEqual({ value: '100+', hiddenNote: 'At least 400 nav and footer hidden' })
+
+  // Filter off: the crawl's own total, and no secondary line.
+  expect(linkTileCount({ total: 48, visible: 1, hidden: 47, truncated: false, showTemplateLinks: true, known: true }))
+    .toEqual({ value: '48', hiddenNote: null })
+
+  // Nothing hidden is not a note worth showing.
+  expect(linkTileCount({ total: 3, visible: 3, hidden: 0, truncated: false, showTemplateLinks: false, known: true }))
+    .toEqual({ value: '3', hiddenNote: null })
+
+  // Before the neighbour read lands there is no per-kind answer, so the tile
+  // shows the total rather than flashing a zero.
+  expect(linkTileCount({ total: 48, visible: 0, hidden: 0, truncated: false, showTemplateLinks: false, known: false }))
+    .toEqual({ value: '48', hiddenNote: null })
+})
+
+test('both count fixes hold at once: filtered tiles and no self-link anywhere', async () => {
+  // The two bugs on this panel were independent and had to be true together:
+  // the tiles must follow the toggle, and neither surface may count a page's
+  // link to itself. This is a page with template inbound AND a self-link.
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
+  vi.stubGlobal('fetch', fetchMock)
+  // 2 real inbound (1 content, 1 nav) and 1 real outbound, as the crawl's own
+  // page metrics count them: the self-link is in neither, at either layer.
+  const servicesWithLinks = { ...servicesPage, inboundUniqueEdges: 2, outboundUniqueEdges: 1 }
+  const queryClient = seedTemplateLinkGraph({
+    nodes: [
+      { ...homePage, x: 0, y: 0 },
+      { ...servicesWithLinks, x: 1, y: 1 },
+      { ...contactPage, x: -1, y: 1 },
+    ],
+  })
+  const link = (edgeKey: string, from: string, to: string, isTemplate: boolean) => ({
+    edgeKey,
+    sourceNodeKey: from,
+    sourceUrl: `https://citypoint.example/${from}`,
+    targetNodeKey: to,
+    targetUrl: `https://citypoint.example/${to}`,
+    relation: 'anchor',
+    internal: true,
+    followable: true,
+    occurrences: 1,
+    followableOccurrences: 1,
+    nofollowOccurrences: 0,
+    anchors: isTemplate ? [] : ['Roof repair'],
+    isTemplate,
+    templateRatio: isTemplate ? 0.9 : 0.1,
+  })
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', nodeKey: 'page_services', limit: 100 },
+  }), {
+    project: projectName,
+    hasCrawlData: true,
+    runId: 'run_1',
+    nodeKey: 'page_services',
+    url: servicesPage.url,
+    templateDetection: 'applied',
+    linkKind: 'all',
+    // The API no longer returns the self-link in either direction: the writer
+    // drops it and the migration cleared the stored ones.
+    inbound: [link('in-content', 'page_home', 'page_services', false), link('in-nav', 'page_contact', 'page_services', true)],
+    outbound: [link('out-content', 'page_services', 'page_home', false)],
+    inboundTruncated: false,
+    outboundTruncated: false,
+  })
+
+  renderSection(queryClient)
+  fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
+
+  const tile = (label: string) => screen.getByText(label).parentElement as HTMLElement
+  const selfLinkRows = () => screen.queryAllByText('/page_services')
+
+  // Filter on: tiles match the tables, and no self-link is listed anywhere.
+  await waitFor(() => expect(within(tile('Links in')).getByText('1')).toBeTruthy())
+  expect(within(tile('Links in')).getByText('1 nav and footer hidden')).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Links in (1)' })).toBeTruthy()
+  expect(within(tile('Links out')).getByText('1')).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Links out (1)' })).toBeTruthy()
+  expect(selfLinkRows()).toHaveLength(0)
+
+  // Filter off: tiles show the crawl's totals, which also exclude the
+  // self-link, and the tables agree with them.
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show nav and footer links' }))
+  expect(within(tile('Links in')).getByText('2')).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Links in (2)' })).toBeTruthy()
+  expect(within(tile('Links out')).getByText('1')).toBeTruthy()
+  expect(screen.getByRole('region', { name: 'Links out (1)' })).toBeTruthy()
+  expect(selfLinkRows()).toHaveLength(0)
 })

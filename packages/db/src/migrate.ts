@@ -272,6 +272,23 @@ export function relinkOrphanedSnapshotQueryIds(tx: MigrationDb): void {
  * idempotent: only `health_state IS NULL` rows are candidates, so a re-run is
  * a no-op.
  */
+/**
+ * Remove stored self-links (v132).
+ *
+ * Pure data change, no schema change. An older binary reading these tables
+ * simply sees fewer edge rows, and the rows removed are ones it was counting
+ * INCONSISTENTLY with its own page metrics, so a downgrade is strictly better
+ * off without them.
+ *
+ * The graph sample is cleared by node key because a published sample edge is
+ * already resolved to nodes; the source table is cleared by the normalized
+ * URLs the writer compares in `isSelfLink`.
+ */
+export function dropSiteCrawlSelfLinks(tx: MigrationDb): void {
+  tx.run(sql.raw('DELETE FROM site_crawl_edges WHERE source_url = target_url'))
+  tx.run(sql.raw('DELETE FROM site_crawl_graph_edges WHERE source_node_key = target_node_key'))
+}
+
 export function backfillSiteCrawlPageHealthState(tx: MigrationDb): void {
   const BATCH = 500
   for (;;) {
@@ -3464,6 +3481,26 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
         ON site_crawl_edges(project_id, run_id, attempt_id, internal, is_template, edge_key)`,
     ],
     run: backfillSiteCrawlTemplateLinks,
+  },
+  {
+    version: 132,
+    name: 'site-crawl-drop-self-links',
+    // A page linking to itself is not a link to or from another page, and the
+    // crawl engine already excludes self-loops from a page's inbound and
+    // outbound metrics. The edge tables kept them, so the stored edges
+    // disagreed with the page rows produced by the same crawl: a self-loop
+    // appeared in BOTH neighbour lists, so every self-linking page read one
+    // higher in each direction than its own tiles.
+    //
+    // The writer now drops them, which fixes new scans. This clears the ones
+    // already stored so an existing scan is correct without a re-crawl.
+    // Comparing the stored normalized URLs is exactly the rule the writer
+    // applies (`isSelfLink`), expressed as the equality SQL can do without
+    // reimplementing any derivation.
+    //
+    // Idempotent: a re-run deletes nothing once the rows are gone.
+    statements: [],
+    run: dropSiteCrawlSelfLinks,
   },
 ]
 
