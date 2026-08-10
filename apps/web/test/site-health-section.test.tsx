@@ -1039,13 +1039,11 @@ test('offers rerun recovery when a pinned onboarding scan is cancelled before a 
   expect((screen.getByRole('combobox', { name: 'View a Site Health scan' }) as HTMLSelectElement).value).toBe('')
 })
 
-test('offers measurement setup after a usable terminal map without claiming it inferred queries', () => {
+test('keeps measurement-plan setup out of Site Health', () => {
   renderSection()
 
-  const action = screen.getByRole('link', { name: 'Build measurement plan' })
-  expect(action.getAttribute('href')).toBe('/projects/citypoint/portfolio')
-  expect(screen.getByText(/review the pages and groups you want to measure/i)).not.toBeNull()
-  expect(screen.queryByText(/queries were added automatically/i)).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Build measurement plan' })).toBeNull()
+  expect(screen.queryByRole('region', { name: 'Define what to measure' })).toBeNull()
 })
 
 test('walks a first-time operator from the terminal map through page health, then continues to AI Visibility', async () => {
@@ -1313,7 +1311,7 @@ test('expands site sections lazily while preserving the selected run', () => {
   expect(queryClient.getQueryState(getApiV1ProjectsByNameTechnicalAeoStructureInfiniteQueryKey(nestedInput))).not.toBeUndefined()
 })
 
-test('keeps Site sections in the right-hand column at practical desktop widths', () => {
+test('keeps Site sections in the right-hand column at compact app widths', () => {
   const queryClient = makeClient()
 
   renderSection(queryClient)
@@ -1321,8 +1319,8 @@ test('keeps Site sections in the right-hand column at practical desktop widths',
   const sections = screen.getByRole('complementary', { name: 'Site sections' })
   const explorer = sections.parentElement
   expect(explorer?.id).toBe('site-health-map-explorer')
-  expect(explorer?.className).toContain('md:grid-cols-[minmax(0,1fr)_18rem]')
-  expect(explorer?.className).not.toContain('lg:grid-cols-[minmax(0,1fr)_18rem]')
+  expect(explorer?.className).toContain('sm:grid-cols-[minmax(0,1fr)_minmax(14rem,18rem)]')
+  expect(explorer?.className).not.toContain('md:grid-cols-[minmax(0,1fr)_18rem]')
   expect(explorer?.lastElementChild).toBe(sections)
 })
 

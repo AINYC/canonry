@@ -10,7 +10,6 @@ import {
   type ReactNode,
 } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
 import type { EventData as JoyrideEventData, Options as JoyrideOptions, Step as JoyrideStep, Styles as JoyrideStyles } from 'react-joyride'
 import {
   AlertTriangle,
@@ -2067,7 +2066,7 @@ export function SiteHealthSection({
               <p className="mb-3 text-sm text-secondary">{templateDetectionCopy(templateDetection)}</p>
             )}
 
-            <div id="site-health-map-explorer" className="grid gap-4 md:grid-cols-[minmax(0,1fr)_18rem]">
+            <div id="site-health-map-explorer" className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(14rem,18rem)]">
               {graphQuery.isLoading ? (
                 <GraphLoadingState />
               ) : graphQuery.error ? (
@@ -2136,23 +2135,6 @@ export function SiteHealthSection({
             onRetryReasons={() => { void selectedPageQuery.refetch() }}
             showTemplateLinks={showTemplateLinks || templateFilterUnavailable}
           />
-
-          {hasUsableSiteEvidence && (
-            <section id="site-health-measurement-plan" className="flex flex-col justify-between gap-4 border-t border-default pt-5 sm:flex-row sm:items-center" aria-labelledby="site-health-measurement-plan-heading">
-              <div>
-                <h3 id="site-health-measurement-plan-heading" className="text-base font-semibold text-heading">Define what to measure</h3>
-                <p className="mt-1 max-w-2xl text-sm text-secondary">Review the pages and groups you want to measure. Canonry does not add queries automatically.</p>
-              </div>
-              <Button asChild className="shrink-0">
-                <Link
-                  to="/projects/$projectName/portfolio"
-                  params={{ projectName }}
-                >
-                  Build measurement plan
-                </Link>
-              </Button>
-            </section>
-          )}
         </div>
       )}
     </div>
