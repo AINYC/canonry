@@ -1,8 +1,8 @@
 # Server-side traffic (AI Visibility — Server-Side)
 
-Server-side traffic ingestion captures **what AI engines actually do in
-your server logs** — bots crawling pages, AI products sending
-click-through arrivals — in addition to the citation data that measures
+Server-side traffic ingestion captures **what AI engines actually do at
+your site** — bots crawling pages, AI products fetching pages for users,
+and AI products sending click-through arrivals. Citation data measures
 **what models say** about you. The two surfaces are independent.
 
 ## When to use it
@@ -10,6 +10,7 @@ click-through arrivals — in addition to the citation data that measures
 Reach for server-side traffic when an analyst or operator asks:
 
 - *"Is GPTBot / ClaudeBot / PerplexityBot actually fetching my pages?"*
+- *"Did an AI product fetch this page for a user?"*
 - *"Which paths are AI engines paying attention to?"*
 - *"Are users clicking through from chatgpt.com / claude.ai / etc.?"*
 - *"My citation rate is fine but there's no traffic — why?"*
@@ -21,25 +22,28 @@ blockers, or analytics gaps.
 
 ## Architecture
 
-Two tables, populated from server-log adapters:
+Four tables store the shared output from every adapter:
 
 | Table | What's in it |
 |---|---|
 | `crawler_events_hourly` | One row per `(project, source, hour, bot, verification, path, status)` — bot crawls rolled up by hour |
+| `ai_user_fetch_events_hourly` | One row per `(project, source, hour, bot, verification, path, status)` — user-initiated AI fetches rolled up by hour |
 | `ai_referral_events_hourly` | One row per `(project, source, hour, product, source_domain, evidence_type, landing_path, status)` — click-through arrivals rolled up by hour |
-| `raw_event_samples` | Bounded forensic samples (≤100 per sync) for spot-checking |
+| `raw_event_samples` | Bounded forensic samples for spot checks. Cloudflare uses a per-source, per-hour cap |
 
 Each `traffic_sources` row is one server-log integration for a project.
 Adapters today:
 
-| Adapter | Source | Best for |
-|---|---|---|
-| `cloud-run` | GCP Cloud Run request logs via Logging API | Any service running on Cloud Run |
-| `wordpress` | The Canonry Traffic Logger WP plugin's REST endpoint | WordPress sites where you control wp-admin |
-| `vercel` | Vercel project logs via the Vercel API | Sites deployed on Vercel (Next.js, SvelteKit, etc.) |
-| `cloudflare` | A zone Worker selecting edge request events, delivered by direct push | Sites whose public traffic already passes through Cloudflare |
+| Adapter | Transport | Source | Best for |
+|---|---|---|---|
+| [`cloud-run`](#connecting-a-cloud-run-source) | Pull | GCP Cloud Run request logs via Logging API | Any service running on Cloud Run |
+| [`wordpress`](#connecting-a-wordpress-source) | Pull | Canonry Traffic Logger REST endpoint | WordPress sites where you control wp-admin |
+| [`vercel`](#connecting-a-vercel-source) | Pull | Vercel project logs via the Vercel API | Sites deployed on Vercel |
+| [`cloudflare`](#connecting-a-cloudflare-source-direct-push) | Direct push | A zone Worker selects and sends edge events | Sites whose public traffic passes through Cloudflare |
 
 Future adapters slot in by implementing the same contract.
+Cloud Run, WordPress, and Vercel pull logs during `traffic sync`.
+Cloudflare sends selected events from its Worker and does not use `traffic sync`.
 
 ## Connecting a Cloud Run source
 
@@ -199,6 +203,29 @@ to Canonry in `ctx.waitUntil()`. The origin response remains independent
 from filtering, scheduling, and delivery errors. The event shape is also
 the contract for the later Queue pull transport.
 
+The shipped adapter does not pull Cloudflare analytics or request logs.
+Queue pull has a reserved transport mode, but it is not available yet.
+
+```mermaid
+flowchart LR
+  request["Site request"] --> worker["Canonry Cloudflare Worker"]
+  worker --> origin["Existing origin or Pages site"]
+  origin --> response["Unchanged site response"]
+  worker -. "signed selected event via ctx.waitUntil" .-> ingest["Canonry public HTTPS ingest"]
+  ingest --> classify["Shared traffic classifier"]
+  classify --> rollups["Hourly crawler, user-fetch, and referral rollups"]
+```
+
+### Setup flow
+
+1. Create or select a Canonry project with one exact canonical hostname.
+2. Give the Canonry server a stable public HTTPS URL outside the site route.
+3. Authenticate Wrangler with the Cloudflare account that owns the zone.
+4. Inspect existing Worker routes for the exact canonical hostname.
+5. Run the local Cloudflare connect command with `--deploy`.
+6. Attach the printed route in Cloudflare and set it to **Fail open**.
+7. Send the smoke requests and run the Canonry doctor.
+
 ### Current support boundary
 
 Direct push currently supports a local `canonry serve` instance. The CLI
@@ -214,52 +241,135 @@ site. Overlapping adapters capture the same requests and double-count
 project totals. This is a current limitation. Queue support must define
 source coverage before it permits a transport change.
 
+### Expose the Canonry receiver
+
+Complete the local dashboard setup and set its password before you expose
+Canonry. A tunnel makes the loopback server reachable from the public Internet.
+
+Use a named Cloudflare Tunnel or another stable reverse proxy:
+
+```text
+https://canonry-ops.example.net
+  -> stable tunnel or reverse proxy
+  -> http://127.0.0.1:4100
+```
+
+Then complete these steps:
+
+1. Back up `~/.canonry/config.yaml`.
+2. Set `publicUrl` to the external Canonry URL.
+3. If Canonry uses a base path, include that path in `publicUrl`.
+4. Restart `canonry serve`.
+5. Send an unsigned request to the ingest path from the public Internet.
+6. Make sure that the response status is `401`.
+
+```yaml
+publicUrl: https://canonry-ops.example.net
+```
+
+```bash
+CANONRY_PUBLIC_URL=https://canonry-ops.example.net
+
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -X POST -H 'content-type: application/json' --data '{}' \
+  "${CANONRY_PUBLIC_URL%/}/api/v1/projects/<project>/traffic/cloudflare/ingest"
+```
+
+The `401` response proves that the request reached Canonry's transport
+authentication. A `403` can mean that Cloudflare Access or a WAF rule blocked
+the request first. Exempt only the exact ingest path from interactive
+challenges. Keep the rest of Canonry behind its normal access controls.
+
+Do not use a random TryCloudflare URL for production. The Worker stores the
+ingest URL at deployment time. If a temporary URL changes, rerun connect and
+redeploy the Worker.
+
+The public URL is the Canonry receiver, not the tracked site. Use a different
+hostname from the generated Worker route. Do not add credentials, a query, or
+a fragment to this URL.
+
 ### Prerequisites and route preflight
 
-1. Set `publicUrl` in `~/.canonry/config.yaml` to a stable public HTTPS URL.
-   If `canonry serve` is local, use a stable HTTPS tunnel URL.
-2. Put the ingest host outside the Worker route. For `www.example.com/*`,
-   use a different host such as `canonry-ops.example.net`.
-3. Install a current Wrangler release and run `wrangler login`.
+1. Install a current Wrangler release.
+2. Run `wrangler login`.
    If Wrangler lists multiple accounts, pass the exact `--account-id`.
-4. Verify that Cloudflare proxies the canonical hostname in DNS.
-5. Open **Workers & Pages → existing Worker → Settings → Domains &
-   Routes** for the zone. Verify that `<canonical-host>/*` is unclaimed.
-6. If another Worker owns that route, stop. Integrate Canonry into that
+3. Run `wrangler whoami` to get the account ID.
+4. Get the zone ID from the Cloudflare zone Overview page.
+5. Make sure that the zone belongs to the selected account.
+6. Make sure that Cloudflare proxies the canonical hostname in DNS.
+7. Inspect every Worker route that overlaps the canonical hostname. Cloudflare
+   uses the most-specific matching route. Record any excluded path coverage.
+8. Make sure that `<canonical-host>/*` is unclaimed. If a more-specific route
+   must remain, integrate Canonry there or accept that those paths are absent.
+9. If another Worker owns the catch-all route, stop. Integrate Canonry into that
    Worker instead of attaching a second Worker.
-7. Review the account request volume. A route invokes the Worker for every
+10. Review the account request volume. A route invokes the Worker for every
    matching request. The filter does not reduce Worker invocations.
+
+```bash
+npm install -g wrangler@latest
+wrangler login
+wrangler whoami
+```
+
+Canonry does not pass a `--profile` option to Wrangler. Wrangler uses the auth
+profile that is active for the current directory, or its default profile. If
+you use named profiles, activate one before you run Canonry:
+
+```bash
+wrangler auth list
+wrangler auth activate <profile> .
+wrangler whoami --json
+```
+
+The project must already exist. Use a bare public hostname such as
+`www.example.com` for its canonical domain. `--zone-id` is mandatory with
+`--deploy`. You can omit `--account-id` when the active profile has one account.
+
+The generated route covers only the project's exact canonical hostname. It
+does not also cover `www` or the apex. Test and redirect the other hostname
+separately.
+
+A Worker Route can run in front of a Cloudflare Pages custom domain. If the
+origin is another Worker, use a Custom Domain or integrate Canonry into that
+Worker. A same-zone Worker Route cannot be the target of `fetch()`.
 
 Workers Free includes 100,000 requests per account each day. The quota
 resets at midnight UTC. A fail-closed route returns Cloudflare error 1027
 after the account exhausts this quota. A fail-open route bypasses the
 Worker and keeps the origin available. See [Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/).
 
+Free-plan classification uses user-agent, referer, and UTM evidence. Granular
+`request.cf.botManagement` scores require the Enterprise Bot Management add-on.
+
 ### Generate or deploy
 
 ```bash
 # Generate secret-free worker.js and wrangler.toml in
 # ./canonry-cloudflare-<project-slug>:
-canonry traffic connect cloudflare <project> \
+cnry traffic connect cloudflare <project> \
   --zone-id <cloudflare-zone-id> \
   --account-id <cloudflare-account-id>
 
 # Deploy only the Worker after the route preflight.
 # Both safety acknowledgements are mandatory:
-canonry traffic connect cloudflare <project> \
+cnry traffic connect cloudflare <project> \
   --zone-id <cloudflare-zone-id> \
   --account-id <cloudflare-account-id> \
   --deploy --confirm-route --confirm-fail-open
 
 # Optional artifact directory / source label:
-canonry traffic connect cloudflare <project> \
+cnry traffic connect cloudflare <project> \
   --display-name "Cloudflare · production" \
   --output-dir ./infra/canonry-cloudflare
 ```
 
-`--confirm-route` records that you inspected the exact route.
-`--confirm-fail-open` records that you will configure the required route
-toggle. Neither flag changes Cloudflare by itself.
+`--confirm-route` acknowledges that you inspected the exact route.
+`--confirm-fail-open` acknowledges that you will configure the required route
+toggle. Canonry does not persist these flags. Neither flag changes Cloudflare.
+
+The command prints the source ID, artifact directory, and manual route steps.
+Keep the source ID for the acceptance test and later diagnosis.
 
 With `--deploy`, Canonry checks Wrangler before it connects the source. The
 preflight uses `--dry-run --secrets-file ... --strict` to parse and bundle
@@ -270,9 +380,15 @@ it does not contain secret values.
 
 The generated TOML never declares `[[routes]]`. Thus, Wrangler deploys the
 Worker without placing it on production traffic. After deployment, open
-Cloudflare Dashboard and attach the exact `<canonical-host>/*` route shown
-in the command output. Set **Request limit failure mode** to **Fail open**
-as part of this manual activation. Wrangler cannot configure this toggle.
+Cloudflare Dashboard and complete these steps:
+
+1. Open **Workers & Pages → Overview** and select the generated Worker.
+2. Open **Settings → Domains & Routes → Add → Route**.
+3. Select the zone and enter the exact `<canonical-host>/*` route.
+4. Set **Request limit failure mode** to **Fail open**.
+5. Add the route.
+
+Wrangler cannot configure the failure-mode toggle.
 
 The generated source and TOML contain no credential values. Non-secret
 configuration values are Worker vars. The `--account-id` option makes
@@ -289,11 +405,30 @@ atomically replaces recognizable Canonry-generated files. It refuses
 operator-owned files and symlinks. Therefore, doctor remediation does not
 require manual file deletion.
 
+Wrangler preflight failures occur before Canonry creates a source. Artifact or
+deployment failures can occur after source creation. Rerun the same command
+with the same output directory. Canonry reuses the source and its credentials.
+
 Cloudflare connect is absent from MCP because deployment reads local
 secrets. An agent can guide the CLI command. It must not request, print,
 or send either secret through chat.
 
 ### Direct-push behavior and smoke test
+
+The Worker forwards a request candidate when at least one condition is true:
+
+- Its user-agent matches a known AI crawler or user-fetch agent.
+- Its user-agent contains the broad `bot`, `crawler`, or `spider` keyword.
+- Its referer or `utm_source` matches a known AI product.
+- Bot Management marks it as verified or gives it a score below 30.
+
+The shared Canonry classifier makes the strict classification after delivery.
+Thus, the broad edge filter can send a candidate that produces no rollup.
+
+Direct push observes only requests that reach this Worker. A terminating
+Access, WAF, bot-protection, or AI Crawl Control action can stop a request first.
+For a crawler smoke test, use a narrow exception for only the smoke path when
+the site's security policy permits it. Do not disable site-wide protection.
 
 Direct push has bounded retries for network failures and HTTP 408, 425,
 429, and 5xx responses (250 ms, then 1 s). Delivery is asynchronous and
@@ -301,62 +436,166 @@ never changes the site's response. If Canonry remains unavailable after
 the retry budget, the selected event is lost. Direct push has no durable
 edge buffer. This limit is the primary reason to add Queue pull next.
 
+The receiver accepts at most 256 KiB per request. Its default budgets are
+6,000 requests per minute for each source and each caller IP. A bearer token
+and HMAC protect the route. The HMAC timestamp window is five minutes. A
+transactional receipt protects each event ID for ten minutes. Receipt claims,
+hourly rollups, samples, and source progress commit in one transaction.
+
+Direct push sends one selected event per batch. It does not batch or sample at
+the edge. Canonry stores at most 100 raw samples per source per UTC hour, while
+it continues to add all classified events to hourly rollups.
+
 The Worker transports the raw client IP, full query string, and full referer
 URL for classification. Canonry does not persist these raw values. Raw samples
 store `ipHash: null`, a normalized path without its query, and only the referer
 host. A later privacy change can send only the query parameters that the
 classifier requires.
 
-Smoke-test all of these before considering the source live:
+Raw samples retain the user-agent and normalized path. Do not put personal
+data in URL paths. Canonry replaces numeric, UUID, and long hexadecimal path
+segments with `:id`, but it retains other path segments.
 
-1. Run connect with `--deploy`. Make sure that Canonry's preflight completes
-   without a Wrangler parse or bundle error. It checks the generated TOML,
-   Worker, required secret bindings, and strict mode before it creates the
-   source.
-2. Request a normal page with an ordinary browser UA. Make sure that the
-   origin status, headers, and body remain unchanged. No Canonry event must land.
-3. Request a harmless page with `utm_source=chatgpt` or a known AI crawler
-   UA. Make sure that one event contains the expected path, status, and UA.
-4. Repeat the request without AI evidence. Make sure that Canonry receives
-   no event.
-5. Make sure that the site route excludes the Canonry ingest hostname.
-   This condition prevents delivery recursion.
-6. In the route form, select the exact route and Worker. Set **Request limit
-   failure mode** to **Fail open**. If both values are correct, save the route.
-7. Cause a non-production receiver failure in staging. Make sure that the
-   origin remains healthy and retries stay bounded.
-8. Configure the staging receiver to return HTTP 429. Send a burst with a
-   broad bot UA. Measure the receiver load. Each matched request can cause
-   three delivery attempts: one initial attempt and two retries. Confirm that
-   the ingest receiver records three 429 attempts. The browser must receive the
-   unchanged healthy origin response. Server limits bound accepted processing,
-   but they do not prevent the retry requests.
-9. Measure baseline p50 and p95 TTFB without the Worker. Attach the Worker.
-   Repeat the sample under the same cache conditions. Investigate a repeatable
-   increase.
-10. Inspect Worker logs. Make sure that logs contain no secret values.
-11. Run `canonry doctor --project <project>`. Inspect
-   `traffic.source.recent-data` and `traffic.source.worker-version`.
-12. If the Worker version is stale, rerun the connect command. Then deploy
-   with both acknowledgement flags.
-13. Rehearse rollback in staging. Detach the route and make sure that the
-    origin remains healthy without the Worker.
+### User acceptance test
 
-A direct-push source does not use `canonry traffic sync` or a traffic-sync
+1. Choose a stable, harmless origin path and create a unique smoke-run name.
+2. Before route attachment, capture the origin response and source rollups.
+3. Attach the exact route with **Fail open**.
+4. Capture the origin response again. Compare its body and critical headers.
+5. Send four classified requests and one negative control.
+6. Poll the source rollups, inspect the unique paths, and run the doctor.
+
+Replace the example hostname, `<project>`, and `<source-id>` before you run
+these commands:
+
+```bash
+CANONRY_SMOKE_SITE=https://www.example.com
+CANONRY_SMOKE_RUN=run-$(date -u +%Y%m%dT%H%M%SZ)
+CANONRY_SMOKE_PREFIX=/canonry-cloudflare-smoke/$CANONRY_SMOKE_RUN
+CANONRY_SMOKE_DIR=$(mktemp -d)
+
+# Run these commands before route attachment.
+curl -sS -D "$CANONRY_SMOKE_DIR/origin-before.headers" \
+  -o "$CANONRY_SMOKE_DIR/origin-before.body" \
+  "$CANONRY_SMOKE_SITE$CANONRY_SMOKE_PREFIX/origin"
+cnry traffic events <project> --source <source-id> \
+  --kind all --since-minutes 120 --limit 5000 --format json \
+  > "$CANONRY_SMOKE_DIR/events-before.json"
+
+# Stop here. Attach the exact route with Fail open, then continue.
+curl -sS -D "$CANONRY_SMOKE_DIR/origin-after.headers" \
+  -o "$CANONRY_SMOKE_DIR/origin-after.body" \
+  "$CANONRY_SMOKE_SITE$CANONRY_SMOKE_PREFIX/origin"
+grep -Ei '^(HTTP/|content-type:|cache-control:|location:)' \
+  "$CANONRY_SMOKE_DIR/origin-before.headers" \
+  "$CANONRY_SMOKE_DIR/origin-after.headers"
+cmp "$CANONRY_SMOKE_DIR/origin-before.body" \
+  "$CANONRY_SMOKE_DIR/origin-after.body"
+
+# AI crawler
+curl -sS -o /dev/null -w '%{http_code}\n' -A 'GPTBot/1.2' \
+  "$CANONRY_SMOKE_SITE$CANONRY_SMOKE_PREFIX/crawler"
+
+# AI user fetch
+curl -sS -o /dev/null -w '%{http_code}\n' -A 'ChatGPT-User/1.0' \
+  "$CANONRY_SMOKE_SITE$CANONRY_SMOKE_PREFIX/user-fetch"
+
+# AI referral by referer
+curl -sS -o /dev/null -w '%{http_code}\n' -A 'Mozilla/5.0 CanonrySmoke' \
+  -e 'https://chatgpt.com/' \
+  "$CANONRY_SMOKE_SITE$CANONRY_SMOKE_PREFIX/referral"
+
+# AI referral by UTM
+curl -sS -o /dev/null -w '%{http_code}\n' -A 'Mozilla/5.0 CanonrySmoke' \
+  "$CANONRY_SMOKE_SITE$CANONRY_SMOKE_PREFIX/utm?utm_source=chatgpt"
+
+# Negative control: this request must not add a classified traffic rollup
+curl -sS -o /dev/null -w '%{http_code}\n' -A 'Mozilla/5.0 CanonrySmoke' \
+  "$CANONRY_SMOKE_SITE$CANONRY_SMOKE_PREFIX/control"
+
+# Poll until the deterministic UTM event arrives, for at most 20 seconds.
+for CANONRY_SMOKE_ATTEMPT in 1 2 3 4 5 6 7 8 9 10; do
+  cnry traffic events <project> --source <source-id> \
+    --kind all --since-minutes 120 --limit 5000 --format json \
+    > "$CANONRY_SMOKE_DIR/events-after.json"
+  grep -Fq "$CANONRY_SMOKE_PREFIX/utm" \
+    "$CANONRY_SMOKE_DIR/events-after.json" && break
+  sleep 2
+done
+
+cat "$CANONRY_SMOKE_DIR/events-before.json"
+cat "$CANONRY_SMOKE_DIR/events-after.json"
+
+if grep -Fq "$CANONRY_SMOKE_PREFIX/control" \
+  "$CANONRY_SMOKE_DIR/events-after.json"; then
+  echo 'Unexpected classified control rollup'
+else
+  echo 'Negative control passed'
+fi
+
+cnry doctor --project <project> --check 'traffic.source.*' --format json
+```
+
+The smoke paths can return `404`. The body and critical headers must match the
+no-Worker baseline. When all four selected requests reach the Worker, the
+unique paths must show one crawler, one AI user fetch, and two AI referrals.
+The control path must not appear in a classified rollup. On Bot Management
+plans, a low bot score can still cause its transport.
+
+The crawler request uses a spoofed user agent. It tests forwarding and
+classification only. Canonry reports it as `claimed_unverified` unless the
+client IP belongs to the bot's published IP ranges. If only the crawler path is
+absent, inspect AI Crawl Control, Access, WAF, and other terminating rules. The
+UTM request is the deterministic direct-push transport check.
+
+The events command returns hourly rollups, not raw request records. The doctor
+must report current Worker version and recent traffic.
+
+### Staging release test
+
+1. Cause a receiver failure. Make sure that the origin stays healthy.
+2. Return HTTP `429` from staging and send a bounded bot burst.
+3. Make sure that delivery stops after one request and two retries.
+4. Compare p50 and p95 TTFB before and after route attachment.
+5. Inspect Worker logs. Make sure that logs contain no secret values.
+6. Rehearse rollback and make sure that the origin stays healthy.
+
+A direct-push source does not use `cnry traffic sync` or a traffic-sync
 schedule.
 
 ### Rollback and teardown
 
+For a dedicated Canonry-generated Worker:
+
 1. Detach the exact site route from the Worker.
 2. Request an ordinary site page. Make sure that the origin status,
    headers, and body remain healthy.
-3. Delete the Worker after the origin test succeeds.
-4. Run the doctor. Expect source-health warnings until Canonry supports
+3. Run `wrangler delete --config <artifact-directory>/wrangler.toml`.
+4. Stop the tunnel if no other integration uses it.
+5. Run the doctor. Expect source-health warnings until Canonry supports
    Cloudflare disconnect.
+
+If Canonry code shares an existing Worker, remove only the Canonry code and
+bindings. Redeploy the prior Worker version. Do not delete the shared Worker.
 
 The current CLI and API have no Cloudflare disconnect operation. The source
 row and local credential store remain after teardown. A follow-up must add
 source archival and local credential cleanup.
+
+### Cloudflare troubleshooting
+
+| Symptom | Action |
+|---|---|
+| Wrangler preflight fails | Install the latest Wrangler. Run `wrangler whoami`. Then rerun connect. |
+| Worker deploys to the wrong account | Make the correct Wrangler profile active. Pass the matching `--account-id`. |
+| Route cannot attach | Make sure that the zone is active, DNS is proxied, and the exact route is unclaimed. Inspect every overlapping route. |
+| Receiver probe returns `403` | Remove the Access or WAF challenge from the exact ingest path. |
+| Worker log shows ingest `401` | Rerun connect from the credential-owning host. Make sure that system clocks differ by less than five minutes. |
+| No events arrive | Make sure that the route matches the exact host and `publicUrl` is reachable. Inspect AI Crawl Control, Access, WAF, and route precedence. Then send the UTM smoke request. |
+| Some paths are absent | Inspect more-specific routes and terminating security rules. Integrate Canonry into those routes or document the excluded coverage. |
+| Ingest returns `429` | Wait for the rate window. The Worker retries twice, then drops the event. |
+| Site returns Cloudflare error `1027` | Set the route to **Fail open**, or detach it. The account exhausted its daily Worker requests. |
+| Doctor reports stale or empty direct-push data | Do not run `traffic sync`. Inspect the route, receiver, and Worker logs. Then repeat the smoke request. |
 
 ### Queue pull seam (not shipped yet)
 
@@ -478,9 +717,9 @@ The doctor checks are adapter-agnostic. When they fail or warn:
 |---|---|---|
 | `traffic.source.connected` | `traffic.source.none` | No source — `cnry traffic connect cloud-run …` |
 | `traffic.source.connected` | `traffic.source.all-errored` | Re-connect the source. The check's `details.lastError` shows the underlying reason. |
-| `traffic.source.recent-data` | `traffic.recent-data.stale` | Last sync was >7d ago. Run `cnry traffic sync …` or schedule a recurring sync. |
-| `traffic.source.recent-data` | `traffic.recent-data.empty` | Source connected but no data in 30d. Verify config and credentials with `cnry traffic sources <project>`. |
-| `traffic.source.credentials` | `traffic.credentials.resolve-failed` | Service-account key in `~/.canonry/config.yaml` is invalid or expired. Re-connect. |
+| `traffic.source.recent-data` | `traffic.recent-data.stale` | For pull sources, run `cnry traffic sync …`. For Cloudflare direct push, inspect the route and receiver. |
+| `traffic.source.recent-data` | `traffic.recent-data.empty` | Inspect source configuration. For Cloudflare direct push, send the UTM smoke request and inspect Worker logs. |
+| `traffic.source.credentials` | `traffic.credentials.resolve-failed` | Reconnect from the host that owns the source credentials. |
 | `traffic.source.cache-blindspot` | `traffic.cache-blindspot.wordpress-plugin` | A WordPress source is connected, so the plugin cannot see cache-served page views. Exclude AI user-agents from the page cache and any CDN, or switch to a log/edge source. Warns only, not a failure. |
 | `traffic.source.worker-version` | `traffic.worker-version.waiting-for-first-event` | Send a smoke-test request through the Worker. Then run the doctor again. |
 | `traffic.source.worker-version` | `traffic.worker-version.stale` | Redeploy the generated Worker from the credential-owning host. Use `--deploy --confirm-route --confirm-fail-open`. Attach the route manually. |
@@ -552,9 +791,9 @@ domains, or PII are surfaced.
   treat the report's crawled-paths table as "engine attention" — the
   signal is the bot fetched it, not whether it was cited.
 - **Verified vs unverified.** The headline numbers count only
-  rDNS-verified hits. Unverified bots claim a known UA but couldn't be
-  cross-confirmed via reverse-DNS — they may be the real bot or an
-  imitator. Don't promote unverified counts in client-facing copy.
+  published-IP-range-verified hits. Unverified bots claim a known UA but
+  do not match the operator's published IP ranges. The bot can be real or an
+  imitator. Do not promote unverified counts in client-facing copy.
   **Vercel sources are a special case:** the Vercel pull API returns
   no client IP, so every Vercel crawler hit is unverified by
   construction (UA-only). A Vercel source reading 100% unverified is

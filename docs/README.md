@@ -36,6 +36,7 @@ Canonry is API-first. The API is the source of truth, the CLI is the standard op
 | [`bing-webmaster-setup.md`](bing-webmaster-setup.md) | current | operators | Bing Webmaster Tools API key setup and usage |
 | [`google-analytics-setup.md`](google-analytics-setup.md) | current | operators | Google Analytics 4 service account setup and usage |
 | [`wordpress-setup.md`](wordpress-setup.md) | current | operators | WordPress REST + Application Password setup, staging diffs, and manual handoff workflows |
+| [`server-side-traffic.md`](../skills/canonry/references/server-side-traffic.md) | current | operators | Cloudflare direct-push and Cloud Run, WordPress, and Vercel pull-source setup, smoke tests, rollback, and troubleshooting |
 
 Implementation plans, product direction, and design rationale live in PR descriptions, not in the repo — a plan doc goes stale the day its PR merges, while the PR record stays attached to the change that realized it. Durable behavior rules live in the per-package `AGENTS.md` files.
 

@@ -6,7 +6,7 @@ Your entire AEO + web analytics stack, agent-first. **Open source. Self-hosted. 
 
 - **Local-only:** Canonry runs on your machine and stores its data in SQLite.
 - Track citations across Gemini, ChatGPT, Claude, Perplexity, and local LLMs
-- Watch AI engines crawl and refer traffic via [server-log ingestion](skills/canonry/references/server-side-traffic.md) — Cloud Run, Vercel, and the WordPress Traffic Logger plugin today
+- Watch AI engines crawl, fetch, and refer traffic through [server-side traffic](skills/canonry/references/server-side-traffic.md): Cloudflare, Cloud Run, Vercel, and WordPress
 - Diagnose against real traffic with built-in [GSC](docs/google-search-console-setup.md), [GA4](docs/google-analytics-setup.md), and [Bing Webmaster](docs/bing-webmaster-setup.md)
 - Track local AEO via [Google Business Profile](skills/canonry/references/google-business-profile.md) — search-term impressions, performance metrics, and hotel lodging + booking-CTA gaps
 - Manage [ChatGPT ads](docs/mcp.md#tool-surface) with OpenAI Ads Manager — connect an ad account, inspect conversion setup and performance, prepare paused campaigns, and launch only with an explicit human approval
@@ -44,6 +44,44 @@ cnry run my-site --wait
 cnry evidence my-site
 cnry insights my-site
 ```
+
+## Classify AI traffic at the Cloudflare edge
+
+The current Cloudflare adapter uses direct push. A zone Worker selects AI
+traffic and sends signed events to Canonry without delaying the origin response.
+Canonry records AI crawlers, AI user fetches, and AI referrals in hourly
+traffic views.
+
+Before setup, make sure that:
+
+- The Canonry project uses one exact hostname that Cloudflare proxies.
+- The local dashboard setup and password are complete before public exposure.
+- `cnry serve` has a public HTTPS URL on a different hostname.
+- The CLI and `cnry serve` use the same `~/.canonry/config.yaml`.
+- Wrangler is current and authenticated with the correct Cloudflare account.
+- No other Worker owns the generated `<canonical-host>/*` route.
+
+Deploy the Worker:
+
+```bash
+cnry traffic connect cloudflare <project> \
+  --zone-id <cloudflare-zone-id> \
+  --account-id <cloudflare-account-id> \
+  --deploy --confirm-route --confirm-fail-open
+```
+
+The command uploads secrets and deploys the Worker without a route. In the
+Cloudflare dashboard, attach the printed route and set its failure mode to
+**Fail open**.
+
+```bash
+cnry traffic events <project> --source <source-id> \
+  --kind all --since-minutes 120 --format json
+cnry doctor --project <project> --check 'traffic.source.*' --format json
+```
+
+Direct push is event-driven. Do not add a traffic-sync schedule. Read the
+[complete setup, smoke test, privacy, and rollback guide](skills/canonry/references/server-side-traffic.md#connecting-a-cloudflare-source-direct-push).
 
 ## Or use any shell-capable coding agent
 
@@ -94,7 +132,7 @@ Configure during `cnry init`, in the dashboard `/settings`, or as env vars.
 | **Aero — built-in agent** | [skills/aero/SKILL.md](skills/aero/SKILL.md) |
 | **Agent Plugin — portable core + Codex / Claude adapters** | [docs/plugins.md](docs/plugins.md) |
 | **MCP — Claude Desktop / Cursor / Codex** | [docs/mcp.md](docs/mcp.md) |
-| **Integrations** | [GSC](docs/google-search-console-setup.md) · [GA4](docs/google-analytics-setup.md) · [Bing](docs/bing-webmaster-setup.md) · [Google Business Profile](skills/canonry/references/google-business-profile.md) · [WordPress](docs/wordpress-setup.md) · [Server-side traffic (Cloud Run + Vercel + WordPress logs)](skills/canonry/references/server-side-traffic.md) |
+| **Integrations** | [GSC](docs/google-search-console-setup.md) · [GA4](docs/google-analytics-setup.md) · [Bing](docs/bing-webmaster-setup.md) · [Google Business Profile](skills/canonry/references/google-business-profile.md) · [WordPress](docs/wordpress-setup.md) · [Server-side traffic (Cloudflare direct push, Cloud Run, Vercel, WordPress)](skills/canonry/references/server-side-traffic.md) |
 | **Deployment** — Docker, Railway, Render, systemd, Tailscale | [docs/deployment.md](docs/deployment.md) |
 | **API** — 118+ endpoints | `GET /api/v1/openapi.json` (no auth) |
 | **Standalone skills bundle** for Claude Code / Codex | `cnry skills install` ([details](skills/canonry/SKILL.md)) |

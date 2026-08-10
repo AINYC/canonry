@@ -66,7 +66,7 @@ tool or `403` by switching credentials.
 - Running technical SEO audits (14‑factor scoring)
 - Implementing structured data (JSON‑LD)
 - Diagnosing indexing gaps via Google Search Console / Bing Webmaster Tools
-- Wiring server-side traffic (Cloud Run, WordPress, Vercel) and GA4 referrals into a single AEO signal
+- Wiring server-side traffic (Cloudflare, Cloud Run, WordPress, Vercel) and GA4 referrals into a single AEO signal
 - Optimizing `llms.txt`, sitemaps, robots.txt for AI crawlers
 - Submitting URLs to Google Indexing API and Bing IndexNow
 - Analyzing competitor citation patterns
@@ -129,7 +129,12 @@ GA4 is a first-class signal alongside citation tracking. Connect once with `cnry
 
 ## Server-Side Traffic
 
-When the project ships behind a server you control, wire crawler + AI-referral evidence directly from the edge: `cnry traffic connect cloud-run | wordpress | vercel <project> ...` writes credentials to `~/.canonry/config.yaml`, `cnry traffic sync` pulls and classifies logs into hourly buckets, and `cnry traffic events / sources / status` expose the rollups. See `references/server-side-traffic.md` for adapter-specific setup.
+When the project ships behind a server you control, connect Cloud Run, WordPress,
+or Vercel. `cnry traffic sync` pulls and classifies their logs into hourly
+buckets. For a Cloudflare site, `cnry traffic connect cloudflare <project> ...`
+deploys a direct-push Worker from the credential-owning host. Cloudflare direct
+push does not use `traffic sync`. Use `cnry traffic events / sources / status`
+for every adapter. See `references/server-side-traffic.md` for setup.
 
 **Vercel gotcha:** a freshly connected Vercel source captures only going-forward traffic — `lastSyncedAt` is seeded to NOW to avoid the 30-day default window exceeding Vercel's ~14-day request-logs retention (which would otherwise throw on every first sync). Use `cnry traffic backfill <project> --source <id> --days N` for historical recovery. If an idle Vercel/Cloud Run source has been failing long enough that `lastSyncedAt` aged past retention, unstick it with `cnry traffic reset <project> --source <id> --advance-to-now`.
 
@@ -168,7 +173,7 @@ Aero also wakes unprompted after every `run.completed` so insights and regressio
 | `references/aeo-analysis.md` | Interpreting sweep output, diagnosing regressions, planning content fixes |
 | `references/indexing.md` | Submitting URLs, checking GSC/Bing coverage, fixing indexing gaps |
 | `references/wordpress-integration.md` | Connecting to WordPress, editing pages, pushing staging → live |
-| `references/server-side-traffic.md` | Wiring server-log evidence (Cloud Run, WordPress, Vercel adapters) for AI Visibility — Server-Side. Connect, sync, manage sources, troubleshoot. |
+| `references/server-side-traffic.md` | Wiring server-side evidence from Cloudflare, Cloud Run, WordPress, and Vercel. Connect, inspect, sync pull sources, and troubleshoot. |
 | `references/google-business-profile.md` | Connecting Google Business Profile for local AEO: access-form approval, GCP API enablement, the v4-reviews access gate, hotel lodging/place-action signals, data shapes, troubleshooting. |
 
 ---
