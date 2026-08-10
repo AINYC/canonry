@@ -7,6 +7,7 @@ import {
   siteAuditPages,
   siteAuditSnapshots,
   siteCrawlEdges,
+  siteCrawlAttempts,
   siteCrawlFindings,
   siteCrawlGraphEdges,
   siteCrawlGraphLayouts,
@@ -25,6 +26,7 @@ import {
   SiteAuditTrendDirections,
   SiteCrawlFetchedStates,
   normalizeSiteAuditRunRequest,
+  missingDependency,
   notFound,
   operationInProgress,
   siteAuditPageFactorSchema,
@@ -40,6 +42,8 @@ import {
   type RunStatus,
   type SiteAuditPageDto,
   type SiteAuditPagesResponseDto,
+  type SiteAuditRunPhase,
+  type SiteAuditRunProgressDto,
   type SiteAuditScoreDto,
   type SiteAuditTrendResponseDto,
   type SiteCrawlDeadLinksResponseDto,
@@ -106,6 +110,27 @@ export interface TechnicalAeoRoutesOptions {
 
 /** Run statuses that count as a real, surfaceable site audit. */
 const SURFACEABLE_STATUSES = [RunStatuses.completed, RunStatuses.partial]
+
+function siteAuditRunPhase(
+  status: RunStatus,
+  attempt: typeof siteCrawlAttempts.$inferSelect | undefined,
+  layoutState: 'pending' | 'ready' | 'unavailable',
+): SiteAuditRunPhase {
+  switch (status) {
+    case RunStatuses.queued:
+      return 'queued'
+    case RunStatuses.running:
+      return (attempt?.pagesFetched ?? 0) > 0 ? 'checking' : 'discovering'
+    case RunStatuses.completed:
+      return attempt && layoutState === 'pending' ? 'arranging-map' : 'completed'
+    case RunStatuses.partial:
+      return attempt && layoutState === 'pending' ? 'arranging-map' : 'partial'
+    case RunStatuses.failed:
+      return 'failed'
+    case RunStatuses.cancelled:
+      return 'cancelled'
+  }
+}
 
 function emptyScore(projectName: string): SiteAuditScoreDto {
   return {
@@ -2202,6 +2227,69 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     }
   })
 
+  // GET /projects/:name/technical-aeo/runs/:runId/progress — exact stored
+  // progress only. It never polls an executor, fetches a page, or invokes a
+  // provider: onboarding can safely resume after a reload without inventing a
+  // progress percentage for an unknown final corpus.
+  app.get<{
+    Params: { name: string; runId: string }
+  }>('/projects/:name/technical-aeo/runs/:runId/progress', async (request): Promise<SiteAuditRunProgressDto> => {
+    const project = resolveProject(app.db, request.params.name)
+    const run = app.db.select().from(runs).where(and(
+      eq(runs.id, request.params.runId),
+      eq(runs.projectId, project.id),
+      eq(runs.kind, RunKinds['site-audit']),
+      notProbeRun(),
+    )).get()
+    if (!run) throw notFound('Site audit run', request.params.runId)
+
+    const attempt = app.db.select().from(siteCrawlAttempts).where(and(
+      eq(siteCrawlAttempts.projectId, project.id),
+      eq(siteCrawlAttempts.runId, run.id),
+    )).orderBy(desc(siteCrawlAttempts.attemptNumber), desc(siteCrawlAttempts.updatedAt)).limit(1).get()
+    const persistedLayout = attempt
+      ? app.db.select().from(siteCrawlGraphLayouts).where(and(
+        eq(siteCrawlGraphLayouts.projectId, project.id),
+        eq(siteCrawlGraphLayouts.runId, run.id),
+        eq(siteCrawlGraphLayouts.attemptId, attempt.id),
+      )).get()
+      : undefined
+    const layoutState = persistedLayout?.state === 'ready' || persistedLayout?.state === 'unavailable'
+      ? persistedLayout.state
+      : run.status === RunStatuses.completed || run.status === RunStatuses.partial
+        ? 'unavailable'
+        : 'pending'
+
+    return {
+      project: project.name,
+      runId: run.id,
+      status: run.status as RunStatus,
+      phase: siteAuditRunPhase(run.status as RunStatus, attempt, layoutState),
+      attempt: attempt
+        ? {
+          id: attempt.id,
+          state: attempt.state,
+          pagesDiscovered: attempt.pagesDiscovered,
+          pagesFetched: attempt.pagesFetched,
+          pagesEligible: attempt.pagesEligible,
+          pagesErrored: attempt.pagesErrored,
+          edgesDiscovered: attempt.edgesDiscovered,
+          lastUpdatedAt: attempt.updatedAt,
+          startedAt: attempt.startedAt,
+          finishedAt: attempt.finishedAt,
+          error: attempt.error,
+        }
+        : null,
+      layout: {
+        state: layoutState,
+        layoutVersion: persistedLayout?.layoutVersion ?? null,
+        failureCode: persistedLayout?.failureCode ?? null,
+        updatedAt: persistedLayout?.updatedAt ?? null,
+      },
+      error: run.error ?? attempt?.error ?? null,
+    }
+  })
+
   // POST /projects/:name/technical-aeo/runs — exact-identity consolidation.
   app.post<{
     Params: { name: string }
@@ -2212,6 +2300,11 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     const parsed = siteAuditRunRequestSchema.safeParse(request.body ?? {})
     if (!parsed.success) {
       throw validationError(parsed.error.issues[0]?.message ?? 'Invalid site-audit request')
+    }
+    if (!opts.onSiteAuditRequested) {
+      throw missingDependency('Site Health execution is not available on this deployment.', {
+        reason: 'no-site-audit-handler',
+      })
     }
 
     const effectiveRequest = normalizeSiteAuditRunRequest(parsed.data)
@@ -2271,7 +2364,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     })
 
     if (result.created) {
-      opts.onSiteAuditRequested?.(result.runId, project.id, {
+      opts.onSiteAuditRequested(result.runId, project.id, {
         sitemapUrl: effectiveRequest.sitemapUrl ?? undefined,
         limit: parsed.data.limit,
         maxPages: effectiveRequest.maxPages,

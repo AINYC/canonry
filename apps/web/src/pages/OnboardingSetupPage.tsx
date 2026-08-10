@@ -1,0 +1,490 @@
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useNavigate, useSearch } from '@tanstack/react-router'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Globe2, LoaderCircle } from 'lucide-react'
+import { getApiV1ProjectsOptions, getApiV1ProjectsQueryKey } from '@ainyc/canonry-api-client/react-query'
+
+import {
+  ApiError,
+  createOnboardingProject,
+  getOnboardingMode,
+  heyClient,
+  type ApiProject,
+  type OnboardingMode,
+} from '../api.js'
+import { asyncHandler } from '../lib/async-handler.js'
+import { addToast } from '../lib/toast-store.js'
+import { useTriggerSiteAudit } from '../queries/mutations.js'
+import { AdminOnly } from '../components/shared/AccessControls.js'
+import { Button } from '../components/ui/button.js'
+import { SetupPage } from './SetupPage.js'
+
+export const SITE_HEALTH_DISPATCH_BOUNDARY_MS = 1_800
+
+export type OnboardingProjectListState =
+  | { state: 'idle' | 'loading' | 'error' }
+  | { state: 'success'; projectCount: number }
+
+export type OnboardingSurface = 'legacy' | 'loading' | 'platform' | 'retry'
+
+/**
+ * `auto` is intentionally conservative. An unavailable project-list request
+ * is not evidence that the install has no projects, so it gets recovery UI
+ * rather than a potentially destructive first-open flow.
+ */
+export function resolveOnboardingSurface(
+  mode: OnboardingMode,
+  projectList: OnboardingProjectListState,
+): OnboardingSurface {
+  if (mode === 'legacy') return 'legacy'
+  if (mode === 'platform') return 'platform'
+  if (projectList.state === 'success') {
+    return projectList.projectCount === 0 ? 'platform' : 'legacy'
+  }
+  if (projectList.state === 'error') return 'retry'
+  return 'loading'
+}
+
+export interface LaunchpadIdentity {
+  canonicalDomain: string
+  projectName: string
+  displayName: string
+}
+
+function isIpLiteralHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '')
+  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host) || host.includes(':')
+}
+
+/**
+ * Accept a public host or URL and make the intended server values visible
+ * before submission. The server remains the authority for normalization and
+ * validation; this protects the form from submitting obvious non-host input.
+ */
+export function deriveLaunchpadIdentity(value: string): LaunchpadIdentity | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`
+
+  let parsed: URL
+  try {
+    parsed = new URL(candidate)
+  } catch {
+    return null
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+
+  const canonicalDomain = parsed.hostname.toLowerCase().replace(/^www\./, '')
+  if (
+    !canonicalDomain
+    || canonicalDomain === 'localhost'
+    || isIpLiteralHost(canonicalDomain)
+    || !canonicalDomain.includes('.')
+  ) {
+    return null
+  }
+
+  const projectName = canonicalDomain
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+
+  return projectName
+    ? { canonicalDomain, projectName, displayName: canonicalDomain }
+    : null
+}
+
+export type SiteHealthDispatchResult = {
+  runId: string
+  status: string
+}
+
+export type SiteHealthDispatchSettlement<T extends SiteHealthDispatchResult> =
+  | { state: 'queued'; run: T }
+  | { state: 'timed-out' }
+
+/**
+ * The site scan can take a moment to queue on a cold worker. Bound only the
+ * handoff, not the server job: after the boundary the valid project moves into
+ * Site Health, where the normal persisted run list resumes it.
+ */
+export async function settleSiteHealthDispatch<T extends SiteHealthDispatchResult>(
+  dispatch: Promise<T>,
+  timeoutMs = SITE_HEALTH_DISPATCH_BOUNDARY_MS,
+): Promise<SiteHealthDispatchSettlement<T>> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<{ state: 'timed-out' }>((resolve) => {
+    timeoutId = setTimeout(() => resolve({ state: 'timed-out' }), timeoutMs)
+  })
+  const result = await Promise.race([
+    dispatch.then((run) => ({ state: 'queued' as const, run })),
+    timeout,
+  ])
+  if (timeoutId) clearTimeout(timeoutId)
+  return result
+}
+
+/** Keep a timed-out request observable after the launchpad has navigated away. */
+export function watchTimedOutSiteHealthDispatch(
+  dispatch: Promise<SiteHealthDispatchResult>,
+  projectId: string,
+): void {
+  void dispatch.catch(() => {
+    addToast({
+      title: 'Site Health scan did not start',
+      detail: 'The project is safe. Choose Run scan in Site Health to retry.',
+      tone: 'negative',
+      dedupeKey: `site-health-dispatch:${projectId}`,
+    })
+  })
+}
+
+function onboardingError(error: unknown, fallback: string): string {
+  if (error instanceof ApiError && error.statusCode === 409) {
+    return 'A project with this name or site already exists. Change the project name or domain, or open the existing project.'
+  }
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
+function AutoModeLoading() {
+  return (
+    <div className="page-container max-w-3xl" aria-busy="true" aria-live="polite">
+      <div className="page-header">
+        <div className="page-header-left">
+          <h1 className="page-title">Preparing setup</h1>
+          <p className="page-subtitle">Checking the projects already on this install.</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-3 rounded-lg border border-default bg-surface p-4 text-sm text-secondary" role="status">
+        <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+        Loading projects…
+      </div>
+    </div>
+  )
+}
+
+function AutoModeRetry({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="page-container max-w-3xl">
+      <div className="page-header">
+        <div className="page-header-left">
+          <h1 className="page-title">Can’t load projects</h1>
+          <p className="page-subtitle">Canonry could not confirm whether this install already has a project.</p>
+        </div>
+      </div>
+      <div className="rounded-lg border border-negative bg-negative-soft p-4" role="alert" tabIndex={-1}>
+        <p className="text-sm font-medium text-heading">Setup is paused to protect existing projects.</p>
+        <p className="mt-1 text-sm text-secondary">Check the connection or sign in again, then retry.</p>
+        <Button type="button" className="mt-4" variant="secondary" onClick={onRetry}>
+          Retry project check
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** Runtime switch around the existing wizard; legacy is unchanged when off. */
+export function OnboardingSetupPage() {
+  const search = useSearch({ from: '/setup' })
+  const configuredMode = getOnboardingMode()
+  const mode: OnboardingMode = search.experience === 'legacy' ? 'legacy' : configuredMode
+  const [platformLatched, setPlatformLatched] = useState(false)
+  const projectsQuery = useQuery({
+    ...getApiV1ProjectsOptions({ client: heyClient }),
+    enabled: mode === 'auto',
+    retry: false,
+    // A cached empty list can be stale after a CLI/API creation. `auto` waits
+    // for one mount-time confirmation before it treats this as first open.
+    refetchOnMount: 'always',
+  })
+  const projectList: OnboardingProjectListState = mode !== 'auto'
+    ? { state: 'idle' }
+    : projectsQuery.isSuccess && !projectsQuery.isFetching
+      ? { state: 'success', projectCount: projectsQuery.data.length }
+      : projectsQuery.isError
+        ? { state: 'error' }
+        : { state: 'loading' }
+  const surface = platformLatched ? 'platform' : resolveOnboardingSurface(mode, projectList)
+
+  if (surface === 'legacy') return <SetupPage />
+  if (surface === 'loading') return <AutoModeLoading />
+  if (surface === 'retry') return <AutoModeRetry onRetry={() => { void projectsQuery.refetch() }} />
+  return <PlatformSetupPage onActivationStarted={() => setPlatformLatched(true)} />
+}
+
+function PlatformSetupPage({ onActivationStarted }: { onActivationStarted: () => void }) {
+  return (
+    <AdminOnly title="Site Health setup">
+      <PlatformSetupPageBody onActivationStarted={onActivationStarted} />
+    </AdminOnly>
+  )
+}
+
+function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: () => void }) {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const siteAuditMutation = useTriggerSiteAudit()
+  const [domain, setDomain] = useState('')
+  const [projectName, setProjectName] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [country, setCountry] = useState('US')
+  const [language, setLanguage] = useState('en')
+  const [crawlApproved, setCrawlApproved] = useState(false)
+  const [phase, setPhase] = useState<'idle' | 'creating' | 'dispatching' | 'recovery'>('idle')
+  const [createdProject, setCreatedProject] = useState<ApiProject | null>(null)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [createConflict, setCreateConflict] = useState(false)
+  const [dispatchError, setDispatchError] = useState<string | null>(null)
+  const errorRef = useRef<HTMLDivElement>(null)
+
+  const identity = deriveLaunchpadIdentity(domain)
+  const resolvedProjectName = projectName || identity?.projectName || ''
+  const resolvedDisplayName = displayName || identity?.displayName || ''
+  const busy = phase === 'creating' || phase === 'dispatching'
+  const visibleError = createError ?? dispatchError
+
+  useEffect(() => {
+    if (visibleError) errorRef.current?.focus()
+  }, [visibleError])
+
+  const openProject = (project: ApiProject, runId?: string) => navigate({
+    to: '/projects/$projectName/technical-aeo',
+    params: { projectName: project.name },
+    search: {
+      ...(runId ? { siteHealthRunId: runId } : {}),
+      onboarding: 'site-health',
+    },
+  })
+
+  const dispatchSiteHealth = async (project: ApiProject) => {
+    setPhase('dispatching')
+    setDispatchError(null)
+    try {
+      const dispatch = siteAuditMutation.mutateAsync({
+        projectName: project.name,
+        projectId: project.id,
+        projectLabel: project.displayName || project.name,
+        suppressErrorToast: true,
+        body: {},
+      })
+      const settlement = await settleSiteHealthDispatch(dispatch)
+      if (settlement.state === 'queued') {
+        await openProject(project, settlement.run.runId)
+        return
+      }
+
+      // Do not leave a valid project pinned to the form while the request is
+      // still settling. Site Health's normal persisted run list will pick up
+      // the queued scan as soon as it exists.
+      watchTimedOutSiteHealthDispatch(dispatch, project.id)
+      await openProject(project)
+    } catch (error) {
+      setPhase('recovery')
+      setDispatchError(onboardingError(error, 'The project was created, but the Site Health scan could not be started.'))
+    }
+  }
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!identity || !crawlApproved || busy) return
+
+    setPhase('creating')
+    setCreateError(null)
+    setCreateConflict(false)
+    setDispatchError(null)
+    try {
+      const project = await createOnboardingProject({
+        name: resolvedProjectName,
+        displayName: resolvedDisplayName,
+        canonicalDomain: identity.canonicalDomain,
+        country,
+        language,
+      })
+      // `auto` would otherwise switch back to legacy as soon as creation makes
+      // the authoritative project list non-empty, unmounting dispatch recovery.
+      onActivationStarted()
+      setCreatedProject(project)
+      await queryClient.invalidateQueries({
+        queryKey: getApiV1ProjectsQueryKey({ client: heyClient }),
+      })
+      await dispatchSiteHealth(project)
+    } catch (error) {
+      setPhase('idle')
+      const conflict = error instanceof ApiError && error.statusCode === 409
+      setCreateConflict(conflict)
+      setCreateError(onboardingError(error, 'Could not create the project. Try again.'))
+      if (conflict) {
+        // Keep the actionable collision recovery visible while `auto`
+        // refreshes and discovers the project that won the create race.
+        onActivationStarted()
+        void queryClient.invalidateQueries({
+          queryKey: getApiV1ProjectsQueryKey({ client: heyClient }),
+        })
+      }
+    }
+  }
+
+  const retryDispatch = () => {
+    if (createdProject && !busy) {
+      void dispatchSiteHealth(createdProject)
+    }
+  }
+
+  const cancel = () => {
+    if (busy) return
+    void navigate({ to: '/projects' })
+  }
+
+  if (createdProject && phase === 'recovery') {
+    return (
+      <div className="page-container max-w-3xl">
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1 className="page-title">Project created</h1>
+            <p className="page-subtitle">{createdProject.displayName || createdProject.name} is ready. The Site Health scan needs another try.</p>
+          </div>
+        </div>
+        <div ref={errorRef} className="rounded-lg border border-negative bg-negative-soft p-4" role="alert" tabIndex={-1}>
+          <p className="text-sm font-medium text-heading">{dispatchError}</p>
+          <p className="mt-1 text-sm text-secondary">You can retry the scan or open the project and continue without a map.</p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Button type="button" onClick={retryDispatch}>Retry Site Health scan</Button>
+            <Button type="button" variant="secondary" onClick={() => { void openProject(createdProject) }}>Open project</Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="page-container max-w-3xl">
+      <div className="page-header">
+        <div className="page-header-left">
+          <h1 className="page-title">Start with your public site</h1>
+          <p className="page-subtitle">Canonry will map the pages and internal links it can reach.</p>
+        </div>
+      </div>
+
+      <form className="rounded-xl border border-default bg-surface p-5" onSubmit={asyncHandler(submit)} noValidate>
+        <div className="space-y-5">
+          <div className="setup-field">
+            <label className="setup-label" htmlFor="launchpad-domain">Website address</label>
+            <input
+              id="launchpad-domain"
+              className="setup-input"
+              type="text"
+              autoComplete="url"
+              autoFocus
+              required
+              aria-describedby="launchpad-domain-hint"
+              placeholder="example.com"
+              value={domain}
+              onChange={(event) => {
+                setDomain(event.target.value)
+                setCreateError(null)
+                setCreateConflict(false)
+              }}
+            />
+            <p id="launchpad-domain-hint" className="mt-1 text-sm text-secondary">
+              Use the public domain visitors reach. A sitemap is optional.
+            </p>
+            {domain && !identity ? <p className="mt-2 text-sm text-negative" role="alert">Enter a public domain, such as example.com.</p> : null}
+          </div>
+
+          {identity ? (
+            <details className="rounded-md border border-default bg-surface-subtle p-3">
+              <summary className="cursor-pointer text-sm font-medium text-heading">Project details: {resolvedProjectName}</summary>
+              <p className="mt-2 text-sm text-secondary">Canonry derived these from the website address. Edit them only if you need a different project label.</p>
+              <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                <div className="setup-field">
+                  <label className="setup-label" htmlFor="launchpad-project-name">Project name</label>
+                  <input
+                    id="launchpad-project-name"
+                    className="setup-input"
+                    type="text"
+                    value={resolvedProjectName}
+                    onChange={(event) => setProjectName(event.target.value)}
+                  />
+                </div>
+                <div className="setup-field">
+                  <label className="setup-label" htmlFor="launchpad-display-name">Display name</label>
+                  <input
+                    id="launchpad-display-name"
+                    className="setup-input"
+                    type="text"
+                    value={resolvedDisplayName}
+                    onChange={(event) => setDisplayName(event.target.value)}
+                  />
+                </div>
+              </div>
+            </details>
+          ) : null}
+
+          <details className="rounded-md border border-default bg-surface-subtle p-3">
+            <summary className="cursor-pointer text-sm font-medium text-heading">Locale: {country || 'Not set'} · {language || 'Not set'}</summary>
+            <p className="mt-2 text-sm text-secondary">Optional. Adjust the default market and language before creating the project.</p>
+            <div className="mt-3 grid gap-4 sm:grid-cols-2">
+              <div className="setup-field">
+                <label className="setup-label" htmlFor="launchpad-country">Country</label>
+                <input
+                  id="launchpad-country"
+                  className="setup-input"
+                  type="text"
+                  maxLength={2}
+                  value={country}
+                  onChange={(event) => setCountry(event.target.value.toUpperCase())}
+                />
+              </div>
+              <div className="setup-field">
+                <label className="setup-label" htmlFor="launchpad-language">Language</label>
+                <input
+                  id="launchpad-language"
+                  className="setup-input"
+                  type="text"
+                  maxLength={5}
+                  value={language}
+                  onChange={(event) => setLanguage(event.target.value.toLowerCase())}
+                />
+              </div>
+            </div>
+          </details>
+
+          <label className="flex items-start gap-3 rounded-md border border-default bg-surface-subtle p-4">
+            <input
+              className="mt-0.5 size-4 rounded border-strong bg-bg"
+              type="checkbox"
+              checked={crawlApproved}
+              onChange={(event) => setCrawlApproved(event.target.checked)}
+            />
+            <span>
+              <span className="block text-sm font-medium text-heading">I approve Canonry to crawl this public site and its internal links.</span>
+              <span className="mt-1 block text-sm text-secondary">The crawl does not call answer providers. If Aero is enabled, its normal post-run analysis can use your configured agent provider.</span>
+            </span>
+          </label>
+
+          {visibleError ? (
+            <div ref={errorRef} className="rounded-md border border-negative bg-negative-soft p-3" role="alert" tabIndex={-1}>
+              <p className="text-sm font-medium text-heading">{visibleError}</p>
+              {createConflict ? (
+                <Button type="button" variant="secondary" size="sm" className="mt-3" onClick={cancel}>View projects</Button>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Button type="submit" disabled={!identity || !crawlApproved || busy}>
+              {phase === 'creating' ? <><LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" /> Creating project…</> : null}
+              {phase === 'dispatching' ? <><LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" /> Starting Site Health…</> : null}
+              {phase === 'idle' ? <><Globe2 className="size-4" aria-hidden="true" /> Create project and map site</> : null}
+            </Button>
+            <Button type="button" variant="ghost" disabled={busy} onClick={cancel}>Cancel</Button>
+            {phase === 'dispatching' ? <span className="text-sm text-secondary" role="status">Moving into Site Health as soon as the scan is queued.</span> : null}
+          </div>
+        </div>
+      </form>
+    </div>
+  )
+}

@@ -2,6 +2,9 @@ export type OpenApiMcpClassification = 'included' | 'deferred' | 'excluded-proto
 
 export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'GET /api/v1/openapi.json': 'excluded-protocol',
+  // The browser launchpad needs create-only collision semantics. Agents already
+  // have the included project upsert tool and do not need a second create path.
+  'POST /api/v1/projects': 'deferred',
   'PUT /api/v1/projects/{name}': 'included',
   'GET /api/v1/projects': 'included',
   'GET /api/v1/projects/{name}': 'included',
@@ -388,5 +391,8 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   // already get run provenance from the trend and changes tools, so this is
   // deferred until an agent workflow actually needs to enumerate scans.
   'GET /api/v1/projects/{name}/technical-aeo/runs': 'deferred',
+  // Raw crawl-attempt counters exist for transient onboarding progress. Agents
+  // use run_get plus the canonical crawl reads once evidence is published.
+  'GET /api/v1/projects/{name}/technical-aeo/runs/{runId}/progress': 'deferred',
   'POST /api/v1/projects/{name}/technical-aeo/runs': 'included',
 } as const satisfies Record<string, OpenApiMcpClassification>

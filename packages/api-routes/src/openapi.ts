@@ -678,6 +678,28 @@ const routeCatalog: OpenApiOperation[] = [
     },
   },
   {
+    method: 'post',
+    path: '/api/v1/projects',
+    summary: 'Create a project',
+    description:
+      'Creates a new project with create-only semantics for the domain-first launchpad. The server normalizes the project name and canonical domain; a normalized name or canonical-domain collision returns 409 and never updates the existing project.',
+    tags: ['projects'],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/ProjectCreateRequest' },
+        },
+      },
+    },
+    responses: {
+      201: jsonResponse('Project created.', 'ProjectDto'),
+      400: errorResponse('Invalid project payload, normalized name, or canonical domain.'),
+      403: errorResponse('The caller lacks broad projects.write authority.'),
+      409: errorResponse('A project with the normalized name or canonical domain already exists.'),
+    },
+  },
+  {
     method: 'put',
     path: '/api/v1/projects/{name}',
     summary: 'Create or update a project',
@@ -6323,6 +6345,22 @@ const routeCatalog: OpenApiOperation[] = [
     },
   },
   {
+    method: 'get',
+    path: '/api/v1/projects/{name}/technical-aeo/runs/{runId}/progress',
+    summary: 'Get exact stored Site Health run progress',
+    description:
+      'Returns durable run, crawl-attempt, and terminal graph-layout state for one exact non-probe site-audit run. It performs no network work and intentionally returns raw counters instead of a completion percentage.',
+    tags: ['technical-aeo'],
+    parameters: [
+      nameParameter,
+      { name: 'runId', in: 'path', required: true, description: 'Exact site-audit run ID.', schema: stringSchema },
+    ],
+    responses: {
+      200: jsonResponse('Exact stored Site Health progress returned.', 'SiteAuditRunProgressDto'),
+      404: errorResponse('Project or non-probe site-audit run not found.'),
+    },
+  },
+  {
     method: 'post',
     path: '/api/v1/projects/{name}/technical-aeo/runs',
     summary: 'Trigger a Technical AEO site-audit run',
@@ -6352,6 +6390,7 @@ const routeCatalog: OpenApiOperation[] = [
       200: jsonResponse('Site-audit run queued (or the in-flight run returned).', 'SiteAuditRunResponseDto'),
       400: errorResponse('Invalid site-audit request.'),
       409: errorResponse('A crawl with different effective options is already queued or running.'),
+      422: errorResponse('The site-audit executor is unavailable on this deployment.'),
       404: errorResponse('Project not found.'),
     },
   },

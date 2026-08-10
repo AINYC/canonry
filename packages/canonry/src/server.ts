@@ -262,6 +262,23 @@ function resolveDashboardShowUpdateNotification(env: NodeJS.ProcessEnv, config: 
     ?? true;
 }
 
+type DashboardOnboardingMode = NonNullable<NonNullable<CanonryConfig['dashboard']>['onboardingMode']>;
+
+function parseDashboardOnboardingMode(value: string | undefined): DashboardOnboardingMode | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === 'legacy' || normalized === 'platform' || normalized === 'auto'
+    ? normalized
+    : undefined;
+}
+
+function resolveDashboardOnboardingMode(
+  env: NodeJS.ProcessEnv,
+  config: CanonryConfig,
+): DashboardOnboardingMode | undefined {
+  return parseDashboardOnboardingMode(env.CANONRY_ONBOARDING_MODE)
+    ?? config.dashboard?.onboardingMode;
+}
+
 /** All known API adapters — add new providers here */
 const API_ADAPTERS: ProviderAdapter[] = [
   geminiAdapter,
@@ -1716,6 +1733,7 @@ export async function createServer(opts: {
   const dashboardRequirePassword = resolveDashboardRequirePassword(process.env, opts.config);
   const dashboardShowResourceLinks = resolveDashboardShowResourceLinks(process.env, opts.config);
   const dashboardShowUpdateNotification = resolveDashboardShowUpdateNotification(process.env, opts.config);
+  const dashboardOnboardingMode = resolveDashboardOnboardingMode(process.env, opts.config);
   app.log.info(
     { dashboardRequirePassword },
     "Dashboard password gate resolved",
@@ -2769,7 +2787,10 @@ export async function createServer(opts: {
       if (basePath) clientConfig.basePath = basePath;
       // Keep the default client config byte-for-byte unchanged. Only inject the
       // dashboard block when the operator opts out of dashboard chrome.
-      const dashboardConfig: Record<string, boolean> = {};
+      const dashboardConfig: Record<string, boolean | string> = {};
+      if (dashboardOnboardingMode) {
+        dashboardConfig.onboardingMode = dashboardOnboardingMode;
+      }
       if (!dashboardShowResourceLinks) {
         dashboardConfig.showResourceLinks = false;
       }

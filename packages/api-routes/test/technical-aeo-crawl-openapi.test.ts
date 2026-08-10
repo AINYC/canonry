@@ -16,6 +16,7 @@ test('crawl read routes are public, bounded, and backed by typed OpenAPI schemas
     ['/api/v1/projects/{name}/technical-aeo/internal-links', 'SiteCrawlInternalLinksResponseDto'],
     ['/api/v1/projects/{name}/technical-aeo/internal-links/neighbors', 'SiteCrawlNeighborsResponseDto'],
     ['/api/v1/projects/{name}/technical-aeo/dead-links', 'SiteCrawlDeadLinksResponseDto'],
+    ['/api/v1/projects/{name}/technical-aeo/runs/{runId}/progress', 'SiteAuditRunProgressDto'],
   ]
 
   for (const [path, schema] of cases) {

@@ -433,8 +433,14 @@ function isOverviewRead(url: string): boolean {
   ]).has(rest)
 }
 
-function isTechnicalAeoRead(url: string): boolean {
+function isTechnicalAeoRead(request: FastifyRequest, url: string): boolean {
   const rest = projectRouteRest(url)
+  if (rest === 'runs') {
+    return queryValue(request, 'kind') === RunKinds['site-audit']
+  }
+  if (rest && /^technical-aeo\/runs\/[^/]+\/progress$/.test(rest)) {
+    return true
+  }
   return rest === 'technical-aeo'
     || rest === 'technical-aeo/pages'
     || rest === 'technical-aeo/trend'
@@ -480,7 +486,7 @@ function enforceEmbedProjectTabs(request: FastifyRequest, configuredTabs: readon
   const url = request.url.split('?')[0]!
   if (isProjectShellRead(request, url)) return
   if (tabs.includes('overview') && isOverviewRead(url)) return
-  if (tabs.includes('technical-aeo') && isTechnicalAeoRead(url)) return
+  if (tabs.includes('technical-aeo') && isTechnicalAeoRead(request, url)) return
   if (tabs.includes('report') && isReportRead(url)) return
 
   throw forbidden('This endpoint is not available for the configured embed tabs.')

@@ -11,7 +11,7 @@ import { ErrorBoundary } from '../components/layout/ErrorBoundary.js'
 // actually needs (~618KB after this change).
 import { OverviewPage } from '../pages/OverviewPage.js'
 import { ProjectsPage } from '../pages/ProjectsPage.js'
-import { SetupPage } from '../pages/SetupPage.js'
+import { OnboardingSetupPage } from '../pages/OnboardingSetupPage.js'
 import { NotFoundPage } from '../pages/NotFoundPage.js'
 import { heyClient } from '../api.js'
 import { getApiV1ProjectsQueryKey, getApiV1ProjectsOptions } from '@ainyc/canonry-api-client/react-query'
@@ -69,12 +69,18 @@ type SearchParams = {
   /** Opens the project's query manager after a navigation, so setup can hand off to it. */
   manageQueries?: boolean
   runId?: string
+  /** Exact Site Health onboarding handoff; separate from the global run drawer. */
+  siteHealthRunId?: string
   evidenceId?: string
   runStatus?: string
   runKind?: string
   runProject?: string
   runWindow?: string
   runQuery?: string
+  /** First-open Site Health handoff state; a durable run remains the authority. */
+  onboarding?: 'site-health'
+  /** Temporary rescue hatch while the platform launchpad rolls out. */
+  experience?: 'legacy'
   /**
    * Advanced-measurement view state, in the URL so a market is a place you can
    * link, bookmark, and reload. `all` (the default) is omitted rather than
@@ -99,12 +105,15 @@ export const rootRoute = createRootRouteWithContext<RouterContext>()({
   validateSearch: (search: Record<string, unknown>): SearchParams => ({
     manageQueries: search.manageQueries === true || search.manageQueries === 'true' ? true : undefined,
     runId: typeof search.runId === 'string' ? search.runId : undefined,
+    siteHealthRunId: typeof search.siteHealthRunId === 'string' ? search.siteHealthRunId : undefined,
     evidenceId: typeof search.evidenceId === 'string' ? search.evidenceId : undefined,
     runStatus: typeof search.runStatus === 'string' ? search.runStatus : undefined,
     runKind: typeof search.runKind === 'string' ? search.runKind : undefined,
     runProject: typeof search.runProject === 'string' ? search.runProject : undefined,
     runWindow: typeof search.runWindow === 'string' ? search.runWindow : undefined,
     runQuery: typeof search.runQuery === 'string' ? search.runQuery : undefined,
+    onboarding: search.onboarding === 'site-health' ? 'site-health' : undefined,
+    experience: search.experience === 'legacy' ? 'legacy' : undefined,
     scope: typeof search.scope === 'string' ? search.scope : undefined,
     class: typeof search.class === 'string' ? search.class : undefined,
   }),
@@ -114,9 +123,26 @@ export const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   component: OverviewPage,
-  beforeLoad: ({ context }) => {
-    const projects = context.queryClient.getQueryData(getApiV1ProjectsQueryKey({ client: heyClient })) as unknown[] | undefined
-    if (projects && projects.length === 0) {
+  beforeLoad: async ({ context }) => {
+    let projects = context.queryClient.getQueryData(
+      getApiV1ProjectsQueryKey({ client: heyClient }),
+    ) as unknown[] | undefined
+
+    // A blank cache is not an empty installation. On a cold direct visit,
+    // resolve the canonical list once before choosing first-run setup. A
+    // network/auth failure deliberately stays on the portfolio route, whose
+    // error shell offers retry instead of pretending there are no projects.
+    if (projects === undefined) {
+      try {
+        projects = await context.queryClient.ensureQueryData(
+          getApiV1ProjectsOptions({ client: heyClient }),
+        )
+      } catch {
+        return
+      }
+    }
+
+    if (projects.length === 0) {
       throw redirect({ to: '/setup' })
     }
   },
@@ -273,7 +299,7 @@ export const settingsRoute = createRoute({
 export const setupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/setup',
-  component: SetupPage,
+  component: OnboardingSetupPage,
 })
 
 export const backlinksRoute = createRoute({

@@ -83,7 +83,7 @@ function OverviewProjectCard({
 
 export function OverviewPage() {
   const contextDashboard = useInitialDashboard()
-  const { dashboard, isLoading } = useDashboard()
+  const { dashboard, isLoading, isError, refetch } = useDashboard()
   const safeDashboard = dashboard ?? contextDashboard?.dashboard
 
   // Every hook has to run on every render, so they all sit above the skeleton
@@ -95,6 +95,26 @@ export function OverviewPage() {
   const enableLiveStatus = !contextDashboard
   const healthQuery = useHealth(enableLiveStatus, contextDashboard?.health)
   const { openRun } = useDrawer()
+
+  if (isError && !safeDashboard) {
+    return (
+      <div className="page-container">
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1 className="page-title">Portfolio unavailable</h1>
+            <p className="page-subtitle">Canonry could not load the project list.</p>
+          </div>
+        </div>
+        <div className="max-w-xl rounded-lg border border-negative bg-negative-soft p-4" role="alert">
+          <p className="text-sm font-medium text-heading">Your projects have not been changed.</p>
+          <p className="mt-1 text-sm text-secondary">Check the connection or sign in again, then retry.</p>
+          <Button type="button" variant="secondary" className="mt-4" onClick={() => { void refetch() }}>
+            Retry loading portfolio
+          </Button>
+        </div>
+      </div>
+    )
+  }
 
   if (!safeDashboard || isLoading) {
     return (

@@ -25,6 +25,7 @@ import {
 import type {
   SiteAuditFactorSummaryDto,
   SiteAuditPagesResponseDto,
+  SiteAuditRunProgressDto,
   SiteAuditScoreDto,
   SiteAuditTrendResponseDto,
   SiteCrawlDeadLinksResponseDto,
@@ -1295,6 +1296,128 @@ describe('POST /technical-aeo/runs', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(ctx.siteAuditRequested[0]!.opts).toMatchObject({ maxPages: 60, maxEdges: 500, maxDepth: 4, checkDeadLinks: false })
+  })
+
+  it('rejects an unavailable executor before a queued run can be persisted', async () => {
+    const before = ctx.db.select().from(runs).all().length
+    const withoutExecutor = Fastify()
+    withoutExecutor.register(apiRoutes, { db: ctx.db, skipAuth: true })
+    await withoutExecutor.ready()
+
+    const response = await withoutExecutor.inject({
+      method: 'POST',
+      url: '/api/v1/projects/tech-aeo/technical-aeo/runs',
+      payload: {},
+    })
+
+    expect(response.statusCode).toBe(422)
+    expect(response.json()).toMatchObject({
+      error: { code: 'MISSING_DEPENDENCY', details: { reason: 'no-site-audit-handler' } },
+    })
+    expect(ctx.db.select().from(runs).all()).toHaveLength(before)
+    await withoutExecutor.close()
+  })
+})
+
+describe('GET /technical-aeo/runs/:runId/progress', () => {
+  it('keeps a legacy terminal audit terminal when no crawl attempt exists', async () => {
+    const response = await get<SiteAuditRunProgressDto>(`/api/v1/projects/tech-aeo/technical-aeo/runs/${ctx.runA}/progress`)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      runId: ctx.runA,
+      status: 'completed',
+      phase: 'completed',
+      attempt: null,
+    })
+  })
+
+  it.each([
+    ['completed', 'completed'],
+    ['partial', 'partial'],
+  ] as const)('keeps a legacy %s audit terminal when its persisted crawl has no graph layout', async (status, phase) => {
+    const now = new Date().toISOString()
+    const runId = crypto.randomUUID()
+    const attemptId = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: runId, projectId: ctx.projectId, kind: 'site-audit', status, trigger: 'manual', createdAt: now, finishedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlAttempts).values({
+      id: attemptId, projectId: ctx.projectId, runId, attemptNumber: 1, state: status,
+      startedAt: now, finishedAt: now, createdAt: now, updatedAt: now,
+    }).run()
+
+    const response = await get<SiteAuditRunProgressDto>(`/api/v1/projects/tech-aeo/technical-aeo/runs/${runId}/progress`)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      runId,
+      status,
+      phase,
+      attempt: { id: attemptId, state: status },
+      layout: { state: 'unavailable', layoutVersion: null, failureCode: null, updatedAt: null },
+    })
+  })
+
+  it('returns raw stored counters for an exact running site-audit without a percentage', async () => {
+    const now = new Date().toISOString()
+    const runId = crypto.randomUUID()
+    const attemptId = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: runId, projectId: ctx.projectId, kind: 'site-audit', status: 'running', trigger: 'manual', createdAt: now, startedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlAttempts).values({
+      id: attemptId, projectId: ctx.projectId, runId, attemptNumber: 1, state: 'running',
+      pagesDiscovered: 48, pagesFetched: 19, pagesEligible: 12, pagesErrored: 2, edgesDiscovered: 97,
+      startedAt: now, createdAt: now, updatedAt: now,
+    }).run()
+
+    const response = await get<SiteAuditRunProgressDto>(`/api/v1/projects/tech-aeo/technical-aeo/runs/${runId}/progress`)
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual(expect.objectContaining({
+      project: 'tech-aeo', runId, status: 'running', phase: 'checking',
+      layout: { state: 'pending', layoutVersion: null, failureCode: null, updatedAt: null },
+    }))
+    expect(response.body.attempt).toEqual(expect.objectContaining({
+      id: attemptId, state: 'running', pagesDiscovered: 48, pagesFetched: 19,
+      pagesEligible: 12, pagesErrored: 2, edgesDiscovered: 97, lastUpdatedAt: now,
+    }))
+    expect(JSON.stringify(response.body)).not.toContain('percent')
+  })
+
+  it('pins terminal map layout state to the exact completed run', async () => {
+    const response = await get<SiteAuditRunProgressDto>(`/api/v1/projects/tech-aeo/technical-aeo/runs/${ctx.runB}/progress`)
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      runId: ctx.runB,
+      status: 'completed',
+      phase: 'completed',
+      layout: { state: 'ready', layoutVersion: 'site-health-fa2-v1' },
+      attempt: { state: 'completed', pagesDiscovered: 3, pagesFetched: 3, pagesEligible: 2, edgesDiscovered: 2 },
+    })
+  })
+
+  it('does not disclose a probe, non-site-audit, or another project\'s run through the project path', async () => {
+    const now = new Date().toISOString()
+    const answerRunId = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: answerRunId, projectId: ctx.projectId, kind: 'answer-visibility', status: 'completed', trigger: 'manual', createdAt: now,
+    }).run()
+
+    const otherProjectId = crypto.randomUUID()
+    const otherRunId = crypto.randomUUID()
+    ctx.db.insert(projects).values({
+      id: otherProjectId, name: 'other-health', displayName: 'Other Health', canonicalDomain: 'other.example',
+      country: 'US', language: 'en', providers: [], locations: [], createdAt: now, updatedAt: now,
+    }).run()
+    ctx.db.insert(runs).values({
+      id: otherRunId, projectId: otherProjectId, kind: 'site-audit', status: 'queued', trigger: 'manual', createdAt: now,
+    }).run()
+
+    for (const runId of [ctx.probeRun, answerRunId, otherRunId]) {
+      const response = await get(`/api/v1/projects/tech-aeo/technical-aeo/runs/${runId}/progress`)
+      expect(response.status, runId).toBe(404)
+    }
   })
 })
 

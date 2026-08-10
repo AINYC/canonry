@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import React from 'react'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import {
@@ -13,6 +13,7 @@ import {
   getApiV1ProjectsByNameTechnicalAeoGraphQueryKey,
   getApiV1ProjectsByNameTechnicalAeoGraphQueryKey,
   getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsQueryKey,
+  getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressQueryKey,
   getApiV1ProjectsByNameTechnicalAeoStructureInfiniteQueryKey,
   getApiV1ProjectsByNameTechnicalAeoStructureQueryKey,
 } from '@ainyc/canonry-api-client/react-query'
@@ -28,6 +29,25 @@ vi.mock('../src/queries/mutations.js', () => ({
     mutate: mutationMock.mutate,
   }),
 }))
+
+vi.mock('@tanstack/react-router', async () => {
+  const React = await import('react')
+  return {
+    Link: ({
+      to,
+      params,
+      children,
+      ...props
+    }: {
+      to: string
+      params: { projectName: string }
+      children?: React.ReactNode
+    }) => React.createElement('a', {
+      ...props,
+      href: to.replace('$projectName', encodeURIComponent(params.projectName)),
+    }, children),
+  }
+})
 
 vi.mock('../src/components/project/TechnicalAeoSection.js', () => ({
   TechnicalAeoSection: ({ runId, integrated }: { runId?: string | null; integrated?: boolean }) => (
@@ -88,7 +108,7 @@ const projectId = 'proj_1'
 
 function scan(
   runId: string,
-  status: 'completed' | 'partial' | 'running' = 'completed',
+  status: 'completed' | 'partial' | 'running' | 'failed' | 'cancelled' = 'completed',
   hasCrawlData = true,
 ) {
   return {
@@ -360,10 +380,13 @@ function makeClient() {
   return queryClient
 }
 
-function renderSection(queryClient = makeClient()) {
+function renderSection(
+  queryClient = makeClient(),
+  props: Partial<React.ComponentProps<typeof SiteHealthSection>> = {},
+) {
   render(
     <QueryClientProvider client={queryClient}>
-      <SiteHealthSection projectName={projectName} projectId={projectId} />
+      <SiteHealthSection projectName={projectName} projectId={projectId} {...props} />
     </QueryClientProvider>,
   )
   return queryClient
@@ -581,6 +604,444 @@ test('keeps dead-link checks off by default when starting a scan', () => {
     projectId,
     body: { checkDeadLinks: false },
   })
+})
+
+test('releases a pinned onboarding scan before the header starts its replacement', async () => {
+  const queryClient = makeClient()
+  const onReleaseInitialRun = vi.fn()
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressQueryKey({
+    client: heyClient,
+    path: { name: projectName, runId: 'run_1' },
+  }), {
+    project: projectName,
+    runId: 'run_1',
+    status: 'completed',
+    phase: 'completed',
+    attempt: null,
+    layout: { state: 'ready', layoutVersion: 'site-health-fa2-v1', failureCode: null, updatedAt: null },
+    error: null,
+  })
+
+  renderSection(queryClient, { initialRunId: 'run_1', onReleaseInitialRun })
+  const history = screen.getByRole('combobox', { name: 'View a Site Health scan' }) as HTMLSelectElement
+  expect(history.value).toBe('run_1')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Run scan' }))
+
+  expect(mutationMock.mutate).toHaveBeenCalledWith({
+    projectName,
+    projectId,
+    body: { checkDeadLinks: false },
+  })
+  expect(onReleaseInitialRun).toHaveBeenCalledOnce()
+  expect(history.value).toBe('')
+
+  act(() => {
+    queryClient.setQueryData(
+      scanHistoryKey(),
+      scanHistory(scan('run_2', 'running', false), scan('run_1')),
+    )
+  })
+  expect(await screen.findByText(/a newer scan is running/i)).not.toBeNull()
+
+  act(() => {
+    seedRun(queryClient, 'run_2', summary('run_2', 64))
+    queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_2'), scan('run_1')))
+  })
+  await waitFor(() => expect(screen.getByText('64')).not.toBeNull())
+  expect(history.value).toBe('')
+})
+
+test('uses the exact active run for a first scan instead of showing stale-map copy', () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_active', 'running', false)))
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_active' },
+  }), {
+    project: projectName,
+    hasCrawlData: false,
+    legacyAuditAvailable: false,
+    runId: 'run_active',
+    runStatus: 'running',
+  })
+
+  renderSection(queryClient)
+
+  expect(screen.getByRole('status').textContent).toContain('Scanning site')
+  expect(screen.queryByText(/latest completed results remain/i)).toBeNull()
+  expect(screen.queryByText('Full-site map not available')).toBeNull()
+  expect(queryClient.getQueryState(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_active' },
+  }))).not.toBeUndefined()
+})
+
+test('defers the terminal-only crawl read for an active exact run and keeps progress visible', async () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_active', 'running', false)))
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressQueryKey({
+    client: heyClient,
+    path: { name: projectName, runId: 'run_active' },
+  }), {
+    project: projectName,
+    runId: 'run_active',
+    status: 'running',
+    phase: 'discovering',
+    attempt: null,
+    layout: { state: 'pending', layoutVersion: null, failureCode: null, updatedAt: null },
+    error: null,
+  })
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+    code: 'NOT_FOUND',
+    message: 'No completed crawl exists for this run.',
+  }), {
+    status: 404,
+    headers: { 'content-type': 'application/json' },
+  }))
+  vi.stubGlobal('fetch', fetchMock)
+
+  renderSection(queryClient, { initialRunId: 'run_active' })
+
+  await waitFor(() => expect(screen.getByRole('status', { name: 'Current scan progress' })).not.toBeNull())
+  expect(fetchMock).not.toHaveBeenCalled()
+  expect(screen.getByRole('status', { name: 'Current scan progress' }).textContent).toContain('Discovering pages')
+})
+
+test('uses exact stored progress when the project run list is unavailable', async () => {
+  const queryClient = makeClient()
+  queryClient.removeQueries({
+    queryKey: scanHistoryKey(),
+  })
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressQueryKey({
+    client: heyClient,
+    path: { name: projectName, runId: 'run_handoff' },
+  }), {
+    project: projectName,
+    runId: 'run_handoff',
+    status: 'running',
+    phase: 'checking',
+    attempt: null,
+    layout: { state: 'pending', layoutVersion: null, failureCode: null, updatedAt: null },
+    error: null,
+  })
+  const requestedPaths: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = input instanceof Request ? input.url : String(input)
+    requestedPaths.push(new URL(url).pathname)
+    return new Response('{"error":{"message":"run list unavailable"}}', {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    })
+  }))
+
+  renderSection(queryClient, { initialRunId: 'run_handoff' })
+
+  const progress = await screen.findByRole('status', { name: 'Current scan progress' })
+  expect(progress.textContent).toContain('Checking pages')
+  expect(progress.closest('[role="tabpanel"]')?.getAttribute('id')).toBe('site-health-map-panel')
+  expect(requestedPaths.some((path) => path.endsWith('/technical-aeo/crawl'))).toBe(false)
+})
+
+test('releases a stale exact handoff after the stored progress route returns not found', async () => {
+  const queryClient = makeClient()
+  const onReleaseInitialRun = vi.fn()
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = input instanceof Request ? input.url : String(input)
+    if (url.includes('/technical-aeo/runs/run_missing/progress')) {
+      return new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Run not found' } }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    return new Response('{}', { status: 500, headers: { 'content-type': 'application/json' } })
+  }))
+
+  renderSection(queryClient, { initialRunId: 'run_missing', onReleaseInitialRun })
+
+  await waitFor(() => expect(onReleaseInitialRun).toHaveBeenCalledOnce())
+  expect(screen.queryByRole('status', { name: 'Current scan progress' })).toBeNull()
+  expect(screen.getByRole('img', { name: 'Interactive site map' })).not.toBeNull()
+})
+
+test('releases local exact-run selection when durable handoff state is cleared', () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressQueryKey({
+    client: heyClient,
+    path: { name: projectName, runId: 'run_1' },
+  }), {
+    project: projectName,
+    runId: 'run_1',
+    status: 'completed',
+    phase: 'completed',
+    attempt: null,
+    layout: { state: 'ready', layoutVersion: 'site-health-fa2-v1', failureCode: null, updatedAt: null },
+    error: null,
+  })
+  const view = (initialRunId?: string) => (
+    <QueryClientProvider client={queryClient}>
+      <SiteHealthSection projectName={projectName} projectId={projectId} initialRunId={initialRunId} />
+    </QueryClientProvider>
+  )
+  const { rerender } = render(view('run_1'))
+  expect((screen.getByRole('combobox', { name: 'View a Site Health scan' }) as HTMLSelectElement).value).toBe('run_1')
+
+  rerender(view(undefined))
+
+  expect((screen.getByRole('combobox', { name: 'View a Site Health scan' }) as HTMLSelectElement).value).toBe('')
+})
+
+test('pins an onboarding handoff to its exact active scan after reload', () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(
+    scanHistoryKey(),
+    scanHistory(scan('run_handoff', 'running', false), scan('run_previous')),
+  )
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_handoff' },
+  }), {
+    project: projectName,
+    hasCrawlData: false,
+    legacyAuditAvailable: false,
+    runId: 'run_handoff',
+    runStatus: 'running',
+  })
+
+  renderSection(queryClient, { initialRunId: 'run_handoff' })
+
+  expect(screen.getByRole('status').textContent).toContain('Scanning site')
+  expect((screen.getByRole('combobox', { name: 'View a Site Health scan' }) as HTMLSelectElement).value).toBe('run_handoff')
+  expect(screen.queryByRole('img', { name: 'Interactive site map' })).toBeNull()
+})
+
+test('shows exact stored scan progress as raw stages and counts, never a fabricated percentage', () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_active', 'running', false)))
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_active' },
+  }), {
+    project: projectName,
+    hasCrawlData: false,
+    legacyAuditAvailable: false,
+    runId: 'run_active',
+    runStatus: 'running',
+  })
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressQueryKey({
+    client: heyClient,
+    path: { name: projectName, runId: 'run_active' },
+  }), {
+    project: projectName,
+    runId: 'run_active',
+    status: 'running',
+    phase: 'checking',
+    attempt: {
+      id: 'attempt_1',
+      state: 'running',
+      pagesDiscovered: 47,
+      pagesFetched: 19,
+      pagesEligible: 16,
+      pagesErrored: 2,
+      edgesDiscovered: 105,
+      lastUpdatedAt: '2026-08-09T12:00:00.000Z',
+      startedAt: '2026-08-09T11:58:00.000Z',
+      finishedAt: null,
+      error: null,
+    },
+    layout: { state: 'pending', layoutVersion: null, failureCode: null, updatedAt: null },
+    error: null,
+  })
+
+  renderSection(queryClient)
+
+  const progress = screen.getByRole('status', { name: 'Current scan progress' })
+  expect(within(progress).getByText(/Checking pages/)).not.toBeNull()
+  expect(within(progress).getByText('47')).not.toBeNull()
+  expect(within(progress).getByText('19')).not.toBeNull()
+  expect(within(progress).getByText('2')).not.toBeNull()
+  expect(progress.textContent).not.toMatch(/\d+%/)
+})
+
+test('keeps the exact onboarding run in arranging-map state until its terminal layout is published', () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_handoff')))
+  seedRun(queryClient, 'run_handoff')
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressQueryKey({
+    client: heyClient,
+    path: { name: projectName, runId: 'run_handoff' },
+  }), {
+    project: projectName,
+    runId: 'run_handoff',
+    status: 'completed',
+    phase: 'arranging-map',
+    attempt: {
+      id: 'attempt_1',
+      state: 'completed',
+      pagesDiscovered: 42,
+      pagesFetched: 40,
+      pagesEligible: 37,
+      pagesErrored: 0,
+      edgesDiscovered: 294,
+      lastUpdatedAt: '2026-08-09T12:00:00.000Z',
+      startedAt: '2026-08-09T11:58:00.000Z',
+      finishedAt: '2026-08-09T12:00:00.000Z',
+      error: null,
+    },
+    layout: { state: 'pending', layoutVersion: null, failureCode: null, updatedAt: null },
+    error: null,
+  })
+
+  renderSection(queryClient, { initialRunId: 'run_handoff' })
+
+  const progress = screen.getByRole('status', { name: 'Current scan progress' })
+  expect(progress.textContent).toContain('Arranging map')
+  expect(screen.queryByRole('img', { name: 'Interactive site map' })).toBeNull()
+})
+
+test('waits for arranging-map to finish before loading the large graph payload', async () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_handoff')))
+  seedRun(queryClient, 'run_handoff')
+  queryClient.removeQueries({
+    queryKey: getApiV1ProjectsByNameTechnicalAeoGraphQueryKey({
+      client: heyClient,
+      path: { name: projectName },
+      query: { runId: 'run_handoff', maxNodes: 20_000, maxEdges: 50_000 },
+    }),
+  })
+  const progressKey = getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressQueryKey({
+    client: heyClient,
+    path: { name: projectName, runId: 'run_handoff' },
+  })
+  const arrangingProgress = {
+    project: projectName,
+    runId: 'run_handoff',
+    status: 'completed' as const,
+    phase: 'arranging-map' as const,
+    attempt: null,
+    layout: { state: 'pending' as const, layoutVersion: null, failureCode: null, updatedAt: null },
+    error: null,
+  }
+  queryClient.setQueryData(progressKey, arrangingProgress)
+  let layoutPublished = false
+  const graphRequests: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = input instanceof Request ? input.url : String(input)
+    if (!url.includes('/technical-aeo/graph')) return new Response('{}', { status: 500 })
+    graphRequests.push(url)
+    if (!layoutPublished) {
+      return new Response('{"error":{"message":"layout pending"}}', {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({
+      project: projectName,
+      hasCrawlData: true,
+      runId: 'run_handoff',
+      layout: { state: 'ready', version: 'site-health-fa2-v1', computedAt: '2026-08-09T12:00:01.000Z' },
+      totalNodes: 2,
+      totalEdges: 1,
+      nodes: [{ ...homePage, x: 0, y: 0 }, { ...servicesPage, x: 1, y: 1 }],
+      edges: [],
+      omittedNodes: 0,
+      omittedEdges: 0,
+      sampled: false,
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }))
+
+  renderSection(queryClient, { initialRunId: 'run_handoff' })
+  expect(screen.getByRole('status', { name: 'Current scan progress' }).textContent).toContain('Arranging map')
+
+  layoutPublished = true
+  act(() => {
+    queryClient.setQueryData(progressKey, {
+      ...arrangingProgress,
+      phase: 'completed',
+      layout: { state: 'ready', layoutVersion: 'site-health-fa2-v1', failureCode: null, updatedAt: '2026-08-09T12:00:01.000Z' },
+    })
+  })
+
+  await screen.findByRole('img', { name: 'Interactive site map' })
+  expect(graphRequests).toHaveLength(1)
+})
+
+test('offers rerun recovery when a pinned onboarding scan is cancelled before a map exists', async () => {
+  const queryClient = makeClient()
+  const onReleaseInitialRun = vi.fn()
+  queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_handoff', 'cancelled', false)))
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressQueryKey({
+    client: heyClient,
+    path: { name: projectName, runId: 'run_handoff' },
+  }), {
+    project: projectName,
+    runId: 'run_handoff',
+    status: 'cancelled',
+    phase: 'cancelled',
+    attempt: null,
+    layout: { state: 'unavailable', layoutVersion: null, failureCode: 'CANCELLED', updatedAt: null },
+    error: null,
+  })
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+    code: 'NOT_FOUND',
+    message: 'No completed crawl exists for this run.',
+  }), {
+    status: 404,
+    headers: { 'content-type': 'application/json' },
+  }))
+  vi.stubGlobal('fetch', fetchMock)
+
+  renderSection(queryClient, {
+    initialRunId: 'run_handoff',
+    onReleaseInitialRun,
+  } as never)
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+  const recovery = screen.getByRole('alert', { name: 'Site scan recovery' })
+  expect(recovery.textContent).toContain('Scan cancelled')
+  fireEvent.click(within(recovery).getByRole('button', { name: 'Run scan again' }))
+  expect(mutationMock.mutate).toHaveBeenCalledWith({
+    projectName,
+    projectId,
+    body: { checkDeadLinks: false },
+  })
+  expect(onReleaseInitialRun).toHaveBeenCalledOnce()
+  expect((screen.getByRole('combobox', { name: 'View a Site Health scan' }) as HTMLSelectElement).value).toBe('')
+})
+
+test('offers measurement setup after a usable terminal map without claiming it inferred queries', () => {
+  renderSection()
+
+  const action = screen.getByRole('link', { name: 'Build measurement plan' })
+  expect(action.getAttribute('href')).toBe('/projects/citypoint/portfolio')
+  expect(screen.getByText(/review the pages and groups you want to measure/i)).not.toBeNull()
+  expect(screen.queryByText(/queries were added automatically/i)).toBeNull()
+})
+
+test('offers the inventory as the direct recovery path when the graph read fails', async () => {
+  const queryClient = makeClient()
+  queryClient.removeQueries({
+    queryKey: getApiV1ProjectsByNameTechnicalAeoGraphQueryKey({
+      client: heyClient,
+      path: { name: projectName },
+      query: { runId: 'run_1', maxNodes: 20_000, maxEdges: 50_000 },
+    }),
+  })
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"unavailable"}', {
+    status: 503,
+    headers: { 'content-type': 'application/json' },
+  })))
+
+  renderSection(queryClient)
+
+  await screen.findByText('The interactive map could not be loaded.')
+  fireEvent.click(screen.getByRole('button', { name: 'Open page inventory' }))
+  expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('site-health-inventory-tab')
 })
 
 test('loads the complete inventory in 200-page batches', async () => {

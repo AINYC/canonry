@@ -235,10 +235,11 @@ export function useTriggerSiteAudit() {
       projectName: string
       projectId: string
       projectLabel?: string
+      suppressErrorToast?: boolean
       body?: Parameters<typeof triggerSiteAudit>[1]
     }) => triggerSiteAudit(projectName, body),
     onSuccess: (result, variables) => {
-      invalidateProjectAndRunQueries(queryClient)
+      invalidateQueriesForRunKind(queryClient, RunKinds['site-audit'], variables.projectName)
       trackRun({
         id: result.runId,
         projectId: variables.projectId,
@@ -256,6 +257,7 @@ export function useTriggerSiteAudit() {
       })
     },
     onError: (error, variables) => {
+      if (variables.suppressErrorToast) return
       handleTrackedRunError(error, {
         projectKey: variables.projectName,
         projectLabel: variables.projectLabel ?? variables.projectName,

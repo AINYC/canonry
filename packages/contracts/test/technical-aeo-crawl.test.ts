@@ -8,6 +8,7 @@ import {
   normalizeSiteAuditRunRequest,
   siteAuditRequestIdentity,
   siteAuditRunRequestSchema,
+  siteAuditRunProgressSchema,
   siteCrawlDeadLinksResponseSchema,
   siteCrawlGraphResponseSchema,
   siteCrawlPageAuditSchema,
@@ -25,6 +26,22 @@ describe('Technical AEO crawl contracts', () => {
     expect(SITE_AUDIT_MAX_PAGE_LIMIT).toBe(50_000)
     expect(SITE_AUDIT_MAX_EDGE_LIMIT).toBe(1_000_000)
     expect(normalizeSiteAuditRunRequest({})).toMatchObject({ maxPages: 1_000, maxEdges: 100_000 })
+  })
+
+  it('models exact stored run progress without inventing a completion percentage', () => {
+    expect(siteAuditRunProgressSchema.parse({
+      project: 'example',
+      runId: 'run-1',
+      status: 'running',
+      phase: 'checking',
+      attempt: {
+        id: 'attempt-1', state: 'running',
+        pagesDiscovered: 42, pagesFetched: 17, pagesEligible: 12, pagesErrored: 1, edgesDiscovered: 88,
+        lastUpdatedAt: '2026-08-09T12:00:00.000Z', startedAt: '2026-08-09T11:59:00.000Z', finishedAt: null, error: null,
+      },
+      layout: { state: 'pending', layoutVersion: null, failureCode: null, updatedAt: null },
+      error: null,
+    })).toMatchObject({ phase: 'checking', layout: { state: 'pending' } })
   })
 
   it('defaults dead-link checking off while retaining the legacy sitemapUrl and limit aliases', () => {

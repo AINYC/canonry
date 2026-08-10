@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import {
   AlertTriangle,
   ChevronDown,
@@ -37,6 +38,7 @@ import {
   getApiV1ProjectsByNameTechnicalAeoGraphOptions,
   getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsOptions,
   getApiV1ProjectsByNameTechnicalAeoRunsOptions,
+  getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressOptions,
   getApiV1ProjectsByNameTechnicalAeoStructureInfiniteOptions,
 } from '@ainyc/canonry-api-client/react-query'
 
@@ -697,7 +699,7 @@ function PageInspector({
         <div className="mt-5">
           {isLoading ? (
           <div className="flex items-center gap-2 py-6 text-sm text-secondary">
-            <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+            <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
             Loading page links...
           </div>
         ) : error ? (
@@ -858,7 +860,7 @@ function InventoryTable({
       {hasNextPage && (
         <div className="flex justify-center border-x border-b border-default px-4 py-3">
           <Button variant="secondary" size="sm" disabled={isFetchingNextPage} onClick={onLoadMore}>
-            {isFetchingNextPage && <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />}
+            {isFetchingNextPage && <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />}
             {isFetchingNextPage ? 'Loading more pages' : 'Load more pages'}
           </Button>
         </div>
@@ -984,7 +986,7 @@ function SiteSectionChildren({
   if (structureQuery.isLoading) {
     return (
       <div className="flex items-center gap-2 px-3 py-4 text-sm text-secondary" role="status">
-        <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> Loading sections...
+        <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" /> Loading sections...
       </div>
     )
   }
@@ -1034,7 +1036,7 @@ function GraphLoadingState() {
       className="flex min-h-[420px] items-center justify-center rounded-lg border border-default bg-surface-inset px-6 text-center lg:min-h-[520px]"
     >
       <div className="max-w-sm">
-        <LoaderCircle className="mx-auto size-5 animate-spin text-muted" aria-hidden="true" />
+        <LoaderCircle className="mx-auto size-5 motion-safe:animate-spin text-muted" aria-hidden="true" />
         <p className="mt-3 text-sm font-medium text-heading">Preparing the interactive site map</p>
         <p className="mt-1 text-sm text-secondary">Page and link data is ready for the graph renderer.</p>
       </div>
@@ -1042,10 +1044,170 @@ function GraphLoadingState() {
   )
 }
 
-export function SiteHealthSection({ projectName, projectId }: { projectName: string; projectId: string }) {
+type SiteAuditProgressSnapshot = {
+  phase: 'queued' | 'discovering' | 'checking' | 'arranging-map' | 'completed' | 'partial' | 'failed' | 'cancelled'
+  attempt: {
+    pagesDiscovered: number
+    pagesFetched: number
+    pagesErrored: number
+    error: string | null
+  } | null
+  error: string | null
+}
+
+function scanPhaseCopy(phase: SiteAuditProgressSnapshot['phase'] | 'running' | 'queued' | null | undefined): string {
+  if (phase === 'discovering') return 'Discovering pages'
+  if (phase === 'checking') return 'Checking pages'
+  if (phase === 'arranging-map') return 'Arranging map'
+  if (phase === 'queued') return 'Waiting to start'
+  return 'Preparing scan'
+}
+
+function shouldPollSiteAuditProgress(phase: SiteAuditProgressSnapshot['phase'] | undefined): boolean {
+  return phase !== 'completed'
+    && phase !== 'partial'
+    && phase !== 'failed'
+    && phase !== 'cancelled'
+}
+
+function isActiveSiteAuditPhase(phase: SiteAuditProgressSnapshot['phase'] | undefined): boolean {
+  return phase === 'queued'
+    || phase === 'discovering'
+    || phase === 'checking'
+    || phase === 'arranging-map'
+}
+
+function queryErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null
+  const candidate = error as { code?: unknown; error?: unknown }
+  if (typeof candidate.code === 'string') return candidate.code
+  if (candidate.error && typeof candidate.error === 'object') {
+    const nested = candidate.error as { code?: unknown }
+    return typeof nested.code === 'string' ? nested.code : null
+  }
+  return null
+}
+
+function TransientSiteHealthPanel({
+  view,
+  children,
+}: {
+  view: Exclude<SiteHealthView, 'technical'>
+  children: ReactNode
+}) {
+  return (
+    <div
+      id={`site-health-${view}-panel`}
+      role="tabpanel"
+      aria-labelledby={`site-health-${view}-tab`}
+      className="min-w-0"
+    >
+      {children}
+    </div>
+  )
+}
+
+function ActiveScanState({
+  status,
+  progress,
+  progressError,
+  onRetryProgress,
+}: {
+  status: SiteAuditProgressSnapshot['phase'] | 'running'
+  progress?: SiteAuditProgressSnapshot | null
+  progressError?: boolean
+  onRetryProgress?: () => void
+}) {
+  const attempt = progress?.attempt ?? null
+  const phase = progress?.phase ?? status
+  const arrangingMap = phase === 'arranging-map'
+
+  return (
+    <section
+      aria-label="Current scan progress"
+      aria-live="polite"
+      role="status"
+      className="rounded-lg border border-caution bg-caution-soft px-5 py-6"
+    >
+      <h2 className="text-base font-semibold text-heading">{arrangingMap ? 'Preparing site map' : 'Scanning site'}</h2>
+      <p className="mt-1 text-sm text-secondary">
+        {arrangingMap
+          ? 'Arranging map. The scan is complete and its map is being published.'
+          : `${scanPhaseCopy(phase)}. The map appears after the scan finishes.`}
+      </p>
+      {attempt && (
+        <dl className="mt-5 grid grid-cols-3 divide-x divide-default rounded-lg border border-default bg-surface-subtle">
+          <div className="px-4 py-3">
+            <dt className="text-xs text-muted">Pages found</dt>
+            <dd className="mt-1 font-mono text-lg font-semibold tabular-nums text-heading">{metricValue(attempt.pagesDiscovered)}</dd>
+          </div>
+          <div className="px-4 py-3">
+            <dt className="text-xs text-muted">Pages checked</dt>
+            <dd className="mt-1 font-mono text-lg font-semibold tabular-nums text-heading">{metricValue(attempt.pagesFetched)}</dd>
+          </div>
+          <div className="px-4 py-3">
+            <dt className="text-xs text-muted">Pages failed</dt>
+            <dd className="mt-1 font-mono text-lg font-semibold tabular-nums text-heading">{metricValue(attempt.pagesErrored)}</dd>
+          </div>
+        </dl>
+      )}
+      {progressError && (
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-secondary" role="alert">
+          <span>{arrangingMap ? 'Map publishing status could not load.' : 'Live scan counts could not load. The scan is still running.'}</span>
+          {onRetryProgress && <Button type="button" variant="secondary" size="sm" onClick={onRetryProgress}>Retry progress</Button>}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function TerminalScanRecoveryState({
+  phase,
+  progress,
+  onRunAgain,
+}: {
+  phase: 'failed' | 'cancelled'
+  progress?: SiteAuditProgressSnapshot | null
+  onRunAgain: () => void
+}) {
+  const cancelled = phase === 'cancelled'
+  const error = progress?.error ?? progress?.attempt?.error
+
+  return (
+    <section
+      aria-label="Site scan recovery"
+      role="alert"
+      className="rounded-lg border border-negative bg-negative-soft px-5 py-6"
+    >
+      <h2 className="text-base font-semibold text-negative">{cancelled ? 'Scan cancelled' : 'Scan failed'}</h2>
+      <p className="mt-1 text-sm text-secondary">
+        {cancelled
+          ? 'The scan was cancelled before Canonry could publish a site map.'
+          : 'The scan did not complete, so there is no site map for this run.'}
+      </p>
+      {error && <p className="mt-3 text-sm text-negative">{error}</p>}
+      <Button type="button" className="mt-4" onClick={onRunAgain}>Run scan again</Button>
+    </section>
+  )
+}
+
+export function SiteHealthSection({
+  projectName,
+  projectId,
+  initialRunId,
+  onReleaseInitialRun,
+}: {
+  projectName: string
+  projectId: string
+  /** The durable route handoff wins over a derived latest scan after reload. */
+  initialRunId?: string
+  /** Clears an onboarding handoff from durable route state before a replacement scan. */
+  onReleaseInitialRun?: () => void
+}) {
   const [view, setView] = useState<SiteHealthView>('map')
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(() => initialRunId ?? null)
+  const previousInitialRunId = useRef(initialRunId)
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
   const [checkDeadLinks, setCheckDeadLinks] = useState(false)
   const [inventoryFilter, setInventoryFilter] = useState<InventoryFilterId>('all')
@@ -1058,6 +1220,14 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
   const [showTemplateLinks, setShowTemplateLinks] = useState(false)
   const embedded = isEmbed()
   const runMutation = useTriggerSiteAudit()
+
+  useEffect(() => {
+    const previous = previousInitialRunId.current
+    if (previous === initialRunId) return
+    previousInitialRunId.current = initialRunId
+    setSelectedRunId((current) => initialRunId ?? (current === previous ? null : current))
+    setSelectedNodeKey(null)
+  }, [initialRunId])
 
   // The Site Health scan history, not the generic run list: it already excludes
   // probes and says which scans kept a crawl.
@@ -1076,7 +1246,44 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
   const activeAudit = auditScans.find((scan) => scan.status === 'queued' || scan.status === 'running')
   const latestTerminalAudit = auditScans
     .find((scan) => scan.status === 'completed' || scan.status === 'partial')
-  const requestedRunId = selectedRunId ?? latestTerminalAudit?.runId ?? null
+  const requestedRunId = selectedRunId ?? latestTerminalAudit?.runId ?? activeAudit?.runId ?? null
+  const activeRunWithoutPublishedMap = activeAudit?.runId === requestedRunId ? activeAudit : null
+  const requestedAuditRun = requestedRunId
+    ? auditScans.find((scan) => scan.runId === requestedRunId)
+    : undefined
+  const isInitialRunSelection = Boolean(initialRunId && requestedRunId === initialRunId)
+  const exactProgressRunId = activeRunWithoutPublishedMap?.runId ?? (isInitialRunSelection ? requestedRunId : null)
+
+  const activeProgressQuery = useQuery({
+    ...getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressOptions({
+      client: heyClient,
+      path: { name: projectName, runId: exactProgressRunId ?? '' },
+    }),
+    enabled: Boolean(exactProgressRunId),
+    refetchInterval: (query) => shouldPollSiteAuditProgress(query.state.data?.phase) ? 3_000 : false,
+  })
+  useEffect(() => {
+    if (!isInitialRunSelection || !activeProgressQuery.isError) return
+    if (queryErrorCode(activeProgressQuery.error) !== 'NOT_FOUND') return
+    setSelectedRunId(null)
+    setSelectedNodeKey(null)
+    onReleaseInitialRun?.()
+  }, [activeProgressQuery.error, activeProgressQuery.isError, isInitialRunSelection, onReleaseInitialRun])
+  const exactProgressActive = isActiveSiteAuditPhase(activeProgressQuery.data?.phase)
+  const exactProgressPending = Boolean(exactProgressRunId && activeProgressQuery.isPending)
+  const exactProgressNeedsAuthority = Boolean(isInitialRunSelection && !requestedAuditRun)
+  const exactProgressUnavailable = Boolean(exactProgressNeedsAuthority && activeProgressQuery.isError)
+  const deferTerminalEvidence = Boolean(
+    activeRunWithoutPublishedMap
+    || exactProgressActive
+    || exactProgressPending
+    || exactProgressUnavailable,
+  )
+  const recoveryPhase = activeProgressQuery.data?.phase === 'failed' || activeProgressQuery.data?.phase === 'cancelled'
+    ? activeProgressQuery.data.phase
+    : isInitialRunSelection && (requestedAuditRun?.status === 'failed' || requestedAuditRun?.status === 'cancelled')
+      ? requestedAuditRun.status
+      : null
 
   const crawlQuery = useQuery({
     ...getApiV1ProjectsByNameTechnicalAeoCrawlOptions({
@@ -1084,7 +1291,9 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
       path: { name: projectName },
       ...(requestedRunId ? { query: { runId: requestedRunId } } : {}),
     }),
-    refetchInterval: !selectedRunId && activeAudit ? 3_000 : false,
+    // The crawl endpoint deliberately exposes terminal persisted crawls only.
+    // Exact progress is the authoritative read while this run is still active.
+    enabled: !deferTerminalEvidence,
   })
   const crawl = crawlQuery.data
   const resolvedRunId = requestedRunId ?? crawl?.runId ?? null
@@ -1097,7 +1306,9 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
       path: { name: projectName },
       query: { ...scopedRunQuery, maxNodes: GRAPH_NODE_LIMIT, maxEdges: GRAPH_EDGE_LIMIT },
     }),
-    enabled: detailsEnabled,
+    // Layout publication is terminal. Fetch this large payload once after the
+    // exact progress route leaves `arranging-map`, never while it is pending.
+    enabled: detailsEnabled && !deferTerminalEvidence,
   })
   // The chip narrows on the server, so `total` and the cursor stay truthful
   // instead of describing an unfiltered list.
@@ -1257,15 +1468,23 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
 
   // The server already orders scans newest first, so the dropdown does not
   // keep a second ordering of the same list.
-  const selectableScans = useMemo(
-    () => auditScans.filter((scan) => scan.status === 'completed' || scan.status === 'partial'),
-    [auditScans],
-  )
+  const selectableScans = useMemo(() => {
+    const terminalScans = auditScans
+      .filter((scan) => scan.status === 'completed' || scan.status === 'partial')
+    const selectedScan = selectedRunId
+      ? auditScans.find((scan) => scan.runId === selectedRunId)
+      : undefined
+    return selectedScan && !terminalScans.some((scan) => scan.runId === selectedScan.runId)
+      ? [selectedScan, ...terminalScans]
+      : terminalScans
+  }, [auditScans, selectedRunId])
   const newestRunStatus = auditScans[0]?.status ?? null
-  const selectedRun = resolvedRunId ? auditScans.find((scan) => scan.runId === resolvedRunId) : undefined
-  const status = !selectedRunId && activeAudit
-    ? activeAudit.status
-    : crawl?.runStatus ?? selectedRun?.status ?? null
+  const selectedRun = resolvedRunId ? requestedAuditRun : undefined
+  const status = activeRunWithoutPublishedMap
+    ? activeRunWithoutPublishedMap.status
+    : exactProgressActive
+      ? activeProgressQuery.data?.status ?? null
+    : recoveryPhase ?? crawl?.runStatus ?? selectedRun?.status ?? null
   const statusLabel = status === 'running'
     ? 'Scan running'
     : status === 'queued'
@@ -1276,10 +1495,12 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
           ? 'Complete'
           : status === 'failed'
             ? 'Scan failed'
+            : status === 'cancelled'
+              ? 'Scan cancelled'
             : 'No scan'
   const deadLinks = deadLinksQuery.data
   const deadLinkStatus = deadLinkLabel(
-    deadLinks?.state ?? crawl?.deadLinks.state ?? 'unavailable',
+    deadLinks?.state ?? crawl?.deadLinks?.state ?? 'unavailable',
     deadLinks && 'found' in deadLinks ? deadLinks.found : crawl?.deadLinks && 'found' in crawl.deadLinks ? crawl.deadLinks.found : undefined,
   )
   const movedSite = movedSiteHosts(crawl?.requestedRootUrl ?? null, crawl?.rootUrl ?? null)
@@ -1302,17 +1523,31 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
       ?? null,
     [graphPages, rootNodeKey, rootPageQuery.data],
   )
-  const scanBusy = runMutation.isPending || Boolean(activeAudit)
+  const scanBusy = runMutation.isPending || Boolean(activeAudit) || exactProgressActive || exactProgressPending
+  const showProgressState = deferTerminalEvidence
+  const hasUsableSiteEvidence = Boolean(
+    crawl?.hasCrawlData
+    && crawl.detailsAvailable
+    && (graphPages.length > 0 || inventoryPages.length > 0),
+  )
 
   const selectRun = (runId: string) => {
     setSelectedRunId(runId || null)
     setSelectedNodeKey(null)
   }
-  const startScan = () => runMutation.mutate({
-    projectName,
-    projectId,
-    body: { checkDeadLinks },
-  })
+  const startScan = () => {
+    // Release any pinned scan before dispatching its replacement.
+    // Otherwise the durable URL handoff keeps the old run selected while the
+    // newly queued scan progresses invisibly in the background.
+    setSelectedRunId(null)
+    setSelectedNodeKey(null)
+    if (initialRunId) onReleaseInitialRun?.()
+    runMutation.mutate({
+      projectName,
+      projectId,
+      body: { checkDeadLinks },
+    })
+  }
   const selectSection = (path: string) => {
     const matchingPage = graphPages.find((page) => page.path === path || page.path.startsWith(`${path}/`))
     if (matchingPage) setSelectedNodeKey(matchingPage.nodeKey)
@@ -1391,7 +1626,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
                 </div>
               </details>
               <WriteButton onClick={startScan} disabled={scanBusy}>
-                {scanBusy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Play className="size-4" aria-hidden="true" />}
+                {scanBusy ? <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" /> : <Play className="size-4" aria-hidden="true" />}
                 {activeAudit?.status === 'running' ? 'Scan running' : activeAudit?.status === 'queued' ? 'Scan queued' : 'Run scan'}
               </WriteButton>
             </div>
@@ -1461,9 +1696,9 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
         )}
       </div>
 
-      {!selectedRunId && activeAudit && (
+      {!selectedRunId && activeAudit && !activeRunWithoutPublishedMap && (
         <div className="rounded-lg border border-caution bg-caution-soft px-4 py-3 text-sm text-caution" role="status">
-          The scan is running. The latest completed results remain available until it finishes.
+          A newer scan is running. The latest published result remains available until it finishes.
         </div>
       )}
       {movedSite && (
@@ -1494,41 +1729,66 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             integrated
           />
         </div>
+      ) : recoveryPhase ? (
+        <TransientSiteHealthPanel view={view}>
+          <TerminalScanRecoveryState
+            phase={recoveryPhase}
+            progress={activeProgressQuery.data}
+            onRunAgain={startScan}
+          />
+        </TransientSiteHealthPanel>
+      ) : showProgressState ? (
+        <TransientSiteHealthPanel view={view}>
+          <ActiveScanState
+            status={activeProgressQuery.data?.phase ?? (activeRunWithoutPublishedMap?.status === 'running' ? 'running' : 'queued')}
+            progress={activeProgressQuery.data}
+            progressError={activeProgressQuery.isError}
+            onRetryProgress={() => { void activeProgressQuery.refetch() }}
+          />
+        </TransientSiteHealthPanel>
       ) : crawlQuery.isLoading ? (
-        <div className="flex min-h-72 items-center justify-center gap-2 text-sm text-secondary" role="status">
-          <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-          Loading site health...
-        </div>
+        <TransientSiteHealthPanel view={view}>
+          <div className="flex min-h-72 items-center justify-center gap-2 text-sm text-secondary" role="status">
+            <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+            Loading site health...
+          </div>
+        </TransientSiteHealthPanel>
       ) : crawlQuery.error ? (
-        <section className="rounded-lg border border-negative bg-negative-soft px-5 py-6" role="alert">
-          <h2 className="font-semibold text-negative">Site Health could not load</h2>
-          <p className="mt-1 text-sm text-negative">Try loading the crawl again.</p>
-          <Button variant="secondary" size="sm" className="mt-4" onClick={() => void crawlQuery.refetch()}>Try again</Button>
-        </section>
+        <TransientSiteHealthPanel view={view}>
+          <section className="rounded-lg border border-negative bg-negative-soft px-5 py-6" role="alert">
+            <h2 className="font-semibold text-negative">Site Health could not load</h2>
+            <p className="mt-1 text-sm text-negative">Try loading the crawl again.</p>
+            <Button variant="secondary" size="sm" className="mt-4" onClick={() => void crawlQuery.refetch()}>Try again</Button>
+          </section>
+        </TransientSiteHealthPanel>
       ) : !crawl?.hasCrawlData ? (
-        <section className="rounded-lg border border-default bg-surface-subtle px-5 py-8 text-center">
-          <h2 className="text-base font-semibold text-heading">Full-site map not available</h2>
-          <p className="mx-auto mt-2 max-w-xl text-sm text-secondary">
-            {crawl?.legacyAuditAvailable
-              ? 'Existing technical checks are preserved. Run a new scan to build the page and internal-link map.'
-              : embedded
-                ? 'A full-site scan has not been run for this project.'
-                : 'Run a scan to discover pages, site sections, and internal links.'}
-          </p>
-          {crawl?.legacyAuditAvailable && (
-            <Button variant="secondary" size="sm" className="mt-4" onClick={() => setView('technical')}>View technical checks</Button>
-          )}
-        </section>
+        <TransientSiteHealthPanel view={view}>
+          <section className="rounded-lg border border-default bg-surface-subtle px-5 py-8 text-center">
+            <h2 className="text-base font-semibold text-heading">Full-site map not available</h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-secondary">
+              {crawl?.legacyAuditAvailable
+                ? 'Existing technical checks are preserved. Run a new scan to build the page and internal-link map.'
+                : embedded
+                  ? 'A full-site scan has not been run for this project.'
+                  : 'Run a scan to discover pages, site sections, and internal links.'}
+            </p>
+            {crawl?.legacyAuditAvailable && (
+              <Button variant="secondary" size="sm" className="mt-4" onClick={() => setView('technical')}>View technical checks</Button>
+            )}
+          </section>
+        </TransientSiteHealthPanel>
       ) : !crawl.detailsAvailable ? (
-        <section className="rounded-lg border border-caution bg-caution-soft px-5 py-6">
-          <h2 className="font-semibold text-caution">Page details unavailable</h2>
-          <p className="mt-1 text-sm text-caution">Summary metrics are preserved for this scan, but its page graph cannot be opened.</p>
-        </section>
+        <TransientSiteHealthPanel view={view}>
+          <section className="rounded-lg border border-caution bg-caution-soft px-5 py-6">
+            <h2 className="font-semibold text-caution">Page details unavailable</h2>
+            <p className="mt-1 text-sm text-caution">Summary metrics are preserved for this scan, but its page graph cannot be opened.</p>
+          </section>
+        </TransientSiteHealthPanel>
       ) : view === 'inventory' ? (
         <div id="site-health-inventory-panel" role="tabpanel" aria-labelledby="site-health-inventory-tab" className="space-y-5">
           {pagesQuery.isLoading ? (
             <div className="flex min-h-56 items-center justify-center gap-2 text-sm text-secondary" role="status">
-              <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+              <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
               Loading page inventory...
             </div>
           ) : pagesQuery.error ? (
@@ -1627,8 +1887,12 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
               {graphQuery.isLoading ? (
                 <GraphLoadingState />
               ) : graphQuery.error ? (
-                <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-negative bg-negative-soft px-6 text-center text-sm text-negative lg:min-h-[520px]" role="alert">
-                  The interactive map could not be loaded.
+                <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-negative bg-negative-soft px-6 text-center lg:min-h-[520px]" role="alert">
+                  <div>
+                    <p className="text-sm font-medium text-negative">The interactive map could not be loaded.</p>
+                    <p className="mt-1 text-sm text-secondary">The page inventory and technical findings remain available.</p>
+                    <Button variant="secondary" size="sm" className="mt-4" onClick={() => setView('inventory')}>Open page inventory</Button>
+                  </div>
                 </div>
               ) : (
                 <SiteGraphSigma
@@ -1643,6 +1907,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
                   rootNodeKey={graphQuery.data?.rootNodeKey ?? null}
                   selectedNodeKey={effectiveSelectedNodeKey}
                   onSelectNode={(node) => setSelectedNodeKey(node.nodeKey)}
+                  onOpenInventory={() => setView('inventory')}
                   ariaLabel={`Interactive site map showing ${metricValue(graphQuery.data?.nodes.length ?? 0)} pages and ${metricValue(visibleGraphEdges.length)} internal links`}
                 />
               )}
@@ -1687,6 +1952,23 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             onRetryReasons={() => { void selectedPageQuery.refetch() }}
             showTemplateLinks={showTemplateLinks || templateFilterUnavailable}
           />
+
+          {hasUsableSiteEvidence && (
+            <section className="flex flex-col justify-between gap-4 border-t border-default pt-5 sm:flex-row sm:items-center" aria-labelledby="site-health-measurement-plan-heading">
+              <div>
+                <h3 id="site-health-measurement-plan-heading" className="text-base font-semibold text-heading">Define what to measure</h3>
+                <p className="mt-1 max-w-2xl text-sm text-secondary">Review the pages and groups you want to measure. Canonry does not add queries automatically.</p>
+              </div>
+              <Button asChild className="shrink-0">
+                <Link
+                  to="/projects/$projectName/portfolio"
+                  params={{ projectName }}
+                >
+                  Build measurement plan
+                </Link>
+              </Button>
+            </section>
+          )}
         </div>
       )}
     </div>

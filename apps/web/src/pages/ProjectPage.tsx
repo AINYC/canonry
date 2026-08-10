@@ -1679,7 +1679,21 @@ function ProjectPageContent({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const appendQueries = useAppendQueries()
-  const manageQueriesRequested = (useSearch({ strict: false }) as { manageQueries?: boolean }).manageQueries === true
+  const projectSearchParams = useSearch({ strict: false }) as {
+    manageQueries?: boolean
+    runId?: string
+    siteHealthRunId?: string
+    scope?: string
+    class?: string
+  }
+  const manageQueriesRequested = projectSearchParams.manageQueries === true
+  const releaseInitialSiteHealthRun = useCallback(() => {
+    void navigate({
+      to: '.',
+      replace: true,
+      search: (previous: Record<string, unknown>) => ({ ...previous, siteHealthRunId: undefined }),
+    })
+  }, [navigate])
   const [managingQueries, setManagingQueries] = useState(manageQueriesRequested)
   const [newQueryText, setNewQueryText] = useState('')
   const [querySaving, setQuerySaving] = useState(false)
@@ -1696,8 +1710,7 @@ function ProjectPageContent({
   // link, bookmark and reload — at hundreds of markets, re-picking one after
   // every navigation IS the interaction. `search` stays local: it changes on
   // every keystroke and belongs in neither the URL nor the history stack.
-  const measurementSearchParams = useSearch({ strict: false }) as { scope?: string; class?: string }
-  const urlMeasurementView = parseMeasurementViewSearch(measurementSearchParams)
+  const urlMeasurementView = parseMeasurementViewSearch(projectSearchParams)
   const [advancedMeasurementSearch, setAdvancedMeasurementSearch] = useState<string | undefined>(undefined)
   // Sort is a within-view refinement, not what the page is ABOUT, so it stays
   // in component state rather than the URL alongside scope and class.
@@ -2752,7 +2765,12 @@ function ProjectPageContent({
       ) : tab === 'discovery' ? (
         <DiscoverySection projectName={projectName} />
       ) : tab === 'technical-aeo' ? (
-        <SiteHealthSection projectName={model.project.name} projectId={model.project.id} />
+        <SiteHealthSection
+          projectName={model.project.name}
+          projectId={model.project.id}
+          initialRunId={projectSearchParams.siteHealthRunId}
+          onReleaseInitialRun={releaseInitialSiteHealthRun}
+        />
       ) : tab === 'history' ? (
         <ProjectHistorySection projectName={model.project.name} />
       ) : tab === 'activity' ? (

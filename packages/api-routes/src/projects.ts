@@ -4,16 +4,22 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { projects, queries, competitors, schedules, notifications, runs, querySnapshots, insights, auditLog } from '@ainyc/canonry-db'
 import type { InferSelectModel } from 'drizzle-orm'
 import {
+  alreadyExists,
+  forbidden,
+  hostOf,
   validationError,
   locationContextSchema,
   normalizeProjectAliases,
+  normalizeProjectName,
+  projectCreateRequestSchema,
   projectUpsertRequestSchema,
   findDuplicateLocationLabels,
   hasLocationLabel,
   DEFAULT_MEASUREMENT_CONFIG,
+  PROJECTS_WRITE_SCOPE,
 } from '@ainyc/canonry-contracts'
-import type { LocationContext, MeasurementConfig, ProviderModels } from '@ainyc/canonry-contracts'
-import { requireScope } from './auth.js'
+import type { LocationContext, MeasurementConfig, ProjectCreateRequest, ProviderModels } from '@ainyc/canonry-contracts'
+import { requireAdminSession, requireScope } from './auth.js'
 import { resolveProject, writeAuditLog } from './helpers.js'
 import { SETTINGS_WRITE_SCOPE } from './settings.js'
 import type { ProviderAdapterInfo } from './settings.js'
@@ -34,6 +40,128 @@ export interface ProjectRoutesOptions {
 }
 
 export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOptions) {
+  // POST /projects — create only. The launchpad cannot race a CLI/API create
+  // and overwrite the project the other caller already configured.
+  app.post<{ Body: ProjectCreateRequest }>('/projects', async (request, reply) => {
+    requireAdminSession(request)
+    if (request.principal?.projectId) {
+      throw forbidden('This API key is limited to one project, and cannot create projects for this install.')
+    }
+    requireScope(request, PROJECTS_WRITE_SCOPE)
+
+    const parsedBody = projectCreateRequestSchema.safeParse(request.body)
+    if (!parsedBody.success) {
+      throw validationError('Invalid project payload', {
+        issues: parsedBody.error.issues.map(issue => ({
+          path: issue.path.join('.'),
+          message: issue.message,
+        })),
+      })
+    }
+    const body = parsedBody.data
+    const name = normalizeProjectName(body.name)
+    if (!name) {
+      throw validationError('Project name must contain at least one letter or number after normalization.')
+    }
+    const canonicalDomain = hostOf(body.canonicalDomain)
+    if (!canonicalDomain) {
+      throw validationError('canonicalDomain must be a valid hostname or http(s) URL.')
+    }
+
+    // Validate provider names against registered adapters.
+    const validNames = opts.providerAdapters?.map(adapter => adapter.name) ?? []
+    if (validNames.length && body.providers?.length) {
+      const invalid = body.providers.filter(p => !validNames.includes(p))
+      if (invalid.length) {
+        throw validationError(`Invalid provider(s): ${invalid.join(', ')}. Must be one of: ${validNames.join(', ')}`, {
+          invalidProviders: invalid,
+          validProviders: validNames,
+        })
+      }
+    }
+    const nextProviders = body.providers ?? []
+    const providerModels = pruneProviderModelsForProviders(
+      validateProviderModels(body.providerModels ?? {}, opts.providerAdapters),
+      nextProviders,
+    )
+    assertProviderModelScope(request, {}, providerModels, nextProviders)
+
+    const nextLocations = body.locations ?? []
+    const duplicateLabels = findDuplicateLocationLabels(nextLocations)
+    if (duplicateLabels.length > 0) {
+      throw validationError(`Duplicate location labels are not allowed: ${duplicateLabels.join(', ')}`, {
+        duplicateLabels,
+      })
+    }
+    const nextDefaultLocation = body.defaultLocation ?? null
+    if (!hasLocationLabel(nextLocations, nextDefaultLocation)) {
+      throw validationError(`defaultLocation "${nextDefaultLocation}" must match a configured location label`, {
+        defaultLocation: nextDefaultLocation,
+      })
+    }
+
+    // Legacy path-based projects may predate normalized names. Compare their
+    // normalized identity too, then rely on the exact unique index to make a
+    // concurrent same-key insert a no-op rather than an overwrite.
+    const normalizedCollision = app.db.select({
+      id: projects.id,
+      name: projects.name,
+      canonicalDomain: projects.canonicalDomain,
+    }).from(projects).all().find(project => (
+      normalizeProjectName(project.name) === name
+      || hostOf(project.canonicalDomain) === canonicalDomain
+    ))
+    if (normalizedCollision) {
+      if (hostOf(normalizedCollision.canonicalDomain) === canonicalDomain) {
+        throw alreadyExists('Project domain', canonicalDomain)
+      }
+      throw alreadyExists('Project', name)
+    }
+
+    const id = crypto.randomUUID()
+    const now = new Date().toISOString()
+    const nextAliases = normalizeProjectAliases(body.displayName, body.aliases ?? [])
+    const inserted = app.db.transaction((tx) => {
+      const result = tx.insert(projects).values({
+        id,
+        name,
+        displayName: body.displayName,
+        canonicalDomain,
+        ownedDomains: body.ownedDomains ?? [],
+        aliases: nextAliases,
+        country: body.country,
+        language: body.language,
+        tags: body.tags ?? [],
+        labels: body.labels ?? {},
+        providers: nextProviders,
+        providerModels,
+        measurement: body.measurement ?? DEFAULT_MEASUREMENT_CONFIG,
+        locations: nextLocations,
+        defaultLocation: nextDefaultLocation,
+        autoExtractBacklinks: body.autoExtractBacklinks ?? false,
+        configSource: body.configSource ?? 'api',
+        configRevision: 1,
+        createdAt: now,
+        updatedAt: now,
+      }).onConflictDoNothing().run()
+      if (result.changes !== 1) return false
+
+      writeAuditLog(tx, {
+        projectId: id,
+        actor: 'api',
+        action: 'project.created',
+        entityType: 'project',
+        entityId: id,
+      })
+      return true
+    })
+    if (!inserted) throw alreadyExists('Project', name)
+
+    opts.onProjectUpserted?.(id, name)
+    const created = app.db.select().from(projects).where(eq(projects.id, id)).get()!
+    return reply.status(201).send(formatProject(created))
+  })
+
   // PUT /projects/:name — upsert project
   app.put<{
     Params: { name: string }

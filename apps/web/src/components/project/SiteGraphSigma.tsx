@@ -67,6 +67,7 @@ export interface SiteGraphSigmaProps {
   showTemplateLinks?: boolean
   selectedNodeKey?: string | null
   onSelectNode?: (node: SiteGraphSigmaNode) => void
+  onOpenInventory?: () => void
   ariaLabel?: string
   className?: string
 }
@@ -188,6 +189,14 @@ class GraphRenderBoundary extends Component<GraphRenderBoundaryProps, GraphRende
 const CAMERA_ANIMATION_MS = 220
 
 
+
+function cameraAnimationMs(): number {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ? 0
+    : CAMERA_ANIMATION_MS
+}
 
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
   return `${count.toLocaleString()} ${count === 1 ? singular : pluralForm}`
@@ -329,7 +338,7 @@ function supportsWebGl(): boolean {
 /**
  * The browser genuinely cannot run the map. Probed once, at mount.
  */
-function GraphUnavailableState() {
+function GraphUnavailableState({ onOpenInventory }: { onOpenInventory?: () => void }) {
   return (
     <div className="flex h-full min-h-80 items-center justify-center px-6 text-center">
       <div className="max-w-md">
@@ -337,6 +346,9 @@ function GraphUnavailableState() {
         <p className="mt-1 text-sm text-secondary">
           This browser could not start WebGL. The page inventory remains available for the complete crawl.
         </p>
+        {onOpenInventory && (
+          <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={onOpenInventory}>Open page inventory</Button>
+        )}
       </div>
     </div>
   )
@@ -400,11 +412,12 @@ function SigmaRuntime({
   }, [])
 
   useEffect(() => {
+    const duration = cameraAnimationMs()
     onCameraReady({
-      zoomIn: () => zoomIn({ duration: CAMERA_ANIMATION_MS }),
-      zoomOut: () => zoomOut({ duration: CAMERA_ANIMATION_MS }),
-      reset: () => reset({ duration: CAMERA_ANIMATION_MS }),
-      gotoNode: (nodeKey) => gotoNode(nodeKey, { duration: CAMERA_ANIMATION_MS }),
+      zoomIn: () => zoomIn({ duration }),
+      zoomOut: () => zoomOut({ duration }),
+      reset: () => reset({ duration }),
+      gotoNode: (nodeKey) => gotoNode(nodeKey, { duration }),
     })
     return () => onCameraReady(null)
   }, [gotoNode, onCameraReady, reset, zoomIn, zoomOut])
@@ -494,6 +507,7 @@ export function SiteGraphSigma({
   showTemplateLinks = true,
   selectedNodeKey,
   onSelectNode,
+  onOpenInventory,
   ariaLabel,
   className,
 }: SiteGraphSigmaProps) {
@@ -684,6 +698,9 @@ export function SiteGraphSigma({
         <div className="max-w-md">
           <p className="text-sm font-medium text-heading">{unavailableLayout.heading}</p>
           <p className="mt-1 text-sm text-secondary">{unavailableLayout.detail}</p>
+          {onOpenInventory && (
+            <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={onOpenInventory}>Open page inventory</Button>
+          )}
         </div>
       </section>
     )
@@ -697,7 +714,12 @@ export function SiteGraphSigma({
         aria-label={ariaLabel ?? defaultAriaLabel}
         className={cn('flex min-h-80 items-center justify-center rounded-lg border border-default bg-surface-inset px-6 text-center', className)}
       >
-        <p className="max-w-md text-sm text-secondary">No page graph is available for this scan.</p>
+        <div className="max-w-md">
+          <p className="text-sm text-secondary">No page graph is available for this scan.</p>
+          {onOpenInventory && (
+            <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={onOpenInventory}>Open page inventory</Button>
+          )}
+        </div>
       </section>
     )
   }
@@ -713,6 +735,9 @@ export function SiteGraphSigma({
         <div className="max-w-md">
           <p className="text-sm font-medium text-heading">{unavailableLayout.heading}</p>
           <p className="mt-1 text-sm text-secondary">{unavailableLayout.detail}</p>
+          {onOpenInventory && (
+            <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={onOpenInventory}>Open page inventory</Button>
+          )}
         </div>
       </section>
     )
@@ -826,7 +851,7 @@ export function SiteGraphSigma({
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {rendererState === 'unavailable' ? <GraphUnavailableState /> : rendererState === 'checking' || !theme || !builtGraph || !sigmaSettings || !reactSigma || !SigmaContainerComponent ? (
+        {rendererState === 'unavailable' ? <GraphUnavailableState onOpenInventory={onOpenInventory} /> : rendererState === 'checking' || !theme || !builtGraph || !sigmaSettings || !reactSigma || !SigmaContainerComponent ? (
           <div className="flex h-full min-h-80 items-center justify-center px-6 text-center" role="status">
             <p className="text-sm text-secondary">Preparing the interactive site map...</p>
           </div>

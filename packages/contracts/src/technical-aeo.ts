@@ -1220,3 +1220,57 @@ export type SiteHealthScansResponseDto = z.infer<typeof siteHealthScansResponseS
 
 export const SITE_HEALTH_SCANS_DEFAULT_LIMIT = 20
 export const SITE_HEALTH_SCANS_MAX_LIMIT = 100
+
+/** Stable lifecycle stage for one exact stored Site Health crawl. */
+export const siteAuditRunPhaseSchema = z.enum([
+  'queued',
+  'discovering',
+  'checking',
+  'arranging-map',
+  'completed',
+  'partial',
+  'failed',
+  'cancelled',
+])
+export type SiteAuditRunPhase = z.infer<typeof siteAuditRunPhaseSchema>
+
+/** The graph layout is a separately persisted terminal artifact. */
+export const siteAuditRunLayoutSchema = z.object({
+  state: z.enum(['pending', 'ready', 'unavailable']),
+  layoutVersion: z.string().nullable(),
+  failureCode: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+})
+export type SiteAuditRunLayoutDto = z.infer<typeof siteAuditRunLayoutSchema>
+
+/** Mutable counters from the latest durable crawl attempt. Never a percentage. */
+export const siteAuditRunAttemptProgressSchema = z.object({
+  id: z.string(),
+  state: z.string(),
+  pagesDiscovered: z.number().int().nonnegative(),
+  pagesFetched: z.number().int().nonnegative(),
+  pagesEligible: z.number().int().nonnegative(),
+  pagesErrored: z.number().int().nonnegative(),
+  edgesDiscovered: z.number().int().nonnegative(),
+  lastUpdatedAt: z.string(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
+  error: z.string().nullable(),
+})
+export type SiteAuditRunAttemptProgressDto = z.infer<typeof siteAuditRunAttemptProgressSchema>
+
+/**
+ * Exact stored progress for one non-probe `site-audit` run. This route never
+ * starts or polls external work; it exposes only durable run, attempt, and
+ * layout state so an onboarding surface can resume truthfully after reload.
+ */
+export const siteAuditRunProgressSchema = z.object({
+  project: z.string(),
+  runId: z.string(),
+  status: runStatusSchema,
+  phase: siteAuditRunPhaseSchema,
+  attempt: siteAuditRunAttemptProgressSchema.nullable(),
+  layout: siteAuditRunLayoutSchema,
+  error: z.string().nullable(),
+})
+export type SiteAuditRunProgressDto = z.infer<typeof siteAuditRunProgressSchema>

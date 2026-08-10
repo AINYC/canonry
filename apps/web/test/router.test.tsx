@@ -1,4 +1,4 @@
-import { test, expect, beforeAll } from 'vitest'
+import { test, expect, beforeAll, onTestFinished } from 'vitest'
 import React from 'react'
 import { render, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -10,6 +10,7 @@ import { DashboardProvider } from '../src/contexts/dashboard-context.js'
 import { heyClient } from '../src/api.js'
 import { getApiV1ProjectsQueryKey } from '@ainyc/canonry-api-client/react-query'
 import { preloadAllLazyRoutes } from '../src/router/routes.js'
+import { jsonResponse, mockFetch, pathOf } from './mock-fetch.js'
 
 beforeAll(async () => {
   await preloadAllLazyRoutes()
@@ -149,6 +150,34 @@ test('/ redirects to /setup when portfolio is empty', async () => {
   )
 
   expect(router.state.location.pathname).toBe('/setup')
+})
+
+test('/ waits for an authoritative cold project list before redirecting to setup', async () => {
+  const restore = mockFetch((url) => {
+    if (pathOf(url).startsWith('/api/v1/projects')) return jsonResponse([])
+    return jsonResponse({})
+  })
+  onTestFinished(restore)
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const router = createAppRouter(queryClient, { initialEntries: ['/'] })
+  await router.load()
+
+  expect(router.state.location.pathname).toBe('/setup')
+})
+
+test('/ does not treat a failed cold project-list request as an empty portfolio', async () => {
+  const restore = mockFetch((url) => {
+    if (pathOf(url).startsWith('/api/v1/projects')) return jsonResponse({ error: { message: 'offline' } }, 503)
+    return jsonResponse({})
+  })
+  onTestFinished(restore)
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const router = createAppRouter(queryClient, { initialEntries: ['/'] })
+  await router.load()
+
+  expect(router.state.location.pathname).toBe('/')
 })
 
 test('/setup stays available when projects exist so incomplete setup can resume', async () => {

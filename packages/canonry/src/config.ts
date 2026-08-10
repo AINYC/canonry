@@ -248,6 +248,14 @@ export interface AgentConfigEntry {
 
 export interface DashboardConfigEntry {
   /**
+   * First-open dashboard experience. `legacy` preserves the existing setup
+   * wizard, `platform` enables the domain-first Site Health launchpad, and
+   * `auto` enables the launchpad only when the authoritative project list is
+   * empty. Omitted keeps the legacy experience.
+   */
+  onboardingMode?: 'legacy' | 'platform' | 'auto'
+
+  /**
    * Whether the browser dashboard requires Canonry's built-in password/session
    * gate. Defaults to true. Set false only when an upstream layer enforces auth
    * and the engine is not directly internet-reachable.
