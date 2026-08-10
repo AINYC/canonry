@@ -11,7 +11,6 @@ import {
   SITE_GRAPH_FOCUSED_NEIGHBOR_LABEL_LIMIT,
   SITE_GRAPH_LABEL_BUDGETS,
   SITE_GRAPH_OVERVIEW_LABEL_BUDGET,
-  SITE_GRAPH_ROOT_LABEL,
   SITE_GRAPH_ROOT_TOKEN,
   siteGraphLabelBudget,
   siteGraphMaxNodeSize,
@@ -418,8 +417,9 @@ describe('the crawl root', () => {
   it('is named, always labeled, oversized, and ringed regardless of link score', () => {
     const root = graphWithRoot().graph.getNodeAttributes('home')
 
-    expect(root.label).toBe(`● ${SITE_GRAPH_ROOT_LABEL}`)
-    expect(root.label).not.toContain('/')
+    // The root reads as the path it is; the ring and the forced label are
+    // what mark it, not a different name.
+    expect(root.label).toBe('● /')
     expect(root.forceLabel).toBe(true)
     expect(root.isRoot).toBe(true)
     expect(root.ringColor).toBe(theme.root)
@@ -437,7 +437,7 @@ describe('the crawl root', () => {
 
     const overview = createSigmaSiteGraphReducers(built.graph, null, 2, theme)
     expect(overview.nodeReducer('home', root)).toMatchObject({
-      label: `● ${SITE_GRAPH_ROOT_LABEL}`,
+      label: '● /',
       forceLabel: true,
       ringColor: theme.root,
     })
@@ -445,7 +445,7 @@ describe('the crawl root', () => {
     // Focused elsewhere, and not even a neighbor of the focus.
     const focusedElsewhere = createSigmaSiteGraphReducers(built.graph, 'deep', 2, theme)
     expect(focusedElsewhere.nodeReducer('home', root)).toMatchObject({
-      label: `● ${SITE_GRAPH_ROOT_LABEL}`,
+      label: '● /',
       forceLabel: true,
       ringColor: theme.root,
     })
@@ -496,11 +496,11 @@ describe('a real template-mesh site (canonry.ai shape: 50 pages, ~1,259 links)',
     expect(labelled.length).toBeLessThanOrEqual(SITE_GRAPH_OVERVIEW_LABEL_BUDGET)
     expect(labelled).toContain('page-00')
 
-    // Exactly one page is named Home, and it is the server-identified root.
-    const homes = built.graph.nodes().filter((nodeKey) => (
-      String(built.graph.getNodeAttribute(nodeKey, 'label')).endsWith(SITE_GRAPH_ROOT_LABEL)
-    ))
-    expect(homes).toEqual(['page-00'])
+    // Exactly one page carries the root marker, and it is the one the server
+    // identified. Its label is its path like every other page.
+    const ringed = built.graph.nodes().filter((nodeKey) => built.graph.getNodeAttribute(nodeKey, 'isRoot'))
+    expect(ringed).toEqual(['page-00'])
+    expect(built.graph.getNodeAttribute('page-00', 'label')).toBe('● /')
 
     // The default view of a dense site shows nodes only.
     const visibleEdges = built.graph.edges().filter((edgeKey) => (

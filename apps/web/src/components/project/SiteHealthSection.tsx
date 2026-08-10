@@ -48,7 +48,7 @@ import {
   siteGraphVisualState,
   type SiteGraphVisualState,
 } from './site-graph-sigma.js'
-import { displayPagePath, siteHostFromUrl, SITE_HEALTH_HOME_LABEL } from './site-health-paths.js'
+import { displayPagePath, siteHostFromUrl } from './site-health-paths.js'
 import { PageAuditEvidence } from './PageAuditEvidence.js'
 import { TechnicalAeoSection } from './TechnicalAeoSection.js'
 import { WriteButton } from '../shared/AccessControls.js'
@@ -283,13 +283,11 @@ function NeighborTable({
   edges,
   truncated,
   rootHost,
-  rootNodeKey,
 }: {
   direction: 'inbound' | 'outbound'
   edges: SiteCrawlEdgeDto[]
   truncated: boolean
   rootHost: string | null
-  rootNodeKey: string | null
 }) {
   const heading = direction === 'inbound' ? 'Links in' : 'Links out'
   return (
@@ -317,12 +315,11 @@ function NeighborTable({
             <tbody>
               {edges.map((edge) => {
                 const url = direction === 'inbound' ? edge.sourceUrl : edge.targetUrl
-                const nodeKey = direction === 'inbound' ? edge.sourceNodeKey : edge.targetNodeKey
                 return (
                 <tr key={edge.edgeKey}>
                   {/* The path is the display; the full URL stays on hover. */}
                   <td className="max-w-64 truncate font-mono" title={url}>
-                    {nodeKey && nodeKey === rootNodeKey ? SITE_HEALTH_HOME_LABEL : displayPagePath(url, rootHost)}
+                    {displayPagePath(url, rootHost)}
                   </td>
                   <td className="max-w-52 truncate" title={edge.anchors.join(', ') || undefined}>
                     {edge.anchors.join(', ') || 'No anchor text'}
@@ -362,7 +359,6 @@ function PageInspector({
   auditError,
   onRetryAudit,
   rootHost,
-  rootNodeKey,
   reasonSource,
 }: {
   page: InspectableCrawlPage | null
@@ -377,7 +373,6 @@ function PageInspector({
   auditError: Error | null
   onRetryAudit: () => void
   rootHost: string | null
-  rootNodeKey: string | null
   /** The same page from the inventory read, which carries the crawler reasons. */
   reasonSource: SiteCrawlPageDto | null
 }) {
@@ -445,8 +440,8 @@ function PageInspector({
           </p>
         ) : (
           <div className="grid gap-5 lg:grid-cols-2">
-            <NeighborTable direction="inbound" edges={inbound} truncated={inboundTruncated} rootHost={rootHost} rootNodeKey={rootNodeKey} />
-            <NeighborTable direction="outbound" edges={outbound} truncated={outboundTruncated} rootHost={rootHost} rootNodeKey={rootNodeKey} />
+            <NeighborTable direction="inbound" edges={inbound} truncated={inboundTruncated} rootHost={rootHost} />
+            <NeighborTable direction="outbound" edges={outbound} truncated={outboundTruncated} rootHost={rootHost} />
           </div>
           )}
         </div>
@@ -650,16 +645,46 @@ function SiteSectionRow({
   )
 }
 
+/**
+ * The crawl root sits in no folder, so a folders-only list left the home page
+ * with nowhere to be clicked. It leads the top-level list as its own row.
+ */
+function RootPageRow({ page, onSelect }: {
+  page: Pick<SiteCrawlGraphNodeDto, 'nodeKey' | 'path' | 'inventoryEligible'>
+  onSelect: (nodeKey: string) => void
+}) {
+  return (
+    <li className="bg-surface-subtle">
+      <div className="flex min-h-11 items-center gap-1 px-2 py-1">
+        <span className="block size-8 shrink-0" aria-hidden="true" />
+        <button
+          type="button"
+          onClick={() => onSelect(page.nodeKey)}
+          className="min-w-0 flex-1 break-all rounded-sm py-2 text-left font-mono text-sm font-semibold text-heading outline-none hover:text-link focus-visible:ring-2 focus-visible:ring-mono-400"
+        >
+          {page.path || '/'}
+        </button>
+        <span className="shrink-0 px-2 font-mono text-xs text-muted">{metricValue(1)}</span>
+      </div>
+    </li>
+  )
+}
+
 function SiteSectionChildren({
   projectName,
   runId,
   parentPath,
   onSelect,
+  rootPage,
+  onSelectRootPage,
 }: {
   projectName: string
   runId: string
   parentPath: string
   onSelect: (path: string) => void
+  /** Only the top-level list carries it; nested folder lists pass null. */
+  rootPage?: Pick<SiteCrawlGraphNodeDto, 'nodeKey' | 'path' | 'inventoryEligible'> | null
+  onSelectRootPage?: (nodeKey: string) => void
 }) {
   const structureInput = {
     client: heyClient,
@@ -688,13 +713,16 @@ function SiteSectionChildren({
   if (structureQuery.error) {
     return <p className="px-3 py-4 text-sm text-negative" role="alert">Site sections could not be loaded.</p>
   }
-  if (sections.length === 0) {
+  if (sections.length === 0 && !rootPage) {
     return <p className="px-3 py-4 text-sm text-secondary">No nested sections were found.</p>
   }
 
   return (
     <>
       <ul className="divide-y divide-default">
+        {rootPage && onSelectRootPage && (
+          <RootPageRow page={rootPage} onSelect={onSelectRootPage} />
+        )}
         {sections.map((section) => (
           <SiteSectionRow
             key={section.path}
@@ -931,6 +959,12 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
   )
   const movedSite = movedSiteHosts(crawl?.requestedRootUrl ?? null, crawl?.rootUrl ?? null)
   const rootHost = siteHostFromUrl(crawl?.rootUrl ?? null)
+  // The root is identified by the server, so the sections list never has to
+  // guess which page is the site's entry point.
+  const rootGraphPage = useMemo(
+    () => graphPages.find((page) => page.nodeKey === graphQuery.data?.rootNodeKey) ?? null,
+    [graphPages, graphQuery.data?.rootNodeKey],
+  )
   const scanBusy = runMutation.isPending || Boolean(activeAudit)
 
   const selectRun = (runId: string) => {
@@ -1182,7 +1216,6 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             auditError={pageAuditQuery.error}
             onRetryAudit={() => { void pageAuditQuery.refetch() }}
             rootHost={rootHost}
-            rootNodeKey={graphQuery.data?.rootNodeKey ?? null}
             reasonSource={inventoryPage}
           />
         </div>
@@ -1235,6 +1268,8 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
                       runId={resolvedRunId}
                       parentPath="/"
                       onSelect={selectSection}
+                      rootPage={rootGraphPage}
+                      onSelectRootPage={setSelectedNodeKey}
                     />
                   )}
                 </div>
@@ -1256,7 +1291,6 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             auditError={pageAuditQuery.error}
             onRetryAudit={() => { void pageAuditQuery.refetch() }}
             rootHost={rootHost}
-            rootNodeKey={graphQuery.data?.rootNodeKey ?? null}
             reasonSource={inventoryPage}
           />
         </div>

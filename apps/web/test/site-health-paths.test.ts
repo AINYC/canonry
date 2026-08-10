@@ -7,7 +7,6 @@ import {
   displayPagePath,
   isSameSiteUrl,
   siteHostFromUrl,
-  SITE_HEALTH_HOME_LABEL,
 } from '../src/components/project/site-health-paths.js'
 
 const rootHost = 'azcoatingsllc.com'
@@ -32,11 +31,9 @@ describe('displayPagePath', () => {
       .toBe('https://notazcoatingsllc.com/about')
   })
 
-  it('does not guess the home page from the path', () => {
-    // "/" is not proof of the root: an apex and a www alias both sit there.
+  it('writes the root page as the path it actually is', () => {
     expect(displayPagePath('https://azcoatingsllc.com/', rootHost)).toBe('/')
     expect(displayPagePath('https://azcoatingsllc.com', rootHost)).toBe('/')
-    expect(SITE_HEALTH_HOME_LABEL).toBe('Home')
   })
 
   it('preserves query strings, which distinguish real page variants', () => {
@@ -71,29 +68,19 @@ describe('siteHostFromUrl and isSameSiteUrl', () => {
 
 describe('displayPageLabel', () => {
   // A crawl that follows an apex-to-www redirect keeps both aliases as pages,
-  // and both sit at "/". Only the server knows which one it rooted at.
+  // and both sit at "/". Neither is renamed, so neither can misrepresent the
+  // other: the map marks the real root with a ring, not with different text.
   const apex = { nodeKey: 'node-apex', url: 'https://azcoatingsllc.com/', path: '/' }
   const www = { nodeKey: 'node-www', url: 'https://www.azcoatingsllc.com/', path: '/' }
 
-  it('names exactly the server-identified root, never both aliases', () => {
-    const labels = [apex, www].map((page) => displayPageLabel(page, 'node-www', rootHost))
-    expect(labels).toEqual(['/', SITE_HEALTH_HOME_LABEL])
-    expect(labels.filter((label) => label === SITE_HEALTH_HOME_LABEL)).toHaveLength(1)
-
-    // Rooting at the apex instead moves the name with it.
-    expect(displayPageLabel(apex, 'node-apex', rootHost)).toBe(SITE_HEALTH_HOME_LABEL)
-    expect(displayPageLabel(www, 'node-apex', rootHost)).toBe('/')
-  })
-
-  it('names nothing Home when the server did not identify a root', () => {
-    expect(displayPageLabel(apex, null, rootHost)).toBe('/')
-    expect(displayPageLabel(www, undefined, rootHost)).toBe('/')
+  it('names every page by its path, including the root', () => {
+    expect([apex, www].map((page) => displayPageLabel(page, rootHost))).toEqual(['/', '/'])
+    expect(displayPageLabel({ url: 'https://azcoatingsllc.com/about', path: '/about' }, rootHost)).toBe('/about')
   })
 
   it('falls back to the path when a URL cannot be shortened', () => {
-    expect(displayPageLabel({ nodeKey: 'n', url: 'not a url', path: '/fallback' }, 'root', rootHost))
-      .toBe('not a url')
-    expect(displayPageLabel({ nodeKey: 'n', url: null, path: '/fallback' }, 'root', rootHost))
-      .toBe('/fallback')
+    expect(displayPageLabel({ url: 'not a url', path: '/fallback' }, rootHost)).toBe('not a url')
+    expect(displayPageLabel({ url: null, path: '/fallback' }, rootHost)).toBe('/fallback')
+    expect(displayPageLabel({ url: null, path: null }, rootHost)).toBe('/')
   })
 })

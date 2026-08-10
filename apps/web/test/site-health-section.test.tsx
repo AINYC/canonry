@@ -916,7 +916,7 @@ test('writes same-site link targets as paths and keeps the full URL on hover', (
   fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
 
   const linksIn = screen.getByRole('region', { name: 'Links in (1)' })
-  const homeCell = within(linksIn).getByText('Home')
+  const homeCell = within(linksIn).getByText('/')
   expect(homeCell.getAttribute('title')).toBe('https://citypoint.example/')
   expect(within(linksIn).queryByText('https://citypoint.example/')).toBeNull()
 
@@ -1050,4 +1050,34 @@ test('says so when a scan is too old to filter, instead of showing an empty list
   fireEvent.click(screen.getByRole('button', { name: 'Hidden pages' }))
 
   expect(screen.getByText('This scan cannot be filtered. Run a new scan to filter its pages.')).not.toBeNull()
+})
+
+test('leads the site sections list with the root page, which is in no folder', async () => {
+  // The sections list shows folders, and the home page belongs to none of
+  // them, so it used to be the one page with nowhere to click.
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const queryClient = makeClient()
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', nodeKey: 'page_home', limit: 100 },
+  }), {
+    project: projectName, hasCrawlData: true, runId: 'run_1', nodeKey: 'page_home',
+    url: homePage.url, inbound: [], outbound: [], inboundTruncated: false, outboundTruncated: false,
+  })
+
+  renderSection(queryClient)
+
+  const sections = screen.getByRole('complementary', { name: 'Site sections' })
+  const rows = within(sections).getAllByRole('listitem')
+  // The root leads the list, written as the path it is.
+  expect(within(rows[0]!).getByRole('button', { name: '/' })).not.toBeNull()
+  expect(within(rows[1]!).getByRole('button', { name: '/services' })).not.toBeNull()
+
+  // And it selects the root page rather than a folder path.
+  fireEvent.click(within(rows[0]!).getByRole('button', { name: '/' }))
+  await waitFor(() => expect(
+    screen.getByRole('heading', { name: '/', level: 3 }),
+  ).not.toBeNull())
 })

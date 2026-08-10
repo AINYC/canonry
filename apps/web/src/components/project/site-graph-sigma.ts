@@ -1,8 +1,6 @@
 import { MultiDirectedGraph } from 'graphology'
 import { deriveSiteHealthState, type SiteHealthState } from '@ainyc/canonry-contracts'
 
-import { SITE_HEALTH_HOME_LABEL } from './site-health-paths.js'
-
 export type SiteGraphVisualState = SiteHealthState
 
 /**
@@ -32,9 +30,6 @@ export const SITE_GRAPH_ROOT_TOKEN = {
   property: '--chart-site-health-root',
   fallback: '#cc79a7',
 } as const
-
-/** The home page is named, not pathed, so it reads at a glance. */
-export const SITE_GRAPH_ROOT_LABEL = SITE_HEALTH_HOME_LABEL
 
 /** Smallest dot we will draw; below this a node stops being clickable. */
 export const SITE_GRAPH_NODE_MIN_SIZE = 2.5
@@ -342,7 +337,7 @@ export function buildSigmaSiteGraph(
       size: siteGraphNodeSize(node, isRoot, nodesByKey.size),
       color,
       baseColor: color,
-      label: `${glyph} ${isRoot ? SITE_GRAPH_ROOT_LABEL : node.path || '/'}`,
+      label: `${glyph} ${node.path || '/'}`,
       nodeKey: node.nodeKey,
       url: node.url,
       path: node.path,

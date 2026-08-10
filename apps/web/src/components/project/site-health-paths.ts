@@ -9,9 +9,6 @@
  * disguised as an internal path.
  */
 
-/** The crawl root reads as a name, not a bare slash, everywhere it appears. */
-export const SITE_HEALTH_HOME_LABEL = 'Home'
-
 const WWW_PREFIX = /^www\./i
 
 /** Hostname of a crawl root URL, or null when it cannot be parsed. */
@@ -48,10 +45,6 @@ export function isSameSiteUrl(url: string, rootHost: string | null | undefined):
  * `/search?q=roof` and `/search` are different pages). Anything else,
  * including an unparseable value, is returned unchanged rather than silently
  * dropped.
- *
- * This deliberately does NOT name the home page. "/" is not proof of the root:
- * an apex and a www alias both sit at "/", and only the server knows which one
- * the crawl actually rooted at. Home naming is keyed off `rootNodeKey`.
  */
 export function displayPagePath(
   url: string | null | undefined,
@@ -66,15 +59,13 @@ export function displayPagePath(
 }
 
 /**
- * What one crawled page is called. The server-identified root is the only page
- * that reads as "Home", which is what keeps an apex/www alias pair from both
- * announcing themselves as the home page.
+ * What one crawled page is called: its path, everywhere. The root is marked on
+ * the map by its ring and its forced label, not by renaming it, so an apex and
+ * a www alias both read as the "/" they actually are.
  */
 export function displayPageLabel(
-  page: { nodeKey: string; url?: string | null; path?: string | null },
-  rootNodeKey: string | null | undefined,
+  page: { url?: string | null; path?: string | null },
   rootHost: string | null | undefined,
 ): string {
-  if (rootNodeKey && page.nodeKey === rootNodeKey) return SITE_HEALTH_HOME_LABEL
   return displayPagePath(page.url, rootHost) || page.path || '/'
 }

@@ -464,8 +464,8 @@ export function SiteGraphSigma({
     [nodeByKey, nodes, rootNodeKey],
   )
   const pageLabel = useCallback(
-    (node: SiteGraphSigmaNode) => displayPageLabel(node, rootNodeKey, rootHost),
-    [rootHost, rootNodeKey],
+    (node: SiteGraphSigmaNode) => displayPageLabel(node, rootHost),
+    [rootHost],
   )
   const selectedNode = effectiveSelectedNodeKey
     ? nodeByKey.get(effectiveSelectedNodeKey) ?? null
