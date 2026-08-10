@@ -17,7 +17,6 @@ import {
   SITE_CRAWL_GRAPH_MAX_NODES,
 } from '@ainyc/canonry-contracts'
 
-export const SITE_CRAWL_GRAPH_LAYOUT_VERSION = 'site-health-fa2-v1'
 export const SITE_CRAWL_GRAPH_LAYOUT_TIMEOUT_MS = 15_000
 /** Persisted points are normalized; fresh hash seeds occupy this FA2-scale space. */
 export const SITE_CRAWL_GRAPH_SEED_SCALE = 100
@@ -105,26 +104,140 @@ type ComputePositions = (
 const graphSourcePage = alias(siteCrawlPages, 'layout_graph_source_page')
 const graphTargetPage = alias(siteCrawlPages, 'layout_graph_target_page')
 
+/**
+ * Tuned for dense navigation meshes, which is what most real sites are: a
+ * 50-page site with a 25-link template header produces ~1,250 edges that all
+ * pull every page toward every other page. Under linear attraction with
+ * gravity 1 that collapses into one tight blob in the middle of an empty
+ * canvas.
+ *
+ * - `linLogMode` makes attraction logarithmic, so a template link no longer
+ *   pulls as hard as a real editorial link and communities can separate.
+ * - `outboundAttractionDistribution` divides a node's pull by its out-degree,
+ *   so a nav block that links everywhere stops dominating the field.
+ * - lower `gravity` stops the whole graph being squeezed back to the center
+ *   once those two let it expand.
+ */
 const FORCE_ATLAS_SETTINGS = Object.freeze({
   adjustSizes: false,
   barnesHutOptimize: true,
   barnesHutTheta: 0.5,
   edgeWeightInfluence: 0.5,
-  gravity: 1,
-  linLogMode: false,
-  outboundAttractionDistribution: false,
-  scalingRatio: 10,
+  gravity: 0.2,
+  linLogMode: true,
+  outboundAttractionDistribution: true,
+  scalingRatio: 2,
   slowDown: 10,
   strongGravityMode: false,
 })
+
+/**
+ * Publish-time layout has no per-node render size (the browser derives size
+ * from the link score), so anti-overlap uses the renderer's LARGEST node as a
+ * uniform conservative bound: `SITE_GRAPH_ROOT_MIN_SIZE` in
+ * `apps/web/src/components/project/site-graph-sigma.ts`.
+ */
+const RENDER_MAX_NODE_SIZE = 14
+/**
+ * Normalized coordinates span [-1, 1], which the fitted camera renders across
+ * roughly this many pixels of half-viewport. It converts a pixel node size
+ * into a fraction of the graph's own extent, so the separation the layout
+ * produces is scale invariant.
+ */
+const RENDER_HALF_EXTENT_PX = 420
+const NODE_SIZE_EXTENT_FRACTION = RENDER_MAX_NODE_SIZE / RENDER_HALF_EXTENT_PX
+
+const NOVERLAP_SETTINGS = Object.freeze({
+  /** Half a node of clear space between two touching nodes. */
+  marginFactor: 0.5,
+  expansion: 1.1,
+  ratio: 1,
+  speed: 3,
+  /**
+   * Node discs may claim at most this share of the graph's bounding box. At
+   * the 20k cap the extent-derived size asks for spacing the graph physically
+   * does not have, and noverlap either runs for minutes or overflows its
+   * collision set. This bound keeps the pass solvable at every graph size,
+   * and it only binds on graphs far too dense to read node-by-node anyway.
+   */
+  maxPackingFraction: 0.15,
+  /** Cells hold a handful of nodes each, which is what keeps the pass linear. */
+  gridSizeMin: 10,
+  gridSizeMax: 200,
+  iterationLadder: [
+    { maxNodes: 1_000, iterations: 120 },
+    { maxNodes: 5_000, iterations: 60 },
+  ],
+  iterationsFloor: 20,
+})
+
+/** One grid cell per few nodes; a fixed grid degenerates to O(n^2) at the cap. */
+export function noverlapGridSize(nodeCount: number): number {
+  return Math.max(
+    NOVERLAP_SETTINGS.gridSizeMin,
+    Math.min(NOVERLAP_SETTINGS.gridSizeMax, Math.ceil(Math.sqrt(Math.max(1, nodeCount)))),
+  )
+}
+
+/** Same shape as the ForceAtlas2 budget: small graphs can afford convergence. */
+export function noverlapMaxIterations(nodeCount: number): number {
+  for (const step of NOVERLAP_SETTINGS.iterationLadder) {
+    if (nodeCount <= step.maxNodes) return step.iterations
+  }
+  return NOVERLAP_SETTINGS.iterationsFloor
+}
+
+/**
+ * Where disconnected pages sit relative to the connected graph, as a multiple
+ * of the main component's radius. ForceAtlas2 flings an orphan arbitrarily far
+ * (nothing attracts it), which inflates the bounding box and leaves the real
+ * graph a dot after the camera fits. A bounded ring keeps orphans visible and
+ * findable without stealing the frame.
+ */
+const OUTLIER_RING_INNER_FACTOR = 1.25
+const OUTLIER_RING_OUTER_FACTOR = 1.75
+const OUTLIER_RING_MAX_RINGS = 4
+const OUTLIER_RING_TARGET_PER_RING = 16
+/** A single-node or degenerate main component still needs a real ring radius. */
+const OUTLIER_RING_MIN_RADIUS = 1
+
+/**
+ * Physics settings are part of the layout's identity. Fingerprinting them into
+ * the version means a settings change automatically stops prior positions from
+ * being reused as seeds (`loadPriorSiteCrawlGraphPositions` matches on this
+ * exact string), so a tuning change can never half-apply against coordinates
+ * produced by different physics.
+ */
+export function siteCrawlGraphLayoutSettingsFingerprint(settings: unknown): string {
+  return crypto.createHash('sha256').update(JSON.stringify(settings)).digest('hex').slice(0, 8)
+}
+
+const SITE_CRAWL_GRAPH_LAYOUT_ALGORITHM = 'site-health-fa2-v2'
+
+export const SITE_CRAWL_GRAPH_LAYOUT_VERSION = `${SITE_CRAWL_GRAPH_LAYOUT_ALGORITHM}-${
+  siteCrawlGraphLayoutSettingsFingerprint({
+    forceAtlas: FORCE_ATLAS_SETTINGS,
+    noverlap: NOVERLAP_SETTINGS,
+    nodeSizeExtentFraction: NODE_SIZE_EXTENT_FRACTION,
+    outlierRing: {
+      inner: OUTLIER_RING_INNER_FACTOR,
+      outer: OUTLIER_RING_OUTER_FACTOR,
+      maxRings: OUTLIER_RING_MAX_RINGS,
+      targetPerRing: OUTLIER_RING_TARGET_PER_RING,
+      minRadius: OUTLIER_RING_MIN_RADIUS,
+    },
+  })
+}`
 
 const WORKER_SOURCE = String.raw`
 const {parentPort, workerData} = require('node:worker_threads');
 try {
   const graphologyModule = require(workerData.graphologyPath);
   const forceAtlasModule = require(workerData.forceAtlasPath);
+  const noverlapModule = require(workerData.noverlapPath);
   const MultiDirectedGraph = graphologyModule.MultiDirectedGraph;
   const forceAtlas2 = forceAtlasModule.default || forceAtlasModule;
+  const noverlap = noverlapModule.default || noverlapModule;
   const graph = new MultiDirectedGraph({allowSelfLoops: true});
   for (const node of workerData.input.nodes) {
     graph.addNode(node.nodeKey, {x: node.x, y: node.y});
@@ -139,6 +252,45 @@ try {
       iterations: workerData.input.iterations,
       settings: workerData.settings,
     });
+  }
+  // Anti-overlap runs on the spatialization ForceAtlas2 just produced. Node
+  // size is uniform and derived from the graph's own extent, so the pass is
+  // scale invariant and stays deterministic for a fixed input.
+  if (graph.order > 1) {
+    let sumX = 0;
+    let sumY = 0;
+    graph.forEachNode(function (nodeKey, attributes) {
+      sumX += attributes.x;
+      sumY += attributes.y;
+    });
+    const centerX = sumX / graph.order;
+    const centerY = sumY / graph.order;
+    let extent = 0;
+    graph.forEachNode(function (nodeKey, attributes) {
+      extent = Math.max(extent, Math.abs(attributes.x - centerX), Math.abs(attributes.y - centerY));
+    });
+    if (Number.isFinite(extent) && extent > 0) {
+      // Whichever bound is tighter: one render-sized node, or the largest disc
+      // that still leaves the graph mostly empty space at this node count.
+      const byExtent = extent * workerData.nodeSizeExtentFraction;
+      const byArea = Math.sqrt(
+        (workerData.noverlap.maxPackingFraction * Math.pow(2 * extent, 2)) / graph.order,
+      ) / 2;
+      const nodeSize = Math.min(byExtent, byArea);
+      graph.forEachNode(function (nodeKey) {
+        graph.setNodeAttribute(nodeKey, 'size', nodeSize);
+      });
+      noverlap.assign(graph, {
+        maxIterations: workerData.noverlap.maxIterations,
+        settings: {
+          gridSize: workerData.noverlap.gridSize,
+          margin: nodeSize * workerData.noverlap.marginFactor,
+          expansion: workerData.noverlap.expansion,
+          ratio: workerData.noverlap.ratio,
+          speed: workerData.noverlap.speed,
+        },
+      });
+    }
   }
   const positions = [];
   graph.forEachNode((nodeKey, attributes) => {
@@ -231,8 +383,15 @@ async function computeForceAtlasPositions(
     workerData: {
       graphologyPath: requireFromPackage.resolve('graphology'),
       forceAtlasPath: requireFromPackage.resolve('graphology-layout-forceatlas2'),
+      noverlapPath: requireFromPackage.resolve('graphology-layout-noverlap'),
       input,
       settings: FORCE_ATLAS_SETTINGS,
+      noverlap: {
+        ...NOVERLAP_SETTINGS,
+        gridSize: noverlapGridSize(input.nodes.length),
+        maxIterations: noverlapMaxIterations(input.nodes.length),
+      },
+      nodeSizeExtentFraction: NODE_SIZE_EXTENT_FRACTION,
     },
   })
   const timeoutMs = options.timeoutMs ?? SITE_CRAWL_GRAPH_LAYOUT_TIMEOUT_MS
@@ -262,6 +421,112 @@ async function computeForceAtlasPositions(
       if (code !== 0 && !settled) finish({ error: new Error(`Graph layout worker exited with code ${code}`) })
     })
   })
+}
+
+interface ConnectedComponents {
+  /** Node keys of the largest component, ties broken by smallest node key. */
+  main: Set<string>
+  /** Every other node, grouped by component and ordered deterministically. */
+  outliers: string[]
+}
+
+/**
+ * Union-find over the sampled edge list. Direction does not matter here: a page
+ * reachable only by linking OUT is still attached to the graph a reader sees.
+ */
+export function siteCrawlGraphComponents(
+  nodeKeys: readonly string[],
+  edges: readonly Pick<SiteCrawlGraphLayoutEdge, 'sourceNodeKey' | 'targetNodeKey'>[],
+): ConnectedComponents {
+  const parent = new Map<string, string>(nodeKeys.map((key) => [key, key]))
+  const find = (key: string): string => {
+    let root = key
+    while (parent.get(root) !== root) root = parent.get(root)!
+    // Path compression keeps repeated lookups cheap at the 20k cap.
+    let cursor = key
+    while (parent.get(cursor) !== root) {
+      const next = parent.get(cursor)!
+      parent.set(cursor, root)
+      cursor = next
+    }
+    return root
+  }
+  for (const edge of edges) {
+    if (!parent.has(edge.sourceNodeKey) || !parent.has(edge.targetNodeKey)) continue
+    const sourceRoot = find(edge.sourceNodeKey)
+    const targetRoot = find(edge.targetNodeKey)
+    if (sourceRoot === targetRoot) continue
+    // Union by smaller key so the result never depends on edge order.
+    if (sourceRoot < targetRoot) parent.set(targetRoot, sourceRoot)
+    else parent.set(sourceRoot, targetRoot)
+  }
+
+  const members = new Map<string, string[]>()
+  for (const key of [...nodeKeys].sort()) {
+    const root = find(key)
+    const group = members.get(root)
+    if (group) group.push(key)
+    else members.set(root, [key])
+  }
+  let mainRoot: string | null = null
+  for (const [root, group] of members) {
+    if (mainRoot === null) { mainRoot = root; continue }
+    const best = members.get(mainRoot)!
+    if (group.length > best.length || (group.length === best.length && root < mainRoot)) mainRoot = root
+  }
+  const main = new Set(mainRoot === null ? [] : members.get(mainRoot)!)
+  const outliers = [...members.entries()]
+    .filter(([root]) => root !== mainRoot)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .flatMap(([, group]) => group)
+  return { main, outliers }
+}
+
+/**
+ * Re-place everything outside the main component on bounded concentric rings
+ * just past it. ForceAtlas2 has nothing attracting an orphan, so it drifts as
+ * far as the iteration budget allows; the resulting bounding box is mostly
+ * empty space and the camera fit shrinks the real graph to a dot. Placement is
+ * a pure function of node keys, so it is stable across runs.
+ */
+export function frameDisconnectedNodes(
+  positions: readonly ComputedPosition[],
+  edges: readonly Pick<SiteCrawlGraphLayoutEdge, 'sourceNodeKey' | 'targetNodeKey'>[],
+): ComputedPosition[] {
+  const { main, outliers } = siteCrawlGraphComponents(positions.map((p) => p.nodeKey), edges)
+  if (outliers.length === 0 || main.size === 0) return [...positions]
+
+  const mainPositions = positions.filter((position) => main.has(position.nodeKey))
+  const centerX = mainPositions.reduce((sum, p) => sum + p.x, 0) / mainPositions.length
+  const centerY = mainPositions.reduce((sum, p) => sum + p.y, 0) / mainPositions.length
+  if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) return [...positions]
+  const mainRadius = Math.max(
+    OUTLIER_RING_MIN_RADIUS,
+    ...mainPositions.map((p) => Math.hypot(p.x - centerX, p.y - centerY)).filter(Number.isFinite),
+  )
+
+  const ringCount = Math.max(1, Math.min(
+    OUTLIER_RING_MAX_RINGS,
+    Math.ceil(outliers.length / OUTLIER_RING_TARGET_PER_RING),
+  ))
+  const placed = new Map<string, ComputedPosition>()
+  for (const [index, nodeKey] of outliers.entries()) {
+    const ring = index % ringCount
+    const ringRadius = mainRadius * (ringCount === 1
+      ? OUTLIER_RING_INNER_FACTOR
+      : OUTLIER_RING_INNER_FACTOR
+        + (OUTLIER_RING_OUTER_FACTOR - OUTLIER_RING_INNER_FACTOR) * (ring / (ringCount - 1)))
+    const slot = Math.floor(index / ringCount)
+    const slotsOnRing = Math.ceil((outliers.length - ring) / ringCount)
+    // Offset alternating rings by half a slot so neighbours do not line up.
+    const angle = ((slot + (ring % 2) * 0.5) / Math.max(1, slotsOnRing)) * Math.PI * 2
+    placed.set(nodeKey, {
+      nodeKey,
+      x: centerX + Math.cos(angle) * ringRadius,
+      y: centerY + Math.sin(angle) * ringRadius,
+    })
+  }
+  return positions.map((position) => placed.get(position.nodeKey) ?? position)
 }
 
 function normalizePositions(
@@ -320,6 +585,9 @@ export async function layoutSiteCrawlGraphInput(
       iterations: adaptiveForceAtlasIterations(input.nodes.length, input.edges.length),
     }, { signal: options.signal, timeoutMs: options.timeoutMs })
     options.signal?.throwIfAborted()
+    // Framing runs last so the ring bound is exact: nothing moves an outlier
+    // after it is placed.
+    const framed = frameDisconnectedNodes(positions, input.edges)
     return {
       state: 'ready',
       layoutVersion: SITE_CRAWL_GRAPH_LAYOUT_VERSION,
@@ -327,7 +595,7 @@ export async function layoutSiteCrawlGraphInput(
       totalEdges: input.totalEdges,
       nodeCount: input.nodes.length,
       edgeCount: input.edges.length,
-      nodes: normalizePositions(seeded, positions, input.rootNodeKey),
+      nodes: normalizePositions(seeded, framed, input.rootNodeKey),
       edges: input.edges.map((edge, sampleRank) => ({ ...edge, sampleRank })),
     }
   } catch (error) {

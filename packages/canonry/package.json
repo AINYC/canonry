@@ -47,8 +47,8 @@
     "lint": "eslint src/ test/"
   },
   "dependencies": {
-    "@canonry/aeo-audit": "4.6.2",
     "@anthropic-ai/sdk": "^0.91.1",
+    "@canonry/aeo-audit": "4.6.2",
     "@fastify/rate-limit": "^11.2.0",
     "@fastify/static": "^9.1.1",
     "@google/genai": "^1.46.0",
@@ -63,6 +63,7 @@
     "fastify": "^5.8.5",
     "graphology": "0.26.0",
     "graphology-layout-forceatlas2": "0.10.1",
+    "graphology-layout-noverlap": "0.4.2",
     "node-cron": "^4.2.1",
     "openai": "^6.0.0",
     "pdf-lib": "^1.17.1",

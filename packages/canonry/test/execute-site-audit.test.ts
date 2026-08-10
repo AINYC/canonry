@@ -34,6 +34,7 @@ import {
   SITE_AUDIT_DEFAULT_PAGE_LIMIT,
   SITE_AUDIT_MAX_PAGE_LIMIT,
 } from '../src/execute-site-audit.js'
+import { SITE_CRAWL_GRAPH_LAYOUT_VERSION } from '../src/site-crawl-graph-layout.js'
 
 const NOW = '2026-08-08T00:00:00.000Z'
 
@@ -232,7 +233,7 @@ describe('executeSiteAudit', () => {
     expect(db.select().from(siteCrawlEdges).where(eq(siteCrawlEdges.attemptId, attempt!.id)).get()).toMatchObject({ occurrences: 2, followable: true })
     expect(db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, runId)).get()).toMatchObject({ complete: true, detailsAvailable: true })
     expect(db.select().from(siteCrawlGraphLayouts).where(eq(siteCrawlGraphLayouts.runId, runId)).get()).toMatchObject({
-      state: 'ready', layoutVersion: 'site-health-fa2-v1', totalNodes: 2, totalEdges: 1, nodeCount: 2, edgeCount: 1,
+      state: 'ready', layoutVersion: SITE_CRAWL_GRAPH_LAYOUT_VERSION, totalNodes: 2, totalEdges: 1, nodeCount: 2, edgeCount: 1,
     })
     const graphNodes = db.select().from(siteCrawlGraphNodes).where(eq(siteCrawlGraphNodes.runId, runId)).all()
     expect(graphNodes).toHaveLength(2)

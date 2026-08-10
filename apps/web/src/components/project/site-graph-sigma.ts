@@ -185,12 +185,40 @@ export function siteGraphVisualState(node: SiteGraphHealthSource): SiteGraphVisu
   return deriveSiteHealthState(node)
 }
 
+/**
+ * Customer-facing vocabulary for the four node states. Three closed maps over
+ * the same union, so a new state is a compile error in all of them and the
+ * pill, the legend, and the tooltip can never drift apart.
+ *
+ * "Indexable" is deliberately not "Indexed": a crawl only observes what the
+ * site PERMITS, never whether an engine actually indexed the page.
+ */
 export function siteGraphStatusLabel(state: SiteGraphVisualState): string {
   switch (state) {
-    case 'eligible': return 'Technically eligible'
-    case 'hidden': return 'Hidden or points elsewhere'
-    case 'failed': return 'Fetch failed'
+    case 'eligible': return 'Indexable'
+    case 'hidden': return 'Hidden'
+    case 'failed': return 'Broken'
     case 'unchecked': return 'Not checked'
+  }
+}
+
+/** The legend has room to be precise where a pill does not. */
+export function siteGraphStatusLegendLabel(state: SiteGraphVisualState): string {
+  switch (state) {
+    case 'eligible': return 'Indexable'
+    case 'hidden': return 'Hidden or points elsewhere'
+    case 'failed': return 'Broken'
+    case 'unchecked': return 'Not checked'
+  }
+}
+
+/** Plain-word explanation, used as the tooltip on pills and legend entries. */
+export function siteGraphStatusDescription(state: SiteGraphVisualState): string {
+  switch (state) {
+    case 'eligible': return 'AI and search engines are allowed to index this page'
+    case 'hidden': return 'This page tells them not to index it, or points them to another page'
+    case 'failed': return 'This page could not be loaded'
+    case 'unchecked': return 'This page was found but not checked'
   }
 }
 

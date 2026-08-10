@@ -477,6 +477,19 @@ export const siteCrawlGraphEdgeSchema = z.object({
 })
 export type SiteCrawlGraphEdgeDto = z.infer<typeof siteCrawlGraphEdgeSchema>
 
+/**
+ * Why a scan has no usable map. Consumers key copy off these exact values, so
+ * the set is closed and named rather than inlined at the one use site.
+ */
+export const siteCrawlGraphLayoutUnavailableReasonSchema = z.enum([
+  'no-crawl',
+  'legacy-snapshot',
+  'details-unavailable',
+  'layout-failed',
+  'empty-crawl',
+])
+export type SiteCrawlGraphLayoutUnavailableReason = z.infer<typeof siteCrawlGraphLayoutUnavailableReasonSchema>
+
 export const siteCrawlGraphLayoutSchema = z.discriminatedUnion('state', [
   z.object({
     state: z.literal('ready'),
@@ -486,7 +499,7 @@ export const siteCrawlGraphLayoutSchema = z.discriminatedUnion('state', [
   z.object({
     state: z.literal('unavailable'),
     version: z.null(),
-    reason: z.enum(['no-crawl', 'legacy-snapshot', 'details-unavailable', 'layout-failed', 'empty-crawl']),
+    reason: siteCrawlGraphLayoutUnavailableReasonSchema,
   }),
 ])
 export type SiteCrawlGraphLayoutDto = z.infer<typeof siteCrawlGraphLayoutSchema>

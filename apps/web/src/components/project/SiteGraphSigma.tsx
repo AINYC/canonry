@@ -22,6 +22,8 @@ import type {
 } from 'sigma/types'
 import type { AnimateOptions } from 'sigma/utils'
 
+import type { SiteCrawlGraphLayoutUnavailableReason } from '@ainyc/canonry-contracts'
+
 import { cn } from '../../lib/utils.js'
 import { Button } from '../ui/button.js'
 import {
@@ -58,18 +60,38 @@ export interface SiteGraphSigmaProps {
   className?: string
 }
 
-function unavailableLayoutMessage(reason?: string | null): { heading: string; detail: string } {
-  if (reason === 'layout-failed') {
-    return {
-      heading: 'Graph layout failed',
-      detail: 'This scan completed, but its graph layout could not be published. The page inventory remains available.',
-    }
-  }
+/**
+ * Closed map over the contract's `layout.unavailable.reason`, so a new reason
+ * is a compile error rather than silently falling back to generic copy. The
+ * distinction the reader needs is "no map was made" vs "making it failed",
+ * because only the second is worth retrying immediately.
+ */
+const LAYOUT_UNAVAILABLE_COPY: Record<SiteCrawlGraphLayoutUnavailableReason, { heading: string; detail: string }> = {
+  'layout-failed': {
+    heading: 'Map could not be built',
+    detail: 'The map could not be created for this scan. Run a new scan to try again.',
+  },
+  'no-crawl': {
+    heading: 'No map yet',
+    detail: 'This scan has no map yet. Run a new scan to create one.',
+  },
+  'legacy-snapshot': {
+    heading: 'No map yet',
+    detail: 'This scan has no map yet. Run a new scan to create one.',
+  },
+  'details-unavailable': {
+    heading: 'No map yet',
+    detail: 'This scan has no map yet. Run a new scan to create one.',
+  },
+  'empty-crawl': {
+    heading: 'No pages to map',
+    detail: 'This scan found no pages to put on a map. Run a new scan to try again.',
+  },
+}
 
-  return {
-    heading: 'Graph layout unavailable',
-    detail: 'This scan does not have a published graph layout yet.',
-  }
+function unavailableLayoutMessage(reason?: string | null): { heading: string; detail: string } {
+  return LAYOUT_UNAVAILABLE_COPY[reason as SiteCrawlGraphLayoutUnavailableReason]
+    ?? LAYOUT_UNAVAILABLE_COPY['no-crawl']
 }
 
 interface HoveredNode {

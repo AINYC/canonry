@@ -20,11 +20,96 @@ import {
   SITE_CRAWL_GRAPH_LAYOUT_VERSION,
   SITE_CRAWL_GRAPH_SEED_SCALE,
   adaptiveForceAtlasIterations,
+  frameDisconnectedNodes,
   layoutSiteCrawlGraphInput,
+  noverlapGridSize,
+  noverlapMaxIterations,
   prepareSiteCrawlGraphLayout,
   seedSiteCrawlGraphNodes,
+  siteCrawlGraphComponents,
+  siteCrawlGraphLayoutSettingsFingerprint,
   type SiteCrawlGraphLayoutInput,
 } from '../src/site-crawl-graph-layout.js'
+
+/**
+ * A navigation mesh: every page carries a 25-link template header, so almost
+ * every page links to almost every other one. This is what a real 50-page site
+ * looks like, and it is exactly the shape that collapses into a single blob
+ * under linear attraction.
+ */
+const NAV_MESH_SECTIONS = ['services', 'blog', 'about'] as const
+const NAV_MESH_PER_SECTION = 16
+
+function navMeshFixture(): SiteCrawlGraphLayoutInput {
+  const nodes = [{ nodeKey: 'home', path: '/', depth: 0, sampleRank: 0 }]
+  for (const [sectionIndex, section] of NAV_MESH_SECTIONS.entries()) {
+    for (let i = 0; i < NAV_MESH_PER_SECTION; i++) {
+      nodes.push({
+        nodeKey: `${section}-${String(i).padStart(2, '0')}`,
+        path: `/${section}/page-${i}`,
+        depth: 2,
+        sampleRank: 1 + sectionIndex * NAV_MESH_PER_SECTION + i,
+      })
+    }
+  }
+  const template = ['home', ...NAV_MESH_SECTIONS.flatMap((section) => (
+    Array.from({ length: 8 }, (_, i) => `${section}-${String(i).padStart(2, '0')}`)
+  ))]
+  const edges = []
+  for (const node of nodes) {
+    for (const target of template) {
+      if (target === node.nodeKey) continue
+      edges.push({
+        edgeKey: `nav:${node.nodeKey}->${target}`,
+        sourceNodeKey: node.nodeKey,
+        targetNodeKey: target,
+        followable: true,
+        occurrences: 1,
+      })
+    }
+  }
+  // In-section editorial links are the only community signal in the graph.
+  for (const section of NAV_MESH_SECTIONS) {
+    for (let i = 0; i < NAV_MESH_PER_SECTION; i++) {
+      const from = `${section}-${String(i).padStart(2, '0')}`
+      const to = `${section}-${String((i + 1) % NAV_MESH_PER_SECTION).padStart(2, '0')}`
+      edges.push({ edgeKey: `ed:${from}->${to}`, sourceNodeKey: from, targetNodeKey: to, followable: true, occurrences: 1 })
+    }
+  }
+  return { rootNodeKey: 'home', totalNodes: nodes.length, totalEdges: edges.length, nodes, edges }
+}
+
+function sectionSeparationRatio(positions: ReadonlyArray<{ nodeKey: string; x: number; y: number }>): number {
+  const centroids = new Map<string, [number, number]>()
+  const radii = new Map<string, number>()
+  for (const section of NAV_MESH_SECTIONS) {
+    const points = positions.filter((position) => position.nodeKey.startsWith(`${section}-`))
+    const cx = points.reduce((sum, p) => sum + p.x, 0) / points.length
+    const cy = points.reduce((sum, p) => sum + p.y, 0) / points.length
+    centroids.set(section, [cx, cy])
+    radii.set(section, points.reduce((sum, p) => sum + Math.hypot(p.x - cx, p.y - cy), 0) / points.length)
+  }
+  let minInterCentroid = Infinity
+  for (let i = 0; i < NAV_MESH_SECTIONS.length; i++) {
+    for (let j = i + 1; j < NAV_MESH_SECTIONS.length; j++) {
+      const [ax, ay] = centroids.get(NAV_MESH_SECTIONS[i]!)!
+      const [bx, by] = centroids.get(NAV_MESH_SECTIONS[j]!)!
+      minInterCentroid = Math.min(minInterCentroid, Math.hypot(ax - bx, ay - by))
+    }
+  }
+  const meanRadius = [...radii.values()].reduce((sum, r) => sum + r, 0) / radii.size
+  return minInterCentroid / meanRadius
+}
+
+function minPairwiseDistance(positions: ReadonlyArray<{ x: number; y: number }>): number {
+  let min = Infinity
+  for (let i = 0; i < positions.length; i++) {
+    for (let j = i + 1; j < positions.length; j++) {
+      min = Math.min(min, Math.hypot(positions[i]!.x - positions[j]!.x, positions[i]!.y - positions[j]!.y))
+    }
+  }
+  return min
+}
 
 const input: SiteCrawlGraphLayoutInput = {
   rootNodeKey: 'home',
@@ -103,6 +188,53 @@ describe('site crawl graph layout', () => {
     const second = await layoutSiteCrawlGraphInput(input)
 
     expect(second).toEqual(first)
+  })
+
+  it('is deterministic through the whole pipeline, including anti-overlap and framing', async () => {
+    // The sparse fixture above never exercises noverlap (it converges on the
+    // first pass) or the framing pass. This one is dense enough to run every
+    // stage, so any nondeterminism introduced by them shows up here.
+    const dense: SiteCrawlGraphLayoutInput = {
+      ...navMeshFixture(),
+      nodes: [...navMeshFixture().nodes, { nodeKey: 'orphan', path: '/orphan', depth: null, sampleRank: 99 }],
+    }
+    const first = await layoutSiteCrawlGraphInput(dense)
+    const second = await layoutSiteCrawlGraphInput(dense)
+
+    expect(first.state).toBe('ready')
+    expect(second).toEqual(first)
+  })
+
+  it('separates top-level sections on a dense navigation mesh instead of one blob', async () => {
+    const result = await layoutSiteCrawlGraphInput(navMeshFixture())
+    if (result.state !== 'ready') throw new Error('expected ready layout')
+
+    // Sections must sit further apart than they are wide. Under the previous
+    // linear-attraction settings this fixture measured about 0.84: the
+    // sections overlapped each other completely.
+    expect(sectionSeparationRatio(result.nodes)).toBeGreaterThan(1)
+
+    // Anti-overlap ran: no two pages share a point, and the closest pair is
+    // still a visible distance apart in the normalized [-1, 1] space.
+    expect(minPairwiseDistance(result.nodes)).toBeGreaterThan(0.01)
+
+    // The graph fills the frame rather than sitting as a dot in empty space.
+    const spread = (values: number[]) => {
+      const mean = values.reduce((sum, v) => sum + v, 0) / values.length
+      return Math.sqrt(values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / values.length)
+    }
+    expect(spread(result.nodes.map((node) => node.x))).toBeGreaterThan(0.15)
+    expect(spread(result.nodes.map((node) => node.y))).toBeGreaterThan(0.15)
+  })
+
+  it('keeps prior-seeded coordinates flowing through the new pipeline', async () => {
+    const priorPositions = new Map([['home', { x: 0, y: 0 }], ['services-00', { x: 0.4, y: -0.2 }]])
+    const result = await layoutSiteCrawlGraphInput({ ...navMeshFixture(), priorPositions })
+
+    expect(result.state).toBe('ready')
+    if (result.state !== 'ready') throw new Error('expected ready layout')
+    expect(result.nodes).toHaveLength(navMeshFixture().nodes.length)
+    expect(result.nodes.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y))).toBe(true)
   })
 
   it('degrades to unavailable when layout physics fails', async () => {
@@ -301,5 +433,95 @@ describe('site crawl graph layout', () => {
       x: 0.42 * SITE_CRAWL_GRAPH_SEED_SCALE,
       y: -0.31 * SITE_CRAWL_GRAPH_SEED_SCALE,
     })
+  })
+
+  it('groups nodes into components and picks the largest as the main one', () => {
+    const components = siteCrawlGraphComponents(
+      ['a', 'b', 'c', 'orphan-1', 'orphan-2', 'pair-x', 'pair-y'],
+      [
+        { sourceNodeKey: 'a', targetNodeKey: 'b' },
+        { sourceNodeKey: 'b', targetNodeKey: 'c' },
+        { sourceNodeKey: 'pair-x', targetNodeKey: 'pair-y' },
+        // An edge naming a node outside the sample must not invent one.
+        { sourceNodeKey: 'a', targetNodeKey: 'not-sampled' },
+      ],
+    )
+
+    expect([...components.main].sort()).toEqual(['a', 'b', 'c'])
+    // Components stay grouped, and both groups and members are key-ordered.
+    expect(components.outliers).toEqual(['orphan-1', 'orphan-2', 'pair-x', 'pair-y'])
+  })
+
+  it('keeps disconnected pages on a bounded ring instead of letting them inflate the frame', () => {
+    // ForceAtlas2 has nothing attracting an orphan, so it drifts arbitrarily.
+    const positions = [
+      { nodeKey: 'a', x: -10, y: 0 },
+      { nodeKey: 'b', x: 10, y: 0 },
+      { nodeKey: 'c', x: 0, y: 10 },
+      { nodeKey: 'orphan-1', x: 9_000, y: -4_000 },
+      { nodeKey: 'orphan-2', x: -7_500, y: 8_100 },
+    ]
+    const edges = [
+      { sourceNodeKey: 'a', targetNodeKey: 'b' },
+      { sourceNodeKey: 'b', targetNodeKey: 'c' },
+    ]
+
+    const framed = frameDisconnectedNodes(positions, edges)
+    const byKey = new Map(framed.map((position) => [position.nodeKey, position]))
+
+    // The connected component is untouched.
+    for (const nodeKey of ['a', 'b', 'c']) {
+      expect(byKey.get(nodeKey)).toEqual(positions.find((position) => position.nodeKey === nodeKey))
+    }
+
+    const main = framed.filter((position) => ['a', 'b', 'c'].includes(position.nodeKey))
+    const centerX = main.reduce((sum, p) => sum + p.x, 0) / main.length
+    const centerY = main.reduce((sum, p) => sum + p.y, 0) / main.length
+    const mainRadius = Math.max(...main.map((p) => Math.hypot(p.x - centerX, p.y - centerY)))
+
+    for (const nodeKey of ['orphan-1', 'orphan-2']) {
+      const position = byKey.get(nodeKey)!
+      const distance = Math.hypot(position.x - centerX, position.y - centerY)
+      expect(distance, `${nodeKey} must stay near the connected graph`).toBeLessThan(mainRadius * 2)
+      expect(distance, `${nodeKey} must stay outside the connected graph`).toBeGreaterThan(mainRadius)
+    }
+    // Two orphans on one ring sit opposite each other, never stacked.
+    expect(Math.hypot(
+      byKey.get('orphan-1')!.x - byKey.get('orphan-2')!.x,
+      byKey.get('orphan-1')!.y - byKey.get('orphan-2')!.y,
+    )).toBeGreaterThan(mainRadius)
+
+    expect(frameDisconnectedNodes(positions, edges)).toEqual(framed)
+  })
+
+  it('leaves a fully connected graph exactly where the physics put it', () => {
+    const positions = [{ nodeKey: 'a', x: 1, y: 2 }, { nodeKey: 'b', x: 3, y: 4 }]
+    expect(frameDisconnectedNodes(positions, [{ sourceNodeKey: 'a', targetNodeKey: 'b' }])).toEqual(positions)
+  })
+
+  it('bounds the anti-overlap budget so the 20k cap stays solvable', () => {
+    expect(noverlapGridSize(49)).toBe(10)
+    expect(noverlapGridSize(20_000)).toBe(142)
+    // A fixed grid degenerates to a quadratic scan at the cap.
+    expect(noverlapGridSize(20_000)).toBeGreaterThan(noverlapGridSize(500))
+    expect(noverlapGridSize(1_000_000)).toBeLessThanOrEqual(200)
+
+    expect(noverlapMaxIterations(49)).toBe(120)
+    expect(noverlapMaxIterations(1_000)).toBe(120)
+    expect(noverlapMaxIterations(5_000)).toBe(60)
+    expect(noverlapMaxIterations(20_000)).toBe(20)
+    expect(noverlapMaxIterations(20_000)).toBeLessThan(noverlapMaxIterations(49))
+  })
+
+  it('fingerprints the physics settings into the layout version', () => {
+    expect(SITE_CRAWL_GRAPH_LAYOUT_VERSION).toMatch(/^site-health-fa2-v2-[0-9a-f]{8}$/)
+
+    // The fingerprint is what stops positions produced by one set of physics
+    // being reused as seeds under another: `loadPriorSiteCrawlGraphPositions`
+    // matches this exact string.
+    const fingerprint = siteCrawlGraphLayoutSettingsFingerprint({ gravity: 0.2 })
+    expect(fingerprint).toHaveLength(8)
+    expect(siteCrawlGraphLayoutSettingsFingerprint({ gravity: 0.2 })).toBe(fingerprint)
+    expect(siteCrawlGraphLayoutSettingsFingerprint({ gravity: 1 })).not.toBe(fingerprint)
   })
 })
