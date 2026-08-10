@@ -29,12 +29,25 @@ afterEach(() => {
 
 async function renderSetup(
   pathname = '/setup',
-  options: { seedEmptyProjectsCache?: boolean } = {},
+  options: { seedEmptyProjectsCache?: boolean; mappedProjectName?: string } = {},
 ) {
   const fixture = createDashboardFixture({ emptyPortfolio: true })
+  const mappedProject = options.mappedProjectName
+    ? structuredClone(fixture.dashboard.projects[0])
+    : undefined
   // `emptyPortfolio` controls only the overview fixture. The established
   // wizard derives its resume state from the durable project/run collections.
-  fixture.dashboard.projects = []
+  fixture.dashboard.projects = mappedProject
+    ? [{
+        ...mappedProject,
+        project: {
+          ...mappedProject.project,
+          name: options.mappedProjectName ?? mappedProject.project.name,
+        },
+        queryCounts: { cited: 0, total: 0 },
+        competitors: [],
+      }]
+    : []
   fixture.dashboard.runs = []
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   if (options.seedEmptyProjectsCache) {
@@ -43,15 +56,29 @@ async function renderSetup(
   const router = createAppRouter(queryClient, { initialEntries: [pathname] })
   await router.load()
 
-  render(
+  const renderTree = (dashboard: typeof fixture.dashboard) => (
     <QueryClientProvider client={queryClient}>
-      <DashboardProvider value={{ dashboard: fixture.dashboard, health: fixture.health }}>
+      <DashboardProvider value={{ dashboard, health: fixture.health }}>
         <RouterProvider router={router} />
       </DashboardProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   )
+  const rendered = render(renderTree(fixture.dashboard))
 
-  return { queryClient, router }
+  return {
+    queryClient,
+    router,
+    resolveMappedProject(projectName: string) {
+      const nextDashboard = structuredClone(fixture.dashboard)
+      const project = nextDashboard.projects[0]
+      if (!project) throw new Error('A mapped project fixture is required')
+      nextDashboard.projects = [{
+        ...project,
+        project: { ...project.project, name: projectName },
+      }]
+      rendered.rerender(renderTree(nextDashboard))
+    },
+  }
 }
 
 test('keeps the five-step setup when the runtime launchpad flag is absent', async () => {
@@ -68,6 +95,51 @@ test('the legacy rescue query wins over an enabled platform flag', async () => {
   await renderSetup('/setup?experience=legacy')
 
   expect(await screen.findByText('Step 2 of 5')).toBeTruthy()
+})
+
+test('continues a mapped project into the original AI Visibility setup flow', async () => {
+  window.__CANONRY_CONFIG__ = { dashboard: { onboardingMode: 'platform' } }
+  const restore = mockFetch((url) => {
+    if (pathOf(url) === '/api/v1/projects/example-com/queries') return jsonResponse([])
+    return jsonResponse({})
+  })
+  onTestFinished(restore)
+  await renderSetup('/setup?experience=legacy&setupProject=example-com', {
+    mappedProjectName: 'example-com',
+  })
+
+  const heading = await screen.findByRole('heading', { name: 'Set up AI Visibility' })
+  expect(heading).toBeTruthy()
+  expect(document.activeElement).toBe(heading)
+  expect(screen.getByText('Step 3 of 5')).toBeTruthy()
+  expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('Queries')
+  expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('Competitors')
+  expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('Launch')
+  expect(screen.queryByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeNull()
+})
+
+test('does not resume another project when the Site Health handoff is stale', async () => {
+  window.__CANONRY_CONFIG__ = { dashboard: { onboardingMode: 'platform' } }
+  const restore = mockFetch(() => jsonResponse([]))
+  onTestFinished(restore)
+  const { resolveMappedProject } = await renderSetup('/setup?experience=legacy&setupProject=missing-project', {
+    mappedProjectName: 'different-project',
+  })
+
+  const heading = await screen.findByRole('heading', { name: 'Set up AI Visibility' })
+  expect(heading).toBeTruthy()
+  expect(document.activeElement).toBe(heading)
+  expect(screen.getByRole('heading', { name: 'Project not found' })).toBeTruthy()
+  expect(screen.queryByRole('list', { name: 'Setup progress' })).toBeNull()
+  expect(screen.getByRole('link', { name: 'View projects' }).getAttribute('href')).toBe('/projects')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  resolveMappedProject('missing-project')
+
+  const resolvedHeading = await screen.findByRole('heading', { name: 'Set up AI Visibility' })
+  expect(resolvedHeading).not.toBe(heading)
+  expect(document.activeElement).toBe(resolvedHeading)
+  expect(screen.getByText('Step 3 of 5')).toBeTruthy()
 })
 
 test('lets an operator cancel the launchpad before any project is created', async () => {

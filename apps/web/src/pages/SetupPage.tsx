@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefCallback } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
@@ -84,6 +84,18 @@ function projectHasSuccessfulBaseline(
   return project.queryCounts.total > 0
 }
 
+export function selectSetupProject(
+  projects: ProjectCommandCenterVm[],
+  preferredProjectName?: string,
+): ProjectCommandCenterVm | null {
+  if (preferredProjectName) {
+    return projects.find(project => project.project.name === preferredProjectName) ?? null
+  }
+  return projects.find(project => !projectHasSuccessfulBaseline(project))
+    ?? projects.at(0)
+    ?? null
+}
+
 function SetupStepIndicator({ current, labels }: { current: number; labels: readonly { label: string }[] }) {
   return (
     <div className="setup-steps" role="list" aria-label="Setup progress">
@@ -105,18 +117,21 @@ function SetupStepIndicator({ current, labels }: { current: number; labels: read
  * The setup wizard exists to CREATE things — a project, its queries, its
  * first sweep. There is nothing in it for a view-only account.
  */
-export function SetupPage() {
+export function SetupPage({ visibilityProjectName }: { visibilityProjectName?: string } = {}) {
   return (
-    <AdminOnly title="Setup">
-      <SetupPageBody />
+    <AdminOnly title={visibilityProjectName ? 'Set up AI Visibility' : 'Setup'}>
+      <SetupPageBody visibilityProjectName={visibilityProjectName} />
     </AdminOnly>
   )
 }
 
-function SetupPageBody() {
+function SetupPageBody({ visibilityProjectName }: { visibilityProjectName?: string }) {
   const contextDashboard = useInitialDashboard()
   const { dashboard, isLoading, refetch } = useDashboard()
   const safeDashboard = dashboard ?? contextDashboard?.dashboard
+  const visibilityHeadingRef = useCallback<RefCallback<HTMLHeadingElement>>((node) => {
+    if (node && visibilityProjectName) node.focus()
+  }, [visibilityProjectName])
 
   if (!safeDashboard || isLoading) {
     return (
@@ -143,12 +158,37 @@ function SetupPageBody() {
     )
   }
 
+  if (visibilityProjectName && !safeDashboard.projects.some(project => project.project.name === visibilityProjectName)) {
+    return (
+      <div className="page-container">
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1 ref={visibilityHeadingRef} tabIndex={-1} className="page-title">Set up AI Visibility</h1>
+            <p className="page-subtitle">Choose what to track, then run your first visibility sweep.</p>
+          </div>
+        </div>
+        <Card role="alert" className="compact-stack">
+          <h2>Project not found</h2>
+          <p className="text-secondary">
+            Canonry could not find the project handed off from Site Health. Refresh the project list or choose a project to continue.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={() => { void refetch() }}>Retry</Button>
+            <Button type="button" asChild><Link to="/projects">View projects</Link></Button>
+          </div>
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <ReadySetupPage
       dashboard={safeDashboard}
       initialHealth={contextDashboard?.health}
       enableLiveStatus={!contextDashboard}
       refetch={refetch}
+      visibilityProjectName={visibilityProjectName}
+      visibilityHeadingRef={visibilityHeadingRef}
     />
   )
 }
@@ -158,11 +198,15 @@ function ReadySetupPage({
   initialHealth,
   enableLiveStatus,
   refetch,
+  visibilityProjectName,
+  visibilityHeadingRef,
 }: {
   dashboard: DashboardVm
   initialHealth?: HealthSnapshot
   enableLiveStatus: boolean
   refetch: () => Promise<void>
+  visibilityProjectName?: string
+  visibilityHeadingRef: RefCallback<HTMLHeadingElement>
 }) {
   const settings = safeDashboard.settings
 
@@ -187,9 +231,7 @@ function ReadySetupPage({
     } as OnboardingTelemetryEvent)
   }, [])
 
-  const resumeProject: ProjectCommandCenterVm | null = safeDashboard.projects.find(
-    project => !projectHasSuccessfulBaseline(project),
-  ) ?? safeDashboard.projects.at(0) ?? null
+  const resumeProject = selectSetupProject(safeDashboard.projects, visibilityProjectName)
   const resumeProjectRuns = resumeProject
     ? safeDashboard.runs
       .filter(run => run.projectId === resumeProject.project.id)
@@ -1245,8 +1287,18 @@ function ReadySetupPage({
     <div className="page-container">
       <div className="page-header">
         <div className="page-header-left">
-          <h1 className="page-title">Setup</h1>
-          <p className="page-subtitle">Create a project and run its first visibility check.</p>
+          <h1
+            ref={visibilityProjectName ? visibilityHeadingRef : undefined}
+            tabIndex={visibilityProjectName ? -1 : undefined}
+            className="page-title"
+          >
+            {visibilityProjectName ? 'Set up AI Visibility' : 'Setup'}
+          </h1>
+          <p className="page-subtitle">
+            {visibilityProjectName
+              ? 'Choose what to track, then run your first visibility sweep.'
+              : 'Create a project and run its first visibility check.'}
+          </p>
         </div>
       </div>
 

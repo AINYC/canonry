@@ -1270,6 +1270,8 @@ function TerminalScanRecoveryState({
   )
 }
 
+export type SiteHealthOnboardingOutcome = 'finished' | 'dismissed'
+
 export function SiteHealthSection({
   projectName,
   projectId,
@@ -1286,8 +1288,8 @@ export function SiteHealthSection({
   onReleaseInitialRun?: () => void
   /** Starts the post-scan guide after the onboarding crawl publishes usable evidence. */
   showOnboardingWalkthrough?: boolean
-  /** Clears the onboarding intent after the guide is completed or dismissed. */
-  onCompleteOnboardingWalkthrough?: () => void
+  /** Continues into visibility setup on finish, or clears onboarding intent on dismissal. */
+  onCompleteOnboardingWalkthrough?: (outcome: SiteHealthOnboardingOutcome) => void
 }) {
   const [view, setView] = useState<SiteHealthView>('map')
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -1652,14 +1654,6 @@ export function SiteHealthSection({
       content: 'See which checks need attention, which pages are affected, and how to improve them.',
       before: async () => { setView('technical') },
     },
-    {
-      id: 'measurement-plan',
-      target: '#site-health-measurement-plan',
-      placement: 'top',
-      title: 'Choose what to measure',
-      content: 'Build a measurement plan from the pages and groups that matter, then add the queries you want Canonry to track.',
-      before: async () => { setView('map') },
-    },
   ], [walkthroughHasReadyMap])
   const walkthroughRunning = Boolean(
     showOnboardingWalkthrough
@@ -1669,22 +1663,27 @@ export function SiteHealthSection({
     && (walkthroughHasReadyMap || walkthroughHasReadyInventory)
     && !walkthroughDismissed,
   )
-  const completeOnboardingWalkthrough = useCallback(() => {
+  const completeOnboardingWalkthrough = useCallback((outcome: SiteHealthOnboardingOutcome) => {
     if (walkthroughCompleted.current) return
     walkthroughCompleted.current = true
     setWalkthroughDismissed(true)
-    onCompleteOnboardingWalkthrough?.()
+    onCompleteOnboardingWalkthrough?.(outcome)
   }, [onCompleteOnboardingWalkthrough])
   const handleWalkthroughEvent = useCallback((event: JoyrideEventData) => {
-    if (event.type !== 'tour:end' && event.action !== 'close' && event.action !== 'skip') return
-    completeOnboardingWalkthrough()
+    if (event.type === 'tour:end' && event.status === 'finished') {
+      completeOnboardingWalkthrough('finished')
+      return
+    }
+    if (event.action === 'close' || event.action === 'skip' || (event.type === 'tour:end' && event.status === 'skipped')) {
+      completeOnboardingWalkthrough('dismissed')
+    }
   }, [completeOnboardingWalkthrough])
   useEffect(() => {
     if (!walkthroughRunning) return
     // In a continuous Joyride, its built-in Escape "close" collapses only the
     // current step. Canonry treats Escape as dismissing the whole walkthrough.
     const handleEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') completeOnboardingWalkthrough()
+      if (event.key === 'Escape') completeOnboardingWalkthrough('dismissed')
     }
     document.addEventListener('keydown', handleEscape)
     return () => { document.removeEventListener('keydown', handleEscape) }
@@ -1742,7 +1741,7 @@ export function SiteHealthSection({
             locale={{
               back: 'Back',
               close: 'Close walkthrough',
-              last: 'Finish',
+              last: 'Set up AI Visibility',
               nextWithProgress: 'Next ({current} of {total})',
               skip: 'Skip walkthrough',
             }}

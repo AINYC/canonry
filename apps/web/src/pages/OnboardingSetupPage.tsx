@@ -224,7 +224,7 @@ export function OnboardingSetupPage() {
       ? 'platform'
       : resolveOnboardingSurface(mode, projectList)
 
-  if (surface === 'legacy') return <SetupPage />
+  if (surface === 'legacy') return <SetupPage visibilityProjectName={search.setupProject} />
   if (surface === 'loading') return <AutoModeLoading />
   if (surface === 'retry') return <AutoModeRetry onRetry={() => { void projectsQuery.refetch() }} />
   return <PlatformSetupPage onActivationStarted={() => setPlatformLatched(true)} />

@@ -81,6 +81,8 @@ type SearchParams = {
   onboarding?: 'site-health'
   /** Temporary rescue hatch while the platform launchpad rolls out. */
   experience?: 'legacy'
+  /** Exact project handed from Site Health into the original visibility wizard. */
+  setupProject?: string
   /**
    * Advanced-measurement view state, in the URL so a market is a place you can
    * link, bookmark, and reload. `all` (the default) is omitted rather than
@@ -114,6 +116,7 @@ export const rootRoute = createRootRouteWithContext<RouterContext>()({
     runQuery: typeof search.runQuery === 'string' ? search.runQuery : undefined,
     onboarding: search.onboarding === 'site-health' ? 'site-health' : undefined,
     experience: search.experience === 'legacy' ? 'legacy' : undefined,
+    setupProject: typeof search.setupProject === 'string' ? search.setupProject : undefined,
     scope: typeof search.scope === 'string' ? search.scope : undefined,
     class: typeof search.class === 'string' ? search.class : undefined,
   }),

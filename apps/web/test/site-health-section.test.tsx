@@ -24,7 +24,8 @@ import { heyClient } from '../src/api.js'
 const mutationMock = vi.hoisted(() => ({ mutate: vi.fn() }))
 type CapturedJoyrideProps = {
   run?: boolean
-  options?: { scrollDuration?: number }
+  locale?: { last?: string }
+  options?: { closeButtonAction?: string; scrollDuration?: number }
   steps: Array<{
     id?: string
     target: string
@@ -1047,7 +1048,7 @@ test('offers measurement setup after a usable terminal map without claiming it i
   expect(screen.queryByText(/queries were added automatically/i)).toBeNull()
 })
 
-test('walks a first-time operator from the terminal map through page health to measurement setup', async () => {
+test('walks a first-time operator from the terminal map through page health, then continues to AI Visibility', async () => {
   const onCompleteOnboardingWalkthrough = vi.fn()
   renderSection(makeClient(), {
     showOnboardingWalkthrough: true,
@@ -1059,22 +1060,34 @@ test('walks a first-time operator from the terminal map through page health to m
   expect(tour?.steps.map((step) => step.id)).toEqual([
     'site-map-ready',
     'page-health',
-    'measurement-plan',
   ])
   expect(tour?.steps.map((step) => step.target)).toEqual([
     '#site-health-map-explorer',
     '#site-health-technical-tab',
-    '#site-health-measurement-plan',
   ])
+  expect(tour?.steps.some((step) => step.target === '#site-health-measurement-plan')).toBe(false)
+  expect(tour?.locale?.last).toBe('Set up AI Visibility')
 
   await act(async () => { await tour?.steps[1]?.before?.() })
   expect(screen.getByRole('tab', { name: 'Page health' }).getAttribute('aria-selected')).toBe('true')
 
-  await act(async () => { await tour?.steps[2]?.before?.() })
-  expect(screen.getByRole('tab', { name: 'Map' }).getAttribute('aria-selected')).toBe('true')
-
   act(() => { tour?.onEvent?.({ type: 'tour:end', status: 'finished' }) })
-  expect(onCompleteOnboardingWalkthrough).toHaveBeenCalledOnce()
+  expect(onCompleteOnboardingWalkthrough).toHaveBeenCalledWith('finished')
+  expect(joyrideMock.props?.run).toBe(false)
+})
+
+test('treats the walkthrough close control as a dismissal without forcing AI Visibility', async () => {
+  const onCompleteOnboardingWalkthrough = vi.fn()
+  renderSection(makeClient(), {
+    showOnboardingWalkthrough: true,
+    onCompleteOnboardingWalkthrough,
+  })
+
+  await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
+  expect(joyrideMock.props?.options?.closeButtonAction).toBe('skip')
+  act(() => { joyrideMock.props?.onEvent?.({ action: 'skip', type: 'tour:end', status: 'skipped' }) })
+
+  expect(onCompleteOnboardingWalkthrough).toHaveBeenCalledWith('dismissed')
   expect(joyrideMock.props?.run).toBe(false)
 })
 
@@ -1113,7 +1126,7 @@ test('dismisses the post-scan walkthrough from the keyboard', async () => {
   await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
   fireEvent.keyDown(document, { key: 'Escape' })
 
-  expect(onCompleteOnboardingWalkthrough).toHaveBeenCalledOnce()
+  expect(onCompleteOnboardingWalkthrough).toHaveBeenCalledWith('dismissed')
   expect(joyrideMock.props?.run).toBe(false)
 })
 

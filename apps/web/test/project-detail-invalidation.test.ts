@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { QueryClient } from '@tanstack/react-query'
 import { isProjectDetailQuery } from '../src/queries/mutations.js'
 import {
+  aiVisibilitySetupSearch,
   clearCompletedSiteHealthOnboardingSearch,
   patchProjectDashboardCache,
 } from '../src/pages/ProjectPage.js'
@@ -161,6 +162,13 @@ describe('clearCompletedSiteHealthOnboardingSearch', () => {
       onboarding: undefined,
       siteHealthRunId: undefined,
       scope: 'all',
+    })
+  })
+
+  it('starts the original visibility setup for the mapped project', () => {
+    expect(aiVisibilitySetupSearch('citypoint')).toEqual({
+      experience: 'legacy',
+      setupProject: 'citypoint',
     })
   })
 })

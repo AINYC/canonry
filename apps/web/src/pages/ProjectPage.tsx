@@ -26,7 +26,10 @@ import { BacklinksSection } from '../components/project/BacklinksSection.js'
 import { CitationVisibilitySection } from '../components/project/CitationVisibilitySection.js'
 import { VisibilityTrendSection } from '../components/project/VisibilityTrendSection.js'
 import { DiscoverySection } from '../components/project/DiscoverySection.js'
-import { SiteHealthSection } from '../components/project/SiteHealthSection.js'
+import {
+  SiteHealthSection,
+  type SiteHealthOnboardingOutcome,
+} from '../components/project/SiteHealthSection.js'
 import { ProjectHistorySection } from '../components/project/ProjectHistorySection.js'
 import { AdvancedMeasurementSection } from '../components/project/advanced-measurement/AdvancedMeasurementSection.js'
 import { AdvancedMeasurementLanding } from '../components/project/advanced-measurement/AdvancedMeasurementLanding.js'
@@ -148,6 +151,13 @@ export function clearCompletedSiteHealthOnboardingSearch(previous: Record<string
     ...previous,
     onboarding: undefined,
     siteHealthRunId: undefined,
+  }
+}
+
+export function aiVisibilitySetupSearch(projectName: string) {
+  return {
+    experience: 'legacy' as const,
+    setupProject: projectName,
   }
 }
 
@@ -1703,13 +1713,21 @@ function ProjectPageContent({
       search: (previous: Record<string, unknown>) => ({ ...previous, siteHealthRunId: undefined }),
     })
   }, [navigate])
-  const completeSiteHealthOnboarding = useCallback(() => {
+  const completeSiteHealthOnboarding = useCallback((outcome: SiteHealthOnboardingOutcome) => {
+    if (outcome === 'finished') {
+      void navigate({
+        to: '/setup',
+        replace: true,
+        search: aiVisibilitySetupSearch(model.project.name),
+      })
+      return
+    }
     void navigate({
       to: '.',
       replace: true,
       search: clearCompletedSiteHealthOnboardingSearch,
     })
-  }, [navigate])
+  }, [model.project.name, navigate])
   const [managingQueries, setManagingQueries] = useState(manageQueriesRequested)
   const [newQueryText, setNewQueryText] = useState('')
   const [querySaving, setQuerySaving] = useState(false)
