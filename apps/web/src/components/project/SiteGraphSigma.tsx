@@ -22,10 +22,10 @@ import type {
 } from 'sigma/types'
 import type { AnimateOptions } from 'sigma/utils'
 
-import type { SiteCrawlGraphLayoutUnavailableReason } from '@ainyc/canonry-contracts'
+import { SITE_GRAPH_LEGEND_STATES, type SiteCrawlGraphLayoutUnavailableReason } from '@ainyc/canonry-contracts'
 
 import { cn } from '../../lib/utils.js'
-import { displayPagePath, siteHostFromUrl } from './site-health-paths.js'
+import { displayPageLabel, siteHostFromUrl } from './site-health-paths.js'
 import { Button } from '../ui/button.js'
 import {
   buildSigmaSiteGraph,
@@ -35,6 +35,7 @@ import {
   SITE_GRAPH_COLOR_TOKENS,
   SITE_GRAPH_SIGMA_COLOR_TOKENS,
   SITE_GRAPH_OVERVIEW_CAMERA_RATIO,
+  siteGraphLabelBudget,
   siteGraphStatusDescription,
   siteGraphStatusGlyph,
   siteGraphStatusLabel,
@@ -54,8 +55,8 @@ export interface SiteGraphSigmaProps {
   nodes: readonly SiteGraphSigmaNode[]
   edges: readonly SiteGraphSigmaEdge[]
   layoutState?: 'ready' | 'unavailable'
-  layoutUnavailableReason?: string | null
-  /** Server-identified crawl root. Without it no page is labeled "Home". */
+  layoutUnavailableReason?: SiteCrawlGraphLayoutUnavailableReason | null
+  /** Server-identified crawl root. Without it no page gets the root marker. */
   rootNodeKey?: string | null
   selectedNodeKey?: string | null
   onSelectNode?: (node: SiteGraphSigmaNode) => void
@@ -92,9 +93,12 @@ const LAYOUT_UNAVAILABLE_COPY: Record<SiteCrawlGraphLayoutUnavailableReason, { h
   },
 }
 
-function unavailableLayoutMessage(reason?: string | null): { heading: string; detail: string } {
-  return LAYOUT_UNAVAILABLE_COPY[reason as SiteCrawlGraphLayoutUnavailableReason]
-    ?? LAYOUT_UNAVAILABLE_COPY['no-crawl']
+function unavailableLayoutMessage(
+  reason?: SiteCrawlGraphLayoutUnavailableReason | null,
+): { heading: string; detail: string } {
+  // Persisted rows stay forward-compatible, so a value outside the union is
+  // possible on the wire even though the type says otherwise.
+  return (reason && LAYOUT_UNAVAILABLE_COPY[reason]) ?? LAYOUT_UNAVAILABLE_COPY['no-crawl']
 }
 
 interface HoveredNode {
@@ -174,14 +178,7 @@ class GraphRenderBoundary extends Component<GraphRenderBoundaryProps, GraphRende
 
 const CAMERA_ANIMATION_MS = 220
 
-/**
- * What a page is called in the accessible surfaces: the search listbox, the
- * tooltip, and the live region. The canvas label is aria-hidden, so without
- * this the root would read "Home" only to sighted mouse users.
- */
-function displayPageLabel(node: Pick<SiteGraphSigmaNode, 'path' | 'url'>): string {
-  return displayPagePath(node.url, siteHostFromUrl(node.url)) || node.path || '/'
-}
+
 
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
   return `${count.toLocaleString()} ${count === 1 ? singular : pluralForm}`
@@ -214,6 +211,8 @@ function sigmaTheme(element: HTMLElement): SigmaSiteGraphTheme {
   return {
     eligible: color('eligible'),
     hidden: color('hidden'),
+    resource: color('resource'),
+    redirect: color('redirect'),
     failed: color('failed'),
     unchecked: color('unchecked'),
     dimmedNode: color('dimmedNode'),
@@ -371,11 +370,17 @@ function SigmaRuntime({
   const registerEvents = useRegisterEvents()
   const { zoomIn, zoomOut, reset, gotoNode } = useCamera()
   const [hoveredNodeKey, setHoveredNodeKey] = useState<string | null>(null)
-  const [isOverview, setIsOverview] = useState(
-    () => sigma.getCamera().getState().ratio > SITE_GRAPH_OVERVIEW_CAMERA_RATIO,
-  )
-  const overviewRef = useRef(isOverview)
   const focusNodeKey = hoveredNodeKey ?? selectedNodeKey
+  const pendingRefreshRef = useRef<number | null>(null)
+  /** What the last paint was reduced against, so an unchanged zoom is free. */
+  const lastPaintRef = useRef<{ overview: boolean; budget: number }>({
+    overview: true,
+    budget: Number.NaN,
+  })
+
+  useEffect(() => () => {
+    if (pendingRefreshRef.current !== null) cancelAnimationFrame(pendingRefreshRef.current)
+  }, [])
 
   useEffect(() => {
     onCameraReady({
@@ -403,36 +408,55 @@ function SigmaRuntime({
       },
       clickNode: ({ node }) => onSelectNodeKey(node),
       clickStage: () => onHoverNode(null),
-      updated: (state) => {
-        const nextOverview = state.ratio > SITE_GRAPH_OVERVIEW_CAMERA_RATIO
-        if (overviewRef.current === nextOverview) return
-        overviewRef.current = nextOverview
-        setIsOverview(nextOverview)
+      // Sigma applies reducers only inside its own `process()`, which runs on
+      // `refresh()`. Reading the ratio at paint time therefore fixes the FIRST
+      // paint only: without this listener, zooming never re-evaluates the
+      // label budget and never toggles overview edge hiding. Coalesced onto an
+      // animation frame so a pan-zoom gesture triggers one refresh per frame
+      // rather than one per camera event.
+      updated: () => {
+        if (pendingRefreshRef.current !== null) return
+        pendingRefreshRef.current = requestAnimationFrame(() => {
+          pendingRefreshRef.current = null
+          const nextOverview = sigma.getCamera().getState().ratio > SITE_GRAPH_OVERVIEW_CAMERA_RATIO
+          // Only the overview threshold and the label budget tier change what
+          // the reducers emit, so a refresh is skipped while neither moved.
+          const nextBudget = siteGraphLabelBudget(sigma.getCamera().getState().ratio)
+          if (nextOverview === lastPaintRef.current.overview && nextBudget === lastPaintRef.current.budget) return
+          lastPaintRef.current = { overview: nextOverview, budget: nextBudget }
+          sigma.refresh()
+        })
       },
     })
-  }, [onHoverNode, onSelectNodeKey, registerEvents])
+  }, [onHoverNode, onSelectNodeKey, registerEvents, sigma])
 
   useEffect(() => {
-    // Reducers only distinguish the zoomed-out overview from a focused view.
-    // Preserve that one bit of camera state so pan/zoom frames do not trigger
-    // a full 20k/50k graph refresh.
+    // The reducers read the camera ratio at paint time rather than closing
+    // over a snapshot of it. A captured value had to be re-synced by a camera
+    // event, and the fitted FIRST paint fires no such event, so a dense map
+    // opened with its zoomed-in treatment: every label drawn and the whole
+    // edge mesh visible. Reading live also means pan and zoom never need a
+    // full 20k/50k graph refresh to stay correct.
     const reducers = createSigmaSiteGraphReducers(
       graph,
       focusNodeKey,
-      isOverview
-        ? SITE_GRAPH_OVERVIEW_CAMERA_RATIO + Number.EPSILON
-        : SITE_GRAPH_OVERVIEW_CAMERA_RATIO,
+      () => sigma.getCamera().getState().ratio,
       theme,
     )
     sigma.setSetting('nodeReducer', reducers.nodeReducer)
     sigma.setSetting('edgeReducer', reducers.edgeReducer)
+    const ratio = sigma.getCamera().getState().ratio
+    lastPaintRef.current = {
+      overview: ratio > SITE_GRAPH_OVERVIEW_CAMERA_RATIO,
+      budget: siteGraphLabelBudget(ratio),
+    }
     sigma.refresh()
     // Do not reset settings during cleanup. React Sigma kills its WebGL
     // programs before descendant effects can clean up; reconfiguring that
     // destroyed instance schedules a refresh with no `circle` program. A live
     // instance is overwritten by the next effect, and an unmounted one needs
     // no reset.
-  }, [focusNodeKey, graph, isOverview, sigma, theme])
+  }, [focusNodeKey, graph, sigma, theme])
 
   return null
 }
@@ -473,6 +497,19 @@ export function SiteGraphSigma({
     () => new Map(nodes.map((node) => [node.nodeKey, node])),
     [nodes],
   )
+  // The canvas label is aria-hidden, so the search listbox, the tooltip, and
+  // the live region are the accessible route to a page's name. They use the
+  // same server-owned root identity the map does, never a path or host guess.
+  const rootHost = useMemo(
+    // Only the crawl root defines the site's host. `nodes[0]` is whatever the
+    // sample happened to order first, which may be an off-site alias.
+    () => siteHostFromUrl(rootNodeKey ? nodeByKey.get(rootNodeKey)?.url : null),
+    [nodeByKey, rootNodeKey],
+  )
+  const pageLabel = useCallback(
+    (node: SiteGraphSigmaNode) => displayPageLabel(node, rootHost),
+    [rootHost],
+  )
   const selectedNode = effectiveSelectedNodeKey
     ? nodeByKey.get(effectiveSelectedNodeKey) ?? null
     : null
@@ -501,7 +538,8 @@ export function SiteGraphSigma({
     defaultDrawNodeHover: createSiteGraphNodeHoverRenderer(theme),
     defaultDrawNodeLabel: createSiteGraphNodeLabelRenderer(theme),
     labelColor: { color: theme.label },
-    labelDensity: 0.2,
+    labelDensity: 0.07,
+    labelGridCellSize: 140,
     labelFont: 'Geist Sans, sans-serif',
     labelRenderedSizeThreshold: 8,
     labelSize: 13,
@@ -575,8 +613,8 @@ export function SiteGraphSigma({
     if (selectedNodeKey === undefined) setInternalSelectedNodeKey(nodeKey)
     onSelectNode?.(node)
     if (moveCamera) cameraActionsRef.current?.gotoNode(nodeKey)
-    setStatusMessage(`Focused ${displayPageLabel(node)}`)
-  }, [nodeByKey, onSelectNode, selectedNodeKey])
+    setStatusMessage(`Focused ${pageLabel(node)}`)
+  }, [nodeByKey, onSelectNode, pageLabel, selectedNodeKey])
 
   const handleSigmaSelect = useCallback((nodeKey: string) => {
     selectNode(nodeKey, false)
@@ -594,7 +632,7 @@ export function SiteGraphSigma({
 
   const chooseSearchResult = (node: SiteGraphSigmaNode) => {
     selectNode(node.nodeKey, true)
-    setSearchValue(displayPageLabel(node))
+    setSearchValue(pageLabel(node))
     setSearchOpen(false)
   }
 
@@ -684,7 +722,7 @@ export function SiteGraphSigma({
             aria-expanded={searchOpen}
             aria-activedescendant={searchOpen && activeResult ? optionId(activeResult.nodeKey) : undefined}
             value={searchValue}
-            placeholder={selectedNode ? `Focused: ${displayPageLabel(selectedNode)}` : 'Find a page'}
+            placeholder={selectedNode ? `Focused: ${pageLabel(selectedNode)}` : 'Find a page'}
             className="h-10 w-full rounded-md border border-base bg-bg py-2 pl-9 pr-3 text-sm text-primary placeholder-mono-600 outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
             onFocus={() => setSearchOpen(true)}
             onBlur={closeSearchOnBlur}
@@ -730,7 +768,7 @@ export function SiteGraphSigma({
                       onMouseEnter={() => setActiveResultIndex(index)}
                       onClick={() => chooseSearchResult(node)}
                     >
-                      <span className="min-w-0 truncate font-mono">{displayPageLabel(node)}</span>
+                      <span className="min-w-0 truncate font-mono">{pageLabel(node)}</span>
                       <span className="flex shrink-0 items-center gap-1.5 text-[13px] text-muted">
                         <span
                           className="font-mono font-semibold"
@@ -828,7 +866,7 @@ export function SiteGraphSigma({
                 className="pointer-events-none absolute z-20 max-w-64 rounded-md border border-base bg-bg/95 px-3 py-2 shadow-lg"
                 style={{ left: hovered.left, top: hovered.top }}
               >
-                <p className="truncate font-mono text-[13px] font-medium text-heading">{displayPageLabel(hoveredNode)}</p>
+                <p className="truncate font-mono text-[13px] font-medium text-heading">{pageLabel(hoveredNode)}</p>
                 {/* The status WORD stays, and leads: it is the only thing tying
                     this node back to the legend and to the pill in the table.
                     The plain-word sentence explains it, it does not replace it. */}
@@ -855,7 +893,7 @@ export function SiteGraphSigma({
       </div>
 
       <div aria-label="Site map legend" className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-subtle bg-bg-elevated/50 px-3 py-2 text-[13px] text-secondary">
-        {(['eligible', 'hidden', 'failed', 'unchecked'] as const).map((status) => (
+        {SITE_GRAPH_LEGEND_STATES.map((status) => (
           <span key={status} className="inline-flex items-center gap-1.5" title={siteGraphStatusDescription(status)}>
             <span
               className="w-3 text-center font-mono text-[15px] font-semibold leading-none"

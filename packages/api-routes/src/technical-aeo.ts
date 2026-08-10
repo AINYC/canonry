@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { and, asc, count, desc, eq, inArray, isNotNull, lt, or, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/sqlite-core'
 import type { FastifyInstance } from 'fastify'
 import {
@@ -45,6 +45,7 @@ import {
   type SiteCrawlNeighborsResponseDto,
   type SiteCrawlPageDto,
   type SiteCrawlPageAuditDto,
+  type SiteCrawlPagesFilterState,
   type SiteCrawlPagesResponseDto,
   type SiteCrawlStructureResponseDto,
   type SiteCrawlSummaryDto,
@@ -1687,6 +1688,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       indexabilityState?: string
       healthState?: string
       auditState?: string
+      nodeKey?: string
       sort?: string
     }
   }>('/projects/:name/technical-aeo/crawl/pages', async (request): Promise<SiteCrawlPagesResponseDto> => {
@@ -1694,11 +1696,11 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     const target = resolveCrawl(project.id, request.query.runId)
     if (!target) {
       assertKnownAuditRun(project.id, request.query.runId)
-      return { project: project.name, hasCrawlData: false, runId: null, total: 0, nextCursor: null, pages: [] }
+      return { project: project.name, hasCrawlData: false, runId: null, total: 0, nextCursor: null, healthStateFilter: null, pages: [] }
     }
     const snapshot = target.snapshot
     if (!snapshot.detailsAvailable || !snapshot.attemptId) {
-      return { project: project.name, hasCrawlData: true, runId: snapshot.runId, total: 0, nextCursor: null, pages: [] }
+      return { project: project.name, hasCrawlData: true, runId: snapshot.runId, total: 0, nextCursor: null, healthStateFilter: null, pages: [] }
     }
 
     const filters = [
@@ -1706,13 +1708,15 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       eq(siteCrawlPages.runId, snapshot.runId),
       eq(siteCrawlPages.attemptId, snapshot.attemptId),
     ]
+    // Addressing one page by key is the same bounded read as the list, so a
+    // client that already holds a node key never has to page to find its row.
+    if (request.query.nodeKey) filters.push(eq(siteCrawlPages.nodeKey, request.query.nodeKey))
     const inventoryEligible = parseBoolean(request.query.inventoryEligible)
     if (inventoryEligible != null) filters.push(eq(siteCrawlPages.inventoryEligible, inventoryEligible))
     if (request.query.fetchState) filters.push(eq(siteCrawlPages.fetchState, request.query.fetchState))
     if (request.query.indexabilityState) filters.push(eq(siteCrawlPages.indexabilityState, request.query.indexabilityState))
     if (request.query.auditState) filters.push(eq(siteCrawlPages.auditState, request.query.auditState))
     const healthState = parseSiteHealthState(request.query.healthState)
-    const where = and(...filters)
     const limit = parseBoundedLimit(request.query.limit, 100, 200)
     const offset = decodeCursor(request.query.cursor)
     const orderBy = request.query.sort === 'score-desc'
@@ -1723,27 +1727,44 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
           ? [asc(siteCrawlPages.path), asc(siteCrawlPages.nodeKey)] as const
           : [asc(siteCrawlPages.url), asc(siteCrawlPages.nodeKey)] as const
 
-    // Health state is DERIVED, not stored: it depends on fetch state,
-    // indexability, the crawler's reasons, and canonical identity together.
-    // Filtering it runs the contract's own `deriveSiteHealthState` over the
-    // bounded page set rather than re-implementing that decision in SQL, where
-    // the two would silently drift apart. The unfiltered path keeps counting
-    // and paging in SQL.
-    let total: number
-    let rows: Array<typeof siteCrawlPages.$inferSelect>
+    // Health state is written at publish time by the contract's own
+    // `deriveSiteHealthState` and backfilled by migration 130, so filtering it
+    // is an ordinary indexed WHERE. A NULL can still appear if an older engine
+    // image wrote the page after that migration; recomputing here would be the
+    // O(all pages) read this replaced, and deriving it in SQL would be a second
+    // implementation that drifts. Say the filter did not run instead.
+    let healthStateFilter: SiteCrawlPagesFilterState | null = null
     if (healthState) {
-      const candidates = app.db.select().from(siteCrawlPages).where(where)
-        .orderBy(...orderBy).limit(MAX_STRUCTURE_SOURCE_ROWS + 1).all()
-      if (candidates.length > MAX_STRUCTURE_SOURCE_ROWS) {
-        throw validationError(`Persisted crawl exceeds the ${MAX_STRUCTURE_SOURCE_ROWS}-page health-state filter limit`)
-      }
-      const matching = candidates.filter((row) => deriveSiteHealthState(row) === healthState)
-      total = matching.length
-      rows = matching.slice(offset, offset + limit)
-    } else {
-      total = app.db.select({ value: count() }).from(siteCrawlPages).where(where).get()?.value ?? 0
-      rows = app.db.select().from(siteCrawlPages).where(where).orderBy(...orderBy).limit(limit).offset(offset).all()
+      // Scoped to the SNAPSHOT, never to the request's other filters. A probe
+      // narrowed by nodeKey (or fetch state, or audit state) answers about one
+      // slice, so the same snapshot could report `applied` to the inspector and
+      // `unavailable-legacy-scan` to the list, and `applied` would silently
+      // omit legacy rows that belong in the result.
+      const legacyRow = app.db.select({ id: siteCrawlPages.id }).from(siteCrawlPages)
+        .where(and(
+          eq(siteCrawlPages.projectId, project.id),
+          eq(siteCrawlPages.runId, snapshot.runId),
+          eq(siteCrawlPages.attemptId, snapshot.attemptId),
+          isNull(siteCrawlPages.healthState),
+        )).limit(1).get()
+      healthStateFilter = legacyRow ? 'unavailable-legacy-scan' : 'applied'
+      if (healthStateFilter === 'applied') filters.push(eq(siteCrawlPages.healthState, healthState))
     }
+    if (healthStateFilter === 'unavailable-legacy-scan') {
+      return {
+        project: project.name,
+        hasCrawlData: true,
+        runId: snapshot.runId,
+        total: 0,
+        nextCursor: null,
+        healthStateFilter,
+        pages: [],
+      }
+    }
+
+    const where = and(...filters)
+    const total = app.db.select({ value: count() }).from(siteCrawlPages).where(where).get()?.value ?? 0
+    const rows = app.db.select().from(siteCrawlPages).where(where).orderBy(...orderBy).limit(limit).offset(offset).all()
     const nextOffset = offset + rows.length
     return {
       project: project.name,
@@ -1751,6 +1772,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       runId: snapshot.runId,
       total,
       nextCursor: nextOffset < total ? encodeCursor(nextOffset) : null,
+      healthStateFilter,
       pages: rows.map(mapCrawlPage),
     }
   })

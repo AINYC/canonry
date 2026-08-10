@@ -3,10 +3,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  displayPageLabel,
   displayPagePath,
   isSameSiteUrl,
   siteHostFromUrl,
-  SITE_HEALTH_HOME_LABEL,
 } from '../src/components/project/site-health-paths.js'
 
 const rootHost = 'azcoatingsllc.com'
@@ -31,10 +31,9 @@ describe('displayPagePath', () => {
       .toBe('https://notazcoatingsllc.com/about')
   })
 
-  it('names the root page rather than showing a bare slash', () => {
-    expect(displayPagePath('https://azcoatingsllc.com/', rootHost)).toBe(SITE_HEALTH_HOME_LABEL)
-    expect(displayPagePath('https://azcoatingsllc.com', rootHost)).toBe(SITE_HEALTH_HOME_LABEL)
-    expect(SITE_HEALTH_HOME_LABEL).toBe('Home')
+  it('writes the root page as the path it actually is', () => {
+    expect(displayPagePath('https://azcoatingsllc.com/', rootHost)).toBe('/')
+    expect(displayPagePath('https://azcoatingsllc.com', rootHost)).toBe('/')
   })
 
   it('preserves query strings, which distinguish real page variants', () => {
@@ -64,5 +63,24 @@ describe('siteHostFromUrl and isSameSiteUrl', () => {
     expect(isSameSiteUrl('https://azcoatingsllc.com/about', rootHost)).toBe(true)
     expect(isSameSiteUrl('https://other.example/about', rootHost)).toBe(false)
     expect(isSameSiteUrl('https://azcoatingsllc.com/about', null)).toBe(false)
+  })
+})
+
+describe('displayPageLabel', () => {
+  // A crawl that follows an apex-to-www redirect keeps both aliases as pages,
+  // and both sit at "/". Neither is renamed, so neither can misrepresent the
+  // other: the map marks the real root with a ring, not with different text.
+  const apex = { nodeKey: 'node-apex', url: 'https://azcoatingsllc.com/', path: '/' }
+  const www = { nodeKey: 'node-www', url: 'https://www.azcoatingsllc.com/', path: '/' }
+
+  it('names every page by its path, including the root', () => {
+    expect([apex, www].map((page) => displayPageLabel(page, rootHost))).toEqual(['/', '/'])
+    expect(displayPageLabel({ url: 'https://azcoatingsllc.com/about', path: '/about' }, rootHost)).toBe('/about')
+  })
+
+  it('falls back to the path when a URL cannot be shortened', () => {
+    expect(displayPageLabel({ url: 'not a url', path: '/fallback' }, rootHost)).toBe('not a url')
+    expect(displayPageLabel({ url: null, path: '/fallback' }, rootHost)).toBe('/fallback')
+    expect(displayPageLabel({ url: null, path: null }, rootHost)).toBe('/')
   })
 })

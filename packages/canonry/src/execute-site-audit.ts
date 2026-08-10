@@ -26,6 +26,7 @@ import {
   SITE_AUDIT_DEFAULT_PAGE_LIMIT,
   SITE_AUDIT_MAX_EDGE_LIMIT,
   SITE_AUDIT_MAX_PAGE_LIMIT,
+  deriveSiteHealthState,
   factorStatusFromScore,
   type RunStatus,
   type SiteAuditCrossCuttingIssueDto,
@@ -340,17 +341,43 @@ export async function executeSiteAudit(
         ...scope,
         eq(siteCrawlEdges.targetUrl, url),
       )).run()
-      tx.update(siteCrawlPages).set({ canonicalNodeKey: nodeKey, updatedAt: now }).where(and(
+      // Resolving canonical identity can flip a page to `hidden`, so the
+      // derived column is recomputed for exactly the rows this touches
+      // instead of being left at whatever insert time could see.
+      const pageScope = [
         eq(siteCrawlPages.projectId, projectId),
         eq(siteCrawlPages.runId, runId),
         eq(siteCrawlPages.attemptId, attemptId),
-        eq(siteCrawlPages.canonicalUrl, url),
-      )).run()
+      ]
+      const canonicalTargets = tx.select({
+        id: siteCrawlPages.id,
+        nodeKey: siteCrawlPages.nodeKey,
+        fetchState: siteCrawlPages.fetchState,
+        indexabilityState: siteCrawlPages.indexabilityState,
+        indexabilityReasons: siteCrawlPages.indexabilityReasons,
+      }).from(siteCrawlPages).where(and(...pageScope, eq(siteCrawlPages.canonicalUrl, url))).all()
+      for (const target of canonicalTargets) {
+        tx.update(siteCrawlPages).set({
+          canonicalNodeKey: nodeKey,
+          healthState: deriveSiteHealthState({ ...target, canonicalNodeKey: nodeKey }),
+          updatedAt: now,
+        }).where(eq(siteCrawlPages.id, target.id)).run()
+      }
     }
   }
 
   const persistPage = (tx: DatabaseTransaction, page: CrawlPageObservation, now: string): void => {
     const audit = page.audit
+    const canonicalNodeKey = page.canonicalUrl ? nodeKeyByUrl.get(page.canonicalUrl) ?? null : null
+    // Persisted once here, by the SAME function the map, the API filter, and
+    // the agents read, so no consumer has to recompute it and none can drift.
+    const healthState = deriveSiteHealthState({
+      fetchState: page.state,
+      indexabilityState: page.indexability.state,
+      indexabilityReasons: page.indexability.reasons,
+      canonicalNodeKey,
+      nodeKey: page.key,
+    })
     tx.insert(siteCrawlPages).values({
       id: crypto.randomUUID(),
       projectId,
@@ -375,9 +402,10 @@ export async function executeSiteAudit(
       redirectChain: page.redirectChain.map((hop) => hop.to),
       directives: { metaRobots: page.metaRobots, xRobots: page.xRobots },
       canonicalUrl: page.canonicalUrl,
-      canonicalNodeKey: page.canonicalUrl ? nodeKeyByUrl.get(page.canonicalUrl) ?? null : null,
+      canonicalNodeKey,
       indexabilityState: page.indexability.state,
       indexabilityReasons: page.indexability.reasons,
+      healthState,
       auditState: pageAuditState(page),
       auditScore: audit?.overallScore ?? null,
       auditFields: audit ? crawlAuditFields(audit) : {},
@@ -410,9 +438,10 @@ export async function executeSiteAudit(
         redirectChain: page.redirectChain.map((hop) => hop.to),
         directives: { metaRobots: page.metaRobots, xRobots: page.xRobots },
         canonicalUrl: page.canonicalUrl,
-        canonicalNodeKey: page.canonicalUrl ? nodeKeyByUrl.get(page.canonicalUrl) ?? null : null,
+        canonicalNodeKey,
         indexabilityState: page.indexability.state,
         indexabilityReasons: page.indexability.reasons,
+        healthState,
         auditState: pageAuditState(page),
         auditScore: audit?.overallScore ?? null,
         auditFields: audit ? crawlAuditFields(audit) : {},

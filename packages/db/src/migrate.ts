@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { classifyAiReferralTrafficClass, normalizeQueryText } from '@ainyc/canonry-contracts'
+import { classifyAiReferralTrafficClass, deriveSiteHealthState, normalizeQueryText } from '@ainyc/canonry-contracts'
 import type { DatabaseClient } from './client.js'
 import { parseJsonColumn } from './json.js'
 
@@ -246,6 +246,53 @@ export function relinkOrphanedSnapshotQueryIds(tx: MigrationDb): void {
  * rows whose envelope predates the `apiResponse` wrapper untouched.
  * Exported so the migration test can exercise it against seeded rows.
  */
+/**
+ * Populate `site_crawl_pages.health_state` for every page written before the
+ * column existed (v130).
+ *
+ * The derivation folds fetch state, indexability, the crawler's reasons, and
+ * canonical identity together, so it CANNOT be expressed as SQL without
+ * becoming a second implementation that drifts from the contract. It does not
+ * need to be: this runs in TypeScript inside the version's transaction and
+ * calls `deriveSiteHealthState` directly, which is the same function the crawl
+ * executor and every reader use.
+ *
+ * Batched so a large install does not build one enormous statement, and
+ * idempotent: only `health_state IS NULL` rows are candidates, so a re-run is
+ * a no-op.
+ */
+export function backfillSiteCrawlPageHealthState(tx: MigrationDb): void {
+  const BATCH = 500
+  for (;;) {
+    const rows = tx.all(sql.raw(`
+      SELECT id, node_key, fetch_state, indexability_state, indexability_reasons, canonical_node_key
+      FROM site_crawl_pages
+      WHERE health_state IS NULL
+      LIMIT ${BATCH}
+    `)) as Array<{
+      id: string
+      node_key: string
+      fetch_state: string
+      indexability_state: string
+      indexability_reasons: string | null
+      canonical_node_key: string | null
+    }>
+    if (rows.length === 0) return
+
+    for (const row of rows) {
+      const healthState = deriveSiteHealthState({
+        fetchState: row.fetch_state,
+        indexabilityState: row.indexability_state,
+        indexabilityReasons: parseJsonColumn<string[]>(row.indexability_reasons, []),
+        canonicalNodeKey: row.canonical_node_key,
+        nodeKey: row.node_key,
+      })
+      tx.run(sql`UPDATE site_crawl_pages SET health_state = ${healthState} WHERE id = ${row.id}`)
+    }
+    if (rows.length < BATCH) return
+  }
+}
+
 export function backfillQuerySnapshotServedModel(tx: MigrationDb): void {
   tx.run(sql.raw(`
     UPDATE query_snapshots
@@ -3192,6 +3239,35 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `CREATE INDEX IF NOT EXISTS idx_traffic_event_receipts_expires
         ON traffic_event_receipts(source_id, expires_at)`,
     ],
+  },
+  {
+    version: 130,
+    name: 'site-crawl-pages-persisted-health-state',
+    // Site Health state is derived from fetch state, indexability, the
+    // crawler's reasons, and canonical identity together. Filtering it by
+    // recomputing in JS meant reading every page row on every request. It is
+    // now written once at publish time by the SAME contract function the map
+    // and the agents use, so reads are an ordinary indexed WHERE.
+    //
+    // Backfilled in TypeScript inside this transaction (see
+    // `backfillSiteCrawlPageHealthState`) so existing scans are filterable
+    // immediately. The derivation is never rewritten in SQL: the backfill
+    // calls the contract's own function, so there is no second implementation
+    // to drift. `unavailable-legacy-scan` therefore survives only as the
+    // honest answer for a row this could not reach.
+    //
+    // Idempotent: `ALTER TABLE ADD COLUMN` errors with "duplicate column
+    // name" on retry, which the runner already swallows, and the backfill
+    // only touches NULL rows.
+    statements: [
+      `ALTER TABLE site_crawl_pages ADD COLUMN health_state TEXT`,
+      // Trailing columns match the ORDER BY the page list actually issues
+      // (`sort=path`), so a filtered read terminates at LIMIT instead of
+      // sorting every match in a temp b-tree on every cursor page.
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_pages_health
+        ON site_crawl_pages(project_id, run_id, attempt_id, health_state, path, node_key)`,
+    ],
+    run: backfillSiteCrawlPageHealthState,
   },
 ]
 

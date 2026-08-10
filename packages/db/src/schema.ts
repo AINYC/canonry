@@ -845,6 +845,13 @@ export const siteCrawlPages = sqliteTable('site_crawl_pages', {
   canonicalNodeKey: text('canonical_node_key'),
   indexabilityState: text('indexability_state').notNull().default('unknown'),
   indexabilityReasons: text('indexability_reasons', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  /**
+   * Derived Site Health state, computed once at publish time by the contract's
+   * `deriveSiteHealthState`. Stored so reads can filter on an index instead of
+   * materializing every page row; NULL means a snapshot published before this
+   * column existed, which reads must report rather than treat as a state.
+   */
+  healthState: text('health_state'),
   auditState: text('audit_state').notNull().default('pending'),
   auditScore: real('audit_score'),
   auditFields: text('audit_fields', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
@@ -863,6 +870,7 @@ export const siteCrawlPages = sqliteTable('site_crawl_pages', {
   index('idx_site_crawl_pages_read').on(table.projectId, table.runId, table.attemptId, table.inventoryEligible, table.auditScore, table.url),
   index('idx_site_crawl_pages_parent').on(table.projectId, table.runId, table.attemptId, table.parentPath, table.path),
   index('idx_site_crawl_pages_url').on(table.projectId, table.runId, table.attemptId, table.url),
+  index('idx_site_crawl_pages_health').on(table.projectId, table.runId, table.attemptId, table.healthState, table.path, table.nodeKey),
   foreignKey({
     name: 'site_crawl_pages_attempt_fk',
     columns: [table.projectId, table.runId, table.attemptId],

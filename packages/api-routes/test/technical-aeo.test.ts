@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Fastify from 'fastify'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createClient,
@@ -40,7 +40,7 @@ import type {
   SiteHealthScansResponseDto,
   SiteHealthSubgraphResponseDto,
 } from '@ainyc/canonry-contracts'
-import { deriveSiteHealthState } from '@ainyc/canonry-contracts'
+import { deriveSiteHealthState, siteHealthStateSchema } from '@ainyc/canonry-contracts'
 import { apiRoutes } from '../src/index.js'
 
 interface Ctx {
@@ -1436,12 +1436,18 @@ describe('crawl page health-state filter', () => {
       for (const indexabilityState of INDEXABILITY_STATES) {
         for (const variant of ['plain', 'canonical-away', 'reason-canonical'] as const) {
           const nodeKey = `${fetchState}:${indexabilityState}:${variant}`
+          const indexabilityReasons = variant === 'reason-canonical' ? ['canonical-to-other'] : []
+          const canonicalNodeKey = variant === 'canonical-away' ? 'some-other-node' : null
           rows.push({
             id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!,
             nodeKey, url: `https://example.com/${encodeURIComponent(nodeKey)}`, path: `/${nodeKey}`, parentPath: '/',
             discoverySource: 'link', fetchState, indexabilityState,
-            indexabilityReasons: variant === 'reason-canonical' ? ['canonical-to-other'] : [],
-            canonicalNodeKey: variant === 'canonical-away' ? 'some-other-node' : null,
+            indexabilityReasons,
+            canonicalNodeKey,
+            // Written the way the crawl executor writes it: by the contract.
+            healthState: deriveSiteHealthState({
+              fetchState, indexabilityState, indexabilityReasons, canonicalNodeKey, nodeKey,
+            }),
             auditState: 'complete', inventoryEligible: true, depth: 1, createdAt: now, updatedAt: now,
           })
         }
@@ -1451,15 +1457,18 @@ describe('crawl page health-state filter', () => {
     return ctx.db.select().from(siteCrawlPages).where(eq(siteCrawlPages.runId, ctx.runB)).all()
   }
 
-  it('agrees with deriveSiteHealthState on every fetch and indexability combination', async () => {
+  it('persists exactly what deriveSiteHealthState decides for every combination', async () => {
     const seeded = seedEveryCombination()
     expect(seeded.length).toBe(FETCH_STATES.length * INDEXABILITY_STATES.length * 3)
 
-    for (const healthState of ['eligible', 'hidden', 'failed', 'unchecked'] as const) {
+    for (const healthState of siteHealthStateSchema.options) {
       const expected = seeded
         .filter((row) => deriveSiteHealthState(row) === healthState)
         .map((row) => row.nodeKey)
         .sort()
+      // The stored column is the contract's answer, not a lookalike.
+      expect(seeded.filter((row) => row.healthState === healthState).map((row) => row.nodeKey).sort())
+        .toEqual(expected)
       const { status, body } = await get<SiteCrawlPagesResponseDto>(
         `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=${healthState}&limit=200`,
       )
@@ -1471,25 +1480,36 @@ describe('crawl page health-state filter', () => {
     }
 
     // Every page lands in exactly one bucket, so the four filters partition the crawl.
-    const totals = await Promise.all((['eligible', 'hidden', 'failed', 'unchecked'] as const).map(async (state) => (
+    const totals = await Promise.all(siteHealthStateSchema.options.map(async (state) => (
       (await get<SiteCrawlPagesResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=${state}&limit=200`)).body.total
     )))
     expect(totals.reduce((sum, value) => sum + value, 0)).toBe(seeded.length)
   })
 
-  it('catches the states a raw indexabilityState filter would miss', async () => {
+  it('means by "hidden" only what the site actually suppressed', async () => {
     seedEveryCombination()
     const hidden = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=hidden&limit=200')
     const noindexOnly = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?indexabilityState=noindex&limit=200')
-
-    // Redirects, robots blocks, non-HTML, and canonical-away pages are hidden
-    // from answer engines without carrying `indexabilityState=noindex`.
-    expect(hidden.body.total).toBeGreaterThan(noindexOnly.body.total)
     const hiddenKeys = new Set(hidden.body.pages.map((page) => page.nodeKey))
-    expect([...hiddenKeys].some((key) => key.startsWith('redirect:indexable'))).toBe(true)
-    expect([...hiddenKeys].some((key) => key.startsWith('robots-blocked:indexable'))).toBe(true)
-    expect([...hiddenKeys].some((key) => key.startsWith('non-html:indexable'))).toBe(true)
+
+    // Still catches what a raw indexabilityState filter misses: robots.txt and
+    // a canonical pointing elsewhere are the site suppressing the page.
+    expect(hidden.body.total).toBeGreaterThan(noindexOnly.body.total)
+    expect([...hiddenKeys].some((key) => key.startsWith('robots-blocked:'))).toBe(true)
     expect([...hiddenKeys].some((key) => key.endsWith(':canonical-away'))).toBe(true)
+
+    // But the chip must NOT sweep up files and redirects. Flagging
+    // llms-full.txt as hidden reads as a defect when it is the opposite.
+    expect([...hiddenKeys].some((key) => key.startsWith('non-html:'))).toBe(false)
+    expect([...hiddenKeys].some((key) => key.startsWith('redirect:'))).toBe(false)
+
+    const resources = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=resource&limit=200')
+    expect(resources.body.pages.every((page) => page.nodeKey.startsWith('non-html:'))).toBe(true)
+    expect(resources.body.total).toBeGreaterThan(0)
+
+    const redirects = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=redirect&limit=200')
+    expect(redirects.body.pages.every((page) => page.nodeKey.startsWith('redirect:'))).toBe(true)
+    expect(redirects.body.total).toBeGreaterThan(0)
   })
 
   it('pages and refuses an unknown health state', async () => {
@@ -1506,5 +1526,75 @@ describe('crawl page health-state filter', () => {
       .not.toEqual(firstPage.body.pages.map((page) => page.nodeKey))
 
     expect((await get('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=indexed')).status).toBe(400)
+  })
+
+  it('reports a mixed snapshot as unfilterable to every read, not just some', async () => {
+    seedEveryCombination()
+    // A snapshot where only SOME rows predate the column. A probe narrowed by
+    // the request's own filters would answer `applied` for a populated row and
+    // `unavailable-legacy-scan` for the list, disagreeing about one snapshot.
+    ctx.db.update(siteCrawlPages).set({ healthState: null })
+      .where(eq(siteCrawlPages.nodeKey, 'html:noindex:plain')).run()
+
+    const list = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=hidden&limit=200')
+    // A populated row, addressed by key, must give the SAME verdict.
+    const single = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=hidden&nodeKey=redirect:indexable:plain&limit=1')
+
+    expect(list.body.healthStateFilter).toBe('unavailable-legacy-scan')
+    expect(single.body.healthStateFilter).toBe('unavailable-legacy-scan')
+    expect(single.body.pages).toEqual([])
+  })
+
+  it('reports that a scan published before the column cannot be filtered', async () => {
+    seedEveryCombination()
+    // A snapshot from before the derived column existed keeps NULLs. There is
+    // no honest answer to a filter over it, so the route says so instead of
+    // returning a list that looks filtered.
+    ctx.db.update(siteCrawlPages).set({ healthState: null })
+      .where(eq(siteCrawlPages.nodeKey, 'html:indexable:plain')).run()
+
+    const filtered = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=hidden&limit=200')
+    expect(filtered.status).toBe(200)
+    expect(filtered.body.healthStateFilter).toBe('unavailable-legacy-scan')
+    expect(filtered.body.pages).toEqual([])
+    expect(filtered.body.total).toBe(0)
+
+    // The unfiltered list is unaffected and says no filter was requested.
+    const unfiltered = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?limit=200')
+    expect(unfiltered.body.healthStateFilter).toBeNull()
+    expect(unfiltered.body.total).toBeGreaterThan(0)
+  })
+
+  it('serves the real filtered query from the index, with no temp b-tree sort', () => {
+    seedEveryCombination()
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    // The exact shape the page list issues: filter on the derived state,
+    // ordered by path. If the index does not cover the ORDER BY, SQLite sorts
+    // every match in a temp b-tree before LIMIT, on every cursor page.
+    const plan = ctx.db.all(sql`
+      EXPLAIN QUERY PLAN
+      SELECT * FROM site_crawl_pages
+      WHERE project_id = ${ctx.projectId}
+        AND run_id = ${ctx.runB}
+        AND attempt_id = ${snapshot.attemptId}
+        AND health_state = 'hidden'
+      ORDER BY path ASC, node_key ASC
+      LIMIT 100
+    `) as Array<{ detail: string }>
+    const detail = plan.map((row) => row.detail).join(' | ')
+
+    expect(detail).toContain('idx_site_crawl_pages_health')
+    expect(detail).not.toContain('TEMP B-TREE')
+    expect(detail).not.toContain('SCAN site_crawl_pages')
+  })
+
+  it('answers a filtered read without scanning every page row', async () => {
+    seedEveryCombination()
+    const applied = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=hidden&limit=1')
+    expect(applied.body.healthStateFilter).toBe('applied')
+    expect(applied.body.pages).toHaveLength(1)
+    // `total` is a COUNT over the indexed filter, not the length of a
+    // materialized list, so limit=1 stays a bounded read.
+    expect(applied.body.total).toBeGreaterThan(1)
   })
 })

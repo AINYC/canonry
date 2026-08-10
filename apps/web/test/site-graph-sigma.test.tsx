@@ -12,8 +12,15 @@ const sigmaMocks = vi.hoisted(() => ({
   reset: vi.fn(),
   gotoNode: vi.fn(),
   shouldThrow: false,
+  cameraRatio: 1,
   containerProps: null as {
-    graph?: { nodes: () => string[]; getNodeAttribute: (nodeKey: string, attribute: string) => string }
+    graph?: {
+      nodes: () => string[]
+      edges: () => string[]
+      getNodeAttribute: (nodeKey: string, attribute: string) => string
+      getNodeAttributes: (nodeKey: string) => Record<string, unknown>
+      getEdgeAttributes: (edgeKey: string) => Record<string, unknown>
+    }
     settings?: {
       defaultNodeColor?: string
       defaultEdgeColor?: string
@@ -31,7 +38,7 @@ const sigmaMockInstance = {
     areNeighbors: (left: string, right: string) => left === right || left === 'home' || right === 'home',
     extremities: () => ['home', 'pricing'],
   }),
-  getCamera: () => ({ getState: () => ({ ratio: 1 }) }),
+  getCamera: () => ({ getState: () => ({ ratio: sigmaMocks.cameraRatio }) }),
 }
 
 vi.mock('@react-sigma/core', async () => {
@@ -302,33 +309,84 @@ describe('SiteGraphSigma', () => {
 
     const tooltip = screen.getByRole('tooltip')
     expect(within(tooltip).getByText('Score 61/100')).not.toBeNull()
-    expect(within(tooltip).getByText(/Indexable/)).not.toBeNull()
+    expect(within(tooltip).getByText(/allowed to index this page/)).not.toBeNull()
   })
 
-  it('only refreshes the graph when camera zoom crosses the overview threshold', async () => {
+  it('re-reduces after a zoom, so labels and edges actually change on screen', async () => {
+    // Sigma applies reducers only inside process(), which runs on refresh().
+    // Reading the ratio at paint time is necessary but NOT sufficient: without
+    // a camera listener that refreshes, a zoom never re-evaluates the label
+    // budget and the edge mesh never comes back. This is the defect the
+    // founder screenshotted, so it is asserted end to end through the runtime.
     mockWebGl(true)
-    render(<SiteGraphSigma nodes={nodes} edges={edges} />)
+    sigmaMocks.cameraRatio = 1
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
 
+    const denseNodes = Array.from({ length: 30 }, (_, index) => node(`n${String(index).padStart(2, '0')}`))
+    const denseEdges = denseNodes.slice(1).map((target) => ({
+      edgeKey: `n00-${target.nodeKey}`,
+      sourceNodeKey: 'n00',
+      targetNodeKey: target.nodeKey,
+      followable: true,
+      occurrences: 1,
+    }))
+    render(<SiteGraphSigma nodes={denseNodes} edges={denseEdges} rootNodeKey="n00" />)
     await waitFor(() => expect(sigmaMocks.handlers.updated).toBeTypeOf('function'))
-    await waitFor(() => expect(sigmaMocks.refresh).toHaveBeenCalledTimes(1))
-    const initialRefreshes = sigmaMocks.refresh.mock.calls.length
+    await waitFor(() => expect(sigmaMocks.refresh).toHaveBeenCalled())
 
+    const reducerFor = (name: string) => sigmaMocks.setSetting.mock.calls
+      .filter(([setting]) => setting === name).at(-1)![1] as (key: string, attributes: never) => Record<string, unknown>
+    const graph = sigmaMocks.containerProps!.graph!
+    const visibleEdges = () => {
+      const edgeReducer = reducerFor('edgeReducer')
+      return graph.edges().filter((edgeKey: string) => (
+        edgeReducer(edgeKey, graph.getEdgeAttributes(edgeKey) as never).hidden !== true
+      ))
+    }
+    const labelled = () => {
+      const nodeReducer = reducerFor('nodeReducer')
+      return graph.nodes().filter((nodeKey: string) => (
+        nodeReducer(nodeKey, graph.getNodeAttributes(nodeKey) as never).label !== ''
+      ))
+    }
+
+    // Fitted: the overview treatment.
+    expect(visibleEdges()).toEqual([])
+    const overviewLabels = labelled().length
+
+    // Zoom in. The camera event must drive a refresh, coalesced onto a frame.
+    const refreshesBefore = sigmaMocks.refresh.mock.calls.length
+    sigmaMocks.cameraRatio = 0.1
+    act(() => { sigmaMocks.handlers.updated!({ ratio: 0.1 } as never) })
+    expect(frames).toHaveLength(1)
+    act(() => { frames.shift()!(0) })
+    expect(sigmaMocks.refresh.mock.calls.length).toBe(refreshesBefore + 1)
+
+    // And the reduced output really changed: edges are back, more labels show.
+    expect(visibleEdges().length).toBeGreaterThan(0)
+    expect(labelled().length).toBeGreaterThan(overviewLabels)
+
+    // A gesture that does not cross a tier costs no refresh.
+    const refreshesAfterZoom = sigmaMocks.refresh.mock.calls.length
+    sigmaMocks.cameraRatio = 0.11
+    act(() => { sigmaMocks.handlers.updated!({ ratio: 0.11 } as never) })
+    act(() => { frames.shift()!(0) })
+    expect(sigmaMocks.refresh.mock.calls.length).toBe(refreshesAfterZoom)
+
+    // Many events inside one frame coalesce into a single scheduled refresh.
+    sigmaMocks.cameraRatio = 1
     act(() => {
-      for (const ratio of [1.01, 1.1, 1.2, 1.34, 1.01]) {
-        sigmaMocks.handlers.updated!({ ratio } as never)
-      }
+      for (const ratio of [0.5, 0.8, 1]) sigmaMocks.handlers.updated!({ ratio } as never)
     })
-    expect(sigmaMocks.refresh).toHaveBeenCalledTimes(initialRefreshes)
-
-    act(() => sigmaMocks.handlers.updated!({ ratio: 0.7 } as never))
-    await waitFor(() => expect(sigmaMocks.refresh).toHaveBeenCalledTimes(initialRefreshes + 1))
-
-    act(() => {
-      for (const ratio of [0.6, 0.5, 0.7]) {
-        sigmaMocks.handlers.updated!({ ratio } as never)
-      }
-    })
-    expect(sigmaMocks.refresh).toHaveBeenCalledTimes(initialRefreshes + 1)
+    expect(frames).toHaveLength(1)
+    act(() => { frames.shift()!(0) })
+    expect(sigmaMocks.refresh.mock.calls.length).toBe(refreshesAfterZoom + 1)
+    expect(visibleEdges()).toEqual([])
   })
 
   it('does not reconfigure a renderer while its container is being destroyed', async () => {

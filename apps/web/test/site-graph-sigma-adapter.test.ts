@@ -7,25 +7,35 @@ import {
   buildSigmaSiteGraph,
   createSigmaSiteGraphReducers,
   findSiteGraphNodes,
+  SITE_GRAPH_COLOR_TOKENS,
   SITE_GRAPH_EDGE_TOKEN,
   SITE_GRAPH_FOCUSED_NEIGHBOR_LABEL_LIMIT,
-  SITE_GRAPH_ROOT_LABEL,
-  SITE_GRAPH_ROOT_MIN_SIZE,
+  SITE_GRAPH_LABEL_BUDGETS,
+  SITE_GRAPH_OVERVIEW_LABEL_BUDGET,
   SITE_GRAPH_ROOT_TOKEN,
+  siteGraphLabelBudget,
+  siteGraphMaxNodeSize,
+  siteGraphRootNodeSize,
   SITE_GRAPH_SIGMA_COLOR_TOKENS,
   isSigmaWebGlColor,
   isSiteGraphRootNode,
   siteGraphNodeSize,
+  siteGraphStatusDescription,
   siteGraphStatusGlyph,
+  siteGraphStatusLabel,
+  siteGraphStatusLegendLabel,
   siteGraphVisualState,
   type SigmaSiteGraphTheme,
   type SiteGraphSigmaEdge,
   type SiteGraphSigmaNode,
 } from '../src/components/project/site-graph-sigma.js'
+import { SITE_GRAPH_LEGEND_STATES } from '@ainyc/canonry-contracts'
 
 const theme: SigmaSiteGraphTheme = {
   eligible: 'rgb(1, 2, 3)',
   hidden: 'rgb(4, 5, 6)',
+  resource: 'rgb(34, 35, 36)',
+  redirect: 'rgb(37, 38, 39)',
   failed: 'rgb(7, 8, 9)',
   unchecked: 'rgb(10, 11, 12)',
   dimmedNode: 'rgb(13, 14, 15)',
@@ -92,7 +102,12 @@ describe('buildSigmaSiteGraph', () => {
     expect(siteGraphVisualState(node('legacy-redirect', {
       fetchState: 'redirect',
       indexabilityState: 'indexable',
-    }))).toBe('hidden')
+    }))).toBe('redirect')
+    // A fetched .txt or PDF is not hidden; it is simply not a page.
+    expect(siteGraphVisualState(node('legacy-resource', {
+      fetchState: 'non-html',
+      indexabilityState: 'indexable',
+    }))).toBe('resource')
     expect(siteGraphVisualState(node('legacy-canonical-source', {
       canonicalNodeKey: 'legacy-canonical-target',
       fetchState: 'html',
@@ -231,48 +246,67 @@ describe('buildSigmaSiteGraph', () => {
     })
   })
 
-  it('limits overview labels to home and top-level nodes without hiding a focused neighborhood', () => {
+  it('spends a zoom-dependent label budget on the best-linked pages', () => {
+    // A fitted 50-page map used to draw every label at once, overlapping into
+    // unreadable text. The budget names the pages a reader looks for first.
+    const pages = Array.from({ length: 40 }, (_, index) => node(`p${String(index).padStart(2, '0')}`, {
+      path: `/p${index}`,
+      depth: 1 + (index % 3),
+      linkScoreNormalized: index / 39,
+    }))
     const result = buildSigmaSiteGraph(
-      [
-        node('home', { path: '/', depth: 0 }),
-        node('services', { path: '/services', depth: 1 }),
-        node('roof-repair', { path: '/services/roof-repair', depth: 2 }),
-        node('gutter-repair', { path: '/services/gutter-repair', depth: 2 }),
-        node('unrelated', { path: '/blog/guides/article', depth: 3 }),
-      ],
-      [
-        edge('home-services', 'home', 'services'),
-        edge('services-roof', 'services', 'roof-repair'),
-        edge('roof-gutter', 'roof-repair', 'gutter-repair'),
-      ],
+      [node('home', { path: '/', depth: 0, linkScoreNormalized: 0 }), ...pages],
+      pages.map((page) => edge(`home-${page.nodeKey}`, 'home', page.nodeKey)),
       theme,
+      'home',
     )
-    const overview = createSigmaSiteGraphReducers(result.graph, null, 2, theme)
-    const home = result.graph.getNodeAttributes('home')
-    const services = result.graph.getNodeAttributes('services')
-    const roofRepair = result.graph.getNodeAttributes('roof-repair')
 
-    expect(overview.nodeReducer('home', home)).toMatchObject({ label: '● /', forceLabel: true })
-    expect(overview.nodeReducer('services', services)).toMatchObject({ label: '● /services', forceLabel: true })
-    expect(overview.nodeReducer('roof-repair', roofRepair)).toMatchObject({ label: '', forceLabel: false })
+    const labelled = (ratio: number) => {
+      const reducers = createSigmaSiteGraphReducers(result.graph, null, ratio, theme)
+      return result.graph.nodes().filter((nodeKey) => {
+        const reduced = reducers.nodeReducer(nodeKey, result.graph.getNodeAttributes(nodeKey))
+        return reduced.label !== ''
+      })
+    }
 
-    // Sigma's fitted camera starts at ratio 1. The first paint is the
-    // overview, so it must already suppress deep labels before any input.
-    const fittedOverview = createSigmaSiteGraphReducers(result.graph, null, 1, theme)
-    expect(fittedOverview.nodeReducer('roof-repair', roofRepair)).toMatchObject({ label: '', forceLabel: false })
+    const overview = labelled(1)
+    expect(overview.length).toBeLessThanOrEqual(SITE_GRAPH_OVERVIEW_LABEL_BUDGET)
+    // The root is always one of them, whatever its link score.
+    expect(overview).toContain('home')
+    // The rest are the best-linked pages, not an arbitrary slice.
+    expect(overview).toContain('p39')
+    expect(overview).not.toContain('p00')
 
-    const focusedOverview = createSigmaSiteGraphReducers(result.graph, 'roof-repair', 2, theme)
-    expect(focusedOverview.nodeReducer('roof-repair', roofRepair)).toMatchObject({
-      label: '● /services/roof-repair',
-      forceLabel: true,
-    })
-    expect(focusedOverview.nodeReducer('gutter-repair', result.graph.getNodeAttributes('gutter-repair'))).toMatchObject({
-      label: '● /services/gutter-repair',
-      forceLabel: false,
-    })
+    // Zooming in reveals more, and a close zoom holds nothing back.
+    expect(labelled(0.6).length).toBeGreaterThan(overview.length)
+    expect(labelled(0.1).length).toBe(result.graph.order)
 
-    const zoomedIn = createSigmaSiteGraphReducers(result.graph, null, 0.5, theme)
-    expect(zoomedIn.nodeReducer('roof-repair', roofRepair)).toEqual(roofRepair)
+    expect(siteGraphLabelBudget(1)).toBe(SITE_GRAPH_OVERVIEW_LABEL_BUDGET)
+    expect(siteGraphLabelBudget(0.1)).toBe(Number.POSITIVE_INFINITY)
+    // The ladder only ever loosens as the camera moves in.
+    const budgets = [1, 0.7, 0.4, 0.1].map(siteGraphLabelBudget)
+    expect(budgets).toEqual([...budgets].sort((left, right) => left - right))
+    expect(SITE_GRAPH_LABEL_BUDGETS.length).toBeGreaterThan(0)
+  })
+
+  it('shrinks the node size range as a map gets denser, keeping importance monotonic', () => {
+    // At 50 nodes on a template mesh nearly every page scores alike, so a
+    // fixed range drew them all at the maximum and read as one solid mass.
+    expect(siteGraphMaxNodeSize(50)).toBeGreaterThan(siteGraphMaxNodeSize(5_000))
+    expect(siteGraphMaxNodeSize(5_000)).toBeGreaterThan(siteGraphMaxNodeSize(20_000))
+    expect(siteGraphMaxNodeSize(20_000)).toBeGreaterThan(0)
+    expect(siteGraphRootNodeSize(50)).toBeGreaterThan(siteGraphMaxNodeSize(50))
+
+    // Importance still reads monotonically at any density.
+    for (const count of [50, 5_000]) {
+      const low = siteGraphNodeSize(node('low', { linkScoreNormalized: 0.1 }), false, count)
+      const high = siteGraphNodeSize(node('high', { linkScoreNormalized: 0.9 }), false, count)
+      expect(high).toBeGreaterThan(low)
+      expect(high).toBeLessThanOrEqual(siteGraphMaxNodeSize(count))
+    }
+    // A denser map never draws a bigger dot for the same importance.
+    expect(siteGraphNodeSize(node('x', { linkScoreNormalized: 1 }), false, 5_000))
+      .toBeLessThan(siteGraphNodeSize(node('x', { linkScoreNormalized: 1 }), false, 50))
   })
 
   it('bounds collision-safe label candidates around a high-degree focused page by link importance', () => {
@@ -395,13 +429,14 @@ describe('the crawl root', () => {
   it('is named, always labeled, oversized, and ringed regardless of link score', () => {
     const root = graphWithRoot().graph.getNodeAttributes('home')
 
-    expect(root.label).toBe(`● ${SITE_GRAPH_ROOT_LABEL}`)
-    expect(root.label).not.toContain('/')
+    // The root reads as the path it is; the ring and the forced label are
+    // what mark it, not a different name.
+    expect(root.label).toBe('● /')
     expect(root.forceLabel).toBe(true)
     expect(root.isRoot).toBe(true)
     expect(root.ringColor).toBe(theme.root)
     // The lowest possible internal-link score must not shrink it.
-    expect(root.size).toBe(SITE_GRAPH_ROOT_MIN_SIZE)
+    expect(root.size).toBeCloseTo(siteGraphRootNodeSize(3), 9)
     expect(root.size).toBeGreaterThan(
       graphWithRoot().graph.getNodeAttribute('services', 'size'),
     )
@@ -414,7 +449,7 @@ describe('the crawl root', () => {
 
     const overview = createSigmaSiteGraphReducers(built.graph, null, 2, theme)
     expect(overview.nodeReducer('home', root)).toMatchObject({
-      label: `● ${SITE_GRAPH_ROOT_LABEL}`,
+      label: '● /',
       forceLabel: true,
       ringColor: theme.root,
     })
@@ -422,7 +457,7 @@ describe('the crawl root', () => {
     // Focused elsewhere, and not even a neighbor of the focus.
     const focusedElsewhere = createSigmaSiteGraphReducers(built.graph, 'deep', 2, theme)
     expect(focusedElsewhere.nodeReducer('home', root)).toMatchObject({
-      label: `● ${SITE_GRAPH_ROOT_LABEL}`,
+      label: '● /',
       forceLabel: true,
       ringColor: theme.root,
     })
@@ -434,5 +469,111 @@ describe('the crawl root', () => {
       zIndex: 3,
       size: root.size * 1.35,
     })
+  })
+})
+
+describe('a real template-mesh site (canonry.ai shape: 50 pages, ~1,259 links)', () => {
+  function templateMesh() {
+    const pages = Array.from({ length: 50 }, (_, index) => node(`page-${String(index).padStart(2, '0')}`, {
+      path: index === 0 ? '/' : `/page-${index}`,
+      depth: index === 0 ? 0 : 1 + (index % 3),
+      // A shared header links everywhere, so link scores bunch near the top.
+      linkScoreNormalized: 0.7 + (index % 10) / 33,
+      x: Math.cos(index) * 50,
+      y: Math.sin(index * 1.7) * 50,
+    }))
+    const edges = []
+    for (const source of pages) {
+      for (const target of pages) {
+        if (source.nodeKey === target.nodeKey) continue
+        if (edges.length >= 1_259) break
+        edges.push(edge(`${source.nodeKey}->${target.nodeKey}`, source.nodeKey, target.nodeKey))
+      }
+    }
+    return { pages, edges }
+  }
+
+  it('draws a readable overview: budgeted labels, no edge mesh, one Home', () => {
+    const { pages, edges } = templateMesh()
+    const built = buildSigmaSiteGraph(pages, edges, theme, 'page-00')
+    expect(built.graph.order).toBe(50)
+    expect(built.graph.size).toBe(1_259)
+
+    const fitted = createSigmaSiteGraphReducers(built.graph, null, 1, theme)
+
+    // Labels stay inside the budget instead of overlapping into a smear.
+    const labelled = built.graph.nodes().filter((nodeKey) => (
+      fitted.nodeReducer(nodeKey, built.graph.getNodeAttributes(nodeKey)).label !== ''
+    ))
+    expect(labelled.length).toBeLessThanOrEqual(SITE_GRAPH_OVERVIEW_LABEL_BUDGET)
+    expect(labelled).toContain('page-00')
+
+    // Exactly one page carries the root marker, and it is the one the server
+    // identified. Its label is its path like every other page.
+    const ringed = built.graph.nodes().filter((nodeKey) => built.graph.getNodeAttribute(nodeKey, 'isRoot'))
+    expect(ringed).toEqual(['page-00'])
+    expect(built.graph.getNodeAttribute('page-00', 'label')).toBe('● /')
+
+    // The default view of a dense site shows nodes only.
+    const visibleEdges = built.graph.edges().filter((edgeKey) => (
+      fitted.edgeReducer(edgeKey, built.graph.getEdgeAttributes(edgeKey)).hidden !== true
+    ))
+    expect(visibleEdges).toEqual([])
+
+    // Selecting a page brings back that page's own links, still fitted.
+    const focused = createSigmaSiteGraphReducers(built.graph, 'page-07', 1, theme)
+    const focusedEdges = built.graph.edges().filter((edgeKey) => (
+      focused.edgeReducer(edgeKey, built.graph.getEdgeAttributes(edgeKey)).hidden !== true
+    ))
+    expect(focusedEdges.length).toBeGreaterThan(0)
+    for (const edgeKey of focusedEdges) {
+      expect(built.graph.extremities(edgeKey)).toContain('page-07')
+    }
+    // And its own label is drawn whatever the budget says.
+    expect(focused.nodeReducer('page-07', built.graph.getNodeAttributes('page-07')).forceLabel).toBe(true)
+
+    // Dots stay small enough at this density to read as separate pages.
+    expect(siteGraphMaxNodeSize(50)).toBeLessThanOrEqual(9)
+  })
+})
+
+describe('the customer-facing state vocabulary', () => {
+  it('never calls a file or a redirect hidden, at any surface', () => {
+    // /llms-full.txt shipped reading "Hidden" over "Not a reachable HTML
+    // page". Badge, legend, and tooltip all have to agree that it is a file.
+    expect(siteGraphStatusLabel('resource')).toBe('Not a page')
+    expect(siteGraphStatusLegendLabel('resource')).toBe('Not a page')
+    expect(siteGraphStatusDescription('resource')).toMatch(/file rather than a page/i)
+    expect(siteGraphStatusDescription('resource')).not.toMatch(/hidden/i)
+
+    expect(siteGraphStatusLabel('redirect')).toBe('Moved')
+    expect(siteGraphStatusLegendLabel('redirect')).toBe('Moved')
+    expect(siteGraphStatusDescription('redirect')).not.toMatch(/hidden/i)
+
+    // Only the genuinely suppressed state says hidden.
+    expect(siteGraphStatusLabel('hidden')).toBe('Hidden')
+    expect(siteGraphStatusDescription('hidden')).toMatch(/not to index/i)
+  })
+
+  it('colors the non-problem states neutrally, never with the hidden amber', () => {
+    for (const state of ['resource', 'redirect'] as const) {
+      expect(SITE_GRAPH_COLOR_TOKENS[state].fallback).not.toBe(SITE_GRAPH_COLOR_TOKENS.hidden.fallback)
+      expect(SITE_GRAPH_COLOR_TOKENS[state].property).toBe(`--chart-site-health-${state}`)
+    }
+    // Every state is distinctly colored and distinctly glyphed.
+    const colors = SITE_GRAPH_LEGEND_STATES.map((state) => SITE_GRAPH_COLOR_TOKENS[state].fallback)
+    expect(new Set(colors).size).toBe(SITE_GRAPH_LEGEND_STATES.length)
+    const glyphs = SITE_GRAPH_LEGEND_STATES.map(siteGraphStatusGlyph)
+    expect(new Set(glyphs).size).toBe(SITE_GRAPH_LEGEND_STATES.length)
+  })
+
+  it('legends every state the derivation can produce', () => {
+    expect([...SITE_GRAPH_LEGEND_STATES].sort()).toEqual(
+      ['eligible', 'failed', 'hidden', 'redirect', 'resource', 'unchecked'],
+    )
+    for (const state of SITE_GRAPH_LEGEND_STATES) {
+      expect(siteGraphStatusLegendLabel(state)).not.toBe('')
+      expect(siteGraphStatusDescription(state)).not.toBe('')
+    }
   })
 })

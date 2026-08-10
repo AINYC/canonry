@@ -1,8 +1,6 @@
 import { MultiDirectedGraph } from 'graphology'
 import { deriveSiteHealthState, type SiteHealthState } from '@ainyc/canonry-contracts'
 
-import { SITE_HEALTH_HOME_LABEL } from './site-health-paths.js'
-
 export type SiteGraphVisualState = SiteHealthState
 
 /**
@@ -13,6 +11,10 @@ export type SiteGraphVisualState = SiteHealthState
 export const SITE_GRAPH_COLOR_TOKENS = {
   eligible: { property: '--chart-site-health-eligible', fallback: '#56b4e9' },
   hidden: { property: '--chart-site-health-hidden', fallback: '#e69f00' },
+  // Neutral on purpose. A text file or a PDF is not a fault, so it must not
+  // borrow the amber the genuinely hidden pages use.
+  resource: { property: '--chart-site-health-resource', fallback: '#d4d4d8' },
+  redirect: { property: '--chart-site-health-redirect', fallback: '#9aa7b8' },
   failed: { property: '--chart-site-health-failed', fallback: '#d55e00' },
   unchecked: { property: '--chart-site-health-unchecked', fallback: '#a1a1aa' },
 } as const satisfies Record<SiteGraphVisualState, { property: string; fallback: string }>
@@ -33,14 +35,32 @@ export const SITE_GRAPH_ROOT_TOKEN = {
   fallback: '#cc79a7',
 } as const
 
-/** The home page is named, not pathed, so it reads at a glance. */
-export const SITE_GRAPH_ROOT_LABEL = SITE_HEALTH_HOME_LABEL
+/** Smallest dot we will draw; below this a node stops being clickable. */
+export const SITE_GRAPH_NODE_MIN_SIZE = 2.5
+/** Largest dot on a small map. Dense maps scale down from here. */
+export const SITE_GRAPH_NODE_MAX_SIZE = 9
+/** Node counts at or below this get the full size range. */
+const SITE_GRAPH_NODE_SIZE_REFERENCE_COUNT = 200
+/** No matter how dense the map, a node never shrinks past this. */
+const SITE_GRAPH_NODE_MAX_SIZE_FLOOR = 3
+/** The root is this much bigger than the largest ordinary node. */
+const SITE_GRAPH_ROOT_SIZE_FACTOR = 1.6
 
 /**
- * The root must stay findable at any internal-link score, so it never shrinks
- * to the importance-derived size the way every other page does.
+ * The largest ordinary node at this map size. A near-complete template mesh
+ * pushes almost every page to a similar link score, so without this every dot
+ * renders at the maximum and the map reads as one solid mass. Monotonically
+ * non-increasing in node count.
  */
-export const SITE_GRAPH_ROOT_MIN_SIZE = 14
+export function siteGraphMaxNodeSize(nodeCount: number): number {
+  const density = SITE_GRAPH_NODE_SIZE_REFERENCE_COUNT / Math.max(SITE_GRAPH_NODE_SIZE_REFERENCE_COUNT, nodeCount)
+  return Math.max(SITE_GRAPH_NODE_MAX_SIZE_FLOOR, SITE_GRAPH_NODE_MAX_SIZE * density ** 0.25)
+}
+
+/** The root stays findable at any link score, so it never shrinks to fit. */
+export function siteGraphRootNodeSize(nodeCount: number): number {
+  return siteGraphMaxNodeSize(nodeCount) * SITE_GRAPH_ROOT_SIZE_FACTOR
+}
 
 /**
  * Structural subset of a published Site Health graph node. Positions are
@@ -81,6 +101,8 @@ export interface SiteGraphSigmaEdge {
 export interface SigmaSiteGraphTheme {
   eligible: string
   hidden: string
+  resource: string
+  redirect: string
   failed: string
   unchecked: string
   dimmedNode: string
@@ -100,6 +122,8 @@ export interface SigmaSiteGraphTheme {
 export const SITE_GRAPH_SIGMA_COLOR_TOKENS = {
   eligible: SITE_GRAPH_COLOR_TOKENS.eligible,
   hidden: SITE_GRAPH_COLOR_TOKENS.hidden,
+  resource: SITE_GRAPH_COLOR_TOKENS.resource,
+  redirect: SITE_GRAPH_COLOR_TOKENS.redirect,
   failed: SITE_GRAPH_COLOR_TOKENS.failed,
   unchecked: SITE_GRAPH_COLOR_TOKENS.unchecked,
   dimmedNode: { property: '--chart-neutral-text-dim', fallback: '#71717a' },
@@ -168,6 +192,30 @@ export const SITE_GRAPH_FOCUSED_NEIGHBOR_LABEL_LIMIT = 8
 /** Sigma's fitted first paint is ratio 1; deeper labels appear after a real zoom-in. */
 export const SITE_GRAPH_OVERVIEW_CAMERA_RATIO = 0.75
 
+/**
+ * How many page labels the canvas may draw at once, by camera ratio.
+ *
+ * A fitted 50-page map used to draw all 50 labels on top of each other. The
+ * budget is spent on the pages a reader would look for first: the root, then
+ * the best-linked pages. Zooming in raises the budget because the same labels
+ * now have more room, and an unbounded final tier keeps a zoomed-in view
+ * complete.
+ */
+export const SITE_GRAPH_LABEL_BUDGETS = [
+  { maxRatio: 0.2, budget: Number.POSITIVE_INFINITY },
+  { maxRatio: 0.45, budget: 60 },
+  { maxRatio: SITE_GRAPH_OVERVIEW_CAMERA_RATIO, budget: 24 },
+] as const
+/** The fitted overview: the root plus the best-linked handful. */
+export const SITE_GRAPH_OVERVIEW_LABEL_BUDGET = 10
+
+export function siteGraphLabelBudget(cameraRatio: number): number {
+  for (const tier of SITE_GRAPH_LABEL_BUDGETS) {
+    if (cameraRatio <= tier.maxRatio) return tier.budget
+  }
+  return SITE_GRAPH_OVERVIEW_LABEL_BUDGET
+}
+
 function lexical(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0
 }
@@ -197,6 +245,8 @@ export function siteGraphStatusLabel(state: SiteGraphVisualState): string {
   switch (state) {
     case 'eligible': return 'Indexable'
     case 'hidden': return 'Hidden'
+    case 'resource': return 'Not a page'
+    case 'redirect': return 'Moved'
     case 'failed': return 'Broken'
     case 'unchecked': return 'Not checked'
   }
@@ -207,6 +257,8 @@ export function siteGraphStatusLegendLabel(state: SiteGraphVisualState): string 
   switch (state) {
     case 'eligible': return 'Indexable'
     case 'hidden': return 'Hidden or points elsewhere'
+    case 'resource': return 'Not a page'
+    case 'redirect': return 'Moved'
     case 'failed': return 'Broken'
     case 'unchecked': return 'Not checked'
   }
@@ -217,6 +269,8 @@ export function siteGraphStatusDescription(state: SiteGraphVisualState): string 
   switch (state) {
     case 'eligible': return 'AI and search engines are allowed to index this page'
     case 'hidden': return 'This page tells them not to index it, or points them to another page'
+    case 'resource': return 'A file rather than a page, such as a text file or a PDF. Answer engines can still read it'
+    case 'redirect': return 'This address sends visitors to another page'
     case 'failed': return 'This page could not be loaded'
     case 'unchecked': return 'This page was found but not checked'
   }
@@ -227,6 +281,8 @@ export function siteGraphStatusGlyph(state: SiteGraphVisualState): string {
   switch (state) {
     case 'eligible': return '●'
     case 'hidden': return '◆'
+    case 'resource': return '▪'
+    case 'redirect': return '↗'
     case 'failed': return '×'
     case 'unchecked': return '○'
   }
@@ -234,8 +290,8 @@ export function siteGraphStatusGlyph(state: SiteGraphVisualState): string {
 
 /**
  * Root identity is server-owned (`rootNodeKey` on the graph read). There is no
- * path or depth fallback on purpose: renaming the wrong page "Home" on a guess
- * would be worse than leaving the map unlabeled.
+ * path or depth fallback on purpose: marking the wrong page as the site's
+ * entry point on a guess would be worse than marking none.
  */
 export function isSiteGraphRootNode(
   node: SiteGraphHealthSource & { nodeKey: string },
@@ -244,16 +300,19 @@ export function isSiteGraphRootNode(
   return Boolean(rootNodeKey) && node.nodeKey === rootNodeKey
 }
 
-export function siteGraphNodeSize(node: SiteGraphSigmaNode, isRoot = false): number {
-  const importanceSize = 3 + Math.sqrt(normalizedScore(node)) * 7
-  if (isRoot) return Math.max(SITE_GRAPH_ROOT_MIN_SIZE, importanceSize)
-  return node.depth === 0 || node.path.trim() === '/' ? Math.max(9, importanceSize) : importanceSize
+export function siteGraphNodeSize(node: SiteGraphSigmaNode, isRoot = false, nodeCount = 1): number {
+  const maxSize = siteGraphMaxNodeSize(nodeCount)
+  const importanceSize = SITE_GRAPH_NODE_MIN_SIZE
+    + Math.sqrt(normalizedScore(node)) * (maxSize - SITE_GRAPH_NODE_MIN_SIZE)
+  return isRoot ? Math.max(siteGraphRootNodeSize(nodeCount), importanceSize) : importanceSize
 }
 
 function nodeColor(state: SiteGraphVisualState, theme: SigmaSiteGraphTheme): string {
   switch (state) {
     case 'eligible': return theme.eligible
     case 'hidden': return theme.hidden
+    case 'resource': return theme.resource
+    case 'redirect': return theme.redirect
     case 'failed': return theme.failed
     case 'unchecked': return theme.unchecked
   }
@@ -293,10 +352,10 @@ export function buildSigmaSiteGraph(
     graph.addNode(node.nodeKey, {
       x: node.x,
       y: node.y,
-      size: siteGraphNodeSize(node, isRoot),
+      size: siteGraphNodeSize(node, isRoot, nodesByKey.size),
       color,
       baseColor: color,
-      label: `${glyph} ${isRoot ? SITE_GRAPH_ROOT_LABEL : node.path || '/'}`,
+      label: `${glyph} ${node.path || '/'}`,
       nodeKey: node.nodeKey,
       url: node.url,
       path: node.path,
@@ -374,30 +433,51 @@ export interface SigmaSiteGraphReducers {
 export function createSigmaSiteGraphReducers(
   graph: SigmaSiteGraph,
   focusNodeKey: string | null,
-  cameraRatio: number,
+  /**
+   * A NUMBER pins one camera state (tests do this). A GETTER is read on every
+   * reduce, which is what the live renderer passes: Sigma calls reducers during
+   * paint, so a getter cannot go stale the way a captured boolean can. That
+   * staleness is why a fitted first paint could draw the zoomed-in view.
+   */
+  cameraRatio: number | (() => number),
   theme: SigmaSiteGraphTheme,
 ): SigmaSiteGraphReducers {
   const hasFocus = Boolean(focusNodeKey && graph.hasNode(focusNodeKey))
   const focused = hasFocus ? focusNodeKey : null
-  const overview = cameraRatio > SITE_GRAPH_OVERVIEW_CAMERA_RATIO
+  const readRatio = typeof cameraRatio === 'function' ? cameraRatio : () => cameraRatio
+
+  /**
+   * Pages ranked by what a reader looks for first: the root, then size (which
+   * encodes internal-link importance), then shallower, then path. Computed
+   * once per reducer set; the budget slices it per paint.
+   */
+  const rankedNodeKeys = graph.nodes().sort((leftKey, rightKey) => {
+    const left = graph.getNodeAttributes(leftKey)
+    const right = graph.getNodeAttributes(rightKey)
+    return Number(right.isRoot) - Number(left.isRoot)
+      || right.size - left.size
+      || (left.depth ?? Number.MAX_SAFE_INTEGER) - (right.depth ?? Number.MAX_SAFE_INTEGER)
+      || lexical(left.path, right.path)
+      || lexical(leftKey, rightKey)
+  })
+  const labelRankByKey = new Map(rankedNodeKeys.map((nodeKey, rank) => [nodeKey, rank]))
+
+  // Computed ONCE per reducer set. It does not depend on the camera, only on
+  // the focus, so building it inside nodeReducer re-sorted the whole
+  // neighbourhood for every node of every frame.
   const focusedNeighborLabelCandidates = new Set(
-    focused && overview
+    focused
       ? graph.neighbors(focused)
         .filter((nodeKey) => nodeKey !== focused)
-        .sort((leftKey, rightKey) => {
-          const left = graph.getNodeAttributes(leftKey)
-          const right = graph.getNodeAttributes(rightKey)
-          return right.size - left.size
-            || (left.depth ?? Number.MAX_SAFE_INTEGER) - (right.depth ?? Number.MAX_SAFE_INTEGER)
-            || lexical(left.path, right.path)
-            || lexical(leftKey, rightKey)
-        })
+        .sort((leftKey, rightKey) => (labelRankByKey.get(leftKey) ?? 0) - (labelRankByKey.get(rightKey) ?? 0))
         .slice(0, SITE_GRAPH_FOCUSED_NEIGHBOR_LABEL_LIMIT)
       : [],
   )
 
   return {
     nodeReducer: (nodeKey, attributes) => {
+      const ratio = readRatio()
+      const overview = ratio > SITE_GRAPH_OVERVIEW_CAMERA_RATIO
       // The crawl root anchors the whole map, so it keeps its label and its
       // marker in every view: zoomed out, and while another neighborhood has
       // focus. Nothing about its internal-link score can hide it.
@@ -407,6 +487,7 @@ export function createSigmaSiteGraphReducers(
           : { ...attributes, forceLabel: true }
       }
       if (focused) {
+        // The selected or hovered page is always named, at any zoom.
         if (nodeKey === focused) {
           return {
             ...attributes,
@@ -429,17 +510,21 @@ export function createSigmaSiteGraphReducers(
           zIndex: 0,
         }
       }
-      if (!overview) return attributes
-      if (attributes.depth === 0 || attributes.depth === 1) {
-        return { ...attributes, forceLabel: true }
-      }
+      // Unfocused: spend the zoom-dependent label budget on the best-ranked
+      // pages and drop the rest, so labels never pile into unreadable text.
+      const budget = siteGraphLabelBudget(ratio)
+      if (budget === Number.POSITIVE_INFINITY) return attributes
+      const rank = labelRankByKey.get(nodeKey) ?? Number.MAX_SAFE_INTEGER
+      if (rank < budget) return { ...attributes, forceLabel: true }
       return { ...attributes, forceLabel: false, label: '' }
     },
     edgeReducer: (edgeKey, attributes) => {
+      const overview = readRatio() > SITE_GRAPH_OVERVIEW_CAMERA_RATIO
       const [sourceNodeKey, targetNodeKey] = graph.extremities(edgeKey)
       const highlighted = Boolean(
         focused && (sourceNodeKey === focused || targetNodeKey === focused),
       )
+      // A hovered or selected page always shows its own links, even fitted.
       if (highlighted) {
         return {
           ...attributes,
@@ -461,3 +546,4 @@ export function createSigmaSiteGraphReducers(
     },
   }
 }
+

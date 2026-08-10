@@ -29,6 +29,7 @@ import {
 import {
   getApiV1ProjectsByNameTechnicalAeoCrawlOptions,
   getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditOptions,
+  getApiV1ProjectsByNameTechnicalAeoCrawlPagesOptions,
   getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteOptions,
   getApiV1ProjectsByNameTechnicalAeoDeadLinksOptions,
   getApiV1ProjectsByNameTechnicalAeoGraphOptions,
@@ -76,6 +77,9 @@ const SITE_HEALTH_VIEW_DESCRIPTIONS: Record<SiteHealthView, string> = {
  */
 type InventoryFilterId = 'all' | 'hidden'
 
+/** Whether the selected page's own row (which carries its reasons) is known. */
+type PageReasonsState = 'idle' | 'loading' | 'ready' | 'error'
+
 /**
  * `hidden` is the DERIVED health state, not `indexabilityState=noindex`: a
  * redirect, a robots block, a non-HTML response, and a canonical pointing
@@ -102,7 +106,7 @@ const INDEXABILITY_REASON_COPY: Record<SiteCrawlIndexabilityReason, string> = {
   [SiteCrawlIndexabilityReasons.robotsDisallow]: 'Blocked by robots.txt',
   [SiteCrawlIndexabilityReasons.redirectTerminal]: 'Redirects to another page',
   [SiteCrawlIndexabilityReasons.canonicalToOther]: 'Points to another page as canonical',
-  [SiteCrawlIndexabilityReasons.notHtmlOrUnavailable]: 'Not a reachable HTML page',
+  [SiteCrawlIndexabilityReasons.notHtmlOrUnavailable]: 'Not an HTML page, so it was not scored',
 }
 
 /** Persisted rows stay string-backed, so the lookup must admit a miss. */
@@ -134,6 +138,10 @@ const scanDateFormatter = new Intl.DateTimeFormat(undefined, {
 const SITE_HEALTH_STATUS_TONES: Record<SiteGraphVisualState, MetricTone> = {
   eligible: 'positive',
   hidden: 'caution',
+  // Neutral: a file that is not a page, and a page that moved, are facts about
+  // what the crawler found, not problems to fix.
+  resource: 'neutral',
+  redirect: 'neutral',
   failed: 'negative',
   unchecked: 'neutral',
 }
@@ -359,6 +367,8 @@ function PageInspector({
   onRetryAudit,
   rootHost,
   reasonSource,
+  reasonsState,
+  onRetryReasons,
 }: {
   page: InspectableCrawlPage | null
   isLoading: boolean
@@ -374,6 +384,8 @@ function PageInspector({
   rootHost: string | null
   /** The same page from the inventory read, which carries the crawler reasons. */
   reasonSource: SiteCrawlPageDto | null
+  reasonsState: PageReasonsState
+  onRetryReasons: () => void
 }) {
   if (!page) {
     return (
@@ -397,13 +409,20 @@ function PageInspector({
             <ToneBadge tone={status.tone}>{status.label}</ToneBadge>
           </div>
           <p className="mt-1 break-all text-sm text-secondary">{page.url}</p>
-          {reasons.length > 0 && (
+          {reasonsState === 'loading' ? (
+            <p className="mt-2 text-sm text-secondary" role="status">Loading page details...</p>
+          ) : reasonsState === 'error' ? (
+            <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-negative" role="alert">
+              Page details could not be loaded, so any reason this page is hidden is unknown.
+              <Button type="button" variant="secondary" size="sm" onClick={onRetryReasons}>Try again</Button>
+            </p>
+          ) : reasons.length > 0 ? (
             <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-secondary" aria-label="Why this page is hidden">
               {reasons.map((reason) => (
                 <li key={reason}>{indexabilityReasonLabel(reason)}</li>
               ))}
             </ul>
-          )}
+          ) : null}
         </div>
         <Button asChild variant="secondary" size="sm">
           <a href={page.url} target="_blank" rel="noreferrer">
@@ -459,6 +478,7 @@ function InventoryTable({
   onLoadMore,
   filter,
   onFilterChange,
+  filterUnavailable,
 }: {
   pages: SiteCrawlPageDto[]
   total: number
@@ -469,6 +489,8 @@ function InventoryTable({
   onLoadMore: () => void
   filter: InventoryFilterId
   onFilterChange: (filter: InventoryFilterId) => void
+  /** This scan predates persisted health state, so it cannot be filtered. */
+  filterUnavailable: boolean
 }) {
   const [search, setSearch] = useState('')
   const normalizedSearch = search.trim().toLowerCase()
@@ -563,9 +585,11 @@ function InventoryTable({
       {visiblePages.length === 0 && (
         <p className="border-x border-b border-default px-4 py-8 text-center text-sm text-secondary">
           {normalizedSearch.length === 0
-            ? filter === 'hidden'
-              ? 'No hidden pages were found in this scan.'
-              : 'No pages are available.'
+            ? filterUnavailable
+              ? 'This scan cannot be filtered. Run a new scan to filter its pages.'
+              : filter === 'hidden'
+                ? 'No hidden pages were found in this scan.'
+                : 'No pages are available.'
             : searchCoversLoadedWindowOnly
               ? `No matches in the ${metricValue(pages.length)} loaded pages. Load more pages to continue searching.`
               : 'No pages match this search.'}
@@ -639,16 +663,46 @@ function SiteSectionRow({
   )
 }
 
+/**
+ * The crawl root sits in no folder, so a folders-only list left the home page
+ * with nowhere to be clicked. It leads the top-level list as its own row.
+ */
+function RootPageRow({ page, onSelect }: {
+  page: Pick<SiteCrawlGraphNodeDto, 'nodeKey' | 'path' | 'inventoryEligible'>
+  onSelect: (nodeKey: string) => void
+}) {
+  return (
+    <li className="bg-surface-subtle">
+      <div className="flex min-h-11 items-center gap-1 px-2 py-1">
+        <span className="block size-8 shrink-0" aria-hidden="true" />
+        <button
+          type="button"
+          onClick={() => onSelect(page.nodeKey)}
+          className="min-w-0 flex-1 break-all rounded-sm py-2 text-left font-mono text-sm font-semibold text-heading outline-none hover:text-link focus-visible:ring-2 focus-visible:ring-mono-400"
+        >
+          {page.path || '/'}
+        </button>
+        <span className="shrink-0 px-2 font-mono text-xs text-muted">{metricValue(1)}</span>
+      </div>
+    </li>
+  )
+}
+
 function SiteSectionChildren({
   projectName,
   runId,
   parentPath,
   onSelect,
+  rootPage,
+  onSelectRootPage,
 }: {
   projectName: string
   runId: string
   parentPath: string
   onSelect: (path: string) => void
+  /** Only the top-level list carries it; nested folder lists pass null. */
+  rootPage?: Pick<SiteCrawlGraphNodeDto, 'nodeKey' | 'path' | 'inventoryEligible'> | null
+  onSelectRootPage?: (nodeKey: string) => void
 }) {
   const structureInput = {
     client: heyClient,
@@ -677,13 +731,16 @@ function SiteSectionChildren({
   if (structureQuery.error) {
     return <p className="px-3 py-4 text-sm text-negative" role="alert">Site sections could not be loaded.</p>
   }
-  if (sections.length === 0) {
+  if (sections.length === 0 && !rootPage) {
     return <p className="px-3 py-4 text-sm text-secondary">No nested sections were found.</p>
   }
 
   return (
     <>
       <ul className="divide-y divide-default">
+        {rootPage && onSelectRootPage && (
+          <RootPageRow page={rootPage} onSelect={onSelectRootPage} />
+        )}
         {sections.map((section) => (
           <SiteSectionRow
             key={section.path}
@@ -820,15 +877,42 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
     [pagesQuery.data],
   )
   const inventoryTotal = pagesQuery.data?.pages[0]?.total ?? inventoryPages.length
-  const inventoryPage = useMemo(
+  const loadedInventoryPage = useMemo(
     () => inventoryPages.find((page) => page.nodeKey === selectedNodeKey) ?? null,
     [inventoryPages, selectedNodeKey],
   )
-  // A filter narrows the page list on the server. When the selected page is no
-  // longer in that list, the inspector below it is describing a row the reader
-  // can no longer see, so the selection is dropped rather than left stale.
+  // The map holds up to 20,000 nodes while the inventory loads 200 at a time,
+  // so a page selected on the map usually is not in the loaded window. Read
+  // that ONE row by key rather than degrading: paging to find it would be the
+  // scan this surface is built to avoid, and giving up loses its reasons.
+  const selectedPageNeedsRead = Boolean(detailsEnabled && selectedNodeKey && !loadedInventoryPage)
+  const selectedPageQuery = useQuery({
+    ...getApiV1ProjectsByNameTechnicalAeoCrawlPagesOptions({
+      client: heyClient,
+      path: { name: projectName },
+      query: {
+        ...scopedRunQuery,
+        ...(inventoryHealthState ? { healthState: inventoryHealthState } : {}),
+        nodeKey: selectedNodeKey ?? undefined,
+        limit: 1,
+      },
+    }),
+    enabled: selectedPageNeedsRead,
+  })
+  const inventoryPage = loadedInventoryPage ?? selectedPageQuery.data?.pages[0] ?? null
+
+  /**
+   * Drop the selection only when the SERVER has confirmed this page is not in
+   * the filtered set. Absence from the loaded window proves nothing, and a
+   * scan that cannot be filtered at all must not deselect anything either.
+   */
   const selectionFilteredOut = Boolean(
-    selectedNodeKey && inventoryHealthState && !pagesQuery.isLoading && !inventoryPage,
+    selectedNodeKey
+    && inventoryHealthState
+    && selectedPageNeedsRead
+    && selectedPageQuery.isSuccess
+    && selectedPageQuery.data.healthStateFilter === 'applied'
+    && selectedPageQuery.data.pages.length === 0,
   )
   useEffect(() => {
     if (selectionFilteredOut) setSelectedNodeKey(null)
@@ -840,6 +924,21 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
     [graphPages, inventoryPage, selectedNodeKey, selectionFilteredOut],
   )
   const effectiveSelectedNodeKey = selectedPage?.nodeKey ?? null
+  /**
+   * A page whose own row could not be read is NOT a page with nothing to say.
+   * Without this the inspector renders a hidden page with no reasons and no
+   * error, which is indistinguishable from a page that genuinely has none.
+   */
+  const reasonsState: PageReasonsState = !selectedPage
+    ? 'idle'
+    : inventoryPage
+      ? 'ready'
+      : selectedPageQuery.isError
+        ? 'error'
+        : selectedPageNeedsRead && selectedPageQuery.isLoading
+          ? 'loading'
+          : 'ready'
+
   const neighborsQuery = useQuery({
     ...getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsOptions({
       client: heyClient,
@@ -893,6 +992,24 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
   )
   const movedSite = movedSiteHosts(crawl?.requestedRootUrl ?? null, crawl?.rootUrl ?? null)
   const rootHost = siteHostFromUrl(crawl?.rootUrl ?? null)
+  // The root is identified by the server. Sourcing it from the graph alone
+  // made the row disappear on exactly the scans whose layout is missing, so
+  // the inventory read (which every crawl has) is the fallback.
+  const rootNodeKey = graphQuery.data?.rootNodeKey ?? null
+  const rootPageQuery = useQuery({
+    ...getApiV1ProjectsByNameTechnicalAeoCrawlPagesOptions({
+      client: heyClient,
+      path: { name: projectName },
+      query: { ...scopedRunQuery, nodeKey: rootNodeKey ?? undefined, limit: 1 },
+    }),
+    enabled: Boolean(detailsEnabled && rootNodeKey),
+  })
+  const rootGraphPage = useMemo(
+    () => graphPages.find((page) => page.nodeKey === rootNodeKey)
+      ?? rootPageQuery.data?.pages[0]
+      ?? null,
+    [graphPages, rootNodeKey, rootPageQuery.data],
+  )
   const scanBusy = runMutation.isPending || Boolean(activeAudit)
 
   const selectRun = (runId: string) => {
@@ -1121,6 +1238,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             <InventoryTable
               pages={inventoryPages}
               total={inventoryTotal}
+              filterUnavailable={pagesQuery.data?.pages[0]?.healthStateFilter === 'unavailable-legacy-scan'}
               selectedNodeKey={effectiveSelectedNodeKey}
               onSelect={setSelectedNodeKey}
               hasNextPage={Boolean(pagesQuery.hasNextPage)}
@@ -1144,6 +1262,8 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             onRetryAudit={() => { void pageAuditQuery.refetch() }}
             rootHost={rootHost}
             reasonSource={inventoryPage}
+            reasonsState={reasonsState}
+            onRetryReasons={() => { void selectedPageQuery.refetch() }}
           />
         </div>
       ) : (
@@ -1195,6 +1315,8 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
                       runId={resolvedRunId}
                       parentPath="/"
                       onSelect={selectSection}
+                      rootPage={rootGraphPage}
+                      onSelectRootPage={setSelectedNodeKey}
                     />
                   )}
                 </div>
@@ -1217,6 +1339,8 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             onRetryAudit={() => { void pageAuditQuery.refetch() }}
             rootHost={rootHost}
             reasonSource={inventoryPage}
+            reasonsState={reasonsState}
+            onRetryReasons={() => { void selectedPageQuery.refetch() }}
           />
         </div>
       )}

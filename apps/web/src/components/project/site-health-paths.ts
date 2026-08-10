@@ -9,9 +9,6 @@
  * disguised as an internal path.
  */
 
-/** The crawl root reads as a name, not a bare slash, everywhere it appears. */
-export const SITE_HEALTH_HOME_LABEL = 'Home'
-
 const WWW_PREFIX = /^www\./i
 
 /** Hostname of a crawl root URL, or null when it cannot be parsed. */
@@ -45,9 +42,9 @@ export function isSameSiteUrl(url: string, rootHost: string | null | undefined):
  * Display text for one crawled page URL.
  *
  * Same-host URLs render as their path (query strings kept, because
- * `/search?q=roof` and `/search` are different pages), the root renders as
- * "Home", and anything else, including an unparseable value, is returned
- * unchanged rather than silently dropped.
+ * `/search?q=roof` and `/search` are different pages). Anything else,
+ * including an unparseable value, is returned unchanged rather than silently
+ * dropped.
  */
 export function displayPagePath(
   url: string | null | undefined,
@@ -58,5 +55,17 @@ export function displayPagePath(
 
   const parsed = new URL(url)
   const path = `${parsed.pathname}${parsed.search}${parsed.hash}`
-  return path === '' || path === '/' ? SITE_HEALTH_HOME_LABEL : path
+  return path === '' ? '/' : path
+}
+
+/**
+ * What one crawled page is called: its path, everywhere. The root is marked on
+ * the map by its ring and its forced label, not by renaming it, so an apex and
+ * a www alias both read as the "/" they actually are.
+ */
+export function displayPageLabel(
+  page: { url?: string | null; path?: string | null },
+  rootHost: string | null | undefined,
+): string {
+  return displayPagePath(page.url, rootHost) || page.path || '/'
 }
