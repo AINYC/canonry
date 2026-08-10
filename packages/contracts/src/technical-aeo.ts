@@ -204,9 +204,39 @@ export const siteCrawlSummarySchema = z.object({
 })
 export type SiteCrawlSummaryDto = z.infer<typeof siteCrawlSummarySchema>
 
+/**
+ * Why a crawl stopped early. Mirrors `CrawlTerminationReason` from
+ * @canonry/aeo-audit, plus two values canonry itself writes: `complete` when
+ * the crawl finished on its own, and `unknown`, the NOT NULL column default in
+ * `packages/db` that a row keeps when nothing ever set a reason. `unknown` is
+ * in the set precisely because it is persisted and reader-visible: leaving it
+ * out would render the raw token in client copy. Persisted rows stay
+ * string-backed for forward compatibility, so consumers match against this set
+ * and keep a raw fallback.
+ */
+export const siteCrawlTerminationSchema = z.enum([
+  'complete',
+  'unknown',
+  'max-pages',
+  'max-edges',
+  'max-fetches',
+  'max-duration',
+  'max-bytes',
+  'max-page-bytes',
+  'max-depth',
+  'max-links-per-page',
+  'max-query-variants',
+  'max-sitemap-fanout',
+  'max-sitemap-urls',
+  'root-host-redirect',
+])
+export type SiteCrawlTermination = z.infer<typeof siteCrawlTerminationSchema>
+
 /** Shared meaning behind Site Health node color across API, agents, and UI. */
 export const siteHealthStateSchema = z.enum(['eligible', 'hidden', 'failed', 'unchecked'])
 export type SiteHealthState = z.infer<typeof siteHealthStateSchema>
+/** Named members so consumers never re-type the literal at a call site. */
+export const SiteHealthStates = siteHealthStateSchema.enum
 
 /** Exact state vocabulary emitted by @canonry/aeo-audit's Site Crawl contract. */
 export const SiteCrawlFetchStates = {

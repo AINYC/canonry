@@ -20,6 +20,7 @@ import {
   RunStatuses,
   RunTriggers,
   deriveSiteHealthState,
+  siteHealthStateSchema,
   factorStatusFromScore,
   SiteAuditTrendDirections,
   SiteCrawlFetchedStates,
@@ -50,6 +51,7 @@ import {
   type SiteHealthChangeRecordDto,
   type SiteHealthChangesResponseDto,
   type SiteHealthPathResponseDto,
+  type SiteHealthState,
   type SiteHealthScansResponseDto,
   type SiteHealthSubgraphRelation,
   type SiteHealthSubgraphResponseDto,
@@ -130,6 +132,16 @@ function parsePositiveInt(value: unknown, fallback: number, max: number): number
 function parseBoundedLimit(value: unknown, fallback: number, max: number): number {
   const parsed = parsePositiveInt(value, fallback, max)
   return Math.max(1, parsed)
+}
+
+/** Closed vocabulary: an unknown value is a request error, never an empty list. */
+function parseSiteHealthState(value: unknown): SiteHealthState | null {
+  if (value === undefined || value === '') return null
+  const allowed = siteHealthStateSchema.safeParse(value)
+  if (!allowed.success) {
+    throw validationError(`"healthState" must be one of: ${siteHealthStateSchema.options.join(', ')}`)
+  }
+  return allowed.data
 }
 
 function parseBoolean(value: unknown): boolean | null {
@@ -1673,6 +1685,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       inventoryEligible?: string
       fetchState?: string
       indexabilityState?: string
+      healthState?: string
       auditState?: string
       sort?: string
     }
@@ -1698,8 +1711,8 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     if (request.query.fetchState) filters.push(eq(siteCrawlPages.fetchState, request.query.fetchState))
     if (request.query.indexabilityState) filters.push(eq(siteCrawlPages.indexabilityState, request.query.indexabilityState))
     if (request.query.auditState) filters.push(eq(siteCrawlPages.auditState, request.query.auditState))
+    const healthState = parseSiteHealthState(request.query.healthState)
     const where = and(...filters)
-    const total = app.db.select({ value: count() }).from(siteCrawlPages).where(where).get()?.value ?? 0
     const limit = parseBoundedLimit(request.query.limit, 100, 200)
     const offset = decodeCursor(request.query.cursor)
     const orderBy = request.query.sort === 'score-desc'
@@ -1709,7 +1722,28 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
         : request.query.sort === 'path'
           ? [asc(siteCrawlPages.path), asc(siteCrawlPages.nodeKey)] as const
           : [asc(siteCrawlPages.url), asc(siteCrawlPages.nodeKey)] as const
-    const rows = app.db.select().from(siteCrawlPages).where(where).orderBy(...orderBy).limit(limit).offset(offset).all()
+
+    // Health state is DERIVED, not stored: it depends on fetch state,
+    // indexability, the crawler's reasons, and canonical identity together.
+    // Filtering it runs the contract's own `deriveSiteHealthState` over the
+    // bounded page set rather than re-implementing that decision in SQL, where
+    // the two would silently drift apart. The unfiltered path keeps counting
+    // and paging in SQL.
+    let total: number
+    let rows: Array<typeof siteCrawlPages.$inferSelect>
+    if (healthState) {
+      const candidates = app.db.select().from(siteCrawlPages).where(where)
+        .orderBy(...orderBy).limit(MAX_STRUCTURE_SOURCE_ROWS + 1).all()
+      if (candidates.length > MAX_STRUCTURE_SOURCE_ROWS) {
+        throw validationError(`Persisted crawl exceeds the ${MAX_STRUCTURE_SOURCE_ROWS}-page health-state filter limit`)
+      }
+      const matching = candidates.filter((row) => deriveSiteHealthState(row) === healthState)
+      total = matching.length
+      rows = matching.slice(offset, offset + limit)
+    } else {
+      total = app.db.select({ value: count() }).from(siteCrawlPages).where(where).get()?.value ?? 0
+      rows = app.db.select().from(siteCrawlPages).where(where).orderBy(...orderBy).limit(limit).offset(offset).all()
+    }
     const nextOffset = offset + rows.length
     return {
       project: project.name,

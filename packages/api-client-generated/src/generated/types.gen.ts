@@ -20904,7 +20904,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoCrawlData = {
 
 export type GetApiV1ProjectsByNameTechnicalAeoCrawlErrors = {
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -20947,7 +20947,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoGraphData = {
 
 export type GetApiV1ProjectsByNameTechnicalAeoGraphErrors = {
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -21209,6 +21209,10 @@ export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesData = {
          */
         indexabilityState?: string;
         /**
+         * Filter by the derived Site Health state shared with the dashboard and agents. Unlike `indexabilityState` this folds fetch state, canonical identity, and the crawler reasons into one decision, so `hidden` also covers redirects, robots blocks, non-HTML, and canonical-away pages. Values: `eligible`, `hidden`, `failed`, `unchecked`.
+         */
+        healthState?: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+        /**
          * Filter by audit state.
          */
         auditState?: string;
@@ -21230,7 +21234,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesData = {
 
 export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesErrors = {
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -21277,7 +21281,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoStructureData = {
 
 export type GetApiV1ProjectsByNameTechnicalAeoStructureErrors = {
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -21332,7 +21336,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoInternalLinksData = {
 
 export type GetApiV1ProjectsByNameTechnicalAeoInternalLinksErrors = {
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -21383,7 +21387,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsErrors = {
      */
     400: ErrorEnvelope;
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -21426,7 +21430,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoDeadLinksData = {
 
 export type GetApiV1ProjectsByNameTechnicalAeoDeadLinksErrors = {
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
