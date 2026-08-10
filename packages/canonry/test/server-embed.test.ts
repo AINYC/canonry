@@ -465,7 +465,8 @@ describe('server embed mode (#716)', () => {
         url: '/',
         headers: { 'x-canonry-embed-theme': '{"mode":"light","font":"Inter"}' },
       })
-      expect(scoped.body).toContain('"theme":{"mode":"light","font":"Inter"}')
+      expect(scoped.body).toContain('"theme":{"mode":"light"}')
+      expect(scoped.body).not.toContain('"font"')
 
       // The deep-link fallback honors the header too.
       const deep = await app.inject({

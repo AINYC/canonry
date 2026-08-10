@@ -35,7 +35,7 @@ export interface EmbedConfigEntry {
    * all tabs.
    */
   projectTabs?: string[]
-  /** Optional CSS custom-property overrides for the host page (sanitized client-side). */
+  /** Optional color/mode overrides for the host page (sanitized client-side). */
   theme?: Record<string, string>
 }
 
@@ -167,8 +167,15 @@ export function buildEmbedClientConfig(resolved: ResolvedEmbedConfig): EmbedClie
   const client: EmbedClientConfig = { enabled: true }
   if (resolved.views && resolved.views.length > 0) client.views = resolved.views
   if (resolved.projectTabs && resolved.projectTabs.length > 0) client.projectTabs = resolved.projectTabs
-  if (resolved.theme && Object.keys(resolved.theme).length > 0) client.theme = resolved.theme
+  const theme = withoutFontOverride(resolved.theme)
+  if (theme) client.theme = theme
   return client
+}
+
+function withoutFontOverride(theme: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!theme) return undefined
+  const entries = Object.entries(theme).filter(([key]) => key.toLowerCase() !== 'font')
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined
 }
 
 /**
@@ -195,8 +202,9 @@ export function normalizeIdTokens(raw: string[]): string[] | undefined {
  * JSON object string the Embed v2 `/e` proxy sets per dashboard) into a flat
  * `Record<string,string>`. STRUCTURAL defense-in-depth only: caps the header
  * size, keeps only string keys/values within length bounds, and bounds the key
- * count — the VALUE-level guards (color form / font-family / mode enum) live in
- * the SPA's `embedThemeStyle` / `embedThemeMode`, which apply these values. A
+ * count — the VALUE-level guards (color form / mode enum) live in the SPA's
+ * `embedThemeStyle` / `embedThemeMode`, which apply these values. The retired
+ * `font` key is dropped so every dashboard uses the bundled Geist files. A
  * malformed / oversized / non-object header yields `undefined` (keep boot theme).
  */
 function parseThemeOverride(raw: string | string[] | undefined): Record<string, string> | undefined {
@@ -213,6 +221,7 @@ function parseThemeOverride(raw: string | string[] | undefined): Record<string, 
   for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
     if (Object.keys(out).length >= 12) break
     if (typeof k !== 'string' || k.length === 0 || k.length > 32) continue
+    if (k.toLowerCase() === 'font') continue
     if (typeof v !== 'string' || v.length > 256) continue
     out[k] = v
   }

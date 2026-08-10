@@ -581,7 +581,7 @@ export function SiteGraphSigma({
     labelColor: { color: theme.label },
     labelDensity: 0.07,
     labelGridCellSize: 140,
-    labelFont: 'Geist Sans, sans-serif',
+    labelFont: 'Geist Variable, Geist, sans-serif',
     labelRenderedSizeThreshold: 8,
     labelSize: 13,
     labelWeight: '600',

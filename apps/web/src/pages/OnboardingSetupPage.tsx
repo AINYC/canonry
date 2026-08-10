@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Copy, ExternalLink, Globe2, LoaderCircle } from 'lucide-react'
+import { Check, ChevronDown, Copy, ExternalLink, LoaderCircle } from 'lucide-react'
 import { getApiV1ProjectsOptions, getApiV1ProjectsQueryKey } from '@ainyc/canonry-api-client/react-query'
 
 import {
@@ -51,6 +51,18 @@ export interface LaunchpadIdentity {
   canonicalDomain: string
   projectName: string
   displayName: string
+}
+
+function launchpadLocaleLabel(country: string, language: string): string {
+  try {
+    const regionNames = new Intl.DisplayNames(['en'], { type: 'region' })
+    const languageNames = new Intl.DisplayNames(['en'], { type: 'language' })
+    const region = country.length === 2 ? regionNames.of(country.toUpperCase()) : undefined
+    const locale = language ? languageNames.of(language.toLowerCase()) : undefined
+    return `${region ?? (country || 'Country')} · ${locale ?? (language || 'Language')}`
+  } catch {
+    return `${country || 'Country'} · ${language || 'Language'}`
+  }
 }
 
 function isIpLiteralHost(hostname: string): boolean {
@@ -261,6 +273,7 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
   const resolvedDisplayName = displayName || identity?.displayName || ''
   const busy = phase === 'creating' || phase === 'dispatching'
   const visibleError = createError ?? dispatchError
+  const localeLabel = launchpadLocaleLabel(country, language)
 
   useEffect(() => {
     if (visibleError) errorRef.current?.focus()
@@ -389,151 +402,158 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
   }
 
   return (
-    <div className="page-container max-w-3xl">
-      <div className="page-header">
-        <div className="page-header-left">
-          <h1 className="page-title">Start with a publicly reachable site.</h1>
-          <p className="page-subtitle">Canonry will map the pages and internal links it can reach.</p>
-          <div className="mt-2 text-sm text-secondary">
-            <p className="font-medium text-heading">Want to set up Canonry with your agent?</p>
-            <p className="mt-1">Once connected, it can create the project, map your public site, and help choose what to measure.</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Button type="button" variant="secondary" size="sm" onClick={asyncHandler(copyAgentSetupRequest)}>
-                {agentRequestCopied
-                  ? <Check className="size-3.5" aria-hidden="true" />
-                  : <Copy className="size-3.5" aria-hidden="true" />}
-                <span aria-live="polite">
-                  {agentRequestCopied ? 'Copied setup request' : 'Copy setup request'}
-                </span>
-              </Button>
-              <Button asChild variant="ghost" size="sm">
-                <a href={AGENT_SETUP_GUIDE_URL} target="_blank" rel="noopener noreferrer">
-                  Connect a supported agent
-                  <ExternalLink className="size-3.5" aria-hidden="true" />
-                  <span className="sr-only"> (opens in a new tab)</span>
-                </a>
-              </Button>
-            </div>
-          </div>
+    <div className="page-container max-w-xl py-8 md:py-12">
+      <header className="mb-8">
+        <h1 id="site-map-setup-title" className="text-2xl font-semibold tracking-[-0.025em] text-heading">Map your site</h1>
+        <p className="mt-2 max-w-lg text-sm leading-6 text-secondary">
+          Enter your public website to see its pages, structure, and internal links.
+        </p>
+      </header>
+
+      <form aria-labelledby="site-map-setup-title" className="space-y-6" onSubmit={asyncHandler(submit)} noValidate>
+        <div className="grid gap-2">
+          <label className="text-sm font-medium text-heading" htmlFor="launchpad-domain">Website URL</label>
+          <input
+            id="launchpad-domain"
+            className="h-11 w-full rounded-md border border-strong bg-bg-elevated/50 px-3 text-base text-heading outline-none transition placeholder:text-muted focus:border-mono-500 focus:ring-1 focus:ring-mono-500"
+            type="text"
+            inputMode="url"
+            autoComplete="url"
+            autoCapitalize="none"
+            spellCheck={false}
+            required
+            aria-invalid={Boolean(domain && !identity)}
+            aria-describedby={domain && !identity ? 'launchpad-domain-hint launchpad-domain-error' : 'launchpad-domain-hint'}
+            placeholder="https://example.com"
+            value={domain}
+            onChange={(event) => {
+              setDomain(event.target.value)
+              setCreateError(null)
+              setCreateConflict(false)
+            }}
+          />
+          <p id="launchpad-domain-hint" className="text-sm text-secondary">Only public pages are scanned.</p>
+          {domain && !identity ? <p id="launchpad-domain-error" className="text-sm text-negative" role="alert">Enter a public domain, such as example.com.</p> : null}
         </div>
-      </div>
 
-      <form className="rounded-xl border border-default bg-surface p-5" onSubmit={asyncHandler(submit)} noValidate>
-        <div className="space-y-5">
-          <div className="setup-field">
-            <label className="setup-label" htmlFor="launchpad-domain">Website address</label>
-            <input
-              id="launchpad-domain"
-              className="setup-input"
-              type="text"
-              autoComplete="url"
-              autoFocus
-              required
-              aria-describedby="launchpad-domain-hint"
-              placeholder="example.com"
-              value={domain}
-              onChange={(event) => {
-                setDomain(event.target.value)
-                setCreateError(null)
-                setCreateConflict(false)
-              }}
-            />
-            <p id="launchpad-domain-hint" className="mt-1 text-sm text-secondary">
-              Use the public domain visitors reach. A sitemap is optional.
-            </p>
-            {domain && !identity ? <p className="mt-2 text-sm text-negative" role="alert">Enter a public domain, such as example.com.</p> : null}
-          </div>
-
-          {identity ? (
-            <details className="rounded-md border border-default bg-surface-subtle p-3">
-              <summary className="cursor-pointer text-sm font-medium text-heading">Project details: {resolvedProjectName}</summary>
-              <p className="mt-2 text-sm text-secondary">Canonry derived these from the website address. Edit them only if you need a different project label.</p>
-              <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                <div className="setup-field">
-                  <label className="setup-label" htmlFor="launchpad-project-name">Project name</label>
-                  <input
-                    id="launchpad-project-name"
-                    className="setup-input"
-                    type="text"
-                    value={resolvedProjectName}
-                    onChange={(event) => setProjectName(event.target.value)}
-                  />
-                </div>
-                <div className="setup-field">
-                  <label className="setup-label" htmlFor="launchpad-display-name">Display name</label>
-                  <input
-                    id="launchpad-display-name"
-                    className="setup-input"
-                    type="text"
-                    value={resolvedDisplayName}
-                    onChange={(event) => setDisplayName(event.target.value)}
-                  />
-                </div>
-              </div>
-            </details>
-          ) : null}
-
-          <details className="rounded-md border border-default bg-surface-subtle p-3">
-            <summary className="cursor-pointer text-sm font-medium text-heading">Locale: {country || 'Not set'} · {language || 'Not set'}</summary>
-            <p className="mt-2 text-sm text-secondary">Optional. Adjust the default market and language before creating the project.</p>
-            <div className="mt-3 grid gap-4 sm:grid-cols-2">
-              <div className="setup-field">
-                <label className="setup-label" htmlFor="launchpad-country">Country</label>
-                <input
-                  id="launchpad-country"
-                  className="setup-input"
-                  type="text"
-                  maxLength={2}
-                  value={country}
-                  onChange={(event) => setCountry(event.target.value.toUpperCase())}
-                />
-              </div>
-              <div className="setup-field">
-                <label className="setup-label" htmlFor="launchpad-language">Language</label>
-                <input
-                  id="launchpad-language"
-                  className="setup-input"
-                  type="text"
-                  maxLength={5}
-                  value={language}
-                  onChange={(event) => setLanguage(event.target.value.toLowerCase())}
-                />
-              </div>
-            </div>
-          </details>
-
-          <label className="flex items-start gap-3 rounded-md border border-default bg-surface-subtle p-4">
-            <input
-              className="mt-0.5 size-4 rounded border-strong bg-bg"
-              type="checkbox"
-              checked={crawlApproved}
-              onChange={(event) => setCrawlApproved(event.target.checked)}
-            />
-            <span>
-              <span className="block text-sm font-medium text-heading">I approve Canonry to crawl this public site and its internal links.</span>
+        <details className="group border-y border-default">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-4 py-3 text-sm [&::-webkit-details-marker]:hidden">
+            <span className="font-medium text-heading">Advanced settings</span>
+            <span className="flex items-center gap-2 text-secondary">
+              {localeLabel}
+              <ChevronDown className="size-4 transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden="true" />
             </span>
-          </label>
+          </summary>
+          <div className="space-y-5 border-t border-default py-4">
+            {identity ? (
+              <div>
+                <p className="mb-3 text-sm font-medium text-heading">Project</p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-2">
+                    <label className="text-sm text-secondary" htmlFor="launchpad-project-name">Project name</label>
+                    <input
+                      id="launchpad-project-name"
+                      className="setup-input h-10"
+                      type="text"
+                      value={resolvedProjectName}
+                      onChange={(event) => setProjectName(event.target.value)}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <label className="text-sm text-secondary" htmlFor="launchpad-display-name">Display name</label>
+                    <input
+                      id="launchpad-display-name"
+                      className="setup-input h-10"
+                      type="text"
+                      value={resolvedDisplayName}
+                      onChange={(event) => setDisplayName(event.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
-          {visibleError ? (
-            <div ref={errorRef} className="rounded-md border border-negative bg-negative-soft p-3" role="alert" tabIndex={-1}>
-              <p className="text-sm font-medium text-heading">{visibleError}</p>
-              {createConflict ? (
-                <Button type="button" variant="secondary" size="sm" className="mt-3" onClick={cancel}>View projects</Button>
-              ) : null}
+            <div>
+              <p className="mb-3 text-sm font-medium text-heading">Locale</p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-2">
+                  <label className="text-sm text-secondary" htmlFor="launchpad-country">Country</label>
+                  <input
+                    id="launchpad-country"
+                    className="setup-input h-10"
+                    type="text"
+                    maxLength={2}
+                    value={country}
+                    onChange={(event) => setCountry(event.target.value.toUpperCase())}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label className="text-sm text-secondary" htmlFor="launchpad-language">Language</label>
+                  <input
+                    id="launchpad-language"
+                    className="setup-input h-10"
+                    type="text"
+                    maxLength={5}
+                    value={language}
+                    onChange={(event) => setLanguage(event.target.value.toLowerCase())}
+                  />
+                </div>
+              </div>
             </div>
-          ) : null}
-
-          <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit" disabled={!identity || !crawlApproved || busy}>
-              {phase === 'creating' ? <><LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" /> Creating project…</> : null}
-              {phase === 'dispatching' ? <><LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" /> Starting Site Health…</> : null}
-              {phase === 'idle' ? <><Globe2 className="size-4" aria-hidden="true" /> Create project and map site</> : null}
-            </Button>
-            <Button type="button" variant="ghost" disabled={busy} onClick={cancel}>Cancel</Button>
-            {phase === 'dispatching' ? <span className="text-sm text-secondary" role="status">Moving into Site Health as soon as the scan is queued.</span> : null}
           </div>
+        </details>
+
+        <label className="flex min-h-11 cursor-pointer items-start gap-3 py-2">
+          <input
+            className="mt-0.5 size-4 shrink-0 rounded border-strong bg-bg"
+            type="checkbox"
+            checked={crawlApproved}
+            onChange={(event) => setCrawlApproved(event.target.checked)}
+          />
+          <span className="text-sm leading-5 text-heading">Allow Canonry to scan this public site and follow internal links.</span>
+        </label>
+
+        {visibleError ? (
+          <div ref={errorRef} className="rounded-md border border-negative bg-negative-soft p-3" role="alert" tabIndex={-1}>
+            <p className="text-sm font-medium text-heading">{visibleError}</p>
+            {createConflict ? (
+              <Button type="button" variant="secondary" size="sm" className="mt-3" onClick={cancel}>View projects</Button>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="grid gap-2">
+          <Button className="h-11 w-full" type="submit" disabled={!identity || !crawlApproved || busy}>
+            {phase === 'creating' || phase === 'dispatching'
+              ? <><LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" /> Mapping site…</>
+              : 'Map site'}
+          </Button>
+          <Button className="w-full" type="button" variant="ghost" disabled={busy} onClick={cancel}>Cancel</Button>
+          {phase === 'dispatching' ? <span className="text-center text-sm text-secondary" role="status">Opening Site Health when the scan is ready.</span> : null}
         </div>
       </form>
+
+      <section className="mt-8 border-t border-default pt-6" aria-labelledby="agent-setup-title">
+        <p id="agent-setup-title" className="text-sm font-medium text-heading">Use your agent instead</p>
+        <p className="mt-1 text-sm leading-5 text-secondary">Copy a setup request, then paste it into your coding agent.</p>
+        <div className="mt-3 flex flex-wrap items-center gap-1">
+          <Button type="button" variant="ghost" size="sm" className="-ml-3" onClick={asyncHandler(copyAgentSetupRequest)}>
+            {agentRequestCopied
+              ? <Check className="size-3.5" aria-hidden="true" />
+              : <Copy className="size-3.5" aria-hidden="true" />}
+            <span aria-live="polite">
+              {agentRequestCopied ? 'Copied setup request' : 'Copy setup request'}
+            </span>
+          </Button>
+          <Button asChild variant="ghost" size="sm">
+            <a href={AGENT_SETUP_GUIDE_URL} target="_blank" rel="noopener noreferrer">
+              Agent setup guide
+              <ExternalLink className="size-3.5" aria-hidden="true" />
+              <span className="sr-only"> (opens in a new tab)</span>
+            </a>
+          </Button>
+        </div>
+      </section>
     </div>
   )
 }

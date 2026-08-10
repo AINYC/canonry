@@ -33,7 +33,8 @@
     "dist/",
     "assets/",
     "package.json",
-    "README.md"
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
     "node": ">=22.14.0 <26"

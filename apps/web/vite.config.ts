@@ -1,15 +1,35 @@
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 
 // In dev mode, proxy API requests to canonry serve (default port 4100)
 const cannonryTarget = process.env.CANONRY_API_URL ?? 'http://127.0.0.1:4100'
+const thirdPartyNotices = readFileSync(
+  resolve(import.meta.dirname, '../../packages/canonry/THIRD_PARTY_NOTICES.md'),
+  'utf8',
+)
 
 export default defineConfig({
   // Use relative asset paths so the build works at any sub-path.
   // The server injects a <base href="..."> tag at runtime via --base-path.
   base: './',
-  plugins: [tailwindcss(), react()],
+  plugins: [
+    tailwindcss(),
+    react(),
+    {
+      name: 'bundle-third-party-notices',
+      apply: 'build',
+      generateBundle() {
+        this.emitFile({
+          type: 'asset',
+          fileName: 'THIRD_PARTY_NOTICES.md',
+          source: thirdPartyNotices,
+        })
+      },
+    },
+  ],
   resolve: {
     // Force recharts (and its redux deps) to resolve from apps/web/node_modules,
     // not from the pnpm store peer-dep variant which has incomplete ESM files.

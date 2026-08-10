@@ -85,8 +85,8 @@ test('keeps the five-step setup when the runtime launchpad flag is absent', asyn
   await renderSetup()
 
   expect(await screen.findByText('Step 2 of 5')).toBeTruthy()
-  expect(screen.queryByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeNull()
-  expect(screen.queryByText('Want to set up Canonry with your agent?')).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Map your site' })).toBeNull()
+  expect(screen.queryByText('Use your agent instead')).toBeNull()
   expect(screen.queryByRole('button', { name: 'Copy setup request' })).toBeNull()
 })
 
@@ -115,7 +115,7 @@ test('continues a mapped project into the original AI Visibility setup flow', as
   expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('Queries')
   expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('Competitors')
   expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('Launch')
-  expect(screen.queryByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Map your site' })).toBeNull()
 })
 
 test('does not resume another project when the Site Health handoff is stale', async () => {
@@ -167,7 +167,7 @@ test('keeps the auto launchpad in an accessible loading state until the project 
 
   expect((await screen.findByRole('status')).textContent).toContain('Loading projects')
   resolveProjects?.(jsonResponse([]))
-  expect(await screen.findByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeTruthy()
+  expect(await screen.findByRole('heading', { name: 'Map your site' })).toBeTruthy()
 })
 
 test('auto waits for a successful authoritative empty project list before showing the launchpad', async () => {
@@ -180,21 +180,28 @@ test('auto waits for a successful authoritative empty project list before showin
 
   await renderSetup()
 
-  expect(await screen.findByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeTruthy()
-  expect(screen.getByText('Want to set up Canonry with your agent?')).toBeTruthy()
-  expect(screen.getByText('Once connected, it can create the project, map your public site, and help choose what to measure.')).toBeTruthy()
-  const agentGuide = screen.getByRole('link', { name: /Connect a supported agent/i })
+  expect(await screen.findByRole('heading', { name: 'Map your site' })).toBeTruthy()
+  expect(screen.getByText('Enter your public website to see its pages, structure, and internal links.')).toBeTruthy()
+  const setupForm = screen.getByRole('form', { name: 'Map your site' })
+  const agentOption = screen.getByRole('region', { name: 'Use your agent instead' })
+  expect(Boolean(setupForm.compareDocumentPosition(agentOption) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+  expect(screen.getByText('Copy a setup request, then paste it into your coding agent.')).toBeTruthy()
+  const agentGuide = screen.getByRole('link', { name: /Agent setup guide/i })
   expect(agentGuide.getAttribute('href')).toBe(AGENT_SETUP_GUIDE_URL)
   expect(agentGuide.getAttribute('target')).toBe('_blank')
   expect(agentGuide.getAttribute('rel')).toContain('noopener')
   expect(agentGuide.getAttribute('rel')).toContain('noreferrer')
-  expect(screen.getByLabelText('Website address')).toHaveProperty('required', true)
-  expect(screen.getByRole('checkbox', { name: 'I approve Canonry to crawl this public site and its internal links.' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Create project and map site' })).toBeTruthy()
+  expect(screen.getByLabelText('Website URL')).toHaveProperty('required', true)
+  expect(screen.getByText('Only public pages are scanned.')).toBeTruthy()
+  expect(screen.getByText('Advanced settings')).toBeTruthy()
+  expect(screen.getByText('United States · English')).toBeTruthy()
+  expect(screen.getByRole('checkbox', { name: 'Allow Canonry to scan this public site and follow internal links.' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Map site' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Copy setup request' }).getAttribute('type')).toBe('button')
   expect(screen.queryByText(/The crawl does not call answer providers/i)).toBeNull()
   expect(screen.queryByText(/Aero is enabled/i)).toBeNull()
   expect(screen.queryByText(/configured agent provider/i)).toBeNull()
+  expect(screen.queryByText('Start with a publicly reachable site.')).toBeNull()
 })
 
 test('gives an agent a copyable setup request', async () => {
@@ -248,7 +255,7 @@ test('offers the agent guide when the Clipboard API is unavailable', async () =>
     }))
   })
   expect(screen.queryByRole('button', { name: 'Copied setup request' })).toBeNull()
-  expect(screen.getByRole('link', { name: /Connect a supported agent/i })).toBeTruthy()
+  expect(screen.getByRole('link', { name: /Agent setup guide/i })).toBeTruthy()
 })
 
 test('auto confirms a cached empty project list after mount before showing the launchpad', async () => {
@@ -265,10 +272,10 @@ test('auto confirms a cached empty project list after mount before showing the l
   await renderSetup('/setup', { seedEmptyProjectsCache: true })
 
   expect((await screen.findByRole('status')).textContent).toContain('Loading projects')
-  expect(screen.queryByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Map your site' })).toBeNull()
 
   resolveProjects?.(jsonResponse([]))
-  expect(await screen.findByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeTruthy()
+  expect(await screen.findByRole('heading', { name: 'Map your site' })).toBeTruthy()
 })
 
 test('keeps typed launchpad input mounted through an in-flight shared project refetch', async () => {
@@ -288,9 +295,9 @@ test('keeps typed launchpad input mounted through an in-flight shared project re
   onTestFinished(restore)
 
   const { queryClient } = await renderSetup()
-  const domain = await screen.findByLabelText('Website address') as HTMLInputElement
+  const domain = await screen.findByLabelText('Website URL') as HTMLInputElement
   fireEvent.change(domain, { target: { value: 'example.com' } })
-  const approval = screen.getByRole('checkbox', { name: /I approve Canonry/i }) as HTMLInputElement
+  const approval = screen.getByRole('checkbox', { name: /Allow Canonry/i }) as HTMLInputElement
   fireEvent.click(approval)
   domain.focus()
 
@@ -301,9 +308,9 @@ test('keeps typed launchpad input mounted through an in-flight shared project re
     expect(resolveBackgroundRefetch).toBeTypeOf('function')
   })
 
-  expect((screen.getByLabelText('Website address') as HTMLInputElement).value).toBe('example.com')
-  expect((screen.getByRole('checkbox', { name: /I approve Canonry/i }) as HTMLInputElement).checked).toBe(true)
-  expect(document.activeElement).toBe(screen.getByLabelText('Website address'))
+  expect((screen.getByLabelText('Website URL') as HTMLInputElement).value).toBe('example.com')
+  expect((screen.getByRole('checkbox', { name: /Allow Canonry/i }) as HTMLInputElement).checked).toBe(true)
+  expect(document.activeElement).toBe(screen.getByLabelText('Website URL'))
   expect(screen.queryByText('Loading projects…')).toBeNull()
 
   resolveBackgroundRefetch?.(jsonResponse([]))
@@ -326,11 +333,11 @@ test('auto shows a retry shell when the authoritative project-list read fails', 
   await renderSetup()
 
   expect(await screen.findByRole('heading', { name: /load projects/i })).toBeTruthy()
-  expect(screen.queryByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Map your site' })).toBeNull()
 
   failed = false
   fireEvent.click(screen.getByRole('button', { name: 'Retry project check' }))
-  expect(await screen.findByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeTruthy()
+  expect(await screen.findByRole('heading', { name: 'Map your site' })).toBeTruthy()
 })
 
 test('creates once, queues the canonical Site Health run, and hands off with exact URL state', async () => {
@@ -360,9 +367,9 @@ test('creates once, queues the canonical Site Health run, and hands off with exa
   onTestFinished(restore)
 
   const { router } = await renderSetup()
-  fireEvent.change(await screen.findByLabelText('Website address'), { target: { value: 'https://www.example.com/pricing' } })
-  fireEvent.click(screen.getByRole('checkbox', { name: /I approve Canonry/i }))
-  fireEvent.click(screen.getByRole('button', { name: /Create project and map site/i }))
+  fireEvent.change(await screen.findByLabelText('Website URL'), { target: { value: 'https://www.example.com/pricing' } })
+  fireEvent.click(screen.getByRole('checkbox', { name: /Allow Canonry/i }))
+  fireEvent.click(screen.getByRole('button', { name: 'Map site' }))
 
   await waitFor(() => {
     expect(router.state.location.pathname).toBe('/projects/example-com/technical-aeo')
@@ -406,9 +413,9 @@ test('preserves a created project with retry and open-project recovery when disp
   onTestFinished(restore)
 
   await renderSetup()
-  fireEvent.change(await screen.findByLabelText('Website address'), { target: { value: 'example.com' } })
-  fireEvent.click(screen.getByRole('checkbox', { name: /I approve Canonry/i }))
-  fireEvent.click(screen.getByRole('button', { name: /Create project and map site/i }))
+  fireEvent.change(await screen.findByLabelText('Website URL'), { target: { value: 'example.com' } })
+  fireEvent.click(screen.getByRole('checkbox', { name: /Allow Canonry/i }))
+  fireEvent.click(screen.getByRole('button', { name: 'Map site' }))
 
   expect(await screen.findByRole('heading', { name: 'Project created' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Retry Site Health scan' })).toBeTruthy()
@@ -442,9 +449,9 @@ test('keeps auto mode on project-created recovery after the project list becomes
   onTestFinished(restore)
 
   await renderSetup()
-  fireEvent.change(await screen.findByLabelText('Website address'), { target: { value: 'example.com' } })
-  fireEvent.click(screen.getByRole('checkbox', { name: /I approve Canonry/i }))
-  fireEvent.click(screen.getByRole('button', { name: /Create project and map site/i }))
+  fireEvent.change(await screen.findByLabelText('Website URL'), { target: { value: 'example.com' } })
+  fireEvent.click(screen.getByRole('checkbox', { name: /Allow Canonry/i }))
+  fireEvent.click(screen.getByRole('button', { name: 'Map site' }))
 
   expect(await screen.findByRole('heading', { name: 'Project created' })).toBeTruthy()
   expect(screen.queryByText('Step 2 of 5')).toBeNull()
@@ -464,9 +471,9 @@ test('surfaces a create-only name collision and never starts a scan', async () =
   onTestFinished(restore)
 
   await renderSetup()
-  fireEvent.change(await screen.findByLabelText('Website address'), { target: { value: 'example.com' } })
-  fireEvent.click(screen.getByRole('checkbox', { name: /I approve Canonry/i }))
-  fireEvent.click(screen.getByRole('button', { name: /Create project and map site/i }))
+  fireEvent.change(await screen.findByLabelText('Website URL'), { target: { value: 'example.com' } })
+  fireEvent.click(screen.getByRole('checkbox', { name: /Allow Canonry/i }))
+  fireEvent.click(screen.getByRole('button', { name: 'Map site' }))
 
   expect(await screen.findByText(/project with this name or site already exists/i)).toBeTruthy()
   expect(screen.getByRole('button', { name: 'View projects' })).toBeTruthy()
@@ -494,9 +501,9 @@ test('keeps auto mode on actionable conflict recovery after the project list bec
   onTestFinished(restore)
 
   await renderSetup()
-  fireEvent.change(await screen.findByLabelText('Website address'), { target: { value: 'example.com' } })
-  fireEvent.click(screen.getByRole('checkbox', { name: /I approve Canonry/i }))
-  fireEvent.click(screen.getByRole('button', { name: /Create project and map site/i }))
+  fireEvent.change(await screen.findByLabelText('Website URL'), { target: { value: 'example.com' } })
+  fireEvent.click(screen.getByRole('checkbox', { name: /Allow Canonry/i }))
+  fireEvent.click(screen.getByRole('button', { name: 'Map site' }))
 
   expect(await screen.findByRole('button', { name: 'View projects' })).toBeTruthy()
   expect(screen.queryByText('Step 2 of 5')).toBeNull()

@@ -27,6 +27,7 @@ const sigmaMocks = vi.hoisted(() => ({
       defaultEdgeColor?: string
       defaultDrawNodeHover?: (...args: never[]) => void
       labelColor?: { color?: string }
+      labelFont?: string
     }
   } | null,
 }))
@@ -52,6 +53,7 @@ vi.mock('@react-sigma/core', async () => {
         defaultEdgeColor?: string
         defaultDrawNodeHover?: (...args: never[]) => void
         labelColor?: { color?: string }
+        labelFont?: string
       }
     }) => {
       if (sigmaMocks.shouldThrow) throw new Error('WebGL renderer failed')
@@ -222,6 +224,7 @@ describe('SiteGraphSigma', () => {
 
     await waitFor(() => expect(sigmaMocks.containerProps).not.toBeNull())
     const { graph, settings } = sigmaMocks.containerProps!
+    expect(settings?.labelFont).toBe('Geist Variable, Geist, sans-serif')
     const colors = [
       settings?.defaultNodeColor,
       settings?.defaultEdgeColor,
@@ -277,7 +280,7 @@ describe('SiteGraphSigma', () => {
       context as never,
       { x: 40, y: 30, size: 10, label: '/pricing', color: '#56b4e9' } as never,
       {
-        labelFont: 'Geist Sans, sans-serif',
+        labelFont: 'Geist Variable, Geist, sans-serif',
         labelSize: 13,
         labelWeight: '600',
       } as never,
