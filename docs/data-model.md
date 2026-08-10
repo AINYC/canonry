@@ -128,17 +128,29 @@ hash seeds.
 Migration 128 preserves both the operator-requested crawl root and the
 effective root followed after a supported host redirect. It also indexes both
 graph-edge endpoints so derived-layout cleanup stays bounded.
+Migration 131 separates nav, header, and footer links from content links. A
+`(target page, normalized anchor)` pair carried by at least 70 percent of the
+scan's fetched pages is template chrome; on real sites that distribution is
+bimodal, so the threshold sits in an empty middle. Template links are excluded
+from the ForceAtlas2 physics, so positions describe content structure, but they
+are still published in the sample and tagged, so a viewer can draw them without
+a refetch and without any page moving. Below 15 fetched pages nothing is marked
+and the snapshot records `unavailable-too-few-pages`, because on a site that
+small every link looks ubiquitous. The backfill classifies every stored scan
+from rows the crawl already persisted; it deliberately does not rewrite
+immutable layout coordinates, and those rows keep `template_links_excluded = 0`
+so the map can say their positions predate the split.
 
 | Table | Purpose | Key Constraints |
 |-------|---------|----------------|
 | **site_crawl_run_requests** | Canonical effective options and identity for a queued crawl. Identical requests may reuse one active run; different options receive a conflict. | PK: `runId`; composite FK `(projectId, runId)` → runs |
 | **site_crawl_attempts** | Mutable event-stream progress for one execution attempt. | Unique: `(runId, attemptNumber)`; composite FK to runs |
-| **site_crawl_snapshots** | Immutable terminal crawl metadata, including the requested root and effective root. Default reads select only the latest complete snapshot; explicitly selected partial runs remain historical. | Unique: `runId`; composite FK to runs and attempt |
+| **site_crawl_snapshots** | Immutable terminal crawl metadata, including the requested root, effective root, and whether template-link detection ran (`template_detection`; NULL means a scan published before it existed). Default reads select only the latest complete snapshot; explicitly selected partial runs remain historical. | Unique: `runId`; composite FK to runs and attempt |
 | **site_crawl_pages** | URL inventory with discovery provenance, fetch/indexability state, depth, internal-link counts, and link score. | Unique: `(projectId, runId, attemptId, nodeKey)` |
-| **site_crawl_edges** | Bounded typed link observations with occurrence, followability, and anchor summaries. | Unique: `(projectId, runId, attemptId, edgeKey)` |
-| **site_crawl_graph_layouts** | One immutable derived-layout status per crawl attempt, with version, failure code, source totals, and sampled counts. Absent means a pre-v127 snapshot; `unavailable` means layout could not safely publish and does not invalidate the crawl. | Unique: `(projectId, runId, attemptId)` |
+| **site_crawl_edges** | Bounded typed link observations with occurrence, followability, anchor summaries, and the template-link decision (`is_template` plus the `template_ratio` that produced it). NULL `is_template` means never classified, never "not a nav link". | Unique: `(projectId, runId, attemptId, edgeKey)` |
+| **site_crawl_graph_layouts** | One immutable derived-layout status per crawl attempt, with version, failure code, source totals (including the template-link share), sampled counts, and whether template links were kept out of the physics. Absent means a pre-v127 snapshot; `unavailable` means layout could not safely publish and does not invalidate the crawl. | Unique: `(projectId, runId, attemptId)` |
 | **site_crawl_graph_nodes** | The bounded, ranked subset of canonical pages rendered by Site Health, carrying only persisted finite `x/y` coordinates. | Unique: `(projectId, runId, attemptId, nodeKey)` and `(projectId, runId, attemptId, sampleRank)` |
-| **site_crawl_graph_edges** | Exact bounded, ranked canonical-edge subset used for both ForceAtlas2 and the WebGL renderer; both endpoints reference persisted graph nodes. | Unique: `(projectId, runId, attemptId, edgeKey)` and `(projectId, runId, attemptId, sampleRank)` |
+| **site_crawl_graph_edges** | Exact bounded, ranked canonical-edge subset used for both ForceAtlas2 and the WebGL renderer, each carrying its template-link flag; both endpoints reference persisted graph nodes. Template links stay in the sample so the map can draw them without a refetch. | Unique: `(projectId, runId, attemptId, edgeKey)` and `(projectId, runId, attemptId, sampleRank)` |
 | **site_crawl_findings** | Deterministic crawl findings. Dead-link rows exist only when that run opted in. | Unique: `(projectId, runId, attemptId, findingKey)` |
 | **site_crawl_event_receipts** | Idempotency receipts for streamed page, edge, metric, progress, and summary batches. | Unique: `(attemptId, sequence, batchId)` |
 

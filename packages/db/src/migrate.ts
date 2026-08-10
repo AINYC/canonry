@@ -1,5 +1,16 @@
 import { sql } from 'drizzle-orm'
-import { classifyAiReferralTrafficClass, deriveSiteHealthState, normalizeQueryText } from '@ainyc/canonry-contracts'
+import {
+  classifyAiReferralTrafficClass,
+  createTemplateLinkPairIndex,
+  deriveSiteHealthState,
+  isTemplateLinkRatio,
+  normalizeQueryText,
+  observeTemplateLinkEdges,
+  SiteHealthTemplateDetections,
+  templateLinkDetection,
+  templateLinkRatio,
+  type TemplateLinkEdgeInput,
+} from '@ainyc/canonry-contracts'
 import type { DatabaseClient } from './client.js'
 import { parseJsonColumn } from './json.js'
 
@@ -290,6 +301,158 @@ export function backfillSiteCrawlPageHealthState(tx: MigrationDb): void {
       tx.run(sql`UPDATE site_crawl_pages SET health_state = ${healthState} WHERE id = ${row.id}`)
     }
     if (rows.length < BATCH) return
+  }
+}
+
+/**
+ * Read one attempt's links in `edge_key` order, in bounded batches.
+ *
+ * Keyset (not OFFSET) paging, so the unique `(project, run, attempt, edge_key)`
+ * index seeks straight to each batch instead of re-walking every prior row at
+ * the million-link crawl budget.
+ */
+function* streamSiteCrawlTemplateLinkEdges(
+  tx: MigrationDb,
+  attemptId: string,
+  batchSize = 2_000,
+): Generator<TemplateLinkEdgeInput[]> {
+  let after = ''
+  for (;;) {
+    const rows = tx.all(sql`
+      SELECT edge_key, source_node_key, target_node_key, anchors
+      FROM site_crawl_edges
+      WHERE attempt_id = ${attemptId} AND edge_key > ${after}
+      ORDER BY edge_key
+      LIMIT ${batchSize}
+    `) as Array<{
+      edge_key: string
+      source_node_key: string
+      target_node_key: string | null
+      anchors: string | null
+    }>
+    if (rows.length === 0) return
+    yield rows.map((row) => ({
+      edgeKey: row.edge_key,
+      sourceNodeKey: row.source_node_key,
+      targetNodeKey: row.target_node_key,
+      anchors: parseJsonColumn<string[]>(row.anchors, []),
+    }))
+    after = rows[rows.length - 1]!.edge_key
+    if (rows.length < batchSize) return
+  }
+}
+
+/** Bounded `IN (...)` writes: SQLite caps bound parameters, and a JSON array is one. */
+function* chunked<T>(values: readonly T[], size = 500): Generator<T[]> {
+  for (let offset = 0; offset < values.length; offset += size) {
+    yield values.slice(offset, offset + size)
+  }
+}
+
+/**
+ * Classify every stored scan's links as nav/header/footer chrome or content.
+ *
+ * The derivation is never rewritten in SQL: this calls the contract's own
+ * `templateLinkRatio`, the same function the publish path uses, so there is no
+ * second implementation to drift. What it deliberately does NOT do is rewrite
+ * a published layout's coordinates, which are immutable per attempt: an old
+ * scan gains a working filter and truthful counts, and its graph layout row
+ * keeps `template_links_excluded = 0` so the map can say its positions still
+ * include the nav mesh.
+ *
+ * Idempotent: every attempt is reclassified from its own stored rows, so a
+ * retry produces the same result.
+ */
+export function backfillSiteCrawlTemplateLinks(tx: MigrationDb): void {
+  // Attempts, not links: the small table drives the loop, an attempt with no
+  // links still needs its snapshot state, and nothing scans the link table to
+  // find work.
+  const attempts = tx.all(sql.raw(`
+    SELECT
+      a.id                AS attempt_id,
+      a.project_id        AS project_id,
+      a.run_id            AS run_id,
+      COALESCE(NULLIF(a.pages_fetched, 0), s.pages_fetched, 0) AS pages_fetched
+    FROM site_crawl_attempts AS a
+    LEFT JOIN site_crawl_snapshots AS s
+      ON s.project_id = a.project_id AND s.run_id = a.run_id AND s.attempt_id = a.id
+  `)) as Array<{ attempt_id: string; project_id: string; run_id: string; pages_fetched: number }>
+
+  for (const attempt of attempts) {
+    const detection = templateLinkDetection(attempt.pages_fetched)
+    const scope = { attemptId: attempt.attempt_id, projectId: attempt.project_id, runId: attempt.run_id }
+
+    // Start from "classified, not a template link" for the whole attempt. A
+    // NULL left behind here would be read as an unclassified legacy scan.
+    tx.run(sql`
+      UPDATE site_crawl_edges SET is_template = 0, template_ratio = NULL
+      WHERE project_id = ${scope.projectId} AND run_id = ${scope.runId} AND attempt_id = ${scope.attemptId}
+    `)
+    tx.run(sql`
+      UPDATE site_crawl_graph_edges SET is_template = 0
+      WHERE project_id = ${scope.projectId} AND run_id = ${scope.runId} AND attempt_id = ${scope.attemptId}
+    `)
+
+    if (detection === SiteHealthTemplateDetections.applied) {
+      const index = createTemplateLinkPairIndex()
+      for (const batch of streamSiteCrawlTemplateLinkEdges(tx, scope.attemptId)) {
+        observeTemplateLinkEdges(index, batch)
+      }
+      // Grouped by the exact ratio so the number of statements is bounded by
+      // distinct source-page counts, not by the link budget.
+      const keysByRatio = new Map<number, string[]>()
+      const templateEdgeKeys: string[] = []
+      for (const batch of streamSiteCrawlTemplateLinkEdges(tx, scope.attemptId)) {
+        for (const edge of batch) {
+          const ratio = templateLinkRatio(index, attempt.pages_fetched, edge)
+          if (ratio == null) continue
+          const group = keysByRatio.get(ratio)
+          if (group) group.push(edge.edgeKey)
+          else keysByRatio.set(ratio, [edge.edgeKey])
+          if (isTemplateLinkRatio(ratio)) templateEdgeKeys.push(edge.edgeKey)
+        }
+      }
+      for (const [ratio, edgeKeys] of keysByRatio) {
+        const isTemplate = isTemplateLinkRatio(ratio) ? 1 : 0
+        for (const chunk of chunked(edgeKeys)) {
+          tx.run(sql`
+            UPDATE site_crawl_edges SET is_template = ${isTemplate}, template_ratio = ${ratio}
+            WHERE project_id = ${scope.projectId} AND run_id = ${scope.runId} AND attempt_id = ${scope.attemptId}
+              AND edge_key IN (SELECT value FROM json_each(${JSON.stringify(chunk)}))
+          `)
+        }
+      }
+      for (const chunk of chunked(templateEdgeKeys)) {
+        tx.run(sql`
+          UPDATE site_crawl_graph_edges SET is_template = 1
+          WHERE project_id = ${scope.projectId} AND run_id = ${scope.runId} AND attempt_id = ${scope.attemptId}
+            AND edge_key IN (SELECT value FROM json_each(${JSON.stringify(chunk)}))
+        `)
+      }
+    }
+
+    // The same graph-compatible scope `prepareSiteCrawlGraphLayout` counts:
+    // internal anchor links whose source AND target are both crawl pages.
+    tx.run(sql`
+      UPDATE site_crawl_graph_layouts
+      SET total_template_edges = (
+        SELECT COUNT(*)
+        FROM site_crawl_edges AS e
+        INNER JOIN site_crawl_pages AS source_page
+          ON source_page.project_id = e.project_id AND source_page.run_id = e.run_id
+          AND source_page.attempt_id = e.attempt_id AND source_page.node_key = e.source_node_key
+        INNER JOIN site_crawl_pages AS target_page
+          ON target_page.project_id = e.project_id AND target_page.run_id = e.run_id
+          AND target_page.attempt_id = e.attempt_id AND target_page.node_key = e.target_node_key
+        WHERE e.project_id = ${scope.projectId} AND e.run_id = ${scope.runId} AND e.attempt_id = ${scope.attemptId}
+          AND e.internal = 1 AND e.relation = 'anchor' AND e.is_template = 1
+      )
+      WHERE project_id = ${scope.projectId} AND run_id = ${scope.runId} AND attempt_id = ${scope.attemptId}
+    `)
+    tx.run(sql`
+      UPDATE site_crawl_snapshots SET template_detection = ${detection}
+      WHERE project_id = ${scope.projectId} AND run_id = ${scope.runId} AND attempt_id = ${scope.attemptId}
+    `)
   }
 }
 
@@ -3268,6 +3431,39 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
         ON site_crawl_pages(project_id, run_id, attempt_id, health_state, path, node_key)`,
     ],
     run: backfillSiteCrawlPageHealthState,
+  },
+  {
+    version: 131,
+    name: 'site-crawl-template-link-classification',
+    // A real site's internal links are bimodal: a (target page, anchor) pair
+    // sits on nearly every page or on nearly none. The ubiquitous half is nav,
+    // header, and footer chrome, and drawing it buries the content structure
+    // the map exists to show. Classification is computed once at publish time
+    // by the contract's own function, so the map, the API filters, and the
+    // agents cannot disagree about which links are chrome.
+    //
+    // `is_template` and `template_detection` are deliberately nullable:
+    // NULL means "never classified" and reads report it as
+    // `unavailable-legacy-scan`. The too-few-pages guard writes an explicit
+    // `false` plus its reason on the snapshot, so an empty template-link list
+    // can never pass for "this site has no nav".
+    //
+    // Idempotent: `ALTER TABLE ADD COLUMN` errors with "duplicate column
+    // name", which the runner already swallows, and the backfill reclassifies
+    // each attempt from its own stored rows.
+    statements: [
+      `ALTER TABLE site_crawl_edges ADD COLUMN is_template INTEGER`,
+      `ALTER TABLE site_crawl_edges ADD COLUMN template_ratio REAL`,
+      `ALTER TABLE site_crawl_graph_edges ADD COLUMN is_template INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE site_crawl_graph_layouts ADD COLUMN total_template_edges INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE site_crawl_graph_layouts ADD COLUMN template_links_excluded INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE site_crawl_snapshots ADD COLUMN template_detection TEXT`,
+      // Trailing edge key matches the ORDER BY the internal-link reads issue,
+      // so a filtered page terminates at LIMIT.
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_edges_template
+        ON site_crawl_edges(project_id, run_id, attempt_id, internal, is_template, edge_key)`,
+    ],
+    run: backfillSiteCrawlTemplateLinks,
   },
 ]
 

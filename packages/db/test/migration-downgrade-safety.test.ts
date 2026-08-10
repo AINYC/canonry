@@ -90,6 +90,23 @@ const RUN_HOOK_ALLOWLIST: ReadonlySet<number> = new Set([
   // Idempotent via the `health_state IS NULL` guard, which also stops it
   // overwriting a value the live crawl path recorded.
   130,
+  // v131 adds nullable/defaulted columns in statements[] and uses run() only
+  // to POPULATE them: which stored links are nav, header, or footer chrome.
+  // Downgrade-safe: `is_template`, `template_ratio`, and `template_detection`
+  // are unknown to any binary older than v131, so an older engine neither
+  // reads nor writes them; they are nullable, and the two counters it adds to
+  // existing tables are NOT NULL with a default, so an older writer's INSERT
+  // that omits every one of them still succeeds. The hook is required because
+  // the derivation counts DISTINCT source pages per (target, normalized
+  // anchor) pair, and the anchor normalizer is the contract's own function:
+  // expressing it in SQL would be a second implementation that drifts. The
+  // backfill reads only columns already persisted (anchors, node keys, the
+  // attempt's fetched-page count) and invents nothing. Idempotent: each
+  // attempt is reclassified from its own rows, so a retry writes the same
+  // values. It deliberately does NOT rewrite published layout coordinates,
+  // which are immutable per attempt; those rows keep
+  // `template_links_excluded = 0` so the map can say so.
+  131,
 ])
 
 test(`migrations after v${DOWNGRADE_BASELINE} define no run() hook unless explicitly allowlisted`, () => {

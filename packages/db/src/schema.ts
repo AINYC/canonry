@@ -804,6 +804,13 @@ export const siteCrawlSnapshots = sqliteTable('site_crawl_snapshots', {
   deadLinkState: text('dead_link_state').notNull().default('disabled'),
   deadLinksChecked: integer('dead_links_checked').notNull().default(0),
   deadLinksFound: integer('dead_links_found').notNull().default(0),
+  /**
+   * Whether nav/header/footer link detection ran for this scan, and if not,
+   * why. NULL means the scan predates detection, which reads report as
+   * `unavailable-legacy-scan` rather than letting an empty template-link list
+   * pass for "this site has no nav".
+   */
+  templateDetection: text('template_detection'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 }, (table) => [
@@ -896,6 +903,24 @@ export const siteCrawlEdges = sqliteTable('site_crawl_edges', {
   followableOccurrences: integer('followable_occurrences').notNull().default(1),
   nofollowOccurrences: integer('nofollow_occurrences').notNull().default(0),
   anchors: text('anchors', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  /**
+   * True when the same (target page, anchor) pair appears on at least
+   * `TEMPLATE_LINK_RATIO_THRESHOLD` of the attempt's fetched pages: a nav,
+   * header, or footer link rather than an editorial one. Computed once at
+   * publish time by the contract's `classifyTemplateLinks`, so the map, the
+   * API filters, and the agents all read the same decision.
+   *
+   * NULL means this row was never classified, which reads report as
+   * `unavailable-legacy-scan`. It never means "not a template link": the
+   * too-few-pages guard writes an explicit `false` and records its reason on
+   * the snapshot instead.
+   */
+  isTemplate: integer('is_template', { mode: 'boolean' }),
+  /**
+   * Share of fetched pages carrying this link's most ubiquitous anchor. NULL
+   * when the link has no measurable pair (an unresolved target or no anchor).
+   */
+  templateRatio: real('template_ratio'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 }, (table) => [
@@ -904,6 +929,17 @@ export const siteCrawlEdges = sqliteTable('site_crawl_edges', {
   index('idx_site_crawl_edges_inbound').on(table.projectId, table.runId, table.attemptId, table.targetNodeKey, table.edgeKey),
   index('idx_site_crawl_edges_source_url').on(table.projectId, table.runId, table.attemptId, table.sourceUrl),
   index('idx_site_crawl_edges_target_url').on(table.projectId, table.runId, table.attemptId, table.targetUrl),
+  // Backs the `linkKind` filter on the internal-link reads, whose ORDER BY is
+  // the trailing edge key, so a filtered page terminates at LIMIT instead of
+  // sorting every match in a temp b-tree.
+  index('idx_site_crawl_edges_template').on(
+    table.projectId,
+    table.runId,
+    table.attemptId,
+    table.internal,
+    table.isTemplate,
+    table.edgeKey,
+  ),
   // Publish-time graph sampling filters this exact scope and consumes the
   // highest-occurrence internal anchors first. The mixed-direction suffix
   // avoids a million-row temporary ORDER BY at the maximum crawl budget.
@@ -939,8 +975,17 @@ export const siteCrawlGraphLayouts = sqliteTable('site_crawl_graph_layouts', {
   failureCode: text('failure_code'),
   totalNodes: integer('total_nodes').notNull().default(0),
   totalEdges: integer('total_edges').notNull().default(0),
+  /** Share of `totalEdges` classified as nav, header, or footer links. */
+  totalTemplateEdges: integer('total_template_edges').notNull().default(0),
   nodeCount: integer('node_count').notNull().default(0),
   edgeCount: integer('edge_count').notNull().default(0),
+  /**
+   * True when template links were kept out of the ForceAtlas2 physics, so
+   * these positions describe content structure. Layouts published before
+   * template detection keep `false`: the migration classifies their links, but
+   * it deliberately does not rewrite immutable coordinates.
+   */
+  templateLinksExcluded: integer('template_links_excluded', { mode: 'boolean' }).notNull().default(false),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 }, (table) => [
@@ -994,6 +1039,13 @@ export const siteCrawlGraphEdges = sqliteTable('site_crawl_graph_edges', {
   targetNodeKey: text('target_node_key').notNull(),
   followable: integer('followable', { mode: 'boolean' }).notNull(),
   occurrences: integer('occurrences').notNull(),
+  /**
+   * Denormalized from `site_crawl_edges` the same way `followable` and
+   * `occurrences` are, so a bounded map read never joins the full link table.
+   * Template links stay IN the sample: the map hides them by default, and a
+   * viewer switching them on must not trigger a refetch or a re-layout.
+   */
+  isTemplate: integer('is_template', { mode: 'boolean' }).notNull().default(false),
   createdAt: text('created_at').notNull(),
 }, (table) => [
   uniqueIndex('idx_site_crawl_graph_edges_attempt_edge').on(table.projectId, table.runId, table.attemptId, table.edgeKey),

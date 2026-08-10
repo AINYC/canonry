@@ -7379,13 +7379,18 @@ export type SiteCrawlGraphResponseDto = {
         state: 'ready';
         version: string;
         computedAt: string;
+        templateLinksExcluded: boolean;
     } | {
         state: 'unavailable';
         version: null;
         reason: 'no-crawl' | 'legacy-snapshot' | 'details-unavailable' | 'layout-failed' | 'empty-crawl';
     };
+    templateDetection: 'applied' | 'unavailable-too-few-pages' | 'unavailable-legacy-scan';
+    linkKind: 'all' | 'content' | 'template';
     totalNodes: number;
     totalEdges: number;
+    totalTemplateEdges: number;
+    totalContentEdges: number;
     nodes: Array<{
         nodeKey: string;
         url: string;
@@ -7409,6 +7414,7 @@ export type SiteCrawlGraphResponseDto = {
         targetNodeKey: string;
         followable: boolean;
         occurrences: number;
+        isTemplate: boolean;
     }>;
     omittedNodes: number;
     omittedEdges: number;
@@ -7421,6 +7427,8 @@ export type SiteCrawlInternalLinksResponseDto = {
     runId: string | null;
     total: number;
     nextCursor: string | null;
+    templateDetection: 'applied' | 'unavailable-too-few-pages' | 'unavailable-legacy-scan';
+    linkKind: 'all' | 'content' | 'template';
     edges: Array<{
         edgeKey: string;
         sourceNodeKey: string;
@@ -7434,6 +7442,8 @@ export type SiteCrawlInternalLinksResponseDto = {
         followableOccurrences: number;
         nofollowOccurrences: number;
         anchors: Array<string>;
+        isTemplate: boolean | null;
+        templateRatio: number | null;
     }>;
 };
 
@@ -7443,6 +7453,8 @@ export type SiteCrawlNeighborsResponseDto = {
     runId: string | null;
     nodeKey: string | null;
     url: string | null;
+    templateDetection: 'applied' | 'unavailable-too-few-pages' | 'unavailable-legacy-scan';
+    linkKind: 'all' | 'content' | 'template';
     inbound: Array<{
         edgeKey: string;
         sourceNodeKey: string;
@@ -7456,6 +7468,8 @@ export type SiteCrawlNeighborsResponseDto = {
         followableOccurrences: number;
         nofollowOccurrences: number;
         anchors: Array<string>;
+        isTemplate: boolean | null;
+        templateRatio: number | null;
     }>;
     outbound: Array<{
         edgeKey: string;
@@ -7470,6 +7484,8 @@ export type SiteCrawlNeighborsResponseDto = {
         followableOccurrences: number;
         nofollowOccurrences: number;
         anchors: Array<string>;
+        isTemplate: boolean | null;
+        templateRatio: number | null;
     }>;
     inboundTruncated: boolean;
     outboundTruncated: boolean;
@@ -7758,6 +7774,8 @@ export type SiteHealthChangesResponseDto = {
             followableOccurrences: number;
             nofollowOccurrences: number;
             anchors: Array<string>;
+            isTemplate: boolean | null;
+            templateRatio: number | null;
         } | null;
         after: {
             edgeKey: string;
@@ -7772,6 +7790,8 @@ export type SiteHealthChangesResponseDto = {
             followableOccurrences: number;
             nofollowOccurrences: number;
             anchors: Array<string>;
+            isTemplate: boolean | null;
+            templateRatio: number | null;
         } | null;
     }>;
 };
@@ -7831,6 +7851,8 @@ export type SiteHealthPathResponseDto = {
         followableOccurrences: number;
         nofollowOccurrences: number;
         anchors: Array<string>;
+        isTemplate: boolean | null;
+        templateRatio: number | null;
     }>;
 };
 
@@ -7897,6 +7919,8 @@ export type SiteHealthSubgraphResponseDto = {
         followableOccurrences: number;
         nofollowOccurrences: number;
         anchors: Array<string>;
+        isTemplate: boolean | null;
+        templateRatio: number | null;
     }>;
     omittedNodes: number;
     omittedEdges: number;
@@ -20942,6 +20966,10 @@ export type GetApiV1ProjectsByNameTechnicalAeoGraphData = {
          * Maximum graph edges. Defaults to and is capped at 50,000.
          */
         maxEdges?: number;
+        /**
+         * Restrict links to `content` (excludes nav, header, and footer links) or `template` (only those). Defaults to `all`. A scan whose links were never classified matches neither, which is why every link response also carries `templateDetection`: an empty `content` list means "could not tell" when detection is not `applied`.
+         */
+        linkKind?: 'all' | 'content' | 'template';
     };
     url: '/api/v1/projects/{name}/technical-aeo/graph';
 };
@@ -21328,6 +21356,10 @@ export type GetApiV1ProjectsByNameTechnicalAeoInternalLinksData = {
          */
         followable?: boolean;
         /**
+         * Restrict links to `content` (excludes nav, header, and footer links) or `template` (only those). Defaults to `all`. A scan whose links were never classified matches neither, which is why every link response also carries `templateDetection`: an empty `content` list means "could not tell" when detection is not `applied`.
+         */
+        linkKind?: 'all' | 'content' | 'template';
+        /**
          * Opaque cursor from the previous bounded crawl response.
          */
         cursor?: string;
@@ -21378,6 +21410,10 @@ export type GetApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsData = {
          * Canonical crawl URL.
          */
         url?: string;
+        /**
+         * Restrict links to `content` (excludes nav, header, and footer links) or `template` (only those). Defaults to `all`. A scan whose links were never classified matches neither, which is why every link response also carries `templateDetection`: an empty `content` list means "could not tell" when detection is not `applied`.
+         */
+        linkKind?: 'all' | 'content' | 'template';
         /**
          * Maximum inbound and outbound edges independently. Defaults to 50; maximum 100.
          */
