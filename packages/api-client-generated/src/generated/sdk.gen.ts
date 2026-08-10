@@ -5629,7 +5629,7 @@ export const getApiV1ProjectsByNameTechnicalAeoCrawl = <ThrowOnError extends boo
 /**
  * Get a persisted Site Health graph projection
  *
- * Returns the deterministic graph projection computed once when the latest complete or selected historical crawl was published. ForceAtlas2 positions and the exact internal-anchor edge sample are persisted, so reads run no layout physics and never rescan the crawl edge table. The response is bounded to 20,000 nodes / 50,000 edges; `layout`, `omittedNodes`, `omittedEdges`, and `sampled` disclose legacy/unavailable layouts and intentional truncation.
+ * Returns the deterministic graph projection computed once when the latest complete or selected historical crawl was published. ForceAtlas2 positions and the exact internal-anchor edge sample are persisted, so reads run no layout physics and never rescan the crawl edge table. Nav, header, and footer links are excluded from the layout physics but retained in the sample and tagged `isTemplate`, so a viewer can draw them without a refetch and without any node moving. The response is bounded to 20,000 nodes / 50,000 edges; `layout`, `omittedNodes`, `omittedEdges`, and `sampled` disclose legacy/unavailable layouts and intentional truncation, and `templateDetection` says whether template links could be told apart at all.
  */
 export const getApiV1ProjectsByNameTechnicalAeoGraph = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameTechnicalAeoGraphData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameTechnicalAeoGraphResponses, GetApiV1ProjectsByNameTechnicalAeoGraphErrors, ThrowOnError>({
@@ -5755,7 +5755,7 @@ export const getApiV1ProjectsByNameTechnicalAeoStructure = <ThrowOnError extends
 /**
  * List persisted internal crawl links
  *
- * Cursor-paged internal edges for the latest or selected crawl. Optional source/target/followability filters remain project-, run-, and attempt-scoped.
+ * Cursor-paged internal edges for the latest or selected crawl. Optional source/target/followability/link-kind filters remain project-, run-, and attempt-scoped. `total` counts exactly what the requested filters match, and `templateDetection` says whether nav and footer links could be told apart for this scan.
  */
 export const getApiV1ProjectsByNameTechnicalAeoInternalLinks = <ThrowOnError extends boolean = false>(options: Options<GetApiV1ProjectsByNameTechnicalAeoInternalLinksData, ThrowOnError>) => {
     return (options.client ?? client).get<GetApiV1ProjectsByNameTechnicalAeoInternalLinksResponses, GetApiV1ProjectsByNameTechnicalAeoInternalLinksErrors, ThrowOnError>({

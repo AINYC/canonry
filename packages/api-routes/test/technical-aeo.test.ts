@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Fastify from 'fastify'
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createClient,
@@ -680,7 +680,11 @@ describe('GET /technical-aeo crawl reads', () => {
     expect(empty.body).toEqual({
       project: 'graph-fresh', hasCrawlData: false, runId: null, rootNodeKey: null,
       layout: { state: 'unavailable', version: null, reason: 'no-crawl' },
-      totalNodes: 0, totalEdges: 0, nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
+      // Nothing was classified because nothing was crawled, and saying so
+      // beats letting an empty edge list read as "this site has no nav".
+      templateDetection: 'unavailable-legacy-scan', linkKind: 'all',
+      totalNodes: 0, totalEdges: 0, totalTemplateEdges: 0, totalContentEdges: 0,
+      nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
     })
   })
 
@@ -1596,5 +1600,139 @@ describe('crawl page health-state filter', () => {
     // `total` is a COUNT over the indexed filter, not the length of a
     // materialized list, so limit=1 stays a bounded read.
     expect(applied.body.total).toBeGreaterThan(1)
+  })
+})
+
+describe('GET /technical-aeo template link reads', () => {
+  /** Mark the seeded `home-gone` link as nav chrome and record the state. */
+  function classifySeededCrawl(detection: string | null, options?: { templateLinksExcluded?: boolean }): void {
+    ctx.db.update(siteCrawlEdges)
+      .set({ isTemplate: false, templateRatio: 0.1 })
+      .where(eq(siteCrawlEdges.runId, ctx.runB))
+      .run()
+    if (detection === 'applied') {
+      ctx.db.update(siteCrawlEdges)
+        .set({ isTemplate: true, templateRatio: 1 })
+        .where(and(eq(siteCrawlEdges.runId, ctx.runB), eq(siteCrawlEdges.edgeKey, 'home-gone')))
+        .run()
+      ctx.db.update(siteCrawlGraphEdges)
+        .set({ isTemplate: true })
+        .where(and(eq(siteCrawlGraphEdges.runId, ctx.runB), eq(siteCrawlGraphEdges.edgeKey, 'home-gone')))
+        .run()
+      ctx.db.update(siteCrawlGraphLayouts)
+        .set({ totalTemplateEdges: 1, templateLinksExcluded: options?.templateLinksExcluded ?? true })
+        .where(eq(siteCrawlGraphLayouts.runId, ctx.runB))
+        .run()
+    }
+    if (detection === null) {
+      ctx.db.update(siteCrawlEdges)
+        .set({ isTemplate: null, templateRatio: null })
+        .where(eq(siteCrawlEdges.runId, ctx.runB))
+        .run()
+    }
+    ctx.db.update(siteCrawlSnapshots)
+      .set({ templateDetection: detection })
+      .where(eq(siteCrawlSnapshots.runId, ctx.runB))
+      .run()
+  }
+
+  it('publishes template links tagged, so a viewer can draw them without moving a node', async () => {
+    classifySeededCrawl('applied')
+    const { body } = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph')
+
+    expect(body.templateDetection).toBe('applied')
+    expect(body.linkKind).toBe('all')
+    expect(body.edges.map((edge) => [edge.edgeKey, edge.isTemplate])).toEqual([
+      ['home-guide', false],
+      ['home-gone', true],
+    ])
+    if (body.layout.state !== 'ready') throw new Error('expected a ready layout')
+    expect(body.layout.templateLinksExcluded).toBe(true)
+    // The total keeps counting every link; the two new numbers split it.
+    expect(body.totalEdges).toBe(2)
+    expect(body.totalTemplateEdges).toBe(1)
+    expect(body.totalContentEdges).toBe(1)
+  })
+
+  it('says when a scan\'s positions predate the split instead of implying they do not', async () => {
+    classifySeededCrawl('applied', { templateLinksExcluded: false })
+    const { body } = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph')
+
+    expect(body.templateDetection).toBe('applied')
+    if (body.layout.state !== 'ready') throw new Error('expected a ready layout')
+    expect(body.layout.templateLinksExcluded).toBe(false)
+  })
+
+  it('narrows every link read on request while keeping the totals honest', async () => {
+    classifySeededCrawl('applied')
+
+    const content = await get<SiteCrawlInternalLinksResponseDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/internal-links?linkKind=content',
+    )
+    expect(content.body.linkKind).toBe('content')
+    expect(content.body.templateDetection).toBe('applied')
+    expect(content.body.total).toBe(1)
+    expect(content.body.edges.map((edge) => edge.edgeKey)).toEqual(['home-guide'])
+    expect(content.body.edges[0]).toMatchObject({ isTemplate: false, templateRatio: 0.1 })
+
+    const template = await get<SiteCrawlInternalLinksResponseDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/internal-links?linkKind=template',
+    )
+    expect(template.body.edges.map((edge) => edge.edgeKey)).toEqual(['home-gone'])
+
+    const all = await get<SiteCrawlInternalLinksResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/internal-links')
+    expect(all.body.linkKind).toBe('all')
+    expect(all.body.total).toBe(2)
+
+    const neighbors = await get<SiteCrawlNeighborsResponseDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/internal-links/neighbors?nodeKey=home&linkKind=content',
+    )
+    expect(neighbors.body.linkKind).toBe('content')
+    expect(neighbors.body.outbound.map((edge) => edge.edgeKey)).toEqual(['home-guide'])
+
+    const graph = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph?linkKind=content')
+    expect(graph.body.edges.map((edge) => edge.edgeKey)).toEqual(['home-guide'])
+    // Narrowing the payload must not move the counts it is a subset of.
+    expect(graph.body.totalEdges).toBe(2)
+    expect(graph.body.totalTemplateEdges).toBe(1)
+  })
+
+  it('reports why a scan could not be classified rather than answering with an empty list', async () => {
+    classifySeededCrawl('unavailable-too-few-pages')
+    const small = await get<SiteCrawlInternalLinksResponseDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/internal-links?linkKind=template',
+    )
+    expect(small.body.templateDetection).toBe('unavailable-too-few-pages')
+    expect(small.body.edges).toEqual([])
+
+    // A scan whose links were never classified holds NULL, which matches
+    // NEITHER kind. The state is what stops that reading as a real zero.
+    classifySeededCrawl(null)
+    for (const linkKind of ['content', 'template']) {
+      const legacy = await get<SiteCrawlInternalLinksResponseDto>(
+        `/api/v1/projects/tech-aeo/technical-aeo/internal-links?linkKind=${linkKind}`,
+      )
+      expect(legacy.body.templateDetection).toBe('unavailable-legacy-scan')
+      expect(legacy.body.total).toBe(0)
+      expect(legacy.body.edges).toEqual([])
+    }
+    const legacyAll = await get<SiteCrawlInternalLinksResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/internal-links')
+    expect(legacyAll.body.total).toBe(2)
+    expect(legacyAll.body.edges.every((edge) => edge.isTemplate === null)).toBe(true)
+
+    const graph = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph')
+    expect(graph.body.templateDetection).toBe('unavailable-legacy-scan')
+  })
+
+  it('rejects an unknown link kind instead of silently returning everything', async () => {
+    for (const url of [
+      '/api/v1/projects/tech-aeo/technical-aeo/internal-links?linkKind=nav',
+      '/api/v1/projects/tech-aeo/technical-aeo/internal-links/neighbors?nodeKey=home&linkKind=nav',
+      '/api/v1/projects/tech-aeo/technical-aeo/graph?linkKind=nav',
+    ]) {
+      const invalid = await ctx.app.inject({ method: 'GET', url })
+      expect(invalid.statusCode).toBe(400)
+      expect(invalid.json().error.code).toBe('VALIDATION_ERROR')
+    }
   })
 })

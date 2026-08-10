@@ -610,7 +610,7 @@ describe('site crawl graph layout', () => {
   })
 
   it('fingerprints the physics settings into the layout version', () => {
-    expect(SITE_CRAWL_GRAPH_LAYOUT_VERSION).toMatch(/^site-health-fa2-v2-[0-9a-f]{8}$/)
+    expect(SITE_CRAWL_GRAPH_LAYOUT_VERSION).toMatch(/^site-health-fa2-v3-[0-9a-f]{8}$/)
 
     // The fingerprint is what stops positions produced by one set of physics
     // being reused as seeds under another: `loadPriorSiteCrawlGraphPositions`

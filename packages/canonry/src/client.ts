@@ -63,6 +63,7 @@ import type {
   SiteCrawlNeighborsResponseDto,
   SiteCrawlDeadLinksResponseDto,
   SiteHealthChangesResponseDto,
+  SiteHealthLinkKind,
   SiteHealthPathResponseDto,
   SiteHealthSubgraphResponseDto,
   SnapshotDiffResponse,
@@ -3473,7 +3474,15 @@ export class ApiClient {
   /** Bounded, cursor-paged internal crawl edges. */
   async getTechnicalAeoInternalLinks(
     project: string,
-    opts?: { runId?: string; sourceUrl?: string; targetUrl?: string; followable?: boolean; cursor?: string; limit?: number },
+    opts?: {
+      runId?: string
+      sourceUrl?: string
+      targetUrl?: string
+      followable?: boolean
+      linkKind?: SiteHealthLinkKind
+      cursor?: string
+      limit?: number
+    },
   ): Promise<SiteCrawlInternalLinksResponseDto> {
     return this.invoke<SiteCrawlInternalLinksResponseDto>(() =>
       getApiV1ProjectsByNameTechnicalAeoInternalLinks({
@@ -3484,6 +3493,7 @@ export class ApiClient {
           sourceUrl: opts?.sourceUrl,
           targetUrl: opts?.targetUrl,
           followable: opts?.followable,
+          linkKind: opts?.linkKind,
           cursor: opts?.cursor,
           limit: opts?.limit !== undefined ? String(opts.limit) : undefined,
         } as never,
@@ -3494,7 +3504,7 @@ export class ApiClient {
   /** Bounded inbound/outbound internal edges for one crawl node. */
   async getTechnicalAeoInternalLinkNeighbors(
     project: string,
-    opts: { runId?: string; nodeKey?: string; url?: string; limit?: number },
+    opts: { runId?: string; nodeKey?: string; url?: string; linkKind?: SiteHealthLinkKind; limit?: number },
   ): Promise<SiteCrawlNeighborsResponseDto> {
     return this.invoke<SiteCrawlNeighborsResponseDto>(() =>
       getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighbors({
@@ -3504,6 +3514,7 @@ export class ApiClient {
           runId: opts.runId,
           nodeKey: opts.nodeKey,
           url: opts.url,
+          linkKind: opts.linkKind,
           limit: opts.limit !== undefined ? String(opts.limit) : undefined,
         } as never,
       }),
