@@ -67,7 +67,7 @@ CLI + Fastify server + job runner + scheduler + bundled SPA. Only published pack
 | `src/provider-registry.ts` | Collects `ProviderAdapter` impls |
 | `src/scheduler.ts` | Cron kinds: `answer-visibility`, `traffic-sync`, `gbp-sync`, `data-refresh`, `backlinks-sync`, `site-audit`, `ads-sync` |
 | `src/agent/*` | Aero agent: `session.ts` (pi-agent-core), `session-registry.ts` (hybrid mem+DB), `tools.ts` (exposes MCP registry via `mcp-to-agent-tool.ts`), `memory-store.ts`, `compaction.ts` |
-| `src/mcp/*` | `canonry-mcp` stdio adapter, `tool-registry.ts` (183 tools), `toolkits.ts`, `dynamic-catalog.ts`. Cloudflare connect is classified `deferred`: deployment consumes local secrets and must stay out of MCP/Aero transcripts. |
+| `src/mcp/*` | `canonry-mcp` stdio adapter, `tool-registry.ts` (188 tools), `toolkits.ts`, `dynamic-catalog.ts`. Cloudflare connect is classified `deferred`: deployment consumes local secrets and must stay out of MCP/Aero transcripts. |
 | `src/gsc-sitemap-submission.ts` | GSC sitemap helpers (`dedupeGscSitemapUrls`, `resolveDiscoveredGscSitemapUrls`, `submitGscSitemapBatches`) — dedupe + index expansion (4× parallel) + 50-url batched submit |
 | `src/cli.ts` / `src/cli-commands.ts` / `src/commands/*` | CLI dispatch and command implementations. Cloudflare traffic connect writes secret-free artifacts; auto-deploy requires explicit route acknowledgement and local credential ownership. |
 | `src/client.ts` | `ApiClient` + `createApiClient()` |
