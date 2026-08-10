@@ -36,7 +36,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=22.14.0"
+    "node": ">=22.14.0 <26"
   },
   "scripts": {
     "build": "tsx scripts/copy-agent-assets.ts && tsup && tsx build-web.ts",
