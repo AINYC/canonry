@@ -22,6 +22,28 @@ import { linkTileCount, siteHealthMetricHelp, SiteHealthSection } from '../src/c
 import { heyClient } from '../src/api.js'
 
 const mutationMock = vi.hoisted(() => ({ mutate: vi.fn() }))
+type CapturedJoyrideProps = {
+  run?: boolean
+  options?: { scrollDuration?: number }
+  steps: Array<{
+    id?: string
+    target: string
+    title?: React.ReactNode
+    content: React.ReactNode
+    before?: () => Promise<void>
+  }>
+  onEvent?: (event: { action?: string; status?: string; type?: string }) => void
+}
+const joyrideMock = vi.hoisted(() => ({ props: null as CapturedJoyrideProps | null }))
+
+vi.mock('react-joyride', () => ({
+  ACTIONS: { CLOSE: 'close', SKIP: 'skip' },
+  EVENTS: { TOUR_END: 'tour:end' },
+  Joyride: (props: CapturedJoyrideProps) => {
+    joyrideMock.props = props
+    return null
+  },
+}))
 
 vi.mock('../src/queries/mutations.js', () => ({
   useTriggerSiteAudit: () => ({
@@ -51,7 +73,7 @@ vi.mock('@tanstack/react-router', async () => {
 
 vi.mock('../src/components/project/TechnicalAeoSection.js', () => ({
   TechnicalAeoSection: ({ runId, integrated }: { runId?: string | null; integrated?: boolean }) => (
-    <div data-integrated={integrated ? 'true' : 'false'}>Technical checks for {runId ?? 'latest'}</div>
+    <div data-integrated={integrated ? 'true' : 'false'}>Page health for {runId ?? 'latest'}</div>
   ),
 }))
 
@@ -394,6 +416,7 @@ function renderSection(
 
 beforeEach(() => {
   mutationMock.mutate.mockReset()
+  joyrideMock.props = null
   Reflect.deleteProperty(window, '__CANONRY_CONFIG__')
 })
 
@@ -524,7 +547,7 @@ test('uses a labelled, roving-focus tab interface for Site Health views', () => 
 
   const map = screen.getByRole('tab', { name: 'Map' })
   const inventory = screen.getByRole('tab', { name: 'Pages' })
-  const technical = screen.getByRole('tab', { name: 'Technical checks' })
+  const technical = screen.getByRole('tab', { name: 'Page health' })
   expect(map.getAttribute('id')).toBe('site-health-map-tab')
   expect(map.getAttribute('aria-controls')).toBe('site-health-map-panel')
   expect(map.getAttribute('tabindex')).toBe('0')
@@ -571,8 +594,8 @@ test('keeps every detail read pinned to the selected historical run', () => {
   expect(screen.getAllByText('Clicks from home')).not.toHaveLength(0)
   expect(screen.getAllByText('Link importance')).not.toHaveLength(0)
 
-  fireEvent.click(screen.getByRole('tab', { name: 'Technical checks' }))
-  expect(screen.getByText('Technical checks for run_old').getAttribute('data-integrated')).toBe('true')
+  fireEvent.click(screen.getByRole('tab', { name: 'Page health' }))
+  expect(screen.getByText('Page health for run_old').getAttribute('data-integrated')).toBe('true')
 })
 
 test('defaults to the newest terminal run when that scan is partial', () => {
@@ -586,7 +609,7 @@ test('defaults to the newest terminal run when that scan is partial', () => {
   expect(screen.getByText('18')).not.toBeNull()
   expect(screen.getByText(/stopped at the page limit/i)).not.toBeNull()
 
-  fireEvent.click(screen.getByRole('tab', { name: 'Technical checks' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Page health' }))
   expect(screen.getByText(/stopped at the page limit/i)).not.toBeNull()
 })
 
@@ -667,9 +690,10 @@ test('uses the exact active run for a first scan instead of showing stale-map co
     runStatus: 'running',
   })
 
-  renderSection(queryClient)
+  renderSection(queryClient, { showOnboardingWalkthrough: true })
 
   expect(screen.getByRole('status').textContent).toContain('Scanning site')
+  expect(joyrideMock.props?.run ?? false).toBe(false)
   expect(screen.queryByText(/latest completed results remain/i)).toBeNull()
   expect(screen.queryByText('Full-site map not available')).toBeNull()
   expect(queryClient.getQueryState(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
@@ -1023,6 +1047,76 @@ test('offers measurement setup after a usable terminal map without claiming it i
   expect(screen.queryByText(/queries were added automatically/i)).toBeNull()
 })
 
+test('walks a first-time operator from the terminal map through page health to measurement setup', async () => {
+  const onCompleteOnboardingWalkthrough = vi.fn()
+  renderSection(makeClient(), {
+    showOnboardingWalkthrough: true,
+    onCompleteOnboardingWalkthrough,
+  })
+
+  await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
+  const tour = joyrideMock.props
+  expect(tour?.steps.map((step) => step.id)).toEqual([
+    'site-map-ready',
+    'page-health',
+    'measurement-plan',
+  ])
+  expect(tour?.steps.map((step) => step.target)).toEqual([
+    '#site-health-map-explorer',
+    '#site-health-technical-tab',
+    '#site-health-measurement-plan',
+  ])
+
+  await act(async () => { await tour?.steps[1]?.before?.() })
+  expect(screen.getByRole('tab', { name: 'Page health' }).getAttribute('aria-selected')).toBe('true')
+
+  await act(async () => { await tour?.steps[2]?.before?.() })
+  expect(screen.getByRole('tab', { name: 'Map' }).getAttribute('aria-selected')).toBe('true')
+
+  act(() => { tour?.onEvent?.({ type: 'tour:end', status: 'finished' }) })
+  expect(onCompleteOnboardingWalkthrough).toHaveBeenCalledOnce()
+  expect(joyrideMock.props?.run).toBe(false)
+})
+
+test('does not start the post-scan walkthrough without an onboarding handoff', () => {
+  renderSection()
+
+  expect(joyrideMock.props?.run ?? false).toBe(false)
+})
+
+test('does not start the post-scan walkthrough in embed mode', () => {
+  window.__CANONRY_CONFIG__ = {
+    embed: { enabled: true, views: ['project'], projectTabs: ['technical-aeo'] },
+  }
+
+  renderSection(makeClient(), { showOnboardingWalkthrough: true })
+
+  expect(joyrideMock.props?.run ?? false).toBe(false)
+})
+
+test('removes walkthrough scrolling when reduced motion is preferred', async () => {
+  vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }))
+
+  renderSection(makeClient(), { showOnboardingWalkthrough: true })
+
+  await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
+  expect(joyrideMock.props?.options?.scrollDuration).toBe(0)
+})
+
+test('dismisses the post-scan walkthrough from the keyboard', async () => {
+  const onCompleteOnboardingWalkthrough = vi.fn()
+  renderSection(makeClient(), {
+    showOnboardingWalkthrough: true,
+    onCompleteOnboardingWalkthrough,
+  })
+
+  await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
+  fireEvent.keyDown(document, { key: 'Escape' })
+
+  expect(onCompleteOnboardingWalkthrough).toHaveBeenCalledOnce()
+  expect(joyrideMock.props?.run).toBe(false)
+})
+
 test('offers the inventory as the direct recovery path when the graph read fails', async () => {
   const queryClient = makeClient()
   queryClient.removeQueries({
@@ -1037,11 +1131,60 @@ test('offers the inventory as the direct recovery path when the graph read fails
     headers: { 'content-type': 'application/json' },
   })))
 
-  renderSection(queryClient)
+  renderSection(queryClient, { showOnboardingWalkthrough: true })
 
   await screen.findByText('The interactive map could not be loaded.')
+  await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
+  expect(joyrideMock.props?.steps[0]).toMatchObject({
+    id: 'page-inventory-ready',
+    target: '#site-health-inventory-tab',
+  })
   fireEvent.click(screen.getByRole('button', { name: 'Open page inventory' }))
   expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('site-health-inventory-tab')
+})
+
+test('waits for inventory evidence before starting the no-map fallback walkthrough', async () => {
+  const queryClient = makeClient()
+  const graphKey = getApiV1ProjectsByNameTechnicalAeoGraphQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', maxNodes: 20_000, maxEdges: 50_000 },
+  })
+  const graph = queryClient.getQueryData<Record<string, unknown>>(graphKey)
+  queryClient.setQueryData(graphKey, {
+    ...graph,
+    layout: { state: 'unavailable', reason: 'layout-error' },
+  })
+  const pagesInput = {
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', limit: 200, sort: 'path' as const },
+  }
+  const pagesKey = getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteQueryKey(pagesInput)
+  queryClient.removeQueries({ queryKey: pagesKey })
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
+
+  renderSection(queryClient, { showOnboardingWalkthrough: true })
+
+  await waitFor(() => expect(queryClient.getQueryState(pagesKey)?.fetchStatus).toBe('fetching'))
+  expect(joyrideMock.props?.run ?? false).toBe(false)
+})
+
+test('keeps an active walkthrough stable during a background graph refresh', async () => {
+  const queryClient = makeClient()
+  const graphKey = getApiV1ProjectsByNameTechnicalAeoGraphQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', maxNodes: 20_000, maxEdges: 50_000 },
+  })
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
+  renderSection(queryClient, { showOnboardingWalkthrough: true })
+  await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
+
+  void queryClient.refetchQueries({ queryKey: graphKey, exact: true })
+
+  await waitFor(() => expect(queryClient.getQueryState(graphKey)?.fetchStatus).toBe('fetching'))
+  expect(joyrideMock.props?.run).toBe(true)
 })
 
 test('loads the complete inventory in 200-page batches', async () => {
@@ -1254,24 +1397,24 @@ test('contains selected-page link tables inside mobile-safe grid items', () => {
   expect(linksOut.className).toContain('min-w-0')
 })
 
-test('keeps the legacy scorecard available as a subordinate technical-checks view', () => {
+test('keeps the legacy scorecard available as a subordinate page-health view', () => {
   renderSection()
 
-  fireEvent.click(screen.getByRole('tab', { name: 'Technical checks' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Page health' }))
 
-  expect(screen.getByText('Technical checks for run_1')).not.toBeNull()
+  expect(screen.getByText('Page health for run_1')).not.toBeNull()
 })
 
-test('removes map-specific chrome from the Technical checks view', () => {
+test('removes map-specific chrome from the Page health view', () => {
   renderSection()
 
   expect(screen.getByText('Explore how pages, site sections, and internal links fit together.')).not.toBeNull()
-  fireEvent.click(screen.getByRole('tab', { name: 'Technical checks' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Page health' }))
 
   expect(screen.getByText('Prioritize audit findings and inspect the pages that need work.')).not.toBeNull()
   expect(screen.queryByText('Pages found')).toBeNull()
   expect(screen.queryByText('Dead-link check')).toBeNull()
-  expect(screen.getByText('Technical checks for run_1')).not.toBeNull()
+  expect(screen.getByText('Page health for run_1')).not.toBeNull()
 })
 
 test('marks a score-only scan in the history and renders its legacy state, not an error', () => {
@@ -1316,7 +1459,7 @@ test('marks a score-only scan in the history and renders its legacy state, not a
   })
 
   expect(screen.getByRole('heading', { name: 'Full-site map not available' })).not.toBeNull()
-  expect(screen.getByText(/Existing technical checks are preserved/)).not.toBeNull()
+  expect(screen.getByText(/Existing page health results are preserved/)).not.toBeNull()
   expect(screen.queryByRole('heading', { name: 'Site Health could not load' })).toBeNull()
   expect(screen.queryByRole('alert')).toBeNull()
 })

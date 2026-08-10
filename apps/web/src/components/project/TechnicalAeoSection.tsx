@@ -250,7 +250,7 @@ export function TechnicalAeoSection({
     return (
       <div className={`flex min-h-40 items-center justify-center gap-2 text-sm text-secondary ${integrated ? '' : 'mt-6'}`} role="status">
         <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-        Loading technical checks...
+        Loading page health...
       </div>
     )
   }
@@ -265,9 +265,9 @@ export function TechnicalAeoSection({
           <AlertTriangle className="mt-0.5 size-4 shrink-0 text-negative" aria-hidden="true" />
           <div>
             {integrated ? (
-              <h3 className="font-semibold text-negative">Technical checks could not load</h3>
+              <h3 className="font-semibold text-negative">Page health could not load</h3>
             ) : (
-              <h2 className="font-semibold text-negative">Technical checks could not load</h2>
+              <h2 className="font-semibold text-negative">Page health could not load</h2>
             )}
             <p className="mt-1 text-sm text-secondary">The saved audit could not be read. Try loading it again.</p>
           </div>
@@ -293,7 +293,7 @@ export function TechnicalAeoSection({
       return (
         <section className="rounded-lg border border-default bg-surface-subtle px-5 py-7 text-center">
           <ScanSearch className="mx-auto size-7 text-muted" aria-hidden="true" />
-          <h2 className="mt-3 text-base font-semibold text-heading">Technical checks unavailable</h2>
+          <h2 className="mt-3 text-base font-semibold text-heading">Page health unavailable</h2>
           <p className="mx-auto mt-2 max-w-md text-sm text-secondary">
             Run a new Site Health scan to calculate page-level technical findings.
           </p>

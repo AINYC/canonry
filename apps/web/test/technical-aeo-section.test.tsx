@@ -273,8 +273,8 @@ test.each([
   )
 
   const alert = await screen.findByRole('alert')
-  expect(alert.textContent).toContain('Technical checks could not load')
-  expect(screen.queryByText('Technical checks unavailable')).toBeNull()
+  expect(alert.textContent).toContain('Page health could not load')
+  expect(screen.queryByText('Page health unavailable')).toBeNull()
 
   const callsBeforeRetry = scoreCalls
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))

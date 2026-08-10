@@ -1,6 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
+import type { EventData as JoyrideEventData, Options as JoyrideOptions, Step as JoyrideStep, Styles as JoyrideStyles } from 'react-joyride'
 import {
   AlertTriangle,
   ChevronDown,
@@ -63,12 +74,80 @@ import { Button } from '../ui/button.js'
 
 type SiteHealthView = 'map' | 'inventory' | 'technical'
 
+const LazyJoyride = lazy(async () => {
+  const module = await import('react-joyride')
+  return { default: module.Joyride }
+})
+
+const SITE_HEALTH_WALKTHROUGH_OPTIONS = {
+  arrowColor: 'var(--color-bg-elevated)',
+  backgroundColor: 'var(--color-bg-elevated)',
+  blockTargetInteraction: false,
+  buttons: ['back', 'close', 'primary', 'skip'],
+  closeButtonAction: 'skip',
+  dismissKeyAction: false,
+  overlayClickAction: false,
+  overlayColor: 'color-mix(in srgb, var(--color-overlay-scrim) 68%, transparent)',
+  primaryColor: 'var(--color-mono-100)',
+  showProgress: true,
+  skipBeacon: true,
+  spotlightPadding: 8,
+  spotlightRadius: 8,
+  targetWaitTimeout: 2_500,
+  textColor: 'var(--color-text-primary)',
+  width: 360,
+  zIndex: 1200,
+} satisfies Partial<JoyrideOptions>
+
+const SITE_HEALTH_WALKTHROUGH_STYLES = {
+  buttonBack: {
+    borderRadius: 6,
+    color: 'var(--color-text-primary)',
+    fontSize: 14,
+    fontWeight: 500,
+    padding: '8px 12px',
+  },
+  buttonPrimary: {
+    borderRadius: 6,
+    color: 'var(--color-on-inverse)',
+    fontSize: 14,
+    fontWeight: 600,
+    padding: '8px 12px',
+  },
+  buttonSkip: {
+    color: 'var(--color-text-secondary)',
+    fontSize: 14,
+  },
+  floater: {
+    filter: 'drop-shadow(0 12px 28px var(--color-shadow-panel))',
+  },
+  tooltip: {
+    border: '1px solid var(--color-border-strong)',
+    borderRadius: 8,
+    padding: 16,
+  },
+  tooltipContainer: {
+    textAlign: 'left',
+  },
+  tooltipContent: {
+    color: 'var(--color-text-secondary)',
+    fontSize: 14,
+    paddingBottom: 16,
+    paddingTop: 8,
+  },
+  tooltipTitle: {
+    color: 'var(--color-text-heading)',
+    fontSize: 16,
+    fontWeight: 600,
+  },
+} satisfies Partial<JoyrideStyles>
+
 // The `inventory` id is the stable wire/route token. Only the label reads
 // "Pages"; nothing keyed off the id changes with it.
 const SITE_HEALTH_VIEWS = [
   { id: 'map', label: 'Map' },
   { id: 'inventory', label: 'Pages' },
-  { id: 'technical', label: 'Technical checks' },
+  { id: 'technical', label: 'Page health' },
 ] as const satisfies ReadonlyArray<{ id: SiteHealthView; label: string }>
 
 const SITE_HEALTH_VIEW_DESCRIPTIONS: Record<SiteHealthView, string> = {
@@ -1196,6 +1275,8 @@ export function SiteHealthSection({
   projectId,
   initialRunId,
   onReleaseInitialRun,
+  showOnboardingWalkthrough = false,
+  onCompleteOnboardingWalkthrough,
 }: {
   projectName: string
   projectId: string
@@ -1203,6 +1284,10 @@ export function SiteHealthSection({
   initialRunId?: string
   /** Clears an onboarding handoff from durable route state before a replacement scan. */
   onReleaseInitialRun?: () => void
+  /** Starts the post-scan guide after the onboarding crawl publishes usable evidence. */
+  showOnboardingWalkthrough?: boolean
+  /** Clears the onboarding intent after the guide is completed or dismissed. */
+  onCompleteOnboardingWalkthrough?: () => void
 }) {
   const [view, setView] = useState<SiteHealthView>('map')
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -1218,8 +1303,16 @@ export function SiteHealthSection({
    * positions were computed without template links and never move.
    */
   const [showTemplateLinks, setShowTemplateLinks] = useState(false)
+  const [walkthroughDismissed, setWalkthroughDismissed] = useState(false)
+  const walkthroughCompleted = useRef(false)
   const embedded = isEmbed()
   const runMutation = useTriggerSiteAudit()
+
+  useEffect(() => {
+    if (!showOnboardingWalkthrough) return
+    walkthroughCompleted.current = false
+    setWalkthroughDismissed(false)
+  }, [showOnboardingWalkthrough])
 
   useEffect(() => {
     const previous = previousInitialRunId.current
@@ -1530,6 +1623,75 @@ export function SiteHealthSection({
     && crawl.detailsAvailable
     && (graphPages.length > 0 || inventoryPages.length > 0),
   )
+  const walkthroughGraphSettled = graphQuery.isSuccess || graphQuery.isError
+  const walkthroughHasReadyMap = graphQuery.data?.layout.state === 'ready' && graphPages.length > 0
+  const walkthroughHasReadyInventory = pagesQuery.isSuccess && inventoryPages.length > 0
+  const walkthroughSteps = useMemo<Array<JoyrideStep>>(() => [
+    walkthroughHasReadyMap
+      ? {
+          id: 'site-map-ready',
+          target: '#site-health-map-explorer',
+          placement: 'top',
+          title: 'Your site map is ready',
+          content: 'See the pages Canonry found and the internal links between them. Click any page to inspect its evidence.',
+          before: async () => { setView('map') },
+        }
+      : {
+          id: 'page-inventory-ready',
+          target: '#site-health-inventory-tab',
+          placement: 'bottom',
+          title: 'Your page inventory is ready',
+          content: 'Review every page Canonry found, its crawl status, and its internal links.',
+          before: async () => { setView('inventory') },
+        },
+    {
+      id: 'page-health',
+      target: '#site-health-technical-tab',
+      placement: 'bottom',
+      title: 'Review page health',
+      content: 'See which checks need attention, which pages are affected, and how to improve them.',
+      before: async () => { setView('technical') },
+    },
+    {
+      id: 'measurement-plan',
+      target: '#site-health-measurement-plan',
+      placement: 'top',
+      title: 'Choose what to measure',
+      content: 'Build a measurement plan from the pages and groups that matter, then add the queries you want Canonry to track.',
+      before: async () => { setView('map') },
+    },
+  ], [walkthroughHasReadyMap])
+  const walkthroughRunning = Boolean(
+    showOnboardingWalkthrough
+    && !embedded
+    && hasUsableSiteEvidence
+    && walkthroughGraphSettled
+    && (walkthroughHasReadyMap || walkthroughHasReadyInventory)
+    && !walkthroughDismissed,
+  )
+  const completeOnboardingWalkthrough = useCallback(() => {
+    if (walkthroughCompleted.current) return
+    walkthroughCompleted.current = true
+    setWalkthroughDismissed(true)
+    onCompleteOnboardingWalkthrough?.()
+  }, [onCompleteOnboardingWalkthrough])
+  const handleWalkthroughEvent = useCallback((event: JoyrideEventData) => {
+    if (event.type !== 'tour:end' && event.action !== 'close' && event.action !== 'skip') return
+    completeOnboardingWalkthrough()
+  }, [completeOnboardingWalkthrough])
+  useEffect(() => {
+    if (!walkthroughRunning) return
+    // In a continuous Joyride, its built-in Escape "close" collapses only the
+    // current step. Canonry treats Escape as dismissing the whole walkthrough.
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') completeOnboardingWalkthrough()
+    }
+    document.addEventListener('keydown', handleEscape)
+    return () => { document.removeEventListener('keydown', handleEscape) }
+  }, [completeOnboardingWalkthrough, walkthroughRunning])
+  const reduceWalkthroughMotion = typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
   const selectRun = (runId: string) => {
     setSelectedRunId(runId || null)
@@ -1573,6 +1735,29 @@ export function SiteHealthSection({
 
   return (
     <div className="space-y-5">
+      {showOnboardingWalkthrough && !embedded && (
+        <Suspense fallback={null}>
+          <LazyJoyride
+            continuous
+            locale={{
+              back: 'Back',
+              close: 'Close walkthrough',
+              last: 'Finish',
+              nextWithProgress: 'Next ({current} of {total})',
+              skip: 'Skip walkthrough',
+            }}
+            onEvent={handleWalkthroughEvent}
+            options={{
+              ...SITE_HEALTH_WALKTHROUGH_OPTIONS,
+              scrollDuration: reduceWalkthroughMotion ? 0 : 300,
+            }}
+            run={walkthroughRunning}
+            scrollToFirstStep
+            steps={walkthroughSteps}
+            styles={SITE_HEALTH_WALKTHROUGH_STYLES}
+          />
+        </Suspense>
+      )}
       <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
         <div>
           <div className="flex flex-wrap items-center gap-3">
@@ -1767,13 +1952,13 @@ export function SiteHealthSection({
             <h2 className="text-base font-semibold text-heading">Full-site map not available</h2>
             <p className="mx-auto mt-2 max-w-xl text-sm text-secondary">
               {crawl?.legacyAuditAvailable
-                ? 'Existing technical checks are preserved. Run a new scan to build the page and internal-link map.'
+                ? 'Existing page health results are preserved. Run a new scan to build the page and internal-link map.'
                 : embedded
                   ? 'A full-site scan has not been run for this project.'
                   : 'Run a scan to discover pages, site sections, and internal links.'}
             </p>
             {crawl?.legacyAuditAvailable && (
-              <Button variant="secondary" size="sm" className="mt-4" onClick={() => setView('technical')}>View technical checks</Button>
+              <Button variant="secondary" size="sm" className="mt-4" onClick={() => setView('technical')}>View page health</Button>
             )}
           </section>
         </TransientSiteHealthPanel>
@@ -1883,7 +2068,7 @@ export function SiteHealthSection({
               <p className="mb-3 text-sm text-secondary">{templateDetectionCopy(templateDetection)}</p>
             )}
 
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+            <div id="site-health-map-explorer" className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
               {graphQuery.isLoading ? (
                 <GraphLoadingState />
               ) : graphQuery.error ? (
@@ -1954,7 +2139,7 @@ export function SiteHealthSection({
           />
 
           {hasUsableSiteEvidence && (
-            <section className="flex flex-col justify-between gap-4 border-t border-default pt-5 sm:flex-row sm:items-center" aria-labelledby="site-health-measurement-plan-heading">
+            <section id="site-health-measurement-plan" className="flex flex-col justify-between gap-4 border-t border-default pt-5 sm:flex-row sm:items-center" aria-labelledby="site-health-measurement-plan-heading">
               <div>
                 <h3 id="site-health-measurement-plan-heading" className="text-base font-semibold text-heading">Define what to measure</h3>
                 <p className="mt-1 max-w-2xl text-sm text-secondary">Review the pages and groups you want to measure. Canonry does not add queries automatically.</p>

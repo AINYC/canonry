@@ -143,6 +143,14 @@ export function patchProjectDashboardCache(
   })
 }
 
+export function clearCompletedSiteHealthOnboardingSearch(previous: Record<string, unknown>) {
+  return {
+    ...previous,
+    onboarding: undefined,
+    siteHealthRunId: undefined,
+  }
+}
+
 function BingSection({
   projectName,
   refreshNonce,
@@ -1683,6 +1691,7 @@ function ProjectPageContent({
     manageQueries?: boolean
     runId?: string
     siteHealthRunId?: string
+    onboarding?: 'site-health'
     scope?: string
     class?: string
   }
@@ -1692,6 +1701,13 @@ function ProjectPageContent({
       to: '.',
       replace: true,
       search: (previous: Record<string, unknown>) => ({ ...previous, siteHealthRunId: undefined }),
+    })
+  }, [navigate])
+  const completeSiteHealthOnboarding = useCallback(() => {
+    void navigate({
+      to: '.',
+      replace: true,
+      search: clearCompletedSiteHealthOnboardingSearch,
     })
   }, [navigate])
   const [managingQueries, setManagingQueries] = useState(manageQueriesRequested)
@@ -2770,6 +2786,8 @@ function ProjectPageContent({
           projectId={model.project.id}
           initialRunId={projectSearchParams.siteHealthRunId}
           onReleaseInitialRun={releaseInitialSiteHealthRun}
+          showOnboardingWalkthrough={projectSearchParams.onboarding === 'site-health'}
+          onCompleteOnboardingWalkthrough={completeSiteHealthOnboarding}
         />
       ) : tab === 'history' ? (
         <ProjectHistorySection projectName={model.project.name} />

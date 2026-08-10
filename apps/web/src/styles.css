@@ -2809,5 +2809,14 @@
     .aero-dot {
       animation: none;
     }
+
+    #react-joyride-portal .react-joyride__floater,
+    #react-joyride-portal .react-joyride__spotlight path {
+      transition: none !important;
+    }
+
+    #react-joyride-portal .react-joyride__loader > div {
+      animation: none !important;
+    }
   }
 }
