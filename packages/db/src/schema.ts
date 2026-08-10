@@ -1667,7 +1667,7 @@ export const trafficSources = sqliteTable('traffic_sources', {
   // connections block.
   ingestTokenHash: text('ingest_token_hash'),
   // Semver reported by the most recent forwarded event. Drives the
-  // `cloudflare.worker.version-stale` doctor check. NULL until the first
+  // `traffic.source.worker-version` doctor check. NULL until the first
   // event arrives or for source types that don't forward versioned events.
   lastWorkerVersion: text('last_worker_version'),
   createdAt: text('created_at').notNull(),

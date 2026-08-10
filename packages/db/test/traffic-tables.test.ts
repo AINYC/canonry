@@ -598,7 +598,7 @@ test('traffic ingest migration adds source auth columns and durable receipts wit
   const ingestMigration = MIGRATION_VERSIONS.find(
     migration => migration.name === 'traffic-ingest-foundation',
   )
-  expect(ingestMigration).toMatchObject({ version: 127 })
+  expect(ingestMigration).toMatchObject({ version: 129 })
 
   seedProject(db)
 
