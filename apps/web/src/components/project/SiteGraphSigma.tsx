@@ -13,7 +13,7 @@ import {
 } from 'react'
 import { Maximize2, Minus, Plus, Search } from 'lucide-react'
 import type Sigma from 'sigma'
-import type { NodeHoverDrawingFunction } from 'sigma/rendering'
+import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from 'sigma/rendering'
 import type { Settings } from 'sigma/settings'
 import type {
   CameraState,
@@ -22,7 +22,10 @@ import type {
 } from 'sigma/types'
 import type { AnimateOptions } from 'sigma/utils'
 
+import type { SiteCrawlGraphLayoutUnavailableReason } from '@ainyc/canonry-contracts'
+
 import { cn } from '../../lib/utils.js'
+import { displayPagePath, siteHostFromUrl } from './site-health-paths.js'
 import { Button } from '../ui/button.js'
 import {
   buildSigmaSiteGraph,
@@ -32,8 +35,10 @@ import {
   SITE_GRAPH_COLOR_TOKENS,
   SITE_GRAPH_SIGMA_COLOR_TOKENS,
   SITE_GRAPH_OVERVIEW_CAMERA_RATIO,
+  siteGraphStatusDescription,
   siteGraphStatusGlyph,
   siteGraphStatusLabel,
+  siteGraphStatusLegendLabel,
   siteGraphVisualState,
   type SigmaSiteGraph,
   type SigmaSiteGraphEdgeAttributes,
@@ -50,24 +55,46 @@ export interface SiteGraphSigmaProps {
   edges: readonly SiteGraphSigmaEdge[]
   layoutState?: 'ready' | 'unavailable'
   layoutUnavailableReason?: string | null
+  /** Server-identified crawl root. Without it no page is labeled "Home". */
+  rootNodeKey?: string | null
   selectedNodeKey?: string | null
   onSelectNode?: (node: SiteGraphSigmaNode) => void
   ariaLabel?: string
   className?: string
 }
 
-function unavailableLayoutMessage(reason?: string | null): { heading: string; detail: string } {
-  if (reason === 'layout-failed') {
-    return {
-      heading: 'Graph layout failed',
-      detail: 'This scan completed, but its graph layout could not be published. The page inventory remains available.',
-    }
-  }
+/**
+ * Closed map over the contract's `layout.unavailable.reason`, so a new reason
+ * is a compile error rather than silently falling back to generic copy. The
+ * distinction the reader needs is "no map was made" vs "making it failed",
+ * because only the second is worth retrying immediately.
+ */
+const LAYOUT_UNAVAILABLE_COPY: Record<SiteCrawlGraphLayoutUnavailableReason, { heading: string; detail: string }> = {
+  'layout-failed': {
+    heading: 'Map could not be built',
+    detail: 'The map could not be created for this scan. Run a new scan to try again.',
+  },
+  'no-crawl': {
+    heading: 'No map yet',
+    detail: 'This scan has no map yet. Run a new scan to create one.',
+  },
+  'legacy-snapshot': {
+    heading: 'No map yet',
+    detail: 'This scan has no map yet. Run a new scan to create one.',
+  },
+  'details-unavailable': {
+    heading: 'No map yet',
+    detail: 'This scan has no map yet. Run a new scan to create one.',
+  },
+  'empty-crawl': {
+    heading: 'No pages to map',
+    detail: 'This scan found no pages to put on a map. Run a new scan to try again.',
+  },
+}
 
-  return {
-    heading: 'Graph layout unavailable',
-    detail: 'This scan does not have a published graph layout yet.',
-  }
+function unavailableLayoutMessage(reason?: string | null): { heading: string; detail: string } {
+  return LAYOUT_UNAVAILABLE_COPY[reason as SiteCrawlGraphLayoutUnavailableReason]
+    ?? LAYOUT_UNAVAILABLE_COPY['no-crawl']
 }
 
 interface HoveredNode {
@@ -147,6 +174,15 @@ class GraphRenderBoundary extends Component<GraphRenderBoundaryProps, GraphRende
 
 const CAMERA_ANIMATION_MS = 220
 
+/**
+ * What a page is called in the accessible surfaces: the search listbox, the
+ * tooltip, and the live region. The canvas label is aria-hidden, so without
+ * this the root would read "Home" only to sighted mouse users.
+ */
+function displayPageLabel(node: Pick<SiteGraphSigmaNode, 'path' | 'url'>): string {
+  return displayPagePath(node.url, siteHostFromUrl(node.url)) || node.path || '/'
+}
+
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
   return `${count.toLocaleString()} ${count === 1 ? singular : pluralForm}`
 }
@@ -186,6 +222,41 @@ function sigmaTheme(element: HTMLElement): SigmaSiteGraphTheme {
     edgeActive: color('edgeActive'),
     label: color('label'),
     background: color('background'),
+    root: color('root'),
+  }
+}
+
+/**
+ * Sigma 3's circle program cannot stroke a node, so the root's ring is painted
+ * on the 2D label canvas above the WebGL layer. The root always carries
+ * `forceLabel`, so that canvas always runs for it.
+ *
+ * The label text is drawn here rather than delegated to Sigma's
+ * `drawDiscNodeLabel`: importing `sigma/rendering` for a value touches
+ * `WebGL2RenderingContext` at module load, which does not exist during SSR or
+ * in jsdom. The geometry below matches Sigma's own disc-label placement.
+ */
+function createSiteGraphNodeLabelRenderer(
+  theme: SigmaSiteGraphTheme,
+): NodeLabelDrawingFunction<SigmaSiteGraphNodeAttributes, SigmaSiteGraphEdgeAttributes> {
+  return (context, data, settings) => {
+    const ringColor = (data as Partial<SigmaSiteGraphNodeAttributes>).ringColor
+    if (typeof ringColor === 'string') {
+      context.save()
+      context.strokeStyle = ringColor
+      context.lineWidth = 3
+      context.beginPath()
+      context.arc(data.x, data.y, data.size + 4, 0, Math.PI * 2)
+      context.stroke()
+      context.restore()
+    }
+
+    if (!data.label) return
+    context.save()
+    context.fillStyle = settings.labelColor.color ?? theme.label
+    context.font = `${settings.labelWeight} ${settings.labelSize}px ${settings.labelFont}`
+    context.fillText(data.label, data.x + data.size + 3, data.y + settings.labelSize / 3)
+    context.restore()
   }
 }
 
@@ -371,6 +442,7 @@ export function SiteGraphSigma({
   edges,
   layoutState = 'ready',
   layoutUnavailableReason,
+  rootNodeKey = null,
   selectedNodeKey,
   onSelectNode,
   ariaLabel,
@@ -411,8 +483,8 @@ export function SiteGraphSigma({
   )
   const hasFinitePosition = nodes.some((node) => Number.isFinite(node.x) && Number.isFinite(node.y))
   const builtGraph = useMemo(
-    () => theme ? buildSigmaSiteGraph(nodes, edges, theme) : null,
-    [edges, nodes, theme],
+    () => theme ? buildSigmaSiteGraph(nodes, edges, theme, rootNodeKey) : null,
+    [edges, nodes, rootNodeKey, theme],
   )
   const sigmaSettings = useMemo<Partial<Settings<SigmaSiteGraphNodeAttributes, SigmaSiteGraphEdgeAttributes>> | null>(() => theme ? ({
     allowInvalidContainer: true,
@@ -427,6 +499,7 @@ export function SiteGraphSigma({
     hideLabelsOnMove: true,
     itemSizesReference: 'screen' as const,
     defaultDrawNodeHover: createSiteGraphNodeHoverRenderer(theme),
+    defaultDrawNodeLabel: createSiteGraphNodeLabelRenderer(theme),
     labelColor: { color: theme.label },
     labelDensity: 0.2,
     labelFont: 'Geist Sans, sans-serif',
@@ -502,7 +575,7 @@ export function SiteGraphSigma({
     if (selectedNodeKey === undefined) setInternalSelectedNodeKey(nodeKey)
     onSelectNode?.(node)
     if (moveCamera) cameraActionsRef.current?.gotoNode(nodeKey)
-    setStatusMessage(`Focused ${node.path || '/'}`)
+    setStatusMessage(`Focused ${displayPageLabel(node)}`)
   }, [nodeByKey, onSelectNode, selectedNodeKey])
 
   const handleSigmaSelect = useCallback((nodeKey: string) => {
@@ -521,7 +594,7 @@ export function SiteGraphSigma({
 
   const chooseSearchResult = (node: SiteGraphSigmaNode) => {
     selectNode(node.nodeKey, true)
-    setSearchValue(node.path || node.url)
+    setSearchValue(displayPageLabel(node))
     setSearchOpen(false)
   }
 
@@ -611,7 +684,7 @@ export function SiteGraphSigma({
             aria-expanded={searchOpen}
             aria-activedescendant={searchOpen && activeResult ? optionId(activeResult.nodeKey) : undefined}
             value={searchValue}
-            placeholder={selectedNode ? `Focused: ${selectedNode.path || '/'}` : 'Find a page'}
+            placeholder={selectedNode ? `Focused: ${displayPageLabel(selectedNode)}` : 'Find a page'}
             className="h-10 w-full rounded-md border border-base bg-bg py-2 pl-9 pr-3 text-sm text-primary placeholder-mono-600 outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
             onFocus={() => setSearchOpen(true)}
             onBlur={closeSearchOnBlur}
@@ -657,7 +730,7 @@ export function SiteGraphSigma({
                       onMouseEnter={() => setActiveResultIndex(index)}
                       onClick={() => chooseSearchResult(node)}
                     >
-                      <span className="min-w-0 truncate font-mono">{node.path || '/'}</span>
+                      <span className="min-w-0 truncate font-mono">{displayPageLabel(node)}</span>
                       <span className="flex shrink-0 items-center gap-1.5 text-[13px] text-muted">
                         <span
                           className="font-mono font-semibold"
@@ -666,7 +739,7 @@ export function SiteGraphSigma({
                         >
                           {siteGraphStatusGlyph(status)}
                         </span>
-                        <span>{siteGraphStatusLabel(status)}</span>
+                        <span title={siteGraphStatusDescription(status)}>{siteGraphStatusLabel(status)}</span>
                       </span>
                     </button>
                   )
@@ -755,13 +828,24 @@ export function SiteGraphSigma({
                 className="pointer-events-none absolute z-20 max-w-64 rounded-md border border-base bg-bg/95 px-3 py-2 shadow-lg"
                 style={{ left: hovered.left, top: hovered.top }}
               >
-                <p className="truncate font-mono text-[13px] font-medium text-heading">{hoveredNode.path || '/'}</p>
-                <p className="mt-1 text-[13px] text-secondary">
-                  {siteGraphStatusLabel(siteGraphVisualState(hoveredNode))} · depth {hoveredNode.depth ?? 'unknown'}
+                <p className="truncate font-mono text-[13px] font-medium text-heading">{displayPageLabel(hoveredNode)}</p>
+                {/* The status WORD stays, and leads: it is the only thing tying
+                    this node back to the legend and to the pill in the table.
+                    The plain-word sentence explains it, it does not replace it. */}
+                <p className="mt-1 text-[13px] font-medium text-heading">
+                  {siteGraphStatusLabel(siteGraphVisualState(hoveredNode))}
                 </p>
+                <p className="mt-0.5 text-[13px] text-secondary">
+                  {siteGraphStatusDescription(siteGraphVisualState(hoveredNode))}
+                </p>
+                {hoveredNode.depth != null && (
+                  <p className="mt-1 text-[13px] text-secondary">
+                    {plural(hoveredNode.depth, 'click')} from home
+                  </p>
+                )}
                 {hoveredNode.auditScore != null && (
-                  <p className="mt-1 font-mono text-[13px] text-heading">
-                    Technical score {Math.round(hoveredNode.auditScore)}/100
+                  <p className="mt-1 text-[13px] tabular-nums text-heading">
+                    Score {Math.round(hoveredNode.auditScore)}/100
                   </p>
                 )}
               </div>
@@ -772,7 +856,7 @@ export function SiteGraphSigma({
 
       <div aria-label="Site map legend" className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-subtle bg-bg-elevated/50 px-3 py-2 text-[13px] text-secondary">
         {(['eligible', 'hidden', 'failed', 'unchecked'] as const).map((status) => (
-          <span key={status} className="inline-flex items-center gap-1.5">
+          <span key={status} className="inline-flex items-center gap-1.5" title={siteGraphStatusDescription(status)}>
             <span
               className="w-3 text-center font-mono text-[15px] font-semibold leading-none"
               style={{ color: `var(${SITE_GRAPH_COLOR_TOKENS[status].property})` }}
@@ -780,10 +864,10 @@ export function SiteGraphSigma({
             >
               {siteGraphStatusGlyph(status)}
             </span>
-            {siteGraphStatusLabel(status)}
+            {siteGraphStatusLegendLabel(status)}
           </span>
         ))}
-        <span className="ml-auto">Size shows internal-link importance</span>
+        <span className="ml-auto">Bigger = more linked</span>
         {builtGraph && (builtGraph.omittedNodes > 0 || builtGraph.omittedEdges > 0) && (
           <span className="text-caution">Some records lacked valid layout data.</span>
         )}

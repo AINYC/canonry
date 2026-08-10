@@ -54,10 +54,10 @@ test('connects a page score to its exact audit findings and fixes', () => {
     />,
   )
 
-  expect(screen.getByRole('heading', { name: 'Why this technical score' })).not.toBeNull()
-  expect(screen.getByLabelText('Technical score 42 out of 100')).not.toBeNull()
+  expect(screen.getByRole('heading', { name: 'Findings and fixes' })).not.toBeNull()
+  expect(screen.getByLabelText('Score 42 out of 100')).not.toBeNull()
   expect(screen.getByText('No H1 tag was found.')).not.toBeNull()
-  expect(screen.getByText('Not included in the weighted score')).not.toBeNull()
+  expect(screen.getByText('Not counted in the score')).not.toBeNull()
   expect(screen.getByText('Critical')).not.toBeNull()
   const factor = screen.getByText('Content depth').closest('details')
   expect(factor).not.toBeNull()
@@ -98,7 +98,7 @@ test('labels legacy page evidence as scores-only instead of claiming there were 
     />,
   )
 
-  expect(screen.getByText(/preserved factor scores, but not the original finding text/i)).not.toBeNull()
+  expect(screen.getByText(/saved only the scores, not the findings/i)).not.toBeNull()
   expect(screen.getByText('Content depth')).not.toBeNull()
   expect(screen.queryByText(/No technical findings/)).toBeNull()
 })
@@ -121,7 +121,7 @@ test('does not infer a clean page from a legacy scan with only passing scores', 
     />,
   )
 
-  expect(screen.getByText(/detailed finding evidence is unavailable/i)).not.toBeNull()
+  expect(screen.getByText(/saved only the score\. Run a new scan/i)).not.toBeNull()
   expect(screen.queryByText(/No technical findings need attention/)).toBeNull()
 })
 
@@ -129,8 +129,8 @@ test('shows a truthful retry state when page audit evidence cannot be loaded', (
   const onRetry = vi.fn()
   render(<PageAuditEvidence audit={undefined} isLoading={false} error={new Error('offline')} onRetry={onRetry} />)
 
-  expect(screen.getByRole('alert').textContent).toContain('Technical findings could not be loaded.')
-  fireEvent.click(screen.getByRole('button', { name: 'Retry technical findings' }))
+  expect(screen.getByRole('alert').textContent).toContain('Findings could not be loaded.')
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   expect(onRetry).toHaveBeenCalledOnce()
 })
 

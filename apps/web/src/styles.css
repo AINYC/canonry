@@ -155,6 +155,9 @@
   --chart-site-health-hidden: #e69f00;
   --chart-site-health-failed: #d55e00;
   --chart-site-health-unchecked: #a1a1aa;
+  /* Ring around the home page. A fifth Okabe-Ito hue, so it never reads as one
+     of the four states. */
+  --chart-site-health-root: #cc79a7;
   --chart-neutral-text: #a1a1aa;
   --chart-neutral-text-dim: #71717a;
   --chart-neutral-text-faint: #52525b;
@@ -307,6 +310,7 @@
   --chart-site-health-hidden: #a86f00;
   --chart-site-health-failed: #b23a2b;
   --chart-site-health-unchecked: #52525b;
+  --chart-site-health-root: #8c4a72;
   --chart-neutral-text: #52525b;
   --chart-neutral-text-dim: #71717a;
   --chart-neutral-text-faint: #a1a1aa;
@@ -2034,6 +2038,17 @@
 
   .evidence-table td {
     @apply px-4 py-3 text-neutral;
+  }
+
+  /* Site Health tables read as prose, not as a spec sheet: sentence-case
+     headers at body size instead of the all-caps letterspaced default. Scoped
+     to this one surface so the shared .evidence-table stays as it is. */
+  .site-health-table th {
+    @apply text-sm font-semibold normal-case tracking-normal text-secondary;
+  }
+
+  .site-health-table td {
+    @apply text-sm;
   }
 
   .evidence-query-cell {

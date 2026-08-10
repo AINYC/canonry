@@ -1,6 +1,8 @@
 import { MultiDirectedGraph } from 'graphology'
 import { deriveSiteHealthState, type SiteHealthState } from '@ainyc/canonry-contracts'
 
+import { SITE_HEALTH_HOME_LABEL } from './site-health-paths.js'
+
 export type SiteGraphVisualState = SiteHealthState
 
 /**
@@ -20,6 +22,25 @@ export const SITE_GRAPH_EDGE_TOKEN = {
   property: '--chart-neutral-text-dim',
   fallback: '#71717a',
 } as const
+
+/**
+ * Ring drawn around the crawl root. It is a fifth Okabe-Ito hue so it stays
+ * distinguishable from the four state colors, and it clears 3:1 against both
+ * graph canvases.
+ */
+export const SITE_GRAPH_ROOT_TOKEN = {
+  property: '--chart-site-health-root',
+  fallback: '#cc79a7',
+} as const
+
+/** The home page is named, not pathed, so it reads at a glance. */
+export const SITE_GRAPH_ROOT_LABEL = SITE_HEALTH_HOME_LABEL
+
+/**
+ * The root must stay findable at any internal-link score, so it never shrinks
+ * to the importance-derived size the way every other page does.
+ */
+export const SITE_GRAPH_ROOT_MIN_SIZE = 14
 
 /**
  * Structural subset of a published Site Health graph node. Positions are
@@ -68,6 +89,7 @@ export interface SigmaSiteGraphTheme {
   edgeActive: string
   label: string
   background: string
+  root: string
 }
 
 /**
@@ -86,6 +108,7 @@ export const SITE_GRAPH_SIGMA_COLOR_TOKENS = {
   edgeActive: { property: '--chart-neutral-text', fallback: '#a1a1aa' },
   label: { property: '--chart-tooltip-label', fallback: '#e4e4e7' },
   background: { property: '--chart-tooltip-bg', fallback: '#18181b' },
+  root: SITE_GRAPH_ROOT_TOKEN,
 } as const satisfies Record<keyof SigmaSiteGraphTheme, { property: string; fallback: string }>
 
 const SIGMA_HEX_COLOR = /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i
@@ -111,6 +134,10 @@ export interface SigmaSiteGraphNodeAttributes extends Record<string, unknown> {
   glyph: string
   forceLabel: boolean
   zIndex: number
+  /** True only for the server-identified crawl root. */
+  isRoot: boolean
+  /** Ring color painted around the root node; null for every other page. */
+  ringColor: string | null
 }
 
 export interface SigmaSiteGraphEdgeAttributes extends Record<string, unknown> {
@@ -158,12 +185,40 @@ export function siteGraphVisualState(node: SiteGraphHealthSource): SiteGraphVisu
   return deriveSiteHealthState(node)
 }
 
+/**
+ * Customer-facing vocabulary for the four node states. Three closed maps over
+ * the same union, so a new state is a compile error in all of them and the
+ * pill, the legend, and the tooltip can never drift apart.
+ *
+ * "Indexable" is deliberately not "Indexed": a crawl only observes what the
+ * site PERMITS, never whether an engine actually indexed the page.
+ */
 export function siteGraphStatusLabel(state: SiteGraphVisualState): string {
   switch (state) {
-    case 'eligible': return 'Technically eligible'
-    case 'hidden': return 'Hidden or points elsewhere'
-    case 'failed': return 'Fetch failed'
+    case 'eligible': return 'Indexable'
+    case 'hidden': return 'Hidden'
+    case 'failed': return 'Broken'
     case 'unchecked': return 'Not checked'
+  }
+}
+
+/** The legend has room to be precise where a pill does not. */
+export function siteGraphStatusLegendLabel(state: SiteGraphVisualState): string {
+  switch (state) {
+    case 'eligible': return 'Indexable'
+    case 'hidden': return 'Hidden or points elsewhere'
+    case 'failed': return 'Broken'
+    case 'unchecked': return 'Not checked'
+  }
+}
+
+/** Plain-word explanation, used as the tooltip on pills and legend entries. */
+export function siteGraphStatusDescription(state: SiteGraphVisualState): string {
+  switch (state) {
+    case 'eligible': return 'AI and search engines are allowed to index this page'
+    case 'hidden': return 'This page tells them not to index it, or points them to another page'
+    case 'failed': return 'This page could not be loaded'
+    case 'unchecked': return 'This page was found but not checked'
   }
 }
 
@@ -177,8 +232,21 @@ export function siteGraphStatusGlyph(state: SiteGraphVisualState): string {
   }
 }
 
-export function siteGraphNodeSize(node: SiteGraphSigmaNode): number {
+/**
+ * Root identity is server-owned (`rootNodeKey` on the graph read). There is no
+ * path or depth fallback on purpose: renaming the wrong page "Home" on a guess
+ * would be worse than leaving the map unlabeled.
+ */
+export function isSiteGraphRootNode(
+  node: SiteGraphHealthSource & { nodeKey: string },
+  rootNodeKey: string | null | undefined,
+): boolean {
+  return Boolean(rootNodeKey) && node.nodeKey === rootNodeKey
+}
+
+export function siteGraphNodeSize(node: SiteGraphSigmaNode, isRoot = false): number {
   const importanceSize = 3 + Math.sqrt(normalizedScore(node)) * 7
+  if (isRoot) return Math.max(SITE_GRAPH_ROOT_MIN_SIZE, importanceSize)
   return node.depth === 0 || node.path.trim() === '/' ? Math.max(9, importanceSize) : importanceSize
 }
 
@@ -204,6 +272,7 @@ export function buildSigmaSiteGraph(
   inputNodes: readonly SiteGraphSigmaNode[],
   inputEdges: readonly SiteGraphSigmaEdge[],
   theme: SigmaSiteGraphTheme,
+  rootNodeKey: string | null = null,
 ): BuiltSigmaSiteGraph {
   const graph = new MultiDirectedGraph<
     SigmaSiteGraphNodeAttributes,
@@ -220,21 +289,24 @@ export function buildSigmaSiteGraph(
     const status = siteGraphVisualState(node)
     const color = nodeColor(status, theme)
     const glyph = siteGraphStatusGlyph(status)
+    const isRoot = isSiteGraphRootNode(node, rootNodeKey)
     graph.addNode(node.nodeKey, {
       x: node.x,
       y: node.y,
-      size: siteGraphNodeSize(node),
+      size: siteGraphNodeSize(node, isRoot),
       color,
       baseColor: color,
-      label: `${glyph} ${node.path || '/'}`,
+      label: `${glyph} ${isRoot ? SITE_GRAPH_ROOT_LABEL : node.path || '/'}`,
       nodeKey: node.nodeKey,
       url: node.url,
       path: node.path,
       depth: node.depth,
       status,
       glyph,
-      forceLabel: node.depth === 0 || node.path.trim() === '/',
-      zIndex: node.depth === 0 ? 1 : 0,
+      forceLabel: isRoot || node.depth === 0 || node.path.trim() === '/',
+      zIndex: isRoot ? 2 : node.depth === 0 ? 1 : 0,
+      isRoot,
+      ringColor: isRoot ? theme.root : null,
     })
   }
 
@@ -326,6 +398,14 @@ export function createSigmaSiteGraphReducers(
 
   return {
     nodeReducer: (nodeKey, attributes) => {
+      // The crawl root anchors the whole map, so it keeps its label and its
+      // marker in every view: zoomed out, and while another neighborhood has
+      // focus. Nothing about its internal-link score can hide it.
+      if (attributes.isRoot) {
+        return nodeKey === focused
+          ? { ...attributes, size: attributes.size * 1.35, forceLabel: true, zIndex: 3 }
+          : { ...attributes, forceLabel: true }
+      }
       if (focused) {
         if (nodeKey === focused) {
           return {

@@ -204,9 +204,39 @@ export const siteCrawlSummarySchema = z.object({
 })
 export type SiteCrawlSummaryDto = z.infer<typeof siteCrawlSummarySchema>
 
+/**
+ * Why a crawl stopped early. Mirrors `CrawlTerminationReason` from
+ * @canonry/aeo-audit, plus two values canonry itself writes: `complete` when
+ * the crawl finished on its own, and `unknown`, the NOT NULL column default in
+ * `packages/db` that a row keeps when nothing ever set a reason. `unknown` is
+ * in the set precisely because it is persisted and reader-visible: leaving it
+ * out would render the raw token in client copy. Persisted rows stay
+ * string-backed for forward compatibility, so consumers match against this set
+ * and keep a raw fallback.
+ */
+export const siteCrawlTerminationSchema = z.enum([
+  'complete',
+  'unknown',
+  'max-pages',
+  'max-edges',
+  'max-fetches',
+  'max-duration',
+  'max-bytes',
+  'max-page-bytes',
+  'max-depth',
+  'max-links-per-page',
+  'max-query-variants',
+  'max-sitemap-fanout',
+  'max-sitemap-urls',
+  'root-host-redirect',
+])
+export type SiteCrawlTermination = z.infer<typeof siteCrawlTerminationSchema>
+
 /** Shared meaning behind Site Health node color across API, agents, and UI. */
 export const siteHealthStateSchema = z.enum(['eligible', 'hidden', 'failed', 'unchecked'])
 export type SiteHealthState = z.infer<typeof siteHealthStateSchema>
+/** Named members so consumers never re-type the literal at a call site. */
+export const SiteHealthStates = siteHealthStateSchema.enum
 
 /** Exact state vocabulary emitted by @canonry/aeo-audit's Site Crawl contract. */
 export const SiteCrawlFetchStates = {
@@ -477,6 +507,19 @@ export const siteCrawlGraphEdgeSchema = z.object({
 })
 export type SiteCrawlGraphEdgeDto = z.infer<typeof siteCrawlGraphEdgeSchema>
 
+/**
+ * Why a scan has no usable map. Consumers key copy off these exact values, so
+ * the set is closed and named rather than inlined at the one use site.
+ */
+export const siteCrawlGraphLayoutUnavailableReasonSchema = z.enum([
+  'no-crawl',
+  'legacy-snapshot',
+  'details-unavailable',
+  'layout-failed',
+  'empty-crawl',
+])
+export type SiteCrawlGraphLayoutUnavailableReason = z.infer<typeof siteCrawlGraphLayoutUnavailableReasonSchema>
+
 export const siteCrawlGraphLayoutSchema = z.discriminatedUnion('state', [
   z.object({
     state: z.literal('ready'),
@@ -486,7 +529,7 @@ export const siteCrawlGraphLayoutSchema = z.discriminatedUnion('state', [
   z.object({
     state: z.literal('unavailable'),
     version: z.null(),
-    reason: z.enum(['no-crawl', 'legacy-snapshot', 'details-unavailable', 'layout-failed', 'empty-crawl']),
+    reason: siteCrawlGraphLayoutUnavailableReasonSchema,
   }),
 ])
 export type SiteCrawlGraphLayoutDto = z.infer<typeof siteCrawlGraphLayoutSchema>
@@ -501,6 +544,13 @@ export const siteCrawlGraphResponseSchema = z.object({
   project: z.string(),
   hasCrawlData: z.boolean(),
   runId: z.string().nullable(),
+  /**
+   * Server-owned identity of the crawl root, resolved from the snapshot root
+   * URL (or the depth-0 page). Consumers must not infer the home page from a
+   * path or a link score. It is null when the crawl persisted no page detail,
+   * and it can name a page that graph sampling left out of `nodes`.
+   */
+  rootNodeKey: z.string().nullable(),
   layout: siteCrawlGraphLayoutSchema,
   /** Total canonical pages in the persisted crawl before graph sampling. */
   totalNodes: z.number().int().nonnegative(),
@@ -796,3 +846,29 @@ export const siteAuditRunResponseSchema = z.object({
   status: runStatusSchema,
 })
 export type SiteAuditRunResponseDto = z.infer<typeof siteAuditRunResponseSchema>
+
+/**
+ * One entry in the Site Health scan history. `hasCrawlData` separates a scan
+ * that published a page and internal-link graph from a legacy score-only scan
+ * that predates crawl persistence: both are real, selectable history, but only
+ * the first can open the map, inventory, or structure views.
+ */
+export const siteHealthScanSchema = z.object({
+  runId: z.string(),
+  status: runStatusSchema,
+  createdAt: z.string(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
+  hasCrawlData: z.boolean(),
+})
+export type SiteHealthScanDto = z.infer<typeof siteHealthScanSchema>
+
+/** Non-probe site-audit runs for one project, newest first. */
+export const siteHealthScansResponseSchema = z.object({
+  project: z.string(),
+  scans: z.array(siteHealthScanSchema).default([]),
+})
+export type SiteHealthScansResponseDto = z.infer<typeof siteHealthScansResponseSchema>
+
+export const SITE_HEALTH_SCANS_DEFAULT_LIMIT = 20
+export const SITE_HEALTH_SCANS_MAX_LIMIT = 100

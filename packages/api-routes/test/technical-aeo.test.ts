@@ -37,8 +37,10 @@ import type {
   SiteCrawlSummaryDto,
   SiteHealthChangesResponseDto,
   SiteHealthPathResponseDto,
+  SiteHealthScansResponseDto,
   SiteHealthSubgraphResponseDto,
 } from '@ainyc/canonry-contracts'
+import { deriveSiteHealthState } from '@ainyc/canonry-contracts'
 import { apiRoutes } from '../src/index.js'
 
 interface Ctx {
@@ -676,7 +678,7 @@ describe('GET /technical-aeo crawl reads', () => {
     }).run()
     const empty = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/graph-fresh/technical-aeo/graph')
     expect(empty.body).toEqual({
-      project: 'graph-fresh', hasCrawlData: false, runId: null,
+      project: 'graph-fresh', hasCrawlData: false, runId: null, rootNodeKey: null,
       layout: { state: 'unavailable', version: null, reason: 'no-crawl' },
       totalNodes: 0, totalEdges: 0, nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
     })
@@ -1289,5 +1291,220 @@ describe('POST /technical-aeo/runs', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(ctx.siteAuditRequested[0]!.opts).toMatchObject({ maxPages: 60, maxEdges: 500, maxDepth: 4, checkDeadLinks: false })
+  })
+})
+
+// Run A is a real, completed, non-probe site-audit that predates crawl
+// persistence. Selecting it in the scan history must read as "this scan kept
+// no crawl", never as "this run does not exist".
+describe('legacy score-only runs stay honest instead of 404ing', () => {
+  it('answers the crawl summary with its no-crawl shape and the legacy pointer', async () => {
+    const { status, body } = await get<SiteCrawlSummaryDto>(`/api/v1/projects/tech-aeo/technical-aeo/crawl?runId=${ctx.runA}`)
+    expect(status).toBe(200)
+    expect(body.hasCrawlData).toBe(false)
+    expect(body.legacyAuditAvailable).toBe(true)
+    expect(body.runId).toBeNull()
+    expect(body.counts).toEqual({ pagesDiscovered: 0, pagesFetched: 0, pagesEligible: 0, edges: 0, findings: 0 })
+  })
+
+  it('answers the crawl page list with an explicit empty crawl', async () => {
+    const { status, body } = await get<SiteCrawlPagesResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?runId=${ctx.runA}`)
+    expect(status).toBe(200)
+    expect(body.hasCrawlData).toBe(false)
+    expect(body.runId).toBeNull()
+    expect(body.total).toBe(0)
+    expect(body.pages).toEqual([])
+  })
+
+  it('answers the graph with an unavailable no-crawl layout', async () => {
+    const { status, body } = await get<SiteCrawlGraphResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/graph?runId=${ctx.runA}`)
+    expect(status).toBe(200)
+    expect(body.hasCrawlData).toBe(false)
+    expect(body.rootNodeKey).toBeNull()
+    expect(body.layout).toEqual({ state: 'unavailable', version: null, reason: 'no-crawl' })
+    expect(body.nodes).toEqual([])
+  })
+
+  it('answers every other crawl-scoped read with its own no-crawl state', async () => {
+    const structure = await get<SiteCrawlStructureResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/structure?runId=${ctx.runA}`)
+    expect(structure.status).toBe(200)
+    expect(structure.body.hasCrawlData).toBe(false)
+
+    const links = await get<SiteCrawlInternalLinksResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/internal-links?runId=${ctx.runA}`)
+    expect(links.status).toBe(200)
+    expect(links.body.hasCrawlData).toBe(false)
+
+    const neighbors = await get<SiteCrawlNeighborsResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/internal-links/neighbors?runId=${ctx.runA}&nodeKey=home`)
+    expect(neighbors.status).toBe(200)
+    expect(neighbors.body.hasCrawlData).toBe(false)
+
+    const deadLinks = await get<SiteCrawlDeadLinksResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/dead-links?runId=${ctx.runA}`)
+    expect(deadLinks.status).toBe(200)
+    expect(deadLinks.body.state).toBe('unavailable')
+
+    const subgraph = await get<SiteHealthSubgraphResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/subgraph?runId=${ctx.runA}`)
+    expect(subgraph.status).toBe(200)
+    expect(subgraph.body.state).toBe('no-crawl')
+
+    const path = await get<SiteHealthPathResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/path?runId=${ctx.runA}&toUrl=${encodeURIComponent('https://example.com/old')}`)
+    expect(path.status).toBe(200)
+    expect(path.body.state).toBe('no-crawl')
+
+    const audit = await get<SiteCrawlPageAuditDto>(`/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit?runId=${ctx.runA}&nodeKey=home`)
+    expect(audit.status).toBe(200)
+    expect(audit.body.state).toBe('no-crawl')
+  })
+
+  it('still 404s a runId this project never surfaced', async () => {
+    const unknown = crypto.randomUUID()
+    for (const url of [
+      `/api/v1/projects/tech-aeo/technical-aeo/crawl?runId=${unknown}`,
+      `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?runId=${unknown}`,
+      `/api/v1/projects/tech-aeo/technical-aeo/graph?runId=${unknown}`,
+      `/api/v1/projects/tech-aeo/technical-aeo/structure?runId=${unknown}`,
+      `/api/v1/projects/tech-aeo/technical-aeo/internal-links?runId=${unknown}`,
+      `/api/v1/projects/tech-aeo/technical-aeo/internal-links/neighbors?runId=${unknown}&nodeKey=home`,
+      `/api/v1/projects/tech-aeo/technical-aeo/dead-links?runId=${unknown}`,
+      `/api/v1/projects/tech-aeo/technical-aeo/subgraph?runId=${unknown}`,
+      `/api/v1/projects/tech-aeo/technical-aeo/path?runId=${unknown}&toUrl=${encodeURIComponent('https://example.com/old')}`,
+      `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit?runId=${unknown}&nodeKey=home`,
+    ]) {
+      expect((await get(url)).status, url).toBe(404)
+    }
+  })
+
+  it('keeps a probe run unreachable through the crawl reads', async () => {
+    expect((await get(`/api/v1/projects/tech-aeo/technical-aeo/crawl?runId=${ctx.probeRun}`)).status).toBe(404)
+    expect((await get(`/api/v1/projects/tech-aeo/technical-aeo/graph?runId=${ctx.probeRun}`)).status).toBe(404)
+  })
+})
+
+describe('GET /technical-aeo/runs (scan history)', () => {
+  it('lists non-probe site-audit runs newest first and flags which ones kept a crawl', async () => {
+    const { status, body } = await get<SiteHealthScansResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/runs')
+    expect(status).toBe(200)
+    expect(body.project).toBe('tech-aeo')
+    expect(body.scans.map((scan) => scan.runId)).toEqual([ctx.runB, ctx.runA])
+    expect(body.scans.map((scan) => scan.hasCrawlData)).toEqual([true, false])
+    expect(body.scans.every((scan) => scan.status === 'completed')).toBe(true)
+  })
+
+  it('includes a queued rescan that has no crawl yet', async () => {
+    const queuedId = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: queuedId, projectId: ctx.projectId, kind: 'site-audit', status: 'queued',
+      trigger: 'manual', createdAt: new Date().toISOString(),
+    }).run()
+    const { body } = await get<SiteHealthScansResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/runs')
+    expect(body.scans[0]!.runId).toBe(queuedId)
+    expect(body.scans[0]!.status).toBe('queued')
+    expect(body.scans[0]!.hasCrawlData).toBe(false)
+  })
+
+  it('bounds the limit and 404s an unknown project', async () => {
+    const capped = await get<SiteHealthScansResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/runs?limit=1')
+    expect(capped.body.scans).toHaveLength(1)
+    expect(capped.body.scans[0]!.runId).toBe(ctx.runB)
+    expect((await get('/api/v1/projects/nope/technical-aeo/runs')).status).toBe(404)
+  })
+})
+
+describe('graph root identity', () => {
+  it('names the crawl root so the home page is findable without guessing', async () => {
+    const { body } = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph')
+    expect(body.rootNodeKey).toBe('home')
+    expect(body.nodes.some((node) => node.nodeKey === body.rootNodeKey)).toBe(true)
+  })
+})
+
+describe('crawl page health-state filter', () => {
+  /**
+   * The dashboard's "Hidden pages" chip and every agent read must mean the
+   * same thing by "hidden". That only holds if the route filters with the
+   * contract's own derivation rather than a SQL lookalike, so this asserts the
+   * two agree across the whole crawler vocabulary, not just the happy path.
+   */
+  const FETCH_STATES = ['discovered', 'robots-blocked', 'html', 'redirect', 'non-html', 'fetch-error']
+  const INDEXABILITY_STATES = ['indexable', 'noindex', 'blocked', 'unknown']
+
+  function seedEveryCombination(): Array<typeof siteCrawlPages.$inferSelect> {
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    const now = new Date().toISOString()
+    ctx.db.delete(siteCrawlPages).where(eq(siteCrawlPages.runId, ctx.runB)).run()
+    const rows = []
+    for (const fetchState of FETCH_STATES) {
+      for (const indexabilityState of INDEXABILITY_STATES) {
+        for (const variant of ['plain', 'canonical-away', 'reason-canonical'] as const) {
+          const nodeKey = `${fetchState}:${indexabilityState}:${variant}`
+          rows.push({
+            id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!,
+            nodeKey, url: `https://example.com/${encodeURIComponent(nodeKey)}`, path: `/${nodeKey}`, parentPath: '/',
+            discoverySource: 'link', fetchState, indexabilityState,
+            indexabilityReasons: variant === 'reason-canonical' ? ['canonical-to-other'] : [],
+            canonicalNodeKey: variant === 'canonical-away' ? 'some-other-node' : null,
+            auditState: 'complete', inventoryEligible: true, depth: 1, createdAt: now, updatedAt: now,
+          })
+        }
+      }
+    }
+    ctx.db.insert(siteCrawlPages).values(rows).run()
+    return ctx.db.select().from(siteCrawlPages).where(eq(siteCrawlPages.runId, ctx.runB)).all()
+  }
+
+  it('agrees with deriveSiteHealthState on every fetch and indexability combination', async () => {
+    const seeded = seedEveryCombination()
+    expect(seeded.length).toBe(FETCH_STATES.length * INDEXABILITY_STATES.length * 3)
+
+    for (const healthState of ['eligible', 'hidden', 'failed', 'unchecked'] as const) {
+      const expected = seeded
+        .filter((row) => deriveSiteHealthState(row) === healthState)
+        .map((row) => row.nodeKey)
+        .sort()
+      const { status, body } = await get<SiteCrawlPagesResponseDto>(
+        `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=${healthState}&limit=200`,
+      )
+      expect(status).toBe(200)
+      expect(body.pages.map((page) => page.nodeKey).sort(), healthState).toEqual(expected)
+      expect(body.total, `${healthState} total`).toBe(expected.length)
+      // Every returned row also reports that state in its own DTO field.
+      expect(body.pages.every((page) => page.healthState === healthState)).toBe(true)
+    }
+
+    // Every page lands in exactly one bucket, so the four filters partition the crawl.
+    const totals = await Promise.all((['eligible', 'hidden', 'failed', 'unchecked'] as const).map(async (state) => (
+      (await get<SiteCrawlPagesResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=${state}&limit=200`)).body.total
+    )))
+    expect(totals.reduce((sum, value) => sum + value, 0)).toBe(seeded.length)
+  })
+
+  it('catches the states a raw indexabilityState filter would miss', async () => {
+    seedEveryCombination()
+    const hidden = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=hidden&limit=200')
+    const noindexOnly = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?indexabilityState=noindex&limit=200')
+
+    // Redirects, robots blocks, non-HTML, and canonical-away pages are hidden
+    // from answer engines without carrying `indexabilityState=noindex`.
+    expect(hidden.body.total).toBeGreaterThan(noindexOnly.body.total)
+    const hiddenKeys = new Set(hidden.body.pages.map((page) => page.nodeKey))
+    expect([...hiddenKeys].some((key) => key.startsWith('redirect:indexable'))).toBe(true)
+    expect([...hiddenKeys].some((key) => key.startsWith('robots-blocked:indexable'))).toBe(true)
+    expect([...hiddenKeys].some((key) => key.startsWith('non-html:indexable'))).toBe(true)
+    expect([...hiddenKeys].some((key) => key.endsWith(':canonical-away'))).toBe(true)
+  })
+
+  it('pages and refuses an unknown health state', async () => {
+    seedEveryCombination()
+    const firstPage = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=hidden&limit=2')
+    expect(firstPage.body.pages).toHaveLength(2)
+    expect(firstPage.body.nextCursor).not.toBeNull()
+
+    const secondPage = await get<SiteCrawlPagesResponseDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=hidden&limit=2&cursor=${encodeURIComponent(firstPage.body.nextCursor!)}`,
+    )
+    expect(secondPage.body.total).toBe(firstPage.body.total)
+    expect(secondPage.body.pages.map((page) => page.nodeKey))
+      .not.toEqual(firstPage.body.pages.map((page) => page.nodeKey))
+
+    expect((await get('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?healthState=indexed')).status).toBe(400)
   })
 })

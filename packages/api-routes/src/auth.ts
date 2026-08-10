@@ -445,6 +445,10 @@ function isTechnicalAeoRead(url: string): boolean {
     || rest === 'technical-aeo/changes'
     || rest === 'technical-aeo/crawl/pages/audit'
     || rest === 'technical-aeo/crawl/pages'
+    // Scan history. Only the GET reaches here; every write method is refused
+    // before the tab allowlist is consulted, so the POST on this same path
+    // stays out of the embed surface.
+    || rest === 'technical-aeo/runs'
     || rest === 'technical-aeo/structure'
     || rest === 'technical-aeo/internal-links'
     || rest === 'technical-aeo/internal-links/neighbors'

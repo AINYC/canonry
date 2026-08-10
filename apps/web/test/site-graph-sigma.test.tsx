@@ -151,7 +151,7 @@ describe('SiteGraphSigma', () => {
     const search = screen.getByRole('combobox', { name: 'Focus a page in the site map' })
     fireEvent.focus(search)
     expect(screen.getAllByRole('option')).toHaveLength(50)
-    expect(within(screen.getAllByRole('option')[0]!).getByText('Technically eligible')).toBeTruthy()
+    expect(within(screen.getAllByRole('option')[0]!).getByText('Indexable')).toBeTruthy()
     const legend = screen.getByLabelText('Site map legend')
     for (const marker of ['●', '◆', '×', '○']) {
       expect(within(legend).getByText(marker)).toBeTruthy()
@@ -301,8 +301,8 @@ describe('SiteGraphSigma', () => {
     })
 
     const tooltip = screen.getByRole('tooltip')
-    expect(within(tooltip).getByText('Technical score 61/100')).not.toBeNull()
-    expect(within(tooltip).getByText(/Technically eligible/)).not.toBeNull()
+    expect(within(tooltip).getByText('Score 61/100')).not.toBeNull()
+    expect(within(tooltip).getByText(/Indexable/)).not.toBeNull()
   })
 
   it('only refreshes the graph when camera zoom crosses the overview threshold', async () => {
@@ -377,23 +377,23 @@ describe('SiteGraphSigma', () => {
     expect(screen.getByText('No page graph is available for this scan.')).toBeTruthy()
 
     rerender(<SiteGraphSigma nodes={[]} edges={[]} layoutState="unavailable" />)
-    expect(screen.getByText('This scan does not have a published graph layout yet.')).toBeTruthy()
+    expect(screen.getByText('This scan has no map yet. Run a new scan to create one.')).toBeTruthy()
 
     rerender(<SiteGraphSigma nodes={[node('home', { x: Number.NaN })]} edges={[]} />)
-    expect(screen.getByText('This scan does not have a published graph layout yet.')).toBeTruthy()
+    expect(screen.getByText('This scan has no map yet. Run a new scan to create one.')).toBeTruthy()
   })
 
   it('distinguishes a persisted layout failure from an older scan without a layout', () => {
     const { rerender } = render(
       <SiteGraphSigma nodes={nodes} edges={edges} layoutState="unavailable" layoutUnavailableReason="legacy-snapshot" />,
     )
-    expect(screen.getByText('Graph layout unavailable')).toBeTruthy()
-    expect(screen.getByText('This scan does not have a published graph layout yet.')).toBeTruthy()
+    expect(screen.getByText('No map yet')).toBeTruthy()
+    expect(screen.getByText('This scan has no map yet. Run a new scan to create one.')).toBeTruthy()
 
     rerender(
       <SiteGraphSigma nodes={nodes} edges={edges} layoutState="unavailable" layoutUnavailableReason="layout-failed" />,
     )
-    expect(screen.getByText('Graph layout failed')).toBeTruthy()
-    expect(screen.getByText('This scan completed, but its graph layout could not be published. The page inventory remains available.')).toBeTruthy()
+    expect(screen.getByText('Map could not be built')).toBeTruthy()
+    expect(screen.getByText('The map could not be created for this scan. Run a new scan to try again.')).toBeTruthy()
   })
 })

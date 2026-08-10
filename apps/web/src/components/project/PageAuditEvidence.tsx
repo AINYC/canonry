@@ -47,28 +47,27 @@ export function PageAuditEvidence({
     <section className="border-t border-default pt-5" aria-labelledby="site-health-page-audit-heading">
       <div>
         <h3 id="site-health-page-audit-heading" className="text-base font-semibold text-heading">
-          Why this technical score
+          Findings and fixes
         </h3>
-        <p className="mt-1 text-sm text-secondary">Findings and fixes from this page in the selected scan.</p>
       </div>
 
       {isLoading ? (
-        <p className="mt-4 text-sm text-secondary" role="status">Loading technical findings...</p>
+        <p className="mt-4 text-sm text-secondary" role="status">Loading findings...</p>
       ) : error ? (
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-y border-negative bg-negative-soft px-4 py-3" role="alert">
-          <p className="text-sm text-negative">Technical findings could not be loaded.</p>
-          <Button type="button" variant="secondary" size="sm" onClick={onRetry}>Retry technical findings</Button>
+          <p className="text-sm text-negative">Findings could not be loaded.</p>
+          <Button type="button" variant="secondary" size="sm" onClick={onRetry}>Try again</Button>
         </div>
       ) : !audit ? (
-        <p className="mt-4 text-sm text-secondary">Technical findings are unavailable for this page.</p>
+        <p className="mt-4 text-sm text-secondary">No findings are available for this page.</p>
       ) : audit.state === 'no-crawl' ? (
         <p className="mt-4 text-sm text-secondary">No Site Health scan is available.</p>
       ) : audit.state === 'details-unavailable' ? (
-        <p className="mt-4 text-sm text-secondary">This scan preserved its summary, but not page-level audit evidence.</p>
+        <p className="mt-4 text-sm text-secondary">This scan saved its summary, but not the findings for each page.</p>
       ) : audit.state === 'not-found' ? (
         <p className="mt-4 text-sm text-secondary">This page is not present in the selected scan.</p>
       ) : audit.state === 'not-audited' ? (
-        <p className="mt-4 text-sm text-secondary">This page was discovered, but it was not technically audited.</p>
+        <p className="mt-4 text-sm text-secondary">This page was found, but it was not scored.</p>
       ) : (
         <ReadyPageAudit audit={audit} />
       )}
@@ -90,8 +89,8 @@ function ReadyPageAudit({ audit }: {
     <div className="mt-4">
       <div className="flex flex-wrap items-baseline gap-2">
         <span
-          aria-label={`Technical score ${Math.round(audit.auditScore)} out of 100`}
-          className="font-mono text-2xl font-semibold tabular-nums text-heading"
+          aria-label={`Score ${Math.round(audit.auditScore)} out of 100`}
+          className="text-2xl font-semibold tabular-nums text-heading"
         >
           {Math.round(audit.auditScore)}<span className="text-sm text-muted">/100</span>
         </span>
@@ -100,18 +99,18 @@ function ReadyPageAudit({ audit }: {
 
       {audit.evidenceState === 'scores-only' && (
         <p className="mt-3 border border-caution bg-caution-soft px-3 py-2 text-sm text-caution">
-          This older scan preserved factor scores, but not the original finding text or fixes.
+          This older scan saved only the scores, not the findings or fixes.
         </p>
       )}
 
       {audit.criticalDefects.length > 0 && (
         <section className="mt-5" aria-labelledby="site-health-critical-defects-heading">
           <div className="flex flex-wrap items-center gap-2">
-            <h4 id="site-health-critical-defects-heading" className="text-sm font-semibold text-heading">Score-independent defects</h4>
+            <h4 id="site-health-critical-defects-heading" className="text-sm font-semibold text-heading">Problems outside the score</h4>
             <ToneBadge tone={audit.criticalDefects.some((defect) => defect.severity === 'critical') ? 'negative' : 'caution'}>
               {audit.criticalDefects.length}
             </ToneBadge>
-            <span className="text-xs text-muted">Not included in the weighted score</span>
+            <span className="text-xs text-muted">Not counted in the score</span>
           </div>
           <ul className="mt-2 divide-y divide-default border-y border-default">
             {audit.criticalDefects.map((defect) => (
@@ -139,7 +138,7 @@ function ReadyPageAudit({ audit }: {
                   {factor.name}
                 </span>
                 <span className="flex shrink-0 items-center gap-2">
-                  <span className="font-mono text-sm tabular-nums text-heading">{Math.round(factor.score)}/100</span>
+                  <span className="text-sm tabular-nums text-heading">{Math.round(factor.score)}/100</span>
                   <ToneBadge tone={factorTone(factor.status)}>{stateLabel(factor.status)}</ToneBadge>
                 </span>
               </summary>
@@ -155,8 +154,8 @@ function ReadyPageAudit({ audit }: {
                   ) : (
                     <p className="mt-2 text-sm text-secondary">
                       {audit.evidenceState === 'scores-only'
-                        ? 'Finding text was not preserved for this factor.'
-                        : 'No finding text was emitted for this factor.'}
+                        ? 'This scan did not save the findings here.'
+                        : 'Nothing to report here.'}
                     </p>
                   )}
                 </div>
@@ -169,11 +168,11 @@ function ReadyPageAudit({ audit }: {
                   ) : (
                     <p className="mt-2 text-sm text-secondary">
                       {audit.evidenceState === 'scores-only'
-                        ? 'No page-specific fix was preserved.'
-                        : 'No page-specific fix was emitted.'}
+                        ? 'This scan did not save a fix here.'
+                        : 'No fix suggested here.'}
                     </p>
                   )}
-                  <p className="mt-3 text-xs text-muted">Weight: {factor.weight}% of the page score</p>
+                  <p className="mt-3 text-xs text-muted">Worth {factor.weight}% of the page score</p>
                 </div>
               </div>
             </details>
@@ -181,11 +180,11 @@ function ReadyPageAudit({ audit }: {
         </div>
       ) : audit.criticalDefects.length === 0 && audit.evidenceState === 'complete' ? (
         <p className="mt-4 border-y border-positive bg-positive-soft px-4 py-3 text-sm text-positive">
-          No technical findings need attention on this page.
+          Nothing needs attention on this page.
         </p>
       ) : audit.criticalDefects.length === 0 ? (
         <p className="mt-4 border-y border-default px-4 py-3 text-sm text-secondary">
-          No below-pass factor scores were preserved. Detailed finding evidence is unavailable.
+          This scan saved only the score. Run a new scan to see findings.
         </p>
       ) : null}
     </div>

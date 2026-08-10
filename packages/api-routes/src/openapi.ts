@@ -6099,7 +6099,7 @@ const routeCatalog: OpenApiOperation[] = [
     ],
     responses: {
       200: jsonResponse('Persisted crawl summary returned.', 'SiteCrawlSummaryDto'),
-      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+      404: errorResponse('Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.'),
     },
   },
   {
@@ -6116,7 +6116,7 @@ const routeCatalog: OpenApiOperation[] = [
     ],
     responses: {
       200: jsonResponse('Bounded Site Health graph projection returned.', 'SiteCrawlGraphResponseDto'),
-      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+      404: errorResponse('Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.'),
     },
   },
   {
@@ -6211,6 +6211,7 @@ const routeCatalog: OpenApiOperation[] = [
       { name: 'inventoryEligible', in: 'query', description: 'Filter Canonry technical inventory eligibility (`true` or `false`).', schema: booleanSchema },
       { name: 'fetchState', in: 'query', description: 'Filter by persisted fetch state.', schema: stringSchema },
       { name: 'indexabilityState', in: 'query', description: 'Filter by crawler-derived indexability state; this is not Google index coverage.', schema: stringSchema },
+      { name: 'healthState', in: 'query', description: 'Filter by the derived Site Health state shared with the dashboard and agents. Unlike `indexabilityState` this folds fetch state, canonical identity, and the crawler reasons into one decision, so `hidden` also covers redirects, robots blocks, non-HTML, and canonical-away pages. Values: `eligible`, `hidden`, `failed`, `unchecked`.', schema: { type: 'string', enum: ['eligible', 'hidden', 'failed', 'unchecked'] } },
       { name: 'auditState', in: 'query', description: 'Filter by audit state.', schema: stringSchema },
       { name: 'sort', in: 'query', description: 'Sort order. Defaults to `url`.', schema: { type: 'string', enum: ['url', 'path', 'score-asc', 'score-desc'] } },
       crawlCursorParameter,
@@ -6218,7 +6219,7 @@ const routeCatalog: OpenApiOperation[] = [
     ],
     responses: {
       200: jsonResponse('Crawl pages returned.', 'SiteCrawlPagesResponseDto'),
-      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+      404: errorResponse('Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.'),
     },
   },
   {
@@ -6236,7 +6237,7 @@ const routeCatalog: OpenApiOperation[] = [
     ],
     responses: {
       200: jsonResponse('Immediate crawl children returned.', 'SiteCrawlStructureResponseDto'),
-      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+      404: errorResponse('Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.'),
     },
   },
   {
@@ -6256,7 +6257,7 @@ const routeCatalog: OpenApiOperation[] = [
     ],
     responses: {
       200: jsonResponse('Internal crawl links returned.', 'SiteCrawlInternalLinksResponseDto'),
-      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+      404: errorResponse('Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.'),
     },
   },
   {
@@ -6275,7 +6276,7 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('Bounded internal-link neighborhood returned.', 'SiteCrawlNeighborsResponseDto'),
       400: errorResponse('A nodeKey or URL is required.'),
-      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+      404: errorResponse('Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.'),
     },
   },
   {
@@ -6292,7 +6293,22 @@ const routeCatalog: OpenApiOperation[] = [
     ],
     responses: {
       200: jsonResponse('Dead-link status and findings returned.', 'SiteCrawlDeadLinksResponseDto'),
-      404: errorResponse('Project or crawl-bearing site-audit run not found.'),
+      404: errorResponse('Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/technical-aeo/runs',
+    summary: 'List Site Health scan history',
+    description: 'Returns every non-probe `site-audit` run for the project, newest first, including runs still queued or running and runs that failed. `hasCrawlData` says whether that scan published a page and internal-link crawl: a legacy score-only scan is listed with `hasCrawlData=false` rather than hidden, and the crawl-scoped reads answer it with their no-crawl state instead of a 404.',
+    tags: ['technical-aeo'],
+    parameters: [
+      nameParameter,
+      { name: 'limit', in: 'query', description: 'Max scans returned (most recent first). Defaults to 20; max 100.', schema: { type: 'integer', minimum: 1, maximum: 100 } },
+    ],
+    responses: {
+      200: jsonResponse('Site Health scan history returned.', 'SiteHealthScansResponseDto'),
+      404: errorResponse('Project not found.'),
     },
   },
   {

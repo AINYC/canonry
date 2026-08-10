@@ -7374,6 +7374,7 @@ export type SiteCrawlGraphResponseDto = {
     project: string;
     hasCrawlData: boolean;
     runId: string | null;
+    rootNodeKey: string | null;
     layout: {
         state: 'ready';
         version: string;
@@ -7829,6 +7830,18 @@ export type SiteHealthPathResponseDto = {
         followableOccurrences: number;
         nofollowOccurrences: number;
         anchors: Array<string>;
+    }>;
+};
+
+export type SiteHealthScansResponseDto = {
+    project: string;
+    scans: Array<{
+        runId: string;
+        status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
+        createdAt: string;
+        startedAt: string | null;
+        finishedAt: string | null;
+        hasCrawlData: boolean;
     }>;
 };
 
@@ -20891,7 +20904,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoCrawlData = {
 
 export type GetApiV1ProjectsByNameTechnicalAeoCrawlErrors = {
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -20934,7 +20947,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoGraphData = {
 
 export type GetApiV1ProjectsByNameTechnicalAeoGraphErrors = {
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -21196,6 +21209,10 @@ export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesData = {
          */
         indexabilityState?: string;
         /**
+         * Filter by the derived Site Health state shared with the dashboard and agents. Unlike `indexabilityState` this folds fetch state, canonical identity, and the crawler reasons into one decision, so `hidden` also covers redirects, robots blocks, non-HTML, and canonical-away pages. Values: `eligible`, `hidden`, `failed`, `unchecked`.
+         */
+        healthState?: 'eligible' | 'hidden' | 'failed' | 'unchecked';
+        /**
          * Filter by audit state.
          */
         auditState?: string;
@@ -21217,7 +21234,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesData = {
 
 export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesErrors = {
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -21264,7 +21281,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoStructureData = {
 
 export type GetApiV1ProjectsByNameTechnicalAeoStructureErrors = {
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -21319,7 +21336,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoInternalLinksData = {
 
 export type GetApiV1ProjectsByNameTechnicalAeoInternalLinksErrors = {
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -21370,7 +21387,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsErrors = {
      */
     400: ErrorEnvelope;
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -21413,7 +21430,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoDeadLinksData = {
 
 export type GetApiV1ProjectsByNameTechnicalAeoDeadLinksErrors = {
     /**
-     * Project or crawl-bearing site-audit run not found.
+     * Project or site-audit run not found. A known run that published no crawl returns 200 with the no-crawl state instead.
      */
     404: ErrorEnvelope;
 };
@@ -21428,6 +21445,41 @@ export type GetApiV1ProjectsByNameTechnicalAeoDeadLinksResponses = {
 };
 
 export type GetApiV1ProjectsByNameTechnicalAeoDeadLinksResponse = GetApiV1ProjectsByNameTechnicalAeoDeadLinksResponses[keyof GetApiV1ProjectsByNameTechnicalAeoDeadLinksResponses];
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Max scans returned (most recent first). Defaults to 20; max 100.
+         */
+        limit?: number;
+    };
+    url: '/api/v1/projects/{name}/technical-aeo/runs';
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsErrors = {
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsError = GetApiV1ProjectsByNameTechnicalAeoRunsErrors[keyof GetApiV1ProjectsByNameTechnicalAeoRunsErrors];
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsResponses = {
+    /**
+     * Site Health scan history returned.
+     */
+    200: SiteHealthScansResponseDto;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsResponse = GetApiV1ProjectsByNameTechnicalAeoRunsResponses[keyof GetApiV1ProjectsByNameTechnicalAeoRunsResponses];
 
 export type PostApiV1ProjectsByNameTechnicalAeoRunsData = {
     body?: {
