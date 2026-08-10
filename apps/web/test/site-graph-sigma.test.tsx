@@ -13,6 +13,7 @@ const sigmaMocks = vi.hoisted(() => ({
   gotoNode: vi.fn(),
   shouldThrow: false,
   cameraRatio: 1,
+  graphsSeen: [] as unknown[],
   containerProps: null as {
     graph?: {
       nodes: () => string[]
@@ -33,11 +34,10 @@ const sigmaMocks = vi.hoisted(() => ({
 const sigmaMockInstance = {
   setSetting: sigmaMocks.setSetting,
   refresh: sigmaMocks.refresh,
-  getGraph: () => ({
-    hasNode: () => true,
-    areNeighbors: (left: string, right: string) => left === right || left === 'home' || right === 'home',
-    extremities: () => ['home', 'pricing'],
-  }),
+  // The real Sigma reports the graph it renders, and SiteGraphSigma checks it
+  // before configuring: applying settings to an instance built for a different
+  // graph is exactly the bug that killed the map on a toggle.
+  getGraph: () => sigmaMocks.containerProps?.graph ?? null,
   getCamera: () => ({ getState: () => ({ ratio: sigmaMocks.cameraRatio }) }),
 }
 
@@ -55,6 +55,10 @@ vi.mock('@react-sigma/core', async () => {
       }
     }) => {
       if (sigmaMocks.shouldThrow) throw new Error('WebGL renderer failed')
+      // Each distinct graph object is a real Sigma instance, and a real WebGL
+      // context, in the browser. Browsers cap live contexts, so this is the
+      // number that must not grow when a checkbox is flipped.
+      if (graph && !sigmaMocks.graphsSeen.includes(graph)) sigmaMocks.graphsSeen.push(graph)
       sigmaMocks.containerProps = { graph, settings }
       return React.createElement(
         'div',
@@ -111,6 +115,11 @@ const edges = [{
   occurrences: 1,
 }]
 
+const templateEdges = [
+  { edgeKey: 'home-pricing', sourceNodeKey: 'home', targetNodeKey: 'pricing', followable: true, occurrences: 1, isTemplate: false },
+  { edgeKey: 'nav-pricing', sourceNodeKey: 'pricing', targetNodeKey: 'home', followable: true, occurrences: 1, isTemplate: true },
+]
+
 function mockWebGl(supported: boolean) {
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(((contextId: string) => {
     if (contextId === 'webgl' || contextId === 'webgl2') return supported ? {} : null
@@ -122,6 +131,7 @@ beforeEach(() => {
   sigmaMocks.handlers = {}
   sigmaMocks.shouldThrow = false
   sigmaMocks.containerProps = null
+  sigmaMocks.graphsSeen = []
   sigmaMocks.setSetting.mockReset()
   sigmaMocks.refresh.mockReset()
   sigmaMocks.zoomIn.mockReset()
@@ -421,13 +431,27 @@ describe('SiteGraphSigma', () => {
     expect(screen.getByText(/page inventory remains available/i)).toBeTruthy()
   })
 
-  it('contains renderer failures without taking down Site Health', async () => {
+  it('owns a render failure instead of blaming the browser for it', async () => {
+    // The map had already drawn in this browser, so "could not start WebGL"
+    // sent the reader to debug their machine for our bug.
     mockWebGl(true)
     sigmaMocks.shouldThrow = true
-    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    render(<SiteGraphSigma nodes={nodes} edges={edges} />)
+
+    expect(await screen.findByText('The map could not be drawn')).toBeTruthy()
+    expect(screen.queryByText('Interactive map unavailable')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+    // The underlying error is logged, never swallowed.
+    expect(consoleError).toHaveBeenCalled()
+  })
+
+  it('still says WebGL is unavailable when the browser genuinely cannot start it', async () => {
+    mockWebGl(false)
     render(<SiteGraphSigma nodes={nodes} edges={edges} />)
 
     expect(await screen.findByText('Interactive map unavailable')).toBeTruthy()
+    expect(screen.queryByText('The map could not be drawn')).toBeNull()
   })
 
   it('distinguishes an empty graph from missing server layout positions', () => {
@@ -453,5 +477,55 @@ describe('SiteGraphSigma', () => {
     )
     expect(screen.getByText('Map could not be built')).toBeTruthy()
     expect(screen.getByText('The map could not be created for this scan. Run a new scan to try again.')).toBeTruthy()
+  })
+
+  it('keeps one renderer alive across repeated nav and footer toggling', async () => {
+    // The live bug: ticking "Show nav and footer links" replaced the map with
+    // the WebGL fallback. Visibility used to be expressed by handing the
+    // renderer a SHORTER edge list, which is a different graph, which made
+    // react-sigma kill and rebuild the whole Sigma instance. Browsers cap live
+    // WebGL contexts, and the rebuild also let a child effect fire against the
+    // instance that had just been killed.
+    mockWebGl(true)
+    const { rerender } = render(
+      <SiteGraphSigma nodes={nodes} edges={edges} showTemplateLinks={false} />,
+    )
+    await waitFor(() => expect(sigmaMocks.refresh).toHaveBeenCalled())
+    expect(sigmaMocks.graphsSeen).toHaveLength(1)
+
+    for (let i = 0; i < 12; i++) {
+      rerender(<SiteGraphSigma nodes={nodes} edges={edges} showTemplateLinks={i % 2 === 0} />)
+    }
+
+    // One graph, therefore one Sigma instance and one WebGL context, however
+    // many times the toggle is flipped.
+    expect(sigmaMocks.graphsSeen).toHaveLength(1)
+    // And the map is still on screen: no fallback of either kind.
+    expect(screen.queryByText('The map could not be drawn')).toBeNull()
+    expect(screen.queryByText('Interactive map unavailable')).toBeNull()
+    expect(sigmaMocks.containerProps?.graph).toBe(sigmaMocks.graphsSeen[0])
+  })
+
+  it('re-reduces on toggle so the edges actually change without a rebuild', async () => {
+    mockWebGl(true)
+    sigmaMocks.cameraRatio = 0.1
+    const { rerender } = render(
+      <SiteGraphSigma nodes={nodes} edges={templateEdges} showTemplateLinks={false} />,
+    )
+    await waitFor(() => expect(sigmaMocks.refresh).toHaveBeenCalled())
+
+    const visibleEdges = () => {
+      const edgeReducer = sigmaMocks.setSetting.mock.calls
+        .filter(([setting]) => setting === 'edgeReducer').at(-1)![1] as (key: string, attributes: never) => Record<string, unknown>
+      const graph = sigmaMocks.containerProps!.graph!
+      return graph.edges().filter((edgeKey: string) => (
+        edgeReducer(edgeKey, graph.getEdgeAttributes(edgeKey) as never).hidden !== true
+      ))
+    }
+
+    expect(visibleEdges()).toEqual(['home-pricing'])
+    rerender(<SiteGraphSigma nodes={nodes} edges={templateEdges} showTemplateLinks />)
+    expect(visibleEdges()).toEqual(['home-pricing', 'nav-pricing'])
+    expect(sigmaMocks.graphsSeen).toHaveLength(1)
   })
 })

@@ -1,5 +1,6 @@
 import {
   Component,
+  type ErrorInfo,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -58,6 +59,12 @@ export interface SiteGraphSigmaProps {
   layoutUnavailableReason?: SiteCrawlGraphLayoutUnavailableReason | null
   /** Server-identified crawl root. Without it no page gets the root marker. */
   rootNodeKey?: string | null
+  /**
+   * Nav and footer links are hidden through the edge reducer, so flipping this
+   * never changes the graph and never rebuilds the renderer. Pages cannot move
+   * as a result, which is what the toggle promises.
+   */
+  showTemplateLinks?: boolean
   selectedNodeKey?: string | null
   onSelectNode?: (node: SiteGraphSigmaNode) => void
   ariaLabel?: string
@@ -161,8 +168,10 @@ class GraphRenderBoundary extends Component<GraphRenderBoundaryProps, GraphRende
     return { failed: true }
   }
 
-  override componentDidCatch(error: Error): void {
-    console.error('[SiteGraphSigma] WebGL renderer failed', error)
+  override componentDidCatch(error: Error, info: ErrorInfo): void {
+    // Surfaced, never swallowed: this is the only record of WHY the map died,
+    // and the state it puts on screen deliberately does not blame the browser.
+    console.error('[SiteGraphSigma] the map failed to render', error, info.componentStack)
   }
 
   override componentDidUpdate(previousProps: GraphRenderBoundaryProps): void {
@@ -221,15 +230,10 @@ function sigmaTheme(element: HTMLElement): SigmaSiteGraphTheme {
     edgeActive: color('edgeActive'),
     label: color('label'),
     background: color('background'),
-    root: color('root'),
   }
 }
 
 /**
- * Sigma 3's circle program cannot stroke a node, so the root's ring is painted
- * on the 2D label canvas above the WebGL layer. The root always carries
- * `forceLabel`, so that canvas always runs for it.
- *
  * The label text is drawn here rather than delegated to Sigma's
  * `drawDiscNodeLabel`: importing `sigma/rendering` for a value touches
  * `WebGL2RenderingContext` at module load, which does not exist during SSR or
@@ -239,17 +243,6 @@ function createSiteGraphNodeLabelRenderer(
   theme: SigmaSiteGraphTheme,
 ): NodeLabelDrawingFunction<SigmaSiteGraphNodeAttributes, SigmaSiteGraphEdgeAttributes> {
   return (context, data, settings) => {
-    const ringColor = (data as Partial<SigmaSiteGraphNodeAttributes>).ringColor
-    if (typeof ringColor === 'string') {
-      context.save()
-      context.strokeStyle = ringColor
-      context.lineWidth = 3
-      context.beginPath()
-      context.arc(data.x, data.y, data.size + 4, 0, Math.PI * 2)
-      context.stroke()
-      context.restore()
-    }
-
     if (!data.label) return
     context.save()
     context.fillStyle = settings.labelColor.color ?? theme.label
@@ -333,6 +326,9 @@ function supportsWebGl(): boolean {
   }
 }
 
+/**
+ * The browser genuinely cannot run the map. Probed once, at mount.
+ */
 function GraphUnavailableState() {
   return (
     <div className="flex h-full min-h-80 items-center justify-center px-6 text-center">
@@ -346,11 +342,31 @@ function GraphUnavailableState() {
   )
 }
 
+/**
+ * WE failed to draw, in a browser that has already proved it can. Saying
+ * "WebGL is unavailable" here sends the reader to debug their machine for our
+ * bug, so this state owns the failure and offers the only useful action.
+ */
+function GraphRenderFailedState({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex h-full min-h-80 items-center justify-center px-6 text-center" role="alert">
+      <div className="max-w-md">
+        <p className="text-sm font-medium text-heading">The map could not be drawn</p>
+        <p className="mt-1 text-sm text-secondary">
+          Something went wrong while drawing this map. The page inventory below is unaffected.
+        </p>
+        <Button variant="secondary" size="sm" className="mt-4" onClick={onRetry}>Try again</Button>
+      </div>
+    </div>
+  )
+}
+
 interface SigmaRuntimeProps {
   reactSigma: ReactSigmaBindings
   graph: SigmaSiteGraph
   theme: SigmaSiteGraphTheme
   selectedNodeKey: string | null
+  showTemplateLinks: boolean
   onSelectNodeKey: (nodeKey: string) => void
   onHoverNode: (hovered: HoveredNode | null) => void
   onCameraReady: (actions: CameraActions | null) => void
@@ -361,6 +377,7 @@ function SigmaRuntime({
   graph,
   theme,
   selectedNodeKey,
+  showTemplateLinks,
   onSelectNodeKey,
   onHoverNode,
   onCameraReady,
@@ -437,11 +454,18 @@ function SigmaRuntime({
     // opened with its zoomed-in treatment: every label drawn and the whole
     // edge mesh visible. Reading live also means pan and zoom never need a
     // full 20k/50k graph refresh to stay correct.
+    // Applying settings to an instance whose graph is not this one would be
+    // writing to a renderer react-sigma is about to replace, or has already
+    // killed: on a graph change React runs THIS effect (a child) between the
+    // container's cleanup and its re-creation. Waiting for the matching
+    // instance is what keeps that ordering from throwing.
+    if (sigma.getGraph() !== graph) return
     const reducers = createSigmaSiteGraphReducers(
       graph,
       focusNodeKey,
       () => sigma.getCamera().getState().ratio,
       theme,
+      showTemplateLinks,
     )
     sigma.setSetting('nodeReducer', reducers.nodeReducer)
     sigma.setSetting('edgeReducer', reducers.edgeReducer)
@@ -456,7 +480,7 @@ function SigmaRuntime({
     // destroyed instance schedules a refresh with no `circle` program. A live
     // instance is overwritten by the next effect, and an unmounted one needs
     // no reset.
-  }, [focusNodeKey, graph, sigma, theme])
+  }, [focusNodeKey, graph, showTemplateLinks, sigma, theme])
 
   return null
 }
@@ -467,6 +491,7 @@ export function SiteGraphSigma({
   layoutState = 'ready',
   layoutUnavailableReason,
   rootNodeKey = null,
+  showTemplateLinks = true,
   selectedNodeKey,
   onSelectNode,
   ariaLabel,
@@ -488,6 +513,8 @@ export function SiteGraphSigma({
   const [searchOpen, setSearchOpen] = useState(false)
   const [activeResultIndex, setActiveResultIndex] = useState(0)
   const [statusMessage, setStatusMessage] = useState('')
+  /** Bumping this remounts the renderer, which is what "Try again" means. */
+  const [renderAttempt, setRenderAttempt] = useState(0)
   const lastControlledFocusRef = useRef<string | null>(null)
   const deferredSearchValue = useDeferredValue(searchValue)
   const effectiveSelectedNodeKey = selectedNodeKey === undefined
@@ -692,7 +719,7 @@ export function SiteGraphSigma({
   }
 
   const activeResult = searchResults.at(activeResultIndex)
-  const fallback = <GraphUnavailableState />
+  const fallback = <GraphRenderFailedState onRetry={() => setRenderAttempt((attempt) => attempt + 1)} />
   const SigmaContainerComponent = reactSigma?.SigmaContainer
 
   return (
@@ -799,12 +826,12 @@ export function SiteGraphSigma({
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {rendererState === 'unavailable' ? fallback : rendererState === 'checking' || !theme || !builtGraph || !sigmaSettings || !reactSigma || !SigmaContainerComponent ? (
+        {rendererState === 'unavailable' ? <GraphUnavailableState /> : rendererState === 'checking' || !theme || !builtGraph || !sigmaSettings || !reactSigma || !SigmaContainerComponent ? (
           <div className="flex h-full min-h-80 items-center justify-center px-6 text-center" role="status">
             <p className="text-sm text-secondary">Preparing the interactive site map...</p>
           </div>
         ) : (
-          <GraphRenderBoundary fallback={fallback} resetToken={builtGraph.graph}>
+          <GraphRenderBoundary fallback={fallback} resetToken={renderAttempt}>
             <div aria-hidden="true" className="absolute inset-0">
               <SigmaContainerComponent
                 graph={builtGraph.graph}
@@ -817,6 +844,7 @@ export function SiteGraphSigma({
                   graph={builtGraph.graph}
                   theme={theme}
                   selectedNodeKey={effectiveSelectedNodeKey}
+                  showTemplateLinks={showTemplateLinks}
                   onSelectNodeKey={handleSigmaSelect}
                   onHoverNode={handleHoverNode}
                   onCameraReady={handleCameraReady}

@@ -160,9 +160,6 @@
      the genuinely hidden pages use. */
   --chart-site-health-resource: #d4d4d8;
   --chart-site-health-redirect: #9aa7b8;
-  /* Ring around the home page. A further Okabe-Ito hue, so it never reads as
-     one of the page states. */
-  --chart-site-health-root: #cc79a7;
   --chart-neutral-text: #a1a1aa;
   --chart-neutral-text-dim: #71717a;
   --chart-neutral-text-faint: #52525b;
@@ -317,7 +314,6 @@
   --chart-site-health-unchecked: #52525b;
   --chart-site-health-resource: #3f3f46;
   --chart-site-health-redirect: #4b5563;
-  --chart-site-health-root: #8c4a72;
   --chart-neutral-text: #52525b;
   --chart-neutral-text-dim: #71717a;
   --chart-neutral-text-faint: #a1a1aa;

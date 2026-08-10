@@ -25,16 +25,6 @@ export const SITE_GRAPH_EDGE_TOKEN = {
   fallback: '#71717a',
 } as const
 
-/**
- * Ring drawn around the crawl root. It is a fifth Okabe-Ito hue so it stays
- * distinguishable from the four state colors, and it clears 3:1 against both
- * graph canvases.
- */
-export const SITE_GRAPH_ROOT_TOKEN = {
-  property: '--chart-site-health-root',
-  fallback: '#cc79a7',
-} as const
-
 /** Smallest dot we will draw; below this a node stops being clickable. */
 export const SITE_GRAPH_NODE_MIN_SIZE = 2.5
 /** Largest dot on a small map. Dense maps scale down from here. */
@@ -96,6 +86,8 @@ export interface SiteGraphSigmaEdge {
   targetNodeKey: string | null
   followable: boolean
   occurrences: number
+  /** Nav/footer chrome. Null when this scan could not tell them apart. */
+  isTemplate?: boolean | null
 }
 
 export interface SigmaSiteGraphTheme {
@@ -111,7 +103,6 @@ export interface SigmaSiteGraphTheme {
   edgeActive: string
   label: string
   background: string
-  root: string
 }
 
 /**
@@ -132,7 +123,6 @@ export const SITE_GRAPH_SIGMA_COLOR_TOKENS = {
   edgeActive: { property: '--chart-neutral-text', fallback: '#a1a1aa' },
   label: { property: '--chart-tooltip-label', fallback: '#e4e4e7' },
   background: { property: '--chart-tooltip-bg', fallback: '#18181b' },
-  root: SITE_GRAPH_ROOT_TOKEN,
 } as const satisfies Record<keyof SigmaSiteGraphTheme, { property: string; fallback: string }>
 
 const SIGMA_HEX_COLOR = /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i
@@ -160,8 +150,6 @@ export interface SigmaSiteGraphNodeAttributes extends Record<string, unknown> {
   zIndex: number
   /** True only for the server-identified crawl root. */
   isRoot: boolean
-  /** Ring color painted around the root node; null for every other page. */
-  ringColor: string | null
 }
 
 export interface SigmaSiteGraphEdgeAttributes extends Record<string, unknown> {
@@ -170,6 +158,7 @@ export interface SigmaSiteGraphEdgeAttributes extends Record<string, unknown> {
   baseColor: string
   followable: boolean
   occurrences: number
+  isTemplate: boolean
   type: 'line'
   zIndex: number
 }
@@ -365,7 +354,6 @@ export function buildSigmaSiteGraph(
       forceLabel: isRoot || node.depth === 0 || node.path.trim() === '/',
       zIndex: isRoot ? 2 : node.depth === 0 ? 1 : 0,
       isRoot,
-      ringColor: isRoot ? theme.root : null,
     })
   }
 
@@ -384,6 +372,7 @@ export function buildSigmaSiteGraph(
       baseColor: theme.edge,
       followable: edge.followable,
       occurrences: edge.occurrences,
+      isTemplate: edge.isTemplate === true,
       type: 'line',
       zIndex: 0,
     })
@@ -441,6 +430,14 @@ export function createSigmaSiteGraphReducers(
    */
   cameraRatio: number | (() => number),
   theme: SigmaSiteGraphTheme,
+  /**
+   * Nav and footer links are hidden by REDUCING them away, never by handing
+   * Sigma a different graph. Rebuilding the graph made react-sigma tear down
+   * and recreate the whole renderer on a checkbox, which is both wasteful and
+   * the source of a crash (a child effect keyed on the graph fired against the
+   * instance the parent had just killed).
+   */
+  showTemplateLinks = true,
 ): SigmaSiteGraphReducers {
   const hasFocus = Boolean(focusNodeKey && graph.hasNode(focusNodeKey))
   const focused = hasFocus ? focusNodeKey : null
@@ -519,6 +516,7 @@ export function createSigmaSiteGraphReducers(
       return { ...attributes, forceLabel: false, label: '' }
     },
     edgeReducer: (edgeKey, attributes) => {
+      if (attributes.isTemplate && !showTemplateLinks) return { ...attributes, hidden: true }
       const overview = readRatio() > SITE_GRAPH_OVERVIEW_CAMERA_RATIO
       const [sourceNodeKey, targetNodeKey] = graph.extremities(edgeKey)
       const highlighted = Boolean(
