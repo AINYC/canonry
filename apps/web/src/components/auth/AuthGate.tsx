@@ -316,7 +316,7 @@ export function AuthGate() {
                 <p className="eyebrow eyebrow-soft">First-time setup</p>
                 <CardTitle>Create a dashboard password</CardTitle>
                 <CardDescription>
-                  Choose a password to protect the Canonry dashboard. You will use this to sign in on future visits.
+                  Choose a password to protect the Canonry dashboard.
                 </CardDescription>
               </CardHeader>
               <CardContent>

@@ -338,9 +338,12 @@ function movedSiteHosts(requestedRootUrl: string | null, effectiveRootUrl: strin
 } | null {
   if (!requestedRootUrl || !effectiveRootUrl) return null
   try {
-    const requested = new URL(requestedRootUrl).host
-    const effective = new URL(effectiveRootUrl).host
-    return requested !== effective ? { requested, effective } : null
+    const requestedUrl = new URL(requestedRootUrl)
+    const effectiveUrl = new URL(effectiveRootUrl)
+    const identity = (url: URL) => url.hostname.toLowerCase().replace(/\.$/, '').replace(/^www\./, '')
+    return identity(requestedUrl) !== identity(effectiveUrl)
+      ? { requested: requestedUrl.host, effective: effectiveUrl.host }
+      : null
   } catch {
     return null
   }

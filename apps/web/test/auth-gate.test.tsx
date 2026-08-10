@@ -66,6 +66,8 @@ describe('AuthGate', () => {
 
       render(<AuthGate />)
       expect(await screen.findByText('Create a dashboard password')).toBeTruthy()
+      expect(screen.getByText('Choose a password to protect the Canonry dashboard.')).toBeTruthy()
+      expect(screen.queryByText(/future visits/i)).toBeNull()
     })
 
     test('renders dashboard when session is authenticated', async () => {

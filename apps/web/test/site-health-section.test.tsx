@@ -460,7 +460,24 @@ test('leads with the map, truthful crawl metrics, and an explicit disabled dead-
   })).toBe(false)
 })
 
-test('shows the requested and effective hosts when the site moves during a scan', () => {
+test('shows the requested and effective hosts when the site moves to a different address', () => {
+  const queryClient = makeClient()
+  seedRun(queryClient, 'run_1', {
+    ...summary('run_1', 42),
+    requestedRootUrl: 'https://citypoint.example/',
+    rootUrl: 'https://new-citypoint.example/',
+  })
+
+  renderSection(queryClient)
+
+  const banner = screen.getByRole('status')
+  expect(within(banner).getByText('Site address changed during this scan.')).not.toBeNull()
+  expect(within(banner).getByText('citypoint.example')).not.toBeNull()
+  expect(within(banner).getByText('new-citypoint.example')).not.toBeNull()
+  expect(within(banner).getByText(/The map and inventory use the new address/)).not.toBeNull()
+})
+
+test('does not warn when the submitted site redirects between apex and www', () => {
   const queryClient = makeClient()
   seedRun(queryClient, 'run_1', {
     ...summary('run_1', 42),
@@ -470,11 +487,20 @@ test('shows the requested and effective hosts when the site moves during a scan'
 
   renderSection(queryClient)
 
-  const banner = screen.getByRole('status')
-  expect(within(banner).getByText('Site address changed during this scan.')).not.toBeNull()
-  expect(within(banner).getByText('citypoint.example')).not.toBeNull()
-  expect(within(banner).getByText('www.citypoint.example')).not.toBeNull()
-  expect(within(banner).getByText(/The map and inventory use the new address/)).not.toBeNull()
+  expect(screen.queryByText('Site address changed during this scan.')).toBeNull()
+})
+
+test('does not warn when the submitted site upgrades from HTTP to HTTPS', () => {
+  const queryClient = makeClient()
+  seedRun(queryClient, 'run_1', {
+    ...summary('run_1', 42),
+    requestedRootUrl: 'http://citypoint.example/',
+    rootUrl: 'https://citypoint.example/',
+  })
+
+  renderSection(queryClient)
+
+  expect(screen.queryByText('Site address changed during this scan.')).toBeNull()
 })
 
 test('uses the server-owned health state for both the inventory badge and selected-page badge', () => {
