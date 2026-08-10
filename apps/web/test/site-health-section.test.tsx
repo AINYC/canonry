@@ -97,7 +97,9 @@ function summary(runId: string, pagesDiscovered: number, complete = true) {
     linkScoreVersion: '1',
     effectiveOptions: { checkDeadLinks: false },
     complete,
-    termination: complete ? null : 'page_limit',
+    // A real `CrawlTerminationReason` from @canonry/aeo-audit, not an invented
+    // token: the plain-word copy is a closed map over that exact vocabulary.
+    termination: complete ? null : 'max-pages',
     detailsAvailable: true,
     counts: {
       pagesDiscovered,
@@ -323,14 +325,14 @@ test('leads with the map, truthful crawl metrics, and an explicit disabled dead-
   expect(screen.getByRole('option', { name: 'Latest scan' })).not.toBeNull()
   expect(screen.getByRole('tab', { name: 'Map' }).getAttribute('aria-selected')).toBe('true')
   expect(screen.getByRole('img', { name: 'Interactive site map' })).not.toBeNull()
-  expect(screen.getByText('Technically eligible')).not.toBeNull()
+  expect(screen.getByText('Indexable')).not.toBeNull()
   expect(screen.getByText('37')).not.toBeNull()
   const internalLinksMetric = screen.getByText('Internal links').parentElement
   expect(internalLinksMetric).not.toBeNull()
   expect(within(internalLinksMetric as HTMLElement).getByText('1')).not.toBeNull()
   expect(within(internalLinksMetric as HTMLElement).queryByText('294')).toBeNull()
   expect(screen.getByText('Dead-link check')).not.toBeNull()
-  expect(screen.getByText('Check off')).not.toBeNull()
+  expect(screen.getByText('Broken links: not checked')).not.toBeNull()
   expect(screen.queryByText('0 broken links')).toBeNull()
 
   const deadLinksKey = getApiV1ProjectsByNameTechnicalAeoDeadLinksQueryKey({
@@ -411,7 +413,7 @@ test('uses the server-owned health state for both the inventory badge and select
   fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
   fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
 
-  expect(screen.getAllByText('Fetch failed')).toHaveLength(2)
+  expect(screen.getAllByText('Broken')).toHaveLength(2)
 })
 
 test('connects a selected graph page score to its exact audit finding in the same run', () => {
@@ -420,7 +422,7 @@ test('connects a selected graph page score to its exact audit finding in the sam
   fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
 
   expect(screen.getByRole('heading', { name: 'Findings and fixes' })).not.toBeNull()
-  expect(screen.getByLabelText('Technical score 61 out of 100')).not.toBeNull()
+  expect(screen.getByLabelText('Score 61 out of 100')).not.toBeNull()
   expect(screen.getByText('The page is too thin.')).not.toBeNull()
   expect(screen.getByText('Add complete answers to the page.')).not.toBeNull()
   expect(queryClient.getQueryState(getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditQueryKey({
@@ -479,8 +481,8 @@ test('keeps every detail read pinned to the selected historical run', () => {
     query: { runId: 'run_old', nodeKey: 'page_services', limit: 100 },
   })
   expect(queryClient.getQueryState(neighborKey)).not.toBeUndefined()
-  expect(screen.getAllByText('Crawl depth')).not.toHaveLength(0)
-  expect(screen.getAllByText('Internal-link importance')).not.toHaveLength(0)
+  expect(screen.getAllByText('Clicks from home')).not.toHaveLength(0)
+  expect(screen.getAllByText('Link importance')).not.toHaveLength(0)
 
   fireEvent.click(screen.getByRole('tab', { name: 'Technical checks' }))
   expect(screen.getByText('Technical checks for run_old').getAttribute('data-integrated')).toBe('true')
@@ -495,10 +497,10 @@ test('defaults to the newest terminal run when that scan is partial', () => {
 
   expect(screen.getByText('Partial scan')).not.toBeNull()
   expect(screen.getByText('18')).not.toBeNull()
-  expect(screen.getByText(/configured page limit/i)).not.toBeNull()
+  expect(screen.getByText(/stopped at the page limit/i)).not.toBeNull()
 
   fireEvent.click(screen.getByRole('tab', { name: 'Technical checks' }))
-  expect(screen.getByText(/configured page limit/i)).not.toBeNull()
+  expect(screen.getByText(/stopped at the page limit/i)).not.toBeNull()
 })
 
 test('keeps dead-link checks off by default when starting a scan', () => {
@@ -554,10 +556,10 @@ test('loads the complete inventory in 200-page batches', async () => {
   renderSection(queryClient)
   fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
 
-  expect(screen.getByText('Loaded 2 of 3 discovered pages.')).not.toBeNull()
+  expect(screen.getByText('Showing 2 of 3 pages found.')).not.toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Load more pages' }))
 
-  await waitFor(() => expect(screen.getByText('Loaded 3 of 3 discovered pages.')).not.toBeNull())
+  await waitFor(() => expect(screen.getByText('Showing 3 of 3 pages found.')).not.toBeNull())
   expect(fetchMock.mock.calls.some(([input]) => {
     const url = input instanceof Request ? input.url : String(input)
     return url.includes('cursor=cursor_2')
@@ -665,7 +667,7 @@ test('queries dead-link details only when the summary says the check ran', async
 
   renderSection(queryClient)
 
-  await waitFor(() => expect(screen.getByText('3 found')).not.toBeNull())
+  await waitFor(() => expect(screen.getByText('Broken links: 3 found')).not.toBeNull())
   expect(fetchMock.mock.calls.some(([input]) => {
     const url = input instanceof Request ? input.url : String(input)
     return url.includes('/technical-aeo/dead-links')
@@ -811,7 +813,7 @@ test('narrows the page list to hidden pages through the server-side filter', () 
   const hiddenInput = {
     client: heyClient,
     path: { name: projectName },
-    query: { runId: 'run_1', indexabilityState: 'noindex', limit: 200, sort: 'path' },
+    query: { runId: 'run_1', healthState: 'hidden', limit: 200, sort: 'path' },
   } as const
   const hiddenResponse = {
     project: projectName,

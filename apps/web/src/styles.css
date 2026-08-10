@@ -2040,6 +2040,17 @@
     @apply px-4 py-3 text-neutral;
   }
 
+  /* Site Health tables read as prose, not as a spec sheet: sentence-case
+     headers at body size instead of the all-caps letterspaced default. Scoped
+     to this one surface so the shared .evidence-table stays as it is. */
+  .site-health-table th {
+    @apply text-sm font-semibold normal-case tracking-normal text-secondary;
+  }
+
+  .site-health-table td {
+    @apply text-sm;
+  }
+
   .evidence-query-cell {
     @apply font-medium text-heading;
   }
