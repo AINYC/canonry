@@ -378,6 +378,10 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
         <div className="page-header-left">
           <h1 className="page-title">Start with a publicly reachable site.</h1>
           <p className="page-subtitle">Canonry will map the pages and internal links it can reach.</p>
+          <p className="mt-2 text-sm text-secondary">
+            <span className="font-medium text-heading">Prefer to work with an agent?</span>{' '}
+            <span>Your agent can set up Canonry for you.</span>
+          </p>
         </div>
       </div>
 

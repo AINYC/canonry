@@ -56,6 +56,7 @@ test('keeps the five-step setup when the runtime launchpad flag is absent', asyn
 
   expect(await screen.findByText('Step 2 of 5')).toBeTruthy()
   expect(screen.queryByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeNull()
+  expect(screen.queryByText('Your agent can set up Canonry for you.')).toBeNull()
 })
 
 test('the legacy rescue query wins over an enabled platform flag', async () => {
@@ -104,8 +105,10 @@ test('auto waits for a successful authoritative empty project list before showin
   await renderSetup()
 
   expect(await screen.findByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeTruthy()
+  expect(screen.getByText('Your agent can set up Canonry for you.')).toBeTruthy()
   expect(screen.getByLabelText('Website address')).toHaveProperty('required', true)
   expect(screen.getByRole('checkbox', { name: 'I approve Canonry to crawl this public site and its internal links.' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Create project and map site' })).toBeTruthy()
   expect(screen.queryByText(/The crawl does not call answer providers/i)).toBeNull()
   expect(screen.queryByText(/Aero is enabled/i)).toBeNull()
   expect(screen.queryByText(/configured agent provider/i)).toBeNull()
