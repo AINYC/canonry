@@ -1313,6 +1313,19 @@ test('expands site sections lazily while preserving the selected run', () => {
   expect(queryClient.getQueryState(getApiV1ProjectsByNameTechnicalAeoStructureInfiniteQueryKey(nestedInput))).not.toBeUndefined()
 })
 
+test('keeps Site sections in the right-hand column at practical desktop widths', () => {
+  const queryClient = makeClient()
+
+  renderSection(queryClient)
+
+  const sections = screen.getByRole('complementary', { name: 'Site sections' })
+  const explorer = sections.parentElement
+  expect(explorer?.id).toBe('site-health-map-explorer')
+  expect(explorer?.className).toContain('md:grid-cols-[minmax(0,1fr)_18rem]')
+  expect(explorer?.className).not.toContain('lg:grid-cols-[minmax(0,1fr)_18rem]')
+  expect(explorer?.lastElementChild).toBe(sections)
+})
+
 test('queries dead-link details only when the summary says the check ran', async () => {
   const queryClient = makeClient()
   const enabledSummary = {

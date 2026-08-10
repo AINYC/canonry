@@ -2067,7 +2067,7 @@ export function SiteHealthSection({
               <p className="mb-3 text-sm text-secondary">{templateDetectionCopy(templateDetection)}</p>
             )}
 
-            <div id="site-health-map-explorer" className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+            <div id="site-health-map-explorer" className="grid gap-4 md:grid-cols-[minmax(0,1fr)_18rem]">
               {graphQuery.isLoading ? (
                 <GraphLoadingState />
               ) : graphQuery.error ? (
