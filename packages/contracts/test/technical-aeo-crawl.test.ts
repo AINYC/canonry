@@ -69,8 +69,12 @@ describe('Technical AEO crawl contracts', () => {
   it('models a bounded graph projection separately from the full crawl', () => {
     expect(siteCrawlGraphResponseSchema.parse({
       project: 'example', hasCrawlData: true, runId: 'run-1', rootNodeKey: 'home',
-      layout: { state: 'ready', version: 'site-health-fa2-v1', computedAt: '2026-08-09T12:00:00.000Z' },
-      totalNodes: 1_284, totalEdges: 18_402,
+      layout: {
+        state: 'ready', version: 'site-health-fa2-v1', computedAt: '2026-08-09T12:00:00.000Z',
+        templateLinksExcluded: true,
+      },
+      templateDetection: 'applied', linkKind: 'all',
+      totalNodes: 1_284, totalEdges: 18_402, totalTemplateEdges: 15_902, totalContentEdges: 2_500,
       nodes: [{
         nodeKey: 'home', url: 'https://example.com/', path: '/', fetchState: 'html',
         indexabilityState: 'indexable', auditState: 'success', auditScore: 94,
@@ -83,14 +87,21 @@ describe('Technical AEO crawl contracts', () => {
       // Root identity is server-owned so the home page never has to be
       // inferred from a path, a depth, or a link score.
       rootNodeKey: 'home',
-      layout: { state: 'ready', version: 'site-health-fa2-v1' },
+      layout: { state: 'ready', version: 'site-health-fa2-v1', templateLinksExcluded: true },
       nodes: [{ nodeKey: 'home', x: 0, y: 0 }],
+      // The nav mesh is counted, never folded into or subtracted from the
+      // total the summary already reports.
+      templateDetection: 'applied',
+      totalEdges: 18_402,
+      totalTemplateEdges: 15_902,
+      totalContentEdges: 2_500,
     })
 
     const empty = siteCrawlGraphResponseSchema.parse({
       project: 'example', hasCrawlData: false, runId: null, rootNodeKey: null,
       layout: { state: 'unavailable', version: null, reason: 'no-crawl' },
-      totalNodes: 0, totalEdges: 0,
+      templateDetection: 'unavailable-legacy-scan', linkKind: 'all',
+      totalNodes: 0, totalEdges: 0, totalTemplateEdges: 0, totalContentEdges: 0,
       nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
     })
     expect(empty.hasCrawlData).toBe(false)
@@ -99,7 +110,8 @@ describe('Technical AEO crawl contracts', () => {
     expect(siteCrawlGraphResponseSchema.parse({
       project: 'example', hasCrawlData: true, runId: 'legacy-run', rootNodeKey: 'home',
       layout: { state: 'unavailable', version: null, reason: 'legacy-snapshot' },
-      totalNodes: 0, totalEdges: 0,
+      templateDetection: 'unavailable-legacy-scan', linkKind: 'all',
+      totalNodes: 0, totalEdges: 0, totalTemplateEdges: 0, totalContentEdges: 0,
       nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
     }).layout).toEqual({ state: 'unavailable', version: null, reason: 'legacy-snapshot' })
   })

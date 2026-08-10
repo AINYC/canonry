@@ -491,6 +491,13 @@ const crawlLimitParameter: OpenApiParameter = {
   schema: { type: 'integer', minimum: 1, maximum: 200 },
 }
 
+const linkKindParameter: OpenApiParameter = {
+  name: 'linkKind',
+  in: 'query',
+  description: 'Restrict links to `content` (excludes nav, header, and footer links) or `template` (only those). Defaults to `all`. A scan whose links were never classified matches neither, which is why every link response also carries `templateDetection`: an empty `content` list means "could not tell" when detection is not `applied`.',
+  schema: { type: 'string', enum: ['all', 'content', 'template'], default: 'all' },
+}
+
 const measurementOverviewSortParameter: OpenApiParameter = {
   name: 'sort',
   in: 'query',
@@ -6106,13 +6113,14 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'get',
     path: '/api/v1/projects/{name}/technical-aeo/graph',
     summary: 'Get a persisted Site Health graph projection',
-    description: 'Returns the deterministic graph projection computed once when the latest complete or selected historical crawl was published. ForceAtlas2 positions and the exact internal-anchor edge sample are persisted, so reads run no layout physics and never rescan the crawl edge table. The response is bounded to 20,000 nodes / 50,000 edges; `layout`, `omittedNodes`, `omittedEdges`, and `sampled` disclose legacy/unavailable layouts and intentional truncation.',
+    description: 'Returns the deterministic graph projection computed once when the latest complete or selected historical crawl was published. ForceAtlas2 positions and the exact internal-anchor edge sample are persisted, so reads run no layout physics and never rescan the crawl edge table. Nav, header, and footer links are excluded from the layout physics but retained in the sample and tagged `isTemplate`, so a viewer can draw them without a refetch and without any node moving. The response is bounded to 20,000 nodes / 50,000 edges; `layout`, `omittedNodes`, `omittedEdges`, and `sampled` disclose legacy/unavailable layouts and intentional truncation, and `templateDetection` says whether template links could be told apart at all.',
     tags: ['technical-aeo'],
     parameters: [
       nameParameter,
       { name: 'runId', in: 'query', description: 'Historical site-audit run ID. Omit for the latest complete crawl.', schema: stringSchema },
       { name: 'maxNodes', in: 'query', description: 'Maximum graph nodes. Defaults to and is capped at 20,000.', schema: { type: 'integer', minimum: 1, maximum: 20_000 } },
       { name: 'maxEdges', in: 'query', description: 'Maximum graph edges. Defaults to and is capped at 50,000.', schema: { type: 'integer', minimum: 1, maximum: 50_000 } },
+      linkKindParameter,
     ],
     responses: {
       200: jsonResponse('Bounded Site Health graph projection returned.', 'SiteCrawlGraphResponseDto'),
@@ -6245,7 +6253,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'get',
     path: '/api/v1/projects/{name}/technical-aeo/internal-links',
     summary: 'List persisted internal crawl links',
-    description: 'Cursor-paged internal edges for the latest or selected crawl. Optional source/target/followability filters remain project-, run-, and attempt-scoped.',
+    description: 'Cursor-paged internal edges for the latest or selected crawl. Optional source/target/followability/link-kind filters remain project-, run-, and attempt-scoped. `total` counts exactly what the requested filters match, and `templateDetection` says whether nav and footer links could be told apart for this scan.',
     tags: ['technical-aeo'],
     parameters: [
       nameParameter,
@@ -6253,6 +6261,7 @@ const routeCatalog: OpenApiOperation[] = [
       { name: 'sourceUrl', in: 'query', description: 'Restrict to a source URL.', schema: stringSchema },
       { name: 'targetUrl', in: 'query', description: 'Restrict to a target URL.', schema: stringSchema },
       { name: 'followable', in: 'query', description: 'Restrict to followable or nofollow link observations.', schema: booleanSchema },
+      linkKindParameter,
       crawlCursorParameter,
       crawlLimitParameter,
     ],
@@ -6272,6 +6281,7 @@ const routeCatalog: OpenApiOperation[] = [
       { name: 'runId', in: 'query', description: 'Historical site-audit run ID. Omit for the latest crawl.', schema: stringSchema },
       { name: 'nodeKey', in: 'query', description: 'Canonical crawl node key.', schema: stringSchema },
       { name: 'url', in: 'query', description: 'Canonical crawl URL.', schema: stringSchema },
+      linkKindParameter,
       { name: 'limit', in: 'query', description: 'Maximum inbound and outbound edges independently. Defaults to 50; maximum 100.', schema: { type: 'integer', minimum: 1, maximum: 100 } },
     ],
     responses: {

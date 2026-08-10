@@ -331,6 +331,214 @@ export function deriveSiteHealthState(input: SiteHealthStateInput): SiteHealthSt
   }
 }
 
+/**
+ * Share of a scan's fetched pages that must carry the same
+ * (target page, anchor text) link before it counts as a nav, header, or footer
+ * link rather than an editorial one.
+ *
+ * Measured on three live sites through the crawl API. Links are bimodal: a
+ * (target, anchor) pair sits on almost every page or on almost none, and the
+ * middle is nearly empty.
+ *
+ * - 18 pages / 46 pairs: 4 pairs at >=90%, 3 at >=70%, 1 at >=50%, 6 at 20-50%,
+ *   32 under 20%.
+ * - 37 pages / 68 pairs: 15 pairs at >=90%, then exactly ONE pair anywhere
+ *   between 20% and 90%.
+ * - 50 pages / 136 pairs: 20 at >=90%, 4 at >=70%, 1 at >=50%, 1 at 20-50%,
+ *   110 under 20%.
+ *
+ * 0.7 sits inside that empty middle on all three, so the exact value is not
+ * load bearing. It is defined here once and imported by the publish path, the
+ * migration backfill, and the tests.
+ */
+export const TEMPLATE_LINK_RATIO_THRESHOLD = 0.7
+
+/**
+ * Fetched pages a scan needs before ubiquity means anything. On a five-page
+ * site every link is on most pages, so the ratio cannot separate a footer from
+ * a body link. Below this floor nothing is marked and the scan reports
+ * `unavailable-too-few-pages` instead of an empty, confident-looking result.
+ */
+export const TEMPLATE_LINK_MIN_FETCHED_PAGES = 15
+
+/**
+ * Whether template-link detection ran for a scan. Consumers must branch on
+ * this: an empty template-link list means "none found" only when detection is
+ * `applied`.
+ *
+ * `unavailable-legacy-scan` covers a scan whose links were never classified,
+ * which is also the honest answer for a response that resolved no crawl at
+ * all. The migration backfills every stored scan, so it survives for rows
+ * written after the migration by an older engine image, the same way
+ * `SiteCrawlPagesFilterState` does.
+ */
+export const siteHealthTemplateDetectionSchema = z.enum([
+  'applied',
+  'unavailable-too-few-pages',
+  'unavailable-legacy-scan',
+])
+export type SiteHealthTemplateDetection = z.infer<typeof siteHealthTemplateDetectionSchema>
+/** Named members so consumers never re-type the literal at a call site. */
+export const SiteHealthTemplateDetections = siteHealthTemplateDetectionSchema.enum
+
+/** The two states detection itself can produce; the third is a read-time fallback. */
+export type SiteHealthTemplateDetectionOutcome = Exclude<
+  SiteHealthTemplateDetection,
+  'unavailable-legacy-scan'
+>
+
+/** Which links a link read returns. `content` excludes nav, header, and footer links. */
+export const siteHealthLinkKindSchema = z.enum(['all', 'content', 'template'])
+export type SiteHealthLinkKind = z.infer<typeof siteHealthLinkKindSchema>
+/** Named members so consumers never re-type the literal at a call site. */
+export const SiteHealthLinkKinds = siteHealthLinkKindSchema.enum
+
+/**
+ * Anchor identity for template detection: case folded, trimmed, and with
+ * internal runs of whitespace collapsed, so the same nav item written across
+ * two source lines is one anchor. An empty result is a real anchor (a logo or
+ * icon link has no text) and is deliberately kept rather than dropped.
+ */
+export function normalizeTemplateAnchorText(anchor: string): string {
+  return anchor.trim().replace(/\s+/gu, ' ').toLowerCase()
+}
+
+/** One persisted link, reduced to exactly what template detection reads. */
+export interface TemplateLinkEdgeInput {
+  edgeKey: string
+  sourceNodeKey: string
+  /** Null when the crawl never resolved the target to a page it observed. */
+  targetNodeKey: string | null
+  anchors: readonly string[]
+}
+
+/**
+ * Distinct source pages per (target page, anchor) pair.
+ *
+ * Kept as an explicit accumulator rather than a one-shot over an edge array so
+ * both writers can stream a crawl's links in batches. The accumulator itself is
+ * bounded by DISTINCT pairs (low hundreds on real sites) and by pages, never by
+ * the million-row link budget.
+ */
+export interface TemplateLinkPairIndex {
+  readonly sourcePagesByPair: Map<string, Set<string>>
+}
+
+export function createTemplateLinkPairIndex(): TemplateLinkPairIndex {
+  return { sourcePagesByPair: new Map() }
+}
+
+/** Unit separator: neither a node key nor normalized anchor text can contain it. */
+function templateLinkPairKey(targetNodeKey: string, normalizedAnchor: string): string {
+  return `${targetNodeKey}\u001F${normalizedAnchor}`
+}
+
+/** Record one batch of links against the index. Safe to call repeatedly. */
+export function observeTemplateLinkEdges(
+  index: TemplateLinkPairIndex,
+  edges: Iterable<TemplateLinkEdgeInput>,
+): void {
+  for (const edge of edges) {
+    if (edge.targetNodeKey == null) continue
+    for (const anchor of edge.anchors) {
+      const key = templateLinkPairKey(edge.targetNodeKey, normalizeTemplateAnchorText(anchor))
+      const sources = index.sourcePagesByPair.get(key)
+      if (sources) sources.add(edge.sourceNodeKey)
+      else index.sourcePagesByPair.set(key, new Set([edge.sourceNodeKey]))
+    }
+  }
+}
+
+/**
+ * Share of fetched pages carrying this link's MOST ubiquitous anchor, or null
+ * when nothing about the link is measurable (an unresolved target, or no
+ * anchor at all).
+ *
+ * The maximum is deliberate. One persisted link row aggregates every anchor
+ * the crawl saw between the same two pages, so a body link that also appears
+ * in the footer arrives as a single row. Taking the maximum keeps that row out
+ * of the content map, which is what the reader asked for; taking the minimum
+ * would leave the whole nav mesh drawn because one page also links the target
+ * editorially.
+ */
+export function templateLinkRatio(
+  index: TemplateLinkPairIndex,
+  pagesFetched: number,
+  edge: TemplateLinkEdgeInput,
+): number | null {
+  if (edge.targetNodeKey == null || edge.anchors.length === 0) return null
+  if (!Number.isFinite(pagesFetched) || pagesFetched <= 0) return null
+  let best: number | null = null
+  for (const anchor of edge.anchors) {
+    const sources = index.sourcePagesByPair.get(
+      templateLinkPairKey(edge.targetNodeKey, normalizeTemplateAnchorText(anchor)),
+    )
+    if (!sources) continue
+    // A source page outside the fetched count (a redirect node, say) must not
+    // push the share above 1.
+    const ratio = Math.min(1, sources.size / pagesFetched)
+    if (best == null || ratio > best) best = ratio
+  }
+  // Six decimals so the persisted number is stable across runs of the same
+  // crawl rather than carrying float noise into an equality assertion.
+  return best == null ? null : Math.round(best * 1_000_000) / 1_000_000
+}
+
+/** The single threshold comparison. An unmeasurable link is never a template link. */
+export function isTemplateLinkRatio(ratio: number | null): boolean {
+  return ratio != null && ratio >= TEMPLATE_LINK_RATIO_THRESHOLD
+}
+
+/** Whether a scan of this size can be classified at all. */
+export function templateLinkDetection(pagesFetched: number): SiteHealthTemplateDetectionOutcome {
+  return Number.isFinite(pagesFetched) && pagesFetched >= TEMPLATE_LINK_MIN_FETCHED_PAGES
+    ? SiteHealthTemplateDetections.applied
+    : SiteHealthTemplateDetections['unavailable-too-few-pages']
+}
+
+export interface TemplateLinkClassification {
+  edgeKey: string
+  isTemplate: boolean
+  /** Null when the link carries no measurable (target, anchor) pair. */
+  templateRatio: number | null
+}
+
+export interface TemplateLinkClassificationResult {
+  detection: SiteHealthTemplateDetectionOutcome
+  edges: TemplateLinkClassification[]
+}
+
+/**
+ * One-shot classification over a whole link set. Deterministic: the result is
+ * ordered by `edgeKey` and depends on nothing but the input, so the same crawl
+ * always classifies the same way.
+ *
+ * Below the page floor this marks NOTHING and says why, rather than returning
+ * an empty template set that would read as "this site has no nav".
+ */
+export function classifyTemplateLinks(input: {
+  pagesFetched: number
+  edges: readonly TemplateLinkEdgeInput[]
+}): TemplateLinkClassificationResult {
+  const ordered = [...input.edges].sort((left, right) => left.edgeKey.localeCompare(right.edgeKey))
+  const detection = templateLinkDetection(input.pagesFetched)
+  if (detection !== SiteHealthTemplateDetections.applied) {
+    return {
+      detection,
+      edges: ordered.map((edge) => ({ edgeKey: edge.edgeKey, isTemplate: false, templateRatio: null })),
+    }
+  }
+  const index = createTemplateLinkPairIndex()
+  observeTemplateLinkEdges(index, ordered)
+  return {
+    detection,
+    edges: ordered.map((edge) => {
+      const ratio = templateLinkRatio(index, input.pagesFetched, edge)
+      return { edgeKey: edge.edgeKey, isTemplate: isTemplateLinkRatio(ratio), templateRatio: ratio }
+    }),
+  }
+}
+
 export const siteCrawlPageSchema = z.object({
   nodeKey: z.string(),
   url: z.string(),
@@ -489,6 +697,14 @@ export const siteCrawlEdgeSchema = z.object({
   followableOccurrences: z.number().int().nonnegative(),
   nofollowOccurrences: z.number().int().nonnegative(),
   anchors: z.array(z.string()).default([]),
+  /**
+   * True when this link repeats across the scan as nav, header, or footer
+   * chrome. Null means the scan never classified its links, which the
+   * response's `templateDetection` explains; it never means "not a nav link".
+   */
+  isTemplate: z.union([z.boolean(), z.null()]),
+  /** Share of fetched pages carrying this link's most ubiquitous anchor. */
+  templateRatio: z.union([z.number(), z.null()]),
 })
 export type SiteCrawlEdgeDto = z.infer<typeof siteCrawlEdgeSchema>
 
@@ -519,6 +735,12 @@ export const siteCrawlGraphEdgeSchema = z.object({
   targetNodeKey: z.string(),
   followable: z.boolean(),
   occurrences: z.number().int().positive(),
+  /**
+   * True for a nav, header, or footer link. Template links are published in
+   * the sample so a viewer can switch them on without a refetch, but they were
+   * excluded from the layout, so switching them on must never move a node.
+   */
+  isTemplate: z.boolean(),
 })
 export type SiteCrawlGraphEdgeDto = z.infer<typeof siteCrawlGraphEdgeSchema>
 
@@ -540,6 +762,14 @@ export const siteCrawlGraphLayoutSchema = z.discriminatedUnion('state', [
     state: z.literal('ready'),
     version: z.string().min(1),
     computedAt: z.string().min(1),
+    /**
+     * True when nav, header, and footer links were kept out of the physics, so
+     * positions describe content structure. False for a scan published before
+     * template detection: its links are classified by the migration backfill
+     * and can still be filtered, but its node positions were computed with the
+     * nav mesh included. Re-running the scan is what updates them.
+     */
+    templateLinksExcluded: z.boolean(),
   }),
   z.object({
     state: z.literal('unavailable'),
@@ -567,10 +797,22 @@ export const siteCrawlGraphResponseSchema = z.object({
    */
   rootNodeKey: z.string().nullable(),
   layout: siteCrawlGraphLayoutSchema,
+  /** Whether nav and footer links could be told apart for this scan. */
+  templateDetection: siteHealthTemplateDetectionSchema,
+  /** Echo of the requested `linkKind`, so a caller knows what `edges` holds. */
+  linkKind: siteHealthLinkKindSchema,
   /** Total canonical pages in the persisted crawl before graph sampling. */
   totalNodes: z.number().int().nonnegative(),
-  /** Total graph-compatible internal anchor edges before graph sampling. */
+  /**
+   * Total graph-compatible internal anchor edges before graph sampling. This
+   * keeps counting EVERY link, whatever `linkKind` was requested, so the
+   * content and template counts below split a number that never moved.
+   */
   totalEdges: z.number().int().nonnegative(),
+  /** Share of `totalEdges` classified as nav, header, or footer links. */
+  totalTemplateEdges: z.number().int().nonnegative(),
+  /** `totalEdges - totalTemplateEdges`. Equals `totalEdges` when detection is unavailable. */
+  totalContentEdges: z.number().int().nonnegative(),
   nodes: z.array(siteCrawlGraphNodeSchema).default([]),
   edges: z.array(siteCrawlGraphEdgeSchema).default([]),
   omittedNodes: z.number().int().nonnegative(),
@@ -748,8 +990,13 @@ export const siteCrawlInternalLinksResponseSchema = z.object({
   project: z.string(),
   hasCrawlData: z.boolean(),
   runId: z.string().nullable(),
+  /** Total links matching every requested filter, `linkKind` included. */
   total: z.number().int().nonnegative(),
   nextCursor: z.string().nullable(),
+  /** Whether nav and footer links could be told apart for this scan. */
+  templateDetection: siteHealthTemplateDetectionSchema,
+  /** Echo of the requested `linkKind`, so a caller knows what `total` counts. */
+  linkKind: siteHealthLinkKindSchema,
   edges: z.array(siteCrawlEdgeSchema).default([]),
 })
 export type SiteCrawlInternalLinksResponseDto = z.infer<typeof siteCrawlInternalLinksResponseSchema>
@@ -760,6 +1007,10 @@ export const siteCrawlNeighborsResponseSchema = z.object({
   runId: z.string().nullable(),
   nodeKey: z.string().nullable(),
   url: z.string().nullable(),
+  /** Whether nav and footer links could be told apart for this scan. */
+  templateDetection: siteHealthTemplateDetectionSchema,
+  /** Echo of the requested `linkKind`, so a caller knows what the lists hold. */
+  linkKind: siteHealthLinkKindSchema,
   inbound: z.array(siteCrawlEdgeSchema).default([]),
   outbound: z.array(siteCrawlEdgeSchema).default([]),
   inboundTruncated: z.boolean(),

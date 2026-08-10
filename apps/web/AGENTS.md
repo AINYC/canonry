@@ -22,7 +22,7 @@ constraints; `DESIGN.md` owns hierarchy, copy, typography, and control choices.
 | `src/components/shared/ChartPrimitives.tsx` | Recharts wrapper — chart components and styling constants |
 | `src/components/shared/ToneBadge.tsx` | Status indicator component with tone colors |
 | `src/components/project/` | Project page section components (GscSection, TrafficSection, `SiteHealthSection`, etc.) |
-| `src/components/project/SiteGraphSigma.tsx` / `site-graph-sigma.ts` | Site Health WebGL map and its Graphology adapter; consumes server-published coordinates only |
+| `src/components/project/SiteGraphSigma.tsx` / `site-graph-sigma.ts` | Site Health WebGL map and its Graphology adapter; consumes server-published coordinates only. The map defaults to content links and hides nav/header/footer links; the toggle changes only which edges are DRAWN, never the positions, which the server laid out without them. When `templateDetection` is not `applied` the toggle is disabled with plain-word copy and nothing is hidden, because the per-link flag proves nothing then. |
 | `src/queries/` | TanStack Query hooks for data fetching |
 | `src/view-models.ts` | Data transformation from API DTOs to display format |
 

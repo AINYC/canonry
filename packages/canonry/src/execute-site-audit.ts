@@ -42,6 +42,7 @@ import {
   persistSiteCrawlGraphLayout,
   prepareSiteCrawlGraphLayout,
 } from './site-crawl-graph-layout.js'
+import { classifySiteCrawlTemplateLinks } from './site-crawl-template-links.js'
 
 const log = createLogger('SiteAudit')
 
@@ -604,6 +605,22 @@ export async function executeSiteAudit(
       throw emptyCompleteCrawlError(crawlSummary.rootUrl, crawlSummary.finalRootUrl, crawlSummary.pagesObserved)
     }
 
+    // Classification must precede layout: the layout excludes template links
+    // from its physics and the sampling query orders by the same column. It is
+    // a whole-crawl decision (a link's ubiquity is only known once every page
+    // has been fetched), so it cannot happen inside the per-event writes.
+    const templateLinks = classifySiteCrawlTemplateLinks(
+      db,
+      { projectId, runId, attemptId },
+      crawlSummary.pagesFetched,
+    )
+    log.info('template-links', {
+      runId,
+      projectId,
+      detection: templateLinks.detection,
+      templateEdges: templateLinks.templateEdgeCount,
+    })
+
     const graphLayout = await prepareSiteCrawlGraphLayout(db, {
       projectId,
       runId,
@@ -640,6 +657,7 @@ export async function executeSiteAudit(
           failureCode: 'layout-error',
           totalNodes: graphLayout.totalNodes,
           totalEdges: graphLayout.totalEdges,
+          totalTemplateEdges: graphLayout.totalTemplateEdges,
           nodeCount: 0,
           edgeCount: 0,
           nodes: [],
@@ -723,6 +741,7 @@ export async function executeSiteAudit(
         deadLinkState: report.deadLinks.state,
         deadLinksChecked,
         deadLinksFound,
+        templateDetection: templateLinks.detection,
         createdAt: finishedAt,
         updatedAt: finishedAt,
       }).run()

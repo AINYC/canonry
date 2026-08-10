@@ -955,12 +955,17 @@ const technicalAeoStructureInputSchema = z.object({
   limit: z.number().int().positive().max(100).optional(),
 })
 
+const linkKindSchema = z.enum(['all', 'content', 'template']).optional().describe(
+  'Restrict to content links (excludes nav, header, and footer links) or to template links only. Defaults to all. Check templateDetection before reading an empty content list as a real zero.',
+)
+
 const technicalAeoInternalLinksInputSchema = z.object({
   project: projectNameSchema,
   runId: runIdSchema.optional(),
   sourceUrl: z.string().url().optional(),
   targetUrl: z.string().url().optional(),
   followable: z.boolean().optional(),
+  linkKind: linkKindSchema,
   cursor: z.string().min(1).optional().describe('Opaque cursor from the previous internal-links result.'),
   limit: z.number().int().positive().max(200).optional(),
 })
@@ -970,6 +975,7 @@ const technicalAeoLinkNeighborsInputSchema = z.object({
   runId: runIdSchema.optional(),
   nodeKey: z.string().min(1).optional(),
   url: z.string().url().optional(),
+  linkKind: linkKindSchema,
   limit: z.number().int().positive().max(100).optional(),
 }).refine((value) => Boolean(value.nodeKey || value.url), {
   message: 'Provide nodeKey or url.',
@@ -2930,7 +2936,7 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_technical_aeo_internal_links',
     title: 'List Technical AEO internal links',
-    description: 'Read a bounded, cursor-paged list of persisted internal crawl edges. Filter by source URL, target URL, or followability. Use the neighbors tool for one page rather than loading a graph.',
+    description: 'Read a bounded, cursor-paged list of persisted internal crawl edges. Filter by source URL, target URL, followability, or link kind. Nav, header, and footer links are marked isTemplate; templateDetection reports whether that classification ran, so an empty content-only list is not evidence of no content links. Use the neighbors tool for one page rather than loading a graph.',
     access: 'read',
     tier: 'monitoring',
     inputSchema: technicalAeoInternalLinksInputSchema,
@@ -2941,6 +2947,7 @@ export const canonryMcpTools = [
       sourceUrl: input.sourceUrl,
       targetUrl: input.targetUrl,
       followable: input.followable,
+      linkKind: input.linkKind,
       cursor: input.cursor,
       limit: input.limit,
     }),
@@ -2948,7 +2955,7 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_technical_aeo_link_neighbors',
     title: 'Get Technical AEO page link neighbors',
-    description: 'Read bounded inbound and outbound internal links for exactly one crawl node, selected by nodeKey or URL. It returns independent truncation flags for inbound and outbound edges, not a transitive traversal.',
+    description: 'Read bounded inbound and outbound internal links for exactly one crawl node, selected by nodeKey or URL. Filter by link kind to separate editorial links from nav, header, and footer links. It returns independent truncation flags for inbound and outbound edges, not a transitive traversal.',
     access: 'read',
     tier: 'monitoring',
     inputSchema: technicalAeoLinkNeighborsInputSchema,
@@ -2958,6 +2965,7 @@ export const canonryMcpTools = [
       runId: input.runId,
       nodeKey: input.nodeKey,
       url: input.url,
+      linkKind: input.linkKind,
       limit: input.limit,
     }),
   }),

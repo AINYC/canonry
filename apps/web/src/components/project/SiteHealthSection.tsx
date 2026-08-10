@@ -15,6 +15,7 @@ import {
   SITE_CRAWL_GRAPH_MAX_NODES,
   SiteCrawlIndexabilityReasons,
   SiteHealthStates,
+  TEMPLATE_LINK_MIN_FETCHED_PAGES,
   type SiteCrawlEdgeDto,
   type SiteCrawlGraphNodeDto,
   type SiteCrawlIndexabilityReason,
@@ -25,6 +26,7 @@ import {
   type SiteCrawlTermination,
   type SiteHealthScanDto,
   type SiteHealthState,
+  type SiteHealthTemplateDetection,
 } from '@ainyc/canonry-contracts'
 import {
   getApiV1ProjectsByNameTechnicalAeoCrawlOptions,
@@ -39,6 +41,7 @@ import {
 } from '@ainyc/canonry-api-client/react-query'
 
 import { heyClient, isEmbed } from '../../api.js'
+import { cn } from '../../lib/utils.js'
 import { useTriggerSiteAudit } from '../../queries/mutations.js'
 import type { MetricTone } from '../../view-models.js'
 import { SiteGraphSigma } from './SiteGraphSigma.js'
@@ -179,6 +182,11 @@ function metricValue(value: number | null | undefined): string {
   return value == null ? 'Not available' : numberFormatter.format(value)
 }
 
+/** Counted nouns in map copy. "1 content links" reads like a bug report. */
+function countedLinks(count: number, noun: string): string {
+  return `${numberFormatter.format(count)} ${noun}${count === 1 ? '' : 's'}`
+}
+
 function movedSiteHosts(requestedRootUrl: string | null, effectiveRootUrl: string | null): {
   requested: string
   effective: string
@@ -239,6 +247,27 @@ function terminationCopy(termination: string | null): string {
   // An unrecognized reason is shown as-is: it is the only thing the crawler
   // told us about why the scan stopped.
   return TERMINATION_LABELS.get(termination) ?? `This scan stopped early: ${termination}.`
+}
+
+/**
+ * Why the nav and footer toggle is off the table for this scan. A closed
+ * Record over the contract's own vocabulary, so a new state is a compile error
+ * rather than a silently missing explanation. `applied` has no copy because
+ * the control works: the map says what it is showing instead.
+ */
+const TEMPLATE_DETECTION_COPY: Record<Exclude<SiteHealthTemplateDetection, 'applied'>, string> = {
+  'unavailable-too-few-pages': `This scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages. On a site that small every link is on most pages, so nav and footer links cannot be told apart from the rest.`,
+  'unavailable-legacy-scan': 'This scan ran before nav and footer links were separated. Run a new scan to split them out.',
+}
+
+/** Persisted rows stay string-backed, so the lookup must admit a miss. */
+const TEMPLATE_DETECTION_LABELS = new Map<string, string>(Object.entries(TEMPLATE_DETECTION_COPY))
+
+function templateDetectionCopy(detection: SiteHealthTemplateDetection | null): string {
+  if (detection === null || detection === 'applied') return ''
+  // A value outside the union can still arrive on the wire. Fall back to the
+  // "run a new scan" copy, which is true of any scan we cannot classify.
+  return TEMPLATE_DETECTION_LABELS.get(detection) ?? TEMPLATE_DETECTION_COPY['unavailable-legacy-scan']
 }
 
 /**
@@ -785,6 +814,13 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
   const [checkDeadLinks, setCheckDeadLinks] = useState(false)
   const [inventoryFilter, setInventoryFilter] = useState<InventoryFilterId>('all')
+  /**
+   * The map opens on content links only. Nav and footer links repeat on every
+   * page, so drawing them buries the structure this view exists to show. The
+   * server sends both kinds tagged, so this only changes what is DRAWN: node
+   * positions were computed without template links and never move.
+   */
+  const [showTemplateLinks, setShowTemplateLinks] = useState(false)
   const embedded = isEmbed()
   const runMutation = useTriggerSiteAudit()
 
@@ -868,6 +904,31 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
   const internalLinkCount = graphQuery.data?.layout.state === 'ready'
     ? graphQuery.data.totalEdges
     : null
+  const graphEdges = graphQuery.data?.edges ?? []
+  // Counted from the edges actually drawn, not from a site-wide total, so the
+  // legend describes THIS map rather than a number the reader cannot see.
+  const templateEdgeCount = useMemo(
+    () => graphEdges.filter((edge) => edge.isTemplate).length,
+    [graphEdges],
+  )
+  const contentEdgeCount = graphEdges.length - templateEdgeCount
+  const templateDetection = graphQuery.data?.templateDetection ?? null
+  const templateFilterUnavailable = templateDetection !== 'applied'
+  // When detection did not run, the per-link flag proves nothing, so nothing
+  // is hidden. Hiding on an untrustworthy flag would quietly drop real links
+  // from the map and the copy would be a lie.
+  const visibleGraphEdges = useMemo(
+    () => showTemplateLinks || templateFilterUnavailable
+      ? graphEdges
+      : graphEdges.filter((edge) => !edge.isTemplate),
+    [graphEdges, showTemplateLinks, templateFilterUnavailable],
+  )
+  // A scan published before template detection still has classified links (the
+  // migration backfills them) but its stored positions were computed with the
+  // nav mesh included. Say so rather than implying the map already reflects
+  // content structure.
+  const staleTemplateLayout = graphQuery.data?.layout.state === 'ready'
+    && !graphQuery.data.layout.templateLinksExcluded
   const inventoryPages = useMemo(
     () => pagesQuery.data?.pages.flatMap((page) => page.pages) ?? [],
     [pagesQuery.data],
@@ -1279,6 +1340,44 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
               )}
             </div>
 
+            {graphQuery.data?.layout.state === 'ready' && (
+              <div className="mb-3 flex flex-col gap-1.5 rounded-lg border border-default bg-surface-subtle px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-secondary" data-testid="site-map-link-counts">
+                  {templateFilterUnavailable
+                    ? `Showing all ${countedLinks(graphEdges.length, 'link')} on this map.`
+                    : showTemplateLinks
+                      ? `Showing ${countedLinks(contentEdgeCount, 'content link')} and ${countedLinks(templateEdgeCount, 'nav and footer link')}.`
+                      : `Showing ${countedLinks(contentEdgeCount, 'content link')}. ${countedLinks(templateEdgeCount, 'nav and footer link')} hidden.`}
+                  {staleTemplateLayout && !templateFilterUnavailable && (
+                    <span className="mt-1 block text-xs text-muted">
+                      Page positions on this map were set before nav and footer links were separated. Run a new scan to update them.
+                    </span>
+                  )}
+                </p>
+                <label
+                  className={cn(
+                    'flex shrink-0 items-center gap-2 text-sm',
+                    templateFilterUnavailable ? 'cursor-not-allowed text-muted' : 'cursor-pointer text-heading',
+                  )}
+                  title={templateFilterUnavailable
+                    ? templateDetectionCopy(templateDetection)
+                    : 'Nav and footer links are drawn on top. Pages do not move, because the map was laid out from content links.'}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showTemplateLinks && !templateFilterUnavailable}
+                    disabled={templateFilterUnavailable}
+                    onChange={(event) => setShowTemplateLinks(event.target.checked)}
+                    className="size-4 rounded border-base accent-mono-200 focus:ring-2 focus:ring-mono-400"
+                  />
+                  Show nav and footer links
+                </label>
+              </div>
+            )}
+            {templateFilterUnavailable && graphQuery.data?.layout.state === 'ready' && (
+              <p className="mb-3 text-sm text-secondary">{templateDetectionCopy(templateDetection)}</p>
+            )}
+
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
               {graphQuery.isLoading ? (
                 <GraphLoadingState />
@@ -1289,13 +1388,13 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
               ) : (
                 <SiteGraphSigma
                   nodes={graphQuery.data?.nodes ?? []}
-                  edges={graphQuery.data?.edges ?? []}
+                  edges={visibleGraphEdges}
                   layoutState={graphQuery.data?.layout.state ?? 'unavailable'}
                   layoutUnavailableReason={graphQuery.data?.layout.state === 'unavailable' ? graphQuery.data.layout.reason : null}
                   rootNodeKey={graphQuery.data?.rootNodeKey ?? null}
                   selectedNodeKey={effectiveSelectedNodeKey}
                   onSelectNode={(node) => setSelectedNodeKey(node.nodeKey)}
-                  ariaLabel={`Interactive site map showing ${metricValue(graphQuery.data?.nodes.length ?? 0)} pages and ${metricValue(graphQuery.data?.edges.length ?? 0)} internal links`}
+                  ariaLabel={`Interactive site map showing ${metricValue(graphQuery.data?.nodes.length ?? 0)} pages and ${metricValue(visibleGraphEdges.length)} internal links`}
                 />
               )}
 

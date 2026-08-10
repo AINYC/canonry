@@ -38,15 +38,23 @@ vi.mock('../src/components/project/TechnicalAeoSection.js', () => ({
 vi.mock('../src/components/project/SiteGraphSigma.js', () => ({
   SiteGraphSigma: ({
     nodes,
+    edges,
     onSelectNode,
   }: {
-    nodes: Array<{ nodeKey: string; path: string }>
-    onSelectNode?: (node: { nodeKey: string; path: string }) => void
+    nodes: Array<{ nodeKey: string; path: string; x: number; y: number }>
+    edges?: Array<{ edgeKey: string }>
+    onSelectNode?: (node: { nodeKey: string; path: string; x: number; y: number }) => void
   }) => (
     <div role="img" aria-label="Interactive site map">
       {nodes.map((node) => (
         <button key={node.nodeKey} type="button" onClick={() => onSelectNode?.(node)}>{node.path}</button>
       ))}
+      {/* What the renderer was actually handed, so a test can assert which
+          links are drawn and that positions never move. */}
+      <span data-testid="site-map-edge-keys">{(edges ?? []).map((edge) => edge.edgeKey).join(',')}</span>
+      <span data-testid="site-map-node-positions">
+        {nodes.map((node) => `${node.nodeKey}:${node.x},${node.y}`).join(';')}
+      </span>
     </div>
   ),
 }))
@@ -166,7 +174,31 @@ const contactPage = {
   depth: 1,
 }
 
-function seedRun(queryClient: QueryClient, runId: string, crawlSummary = summary(runId, 42)) {
+const contentEdge = {
+  edgeKey: 'home-services',
+  sourceNodeKey: 'page_home',
+  targetNodeKey: 'page_services',
+  followable: true,
+  occurrences: 2,
+  isTemplate: false,
+}
+
+/** A nav link: the same anchor to the same page from every page on the site. */
+const templateEdge = {
+  edgeKey: 'nav-contact',
+  sourceNodeKey: 'page_services',
+  targetNodeKey: 'page_contact',
+  followable: true,
+  occurrences: 1,
+  isTemplate: true,
+}
+
+function seedRun(
+  queryClient: QueryClient,
+  runId: string,
+  crawlSummary = summary(runId, 42),
+  graphOverrides: Record<string, unknown> = {},
+) {
   queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
     client: heyClient,
     path: { name: projectName },
@@ -185,17 +217,23 @@ function seedRun(queryClient: QueryClient, runId: string, crawlSummary = summary
       state: 'ready',
       version: 'site-health-fa2-v1',
       computedAt: '2026-08-08T18:16:33.000Z',
+      templateLinksExcluded: true,
     },
+    templateDetection: 'applied',
+    linkKind: 'all',
     totalNodes: 2,
     totalEdges: 1,
+    totalTemplateEdges: 0,
+    totalContentEdges: 1,
     nodes: [
       { ...homePage, x: 0, y: 0 },
       { ...servicesPage, x: 1, y: 1 },
     ],
-    edges: [],
+    edges: [contentEdge],
     omittedNodes: 0,
     omittedEdges: 0,
     sampled: false,
+    ...graphOverrides,
   })
   const pagesInput = {
     client: heyClient,
@@ -1125,4 +1163,86 @@ test('leads the site sections list with the root page, which is in no folder', a
   await waitFor(() => expect(
     screen.getByRole('heading', { name: '/', level: 3 }),
   ).not.toBeNull())
+})
+
+/** A map with both kinds of link, and a page reachable only through the nav. */
+function seedTemplateLinkGraph(overrides: Record<string, unknown> = {}) {
+  const queryClient = makeClient()
+  seedRun(queryClient, 'run_1', summary('run_1', 42), {
+    totalEdges: 2,
+    totalTemplateEdges: 1,
+    totalContentEdges: 1,
+    nodes: [
+      { ...homePage, x: 0, y: 0 },
+      { ...servicesPage, x: 1, y: 1 },
+      { ...contactPage, x: -1, y: 1 },
+    ],
+    edges: [contentEdge, templateEdge],
+    ...overrides,
+  })
+  return queryClient
+}
+
+test('the map opens on content links only and says what it is hiding', () => {
+  renderSection(seedTemplateLinkGraph())
+
+  const toggle = screen.getByRole('checkbox', { name: 'Show nav and footer links' }) as HTMLInputElement
+  expect(toggle.checked).toBe(false)
+  expect(toggle.disabled).toBe(false)
+  // Real numbers from the response, and the hidden links are named rather
+  // than silently dropped.
+  expect(screen.getByTestId('site-map-link-counts').textContent)
+    .toContain('Showing 1 content link. 1 nav and footer link hidden.')
+
+  // Only the content link is drawn.
+  expect(screen.getByTestId('site-map-edge-keys').textContent).toBe('home-services')
+})
+
+test('switching nav and footer links on draws them without moving a page', () => {
+  renderSection(seedTemplateLinkGraph())
+
+  const positionsBefore = screen.getByTestId('site-map-node-positions').textContent
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show nav and footer links' }))
+
+  expect(screen.getByTestId('site-map-edge-keys').textContent).toBe('home-services,nav-contact')
+  expect(screen.getByTestId('site-map-link-counts').textContent)
+    .toContain('Showing 1 content link and 1 nav and footer link.')
+  // The layout was published without template links, so drawing them is a
+  // rendering change only: nothing re-runs and no page moves.
+  expect(screen.getByTestId('site-map-node-positions').textContent).toBe(positionsBefore)
+})
+
+test('disables the toggle in plain words when a scan is too small to classify', () => {
+  renderSection(seedTemplateLinkGraph({
+    templateDetection: 'unavailable-too-few-pages',
+    totalTemplateEdges: 0,
+    totalContentEdges: 2,
+  }))
+
+  const toggle = screen.getByRole('checkbox', { name: 'Show nav and footer links' }) as HTMLInputElement
+  expect(toggle.disabled).toBe(true)
+  expect(screen.getByText(/This scan found fewer than 15 pages/)).not.toBeNull()
+  // It must not claim a split it could not make, so every link is drawn.
+  expect(screen.getByTestId('site-map-link-counts').textContent).toContain('Showing all 2 links on this map.')
+  expect(screen.getByTestId('site-map-edge-keys').textContent).toBe('home-services,nav-contact')
+})
+
+test('disables the toggle and explains a scan that predates the split', () => {
+  renderSection(seedTemplateLinkGraph({ templateDetection: 'unavailable-legacy-scan' }))
+
+  expect((screen.getByRole('checkbox', { name: 'Show nav and footer links' }) as HTMLInputElement).disabled).toBe(true)
+  expect(screen.getByText(/ran before nav and footer links were separated/)).not.toBeNull()
+})
+
+test('says when a map\'s page positions still include the nav mesh', () => {
+  renderSection(seedTemplateLinkGraph({
+    layout: {
+      state: 'ready',
+      version: 'site-health-fa2-v2',
+      computedAt: '2026-08-08T18:16:33.000Z',
+      templateLinksExcluded: false,
+    },
+  }))
+
+  expect(screen.getByText(/Page positions on this map were set before nav and footer links were separated/)).not.toBeNull()
 })

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { and, asc, count, desc, eq, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, isNotNull, isNull, lt, or, sql, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/sqlite-core'
 import type { FastifyInstance } from 'fastify'
 import {
@@ -32,6 +32,10 @@ import {
   siteAuditRunRequestSchema,
   siteCrawlAuditFactorSchema,
   siteCrawlCriticalDefectSchema,
+  siteHealthLinkKindSchema,
+  siteHealthTemplateDetectionSchema,
+  SiteHealthLinkKinds,
+  SiteHealthTemplateDetections,
   validationError,
   type RunStatus,
   type SiteAuditPageDto,
@@ -51,8 +55,10 @@ import {
   type SiteCrawlSummaryDto,
   type SiteHealthChangeRecordDto,
   type SiteHealthChangesResponseDto,
+  type SiteHealthLinkKind,
   type SiteHealthPathResponseDto,
   type SiteHealthState,
+  type SiteHealthTemplateDetection,
   type SiteHealthScansResponseDto,
   type SiteHealthSubgraphRelation,
   type SiteHealthSubgraphResponseDto,
@@ -281,7 +287,45 @@ function mapCrawlEdge(row: typeof siteCrawlEdges.$inferSelect): SiteCrawlEdgeDto
     followableOccurrences: row.followableOccurrences,
     nofollowOccurrences: row.nofollowOccurrences,
     anchors: row.anchors,
+    isTemplate: row.isTemplate,
+    templateRatio: row.templateRatio,
   }
+}
+
+/**
+ * Whether nav/footer detection ran for this scan.
+ *
+ * A persisted value outside the closed set (a row written by a newer engine
+ * image, say) is reported as unclassified rather than echoed raw: a consumer
+ * keys copy off these values, and an unknown one must not read as `applied`.
+ */
+function templateDetectionOf(value: string | null): SiteHealthTemplateDetection {
+  const parsed = siteHealthTemplateDetectionSchema.safeParse(value)
+  return parsed.success ? parsed.data : SiteHealthTemplateDetections['unavailable-legacy-scan']
+}
+
+/** Closed vocabulary: an unknown value is a request error, never an empty list. */
+function parseLinkKind(value: unknown): SiteHealthLinkKind {
+  if (value === undefined || value === '') return SiteHealthLinkKinds.all
+  const allowed = siteHealthLinkKindSchema.safeParse(value)
+  if (!allowed.success) {
+    throw validationError(`"linkKind" must be one of: ${siteHealthLinkKindSchema.options.join(', ')}`)
+  }
+  return allowed.data
+}
+
+/**
+ * The `linkKind` filter, or undefined for `all`.
+ *
+ * A scan whose links were never classified holds NULL, and NULL is not `false`
+ * in SQL, so an unclassified scan correctly matches NEITHER `content` nor
+ * `template`. The response's `templateDetection` is what tells the caller that
+ * the resulting empty list means "could not tell", not "none".
+ */
+function linkKindFilter(linkKind: SiteHealthLinkKind): SQL | undefined {
+  if (linkKind === SiteHealthLinkKinds.content) return eq(siteCrawlEdges.isTemplate, false)
+  if (linkKind === SiteHealthLinkKinds.template) return eq(siteCrawlEdges.isTemplate, true)
+  return undefined
 }
 
 /** Distinct aliases bound graph edges to the caller's retained node ranks. */
@@ -404,6 +448,12 @@ const PAGE_CHANGE_FIELDS = [
   'inboundOccurrences', 'outboundOccurrences', 'linkScoreRaw', 'linkScoreNormalized',
 ] as const satisfies ReadonlyArray<keyof SiteCrawlPageDto>
 
+/**
+ * `isTemplate` and `templateRatio` are deliberately absent. Both are derived
+ * from the WHOLE scan, so adding one page shifts every ratio and comparing a
+ * pre-detection scan to a classified one would mark every link changed. That
+ * would drown the real link additions and removals this diff exists to show.
+ */
 const LINK_CHANGE_FIELDS = [
   'sourceNodeKey', 'sourceUrl', 'targetNodeKey', 'targetUrl', 'relation', 'internal',
   'followable', 'occurrences', 'followableOccurrences', 'nofollowOccurrences', 'anchors',
@@ -763,25 +813,33 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
   // reads only scan the bounded 20k/50k derived tables.
   app.get<{
     Params: { name: string }
-    Querystring: { runId?: string; maxNodes?: string; maxEdges?: string }
+    Querystring: { runId?: string; maxNodes?: string; maxEdges?: string; linkKind?: string }
   }>('/projects/:name/technical-aeo/graph', async (request): Promise<SiteCrawlGraphResponseDto> => {
     const project = resolveProject(app.db, request.params.name)
+    const linkKind = parseLinkKind(request.query.linkKind)
     const target = resolveCrawl(project.id, request.query.runId)
     if (!target) {
       assertKnownAuditRun(project.id, request.query.runId)
       return {
         project: project.name, hasCrawlData: false, runId: null, rootNodeKey: null,
         layout: { state: 'unavailable', version: null, reason: 'no-crawl' },
-        totalNodes: 0, totalEdges: 0, nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
+        // Nothing was classified because nothing was crawled.
+        templateDetection: SiteHealthTemplateDetections['unavailable-legacy-scan'],
+        linkKind,
+        totalNodes: 0, totalEdges: 0, totalTemplateEdges: 0, totalContentEdges: 0,
+        nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
       }
     }
 
     const snapshot = target.snapshot
+    const templateDetection = templateDetectionOf(snapshot.templateDetection)
     if (!snapshot.detailsAvailable || !snapshot.attemptId) {
       return {
         project: project.name, hasCrawlData: true, runId: snapshot.runId, rootNodeKey: null,
         layout: { state: 'unavailable', version: null, reason: 'details-unavailable' },
-        totalNodes: 0, totalEdges: 0, nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
+        templateDetection, linkKind,
+        totalNodes: 0, totalEdges: 0, totalTemplateEdges: 0, totalContentEdges: 0,
+        nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
       }
     }
     // The home page is the one node an operator always needs to find, so its
@@ -800,7 +858,9 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       return {
         project: project.name, hasCrawlData: true, runId: snapshot.runId, rootNodeKey,
         layout: { state: 'unavailable', version: null, reason: 'legacy-snapshot' },
-        totalNodes: 0, totalEdges: 0, nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
+        templateDetection, linkKind,
+        totalNodes: 0, totalEdges: 0, totalTemplateEdges: 0, totalContentEdges: 0,
+        nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
       }
     }
     if (persistedLayout.state !== 'ready' || !persistedLayout.layoutVersion) {
@@ -812,7 +872,12 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
           state: 'unavailable', version: null,
           reason: persistedLayout.failureCode === 'empty-crawl' ? 'empty-crawl' : 'layout-failed',
         },
-        totalNodes, totalEdges, nodes: [], edges: [], omittedNodes: totalNodes, omittedEdges: totalEdges,
+        templateDetection, linkKind,
+        totalNodes,
+        totalEdges,
+        totalTemplateEdges: persistedLayout.totalTemplateEdges,
+        totalContentEdges: Math.max(0, totalEdges - persistedLayout.totalTemplateEdges),
+        nodes: [], edges: [], omittedNodes: totalNodes, omittedEdges: totalEdges,
         sampled: totalNodes > 0 || totalEdges > 0,
       }
     }
@@ -852,12 +917,19 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       ...row,
       healthState: deriveSiteHealthState({ ...row, indexabilityReasons, canonicalNodeKey }),
     }))
+    // The map keeps template links in the payload and hides them client side,
+    // so switching them on costs no refetch and cannot move a node. A caller
+    // that wants a smaller payload asks for one with `linkKind`.
+    const graphLinkKindFilter = linkKind === SiteHealthLinkKinds.all
+      ? undefined
+      : eq(siteCrawlGraphEdges.isTemplate, linkKind === SiteHealthLinkKinds.template)
     const edges = app.db.select({
       edgeKey: siteCrawlGraphEdges.edgeKey,
       sourceNodeKey: siteCrawlGraphEdges.sourceNodeKey,
       targetNodeKey: siteCrawlGraphEdges.targetNodeKey,
       followable: siteCrawlGraphEdges.followable,
       occurrences: siteCrawlGraphEdges.occurrences,
+      isTemplate: siteCrawlGraphEdges.isTemplate,
     }).from(siteCrawlGraphEdges)
       .innerJoin(graphSourceNode, and(
         eq(graphSourceNode.projectId, siteCrawlGraphEdges.projectId),
@@ -878,10 +950,12 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
         eq(siteCrawlGraphEdges.runId, snapshot.runId),
         eq(siteCrawlGraphEdges.attemptId, snapshot.attemptId),
         lt(siteCrawlGraphEdges.sampleRank, maxEdges),
+        graphLinkKindFilter,
       ))
       .orderBy(asc(siteCrawlGraphEdges.sampleRank)).all()
     const totalNodes = persistedLayout.totalNodes
     const totalEdges = persistedLayout.totalEdges
+    const totalTemplateEdges = persistedLayout.totalTemplateEdges
     const omittedNodes = Math.max(0, totalNodes - nodes.length)
     const omittedEdges = Math.max(0, totalEdges - edges.length)
     return {
@@ -889,9 +963,21 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       hasCrawlData: true,
       runId: snapshot.runId,
       rootNodeKey,
-      layout: { state: 'ready', version: persistedLayout.layoutVersion, computedAt: persistedLayout.createdAt },
+      layout: {
+        state: 'ready',
+        version: persistedLayout.layoutVersion,
+        computedAt: persistedLayout.createdAt,
+        templateLinksExcluded: persistedLayout.templateLinksExcluded,
+      },
+      templateDetection,
+      linkKind,
       totalNodes,
+      // Deliberately still every graph-compatible link, whatever `linkKind`
+      // asked for. The two counts below split it; none of the three moves
+      // because a caller narrowed the payload.
       totalEdges,
+      totalTemplateEdges,
+      totalContentEdges: Math.max(0, totalEdges - totalTemplateEdges),
       nodes,
       edges,
       omittedNodes,
@@ -1875,24 +1961,41 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
   // edges, never the full graph in one response.
   app.get<{
     Params: { name: string }
-    Querystring: { runId?: string; cursor?: string; limit?: string; sourceUrl?: string; targetUrl?: string; followable?: string }
+    Querystring: {
+      runId?: string
+      cursor?: string
+      limit?: string
+      sourceUrl?: string
+      targetUrl?: string
+      followable?: string
+      linkKind?: string
+    }
   }>('/projects/:name/technical-aeo/internal-links', async (request): Promise<SiteCrawlInternalLinksResponseDto> => {
     const project = resolveProject(app.db, request.params.name)
+    const linkKind = parseLinkKind(request.query.linkKind)
     const target = resolveCrawl(project.id, request.query.runId)
     if (!target) {
       assertKnownAuditRun(project.id, request.query.runId)
-      return { project: project.name, hasCrawlData: false, runId: null, total: 0, nextCursor: null, edges: [] }
+      return {
+        project: project.name, hasCrawlData: false, runId: null, total: 0, nextCursor: null,
+        templateDetection: SiteHealthTemplateDetections['unavailable-legacy-scan'], linkKind, edges: [],
+      }
     }
     const snapshot = target.snapshot
+    const templateDetection = templateDetectionOf(snapshot.templateDetection)
     if (!snapshot.detailsAvailable || !snapshot.attemptId) {
-      return { project: project.name, hasCrawlData: true, runId: snapshot.runId, total: 0, nextCursor: null, edges: [] }
+      return {
+        project: project.name, hasCrawlData: true, runId: snapshot.runId, total: 0, nextCursor: null,
+        templateDetection, linkKind, edges: [],
+      }
     }
 
-    const filters = [
+    const filters: (SQL | undefined)[] = [
       eq(siteCrawlEdges.projectId, project.id),
       eq(siteCrawlEdges.runId, snapshot.runId),
       eq(siteCrawlEdges.attemptId, snapshot.attemptId),
       eq(siteCrawlEdges.internal, true),
+      linkKindFilter(linkKind),
     ]
     if (request.query.sourceUrl) filters.push(eq(siteCrawlEdges.sourceUrl, request.query.sourceUrl))
     if (request.query.targetUrl) filters.push(eq(siteCrawlEdges.targetUrl, request.query.targetUrl))
@@ -1917,6 +2020,8 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       runId: snapshot.runId,
       total,
       nextCursor: nextOffset < total ? encodeCursor(nextOffset) : null,
+      templateDetection,
+      linkKind,
       edges: rows.map(mapCrawlEdge),
     }
   })
@@ -1925,9 +2030,10 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
   // local graph neighborhood for one canonical node/URL.
   app.get<{
     Params: { name: string }
-    Querystring: { runId?: string; nodeKey?: string; url?: string; limit?: string }
+    Querystring: { runId?: string; nodeKey?: string; url?: string; limit?: string; linkKind?: string }
   }>('/projects/:name/technical-aeo/internal-links/neighbors', async (request): Promise<SiteCrawlNeighborsResponseDto> => {
     const project = resolveProject(app.db, request.params.name)
+    const linkKind = parseLinkKind(request.query.linkKind)
     if (!request.query.nodeKey && !request.query.url) {
       throw validationError('Provide nodeKey or url')
     }
@@ -1936,13 +2042,16 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       assertKnownAuditRun(project.id, request.query.runId)
       return {
         project: project.name, hasCrawlData: false, runId: null, nodeKey: request.query.nodeKey ?? null, url: request.query.url ?? null,
+        templateDetection: SiteHealthTemplateDetections['unavailable-legacy-scan'], linkKind,
         inbound: [], outbound: [], inboundTruncated: false, outboundTruncated: false,
       }
     }
     const snapshot = target.snapshot
+    const templateDetection = templateDetectionOf(snapshot.templateDetection)
     if (!snapshot.detailsAvailable || !snapshot.attemptId) {
       return {
         project: project.name, hasCrawlData: true, runId: snapshot.runId, nodeKey: request.query.nodeKey ?? null, url: request.query.url ?? null,
+        templateDetection, linkKind,
         inbound: [], outbound: [], inboundTruncated: false, outboundTruncated: false,
       }
     }
@@ -1951,6 +2060,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       eq(siteCrawlEdges.runId, snapshot.runId),
       eq(siteCrawlEdges.attemptId, snapshot.attemptId),
       eq(siteCrawlEdges.internal, true),
+      linkKindFilter(linkKind),
     ]
     const inboundMatch = request.query.nodeKey && request.query.url
       ? or(eq(siteCrawlEdges.targetNodeKey, request.query.nodeKey), eq(siteCrawlEdges.targetUrl, request.query.url))
@@ -1971,6 +2081,8 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       runId: snapshot.runId,
       nodeKey: request.query.nodeKey ?? null,
       url: request.query.url ?? null,
+      templateDetection,
+      linkKind,
       inbound: inboundRows.slice(0, limit).map(mapCrawlEdge),
       outbound: outboundRows.slice(0, limit).map(mapCrawlEdge),
       inboundTruncated: inboundRows.length > limit,

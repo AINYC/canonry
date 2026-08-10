@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { createRequire } from 'node:module'
 import { Worker } from 'node:worker_threads'
-import { and, asc, count, desc, eq, isNull, ne, or, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, isNull, ne, or, sql, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/sqlite-core'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import {
@@ -15,6 +15,7 @@ import {
 import {
   SITE_CRAWL_GRAPH_MAX_EDGES,
   SITE_CRAWL_GRAPH_MAX_NODES,
+  TEMPLATE_LINK_RATIO_THRESHOLD,
 } from '@ainyc/canonry-contracts'
 
 export const SITE_CRAWL_GRAPH_LAYOUT_TIMEOUT_MS = 15_000
@@ -39,6 +40,12 @@ export interface SiteCrawlGraphLayoutEdge {
   targetNodeKey: string
   followable: boolean
   occurrences: number
+  /**
+   * Nav, header, and footer chrome. Template links are PUBLISHED in the sample
+   * (a viewer can switch them on without a refetch) but are kept out of the
+   * physics below, so positions describe content structure.
+   */
+  isTemplate: boolean
 }
 
 interface PersistedGraphEdge extends SiteCrawlGraphLayoutEdge {
@@ -49,6 +56,8 @@ export interface SiteCrawlGraphLayoutInput {
   rootNodeKey: string | null
   totalNodes: number
   totalEdges: number
+  /** Share of `totalEdges` classified as nav, header, or footer links. */
+  totalTemplateEdges: number
   nodes: SiteCrawlGraphSeedNode[]
   edges: SiteCrawlGraphLayoutEdge[]
   /** Surviving nodes from the immediately prior compatible complete snapshot. */
@@ -68,8 +77,11 @@ export type PreparedSiteCrawlGraphLayout =
     layoutVersion: string
     totalNodes: number
     totalEdges: number
+    totalTemplateEdges: number
     nodeCount: number
     edgeCount: number
+    /** Always true for a layout this module computes; false only for older rows. */
+    templateLinksExcluded: true
     nodes: PersistedGraphPosition[]
     edges: PersistedGraphEdge[]
   }
@@ -78,6 +90,7 @@ export type PreparedSiteCrawlGraphLayout =
     failureCode: 'empty-crawl' | 'layout-timeout' | 'layout-error'
     totalNodes: number
     totalEdges: number
+    totalTemplateEdges: number
     nodeCount: 0
     edgeCount: 0
     nodes: []
@@ -239,7 +252,12 @@ export function siteCrawlGraphLayoutSettingsFingerprint(settings: unknown): stri
   return crypto.createHash('sha256').update(JSON.stringify(settings)).digest('hex').slice(0, 8)
 }
 
-const SITE_CRAWL_GRAPH_LAYOUT_ALGORITHM = 'site-health-fa2-v2'
+/**
+ * v3 excludes template links from the physics. That changes what the same
+ * crawl produces, so it is an ALGORITHM change, not a settings change: v2
+ * coordinates must not be reused as seeds for a v3 layout.
+ */
+const SITE_CRAWL_GRAPH_LAYOUT_ALGORITHM = 'site-health-fa2-v3'
 
 export const SITE_CRAWL_GRAPH_LAYOUT_VERSION = `${SITE_CRAWL_GRAPH_LAYOUT_ALGORITHM}-${
   siteCrawlGraphLayoutSettingsFingerprint({
@@ -247,6 +265,7 @@ export const SITE_CRAWL_GRAPH_LAYOUT_VERSION = `${SITE_CRAWL_GRAPH_LAYOUT_ALGORI
     noverlap: NOVERLAP_SETTINGS,
     nodeSizeExtentFraction: NODE_SIZE_EXTENT_FRACTION,
     componentPackingSpacingFactor: COMPONENT_PACKING_SPACING_FACTOR,
+    templateLinkRatioThreshold: TEMPLATE_LINK_RATIO_THRESHOLD,
   })
 }`
 
@@ -635,10 +654,23 @@ export async function layoutSiteCrawlGraphInput(
     return {
       state: 'unavailable', failureCode: 'empty-crawl',
       totalNodes: input.totalNodes, totalEdges: input.totalEdges,
+      totalTemplateEdges: input.totalTemplateEdges,
       nodeCount: 0, edgeCount: 0, nodes: [],
       edges: [],
     }
   }
+  /**
+   * The point of the feature. A template header repeated across 50 pages is
+   * ~1,250 edges pulling every page toward every other page, which is exactly
+   * the mesh the physics tuning above was fighting. Dropping those edges from
+   * the INPUT is stronger than damping them: what is left is the editorial
+   * link structure, so a page reachable only through the nav becomes the
+   * weakly connected component it really is and the packing pass places it.
+   *
+   * The full sample is still PUBLISHED below, so a viewer can switch template
+   * links on and see them drawn over positions that never move.
+   */
+  const layoutEdges = input.edges.filter((edge) => !edge.isTemplate)
   const seeded = seedSiteCrawlGraphNodes(input.nodes, input.rootNodeKey, input.priorPositions)
   // ONE budget for the whole pipeline. Packing and normalization run on this
   // thread after the worker resolves, so without a shared deadline they were
@@ -653,21 +685,26 @@ export async function layoutSiteCrawlGraphInput(
     const compute = options.computePositions ?? computeForceAtlasPositions
     const { positions, nodeSize } = await compute({
       nodes: seeded,
-      edges: input.edges,
-      iterations: adaptiveForceAtlasIterations(input.nodes.length, input.edges.length),
+      edges: layoutEdges,
+      iterations: adaptiveForceAtlasIterations(input.nodes.length, layoutEdges.length),
     }, { signal: options.signal, timeoutMs: Math.max(1, deadline - Date.now()) })
     assertWithinBudget()
     // Packing runs last and only ever translates whole components, so it can
-    // never undo the anti-overlap the worker just did inside one of them.
-    const framed = packSiteCrawlGraphComponents(positions, input.edges, nodeSize)
+    // never undo the anti-overlap the worker just did inside one of them. It
+    // sees the same content-only edges, so a page whose only inbound links are
+    // template links is a genuine singleton and gets placed, not stacked on
+    // the origin.
+    const framed = packSiteCrawlGraphComponents(positions, layoutEdges, nodeSize)
     assertWithinBudget()
     return {
       state: 'ready',
       layoutVersion: SITE_CRAWL_GRAPH_LAYOUT_VERSION,
       totalNodes: input.totalNodes,
       totalEdges: input.totalEdges,
+      totalTemplateEdges: input.totalTemplateEdges,
       nodeCount: input.nodes.length,
       edgeCount: input.edges.length,
+      templateLinksExcluded: true,
       nodes: normalizePositions(seeded, framed, input.rootNodeKey),
       edges: input.edges.map((edge, sampleRank) => ({ ...edge, sampleRank })),
     }
@@ -682,6 +719,7 @@ export async function layoutSiteCrawlGraphInput(
       failureCode: error instanceof GraphLayoutTimeoutError ? 'layout-timeout' : 'layout-error',
       totalNodes: input.totalNodes,
       totalEdges: input.totalEdges,
+      totalTemplateEdges: input.totalTemplateEdges,
       nodeCount: 0,
       edgeCount: 0,
       nodes: [],
@@ -746,6 +784,7 @@ export async function prepareSiteCrawlGraphLayout(
 ): Promise<PreparedSiteCrawlGraphLayout> {
   let totalNodes = 0
   let totalEdges = 0
+  let totalTemplateEdges = 0
   try {
     const assertNotAborted = () => options.signal?.throwIfAborted()
     assertNotAborted()
@@ -763,7 +802,9 @@ export async function prepareSiteCrawlGraphLayout(
     ]
     totalNodes = db.select({ value: count() }).from(siteCrawlPages).where(and(...pageScope)).get()?.value ?? 0
     assertNotAborted()
-    totalEdges = db
+    // ONE query shape for both counts, so the template share always splits the
+    // same denominator the response reports as `totalEdges`.
+    const countGraphCompatibleEdges = (...extra: (SQL | undefined)[]): number => db
       .select({ value: count() })
       .from(siteCrawlEdges)
       .innerJoin(graphSourcePage, and(
@@ -778,8 +819,11 @@ export async function prepareSiteCrawlGraphLayout(
         eq(graphTargetPage.attemptId, scope.attemptId),
         eq(graphTargetPage.nodeKey, siteCrawlEdges.targetNodeKey),
       ))
-      .where(and(...edgeScope))
+      .where(and(...edgeScope, ...extra))
       .get()?.value ?? 0
+    totalEdges = countGraphCompatibleEdges()
+    assertNotAborted()
+    totalTemplateEdges = countGraphCompatibleEdges(eq(siteCrawlEdges.isTemplate, true))
     assertNotAborted()
 
     const graphSeedColumns = {
@@ -821,6 +865,13 @@ export async function prepareSiteCrawlGraphLayout(
     const priorPositions = loadPriorSiteCrawlGraphPositions(db, scope)
     assertNotAborted()
     const selectedKeys = JSON.stringify(nodes.map((node) => node.nodeKey))
+    // Sample order is deliberately unchanged, so it keeps walking
+    // `idx_site_crawl_edges_graph_sample` rather than sorting a million rows
+    // in a temp b-tree. Template links therefore compete for the same 50k
+    // slots as content links; at that cap `sampled` already says the map is
+    // truncated, and `totalTemplateEdges` still reports the real split.
+    // A NULL `is_template` cannot occur here: publish classifies every link in
+    // the attempt before layout runs.
     const edgeRows = nodes.length === 0 ? [] : db.all(sql`
       WITH selected(node_key) AS (SELECT value FROM json_each(${selectedKeys}))
       SELECT
@@ -828,7 +879,8 @@ export async function prepareSiteCrawlGraphLayout(
         edge.source_node_key AS sourceNodeKey,
         edge.target_node_key AS targetNodeKey,
         edge.followable AS followable,
-        edge.occurrences AS occurrences
+        edge.occurrences AS occurrences,
+        edge.is_template AS isTemplate
       FROM site_crawl_edges AS edge
       INNER JOIN selected AS source ON source.node_key = edge.source_node_key
       INNER JOIN selected AS target ON target.node_key = edge.target_node_key
@@ -845,13 +897,15 @@ export async function prepareSiteCrawlGraphLayout(
       targetNodeKey: string
       followable: boolean
       occurrences: number
+      isTemplate: number | boolean | null
     }>
     assertNotAborted()
     return await layoutSiteCrawlGraphInput({
       totalNodes,
       totalEdges,
+      totalTemplateEdges,
       nodes,
-      edges: edgeRows,
+      edges: edgeRows.map((row) => ({ ...row, isTemplate: Boolean(row.isTemplate) })),
       rootNodeKey,
       priorPositions,
     }, options)
@@ -860,7 +914,7 @@ export async function prepareSiteCrawlGraphLayout(
     if (error instanceof DOMException && error.name === 'AbortError') throw error
     return {
       state: 'unavailable', failureCode: 'layout-error',
-      totalNodes, totalEdges, nodeCount: 0, edgeCount: 0, nodes: [],
+      totalNodes, totalEdges, totalTemplateEdges, nodeCount: 0, edgeCount: 0, nodes: [],
       edges: [],
     }
   }
@@ -889,8 +943,10 @@ export function persistSiteCrawlGraphLayout(
       failureCode: layout.state === 'unavailable' ? layout.failureCode : null,
       totalNodes: layout.totalNodes,
       totalEdges: layout.totalEdges,
+      totalTemplateEdges: layout.totalTemplateEdges,
       nodeCount: layout.nodeCount,
       edgeCount: layout.edgeCount,
+      templateLinksExcluded: layout.state === 'ready',
       createdAt: now,
       updatedAt: now,
     }).run()
@@ -921,6 +977,7 @@ export function persistSiteCrawlGraphLayout(
         targetNodeKey: edge.targetNodeKey,
         followable: edge.followable,
         occurrences: edge.occurrences,
+        isTemplate: edge.isTemplate,
         createdAt: now,
       }))).run()
     }
