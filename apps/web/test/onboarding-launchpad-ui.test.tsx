@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, expect, onTestFinished, test } from 'vitest'
+import { afterEach, beforeAll, expect, onTestFinished, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
@@ -12,6 +12,9 @@ import { preloadAllLazyRoutes } from '../src/router/routes.js'
 import { getRunTrackerState, resetRunTracker } from '../src/lib/run-tracker-store.js'
 import { getToasts, resetToasts } from '../src/lib/toast-store.js'
 import { jsonResponse, mockFetch, pathOf } from './mock-fetch.js'
+
+const AGENT_SETUP_REQUEST = 'Help me set up Canonry for my public site. Ask for my site address first. Keep private sign-ins and keys out of this chat. Before creating a project or starting a scan, show me the plan and wait for my approval. Then create the project, map the site, and help me decide what to measure next.'
+const AGENT_SETUP_GUIDE_URL = 'https://github.com/Canonry/canonry/blob/main/docs/plugins.md'
 
 beforeAll(async () => {
   await preloadAllLazyRoutes()
@@ -56,7 +59,8 @@ test('keeps the five-step setup when the runtime launchpad flag is absent', asyn
 
   expect(await screen.findByText('Step 2 of 5')).toBeTruthy()
   expect(screen.queryByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeNull()
-  expect(screen.queryByText('Your agent can set up Canonry for you.')).toBeNull()
+  expect(screen.queryByText('Want to set up Canonry with your agent?')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Copy setup request' })).toBeNull()
 })
 
 test('the legacy rescue query wins over an enabled platform flag', async () => {
@@ -105,13 +109,74 @@ test('auto waits for a successful authoritative empty project list before showin
   await renderSetup()
 
   expect(await screen.findByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeTruthy()
-  expect(screen.getByText('Your agent can set up Canonry for you.')).toBeTruthy()
+  expect(screen.getByText('Want to set up Canonry with your agent?')).toBeTruthy()
+  expect(screen.getByText('Once connected, it can create the project, map your public site, and help choose what to measure.')).toBeTruthy()
+  const agentGuide = screen.getByRole('link', { name: /Connect a supported agent/i })
+  expect(agentGuide.getAttribute('href')).toBe(AGENT_SETUP_GUIDE_URL)
+  expect(agentGuide.getAttribute('target')).toBe('_blank')
+  expect(agentGuide.getAttribute('rel')).toContain('noopener')
+  expect(agentGuide.getAttribute('rel')).toContain('noreferrer')
   expect(screen.getByLabelText('Website address')).toHaveProperty('required', true)
   expect(screen.getByRole('checkbox', { name: 'I approve Canonry to crawl this public site and its internal links.' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Create project and map site' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Copy setup request' }).getAttribute('type')).toBe('button')
   expect(screen.queryByText(/The crawl does not call answer providers/i)).toBeNull()
   expect(screen.queryByText(/Aero is enabled/i)).toBeNull()
   expect(screen.queryByText(/configured agent provider/i)).toBeNull()
+})
+
+test('gives an agent a copyable setup request', async () => {
+  window.__CANONRY_CONFIG__ = { dashboard: { onboardingMode: 'platform' } }
+  const writeText = vi.fn(async () => {})
+  const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  })
+  onTestFinished(() => {
+    if (clipboardDescriptor) {
+      Object.defineProperty(navigator, 'clipboard', clipboardDescriptor)
+    } else {
+      Reflect.deleteProperty(navigator, 'clipboard')
+    }
+  })
+
+  await renderSetup()
+  fireEvent.click(await screen.findByRole('button', { name: 'Copy setup request' }))
+
+  await waitFor(() => {
+    expect(writeText).toHaveBeenCalledWith(AGENT_SETUP_REQUEST)
+  })
+  expect(screen.getByRole('button', { name: 'Copied setup request' })).toBeTruthy()
+})
+
+test('offers the agent guide when the Clipboard API is unavailable', async () => {
+  window.__CANONRY_CONFIG__ = { dashboard: { onboardingMode: 'platform' } }
+  const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: undefined,
+  })
+  onTestFinished(() => {
+    if (clipboardDescriptor) {
+      Object.defineProperty(navigator, 'clipboard', clipboardDescriptor)
+    } else {
+      Reflect.deleteProperty(navigator, 'clipboard')
+    }
+  })
+
+  await renderSetup()
+  fireEvent.click(await screen.findByRole('button', { name: 'Copy setup request' }))
+
+  await waitFor(() => {
+    expect(getToasts()).toContainEqual(expect.objectContaining({
+      tone: 'negative',
+      title: 'Could not copy setup request',
+      detail: 'Open the agent setup guide to connect a supported agent instead.',
+    }))
+  })
+  expect(screen.queryByRole('button', { name: 'Copied setup request' })).toBeNull()
+  expect(screen.getByRole('link', { name: /Connect a supported agent/i })).toBeTruthy()
 })
 
 test('auto confirms a cached empty project list after mount before showing the launchpad', async () => {

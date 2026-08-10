@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Globe2, LoaderCircle } from 'lucide-react'
+import { Check, Copy, ExternalLink, Globe2, LoaderCircle } from 'lucide-react'
 import { getApiV1ProjectsOptions, getApiV1ProjectsQueryKey } from '@ainyc/canonry-api-client/react-query'
 
 import {
@@ -20,6 +20,8 @@ import { Button } from '../components/ui/button.js'
 import { SetupPage } from './SetupPage.js'
 
 export const SITE_HEALTH_DISPATCH_BOUNDARY_MS = 1_800
+export const AGENT_SETUP_GUIDE_URL = 'https://github.com/Canonry/canonry/blob/main/docs/plugins.md'
+export const AGENT_SETUP_REQUEST = 'Help me set up Canonry for my public site. Ask for my site address first. Keep private sign-ins and keys out of this chat. Before creating a project or starting a scan, show me the plan and wait for my approval. Then create the project, map the site, and help me decide what to measure next.'
 
 export type OnboardingProjectListState =
   | { state: 'idle' | 'loading' | 'error' }
@@ -251,6 +253,7 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
   const [createError, setCreateError] = useState<string | null>(null)
   const [createConflict, setCreateConflict] = useState(false)
   const [dispatchError, setDispatchError] = useState<string | null>(null)
+  const [agentRequestCopied, setAgentRequestCopied] = useState(false)
   const errorRef = useRef<HTMLDivElement>(null)
 
   const identity = deriveLaunchpadIdentity(domain)
@@ -351,6 +354,19 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
     void navigate({ to: '/projects' })
   }
 
+  const copyAgentSetupRequest = async () => {
+    try {
+      await navigator.clipboard.writeText(AGENT_SETUP_REQUEST)
+      setAgentRequestCopied(true)
+    } catch {
+      addToast({
+        tone: 'negative',
+        title: 'Could not copy setup request',
+        detail: 'Open the agent setup guide to connect a supported agent instead.',
+      })
+    }
+  }
+
   if (createdProject && phase === 'recovery') {
     return (
       <div className="page-container max-w-3xl">
@@ -378,10 +394,27 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
         <div className="page-header-left">
           <h1 className="page-title">Start with a publicly reachable site.</h1>
           <p className="page-subtitle">Canonry will map the pages and internal links it can reach.</p>
-          <p className="mt-2 text-sm text-secondary">
-            <span className="font-medium text-heading">Prefer to work with an agent?</span>{' '}
-            <span>Your agent can set up Canonry for you.</span>
-          </p>
+          <div className="mt-2 text-sm text-secondary">
+            <p className="font-medium text-heading">Want to set up Canonry with your agent?</p>
+            <p className="mt-1">Once connected, it can create the project, map your public site, and help choose what to measure.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button type="button" variant="secondary" size="sm" onClick={asyncHandler(copyAgentSetupRequest)}>
+                {agentRequestCopied
+                  ? <Check className="size-3.5" aria-hidden="true" />
+                  : <Copy className="size-3.5" aria-hidden="true" />}
+                <span aria-live="polite">
+                  {agentRequestCopied ? 'Copied setup request' : 'Copy setup request'}
+                </span>
+              </Button>
+              <Button asChild variant="ghost" size="sm">
+                <a href={AGENT_SETUP_GUIDE_URL} target="_blank" rel="noopener noreferrer">
+                  Connect a supported agent
+                  <ExternalLink className="size-3.5" aria-hidden="true" />
+                  <span className="sr-only"> (opens in a new tab)</span>
+                </a>
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
 
