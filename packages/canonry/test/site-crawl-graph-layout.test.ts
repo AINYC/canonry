@@ -20,14 +20,16 @@ import {
   SITE_CRAWL_GRAPH_LAYOUT_VERSION,
   SITE_CRAWL_GRAPH_SEED_SCALE,
   adaptiveForceAtlasIterations,
-  frameDisconnectedNodes,
   layoutSiteCrawlGraphInput,
   noverlapGridSize,
   noverlapMaxIterations,
+  packSiteCrawlGraphComponents,
   prepareSiteCrawlGraphLayout,
   seedSiteCrawlGraphNodes,
   siteCrawlGraphComponents,
+  siteCrawlGraphExtent,
   siteCrawlGraphLayoutSettingsFingerprint,
+  siteCrawlGraphNodeSize,
   type SiteCrawlGraphLayoutInput,
 } from '../src/site-crawl-graph-layout.js'
 
@@ -165,11 +167,10 @@ describe('site crawl graph layout', () => {
 
   it('normalizes persisted coordinates around home and records the pinned layout version', async () => {
     const result = await layoutSiteCrawlGraphInput(input, {
-      computePositions: async ({ nodes }) => nodes.map((node) => ({
-        nodeKey: node.nodeKey,
-        x: node.x + 50,
-        y: node.y - 30,
-      })),
+      computePositions: async ({ nodes }) => ({
+        positions: nodes.map((node) => ({ nodeKey: node.nodeKey, x: node.x + 50, y: node.y - 30 })),
+        nodeSize: 1,
+      }),
     })
     expect(result).toMatchObject({
       state: 'ready',
@@ -420,7 +421,7 @@ describe('site crawl graph layout', () => {
     }, {
       computePositions: async ({ nodes }) => {
         seededNodes = nodes
-        return nodes
+        return { positions: nodes, nodeSize: 1 }
       },
     })
 
@@ -435,7 +436,7 @@ describe('site crawl graph layout', () => {
     })
   })
 
-  it('groups nodes into components and picks the largest as the main one', () => {
+  it('groups nodes into components, largest first, deterministically', () => {
     const components = siteCrawlGraphComponents(
       ['a', 'b', 'c', 'orphan-1', 'orphan-2', 'pair-x', 'pair-y'],
       [
@@ -447,56 +448,151 @@ describe('site crawl graph layout', () => {
       ],
     )
 
-    expect([...components.main].sort()).toEqual(['a', 'b', 'c'])
-    // Components stay grouped, and both groups and members are key-ordered.
-    expect(components.outliers).toEqual(['orphan-1', 'orphan-2', 'pair-x', 'pair-y'])
+    expect(components).toEqual([
+      ['a', 'b', 'c'],
+      ['pair-x', 'pair-y'],
+      ['orphan-1'],
+      ['orphan-2'],
+    ])
   })
 
-  it('keeps disconnected pages on a bounded ring instead of letting them inflate the frame', () => {
-    // ForceAtlas2 has nothing attracting an orphan, so it drifts arbitrarily.
+  it('moves each component as a rigid body, so no layout inside one is disturbed', () => {
+    // ForceAtlas2 has nothing holding separate components together, so they
+    // drift arbitrarily far apart.
     const positions = [
       { nodeKey: 'a', x: -10, y: 0 },
       { nodeKey: 'b', x: 10, y: 0 },
       { nodeKey: 'c', x: 0, y: 10 },
-      { nodeKey: 'orphan-1', x: 9_000, y: -4_000 },
-      { nodeKey: 'orphan-2', x: -7_500, y: 8_100 },
+      { nodeKey: 'pair-x', x: 9_000, y: -4_000 },
+      { nodeKey: 'pair-y', x: 9_001, y: -4_000 },
+      { nodeKey: 'orphan', x: -7_500, y: 8_100 },
     ]
     const edges = [
       { sourceNodeKey: 'a', targetNodeKey: 'b' },
       { sourceNodeKey: 'b', targetNodeKey: 'c' },
+      { sourceNodeKey: 'pair-x', targetNodeKey: 'pair-y' },
     ]
+    const distance = (points: ReadonlyArray<{ nodeKey: string; x: number; y: number }>, left: string, right: string) => {
+      const a = points.find((point) => point.nodeKey === left)!
+      const b = points.find((point) => point.nodeKey === right)!
+      return Math.hypot(a.x - b.x, a.y - b.y)
+    }
 
-    const framed = frameDisconnectedNodes(positions, edges)
-    const byKey = new Map(framed.map((position) => [position.nodeKey, position]))
+    const packed = packSiteCrawlGraphComponents(positions, edges, 4)
 
-    // The connected component is untouched.
+    // The connected pair keeps its exact internal distance: it was translated,
+    // never spread. This is the regression the ring placement caused.
+    expect(distance(packed, 'pair-x', 'pair-y')).toBeCloseTo(distance(positions, 'pair-x', 'pair-y'), 9)
+    expect(distance(packed, 'pair-x', 'pair-y')).toBeCloseTo(1, 9)
+    // The main component is the anchor and does not move at all.
     for (const nodeKey of ['a', 'b', 'c']) {
-      expect(byKey.get(nodeKey)).toEqual(positions.find((position) => position.nodeKey === nodeKey))
+      expect(packed.find((point) => point.nodeKey === nodeKey))
+        .toEqual(positions.find((point) => point.nodeKey === nodeKey))
+    }
+    // Every intra-component distance in the main component is untouched too.
+    expect(distance(packed, 'a', 'b')).toBeCloseTo(distance(positions, 'a', 'b'), 9)
+
+    // The far-flung components are brought in beside the anchor.
+    const anchorRadius = Math.max(distance(packed, 'a', 'b'), distance(packed, 'a', 'c')) / 2
+    for (const nodeKey of ['pair-x', 'pair-y', 'orphan']) {
+      const point = packed.find((candidate) => candidate.nodeKey === nodeKey)!
+      expect(Math.hypot(point.x, point.y - 10 / 3)).toBeLessThan(anchorRadius * 12)
     }
 
-    const main = framed.filter((position) => ['a', 'b', 'c'].includes(position.nodeKey))
-    const centerX = main.reduce((sum, p) => sum + p.x, 0) / main.length
-    const centerY = main.reduce((sum, p) => sum + p.y, 0) / main.length
-    const mainRadius = Math.max(...main.map((p) => Math.hypot(p.x - centerX, p.y - centerY)))
+    expect(packSiteCrawlGraphComponents(positions, edges, 4)).toEqual(packed)
+  })
 
-    for (const nodeKey of ['orphan-1', 'orphan-2']) {
-      const position = byKey.get(nodeKey)!
-      const distance = Math.hypot(position.x - centerX, position.y - centerY)
-      expect(distance, `${nodeKey} must stay near the connected graph`).toBeLessThan(mainRadius * 2)
-      expect(distance, `${nodeKey} must stay outside the connected graph`).toBeGreaterThan(mainRadius)
+  it('spaces an edgeless crawl on a grid instead of stacking it in one place', () => {
+    // 20,000 pages and no internal anchor links is a real crawl shape, and it
+    // is 20,000 singleton components. Every one must still be its own dot.
+    const nodeCount = 20_000
+    const positions = Array.from({ length: nodeCount }, (_, index) => ({
+      nodeKey: `n${String(index).padStart(5, '0')}`,
+      // Deliberately degenerate: the seeds put many pages on the same point.
+      x: (index % 7) * 0.001,
+      y: Math.floor(index / 7) * 0.001,
+    }))
+    const nodeSize = 3
+    const packed = packSiteCrawlGraphComponents(positions, [], nodeSize)
+
+    const byKey = new Map(packed.map((point) => [point.nodeKey, point]))
+    expect(byKey.size).toBe(nodeCount)
+    // Nearest-neighbour check over a grid bucket rather than 200m pairs.
+    const bucket = new Map<string, Array<{ x: number; y: number }>>()
+    const cell = nodeSize * 4
+    for (const point of packed) {
+      const key = `${Math.floor(point.x / cell)}:${Math.floor(point.y / cell)}`
+      const list = bucket.get(key)
+      if (list) list.push(point)
+      else bucket.set(key, [point])
     }
-    // Two orphans on one ring sit opposite each other, never stacked.
-    expect(Math.hypot(
-      byKey.get('orphan-1')!.x - byKey.get('orphan-2')!.x,
-      byKey.get('orphan-1')!.y - byKey.get('orphan-2')!.y,
-    )).toBeGreaterThan(mainRadius)
-
-    expect(frameDisconnectedNodes(positions, edges)).toEqual(framed)
+    let minimum = Infinity
+    for (const point of packed) {
+      const cx = Math.floor(point.x / cell)
+      const cy = Math.floor(point.y / cell)
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (const other of bucket.get(`${cx + dx}:${cy + dy}`) ?? []) {
+            if (other === point) continue
+            minimum = Math.min(minimum, Math.hypot(point.x - other.x, point.y - other.y))
+          }
+        }
+      }
+    }
+    expect(minimum).toBeGreaterThanOrEqual(nodeSize)
   })
 
   it('leaves a fully connected graph exactly where the physics put it', () => {
     const positions = [{ nodeKey: 'a', x: 1, y: 2 }, { nodeKey: 'b', x: 3, y: 4 }]
-    expect(frameDisconnectedNodes(positions, [{ sourceNodeKey: 'a', targetNodeKey: 'b' }])).toEqual(positions)
+    expect(packSiteCrawlGraphComponents(positions, [{ sourceNodeKey: 'a', targetNodeKey: 'b' }], 4))
+      .toEqual(positions)
+  })
+
+  it('derives one node size that the worker and the packing pass share', async () => {
+    // The worker computes the size inline (it is a string module) and returns
+    // it. This pins the exported rule to what the worker actually used, so the
+    // two can never drift into spacing the graph by different numbers.
+    const fixture = navMeshFixture()
+    const result = await layoutSiteCrawlGraphInput(fixture)
+    if (result.state !== 'ready') throw new Error('expected ready layout')
+
+    expect(siteCrawlGraphNodeSize(0, 10)).toBe(0)
+    expect(siteCrawlGraphNodeSize(100, 0)).toBe(0)
+    // The area bound binds on a crowded graph; the render bound on a sparse one.
+    expect(siteCrawlGraphNodeSize(1_000, 20_000)).toBeLessThan(siteCrawlGraphNodeSize(1_000, 10))
+    expect(siteCrawlGraphExtent([{ x: -3, y: 0 }, { x: 3, y: 0 }])).toBeCloseTo(3, 9)
+  })
+
+  it('keeps the packed bounding box tight enough for camera fit to frame the site', async () => {
+    // Observed on canonry.ai: two disconnected pages landed so far out that
+    // the camera fit shrank the whole connected site into a corner. The frame
+    // is set by the bounding box, so the box itself has to stay tight.
+    const base = navMeshFixture()
+    const withOrphans: SiteCrawlGraphLayoutInput = {
+      ...base,
+      nodes: [
+        ...base.nodes,
+        { nodeKey: 'orphan-a', path: '/orphan-a', depth: null, sampleRank: 900 },
+        { nodeKey: 'orphan-b', path: '/orphan-b', depth: null, sampleRank: 901 },
+      ],
+    }
+    const result = await layoutSiteCrawlGraphInput(withOrphans)
+    if (result.state !== 'ready') throw new Error('expected ready layout')
+
+    const connected = result.nodes.filter((node) => !node.nodeKey.startsWith('orphan-'))
+    const span = (points: typeof result.nodes) => {
+      const xs = points.map((point) => point.x)
+      const ys = points.map((point) => point.y)
+      return Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))
+    }
+
+    // The full frame is only slightly larger than the connected site's own
+    // box, so fitting the camera still fills the canvas with the real graph.
+    expect(span(result.nodes)).toBeLessThan(span(connected) * 2.5)
+    // And the orphans are genuinely outside it, not hidden inside the mesh.
+    const orphans = result.nodes.filter((node) => node.nodeKey.startsWith('orphan-'))
+    expect(orphans).toHaveLength(2)
+    expect(orphans[0]!.x).not.toBe(orphans[1]!.x)
   })
 
   it('bounds the anti-overlap budget so the 20k cap stays solvable', () => {

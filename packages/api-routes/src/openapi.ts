@@ -6211,6 +6211,7 @@ const routeCatalog: OpenApiOperation[] = [
       { name: 'inventoryEligible', in: 'query', description: 'Filter Canonry technical inventory eligibility (`true` or `false`).', schema: booleanSchema },
       { name: 'fetchState', in: 'query', description: 'Filter by persisted fetch state.', schema: stringSchema },
       { name: 'indexabilityState', in: 'query', description: 'Filter by crawler-derived indexability state; this is not Google index coverage.', schema: stringSchema },
+      { name: 'nodeKey', in: 'query', description: 'Return only the page with this node key. Combined with a filter it answers whether that exact page is in the filtered set, without paging through the list.', schema: stringSchema },
       { name: 'healthState', in: 'query', description: 'Filter by the derived Site Health state shared with the dashboard and agents. Unlike `indexabilityState` this folds fetch state, canonical identity, and the crawler reasons into one decision, so `hidden` also covers redirects, robots blocks, non-HTML, and canonical-away pages. Values: `eligible`, `hidden`, `failed`, `unchecked`.', schema: { type: 'string', enum: ['eligible', 'hidden', 'failed', 'unchecked'] } },
       { name: 'auditState', in: 'query', description: 'Filter by audit state.', schema: stringSchema },
       { name: 'sort', in: 'query', description: 'Sort order. Defaults to `url`.', schema: { type: 'string', enum: ['url', 'path', 'score-asc', 'score-desc'] } },

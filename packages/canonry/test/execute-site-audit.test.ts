@@ -35,6 +35,7 @@ import {
   SITE_AUDIT_MAX_PAGE_LIMIT,
 } from '../src/execute-site-audit.js'
 import { SITE_CRAWL_GRAPH_LAYOUT_VERSION } from '../src/site-crawl-graph-layout.js'
+import { deriveSiteHealthState } from '@ainyc/canonry-contracts'
 
 const NOW = '2026-08-08T00:00:00.000Z'
 
@@ -450,7 +451,28 @@ describe('executeSiteAudit', () => {
     await executeSiteAudit(db, runId, projectId)
 
     expect(db.select().from(siteCrawlEdges).where(eq(siteCrawlEdges.edgeKey, 'edge:root-new')).get()?.targetNodeKey).toBe('page:new')
-    expect(db.select().from(siteCrawlPages).where(eq(siteCrawlPages.nodeKey, 'page:root')).get()?.canonicalNodeKey).toBe('page:new')
+    const root = db.select().from(siteCrawlPages).where(eq(siteCrawlPages.nodeKey, 'page:root')).get()!
+    expect(root.canonicalNodeKey).toBe('page:new')
+    // Canonical identity resolves after the row is first written, and it flips
+    // the derived state. The persisted column must follow, not keep the answer
+    // insert time could see.
+    expect(root.healthState).toBe('hidden')
+    expect(root.healthState).toBe(deriveSiteHealthState(root))
+  })
+
+  it('persists the derived health state the contract decides for every page', async () => {
+    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => emitCompleteGraph(options))
+    const runId = seedRun()
+    await executeSiteAudit(db, runId, projectId)
+
+    const pages = db.select().from(siteCrawlPages).where(eq(siteCrawlPages.runId, runId)).all()
+    expect(pages.length).toBeGreaterThan(0)
+    for (const page of pages) {
+      // Written once, here, by the same function the map and the API filter
+      // read, so no consumer has to recompute it and none can drift.
+      expect(page.healthState, page.nodeKey).toBe(deriveSiteHealthState(page))
+      expect(page.healthState).not.toBeNull()
+    }
   })
 
   it('counts only attempted internal anchor targets for opted-in dead-link checks', async () => {

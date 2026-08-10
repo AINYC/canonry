@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  displayPageLabel,
   displayPagePath,
   isSameSiteUrl,
   siteHostFromUrl,
@@ -31,9 +32,10 @@ describe('displayPagePath', () => {
       .toBe('https://notazcoatingsllc.com/about')
   })
 
-  it('names the root page rather than showing a bare slash', () => {
-    expect(displayPagePath('https://azcoatingsllc.com/', rootHost)).toBe(SITE_HEALTH_HOME_LABEL)
-    expect(displayPagePath('https://azcoatingsllc.com', rootHost)).toBe(SITE_HEALTH_HOME_LABEL)
+  it('does not guess the home page from the path', () => {
+    // "/" is not proof of the root: an apex and a www alias both sit there.
+    expect(displayPagePath('https://azcoatingsllc.com/', rootHost)).toBe('/')
+    expect(displayPagePath('https://azcoatingsllc.com', rootHost)).toBe('/')
     expect(SITE_HEALTH_HOME_LABEL).toBe('Home')
   })
 
@@ -64,5 +66,34 @@ describe('siteHostFromUrl and isSameSiteUrl', () => {
     expect(isSameSiteUrl('https://azcoatingsllc.com/about', rootHost)).toBe(true)
     expect(isSameSiteUrl('https://other.example/about', rootHost)).toBe(false)
     expect(isSameSiteUrl('https://azcoatingsllc.com/about', null)).toBe(false)
+  })
+})
+
+describe('displayPageLabel', () => {
+  // A crawl that follows an apex-to-www redirect keeps both aliases as pages,
+  // and both sit at "/". Only the server knows which one it rooted at.
+  const apex = { nodeKey: 'node-apex', url: 'https://azcoatingsllc.com/', path: '/' }
+  const www = { nodeKey: 'node-www', url: 'https://www.azcoatingsllc.com/', path: '/' }
+
+  it('names exactly the server-identified root, never both aliases', () => {
+    const labels = [apex, www].map((page) => displayPageLabel(page, 'node-www', rootHost))
+    expect(labels).toEqual(['/', SITE_HEALTH_HOME_LABEL])
+    expect(labels.filter((label) => label === SITE_HEALTH_HOME_LABEL)).toHaveLength(1)
+
+    // Rooting at the apex instead moves the name with it.
+    expect(displayPageLabel(apex, 'node-apex', rootHost)).toBe(SITE_HEALTH_HOME_LABEL)
+    expect(displayPageLabel(www, 'node-apex', rootHost)).toBe('/')
+  })
+
+  it('names nothing Home when the server did not identify a root', () => {
+    expect(displayPageLabel(apex, null, rootHost)).toBe('/')
+    expect(displayPageLabel(www, undefined, rootHost)).toBe('/')
+  })
+
+  it('falls back to the path when a URL cannot be shortened', () => {
+    expect(displayPageLabel({ nodeKey: 'n', url: 'not a url', path: '/fallback' }, 'root', rootHost))
+      .toBe('not a url')
+    expect(displayPageLabel({ nodeKey: 'n', url: null, path: '/fallback' }, 'root', rootHost))
+      .toBe('/fallback')
   })
 })

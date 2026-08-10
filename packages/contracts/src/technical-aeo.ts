@@ -430,12 +430,23 @@ export const siteCrawlPageAuditSchema = z.discriminatedUnion('state', [
 ])
 export type SiteCrawlPageAuditDto = z.infer<typeof siteCrawlPageAuditSchema>
 
+/**
+ * Whether a requested `healthState` filter actually ran. Site Health state is
+ * persisted at publish time, so a scan published before that column existed
+ * cannot be filtered. `unavailable-legacy-scan` says so explicitly rather than
+ * letting an empty or unfiltered list read as an answer.
+ */
+export const siteCrawlPagesFilterStateSchema = z.enum(['applied', 'unavailable-legacy-scan'])
+export type SiteCrawlPagesFilterState = z.infer<typeof siteCrawlPagesFilterStateSchema>
+
 export const siteCrawlPagesResponseSchema = z.object({
   project: z.string(),
   hasCrawlData: z.boolean(),
   runId: z.string().nullable(),
   total: z.number().int().nonnegative(),
   nextCursor: z.string().nullable(),
+  /** Null when no `healthState` filter was requested. */
+  healthStateFilter: siteCrawlPagesFilterStateSchema.nullable().default(null),
   pages: z.array(siteCrawlPageSchema).default([]),
 })
 export type SiteCrawlPagesResponseDto = z.infer<typeof siteCrawlPagesResponseSchema>

@@ -179,6 +179,7 @@ function seedRun(queryClient: QueryClient, runId: string, crawlSummary = summary
     project: projectName,
     hasCrawlData: true,
     runId,
+    rootNodeKey: 'page_home',
     layout: {
       state: 'ready',
       version: 'site-health-fa2-v1',
@@ -922,4 +923,131 @@ test('writes same-site link targets as paths and keeps the full URL on hover', (
   // A genuinely cross-host target is never disguised as an internal path.
   const linksOut = screen.getByRole('region', { name: 'Links out (1)' })
   expect(within(linksOut).getByText('https://directory.example/citypoint')).not.toBeNull()
+})
+
+test('inspects a map page that is outside the loaded inventory window', () => {
+  // The map holds every node while the inventory loads 200 at a time, so a
+  // page selected on the map is usually not in the loaded window. Its hidden
+  // reasons must still be readable.
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const queryClient = makeClient()
+  const offWindowPage = {
+    ...contactPage,
+    nodeKey: 'page_far',
+    url: 'https://citypoint.example/far',
+    path: '/far',
+    indexabilityState: 'noindex',
+    indexabilityReasons: ['x-robots-noindex'],
+    healthState: 'hidden' as const,
+  }
+  // The single-page read by node key: what the component asks for when the
+  // selection is not in the loaded list.
+  const byKeyInput = {
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', nodeKey: 'page_far', limit: 1 },
+  } as const
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesQueryKey(byKeyInput), {
+    project: projectName,
+    hasCrawlData: true,
+    runId: 'run_1',
+    total: 1,
+    nextCursor: null,
+    healthStateFilter: null,
+    pages: [offWindowPage],
+  })
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', nodeKey: 'page_far', limit: 100 },
+  }), {
+    project: projectName, hasCrawlData: true, runId: 'run_1', nodeKey: 'page_far',
+    url: offWindowPage.url, inbound: [], outbound: [], inboundTruncated: false, outboundTruncated: false,
+  })
+
+  renderSection(queryClient)
+  fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
+  // Select it the way the map does: by node key, not from the loaded table.
+  fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesQueryKey(byKeyInput), {
+    project: projectName, hasCrawlData: true, runId: 'run_1', total: 1, nextCursor: null,
+    healthStateFilter: null, pages: [offWindowPage],
+  })
+
+  // The page the inspector reads comes from the by-key read, so its reasons
+  // are present rather than lost to the window.
+  expect(screen.getByRole('heading', { name: 'Internal links' })).not.toBeNull()
+})
+
+test('keeps a filtered selection until the server says it does not match', async () => {
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const queryClient = makeClient()
+  const hiddenPage = {
+    ...contactPage,
+    nodeKey: 'page_hidden_far',
+    url: 'https://citypoint.example/thanks',
+    path: '/thanks',
+    indexabilityState: 'noindex',
+    indexabilityReasons: ['meta-robots-noindex'],
+    healthState: 'hidden' as const,
+  }
+  const hiddenListInput = {
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', healthState: 'hidden', limit: 200, sort: 'path' },
+  } as const
+  const hiddenListResponse = {
+    project: projectName, hasCrawlData: true, runId: 'run_1', total: 1, nextCursor: null,
+    healthStateFilter: 'applied' as const, pages: [hiddenPage],
+  }
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesQueryKey(hiddenListInput), hiddenListResponse)
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteQueryKey(hiddenListInput), {
+    pages: [hiddenListResponse], pageParams: [hiddenListInput],
+  })
+  // The server confirms this page is NOT in the filtered set.
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', healthState: 'hidden', nodeKey: 'page_services', limit: 1 },
+  }), {
+    project: projectName, hasCrawlData: true, runId: 'run_1', total: 0, nextCursor: null,
+    healthStateFilter: 'applied' as const, pages: [],
+  })
+
+  renderSection(queryClient)
+  fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
+  fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Hidden pages' }))
+
+  // The selection is dropped because the SERVER answered, not because the
+  // page was missing from the loaded window.
+  await waitFor(() => expect(screen.getByRole('button', { name: '/thanks' })).not.toBeNull())
+  expect(screen.getByText('Select a page to inspect its internal links and crawl signals.')).not.toBeNull()
+})
+
+test('says so when a scan is too old to filter, instead of showing an empty list', () => {
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const queryClient = makeClient()
+  const legacyInput = {
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', healthState: 'hidden', limit: 200, sort: 'path' },
+  } as const
+  const legacyResponse = {
+    project: projectName, hasCrawlData: true, runId: 'run_1', total: 0, nextCursor: null,
+    healthStateFilter: 'unavailable-legacy-scan' as const, pages: [],
+  }
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesQueryKey(legacyInput), legacyResponse)
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteQueryKey(legacyInput), {
+    pages: [legacyResponse], pageParams: [legacyInput],
+  })
+
+  renderSection(queryClient)
+  fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Hidden pages' }))
+
+  expect(screen.getByText('This scan cannot be filtered. Run a new scan to filter its pages.')).not.toBeNull()
 })

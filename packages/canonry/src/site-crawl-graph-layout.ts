@@ -96,10 +96,16 @@ interface LayoutComputeInput {
   iterations: number
 }
 
+interface ComputedLayout {
+  positions: ComputedPosition[]
+  /** The uniform node size the anti-overlap pass used, in layout units. */
+  nodeSize: number
+}
+
 type ComputePositions = (
   input: LayoutComputeInput,
   options?: { signal?: AbortSignal; timeoutMs?: number },
-) => Promise<ComputedPosition[]>
+) => Promise<ComputedLayout>
 
 const graphSourcePage = alias(siteCrawlPages, 'layout_graph_source_page')
 const graphTargetPage = alias(siteCrawlPages, 'layout_graph_target_page')
@@ -147,6 +153,32 @@ const RENDER_MAX_NODE_SIZE = 14
 const RENDER_HALF_EXTENT_PX = 420
 const NODE_SIZE_EXTENT_FRACTION = RENDER_MAX_NODE_SIZE / RENDER_HALF_EXTENT_PX
 
+/**
+ * The uniform node size the layout works in: whichever bound is tighter, one
+ * render-sized node, or the largest disc that still leaves the graph mostly
+ * empty space at this node count. The worker computes and RETURNS the value it
+ * used so component packing spaces singletons by the same number rather than
+ * deriving it a second time.
+ */
+export function siteCrawlGraphNodeSize(extent: number, nodeCount: number): number {
+  if (!Number.isFinite(extent) || extent <= 0 || nodeCount <= 0) return 0
+  const byExtent = extent * NODE_SIZE_EXTENT_FRACTION
+  const byArea = Math.sqrt((NOVERLAP_SETTINGS.maxPackingFraction * (2 * extent) ** 2) / nodeCount) / 2
+  return Math.min(byExtent, byArea)
+}
+
+/** Extent used by `siteCrawlGraphNodeSize`: max axis distance from the centroid. */
+export function siteCrawlGraphExtent(positions: readonly { x: number; y: number }[]): number {
+  if (positions.length === 0) return 0
+  const centerX = positions.reduce((sum, p) => sum + p.x, 0) / positions.length
+  const centerY = positions.reduce((sum, p) => sum + p.y, 0) / positions.length
+  let extent = 0
+  for (const position of positions) {
+    extent = Math.max(extent, Math.abs(position.x - centerX), Math.abs(position.y - centerY))
+  }
+  return extent
+}
+
 const NOVERLAP_SETTINGS = Object.freeze({
   /** Half a node of clear space between two touching nodes. */
   marginFactor: 0.5,
@@ -188,18 +220,11 @@ export function noverlapMaxIterations(nodeCount: number): number {
 }
 
 /**
- * Where disconnected pages sit relative to the connected graph, as a multiple
- * of the main component's radius. ForceAtlas2 flings an orphan arbitrarily far
- * (nothing attracts it), which inflates the bounding box and leaves the real
- * graph a dot after the camera fits. A bounded ring keeps orphans visible and
- * findable without stealing the frame.
+ * Clearance between packed components, as a multiple of the node size the
+ * anti-overlap pass used. Components sit close enough to read as one map while
+ * still being visibly separate.
  */
-const OUTLIER_RING_INNER_FACTOR = 1.25
-const OUTLIER_RING_OUTER_FACTOR = 1.75
-const OUTLIER_RING_MAX_RINGS = 4
-const OUTLIER_RING_TARGET_PER_RING = 16
-/** A single-node or degenerate main component still needs a real ring radius. */
-const OUTLIER_RING_MIN_RADIUS = 1
+const COMPONENT_PACKING_SPACING_FACTOR = 3
 
 /**
  * Physics settings are part of the layout's identity. Fingerprinting them into
@@ -219,13 +244,7 @@ export const SITE_CRAWL_GRAPH_LAYOUT_VERSION = `${SITE_CRAWL_GRAPH_LAYOUT_ALGORI
     forceAtlas: FORCE_ATLAS_SETTINGS,
     noverlap: NOVERLAP_SETTINGS,
     nodeSizeExtentFraction: NODE_SIZE_EXTENT_FRACTION,
-    outlierRing: {
-      inner: OUTLIER_RING_INNER_FACTOR,
-      outer: OUTLIER_RING_OUTER_FACTOR,
-      maxRings: OUTLIER_RING_MAX_RINGS,
-      targetPerRing: OUTLIER_RING_TARGET_PER_RING,
-      minRadius: OUTLIER_RING_MIN_RADIUS,
-    },
+    componentPackingSpacingFactor: COMPONENT_PACKING_SPACING_FACTOR,
   })
 }`
 
@@ -253,6 +272,7 @@ try {
       settings: workerData.settings,
     });
   }
+  let nodeSize = 0;
   // Anti-overlap runs on the spatialization ForceAtlas2 just produced. Node
   // size is uniform and derived from the graph's own extent, so the pass is
   // scale invariant and stays deterministic for a fixed input.
@@ -272,11 +292,12 @@ try {
     if (Number.isFinite(extent) && extent > 0) {
       // Whichever bound is tighter: one render-sized node, or the largest disc
       // that still leaves the graph mostly empty space at this node count.
+      // Mirrors siteCrawlGraphNodeSize; a test asserts the two agree.
       const byExtent = extent * workerData.nodeSizeExtentFraction;
       const byArea = Math.sqrt(
         (workerData.noverlap.maxPackingFraction * Math.pow(2 * extent, 2)) / graph.order,
       ) / 2;
-      const nodeSize = Math.min(byExtent, byArea);
+      nodeSize = Math.min(byExtent, byArea);
       graph.forEachNode(function (nodeKey) {
         graph.setNodeAttribute(nodeKey, 'size', nodeSize);
       });
@@ -296,7 +317,7 @@ try {
   graph.forEachNode((nodeKey, attributes) => {
     positions.push({nodeKey, x: attributes.x, y: attributes.y});
   });
-  parentPort.postMessage({ok: true, positions});
+  parentPort.postMessage({ok: true, positions, nodeSize});
 } catch (error) {
   parentPort.postMessage({
     ok: false,
@@ -373,9 +394,12 @@ export function adaptiveForceAtlasIterations(nodeCount: number, edgeCount: numbe
 async function computeForceAtlasPositions(
   input: LayoutComputeInput,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
-): Promise<ComputedPosition[]> {
+): Promise<ComputedLayout> {
   if (input.nodes.length <= 1 || input.edges.length === 0) {
-    return input.nodes.map(({ nodeKey, x, y }) => ({ nodeKey, x, y }))
+    // No edges means no physics to run, but every page is still its own
+    // component, so packing needs a real spacing. Derive it from the seeds.
+    const positions = input.nodes.map(({ nodeKey, x, y }) => ({ nodeKey, x, y }))
+    return { positions, nodeSize: siteCrawlGraphNodeSize(siteCrawlGraphExtent(positions), positions.length) }
   }
   const requireFromPackage = createRequire(import.meta.url)
   const worker = new Worker(WORKER_SOURCE, {
@@ -395,9 +419,9 @@ async function computeForceAtlasPositions(
     },
   })
   const timeoutMs = options.timeoutMs ?? SITE_CRAWL_GRAPH_LAYOUT_TIMEOUT_MS
-  return await new Promise<ComputedPosition[]>((resolve, reject) => {
+  return await new Promise<ComputedLayout>((resolve, reject) => {
     let settled = false
-    const finish = (result: { positions?: ComputedPosition[]; error?: unknown }) => {
+    const finish = (result: { positions?: ComputedPosition[]; nodeSize?: number; error?: unknown }) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
@@ -406,15 +430,15 @@ async function computeForceAtlasPositions(
       if (result.error) reject(result.error instanceof Error
         ? result.error
         : new Error('Graph layout failed with a non-Error reason', { cause: result.error }))
-      else resolve(result.positions ?? [])
+      else resolve({ positions: result.positions ?? [], nodeSize: result.nodeSize ?? 0 })
     }
     const onAbort = () => finish({ error: options.signal?.reason ?? new DOMException('Layout aborted', 'AbortError') })
     const timer = setTimeout(() => finish({ error: new GraphLayoutTimeoutError(`Graph layout exceeded ${timeoutMs}ms`) }), timeoutMs)
     options.signal?.addEventListener('abort', onAbort, { once: true })
     if (options.signal?.aborted) return onAbort()
-    worker.once('message', (message: { ok: boolean; positions?: ComputedPosition[]; error?: string }) => {
+    worker.once('message', (message: { ok: boolean; positions?: ComputedPosition[]; nodeSize?: number; error?: string }) => {
       if (!message.ok) finish({ error: new Error(message.error ?? 'Graph layout worker failed') })
-      else finish({ positions: message.positions })
+      else finish({ positions: message.positions, nodeSize: message.nodeSize })
     })
     worker.once('error', (error) => finish({ error }))
     worker.once('exit', (code) => {
@@ -423,21 +447,18 @@ async function computeForceAtlasPositions(
   })
 }
 
-interface ConnectedComponents {
-  /** Node keys of the largest component, ties broken by smallest node key. */
-  main: Set<string>
-  /** Every other node, grouped by component and ordered deterministically. */
-  outliers: string[]
-}
-
 /**
  * Union-find over the sampled edge list. Direction does not matter here: a page
  * reachable only by linking OUT is still attached to the graph a reader sees.
+ *
+ * Returns every component, largest first, ties broken by smallest node key, and
+ * members sorted within each component, so the whole result is a pure function
+ * of the input.
  */
 export function siteCrawlGraphComponents(
   nodeKeys: readonly string[],
   edges: readonly Pick<SiteCrawlGraphLayoutEdge, 'sourceNodeKey' | 'targetNodeKey'>[],
-): ConnectedComponents {
+): string[][] {
   const parent = new Map<string, string>(nodeKeys.map((key) => [key, key]))
   const find = (key: string): string => {
     let root = key
@@ -468,65 +489,104 @@ export function siteCrawlGraphComponents(
     if (group) group.push(key)
     else members.set(root, [key])
   }
-  let mainRoot: string | null = null
-  for (const [root, group] of members) {
-    if (mainRoot === null) { mainRoot = root; continue }
-    const best = members.get(mainRoot)!
-    if (group.length > best.length || (group.length === best.length && root < mainRoot)) mainRoot = root
+  return [...members.values()].sort((left, right) => (
+    right.length - left.length || (left[0]! < right[0]! ? -1 : left[0]! > right[0]! ? 1 : 0)
+  ))
+}
+
+interface PackedComponent {
+  nodeKeys: string[]
+  centerX: number
+  centerY: number
+  radius: number
+}
+
+function describeComponent(
+  nodeKeys: string[],
+  byKey: ReadonlyMap<string, ComputedPosition>,
+): PackedComponent {
+  let sumX = 0
+  let sumY = 0
+  for (const nodeKey of nodeKeys) {
+    const position = byKey.get(nodeKey)!
+    sumX += position.x
+    sumY += position.y
   }
-  const main = new Set(mainRoot === null ? [] : members.get(mainRoot)!)
-  const outliers = [...members.entries()]
-    .filter(([root]) => root !== mainRoot)
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .flatMap(([, group]) => group)
-  return { main, outliers }
+  const centerX = sumX / nodeKeys.length
+  const centerY = sumY / nodeKeys.length
+  let radius = 0
+  for (const nodeKey of nodeKeys) {
+    const position = byKey.get(nodeKey)!
+    radius = Math.max(radius, Math.hypot(position.x - centerX, position.y - centerY))
+  }
+  return { nodeKeys, centerX, centerY, radius }
 }
 
 /**
- * Re-place everything outside the main component on bounded concentric rings
- * just past it. ForceAtlas2 has nothing attracting an orphan, so it drifts as
- * far as the iteration budget allows; the resulting bounding box is mostly
- * empty space and the camera fit shrinks the real graph to a dot. Placement is
- * a pure function of node keys, so it is stable across runs.
+ * Cells of a square spiral around the origin, ring by ring, starting at ring
+ * `firstRing`. Deterministic and O(1) per cell, which is what makes an
+ * edgeless 20,000-page crawl (20,000 singleton components) affordable: a
+ * pairwise circle-packing search would be quadratic.
  */
-export function frameDisconnectedNodes(
+function* squareSpiralCells(firstRing: number): Generator<{ dx: number; dy: number }, never, void> {
+  for (let ring = Math.max(1, firstRing); ; ring++) {
+    for (let dx = -ring; dx <= ring; dx++) yield { dx, dy: -ring }
+    for (let dy = -ring + 1; dy <= ring; dy++) yield { dx: ring, dy }
+    for (let dx = ring - 1; dx >= -ring; dx--) yield { dx, dy: ring }
+    for (let dy = ring - 1; dy >= -ring + 1; dy--) yield { dx: -ring, dy }
+  }
+}
+
+/**
+ * Pack disconnected components around the largest one.
+ *
+ * ForceAtlas2 spatializes each component correctly but has nothing holding the
+ * components themselves together, so they drift apart until the bounding box is
+ * mostly empty and the camera fit shrinks the real graph to a dot.
+ *
+ * Each component is moved as a RIGID BODY: every node in it takes the same
+ * translation, so the internal layout ForceAtlas2 computed, and every distance
+ * inside it, survives exactly. Only the components move relative to each other.
+ * `nodeSpacing` is the same node size the anti-overlap pass used, so singleton
+ * components land at least one node apart.
+ */
+export function packSiteCrawlGraphComponents(
   positions: readonly ComputedPosition[],
   edges: readonly Pick<SiteCrawlGraphLayoutEdge, 'sourceNodeKey' | 'targetNodeKey'>[],
+  nodeSpacing: number,
 ): ComputedPosition[] {
-  const { main, outliers } = siteCrawlGraphComponents(positions.map((p) => p.nodeKey), edges)
-  if (outliers.length === 0 || main.size === 0) return [...positions]
+  const components = siteCrawlGraphComponents(positions.map((position) => position.nodeKey), edges)
+  if (components.length <= 1) return [...positions]
 
-  const mainPositions = positions.filter((position) => main.has(position.nodeKey))
-  const centerX = mainPositions.reduce((sum, p) => sum + p.x, 0) / mainPositions.length
-  const centerY = mainPositions.reduce((sum, p) => sum + p.y, 0) / mainPositions.length
-  if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) return [...positions]
-  const mainRadius = Math.max(
-    OUTLIER_RING_MIN_RADIUS,
-    ...mainPositions.map((p) => Math.hypot(p.x - centerX, p.y - centerY)).filter(Number.isFinite),
-  )
-
-  const ringCount = Math.max(1, Math.min(
-    OUTLIER_RING_MAX_RINGS,
-    Math.ceil(outliers.length / OUTLIER_RING_TARGET_PER_RING),
-  ))
-  const placed = new Map<string, ComputedPosition>()
-  for (const [index, nodeKey] of outliers.entries()) {
-    const ring = index % ringCount
-    const ringRadius = mainRadius * (ringCount === 1
-      ? OUTLIER_RING_INNER_FACTOR
-      : OUTLIER_RING_INNER_FACTOR
-        + (OUTLIER_RING_OUTER_FACTOR - OUTLIER_RING_INNER_FACTOR) * (ring / (ringCount - 1)))
-    const slot = Math.floor(index / ringCount)
-    const slotsOnRing = Math.ceil((outliers.length - ring) / ringCount)
-    // Offset alternating rings by half a slot so neighbours do not line up.
-    const angle = ((slot + (ring % 2) * 0.5) / Math.max(1, slotsOnRing)) * Math.PI * 2
-    placed.set(nodeKey, {
-      nodeKey,
-      x: centerX + Math.cos(angle) * ringRadius,
-      y: centerY + Math.sin(angle) * ringRadius,
-    })
+  const byKey = new Map(positions.map((position) => [position.nodeKey, position]))
+  if (positions.some((position) => !Number.isFinite(position.x) || !Number.isFinite(position.y))) {
+    return [...positions]
   }
-  return positions.map((position) => placed.get(position.nodeKey) ?? position)
+  const described = components.map((nodeKeys) => describeComponent(nodeKeys, byKey))
+  const [anchor, ...rest] = described as [PackedComponent, ...PackedComponent[]]
+
+  const spacing = Math.max(nodeSpacing, Number.EPSILON) * COMPONENT_PACKING_SPACING_FACTOR
+  const largestRest = rest.reduce((max, component) => Math.max(max, component.radius), 0)
+  // One uniform cell that fits the largest packed component plus its clearance
+  // keeps placement overlap-free without any pairwise test.
+  const cell = 2 * largestRest + spacing
+  // Start far enough out that the first ring clears the anchor component.
+  const firstRing = Math.max(1, Math.ceil((anchor.radius + largestRest + spacing) / cell))
+
+  const moved = new Map<string, ComputedPosition>()
+  const cells = squareSpiralCells(firstRing)
+  for (const component of rest) {
+    const { dx, dy } = cells.next().value
+    const targetX = anchor.centerX + dx * cell
+    const targetY = anchor.centerY + dy * cell
+    const shiftX = targetX - component.centerX
+    const shiftY = targetY - component.centerY
+    for (const nodeKey of component.nodeKeys) {
+      const position = byKey.get(nodeKey)!
+      moved.set(nodeKey, { nodeKey, x: position.x + shiftX, y: position.y + shiftY })
+    }
+  }
+  return positions.map((position) => moved.get(position.nodeKey) ?? position)
 }
 
 function normalizePositions(
@@ -579,15 +639,15 @@ export async function layoutSiteCrawlGraphInput(
   const seeded = seedSiteCrawlGraphNodes(input.nodes, input.rootNodeKey, input.priorPositions)
   try {
     const compute = options.computePositions ?? computeForceAtlasPositions
-    const positions = await compute({
+    const { positions, nodeSize } = await compute({
       nodes: seeded,
       edges: input.edges,
       iterations: adaptiveForceAtlasIterations(input.nodes.length, input.edges.length),
     }, { signal: options.signal, timeoutMs: options.timeoutMs })
     options.signal?.throwIfAborted()
-    // Framing runs last so the ring bound is exact: nothing moves an outlier
-    // after it is placed.
-    const framed = frameDisconnectedNodes(positions, input.edges)
+    // Packing runs last and only ever translates whole components, so it can
+    // never undo the anti-overlap the worker just did inside one of them.
+    const framed = packSiteCrawlGraphComponents(positions, input.edges, nodeSize)
     return {
       state: 'ready',
       layoutVersion: SITE_CRAWL_GRAPH_LAYOUT_VERSION,

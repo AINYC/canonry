@@ -7560,6 +7560,7 @@ export type SiteCrawlPagesResponseDto = {
     runId: string | null;
     total: number;
     nextCursor: string | null;
+    healthStateFilter: 'applied' | 'unavailable-legacy-scan';
     pages: Array<{
         nodeKey: string;
         url: string;
@@ -21208,6 +21209,10 @@ export type GetApiV1ProjectsByNameTechnicalAeoCrawlPagesData = {
          * Filter by crawler-derived indexability state; this is not Google index coverage.
          */
         indexabilityState?: string;
+        /**
+         * Return only the page with this node key. Combined with a filter it answers whether that exact page is in the filtered set, without paging through the list.
+         */
+        nodeKey?: string;
         /**
          * Filter by the derived Site Health state shared with the dashboard and agents. Unlike `indexabilityState` this folds fetch state, canonical identity, and the crawler reasons into one decision, so `hidden` also covers redirects, robots blocks, non-HTML, and canonical-away pages. Values: `eligible`, `hidden`, `failed`, `unchecked`.
          */

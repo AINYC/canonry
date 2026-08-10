@@ -29,6 +29,7 @@ import {
 import {
   getApiV1ProjectsByNameTechnicalAeoCrawlOptions,
   getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditOptions,
+  getApiV1ProjectsByNameTechnicalAeoCrawlPagesOptions,
   getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteOptions,
   getApiV1ProjectsByNameTechnicalAeoDeadLinksOptions,
   getApiV1ProjectsByNameTechnicalAeoGraphOptions,
@@ -47,7 +48,7 @@ import {
   siteGraphVisualState,
   type SiteGraphVisualState,
 } from './site-graph-sigma.js'
-import { displayPagePath, siteHostFromUrl } from './site-health-paths.js'
+import { displayPagePath, siteHostFromUrl, SITE_HEALTH_HOME_LABEL } from './site-health-paths.js'
 import { PageAuditEvidence } from './PageAuditEvidence.js'
 import { TechnicalAeoSection } from './TechnicalAeoSection.js'
 import { WriteButton } from '../shared/AccessControls.js'
@@ -282,11 +283,13 @@ function NeighborTable({
   edges,
   truncated,
   rootHost,
+  rootNodeKey,
 }: {
   direction: 'inbound' | 'outbound'
   edges: SiteCrawlEdgeDto[]
   truncated: boolean
   rootHost: string | null
+  rootNodeKey: string | null
 }) {
   const heading = direction === 'inbound' ? 'Links in' : 'Links out'
   return (
@@ -314,11 +317,12 @@ function NeighborTable({
             <tbody>
               {edges.map((edge) => {
                 const url = direction === 'inbound' ? edge.sourceUrl : edge.targetUrl
+                const nodeKey = direction === 'inbound' ? edge.sourceNodeKey : edge.targetNodeKey
                 return (
                 <tr key={edge.edgeKey}>
                   {/* The path is the display; the full URL stays on hover. */}
                   <td className="max-w-64 truncate font-mono" title={url}>
-                    {displayPagePath(url, rootHost)}
+                    {nodeKey && nodeKey === rootNodeKey ? SITE_HEALTH_HOME_LABEL : displayPagePath(url, rootHost)}
                   </td>
                   <td className="max-w-52 truncate" title={edge.anchors.join(', ') || undefined}>
                     {edge.anchors.join(', ') || 'No anchor text'}
@@ -358,6 +362,7 @@ function PageInspector({
   auditError,
   onRetryAudit,
   rootHost,
+  rootNodeKey,
   reasonSource,
 }: {
   page: InspectableCrawlPage | null
@@ -372,6 +377,7 @@ function PageInspector({
   auditError: Error | null
   onRetryAudit: () => void
   rootHost: string | null
+  rootNodeKey: string | null
   /** The same page from the inventory read, which carries the crawler reasons. */
   reasonSource: SiteCrawlPageDto | null
 }) {
@@ -439,8 +445,8 @@ function PageInspector({
           </p>
         ) : (
           <div className="grid gap-5 lg:grid-cols-2">
-            <NeighborTable direction="inbound" edges={inbound} truncated={inboundTruncated} rootHost={rootHost} />
-            <NeighborTable direction="outbound" edges={outbound} truncated={outboundTruncated} rootHost={rootHost} />
+            <NeighborTable direction="inbound" edges={inbound} truncated={inboundTruncated} rootHost={rootHost} rootNodeKey={rootNodeKey} />
+            <NeighborTable direction="outbound" edges={outbound} truncated={outboundTruncated} rootHost={rootHost} rootNodeKey={rootNodeKey} />
           </div>
           )}
         </div>
@@ -459,6 +465,7 @@ function InventoryTable({
   onLoadMore,
   filter,
   onFilterChange,
+  filterUnavailable,
 }: {
   pages: SiteCrawlPageDto[]
   total: number
@@ -469,6 +476,8 @@ function InventoryTable({
   onLoadMore: () => void
   filter: InventoryFilterId
   onFilterChange: (filter: InventoryFilterId) => void
+  /** This scan predates persisted health state, so it cannot be filtered. */
+  filterUnavailable: boolean
 }) {
   const [search, setSearch] = useState('')
   const normalizedSearch = search.trim().toLowerCase()
@@ -563,9 +572,11 @@ function InventoryTable({
       {visiblePages.length === 0 && (
         <p className="border-x border-b border-default px-4 py-8 text-center text-sm text-secondary">
           {normalizedSearch.length === 0
-            ? filter === 'hidden'
-              ? 'No hidden pages were found in this scan.'
-              : 'No pages are available.'
+            ? filterUnavailable
+              ? 'This scan cannot be filtered. Run a new scan to filter its pages.'
+              : filter === 'hidden'
+                ? 'No hidden pages were found in this scan.'
+                : 'No pages are available.'
             : searchCoversLoadedWindowOnly
               ? `No matches in the ${metricValue(pages.length)} loaded pages. Load more pages to continue searching.`
               : 'No pages match this search.'}
@@ -820,15 +831,42 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
     [pagesQuery.data],
   )
   const inventoryTotal = pagesQuery.data?.pages[0]?.total ?? inventoryPages.length
-  const inventoryPage = useMemo(
+  const loadedInventoryPage = useMemo(
     () => inventoryPages.find((page) => page.nodeKey === selectedNodeKey) ?? null,
     [inventoryPages, selectedNodeKey],
   )
-  // A filter narrows the page list on the server. When the selected page is no
-  // longer in that list, the inspector below it is describing a row the reader
-  // can no longer see, so the selection is dropped rather than left stale.
+  // The map holds up to 20,000 nodes while the inventory loads 200 at a time,
+  // so a page selected on the map usually is not in the loaded window. Read
+  // that ONE row by key rather than degrading: paging to find it would be the
+  // scan this surface is built to avoid, and giving up loses its reasons.
+  const selectedPageNeedsRead = Boolean(detailsEnabled && selectedNodeKey && !loadedInventoryPage)
+  const selectedPageQuery = useQuery({
+    ...getApiV1ProjectsByNameTechnicalAeoCrawlPagesOptions({
+      client: heyClient,
+      path: { name: projectName },
+      query: {
+        ...scopedRunQuery,
+        ...(inventoryHealthState ? { healthState: inventoryHealthState } : {}),
+        nodeKey: selectedNodeKey ?? undefined,
+        limit: 1,
+      },
+    }),
+    enabled: selectedPageNeedsRead,
+  })
+  const inventoryPage = loadedInventoryPage ?? selectedPageQuery.data?.pages[0] ?? null
+
+  /**
+   * Drop the selection only when the SERVER has confirmed this page is not in
+   * the filtered set. Absence from the loaded window proves nothing, and a
+   * scan that cannot be filtered at all must not deselect anything either.
+   */
   const selectionFilteredOut = Boolean(
-    selectedNodeKey && inventoryHealthState && !pagesQuery.isLoading && !inventoryPage,
+    selectedNodeKey
+    && inventoryHealthState
+    && selectedPageNeedsRead
+    && selectedPageQuery.isSuccess
+    && selectedPageQuery.data.healthStateFilter === 'applied'
+    && selectedPageQuery.data.pages.length === 0,
   )
   useEffect(() => {
     if (selectionFilteredOut) setSelectedNodeKey(null)
@@ -1121,6 +1159,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             <InventoryTable
               pages={inventoryPages}
               total={inventoryTotal}
+              filterUnavailable={pagesQuery.data?.pages[0]?.healthStateFilter === 'unavailable-legacy-scan'}
               selectedNodeKey={effectiveSelectedNodeKey}
               onSelect={setSelectedNodeKey}
               hasNextPage={Boolean(pagesQuery.hasNextPage)}
@@ -1143,6 +1182,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             auditError={pageAuditQuery.error}
             onRetryAudit={() => { void pageAuditQuery.refetch() }}
             rootHost={rootHost}
+            rootNodeKey={graphQuery.data?.rootNodeKey ?? null}
             reasonSource={inventoryPage}
           />
         </div>
@@ -1216,6 +1256,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             auditError={pageAuditQuery.error}
             onRetryAudit={() => { void pageAuditQuery.refetch() }}
             rootHost={rootHost}
+            rootNodeKey={graphQuery.data?.rootNodeKey ?? null}
             reasonSource={inventoryPage}
           />
         </div>

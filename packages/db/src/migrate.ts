@@ -3193,6 +3193,28 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
         ON traffic_event_receipts(source_id, expires_at)`,
     ],
   },
+  {
+    version: 130,
+    name: 'site-crawl-pages-persisted-health-state',
+    // Site Health state is derived from fetch state, indexability, the
+    // crawler's reasons, and canonical identity together. Filtering it by
+    // recomputing in JS meant reading every page row on every request. It is
+    // now written once at publish time by the SAME contract function the map
+    // and the agents use, so reads are an ordinary indexed WHERE.
+    //
+    // Deliberately NOT backfilled: computing it in SQL would be a second
+    // implementation of the derivation, and the two would drift. Rows from
+    // before this migration keep NULL, and the read surface reports that a
+    // pre-existing scan cannot be filtered rather than answering wrongly.
+    //
+    // Idempotent: `ALTER TABLE ADD COLUMN` errors with "duplicate column
+    // name" on retry, which the runner already swallows.
+    statements: [
+      `ALTER TABLE site_crawl_pages ADD COLUMN health_state TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_pages_health
+        ON site_crawl_pages(project_id, run_id, attempt_id, health_state, url)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {
