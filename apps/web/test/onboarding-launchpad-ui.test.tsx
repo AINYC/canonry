@@ -209,7 +209,13 @@ test('auto waits for a successful authoritative empty project list before showin
   expect(screen.getByText('Only public pages are scanned.')).toBeTruthy()
   expect(screen.getByText('Advanced settings')).toBeTruthy()
   expect(screen.getByText('United States · English')).toBeTruthy()
-  expect(screen.getByRole('checkbox', { name: 'Allow Canonry to scan this public site and follow internal links.' })).toBeTruthy()
+  const crawlApproval = screen.getByRole('checkbox', {
+    name: 'Allow Canonry to scan this public site.',
+  })
+  expect(crawlApproval).toBeTruthy()
+  expect(crawlApproval.getAttribute('aria-describedby')).toBe('local-crawl-note')
+  expect(screen.getByText('The crawl runs on this Canonry instance, follows internal links, and stores its results locally.')).toBeTruthy()
+  expect(screen.queryByText('Allow Canonry to scan this public site and follow internal links.')).toBeNull()
   expect(screen.getByRole('button', { name: 'Map site' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Copy setup request' }).getAttribute('type')).toBe('button')
   expect(screen.queryByText(/The crawl does not call answer providers/i)).toBeNull()

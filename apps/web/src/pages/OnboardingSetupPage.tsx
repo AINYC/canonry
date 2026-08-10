@@ -523,8 +523,15 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
             type="checkbox"
             checked={crawlApproved}
             onChange={(event) => setCrawlApproved(event.target.checked)}
+            aria-label="Allow Canonry to scan this public site."
+            aria-describedby="local-crawl-note"
           />
-          <span className="text-sm leading-5 text-heading">Allow Canonry to scan this public site and follow internal links.</span>
+          <span className="grid gap-0.5">
+            <span className="text-sm leading-5 text-heading">Allow Canonry to scan this public site.</span>
+            <span id="local-crawl-note" className="text-sm leading-5 text-secondary">
+              The crawl runs on this Canonry instance, follows internal links, and stores its results locally.
+            </span>
+          </span>
         </label>
 
         {visibleError ? (
