@@ -1324,7 +1324,7 @@ test('expands site sections lazily while preserving the selected run', () => {
   expect(queryClient.getQueryState(getApiV1ProjectsByNameTechnicalAeoStructureInfiniteQueryKey(nestedInput))).not.toBeUndefined()
 })
 
-test('keeps Site sections in the right-hand column at compact app widths', () => {
+test('keeps Site sections first in visual and keyboard order', () => {
   const queryClient = makeClient()
 
   renderSection(queryClient)
@@ -1332,9 +1332,10 @@ test('keeps Site sections in the right-hand column at compact app widths', () =>
   const sections = screen.getByRole('complementary', { name: 'Site sections' })
   const explorer = sections.parentElement
   expect(explorer?.id).toBe('site-health-map-explorer')
-  expect(explorer?.className).toContain('sm:grid-cols-[minmax(0,1fr)_minmax(14rem,18rem)]')
-  expect(explorer?.className).not.toContain('md:grid-cols-[minmax(0,1fr)_18rem]')
-  expect(explorer?.lastElementChild).toBe(sections)
+  expect(explorer?.className).toContain('lg:grid-cols-[minmax(14rem,18rem)_minmax(0,1fr)]')
+  expect(explorer?.className).not.toContain('sm:grid-cols-')
+  expect(explorer?.firstElementChild).toBe(sections)
+  expect(explorer?.lastElementChild?.className).toContain('min-w-0')
 })
 
 test('queries dead-link details only when the summary says the check ran', async () => {

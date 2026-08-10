@@ -2073,35 +2073,7 @@ export function SiteHealthSection({
               <p className="mb-3 text-sm text-secondary">{templateDetectionCopy(templateDetection)}</p>
             )}
 
-            <div id="site-health-map-explorer" className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(14rem,18rem)]">
-              {graphQuery.isLoading ? (
-                <GraphLoadingState />
-              ) : graphQuery.error ? (
-                <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-negative bg-negative-soft px-6 text-center lg:min-h-[520px]" role="alert">
-                  <div>
-                    <p className="text-sm font-medium text-negative">The interactive map could not be loaded.</p>
-                    <p className="mt-1 text-sm text-secondary">The page inventory and technical findings remain available.</p>
-                    <Button variant="secondary" size="sm" className="mt-4" onClick={() => setView('inventory')}>Open page inventory</Button>
-                  </div>
-                </div>
-              ) : (
-                <SiteGraphSigma
-                  nodes={graphQuery.data?.nodes ?? []}
-                  // Every edge, always. Hiding is done by the edge reducer, so
-                  // the graph identity never changes and the renderer is never
-                  // rebuilt when the toggle flips.
-                  edges={graphEdges}
-                  showTemplateLinks={showTemplateLinks || templateFilterUnavailable}
-                  layoutState={graphQuery.data?.layout.state ?? 'unavailable'}
-                  layoutUnavailableReason={graphQuery.data?.layout.state === 'unavailable' ? graphQuery.data.layout.reason : null}
-                  rootNodeKey={graphQuery.data?.rootNodeKey ?? null}
-                  selectedNodeKey={effectiveSelectedNodeKey}
-                  onSelectNode={(node) => setSelectedNodeKey(node.nodeKey)}
-                  onOpenInventory={() => setView('inventory')}
-                  ariaLabel={`Interactive site map showing ${metricValue(graphQuery.data?.nodes.length ?? 0)} pages and ${metricValue(visibleGraphEdges.length)} internal links`}
-                />
-              )}
-
+            <div id="site-health-map-explorer" className="grid gap-4 lg:grid-cols-[minmax(14rem,18rem)_minmax(0,1fr)]">
               <aside className="rounded-lg border border-default bg-surface-subtle" aria-labelledby="site-sections-heading">
                 <div className="border-b border-default px-4 py-3">
                   <h3 id="site-sections-heading" className="text-sm font-semibold text-heading">Site sections</h3>
@@ -2120,6 +2092,35 @@ export function SiteHealthSection({
                   )}
                 </div>
               </aside>
+
+              <div className="min-w-0">
+                {graphQuery.isLoading ? (
+                  <GraphLoadingState />
+                ) : graphQuery.error ? (
+                  <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-negative bg-negative-soft px-6 text-center lg:min-h-[520px]" role="alert">
+                    <div>
+                      <p className="text-sm font-medium text-negative">The interactive map could not be loaded.</p>
+                      <p className="mt-1 text-sm text-secondary">The page inventory and technical findings remain available.</p>
+                      <Button variant="secondary" size="sm" className="mt-4" onClick={() => setView('inventory')}>Open page inventory</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <SiteGraphSigma
+                    nodes={graphQuery.data?.nodes ?? []}
+                    // Every edge, always. Hiding is done by the edge reducer,
+                    // so toggling template links never rebuilds the renderer.
+                    edges={graphEdges}
+                    showTemplateLinks={showTemplateLinks || templateFilterUnavailable}
+                    layoutState={graphQuery.data?.layout.state ?? 'unavailable'}
+                    layoutUnavailableReason={graphQuery.data?.layout.state === 'unavailable' ? graphQuery.data.layout.reason : null}
+                    rootNodeKey={graphQuery.data?.rootNodeKey ?? null}
+                    selectedNodeKey={effectiveSelectedNodeKey}
+                    onSelectNode={(node) => setSelectedNodeKey(node.nodeKey)}
+                    onOpenInventory={() => setView('inventory')}
+                    ariaLabel={`Interactive site map showing ${metricValue(graphQuery.data?.nodes.length ?? 0)} pages and ${metricValue(visibleGraphEdges.length)} internal links`}
+                  />
+                )}
+              </div>
             </div>
 
           </section>
