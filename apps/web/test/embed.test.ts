@@ -203,3 +203,11 @@ it('keeps the overview tab id on the wire however the label reads', () => {
   expect(resolveEmbedProjectTab('overview', ['overview', 'technical-aeo'])).toBe('overview')
   expect(isEmbedProjectTabAllowed('ai-visibility', ['overview'])).toBe(false)
 })
+
+// Site Health replaces the visible Technical AEO label, but existing embed
+// allowlists and saved routes must continue to use the stable wire token.
+it('keeps the technical-aeo tab id on the wire however the Site Health label reads', () => {
+  expect(isEmbedProjectTabAllowed('technical-aeo', ['technical-aeo'])).toBe(true)
+  expect(resolveEmbedProjectTab('technical-aeo', ['overview', 'technical-aeo'])).toBe('technical-aeo')
+  expect(isEmbedProjectTabAllowed('site-health', ['technical-aeo'])).toBe(false)
+})

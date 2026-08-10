@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import Fastify from 'fastify'
 import { eq } from 'drizzle-orm'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createClient,
   migrate,
@@ -15,6 +15,9 @@ import {
   siteCrawlAttempts,
   siteCrawlEdges,
   siteCrawlFindings,
+  siteCrawlGraphEdges,
+  siteCrawlGraphLayouts,
+  siteCrawlGraphNodes,
   siteCrawlPages,
   siteCrawlRunRequests,
   siteCrawlSnapshots,
@@ -25,11 +28,16 @@ import type {
   SiteAuditScoreDto,
   SiteAuditTrendResponseDto,
   SiteCrawlDeadLinksResponseDto,
+  SiteCrawlGraphResponseDto,
   SiteCrawlInternalLinksResponseDto,
   SiteCrawlNeighborsResponseDto,
+  SiteCrawlPageAuditDto,
   SiteCrawlPagesResponseDto,
   SiteCrawlStructureResponseDto,
   SiteCrawlSummaryDto,
+  SiteHealthChangesResponseDto,
+  SiteHealthPathResponseDto,
+  SiteHealthSubgraphResponseDto,
 } from '@ainyc/canonry-contracts'
 import { apiRoutes } from '../src/index.js'
 
@@ -137,7 +145,7 @@ function buildCtx(): Ctx {
   }).run()
   db.insert(siteCrawlSnapshots).values({
     id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId,
-    rootUrl: 'https://example.com/', crawlSchemaVersion: '1.0', engineVersion: 'crawl-test',
+    requestedRootUrl: 'https://origin.example.com/', rootUrl: 'https://example.com/', crawlSchemaVersion: '1.0', engineVersion: 'crawl-test',
     normalizationVersion: 'url-v1', indexabilityVersion: 'index-v1', linkScoreVersion: 'links-v1',
     effectiveOptions: { maxPages: 100, checkDeadLinks: true }, checkDeadLinks: true,
     complete: true, termination: 'completed', detailsAvailable: true,
@@ -148,35 +156,73 @@ function buildCtx(): Ctx {
     {
       id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'home',
       url: 'https://example.com/', finalUrl: 'https://example.com/', path: '/', parentPath: '/', discoverySource: 'sitemap',
-      fetchState: 'fetched', httpStatus: 200, indexabilityState: 'eligible', auditState: 'complete', auditScore: 88,
+      fetchState: 'html', httpStatus: 200, indexabilityState: 'indexable', auditState: 'complete', auditScore: 88,
+      auditFields: {
+        // Pre-evidence crawl shape: scores remain readable, but the detail
+        // endpoint must not claim that empty finding arrays are complete.
+        factors: [{ id: 'structured-data', name: 'Structured Data', weight: 12, score: 88 }],
+      },
       inventoryEligible: true, depth: 0, outboundUniqueEdges: 2, outboundOccurrences: 3, linkScoreRaw: 10, linkScoreNormalized: 1,
       createdAt: tB, updatedAt: tB,
     },
     {
       id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'guide',
       url: 'https://example.com/guide', finalUrl: 'https://example.com/guide', path: '/guide', parentPath: '/', discoverySource: 'link',
-      fetchState: 'fetched', httpStatus: 200, indexabilityState: 'eligible', auditState: 'complete', auditScore: 42,
+      fetchState: 'html', httpStatus: 200, indexabilityState: 'indexable', auditState: 'complete', auditScore: 42,
+      auditFields: {
+        schemaVersion: '1.0',
+        factors: [{
+          id: 'content-depth', name: 'Content Depth', weight: 12, score: 20, status: 'fail', applicable: true,
+          findings: [{ type: 'missing', code: 'content-depth.word-count.low', message: 'Low content depth (120 words).' }],
+          recommendations: ['Add more comprehensive copy covering key user questions.'],
+        }],
+        criticalDefects: [{
+          id: 'missing-h1', severity: 'critical', detail: 'No H1 tag found.', recommendation: 'Add one descriptive H1.',
+        }],
+      },
       inventoryEligible: true, depth: 1, inboundUniqueEdges: 1, inboundOccurrences: 2, linkScoreRaw: 4, linkScoreNormalized: 0.4,
       createdAt: tB, updatedAt: tB,
     },
     {
       id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'gone',
-      url: 'https://example.com/gone', path: '/gone', parentPath: '/', discoverySource: 'link', fetchState: 'fetched', httpStatus: 404,
-      indexabilityState: 'ineligible', auditState: 'skipped', inventoryEligible: false, depth: 1, createdAt: tB, updatedAt: tB,
+      url: 'https://example.com/gone', path: '/gone', parentPath: '/', discoverySource: 'link', fetchState: 'html', httpStatus: 404,
+      indexabilityState: 'noindex', auditState: 'skipped', inventoryEligible: false, depth: 1, createdAt: tB, updatedAt: tB,
     },
   ]).run()
   db.insert(siteCrawlEdges).values([
     {
       id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, edgeKey: 'home-guide',
       sourceNodeKey: 'home', sourceUrl: 'https://example.com/', targetNodeKey: 'guide', targetUrl: 'https://example.com/guide',
-      relation: 'a', internal: true, followable: true, occurrences: 2, followableOccurrences: 2, nofollowOccurrences: 0,
+      relation: 'anchor', internal: true, followable: true, occurrences: 2, followableOccurrences: 2, nofollowOccurrences: 0,
       anchors: ['Guide'], createdAt: tB, updatedAt: tB,
     },
     {
       id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, edgeKey: 'home-gone',
       sourceNodeKey: 'home', sourceUrl: 'https://example.com/', targetNodeKey: 'gone', targetUrl: 'https://example.com/gone',
-      relation: 'a', internal: true, followable: false, occurrences: 1, followableOccurrences: 0, nofollowOccurrences: 1,
+      relation: 'anchor', internal: true, followable: false, occurrences: 1, followableOccurrences: 0, nofollowOccurrences: 1,
       anchors: ['Old'], createdAt: tB, updatedAt: tB,
+    },
+  ]).run()
+  db.insert(siteCrawlGraphLayouts).values({
+    id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId,
+    state: 'ready', layoutVersion: 'site-health-fa2-v1', totalNodes: 3, totalEdges: 2,
+    nodeCount: 3, edgeCount: 2, createdAt: tB, updatedAt: tB,
+  }).run()
+  db.insert(siteCrawlGraphNodes).values([
+    { id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'home', sampleRank: 0, x: 0, y: 0, createdAt: tB },
+    { id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'guide', sampleRank: 1, x: 0.5, y: 0.25, createdAt: tB },
+    { id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, nodeKey: 'gone', sampleRank: 2, x: -0.4, y: 0.3, createdAt: tB },
+  ]).run()
+  db.insert(siteCrawlGraphEdges).values([
+    {
+      id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId,
+      edgeKey: 'home-guide', sampleRank: 0, sourceNodeKey: 'home', targetNodeKey: 'guide',
+      followable: true, occurrences: 2, createdAt: tB,
+    },
+    {
+      id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId,
+      edgeKey: 'home-gone', sampleRank: 1, sourceNodeKey: 'home', targetNodeKey: 'gone',
+      followable: false, occurrences: 1, createdAt: tB,
     },
   ]).run()
   db.insert(siteCrawlFindings).values({
@@ -207,6 +253,38 @@ afterEach(async () => {
 async function get<T>(url: string): Promise<{ status: number; body: T }> {
   const res = await ctx.app.inject({ method: 'GET', url })
   return { status: res.statusCode, body: res.json() as T }
+}
+
+function seedMinimalComparableCrawlForRunA(): void {
+  const createdAt = ctx.db.select({ createdAt: runs.createdAt }).from(runs).where(eq(runs.id, ctx.runA)).get()!.createdAt
+  const attemptId = crypto.randomUUID()
+  ctx.db.insert(siteCrawlAttempts).values({
+    id: attemptId, projectId: ctx.projectId, runId: ctx.runA, attemptNumber: 1, state: 'completed',
+    pagesDiscovered: 2, pagesFetched: 2, pagesEligible: 2, edgesDiscovered: 0,
+    startedAt: createdAt, finishedAt: createdAt, createdAt, updatedAt: createdAt,
+  }).run()
+  ctx.db.insert(siteCrawlSnapshots).values({
+    id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId,
+    rootUrl: 'https://example.com/', crawlSchemaVersion: '1.0', engineVersion: 'crawl-test',
+    normalizationVersion: 'url-v1', indexabilityVersion: 'index-v1', linkScoreVersion: 'links-v1',
+    complete: true, termination: 'completed', detailsAvailable: true,
+    pagesDiscovered: 2, pagesFetched: 2, pagesEligible: 2, edgesDiscovered: 0,
+    createdAt, updatedAt: createdAt,
+  }).run()
+  ctx.db.insert(siteCrawlPages).values([
+    {
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'home',
+      url: 'https://example.com/', path: '/', parentPath: '/', discoverySource: 'sitemap', fetchState: 'html',
+      indexabilityState: 'indexable', auditState: 'complete', inventoryEligible: true, depth: 0,
+      createdAt, updatedAt: createdAt,
+    },
+    {
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'old',
+      url: 'https://example.com/old', path: '/old', parentPath: '/', discoverySource: 'link', fetchState: 'html',
+      indexabilityState: 'indexable', auditState: 'complete', inventoryEligible: true, depth: 1,
+      createdAt, updatedAt: createdAt,
+    },
+  ]).run()
 }
 
 describe('GET /technical-aeo (score)', () => {
@@ -304,12 +382,36 @@ describe('GET /technical-aeo crawl reads', () => {
       hasCrawlData: true,
       legacyAuditAvailable: true,
       runId: ctx.runB,
+      requestedRootUrl: 'https://origin.example.com/',
+      rootUrl: 'https://example.com/',
       complete: true,
       detailsAvailable: true,
       deadLinks: { state: 'complete', checked: 2, found: 1 },
     })
     expect(body.counts.pagesEligible).toBe(2)
     expect(body.runId).not.toBe(ctx.probeRun)
+  })
+
+  it('uses run ID as the stable tie-breaker for equally-timed crawl snapshots', async () => {
+    const createdAt = '2099-01-01T00:00:00.000Z'
+    const lowRunId = '00000000-0000-4000-8000-000000000001'
+    const highRunId = 'ffffffff-ffff-4fff-bfff-ffffffffffff'
+    for (const runId of [lowRunId, highRunId]) {
+      const attemptId = crypto.randomUUID()
+      ctx.db.insert(runs).values({
+        id: runId, projectId: ctx.projectId, kind: 'site-audit', status: 'completed', trigger: 'manual', createdAt, finishedAt: createdAt,
+      }).run()
+      ctx.db.insert(siteCrawlAttempts).values({
+        id: attemptId, projectId: ctx.projectId, runId, attemptNumber: 1, state: 'completed', createdAt, updatedAt: createdAt,
+      }).run()
+      ctx.db.insert(siteCrawlSnapshots).values({
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId, attemptId, rootUrl: 'https://example.com/',
+        complete: true, detailsAvailable: true, createdAt, updatedAt: createdAt,
+      }).run()
+    }
+
+    const { body } = await get<SiteCrawlSummaryDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl')
+    expect(body.runId).toBe(highRunId)
   })
 
   it('keeps the last complete graph current when a newer partial crawl exists', async () => {
@@ -326,12 +428,40 @@ describe('GET /technical-aeo crawl reads', () => {
       id: crypto.randomUUID(), projectId: ctx.projectId, runId: partialRun, attemptId: partialAttempt,
       rootUrl: 'https://example.com/', complete: false, termination: 'max-pages', detailsAvailable: true, createdAt: now, updatedAt: now,
     }).run()
+    ctx.db.insert(siteCrawlPages).values([
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: partialRun, attemptId: partialAttempt, nodeKey: 'partial-home',
+        url: 'https://example.com/', path: '/', parentPath: '/', discoverySource: 'root', fetchState: 'html',
+        indexabilityState: 'indexable', auditState: 'complete', inventoryEligible: true, depth: 0, createdAt: now, updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: partialRun, attemptId: partialAttempt, nodeKey: 'partial-target',
+        url: 'https://example.com/partial-target', path: '/partial-target', parentPath: '/', discoverySource: 'link', fetchState: 'html',
+        indexabilityState: 'indexable', auditState: 'complete', inventoryEligible: true, depth: 1, createdAt: now, updatedAt: now,
+      },
+    ]).run()
+    ctx.db.insert(siteCrawlEdges).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: partialRun, attemptId: partialAttempt, edgeKey: 'partial-home-target',
+      sourceNodeKey: 'partial-home', sourceUrl: 'https://example.com/', targetNodeKey: 'partial-target', targetUrl: 'https://example.com/partial-target',
+      relation: 'anchor', internal: true, followable: true, occurrences: 1, followableOccurrences: 1, nofollowOccurrences: 0,
+      anchors: ['Partial target'], createdAt: now, updatedAt: now,
+    }).run()
 
     const current = await get<SiteCrawlSummaryDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl')
     const historical = await get<SiteCrawlSummaryDto>(`/api/v1/projects/tech-aeo/technical-aeo/crawl?runId=${partialRun}`)
+    const subgraph = await get<SiteHealthSubgraphResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/subgraph?runId=${partialRun}`)
+    const path = await get<SiteHealthPathResponseDto>(`/api/v1/projects/tech-aeo/technical-aeo/path?runId=${partialRun}&toNodeKey=partial-target`)
     expect(current.body.runId).toBe(ctx.runB)
     expect(historical.body.runId).toBe(partialRun)
     expect(historical.body.complete).toBe(false)
+    expect(subgraph.body).toMatchObject({
+      runId: partialRun,
+      state: 'ready',
+      complete: false,
+      termination: 'max-pages',
+      countAccuracy: 'exact',
+    })
+    expect(path.body).toMatchObject({ runId: partialRun, state: 'found', complete: false, termination: 'max-pages' })
   })
 
   it('does not turn a legacy-only scorecard into crawl data', async () => {
@@ -365,6 +495,238 @@ describe('GET /technical-aeo crawl reads', () => {
     expect(status).toBe(404)
   })
 
+  it('reads deterministic bounded positions and edges from the persisted projection', async () => {
+    const first = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph?maxNodes=2&maxEdges=1')
+    const second = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph?maxNodes=2&maxEdges=1')
+
+    expect(first.body).toMatchObject({
+      hasCrawlData: true,
+      runId: ctx.runB,
+      layout: { state: 'ready', version: 'site-health-fa2-v1' },
+      totalNodes: 3,
+      totalEdges: 2,
+      omittedNodes: 1,
+      omittedEdges: 1,
+      sampled: true,
+    })
+    expect(first.body.nodes.map((node) => node.nodeKey)).toEqual(['home', 'guide'])
+    expect(first.body.nodes[0]).toMatchObject({ nodeKey: 'home', x: 0, y: 0 })
+    expect(first.body.edges.map((edge) => edge.edgeKey)).toEqual(['home-guide'])
+    expect(first.body.edges.every((edge) =>
+      first.body.nodes.some((node) => node.nodeKey === edge.sourceNodeKey)
+      && first.body.nodes.some((node) => node.nodeKey === edge.targetNodeKey),
+    )).toBe(true)
+    expect(second.body).toEqual(first.body)
+  })
+
+  it('uses resolved canonical identity for the shared inventory and graph health state', async () => {
+    ctx.db.update(siteCrawlPages).set({
+      // The crawler resolved this identity to home. URL text is intentionally
+      // not used for the health decision.
+      canonicalUrl: 'https://example.com/',
+      canonicalNodeKey: 'home',
+      fetchState: 'html',
+      indexabilityState: 'indexable',
+      indexabilityReasons: [],
+    }).where(eq(siteCrawlPages.nodeKey, 'guide')).run()
+
+    const pages = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?sort=path')
+    const { body } = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph')
+    expect(pages.body.pages.find((page) => page.nodeKey === 'guide')?.healthState).toBe('hidden')
+    expect(body.nodes.find((node) => node.nodeKey === 'guide')?.healthState).toBe('hidden')
+  })
+
+  it('returns exact page audit evidence for one graph node in the selected crawl', async () => {
+    const { status, body } = await get<SiteCrawlPageAuditDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit?nodeKey=guide',
+    )
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({
+      state: 'ready',
+      project: 'tech-aeo',
+      runId: ctx.runB,
+      complete: true,
+      termination: 'completed',
+      nodeKey: 'guide',
+      url: 'https://example.com/guide',
+      auditState: 'complete',
+      auditScore: 42,
+      evidenceState: 'complete',
+      factors: [{
+        id: 'content-depth',
+        score: 20,
+        status: 'fail',
+        applicable: true,
+        findings: [{ code: 'content-depth.word-count.low' }],
+        recommendations: ['Add more comprehensive copy covering key user questions.'],
+      }],
+      criticalDefects: [{ id: 'missing-h1', severity: 'critical' }],
+    })
+  })
+
+  it('distinguishes legacy scores-only evidence from a page that was not audited', async () => {
+    const legacy = await get<SiteCrawlPageAuditDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit?runId=${ctx.runB}&url=${encodeURIComponent('https://example.com/')}`,
+    )
+    const notAudited = await get<SiteCrawlPageAuditDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit?nodeKey=gone',
+    )
+
+    expect(legacy.body).toMatchObject({
+      state: 'ready',
+      nodeKey: 'home',
+      auditScore: 88,
+      evidenceState: 'scores-only',
+      factors: [{
+        id: 'structured-data', score: 88, status: 'pass', applicable: null,
+        findings: [], recommendations: [],
+      }],
+      criticalDefects: [],
+    })
+    expect(notAudited.body).toMatchObject({
+      state: 'not-audited', nodeKey: 'gone', auditScore: null,
+      factors: [], criticalDefects: [],
+    })
+  })
+
+  it('returns explicit page-audit availability states and enforces one selector', async () => {
+    const missing = await get<SiteCrawlPageAuditDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit?nodeKey=missing',
+    )
+    expect(missing.body).toMatchObject({ state: 'not-found', runId: ctx.runB, complete: true })
+
+    const noCrawlProjectId = crypto.randomUUID()
+    const now = new Date().toISOString()
+    ctx.db.insert(projects).values({
+      id: noCrawlProjectId, name: 'no-crawl', displayName: 'No crawl', canonicalDomain: 'none.example',
+      country: 'US', language: 'en', providers: [], locations: [], createdAt: now, updatedAt: now,
+    }).run()
+    const noCrawl = await get<SiteCrawlPageAuditDto>(
+      '/api/v1/projects/no-crawl/technical-aeo/crawl/pages/audit?nodeKey=home',
+    )
+    expect(noCrawl.body).toEqual({ state: 'no-crawl', project: 'no-crawl', runId: null })
+
+    ctx.db.insert(siteCrawlSnapshots).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId: null,
+      rootUrl: 'https://example.com/', complete: true, termination: 'completed', detailsAvailable: false,
+      createdAt: now, updatedAt: now,
+    }).run()
+    const unavailable = await get<SiteCrawlPageAuditDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit?runId=${ctx.runA}&nodeKey=home`,
+    )
+    expect(unavailable.body).toMatchObject({
+      state: 'details-unavailable', runId: ctx.runA, complete: true, termination: 'completed',
+    })
+
+    for (const query of ['', '?nodeKey=home&url=https%3A%2F%2Fexample.com%2F']) {
+      const invalid = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit${query}`,
+      })
+      expect(invalid.statusCode).toBe(400)
+      expect(invalid.json().error.code).toBe('VALIDATION_ERROR')
+    }
+
+    for (const query of [
+      '?nodeKey=guide&nodeKey=home',
+      '?url=https%3A%2F%2Fexample.com%2Fguide&url=https%3A%2F%2Fexample.com%2F',
+      `?nodeKey=guide&runId=${ctx.runB}&runId=${ctx.runA}`,
+    ]) {
+      const repeated = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/tech-aeo/technical-aeo/crawl/pages/audit${query}`,
+      })
+      expect(repeated.statusCode).toBe(400)
+      expect(repeated.json().error.code).toBe('VALIDATION_ERROR')
+    }
+  })
+
+  it('does not rebuild or reorder the projection from canonical crawl rows at read time', async () => {
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    const now = new Date().toISOString()
+    ctx.db.insert(siteCrawlPages).values([
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'alpha',
+        url: 'https://example.com/alpha', path: '/alpha', parentPath: '/', discoverySource: 'link', fetchState: 'html', httpStatus: 200,
+        indexabilityState: 'indexable', auditState: 'complete', inventoryEligible: true, depth: 1, linkScoreNormalized: 0.9,
+        createdAt: now, updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'beta',
+        url: 'https://example.com/beta', path: '/beta', parentPath: '/', discoverySource: 'link', fetchState: 'html', httpStatus: 200,
+        indexabilityState: 'indexable', auditState: 'complete', inventoryEligible: true, depth: 1, linkScoreNormalized: 0.9,
+        createdAt: now, updatedAt: now,
+      },
+    ]).run()
+
+    const { body } = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph?maxNodes=2&maxEdges=1')
+    expect(body.nodes.map((node) => node.nodeKey)).toEqual(['home', 'guide'])
+    expect(body.sampled).toBe(true)
+  })
+
+  it('caps graph projection query parameters and preserves an empty-state distinction', async () => {
+    const capped = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph?maxNodes=999999&maxEdges=999999')
+    expect(capped.body.nodes).toHaveLength(3)
+    expect(capped.body.edges).toHaveLength(2)
+
+    ctx.db.insert(projects).values({
+      id: crypto.randomUUID(), name: 'graph-fresh', displayName: 'Graph fresh', canonicalDomain: 'fresh.example',
+      country: 'US', language: 'en', providers: [], locations: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }).run()
+    const empty = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/graph-fresh/technical-aeo/graph')
+    expect(empty.body).toEqual({
+      project: 'graph-fresh', hasCrawlData: false, runId: null,
+      layout: { state: 'unavailable', version: null, reason: 'no-crawl' },
+      totalNodes: 0, totalEdges: 0, nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
+    })
+  })
+
+  it('reports a truthful unavailable layout for a crawl snapshot published before graph layouts', async () => {
+    const now = new Date().toISOString()
+    const projectId = crypto.randomUUID()
+    const runId = crypto.randomUUID()
+    const attemptId = crypto.randomUUID()
+    ctx.db.insert(projects).values({
+      id: projectId, name: 'graph-legacy', displayName: 'Graph legacy', canonicalDomain: 'legacy.example',
+      country: 'US', language: 'en', providers: [], locations: [], createdAt: now, updatedAt: now,
+    }).run()
+    ctx.db.insert(runs).values({ id: runId, projectId, kind: 'site-audit', status: 'completed', trigger: 'manual', createdAt: now }).run()
+    ctx.db.insert(siteCrawlAttempts).values({
+      id: attemptId, projectId, runId, attemptNumber: 1, state: 'completed', createdAt: now, updatedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlSnapshots).values({
+      id: crypto.randomUUID(), projectId, runId, attemptId, rootUrl: 'https://legacy.example/',
+      complete: true, detailsAvailable: true, createdAt: now, updatedAt: now,
+    }).run()
+
+    const { body } = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/graph-legacy/technical-aeo/graph')
+    expect(body).toMatchObject({
+      hasCrawlData: true,
+      runId,
+      layout: { state: 'unavailable', version: null, reason: 'legacy-snapshot' },
+      nodes: [], edges: [], sampled: false,
+    })
+  })
+
+  it('preserves persisted totals when publish-time layout fails', async () => {
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    const now = new Date().toISOString()
+    ctx.db.delete(siteCrawlGraphLayouts).where(eq(siteCrawlGraphLayouts.runId, ctx.runB)).run()
+    ctx.db.insert(siteCrawlGraphLayouts).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!,
+      state: 'unavailable', layoutVersion: null, failureCode: 'layout-timeout',
+      totalNodes: 3, totalEdges: 2, nodeCount: 0, edgeCount: 0, createdAt: now, updatedAt: now,
+    }).run()
+
+    const { body } = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph')
+    expect(body).toMatchObject({
+      layout: { state: 'unavailable', version: null, reason: 'layout-failed' },
+      totalNodes: 3, totalEdges: 2, omittedNodes: 3, omittedEdges: 2, sampled: true,
+      nodes: [], edges: [],
+    })
+  })
+
   it('cursor-pages crawl inventory and preserves technical inventory eligibility', async () => {
     const first = await get<SiteCrawlPagesResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/crawl/pages?limit=1&sort=path&inventoryEligible=true')
     expect(first.body.total).toBe(2)
@@ -393,6 +755,348 @@ describe('GET /technical-aeo crawl reads', () => {
     expect(dead.body).toMatchObject({ state: 'complete', total: 1, deadLinks: [{ targetUrl: 'https://example.com/gone' }] })
   })
 
+  it('returns a bounded canonical subgraph without presentation coordinates', async () => {
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    const now = new Date().toISOString()
+    ctx.db.insert(siteCrawlPages).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'canonical-only',
+      url: 'https://example.com/canonical-only', finalUrl: 'https://example.com/canonical-only',
+      path: '/canonical-only', parentPath: '/', discoverySource: 'link', fetchState: 'html', httpStatus: 200,
+      indexabilityState: 'indexable', auditState: 'complete', inventoryEligible: true, depth: 2,
+      createdAt: now, updatedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlEdges).values([
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, edgeKey: 'home-canonical-only',
+        sourceNodeKey: 'home', sourceUrl: 'https://example.com/', targetNodeKey: 'canonical-only', targetUrl: 'https://example.com/canonical-only',
+        relation: 'anchor', internal: true, followable: true, occurrences: 1, followableOccurrences: 1, nofollowOccurrences: 0,
+        anchors: ['Canonical only'], createdAt: now, updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, edgeKey: 'guide-canonical-only',
+        sourceNodeKey: 'guide', sourceUrl: 'https://example.com/guide', targetNodeKey: 'canonical-only', targetUrl: 'https://example.com/canonical-only',
+        relation: 'anchor', internal: true, followable: true, occurrences: 1, followableOccurrences: 1, nofollowOccurrences: 0,
+        anchors: ['Canonical only'], createdAt: now, updatedAt: now,
+      },
+    ]).run()
+
+    const { status, body } = await get<SiteHealthSubgraphResponseDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/subgraph?nodeKey=canonical-only&hops=1&maxNodes=2&maxEdges=1',
+    )
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({
+      project: 'tech-aeo',
+      hasCrawlData: true,
+      runId: ctx.runB,
+      focusNodeKey: 'canonical-only',
+      focusUrl: 'https://example.com/canonical-only',
+      hops: 1,
+      countAccuracy: 'lower-bound',
+      truncated: true,
+    })
+    expect(body.nodes).toHaveLength(2)
+    expect(body.edges).toHaveLength(1)
+    expect(body.nodes[0]).toMatchObject({ nodeKey: 'canonical-only', distance: 0, relationToFocus: 'focus', healthState: 'eligible' })
+    expect(body.nodes.every((node) => !('x' in node) && !('y' in node))).toBe(true)
+    expect(body.edges.every((edge) =>
+      body.nodes.some((node) => node.nodeKey === edge.sourceNodeKey)
+      && body.nodes.some((node) => node.nodeKey === edge.targetNodeKey),
+    )).toBe(true)
+  })
+
+  it('marks a hop-bounded subgraph as a lower bound when outermost neighbors link together', async () => {
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    const now = new Date().toISOString()
+    ctx.db.insert(siteCrawlEdges).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, edgeKey: 'guide-gone',
+      sourceNodeKey: 'guide', sourceUrl: 'https://example.com/guide', targetNodeKey: 'gone', targetUrl: 'https://example.com/gone',
+      relation: 'anchor', internal: true, followable: true, occurrences: 1, followableOccurrences: 1, nofollowOccurrences: 0,
+      anchors: ['Related page'], createdAt: now, updatedAt: now,
+    }).run()
+
+    const { status, body } = await get<SiteHealthSubgraphResponseDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/subgraph?nodeKey=home&hops=1&maxNodes=3&maxEdges=2',
+    )
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({
+      countAccuracy: 'lower-bound',
+      truncated: true,
+      totalEdges: 3,
+      omittedEdges: 1,
+    })
+    expect(body.edges).toHaveLength(2)
+    expect(body.edges.map((edge) => edge.edgeKey)).not.toContain('guide-gone')
+  })
+
+  it('finds the shortest directed followable path and ignores a direct nofollow edge', async () => {
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    const now = new Date().toISOString()
+    ctx.db.insert(siteCrawlEdges).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, edgeKey: 'guide-gone',
+      sourceNodeKey: 'guide', sourceUrl: 'https://example.com/guide', targetNodeKey: 'gone', targetUrl: 'https://example.com/gone',
+      relation: 'anchor', internal: true, followable: true, occurrences: 1, followableOccurrences: 1, nofollowOccurrences: 0,
+      anchors: ['Next'], createdAt: now, updatedAt: now,
+    }).run()
+
+    const found = await get<SiteHealthPathResponseDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/path?fromNodeKey=home&toNodeKey=gone',
+    )
+    expect(found.status).toBe(200)
+    expect(found.body.state).toBe('found')
+    expect(found.body.nodes.map((node) => node.nodeKey)).toEqual(['home', 'guide', 'gone'])
+    expect(found.body.edges.map((edge) => edge.edgeKey)).toEqual(['home-guide', 'guide-gone'])
+    expect(found.body.edges.every((edge) => edge.followable && edge.internal)).toBe(true)
+
+    const reverse = await get<SiteHealthPathResponseDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/path?fromNodeKey=gone&toNodeKey=home',
+    )
+    expect(reverse.status).toBe(200)
+    expect(reverse.body.state).toBe('unreachable')
+    expect(reverse.body.nodes).toEqual([])
+    expect(reverse.body.edges).toEqual([])
+  })
+
+  it('diffs canonical crawl snapshots while ignoring graph layout coordinates', async () => {
+    const now = new Date().toISOString()
+    const crawlCreatedAt = ctx.db.select({ createdAt: runs.createdAt }).from(runs).where(eq(runs.id, ctx.runA)).get()!.createdAt
+    const attemptId = crypto.randomUUID()
+    ctx.db.insert(siteCrawlAttempts).values({
+      id: attemptId, projectId: ctx.projectId, runId: ctx.runA, attemptNumber: 1, state: 'completed',
+      pagesDiscovered: 3, pagesFetched: 3, pagesEligible: 2, edgesDiscovered: 2,
+      startedAt: now, finishedAt: now, createdAt: now, updatedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlSnapshots).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId,
+      rootUrl: 'https://example.com/', crawlSchemaVersion: '1.0', engineVersion: 'crawl-test',
+      normalizationVersion: 'url-v1', indexabilityVersion: 'index-v1', linkScoreVersion: 'links-v1',
+      effectiveOptions: { maxPages: 100, checkDeadLinks: true }, checkDeadLinks: true,
+      complete: true, termination: 'completed', detailsAvailable: true,
+      pagesDiscovered: 3, pagesFetched: 3, pagesEligible: 2, edgesDiscovered: 2, findingsCount: 0,
+      deadLinkState: 'complete', deadLinksChecked: 2, deadLinksFound: 0, createdAt: crawlCreatedAt, updatedAt: crawlCreatedAt,
+    }).run()
+    ctx.db.insert(siteCrawlPages).values([
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'home',
+        url: 'https://example.com/', finalUrl: 'https://example.com/', path: '/', parentPath: '/', discoverySource: 'sitemap',
+        fetchState: 'html', httpStatus: 200, indexabilityState: 'indexable', auditState: 'complete', auditScore: 80,
+        inventoryEligible: true, depth: 0, outboundUniqueEdges: 2, outboundOccurrences: 3, linkScoreRaw: 10, linkScoreNormalized: 1,
+        createdAt: now, updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'guide',
+        url: 'https://example.com/guide', finalUrl: 'https://example.com/guide', path: '/guide', parentPath: '/', discoverySource: 'link',
+        fetchState: 'html', httpStatus: 200, indexabilityState: 'indexable', auditState: 'complete', auditScore: 42,
+        inventoryEligible: true, depth: 1, inboundUniqueEdges: 1, inboundOccurrences: 2, linkScoreRaw: 4, linkScoreNormalized: 0.4,
+        createdAt: now, updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'old',
+        url: 'https://example.com/old', finalUrl: 'https://example.com/old', path: '/old', parentPath: '/', discoverySource: 'link',
+        fetchState: 'html', httpStatus: 200, indexabilityState: 'indexable', auditState: 'complete', auditScore: 50,
+        inventoryEligible: true, depth: 1, inboundUniqueEdges: 1, inboundOccurrences: 1,
+        createdAt: now, updatedAt: now,
+      },
+    ]).run()
+    ctx.db.insert(siteCrawlEdges).values([
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, edgeKey: 'home-guide',
+        sourceNodeKey: 'home', sourceUrl: 'https://example.com/', targetNodeKey: 'guide', targetUrl: 'https://example.com/guide',
+        relation: 'anchor', internal: true, followable: true, occurrences: 2, followableOccurrences: 2, nofollowOccurrences: 0,
+        anchors: ['Previous guide label'], createdAt: now, updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, edgeKey: 'home-old',
+        sourceNodeKey: 'home', sourceUrl: 'https://example.com/', targetNodeKey: 'old', targetUrl: 'https://example.com/old',
+        relation: 'anchor', internal: true, followable: true, occurrences: 1, followableOccurrences: 1, nofollowOccurrences: 0,
+        anchors: ['Old'], createdAt: now, updatedAt: now,
+      },
+    ]).run()
+    ctx.db.insert(siteCrawlGraphLayouts).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId,
+      state: 'ready', layoutVersion: 'site-health-fa2-v1', totalNodes: 3, totalEdges: 2,
+      nodeCount: 3, edgeCount: 2, createdAt: now, updatedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlGraphNodes).values([
+      { id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'home', sampleRank: 0, x: 99, y: -99, createdAt: now },
+      { id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'guide', sampleRank: 1, x: 42, y: 42, createdAt: now },
+      { id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runA, attemptId, nodeKey: 'old', sampleRank: 2, x: -42, y: -42, createdAt: now },
+    ]).run()
+
+    const { status, body } = await get<SiteHealthChangesResponseDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/changes?fromRunId=${ctx.runA}&toRunId=${ctx.runB}&limit=100`,
+    )
+    expect(status).toBe(200)
+    expect(body.state).toBe('ready')
+    if (body.state !== 'ready') return
+
+    expect(body.summary).toEqual({
+      pages: { added: 1, removed: 1, changed: 1 },
+      links: { added: 1, removed: 1, changed: 1 },
+    })
+    expect(body.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entity: 'page', change: 'added', key: 'gone', before: null }),
+      expect.objectContaining({ entity: 'page', change: 'removed', key: 'old', after: null }),
+      expect.objectContaining({ entity: 'page', change: 'changed', key: 'home', changedFields: ['auditScore'] }),
+      expect.objectContaining({ entity: 'link', change: 'added', key: 'home-gone', before: null }),
+      expect.objectContaining({ entity: 'link', change: 'removed', key: 'home-old', after: null }),
+      expect.objectContaining({ entity: 'link', change: 'changed', key: 'home-guide', changedFields: ['anchors'] }),
+    ]))
+    expect(body.changes.flatMap((change) => change.changedFields)).not.toContain('x')
+    expect(body.changes.flatMap((change) => change.changedFields)).not.toContain('y')
+    expect(body.changes.every((change) =>
+      (change.before === null || (!('x' in change.before) && !('y' in change.before)))
+      && (change.after === null || (!('x' in change.after) && !('y' in change.after))),
+    )).toBe(true)
+  })
+
+  it('keyset-pages every Site Health change once across page and link records', async () => {
+    seedMinimalComparableCrawlForRunA()
+    const records: string[] = []
+    let cursor: string | null = null
+
+    for (let page = 0; page < 10; page += 1) {
+      const result = await get<SiteHealthChangesResponseDto>(
+        `/api/v1/projects/tech-aeo/technical-aeo/changes?fromRunId=${ctx.runA}&toRunId=${ctx.runB}&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+      )
+      expect(result.status).toBe(200)
+      expect(result.body.state).toBe('ready')
+      if (result.body.state !== 'ready') return
+      expect(result.body.filters).toEqual({ scope: 'all', change: 'all' })
+      expect(result.body.summaryState).toBe(page === 0 ? 'exact' : 'omitted-on-continuation')
+      expect(result.body.total).toBe(page === 0 ? 6 : null)
+      expect(result.body.summary === null).toBe(page > 0)
+      expect(result.body.changes).toHaveLength(1)
+      records.push(`${result.body.changes[0]!.entity}:${result.body.changes[0]!.key}`)
+      cursor = result.body.nextCursor
+      if (cursor === null) break
+    }
+
+    expect(records).toEqual([
+      'page:gone',
+      'page:guide',
+      'page:home',
+      'page:old',
+      'link:home-gone',
+      'link:home-guide',
+    ])
+    expect(new Set(records).size).toBe(records.length)
+    expect(cursor).toBeNull()
+  })
+
+  it('omits the comparison summary on cursor pages instead of rerunning its joins', async () => {
+    seedMinimalComparableCrawlForRunA()
+    const rawAll = vi.spyOn(ctx.db, 'all')
+    const first = await get<SiteHealthChangesResponseDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/changes?fromRunId=${ctx.runA}&toRunId=${ctx.runB}&scope=pages&limit=1`,
+    )
+    expect(first.body.state).toBe('ready')
+    if (first.body.state !== 'ready') return
+    expect(first.body.nextCursor).toEqual(expect.any(String))
+    expect(first.body.nextCursor!.length).toBeLessThanOrEqual(2_048)
+    expect(first.body).toMatchObject({
+      filters: { scope: 'pages', change: 'all' },
+      summaryState: 'exact',
+      summary: {
+        pages: { added: 2, removed: 1, changed: 1 },
+        links: { added: 0, removed: 0, changed: 0 },
+      },
+      total: 4,
+    })
+    expect(rawAll).toHaveBeenCalledTimes(4) // two page-summary joins + two page-key queries
+
+    rawAll.mockClear()
+    const second = await get<SiteHealthChangesResponseDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/changes?fromRunId=${ctx.runA}&toRunId=${ctx.runB}&scope=pages&limit=1&cursor=${encodeURIComponent(first.body.nextCursor!)}`,
+    )
+    expect(second.body.state).toBe('ready')
+    if (second.body.state !== 'ready') return
+    expect(second.body.summaryState).toBe('omitted-on-continuation')
+    expect(second.body.summary).toBeNull()
+    expect(second.body.total).toBeNull()
+    expect(rawAll).toHaveBeenCalledTimes(2) // keyset work only; no full-snapshot summary joins
+  })
+
+  it('does not run irrelevant record-key scans for scoped change filters', async () => {
+    seedMinimalComparableCrawlForRunA()
+    const rawAll = vi.spyOn(ctx.db, 'all')
+    const result = await get<SiteHealthChangesResponseDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/changes?fromRunId=${ctx.runA}&toRunId=${ctx.runB}&scope=pages&change=added&limit=1`,
+    )
+    expect(result.body.state).toBe('ready')
+    if (result.body.state !== 'ready') return
+    expect(result.body.summary).toEqual({
+      pages: { added: 2, removed: 0, changed: 0 },
+      links: { added: 0, removed: 0, changed: 0 },
+    })
+    expect(result.body).toMatchObject({
+      filters: { scope: 'pages', change: 'added' },
+      summaryState: 'exact',
+      total: 2,
+    })
+    expect(result.body.changes).toEqual([
+      expect.objectContaining({ entity: 'page', change: 'added', key: 'gone' }),
+    ])
+    expect(rawAll).toHaveBeenCalledTimes(2) // one added-page summary + one added-page key query
+  })
+
+  it('rejects a Site Health changes cursor when its filter context changes', async () => {
+    seedMinimalComparableCrawlForRunA()
+    const first = await get<SiteHealthChangesResponseDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/changes?fromRunId=${ctx.runA}&toRunId=${ctx.runB}&scope=pages&limit=1`,
+    )
+    expect(first.body.state).toBe('ready')
+    if (first.body.state !== 'ready') return
+    expect(first.body.nextCursor).toEqual(expect.any(String))
+
+    const mismatch = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/projects/tech-aeo/technical-aeo/changes?fromRunId=${ctx.runA}&toRunId=${ctx.runB}&scope=links&cursor=${encodeURIComponent(first.body.nextCursor!)}`,
+    })
+    expect(mismatch.statusCode).toBe(400)
+    expect(mismatch.json()).toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Site Health changes cursor does not match this snapshot comparison and filter',
+      },
+    })
+  })
+
+  it('defaults either omitted Site Health changes endpoint to the adjacent complete crawl', async () => {
+    seedMinimalComparableCrawlForRunA()
+    const onlyTarget = await get<SiteHealthChangesResponseDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/changes?toRunId=${ctx.runB}`,
+    )
+    const onlyBaseline = await get<SiteHealthChangesResponseDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/changes?fromRunId=${ctx.runA}`,
+    )
+
+    for (const result of [onlyTarget, onlyBaseline]) {
+      expect(result.status).toBe(200)
+      expect(result.body).toMatchObject({
+        state: 'ready',
+        fromRunId: ctx.runA,
+        toRunId: ctx.runB,
+      })
+    }
+  })
+
+  it('rejects a changes comparison whose baseline is not earlier than its target', async () => {
+    seedMinimalComparableCrawlForRunA()
+    const result = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/projects/tech-aeo/technical-aeo/changes?fromRunId=${ctx.runB}&toRunId=${ctx.runA}`,
+    })
+    expect(result.statusCode).toBe(400)
+    expect(result.json()).toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'fromRunId must identify a crawl earlier than toRunId',
+      },
+    })
+  })
+
   it('surfaces synthetic folder levels when no folder landing page exists', async () => {
     const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
     const now = new Date().toISOString()
@@ -410,6 +1114,23 @@ describe('GET /technical-aeo crawl reads', () => {
     const guides = await get<SiteCrawlStructureResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/structure?parentPath=/docs/guides&limit=100')
     expect(guides.body.children).toContainEqual(expect.objectContaining({
       path: '/docs/guides/start', url: 'https://example.com/docs/guides/start', hasPage: true, pageCount: 1,
+    }))
+  })
+
+  it('counts legacy fetched rows in historical structure snapshots', async () => {
+    const snapshot = ctx.db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, ctx.runB)).get()!
+    const now = new Date().toISOString()
+    ctx.db.insert(siteCrawlPages).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId: ctx.runB, attemptId: snapshot.attemptId!, nodeKey: 'legacy-fetched',
+      url: 'https://example.com/legacy/page', finalUrl: 'https://example.com/legacy/page',
+      path: '/legacy/page', parentPath: '/legacy', discoverySource: 'sitemap', fetchState: 'fetched', httpStatus: 200,
+      indexabilityState: 'unknown', auditState: 'success', inventoryEligible: true, depth: 2, createdAt: now, updatedAt: now,
+    }).run()
+
+    const structure = await get<SiteCrawlStructureResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/structure?parentPath=/legacy&limit=100')
+    expect(structure.body.children).toContainEqual(expect.objectContaining({
+      path: '/legacy/page',
+      fetchedCount: 1,
     }))
   })
 

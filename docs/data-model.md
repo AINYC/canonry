@@ -27,8 +27,11 @@ erDiagram
   runs ||--o| site_crawl_run_requests : "freezes request identity"
   runs ||--o{ site_crawl_attempts : "executes"
   runs ||--o| site_crawl_snapshots : "publishes"
+  site_crawl_attempts ||--o| site_crawl_graph_layouts : "publishes derived layout"
   site_crawl_attempts ||--o{ site_crawl_pages : "observes"
   site_crawl_attempts ||--o{ site_crawl_edges : "observes"
+  site_crawl_graph_layouts ||--o{ site_crawl_graph_nodes : "positions sampled pages"
+  site_crawl_graph_layouts ||--o{ site_crawl_graph_edges : "samples rendered edges"
   site_crawl_attempts ||--o{ site_crawl_findings : "derives"
   site_crawl_attempts ||--o{ site_crawl_event_receipts : "checkpoints"
 
@@ -113,21 +116,45 @@ library changes.
 ### Technical AEO Crawl Persistence
 
 Migration 126 adds the local full-crawl graph beside the legacy
-`site_audit_snapshots` and `site_audit_pages` scorecard tables.
+`site_audit_snapshots` and `site_audit_pages` scorecard tables. Migration 127
+adds the separately persisted Site Health visualization projection: a
+publication-time Graphology ForceAtlas2 worker lays out a deterministic bounded
+sample (at most 20,000 nodes and 50,000 edges). Coordinates never alter the
+canonical crawl inventory or run in the browser. A new layout seeds surviving
+node keys from the prior complete, compatible layout so rescans preserve the
+operator's spatial frame while newly discovered pages receive deterministic
+hash seeds.
+Migration 128 preserves both the operator-requested crawl root and the
+effective root followed after a supported host redirect. It also indexes both
+graph-edge endpoints so derived-layout cleanup stays bounded.
 
 | Table | Purpose | Key Constraints |
 |-------|---------|----------------|
 | **site_crawl_run_requests** | Canonical effective options and identity for a queued crawl. Identical requests may reuse one active run; different options receive a conflict. | PK: `runId`; composite FK `(projectId, runId)` → runs |
 | **site_crawl_attempts** | Mutable event-stream progress for one execution attempt. | Unique: `(runId, attemptNumber)`; composite FK to runs |
-| **site_crawl_snapshots** | Immutable terminal crawl metadata. Default reads select only the latest complete snapshot; explicitly selected partial runs remain historical. | Unique: `runId`; composite FK to runs and attempt |
+| **site_crawl_snapshots** | Immutable terminal crawl metadata, including the requested root and effective root. Default reads select only the latest complete snapshot; explicitly selected partial runs remain historical. | Unique: `runId`; composite FK to runs and attempt |
 | **site_crawl_pages** | URL inventory with discovery provenance, fetch/indexability state, depth, internal-link counts, and link score. | Unique: `(projectId, runId, attemptId, nodeKey)` |
 | **site_crawl_edges** | Bounded typed link observations with occurrence, followability, and anchor summaries. | Unique: `(projectId, runId, attemptId, edgeKey)` |
+| **site_crawl_graph_layouts** | One immutable derived-layout status per crawl attempt, with version, failure code, source totals, and sampled counts. Absent means a pre-v127 snapshot; `unavailable` means layout could not safely publish and does not invalidate the crawl. | Unique: `(projectId, runId, attemptId)` |
+| **site_crawl_graph_nodes** | The bounded, ranked subset of canonical pages rendered by Site Health, carrying only persisted finite `x/y` coordinates. | Unique: `(projectId, runId, attemptId, nodeKey)` and `(projectId, runId, attemptId, sampleRank)` |
+| **site_crawl_graph_edges** | Exact bounded, ranked canonical-edge subset used for both ForceAtlas2 and the WebGL renderer; both endpoints reference persisted graph nodes. | Unique: `(projectId, runId, attemptId, edgeKey)` and `(projectId, runId, attemptId, sampleRank)` |
 | **site_crawl_findings** | Deterministic crawl findings. Dead-link rows exist only when that run opted in. | Unique: `(projectId, runId, attemptId, findingKey)` |
 | **site_crawl_event_receipts** | Idempotency receipts for streamed page, edge, metric, progress, and summary batches. | Unique: `(attemptId, sequence, batchId)` |
 
 All detail rows carry the project, run, and attempt tuple. Composite foreign
 keys prevent data from crossing project or attempt boundaries. The mutable
-attempt is not the current graph; only a complete terminal snapshot is.
+attempt is not the current graph; only a complete terminal snapshot is the
+default current graph. An explicitly selected partial terminal snapshot remains
+inspectable. Layout failure, timeout, empty crawl, or absence on a legacy
+snapshot is exposed as a truthful unavailable graph state; it never makes a
+successful crawl fail or causes the UI to recompute positions.
+
+Agent reads use the canonical `site_crawl_pages` and `site_crawl_edges` rows,
+not the sampled visualization tables. A bounded semantic subgraph exposes the
+same page state, crawl depth, importance, and link evidence that the operator
+can inspect. Path reads follow persisted internal links. Run-change reads
+compare two immutable complete snapshots by stable page and edge identity at
+query time; ForceAtlas2 coordinates are never considered a website change.
 
 #### `projects.provider_models`
 

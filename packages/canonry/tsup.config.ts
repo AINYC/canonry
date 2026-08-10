@@ -32,6 +32,11 @@ export default defineConfig({
     '@google/genai',
     '@anthropic-ai/sdk',
     'node-cron',
+    // Publish-time Site Health layout runs in a worker and resolves these
+    // pinned packages through createRequire. Keep them external in the npm
+    // artifact so the worker receives real filesystem module paths.
+    'graphology',
+    'graphology-layout-forceatlas2',
     // cron-parser computes the scheduler's nextRunAt (node-cron's own
     // getNextRun() is broken for weekday crons). Keep external in lockstep
     // with the entry in `packages/canonry/package.json`.

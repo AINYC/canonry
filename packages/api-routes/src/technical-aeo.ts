@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
-import { and, asc, count, desc, eq, inArray, lt, or } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, isNotNull, lt, or, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/sqlite-core'
 import type { FastifyInstance } from 'fastify'
 import {
   runs,
@@ -7,6 +8,9 @@ import {
   siteAuditSnapshots,
   siteCrawlEdges,
   siteCrawlFindings,
+  siteCrawlGraphEdges,
+  siteCrawlGraphLayouts,
+  siteCrawlGraphNodes,
   siteCrawlPages,
   siteCrawlRunRequests,
   siteCrawlSnapshots,
@@ -15,12 +19,18 @@ import {
   RunKinds,
   RunStatuses,
   RunTriggers,
+  deriveSiteHealthState,
+  factorStatusFromScore,
   SiteAuditTrendDirections,
+  SiteCrawlFetchedStates,
   normalizeSiteAuditRunRequest,
   notFound,
   operationInProgress,
+  siteAuditPageFactorSchema,
   siteAuditRequestIdentity,
   siteAuditRunRequestSchema,
+  siteCrawlAuditFactorSchema,
+  siteCrawlCriticalDefectSchema,
   validationError,
   type RunStatus,
   type SiteAuditPageDto,
@@ -29,14 +39,42 @@ import {
   type SiteAuditTrendResponseDto,
   type SiteCrawlDeadLinksResponseDto,
   type SiteCrawlEdgeDto,
+  type SiteCrawlGraphResponseDto,
   type SiteCrawlInternalLinksResponseDto,
   type SiteCrawlNeighborsResponseDto,
   type SiteCrawlPageDto,
+  type SiteCrawlPageAuditDto,
   type SiteCrawlPagesResponseDto,
   type SiteCrawlStructureResponseDto,
   type SiteCrawlSummaryDto,
+  type SiteHealthChangeRecordDto,
+  type SiteHealthChangesResponseDto,
+  type SiteHealthPathResponseDto,
+  type SiteHealthSubgraphRelation,
+  type SiteHealthSubgraphResponseDto,
+  SITE_CRAWL_GRAPH_DEFAULT_MAX_EDGES,
+  SITE_CRAWL_GRAPH_DEFAULT_MAX_NODES,
+  SITE_CRAWL_GRAPH_MAX_EDGES,
+  SITE_CRAWL_GRAPH_MAX_NODES,
+  SITE_HEALTH_CHANGES_DEFAULT_LIMIT,
+  SITE_HEALTH_CHANGES_MAX_LIMIT,
+  SITE_HEALTH_PATH_DEFAULT_MAX_DEPTH,
+  SITE_HEALTH_PATH_MAX_DEPTH,
+  SITE_HEALTH_PATH_MAX_VISITED_NODES,
+  SITE_HEALTH_SUBGRAPH_DEFAULT_MAX_EDGES,
+  SITE_HEALTH_SUBGRAPH_DEFAULT_MAX_NODES,
+  SITE_HEALTH_SUBGRAPH_MAX_EDGES,
+  SITE_HEALTH_SUBGRAPH_MAX_NODES,
 } from '@ainyc/canonry-contracts'
 import { notProbeRun, resolveProject } from './helpers.js'
+
+const FETCHED_SITE_CRAWL_STATES: ReadonlySet<string> = new Set([
+  ...SiteCrawlFetchedStates,
+  // Snapshots published before the full-crawl contract used this aggregate
+  // state. Keep historical structure counts truthful without admitting it to
+  // the current crawler vocabulary.
+  'fetched',
+])
 
 export interface TechnicalAeoRoutesOptions {
   /**
@@ -173,6 +211,43 @@ function mapCrawlPage(row: typeof siteCrawlPages.$inferSelect): SiteCrawlPageDto
     outboundOccurrences: row.outboundOccurrences,
     linkScoreRaw: row.linkScoreRaw,
     linkScoreNormalized: row.linkScoreNormalized,
+    healthState: deriveSiteHealthState(row),
+  }
+}
+
+function mapCrawlPageAuditEvidence(row: typeof siteCrawlPages.$inferSelect): Pick<
+  Extract<SiteCrawlPageAuditDto, { state: 'ready' }>,
+  'evidenceState' | 'factors' | 'criticalDefects'
+> {
+  const fields = row.auditFields
+  const rawFactors = Array.isArray(fields.factors) ? fields.factors : []
+  const rawCriticalDefects = Array.isArray(fields.criticalDefects) ? fields.criticalDefects : []
+  const parsedFactors = rawFactors.map((factor) => siteCrawlAuditFactorSchema.safeParse(factor))
+  const parsedCriticalDefects = rawCriticalDefects.map((defect) => siteCrawlCriticalDefectSchema.safeParse(defect))
+  const complete = fields.schemaVersion === '1.0'
+    && Array.isArray(fields.factors)
+    && Array.isArray(fields.criticalDefects)
+    && parsedFactors.every((result) => result.success)
+    && parsedCriticalDefects.every((result) => result.success)
+
+  const factors = parsedFactors.flatMap((result, index) => {
+    if (result.success) return [result.data]
+    const legacy = siteAuditPageFactorSchema.safeParse(rawFactors[index])
+    return legacy.success
+      ? [{
+          ...legacy.data,
+          status: factorStatusFromScore(legacy.data.score),
+          applicable: null,
+          findings: [],
+          recommendations: [],
+        }]
+      : []
+  })
+
+  return {
+    evidenceState: complete ? 'complete' : 'scores-only',
+    factors,
+    criticalDefects: parsedCriticalDefects.flatMap((result) => result.success ? [result.data] : []),
   }
 }
 
@@ -191,6 +266,140 @@ function mapCrawlEdge(row: typeof siteCrawlEdges.$inferSelect): SiteCrawlEdgeDto
     nofollowOccurrences: row.nofollowOccurrences,
     anchors: row.anchors,
   }
+}
+
+/** Distinct aliases bound graph edges to the caller's retained node ranks. */
+const graphSourceNode = alias(siteCrawlGraphNodes, 'site_crawl_graph_source_node')
+const graphTargetNode = alias(siteCrawlGraphNodes, 'site_crawl_graph_target_node')
+
+interface CrawlDetailScope {
+  projectId: string
+  runId: string
+  attemptId: string
+}
+
+interface SiteHealthChangeKeyRow {
+  entity: 'page' | 'link'
+  change: 'added' | 'removed' | 'changed'
+  key: string
+}
+
+interface SiteHealthChangeCounts {
+  added: number
+  removed: number
+  changed: number
+}
+
+interface SiteHealthChangesSummary {
+  pages: SiteHealthChangeCounts
+  links: SiteHealthChangeCounts
+}
+
+interface SiteHealthChangesCursor {
+  v: 1
+  fromRunId: string
+  toRunId: string
+  scope: 'all' | 'pages' | 'links'
+  change: 'all' | 'added' | 'removed' | 'changed'
+  entity: 'page' | 'link'
+  key: string
+}
+
+/** SQLite null-safe semantic comparisons. The aliases are fixed by the bounded summary/keyset queries below. */
+const PAGE_CHANGE_PREDICATE = sql`(
+  current.url IS NOT previous.url
+  OR current.final_url IS NOT previous.final_url
+  OR current.path IS NOT previous.path
+  OR current.parent_path IS NOT previous.parent_path
+  OR current.discovery_source IS NOT previous.discovery_source
+  OR current.fetch_state IS NOT previous.fetch_state
+  OR current.http_status IS NOT previous.http_status
+  OR current.canonical_url IS NOT previous.canonical_url
+  OR current.indexability_state IS NOT previous.indexability_state
+  OR current.indexability_reasons IS NOT previous.indexability_reasons
+  OR current.audit_state IS NOT previous.audit_state
+  OR current.audit_score IS NOT previous.audit_score
+  OR current.inventory_eligible IS NOT previous.inventory_eligible
+  OR current.depth IS NOT previous.depth
+  OR current.inbound_unique_edges IS NOT previous.inbound_unique_edges
+  OR current.outbound_unique_edges IS NOT previous.outbound_unique_edges
+  OR current.inbound_occurrences IS NOT previous.inbound_occurrences
+  OR current.outbound_occurrences IS NOT previous.outbound_occurrences
+  OR current.link_score_raw IS NOT previous.link_score_raw
+  OR current.link_score_normalized IS NOT previous.link_score_normalized
+)`
+
+const LINK_CHANGE_PREDICATE = sql`(
+  current.source_node_key IS NOT previous.source_node_key
+  OR current.source_url IS NOT previous.source_url
+  OR current.target_node_key IS NOT previous.target_node_key
+  OR current.target_url IS NOT previous.target_url
+  OR current.relation IS NOT previous.relation
+  OR current.followable IS NOT previous.followable
+  OR current.occurrences IS NOT previous.occurrences
+  OR current.followable_occurrences IS NOT previous.followable_occurrences
+  OR current.nofollow_occurrences IS NOT previous.nofollow_occurrences
+  OR current.anchors IS NOT previous.anchors
+)`
+
+function encodeSiteHealthChangesCursor(cursor: SiteHealthChangesCursor): string {
+  return Buffer.from(JSON.stringify(cursor)).toString('base64url')
+}
+
+function decodeSiteHealthChangesCursor(
+  value: unknown,
+  context: Pick<SiteHealthChangesCursor, 'fromRunId' | 'toRunId' | 'scope' | 'change'>,
+): SiteHealthChangesCursor | null {
+  if (value == null || value === '') return null
+  if (typeof value !== 'string' || value.length > 2_048) throw validationError('Invalid Site Health changes cursor')
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<SiteHealthChangesCursor>
+    const valid = parsed.v === 1
+      && parsed.fromRunId === context.fromRunId
+      && parsed.toRunId === context.toRunId
+      && parsed.scope === context.scope
+      && parsed.change === context.change
+      && (parsed.entity === 'page' || parsed.entity === 'link')
+      && typeof parsed.key === 'string'
+      && parsed.key.length > 0
+      && parsed.key.length <= 2_048
+    if (!valid) throw new Error('context mismatch')
+    return parsed as SiteHealthChangesCursor
+  } catch {
+    throw validationError('Site Health changes cursor does not match this snapshot comparison and filter')
+  }
+}
+
+function compareChangeKeys(left: SiteHealthChangeKeyRow, right: SiteHealthChangeKeyRow): number {
+  return Buffer.compare(Buffer.from(left.key), Buffer.from(right.key))
+}
+
+function valueChanged(before: unknown, after: unknown): boolean {
+  if (Array.isArray(before) || Array.isArray(after) || (before && typeof before === 'object') || (after && typeof after === 'object')) {
+    return JSON.stringify(before) !== JSON.stringify(after)
+  }
+  return before !== after
+}
+
+const PAGE_CHANGE_FIELDS = [
+  'url', 'finalUrl', 'path', 'parentPath', 'discoverySource', 'fetchState', 'httpStatus',
+  'canonicalUrl', 'indexabilityState', 'indexabilityReasons', 'auditState', 'auditScore',
+  'inventoryEligible', 'depth', 'inboundUniqueEdges', 'outboundUniqueEdges',
+  'inboundOccurrences', 'outboundOccurrences', 'linkScoreRaw', 'linkScoreNormalized',
+] as const satisfies ReadonlyArray<keyof SiteCrawlPageDto>
+
+const LINK_CHANGE_FIELDS = [
+  'sourceNodeKey', 'sourceUrl', 'targetNodeKey', 'targetUrl', 'relation', 'internal',
+  'followable', 'occurrences', 'followableOccurrences', 'nofollowOccurrences', 'anchors',
+] as const satisfies ReadonlyArray<keyof SiteCrawlEdgeDto>
+
+function changedFields<T extends Record<string, unknown>>(
+  before: T | null,
+  after: T | null,
+  fields: readonly (keyof T)[],
+): string[] {
+  if (!before || !after) return []
+  return fields.filter((field) => valueChanged(before[field], after[field])).map(String)
 }
 
 export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAeoRoutesOptions) {
@@ -218,10 +427,42 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       .from(siteCrawlSnapshots)
       .innerJoin(runs, eq(siteCrawlSnapshots.runId, runs.id))
       .where(and(...filters))
-      .orderBy(desc(siteCrawlSnapshots.createdAt))
+      .orderBy(desc(siteCrawlSnapshots.createdAt), desc(siteCrawlSnapshots.runId))
       .limit(1)
       .get()
   }
+
+  const detailScopeFor = (projectId: string, snapshot: typeof siteCrawlSnapshots.$inferSelect): CrawlDetailScope | null => (
+    snapshot.detailsAvailable && snapshot.attemptId
+      ? { projectId, runId: snapshot.runId, attemptId: snapshot.attemptId }
+      : null
+  )
+
+  const pageInScope = (
+    scope: CrawlDetailScope,
+    selector: { nodeKey?: string; url?: string },
+  ): typeof siteCrawlPages.$inferSelect | null => {
+    if (!selector.nodeKey && !selector.url) return null
+    return app.db.select().from(siteCrawlPages).where(and(
+      eq(siteCrawlPages.projectId, scope.projectId),
+      eq(siteCrawlPages.runId, scope.runId),
+      eq(siteCrawlPages.attemptId, scope.attemptId),
+      selector.nodeKey
+        ? eq(siteCrawlPages.nodeKey, selector.nodeKey)
+        : eq(siteCrawlPages.url, selector.url!),
+    )).orderBy(asc(siteCrawlPages.nodeKey)).limit(1).get() ?? null
+  }
+
+  const rootPageInScope = (
+    scope: CrawlDetailScope,
+    rootUrl: string,
+  ): typeof siteCrawlPages.$inferSelect | null => pageInScope(scope, { url: rootUrl }) ?? app.db
+    .select().from(siteCrawlPages).where(and(
+      eq(siteCrawlPages.projectId, scope.projectId),
+      eq(siteCrawlPages.runId, scope.runId),
+      eq(siteCrawlPages.attemptId, scope.attemptId),
+      eq(siteCrawlPages.depth, 0),
+    )).orderBy(asc(siteCrawlPages.nodeKey)).limit(1).get() ?? null
 
   /** Legacy rows are a scorecard only: they never stand in for a crawl graph. */
   const hasLegacyAudit = (projectId: string): boolean => Boolean(app.db
@@ -244,6 +485,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     legacyAuditAvailable,
     runId: null,
     runStatus: null,
+    requestedRootUrl: null,
     rootUrl: null,
     effectiveOptions: {},
     complete: false,
@@ -453,6 +695,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       legacyAuditAvailable,
       runId: snapshot.runId,
       runStatus: target.runStatus as RunStatus,
+      requestedRootUrl: snapshot.requestedRootUrl,
       rootUrl: snapshot.rootUrl,
       crawlSchemaVersion: snapshot.crawlSchemaVersion,
       engineVersion: snapshot.engineVersion,
@@ -471,6 +714,916 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
         findings: snapshot.findingsCount,
       },
       deadLinks,
+    }
+  })
+
+  // GET /projects/:name/technical-aeo/graph — the persisted Site Health
+  // projection. Sampling and ForceAtlas2 run exactly once at snapshot publish;
+  // reads only scan the bounded 20k/50k derived tables.
+  app.get<{
+    Params: { name: string }
+    Querystring: { runId?: string; maxNodes?: string; maxEdges?: string }
+  }>('/projects/:name/technical-aeo/graph', async (request): Promise<SiteCrawlGraphResponseDto> => {
+    const project = resolveProject(app.db, request.params.name)
+    const target = resolveCrawl(project.id, request.query.runId)
+    if (!target) {
+      if (request.query.runId) throw notFound('Site crawl run', request.query.runId)
+      return {
+        project: project.name, hasCrawlData: false, runId: null,
+        layout: { state: 'unavailable', version: null, reason: 'no-crawl' },
+        totalNodes: 0, totalEdges: 0, nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
+      }
+    }
+
+    const snapshot = target.snapshot
+    if (!snapshot.detailsAvailable || !snapshot.attemptId) {
+      return {
+        project: project.name, hasCrawlData: true, runId: snapshot.runId,
+        layout: { state: 'unavailable', version: null, reason: 'details-unavailable' },
+        totalNodes: 0, totalEdges: 0, nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
+      }
+    }
+
+    const persistedLayout = app.db.select().from(siteCrawlGraphLayouts).where(and(
+      eq(siteCrawlGraphLayouts.projectId, project.id),
+      eq(siteCrawlGraphLayouts.runId, snapshot.runId),
+      eq(siteCrawlGraphLayouts.attemptId, snapshot.attemptId),
+    )).limit(1).get()
+    if (!persistedLayout) {
+      return {
+        project: project.name, hasCrawlData: true, runId: snapshot.runId,
+        layout: { state: 'unavailable', version: null, reason: 'legacy-snapshot' },
+        totalNodes: 0, totalEdges: 0, nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
+      }
+    }
+    if (persistedLayout.state !== 'ready' || !persistedLayout.layoutVersion) {
+      const totalNodes = persistedLayout.totalNodes
+      const totalEdges = persistedLayout.totalEdges
+      return {
+        project: project.name, hasCrawlData: true, runId: snapshot.runId,
+        layout: {
+          state: 'unavailable', version: null,
+          reason: persistedLayout.failureCode === 'empty-crawl' ? 'empty-crawl' : 'layout-failed',
+        },
+        totalNodes, totalEdges, nodes: [], edges: [], omittedNodes: totalNodes, omittedEdges: totalEdges,
+        sampled: totalNodes > 0 || totalEdges > 0,
+      }
+    }
+
+    const maxNodes = parseBoundedLimit(request.query.maxNodes, SITE_CRAWL_GRAPH_DEFAULT_MAX_NODES, SITE_CRAWL_GRAPH_MAX_NODES)
+    const maxEdges = parseBoundedLimit(request.query.maxEdges, SITE_CRAWL_GRAPH_DEFAULT_MAX_EDGES, SITE_CRAWL_GRAPH_MAX_EDGES)
+    const graphScope = [
+      eq(siteCrawlGraphNodes.projectId, project.id),
+      eq(siteCrawlGraphNodes.runId, snapshot.runId),
+      eq(siteCrawlGraphNodes.attemptId, snapshot.attemptId),
+    ]
+    const nodeRows = app.db.select({
+      nodeKey: siteCrawlPages.nodeKey,
+      url: siteCrawlPages.url,
+      path: siteCrawlPages.path,
+      depth: siteCrawlPages.depth,
+      indexabilityState: siteCrawlPages.indexabilityState,
+      indexabilityReasons: siteCrawlPages.indexabilityReasons,
+      canonicalNodeKey: siteCrawlPages.canonicalNodeKey,
+      fetchState: siteCrawlPages.fetchState,
+      auditState: siteCrawlPages.auditState,
+      auditScore: siteCrawlPages.auditScore,
+      inventoryEligible: siteCrawlPages.inventoryEligible,
+      inboundUniqueEdges: siteCrawlPages.inboundUniqueEdges,
+      outboundUniqueEdges: siteCrawlPages.outboundUniqueEdges,
+      linkScoreNormalized: siteCrawlPages.linkScoreNormalized,
+      x: siteCrawlGraphNodes.x,
+      y: siteCrawlGraphNodes.y,
+    }).from(siteCrawlGraphNodes).innerJoin(siteCrawlPages, and(
+      eq(siteCrawlPages.projectId, siteCrawlGraphNodes.projectId),
+      eq(siteCrawlPages.runId, siteCrawlGraphNodes.runId),
+      eq(siteCrawlPages.attemptId, siteCrawlGraphNodes.attemptId),
+      eq(siteCrawlPages.nodeKey, siteCrawlGraphNodes.nodeKey),
+    )).where(and(...graphScope, lt(siteCrawlGraphNodes.sampleRank, maxNodes)))
+      .orderBy(asc(siteCrawlGraphNodes.sampleRank)).all()
+    const nodes = nodeRows.map(({ indexabilityReasons, canonicalNodeKey, ...row }) => ({
+      ...row,
+      healthState: deriveSiteHealthState({ ...row, indexabilityReasons, canonicalNodeKey }),
+    }))
+    const edges = app.db.select({
+      edgeKey: siteCrawlGraphEdges.edgeKey,
+      sourceNodeKey: siteCrawlGraphEdges.sourceNodeKey,
+      targetNodeKey: siteCrawlGraphEdges.targetNodeKey,
+      followable: siteCrawlGraphEdges.followable,
+      occurrences: siteCrawlGraphEdges.occurrences,
+    }).from(siteCrawlGraphEdges)
+      .innerJoin(graphSourceNode, and(
+        eq(graphSourceNode.projectId, siteCrawlGraphEdges.projectId),
+        eq(graphSourceNode.runId, siteCrawlGraphEdges.runId),
+        eq(graphSourceNode.attemptId, siteCrawlGraphEdges.attemptId),
+        eq(graphSourceNode.nodeKey, siteCrawlGraphEdges.sourceNodeKey),
+        lt(graphSourceNode.sampleRank, maxNodes),
+      ))
+      .innerJoin(graphTargetNode, and(
+        eq(graphTargetNode.projectId, siteCrawlGraphEdges.projectId),
+        eq(graphTargetNode.runId, siteCrawlGraphEdges.runId),
+        eq(graphTargetNode.attemptId, siteCrawlGraphEdges.attemptId),
+        eq(graphTargetNode.nodeKey, siteCrawlGraphEdges.targetNodeKey),
+        lt(graphTargetNode.sampleRank, maxNodes),
+      ))
+      .where(and(
+        eq(siteCrawlGraphEdges.projectId, project.id),
+        eq(siteCrawlGraphEdges.runId, snapshot.runId),
+        eq(siteCrawlGraphEdges.attemptId, snapshot.attemptId),
+        lt(siteCrawlGraphEdges.sampleRank, maxEdges),
+      ))
+      .orderBy(asc(siteCrawlGraphEdges.sampleRank)).all()
+    const totalNodes = persistedLayout.totalNodes
+    const totalEdges = persistedLayout.totalEdges
+    const omittedNodes = Math.max(0, totalNodes - nodes.length)
+    const omittedEdges = Math.max(0, totalEdges - edges.length)
+    return {
+      project: project.name,
+      hasCrawlData: true,
+      runId: snapshot.runId,
+      layout: { state: 'ready', version: persistedLayout.layoutVersion, computedAt: persistedLayout.createdAt },
+      totalNodes,
+      totalEdges,
+      nodes,
+      edges,
+      omittedNodes,
+      omittedEdges,
+      sampled: omittedNodes > 0 || omittedEdges > 0,
+    }
+  })
+
+  // GET /projects/:name/technical-aeo/subgraph — a bounded canonical
+  // neighborhood for agents. It deliberately excludes visualization layout.
+  app.get<{
+    Params: { name: string }
+    Querystring: {
+      runId?: string
+      nodeKey?: string
+      url?: string
+      hops?: string
+      maxNodes?: string
+      maxEdges?: string
+    }
+  }>('/projects/:name/technical-aeo/subgraph', async (request): Promise<SiteHealthSubgraphResponseDto> => {
+    const project = resolveProject(app.db, request.params.name)
+    const hops = Math.min(3, parsePositiveInt(request.query.hops, 1, 3))
+    const maxNodes = parseBoundedLimit(
+      request.query.maxNodes,
+      SITE_HEALTH_SUBGRAPH_DEFAULT_MAX_NODES,
+      SITE_HEALTH_SUBGRAPH_MAX_NODES,
+    )
+    const maxEdges = parseBoundedLimit(
+      request.query.maxEdges,
+      SITE_HEALTH_SUBGRAPH_DEFAULT_MAX_EDGES,
+      SITE_HEALTH_SUBGRAPH_MAX_EDGES,
+    )
+    const target = resolveCrawl(project.id, request.query.runId)
+    const empty = (
+      state: 'no-crawl' | 'details-unavailable',
+      runId: string | null,
+      hasCrawlData: boolean,
+      complete: boolean,
+      termination: string | null,
+    ): SiteHealthSubgraphResponseDto => ({
+      project: project.name,
+      hasCrawlData,
+      runId,
+      complete,
+      termination,
+      state,
+      focusNodeKey: null,
+      focusUrl: null,
+      hops,
+      totalNodes: 0,
+      totalEdges: 0,
+      nodes: [],
+      edges: [],
+      omittedNodes: 0,
+      omittedEdges: 0,
+      countAccuracy: state === 'no-crawl' ? 'exact' : 'lower-bound',
+      truncated: false,
+    })
+    if (!target) {
+      if (request.query.runId) throw notFound('Site crawl run', request.query.runId)
+      return empty('no-crawl', null, false, false, null)
+    }
+    const snapshot = target.snapshot
+    const scope = detailScopeFor(project.id, snapshot)
+    if (!scope) return empty('details-unavailable', snapshot.runId, true, snapshot.complete, snapshot.termination)
+
+    const explicitFocus = Boolean(request.query.nodeKey || request.query.url)
+    const focus = explicitFocus
+      ? pageInScope(scope, { nodeKey: request.query.nodeKey, url: request.query.url })
+      : rootPageInScope(scope, snapshot.rootUrl)
+    if (!focus) {
+      if (explicitFocus) throw notFound('Site crawl page', request.query.nodeKey ?? request.query.url!)
+      return {
+        ...empty('details-unavailable', snapshot.runId, true, snapshot.complete, snapshot.termination),
+        truncated: false,
+      }
+    }
+
+    const distances = new Map<string, number>([[focus.nodeKey, 0]])
+    const directRelations = new Map<string, Exclude<SiteHealthSubgraphRelation, 'focus' | 'transitive'>>()
+    const edgeRows = new Map<string, typeof siteCrawlEdges.$inferSelect>()
+    const omittedNodeKeys = new Set<string>()
+    const omittedEdgeKeys = new Set<string>()
+    const seenEdgeKeys = new Set<string>()
+    let frontier = [focus.nodeKey]
+    let queryTruncated = false
+
+    for (let distance = 0; distance < hops && frontier.length > 0; distance += 1) {
+      const candidates = app.db.select().from(siteCrawlEdges).where(and(
+        eq(siteCrawlEdges.projectId, scope.projectId),
+        eq(siteCrawlEdges.runId, scope.runId),
+        eq(siteCrawlEdges.attemptId, scope.attemptId),
+        eq(siteCrawlEdges.internal, true),
+        isNotNull(siteCrawlEdges.targetNodeKey),
+        or(
+          inArray(siteCrawlEdges.sourceNodeKey, frontier),
+          inArray(siteCrawlEdges.targetNodeKey, frontier),
+        ),
+      )).orderBy(asc(siteCrawlEdges.edgeKey))
+        .limit(maxEdges + maxNodes + 1)
+        .all()
+      if (candidates.length > maxEdges + maxNodes) queryTruncated = true
+
+      const next = new Set<string>()
+      for (const edge of candidates.slice(0, maxEdges + maxNodes)) {
+        if (!edge.targetNodeKey || seenEdgeKeys.has(edge.edgeKey)) continue
+        seenEdgeKeys.add(edge.edgeKey)
+        const sourceInFrontier = frontier.includes(edge.sourceNodeKey)
+        const neighborKey = sourceInFrontier ? edge.targetNodeKey : edge.sourceNodeKey
+        if (!distances.has(neighborKey)) {
+          if (distances.size < maxNodes) {
+            distances.set(neighborKey, distance + 1)
+            next.add(neighborKey)
+          } else {
+            omittedNodeKeys.add(neighborKey)
+          }
+        }
+        if (distance === 0 && neighborKey !== focus.nodeKey) {
+          const direction = edge.sourceNodeKey === focus.nodeKey ? 'outbound' : 'inbound'
+          const prior = directRelations.get(neighborKey)
+          directRelations.set(neighborKey, prior && prior !== direction ? 'both' : direction)
+        }
+        if (distances.has(edge.sourceNodeKey) && distances.has(edge.targetNodeKey)) {
+          if (edgeRows.size < maxEdges) edgeRows.set(edge.edgeKey, edge)
+          else omittedEdgeKeys.add(edge.edgeKey)
+        } else {
+          omittedEdgeKeys.add(edge.edgeKey)
+        }
+      }
+      frontier = [...next].sort()
+    }
+
+    const nodeKeys = [...distances.keys()]
+    const pageRows = nodeKeys.length === 0 ? [] : app.db.select().from(siteCrawlPages).where(and(
+      eq(siteCrawlPages.projectId, scope.projectId),
+      eq(siteCrawlPages.runId, scope.runId),
+      eq(siteCrawlPages.attemptId, scope.attemptId),
+      inArray(siteCrawlPages.nodeKey, nodeKeys),
+    )).all()
+    const persistedNodeKeys = new Set(pageRows.map((row) => row.nodeKey))
+    // Traversal visits edges adjacent to the previous frontier. Links wholly
+    // within the final hop are never visited, so a cheap bounded probe keeps
+    // an induced-neighborhood edge count from being presented as exact.
+    const outermostNodeKeys = pageRows
+      .filter((row) => distances.get(row.nodeKey) === hops)
+      .map((row) => row.nodeKey)
+    const omittedOutermostEdge = outermostNodeKeys.length === 0
+      ? undefined
+      : app.db.select({ edgeKey: siteCrawlEdges.edgeKey }).from(siteCrawlEdges).where(and(
+        eq(siteCrawlEdges.projectId, scope.projectId),
+        eq(siteCrawlEdges.runId, scope.runId),
+        eq(siteCrawlEdges.attemptId, scope.attemptId),
+        eq(siteCrawlEdges.internal, true),
+        isNotNull(siteCrawlEdges.targetNodeKey),
+        inArray(siteCrawlEdges.sourceNodeKey, outermostNodeKeys),
+        inArray(siteCrawlEdges.targetNodeKey, outermostNodeKeys),
+      )).limit(1).get()
+    if (omittedOutermostEdge && !seenEdgeKeys.has(omittedOutermostEdge.edgeKey)) {
+      omittedEdgeKeys.add(omittedOutermostEdge.edgeKey)
+    }
+    const nodes = pageRows.map((row) => ({
+      ...mapCrawlPage(row),
+      distance: distances.get(row.nodeKey) ?? 0,
+      relationToFocus: row.nodeKey === focus.nodeKey
+        ? 'focus' as const
+        : directRelations.get(row.nodeKey) ?? 'transitive' as const,
+    })).sort((a, b) => a.distance - b.distance || a.nodeKey.localeCompare(b.nodeKey))
+    const edges = [...edgeRows.values()]
+      .filter((edge) => edge.targetNodeKey && persistedNodeKeys.has(edge.sourceNodeKey) && persistedNodeKeys.has(edge.targetNodeKey))
+      .sort((a, b) => a.edgeKey.localeCompare(b.edgeKey))
+      .map(mapCrawlEdge)
+    const omittedNodes = omittedNodeKeys.size + Math.max(0, distances.size - pageRows.length)
+    const omittedEdges = omittedEdgeKeys.size + (queryTruncated ? 1 : 0) + Math.max(0, edgeRows.size - edges.length)
+    const truncated = omittedNodes > 0 || omittedEdges > 0
+    return {
+      project: project.name,
+      hasCrawlData: true,
+      runId: snapshot.runId,
+      complete: snapshot.complete,
+      termination: snapshot.termination,
+      state: 'ready',
+      focusNodeKey: focus.nodeKey,
+      focusUrl: focus.url,
+      hops,
+      totalNodes: nodes.length + omittedNodes,
+      totalEdges: edges.length + omittedEdges,
+      nodes,
+      edges,
+      omittedNodes,
+      omittedEdges,
+      countAccuracy: truncated ? 'lower-bound' : 'exact',
+      truncated,
+    }
+  })
+
+  // GET /projects/:name/technical-aeo/path — directed shortest path over
+  // followable internal anchor links, with a hard exploration budget.
+  app.get<{
+    Params: { name: string }
+    Querystring: {
+      runId?: string
+      fromNodeKey?: string
+      fromUrl?: string
+      toNodeKey?: string
+      toUrl?: string
+      maxDepth?: string
+    }
+  }>('/projects/:name/technical-aeo/path', async (request): Promise<SiteHealthPathResponseDto> => {
+    const project = resolveProject(app.db, request.params.name)
+    const maxDepth = parseBoundedLimit(
+      request.query.maxDepth,
+      SITE_HEALTH_PATH_DEFAULT_MAX_DEPTH,
+      SITE_HEALTH_PATH_MAX_DEPTH,
+    )
+    if (!request.query.toNodeKey && !request.query.toUrl) {
+      throw validationError('toNodeKey or toUrl is required')
+    }
+    const target = resolveCrawl(project.id, request.query.runId)
+    if (!target) {
+      if (request.query.runId) throw notFound('Site crawl run', request.query.runId)
+      return {
+        project: project.name, runId: null, state: 'no-crawl', from: null, to: null,
+        complete: false, termination: null,
+        maxDepth, visitedNodes: 0, nodes: [], edges: [],
+      }
+    }
+    const snapshot = target.snapshot
+    const scope = detailScopeFor(project.id, snapshot)
+    if (!scope) {
+      return {
+        project: project.name, runId: snapshot.runId, state: 'details-unavailable', from: null, to: null,
+        complete: snapshot.complete, termination: snapshot.termination,
+        maxDepth, visitedNodes: 0, nodes: [], edges: [],
+      }
+    }
+    const explicitFrom = Boolean(request.query.fromNodeKey || request.query.fromUrl)
+    const fromPage = explicitFrom
+      ? pageInScope(scope, { nodeKey: request.query.fromNodeKey, url: request.query.fromUrl })
+      : rootPageInScope(scope, snapshot.rootUrl)
+    if (!fromPage) throw notFound('Site crawl page', request.query.fromNodeKey ?? request.query.fromUrl ?? snapshot.rootUrl)
+    const toPage = pageInScope(scope, { nodeKey: request.query.toNodeKey, url: request.query.toUrl })
+    if (!toPage) throw notFound('Site crawl page', request.query.toNodeKey ?? request.query.toUrl!)
+    const reference = (row: typeof siteCrawlPages.$inferSelect) => ({
+      nodeKey: row.nodeKey,
+      url: row.url,
+      path: row.path,
+    })
+
+    const predecessor = new Map<string, { nodeKey: string; edge: typeof siteCrawlEdges.$inferSelect }>()
+    const visited = new Set<string>([fromPage.nodeKey])
+    let frontier = [fromPage.nodeKey]
+    let found = fromPage.nodeKey === toPage.nodeKey
+    let truncated = false
+
+    for (let depth = 0; depth < maxDepth && frontier.length > 0 && !found; depth += 1) {
+      const candidates = app.db.select().from(siteCrawlEdges).where(and(
+        eq(siteCrawlEdges.projectId, scope.projectId),
+        eq(siteCrawlEdges.runId, scope.runId),
+        eq(siteCrawlEdges.attemptId, scope.attemptId),
+        eq(siteCrawlEdges.internal, true),
+        eq(siteCrawlEdges.followable, true),
+        eq(siteCrawlEdges.relation, 'anchor'),
+        isNotNull(siteCrawlEdges.targetNodeKey),
+        inArray(siteCrawlEdges.sourceNodeKey, frontier),
+      )).orderBy(asc(siteCrawlEdges.edgeKey))
+        .limit(SITE_HEALTH_PATH_MAX_VISITED_NODES + 1)
+        .all()
+      if (candidates.length > SITE_HEALTH_PATH_MAX_VISITED_NODES) truncated = true
+
+      const candidateTargetKeys = [...new Set(candidates
+        .map((edge) => edge.targetNodeKey)
+        .filter((nodeKey): nodeKey is string => nodeKey != null))]
+      const persistedTargetKeys = new Set(candidateTargetKeys.length === 0 ? [] : app.db
+        .select({ nodeKey: siteCrawlPages.nodeKey })
+        .from(siteCrawlPages)
+        .where(and(
+          eq(siteCrawlPages.projectId, scope.projectId),
+          eq(siteCrawlPages.runId, scope.runId),
+          eq(siteCrawlPages.attemptId, scope.attemptId),
+          inArray(siteCrawlPages.nodeKey, candidateTargetKeys),
+        )).all().map((row) => row.nodeKey))
+      const next = new Set<string>()
+      for (const edge of candidates.slice(0, SITE_HEALTH_PATH_MAX_VISITED_NODES)) {
+        if (!edge.targetNodeKey || !persistedTargetKeys.has(edge.targetNodeKey) || visited.has(edge.targetNodeKey)) continue
+        if (visited.size >= SITE_HEALTH_PATH_MAX_VISITED_NODES) {
+          truncated = true
+          break
+        }
+        visited.add(edge.targetNodeKey)
+        predecessor.set(edge.targetNodeKey, { nodeKey: edge.sourceNodeKey, edge })
+        next.add(edge.targetNodeKey)
+        if (edge.targetNodeKey === toPage.nodeKey) {
+          found = true
+          break
+        }
+      }
+      frontier = [...next].sort()
+    }
+
+    if (!found) {
+      return {
+        project: project.name,
+        runId: snapshot.runId,
+        complete: snapshot.complete,
+        termination: snapshot.termination,
+        state: truncated || frontier.length > 0 ? 'truncated' : 'unreachable',
+        from: reference(fromPage),
+        to: reference(toPage),
+        maxDepth,
+        visitedNodes: visited.size,
+        nodes: [],
+        edges: [],
+      }
+    }
+
+    const pathKeys = [toPage.nodeKey]
+    const pathEdges: Array<typeof siteCrawlEdges.$inferSelect> = []
+    while (pathKeys[0] !== fromPage.nodeKey) {
+      const step = predecessor.get(pathKeys[0]!)
+      if (!step) break
+      pathEdges.unshift(step.edge)
+      pathKeys.unshift(step.nodeKey)
+    }
+    const pathRows = app.db.select().from(siteCrawlPages).where(and(
+      eq(siteCrawlPages.projectId, scope.projectId),
+      eq(siteCrawlPages.runId, scope.runId),
+      eq(siteCrawlPages.attemptId, scope.attemptId),
+      inArray(siteCrawlPages.nodeKey, pathKeys),
+    )).all()
+    const pageByKey = new Map(pathRows.map((row) => [row.nodeKey, row]))
+    return {
+      project: project.name,
+      runId: snapshot.runId,
+      complete: snapshot.complete,
+      termination: snapshot.termination,
+      state: 'found',
+      from: reference(fromPage),
+      to: reference(toPage),
+      maxDepth,
+      visitedNodes: visited.size,
+      nodes: pathKeys.map((key) => mapCrawlPage(pageByKey.get(key)!)),
+      edges: pathEdges.map(mapCrawlEdge),
+    }
+  })
+
+  // GET /projects/:name/technical-aeo/changes — exact canonical page/link
+  // changes between two immutable complete snapshots. ForceAtlas2 x/y are not
+  // part of identity and never create a change.
+  app.get<{
+    Params: { name: string }
+    Querystring: {
+      fromRunId?: string
+      toRunId?: string
+      scope?: string
+      change?: string
+      cursor?: string
+      limit?: string
+    }
+  }>('/projects/:name/technical-aeo/changes', async (request): Promise<SiteHealthChangesResponseDto> => {
+    const project = resolveProject(app.db, request.params.name)
+    const scopeFilter = request.query.scope ?? 'all'
+    if (scopeFilter !== 'all' && scopeFilter !== 'pages' && scopeFilter !== 'links') {
+      throw validationError('scope must be all, pages, or links')
+    }
+    const changeFilter = request.query.change ?? 'all'
+    if (changeFilter !== 'all' && changeFilter !== 'added' && changeFilter !== 'removed' && changeFilter !== 'changed') {
+      throw validationError('change must be all, added, removed, or changed')
+    }
+
+    const completeSnapshotFilters = [
+      eq(siteCrawlSnapshots.projectId, project.id),
+      eq(runs.projectId, project.id),
+      eq(runs.kind, RunKinds['site-audit']),
+      eq(runs.status, RunStatuses.completed),
+      eq(siteCrawlSnapshots.complete, true),
+      notProbeRun(),
+    ]
+    const afterTarget = request.query.toRunId
+      ? resolveCrawl(project.id, request.query.toRunId)
+      : app.db.select({ snapshot: siteCrawlSnapshots, runStatus: runs.status })
+        .from(siteCrawlSnapshots)
+        .innerJoin(runs, eq(siteCrawlSnapshots.runId, runs.id))
+        .where(and(...completeSnapshotFilters))
+        .orderBy(desc(siteCrawlSnapshots.createdAt), desc(siteCrawlSnapshots.runId))
+        .limit(1)
+        .get()
+    if (request.query.toRunId && !afterTarget) throw notFound('Site crawl run', request.query.toRunId)
+    const beforeTarget = request.query.fromRunId
+      ? resolveCrawl(project.id, request.query.fromRunId)
+      : afterTarget
+        ? app.db.select({ snapshot: siteCrawlSnapshots, runStatus: runs.status })
+          .from(siteCrawlSnapshots)
+          .innerJoin(runs, eq(siteCrawlSnapshots.runId, runs.id))
+          .where(and(
+            ...completeSnapshotFilters,
+            or(
+              lt(siteCrawlSnapshots.createdAt, afterTarget.snapshot.createdAt),
+              and(
+                eq(siteCrawlSnapshots.createdAt, afterTarget.snapshot.createdAt),
+                lt(siteCrawlSnapshots.runId, afterTarget.snapshot.runId),
+              ),
+            ),
+          ))
+          .orderBy(desc(siteCrawlSnapshots.createdAt), desc(siteCrawlSnapshots.runId))
+          .limit(1)
+          .get()
+        : undefined
+    if (request.query.fromRunId && !beforeTarget) throw notFound('Site crawl run', request.query.fromRunId)
+    if (!afterTarget) {
+      return { project: project.name, state: 'unavailable', reason: 'no-crawl', fromRunId: null, toRunId: null }
+    }
+    if (!beforeTarget) {
+      return {
+        project: project.name, state: 'unavailable', reason: 'insufficient-history',
+        fromRunId: null, toRunId: afterTarget.snapshot.runId,
+      }
+    }
+
+    const beforeSnapshot = beforeTarget.snapshot
+    const afterSnapshot = afterTarget.snapshot
+    if (beforeSnapshot.runId === afterSnapshot.runId) {
+      throw validationError('fromRunId and toRunId must identify different crawls')
+    }
+    const crawlOrder = beforeSnapshot.createdAt.localeCompare(afterSnapshot.createdAt)
+    if (crawlOrder > 0 || (crawlOrder === 0 && beforeSnapshot.runId >= afterSnapshot.runId)) {
+      throw validationError('fromRunId must identify a crawl earlier than toRunId')
+    }
+    if (!beforeSnapshot.complete || !afterSnapshot.complete
+      || beforeTarget.runStatus !== RunStatuses.completed || afterTarget.runStatus !== RunStatuses.completed) {
+      return {
+        project: project.name, state: 'unavailable', reason: 'partial-not-comparable',
+        fromRunId: beforeSnapshot.runId, toRunId: afterSnapshot.runId,
+      }
+    }
+    const beforeScope = detailScopeFor(project.id, beforeSnapshot)
+    const afterScope = detailScopeFor(project.id, afterSnapshot)
+    if (!beforeScope || !afterScope) {
+      return {
+        project: project.name, state: 'unavailable', reason: 'details-unavailable',
+        fromRunId: beforeSnapshot.runId, toRunId: afterSnapshot.runId,
+      }
+    }
+
+    const versions = {
+      crawlSchema: [beforeSnapshot.crawlSchemaVersion, afterSnapshot.crawlSchemaVersion],
+      normalization: [beforeSnapshot.normalizationVersion, afterSnapshot.normalizationVersion],
+      indexability: [beforeSnapshot.indexabilityVersion, afterSnapshot.indexabilityVersion],
+      linkScore: [beforeSnapshot.linkScoreVersion, afterSnapshot.linkScoreVersion],
+    } as const
+    const mismatchedVersions = Object.entries(versions)
+      .filter(([, pair]) => pair[0] !== pair[1])
+      .map(([name]) => name)
+    if (mismatchedVersions.length > 0) {
+      return {
+        project: project.name, state: 'incompatible', reason: 'incompatible-versions',
+        fromRunId: beforeSnapshot.runId, toRunId: afterSnapshot.runId, mismatchedVersions,
+      }
+    }
+
+    const cursor = decodeSiteHealthChangesCursor(request.query.cursor, {
+      fromRunId: beforeSnapshot.runId,
+      toRunId: afterSnapshot.runId,
+      scope: scopeFilter,
+      change: changeFilter,
+    })
+    const loadSummary = (): SiteHealthChangesSummary => {
+      type AfterCounts = { added: number; changed: number }
+      type RemovedCount = { removed: number }
+      const includeAdded = changeFilter === 'all' || changeFilter === 'added'
+      const includeRemoved = changeFilter === 'all' || changeFilter === 'removed'
+      const includeChanged = changeFilter === 'all' || changeFilter === 'changed'
+      const zero = (): SiteHealthChangeCounts => ({ added: 0, removed: 0, changed: 0 })
+      const summary: SiteHealthChangesSummary = { pages: zero(), links: zero() }
+
+      if (scopeFilter !== 'links') {
+        if (includeAdded || includeChanged) {
+          const addedExpression = includeAdded
+            ? sql`COALESCE(SUM(CASE WHEN previous.id IS NULL THEN 1 ELSE 0 END), 0)`
+            : sql`0`
+          const changedExpression = includeChanged
+            ? sql`COALESCE(SUM(CASE WHEN previous.id IS NOT NULL AND ${PAGE_CHANGE_PREDICATE} THEN 1 ELSE 0 END), 0)`
+            : sql`0`
+          const [counts = { added: 0, changed: 0 }] = app.db.all<AfterCounts>(sql`
+            SELECT ${addedExpression} AS added, ${changedExpression} AS changed
+            FROM site_crawl_pages AS current
+            LEFT JOIN site_crawl_pages AS previous
+              ON previous.project_id = ${beforeScope.projectId}
+              AND previous.run_id = ${beforeScope.runId}
+              AND previous.attempt_id = ${beforeScope.attemptId}
+              AND previous.node_key = current.node_key
+            WHERE current.project_id = ${afterScope.projectId}
+              AND current.run_id = ${afterScope.runId}
+              AND current.attempt_id = ${afterScope.attemptId}
+          `)
+          summary.pages.added = Number(counts.added)
+          summary.pages.changed = Number(counts.changed)
+        }
+        if (includeRemoved) {
+          const [counts = { removed: 0 }] = app.db.all<RemovedCount>(sql`
+            SELECT COUNT(*) AS removed
+            FROM site_crawl_pages AS previous
+            LEFT JOIN site_crawl_pages AS current
+              ON current.project_id = ${afterScope.projectId}
+              AND current.run_id = ${afterScope.runId}
+              AND current.attempt_id = ${afterScope.attemptId}
+              AND current.node_key = previous.node_key
+            WHERE previous.project_id = ${beforeScope.projectId}
+              AND previous.run_id = ${beforeScope.runId}
+              AND previous.attempt_id = ${beforeScope.attemptId}
+              AND current.id IS NULL
+          `)
+          summary.pages.removed = Number(counts.removed)
+        }
+      }
+
+      if (scopeFilter !== 'pages') {
+        if (includeAdded || includeChanged) {
+          const addedExpression = includeAdded
+            ? sql`COALESCE(SUM(CASE WHEN previous.id IS NULL THEN 1 ELSE 0 END), 0)`
+            : sql`0`
+          const changedExpression = includeChanged
+            ? sql`COALESCE(SUM(CASE WHEN previous.id IS NOT NULL AND ${LINK_CHANGE_PREDICATE} THEN 1 ELSE 0 END), 0)`
+            : sql`0`
+          const [counts = { added: 0, changed: 0 }] = app.db.all<AfterCounts>(sql`
+            SELECT ${addedExpression} AS added, ${changedExpression} AS changed
+            FROM site_crawl_edges AS current
+            LEFT JOIN site_crawl_edges AS previous
+              ON previous.project_id = ${beforeScope.projectId}
+              AND previous.run_id = ${beforeScope.runId}
+              AND previous.attempt_id = ${beforeScope.attemptId}
+              AND previous.internal = 1
+              AND previous.edge_key = current.edge_key
+            WHERE current.project_id = ${afterScope.projectId}
+              AND current.run_id = ${afterScope.runId}
+              AND current.attempt_id = ${afterScope.attemptId}
+              AND current.internal = 1
+          `)
+          summary.links.added = Number(counts.added)
+          summary.links.changed = Number(counts.changed)
+        }
+        if (includeRemoved) {
+          const [counts = { removed: 0 }] = app.db.all<RemovedCount>(sql`
+            SELECT COUNT(*) AS removed
+            FROM site_crawl_edges AS previous
+            LEFT JOIN site_crawl_edges AS current
+              ON current.project_id = ${afterScope.projectId}
+              AND current.run_id = ${afterScope.runId}
+              AND current.attempt_id = ${afterScope.attemptId}
+              AND current.internal = 1
+              AND current.edge_key = previous.edge_key
+            WHERE previous.project_id = ${beforeScope.projectId}
+              AND previous.run_id = ${beforeScope.runId}
+              AND previous.attempt_id = ${beforeScope.attemptId}
+              AND previous.internal = 1
+              AND current.id IS NULL
+          `)
+          summary.links.removed = Number(counts.removed)
+        }
+      }
+      return summary
+    }
+    const summary = cursor ? null : loadSummary()
+    const limit = parseBoundedLimit(request.query.limit, SITE_HEALTH_CHANGES_DEFAULT_LIMIT, SITE_HEALTH_CHANGES_MAX_LIMIT)
+    const sumCounts = (counts: SiteHealthChangeCounts): number => counts.added + counts.removed + counts.changed
+    const total = summary
+      ? sumCounts(summary.pages) + sumCounts(summary.links)
+      : null
+    const collectEntity = (
+      entity: 'page' | 'link',
+      afterKey: string,
+      wanted: number,
+    ): SiteHealthChangeKeyRow[] => {
+      if (wanted <= 0) return []
+      const includeAfter = changeFilter === 'all' || changeFilter === 'added' || changeFilter === 'changed'
+      const includeRemoved = changeFilter === 'all' || changeFilter === 'removed'
+      const table = entity === 'page' ? 'site_crawl_pages' : 'site_crawl_edges'
+      const keyColumn = entity === 'page' ? 'node_key' : 'edge_key'
+      const internalCurrent = entity === 'link' ? sql`AND current.internal = 1` : sql``
+      const internalPreviousJoin = entity === 'link' ? sql`AND previous.internal = 1` : sql``
+      const internalPrevious = entity === 'link' ? sql`AND previous.internal = 1` : sql``
+      const internalCurrentJoin = entity === 'link' ? sql`AND current.internal = 1` : sql``
+      const difference = entity === 'page' ? PAGE_CHANGE_PREDICATE : LINK_CHANGE_PREDICATE
+      const afterKind = changeFilter === 'added'
+        ? sql`previous.id IS NULL`
+        : changeFilter === 'changed'
+          ? sql`previous.id IS NOT NULL AND ${difference}`
+          : sql`previous.id IS NULL OR (previous.id IS NOT NULL AND ${difference})`
+      const afterRows = includeAfter ? app.db.all<SiteHealthChangeKeyRow>(sql`
+        SELECT ${entity} AS entity,
+          CASE WHEN previous.id IS NULL THEN 'added' ELSE 'changed' END AS change,
+          current.${sql.raw(keyColumn)} AS key
+        FROM ${sql.raw(table)} AS current
+        LEFT JOIN ${sql.raw(table)} AS previous
+          ON previous.project_id = ${beforeScope.projectId}
+          AND previous.run_id = ${beforeScope.runId}
+          AND previous.attempt_id = ${beforeScope.attemptId}
+          ${internalPreviousJoin}
+          AND previous.${sql.raw(keyColumn)} = current.${sql.raw(keyColumn)}
+        WHERE current.project_id = ${afterScope.projectId}
+          AND current.run_id = ${afterScope.runId}
+          AND current.attempt_id = ${afterScope.attemptId}
+          ${internalCurrent}
+          AND current.${sql.raw(keyColumn)} > ${afterKey}
+          AND (${afterKind})
+        ORDER BY current.${sql.raw(keyColumn)} ASC
+        LIMIT ${wanted}
+      `) : []
+      const removedRows = includeRemoved ? app.db.all<SiteHealthChangeKeyRow>(sql`
+        SELECT ${entity} AS entity, 'removed' AS change, previous.${sql.raw(keyColumn)} AS key
+        FROM ${sql.raw(table)} AS previous
+        LEFT JOIN ${sql.raw(table)} AS current
+          ON current.project_id = ${afterScope.projectId}
+          AND current.run_id = ${afterScope.runId}
+          AND current.attempt_id = ${afterScope.attemptId}
+          ${internalCurrentJoin}
+          AND current.${sql.raw(keyColumn)} = previous.${sql.raw(keyColumn)}
+        WHERE previous.project_id = ${beforeScope.projectId}
+          AND previous.run_id = ${beforeScope.runId}
+          AND previous.attempt_id = ${beforeScope.attemptId}
+          ${internalPrevious}
+          AND previous.${sql.raw(keyColumn)} > ${afterKey}
+          AND current.id IS NULL
+        ORDER BY previous.${sql.raw(keyColumn)} ASC
+        LIMIT ${wanted}
+      `) : []
+      const merged: SiteHealthChangeKeyRow[] = []
+      let afterIndex = 0
+      let removedIndex = 0
+      while (merged.length < wanted && (afterIndex < afterRows.length || removedIndex < removedRows.length)) {
+        const afterRow = afterRows.at(afterIndex)
+        const removedRow = removedRows.at(removedIndex)
+        if (!removedRow || (afterRow && compareChangeKeys(afterRow, removedRow) <= 0)) {
+          merged.push(afterRow!)
+          afterIndex += 1
+        } else {
+          merged.push(removedRow)
+          removedIndex += 1
+        }
+      }
+      return merged
+    }
+
+    const keyRows: SiteHealthChangeKeyRow[] = []
+    const wanted = limit + 1
+    if (scopeFilter !== 'links' && cursor?.entity !== 'link') {
+      keyRows.push(...collectEntity('page', cursor?.entity === 'page' ? cursor.key : '', wanted))
+    }
+    if (keyRows.length < wanted && scopeFilter !== 'pages') {
+      keyRows.push(...collectEntity('link', cursor?.entity === 'link' ? cursor.key : '', wanted - keyRows.length))
+    }
+    const visibleKeys = keyRows.slice(0, limit)
+    const pageKeys = visibleKeys.filter((row) => row.entity === 'page').map((row) => row.key)
+    const linkKeys = visibleKeys.filter((row) => row.entity === 'link').map((row) => row.key)
+    const pageRowsFor = (scope: CrawlDetailScope) => pageKeys.length === 0 ? [] : app.db
+      .select().from(siteCrawlPages).where(and(
+        eq(siteCrawlPages.projectId, scope.projectId),
+        eq(siteCrawlPages.runId, scope.runId),
+        eq(siteCrawlPages.attemptId, scope.attemptId),
+        inArray(siteCrawlPages.nodeKey, pageKeys),
+      )).all()
+    const edgeRowsFor = (scope: CrawlDetailScope) => linkKeys.length === 0 ? [] : app.db
+      .select().from(siteCrawlEdges).where(and(
+        eq(siteCrawlEdges.projectId, scope.projectId),
+        eq(siteCrawlEdges.runId, scope.runId),
+        eq(siteCrawlEdges.attemptId, scope.attemptId),
+        eq(siteCrawlEdges.internal, true),
+        inArray(siteCrawlEdges.edgeKey, linkKeys),
+      )).all()
+    const beforePages = new Map(pageRowsFor(beforeScope).map((row) => [row.nodeKey, mapCrawlPage(row)]))
+    const afterPages = new Map(pageRowsFor(afterScope).map((row) => [row.nodeKey, mapCrawlPage(row)]))
+    const beforeLinks = new Map(edgeRowsFor(beforeScope).map((row) => [row.edgeKey, mapCrawlEdge(row)]))
+    const afterLinks = new Map(edgeRowsFor(afterScope).map((row) => [row.edgeKey, mapCrawlEdge(row)]))
+    const changes: SiteHealthChangeRecordDto[] = visibleKeys.map((row) => {
+      if (row.entity === 'page') {
+        const before = beforePages.get(row.key) ?? null
+        const after = afterPages.get(row.key) ?? null
+        const pageChangedFields = changedFields(before, after, PAGE_CHANGE_FIELDS)
+        if (before && after && before.healthState !== after.healthState) pageChangedFields.push('healthState')
+        return {
+          entity: 'page', change: row.change, key: row.key,
+          changedFields: pageChangedFields, before, after,
+        }
+      }
+      const before = beforeLinks.get(row.key) ?? null
+      const after = afterLinks.get(row.key) ?? null
+      return {
+        entity: 'link', change: row.change, key: row.key,
+        changedFields: changedFields(before, after, LINK_CHANGE_FIELDS), before, after,
+      }
+    })
+    return {
+      project: project.name,
+      state: 'ready',
+      fromRunId: beforeSnapshot.runId,
+      toRunId: afterSnapshot.runId,
+      versions: {
+        crawlSchema: afterSnapshot.crawlSchemaVersion,
+        normalization: afterSnapshot.normalizationVersion,
+        indexability: afterSnapshot.indexabilityVersion,
+        linkScore: afterSnapshot.linkScoreVersion,
+      },
+      filters: { scope: scopeFilter, change: changeFilter },
+      summaryState: cursor ? 'omitted-on-continuation' : 'exact',
+      summary,
+      total,
+      nextCursor: keyRows.length > limit && visibleKeys.length > 0
+        ? encodeSiteHealthChangesCursor({
+          v: 1,
+          fromRunId: beforeSnapshot.runId,
+          toRunId: afterSnapshot.runId,
+          scope: scopeFilter,
+          change: changeFilter,
+          entity: visibleKeys.at(-1)!.entity,
+          key: visibleKeys.at(-1)!.key,
+        })
+        : null,
+      changes,
+    }
+  })
+
+  // GET /projects/:name/technical-aeo/crawl/pages/audit — one page's exact
+  // weighted factors and independent critical defects. Evidence is loaded on
+  // selection so the 20k-node visualization DTO stays compact.
+  app.get<{
+    Params: { name: string }
+    Querystring: { runId?: unknown; nodeKey?: unknown; url?: unknown }
+  }>('/projects/:name/technical-aeo/crawl/pages/audit', async (request): Promise<SiteCrawlPageAuditDto> => {
+    const project = resolveProject(app.db, request.params.name)
+    const scalarQueryString = (value: unknown, name: string): string | undefined => {
+      if (value === undefined) return undefined
+      if (typeof value !== 'string') throw validationError(`${name} must be provided once`)
+      return value
+    }
+    const runId = scalarQueryString(request.query.runId, 'runId')
+    const nodeKey = scalarQueryString(request.query.nodeKey, 'nodeKey')?.trim()
+    const url = scalarQueryString(request.query.url, 'url')?.trim()
+    if (Number(Boolean(nodeKey)) + Number(Boolean(url)) !== 1) {
+      throw validationError('Provide exactly one of nodeKey or url')
+    }
+
+    const target = resolveCrawl(project.id, runId)
+    if (!target) {
+      if (runId) throw notFound('Site crawl run', runId)
+      return { state: 'no-crawl', project: project.name, runId: null }
+    }
+    const snapshot = target.snapshot
+    const provenance = {
+      project: project.name,
+      runId: snapshot.runId,
+      complete: snapshot.complete,
+      termination: snapshot.termination,
+    }
+    const scope = detailScopeFor(project.id, snapshot)
+    if (!scope) return { state: 'details-unavailable', ...provenance }
+
+    const page = pageInScope(scope, nodeKey ? { nodeKey } : { url: url! })
+    if (!page) return { state: 'not-found', ...provenance }
+    const identity = {
+      nodeKey: page.nodeKey,
+      url: page.url,
+      auditState: page.auditState,
+    }
+    if (page.auditScore == null) {
+      return {
+        state: 'not-audited',
+        ...provenance,
+        ...identity,
+        auditScore: null,
+        factors: [],
+        criticalDefects: [],
+      }
+    }
+
+    return {
+      state: 'ready',
+      ...provenance,
+      ...identity,
+      auditScore: page.auditScore,
+      ...mapCrawlPageAuditEvidence(page),
     }
   })
 
@@ -593,7 +1746,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       }
       child.pageCount++
       if (row.inventoryEligible) child.inventoryEligibleCount++
-      if (['html', 'redirect', 'non-html', 'fetch-error', 'fetched'].includes(row.fetchState)) child.fetchedCount++
+      if (FETCHED_SITE_CRAWL_STATES.has(row.fetchState)) child.fetchedCount++
       if (structureHierarchyPath(row.path) === childPath) {
         child.hasPage = true
         // Preserve the old SQL `max(url)` tie break when both `/docs` and

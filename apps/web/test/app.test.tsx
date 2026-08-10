@@ -96,7 +96,8 @@ test('project route renders a concise visibility summary with progressive detail
   // renaming it would break an existing install's allowlist.
   expect(html).toMatch(/AI Visibility/)
   expect(html).toMatch(/Search Engines/)
-  expect(html).toMatch(/Technical AEO/)
+  // The route/embed token remains `technical-aeo`; only the product label changes.
+  expect(html).toMatch(/Site Health/)
   expect(html).toMatch(/Query Discovery/)
   expect(html).toMatch(/Visibility/)
   expect(html).toMatch(/Coverage now/)

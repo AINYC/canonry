@@ -6,6 +6,11 @@ test('crawl read routes are public, bounded, and backed by typed OpenAPI schemas
   const paths = document.paths ?? {}
   const cases: Array<[string, string]> = [
     ['/api/v1/projects/{name}/technical-aeo/crawl', 'SiteCrawlSummaryDto'],
+    ['/api/v1/projects/{name}/technical-aeo/graph', 'SiteCrawlGraphResponseDto'],
+    ['/api/v1/projects/{name}/technical-aeo/subgraph', 'SiteHealthSubgraphResponseDto'],
+    ['/api/v1/projects/{name}/technical-aeo/path', 'SiteHealthPathResponseDto'],
+    ['/api/v1/projects/{name}/technical-aeo/changes', 'SiteHealthChangesResponseDto'],
+    ['/api/v1/projects/{name}/technical-aeo/crawl/pages/audit', 'SiteCrawlPageAuditDto'],
     ['/api/v1/projects/{name}/technical-aeo/crawl/pages', 'SiteCrawlPagesResponseDto'],
     ['/api/v1/projects/{name}/technical-aeo/structure', 'SiteCrawlStructureResponseDto'],
     ['/api/v1/projects/{name}/technical-aeo/internal-links', 'SiteCrawlInternalLinksResponseDto'],
@@ -23,7 +28,27 @@ test('crawl read routes are public, bounded, and backed by typed OpenAPI schemas
   const pages = paths['/api/v1/projects/{name}/technical-aeo/crawl/pages']!.get!
   expect(pages.parameters?.some((parameter) => parameter.name === 'cursor')).toBe(true)
   expect(pages.parameters?.some((parameter) => parameter.name === 'limit')).toBe(true)
+  const pageAudit = paths['/api/v1/projects/{name}/technical-aeo/crawl/pages/audit']!.get!
+  expect(pageAudit.parameters?.some((parameter) => parameter.name === 'nodeKey')).toBe(true)
+  expect(pageAudit.parameters?.some((parameter) => parameter.name === 'url')).toBe(true)
+  expect(pageAudit.description).toMatch(/legacy score-only/i)
   expect(paths['/api/v1/projects/{name}/technical-aeo/dead-links']!.get?.description).toMatch(/discriminated/i)
+
+  const graph = paths['/api/v1/projects/{name}/technical-aeo/graph']!.get!
+  expect(graph.parameters?.find((parameter) => parameter.name === 'maxNodes')?.schema).toMatchObject({ minimum: 1, maximum: 20_000 })
+  expect(graph.parameters?.find((parameter) => parameter.name === 'maxEdges')?.schema).toMatchObject({ minimum: 1, maximum: 50_000 })
+
+  const subgraph = paths['/api/v1/projects/{name}/technical-aeo/subgraph']!.get!
+  expect(subgraph.parameters?.find((parameter) => parameter.name === 'hops')?.schema).toMatchObject({ minimum: 0, maximum: 3 })
+  expect(subgraph.parameters?.find((parameter) => parameter.name === 'maxNodes')?.schema).toMatchObject({ minimum: 1, maximum: 200 })
+  expect(subgraph.parameters?.find((parameter) => parameter.name === 'maxEdges')?.schema).toMatchObject({ minimum: 1, maximum: 500 })
+
+  const path = paths['/api/v1/projects/{name}/technical-aeo/path']!.get!
+  expect(path.parameters?.find((parameter) => parameter.name === 'maxDepth')?.schema).toMatchObject({ minimum: 1, maximum: 24 })
+
+  const changes = paths['/api/v1/projects/{name}/technical-aeo/changes']!.get!
+  expect(changes.parameters?.find((parameter) => parameter.name === 'limit')?.schema).toMatchObject({ minimum: 1, maximum: 100 })
+  expect(changes.parameters?.some((parameter) => parameter.name === 'cursor')).toBe(true)
 })
 
 test('crawl summary nullability and run budgets are machine-readable in OpenAPI', () => {

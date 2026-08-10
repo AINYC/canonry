@@ -2,6 +2,10 @@ import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import {
   createClient,
   getApiV1Projects,
+  getApiV1ProjectsByNameTechnicalAeoGraph,
+  getApiV1ProjectsByNameTechnicalAeoChanges,
+  getApiV1ProjectsByNameTechnicalAeoPath,
+  getApiV1ProjectsByNameTechnicalAeoSubgraph,
   getApiV1ProjectsByNameMeasurementReport,
   postApiV1ProjectsByNameMeasurementDiscovery,
 } from '../src/index.js'
@@ -10,6 +14,10 @@ import type {
   AdsOperationReconcileResponse,
   AdsUnresolvedOperationListResponse,
   GetApiV1ProjectsByNameMeasurementReportData,
+  GetApiV1ProjectsByNameTechnicalAeoGraphData,
+  GetApiV1ProjectsByNameTechnicalAeoChangesData,
+  GetApiV1ProjectsByNameTechnicalAeoPathData,
+  GetApiV1ProjectsByNameTechnicalAeoSubgraphData,
   GetApiV1ProjectsByNameSearchResponse,
   MeasurementDiscoveryRequest,
   MeasurementDiscoveryResponse,
@@ -67,6 +75,68 @@ describe('canonry-api-client', () => {
       .toEqualTypeOf<'proposed'>()
     expectTypeOf<MeasurementReportResponse['groups'][number]['targetIds']>()
       .toEqualTypeOf<string[]>()
+  })
+
+  it('generates the bounded Site Health graph adapter surface', async () => {
+    expectTypeOf<GetApiV1ProjectsByNameTechnicalAeoGraphData['query']>()
+      .toEqualTypeOf<{ runId?: string; maxNodes?: number; maxEdges?: number }>()
+
+    const fakeFetch = vi.fn(async () =>
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const client = createClient({
+      baseUrl: 'https://example.test',
+      fetch: fakeFetch as unknown as typeof fetch,
+    })
+    await getApiV1ProjectsByNameTechnicalAeoGraph({
+      client,
+      path: { name: 'example' },
+      query: { maxNodes: 20_000, maxEdges: 50_000 },
+    })
+
+    const request = fakeFetch.mock.calls[0]![0] as Request
+    expect(request.url).toBe('https://example.test/api/v1/projects/example/technical-aeo/graph?maxNodes=20000&maxEdges=50000')
+  })
+
+  it('generates task-shaped Site Health agent reads', async () => {
+    expectTypeOf<GetApiV1ProjectsByNameTechnicalAeoSubgraphData['query']>()
+      .toEqualTypeOf<{ runId?: string; nodeKey?: string; url?: string; hops?: number; maxNodes?: number; maxEdges?: number }>()
+    expectTypeOf<GetApiV1ProjectsByNameTechnicalAeoPathData['query']>()
+      .toEqualTypeOf<{ runId?: string; fromNodeKey?: string; fromUrl?: string; toNodeKey?: string; toUrl?: string; maxDepth?: number }>()
+    expectTypeOf<GetApiV1ProjectsByNameTechnicalAeoChangesData['query']>()
+      .toEqualTypeOf<{
+        fromRunId?: string
+        toRunId?: string
+        scope?: 'all' | 'pages' | 'links'
+        change?: 'all' | 'added' | 'removed' | 'changed'
+        cursor?: string
+        limit?: number
+      }>()
+
+    const fakeFetch = vi.fn(async () => new Response('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    const client = createClient({ baseUrl: 'https://example.test', fetch: fakeFetch as unknown as typeof fetch })
+    await getApiV1ProjectsByNameTechnicalAeoSubgraph({
+      client, path: { name: 'example' }, query: { nodeKey: 'home', hops: 2, maxNodes: 25, maxEdges: 50 },
+    })
+    await getApiV1ProjectsByNameTechnicalAeoPath({
+      client, path: { name: 'example' }, query: { toUrl: 'https://example.test/deep', maxDepth: 12 },
+    })
+    await getApiV1ProjectsByNameTechnicalAeoChanges({
+      client, path: { name: 'example' }, query: { scope: 'pages', change: 'changed', limit: 25 },
+    })
+
+    const requests = fakeFetch.mock.calls.map((call) => (call[0] as Request).url)
+    expect(requests).toEqual([
+      'https://example.test/api/v1/projects/example/technical-aeo/subgraph?nodeKey=home&hops=2&maxNodes=25&maxEdges=50',
+      'https://example.test/api/v1/projects/example/technical-aeo/path?toUrl=https%3A%2F%2Fexample.test%2Fdeep&maxDepth=12',
+      'https://example.test/api/v1/projects/example/technical-aeo/changes?scope=pages&change=changed&limit=25',
+    ])
   })
 
   it('serializes measurement discovery bodies and report revisions', async () => {

@@ -13,10 +13,10 @@ const nullableRunStatusSchema = z.union([runStatusSchema, z.null()])
  * from the root, robots/sitemaps, and internal links; audits each reachable
  * HTML page; and rolls the reports into a site score plus crawl graph.
  *
- * These DTOs are the public contract for the dashboard "Technical AEO" page,
- * the `canonry technical-aeo …` CLI, and the matching MCP tools. The underlying
- * run/schedule kind stays `site-audit` (the existing `RunKinds` value); the
- * product surface is named "Technical AEO".
+ * These DTOs are the public contract for the dashboard's visible "Site Health"
+ * tab, the `canonry technical-aeo …` CLI, and the matching MCP tools. The
+ * stable route/API/embed key stays `technical-aeo`; the underlying run and
+ * schedule kind stays `site-audit` (the existing `RunKinds` value).
  */
 
 /** Per-factor / per-page health bucket — mirrors aeo-audit's `scoreToStatus`. */
@@ -186,6 +186,9 @@ export const siteCrawlSummarySchema = z.object({
   legacyAuditAvailable: z.boolean(),
   runId: z.string().nullable(),
   runStatus: nullableRunStatusSchema,
+  /** Root URL originally requested by the operator; null for legacy snapshots. */
+  requestedRootUrl: z.string().nullable(),
+  /** Effective root followed by the crawl after any supported host redirect. */
   rootUrl: z.string().nullable(),
   crawlSchemaVersion: z.string().nullable().optional(),
   engineVersion: z.string().nullable().optional(),
@@ -200,6 +203,103 @@ export const siteCrawlSummarySchema = z.object({
   deadLinks: siteCrawlDeadLinksSummarySchema,
 })
 export type SiteCrawlSummaryDto = z.infer<typeof siteCrawlSummarySchema>
+
+/** Shared meaning behind Site Health node color across API, agents, and UI. */
+export const siteHealthStateSchema = z.enum(['eligible', 'hidden', 'failed', 'unchecked'])
+export type SiteHealthState = z.infer<typeof siteHealthStateSchema>
+
+/** Exact state vocabulary emitted by @canonry/aeo-audit's Site Crawl contract. */
+export const SiteCrawlFetchStates = {
+  discovered: 'discovered',
+  robotsBlocked: 'robots-blocked',
+  html: 'html',
+  redirect: 'redirect',
+  nonHtml: 'non-html',
+  fetchError: 'fetch-error',
+} as const
+export type SiteCrawlFetchState = (typeof SiteCrawlFetchStates)[keyof typeof SiteCrawlFetchStates]
+/** States reached only after an HTTP fetch was attempted. */
+export const SiteCrawlFetchedStates = [
+  SiteCrawlFetchStates.html,
+  SiteCrawlFetchStates.redirect,
+  SiteCrawlFetchStates.nonHtml,
+  SiteCrawlFetchStates.fetchError,
+] as const satisfies readonly SiteCrawlFetchState[]
+
+/** Exact indexability vocabulary emitted by @canonry/aeo-audit's Site Crawl contract. */
+export const SiteCrawlIndexabilityStates = {
+  indexable: 'indexable',
+  noindex: 'noindex',
+  blocked: 'blocked',
+  unknown: 'unknown',
+} as const
+export type SiteCrawlIndexabilityState = (typeof SiteCrawlIndexabilityStates)[keyof typeof SiteCrawlIndexabilityStates]
+
+/** Machine reasons that carry a canonical-identity decision from the crawler. */
+export const SiteCrawlIndexabilityReasons = {
+  robotsDisallow: 'robots-disallow',
+  redirectTerminal: 'redirect-terminal',
+  metaRobotsNoindex: 'meta-robots-noindex',
+  xRobotsNoindex: 'x-robots-noindex',
+  canonicalToOther: 'canonical-to-other',
+  notHtmlOrUnavailable: 'not-html-or-unavailable',
+} as const
+export type SiteCrawlIndexabilityReason = (typeof SiteCrawlIndexabilityReasons)[keyof typeof SiteCrawlIndexabilityReasons]
+
+/**
+ * Rows remain string-backed for forward-compatible persisted crawl history, but
+ * classification only recognizes the exact crawler values declared above.
+ */
+export interface SiteHealthStateInput {
+  fetchState: string
+  indexabilityState: string
+  indexabilityReasons?: readonly string[]
+  /** Resolved canonical identity. It is null when that target was not a crawl node. */
+  canonicalNodeKey?: string | null
+  /** Stable identity of this persisted crawl page. */
+  nodeKey?: string
+}
+
+function pointsToOtherCanonical(input: SiteHealthStateInput): boolean {
+  return input.indexabilityReasons?.some((reason) => reason === SiteCrawlIndexabilityReasons.canonicalToOther) === true
+    || (input.nodeKey !== undefined
+      && input.canonicalNodeKey !== null
+      && input.canonicalNodeKey !== undefined
+      && input.canonicalNodeKey !== input.nodeKey)
+}
+
+export function deriveSiteHealthState(input: SiteHealthStateInput): SiteHealthState {
+  // Fetch state is decisive: a failed request cannot be visually eligible.
+  switch (input.fetchState) {
+    case SiteCrawlFetchStates.fetchError:
+      return 'failed'
+    case SiteCrawlFetchStates.discovered:
+      return 'unchecked'
+    case SiteCrawlFetchStates.redirect:
+    case SiteCrawlFetchStates.robotsBlocked:
+    case SiteCrawlFetchStates.nonHtml:
+      return 'hidden'
+    case SiteCrawlFetchStates.html:
+      break
+    default:
+      // Unrecognized persisted values are not crawler states and cannot prove a page's health.
+      return 'unchecked'
+  }
+
+  // Never infer canonical identity from textual URL presentation (e.g. trailing slashes).
+  if (pointsToOtherCanonical(input)) return 'hidden'
+
+  switch (input.indexabilityState) {
+    case SiteCrawlIndexabilityStates.indexable:
+      return 'eligible'
+    case SiteCrawlIndexabilityStates.noindex:
+    case SiteCrawlIndexabilityStates.blocked:
+      return 'hidden'
+    case SiteCrawlIndexabilityStates.unknown:
+    default:
+      return 'unchecked'
+  }
+}
 
 export const siteCrawlPageSchema = z.object({
   nodeKey: z.string(),
@@ -223,8 +323,82 @@ export const siteCrawlPageSchema = z.object({
   outboundOccurrences: z.number().int().nonnegative(),
   linkScoreRaw: z.number().nullable(),
   linkScoreNormalized: z.number().nullable(),
+  healthState: siteHealthStateSchema,
 })
 export type SiteCrawlPageDto = z.infer<typeof siteCrawlPageSchema>
+
+/** One stable, page-scoped finding emitted by the audit engine. */
+export const siteCrawlAuditFindingSchema = z.object({
+  type: z.enum(['found', 'missing', 'info', 'timeout', 'unreachable']),
+  /** Stable machine code; UI and agents must not key behavior off `message`. */
+  code: z.string().min(1),
+  message: z.string().min(1),
+})
+export type SiteCrawlAuditFindingDto = z.infer<typeof siteCrawlAuditFindingSchema>
+
+/**
+ * One factor that contributes to a page's aggregate audit score, with the
+ * exact evidence and remediation emitted for that page in the selected run.
+ */
+export const siteCrawlAuditFactorSchema = siteAuditPageFactorSchema.extend({
+  status: siteAuditFactorStatusSchema,
+  /** `null` means the engine did not explicitly classify applicability. */
+  applicable: z.boolean().nullable(),
+  findings: z.array(siteCrawlAuditFindingSchema).default([]),
+  recommendations: z.array(z.string()).default([]),
+})
+export type SiteCrawlAuditFactorDto = z.infer<typeof siteCrawlAuditFactorSchema>
+
+/** High-impact page defect detected independently of the weighted score. */
+export const siteCrawlCriticalDefectSchema = z.object({
+  id: z.string().min(1),
+  severity: z.enum(['critical', 'warning']),
+  detail: z.string().min(1),
+  recommendation: z.string().min(1),
+})
+export type SiteCrawlCriticalDefectDto = z.infer<typeof siteCrawlCriticalDefectSchema>
+
+/**
+ * One-page audit evidence read. This stays separate from the 20k-node graph
+ * projection so selecting a node can load evidence without inflating every
+ * graph node with finding prose.
+ */
+const siteCrawlPageAuditProvenanceSchema = z.object({
+  project: z.string(),
+  runId: z.string(),
+  complete: z.boolean(),
+  termination: z.string().nullable(),
+})
+const siteCrawlPageAuditIdentitySchema = z.object({
+  nodeKey: z.string(),
+  url: z.string(),
+  auditState: z.string(),
+})
+
+export const siteCrawlPageAuditSchema = z.discriminatedUnion('state', [
+  z.object({
+    state: z.literal('no-crawl'),
+    project: z.string(),
+    runId: z.null(),
+  }),
+  siteCrawlPageAuditProvenanceSchema.extend({ state: z.literal('details-unavailable') }),
+  siteCrawlPageAuditProvenanceSchema.extend({ state: z.literal('not-found') }),
+  siteCrawlPageAuditProvenanceSchema.merge(siteCrawlPageAuditIdentitySchema).extend({
+    state: z.literal('not-audited'),
+    auditScore: z.null(),
+    factors: z.array(siteCrawlAuditFactorSchema).length(0).default([]),
+    criticalDefects: z.array(siteCrawlCriticalDefectSchema).length(0).default([]),
+  }),
+  siteCrawlPageAuditProvenanceSchema.merge(siteCrawlPageAuditIdentitySchema).extend({
+    state: z.literal('ready'),
+    auditScore: z.number(),
+    /** Old crawl rows retain factor scores but did not persist evidence prose. */
+    evidenceState: z.enum(['complete', 'scores-only']),
+    factors: z.array(siteCrawlAuditFactorSchema).default([]),
+    criticalDefects: z.array(siteCrawlCriticalDefectSchema).default([]),
+  }),
+])
+export type SiteCrawlPageAuditDto = z.infer<typeof siteCrawlPageAuditSchema>
 
 export const siteCrawlPagesResponseSchema = z.object({
   project: z.string(),
@@ -272,6 +446,238 @@ export const siteCrawlEdgeSchema = z.object({
   anchors: z.array(z.string()).default([]),
 })
 export type SiteCrawlEdgeDto = z.infer<typeof siteCrawlEdgeSchema>
+
+export const siteCrawlGraphNodeSchema = z.object({
+  nodeKey: z.string(),
+  url: z.string(),
+  path: z.string(),
+  depth: z.number().int().nonnegative().nullable(),
+  indexabilityState: z.string(),
+  fetchState: z.string(),
+  auditState: z.string(),
+  auditScore: z.number().nullable(),
+  inventoryEligible: z.boolean(),
+  inboundUniqueEdges: z.number().int().nonnegative(),
+  outboundUniqueEdges: z.number().int().nonnegative(),
+  linkScoreNormalized: z.number().nullable(),
+  healthState: siteHealthStateSchema,
+  /** Publish-time ForceAtlas2 coordinate. Reads never run layout physics. */
+  x: z.number(),
+  /** Publish-time ForceAtlas2 coordinate. Reads never run layout physics. */
+  y: z.number(),
+})
+export type SiteCrawlGraphNodeDto = z.infer<typeof siteCrawlGraphNodeSchema>
+
+export const siteCrawlGraphEdgeSchema = z.object({
+  edgeKey: z.string(),
+  sourceNodeKey: z.string(),
+  targetNodeKey: z.string(),
+  followable: z.boolean(),
+  occurrences: z.number().int().positive(),
+})
+export type SiteCrawlGraphEdgeDto = z.infer<typeof siteCrawlGraphEdgeSchema>
+
+export const siteCrawlGraphLayoutSchema = z.discriminatedUnion('state', [
+  z.object({
+    state: z.literal('ready'),
+    version: z.string().min(1),
+    computedAt: z.string().min(1),
+  }),
+  z.object({
+    state: z.literal('unavailable'),
+    version: z.null(),
+    reason: z.enum(['no-crawl', 'legacy-snapshot', 'details-unavailable', 'layout-failed', 'empty-crawl']),
+  }),
+])
+export type SiteCrawlGraphLayoutDto = z.infer<typeof siteCrawlGraphLayoutSchema>
+
+/**
+ * A persisted, deterministic graph projection for an interactive Site Health
+ * map. `total*` reflects graph-compatible persisted crawl rows; `omitted*`
+ * explains what the publish/read caps intentionally leave out. Layout state is
+ * explicit because snapshots written before layout support remain valid.
+ */
+export const siteCrawlGraphResponseSchema = z.object({
+  project: z.string(),
+  hasCrawlData: z.boolean(),
+  runId: z.string().nullable(),
+  layout: siteCrawlGraphLayoutSchema,
+  /** Total canonical pages in the persisted crawl before graph sampling. */
+  totalNodes: z.number().int().nonnegative(),
+  /** Total graph-compatible internal anchor edges before graph sampling. */
+  totalEdges: z.number().int().nonnegative(),
+  nodes: z.array(siteCrawlGraphNodeSchema).default([]),
+  edges: z.array(siteCrawlGraphEdgeSchema).default([]),
+  omittedNodes: z.number().int().nonnegative(),
+  omittedEdges: z.number().int().nonnegative(),
+  /** True when publish/read caps or a layout failure omit graph rows. */
+  sampled: z.boolean(),
+})
+export type SiteCrawlGraphResponseDto = z.infer<typeof siteCrawlGraphResponseSchema>
+
+/** Site Health publish/read caps. They deliberately do not change crawl budgets. */
+export const SITE_CRAWL_GRAPH_DEFAULT_MAX_NODES = 20_000
+export const SITE_CRAWL_GRAPH_MAX_NODES = 20_000
+export const SITE_CRAWL_GRAPH_DEFAULT_MAX_EDGES = 50_000
+export const SITE_CRAWL_GRAPH_MAX_EDGES = 50_000
+
+export const siteHealthSubgraphRelationSchema = z.enum([
+  'focus',
+  'inbound',
+  'outbound',
+  'both',
+  'transitive',
+])
+export type SiteHealthSubgraphRelation = z.infer<typeof siteHealthSubgraphRelationSchema>
+
+export const siteHealthSubgraphNodeSchema = siteCrawlPageSchema.extend({
+  distance: z.number().int().nonnegative(),
+  relationToFocus: siteHealthSubgraphRelationSchema,
+})
+export type SiteHealthSubgraphNodeDto = z.infer<typeof siteHealthSubgraphNodeSchema>
+
+/** Compact canonical graph neighborhood for agents; never includes layout coordinates. */
+export const siteHealthSubgraphResponseSchema = z.object({
+  project: z.string(),
+  hasCrawlData: z.boolean(),
+  runId: z.string().nullable(),
+  /** Selected snapshot provenance. Historical partial crawls stay explicit. */
+  complete: z.boolean(),
+  termination: z.string().nullable(),
+  state: z.enum(['no-crawl', 'details-unavailable', 'ready']),
+  focusNodeKey: z.string().nullable(),
+  focusUrl: z.string().nullable(),
+  hops: z.number().int().min(0).max(3),
+  totalNodes: z.number().int().nonnegative(),
+  totalEdges: z.number().int().nonnegative(),
+  nodes: z.array(siteHealthSubgraphNodeSchema).default([]),
+  edges: z.array(siteCrawlEdgeSchema).default([]),
+  omittedNodes: z.number().int().nonnegative(),
+  omittedEdges: z.number().int().nonnegative(),
+  /** `lower-bound` means totals and omissions are minimums because traversal hit a cap. */
+  countAccuracy: z.enum(['exact', 'lower-bound']),
+  truncated: z.boolean(),
+})
+export type SiteHealthSubgraphResponseDto = z.infer<typeof siteHealthSubgraphResponseSchema>
+
+export const SITE_HEALTH_SUBGRAPH_DEFAULT_MAX_NODES = 25
+export const SITE_HEALTH_SUBGRAPH_MAX_NODES = 200
+export const SITE_HEALTH_SUBGRAPH_DEFAULT_MAX_EDGES = 50
+export const SITE_HEALTH_SUBGRAPH_MAX_EDGES = 500
+
+export const siteHealthNodeReferenceSchema = z.object({
+  nodeKey: z.string(),
+  url: z.string(),
+  path: z.string(),
+})
+export type SiteHealthNodeReferenceDto = z.infer<typeof siteHealthNodeReferenceSchema>
+
+/** Directed, followable shortest path over canonical internal-link observations. */
+export const siteHealthPathResponseSchema = z.object({
+  project: z.string(),
+  runId: z.string().nullable(),
+  /** Selected snapshot provenance. `unreachable` on a partial crawl is not a site-wide claim. */
+  complete: z.boolean(),
+  termination: z.string().nullable(),
+  state: z.enum(['no-crawl', 'details-unavailable', 'found', 'unreachable', 'truncated']),
+  from: siteHealthNodeReferenceSchema.nullable(),
+  to: siteHealthNodeReferenceSchema.nullable(),
+  maxDepth: z.number().int().positive(),
+  visitedNodes: z.number().int().nonnegative(),
+  nodes: z.array(siteCrawlPageSchema).default([]),
+  edges: z.array(siteCrawlEdgeSchema).default([]),
+})
+export type SiteHealthPathResponseDto = z.infer<typeof siteHealthPathResponseSchema>
+
+export const SITE_HEALTH_PATH_DEFAULT_MAX_DEPTH = 12
+export const SITE_HEALTH_PATH_MAX_DEPTH = 24
+export const SITE_HEALTH_PATH_MAX_VISITED_NODES = 5_000
+
+export const siteHealthChangeKindSchema = z.enum(['added', 'removed', 'changed'])
+export type SiteHealthChangeKind = z.infer<typeof siteHealthChangeKindSchema>
+
+export const siteHealthPageChangeSchema = z.object({
+  entity: z.literal('page'),
+  change: siteHealthChangeKindSchema,
+  key: z.string(),
+  changedFields: z.array(z.string()).default([]),
+  before: siteCrawlPageSchema.nullable(),
+  after: siteCrawlPageSchema.nullable(),
+})
+export type SiteHealthPageChangeDto = z.infer<typeof siteHealthPageChangeSchema>
+
+export const siteHealthLinkChangeSchema = z.object({
+  entity: z.literal('link'),
+  change: siteHealthChangeKindSchema,
+  key: z.string(),
+  changedFields: z.array(z.string()).default([]),
+  before: siteCrawlEdgeSchema.nullable(),
+  after: siteCrawlEdgeSchema.nullable(),
+})
+export type SiteHealthLinkChangeDto = z.infer<typeof siteHealthLinkChangeSchema>
+
+export const siteHealthChangeRecordSchema = z.discriminatedUnion('entity', [
+  siteHealthPageChangeSchema,
+  siteHealthLinkChangeSchema,
+])
+export type SiteHealthChangeRecordDto = z.infer<typeof siteHealthChangeRecordSchema>
+
+const siteHealthChangeCountsSchema = z.object({
+  added: z.number().int().nonnegative(),
+  removed: z.number().int().nonnegative(),
+  changed: z.number().int().nonnegative(),
+})
+
+export const siteHealthChangesFiltersSchema = z.object({
+  scope: z.enum(['all', 'pages', 'links']),
+  change: z.enum(['all', 'added', 'removed', 'changed']),
+})
+export type SiteHealthChangesFilters = z.infer<typeof siteHealthChangesFiltersSchema>
+
+export const siteHealthChangesResponseSchema = z.discriminatedUnion('state', [
+  z.object({
+    project: z.string(),
+    state: z.literal('unavailable'),
+    reason: z.enum(['no-crawl', 'insufficient-history', 'details-unavailable', 'partial-not-comparable']),
+    fromRunId: z.string().nullable(),
+    toRunId: z.string().nullable(),
+  }),
+  z.object({
+    project: z.string(),
+    state: z.literal('incompatible'),
+    reason: z.literal('incompatible-versions'),
+    fromRunId: z.string(),
+    toRunId: z.string(),
+    mismatchedVersions: z.array(z.string()).min(1),
+  }),
+  z.object({
+    project: z.string(),
+    state: z.literal('ready'),
+    fromRunId: z.string(),
+    toRunId: z.string(),
+    versions: z.object({
+      crawlSchema: z.string(),
+      normalization: z.string(),
+      indexability: z.string(),
+      linkScore: z.string(),
+    }),
+    /** The filters whose post-filter counts and records this page represents. */
+    filters: siteHealthChangesFiltersSchema,
+    /** Continuations omit summary work; reuse the exact summary from the first page. */
+    summaryState: z.enum(['exact', 'omitted-on-continuation']),
+    summary: z.object({
+      pages: siteHealthChangeCountsSchema,
+      links: siteHealthChangeCountsSchema,
+    }).nullable(),
+    total: z.number().int().nonnegative().nullable(),
+    nextCursor: z.string().nullable(),
+    changes: z.array(siteHealthChangeRecordSchema).default([]),
+  }),
+])
+export type SiteHealthChangesResponseDto = z.infer<typeof siteHealthChangesResponseSchema>
+
+export const SITE_HEALTH_CHANGES_DEFAULT_LIMIT = 25
+export const SITE_HEALTH_CHANGES_MAX_LIMIT = 100
 
 export const siteCrawlInternalLinksResponseSchema = z.object({
   project: z.string(),

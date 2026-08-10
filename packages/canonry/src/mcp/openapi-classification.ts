@@ -360,7 +360,14 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'GET /api/v1/projects/{name}/technical-aeo/pages': 'included',
   'GET /api/v1/projects/{name}/technical-aeo/trend': 'included',
   'GET /api/v1/projects/{name}/technical-aeo/crawl': 'included',
+  'GET /api/v1/projects/{name}/technical-aeo/subgraph': 'included',
+  'GET /api/v1/projects/{name}/technical-aeo/path': 'included',
+  'GET /api/v1/projects/{name}/technical-aeo/changes': 'included',
+  // The interactive map projection is dashboard transport; agents already
+  // have the cursor-paged inventory and bounded page-neighbor reads.
+  'GET /api/v1/projects/{name}/technical-aeo/graph': 'deferred',
   'GET /api/v1/projects/{name}/technical-aeo/crawl/pages': 'included',
+  'GET /api/v1/projects/{name}/technical-aeo/crawl/pages/audit': 'included',
   'GET /api/v1/projects/{name}/technical-aeo/structure': 'included',
   'GET /api/v1/projects/{name}/technical-aeo/internal-links': 'included',
   'GET /api/v1/projects/{name}/technical-aeo/internal-links/neighbors': 'included',

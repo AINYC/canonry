@@ -193,6 +193,9 @@ Canonry ships as a **self-hosted single-process install** — that is the only s
   `@canonry/aeo-audit` and worker `@ainyc/aeo-audit@4.2.0` pins explicit
 - API key-based auth
 - Raw observation snapshots only; transitions computed at query time
+- Agent-first Site Health parity: browser color, size, focus, and scan-change
+  semantics must exist as typed API fields or bounded CLI/MCP reads. The raw
+  Sigma coordinate payload remains dashboard transport, not model context.
 
 ## Score Families
 

@@ -3073,6 +3073,100 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
         ON site_crawl_event_receipts(project_id, run_id, attempt_id)`,
     ],
   },
+  {
+    // Graph coordinates are optional derived snapshot data. Separate tables
+    // preserve the canonical crawl-page shape and make a missing row the
+    // truthful compatibility signal for snapshots published before v127.
+    version: 127,
+    name: 'site-crawl-persisted-graph-layout',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS site_crawl_graph_layouts (
+        id             TEXT PRIMARY KEY,
+        project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        run_id         TEXT NOT NULL,
+        attempt_id     TEXT NOT NULL,
+        state          TEXT NOT NULL CHECK (state IN ('ready', 'unavailable')),
+        layout_version TEXT,
+        failure_code   TEXT,
+        total_nodes    INTEGER NOT NULL DEFAULT 0,
+        total_edges    INTEGER NOT NULL DEFAULT 0,
+        node_count     INTEGER NOT NULL DEFAULT 0,
+        edge_count     INTEGER NOT NULL DEFAULT 0,
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id, attempt_id)
+          REFERENCES site_crawl_attempts(project_id, run_id, id) ON DELETE CASCADE
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_crawl_graph_layouts_attempt
+        ON site_crawl_graph_layouts(project_id, run_id, attempt_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_graph_layouts_run
+        ON site_crawl_graph_layouts(project_id, run_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_edges_graph_sample
+        ON site_crawl_edges(project_id, run_id, attempt_id, internal, relation, occurrences DESC, edge_key ASC)`,
+      `CREATE TABLE IF NOT EXISTS site_crawl_graph_nodes (
+        id          TEXT PRIMARY KEY,
+        project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        run_id      TEXT NOT NULL,
+        attempt_id  TEXT NOT NULL,
+        node_key    TEXT NOT NULL,
+        sample_rank INTEGER NOT NULL CHECK (sample_rank >= 0),
+        x           REAL NOT NULL,
+        y           REAL NOT NULL,
+        created_at  TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id, attempt_id)
+          REFERENCES site_crawl_graph_layouts(project_id, run_id, attempt_id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, run_id, attempt_id, node_key)
+          REFERENCES site_crawl_pages(project_id, run_id, attempt_id, node_key) ON DELETE CASCADE
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_crawl_graph_nodes_attempt_node
+        ON site_crawl_graph_nodes(project_id, run_id, attempt_id, node_key)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_crawl_graph_nodes_attempt_rank
+        ON site_crawl_graph_nodes(project_id, run_id, attempt_id, sample_rank)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_graph_nodes_read
+        ON site_crawl_graph_nodes(project_id, run_id, attempt_id, sample_rank)`,
+      `CREATE TABLE IF NOT EXISTS site_crawl_graph_edges (
+        id              TEXT PRIMARY KEY,
+        project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        run_id          TEXT NOT NULL,
+        attempt_id      TEXT NOT NULL,
+        edge_key        TEXT NOT NULL,
+        sample_rank     INTEGER NOT NULL CHECK (sample_rank >= 0),
+        source_node_key TEXT NOT NULL,
+        target_node_key TEXT NOT NULL,
+        followable      INTEGER NOT NULL,
+        occurrences     INTEGER NOT NULL CHECK (occurrences > 0),
+        created_at      TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id, attempt_id)
+          REFERENCES site_crawl_graph_layouts(project_id, run_id, attempt_id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, run_id, attempt_id, source_node_key)
+          REFERENCES site_crawl_graph_nodes(project_id, run_id, attempt_id, node_key) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, run_id, attempt_id, target_node_key)
+          REFERENCES site_crawl_graph_nodes(project_id, run_id, attempt_id, node_key) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, run_id, attempt_id, edge_key)
+          REFERENCES site_crawl_edges(project_id, run_id, attempt_id, edge_key) ON DELETE CASCADE
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_crawl_graph_edges_attempt_edge
+        ON site_crawl_graph_edges(project_id, run_id, attempt_id, edge_key)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_site_crawl_graph_edges_attempt_rank
+        ON site_crawl_graph_edges(project_id, run_id, attempt_id, sample_rank)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_graph_edges_read
+        ON site_crawl_graph_edges(project_id, run_id, attempt_id, sample_rank)`,
+    ],
+  },
+  {
+    // Keep the operator-requested root beside the terminal root without
+    // rewriting immutable historical snapshots. The edge indexes make layout
+    // cleanup/cascades linear at the graph's 20k/50k publish cap.
+    version: 128,
+    name: 'site-crawl-requested-root-and-graph-edge-cleanup-indexes',
+    statements: [
+      `ALTER TABLE site_crawl_snapshots ADD COLUMN requested_root_url TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_graph_edges_source_node
+        ON site_crawl_graph_edges(project_id, run_id, attempt_id, source_node_key)`,
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_graph_edges_target_node
+        ON site_crawl_graph_edges(project_id, run_id, attempt_id, target_node_key)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

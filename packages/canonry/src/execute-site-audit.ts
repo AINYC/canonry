@@ -31,9 +31,16 @@ import {
   type SiteAuditCrossCuttingIssueDto,
   type SiteAuditFactorSummaryDto,
   type SiteAuditPageFactorDto,
+  type SiteCrawlAuditFactorDto,
+  type SiteCrawlCriticalDefectDto,
 } from '@ainyc/canonry-contracts'
 import { resolveWebhookTarget } from '@ainyc/canonry-api-routes'
 import { createLogger } from './logger.js'
+import {
+  deleteSiteCrawlGraphLayout,
+  persistSiteCrawlGraphLayout,
+  prepareSiteCrawlGraphLayout,
+} from './site-crawl-graph-layout.js'
 
 const log = createLogger('SiteAudit')
 
@@ -54,6 +61,8 @@ export interface SiteAuditOptions {
   checkDeadLinks?: boolean
   /** The local server owns this controller; never accepted from an HTTP body. */
   signal?: AbortSignal
+  /** Internal test/operations seam; never accepted from an HTTP body. */
+  graphLayoutTimeoutMs?: number
 }
 
 type AuditPage = Pick<CrawlPageObservation, 'audit'>
@@ -86,6 +95,28 @@ export function clampSiteAuditEdgeLimit(limit: number | undefined): number {
 
 function toPageFactor(factor: AuditFactor): SiteAuditPageFactorDto {
   return { id: factor.id, name: factor.name, weight: factor.weight, score: factor.score }
+}
+
+function toCrawlAuditFactor(factor: AuditFactor): SiteCrawlAuditFactorDto {
+  return {
+    ...toPageFactor(factor),
+    status: factorStatusFromScore(factor.score),
+    applicable: factor.applicable ?? null,
+    findings: factor.findings,
+    recommendations: factor.recommendations,
+  }
+}
+
+function crawlAuditFields(audit: NonNullable<CrawlPageObservation['audit']>): {
+  schemaVersion: '1.0'
+  factors: SiteCrawlAuditFactorDto[]
+  criticalDefects: SiteCrawlCriticalDefectDto[]
+} {
+  return {
+    schemaVersion: '1.0',
+    factors: audit.factors.map(toCrawlAuditFactor),
+    criticalDefects: audit.criticalDefects,
+  }
 }
 
 /** Aggregate the scorecard from crawl observations, not a second full report. */
@@ -349,7 +380,7 @@ export async function executeSiteAudit(
       indexabilityReasons: page.indexability.reasons,
       auditState: pageAuditState(page),
       auditScore: audit?.overallScore ?? null,
-      auditFields: audit ? { factors: audit.factors.map(toPageFactor) } : {},
+      auditFields: audit ? crawlAuditFields(audit) : {},
       inventoryEligible: isInventoryEligible(page),
       depth: page.depth,
       inboundUniqueEdges: page.metrics.inbound.uniqueEdges,
@@ -384,7 +415,7 @@ export async function executeSiteAudit(
         indexabilityReasons: page.indexability.reasons,
         auditState: pageAuditState(page),
         auditScore: audit?.overallScore ?? null,
-        auditFields: audit ? { factors: audit.factors.map(toPageFactor) } : {},
+        auditFields: audit ? crawlAuditFields(audit) : {},
         inventoryEligible: isInventoryEligible(page),
         depth: page.depth,
         inboundUniqueEdges: page.metrics.inbound.uniqueEdges,
@@ -544,6 +575,12 @@ export async function executeSiteAudit(
       throw emptyCompleteCrawlError(crawlSummary.rootUrl, crawlSummary.finalRootUrl, crawlSummary.pagesObserved)
     }
 
+    const graphLayout = await prepareSiteCrawlGraphLayout(db, {
+      projectId,
+      runId,
+      attemptId,
+      rootUrl: crawlSummary.finalRootUrl ?? crawlSummary.rootUrl,
+    }, { signal: opts.signal, timeoutMs: opts.graphLayoutTimeoutMs })
     const finishedAt = new Date().toISOString()
     const factors = computeFactorAverages([...observedPages.values()])
     const errorCount = observedErrorCount(observedPages.values())
@@ -551,6 +588,42 @@ export async function executeSiteAudit(
     const deadLinksChecked = opts.checkDeadLinks ? deadLinkCheckedCount(observedEdges.values(), observedPages.values()) : 0
     const deadLinksFound = report.deadLinks.findings.length
     const legacyIssues = factors.map((factor) => toLegacyIssue(factor, crawlSummary.auditRollup.auditedPages)).filter((issue): issue is SiteAuditCrossCuttingIssueDto => issue !== null)
+
+    // Derived layout persistence is isolated from the canonical crawl
+    // publication. A worker timeout, package/runtime incompatibility, or row
+    // write failure leaves a truthful unavailable graph but can never turn a
+    // successful crawl into a failed run. Persist before the terminal CAS so a
+    // completed run never exposes a transient "layout pending" state.
+    try {
+      persistSiteCrawlGraphLayout(db, { projectId, runId, attemptId }, graphLayout, finishedAt)
+    } catch (error) {
+      log.warn('graph-layout.persist-failed', {
+        runId,
+        projectId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      // A failed node/edge batch rolls its transaction back. Persist the
+      // minimal unavailable marker separately so this new snapshot cannot be
+      // mistaken for a pre-layout legacy snapshot at read time.
+      try {
+        persistSiteCrawlGraphLayout(db, { projectId, runId, attemptId }, {
+          state: 'unavailable',
+          failureCode: 'layout-error',
+          totalNodes: graphLayout.totalNodes,
+          totalEdges: graphLayout.totalEdges,
+          nodeCount: 0,
+          edgeCount: 0,
+          nodes: [],
+          edges: [],
+        }, finishedAt)
+      } catch (markerError) {
+        log.warn('graph-layout.marker-persist-failed', {
+          runId,
+          projectId,
+          error: markerError instanceof Error ? markerError.message : String(markerError),
+        })
+      }
+    }
 
     const published = db.transaction((tx) => {
       // Claim terminal publication first, in the same transaction as every
@@ -594,7 +667,8 @@ export async function executeSiteAudit(
 
       tx.insert(siteCrawlSnapshots).values({
         id: crypto.randomUUID(), projectId, runId, attemptId,
-        rootUrl: crawlSummary.rootUrl,
+        requestedRootUrl: crawlSummary.rootUrl,
+        rootUrl: crawlSummary.finalRootUrl ?? crawlSummary.rootUrl,
         crawlSchemaVersion: crawlSummary.crawlSchemaVersion,
         engineVersion: crawlSummary.engineVersion,
         normalizationVersion: crawlSummary.urlNormalizationVersion,
@@ -653,6 +727,19 @@ export async function executeSiteAudit(
     })
 
     if (!published) {
+      // Layout publication deliberately precedes the terminal CAS so a
+      // completed run never exposes a pending graph. If cancellation won the
+      // CAS, remove that unpublished derived data (nodes/edges cascade). A
+      // cleanup failure must not replace the typed cancellation result.
+      try {
+        deleteSiteCrawlGraphLayout(db, { projectId, runId, attemptId })
+      } catch (cleanupError) {
+        log.warn('graph-layout.cleanup-failed', {
+          runId,
+          projectId,
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        })
+      }
       const current = db.select({ status: runs.status }).from(runs).where(eq(runs.id, runId)).get()
       if (current?.status === 'cancelled') throw new SiteAuditCancelledError(`Site audit cancelled before publication: ${runId}`)
       throw new Error(`Site audit run was no longer running before publication: ${runId}`)

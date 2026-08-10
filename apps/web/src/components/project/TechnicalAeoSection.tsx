@@ -89,23 +89,39 @@ function formatAuditedAtLabel(value: any): string {
   return formatObservedInstantLabel(observedInstant(String(value)))
 }
 
-export function TechnicalAeoSection({ projectName, projectId }: { projectName: string; projectId: string }) {
+export function TechnicalAeoSection({
+  projectName,
+  projectId,
+  runId,
+  integrated = false,
+}: {
+  projectName: string
+  projectId: string
+  /** When supplied, keep every scorecard read pinned to the parent Site Health scan. */
+  runId?: string | null
+  /** Hide duplicate history and run controls when rendered inside Site Health. */
+  integrated?: boolean
+}) {
   const [errorsOnly, setErrorsOnly] = useState(false)
   const [expandedFactor, setExpandedFactor] = useState<string | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const effectiveRunId = runId === undefined ? selectedRunId : runId
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
   const lastAutoRefreshedRun = useRef<string | null>(null)
 
   const scoreQuery = useQuery(getApiV1ProjectsByNameTechnicalAeoOptions({
     client: heyClient,
     path: { name: projectName },
-    ...(selectedRunId ? { query: { runId: selectedRunId } } : {}),
+    ...(effectiveRunId ? { query: { runId: effectiveRunId } } : {}),
   }))
-  const trendQuery = useQuery(getApiV1ProjectsByNameTechnicalAeoTrendOptions({
-    client: heyClient,
-    path: { name: projectName },
-    query: { limit: 30 },
-  }))
+  const trendQuery = useQuery({
+    ...getApiV1ProjectsByNameTechnicalAeoTrendOptions({
+      client: heyClient,
+      path: { name: projectName },
+      query: { limit: 30 },
+    }),
+    enabled: !integrated,
+  })
   // One unfiltered fetch powers both the per-page table (filtered client-side)
   // and the per-factor drill-down (which pages fall below pass on a factor).
   const pagesQuery = useQuery(getApiV1ProjectsByNameTechnicalAeoPagesOptions({
@@ -114,7 +130,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
     query: {
       limit: PAGES_FETCH_LIMIT,
       sort: 'score-asc',
-      ...(selectedRunId ? { runId: selectedRunId } : {}),
+      ...(effectiveRunId ? { runId: effectiveRunId } : {}),
     },
   }))
   const auditRunsQuery = useQuery({
@@ -123,6 +139,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
       path: { name: projectName },
       query: { kind: RunKinds['site-audit'], limit: 10 },
     }),
+    enabled: !integrated,
     refetchOnWindowFocus: 'always',
     refetchInterval: (query) => {
       const hasActiveAudit = query.state.data?.some(
@@ -147,16 +164,17 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
   const refreshAll = useCallback(async () => {
     const results = await Promise.all([
       scoreQuery.refetch(),
-      trendQuery.refetch(),
       pagesQuery.refetch(),
+      ...(!integrated ? [trendQuery.refetch()] : []),
     ])
     const failed = results.find((result) => result.error)
     if (failed?.error) throw failed.error
     return results[0]
-  }, [pagesQuery.refetch, scoreQuery.refetch, trendQuery.refetch])
+  }, [integrated, pagesQuery.refetch, scoreQuery.refetch, trendQuery.refetch])
 
   useEffect(() => {
-    if (selectedRunId) return
+    if (integrated) return
+    if (effectiveRunId) return
     if (!latestAudit || (latestAudit.status !== 'completed' && latestAudit.status !== 'partial')) return
     if (scoreQuery.data?.runId === latestAudit.id || lastAutoRefreshedRun.current === latestAudit.id) return
     lastAutoRefreshedRun.current = latestAudit.id
@@ -169,7 +187,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
         dedupeMode: 'replace',
       })
     })
-  }, [latestAudit?.id, latestAudit?.status, projectName, refreshAll, scoreQuery.data?.runId, selectedRunId])
+  }, [effectiveRunId, integrated, latestAudit?.id, latestAudit?.status, projectName, refreshAll, scoreQuery.data?.runId])
 
   const handleManualRefresh = async () => {
     setIsManualRefreshing(true)
@@ -219,18 +237,69 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
     getSearchText: siteAuditPageSearchText,
   })
   const pagesCapped = score ? score.pagesAudited > allPages.length : false
+  const primaryFactorId = score?.crossCuttingIssues[0]?.factorId
+    ?? score?.factors.find((factor) => factor.pagesPartial + factor.pagesFailing > 0)?.id
+    ?? null
 
   useEffect(() => {
     setErrorsOnly(false)
-    setExpandedFactor(null)
-  }, [selectedRunId])
+    setExpandedFactor(integrated ? primaryFactorId : null)
+  }, [effectiveRunId, integrated, primaryFactorId])
 
   if (scoreQuery.isLoading) {
-    return <p className="supporting-copy mt-6">Loading technical audit…</p>
+    return (
+      <div className={`flex min-h-40 items-center justify-center gap-2 text-sm text-secondary ${integrated ? '' : 'mt-6'}`} role="status">
+        <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+        Loading technical checks...
+      </div>
+    )
+  }
+
+  if (scoreQuery.error) {
+    return (
+      <section
+        className={`flex flex-col gap-4 rounded-lg border border-negative bg-negative-soft px-5 py-5 sm:flex-row sm:items-center sm:justify-between ${integrated ? '' : 'mt-6'}`}
+        role="alert"
+      >
+        <div className="flex min-w-0 gap-3">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-negative" aria-hidden="true" />
+          <div>
+            {integrated ? (
+              <h3 className="font-semibold text-negative">Technical checks could not load</h3>
+            ) : (
+              <h2 className="font-semibold text-negative">Technical checks could not load</h2>
+            )}
+            <p className="mt-1 text-sm text-secondary">The saved audit could not be read. Try loading it again.</p>
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="shrink-0"
+          onClick={() => void handleManualRefresh()}
+          disabled={isManualRefreshing}
+        >
+          <RefreshCw className={`size-4 ${isManualRefreshing ? 'motion-safe:animate-spin' : ''}`} aria-hidden="true" />
+          {isManualRefreshing ? 'Trying again...' : 'Try again'}
+        </Button>
+      </section>
+    )
   }
 
   // Onboarding / empty state — instructional copy is allowed here.
   if (!score || !score.hasData) {
+    if (integrated) {
+      return (
+        <section className="rounded-lg border border-default bg-surface-subtle px-5 py-7 text-center">
+          <ScanSearch className="mx-auto size-7 text-muted" aria-hidden="true" />
+          <h2 className="mt-3 text-base font-semibold text-heading">Technical checks unavailable</h2>
+          <p className="mx-auto mt-2 max-w-md text-sm text-secondary">
+            Run a new Site Health scan to calculate page-level technical findings.
+          </p>
+        </section>
+      )
+    }
     return (
       <Card className="surface-card mt-6 p-8 text-center">
         <ScanSearch className="mx-auto mb-3 h-8 w-8 text-muted" aria-hidden="true" />
@@ -267,8 +336,14 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
 
   const trendPoints = trendQuery.data?.points ?? []
   const trendRows = trendPoints.map((p) => ({ runId: p.runId, date: p.auditedAt, score: p.aggregateScore }))
-  const viewingHistorical = selectedRunId !== null
+  const viewingHistorical = runId === undefined && selectedRunId !== null
   const successPages = allPages.filter((p) => p.status === 'success')
+  const attentionFactorCount = score.factors.filter(
+    (factor) => factor.pagesPartial + factor.pagesFailing > 0,
+  ).length
+  const hasAnyRecommendations = score.crossCuttingIssues.some(
+    (issue) => issue.topRecommendations.length > 0,
+  )
 
   // For a factor, the audited pages scoring below pass (< 70) on that factor,
   // worst-first — the "what's failing" behind the pass/partial/fail counts.
@@ -282,9 +357,38 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
   }
 
   return (
-    <div className="mt-6">
+    <div className={integrated ? '' : 'mt-6'}>
       {/* Hero — aggregate score + sitemap provenance + action */}
-      <section className="surface-card flex flex-wrap items-start justify-between gap-6 rounded-lg border border-default bg-surface p-6">
+      {integrated ? (
+        <section className="flex flex-col gap-3 border-b border-default pb-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-secondary">Site score</p>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <span
+                aria-label={`Site score ${score.aggregateScore} out of 100`}
+                className={`inline-flex items-baseline gap-1 font-mono tabular-nums ${scoreTextClass(score.aggregateScore)}`}
+              >
+                <span className="text-3xl font-semibold">{score.aggregateScore}</span>
+                <span className="text-sm text-muted">/100</span>
+              </span>
+              <ToneBadge tone={scoreTone(score.aggregateScore)}>{statusLabel(score.aggregateScore)}</ToneBadge>
+              {deltaLabel ? <ToneBadge tone={deltaTone}>{deltaLabel}</ToneBadge> : null}
+            </div>
+          </div>
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm tabular-nums text-secondary">
+            <span>{score.pagesAudited} page{score.pagesAudited === 1 ? '' : 's'} checked</span>
+            <span aria-hidden="true" className="text-faint">·</span>
+            <span>{attentionFactorCount} check{attentionFactorCount === 1 ? '' : 's'} need{attentionFactorCount === 1 ? 's' : ''} attention</span>
+            {score.pagesErrored > 0 ? (
+              <>
+                <span aria-hidden="true" className="text-faint">·</span>
+                <span className="text-negative">{score.pagesErrored} crawl error{score.pagesErrored === 1 ? '' : 's'}</span>
+              </>
+            ) : null}
+          </p>
+        </section>
+      ) : (
+        <section className="surface-card flex flex-wrap items-start justify-between gap-6 rounded-lg border border-default bg-surface p-6">
         <div className="min-w-0">
           <p className="eyebrow eyebrow-soft">{viewingHistorical ? 'Technical AEO history' : 'Technical AEO'}</p>
           <div className="mt-1 flex flex-wrap items-baseline gap-3">
@@ -321,7 +425,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
           ) : null}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {trendPoints.length > 1 ? (
+          {runId === undefined && trendPoints.length > 1 ? (
             <select
               aria-label="View a Technical AEO audit"
               value={selectedRunId ?? ''}
@@ -352,9 +456,10 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
           )}
         </div>
       </section>
+      )}
 
       {/* Trend */}
-      {trendRows.length >= 2 ? (
+      {!integrated && trendRows.length >= 2 ? (
         <section className="page-section-divider">
           <div className="section-head">
             <p className="eyebrow eyebrow-soft">Trend</p>
@@ -407,23 +512,34 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
       ) : null}
 
       {/* Factor scorecard — expandable rows reveal which pages fail + how to fix */}
-      <section className="page-section-divider">
-        <div className="section-head">
-          <p className="eyebrow eyebrow-soft">Scorecard</p>
-          <h2 className="inline-flex items-center gap-1.5">
-            Ranking factors
-            <InfoTooltip text="Each factor is scored 0–100 per page (via the aeo-audit engine), then averaged across all successfully-audited pages. Pass ≥70, partial 40–69, fail <40. Expand a row to see which pages fall short and how to fix it." />
-          </h2>
-        </div>
+      <section className={integrated ? 'pt-5' : 'page-section-divider'}>
+        {integrated ? (
+          <div>
+            <h3 className="text-base font-semibold text-heading">Technical findings</h3>
+            <p className="mt-1 max-w-2xl text-sm text-secondary">
+              {hasAnyRecommendations
+                ? 'Select a check to see affected pages and recommended fixes.'
+                : 'Select a check to see affected pages and score details.'}
+            </p>
+          </div>
+        ) : (
+          <div className="section-head">
+            <p className="eyebrow eyebrow-soft">Scorecard</p>
+            <h2 className="inline-flex items-center gap-1.5">
+              Ranking factors
+              <InfoTooltip text="Each factor is scored 0–100 per page (via the aeo-audit engine), then averaged across all successfully-audited pages. Pass ≥70, partial 40–69, fail <40. Expand a row to see which pages fall short and how to fix it." />
+            </h2>
+          </div>
+        )}
         <div className="evidence-table-wrap mt-3">
-          <table className="evidence-table">
+          <table className={`evidence-table ${integrated ? 'min-w-[42rem]' : ''}`}>
             <thead>
               <tr>
-                <th>Factor</th>
-                <th className="text-right">Weight</th>
-                <th className="text-right">Avg</th>
+                <th>{integrated ? 'Technical check' : 'Factor'}</th>
+                {!integrated ? <th className="text-right">Weight</th> : null}
+                <th className="text-right">{integrated ? 'Score' : 'Avg'}</th>
                 <th>Status</th>
-                <th>Pass / Partial / Fail</th>
+                <th>{integrated ? 'Pages affected' : 'Pass / Partial / Fail'}</th>
               </tr>
             </thead>
             <tbody>
@@ -432,83 +548,125 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
                 const issue = score.crossCuttingIssues.find((c) => c.factorId === f.id)
                 const belowPass = expanded ? pagesBelowPass(f.id) : []
                 const belowPassTotal = f.pagesPartial + f.pagesFailing
+                const auditedFactorPages = f.pagesPassing + belowPassTotal
+                const hasRecommendations = Boolean(issue?.topRecommendations.length)
+                const hasTwoDetailColumns = hasRecommendations && belowPassTotal > 0
                 return (
                   <Fragment key={f.id}>
-                    <tr className={expanded ? 'bg-surface' : undefined}>
+                    <tr className={expanded ? 'bg-surface-subtle' : undefined}>
                       <td>
                         <button
                           type="button"
-                          className="flex items-center gap-1.5 text-left font-medium text-strong hover:text-primary"
+                          className="flex min-h-11 w-full items-center gap-2 text-left font-medium text-strong outline-none hover:text-primary focus-visible:text-primary focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-mono-400"
                           aria-expanded={expanded}
                           onClick={() => setExpandedFactor(expanded ? null : f.id)}
                         >
                           {expanded
-                            ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />
-                            : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />}
+                            ? <ChevronDown className="size-4 shrink-0 text-muted" aria-hidden="true" />
+                            : <ChevronRight className="size-4 shrink-0 text-muted" aria-hidden="true" />}
                           {f.name}
                         </button>
                       </td>
-                      <td className="text-right tabular-nums text-muted">{f.weight}%</td>
-                      <td className="text-right tabular-nums text-strong">{f.avgScore}</td>
-                      <td><ToneBadge tone={factorTone(f.status)}>{statusLabel(f.avgScore)}</ToneBadge></td>
-                      <td className="tabular-nums text-secondary">
-                        <span className="text-positive-400">{f.pagesPassing}</span>
-                        {' / '}
-                        <span className="text-caution-400">{f.pagesPartial}</span>
-                        {' / '}
-                        <span className="text-negative-400">{f.pagesFailing}</span>
+                      {!integrated ? <td className="text-right tabular-nums text-muted">{f.weight}%</td> : null}
+                      <td className="text-right font-mono tabular-nums text-strong">
+                        {f.avgScore}{integrated ? <span className="text-muted">/100</span> : null}
                       </td>
+                      <td><ToneBadge tone={factorTone(f.status)}>{statusLabel(f.avgScore)}</ToneBadge></td>
+                      {integrated ? (
+                        <td className={`tabular-nums ${belowPassTotal > 0 ? 'text-strong' : 'text-muted'}`}>
+                          {belowPassTotal} of {auditedFactorPages}
+                        </td>
+                      ) : (
+                        <td className="tabular-nums text-secondary">
+                          <span className="text-positive-400">{f.pagesPassing}</span>
+                          {' / '}
+                          <span className="text-caution-400">{f.pagesPartial}</span>
+                          {' / '}
+                          <span className="text-negative-400">{f.pagesFailing}</span>
+                        </td>
+                      )}
                     </tr>
                     {expanded ? (
-                      <tr className="bg-surface">
-                        <td colSpan={5} className="px-4 pb-4 pt-0">
-                          <div className="space-y-4 border-l border-base pl-4">
-                            {issue && issue.topRecommendations.length > 0 ? (
-                              <div>
-                                <p className="eyebrow eyebrow-soft mb-1.5 text-muted">How to fix</p>
-                                <ul className="space-y-1">
+                      <tr className="bg-surface-subtle">
+                        <td colSpan={integrated ? 4 : 5} className="px-4 pb-5 pt-0">
+                          <div className={`grid gap-5 border-t border-subtle pt-4 ${hasTwoDetailColumns ? 'lg:grid-cols-2' : ''}`}>
+                            {hasRecommendations && issue ? (
+                              <section aria-labelledby={`technical-finding-${f.id}-fixes`}>
+                                <h4 id={`technical-finding-${f.id}-fixes`} className="text-sm font-semibold text-heading">
+                                  Recommended fixes
+                                </h4>
+                                <ol className="mt-2 list-decimal space-y-1.5 pl-5 marker:text-muted">
                                   {issue.topRecommendations.map((rec, i) => (
-                                    <li key={i} className="flex gap-2 text-sm text-neutral">
-                                      <span className="select-none text-faint">→</span>
-                                      <span>{rec}</span>
-                                    </li>
+                                    <li key={i} className="pl-1 text-sm text-secondary">{rec}</li>
                                   ))}
-                                </ul>
-                              </div>
+                                </ol>
+                                {integrated ? (
+                                  <p className="mt-3 text-xs text-muted">Weight: {f.weight}% of the site score</p>
+                                ) : null}
+                              </section>
                             ) : belowPassTotal === 0 ? (
-                              <p className="text-sm text-muted">Every audited page passes this factor.</p>
+                              <p className="text-sm text-secondary">Every audited page passes this check.</p>
                             ) : null}
 
                             {belowPassTotal > 0 ? (
-                              <div>
-                                <p className="eyebrow eyebrow-soft mb-1.5 text-muted">
-                                  Pages below pass ({belowPassTotal})
-                                </p>
-                                <ul className="space-y-1">
-                                  {belowPass.slice(0, FACTOR_DRILLDOWN_PAGE_CAP).map((row) => (
-                                    <li key={row.url} className="flex items-center gap-2 text-sm">
-                                      <span className={`w-8 shrink-0 text-right tabular-nums ${scoreTextClass(row.score)}`}>{row.score}</span>
-                                      <a
-                                        href={row.url}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="truncate text-neutral hover:text-heading"
-                                        title={row.url}
-                                      >
-                                        {row.url}
-                                      </a>
-                                    </li>
-                                  ))}
-                                </ul>
+                              <section aria-labelledby={`technical-finding-${f.id}-pages`}>
+                                <h4 id={`technical-finding-${f.id}-pages`} className="text-sm font-semibold text-heading">
+                                  Affected pages ({belowPassTotal})
+                                </h4>
+                                {integrated && pagesQuery.isLoading ? (
+                                  <div className="mt-3 flex items-center gap-2 text-sm text-secondary" role="status">
+                                    <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+                                    Loading affected pages...
+                                  </div>
+                                ) : integrated && pagesQuery.error ? (
+                                  <div className="mt-3" role="alert">
+                                    <p className="text-sm font-medium text-negative">Affected pages could not load</p>
+                                    <p className="mt-1 text-sm text-secondary">Try the page-level audit read again.</p>
+                                    <Button
+                                      type="button"
+                                      variant="secondary"
+                                      size="sm"
+                                      className="mt-3"
+                                      onClick={() => void pagesQuery.refetch()}
+                                      disabled={pagesQuery.isFetching}
+                                    >
+                                      {pagesQuery.isFetching ? (
+                                        <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+                                      ) : (
+                                        <RefreshCw className="size-4" aria-hidden="true" />
+                                      )}
+                                      {pagesQuery.isFetching ? 'Retrying affected pages...' : 'Retry affected pages'}
+                                    </Button>
+                                  </div>
+                                ) : belowPass.length > 0 ? (
+                                  <ul className="mt-2 space-y-1.5">
+                                    {belowPass.slice(0, FACTOR_DRILLDOWN_PAGE_CAP).map((row) => (
+                                      <li key={row.url} className="flex min-w-0 items-center gap-2 text-sm">
+                                        <span className={`w-8 shrink-0 text-right font-mono tabular-nums ${scoreTextClass(row.score)}`}>{row.score}</span>
+                                        <a
+                                          href={row.url}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="min-w-0 truncate text-link outline-none hover:text-heading focus-visible:ring-2 focus-visible:ring-mono-400"
+                                          title={row.url}
+                                        >
+                                          {row.url}
+                                        </a>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                ) : (
+                                  <p className="mt-2 text-sm text-secondary">Page details are not available in the loaded audit sample.</p>
+                                )}
                                 {belowPass.length > FACTOR_DRILLDOWN_PAGE_CAP ? (
-                                  <p className="mt-1 text-xs text-faint">
+                                  <p className="mt-2 text-xs text-muted">
                                     + {belowPass.length - FACTOR_DRILLDOWN_PAGE_CAP} more below pass
                                   </p>
                                 ) : null}
-                                {pagesCapped ? (
-                                  <p className="mt-1 text-xs text-faint">Showing the worst {allPages.length} audited pages.</p>
+                                {pagesCapped && (!integrated || (!pagesQuery.isLoading && !pagesQuery.error)) ? (
+                                  <p className="mt-2 text-xs text-muted">Showing the worst {allPages.length} audited pages.</p>
                                 ) : null}
-                              </div>
+                              </section>
                             ) : null}
                           </div>
                         </td>
@@ -523,7 +681,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
       </section>
 
       {/* Opportunities — one structured block per cross-cutting factor */}
-      {score.crossCuttingIssues.length > 0 ? (
+      {!integrated && score.crossCuttingIssues.length > 0 ? (
         <section className="page-section-divider">
           <div className="section-head">
             <p className="eyebrow eyebrow-soft">Opportunities</p>
@@ -561,6 +719,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
       ) : null}
 
       {/* Per-page breakdown */}
+      {!integrated ? (
       <section className="page-section-divider">
         <div className="section-head section-head-inline">
           <div>
@@ -656,6 +815,7 @@ export function TechnicalAeoSection({ projectName, projectId }: { projectName: s
           </>
         )}
       </section>
+      ) : null}
     </div>
   )
 }

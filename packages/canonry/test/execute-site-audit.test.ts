@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createClient,
@@ -14,6 +14,9 @@ import {
   siteCrawlAttempts,
   siteCrawlEdges,
   siteCrawlEventReceipts,
+  siteCrawlGraphEdges,
+  siteCrawlGraphLayouts,
+  siteCrawlGraphNodes,
   siteCrawlPages,
   siteCrawlSnapshots,
 } from '@ainyc/canonry-db'
@@ -35,7 +38,11 @@ import {
 const NOW = '2026-08-08T00:00:00.000Z'
 
 function scoredFactor(id: string, name: string, weight: number, score: number) {
-  return { id, name, weight, score, findings: [], recommendations: [] }
+  return {
+    id, name, weight, score,
+    findings: [{ type: 'info', code: `${id}.test-evidence`, message: `${name} evidence.` }],
+    recommendations: [`Improve ${name}.`],
+  }
 }
 
 function page(key: string, url: string, overrides: Record<string, unknown> = {}) {
@@ -61,6 +68,12 @@ function page(key: string, url: string, overrides: Record<string, unknown> = {})
       auditedAt: NOW,
       overallScore: 88,
       factors: [scoredFactor('sd', 'Structured Data', 12, 88)],
+      criticalDefects: [{
+        id: 'missing-meta-description',
+        severity: 'warning',
+        detail: 'No meta description found.',
+        recommendation: 'Add a concise meta description.',
+      }],
     },
     error: null,
     metrics: {
@@ -195,11 +208,118 @@ describe('executeSiteAudit', () => {
     const attempt = db.select().from(siteCrawlAttempts).where(eq(siteCrawlAttempts.runId, runId)).get()
     expect(attempt).toMatchObject({ state: 'completed', lastEventSequence: 4 })
     expect(db.select().from(siteCrawlEventReceipts).where(eq(siteCrawlEventReceipts.attemptId, attempt!.id)).all()).toHaveLength(4)
-    expect(db.select().from(siteCrawlPages).where(eq(siteCrawlPages.attemptId, attempt!.id)).all()).toHaveLength(2)
+    const crawlPages = db.select().from(siteCrawlPages).where(eq(siteCrawlPages.attemptId, attempt!.id)).all()
+    expect(crawlPages).toHaveLength(2)
+    expect(crawlPages.find((page) => page.nodeKey === 'page:root')?.auditFields).toEqual({
+      schemaVersion: '1.0',
+      factors: [{
+        id: 'sd',
+        name: 'Structured Data',
+        weight: 12,
+        score: 88,
+        status: 'pass',
+        applicable: null,
+        findings: [{ type: 'info', code: 'sd.test-evidence', message: 'Structured Data evidence.' }],
+        recommendations: ['Improve Structured Data.'],
+      }],
+      criticalDefects: [{
+        id: 'missing-meta-description',
+        severity: 'warning',
+        detail: 'No meta description found.',
+        recommendation: 'Add a concise meta description.',
+      }],
+    })
     expect(db.select().from(siteCrawlEdges).where(eq(siteCrawlEdges.attemptId, attempt!.id)).get()).toMatchObject({ occurrences: 2, followable: true })
     expect(db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, runId)).get()).toMatchObject({ complete: true, detailsAvailable: true })
+    expect(db.select().from(siteCrawlGraphLayouts).where(eq(siteCrawlGraphLayouts.runId, runId)).get()).toMatchObject({
+      state: 'ready', layoutVersion: 'site-health-fa2-v1', totalNodes: 2, totalEdges: 1, nodeCount: 2, edgeCount: 1,
+    })
+    const graphNodes = db.select().from(siteCrawlGraphNodes).where(eq(siteCrawlGraphNodes.runId, runId)).all()
+    expect(graphNodes).toHaveLength(2)
+    expect(graphNodes.find((node) => node.nodeKey === 'page:root')).toMatchObject({ x: 0, y: 0, sampleRank: 0 })
+    expect(db.select().from(siteCrawlGraphEdges).where(eq(siteCrawlGraphEdges.runId, runId)).get()).toMatchObject({
+      edgeKey: 'edge:root-a', sourceNodeKey: 'page:root', targetNodeKey: 'page:a', sampleRank: 0,
+    })
     expect(db.select().from(siteAuditSnapshots).where(eq(siteAuditSnapshots.runId, runId)).get()).toMatchObject({ aggregateScore: 88 })
     expect(db.select().from(siteAuditPages).where(eq(siteAuditPages.runId, runId)).all()).toHaveLength(2)
+  })
+
+  it('publishes the crawl when ForceAtlas2 times out and records layout unavailability', async () => {
+    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => emitCompleteGraph(options))
+    const runId = seedRun()
+    await executeSiteAudit(db, runId, projectId, { graphLayoutTimeoutMs: 1 })
+
+    expect(db.select().from(runs).where(eq(runs.id, runId)).get()?.status).toBe('completed')
+    expect(db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, runId)).get()).toBeDefined()
+    expect(db.select().from(siteCrawlGraphLayouts).where(eq(siteCrawlGraphLayouts.runId, runId)).get()).toMatchObject({
+      state: 'unavailable', layoutVersion: null, failureCode: 'layout-timeout',
+      totalNodes: 2, totalEdges: 1, nodeCount: 0, edgeCount: 0,
+    })
+    expect(db.select().from(siteCrawlGraphNodes).where(eq(siteCrawlGraphNodes.runId, runId)).all()).toEqual([])
+  })
+
+  it('publishes an unavailable marker when ready-layout persistence fails', async () => {
+    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
+      const result = await emitCompleteGraph(options)
+      vi.spyOn(db, 'transaction').mockImplementationOnce(() => {
+        throw new Error('forced graph persistence failure')
+      })
+      return result
+    })
+    const runId = seedRun()
+
+    await executeSiteAudit(db, runId, projectId)
+
+    expect(db.select().from(runs).where(eq(runs.id, runId)).get()?.status).toBe('completed')
+    expect(db.select().from(siteCrawlGraphLayouts).where(eq(siteCrawlGraphLayouts.runId, runId)).get()).toMatchObject({
+      state: 'unavailable', failureCode: 'layout-error', totalNodes: 2, totalEdges: 1, nodeCount: 0, edgeCount: 0,
+    })
+    expect(db.select().from(siteCrawlGraphNodes).where(eq(siteCrawlGraphNodes.runId, runId)).all()).toEqual([])
+    expect(db.select().from(siteCrawlGraphEdges).where(eq(siteCrawlGraphEdges.runId, runId)).all()).toEqual([])
+  })
+
+  it('centers the terminal home page when the crawl root redirects from apex to www', async () => {
+    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
+      const finalRootUrl = 'https://www.example.com/'
+      await options.onEvent?.({
+        type: 'pages', sequence: 1, batchId: 'redirected-root-pages', checksum: 'redirected-root-pages',
+        rows: [
+          page('page:redirect-root', 'https://example.com/', {
+            finalUrl: finalRootUrl,
+            state: 'redirect',
+            depth: 0,
+            audit: null,
+            indexability: { state: 'redirect', reasons: ['redirect'], rulesetVersion: '1.0.0' },
+          }),
+          page('page:www-root', finalRootUrl, {
+            depth: 0,
+            provenance: { discoveredFrom: ['https://example.com/'], sitemapSources: [], root: true },
+          }),
+        ],
+      })
+      const endSummary = summary({
+        finalRootUrl,
+        pagesDiscovered: 2,
+        pagesFetched: 2,
+        pagesObserved: 2,
+        edgesObserved: 0,
+        auditRollup: { auditedPages: 1, aggregateScore: 88, factors: [] },
+      })
+      await options.onEvent?.({ type: 'summary', sequence: 2, batchId: 'redirected-root-summary', checksum: 'redirected-root-summary', summary: endSummary })
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+    })
+    const runId = seedRun()
+
+    await executeSiteAudit(db, runId, projectId)
+
+    expect(db.select().from(siteCrawlGraphNodes).where(and(
+      eq(siteCrawlGraphNodes.runId, runId),
+      eq(siteCrawlGraphNodes.nodeKey, 'page:www-root'),
+    )).get()).toMatchObject({ sampleRank: 0, x: 0, y: 0 })
+    expect(db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, runId)).get()).toMatchObject({
+      requestedRootUrl: 'https://example.com/',
+      rootUrl: 'https://www.example.com/',
+    })
   })
 
   it('keeps technically indexable HTML in inventory when factor analysis fails', async () => {
@@ -581,5 +701,40 @@ describe('executeSiteAudit', () => {
     expect(db.select().from(siteCrawlAttempts).where(eq(siteCrawlAttempts.runId, runId)).get()?.state).toBe('cancelled')
     expect(db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, runId)).get()).toBeUndefined()
     expect(db.select().from(siteAuditSnapshots).where(eq(siteAuditSnapshots.runId, runId)).get()).toBeUndefined()
+    expect(db.select().from(siteCrawlGraphLayouts).where(eq(siteCrawlGraphLayouts.runId, runId)).all()).toEqual([])
+    expect(db.select().from(siteCrawlGraphNodes).where(eq(siteCrawlGraphNodes.runId, runId)).all()).toEqual([])
+    expect(db.select().from(siteCrawlGraphEdges).where(eq(siteCrawlGraphEdges.runId, runId)).all()).toEqual([])
+  })
+
+  it('keeps the typed cancellation error when graph cleanup loses its storage write', async () => {
+    const runId = seedRun()
+    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
+      const result = await emitCompleteGraph(options)
+      db.update(runs).set({ status: 'cancelled', finishedAt: NOW }).where(eq(runs.id, runId)).run()
+      return result
+    })
+    vi.spyOn(db, 'delete').mockImplementationOnce(() => {
+      throw new Error('graph cleanup storage failed')
+    })
+
+    await expect(executeSiteAudit(db, runId, projectId)).rejects.toThrow(/cancelled before publication/i)
+    expect(db.select().from(runs).where(eq(runs.id, runId)).get()?.status).toBe('cancelled')
+  })
+
+  it('honors a signal-only cancellation that arrives after the crawl returns', async () => {
+    const controller = new AbortController()
+    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
+      const result = await emitCompleteGraph(options)
+      controller.abort(new Error('cancelled after crawl'))
+      return result
+    })
+    const runId = seedRun()
+
+    await expect(executeSiteAudit(db, runId, projectId, { signal: controller.signal })).rejects.toThrow('cancelled after crawl')
+
+    expect(db.select().from(runs).where(eq(runs.id, runId)).get()?.status).toBe('cancelled')
+    expect(db.select().from(siteCrawlAttempts).where(eq(siteCrawlAttempts.runId, runId)).get()?.state).toBe('cancelled')
+    expect(db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, runId)).all()).toEqual([])
+    expect(db.select().from(siteCrawlGraphLayouts).where(eq(siteCrawlGraphLayouts.runId, runId)).all()).toEqual([])
   })
 })

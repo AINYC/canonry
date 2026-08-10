@@ -21,7 +21,8 @@ constraints; `DESIGN.md` owns hierarchy, copy, typography, and control choices.
 | `src/pages/` | One file per page (ProjectPage is largest at 1,600 LOC) |
 | `src/components/shared/ChartPrimitives.tsx` | Recharts wrapper — chart components and styling constants |
 | `src/components/shared/ToneBadge.tsx` | Status indicator component with tone colors |
-| `src/components/project/` | Project page section components (GscSection, TrafficSection, etc.) |
+| `src/components/project/` | Project page section components (GscSection, TrafficSection, `SiteHealthSection`, etc.) |
+| `src/components/project/SiteGraphSigma.tsx` / `site-graph-sigma.ts` | Site Health WebGL map and its Graphology adapter; consumes server-published coordinates only |
 | `src/queries/` | TanStack Query hooks for data fetching |
 | `src/view-models.ts` | Data transformation from API DTOs to display format |
 
@@ -128,7 +129,7 @@ Base path comes from `window.__CANONRY_CONFIG__.basePath`. Never hardcode `/api/
 
 ### Read-only embed mode (#716)
 
-When the server injects `window.__CANONRY_CONFIG__.embed` (via `canonry serve --embed`), `RootLayout` (`src/App.tsx`) takes a chromeless branch — placed AFTER every hook so Rules of Hooks hold on both paths — rendering only `<Outlet/>` inside a minimal `app-shell-embed` shell with NO sidebar / topbar / mobile nav / footer / drawers / `RunNotificationObserver` / `Toaster` / `AeroBarHost`. The optional `embed.views` allowlist gates the route via `embedViewIdForPath` (a non-allowlisted route renders a `embed-view-unavailable` state instead of the page, so surfaces like `/settings` are not reachable inside the iframe — a presentational gate, NOT a security boundary; the API key scope is the real boundary). The optional `embed.projectTabs` allowlist is a FINER gate that `ProjectPage` applies to the in-page tab subnav (Overview / Search Engines / Activity / Technical AEO / Local / Discovery / Backlinks / Report / Settings): it filters the rendered tabs to the allowlist and `resolveEmbedProjectTab` falls a direct-URL hit on a hidden tab back to Overview (or the first allowed tab). This is what `embed.views` cannot do — every `/projects/*` collapses to the one `project` view id. Same posture as `views`: presentational, NOT a security boundary; unset = all tabs. The optional `embed.theme` is applied through `embedThemeStyle` (sanitized, via the React `style` prop). With embed off, `getEmbedConfig()` returns `null` and the full chrome renders exactly as before.
+When the server injects `window.__CANONRY_CONFIG__.embed` (via `canonry serve --embed`), `RootLayout` (`src/App.tsx`) takes a chromeless branch — placed AFTER every hook so Rules of Hooks hold on both paths — rendering only `<Outlet/>` inside a minimal `app-shell-embed` shell with NO sidebar / topbar / mobile nav / footer / drawers / `RunNotificationObserver` / `Toaster` / `AeroBarHost`. The optional `embed.views` allowlist gates the route via `embedViewIdForPath` (a non-allowlisted route renders a `embed-view-unavailable` state instead of the page, so surfaces like `/settings` are not reachable inside the iframe — a presentational gate, NOT a security boundary; the API key scope is the real boundary). The optional `embed.projectTabs` allowlist is a FINER gate that `ProjectPage` applies to the in-page tab subnav (Overview / Search Engines / Activity / Site Health / Local / Discovery / Backlinks / Report / Settings): it filters the rendered tabs to the allowlist and `resolveEmbedProjectTab` falls a direct-URL hit on a hidden tab back to Overview (or the first allowed tab). Site Health retains the stable `technical-aeo` allowlist token. This is what `embed.views` cannot do — every `/projects/*` collapses to the one `project` view id. Same posture as `views`: presentational, NOT a security boundary; unset = all tabs. The optional `embed.theme` is applied through `embedThemeStyle` (sanitized, via the React `style` prop). With embed off, `getEmbedConfig()` returns `null` and the full chrome renders exactly as before.
 
 ### DTO types — generated vs hand-typed
 
@@ -143,13 +144,28 @@ through every consumer that assumes those fields are always present.
 Migrating each requires consumer-side review; track as separate follow-up
 PRs rather than rolling into tooling work.
 
-### Charting
+### Charting and graph rendering
 
-**Recharts only, via ChartPrimitives.tsx.** Never import `recharts` directly. ESLint enforces this.
+**Recharts only, via ChartPrimitives.tsx, for analytic charts.** Never import
+`recharts` directly. ESLint enforces this.
 
 ```typescript
 import { CHART_TOOLTIP_STYLE, CHART_AXIS_TICK, CHART_SERIES_COLORS } from '../shared/ChartPrimitives'
 ```
+
+**Narrow Site Health exception:** the `/technical-aeo` route is labeled **Site
+Health** and renders its site map with stable `sigma@3` through
+`@react-sigma/core@5` and `graphology`. This is a WebGL graph renderer, not a
+second charting system. Keep all Sigma/Graphology imports inside
+`SiteGraphSigma.tsx` and `site-graph-sigma.ts`; every other visual stays on the
+Recharts path above.
+
+The browser must never run graph layout physics. It receives the immutable
+coordinates published with the crawl snapshot (Graphology ForceAtlas2 runs in a
+bounded Node worker during publication). The renderer may pan, zoom, focus,
+dim, filter, and derive accessible controls from those positions, but must not
+mutate or recompute them. A missing/failed/legacy layout is an explicit
+unavailable state, not a client-side fallback layout.
 
 ### Design tokens
 
@@ -240,7 +256,7 @@ Token migration guardrails:
 ## Common Mistakes
 
 - **Importing `recharts` directly** — use `ChartPrimitives.tsx` exports.
-- **Adding alternative charting libraries** (Chart.js, D3, Highcharts) — Recharts is the only allowed library.
+- **Adding alternative charting libraries** (Chart.js, D3, Highcharts) — Recharts is the only chart library; the isolated Site Health Sigma/Graphology exception above is not a precedent for other views.
 - **Hardcoding `/api/v1`** — use the base path from `window.__CANONRY_CONFIG__`.
 - **Using card grids for tabular data** — analysts prefer tables for scanability.
 - **Adding decorative gradients or glow effects** — the design system is clean and flat.
