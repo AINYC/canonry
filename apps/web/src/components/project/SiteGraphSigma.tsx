@@ -13,7 +13,7 @@ import {
 } from 'react'
 import { Maximize2, Minus, Plus, Search } from 'lucide-react'
 import type Sigma from 'sigma'
-import type { NodeHoverDrawingFunction } from 'sigma/rendering'
+import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from 'sigma/rendering'
 import type { Settings } from 'sigma/settings'
 import type {
   CameraState,
@@ -50,6 +50,8 @@ export interface SiteGraphSigmaProps {
   edges: readonly SiteGraphSigmaEdge[]
   layoutState?: 'ready' | 'unavailable'
   layoutUnavailableReason?: string | null
+  /** Server-identified crawl root. Without it no page is labeled "Home". */
+  rootNodeKey?: string | null
   selectedNodeKey?: string | null
   onSelectNode?: (node: SiteGraphSigmaNode) => void
   ariaLabel?: string
@@ -186,6 +188,41 @@ function sigmaTheme(element: HTMLElement): SigmaSiteGraphTheme {
     edgeActive: color('edgeActive'),
     label: color('label'),
     background: color('background'),
+    root: color('root'),
+  }
+}
+
+/**
+ * Sigma 3's circle program cannot stroke a node, so the root's ring is painted
+ * on the 2D label canvas above the WebGL layer. The root always carries
+ * `forceLabel`, so that canvas always runs for it.
+ *
+ * The label text is drawn here rather than delegated to Sigma's
+ * `drawDiscNodeLabel`: importing `sigma/rendering` for a value touches
+ * `WebGL2RenderingContext` at module load, which does not exist during SSR or
+ * in jsdom. The geometry below matches Sigma's own disc-label placement.
+ */
+function createSiteGraphNodeLabelRenderer(
+  theme: SigmaSiteGraphTheme,
+): NodeLabelDrawingFunction<SigmaSiteGraphNodeAttributes, SigmaSiteGraphEdgeAttributes> {
+  return (context, data, settings) => {
+    const ringColor = (data as Partial<SigmaSiteGraphNodeAttributes>).ringColor
+    if (typeof ringColor === 'string') {
+      context.save()
+      context.strokeStyle = ringColor
+      context.lineWidth = 3
+      context.beginPath()
+      context.arc(data.x, data.y, data.size + 4, 0, Math.PI * 2)
+      context.stroke()
+      context.restore()
+    }
+
+    if (!data.label) return
+    context.save()
+    context.fillStyle = settings.labelColor.color ?? theme.label
+    context.font = `${settings.labelWeight} ${settings.labelSize}px ${settings.labelFont}`
+    context.fillText(data.label, data.x + data.size + 3, data.y + settings.labelSize / 3)
+    context.restore()
   }
 }
 
@@ -371,6 +408,7 @@ export function SiteGraphSigma({
   edges,
   layoutState = 'ready',
   layoutUnavailableReason,
+  rootNodeKey = null,
   selectedNodeKey,
   onSelectNode,
   ariaLabel,
@@ -411,8 +449,8 @@ export function SiteGraphSigma({
   )
   const hasFinitePosition = nodes.some((node) => Number.isFinite(node.x) && Number.isFinite(node.y))
   const builtGraph = useMemo(
-    () => theme ? buildSigmaSiteGraph(nodes, edges, theme) : null,
-    [edges, nodes, theme],
+    () => theme ? buildSigmaSiteGraph(nodes, edges, theme, rootNodeKey) : null,
+    [edges, nodes, rootNodeKey, theme],
   )
   const sigmaSettings = useMemo<Partial<Settings<SigmaSiteGraphNodeAttributes, SigmaSiteGraphEdgeAttributes>> | null>(() => theme ? ({
     allowInvalidContainer: true,
@@ -427,6 +465,7 @@ export function SiteGraphSigma({
     hideLabelsOnMove: true,
     itemSizesReference: 'screen' as const,
     defaultDrawNodeHover: createSiteGraphNodeHoverRenderer(theme),
+    defaultDrawNodeLabel: createSiteGraphNodeLabelRenderer(theme),
     labelColor: { color: theme.label },
     labelDensity: 0.2,
     labelFont: 'Geist Sans, sans-serif',

@@ -9,8 +9,12 @@ import {
   findSiteGraphNodes,
   SITE_GRAPH_EDGE_TOKEN,
   SITE_GRAPH_FOCUSED_NEIGHBOR_LABEL_LIMIT,
+  SITE_GRAPH_ROOT_LABEL,
+  SITE_GRAPH_ROOT_MIN_SIZE,
+  SITE_GRAPH_ROOT_TOKEN,
   SITE_GRAPH_SIGMA_COLOR_TOKENS,
   isSigmaWebGlColor,
+  isSiteGraphRootNode,
   siteGraphNodeSize,
   siteGraphStatusGlyph,
   siteGraphVisualState,
@@ -30,6 +34,7 @@ const theme: SigmaSiteGraphTheme = {
   edgeActive: 'rgb(22, 23, 24)',
   label: 'rgb(25, 26, 27)',
   background: 'rgb(28, 29, 30)',
+  root: 'rgb(31, 32, 33)',
 }
 
 function node(
@@ -133,6 +138,10 @@ describe('buildSigmaSiteGraph', () => {
     expect(SITE_GRAPH_EDGE_TOKEN).toEqual({
       property: '--chart-neutral-text-dim',
       fallback: '#71717a',
+    })
+    expect(SITE_GRAPH_ROOT_TOKEN).toEqual({
+      property: '--chart-site-health-root',
+      fallback: '#cc79a7',
     })
   })
 
@@ -357,5 +366,73 @@ describe('findSiteGraphNodes', () => {
       'page-01',
       'page-02',
     ])
+  })
+})
+
+describe('the crawl root', () => {
+  const graphWithRoot = () => buildSigmaSiteGraph(
+    [
+      node('home', { path: '/', depth: 0, linkScoreNormalized: 0 }),
+      node('services', { path: '/services', depth: 1, linkScoreNormalized: 1 }),
+      node('deep', { path: '/blog/guides/article', depth: 3 }),
+    ],
+    [edge('home-services', 'home', 'services'), edge('services-deep', 'services', 'deep')],
+    theme,
+    'home',
+  )
+
+  it('takes its identity from the server and never guesses from a path or a depth', () => {
+    expect(isSiteGraphRootNode(node('home', { path: '/', depth: 0 }), 'home')).toBe(true)
+    expect(isSiteGraphRootNode(node('home', { path: '/', depth: 0 }), null)).toBe(false)
+    expect(isSiteGraphRootNode(node('home', { path: '/', depth: 0 }), 'other')).toBe(false)
+
+    const unidentified = buildSigmaSiteGraph([node('home', { path: '/', depth: 0 })], [], theme)
+    expect(unidentified.graph.getNodeAttribute('home', 'isRoot')).toBe(false)
+    expect(unidentified.graph.getNodeAttribute('home', 'label')).toBe('● /')
+    expect(unidentified.graph.getNodeAttribute('home', 'ringColor')).toBeNull()
+  })
+
+  it('is named, always labeled, oversized, and ringed regardless of link score', () => {
+    const root = graphWithRoot().graph.getNodeAttributes('home')
+
+    expect(root.label).toBe(`● ${SITE_GRAPH_ROOT_LABEL}`)
+    expect(root.label).not.toContain('/')
+    expect(root.forceLabel).toBe(true)
+    expect(root.isRoot).toBe(true)
+    expect(root.ringColor).toBe(theme.root)
+    // The lowest possible internal-link score must not shrink it.
+    expect(root.size).toBe(SITE_GRAPH_ROOT_MIN_SIZE)
+    expect(root.size).toBeGreaterThan(
+      graphWithRoot().graph.getNodeAttribute('services', 'size'),
+    )
+    expect(root.zIndex).toBeGreaterThan(graphWithRoot().graph.getNodeAttribute('services', 'zIndex'))
+  })
+
+  it('keeps its label and ring in the overview and while another page has focus', () => {
+    const built = graphWithRoot()
+    const root = built.graph.getNodeAttributes('home')
+
+    const overview = createSigmaSiteGraphReducers(built.graph, null, 2, theme)
+    expect(overview.nodeReducer('home', root)).toMatchObject({
+      label: `● ${SITE_GRAPH_ROOT_LABEL}`,
+      forceLabel: true,
+      ringColor: theme.root,
+    })
+
+    // Focused elsewhere, and not even a neighbor of the focus.
+    const focusedElsewhere = createSigmaSiteGraphReducers(built.graph, 'deep', 2, theme)
+    expect(focusedElsewhere.nodeReducer('home', root)).toMatchObject({
+      label: `● ${SITE_GRAPH_ROOT_LABEL}`,
+      forceLabel: true,
+      ringColor: theme.root,
+    })
+    expect(focusedElsewhere.nodeReducer('home', root).color).toBe(theme.eligible)
+
+    const focusedOnRoot = createSigmaSiteGraphReducers(built.graph, 'home', 2, theme)
+    expect(focusedOnRoot.nodeReducer('home', root)).toMatchObject({
+      forceLabel: true,
+      zIndex: 3,
+      size: root.size * 1.35,
+    })
   })
 })

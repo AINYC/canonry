@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import {
-  getApiV1ProjectsByNameRunsQueryKey,
+  getApiV1ProjectsByNameTechnicalAeoRunsQueryKey,
   getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteQueryKey,
   getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditQueryKey,
   getApiV1ProjectsByNameTechnicalAeoCrawlPagesQueryKey,
@@ -53,19 +53,32 @@ vi.mock('../src/components/project/SiteGraphSigma.js', () => ({
 const projectName = 'citypoint'
 const projectId = 'proj_1'
 
-function run(id: string, status: 'completed' | 'partial' | 'running' = 'completed') {
+function scan(
+  runId: string,
+  status: 'completed' | 'partial' | 'running' = 'completed',
+  hasCrawlData = true,
+) {
   return {
-    id,
-    projectId,
-    kind: 'site-audit' as const,
+    runId,
     status,
-    trigger: 'manual' as const,
-    location: null,
     startedAt: '2026-08-08T18:15:00.000Z',
     finishedAt: status === 'running' ? null : '2026-08-08T18:16:33.000Z',
-    error: null,
     createdAt: '2026-08-08T18:15:00.000Z',
+    hasCrawlData,
   }
+}
+
+/** The scan history is served newest first, exactly as the dropdown reads it. */
+function scanHistoryKey() {
+  return getApiV1ProjectsByNameTechnicalAeoRunsQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { limit: 20 },
+  })
+}
+
+function scanHistory(...scans: ReturnType<typeof scan>[]) {
+  return { project: projectName, scans }
 }
 
 function summary(runId: string, pagesDiscovered: number, complete = true) {
@@ -272,11 +285,7 @@ function makeClient() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   })
-  queryClient.setQueryData(getApiV1ProjectsByNameRunsQueryKey({
-    client: heyClient,
-    path: { name: projectName },
-    query: { kind: 'site-audit', limit: 20 },
-  }), [run('run_1')])
+  queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_1')))
   queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
     client: heyClient,
     path: { name: projectName },
@@ -399,7 +408,7 @@ test('uses the server-owned health state for both the inventory badge and select
   })
 
   renderSection(queryClient)
-  fireEvent.click(screen.getByRole('tab', { name: 'Inventory' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
   fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
 
   expect(screen.getAllByText('Fetch failed')).toHaveLength(2)
@@ -410,7 +419,7 @@ test('connects a selected graph page score to its exact audit finding in the sam
 
   fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
 
-  expect(screen.getByRole('heading', { name: 'Why this technical score' })).not.toBeNull()
+  expect(screen.getByRole('heading', { name: 'Findings and fixes' })).not.toBeNull()
   expect(screen.getByLabelText('Technical score 61 out of 100')).not.toBeNull()
   expect(screen.getByText('The page is too thin.')).not.toBeNull()
   expect(screen.getByText('Add complete answers to the page.')).not.toBeNull()
@@ -425,7 +434,7 @@ test('uses a labelled, roving-focus tab interface for Site Health views', () => 
   renderSection()
 
   const map = screen.getByRole('tab', { name: 'Map' })
-  const inventory = screen.getByRole('tab', { name: 'Inventory' })
+  const inventory = screen.getByRole('tab', { name: 'Pages' })
   const technical = screen.getByRole('tab', { name: 'Technical checks' })
   expect(map.getAttribute('id')).toBe('site-health-map-tab')
   expect(map.getAttribute('aria-controls')).toBe('site-health-map-panel')
@@ -450,11 +459,7 @@ test('uses a labelled, roving-focus tab interface for Site Health views', () => 
 
 test('keeps every detail read pinned to the selected historical run', () => {
   const queryClient = makeClient()
-  queryClient.setQueryData(getApiV1ProjectsByNameRunsQueryKey({
-    client: heyClient,
-    path: { name: projectName },
-    query: { kind: 'site-audit', limit: 20 },
-  }), [run('run_old', 'partial'), run('run_1')])
+  queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_1'), scan('run_old', 'partial')))
   seedRun(queryClient, 'run_old', summary('run_old', 18, false))
   renderSection(queryClient)
 
@@ -465,7 +470,7 @@ test('keeps every detail read pinned to the selected historical run', () => {
   expect(screen.getByText('Partial scan')).not.toBeNull()
   expect(screen.getByText('18')).not.toBeNull()
 
-  fireEvent.click(screen.getByRole('tab', { name: 'Inventory' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
   fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
 
   const neighborKey = getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsQueryKey({
@@ -483,11 +488,7 @@ test('keeps every detail read pinned to the selected historical run', () => {
 
 test('defaults to the newest terminal run when that scan is partial', () => {
   const queryClient = makeClient()
-  queryClient.setQueryData(getApiV1ProjectsByNameRunsQueryKey({
-    client: heyClient,
-    path: { name: projectName },
-    query: { kind: 'site-audit', limit: 20 },
-  }), [run('run_1'), run('run_partial', 'partial')])
+  queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_partial', 'partial'), scan('run_1')))
   seedRun(queryClient, 'run_partial', summary('run_partial', 18, false))
 
   renderSection(queryClient)
@@ -551,7 +552,7 @@ test('loads the complete inventory in 200-page batches', async () => {
   vi.stubGlobal('fetch', fetchMock)
 
   renderSection(queryClient)
-  fireEvent.click(screen.getByRole('tab', { name: 'Inventory' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
 
   expect(screen.getByText('Loaded 2 of 3 discovered pages.')).not.toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Load more pages' }))
@@ -585,7 +586,7 @@ test('makes loaded-window inventory search limits explicit', () => {
   })
 
   renderSection(queryClient)
-  fireEvent.click(screen.getByRole('tab', { name: 'Inventory' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
   fireEvent.change(screen.getByRole('searchbox', { name: 'Search loaded pages' }), {
     target: { value: '/not-loaded-yet' },
   })
@@ -673,7 +674,7 @@ test('queries dead-link details only when the summary says the check ran', async
 
 test('lets long selected paths and URLs wrap in the page inspector', () => {
   renderSection()
-  fireEvent.click(screen.getByRole('tab', { name: 'Inventory' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
   fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
 
   const path = screen.getByRole('heading', { name: '/services/roof-repair', level: 3 })
@@ -718,7 +719,7 @@ test('contains selected-page link tables inside mobile-safe grid items', () => {
 
   renderSection(queryClient)
   fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
-  fireEvent.click(screen.getByRole('tab', { name: 'Inventory' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
 
   const linksIn = screen.getByRole('region', { name: 'Links in (1)' })
   const linksOut = screen.getByRole('region', { name: 'Links out (1)' })
@@ -744,4 +745,179 @@ test('removes map-specific chrome from the Technical checks view', () => {
   expect(screen.queryByText('Pages found')).toBeNull()
   expect(screen.queryByText('Dead-link check')).toBeNull()
   expect(screen.getByText('Technical checks for run_1')).not.toBeNull()
+})
+
+test('marks a score-only scan in the history and renders its legacy state, not an error', () => {
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const queryClient = makeClient()
+  queryClient.setQueryData(
+    scanHistoryKey(),
+    scanHistory(scan('run_1'), scan('run_legacy', 'completed', false)),
+  )
+  // With the route fix a legacy run answers 200 with hasCrawlData:false rather
+  // than 404, so the existing no-crawl path takes over.
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_legacy' },
+  }), {
+    project: projectName,
+    hasCrawlData: false,
+    legacyAuditAvailable: true,
+    runId: null,
+    runStatus: null,
+    requestedRootUrl: null,
+    rootUrl: null,
+    effectiveOptions: {},
+    complete: false,
+    termination: null,
+    detailsAvailable: false,
+    counts: { pagesDiscovered: 0, pagesFetched: 0, pagesEligible: 0, edges: 0, findings: 0 },
+    deadLinks: { state: 'unavailable' as const },
+  })
+
+  renderSection(queryClient)
+
+  const legacyOption = screen.getByRole('option', { name: /Score only/ }) as HTMLOptionElement
+  expect(legacyOption.value).toBe('run_legacy')
+  const crawlOption = screen.getByRole('option', { name: /Completed$/ }) as HTMLOptionElement
+  expect(crawlOption.value).toBe('run_1')
+
+  fireEvent.change(screen.getByRole('combobox', { name: 'View a Site Health scan' }), {
+    target: { value: 'run_legacy' },
+  })
+
+  expect(screen.getByRole('heading', { name: 'Full-site map not available' })).not.toBeNull()
+  expect(screen.getByText(/Existing technical checks are preserved/)).not.toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Site Health could not load' })).toBeNull()
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+test('narrows the page list to hidden pages through the server-side filter', () => {
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const queryClient = makeClient()
+  const hiddenPage = {
+    ...contactPage,
+    nodeKey: 'page_hidden',
+    url: 'https://citypoint.example/thank-you',
+    finalUrl: 'https://citypoint.example/thank-you',
+    path: '/thank-you',
+    indexabilityState: 'noindex',
+    indexabilityReasons: ['meta-robots-noindex', 'x-robots-noindex', 'brand-new-crawler-reason'],
+    healthState: 'hidden' as const,
+  }
+  const hiddenInput = {
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', indexabilityState: 'noindex', limit: 200, sort: 'path' },
+  } as const
+  const hiddenResponse = {
+    project: projectName,
+    hasCrawlData: true,
+    runId: 'run_1',
+    total: 1,
+    nextCursor: null,
+    pages: [hiddenPage],
+  }
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesQueryKey(hiddenInput), hiddenResponse)
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteQueryKey(hiddenInput), {
+    pages: [hiddenResponse],
+    pageParams: [hiddenInput],
+  })
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', nodeKey: 'page_hidden', limit: 100 },
+  }), {
+    project: projectName,
+    hasCrawlData: true,
+    runId: 'run_1',
+    nodeKey: 'page_hidden',
+    url: hiddenPage.url,
+    inbound: [],
+    outbound: [],
+    inboundTruncated: false,
+    outboundTruncated: false,
+  })
+
+  renderSection(queryClient)
+  fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
+
+  const allChip = screen.getByRole('button', { name: 'All' })
+  const hiddenChip = screen.getByRole('button', { name: 'Hidden pages' })
+  expect(allChip.getAttribute('aria-pressed')).toBe('true')
+  expect(hiddenChip.getAttribute('aria-pressed')).toBe('false')
+  expect(screen.getByRole('button', { name: '/services/roof-repair' })).not.toBeNull()
+
+  fireEvent.click(hiddenChip)
+
+  expect(hiddenChip.getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: '/thank-you' })).not.toBeNull()
+  expect(screen.queryByRole('button', { name: '/services/roof-repair' })).toBeNull()
+
+  // The reasons read in plain words, and an unknown one is shown rather than dropped.
+  fireEvent.click(screen.getByRole('button', { name: '/thank-you' }))
+  const reasons = screen.getByRole('list', { name: 'Why this page is hidden' })
+  expect(within(reasons).getByText('Hidden by meta robots tag')).not.toBeNull()
+  expect(within(reasons).getByText('Hidden by X-Robots-Tag header')).not.toBeNull()
+  expect(within(reasons).getByText('brand-new-crawler-reason')).not.toBeNull()
+})
+
+test('writes same-site link targets as paths and keeps the full URL on hover', () => {
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const queryClient = makeClient()
+  const baseEdge = {
+    edgeKey: 'home-services',
+    sourceNodeKey: homePage.nodeKey,
+    sourceUrl: homePage.url,
+    targetNodeKey: servicesPage.nodeKey,
+    targetUrl: servicesPage.url,
+    relation: 'anchor',
+    internal: true,
+    followable: true,
+    occurrences: 1,
+    followableOccurrences: 1,
+    nofollowOccurrences: 0,
+    anchors: ['Roof repair'],
+  }
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', nodeKey: 'page_services', limit: 100 },
+  }), {
+    project: projectName,
+    hasCrawlData: true,
+    runId: 'run_1',
+    nodeKey: 'page_services',
+    url: servicesPage.url,
+    inbound: [baseEdge],
+    outbound: [
+      {
+        ...baseEdge,
+        edgeKey: 'services-offsite',
+        sourceNodeKey: servicesPage.nodeKey,
+        sourceUrl: servicesPage.url,
+        targetNodeKey: null,
+        targetUrl: 'https://directory.example/citypoint',
+      },
+    ],
+    inboundTruncated: false,
+    outboundTruncated: false,
+  })
+
+  renderSection(queryClient)
+  fireEvent.click(screen.getByRole('tab', { name: 'Pages' }))
+  fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
+
+  const linksIn = screen.getByRole('region', { name: 'Links in (1)' })
+  const homeCell = within(linksIn).getByText('Home')
+  expect(homeCell.getAttribute('title')).toBe('https://citypoint.example/')
+  expect(within(linksIn).queryByText('https://citypoint.example/')).toBeNull()
+
+  // A genuinely cross-host target is never disguised as an internal path.
+  const linksOut = screen.getByRole('region', { name: 'Links out (1)' })
+  expect(within(linksOut).getByText('https://directory.example/citypoint')).not.toBeNull()
 })

@@ -155,6 +155,9 @@
   --chart-site-health-hidden: #e69f00;
   --chart-site-health-failed: #d55e00;
   --chart-site-health-unchecked: #a1a1aa;
+  /* Ring around the home page. A fifth Okabe-Ito hue, so it never reads as one
+     of the four states. */
+  --chart-site-health-root: #cc79a7;
   --chart-neutral-text: #a1a1aa;
   --chart-neutral-text-dim: #71717a;
   --chart-neutral-text-faint: #52525b;
@@ -307,6 +310,7 @@
   --chart-site-health-hidden: #a86f00;
   --chart-site-health-failed: #b23a2b;
   --chart-site-health-unchecked: #52525b;
+  --chart-site-health-root: #8c4a72;
   --chart-neutral-text: #52525b;
   --chart-neutral-text-dim: #71717a;
   --chart-neutral-text-faint: #a1a1aa;

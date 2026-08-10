@@ -51,6 +51,26 @@ test('crawl read routes are public, bounded, and backed by typed OpenAPI schemas
   expect(changes.parameters?.some((parameter) => parameter.name === 'cursor')).toBe(true)
 })
 
+test('scan history is a typed, bounded read that shares its path with the trigger', () => {
+  const document = buildOpenApiDocument()
+  const scans = document.paths?.['/api/v1/projects/{name}/technical-aeo/runs']?.get
+  expect(scans).toBeDefined()
+  expect(scans?.responses?.['200']?.content?.['application/json']?.schema?.$ref)
+    .toBe('#/components/schemas/SiteHealthScansResponseDto')
+  expect(scans?.parameters?.find((parameter) => parameter.name === 'limit')?.schema)
+    .toMatchObject({ minimum: 1, maximum: 100 })
+  // The legacy-scan contract is the point of the field; say so in the spec.
+  expect(scans?.description).toMatch(/hasCrawlData/)
+  expect(scans?.description).toMatch(/404/)
+  // The POST trigger still lives on the same path and is unaffected.
+  expect(document.paths?.['/api/v1/projects/{name}/technical-aeo/runs']?.post).toBeDefined()
+
+  const graph = document.components?.schemas?.SiteCrawlGraphResponseDto as {
+    properties?: Record<string, unknown>
+  }
+  expect(graph.properties?.rootNodeKey).toBeDefined()
+})
+
 test('crawl summary nullability and run budgets are machine-readable in OpenAPI', () => {
   const document = buildOpenApiDocument()
   const paths = document.paths ?? {}

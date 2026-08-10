@@ -54,7 +54,7 @@ test('connects a page score to its exact audit findings and fixes', () => {
     />,
   )
 
-  expect(screen.getByRole('heading', { name: 'Why this technical score' })).not.toBeNull()
+  expect(screen.getByRole('heading', { name: 'Findings and fixes' })).not.toBeNull()
   expect(screen.getByLabelText('Technical score 42 out of 100')).not.toBeNull()
   expect(screen.getByText('No H1 tag was found.')).not.toBeNull()
   expect(screen.getByText('Not included in the weighted score')).not.toBeNull()

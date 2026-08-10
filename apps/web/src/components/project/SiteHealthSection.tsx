@@ -11,24 +11,27 @@ import {
   Settings2,
 } from 'lucide-react'
 import {
-  RunKinds,
   SITE_CRAWL_GRAPH_MAX_EDGES,
   SITE_CRAWL_GRAPH_MAX_NODES,
+  SiteCrawlIndexabilityReasons,
+  SiteCrawlIndexabilityStates,
   type SiteCrawlEdgeDto,
   type SiteCrawlGraphNodeDto,
+  type SiteCrawlIndexabilityReason,
   type SiteCrawlPageAuditDto,
   type SiteCrawlPageDto,
   type SiteCrawlStructureChildDto,
   type SiteCrawlStructureResponseDto,
+  type SiteHealthScanDto,
 } from '@ainyc/canonry-contracts'
 import {
-  getApiV1ProjectsByNameRunsOptions,
   getApiV1ProjectsByNameTechnicalAeoCrawlOptions,
   getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditOptions,
   getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteOptions,
   getApiV1ProjectsByNameTechnicalAeoDeadLinksOptions,
   getApiV1ProjectsByNameTechnicalAeoGraphOptions,
   getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsOptions,
+  getApiV1ProjectsByNameTechnicalAeoRunsOptions,
   getApiV1ProjectsByNameTechnicalAeoStructureInfiniteOptions,
 } from '@ainyc/canonry-api-client/react-query'
 
@@ -37,6 +40,7 @@ import { useTriggerSiteAudit } from '../../queries/mutations.js'
 import type { MetricTone } from '../../view-models.js'
 import { SiteGraphSigma } from './SiteGraphSigma.js'
 import { siteGraphStatusLabel, siteGraphVisualState, type SiteGraphVisualState } from './site-graph-sigma.js'
+import { displayPagePath, siteHostFromUrl } from './site-health-paths.js'
 import { PageAuditEvidence } from './PageAuditEvidence.js'
 import { TechnicalAeoSection } from './TechnicalAeoSection.js'
 import { WriteButton } from '../shared/AccessControls.js'
@@ -45,9 +49,11 @@ import { Button } from '../ui/button.js'
 
 type SiteHealthView = 'map' | 'inventory' | 'technical'
 
+// The `inventory` id is the stable wire/route token. Only the label reads
+// "Pages"; nothing keyed off the id changes with it.
 const SITE_HEALTH_VIEWS = [
   { id: 'map', label: 'Map' },
-  { id: 'inventory', label: 'Inventory' },
+  { id: 'inventory', label: 'Pages' },
   { id: 'technical', label: 'Technical checks' },
 ] as const satisfies ReadonlyArray<{ id: SiteHealthView; label: string }>
 
@@ -57,6 +63,47 @@ const SITE_HEALTH_VIEW_DESCRIPTIONS: Record<SiteHealthView, string> = {
   technical: 'Prioritize audit findings and inspect the pages that need work.',
 }
 
+/**
+ * Page-list filters. Each one maps to a server-side filter the crawl/pages
+ * route already supports, so a chip never narrows only the loaded window.
+ */
+type InventoryFilterId = 'all' | 'hidden'
+
+const INVENTORY_FILTERS = [
+  { id: 'all', label: 'All', indexabilityState: undefined },
+  { id: 'hidden', label: 'Hidden pages', indexabilityState: SiteCrawlIndexabilityStates.noindex },
+] as const satisfies ReadonlyArray<{
+  id: InventoryFilterId
+  label: string
+  indexabilityState: string | undefined
+}>
+
+/**
+ * Plain-word reading of the crawler's machine indexability reasons. The
+ * `Record` over the closed union is what makes a newly added reason a compile
+ * error here instead of raw machine text in the UI.
+ */
+const INDEXABILITY_REASON_COPY: Record<SiteCrawlIndexabilityReason, string> = {
+  [SiteCrawlIndexabilityReasons.metaRobotsNoindex]: 'Hidden by meta robots tag',
+  [SiteCrawlIndexabilityReasons.xRobotsNoindex]: 'Hidden by X-Robots-Tag header',
+  [SiteCrawlIndexabilityReasons.robotsDisallow]: 'Blocked by robots.txt',
+  [SiteCrawlIndexabilityReasons.redirectTerminal]: 'Redirects to another page',
+  [SiteCrawlIndexabilityReasons.canonicalToOther]: 'Points to another page as canonical',
+  [SiteCrawlIndexabilityReasons.notHtmlOrUnavailable]: 'Not a reachable HTML page',
+}
+
+/** Persisted rows stay string-backed, so the lookup must admit a miss. */
+const INDEXABILITY_REASON_LABELS = new Map<string, string>(Object.entries(INDEXABILITY_REASON_COPY))
+
+/**
+ * An unrecognized reason is shown verbatim. Dropping it would hide the only
+ * evidence the crawler gave for a page being out of the index.
+ */
+function indexabilityReasonLabel(reason: string): string {
+  return INDEXABILITY_REASON_LABELS.get(reason) ?? reason
+}
+
+const SCAN_HISTORY_LIMIT = 20
 const INVENTORY_LIMIT = 200
 const STRUCTURE_LIMIT = 100
 const NEIGHBOR_LIMIT = 100
@@ -136,13 +183,14 @@ function scanTone(status: string | null | undefined): MetricTone {
   return 'neutral'
 }
 
-function runOptionLabel(run: {
-  status: string
-  finishedAt?: string | null
-  startedAt?: string | null
-  createdAt: string
-}): string {
-  return `${formatScanDate(run.finishedAt ?? run.startedAt ?? run.createdAt)} · ${titleCase(run.status)}`
+/**
+ * A scan that kept no crawl is still real, selectable history. Say what it
+ * holds ("Score only") rather than hiding it or letting it look broken.
+ */
+function scanOptionLabel(scan: SiteHealthScanDto): string {
+  const when = formatScanDate(scan.finishedAt ?? scan.startedAt ?? scan.createdAt)
+  const suffix = scan.hasCrawlData ? '' : ' · Score only'
+  return `${when} · ${titleCase(scan.status)}${suffix}`
 }
 
 function terminationCopy(termination: string | null): string {
@@ -187,10 +235,12 @@ function NeighborTable({
   direction,
   edges,
   truncated,
+  rootHost,
 }: {
   direction: 'inbound' | 'outbound'
   edges: SiteCrawlEdgeDto[]
   truncated: boolean
+  rootHost: string | null
 }) {
   const heading = direction === 'inbound' ? 'Links in' : 'Links out'
   return (
@@ -216,23 +266,36 @@ function NeighborTable({
               </tr>
             </thead>
             <tbody>
-              {edges.map((edge) => (
+              {edges.map((edge) => {
+                const url = direction === 'inbound' ? edge.sourceUrl : edge.targetUrl
+                return (
                 <tr key={edge.edgeKey}>
-                  <td className="max-w-64 truncate font-mono" title={direction === 'inbound' ? edge.sourceUrl : edge.targetUrl}>
-                    {direction === 'inbound' ? edge.sourceUrl : edge.targetUrl}
+                  {/* The path is the display; the full URL stays on hover. */}
+                  <td className="max-w-64 truncate font-mono" title={url}>
+                    {displayPagePath(url, rootHost)}
                   </td>
                   <td className="max-w-52 truncate" title={edge.anchors.join(', ') || undefined}>
                     {edge.anchors.join(', ') || 'No anchor text'}
                   </td>
                   <td className="font-mono">{metricValue(edge.occurrences)}</td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>
       )}
     </section>
   )
+}
+
+/**
+ * Only the full page DTO carries the crawler's reasons; the compact graph node
+ * does not. Reading it through this narrow accessor keeps the difference from
+ * turning into an inline cast at the render site.
+ */
+function indexabilityReasons(page: InspectableCrawlPage): readonly string[] {
+  return 'indexabilityReasons' in page ? page.indexabilityReasons : []
 }
 
 function PageInspector({
@@ -247,6 +310,7 @@ function PageInspector({
   auditLoading,
   auditError,
   onRetryAudit,
+  rootHost,
 }: {
   page: InspectableCrawlPage | null
   isLoading: boolean
@@ -259,6 +323,7 @@ function PageInspector({
   auditLoading: boolean
   auditError: Error | null
   onRetryAudit: () => void
+  rootHost: string | null
 }) {
   if (!page) {
     return (
@@ -270,6 +335,7 @@ function PageInspector({
   }
 
   const status = crawlStatus(page)
+  const reasons = indexabilityReasons(page)
   return (
     <section className="border-t border-default pt-5" aria-labelledby="site-health-page-inspector-title">
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
@@ -281,6 +347,13 @@ function PageInspector({
             <ToneBadge tone={status.tone}>{status.label}</ToneBadge>
           </div>
           <p className="mt-1 break-all text-sm text-secondary">{page.url}</p>
+          {reasons.length > 0 && (
+            <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-secondary" aria-label="Why this page is hidden">
+              {reasons.map((reason) => (
+                <li key={reason}>{indexabilityReasonLabel(reason)}</li>
+              ))}
+            </ul>
+          )}
         </div>
         <Button asChild variant="secondary" size="sm">
           <a href={page.url} target="_blank" rel="noreferrer">
@@ -316,8 +389,8 @@ function PageInspector({
           </p>
         ) : (
           <div className="grid gap-5 lg:grid-cols-2">
-            <NeighborTable direction="inbound" edges={inbound} truncated={inboundTruncated} />
-            <NeighborTable direction="outbound" edges={outbound} truncated={outboundTruncated} />
+            <NeighborTable direction="inbound" edges={inbound} truncated={inboundTruncated} rootHost={rootHost} />
+            <NeighborTable direction="outbound" edges={outbound} truncated={outboundTruncated} rootHost={rootHost} />
           </div>
           )}
         </div>
@@ -334,6 +407,8 @@ function InventoryTable({
   hasNextPage,
   isFetchingNextPage,
   onLoadMore,
+  filter,
+  onFilterChange,
 }: {
   pages: SiteCrawlPageDto[]
   total: number
@@ -342,6 +417,8 @@ function InventoryTable({
   hasNextPage: boolean
   isFetchingNextPage: boolean
   onLoadMore: () => void
+  filter: InventoryFilterId
+  onFilterChange: (filter: InventoryFilterId) => void
 }) {
   const [search, setSearch] = useState('')
   const normalizedSearch = search.trim().toLowerCase()
@@ -373,6 +450,20 @@ function InventoryTable({
             className="h-9 w-full rounded-md border border-base bg-bg pl-9 pr-3 text-sm text-primary outline-none placeholder-mono-600 focus:border-strong focus:ring-2 focus:ring-mono-600"
           />
         </label>
+      </div>
+
+      <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label="Filter pages">
+        {INVENTORY_FILTERS.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            aria-pressed={filter === option.id}
+            onClick={() => onFilterChange(option.id)}
+            className={`filter-chip ${filter === option.id ? 'filter-chip-active' : ''}`}
+          >
+            {option.label}
+          </button>
+        ))}
       </div>
 
       <div className="evidence-table-wrap">
@@ -420,7 +511,9 @@ function InventoryTable({
       {visiblePages.length === 0 && (
         <p className="border-x border-b border-default px-4 py-8 text-center text-sm text-secondary">
           {normalizedSearch.length === 0
-            ? 'No pages are available.'
+            ? filter === 'hidden'
+              ? 'No hidden pages were found in this scan.'
+              : 'No pages are available.'
             : searchCoversLoadedWindowOnly
               ? `No matches in the ${metricValue(pages.length)} loaded pages. Load more pages to continue searching.`
               : 'No pages match this search.'}
@@ -586,26 +679,28 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
   const [checkDeadLinks, setCheckDeadLinks] = useState(false)
+  const [inventoryFilter, setInventoryFilter] = useState<InventoryFilterId>('all')
   const embedded = isEmbed()
   const runMutation = useTriggerSiteAudit()
 
+  // The Site Health scan history, not the generic run list: it already excludes
+  // probes and says which scans kept a crawl.
   const auditRunsQuery = useQuery({
-    ...getApiV1ProjectsByNameRunsOptions({
+    ...getApiV1ProjectsByNameTechnicalAeoRunsOptions({
       client: heyClient,
       path: { name: projectName },
-      query: { kind: RunKinds['site-audit'], limit: 20 },
+      query: { limit: SCAN_HISTORY_LIMIT },
     }),
     refetchOnWindowFocus: 'always',
-    refetchInterval: (query) => query.state.data?.some(
-      (run) => run.status === 'queued' || run.status === 'running',
+    refetchInterval: (query) => query.state.data?.scans.some(
+      (scan) => scan.status === 'queued' || scan.status === 'running',
     ) ? 3_000 : 15_000,
   })
-  const auditRuns = auditRunsQuery.data ?? []
-  const activeAudit = auditRuns.find((run) => run.status === 'queued' || run.status === 'running')
-  const latestTerminalAudit = auditRuns
-    .filter((run) => run.status === 'completed' || run.status === 'partial')
-    .at(-1)
-  const requestedRunId = selectedRunId ?? latestTerminalAudit?.id ?? null
+  const auditScans = auditRunsQuery.data?.scans ?? []
+  const activeAudit = auditScans.find((scan) => scan.status === 'queued' || scan.status === 'running')
+  const latestTerminalAudit = auditScans
+    .find((scan) => scan.status === 'completed' || scan.status === 'partial')
+  const requestedRunId = selectedRunId ?? latestTerminalAudit?.runId ?? null
 
   const crawlQuery = useQuery({
     ...getApiV1ProjectsByNameTechnicalAeoCrawlOptions({
@@ -628,10 +723,19 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
     }),
     enabled: detailsEnabled,
   })
+  // The chip narrows on the server, so `total` and the cursor stay truthful
+  // instead of describing an unfiltered list.
+  const inventoryIndexabilityState = INVENTORY_FILTERS
+    .find((option) => option.id === inventoryFilter)?.indexabilityState
   const pagesInput = {
     client: heyClient,
     path: { name: projectName },
-    query: { ...scopedRunQuery, limit: INVENTORY_LIMIT, sort: 'path' as const },
+    query: {
+      ...scopedRunQuery,
+      ...(inventoryIndexabilityState ? { indexabilityState: inventoryIndexabilityState } : {}),
+      limit: INVENTORY_LIMIT,
+      sort: 'path' as const,
+    },
   }
   const pagesQuery = useInfiniteQuery({
     ...getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteOptions(pagesInput),
@@ -695,19 +799,14 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
     enabled: detailsEnabled && Boolean(effectiveSelectedNodeKey),
   })
 
-  const sortedRuns = useMemo(
-    () => [...auditRuns]
-      .filter((run) => run.status === 'completed' || run.status === 'partial')
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-    [auditRuns],
+  // The server already orders scans newest first, so the dropdown does not
+  // keep a second ordering of the same list.
+  const selectableScans = useMemo(
+    () => auditScans.filter((scan) => scan.status === 'completed' || scan.status === 'partial'),
+    [auditScans],
   )
-  const newestRunStatus = useMemo(
-    () => auditRuns.length === 0
-      ? null
-      : [...auditRuns].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0].status,
-    [auditRuns],
-  )
-  const selectedRun = resolvedRunId ? auditRuns.find((run) => run.id === resolvedRunId) : undefined
+  const newestRunStatus = auditScans[0]?.status ?? null
+  const selectedRun = resolvedRunId ? auditScans.find((scan) => scan.runId === resolvedRunId) : undefined
   const status = !selectedRunId && activeAudit
     ? activeAudit.status
     : crawl?.runStatus ?? selectedRun?.status ?? null
@@ -728,6 +827,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
     deadLinks && 'found' in deadLinks ? deadLinks.found : crawl?.deadLinks && 'found' in crawl.deadLinks ? crawl.deadLinks.found : undefined,
   )
   const movedSite = movedSiteHosts(crawl?.requestedRootUrl ?? null, crawl?.rootUrl ?? null)
+  const rootHost = siteHostFromUrl(crawl?.rootUrl ?? null)
   const scanBusy = runMutation.isPending || Boolean(activeAudit)
 
   const selectRun = (runId: string) => {
@@ -786,8 +886,8 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
               className="h-9 min-w-48 rounded-md border border-base bg-bg px-3 text-sm text-primary outline-none focus:border-strong focus:ring-2 focus:ring-mono-600"
             >
               <option value="">Latest scan</option>
-              {sortedRuns.map((run) => (
-                <option key={run.id} value={run.id}>{runOptionLabel(run)}</option>
+              {selectableScans.map((scan) => (
+                <option key={scan.runId} value={scan.runId}>{scanOptionLabel(scan)}</option>
               ))}
             </select>
           </label>
@@ -961,6 +1061,8 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
               hasNextPage={Boolean(pagesQuery.hasNextPage)}
               isFetchingNextPage={pagesQuery.isFetchingNextPage}
               onLoadMore={() => void pagesQuery.fetchNextPage()}
+              filter={inventoryFilter}
+              onFilterChange={setInventoryFilter}
             />
           )}
           <PageInspector
@@ -975,6 +1077,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             auditLoading={pageAuditQuery.isLoading && Boolean(selectedPage)}
             auditError={pageAuditQuery.error}
             onRetryAudit={() => { void pageAuditQuery.refetch() }}
+            rootHost={rootHost}
           />
         </div>
       ) : (
@@ -1007,6 +1110,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
                   edges={graphQuery.data?.edges ?? []}
                   layoutState={graphQuery.data?.layout.state ?? 'unavailable'}
                   layoutUnavailableReason={graphQuery.data?.layout.state === 'unavailable' ? graphQuery.data.layout.reason : null}
+                  rootNodeKey={graphQuery.data?.rootNodeKey ?? null}
                   selectedNodeKey={effectiveSelectedNodeKey}
                   onSelectNode={(node) => setSelectedNodeKey(node.nodeKey)}
                   ariaLabel={`Interactive site map showing ${metricValue(graphQuery.data?.nodes.length ?? 0)} pages and ${metricValue(graphQuery.data?.edges.length ?? 0)} internal links`}
@@ -1045,6 +1149,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             auditLoading={pageAuditQuery.isLoading && Boolean(selectedPage)}
             auditError={pageAuditQuery.error}
             onRetryAudit={() => { void pageAuditQuery.refetch() }}
+            rootHost={rootHost}
           />
         </div>
       )}

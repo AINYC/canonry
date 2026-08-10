@@ -292,6 +292,7 @@ test('Site Health uses a color-vision-safe graph palette in both themes', async 
     '--chart-site-health-hidden: #e69f00',
     '--chart-site-health-failed: #d55e00',
     '--chart-site-health-unchecked: #a1a1aa',
+    '--chart-site-health-root: #cc79a7',
   ]) {
     expect(source, `dark graph palette must contain "${declaration}"`).toContain(declaration)
   }
@@ -301,6 +302,7 @@ test('Site Health uses a color-vision-safe graph palette in both themes', async 
     '--chart-site-health-hidden: #a86f00',
     '--chart-site-health-failed: #b23a2b',
     '--chart-site-health-unchecked: #52525b',
+    '--chart-site-health-root: #8c4a72',
   ]) {
     expect(light, `light graph palette must contain "${declaration}"`).toContain(declaration)
   }
@@ -317,10 +319,10 @@ test('Site Health uses a color-vision-safe graph palette in both themes', async 
     return (values[0]! + 0.05) / (values[1]! + 0.05)
   }
 
-  for (const color of ['#56b4e9', '#e69f00', '#d55e00', '#a1a1aa']) {
+  for (const color of ['#56b4e9', '#e69f00', '#d55e00', '#a1a1aa', '#cc79a7']) {
     expect(contrast(color, '#18181b'), `${color} must remain visible on the dark graph`).toBeGreaterThanOrEqual(3)
   }
-  for (const color of ['#0072b2', '#a86f00', '#b23a2b', '#52525b']) {
+  for (const color of ['#0072b2', '#a86f00', '#b23a2b', '#52525b', '#8c4a72']) {
     expect(contrast(color, '#ffffff'), `${color} must remain visible on the light graph`).toBeGreaterThanOrEqual(3)
   }
   expect(contrast('#71717a', '#18181b'), 'default links must remain visible on the dark graph').toBeGreaterThanOrEqual(3)

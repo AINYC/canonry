@@ -501,6 +501,13 @@ export const siteCrawlGraphResponseSchema = z.object({
   project: z.string(),
   hasCrawlData: z.boolean(),
   runId: z.string().nullable(),
+  /**
+   * Server-owned identity of the crawl root, resolved from the snapshot root
+   * URL (or the depth-0 page). Consumers must not infer the home page from a
+   * path or a link score. It is null when the crawl persisted no page detail,
+   * and it can name a page that graph sampling left out of `nodes`.
+   */
+  rootNodeKey: z.string().nullable(),
   layout: siteCrawlGraphLayoutSchema,
   /** Total canonical pages in the persisted crawl before graph sampling. */
   totalNodes: z.number().int().nonnegative(),
@@ -796,3 +803,29 @@ export const siteAuditRunResponseSchema = z.object({
   status: runStatusSchema,
 })
 export type SiteAuditRunResponseDto = z.infer<typeof siteAuditRunResponseSchema>
+
+/**
+ * One entry in the Site Health scan history. `hasCrawlData` separates a scan
+ * that published a page and internal-link graph from a legacy score-only scan
+ * that predates crawl persistence: both are real, selectable history, but only
+ * the first can open the map, inventory, or structure views.
+ */
+export const siteHealthScanSchema = z.object({
+  runId: z.string(),
+  status: runStatusSchema,
+  createdAt: z.string(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
+  hasCrawlData: z.boolean(),
+})
+export type SiteHealthScanDto = z.infer<typeof siteHealthScanSchema>
+
+/** Non-probe site-audit runs for one project, newest first. */
+export const siteHealthScansResponseSchema = z.object({
+  project: z.string(),
+  scans: z.array(siteHealthScanSchema).default([]),
+})
+export type SiteHealthScansResponseDto = z.infer<typeof siteHealthScansResponseSchema>
+
+export const SITE_HEALTH_SCANS_DEFAULT_LIMIT = 20
+export const SITE_HEALTH_SCANS_MAX_LIMIT = 100

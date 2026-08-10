@@ -47,9 +47,8 @@ export function PageAuditEvidence({
     <section className="border-t border-default pt-5" aria-labelledby="site-health-page-audit-heading">
       <div>
         <h3 id="site-health-page-audit-heading" className="text-base font-semibold text-heading">
-          Why this technical score
+          Findings and fixes
         </h3>
-        <p className="mt-1 text-sm text-secondary">Findings and fixes from this page in the selected scan.</p>
       </div>
 
       {isLoading ? (

@@ -383,5 +383,10 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'GET /api/v1/projects/{name}/technical-aeo/internal-links': 'included',
   'GET /api/v1/projects/{name}/technical-aeo/internal-links/neighbors': 'included',
   'GET /api/v1/projects/{name}/technical-aeo/dead-links': 'included',
+  // Scan history exists so the dashboard's run picker can label a legacy
+  // score-only scan. Agents address a scan by `runId` on the reads above and
+  // already get run provenance from the trend and changes tools, so this is
+  // deferred until an agent workflow actually needs to enumerate scans.
+  'GET /api/v1/projects/{name}/technical-aeo/runs': 'deferred',
   'POST /api/v1/projects/{name}/technical-aeo/runs': 'included',
 } as const satisfies Record<string, OpenApiMcpClassification>

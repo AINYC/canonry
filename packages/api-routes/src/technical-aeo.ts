@@ -50,6 +50,7 @@ import {
   type SiteHealthChangeRecordDto,
   type SiteHealthChangesResponseDto,
   type SiteHealthPathResponseDto,
+  type SiteHealthScansResponseDto,
   type SiteHealthSubgraphRelation,
   type SiteHealthSubgraphResponseDto,
   SITE_CRAWL_GRAPH_DEFAULT_MAX_EDGES,
@@ -61,6 +62,8 @@ import {
   SITE_HEALTH_PATH_DEFAULT_MAX_DEPTH,
   SITE_HEALTH_PATH_MAX_DEPTH,
   SITE_HEALTH_PATH_MAX_VISITED_NODES,
+  SITE_HEALTH_SCANS_DEFAULT_LIMIT,
+  SITE_HEALTH_SCANS_MAX_LIMIT,
   SITE_HEALTH_SUBGRAPH_DEFAULT_MAX_EDGES,
   SITE_HEALTH_SUBGRAPH_DEFAULT_MAX_NODES,
   SITE_HEALTH_SUBGRAPH_MAX_EDGES,
@@ -464,6 +467,31 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       eq(siteCrawlPages.depth, 0),
     )).orderBy(asc(siteCrawlPages.nodeKey)).limit(1).get() ?? null
 
+  /**
+   * True when `runId` names a real, surfaceable, non-probe site-audit run in
+   * this project. Every crawl-scoped read uses it to separate two very
+   * different misses: a run that exists but predates crawl persistence (a
+   * legacy score-only scan, which must answer with its honest no-crawl shape)
+   * from a runId this project never had (which stays a 404).
+   */
+  const isSurfaceableAuditRun = (projectId: string, runId: string): boolean => Boolean(app.db
+    .select({ id: runs.id })
+    .from(runs)
+    .where(and(
+      eq(runs.id, runId),
+      eq(runs.projectId, projectId),
+      eq(runs.kind, RunKinds['site-audit']),
+      inArray(runs.status, SURFACEABLE_STATUSES),
+      notProbeRun(),
+    ))
+    .limit(1)
+    .get())
+
+  /** Refuse only a runId this project never surfaced; legacy scans fall through. */
+  const assertKnownAuditRun = (projectId: string, runId: string | undefined): void => {
+    if (runId && !isSurfaceableAuditRun(projectId, runId)) throw notFound('Site crawl run', runId)
+  }
+
   /** Legacy rows are a scorecard only: they never stand in for a crawl graph. */
   const hasLegacyAudit = (projectId: string): boolean => Boolean(app.db
     .select({ runId: siteAuditSnapshots.runId })
@@ -676,7 +704,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     const target = resolveCrawl(project.id, request.query.runId)
     const legacyAuditAvailable = hasLegacyAudit(project.id)
     if (!target) {
-      if (request.query.runId) throw notFound('Site crawl run', request.query.runId)
+      assertKnownAuditRun(project.id, request.query.runId)
       return emptyCrawlSummary(project.name, legacyAuditAvailable)
     }
 
@@ -727,9 +755,9 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     const project = resolveProject(app.db, request.params.name)
     const target = resolveCrawl(project.id, request.query.runId)
     if (!target) {
-      if (request.query.runId) throw notFound('Site crawl run', request.query.runId)
+      assertKnownAuditRun(project.id, request.query.runId)
       return {
-        project: project.name, hasCrawlData: false, runId: null,
+        project: project.name, hasCrawlData: false, runId: null, rootNodeKey: null,
         layout: { state: 'unavailable', version: null, reason: 'no-crawl' },
         totalNodes: 0, totalEdges: 0, nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
       }
@@ -738,11 +766,17 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     const snapshot = target.snapshot
     if (!snapshot.detailsAvailable || !snapshot.attemptId) {
       return {
-        project: project.name, hasCrawlData: true, runId: snapshot.runId,
+        project: project.name, hasCrawlData: true, runId: snapshot.runId, rootNodeKey: null,
         layout: { state: 'unavailable', version: null, reason: 'details-unavailable' },
         totalNodes: 0, totalEdges: 0, nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
       }
     }
+    // The home page is the one node an operator always needs to find, so its
+    // identity is server-owned rather than guessed from a path or a depth.
+    const rootNodeKey = rootPageInScope(
+      { projectId: project.id, runId: snapshot.runId, attemptId: snapshot.attemptId },
+      snapshot.rootUrl,
+    )?.nodeKey ?? null
 
     const persistedLayout = app.db.select().from(siteCrawlGraphLayouts).where(and(
       eq(siteCrawlGraphLayouts.projectId, project.id),
@@ -751,7 +785,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     )).limit(1).get()
     if (!persistedLayout) {
       return {
-        project: project.name, hasCrawlData: true, runId: snapshot.runId,
+        project: project.name, hasCrawlData: true, runId: snapshot.runId, rootNodeKey,
         layout: { state: 'unavailable', version: null, reason: 'legacy-snapshot' },
         totalNodes: 0, totalEdges: 0, nodes: [], edges: [], omittedNodes: 0, omittedEdges: 0, sampled: false,
       }
@@ -760,7 +794,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       const totalNodes = persistedLayout.totalNodes
       const totalEdges = persistedLayout.totalEdges
       return {
-        project: project.name, hasCrawlData: true, runId: snapshot.runId,
+        project: project.name, hasCrawlData: true, runId: snapshot.runId, rootNodeKey,
         layout: {
           state: 'unavailable', version: null,
           reason: persistedLayout.failureCode === 'empty-crawl' ? 'empty-crawl' : 'layout-failed',
@@ -841,6 +875,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       project: project.name,
       hasCrawlData: true,
       runId: snapshot.runId,
+      rootNodeKey,
       layout: { state: 'ready', version: persistedLayout.layoutVersion, computedAt: persistedLayout.createdAt },
       totalNodes,
       totalEdges,
@@ -904,7 +939,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       truncated: false,
     })
     if (!target) {
-      if (request.query.runId) throw notFound('Site crawl run', request.query.runId)
+      assertKnownAuditRun(project.id, request.query.runId)
       return empty('no-crawl', null, false, false, null)
     }
     const snapshot = target.snapshot
@@ -1064,7 +1099,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     }
     const target = resolveCrawl(project.id, request.query.runId)
     if (!target) {
-      if (request.query.runId) throw notFound('Site crawl run', request.query.runId)
+      assertKnownAuditRun(project.id, request.query.runId)
       return {
         project: project.name, runId: null, state: 'no-crawl', from: null, to: null,
         complete: false, termination: null,
@@ -1587,7 +1622,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
 
     const target = resolveCrawl(project.id, runId)
     if (!target) {
-      if (runId) throw notFound('Site crawl run', runId)
+      assertKnownAuditRun(project.id, runId)
       return { state: 'no-crawl', project: project.name, runId: null }
     }
     const snapshot = target.snapshot
@@ -1645,7 +1680,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     const project = resolveProject(app.db, request.params.name)
     const target = resolveCrawl(project.id, request.query.runId)
     if (!target) {
-      if (request.query.runId) throw notFound('Site crawl run', request.query.runId)
+      assertKnownAuditRun(project.id, request.query.runId)
       return { project: project.name, hasCrawlData: false, runId: null, total: 0, nextCursor: null, pages: [] }
     }
     const snapshot = target.snapshot
@@ -1696,7 +1731,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     const parentPath = normalizeParentPath(request.query.parentPath)
     const target = resolveCrawl(project.id, request.query.runId)
     if (!target) {
-      if (request.query.runId) throw notFound('Site crawl run', request.query.runId)
+      assertKnownAuditRun(project.id, request.query.runId)
       return { project: project.name, hasCrawlData: false, runId: null, parentPath, nextCursor: null, children: [] }
     }
     const snapshot = target.snapshot
@@ -1789,7 +1824,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     const project = resolveProject(app.db, request.params.name)
     const target = resolveCrawl(project.id, request.query.runId)
     if (!target) {
-      if (request.query.runId) throw notFound('Site crawl run', request.query.runId)
+      assertKnownAuditRun(project.id, request.query.runId)
       return { project: project.name, hasCrawlData: false, runId: null, total: 0, nextCursor: null, edges: [] }
     }
     const snapshot = target.snapshot
@@ -1842,7 +1877,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     }
     const target = resolveCrawl(project.id, request.query.runId)
     if (!target) {
-      if (request.query.runId) throw notFound('Site crawl run', request.query.runId)
+      assertKnownAuditRun(project.id, request.query.runId)
       return {
         project: project.name, hasCrawlData: false, runId: null, nodeKey: request.query.nodeKey ?? null, url: request.query.url ?? null,
         inbound: [], outbound: [], inboundTruncated: false, outboundTruncated: false,
@@ -1897,7 +1932,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     const target = resolveCrawl(project.id, request.query.runId)
     const legacyAuditAvailable = hasLegacyAudit(project.id)
     if (!target) {
-      if (request.query.runId) throw notFound('Site crawl run', request.query.runId)
+      assertKnownAuditRun(project.id, request.query.runId)
       return { project: project.name, runId: null, state: 'unavailable', legacyAuditAvailable }
     }
     const snapshot = target.snapshot
@@ -1941,6 +1976,61 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       total,
       nextCursor: nextOffset < total ? encodeCursor(nextOffset) : null,
       deadLinks,
+    }
+  })
+
+  // GET /projects/:name/technical-aeo/runs — Site Health scan history. Every
+  // non-probe site-audit run is listed, including the legacy score-only ones,
+  // so selecting a scan never depends on guessing which runs kept a crawl.
+  app.get<{
+    Params: { name: string }
+    Querystring: { limit?: string }
+  }>('/projects/:name/technical-aeo/runs', async (request): Promise<SiteHealthScansResponseDto> => {
+    const project = resolveProject(app.db, request.params.name)
+    const limit = parseBoundedLimit(request.query.limit, SITE_HEALTH_SCANS_DEFAULT_LIMIT, SITE_HEALTH_SCANS_MAX_LIMIT)
+    const rows = app.db
+      .select({
+        runId: runs.id,
+        status: runs.status,
+        createdAt: runs.createdAt,
+        startedAt: runs.startedAt,
+        finishedAt: runs.finishedAt,
+      })
+      .from(runs)
+      .where(and(
+        eq(runs.projectId, project.id),
+        eq(runs.kind, RunKinds['site-audit']),
+        notProbeRun(),
+      ))
+      .orderBy(desc(runs.createdAt), desc(runs.id))
+      .limit(limit)
+      .all()
+
+    // Exactly the snapshots `resolveCrawl` would resolve, so `hasCrawlData`
+    // and the crawl-scoped reads can never disagree about the same run.
+    const runIds = rows.map((row) => row.runId)
+    const crawlRunIds = new Set(runIds.length === 0 ? [] : app.db
+      .select({ runId: siteCrawlSnapshots.runId })
+      .from(siteCrawlSnapshots)
+      .innerJoin(runs, eq(siteCrawlSnapshots.runId, runs.id))
+      .where(and(
+        eq(siteCrawlSnapshots.projectId, project.id),
+        eq(runs.projectId, project.id),
+        eq(runs.kind, RunKinds['site-audit']),
+        inArray(runs.status, SURFACEABLE_STATUSES),
+        notProbeRun(),
+        inArray(siteCrawlSnapshots.runId, runIds),
+      ))
+      .all()
+      .map((row) => row.runId))
+
+    return {
+      project: project.name,
+      scans: rows.map((row) => ({
+        ...row,
+        status: row.status as RunStatus,
+        hasCrawlData: crawlRunIds.has(row.runId),
+      })),
     }
   })
 

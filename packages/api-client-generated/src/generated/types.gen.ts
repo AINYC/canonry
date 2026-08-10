@@ -7374,6 +7374,7 @@ export type SiteCrawlGraphResponseDto = {
     project: string;
     hasCrawlData: boolean;
     runId: string | null;
+    rootNodeKey: string | null;
     layout: {
         state: 'ready';
         version: string;
@@ -7829,6 +7830,18 @@ export type SiteHealthPathResponseDto = {
         followableOccurrences: number;
         nofollowOccurrences: number;
         anchors: Array<string>;
+    }>;
+};
+
+export type SiteHealthScansResponseDto = {
+    project: string;
+    scans: Array<{
+        runId: string;
+        status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
+        createdAt: string;
+        startedAt: string | null;
+        finishedAt: string | null;
+        hasCrawlData: boolean;
     }>;
 };
 
@@ -21428,6 +21441,41 @@ export type GetApiV1ProjectsByNameTechnicalAeoDeadLinksResponses = {
 };
 
 export type GetApiV1ProjectsByNameTechnicalAeoDeadLinksResponse = GetApiV1ProjectsByNameTechnicalAeoDeadLinksResponses[keyof GetApiV1ProjectsByNameTechnicalAeoDeadLinksResponses];
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Max scans returned (most recent first). Defaults to 20; max 100.
+         */
+        limit?: number;
+    };
+    url: '/api/v1/projects/{name}/technical-aeo/runs';
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsErrors = {
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsError = GetApiV1ProjectsByNameTechnicalAeoRunsErrors[keyof GetApiV1ProjectsByNameTechnicalAeoRunsErrors];
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsResponses = {
+    /**
+     * Site Health scan history returned.
+     */
+    200: SiteHealthScansResponseDto;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsResponse = GetApiV1ProjectsByNameTechnicalAeoRunsResponses[keyof GetApiV1ProjectsByNameTechnicalAeoRunsResponses];
 
 export type PostApiV1ProjectsByNameTechnicalAeoRunsData = {
     body?: {
