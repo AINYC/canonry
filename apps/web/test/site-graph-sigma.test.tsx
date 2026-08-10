@@ -23,6 +23,17 @@ const sigmaMocks = vi.hoisted(() => ({
   } | null,
 }))
 
+const sigmaMockInstance = {
+  setSetting: sigmaMocks.setSetting,
+  refresh: sigmaMocks.refresh,
+  getGraph: () => ({
+    hasNode: () => true,
+    areNeighbors: (left: string, right: string) => left === right || left === 'home' || right === 'home',
+    extremities: () => ['home', 'pricing'],
+  }),
+  getCamera: () => ({ getState: () => ({ ratio: 1 }) }),
+}
+
 vi.mock('@react-sigma/core', async () => {
   const React = await import('react')
   return {
@@ -57,16 +68,7 @@ vi.mock('@react-sigma/core', async () => {
     useRegisterEvents: () => (handlers: Record<string, (...args: never[]) => void>) => {
       sigmaMocks.handlers = handlers
     },
-    useSigma: () => ({
-      setSetting: sigmaMocks.setSetting,
-      refresh: sigmaMocks.refresh,
-      getGraph: () => ({
-        hasNode: () => true,
-        areNeighbors: (left: string, right: string) => left === right || left === 'home' || right === 'home',
-        extremities: () => ['home', 'pricing'],
-      }),
-      getCamera: () => ({ getState: () => ({ ratio: 1 }) }),
-    }),
+    useSigma: () => sigmaMockInstance,
   }
 })
 
@@ -308,6 +310,7 @@ describe('SiteGraphSigma', () => {
     render(<SiteGraphSigma nodes={nodes} edges={edges} />)
 
     await waitFor(() => expect(sigmaMocks.handlers.updated).toBeTypeOf('function'))
+    await waitFor(() => expect(sigmaMocks.refresh).toHaveBeenCalledTimes(1))
     const initialRefreshes = sigmaMocks.refresh.mock.calls.length
 
     act(() => {
