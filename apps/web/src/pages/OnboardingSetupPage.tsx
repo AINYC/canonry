@@ -200,14 +200,27 @@ export function OnboardingSetupPage() {
     // for one mount-time confirmation before it treats this as first open.
     refetchOnMount: 'always',
   })
+  const hasAuthoritativeEmptyProjectList = mode === 'auto'
+    && projectsQuery.isSuccess
+    && projectsQuery.isFetchedAfterMount
+    && projectsQuery.data.length === 0
+
+  useEffect(() => {
+    if (hasAuthoritativeEmptyProjectList) setPlatformLatched(true)
+  }, [hasAuthoritativeEmptyProjectList])
+
   const projectList: OnboardingProjectListState = mode !== 'auto'
     ? { state: 'idle' }
-    : projectsQuery.isSuccess && !projectsQuery.isFetching
+    : projectsQuery.isSuccess && projectsQuery.isFetchedAfterMount
       ? { state: 'success', projectCount: projectsQuery.data.length }
       : projectsQuery.isError
         ? { state: 'error' }
         : { state: 'loading' }
-  const surface = platformLatched ? 'platform' : resolveOnboardingSurface(mode, projectList)
+  const surface = mode === 'legacy'
+    ? 'legacy'
+    : platformLatched || hasAuthoritativeEmptyProjectList
+      ? 'platform'
+      : resolveOnboardingSurface(mode, projectList)
 
   if (surface === 'legacy') return <SetupPage />
   if (surface === 'loading') return <AutoModeLoading />
@@ -363,7 +376,7 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
     <div className="page-container max-w-3xl">
       <div className="page-header">
         <div className="page-header-left">
-          <h1 className="page-title">Start with your public site</h1>
+          <h1 className="page-title">Start with a publicly reachable site.</h1>
           <p className="page-subtitle">Canonry will map the pages and internal links it can reach.</p>
         </div>
       </div>
@@ -461,7 +474,6 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
             />
             <span>
               <span className="block text-sm font-medium text-heading">I approve Canonry to crawl this public site and its internal links.</span>
-              <span className="mt-1 block text-sm text-secondary">The crawl does not call answer providers. If Aero is enabled, its normal post-run analysis can use your configured agent provider.</span>
             </span>
           </label>
 

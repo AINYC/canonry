@@ -2,8 +2,10 @@ import { afterEach, beforeAll, expect, onTestFinished, test } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
+import { getApiV1ProjectsQueryKey } from '@ainyc/canonry-api-client/react-query'
 
 import { DashboardProvider } from '../src/contexts/dashboard-context.js'
+import { heyClient } from '../src/api.js'
 import { createDashboardFixture } from '../src/mock-data.js'
 import { createAppRouter } from '../src/router/router.js'
 import { preloadAllLazyRoutes } from '../src/router/routes.js'
@@ -22,13 +24,19 @@ afterEach(() => {
   delete window.__CANONRY_CONFIG__
 })
 
-async function renderSetup(pathname = '/setup') {
+async function renderSetup(
+  pathname = '/setup',
+  options: { seedEmptyProjectsCache?: boolean } = {},
+) {
   const fixture = createDashboardFixture({ emptyPortfolio: true })
   // `emptyPortfolio` controls only the overview fixture. The established
   // wizard derives its resume state from the durable project/run collections.
   fixture.dashboard.projects = []
   fixture.dashboard.runs = []
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  if (options.seedEmptyProjectsCache) {
+    queryClient.setQueryData(getApiV1ProjectsQueryKey({ client: heyClient }), [])
+  }
   const router = createAppRouter(queryClient, { initialEntries: [pathname] })
   await router.load()
 
@@ -40,14 +48,14 @@ async function renderSetup(pathname = '/setup') {
     </QueryClientProvider>,
   )
 
-  return router
+  return { queryClient, router }
 }
 
 test('keeps the five-step setup when the runtime launchpad flag is absent', async () => {
   await renderSetup()
 
   expect(await screen.findByText('Step 2 of 5')).toBeTruthy()
-  expect(screen.queryByRole('heading', { name: 'Start with your public site' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeNull()
 })
 
 test('the legacy rescue query wins over an enabled platform flag', async () => {
@@ -59,7 +67,7 @@ test('the legacy rescue query wins over an enabled platform flag', async () => {
 
 test('lets an operator cancel the launchpad before any project is created', async () => {
   window.__CANONRY_CONFIG__ = { dashboard: { onboardingMode: 'platform' } }
-  const router = await renderSetup()
+  const { router } = await renderSetup()
 
   fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
   await waitFor(() => {
@@ -82,7 +90,7 @@ test('keeps the auto launchpad in an accessible loading state until the project 
 
   expect((await screen.findByRole('status')).textContent).toContain('Loading projects')
   resolveProjects?.(jsonResponse([]))
-  expect(await screen.findByRole('heading', { name: 'Start with your public site' })).toBeTruthy()
+  expect(await screen.findByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeTruthy()
 })
 
 test('auto waits for a successful authoritative empty project list before showing the launchpad', async () => {
@@ -95,8 +103,71 @@ test('auto waits for a successful authoritative empty project list before showin
 
   await renderSetup()
 
-  expect(await screen.findByRole('heading', { name: 'Start with your public site' })).toBeTruthy()
+  expect(await screen.findByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeTruthy()
   expect(screen.getByLabelText('Website address')).toHaveProperty('required', true)
+  expect(screen.getByRole('checkbox', { name: 'I approve Canonry to crawl this public site and its internal links.' })).toBeTruthy()
+  expect(screen.queryByText(/The crawl does not call answer providers/i)).toBeNull()
+  expect(screen.queryByText(/Aero is enabled/i)).toBeNull()
+  expect(screen.queryByText(/configured agent provider/i)).toBeNull()
+})
+
+test('auto confirms a cached empty project list after mount before showing the launchpad', async () => {
+  window.__CANONRY_CONFIG__ = { dashboard: { onboardingMode: 'auto' } }
+  let resolveProjects: ((response: Response) => void) | undefined
+  const restore = mockFetch((url) => {
+    if (pathOf(url) === '/api/v1/projects') {
+      return new Promise<Response>((resolve) => { resolveProjects = resolve })
+    }
+    return jsonResponse({})
+  })
+  onTestFinished(restore)
+
+  await renderSetup('/setup', { seedEmptyProjectsCache: true })
+
+  expect((await screen.findByRole('status')).textContent).toContain('Loading projects')
+  expect(screen.queryByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeNull()
+
+  resolveProjects?.(jsonResponse([]))
+  expect(await screen.findByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeTruthy()
+})
+
+test('keeps typed launchpad input mounted through an in-flight shared project refetch', async () => {
+  window.__CANONRY_CONFIG__ = { dashboard: { onboardingMode: 'auto' } }
+  let projectListReads = 0
+  let resolveBackgroundRefetch: ((response: Response) => void) | undefined
+  const restore = mockFetch((url) => {
+    if (pathOf(url) === '/api/v1/projects') {
+      projectListReads += 1
+      if (projectListReads === 1) return jsonResponse([])
+      return new Promise<Response>((resolve) => {
+        resolveBackgroundRefetch = resolve
+      })
+    }
+    return jsonResponse({})
+  })
+  onTestFinished(restore)
+
+  const { queryClient } = await renderSetup()
+  const domain = await screen.findByLabelText('Website address') as HTMLInputElement
+  fireEvent.change(domain, { target: { value: 'example.com' } })
+  const approval = screen.getByRole('checkbox', { name: /I approve Canonry/i }) as HTMLInputElement
+  fireEvent.click(approval)
+  domain.focus()
+
+  const refetch = queryClient.invalidateQueries({
+    queryKey: getApiV1ProjectsQueryKey({ client: heyClient }),
+  })
+  await waitFor(() => {
+    expect(resolveBackgroundRefetch).toBeTypeOf('function')
+  })
+
+  expect((screen.getByLabelText('Website address') as HTMLInputElement).value).toBe('example.com')
+  expect((screen.getByRole('checkbox', { name: /I approve Canonry/i }) as HTMLInputElement).checked).toBe(true)
+  expect(document.activeElement).toBe(screen.getByLabelText('Website address'))
+  expect(screen.queryByText('Loading projects…')).toBeNull()
+
+  resolveBackgroundRefetch?.(jsonResponse([]))
+  await refetch
 })
 
 test('auto shows a retry shell when the authoritative project-list read fails', async () => {
@@ -115,11 +186,11 @@ test('auto shows a retry shell when the authoritative project-list read fails', 
   await renderSetup()
 
   expect(await screen.findByRole('heading', { name: /load projects/i })).toBeTruthy()
-  expect(screen.queryByRole('heading', { name: 'Start with your public site' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeNull()
 
   failed = false
   fireEvent.click(screen.getByRole('button', { name: 'Retry project check' }))
-  expect(await screen.findByRole('heading', { name: 'Start with your public site' })).toBeTruthy()
+  expect(await screen.findByRole('heading', { name: 'Start with a publicly reachable site.' })).toBeTruthy()
 })
 
 test('creates once, queues the canonical Site Health run, and hands off with exact URL state', async () => {
@@ -148,7 +219,7 @@ test('creates once, queues the canonical Site Health run, and hands off with exa
   })
   onTestFinished(restore)
 
-  const router = await renderSetup()
+  const { router } = await renderSetup()
   fireEvent.change(await screen.findByLabelText('Website address'), { target: { value: 'https://www.example.com/pricing' } })
   fireEvent.click(screen.getByRole('checkbox', { name: /I approve Canonry/i }))
   fireEvent.click(screen.getByRole('button', { name: /Create project and map site/i }))
