@@ -69,7 +69,7 @@ function pagedReport(): AdvancedMeasurementOverviewReport {
 }
 
 describe('advanced measurement landing', () => {
-  it('keeps the existing overview for a Simple project and opens setup explicitly', () => {
+  it('keeps the existing overview for a Simple project without advertising advanced setup', () => {
     const onOpenSetup = vi.fn()
     render(
       <AdvancedMeasurementLanding
@@ -81,11 +81,11 @@ describe('advanced measurement landing', () => {
     )
 
     expect(screen.getByText('Existing project overview')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Set up advanced measurement' }))
-    expect(onOpenSetup).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: 'Set up advanced measurement' })).toBeNull()
+    expect(onOpenSetup).not.toHaveBeenCalled()
   })
 
-  it('keeps a draft-only project on the existing overview with a Continue action', () => {
+  it('keeps a draft-only project on the existing overview without exposing its setup action', () => {
     render(
       <AdvancedMeasurementLanding
         mode={{ surface: 'simple-overview', setupAction: 'continue' }}
@@ -96,7 +96,7 @@ describe('advanced measurement landing', () => {
     )
 
     expect(screen.getByText('Existing project overview')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Continue advanced setup' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Continue advanced setup' })).toBeNull()
   })
 
   it('replaces the existing overview when a published setup is active', () => {
@@ -205,40 +205,6 @@ describe('advanced measurement landing', () => {
     expect(screen.getByRole('alert').textContent).toContain('Could not load more properties.')
     fireEvent.click(screen.getByRole('button', { name: 'Retry loading more properties' }))
     expect(onLoadMore).toHaveBeenCalledWith('next-page')
-  })
-})
-
-describe('the setup action leads its row instead of floating at the right', () => {
-  it('puts the control first and says what it does', () => {
-    render(
-      <AdvancedMeasurementLanding
-        mode={{ surface: 'simple-overview', setupAction: 'continue' }}
-        canEdit
-        simpleOverview={<p>Existing project overview</p>}
-        onOpenSetup={vi.fn()}
-      />,
-    )
-
-    const action = screen.getByRole('button', { name: 'Continue advanced setup' })
-    // Was a lone right-aligned button in an empty row, which reads as a stray
-    // affordance rather than the next step.
-    expect(action.parentElement?.className).not.toContain('justify-end')
-    expect(screen.getByText('Setup is unfinished. Pick up where you left off.')).toBeTruthy()
-    // The button comes before its explanation in the DOM, so it leads the row.
-    expect(action.compareDocumentPosition(screen.getByText('Setup is unfinished. Pick up where you left off.')))
-      .toBe(Node.DOCUMENT_POSITION_FOLLOWING)
-  })
-
-  it('explains each setup state differently', () => {
-    render(
-      <AdvancedMeasurementLanding
-        mode={{ surface: 'simple-overview', setupAction: 'set-up' }}
-        canEdit
-        simpleOverview={<p>Existing project overview</p>}
-        onOpenSetup={vi.fn()}
-      />,
-    )
-    expect(screen.getByText(/Measure each Property on its own queries/)).toBeTruthy()
   })
 })
 

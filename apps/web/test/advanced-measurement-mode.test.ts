@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { resolveAdvancedMeasurementMode } from '../src/components/project/advanced-measurement/model.js'
+import {
+  resolveAdvancedMeasurementMode,
+} from '../src/components/project/advanced-measurement/model.js'
 
 describe('advanced measurement mode', () => {
   it('keeps an untouched project on the existing overview', () => {
@@ -28,6 +30,13 @@ describe('advanced measurement mode', () => {
     expect(resolveAdvancedMeasurementMode({ activePlanSchemaVersion: 2, hasDraft: false })).toEqual({
       surface: 'advanced-overview',
       setupAction: 'edit',
+    })
+  })
+
+  it('keeps active results while sending an unpublished v2 draft back to setup', () => {
+    expect(resolveAdvancedMeasurementMode({ activePlanSchemaVersion: 2, hasDraft: true })).toEqual({
+      surface: 'advanced-overview',
+      setupAction: 'continue',
     })
   })
 })

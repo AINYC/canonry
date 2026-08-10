@@ -33,7 +33,10 @@ import {
 import { ProjectHistorySection } from '../components/project/ProjectHistorySection.js'
 import { AdvancedMeasurementSection } from '../components/project/advanced-measurement/AdvancedMeasurementSection.js'
 import { AdvancedMeasurementLanding } from '../components/project/advanced-measurement/AdvancedMeasurementLanding.js'
-import { resolveAdvancedMeasurementMode } from '../components/project/advanced-measurement/model.js'
+import {
+  advancedMeasurementSetupActionLabel,
+  resolveAdvancedMeasurementMode,
+} from '../components/project/advanced-measurement/model.js'
 import { adaptVersionOneMeasurementReport } from '../components/project/advanced-measurement/v1-report-adapter.js'
 import {
   adaptV2MeasurementOverview,
@@ -1728,6 +1731,19 @@ function ProjectPageContent({
       search: clearCompletedSiteHealthOnboardingSearch,
     })
   }, [model.project.name, navigate])
+  const aiVisibilityOnboardingPending = projectSearchParams.onboarding === 'site-health'
+    && canWrite
+    && !isEmbed()
+  const aiVisibilityOnboardingRedirected = useRef(false)
+  useEffect(() => {
+    if (tab !== 'overview' || !aiVisibilityOnboardingPending || aiVisibilityOnboardingRedirected.current) return
+    aiVisibilityOnboardingRedirected.current = true
+    void navigate({
+      to: '/setup',
+      replace: true,
+      search: aiVisibilitySetupSearch(model.project.name),
+    })
+  }, [aiVisibilityOnboardingPending, model.project.name, navigate, tab])
   const [managingQueries, setManagingQueries] = useState(manageQueriesRequested)
   const [newQueryText, setNewQueryText] = useState('')
   const [querySaving, setQuerySaving] = useState(false)
@@ -1942,6 +1958,11 @@ function ProjectPageContent({
     measurementSetupQuery.data === undefined
     && activeMeasurementPlanQuery.data === undefined
     && (activeMeasurementPlanQuery.isLoading || measurementSetupQuery.isLoading)
+  const measurementSetupDisplayState = measurementSetupQuery.data !== undefined
+    ? 'success' as const
+    : measurementSetupQuery.isError
+      ? 'error' as const
+      : 'pending' as const
   const advancedMeasurementOverviewPagesInconsistent = useMemo(() => {
     const pages = advancedMeasurementOverviewQuery.data?.pages
     return pages ? !areV2OverviewPagesCompatible(pages) : false
@@ -2333,16 +2354,21 @@ function ProjectPageContent({
       </div>
 
       <nav className="project-subnav" aria-label="Project sections">
-        {projectTabItems.map((item) => (
-          <Link
-            key={item.key}
-            to={item.href}
-            className={`project-subnav-link ${item.key === tab ? 'project-subnav-link-active' : ''}`}
-            aria-current={item.key === tab ? 'page' : undefined}
-          >
-            {item.label}
-          </Link>
-        ))}
+        {projectTabItems.map((item) => {
+          const openVisibilitySetup = item.key === 'overview' && aiVisibilityOnboardingPending
+          return (
+            <Link
+              key={item.key}
+              to={openVisibilitySetup ? '/setup' : item.href}
+              search={openVisibilitySetup ? aiVisibilitySetupSearch(projectName) : undefined}
+              replace={openVisibilitySetup}
+              className={`project-subnav-link ${item.key === tab ? 'project-subnav-link-active' : ''}`}
+              aria-current={item.key === tab ? 'page' : undefined}
+            >
+              {item.label}
+            </Link>
+          )
+        })}
         <div className="project-subnav-trailing">
           <ProjectSubnavMore items={projectOverflowTabItems} activeTab={tab} />
           {projectSettingsTab && (
@@ -2402,9 +2428,11 @@ function ProjectPageContent({
           }}
         />
       ) : tab === 'overview' ? (
-        isMeasurementModeUnresolved ? (
+        isMeasurementModeUnresolved || aiVisibilityOnboardingPending ? (
           <div role="status" aria-live="polite">
-            <span className="sr-only">Loading project overview</span>
+            <span className="sr-only">
+              {aiVisibilityOnboardingPending ? 'Opening AI Visibility setup' : 'Loading project overview'}
+            </span>
             <div className="h-32 animate-pulse rounded-md bg-surface-subtle" aria-hidden="true" />
           </div>
         ) : (
@@ -2739,17 +2767,30 @@ function ProjectPageContent({
         <>
           <ProjectSettingsSection project={{ ...model.project, displayName: model.project.displayName ?? model.project.name, defaultLocation: model.project.defaultLocation ?? null }} onUpdateProject={async (name, updates) => { await handleUpdateProject(name, updates) }} onRefresh={() => void refetch()} />
           <ProjectEngineSettingsSection project={model.project} onSave={async next => { await handleUpdateProject(model.project.name, next) }} />
-          {canWrite && !isEmbed() && advancedMeasurementMode.surface !== 'simple-overview' ? (
+          {canWrite && !isEmbed() ? (
             <section className="page-section-divider">
               <h2 className="text-lg font-semibold text-heading">Advanced measurement</h2>
-              <p className="supporting-copy mt-1 mb-3">Change which Properties and queries are measured.</p>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => { void navigate({ to: '/projects/$projectName/portfolio', params: { projectName } }) }}
-              >
-                Edit setup
-              </Button>
+              <p className="supporting-copy mt-1 mb-3">
+                Measure individual properties, locations, or site sections with separate query sets.
+              </p>
+              {measurementSetupDisplayState === 'pending' ? (
+                <p role="status" className="text-sm text-secondary">Loading setup…</p>
+              ) : measurementSetupDisplayState === 'error' ? (
+                <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-negative">
+                  <span>Could not load advanced measurement setup.</span>
+                  <Button type="button" size="sm" variant="outline" onClick={() => { void measurementSetupQuery.refetch() }}>
+                    Retry
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => { void navigate({ to: '/projects/$projectName/portfolio', params: { projectName } }) }}
+                >
+                  {advancedMeasurementSetupActionLabel(advancedMeasurementMode.setupAction)}
+                </Button>
+              )}
             </section>
           ) : null}
           <ScheduleSection projectName={model.project.name} />

@@ -130,6 +130,7 @@ test('continues a mapped project into the original AI Visibility setup flow', as
   expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('Competitors')
   expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('Launch')
   expect(screen.queryByRole('heading', { name: 'Map your site' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Set up Advanced measurement instead' })).toBeNull()
 })
 
 test('does not resume another project when the Site Health handoff is stale', async () => {

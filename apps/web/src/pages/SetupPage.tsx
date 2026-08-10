@@ -282,6 +282,15 @@ function ReadySetupPage({
   const [projectError, setProjectError] = useState<string | null>(null)
   const [projectSaving, setProjectSaving] = useState(false)
 
+  const openProjectDashboard = () => {
+    void navigate({
+      to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/',
+      // Project-scoped setup replaces the project route on entry. Replace it
+      // again on exit so Back cannot reopen a wizard the operator just finished.
+      replace: Boolean(visibilityProjectName),
+    })
+  }
+
   const [queriesText, setQueriesText] = useState(durableQueries.map(query => query.query).join('\n'))
   const [queriesSaved, setQueriesSaved] = useState(durableQueryCount > 0)
   const [queriesError, setQueriesError] = useState<string | null>(null)
@@ -942,27 +951,6 @@ function ReadySetupPage({
               fine: you can edit them, research more, and add to them at any time from the
               project.
             </p>
-            <div className="rounded-md border border-base bg-bg-elevated p-3 text-sm">
-              <p className="m-0 font-medium text-heading">Tracking more than one location or property?</p>
-              <p className="mt-1 mb-2 text-secondary">
-                Queries attach to each property separately in Advanced measurement, so
-                there is nothing useful to add here. Skip this and set it up on the project.
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  skipQueries()
-                  // Advanced measurement lives on the portfolio tab. Landing on the
-                  // project root dropped the operator on Overview and made them hunt
-                  // for the thing this button just offered them.
-                  void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}/portfolio` : '/' })
-                }}
-              >
-                Set up Advanced measurement instead
-              </Button>
-            </div>
             {resumeQueriesQuery.isError ? (
               <div className="compact-stack">
                 <div role="alert" className="rounded-md border border-negative bg-negative-soft p-3 text-sm text-negative">
@@ -1164,7 +1152,7 @@ function ReadySetupPage({
                 </p>
                 <div className="setup-nav">
                   <span />
-                  <Button type="button" onClick={() => { void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' }) }}>
+                  <Button type="button" onClick={openProjectDashboard}>
                     Open project dashboard →
                   </Button>
                 </div>
@@ -1188,7 +1176,7 @@ function ReadySetupPage({
                   <Button
                     type="button"
                     variant="ghost"
-                    onClick={() => { void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' }) }}
+                    onClick={openProjectDashboard}
                   >
                     Finish without running
                   </Button>
@@ -1220,7 +1208,7 @@ function ReadySetupPage({
                 )}
                 <div className="setup-nav">
                   <span />
-                  <Button type="button" variant="outline" onClick={() => { void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' }) }}>
+                  <Button type="button" variant="outline" onClick={openProjectDashboard}>
                     Watch on project page
                   </Button>
                 </div>
@@ -1268,7 +1256,7 @@ function ReadySetupPage({
                 </p>
                 <div className="setup-nav">
                   <span />
-                  <Button type="button" onClick={() => { void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' }) }}>
+                  <Button type="button" onClick={openProjectDashboard}>
                     Open project dashboard →
                   </Button>
                 </div>

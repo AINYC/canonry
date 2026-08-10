@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, expect, onTestFinished, test } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 
@@ -12,6 +12,7 @@ import { heyClient } from '../src/api.js'
 import {
   getApiV1ProjectsByNameMeasurementOverviewInfiniteQueryKey,
   getApiV1ProjectsByNameMeasurementPlanQueryKey,
+  getApiV1ProjectsByNameMeasurementSetupQueryKey,
   getApiV1ProjectsByNameMeasurementReportQueryKey,
   getApiV1ProjectsByNameQueriesQueryKey,
   getApiV1ProjectsByNameScheduleQueryKey,
@@ -33,6 +34,9 @@ async function renderAt(
   embed?: EmbedBlock,
   measurement?: {
     plan: ReturnType<typeof measurementPlanResponse> | ReturnType<typeof measurementPlanV2Response>
+    setup?: ReturnType<typeof measurementSetupResponse>
+      | ReturnType<typeof simpleMeasurementSetupResponse>
+      | ReturnType<typeof activeMeasurementSetupResponse>
     report?: ReturnType<typeof measurementReportResponse>
     overview?: ReturnType<typeof measurementOverviewResponse>
     overviewKey?: { scope?: 'all' | 'group'; groupKey?: string; queryClass?: 'all' | 'non-brand' | 'branded' }
@@ -65,6 +69,12 @@ async function renderAt(
     queryClient.setQueryData(
       getApiV1ProjectsByNameMeasurementPlanQueryKey({ client: heyClient, path: { name: projectName } }),
       measurement?.plan ?? { active: null },
+    )
+  }
+  if (measurement?.setup) {
+    queryClient.setQueryData(
+      getApiV1ProjectsByNameMeasurementSetupQueryKey({ client: heyClient, path: { name: projectName } }),
+      measurement.setup,
     )
   }
   if (measurement?.report && measurement.plan.active) {
@@ -243,6 +253,28 @@ function measurementSetupResponse(revision: number | null = null) {
   }
 }
 
+function simpleMeasurementSetupResponse() {
+  return {
+    state: 'simple' as const,
+    nextAction: 'start_setup' as const,
+    mode: 'simple' as const,
+    activeRevision: null,
+    activeSchemaVersion: null,
+    draft: null,
+  }
+}
+
+function activeMeasurementSetupResponse(revision: number) {
+  return {
+    state: 'operational' as const,
+    nextAction: 'view_measurement' as const,
+    mode: 'active-v2' as const,
+    activeRevision: revision,
+    activeSchemaVersion: 2 as const,
+    draft: null,
+  }
+}
+
 function measurementDraftResponse() {
   return {
     draft: {
@@ -321,14 +353,95 @@ test('the Portfolio route is an explicit non-embed project workspace', async () 
   expect(html).not.toContain('Coverage and performance')
 })
 
-test('a Simple project keeps the existing Overview and exposes setup as one secondary action', async () => {
+test('a Simple project keeps the existing Overview without advertising advanced measurement', async () => {
   const html = await renderAt('/projects/project_citypoint')
 
   expect(html).toContain('Where competitors are winning')
   expect(html).toContain('AI sweep running')
-  expect(html).toContain('Set up advanced measurement')
+  expect(html).not.toContain('Set up advanced measurement')
   expect(html).not.toContain('Republish setup')
   expect(html).not.toContain('Latest measurement')
+})
+
+test('explicit Site Health onboarding intent opens the original AI Visibility setup flow', async () => {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const raw = input instanceof Request ? input.url : String(input)
+    const url = new URL(raw, window.location.origin)
+    if (decodeURIComponent(url.pathname).endsWith('/queries')) return jsonResponse([])
+    return jsonResponse({ code: 'NOT_FOUND', message: 'not found' }, 404)
+  }) as typeof fetch
+  onTestFinished(() => { globalThis.fetch = realFetch })
+
+  const fixture = createDashboardFixture({})
+  const project = fixture.dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const router = createAppRouter(queryClient, {
+    initialEntries: ['/projects/project_citypoint?onboarding=site-health'],
+  })
+  await router.load()
+  const page = render(
+    <QueryClientProvider client={queryClient}>
+      <DashboardProvider value={{ dashboard: fixture.dashboard, health: fixture.health }}>
+        <RouterProvider router={router} />
+      </DashboardProvider>
+    </QueryClientProvider>,
+  )
+
+  await waitFor(() => expect(router.state.location.pathname).toBe('/setup'))
+  expect(router.state.location.search).toMatchObject({
+    experience: 'legacy',
+    setupProject: project.project.name,
+  })
+  expect(await page.findByRole('heading', { name: 'Set up AI Visibility' })).toBeTruthy()
+})
+
+test('the AI Visibility tab points to setup while Site Health onboarding is active', async () => {
+  const html = await renderAt('/projects/project_citypoint/technical-aeo?onboarding=site-health')
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const link = [...doc.querySelectorAll<HTMLAnchorElement>('nav[aria-label="Project sections"] a')]
+    .find(anchor => anchor.textContent === 'AI Visibility')
+
+  expect(link).toBeTruthy()
+  const destination = new URL(link!.href, 'http://localhost')
+  expect(destination.pathname).toBe('/setup')
+  expect(destination.searchParams.get('experience')).toBe('legacy')
+  expect(destination.searchParams.get('setupProject')).toBe('Citypoint Dental NYC')
+})
+
+test('the AI Visibility handoff replaces the marked Site Health history entry', async () => {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const raw = input instanceof Request ? input.url : String(input)
+    const url = new URL(raw, window.location.origin)
+    if (decodeURIComponent(url.pathname).endsWith('/queries')) return jsonResponse([])
+    return jsonResponse({ code: 'NOT_FOUND', message: 'not found' }, 404)
+  }) as typeof fetch
+  onTestFinished(() => { globalThis.fetch = realFetch })
+
+  const fixture = createDashboardFixture({})
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const router = createAppRouter(queryClient, {
+    initialEntries: [
+      '/projects/project_citypoint/technical-aeo',
+      '/projects/project_citypoint/technical-aeo?onboarding=site-health',
+    ],
+  })
+  await router.load()
+  const page = render(
+    <QueryClientProvider client={queryClient}>
+      <DashboardProvider value={{ dashboard: fixture.dashboard, health: fixture.health }}>
+        <RouterProvider router={router} />
+      </DashboardProvider>
+    </QueryClientProvider>,
+  )
+
+  fireEvent.click(await page.findByRole('link', { name: 'AI Visibility' }))
+  await waitFor(() => expect(router.state.location.pathname).toBe('/setup'))
+
+  act(() => router.history.back())
+  await waitFor(() => expect(router.state.location.pathname).toBe('/projects/project_citypoint/technical-aeo'))
+  expect(router.state.location.search).not.toHaveProperty('onboarding')
 })
 
 test('an active setup replaces the Simple Overview with the advanced measurement landing', async () => {
@@ -764,6 +877,46 @@ test('deleting the project is still offered, at the end of the Settings tab', as
 
   expect(html).toContain('Delete project')
   expect(html).toContain('Permanently deletes this project and all its queries, competitors, runs, and snapshots.')
+})
+
+test('Settings is the only discoverable entry to advanced measurement for a Simple project', async () => {
+  const html = await renderAt('/projects/project_citypoint/settings', undefined, {
+    plan: { active: null },
+    setup: simpleMeasurementSetupResponse(),
+  })
+
+  expect(html).toContain('Advanced measurement')
+  expect(html).toContain('Measure individual properties, locations, or site sections with separate query sets.')
+  expect(html).toContain('Set up advanced measurement')
+})
+
+test('Settings resumes an unfinished advanced measurement draft', async () => {
+  const html = await renderAt('/projects/project_citypoint/settings', undefined, {
+    plan: { active: null },
+    setup: measurementSetupResponse(),
+  })
+
+  expect(html).toContain('Continue setup')
+  expect(html).not.toContain('Set up advanced measurement')
+})
+
+test('Settings edits a published advanced measurement setup', async () => {
+  const html = await renderAt('/projects/project_citypoint/settings', undefined, {
+    plan: measurementPlanV2Response(4),
+    setup: activeMeasurementSetupResponse(4),
+  })
+
+  expect(html).toContain('Edit setup')
+})
+
+test('Settings resumes an unpublished draft over an active advanced setup', async () => {
+  const html = await renderAt('/projects/project_citypoint/settings', undefined, {
+    plan: measurementPlanV2Response(4),
+    setup: measurementSetupResponse(4),
+  })
+
+  expect(html).toContain('Continue setup')
+  expect(html).not.toContain('Edit setup')
 })
 
 // Restored: these two shipped in #953 and were dropped when a later branch's
