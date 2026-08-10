@@ -13,8 +13,22 @@ import { getRunTrackerState, resetRunTracker } from '../src/lib/run-tracker-stor
 import { getToasts, resetToasts } from '../src/lib/toast-store.js'
 import { jsonResponse, mockFetch, pathOf } from './mock-fetch.js'
 
-const AGENT_SETUP_REQUEST = 'Help me set up Canonry for my public site. Ask for my site address first. Keep private sign-ins and keys out of this chat. Before creating a project or starting a scan, show me the plan and wait for my approval. Then create the project, map the site, and help me decide what to measure next.'
-const AGENT_SETUP_GUIDE_URL = 'https://github.com/Canonry/canonry/blob/main/docs/plugins.md'
+const AGENT_SETUP_REQUEST = `Help me set up Canonry for my public site.
+
+Use Canonry's official docs:
+- Agent quickstart: https://github.com/Canonry/canonry#or-use-any-shell-capable-coding-agent
+- CLI reference: https://github.com/Canonry/canonry/blob/main/skills/canonry/references/canonry-cli.md
+- Plugin setup: https://github.com/Canonry/canonry/blob/main/docs/plugins.md
+- MCP setup: https://github.com/Canonry/canonry/blob/main/docs/mcp.md
+
+Use an existing Canonry installation or connected plugin/MCP if one is already available. Do not create a duplicate. The \`cnry\` and \`canonry\` commands are interchangeable.
+
+1. Ask for my public domain, country, and language. Do not create or scan anything yet.
+2. Check the local setup with \`command -v cnry\`, \`cnry --version\`, \`cnry doctor --format json\`, and \`cnry project list --format json\`. If Canonry is missing, propose \`npm install -g @canonry/canonry\` and wait for approval. If initialization is required, tell me to run \`cnry init\` in my private terminal and wait. Never ask me to paste passwords, API keys, OAuth credentials, or \`cnry init\` output.
+3. Show the normalized domain, proposed project name, exact \`cnry project create ...\` command, and wait for explicit approval before creating it.
+4. Propose a bounded Site Health scan, including \`--max-pages\` and whether dead-link checking is enabled. Show the exact \`cnry technical-aeo run ... --wait --format json\` command and wait for separate approval before scanning.
+5. After the crawl, summarize the findings and propose AI Visibility setup. Ask before adding queries, connecting providers, starting any provider-backed or quota-consuming run, editing files, or publishing.`
+const AGENT_SETUP_GUIDE_URL = 'https://github.com/Canonry/canonry#or-use-any-shell-capable-coding-agent'
 
 beforeAll(async () => {
   await preloadAllLazyRoutes()
@@ -185,8 +199,8 @@ test('auto waits for a successful authoritative empty project list before showin
   const setupForm = screen.getByRole('form', { name: 'Map your site' })
   const agentOption = screen.getByRole('region', { name: 'Use your agent instead' })
   expect(Boolean(setupForm.compareDocumentPosition(agentOption) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
-  expect(screen.getByText('Copy a setup request, then paste it into your coding agent.')).toBeTruthy()
-  const agentGuide = screen.getByRole('link', { name: /Agent setup guide/i })
+  expect(screen.getByText('Copy a complete CLI setup request into any coding agent.')).toBeTruthy()
+  const agentGuide = screen.getByRole('link', { name: /Agent quickstart/i })
   expect(agentGuide.getAttribute('href')).toBe(AGENT_SETUP_GUIDE_URL)
   expect(agentGuide.getAttribute('target')).toBe('_blank')
   expect(agentGuide.getAttribute('rel')).toContain('noopener')
@@ -226,6 +240,16 @@ test('gives an agent a copyable setup request', async () => {
   await waitFor(() => {
     expect(writeText).toHaveBeenCalledWith(AGENT_SETUP_REQUEST)
   })
+  expect(AGENT_SETUP_REQUEST).toContain('https://github.com/Canonry/canonry#or-use-any-shell-capable-coding-agent')
+  expect(AGENT_SETUP_REQUEST).toContain('https://github.com/Canonry/canonry/blob/main/skills/canonry/references/canonry-cli.md')
+  expect(AGENT_SETUP_REQUEST).toContain('https://github.com/Canonry/canonry/blob/main/docs/plugins.md')
+  expect(AGENT_SETUP_REQUEST).toContain('https://github.com/Canonry/canonry/blob/main/docs/mcp.md')
+  expect(AGENT_SETUP_REQUEST).toContain('cnry doctor --format json')
+  expect(AGENT_SETUP_REQUEST).toContain('cnry project list --format json')
+  expect(AGENT_SETUP_REQUEST).toContain('npm install -g @canonry/canonry')
+  expect(AGENT_SETUP_REQUEST.indexOf('Ask for my public domain')).toBeLessThan(AGENT_SETUP_REQUEST.indexOf('cnry project create'))
+  expect(AGENT_SETUP_REQUEST).toContain('wait for separate approval before scanning')
+  expect(AGENT_SETUP_REQUEST).toContain('Never ask me to paste passwords, API keys, OAuth credentials, or `cnry init` output')
   expect(screen.getByRole('button', { name: 'Copied setup request' })).toBeTruthy()
 })
 
@@ -251,11 +275,11 @@ test('offers the agent guide when the Clipboard API is unavailable', async () =>
     expect(getToasts()).toContainEqual(expect.objectContaining({
       tone: 'negative',
       title: 'Could not copy setup request',
-      detail: 'Open the agent setup guide to connect a supported agent instead.',
+      detail: 'Open the agent quickstart to continue with the CLI instead.',
     }))
   })
   expect(screen.queryByRole('button', { name: 'Copied setup request' })).toBeNull()
-  expect(screen.getByRole('link', { name: /Agent setup guide/i })).toBeTruthy()
+  expect(screen.getByRole('link', { name: /Agent quickstart/i })).toBeTruthy()
 })
 
 test('auto confirms a cached empty project list after mount before showing the launchpad', async () => {

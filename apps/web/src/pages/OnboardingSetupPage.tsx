@@ -20,8 +20,22 @@ import { Button } from '../components/ui/button.js'
 import { SetupPage } from './SetupPage.js'
 
 export const SITE_HEALTH_DISPATCH_BOUNDARY_MS = 1_800
-export const AGENT_SETUP_GUIDE_URL = 'https://github.com/Canonry/canonry/blob/main/docs/plugins.md'
-export const AGENT_SETUP_REQUEST = 'Help me set up Canonry for my public site. Ask for my site address first. Keep private sign-ins and keys out of this chat. Before creating a project or starting a scan, show me the plan and wait for my approval. Then create the project, map the site, and help me decide what to measure next.'
+export const AGENT_SETUP_GUIDE_URL = 'https://github.com/Canonry/canonry#or-use-any-shell-capable-coding-agent'
+export const AGENT_SETUP_REQUEST = `Help me set up Canonry for my public site.
+
+Use Canonry's official docs:
+- Agent quickstart: https://github.com/Canonry/canonry#or-use-any-shell-capable-coding-agent
+- CLI reference: https://github.com/Canonry/canonry/blob/main/skills/canonry/references/canonry-cli.md
+- Plugin setup: https://github.com/Canonry/canonry/blob/main/docs/plugins.md
+- MCP setup: https://github.com/Canonry/canonry/blob/main/docs/mcp.md
+
+Use an existing Canonry installation or connected plugin/MCP if one is already available. Do not create a duplicate. The \`cnry\` and \`canonry\` commands are interchangeable.
+
+1. Ask for my public domain, country, and language. Do not create or scan anything yet.
+2. Check the local setup with \`command -v cnry\`, \`cnry --version\`, \`cnry doctor --format json\`, and \`cnry project list --format json\`. If Canonry is missing, propose \`npm install -g @canonry/canonry\` and wait for approval. If initialization is required, tell me to run \`cnry init\` in my private terminal and wait. Never ask me to paste passwords, API keys, OAuth credentials, or \`cnry init\` output.
+3. Show the normalized domain, proposed project name, exact \`cnry project create ...\` command, and wait for explicit approval before creating it.
+4. Propose a bounded Site Health scan, including \`--max-pages\` and whether dead-link checking is enabled. Show the exact \`cnry technical-aeo run ... --wait --format json\` command and wait for separate approval before scanning.
+5. After the crawl, summarize the findings and propose AI Visibility setup. Ask before adding queries, connecting providers, starting any provider-backed or quota-consuming run, editing files, or publishing.`
 
 export type OnboardingProjectListState =
   | { state: 'idle' | 'loading' | 'error' }
@@ -375,7 +389,7 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
       addToast({
         tone: 'negative',
         title: 'Could not copy setup request',
-        detail: 'Open the agent setup guide to connect a supported agent instead.',
+        detail: 'Open the agent quickstart to continue with the CLI instead.',
       })
     }
   }
@@ -535,7 +549,7 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
 
       <section className="mt-8 border-t border-default pt-6" aria-labelledby="agent-setup-title">
         <p id="agent-setup-title" className="text-sm font-medium text-heading">Use your agent instead</p>
-        <p className="mt-1 text-sm leading-5 text-secondary">Copy a setup request, then paste it into your coding agent.</p>
+        <p className="mt-1 text-sm leading-5 text-secondary">Copy a complete CLI setup request into any coding agent.</p>
         <div className="mt-3 flex flex-wrap items-center gap-1">
           <Button type="button" variant="ghost" size="sm" className="-ml-3" onClick={asyncHandler(copyAgentSetupRequest)}>
             {agentRequestCopied
@@ -547,7 +561,7 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
           </Button>
           <Button asChild variant="ghost" size="sm">
             <a href={AGENT_SETUP_GUIDE_URL} target="_blank" rel="noopener noreferrer">
-              Agent setup guide
+              Agent quickstart
               <ExternalLink className="size-3.5" aria-hidden="true" />
               <span className="sr-only"> (opens in a new tab)</span>
             </a>
