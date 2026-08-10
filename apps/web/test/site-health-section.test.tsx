@@ -29,6 +29,7 @@ type CapturedJoyrideProps = {
   steps: Array<{
     id?: string
     target: string
+    placement?: string
     title?: React.ReactNode
     content: React.ReactNode
     before?: () => Promise<void>
@@ -1058,12 +1059,19 @@ test('walks a first-time operator from the terminal map through page health, the
   expect(tour?.steps.map((step) => step.id)).toEqual([
     'site-map-ready',
     'page-health',
+    'ai-visibility',
   ])
   expect(tour?.steps.map((step) => step.target)).toEqual([
     '#site-health-map-explorer',
     '#site-health-technical-tab',
+    'body',
   ])
   expect(tour?.steps.some((step) => step.target === '#site-health-measurement-plan')).toBe(false)
+  expect(tour?.steps[2]).toMatchObject({
+    placement: 'center',
+    title: 'See what answer engines say',
+    content: 'Technical fixes can make your site easier to crawl and understand. AI Visibility measures whether answer engines mention your brand and cite your pages for the queries you choose to track.',
+  })
   expect(tour?.locale?.last).toBe('Set up AI Visibility')
 
   await act(async () => { await tour?.steps[1]?.before?.() })
@@ -1146,6 +1154,11 @@ test('offers the inventory as the direct recovery path when the graph read fails
 
   await screen.findByText('The interactive map could not be loaded.')
   await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
+  expect(joyrideMock.props?.steps.map((step) => step.id)).toEqual([
+    'page-inventory-ready',
+    'page-health',
+    'ai-visibility',
+  ])
   expect(joyrideMock.props?.steps[0]).toMatchObject({
     id: 'page-inventory-ready',
     target: '#site-health-inventory-tab',

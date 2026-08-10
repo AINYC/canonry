@@ -1653,6 +1653,13 @@ export function SiteHealthSection({
       content: 'See which checks need attention, which pages are affected, and how to improve them.',
       before: async () => { setView('technical') },
     },
+    {
+      id: 'ai-visibility',
+      target: 'body',
+      placement: 'center',
+      title: 'See what answer engines say',
+      content: 'Technical fixes can make your site easier to crawl and understand. AI Visibility measures whether answer engines mention your brand and cite your pages for the queries you choose to track.',
+    },
   ], [walkthroughHasReadyMap])
   const walkthroughRunning = Boolean(
     showOnboardingWalkthrough
