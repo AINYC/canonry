@@ -71,7 +71,7 @@ export const getApiV1Projects = <ThrowOnError extends boolean = false>(options?:
 /**
  * Create a project
  *
- * Creates a new project with create-only semantics for the domain-first launchpad. The server normalizes the project name and canonical domain; a normalized name or canonical-domain collision returns 409 and never updates the existing project.
+ * Creates a new project with create-only semantics for the domain-first launchpad. The server normalizes the project name and canonical domain; a normalized-name collision returns 409 and never updates the existing project.
  */
 export const postApiV1Projects = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsResponses, PostApiV1ProjectsErrors, ThrowOnError>({

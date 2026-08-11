@@ -251,7 +251,9 @@ export interface DashboardConfigEntry {
    * First-open dashboard experience. `legacy` preserves the existing setup
    * wizard, `platform` enables the domain-first Site Health launchpad, and
    * `auto` enables the launchpad only when the authoritative project list is
-   * empty. Omitted keeps the legacy experience.
+   * empty. Omitted defaults to `auto`: fresh installs use the launchpad after
+   * an authoritative empty project-list response, while existing installs
+   * retain the legacy wizard.
    */
   onboardingMode?: 'legacy' | 'platform' | 'auto'
 

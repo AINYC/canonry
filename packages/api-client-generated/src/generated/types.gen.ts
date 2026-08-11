@@ -8977,7 +8977,7 @@ export type PostApiV1ProjectsErrors = {
      */
     403: ErrorEnvelope;
     /**
-     * A project with the normalized name or canonical domain already exists.
+     * A project with the normalized name already exists.
      */
     409: ErrorEnvelope;
 };

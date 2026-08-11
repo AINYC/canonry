@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 const mocked = vi.hoisted(() => ({
   triggerSiteAudit: vi.fn(),
+  getTechnicalAeoProgress: vi.fn(),
   getTechnicalAeoCrawl: vi.fn(),
   getTechnicalAeoCrawlPages: vi.fn(),
   getTechnicalAeoPageAudit: vi.fn(),
@@ -25,6 +26,7 @@ import {
   technicalAeoDeadLinks,
   technicalAeoInternalLinks,
   technicalAeoPageAudit,
+  technicalAeoProgress,
   technicalAeoStructure,
 } from '../src/commands/technical-aeo.js'
 
@@ -96,6 +98,7 @@ describe('Technical AEO full-crawl CLI', () => {
   it('registers bounded graph reads under Technical AEO and Site Health aliases', () => {
     expect(TECHNICAL_AEO_CLI_COMMANDS.map((spec) => spec.path.join(' '))).toEqual(expect.arrayContaining([
       'technical-aeo crawl',
+      'technical-aeo progress',
       'technical-aeo crawl-pages',
       'technical-aeo page-audit',
       'technical-aeo structure',
@@ -116,6 +119,81 @@ describe('Technical AEO full-crawl CLI', () => {
       'site-health path',
       'site-health changes',
     ]))
+  })
+
+  it('requires an exact run ID for Site Health progress', async () => {
+    await expect(command(['technical-aeo', 'progress']).run({
+      positionals: ['acme'],
+      values: {},
+      format: 'json',
+      dryRun: false,
+    })).rejects.toMatchObject({
+      code: 'CLI_USAGE_ERROR',
+      message: '--run-id is required',
+      displayMessage: expect.stringContaining(
+        'Usage: canonry technical-aeo progress <project> --run-id <id> [--format json]',
+      ),
+    })
+    expect(mocked.getTechnicalAeoProgress).not.toHaveBeenCalled()
+  })
+
+  it('prints exact stored Site Health progress as JSON', async () => {
+    const progress = {
+      project: 'acme',
+      runId: 'run-1',
+      status: 'running',
+      phase: 'checking',
+      attempt: {
+        id: 'attempt-1', state: 'running', pagesDiscovered: 42, pagesFetched: 17,
+        pagesEligible: 12, pagesErrored: 1, edgesDiscovered: 88,
+        lastUpdatedAt: '2026-08-09T12:00:00.000Z', startedAt: '2026-08-09T11:59:00.000Z',
+        finishedAt: null, error: null,
+      },
+      layout: { state: 'pending', layoutVersion: null, failureCode: null, updatedAt: null },
+      error: null,
+    }
+    mocked.getTechnicalAeoProgress.mockResolvedValue(progress)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    try {
+      await command(['technical-aeo', 'progress']).run({
+        positionals: ['acme'],
+        values: { 'run-id': 'run-1' },
+        format: 'json',
+        dryRun: false,
+      })
+      expect(log).toHaveBeenCalledWith(JSON.stringify(progress, null, 2))
+    } finally {
+      log.mockRestore()
+    }
+    expect(mocked.getTechnicalAeoProgress).toHaveBeenCalledWith('acme', 'run-1')
+  })
+
+  it('renders durable progress counters without inventing a percentage', async () => {
+    mocked.getTechnicalAeoProgress.mockResolvedValue({
+      project: 'acme',
+      runId: 'run-1',
+      status: 'running',
+      phase: 'checking',
+      attempt: {
+        id: 'attempt-1', state: 'running', pagesDiscovered: 42, pagesFetched: 17,
+        pagesEligible: 12, pagesErrored: 1, edgesDiscovered: 88,
+        lastUpdatedAt: '2026-08-09T12:00:00.000Z', startedAt: '2026-08-09T11:59:00.000Z',
+        finishedAt: null, error: null,
+      },
+      layout: { state: 'pending', layoutVersion: null, failureCode: null, updatedAt: null },
+      error: null,
+    })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    try {
+      await technicalAeoProgress('acme', { runId: 'run-1' })
+      const output = String(log.mock.calls[0]?.[0])
+      expect(output).toContain('Site Health progress: checking (running)')
+      expect(output).toContain('Pages: 42 found · 17 checked · 1 failed')
+      expect(output).toContain('Eligible: 12 · Links found: 88')
+      expect(output).not.toContain('%')
+    } finally {
+      log.mockRestore()
+    }
   })
 
   it('requires exactly one page selector for page audit evidence', async () => {

@@ -168,16 +168,20 @@ describe('POST /projects', () => {
     expect(db.select().from(auditLog).where(eq(auditLog.action, 'project.created')).all()).toHaveLength(1)
   })
 
-  it('returns a typed 409 for a canonical-domain collision without creating duplicate site work', async () => {
+  it('allows distinct projects to share a canonical domain', async () => {
     expect((await createProject(ROOT_KEY, 'First Site')).statusCode).toBe(201)
-    const conflict = await createProject(ROOT_KEY, 'Same Site, Different Name', {
+    const second = await createProject(ROOT_KEY, 'Same Site, Different Name', {
       canonicalDomain: 'http://acme.example/another-path',
     })
 
-    expect(conflict.statusCode).toBe(409)
-    expect(conflict.json()).toMatchObject({ error: { code: 'ALREADY_EXISTS' } })
-    expect(db.select().from(projects).where(eq(projects.canonicalDomain, 'acme.example')).all()).toHaveLength(1)
-    expect(callbackCalls).toHaveLength(1)
+    expect(second.statusCode).toBe(201)
+    expect(second.json()).toMatchObject({
+      name: 'same-site-different-name',
+      canonicalDomain: 'acme.example',
+    })
+    expect(db.select().from(projects).where(eq(projects.canonicalDomain, 'acme.example')).all()).toHaveLength(2)
+    expect(callbackCalls).toHaveLength(2)
+    expect(db.select().from(auditLog).where(eq(auditLog.action, 'project.created')).all()).toHaveLength(2)
   })
 
   it('rejects an unparseable canonical domain before writing any project', async () => {

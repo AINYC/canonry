@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from 'react'
-import { useNavigate, useSearch } from '@tanstack/react-router'
+import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, Copy, ExternalLink, LoaderCircle } from 'lucide-react'
 import { getApiV1ProjectsOptions, getApiV1ProjectsQueryKey } from '@ainyc/canonry-api-client/react-query'
@@ -178,7 +178,7 @@ export function watchTimedOutSiteHealthDispatch(
 
 function onboardingError(error: unknown, fallback: string): string {
   if (error instanceof ApiError && error.statusCode === 409) {
-    return 'A project with this name or site already exists. Change the project name or domain, or open the existing project.'
+    return 'A project with this name already exists. Change the project name, or open the existing project.'
   }
   return error instanceof Error && error.message ? error.message : fallback
 }
@@ -613,7 +613,16 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
               setCreateConflict(false)
             }}
           />
-          <p id="launchpad-domain-hint" className="text-sm text-secondary">Only public pages are scanned.</p>
+          <p id="launchpad-domain-hint" className="text-sm text-secondary">
+            Only public pages are scanned.{' '}
+            <Link
+              to="/setup"
+              search={{ experience: 'legacy' }}
+              className="font-medium text-link underline-offset-4 hover:underline"
+            >
+              Set up without a site scan
+            </Link>
+          </p>
           {domain && !identity ? <p id="launchpad-domain-error" className="text-sm text-negative" role="alert">Enter a public domain, such as example.com.</p> : null}
         </div>
 

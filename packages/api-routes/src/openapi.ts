@@ -682,7 +682,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects',
     summary: 'Create a project',
     description:
-      'Creates a new project with create-only semantics for the domain-first launchpad. The server normalizes the project name and canonical domain; a normalized name or canonical-domain collision returns 409 and never updates the existing project.',
+      'Creates a new project with create-only semantics for the domain-first launchpad. The server normalizes the project name and canonical domain; a normalized-name collision returns 409 and never updates the existing project.',
     tags: ['projects'],
     requestBody: {
       required: true,
@@ -696,7 +696,7 @@ const routeCatalog: OpenApiOperation[] = [
       201: jsonResponse('Project created.', 'ProjectDto'),
       400: errorResponse('Invalid project payload, normalized name, or canonical domain.'),
       403: errorResponse('The caller lacks broad projects.write authority.'),
-      409: errorResponse('A project with the normalized name or canonical domain already exists.'),
+      409: errorResponse('A project with the normalized name already exists.'),
     },
   },
   {

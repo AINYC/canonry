@@ -1625,7 +1625,7 @@ export function SiteHealthSection({
 
   return (
     <div className="space-y-5">
-      {explicitOnboarding ? <OnboardingProgress current={siteAuditReady ? 'visibility' : 'site'} /> : null}
+      {explicitOnboarding ? <OnboardingProgress current={siteAuditReady ? 'fixes' : 'site'} /> : null}
       {!explicitOnboarding && <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
         <div>
           <div className="flex flex-wrap items-center gap-3">

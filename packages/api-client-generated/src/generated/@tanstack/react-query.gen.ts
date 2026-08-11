@@ -105,7 +105,7 @@ export const getApiV1ProjectsOptions = (options?: Options<GetApiV1ProjectsData>)
 /**
  * Create a project
  *
- * Creates a new project with create-only semantics for the domain-first launchpad. The server normalizes the project name and canonical domain; a normalized name or canonical-domain collision returns 409 and never updates the existing project.
+ * Creates a new project with create-only semantics for the domain-first launchpad. The server normalizes the project name and canonical domain; a normalized-name collision returns 409 and never updates the existing project.
  */
 export const postApiV1ProjectsMutation = (options?: Partial<Options<PostApiV1ProjectsData>>): UseMutationOptions<PostApiV1ProjectsResponse, PostApiV1ProjectsError, Options<PostApiV1ProjectsData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsResponse, PostApiV1ProjectsError, Options<PostApiV1ProjectsData>> = {

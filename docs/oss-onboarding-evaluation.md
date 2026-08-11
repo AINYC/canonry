@@ -1,16 +1,3 @@
-# SEO VS AEO VS GEO, VS AIO.
-
-The industry is still aligning on terminology. Teams use **SEO**, **AEO** (Answer Engine Optimization), **GEO** (Generative Engine Optimization), and **AIO** (usually AI Optimization or AI-search optimization) with overlapping meanings.
-
-For an operator, the work converges:
-
-    Understand demand → make the site useful and citable → observe answers and outcomes
-    → improve the right surface → measure what changed
-
-SEO remains the broader search discipline. The newer labels emphasize AI-mediated answers, recommendations, and citations. Canonry should use **AEO** as its internal category and **AI search visibility** in first-run language. The product should not ask a new user to learn the taxonomy before showing value.
-
----
-
 # Canonry OSS onboarding rework: reveal the operating platform
 
 ## The rework in one sentence
@@ -18,6 +5,14 @@ SEO remains the broader search discipline. The newer labels emphasize AI-mediate
 This is not a shorter setup wizard. It changes Canonry's first mental model from an LLM query runner into an evidence-connected AEO operating platform.
 
 Queries are sensors, not the product. Google Search Console is one evidence source, not the hook. Aero is an operator, not a support chatbot. The dashboard is the human workroom for understanding state, approving action, and inspecting evidence.
+
+## Product language: SEO, AEO, GEO, and AIO
+
+The industry is still aligning on these terms. For an operator, these labels
+describe the same work: improve content, observe results, and measure changes.
+
+Canonry uses **AEO** internally and **AI search visibility** during onboarding.
+The first experience shows value before it explains the taxonomy.
 
 ## Current-main reassessment: Site Health becomes the hook
 

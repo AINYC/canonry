@@ -1449,6 +1449,7 @@ describe('canonry', () => {
     await client.getAnalyticsGaps('acme')
     await client.getAnalyticsSources('acme')
     await client.getTechnicalAeoScore('acme')
+    await client.getTechnicalAeoProgress('acme', 'run-1')
     await client.getTechnicalAeoCrawl('acme', { runId: 'run-1' })
     await client.getSiteHealthSubgraph('acme', { nodeKey: 'page:root', hops: 2, maxNodes: 25, maxEdges: 50 })
     await client.getSiteHealthPath('acme', { fromNodeKey: 'page:root', toUrl: 'https://acme.test/pricing', maxDepth: 8 })
@@ -1465,6 +1466,7 @@ describe('canonry', () => {
       'https://example.test/canonry/api/v1/projects/acme/analytics/gaps',
       'https://example.test/canonry/api/v1/projects/acme/analytics/sources',
       'https://example.test/canonry/api/v1/projects/acme/technical-aeo',
+      'https://example.test/canonry/api/v1/projects/acme/technical-aeo/runs/run-1/progress',
       'https://example.test/canonry/api/v1/projects/acme/technical-aeo/crawl?runId=run-1',
       'https://example.test/canonry/api/v1/projects/acme/technical-aeo/subgraph?nodeKey=page%3Aroot&hops=2&maxNodes=25&maxEdges=50',
       'https://example.test/canonry/api/v1/projects/acme/technical-aeo/path?fromNodeKey=page%3Aroot&toUrl=https%3A%2F%2Facme.test%2Fpricing&maxDepth=8',

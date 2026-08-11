@@ -251,7 +251,7 @@ test('continues a mapped project into the original AI Visibility setup flow', as
     return jsonResponse({})
   })
   onTestFinished(restore)
-  await renderSetup('/setup?experience=legacy&setupProject=example-com', {
+  await renderSetup('/setup?experience=legacy&onboarding=site-health&setupProject=example-com', {
     mappedProjectName: 'example-com',
   })
 
@@ -262,6 +262,8 @@ test('continues a mapped project into the original AI Visibility setup flow', as
   expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('Queries')
   expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('Competitors')
   expect(screen.getByRole('list', { name: 'Setup progress' }).textContent).toContain('Launch')
+  const onboardingProgress = screen.getByRole('list', { name: 'Onboarding progress' })
+  expect(within(onboardingProgress).getByText('AI Visibility').closest('[aria-current="step"]')).toBeTruthy()
   expect(screen.queryByRole('heading', { name: 'Map your site' })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Set up Advanced measurement instead' })).toBeNull()
 })
@@ -298,6 +300,20 @@ test('lets an operator cancel the launchpad before any project is created', asyn
   await waitFor(() => {
     expect(router.state.location.pathname).toBe('/projects')
   })
+})
+
+test('offers the established setup when a site cannot be scanned', async () => {
+  window.__CANONRY_CONFIG__ = { dashboard: { onboardingMode: 'platform' } }
+  const { router } = await renderSetup()
+
+  const escape = await screen.findByRole('link', { name: 'Set up without a site scan' })
+  fireEvent.click(escape)
+
+  await waitFor(() => {
+    expect(router.state.location.pathname).toBe('/setup')
+    expect(router.state.location.search).toMatchObject({ experience: 'legacy' })
+  })
+  expect(await screen.findByText('Step 2 of 5')).toBeTruthy()
 })
 
 test('keeps the auto launchpad in an accessible loading state until the project list resolves', async () => {
@@ -652,7 +668,7 @@ test('surfaces a create-only name collision and never starts a scan', async () =
   fireEvent.click(screen.getByRole('checkbox', { name: /Allow Canonry/i }))
   fireEvent.click(screen.getByRole('button', { name: 'Map site' }))
 
-  expect(await screen.findByText(/project with this name or site already exists/i)).toBeTruthy()
+  expect(await screen.findByText(/project with this name already exists/i)).toBeTruthy()
   expect(screen.getByRole('button', { name: 'View projects' })).toBeTruthy()
   expect(requests.some((request) => request.includes('technical-aeo/runs'))).toBe(false)
 })

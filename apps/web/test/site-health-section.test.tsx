@@ -1107,7 +1107,9 @@ test('moves explicit onboarding directly into Page health with a compact AI Visi
   })
 
   expect(screen.queryByRole('dialog')).toBeNull()
-  expect(screen.getByRole('list', { name: 'Onboarding progress' }).querySelector('[aria-current="step"]')?.textContent).toContain('AI Visibility')
+  const onboardingProgress = screen.getByRole('list', { name: 'Onboarding progress' })
+  expect(onboardingProgress.querySelector('[aria-current="step"]')?.textContent).toContain('Page health')
+  expect(within(onboardingProgress).getByText('AI Visibility').closest('li')?.getAttribute('aria-current')).toBeNull()
   expect(screen.queryByRole('combobox', { name: 'View a Site Health scan' })).toBeNull()
   expect(screen.queryByRole('heading', { name: 'Site Health' })).toBeNull()
   expect(screen.queryByRole('heading', { name: 'Site audit complete' })).toBeNull()

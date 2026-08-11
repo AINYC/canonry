@@ -109,6 +109,35 @@ export async function technicalAeoTrend(
   console.log(lines.join('\n'))
 }
 
+/** `canonry technical-aeo progress <project>` — exact durable progress for one run. */
+export async function technicalAeoProgress(
+  project: string,
+  opts: { runId: string; format?: string },
+): Promise<void> {
+  const progress = await getClient().getTechnicalAeoProgress(project, opts.runId)
+  if (isMachineFormat(opts.format)) {
+    console.log(JSON.stringify(progress, null, 2))
+    return
+  }
+
+  const lines = [
+    `Site Health progress: ${progress.phase} (${progress.status})`,
+    `Run: ${progress.runId}`,
+  ]
+  if (progress.attempt) {
+    lines.push(
+      `Pages: ${progress.attempt.pagesDiscovered} found · ${progress.attempt.pagesFetched} checked · ${progress.attempt.pagesErrored} failed`,
+      `Eligible: ${progress.attempt.pagesEligible} · Links found: ${progress.attempt.edgesDiscovered}`,
+      `Updated: ${progress.attempt.lastUpdatedAt}`,
+    )
+  } else {
+    lines.push('Pages: waiting for the crawl to start')
+  }
+  lines.push(`Layout: ${progress.layout.state}`)
+  if (progress.error) lines.push(`Error: ${progress.error}`)
+  console.log(lines.join('\n'))
+}
+
 /** `canonry technical-aeo crawl <project>` — persisted crawl metadata, not a graph dump. */
 export async function technicalAeoCrawl(
   project: string,

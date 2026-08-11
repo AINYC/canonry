@@ -418,9 +418,22 @@ export function RootLayout() {
   // While loading or dashboard not yet available, use context data or null (no mock fallback)
   const safeDashboard = dashboard ?? contextDashboard?.dashboard ?? null
 
-  // Setup is one focused surface from project creation through the optional
-  // AI Visibility stage. Project-list refreshes must not toggle the shell.
-  const isFocusedSetup = location.pathname === '/setup'
+  // Focus the first-run setup visit, then keep it focused while creation makes
+  // the project list non-empty. A later /setup visit by an existing operator
+  // retains the normal shell and navigation.
+  const isSetupRoute = location.pathname === '/setup'
+  const isEmptySetup = isSetupRoute
+    && safeDashboard !== null
+    && safeDashboard.portfolioOverview.projects.length === 0
+  const [firstRunSetupLatched, setFirstRunSetupLatched] = useState(isEmptySetup)
+  useEffect(() => {
+    if (!isSetupRoute) {
+      setFirstRunSetupLatched(false)
+    } else if (isEmptySetup) {
+      setFirstRunSetupLatched(true)
+    }
+  }, [isEmptySetup, isSetupRoute])
+  const isFocusedSetup = isSetupRoute && (isEmptySetup || firstRunSetupLatched)
   const shellModifier = isFocusedSetup
     ? 'app-shell-focus'
     : sidebarHidden

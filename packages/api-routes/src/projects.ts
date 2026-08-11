@@ -104,19 +104,9 @@ export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOpt
     // normalized identity too, then rely on the exact unique index to make a
     // concurrent same-key insert a no-op rather than an overwrite.
     const normalizedCollision = app.db.select({
-      id: projects.id,
       name: projects.name,
-      canonicalDomain: projects.canonicalDomain,
-    }).from(projects).all().find(project => (
-      normalizeProjectName(project.name) === name
-      || hostOf(project.canonicalDomain) === canonicalDomain
-    ))
-    if (normalizedCollision) {
-      if (hostOf(normalizedCollision.canonicalDomain) === canonicalDomain) {
-        throw alreadyExists('Project domain', canonicalDomain)
-      }
-      throw alreadyExists('Project', name)
-    }
+    }).from(projects).all().find(project => normalizeProjectName(project.name) === name)
+    if (normalizedCollision) throw alreadyExists('Project', name)
 
     const id = crypto.randomUUID()
     const now = new Date().toISOString()
