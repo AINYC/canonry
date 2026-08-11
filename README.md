@@ -5,7 +5,7 @@
 Your entire AEO + web analytics stack, agent-first. **Open source. Self-hosted. Local.**
 
 - **Local-only:** Canonry runs on your machine and stores its data in SQLite.
-- Track citations across Gemini, ChatGPT, Claude, Perplexity, and local LLMs
+- Track web search citations and mentions across Gemini, ChatGPT, Claude, Perplexity, and local LLMs
 - Capture server-side traffic from Cloudflare, Cloud Run, Vercel, and WordPress — [setup guide](skills/canonry/references/server-side-traffic.md)
 - Diagnose against real traffic with built-in [GSC](docs/google-search-console-setup.md), [GA4](docs/google-analytics-setup.md), and [Bing Webmaster](docs/bing-webmaster-setup.md)
 - Track local AEO via [Google Business Profile](skills/canonry/references/google-business-profile.md) — search-term impressions, performance metrics, and hotel lodging + booking-CTA gaps
