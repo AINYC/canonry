@@ -26,10 +26,7 @@ import { BacklinksSection } from '../components/project/BacklinksSection.js'
 import { CitationVisibilitySection } from '../components/project/CitationVisibilitySection.js'
 import { VisibilityTrendSection } from '../components/project/VisibilityTrendSection.js'
 import { DiscoverySection } from '../components/project/DiscoverySection.js'
-import {
-  SiteHealthSection,
-  type SiteHealthOnboardingOutcome,
-} from '../components/project/SiteHealthSection.js'
+import { SiteHealthSection } from '../components/project/SiteHealthSection.js'
 import { ProjectHistorySection } from '../components/project/ProjectHistorySection.js'
 import { AdvancedMeasurementSection } from '../components/project/advanced-measurement/AdvancedMeasurementSection.js'
 import { AdvancedMeasurementLanding } from '../components/project/advanced-measurement/AdvancedMeasurementLanding.js'
@@ -147,21 +144,6 @@ export function patchProjectDashboardCache(
     if (!current || typeof current !== 'object' || !('project' in current)) return current
     return { ...current, project: updated }
   })
-}
-
-export function clearCompletedSiteHealthOnboardingSearch(previous: Record<string, unknown>) {
-  return {
-    ...previous,
-    onboarding: undefined,
-    siteHealthRunId: undefined,
-  }
-}
-
-export function aiVisibilitySetupSearch(projectName: string) {
-  return {
-    experience: 'legacy' as const,
-    setupProject: projectName,
-  }
 }
 
 function BingSection({
@@ -1704,7 +1686,6 @@ function ProjectPageContent({
     manageQueries?: boolean
     runId?: string
     siteHealthRunId?: string
-    onboarding?: 'site-health'
     scope?: string
     class?: string
   }
@@ -1716,34 +1697,6 @@ function ProjectPageContent({
       search: (previous: Record<string, unknown>) => ({ ...previous, siteHealthRunId: undefined }),
     })
   }, [navigate])
-  const completeSiteHealthOnboarding = useCallback((outcome: SiteHealthOnboardingOutcome) => {
-    if (outcome === 'finished') {
-      void navigate({
-        to: '/setup',
-        replace: true,
-        search: aiVisibilitySetupSearch(model.project.name),
-      })
-      return
-    }
-    void navigate({
-      to: '.',
-      replace: true,
-      search: clearCompletedSiteHealthOnboardingSearch,
-    })
-  }, [model.project.name, navigate])
-  const aiVisibilityOnboardingPending = projectSearchParams.onboarding === 'site-health'
-    && canWrite
-    && !isEmbed()
-  const aiVisibilityOnboardingRedirected = useRef(false)
-  useEffect(() => {
-    if (tab !== 'overview' || !aiVisibilityOnboardingPending || aiVisibilityOnboardingRedirected.current) return
-    aiVisibilityOnboardingRedirected.current = true
-    void navigate({
-      to: '/setup',
-      replace: true,
-      search: aiVisibilitySetupSearch(model.project.name),
-    })
-  }, [aiVisibilityOnboardingPending, model.project.name, navigate, tab])
   const [managingQueries, setManagingQueries] = useState(manageQueriesRequested)
   const [newQueryText, setNewQueryText] = useState('')
   const [querySaving, setQuerySaving] = useState(false)
@@ -2355,13 +2308,10 @@ function ProjectPageContent({
 
       <nav className="project-subnav" aria-label="Project sections">
         {projectTabItems.map((item) => {
-          const openVisibilitySetup = item.key === 'overview' && aiVisibilityOnboardingPending
           return (
             <Link
               key={item.key}
-              to={openVisibilitySetup ? '/setup' : item.href}
-              search={openVisibilitySetup ? aiVisibilitySetupSearch(projectName) : undefined}
-              replace={openVisibilitySetup}
+              to={item.href}
               className={`project-subnav-link ${item.key === tab ? 'project-subnav-link-active' : ''}`}
               aria-current={item.key === tab ? 'page' : undefined}
             >
@@ -2428,11 +2378,9 @@ function ProjectPageContent({
           }}
         />
       ) : tab === 'overview' ? (
-        isMeasurementModeUnresolved || aiVisibilityOnboardingPending ? (
+        isMeasurementModeUnresolved ? (
           <div role="status" aria-live="polite">
-            <span className="sr-only">
-              {aiVisibilityOnboardingPending ? 'Opening AI Visibility setup' : 'Loading project overview'}
-            </span>
+            <span className="sr-only">Loading project overview</span>
             <div className="h-32 animate-pulse rounded-md bg-surface-subtle" aria-hidden="true" />
           </div>
         ) : (
@@ -2845,8 +2793,6 @@ function ProjectPageContent({
           projectId={model.project.id}
           initialRunId={projectSearchParams.siteHealthRunId}
           onReleaseInitialRun={releaseInitialSiteHealthRun}
-          showOnboardingWalkthrough={projectSearchParams.onboarding === 'site-health'}
-          onCompleteOnboardingWalkthrough={completeSiteHealthOnboarding}
         />
       ) : tab === 'history' ? (
         <ProjectHistorySection projectName={model.project.name} />

@@ -22,30 +22,7 @@ import { linkTileCount, siteHealthMetricHelp, SiteHealthSection } from '../src/c
 import { heyClient } from '../src/api.js'
 
 const mutationMock = vi.hoisted(() => ({ mutate: vi.fn() }))
-type CapturedJoyrideProps = {
-  run?: boolean
-  locale?: { last?: string }
-  options?: { closeButtonAction?: string; scrollDuration?: number }
-  steps: Array<{
-    id?: string
-    target: string
-    placement?: string
-    title?: React.ReactNode
-    content: React.ReactNode
-    before?: () => Promise<void>
-  }>
-  onEvent?: (event: { action?: string; status?: string; type?: string }) => void
-}
-const joyrideMock = vi.hoisted(() => ({ props: null as CapturedJoyrideProps | null }))
-
-vi.mock('react-joyride', () => ({
-  ACTIONS: { CLOSE: 'close', SKIP: 'skip' },
-  EVENTS: { TOUR_END: 'tour:end' },
-  Joyride: (props: CapturedJoyrideProps) => {
-    joyrideMock.props = props
-    return null
-  },
-}))
+const technicalAeoMock = vi.hoisted(() => ({ state: 'success' as 'success' | 'unavailable' }))
 
 vi.mock('../src/queries/mutations.js', () => ({
   useTriggerSiteAudit: () => ({
@@ -74,8 +51,21 @@ vi.mock('@tanstack/react-router', async () => {
 })
 
 vi.mock('../src/components/project/TechnicalAeoSection.js', () => ({
-  TechnicalAeoSection: ({ runId, integrated }: { runId?: string | null; integrated?: boolean }) => (
-    <div data-integrated={integrated ? 'true' : 'false'}>Page health for {runId ?? 'latest'}</div>
+  TechnicalAeoSection: ({
+    runId,
+    integrated,
+    footer,
+    unavailableFooter,
+  }: {
+    runId?: string | null
+    integrated?: boolean
+    footer?: React.ReactNode
+    unavailableFooter?: React.ReactNode
+  }) => (
+    <div data-integrated={integrated ? 'true' : 'false'}>
+      Page health for {runId ?? 'latest'}
+      {technicalAeoMock.state === 'success' ? footer : unavailableFooter}
+    </div>
   ),
 }))
 
@@ -418,7 +408,7 @@ function renderSection(
 
 beforeEach(() => {
   mutationMock.mutate.mockReset()
-  joyrideMock.props = null
+  technicalAeoMock.state = 'success'
   Reflect.deleteProperty(window, '__CANONRY_CONFIG__')
 })
 
@@ -718,10 +708,14 @@ test('uses the exact active run for a first scan instead of showing stale-map co
     runStatus: 'running',
   })
 
-  renderSection(queryClient, { showOnboardingWalkthrough: true })
+  renderSection(queryClient, { showOnboardingActions: true })
 
   expect(screen.getByRole('status').textContent).toContain('Scanning site')
-  expect(joyrideMock.props?.run ?? false).toBe(false)
+  expect(screen.getByRole('list', { name: 'Onboarding progress' }).querySelector('[aria-current="step"]')?.textContent).toContain('Site audit')
+  const pageHealthTab = screen.getByRole('tab', { name: 'Page health' }) as HTMLButtonElement
+  expect(pageHealthTab.disabled).toBe(true)
+  fireEvent.click(pageHealthTab)
+  expect(screen.getByRole('status').textContent).toContain('Scanning site')
   expect(screen.queryByText(/latest completed results remain/i)).toBeNull()
   expect(screen.queryByText('Full-site map not available')).toBeNull()
   expect(queryClient.getQueryState(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
@@ -1051,11 +1045,14 @@ test('offers rerun recovery when a pinned onboarding scan is cancelled before a 
   renderSection(queryClient, {
     initialRunId: 'run_handoff',
     onReleaseInitialRun,
-  } as never)
+    showOnboardingActions: true,
+  })
 
   await waitFor(() => expect(fetchMock).toHaveBeenCalled())
   const recovery = screen.getByRole('alert', { name: 'Site scan recovery' })
   expect(recovery.textContent).toContain('Scan cancelled')
+  expect(screen.getByRole('tab', { name: 'Page health' })).toHaveProperty('disabled', true)
+  expect(screen.getByRole('list', { name: 'Onboarding progress' }).querySelector('[aria-current="step"]')?.textContent).toContain('Site audit')
   fireEvent.click(within(recovery).getByRole('button', { name: 'Run scan again' }))
   expect(mutationMock.mutate).toHaveBeenCalledWith({
     projectName,
@@ -1063,7 +1060,6 @@ test('offers rerun recovery when a pinned onboarding scan is cancelled before a 
     body: { checkDeadLinks: false },
   })
   expect(onReleaseInitialRun).toHaveBeenCalledOnce()
-  expect((screen.getByRole('combobox', { name: 'View a Site Health scan' }) as HTMLSelectElement).value).toBe('')
 })
 
 test('keeps measurement-plan setup out of Site Health', () => {
@@ -1073,96 +1069,125 @@ test('keeps measurement-plan setup out of Site Health', () => {
   expect(screen.queryByRole('region', { name: 'Define what to measure' })).toBeNull()
 })
 
-test('walks a first-time operator from the terminal map through page health, then continues to AI Visibility', async () => {
-  const onCompleteOnboardingWalkthrough = vi.fn()
+test('moves explicit onboarding from the completed audit through fixes to the optional AI Visibility decision', () => {
+  const onContinueOnboarding = vi.fn()
+  const onSkipOnboarding = vi.fn()
   renderSection(makeClient(), {
-    showOnboardingWalkthrough: true,
-    onCompleteOnboardingWalkthrough,
+    showOnboardingActions: true,
+    onContinueOnboarding,
+    onSkipOnboarding,
   })
 
-  await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
-  const tour = joyrideMock.props
-  expect(tour?.steps.map((step) => step.id)).toEqual([
-    'site-map-ready',
-    'page-health',
-    'ai-visibility',
-  ])
-  expect(tour?.steps.map((step) => step.target)).toEqual([
-    '#site-health-map-explorer',
-    '#site-health-technical-tab',
-    'body',
-  ])
-  expect(tour?.steps.some((step) => step.target === '#site-health-measurement-plan')).toBe(false)
-  expect(tour?.steps[2]).toMatchObject({
-    placement: 'center',
-    title: 'See what answer engines say',
-    content: 'Technical fixes can make your site easier to crawl and understand. AI Visibility measures whether answer engines mention your brand and cite your pages for the queries you choose to track.',
-  })
-  expect(tour?.locale?.last).toBe('Set up AI Visibility')
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(screen.getByRole('list', { name: 'Onboarding progress' }).querySelector('[aria-current="step"]')?.textContent).toContain('Review fixes')
+  expect(screen.queryByRole('combobox', { name: 'View a Site Health scan' })).toBeNull()
+  expect(screen.getByRole('heading', { name: 'Site audit complete' })).not.toBeNull()
+  expect(screen.getByText(/Review Page health to see the checks that need attention/i)).not.toBeNull()
 
-  await act(async () => { await tour?.steps[1]?.before?.() })
+  fireEvent.click(screen.getByRole('button', { name: 'Review fixes' }))
   expect(screen.getByRole('tab', { name: 'Page health' }).getAttribute('aria-selected')).toBe('true')
+  expect(screen.getByText('Page health for run_1')).not.toBeNull()
+  expect(screen.getByRole('heading', { name: 'Next, see what answer engines say' })).not.toBeNull()
+  expect(screen.getByText(/AI Visibility shows whether answer engines mention your brand and cite your pages/i)).not.toBeNull()
 
-  act(() => { tour?.onEvent?.({ type: 'tour:end', status: 'finished' }) })
-  expect(onCompleteOnboardingWalkthrough).toHaveBeenCalledWith('finished')
-  expect(joyrideMock.props?.run).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Set up AI Visibility' }))
+  expect(onContinueOnboarding).toHaveBeenCalledOnce()
+  fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }))
+  expect(onSkipOnboarding).toHaveBeenCalledOnce()
 })
 
-test('treats the walkthrough close control as a dismissal without forcing AI Visibility', async () => {
-  const onCompleteOnboardingWalkthrough = vi.fn()
-  renderSection(makeClient(), {
-    showOnboardingWalkthrough: true,
-    onCompleteOnboardingWalkthrough,
-  })
-
-  await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
-  expect(joyrideMock.props?.options?.closeButtonAction).toBe('skip')
-  act(() => { joyrideMock.props?.onEvent?.({ action: 'skip', type: 'tour:end', status: 'skipped' }) })
-
-  expect(onCompleteOnboardingWalkthrough).toHaveBeenCalledWith('dismissed')
-  expect(joyrideMock.props?.run).toBe(false)
-})
-
-test('does not start the post-scan walkthrough without an onboarding handoff', () => {
+test('does not expose explicit onboarding actions in regular Site Health', () => {
   renderSection()
 
-  expect(joyrideMock.props?.run ?? false).toBe(false)
+  expect(screen.queryByRole('heading', { name: 'Site audit complete' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Review fixes' })).toBeNull()
 })
 
-test('does not start the post-scan walkthrough in embed mode', () => {
-  window.__CANONRY_CONFIG__ = {
-    embed: { enabled: true, views: ['project'], projectTabs: ['technical-aeo'] },
-  }
+test('labels a usable partial onboarding audit without claiming full completion', () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_partial', 'partial')))
+  seedRun(queryClient, 'run_partial', summary('run_partial', 18, false))
 
-  renderSection(makeClient(), { showOnboardingWalkthrough: true })
+  renderSection(queryClient, { showOnboardingActions: true })
 
-  expect(joyrideMock.props?.run ?? false).toBe(false)
+  expect(screen.getByRole('heading', { name: 'Site audit finished with partial coverage' })).not.toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Site audit complete' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Review fixes' })).not.toBeNull()
 })
 
-test('removes walkthrough scrolling when reduced motion is preferred', async () => {
-  vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }))
+test('keeps a partial crawl recoverable when it publishes no Page health score', () => {
+  const onContinueOnboarding = vi.fn()
+  const onSkipOnboarding = vi.fn()
+  const queryClient = makeClient()
+  queryClient.setQueryData(scanHistoryKey(), scanHistory(scan('run_partial', 'partial')))
+  seedRun(queryClient, 'run_partial', summary('run_partial', 18, false))
+  technicalAeoMock.state = 'unavailable'
 
-  renderSection(makeClient(), { showOnboardingWalkthrough: true })
-
-  await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
-  expect(joyrideMock.props?.options?.scrollDuration).toBe(0)
-})
-
-test('dismisses the post-scan walkthrough from the keyboard', async () => {
-  const onCompleteOnboardingWalkthrough = vi.fn()
-  renderSection(makeClient(), {
-    showOnboardingWalkthrough: true,
-    onCompleteOnboardingWalkthrough,
+  renderSection(queryClient, {
+    showOnboardingActions: true,
+    onContinueOnboarding,
+    onSkipOnboarding,
   })
 
-  await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
-  fireEvent.keyDown(document, { key: 'Escape' })
+  fireEvent.click(screen.getByRole('button', { name: 'Review fixes' }))
+  expect(screen.getByText(/Run the site audit again to retry these checks/i)).not.toBeNull()
 
-  expect(onCompleteOnboardingWalkthrough).toHaveBeenCalledWith('dismissed')
-  expect(joyrideMock.props?.run).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Set up AI Visibility' }))
+  expect(onContinueOnboarding).toHaveBeenCalledOnce()
+  fireEvent.click(screen.getByRole('button', { name: 'Finish for now' }))
+  expect(onSkipOnboarding).toHaveBeenCalledOnce()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Run site audit again' }))
+  expect(mutationMock.mutate).toHaveBeenCalledWith({
+    projectName,
+    projectId,
+    body: { checkDeadLinks: false },
+  })
 })
 
-test('offers the inventory as the direct recovery path when the graph read fails', async () => {
+test('keeps explicit onboarding recoverable and follows the active replacement after a terminal scan publishes no crawl data', async () => {
+  const queryClient = makeClient()
+  seedRun(queryClient, 'run_1', {
+    ...summary('run_1', 0),
+    hasCrawlData: false,
+    detailsAvailable: false,
+    counts: { pagesDiscovered: 0, pagesFetched: 0, pagesEligible: 0, edges: 0, findings: 0 },
+  })
+
+  renderSection(queryClient, { showOnboardingActions: true })
+
+  expect(screen.getByRole('heading', { name: 'Full-site map not available' })).not.toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Run scan again' }))
+  expect(mutationMock.mutate).toHaveBeenCalledWith({
+    projectName,
+    projectId,
+    body: { checkDeadLinks: false },
+  })
+
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressQueryKey({
+    client: heyClient,
+    path: { name: projectName, runId: 'run_2' },
+  }), {
+    project: projectName,
+    runId: 'run_2',
+    status: 'running',
+    phase: 'discovering',
+    attempt: null,
+    layout: { state: 'pending', layoutVersion: null, failureCode: null, updatedAt: null },
+    error: null,
+  })
+  act(() => {
+    queryClient.setQueryData(
+      scanHistoryKey(),
+      scanHistory(scan('run_2', 'running', false), scan('run_1', 'completed', false)),
+    )
+  })
+
+  expect((await screen.findByRole('status', { name: 'Current scan progress' })).textContent).toContain('Discovering pages')
+  expect(screen.queryByRole('heading', { name: 'Full-site map not available' })).toBeNull()
+})
+
+test('offers the inventory and Page health continuation when the graph read fails during onboarding', async () => {
   const queryClient = makeClient()
   queryClient.removeQueries({
     queryKey: getApiV1ProjectsByNameTechnicalAeoGraphQueryKey({
@@ -1176,65 +1201,14 @@ test('offers the inventory as the direct recovery path when the graph read fails
     headers: { 'content-type': 'application/json' },
   })))
 
-  renderSection(queryClient, { showOnboardingWalkthrough: true })
+  renderSection(queryClient, { showOnboardingActions: true })
 
   await screen.findByText('The interactive map could not be loaded.')
-  await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
-  expect(joyrideMock.props?.steps.map((step) => step.id)).toEqual([
-    'page-inventory-ready',
-    'page-health',
-    'ai-visibility',
-  ])
-  expect(joyrideMock.props?.steps[0]).toMatchObject({
-    id: 'page-inventory-ready',
-    target: '#site-health-inventory-tab',
-  })
   fireEvent.click(screen.getByRole('button', { name: 'Open page inventory' }))
   expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('site-health-inventory-tab')
-})
-
-test('waits for inventory evidence before starting the no-map fallback walkthrough', async () => {
-  const queryClient = makeClient()
-  const graphKey = getApiV1ProjectsByNameTechnicalAeoGraphQueryKey({
-    client: heyClient,
-    path: { name: projectName },
-    query: { runId: 'run_1', maxNodes: 20_000, maxEdges: 50_000 },
-  })
-  const graph = queryClient.getQueryData<Record<string, unknown>>(graphKey)
-  queryClient.setQueryData(graphKey, {
-    ...graph,
-    layout: { state: 'unavailable', reason: 'layout-error' },
-  })
-  const pagesInput = {
-    client: heyClient,
-    path: { name: projectName },
-    query: { runId: 'run_1', limit: 200, sort: 'path' as const },
-  }
-  const pagesKey = getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteQueryKey(pagesInput)
-  queryClient.removeQueries({ queryKey: pagesKey })
-  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
-
-  renderSection(queryClient, { showOnboardingWalkthrough: true })
-
-  await waitFor(() => expect(queryClient.getQueryState(pagesKey)?.fetchStatus).toBe('fetching'))
-  expect(joyrideMock.props?.run ?? false).toBe(false)
-})
-
-test('keeps an active walkthrough stable during a background graph refresh', async () => {
-  const queryClient = makeClient()
-  const graphKey = getApiV1ProjectsByNameTechnicalAeoGraphQueryKey({
-    client: heyClient,
-    path: { name: projectName },
-    query: { runId: 'run_1', maxNodes: 20_000, maxEdges: 50_000 },
-  })
-  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
-  renderSection(queryClient, { showOnboardingWalkthrough: true })
-  await waitFor(() => expect(joyrideMock.props?.run).toBe(true))
-
-  void queryClient.refetchQueries({ queryKey: graphKey, exact: true })
-
-  await waitFor(() => expect(queryClient.getQueryState(graphKey)?.fetchStatus).toBe('fetching'))
-  expect(joyrideMock.props?.run).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Review fixes' }))
+  expect(screen.getByText('Page health for run_1')).not.toBeNull()
+  expect(screen.getByRole('heading', { name: 'Next, see what answer engines say' })).not.toBeNull()
 })
 
 test('loads the complete inventory in 200-page batches', async () => {

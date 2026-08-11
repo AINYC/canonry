@@ -34,12 +34,21 @@ The revised recommendation is therefore:
 
     Domain
       → approved canonical Site Health scan
-      → map reveal and one exact page finding
-      → reviewed measurement scope
-      → demand and answer-engine evidence
-      → operating brief and monitoring
+      → map reveal and Page health fixes
+      → optional AI Visibility setup
+      → Home
 
 “Technical audit” is the action. The map is its first result. Do not insert a scorecard step between them.
+
+### Implementation decision: one explicit setup flow
+
+The shipped onboarding no longer enters the project shell and overlays a guided tour. First open stays on `/setup` and uses real product data in three explicit stages:
+
+1. **Site audit** creates the project and runs the canonical persisted crawl.
+2. **Review fixes** shows the retained map, inventory, and Page health findings.
+3. **AI Visibility** reuses the project-scoped visibility setup and can be skipped.
+
+Finishing or skipping AI Visibility replaces the setup route with `/` (Home). The exact project and Site Health run remain recoverable from URL and server state during setup. No local onboarding-complete flag or tutorial state is added, and graph-layout failure does not block Page health or the AI Visibility decision.
 
 ## Decision
 
@@ -56,7 +65,7 @@ The first UI experience should show Canonry's operating loop before asking the u
     Verify the result and keep watching
         ↺
 
-The domain is the opening input. Canonry should create a minimal project, run an approved provider-free Site Health scan, and enter the normal project shell while the scan runs. The visual map is the first retained proof that Canonry understands the site as a system rather than a domain string.
+The domain is the opening input. Canonry creates a minimal project and runs an approved provider-free Site Health scan while the operator remains in the focused `/setup` flow. The visual map is the first retained proof that Canonry understands the site as a system rather than a domain string.
 
 The destination is not “setup complete” or a raw visibility count. It is an operating brief that answers:
 
@@ -205,43 +214,15 @@ Use the real canonical Site Health run with the existing server defaults: 1,000 
 
 The map is published only when the crawl reaches a terminal complete or partial state because layout is calculated and persisted server-side. While it runs, show truthful stages and live counts, not a fake progressive graph or percentage. If layout or WebGL is unavailable, the page inventory and exact technical evidence remain the equivalent continuation path.
 
-## Replace the wizard with an activation workbench
+## Use one explicit setup surface
 
-After the domain is accepted, create the minimal project and reveal the normal project shell immediately, with Site Health as the active destination.
+After the domain is accepted, keep the operator on `/setup` through three visible stages:
 
-    ACME.COM                                       Building operating picture
+    Site audit  →  Review fixes  →  AI Visibility (optional)  →  Home
 
-    AI Visibility  Search Engines  Activity  Site Health  Query Discovery
+The Site audit stage shows real persisted crawl progress. A complete or partial terminal crawl advances to Review fixes, where the retained map, page inventory, and Page health findings are available without a guided overlay. Graph or WebGL failure falls back to the inventory and does not block the Page health review.
 
-    Map and check this site                    Evidence readiness
-
-    ✓ Workspace created                       Site structure    Running
-      example.com                             Technical checks  Running
-
-    1 Scan and map the public site            Search demand     Later
-      Discovering pages and internal links    AI visibility     Needs engine
-      86 pages found · 42 checked              Traffic outcomes  Connect later
-
-    2 Review the map and one finding
-    3 Build the measurement scope
-    4 Add demand and observe an answer engine
-    5 Review the operating brief and decide what to watch
-
-When the scan finishes, the map replaces the progress state in the same surface. Only the active mission expands. The remaining missions stay visible as a compact map of the operating system being assembled.
-
-The normal Site Health page already has the right result hierarchy: Map first, Inventory second, Technical checks third. Onboarding should reuse that product model. Do not show the aggregate scorecard before the visual map.
-
-Use product-level states:
-
-- Available
-- Ready
-- Needs connection
-- Needs data
-- Running
-- Blocked
-- Not applicable
-
-Never show 0% for a signal that has not been measured.
+AI Visibility then reuses the existing project-scoped provider, query, competitor, and first-sweep setup. It is explicitly optional. Finishing or skipping replaces setup history with `/`, so Back does not reopen onboarding.
 
 ### Demand is a mission, not onboarding itself
 
@@ -502,9 +483,9 @@ Do not claim the browser can execute a capability that exists only through CLI/A
 
 ### Scope verdict
 
-Build this as an additive project-activation layer, not as a second onboarding application.
+Build this as an additive setup orchestration layer over existing persisted project, Site Health, and AI Visibility state.
 
-The implementation keeps the existing `/setup` and project routes, creates a real project before any provider work, and moves the operator into the normal project shell immediately. Site Health is the first active project surface. After the map is reviewed, the workbench continues into measurement scope, demand, answer evidence, and the operating brief.
+The implementation keeps the existing `/setup` and project routes, creates a real project before any provider work, and remains on the focused setup surface through the audit, fixes, and optional visibility stages. It enters the normal shell only after setup exits to Home.
 
 Six decisions keep the change inside Canonry's current architecture:
 
@@ -523,16 +504,10 @@ flowchart LR
   P --> S["Approved canonical Site Health scan"]
   S --> X["Terminal exact-run map + page finding"]
   X --> D["Existing site_crawl_* evidence + graph layout"]
-  X --> M["Reviewed site scope draft"]
-  D --> C["Capabilities composite"]
-  D --> B["Deterministic operating brief"]
-  C --> W["Activation workbench"]
-  B --> W
-  M --> Q["Demand missions"]
-  Q --> R["Approved answer baseline"]
-  R --> D
-  W --> H["Schedule and notification decision"]
-  B -. "after evidence" .-> A["Aero or external agent"]
+  X --> F["Review Page health fixes"]
+  F --> V["Optional AI Visibility setup"]
+  V --> H["Home"]
+  F --> H
 ```
 
 ### Route and state model
@@ -542,10 +517,10 @@ Keep one route flow:
     / with zero projects
       → /setup
       → create project and request approved Site Health scan
-      → /projects/:name/technical-aeo
-      → terminal map, exact finding, and measurement-scope handoff
-      → activation workbench on the normal project shell
-      → permanent operating brief on Overview
+      → remain on /setup with the exact project and Site Health run
+      → terminal map, inventory, and Page health review
+      → optional project-scoped AI Visibility setup
+      → / (Home)
 
 Do not add an `/onboarding/*` route tree. Reloads, server restarts, CLI-created projects, and API-created evidence must all resume from the same durable state.
 
@@ -819,16 +794,14 @@ Create these state boundaries:
 
 Before adding more hooks, extract the current Overview branch from `ProjectPage.tsx` into `ProjectOverviewSurface.tsx`. `ProjectPageContent` already coordinates a large hook graph and has a dedicated loading shell to prevent conditional-hook failures.
 
-Do not embed the entire current `SiteHealthSection` inside Setup. It owns history, scan controls, three views, inventory pagination, dead links, the technical scorecard, and perpetual run polling. Extract a presentational `SiteMapExplorer` and reuse the existing `SiteGraphSigma`, `site-graph-sigma` adapter, and `PageAuditEvidence`. Keep the canonical Site Health page behavior unchanged.
-
-Lazy-load the map reveal. `SetupPage` is currently eager, while Sigma/Graphology/WebGL belong only after a scan succeeds. The reveal also needs a wider surface than the current `max-w-3xl` setup shell. Preserve Inventory as the accessible and WebGL-unavailable fallback, respect reduced motion, and keep hover content inside narrow viewports.
+Lazy-load the explicit Site Health result surface so Sigma, Graphology, and WebGL stay out of the initial setup chunk. In onboarding mode, reuse `SiteHealthSection` while hiding history and ordinary scan controls, exposing only persisted progress, map/inventory, Page health, retry, and continuation actions. Preserve Inventory as the accessible and WebGL-unavailable fallback.
 
 Modify the existing surfaces as follows:
 
 - `SetupPage.tsx` becomes a runtime-selected legacy or platform route container. The platform branch contains no provider, query, competitor, or run gate before project creation.
-- `App.tsx` keeps the first input visually focused, but restores the normal project shell immediately after project creation. The launchpad itself must show the operating loop; an empty sidebar is not the capability story.
+- `App.tsx` keeps every `/setup` stage focused. Project-list refreshes must not make the normal shell appear mid-flow.
 - `routes.tsx` validates `experience` and honors `?experience=legacy` only on `/setup`; the typed router must not silently discard the rescue switch.
-- `ProjectPage.tsx` can enter Site Health first during activation, then renders the workbench and permanent operating brief before existing visibility sections and outside the Advanced Measurement landing wrapper.
+- `ProjectPage.tsx` remains the normal post-setup product surface and does not own onboarding state or guided-tour behavior.
 - `AeroBar.tsx` exposes the command bar only after first evidence when agent mode is enabled and an agent provider is configured. This is stored readiness, not a live credential guarantee; operation errors remain recoverable. Before that, readiness copy explains its role.
 - `run-invalidations.ts` and connection/query/schedule mutations invalidate the capability and brief composites.
 - The generated API client is mandatory for every new web request; no raw `fetch()` is added.
@@ -904,9 +877,9 @@ Add a runtime mode such as:
     dashboard.onboardingMode: legacy | platform | auto
     CANONRY_ONBOARDING_MODE=legacy|platform|auto
 
-Environment overrides config. `auto` selects the platform experience only after a successful authoritative project-list read reports zero projects; a read failure is an error, not “empty.” Inject the resolved value into `window.__CANONRY_CONFIG__`; do not use a build-time `VITE_*` flag because the OSS package ships one bundled SPA.
+Environment overrides config. `auto` selects the platform experience only after a successful authoritative project-list read reports zero projects; a read failure is an error, not “empty.” Fresh browser sessions default to `auto` when no mode is injected. An explicit runtime value in `window.__CANONRY_CONFIG__` overrides that default; do not use a build-time `VITE_*` flag because the OSS package ships one bundled SPA.
 
-Keep the existing mode as the default while dark APIs and the platform UI land. Retain a rescue `?experience=legacy` path for at least one minor release after platform becomes default.
+Retain `?experience=legacy` as the rescue path for operators who need the established wizard.
 
 Preserve onboarding telemetry V1 and its callback unchanged. Add a strict V2 activation schema, a separate `POST /api/v1/telemetry/activation` transport/callback, and separate event names:
 
@@ -1247,7 +1220,7 @@ Existing gcloud authentication does not automatically become a durable Canonry G
 13. Define product activation as an explicitly enabled evidence/site monitoring schedule.
 14. Keep Google OAuth mechanics in implementation scope, not the product headline.
 15. Keep derived activation state migration-free in the first release.
-16. Ship behind a runtime OSS flag with a legacy rescue path.
+16. Default fresh browser sessions to `auto`, preserve runtime overrides, and keep the legacy rescue path.
 17. Block automatic first-run scanning on end-to-end public-fetch verification.
 
 ## Remaining questions and blocking spikes

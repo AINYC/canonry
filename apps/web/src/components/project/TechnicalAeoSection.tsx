@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ChevronDown, ChevronRight, LoaderCircle, Play, RefreshCw, ScanSearch } from 'lucide-react'
 import type { MetricTone } from '../../view-models.js'
@@ -94,6 +94,8 @@ export function TechnicalAeoSection({
   projectId,
   runId,
   integrated = false,
+  footer,
+  unavailableFooter,
 }: {
   projectName: string
   projectId: string
@@ -101,6 +103,10 @@ export function TechnicalAeoSection({
   runId?: string | null
   /** Hide duplicate history and run controls when rendered inside Site Health. */
   integrated?: boolean
+  /** Rendered only after persisted Page health evidence has loaded successfully. */
+  footer?: ReactNode
+  /** Rendered after an unavailable/error state so a parent flow can recover. */
+  unavailableFooter?: ReactNode
 }) {
   const [errorsOnly, setErrorsOnly] = useState(false)
   const [expandedFactor, setExpandedFactor] = useState<string | null>(null)
@@ -257,33 +263,36 @@ export function TechnicalAeoSection({
 
   if (scoreQuery.error) {
     return (
-      <section
-        className={`flex flex-col gap-4 rounded-lg border border-negative bg-negative-soft px-5 py-5 sm:flex-row sm:items-center sm:justify-between ${integrated ? '' : 'mt-6'}`}
-        role="alert"
-      >
-        <div className="flex min-w-0 gap-3">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-negative" aria-hidden="true" />
-          <div>
-            {integrated ? (
-              <h3 className="font-semibold text-negative">Page health could not load</h3>
-            ) : (
-              <h2 className="font-semibold text-negative">Page health could not load</h2>
-            )}
-            <p className="mt-1 text-sm text-secondary">The saved audit could not be read. Try loading it again.</p>
-          </div>
-        </div>
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          className="shrink-0"
-          onClick={() => void handleManualRefresh()}
-          disabled={isManualRefreshing}
+      <>
+        <section
+          className={`flex flex-col gap-4 rounded-lg border border-negative bg-negative-soft px-5 py-5 sm:flex-row sm:items-center sm:justify-between ${integrated ? '' : 'mt-6'}`}
+          role="alert"
         >
-          <RefreshCw className={`size-4 ${isManualRefreshing ? 'motion-safe:animate-spin' : ''}`} aria-hidden="true" />
-          {isManualRefreshing ? 'Trying again...' : 'Try again'}
-        </Button>
-      </section>
+          <div className="flex min-w-0 gap-3">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-negative" aria-hidden="true" />
+            <div>
+              {integrated ? (
+                <h3 className="font-semibold text-negative">Page health could not load</h3>
+              ) : (
+                <h2 className="font-semibold text-negative">Page health could not load</h2>
+              )}
+              <p className="mt-1 text-sm text-secondary">The saved audit could not be read. Try loading it again.</p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="shrink-0"
+            onClick={() => void handleManualRefresh()}
+            disabled={isManualRefreshing}
+          >
+            <RefreshCw className={`size-4 ${isManualRefreshing ? 'motion-safe:animate-spin' : ''}`} aria-hidden="true" />
+            {isManualRefreshing ? 'Trying again...' : 'Try again'}
+          </Button>
+        </section>
+        {unavailableFooter}
+      </>
     )
   }
 
@@ -291,13 +300,16 @@ export function TechnicalAeoSection({
   if (!score || !score.hasData) {
     if (integrated) {
       return (
-        <section className="rounded-lg border border-default bg-surface-subtle px-5 py-7 text-center">
-          <ScanSearch className="mx-auto size-7 text-muted" aria-hidden="true" />
-          <h2 className="mt-3 text-base font-semibold text-heading">Page health unavailable</h2>
-          <p className="mx-auto mt-2 max-w-md text-sm text-secondary">
-            Run a new Site Health scan to calculate page-level technical findings.
-          </p>
-        </section>
+        <>
+          <section className="rounded-lg border border-default bg-surface-subtle px-5 py-7 text-center">
+            <ScanSearch className="mx-auto size-7 text-muted" aria-hidden="true" />
+            <h2 className="mt-3 text-base font-semibold text-heading">Page health unavailable</h2>
+            <p className="mx-auto mt-2 max-w-md text-sm text-secondary">
+              Run a new Site Health scan to calculate page-level technical findings.
+            </p>
+          </section>
+          {unavailableFooter}
+        </>
       )
     }
     return (
@@ -816,6 +828,7 @@ export function TechnicalAeoSection({
         )}
       </section>
       ) : null}
+      {footer}
     </div>
   )
 }

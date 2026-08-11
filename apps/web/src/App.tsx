@@ -418,17 +418,10 @@ export function RootLayout() {
   // While loading or dashboard not yet available, use context data or null (no mock fallback)
   const safeDashboard = dashboard ?? contextDashboard?.dashboard ?? null
 
-  // First-run focus mode: hide the sidebar on /setup when the user has zero
-  // projects. The sidebar's nav items (Portfolio / Projects / Runs / Traffic
-  // sources / Backlink data / Settings) point at surfaces that don't have any
-  // data yet — showing them adds visual noise + shrinks the wizard's
-  // available real estate. Once they create their first project the
-  // sidebar comes back automatically (intentional "you've made it into the
-  // app" moment).
-  const isFirstRunSetup = location.pathname === '/setup'
-    && safeDashboard !== null
-    && safeDashboard.portfolioOverview.projects.length === 0
-  const shellModifier = isFirstRunSetup
+  // Setup is one focused surface from project creation through the optional
+  // AI Visibility stage. Project-list refreshes must not toggle the shell.
+  const isFocusedSetup = location.pathname === '/setup'
+  const shellModifier = isFocusedSetup
     ? 'app-shell-focus'
     : sidebarHidden
       ? 'app-shell-sidebar-hidden'
@@ -530,7 +523,7 @@ export function RootLayout() {
       </a>
 
       {/* ── Sidebar (desktop) ── */}
-      {!isFirstRunSetup && !sidebarHidden && (
+      {!isFocusedSetup && !sidebarHidden && (
       <aside id="desktop-sidebar" className="sidebar" aria-label="Primary navigation">
         <div className="sidebar-brand">
           <BrandLockup
@@ -701,7 +694,7 @@ export function RootLayout() {
         {/* Topbar */}
         <header className="topbar">
           <div className="topbar-left">
-            {!isFirstRunSetup && (
+            {!isFocusedSetup && (
               <Button
                 className="sidebar-privacy-toggle"
                 variant="ghost"

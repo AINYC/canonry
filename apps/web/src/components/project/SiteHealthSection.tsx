@@ -1,7 +1,4 @@
 import {
-  lazy,
-  Suspense,
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -10,7 +7,6 @@ import {
   type ReactNode,
 } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import type { EventData as JoyrideEventData, Options as JoyrideOptions, Step as JoyrideStep, Styles as JoyrideStyles } from 'react-joyride'
 import {
   AlertTriangle,
   ChevronDown,
@@ -67,79 +63,12 @@ import { displayPagePath, siteHostFromUrl } from './site-health-paths.js'
 import { PageAuditEvidence } from './PageAuditEvidence.js'
 import { TechnicalAeoSection } from './TechnicalAeoSection.js'
 import { WriteButton } from '../shared/AccessControls.js'
+import { OnboardingProgress } from '../shared/OnboardingProgress.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { Button } from '../ui/button.js'
 
 type SiteHealthView = 'map' | 'inventory' | 'technical'
-
-const LazyJoyride = lazy(async () => {
-  const module = await import('react-joyride')
-  return { default: module.Joyride }
-})
-
-const SITE_HEALTH_WALKTHROUGH_OPTIONS = {
-  arrowColor: 'var(--color-bg-elevated)',
-  backgroundColor: 'var(--color-bg-elevated)',
-  blockTargetInteraction: false,
-  buttons: ['back', 'close', 'primary', 'skip'],
-  closeButtonAction: 'skip',
-  dismissKeyAction: false,
-  overlayClickAction: false,
-  overlayColor: 'color-mix(in srgb, var(--color-overlay-scrim) 68%, transparent)',
-  primaryColor: 'var(--color-mono-100)',
-  showProgress: true,
-  skipBeacon: true,
-  spotlightPadding: 8,
-  spotlightRadius: 8,
-  targetWaitTimeout: 2_500,
-  textColor: 'var(--color-text-primary)',
-  width: 360,
-  zIndex: 1200,
-} satisfies Partial<JoyrideOptions>
-
-const SITE_HEALTH_WALKTHROUGH_STYLES = {
-  buttonBack: {
-    borderRadius: 6,
-    color: 'var(--color-text-primary)',
-    fontSize: 14,
-    fontWeight: 500,
-    padding: '8px 12px',
-  },
-  buttonPrimary: {
-    borderRadius: 6,
-    color: 'var(--color-on-inverse)',
-    fontSize: 14,
-    fontWeight: 600,
-    padding: '8px 12px',
-  },
-  buttonSkip: {
-    color: 'var(--color-text-secondary)',
-    fontSize: 14,
-  },
-  floater: {
-    filter: 'drop-shadow(0 12px 28px var(--color-shadow-panel))',
-  },
-  tooltip: {
-    border: '1px solid var(--color-border-strong)',
-    borderRadius: 8,
-    padding: 16,
-  },
-  tooltipContainer: {
-    textAlign: 'left',
-  },
-  tooltipContent: {
-    color: 'var(--color-text-secondary)',
-    fontSize: 14,
-    paddingBottom: 16,
-    paddingTop: 8,
-  },
-  tooltipTitle: {
-    color: 'var(--color-text-heading)',
-    fontSize: 16,
-    fontWeight: 600,
-  },
-} satisfies Partial<JoyrideStyles>
 
 // The `inventory` id is the stable wire/route token. Only the label reads
 // "Pages"; nothing keyed off the id changes with it.
@@ -1272,15 +1201,14 @@ function TerminalScanRecoveryState({
   )
 }
 
-export type SiteHealthOnboardingOutcome = 'finished' | 'dismissed'
-
 export function SiteHealthSection({
   projectName,
   projectId,
   initialRunId,
   onReleaseInitialRun,
-  showOnboardingWalkthrough = false,
-  onCompleteOnboardingWalkthrough,
+  showOnboardingActions = false,
+  onContinueOnboarding,
+  onSkipOnboarding,
 }: {
   projectName: string
   projectId: string
@@ -1288,10 +1216,12 @@ export function SiteHealthSection({
   initialRunId?: string
   /** Clears an onboarding handoff from durable route state before a replacement scan. */
   onReleaseInitialRun?: () => void
-  /** Starts the post-scan guide after the onboarding crawl publishes usable evidence. */
-  showOnboardingWalkthrough?: boolean
-  /** Continues into visibility setup on finish, or clears onboarding intent on dismissal. */
-  onCompleteOnboardingWalkthrough?: (outcome: SiteHealthOnboardingOutcome) => void
+  /** Reserved for the explicit post-scan onboarding flow. */
+  showOnboardingActions?: boolean
+  /** Continues the explicit onboarding flow. */
+  onContinueOnboarding?: () => void
+  /** Leaves the explicit onboarding flow. */
+  onSkipOnboarding?: () => void
 }) {
   const [view, setView] = useState<SiteHealthView>('map')
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -1305,18 +1235,11 @@ export function SiteHealthSection({
    * page, so drawing them buries the structure this view exists to show. The
    * server sends both kinds tagged, so this only changes what is DRAWN: node
    * positions were computed without template links and never move.
-   */
+  */
   const [showTemplateLinks, setShowTemplateLinks] = useState(false)
-  const [walkthroughDismissed, setWalkthroughDismissed] = useState(false)
-  const walkthroughCompleted = useRef(false)
   const embedded = isEmbed()
+  const explicitOnboarding = showOnboardingActions && !embedded
   const runMutation = useTriggerSiteAudit()
-
-  useEffect(() => {
-    if (!showOnboardingWalkthrough) return
-    walkthroughCompleted.current = false
-    setWalkthroughDismissed(false)
-  }, [showOnboardingWalkthrough])
 
   useEffect(() => {
     const previous = previousInitialRunId.current
@@ -1343,7 +1266,12 @@ export function SiteHealthSection({
   const activeAudit = auditScans.find((scan) => scan.status === 'queued' || scan.status === 'running')
   const latestTerminalAudit = auditScans
     .find((scan) => scan.status === 'completed' || scan.status === 'partial')
-  const requestedRunId = selectedRunId ?? latestTerminalAudit?.runId ?? activeAudit?.runId ?? null
+  // During explicit setup, a replacement scan is the current work. Prefer it
+  // over a terminal no-crawl result so retry cannot strand the operator on
+  // stale evidence while the new scan progresses.
+  const requestedRunId = selectedRunId ?? (explicitOnboarding
+    ? activeAudit?.runId ?? latestTerminalAudit?.runId
+    : latestTerminalAudit?.runId ?? activeAudit?.runId) ?? null
   const activeRunWithoutPublishedMap = activeAudit?.runId === requestedRunId ? activeAudit : null
   const requestedAuditRun = requestedRunId
     ? auditScans.find((scan) => scan.runId === requestedRunId)
@@ -1622,85 +1550,11 @@ export function SiteHealthSection({
   )
   const scanBusy = runMutation.isPending || Boolean(activeAudit) || exactProgressActive || exactProgressPending
   const showProgressState = deferTerminalEvidence
-  const hasUsableSiteEvidence = Boolean(
-    crawl?.hasCrawlData
-    && crawl.detailsAvailable
-    && (graphPages.length > 0 || inventoryPages.length > 0),
-  )
-  const walkthroughGraphSettled = graphQuery.isSuccess || graphQuery.isError
-  const walkthroughHasReadyMap = graphQuery.data?.layout.state === 'ready' && graphPages.length > 0
-  const walkthroughHasReadyInventory = pagesQuery.isSuccess && inventoryPages.length > 0
-  const walkthroughSteps = useMemo<Array<JoyrideStep>>(() => [
-    walkthroughHasReadyMap
-      ? {
-          id: 'site-map-ready',
-          target: '#site-health-map-explorer',
-          placement: 'top',
-          title: 'Your site map is ready',
-          content: 'See the pages Canonry found and the internal links between them. Click any page to inspect its evidence.',
-          before: async () => { setView('map') },
-        }
-      : {
-          id: 'page-inventory-ready',
-          target: '#site-health-inventory-tab',
-          placement: 'bottom',
-          title: 'Your page inventory is ready',
-          content: 'Review every page Canonry found, its crawl status, and its internal links.',
-          before: async () => { setView('inventory') },
-        },
-    {
-      id: 'page-health',
-      target: '#site-health-technical-tab',
-      placement: 'bottom',
-      title: 'Review page health',
-      content: 'See which checks need attention, which pages are affected, and how to improve them.',
-      before: async () => { setView('technical') },
-    },
-    {
-      id: 'ai-visibility',
-      target: 'body',
-      placement: 'center',
-      title: 'See what answer engines say',
-      content: 'Technical fixes can make your site easier to crawl and understand. AI Visibility measures whether answer engines mention your brand and cite your pages for the queries you choose to track.',
-    },
-  ], [walkthroughHasReadyMap])
-  const walkthroughRunning = Boolean(
-    showOnboardingWalkthrough
-    && !embedded
-    && hasUsableSiteEvidence
-    && walkthroughGraphSettled
-    && (walkthroughHasReadyMap || walkthroughHasReadyInventory)
-    && !walkthroughDismissed,
-  )
-  const completeOnboardingWalkthrough = useCallback((outcome: SiteHealthOnboardingOutcome) => {
-    if (walkthroughCompleted.current) return
-    walkthroughCompleted.current = true
-    setWalkthroughDismissed(true)
-    onCompleteOnboardingWalkthrough?.(outcome)
-  }, [onCompleteOnboardingWalkthrough])
-  const handleWalkthroughEvent = useCallback((event: JoyrideEventData) => {
-    if (event.type === 'tour:end' && event.status === 'finished') {
-      completeOnboardingWalkthrough('finished')
-      return
-    }
-    if (event.action === 'close' || event.action === 'skip' || (event.type === 'tour:end' && event.status === 'skipped')) {
-      completeOnboardingWalkthrough('dismissed')
-    }
-  }, [completeOnboardingWalkthrough])
+  const siteAuditReady = Boolean(crawl?.hasCrawlData && !deferTerminalEvidence)
   useEffect(() => {
-    if (!walkthroughRunning) return
-    // In a continuous Joyride, its built-in Escape "close" collapses only the
-    // current step. Canonry treats Escape as dismissing the whole walkthrough.
-    const handleEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') completeOnboardingWalkthrough('dismissed')
-    }
-    document.addEventListener('keydown', handleEscape)
-    return () => { document.removeEventListener('keydown', handleEscape) }
-  }, [completeOnboardingWalkthrough, walkthroughRunning])
-  const reduceWalkthroughMotion = typeof window !== 'undefined'
-    && typeof window.matchMedia === 'function'
-    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-
+    if (explicitOnboarding && !siteAuditReady && view !== 'map') setView('map')
+  }, [explicitOnboarding, siteAuditReady, view])
+  const transientView = view === 'technical' ? 'map' : view
   const selectRun = (runId: string) => {
     setSelectedRunId(runId || null)
     setSelectedNodeKey(null)
@@ -1724,7 +1578,12 @@ export function SiteHealthSection({
   }
 
   const selectView = (nextView: SiteHealthView) => setView(nextView)
+  const reviewFixes = () => {
+    setView('technical')
+    requestAnimationFrame(() => { tabRefs.current[2]?.focus() })
+  }
   const handleViewKeyDown = (event: KeyboardEvent<HTMLButtonElement>, currentIndex: number) => {
+    if (explicitOnboarding && !siteAuditReady) return
     let nextIndex: number | null = null
     if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
       nextIndex = (currentIndex + 1) % SITE_HEALTH_VIEWS.length
@@ -1743,29 +1602,7 @@ export function SiteHealthSection({
 
   return (
     <div className="space-y-5">
-      {showOnboardingWalkthrough && !embedded && (
-        <Suspense fallback={null}>
-          <LazyJoyride
-            continuous
-            locale={{
-              back: 'Back',
-              close: 'Close walkthrough',
-              last: 'Set up AI Visibility',
-              nextWithProgress: 'Next ({current} of {total})',
-              skip: 'Skip walkthrough',
-            }}
-            onEvent={handleWalkthroughEvent}
-            options={{
-              ...SITE_HEALTH_WALKTHROUGH_OPTIONS,
-              scrollDuration: reduceWalkthroughMotion ? 0 : 300,
-            }}
-            run={walkthroughRunning}
-            scrollToFirstStep
-            steps={walkthroughSteps}
-            styles={SITE_HEALTH_WALKTHROUGH_STYLES}
-          />
-        </Suspense>
-      )}
+      {explicitOnboarding ? <OnboardingProgress current={siteAuditReady ? 'fixes' : 'site'} /> : null}
       <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
         <div>
           <div className="flex flex-wrap items-center gap-3">
@@ -1778,7 +1615,7 @@ export function SiteHealthSection({
           <p className="mt-1 text-sm text-secondary">{SITE_HEALTH_VIEW_DESCRIPTIONS[view]}</p>
         </div>
 
-        <div className="flex flex-wrap items-start gap-2">
+        {!explicitOnboarding && <div className="flex flex-wrap items-start gap-2">
           <label className="grid gap-1 text-xs text-muted">
             Scan history
             <select
@@ -1824,7 +1661,7 @@ export function SiteHealthSection({
               </WriteButton>
             </div>
           )}
-        </div>
+        </div>}
       </header>
 
       {crawl?.hasCrawlData && view !== 'technical' && (
@@ -1857,6 +1694,20 @@ export function SiteHealthSection({
         </div>
       )}
 
+      {explicitOnboarding && siteAuditReady && view !== 'technical' && (
+        <section aria-labelledby="site-audit-complete-heading" className="flex flex-col gap-4 border-y border-default py-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="max-w-2xl">
+            <h2 id="site-audit-complete-heading" className="text-base font-semibold text-heading">
+              {crawl?.complete ? 'Site audit complete' : 'Site audit finished with partial coverage'}
+            </h2>
+            <p className="mt-1 text-sm text-secondary">
+              Canonry mapped {metricValue(crawl?.counts.pagesDiscovered ?? 0)} pages. Review Page health to see the checks that need attention and the pages they affect.
+            </p>
+          </div>
+          <Button type="button" className="shrink-0" onClick={reviewFixes}>Review fixes</Button>
+        </section>
+      )}
+
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-default">
         <div role="tablist" aria-label="Site Health views" aria-orientation="horizontal" className="flex min-w-0 gap-5">
           {SITE_HEALTH_VIEWS.map((item, index) => (
@@ -1867,11 +1718,12 @@ export function SiteHealthSection({
               id={`site-health-${item.id}-tab`}
               aria-selected={view === item.id}
               aria-controls={`site-health-${item.id}-panel`}
+              disabled={explicitOnboarding && !siteAuditReady && item.id !== 'map'}
               tabIndex={view === item.id ? 0 : -1}
               ref={(element) => { tabRefs.current[index] = element }}
               onClick={() => selectView(item.id)}
               onKeyDown={(event) => handleViewKeyDown(event, index)}
-              className={`min-h-11 border-b-2 px-0.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-mono-400 ${
+              className={`min-h-11 border-b-2 px-0.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-mono-400 disabled:cursor-not-allowed disabled:opacity-50 ${
                 view === item.id
                   ? 'border-strong text-heading'
                   : 'border-transparent text-secondary hover:border-base hover:text-primary'
@@ -1913,17 +1765,8 @@ export function SiteHealthSection({
         </div>
       )}
 
-      {view === 'technical' ? (
-        <div id="site-health-technical-panel" role="tabpanel" aria-labelledby="site-health-technical-tab" className="min-w-0">
-          <TechnicalAeoSection
-            projectName={projectName}
-            projectId={projectId}
-            runId={resolvedRunId}
-            integrated
-          />
-        </div>
-      ) : recoveryPhase ? (
-        <TransientSiteHealthPanel view={view}>
+      {recoveryPhase ? (
+        <TransientSiteHealthPanel view={transientView}>
           <TerminalScanRecoveryState
             phase={recoveryPhase}
             progress={activeProgressQuery.data}
@@ -1931,7 +1774,7 @@ export function SiteHealthSection({
           />
         </TransientSiteHealthPanel>
       ) : showProgressState ? (
-        <TransientSiteHealthPanel view={view}>
+        <TransientSiteHealthPanel view={transientView}>
           <ActiveScanState
             status={activeProgressQuery.data?.phase ?? (activeRunWithoutPublishedMap?.status === 'running' ? 'running' : 'queued')}
             progress={activeProgressQuery.data}
@@ -1939,6 +1782,53 @@ export function SiteHealthSection({
             onRetryProgress={() => { void activeProgressQuery.refetch() }}
           />
         </TransientSiteHealthPanel>
+      ) : view === 'technical' ? (
+        <div id="site-health-technical-panel" role="tabpanel" aria-labelledby="site-health-technical-tab" className="min-w-0 space-y-6">
+          <TechnicalAeoSection
+            projectName={projectName}
+            projectId={projectId}
+            runId={resolvedRunId}
+            integrated
+            footer={explicitOnboarding && siteAuditReady ? (
+              <section aria-labelledby="ai-visibility-next-heading" className="mt-6 flex flex-col gap-5 border-t border-default pt-6 sm:flex-row sm:items-end sm:justify-between">
+                <div className="max-w-2xl">
+                  <h2 id="ai-visibility-next-heading" className="text-base font-semibold text-heading">Next, see what answer engines say</h2>
+                  <p className="mt-2 text-sm leading-6 text-secondary">
+                    Page health shows the onsite fixes that help crawlers and answer engines understand your content. AI Visibility shows whether answer engines mention your brand and cite your pages for the queries you choose.
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <Button type="button" onClick={onContinueOnboarding}>Set up AI Visibility</Button>
+                  <Button type="button" variant="secondary" onClick={onSkipOnboarding}>Skip for now</Button>
+                </div>
+              </section>
+            ) : undefined}
+            unavailableFooter={explicitOnboarding && siteAuditReady ? (
+              <section aria-labelledby="page-health-recovery-heading" className="mt-6 flex flex-col gap-5 border-t border-default pt-6 sm:flex-row sm:items-end sm:justify-between">
+                <div className="max-w-2xl">
+                  <h3 id="page-health-recovery-heading" className="text-base font-semibold text-heading">Continue setup without Page health</h3>
+                  <p className="mt-2 text-sm leading-6 text-secondary">
+                    Run the site audit again to retry these checks, or continue to the optional AI Visibility setup.
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    disabled={scanBusy}
+                    onClick={() => {
+                      setView('map')
+                      startScan()
+                    }}
+                  >
+                    Run site audit again
+                  </Button>
+                  <Button type="button" variant="secondary" onClick={onContinueOnboarding}>Set up AI Visibility</Button>
+                  <Button type="button" variant="secondary" onClick={onSkipOnboarding}>Finish for now</Button>
+                </div>
+              </section>
+            ) : undefined}
+          />
+        </div>
       ) : crawlQuery.isLoading ? (
         <TransientSiteHealthPanel view={view}>
           <div className="flex min-h-72 items-center justify-center gap-2 text-sm text-secondary" role="status">
@@ -1965,8 +1855,15 @@ export function SiteHealthSection({
                   ? 'A full-site scan has not been run for this project.'
                   : 'Run a scan to discover pages, site sections, and internal links.'}
             </p>
-            {crawl?.legacyAuditAvailable && (
-              <Button variant="secondary" size="sm" className="mt-4" onClick={() => setView('technical')}>View page health</Button>
+            {(crawl?.legacyAuditAvailable || explicitOnboarding) && (
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                {crawl?.legacyAuditAvailable && (
+                  <Button variant="secondary" size="sm" onClick={() => setView('technical')}>View page health</Button>
+                )}
+                {explicitOnboarding && (
+                  <Button type="button" size="sm" onClick={startScan}>Run scan again</Button>
+                )}
+              </div>
             )}
           </section>
         </TransientSiteHealthPanel>

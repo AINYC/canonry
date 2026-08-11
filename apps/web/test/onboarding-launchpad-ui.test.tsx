@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, expect, onTestFinished, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 import { getApiV1ProjectsQueryKey } from '@ainyc/canonry-api-client/react-query'
@@ -12,6 +12,33 @@ import { preloadAllLazyRoutes } from '../src/router/routes.js'
 import { getRunTrackerState, resetRunTracker } from '../src/lib/run-tracker-store.js'
 import { getToasts, resetToasts } from '../src/lib/toast-store.js'
 import { jsonResponse, mockFetch, pathOf } from './mock-fetch.js'
+
+vi.mock('../src/components/project/SiteHealthSection.js', () => ({
+  SiteHealthSection: ({
+    projectName,
+    projectId,
+    initialRunId,
+    showOnboardingActions,
+    onReleaseInitialRun,
+    onContinueOnboarding,
+    onSkipOnboarding,
+  }: {
+    projectName: string
+    projectId: string
+    initialRunId?: string
+    showOnboardingActions?: boolean
+    onReleaseInitialRun?: () => void
+    onContinueOnboarding?: () => void
+    onSkipOnboarding?: () => void
+  }) => (
+    <section aria-label="Explicit Site Health">
+      <p>{`${projectName}:${projectId}:${initialRunId ?? 'latest'}:${String(showOnboardingActions)}`}</p>
+      <button type="button" onClick={onReleaseInitialRun}>Release initial scan</button>
+      <button type="button" onClick={onContinueOnboarding}>Continue onboarding</button>
+      <button type="button" onClick={onSkipOnboarding}>Skip onboarding</button>
+    </section>
+  ),
+}))
 
 const AGENT_SETUP_REQUEST = `Help me set up Canonry for my public site.
 
@@ -95,13 +122,18 @@ async function renderSetup(
   }
 }
 
-test('keeps the five-step setup when the runtime launchpad flag is absent', async () => {
+test('defaults a fresh install to the domain-first Site Health flow', async () => {
+  const restore = mockFetch((url) => pathOf(url) === '/api/v1/projects'
+    ? jsonResponse([])
+    : jsonResponse({}))
+  onTestFinished(restore)
+
   await renderSetup()
 
-  expect(await screen.findByText('Step 2 of 5')).toBeTruthy()
-  expect(screen.queryByRole('heading', { name: 'Map your site' })).toBeNull()
-  expect(screen.queryByText('Use your agent instead')).toBeNull()
-  expect(screen.queryByRole('button', { name: 'Copy setup request' })).toBeNull()
+  expect(await screen.findByRole('heading', { name: 'Map your site' })).toBeTruthy()
+  expect(screen.queryByText('Step 2 of 5')).toBeNull()
+  expect(screen.getByText('Use your agent instead')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Copy setup request' })).toBeTruthy()
 })
 
 test('the legacy rescue query wins over an enabled platform flag', async () => {
@@ -109,6 +141,107 @@ test('the legacy rescue query wins over an enabled platform flag', async () => {
   await renderSetup('/setup?experience=legacy')
 
   expect(await screen.findByText('Step 2 of 5')).toBeTruthy()
+})
+
+test('an explicit Site Health handoff wins over the configured legacy surface and resumes the exact run', async () => {
+  const restore = mockFetch((url) => {
+    if (pathOf(url) === '/api/v1/projects') {
+      return jsonResponse([{
+        id: 'project-example',
+        name: 'example-com',
+        displayName: 'Example',
+        canonicalDomain: 'example.com',
+        ownedDomains: [], aliases: [], country: 'US', language: 'en', tags: [], labels: {},
+        providers: [], providerModels: {}, locations: [], defaultLocation: null,
+        measurement: { marketingHosts: [], brandTerms: [], leadEventNames: [] },
+        autoExtractBacklinks: false, configSource: 'api', configRevision: 1,
+      }])
+    }
+    return jsonResponse([])
+  })
+  onTestFinished(restore)
+
+  const { router } = await renderSetup('/setup?onboarding=site-health&setupProject=example-com&siteHealthRunId=site-audit-1')
+
+  expect(await screen.findByRole('region', { name: 'Explicit Site Health' })).toBeTruthy()
+  expect(screen.getByText('example-com:project-example:site-audit-1:true')).toBeTruthy()
+  expect(screen.queryByText('Step 2 of 5')).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Release initial scan' }))
+  await waitFor(() => {
+    expect(router.state.location.search).toMatchObject({
+      onboarding: 'site-health',
+      setupProject: 'example-com',
+    })
+    expect(router.state.location.search).not.toHaveProperty('siteHealthRunId')
+  })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Continue onboarding' }))
+  await waitFor(() => {
+    expect(router.state.location.pathname).toBe('/setup')
+    expect(router.state.location.search).toMatchObject({
+      experience: 'legacy',
+      setupProject: 'example-com',
+      onboarding: 'site-health',
+    })
+    expect(router.state.location.search).not.toHaveProperty('siteHealthRunId')
+  })
+})
+
+test('the explicit Site Health handoff never falls back to a different project', async () => {
+  const restore = mockFetch((url) => pathOf(url) === '/api/v1/projects'
+    ? jsonResponse([{
+        id: 'project-different',
+        name: 'different-project',
+        displayName: 'Different',
+        canonicalDomain: 'different.example',
+        ownedDomains: [], aliases: [], country: 'US', language: 'en', tags: [], labels: {},
+        providers: [], providerModels: {}, locations: [], defaultLocation: null,
+        measurement: { marketingHosts: [], brandTerms: [], leadEventNames: [] },
+        autoExtractBacklinks: false, configSource: 'api', configRevision: 1,
+      }])
+    : jsonResponse([]))
+  onTestFinished(restore)
+
+  await renderSetup('/setup?onboarding=site-health&setupProject=missing-project&siteHealthRunId=site-audit-1')
+
+  expect(await screen.findByRole('heading', { name: 'Project not found' })).toBeTruthy()
+  expect(screen.getByText(/missing-project/)).toBeTruthy()
+  expect(screen.queryByRole('region', { name: 'Explicit Site Health' })).toBeNull()
+})
+
+test('a malformed AI Visibility handoff never falls back to the first project', async () => {
+  await renderSetup('/setup?experience=legacy&onboarding=site-health', {
+    mappedProjectName: 'different-project',
+  })
+
+  expect(await screen.findByRole('heading', { name: 'Project not found' })).toBeTruthy()
+  expect(screen.getByText('This setup link does not identify a project.')).toBeTruthy()
+  expect(screen.queryByText('Step 3 of 5')).toBeNull()
+})
+
+test('the explicit Site Health handoff can be skipped to Home', async () => {
+  const restore = mockFetch((url) => pathOf(url) === '/api/v1/projects'
+    ? jsonResponse([{
+        id: 'project-example',
+        name: 'example-com',
+        displayName: 'Example',
+        canonicalDomain: 'example.com',
+        ownedDomains: [], aliases: [], country: 'US', language: 'en', tags: [], labels: {},
+        providers: [], providerModels: {}, locations: [], defaultLocation: null,
+        measurement: { marketingHosts: [], brandTerms: [], leadEventNames: [] },
+        autoExtractBacklinks: false, configSource: 'api', configRevision: 1,
+      }])
+    : jsonResponse([]))
+  onTestFinished(restore)
+
+  const { router } = await renderSetup('/setup?onboarding=site-health&setupProject=example-com&siteHealthRunId=site-audit-1')
+  fireEvent.click(await screen.findByRole('button', { name: 'Skip onboarding' }))
+
+  await waitFor(() => {
+    expect(router.state.location.pathname).toBe('/')
+    expect(router.state.location.search).toEqual({})
+  })
 })
 
 test('continues a mapped project into the original AI Visibility setup flow', async () => {
@@ -218,6 +351,10 @@ test('auto waits for a successful authoritative empty project list before showin
   expect(screen.getByText('The crawl runs on this Canonry instance, follows internal links, and stores its results locally.')).toBeTruthy()
   expect(screen.queryByText('Allow Canonry to scan this public site and follow internal links.')).toBeNull()
   expect(screen.getByRole('button', { name: 'Map site' })).toBeTruthy()
+  const onboardingProgress = screen.getByRole('list', { name: 'Onboarding progress' })
+  expect(within(onboardingProgress).getByText('Site audit').closest('[aria-current="step"]')).toBeTruthy()
+  expect(within(onboardingProgress).getByText('AI Visibility')).toBeTruthy()
+  expect(within(onboardingProgress).getByText('Optional')).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Copy setup request' }).getAttribute('type')).toBe('button')
   expect(screen.queryByText(/The crawl does not call answer providers/i)).toBeNull()
   expect(screen.queryByText(/Aero is enabled/i)).toBeNull()
@@ -403,10 +540,19 @@ test('creates once, queues the canonical Site Health run, and hands off with exa
   fireEvent.click(screen.getByRole('button', { name: 'Map site' }))
 
   await waitFor(() => {
-    expect(router.state.location.pathname).toBe('/projects/example-com/technical-aeo')
+    expect(router.state.location.pathname).toBe('/setup')
+    expect(router.state.location.search).toMatchObject({
+      siteHealthRunId: 'site-audit-1',
+      onboarding: 'site-health',
+      setupProject: 'example-com',
+    })
   })
 
-  expect(router.state.location.search).toMatchObject({ siteHealthRunId: 'site-audit-1', onboarding: 'site-health' })
+  expect(router.state.location.search).toMatchObject({
+    siteHealthRunId: 'site-audit-1',
+    onboarding: 'site-health',
+    setupProject: 'example-com',
+  })
   expect(router.state.location.search).not.toHaveProperty('runId')
   expect(getRunTrackerState().runs['site-audit-1']).toMatchObject({
     projectId: 'project-example',
@@ -424,7 +570,7 @@ test('creates once, queues the canonical Site Health run, and hands off with exa
   expect(requests.some((request) => request.path.endsWith('/technical-aeo/runs') && request.method === 'POST')).toBe(true)
 })
 
-test('preserves a created project with retry and open-project recovery when dispatch fails', async () => {
+test('preserves a created project with retry and setup recovery when dispatch fails', async () => {
   window.__CANONRY_CONFIG__ = { dashboard: { onboardingMode: 'platform' } }
   const restore = mockFetch((url, init) => {
     const path = pathOf(url)
@@ -450,7 +596,7 @@ test('preserves a created project with retry and open-project recovery when disp
 
   expect(await screen.findByRole('heading', { name: 'Project created' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Retry Site Health scan' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Open project' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Continue setup' })).toBeTruthy()
   expect(getToasts().filter((toast) => toast.tone === 'negative')).toHaveLength(0)
 })
 

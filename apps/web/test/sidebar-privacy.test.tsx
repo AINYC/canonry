@@ -139,3 +139,21 @@ test('does not render the sidebar toggle during first-run setup', async () => {
   expect(container.querySelector('#desktop-sidebar')).toBeNull()
   expect(queryByRole('button', { name: /sidebar/i })).toBeNull()
 })
+
+test('keeps the shell focused after the onboarding project has been created', async () => {
+  const { container, queryByRole } = await renderRoute(
+    '/setup?onboarding=site-health&setupProject=Citypoint%20Dental%20NYC',
+  )
+
+  expect(container.querySelector('#desktop-sidebar')).toBeNull()
+  expect(queryByRole('button', { name: /sidebar/i })).toBeNull()
+  expect(container.querySelector('.app-shell-focus')).not.toBeNull()
+})
+
+test('keeps plain setup focused while the project list is already non-empty', async () => {
+  const { container, queryByRole } = await renderRoute('/setup')
+
+  expect(container.querySelector('#desktop-sidebar')).toBeNull()
+  expect(queryByRole('button', { name: /sidebar/i })).toBeNull()
+  expect(container.querySelector('.app-shell-focus')).not.toBeNull()
+})

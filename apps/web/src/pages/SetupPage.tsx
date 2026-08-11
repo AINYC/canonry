@@ -11,6 +11,7 @@ import {
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
 import { AdminOnly } from '../components/shared/AccessControls.js'
+import { OnboardingProgress } from '../components/shared/OnboardingProgress.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
 import { addToast } from '../lib/toast-store.js'
 import {
@@ -117,21 +118,36 @@ function SetupStepIndicator({ current, labels }: { current: number; labels: read
  * The setup wizard exists to CREATE things — a project, its queries, its
  * first sweep. There is nothing in it for a view-only account.
  */
-export function SetupPage({ visibilityProjectName }: { visibilityProjectName?: string } = {}) {
+interface SetupPageProps {
+  visibilityProjectName?: string
+  siteHealthOnboarding?: boolean
+}
+
+export function SetupPage({
+  visibilityProjectName,
+  siteHealthOnboarding = false,
+}: SetupPageProps = {}) {
   return (
     <AdminOnly title={visibilityProjectName ? 'Set up AI Visibility' : 'Setup'}>
-      <SetupPageBody visibilityProjectName={visibilityProjectName} />
+      <SetupPageBody
+        visibilityProjectName={visibilityProjectName}
+        siteHealthOnboarding={siteHealthOnboarding}
+      />
     </AdminOnly>
   )
 }
 
-function SetupPageBody({ visibilityProjectName }: { visibilityProjectName?: string }) {
+function SetupPageBody({ visibilityProjectName, siteHealthOnboarding }: SetupPageProps) {
   const contextDashboard = useInitialDashboard()
   const { dashboard, isLoading, refetch } = useDashboard()
   const safeDashboard = dashboard ?? contextDashboard?.dashboard
+  const navigate = useNavigate()
   const visibilityHeadingRef = useCallback<RefCallback<HTMLHeadingElement>>((node) => {
     if (node && visibilityProjectName) node.focus()
   }, [visibilityProjectName])
+  const skipAiVisibility = () => {
+    void navigate({ to: '/', replace: true })
+  }
 
   if (!safeDashboard || isLoading) {
     return (
@@ -161,11 +177,19 @@ function SetupPageBody({ visibilityProjectName }: { visibilityProjectName?: stri
   if (visibilityProjectName && !safeDashboard.projects.some(project => project.project.name === visibilityProjectName)) {
     return (
       <div className="page-container">
+        {siteHealthOnboarding ? <OnboardingProgress current="visibility" /> : null}
         <div className="page-header">
           <div className="page-header-left">
             <h1 ref={visibilityHeadingRef} tabIndex={-1} className="page-title">Set up AI Visibility</h1>
             <p className="page-subtitle">Choose what to track, then run your first visibility sweep.</p>
           </div>
+          {siteHealthOnboarding ? (
+            <div className="page-header-right">
+              <Button type="button" variant="outline" onClick={skipAiVisibility}>
+                Skip AI Visibility
+              </Button>
+            </div>
+          ) : null}
         </div>
         <Card role="alert" className="compact-stack">
           <h2>Project not found</h2>
@@ -189,6 +213,7 @@ function SetupPageBody({ visibilityProjectName }: { visibilityProjectName?: stri
       refetch={refetch}
       visibilityProjectName={visibilityProjectName}
       visibilityHeadingRef={visibilityHeadingRef}
+      siteHealthOnboarding={siteHealthOnboarding}
     />
   )
 }
@@ -200,6 +225,7 @@ function ReadySetupPage({
   refetch,
   visibilityProjectName,
   visibilityHeadingRef,
+  siteHealthOnboarding,
 }: {
   dashboard: DashboardVm
   initialHealth?: HealthSnapshot
@@ -207,6 +233,7 @@ function ReadySetupPage({
   refetch: () => Promise<void>
   visibilityProjectName?: string
   visibilityHeadingRef: RefCallback<HTMLHeadingElement>
+  siteHealthOnboarding?: boolean
 }) {
   const settings = safeDashboard.settings
 
@@ -283,6 +310,10 @@ function ReadySetupPage({
   const [projectSaving, setProjectSaving] = useState(false)
 
   const openProjectDashboard = () => {
+    if (siteHealthOnboarding) {
+      void navigate({ to: '/', replace: true })
+      return
+    }
     void navigate({
       to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/',
       // Project-scoped setup replaces the project route on entry. Replace it
@@ -1153,7 +1184,7 @@ function ReadySetupPage({
                 <div className="setup-nav">
                   <span />
                   <Button type="button" onClick={openProjectDashboard}>
-                    Open project dashboard →
+                    {siteHealthOnboarding ? 'Finish and go Home' : 'Open project dashboard →'}
                   </Button>
                 </div>
               </div>
@@ -1193,7 +1224,7 @@ function ReadySetupPage({
             ) : !terminal ? (
               <div className="compact-stack">
                 <p className="text-neutral">
-                  Sweep running — typically 30-60s. Polling every 2s…
+                  Sweep running. This usually takes 30 to 60 seconds.
                 </p>
                 <div className="rounded-md border border-default bg-surface p-3 text-xs text-muted">
                   <p>Status: <span className="text-neutral">{runStatus ?? 'queued'}</span></p>
@@ -1209,7 +1240,7 @@ function ReadySetupPage({
                 <div className="setup-nav">
                   <span />
                   <Button type="button" variant="outline" onClick={openProjectDashboard}>
-                    Watch on project page
+                    {siteHealthOnboarding ? 'Finish and go Home' : 'Watch on project page'}
                   </Button>
                 </div>
               </div>
@@ -1252,12 +1283,14 @@ function ReadySetupPage({
                   </div>
                 </div>
                 <p className="mt-1 text-sm text-secondary">
-                  Open the project to review the evidence.
+                  {siteHealthOnboarding
+                    ? 'Your project is ready. Open it from Home to review the evidence.'
+                    : 'Open the project to review the evidence.'}
                 </p>
                 <div className="setup-nav">
                   <span />
                   <Button type="button" onClick={openProjectDashboard}>
-                    Open project dashboard →
+                    {siteHealthOnboarding ? 'Finish and go Home' : 'Open project dashboard →'}
                   </Button>
                 </div>
               </div>
@@ -1273,6 +1306,7 @@ function ReadySetupPage({
 
   return (
     <div className="page-container">
+      {siteHealthOnboarding ? <OnboardingProgress current="visibility" /> : null}
       <div className="page-header">
         <div className="page-header-left">
           <h1
@@ -1288,6 +1322,13 @@ function ReadySetupPage({
               : 'Create a project and run its first visibility check.'}
           </p>
         </div>
+        {siteHealthOnboarding ? (
+          <div className="page-header-right">
+            <Button type="button" variant="outline" onClick={openProjectDashboard}>
+              Skip AI Visibility
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       <SetupStepIndicator current={step} labels={SETUP_STEPS} />

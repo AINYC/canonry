@@ -92,8 +92,8 @@ test('/settings renders the settings page', async () => {
   expect(container.querySelector('.page-title')?.textContent).toBe('Settings')
 })
 
-test('/setup renders the setup page', async () => {
-  const { container } = await renderRoute('/setup')
+test('/setup legacy rescue renders the established setup page', async () => {
+  const { container } = await renderRoute('/setup?experience=legacy')
   expect(container.querySelector('.page-title')?.textContent).toBe('Setup')
 })
 

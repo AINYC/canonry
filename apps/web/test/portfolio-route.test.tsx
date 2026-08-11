@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, expect, onTestFinished, test } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 
@@ -363,19 +363,30 @@ test('a Simple project keeps the existing Overview without advertising advanced 
   expect(html).not.toContain('Latest measurement')
 })
 
-test('explicit Site Health onboarding intent opens the original AI Visibility setup flow', async () => {
-  const realFetch = globalThis.fetch
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    const raw = input instanceof Request ? input.url : String(input)
-    const url = new URL(raw, window.location.origin)
-    if (decodeURIComponent(url.pathname).endsWith('/queries')) return jsonResponse([])
-    return jsonResponse({ code: 'NOT_FOUND', message: 'not found' }, 404)
-  }) as typeof fetch
-  onTestFinished(() => { globalThis.fetch = realFetch })
+test('project navigation ignores stale Site Health onboarding markers', async () => {
+  const html = await renderAt('/projects/project_citypoint/technical-aeo?onboarding=site-health')
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const link = [...doc.querySelectorAll<HTMLAnchorElement>('nav[aria-label="Project sections"] a')]
+    .find(anchor => anchor.textContent === 'AI Visibility')
 
+  expect(link).toBeTruthy()
+  const destination = new URL(link!.href, 'http://localhost')
+  expect(destination.pathname).toBe('/projects/Citypoint%20Dental%20NYC')
+  expect(destination.search).toBe('')
+})
+
+test('a stale Site Health onboarding marker cannot redirect the project overview', async () => {
   const fixture = createDashboardFixture({})
-  const project = fixture.dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!
+  const projectName = fixture.dashboard.projects.find(entry => entry.project.id === 'project_citypoint')!.project.name
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  queryClient.setQueryData(
+    getApiV1ProjectsByNameQueriesQueryKey({ client: heyClient, path: { name: projectName } }),
+    [],
+  )
+  queryClient.setQueryData(
+    getApiV1ProjectsByNameMeasurementPlanQueryKey({ client: heyClient, path: { name: projectName } }),
+    { active: null },
+  )
   const router = createAppRouter(queryClient, {
     initialEntries: ['/projects/project_citypoint?onboarding=site-health'],
   })
@@ -388,60 +399,8 @@ test('explicit Site Health onboarding intent opens the original AI Visibility se
     </QueryClientProvider>,
   )
 
-  await waitFor(() => expect(router.state.location.pathname).toBe('/setup'))
-  expect(router.state.location.search).toMatchObject({
-    experience: 'legacy',
-    setupProject: project.project.name,
-  })
-  expect(await page.findByRole('heading', { name: 'Set up AI Visibility' })).toBeTruthy()
-})
-
-test('the AI Visibility tab points to setup while Site Health onboarding is active', async () => {
-  const html = await renderAt('/projects/project_citypoint/technical-aeo?onboarding=site-health')
-  const doc = new DOMParser().parseFromString(html, 'text/html')
-  const link = [...doc.querySelectorAll<HTMLAnchorElement>('nav[aria-label="Project sections"] a')]
-    .find(anchor => anchor.textContent === 'AI Visibility')
-
-  expect(link).toBeTruthy()
-  const destination = new URL(link!.href, 'http://localhost')
-  expect(destination.pathname).toBe('/setup')
-  expect(destination.searchParams.get('experience')).toBe('legacy')
-  expect(destination.searchParams.get('setupProject')).toBe('Citypoint Dental NYC')
-})
-
-test('the AI Visibility handoff replaces the marked Site Health history entry', async () => {
-  const realFetch = globalThis.fetch
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    const raw = input instanceof Request ? input.url : String(input)
-    const url = new URL(raw, window.location.origin)
-    if (decodeURIComponent(url.pathname).endsWith('/queries')) return jsonResponse([])
-    return jsonResponse({ code: 'NOT_FOUND', message: 'not found' }, 404)
-  }) as typeof fetch
-  onTestFinished(() => { globalThis.fetch = realFetch })
-
-  const fixture = createDashboardFixture({})
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const router = createAppRouter(queryClient, {
-    initialEntries: [
-      '/projects/project_citypoint/technical-aeo',
-      '/projects/project_citypoint/technical-aeo?onboarding=site-health',
-    ],
-  })
-  await router.load()
-  const page = render(
-    <QueryClientProvider client={queryClient}>
-      <DashboardProvider value={{ dashboard: fixture.dashboard, health: fixture.health }}>
-        <RouterProvider router={router} />
-      </DashboardProvider>
-    </QueryClientProvider>,
-  )
-
-  fireEvent.click(await page.findByRole('link', { name: 'AI Visibility' }))
-  await waitFor(() => expect(router.state.location.pathname).toBe('/setup'))
-
-  act(() => router.history.back())
-  await waitFor(() => expect(router.state.location.pathname).toBe('/projects/project_citypoint/technical-aeo'))
-  expect(router.state.location.search).not.toHaveProperty('onboarding')
+  expect(await page.findByText('Where competitors are winning')).toBeTruthy()
+  expect(router.state.location.pathname).toBe('/projects/project_citypoint')
 })
 
 test('an active setup replaces the Simple Overview with the advanced measurement landing', async () => {

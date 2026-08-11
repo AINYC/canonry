@@ -2,8 +2,6 @@ import { describe, it, expect } from 'vitest'
 import { QueryClient } from '@tanstack/react-query'
 import { isProjectDetailQuery } from '../src/queries/mutations.js'
 import {
-  aiVisibilitySetupSearch,
-  clearCompletedSiteHealthOnboardingSearch,
   patchProjectDashboardCache,
 } from '../src/pages/ProjectPage.js'
 import type { ApiProject } from '../src/api.js'
@@ -149,26 +147,5 @@ describe('patchProjectDashboardCache', () => {
     expect(queryClient.getQueryData(['project-dashboard-full', 'id-a', 'none'])).toEqual({ queries: [] })
 
     queryClient.clear()
-  })
-})
-
-describe('clearCompletedSiteHealthOnboardingSearch', () => {
-  it('releases both onboarding markers while preserving unrelated project search state', () => {
-    expect(clearCompletedSiteHealthOnboardingSearch({
-      onboarding: 'site-health',
-      siteHealthRunId: 'run_1',
-      scope: 'all',
-    })).toEqual({
-      onboarding: undefined,
-      siteHealthRunId: undefined,
-      scope: 'all',
-    })
-  })
-
-  it('starts the original visibility setup for the mapped project', () => {
-    expect(aiVisibilitySetupSearch('citypoint')).toEqual({
-      experience: 'legacy',
-      setupProject: 'citypoint',
-    })
   })
 })

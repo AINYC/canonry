@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, Copy, ExternalLink, LoaderCircle } from 'lucide-react'
@@ -16,8 +16,14 @@ import { asyncHandler } from '../lib/async-handler.js'
 import { addToast } from '../lib/toast-store.js'
 import { useTriggerSiteAudit } from '../queries/mutations.js'
 import { AdminOnly } from '../components/shared/AccessControls.js'
+import { OnboardingProgress } from '../components/shared/OnboardingProgress.js'
 import { Button } from '../components/ui/button.js'
 import { SetupPage } from './SetupPage.js'
+
+const LazySiteHealthSection = lazy(async () => {
+  const module = await import('../components/project/SiteHealthSection.js')
+  return { default: module.SiteHealthSection }
+})
 
 export const SITE_HEALTH_DISPATCH_BOUNDARY_MS = 1_800
 export const AGENT_SETUP_GUIDE_URL = 'https://github.com/Canonry/canonry#or-use-any-shell-capable-coding-agent'
@@ -214,9 +220,157 @@ function AutoModeRetry({ onRetry }: { onRetry: () => void }) {
   )
 }
 
+function SiteHealthOnboardingPage({
+  projectName,
+  initialRunId,
+}: {
+  projectName?: string
+  initialRunId?: string
+}) {
+  return (
+    <AdminOnly title="Site Health setup">
+      <SiteHealthOnboardingPageBody projectName={projectName} initialRunId={initialRunId} />
+    </AdminOnly>
+  )
+}
+
+function SiteHealthOnboardingPageBody({
+  projectName,
+  initialRunId,
+}: {
+  projectName?: string
+  initialRunId?: string
+}) {
+  const navigate = useNavigate()
+  const projectsQuery = useQuery({
+    ...getApiV1ProjectsOptions({ client: heyClient }),
+    enabled: Boolean(projectName),
+    retry: false,
+    refetchOnMount: 'always',
+  })
+
+  if (!projectName) {
+    return (
+      <div className="page-container max-w-3xl">
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1 className="page-title">Project not found</h1>
+            <p className="page-subtitle">This setup link does not identify a project.</p>
+          </div>
+        </div>
+        <Button type="button" variant="secondary" onClick={() => { void navigate({ to: '/projects' }) }}>
+          View projects
+        </Button>
+      </div>
+    )
+  }
+
+  if (projectsQuery.isPending) {
+    return (
+      <div className="page-container max-w-3xl" aria-busy="true" aria-live="polite">
+        <OnboardingProgress current="site" />
+        <div className="mt-8 flex items-center gap-3 text-sm text-secondary" role="status">
+          <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+          Loading Site Health setup…
+        </div>
+      </div>
+    )
+  }
+
+  if (projectsQuery.isError) {
+    return (
+      <div className="page-container max-w-3xl">
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1 className="page-title">Can’t resume setup</h1>
+            <p className="page-subtitle">Canonry could not load the project for this Site Health scan.</p>
+          </div>
+        </div>
+        <div className="rounded-lg border border-negative bg-negative-soft p-4" role="alert">
+          <p className="text-sm text-secondary">Check the connection or sign in again, then retry.</p>
+          <Button type="button" className="mt-4" variant="secondary" onClick={() => { void projectsQuery.refetch() }}>
+            Retry project check
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  const project = projectsQuery.data.find((candidate) => candidate.name === projectName)
+  if (!project) {
+    return (
+      <div className="page-container max-w-3xl">
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1 className="page-title">Project not found</h1>
+            <p className="page-subtitle">
+              Canonry could not find {projectName}. It will not open a different project.
+            </p>
+          </div>
+        </div>
+        <Button type="button" variant="secondary" onClick={() => { void navigate({ to: '/projects' }) }}>
+          View projects
+        </Button>
+      </div>
+    )
+  }
+
+  const releaseInitialRun = () => {
+    void navigate({
+      to: '/setup',
+      search: { onboarding: 'site-health', setupProject: project.name },
+      replace: true,
+    })
+  }
+  const continueOnboarding = () => {
+    void navigate({
+      to: '/setup',
+      search: {
+        experience: 'legacy',
+        onboarding: 'site-health',
+        setupProject: project.name,
+      },
+      replace: true,
+    })
+  }
+  const skipOnboarding = () => {
+    void navigate({ to: '/', replace: true })
+  }
+
+  return (
+    <div className="page-container max-w-7xl py-8 md:py-10">
+      <h1 className="sr-only">Set up Canonry</h1>
+      <Suspense
+        fallback={(
+          <div className="space-y-5">
+            <OnboardingProgress current="site" />
+            <div className="flex min-h-72 items-center justify-center gap-3 text-sm text-secondary" role="status">
+              <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+              Loading Site Health…
+            </div>
+          </div>
+        )}
+      >
+        <LazySiteHealthSection
+          projectName={project.name}
+          projectId={project.id}
+          initialRunId={initialRunId}
+          onReleaseInitialRun={releaseInitialRun}
+          showOnboardingActions
+          onContinueOnboarding={continueOnboarding}
+          onSkipOnboarding={skipOnboarding}
+        />
+      </Suspense>
+    </div>
+  )
+}
+
 /** Runtime switch around the existing wizard; legacy is unchanged when off. */
 export function OnboardingSetupPage() {
   const search = useSearch({ from: '/setup' })
+  const missingSiteHealthProject = search.onboarding === 'site-health' && !search.setupProject
+  const explicitSiteHealthOnboarding = search.onboarding === 'site-health'
+    && search.experience !== 'legacy'
   const configuredMode = getOnboardingMode()
   const mode: OnboardingMode = search.experience === 'legacy' ? 'legacy' : configuredMode
   const [platformLatched, setPlatformLatched] = useState(false)
@@ -250,7 +404,17 @@ export function OnboardingSetupPage() {
       ? 'platform'
       : resolveOnboardingSurface(mode, projectList)
 
-  if (surface === 'legacy') return <SetupPage visibilityProjectName={search.setupProject} />
+  if (missingSiteHealthProject || explicitSiteHealthOnboarding) {
+    return <SiteHealthOnboardingPage projectName={search.setupProject} initialRunId={search.siteHealthRunId} />
+  }
+  if (surface === 'legacy') {
+    return (
+      <SetupPage
+        visibilityProjectName={search.setupProject}
+        siteHealthOnboarding={search.onboarding === 'site-health'}
+      />
+    )
+  }
   if (surface === 'loading') return <AutoModeLoading />
   if (surface === 'retry') return <AutoModeRetry onRetry={() => { void projectsQuery.refetch() }} />
   return <PlatformSetupPage onActivationStarted={() => setPlatformLatched(true)} />
@@ -293,13 +457,14 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
     if (visibleError) errorRef.current?.focus()
   }, [visibleError])
 
-  const openProject = (project: ApiProject, runId?: string) => navigate({
-    to: '/projects/$projectName/technical-aeo',
-    params: { projectName: project.name },
+  const openSiteHealthSetup = (project: ApiProject, runId?: string) => navigate({
+    to: '/setup',
     search: {
       ...(runId ? { siteHealthRunId: runId } : {}),
       onboarding: 'site-health',
+      setupProject: project.name,
     },
+    replace: true,
   })
 
   const dispatchSiteHealth = async (project: ApiProject) => {
@@ -315,7 +480,7 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
       })
       const settlement = await settleSiteHealthDispatch(dispatch)
       if (settlement.state === 'queued') {
-        await openProject(project, settlement.run.runId)
+        await openSiteHealthSetup(project, settlement.run.runId)
         return
       }
 
@@ -323,7 +488,7 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
       // still settling. Site Health's normal persisted run list will pick up
       // the queued scan as soon as it exists.
       watchTimedOutSiteHealthDispatch(dispatch, project.id)
-      await openProject(project)
+      await openSiteHealthSetup(project)
     } catch (error) {
       setPhase('recovery')
       setDispatchError(onboardingError(error, 'The project was created, but the Site Health scan could not be started.'))
@@ -397,7 +562,8 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
   if (createdProject && phase === 'recovery') {
     return (
       <div className="page-container max-w-3xl">
-        <div className="page-header">
+        <OnboardingProgress current="site" />
+        <div className="page-header mt-8">
           <div className="page-header-left">
             <h1 className="page-title">Project created</h1>
             <p className="page-subtitle">{createdProject.displayName || createdProject.name} is ready. The Site Health scan needs another try.</p>
@@ -405,10 +571,10 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
         </div>
         <div ref={errorRef} className="rounded-lg border border-negative bg-negative-soft p-4" role="alert" tabIndex={-1}>
           <p className="text-sm font-medium text-heading">{dispatchError}</p>
-          <p className="mt-1 text-sm text-secondary">You can retry the scan or open the project and continue without a map.</p>
+          <p className="mt-1 text-sm text-secondary">You can retry the scan or continue setup and retry from Site Health.</p>
           <div className="mt-4 flex flex-wrap gap-3">
             <Button type="button" onClick={retryDispatch}>Retry Site Health scan</Button>
-            <Button type="button" variant="secondary" onClick={() => { void openProject(createdProject) }}>Open project</Button>
+            <Button type="button" variant="secondary" onClick={() => { void openSiteHealthSetup(createdProject) }}>Continue setup</Button>
           </div>
         </div>
       </div>
@@ -417,7 +583,8 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
 
   return (
     <div className="page-container max-w-xl py-8 md:py-12">
-      <header className="mb-8">
+      <OnboardingProgress current="site" />
+      <header className="mb-8 mt-8">
         <h1 id="site-map-setup-title" className="text-2xl font-semibold tracking-[-0.025em] text-heading">Map your site</h1>
         <p className="mt-2 max-w-lg text-sm leading-6 text-secondary">
           Enter your public website to see its pages, structure, and internal links.

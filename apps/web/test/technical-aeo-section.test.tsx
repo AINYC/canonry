@@ -281,6 +281,33 @@ test.each([
   await waitFor(() => expect(scoreCalls).toBeGreaterThan(callsBeforeRetry))
 })
 
+test('adds the caller recovery path when integrated page health cannot be read', async () => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"not found"}', {
+    status: 404,
+    headers: { 'content-type': 'application/json' },
+  })))
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TechnicalAeoSection
+        projectName={projectName}
+        projectId={projectId}
+        runId="audit_partial"
+        integrated
+        footer={<p>Continue after successful Page health</p>}
+        unavailableFooter={<p>Continue setup without Page health</p>}
+      />
+    </QueryClientProvider>,
+  )
+
+  expect(await screen.findByText('Page health could not load')).not.toBeNull()
+  expect(screen.getByText('Continue setup without Page health')).not.toBeNull()
+  expect(screen.queryByText('Continue after successful Page health')).toBeNull()
+})
+
 test('distills the integrated view to a score and its actionable findings', async () => {
   const queryClient = makeClient()
   queryClient.setQueryData(scoreKey, {
@@ -350,7 +377,13 @@ test('distills the integrated view to a score and its actionable findings', asyn
 
   render(
     <QueryClientProvider client={queryClient}>
-      <TechnicalAeoSection projectName={projectName} projectId={projectId} integrated />
+      <TechnicalAeoSection
+        projectName={projectName}
+        projectId={projectId}
+        integrated
+        footer={<p>Continue onboarding after reviewing fixes</p>}
+        unavailableFooter={<p>Recover unavailable Page health</p>}
+      />
     </QueryClientProvider>,
   )
 
@@ -359,6 +392,8 @@ test('distills the integrated view to a score and its actionable findings', asyn
   expect(screen.getByText('2 checks need attention')).not.toBeNull()
   expect(screen.getByRole('heading', { name: 'Technical findings' })).not.toBeNull()
   expect(screen.getByText('Pages affected')).not.toBeNull()
+  expect(screen.getByText('Continue onboarding after reviewing fixes')).not.toBeNull()
+  expect(screen.queryByText('Recover unavailable Page health')).toBeNull()
 
   const failingFactor = screen.getByRole('button', { name: 'AI Crawler Access' })
   await waitFor(() => expect(failingFactor.getAttribute('aria-expanded')).toBe('true'))

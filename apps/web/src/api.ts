@@ -188,21 +188,23 @@ declare global {
   }
 }
 
-/** Runtime-selected first-open experience. The server, not the bundle, owns it. */
+/** Runtime-selected first-open experience with an operator-configurable override. */
 export type OnboardingMode = 'legacy' | 'platform' | 'auto'
 
 /**
- * Keep the established wizard as the safe fallback for old servers and static
- * hosts. `auto` is resolved by the launchpad only after an authoritative
- * project-list response succeeds.
+ * Fresh installs use the domain-first flow by default. `auto` enters it only
+ * after an authoritative empty project-list response, while existing installs
+ * retain the established setup wizard. Operators can still force `legacy`.
  */
 export function getOnboardingMode(): OnboardingMode {
+  // Server rendering has no authoritative project-list query. Preserve the
+  // established surface there; the browser resolves fresh installs to auto.
   if (typeof window === 'undefined') return 'legacy'
   const candidate = window.__CANONRY_CONFIG__?.dashboard?.onboardingMode
     ?? window.__CANONRY_CONFIG__?.onboardingMode
   return candidate === 'platform' || candidate === 'auto' || candidate === 'legacy'
     ? candidate
-    : 'legacy'
+    : 'auto'
 }
 
 function getEmbedRenderToken(): string | undefined {
