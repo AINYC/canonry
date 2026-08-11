@@ -17,7 +17,7 @@ import {
   getApiV1ProjectsByNameTechnicalAeoStructureQueryKey,
 } from '@ainyc/canonry-api-client/react-query'
 
-import { linkTileCount, SiteHealthSection } from '../src/components/project/SiteHealthSection.js'
+import { linkTileCount, siteHealthMetricHelp, SiteHealthSection } from '../src/components/project/SiteHealthSection.js'
 import { heyClient } from '../src/api.js'
 
 const mutationMock = vi.hoisted(() => ({ mutate: vi.fn() }))
@@ -1419,23 +1419,27 @@ test('a link tile never presents a bounded count as a total', () => {
   // The neighbour read is capped, so a truncated list proves only a lower
   // bound. Rounding that into a flat number would be a quiet lie.
   expect(linkTileCount({ total: 48, visible: 1, hidden: 47, truncated: false, showTemplateLinks: false, known: true }))
-    .toEqual({ value: '1', hiddenNote: '47 nav and footer hidden' })
+    .toEqual({ value: '1', hiddenNote: '47 nav and footer hidden', filtered: true })
 
   expect(linkTileCount({ total: 500, visible: 100, hidden: 400, truncated: true, showTemplateLinks: false, known: true }))
-    .toEqual({ value: '100+', hiddenNote: 'At least 400 nav and footer hidden' })
+    .toEqual({ value: '100+', hiddenNote: 'At least 400 nav and footer hidden', filtered: true })
 
   // Filter off: the crawl's own total, and no secondary line.
   expect(linkTileCount({ total: 48, visible: 1, hidden: 47, truncated: false, showTemplateLinks: true, known: true }))
-    .toEqual({ value: '48', hiddenNote: null })
+    .toEqual({ value: '48', hiddenNote: null, filtered: false })
 
   // Nothing hidden is not a note worth showing.
+  // Nothing hidden, but the filter IS in force: no note to show, yet the tile
+  // is still a content-only count and the tooltip must say so.
   expect(linkTileCount({ total: 3, visible: 3, hidden: 0, truncated: false, showTemplateLinks: false, known: true }))
-    .toEqual({ value: '3', hiddenNote: null })
+    .toEqual({ value: '3', hiddenNote: null, filtered: true })
 
   // Before the neighbour read lands there is no per-kind answer, so the tile
   // shows the total rather than flashing a zero.
+  // A legacy scan cannot tell nav from content, so the tile is NOT filtered:
+  // claiming "content links only" there would be a lie.
   expect(linkTileCount({ total: 48, visible: 0, hidden: 0, truncated: false, showTemplateLinks: false, known: false }))
-    .toEqual({ value: '48', hiddenNote: null })
+    .toEqual({ value: '48', hiddenNote: null, filtered: false })
 })
 
 test('both count fixes hold at once: filtered tiles and no self-link anywhere', async () => {
@@ -1512,4 +1516,113 @@ test('both count fixes hold at once: filtered tiles and no self-link anywhere', 
   expect(within(tile('Links out')).getByText('1')).toBeTruthy()
   expect(screen.getByRole('region', { name: 'Links out (1)' })).toBeTruthy()
   expect(selfLinkRows()).toHaveLength(0)
+})
+
+test('metric help text tells the truth about what the nav and footer filter changes', () => {
+  // Depth and link score are computed by the crawl over the FULL link graph,
+  // before nav links are told apart, so the filter cannot move them. Sitting
+  // beside two filtered tiles, they have to say so or they read as filtered.
+  expect(siteHealthMetricHelp('clicksFromHome', false)).toBe(
+    'How many clicks it takes to reach this page from the home page, following links. This always counts every link, including nav and footer.',
+  )
+  expect(siteHealthMetricHelp('linkImportance', false)).toBe(
+    'How much link value flows to this page, based on how many pages link to it and how important those pages are. Shown relative to the highest page on this site, which is 100%. This always counts every link, including nav and footer.',
+  )
+  // A full-graph metric ignores the argument entirely: there is no state in
+  // which it is a filtered number, so no caller can make it claim otherwise.
+  expect(siteHealthMetricHelp('clicksFromHome', true)).toBe(siteHealthMetricHelp('clicksFromHome', false))
+  expect(siteHealthMetricHelp('linkImportance', true)).toBe(siteHealthMetricHelp('linkImportance', false))
+
+  // The two counts that DO follow the toggle describe whichever number is on
+  // screen right now.
+  expect(siteHealthMetricHelp('linksIn', true)).toBe(
+    'How many other pages link to this page. Right now this counts content links only. Nav and footer links are hidden.',
+  )
+  expect(siteHealthMetricHelp('linksIn', false)).toBe(
+    'How many other pages link to this page. This counts every link, including nav and footer.',
+  )
+  expect(siteHealthMetricHelp('linksOut', true)).toBe(
+    'How many other pages this page links to. Right now this counts content links only. Nav and footer links are hidden.',
+  )
+  expect(siteHealthMetricHelp('linksOut', false)).toBe(
+    'How many other pages this page links to. This counts every link, including nav and footer.',
+  )
+
+  // Metrics with nothing to qualify are left alone rather than padded with a
+  // sentence about a filter that does not apply to them.
+  expect(siteHealthMetricHelp('technicalScore', true)).toBe(siteHealthMetricHelp('technicalScore', false))
+  expect(siteHealthMetricHelp('linkTimes', true)).toBe(siteHealthMetricHelp('linkTimes', false))
+})
+
+test('the tile tooltips are keyboard reachable and follow the nav and footer toggle', async () => {
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const servicesWithLinks = { ...servicesPage, inboundUniqueEdges: 2, outboundUniqueEdges: 1 }
+  const queryClient = seedTemplateLinkGraph({
+    nodes: [
+      { ...homePage, x: 0, y: 0 },
+      { ...servicesWithLinks, x: 1, y: 1 },
+      { ...contactPage, x: -1, y: 1 },
+    ],
+  })
+  const link = (edgeKey: string, from: string, to: string, isTemplate: boolean) => ({
+    edgeKey,
+    sourceNodeKey: from,
+    sourceUrl: `https://citypoint.example/${from}`,
+    targetNodeKey: to,
+    targetUrl: `https://citypoint.example/${to}`,
+    relation: 'anchor',
+    internal: true,
+    followable: true,
+    occurrences: 1,
+    followableOccurrences: 1,
+    nofollowOccurrences: 0,
+    anchors: isTemplate ? [] : ['Roof repair'],
+    isTemplate,
+    templateRatio: isTemplate ? 0.9 : 0.1,
+  })
+  queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsQueryKey({
+    client: heyClient,
+    path: { name: projectName },
+    query: { runId: 'run_1', nodeKey: 'page_services', limit: 100 },
+  }), {
+    project: projectName,
+    hasCrawlData: true,
+    runId: 'run_1',
+    nodeKey: 'page_services',
+    url: servicesPage.url,
+    templateDetection: 'applied',
+    linkKind: 'all',
+    inbound: [link('in-content', 'page_home', 'page_services', false), link('in-nav', 'page_contact', 'page_services', true)],
+    outbound: [link('out-content', 'page_services', 'page_home', false)],
+    inboundTruncated: false,
+    outboundTruncated: false,
+  })
+
+  renderSection(queryClient)
+  fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
+
+  // The explanation is the trigger's accessible name, so a screen reader gets
+  // it without a hover ever happening.
+  await waitFor(() => expect(screen.getByRole('button', { name: siteHealthMetricHelp('linksIn', true) })).toBeTruthy())
+  expect(screen.getByRole('button', { name: siteHealthMetricHelp('linksOut', true) })).toBeTruthy()
+  expect(screen.getByRole('button', { name: siteHealthMetricHelp('clicksFromHome', false) })).toBeTruthy()
+  expect(screen.getByRole('button', { name: siteHealthMetricHelp('linkImportance', false) })).toBeTruthy()
+
+  // Focus alone reveals the bubble, so the copy is not hover-only.
+  const trigger = screen.getByRole('button', { name: siteHealthMetricHelp('linksIn', true) })
+  expect(trigger.getAttribute('aria-expanded')).toBe('false')
+  fireEvent.focus(trigger)
+  expect(trigger.getAttribute('aria-expanded')).toBe('true')
+  fireEvent.keyDown(trigger, { key: 'Escape' })
+  expect(trigger.getAttribute('aria-expanded')).toBe('false')
+
+  // Toggle off the filter and the two filterable tiles stop claiming to be
+  // content-only, while the two full-graph tiles are untouched.
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show nav and footer links' }))
+  expect(screen.getByRole('button', { name: siteHealthMetricHelp('linksIn', false) })).toBeTruthy()
+  expect(screen.getByRole('button', { name: siteHealthMetricHelp('linksOut', false) })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: siteHealthMetricHelp('linksIn', true) })).toBeNull()
+  expect(screen.getByRole('button', { name: siteHealthMetricHelp('clicksFromHome', false) })).toBeTruthy()
+  expect(screen.getByRole('button', { name: siteHealthMetricHelp('linkImportance', false) })).toBeTruthy()
 })

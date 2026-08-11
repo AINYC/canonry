@@ -56,6 +56,7 @@ import { PageAuditEvidence } from './PageAuditEvidence.js'
 import { TechnicalAeoSection } from './TechnicalAeoSection.js'
 import { WriteButton } from '../shared/AccessControls.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
+import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { Button } from '../ui/button.js'
 
 type SiteHealthView = 'map' | 'inventory' | 'technical'
@@ -186,6 +187,66 @@ function metricValue(value: number | null | undefined): string {
   return value == null ? 'Not available' : numberFormatter.format(value)
 }
 
+/**
+ * What every Site Health number means, in plain words.
+ *
+ * One source of truth, because the same four metrics appear on the page
+ * inspector tiles AND as Pages table columns. Two copies would drift, and a
+ * metric explained differently in two places is worse than one not explained
+ * at all.
+ */
+type SiteHealthMetric =
+  | 'clicksFromHome'
+  | 'linksIn'
+  | 'linksOut'
+  | 'linkImportance'
+  | 'technicalScore'
+  | 'linkTimes'
+  | 'pagesFound'
+  | 'pagesChecked'
+  | 'internalLinks'
+
+const SITE_HEALTH_METRIC_HELP: Record<SiteHealthMetric, string> = {
+  clicksFromHome: 'How many clicks it takes to reach this page from the home page, following links.',
+  linksIn: 'How many other pages link to this page.',
+  linksOut: 'How many other pages this page links to.',
+  linkImportance: 'How much link value flows to this page, based on how many pages link to it and how important those pages are. Shown relative to the highest page on this site, which is 100%.',
+  technicalScore: 'How well this page is set up for AI and search engines to read, from 0 to 100. Open a page to see what it is marked down for.',
+  linkTimes: 'How many times this link appears on the page it comes from.',
+  pagesFound: 'How many pages this scan discovered, whether or not it could load them.',
+  pagesChecked: 'How many of the pages it found this scan actually loaded.',
+  internalLinks: 'How many links between pages on this site the scan recorded.',
+}
+
+/**
+ * Metrics the crawl engine computes over the FULL link graph, before nav and
+ * footer links are told apart. The filter cannot change them, so they say so
+ * out loud: without that, a reader seeing them beside two filtered counts
+ * would reasonably assume all four were filtered.
+ */
+const FULL_GRAPH_METRICS: ReadonlySet<SiteHealthMetric> = new Set([
+  'clicksFromHome',
+  'linkImportance',
+  'internalLinks',
+  'pagesFound',
+  'pagesChecked',
+])
+
+/**
+ * Help text for one metric, told truthfully for the surface it sits on.
+ * `filtered` means THIS surface is currently hiding nav and footer links.
+ */
+export function siteHealthMetricHelp(metric: SiteHealthMetric, filtered: boolean): string {
+  const base = SITE_HEALTH_METRIC_HELP[metric]
+  if (FULL_GRAPH_METRICS.has(metric)) {
+    return `${base} This always counts every link, including nav and footer.`
+  }
+  if (metric === 'technicalScore' || metric === 'linkTimes') return base
+  return filtered
+    ? `${base} Right now this counts content links only. Nav and footer links are hidden.`
+    : `${base} This counts every link, including nav and footer.`
+}
+
 /** Counted nouns in map copy. "1 content links" reads like a bug report. */
 function countedLinks(count: number, noun: string): string {
   return `${numberFormatter.format(count)} ${noun}${count === 1 ? '' : 's'}`
@@ -306,15 +367,19 @@ export function linkTileCount(counts: {
   truncated: boolean
   showTemplateLinks: boolean
   known: boolean
-}): { value: string; hiddenNote: string | null } {
+}): { value: string; hiddenNote: string | null; filtered: boolean } {
+  // `filtered` is decided HERE, by the same branch that decides the number, so
+  // the tooltip can never describe a count this function did not produce.
+  //
   // Filter off, or no per-kind answer to give: the crawl's own total, which is
   // the only number here that covers every link.
   if (counts.showTemplateLinks || !counts.known) {
-    return { value: metricValue(counts.total), hiddenNote: null }
+    return { value: metricValue(counts.total), hiddenNote: null, filtered: false }
   }
   // The neighbour read is bounded, so a truncated list can only prove a lower
   // bound. Say so rather than presenting a partial count as the answer.
   return {
+    filtered: true,
     value: counts.truncated ? `${metricValue(counts.visible)}+` : metricValue(counts.visible),
     hiddenNote: counts.hidden === 0
       ? null
@@ -324,14 +389,18 @@ export function linkTileCount(counts: {
   }
 }
 
-function LinkMetricTile({ label, value, hiddenNote }: {
+function LinkMetricTile({ label, value, hiddenNote, help }: {
   label: string
   value: string
   hiddenNote?: string | null
+  help: string
 }) {
   return (
     <div className="px-4 py-3">
-      <dt className="text-xs text-muted">{label}</dt>
+      <dt className="flex items-center gap-1 text-xs text-muted">
+        {label}
+        <InfoTooltip text={help} />
+      </dt>
       <dd className="mt-1 text-sm font-medium tabular-nums text-heading">{value}</dd>
       {hiddenNote && <dd className="mt-0.5 text-xs text-muted">{hiddenNote}</dd>}
     </div>
@@ -347,16 +416,37 @@ function LinkMetrics({ page, inbound, outbound }: {
   // link graph, before nav and footer links are classified, so the filter does
   // not change them. Saying so is the honest fix: quietly leaving them beside
   // filtered numbers implies they were filtered too.
-  const filtered = Boolean(inbound.hiddenNote || outbound.hiddenNote)
+  // The footnote only earns its space when something is actually hidden; the
+  // tooltips key off the filter itself, which is in force even on a page that
+  // happens to have no nav or footer links.
+  const anythingHidden = Boolean(inbound.hiddenNote || outbound.hiddenNote)
   return (
     <>
       <dl className="grid grid-cols-2 divide-x divide-y divide-default rounded-lg border border-default sm:grid-cols-4 sm:divide-y-0">
-        <LinkMetricTile label="Clicks from home" value={String(page.depth ?? 'Not reached')} />
-        <LinkMetricTile label="Links in" value={inbound.value} hiddenNote={inbound.hiddenNote} />
-        <LinkMetricTile label="Links out" value={outbound.value} hiddenNote={outbound.hiddenNote} />
-        <LinkMetricTile label="Link importance" value={formatImportance(page.linkScoreNormalized)} />
+        <LinkMetricTile
+          label="Clicks from home"
+          value={String(page.depth ?? 'Not reached')}
+          help={siteHealthMetricHelp('clicksFromHome', false)}
+        />
+        <LinkMetricTile
+          label="Links in"
+          value={inbound.value}
+          hiddenNote={inbound.hiddenNote}
+          help={siteHealthMetricHelp('linksIn', inbound.filtered)}
+        />
+        <LinkMetricTile
+          label="Links out"
+          value={outbound.value}
+          hiddenNote={outbound.hiddenNote}
+          help={siteHealthMetricHelp('linksOut', outbound.filtered)}
+        />
+        <LinkMetricTile
+          label="Link importance"
+          value={formatImportance(page.linkScoreNormalized)}
+          help={siteHealthMetricHelp('linkImportance', false)}
+        />
       </dl>
-      {filtered && (
+      {anythingHidden && (
         <p className="mt-2 text-xs text-muted">
           Clicks from home and link importance always count every link, including nav and footer.
         </p>
@@ -395,6 +485,22 @@ export function emptyLinkCopy(
   return `${lead} ${hidden}`
 }
 
+/**
+ * A table column heading with its plain-words explanation attached.
+ *
+ * Table columns read the server's full-graph counts, so they are never the
+ * filtered variant. The page inspector tiles are, which is why they call
+ * `siteHealthMetricHelp` themselves with the live toggle state.
+ */
+function ColumnLabel({ label, metric }: { label: string; metric: SiteHealthMetric }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      {label}
+      <InfoTooltip text={siteHealthMetricHelp(metric, false)} />
+    </span>
+  )
+}
+
 function NeighborTable({
   direction,
   edges,
@@ -428,7 +534,7 @@ function NeighborTable({
               <tr>
                 <th scope="col">Page</th>
                 <th scope="col">Anchor text</th>
-                <th scope="col">Times</th>
+                <th scope="col"><ColumnLabel label="Times" metric="linkTimes" /></th>
               </tr>
             </thead>
             <tbody>
@@ -700,11 +806,11 @@ function InventoryTable({
             <tr>
               <th scope="col">Page</th>
               <th scope="col" title={siteGraphStatusDescription('eligible')}>Status</th>
-              <th scope="col">Clicks from home</th>
-              <th scope="col">Links in</th>
-              <th scope="col">Links out</th>
-              <th scope="col">Link importance</th>
-              <th scope="col">Score</th>
+              <th scope="col"><ColumnLabel label="Clicks from home" metric="clicksFromHome" /></th>
+              <th scope="col"><ColumnLabel label="Links in" metric="linksIn" /></th>
+              <th scope="col"><ColumnLabel label="Links out" metric="linksOut" /></th>
+              <th scope="col"><ColumnLabel label="Link importance" metric="linkImportance" /></th>
+              <th scope="col"><ColumnLabel label="Score" metric="technicalScore" /></th>
             </tr>
           </thead>
           <tbody>
@@ -1296,11 +1402,17 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
       {crawl?.hasCrawlData && view !== 'technical' && (
         <div className="grid grid-cols-2 divide-x divide-y divide-default rounded-lg border border-default bg-surface-subtle sm:grid-cols-4 sm:divide-y-0">
           <div className="px-4 py-3">
-            <div className="text-xs text-muted">Pages found</div>
+            <div className="flex items-center gap-1 text-xs text-muted">
+              Pages found
+              <InfoTooltip text={siteHealthMetricHelp('pagesFound', false)} />
+            </div>
             <div className="mt-1 text-xl font-semibold tabular-nums text-heading">{metricValue(crawl.counts.pagesDiscovered)}</div>
           </div>
           <div className="px-4 py-3">
-            <div className="text-xs text-muted">Pages checked</div>
+            <div className="flex items-center gap-1 text-xs text-muted">
+              Pages checked
+              <InfoTooltip text={siteHealthMetricHelp('pagesChecked', false)} />
+            </div>
             <div className="mt-1 text-xl font-semibold tabular-nums text-heading">{metricValue(crawl.counts.pagesFetched)}</div>
           </div>
           <div className="px-4 py-3">
@@ -1308,7 +1420,10 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             <div className="mt-1 text-xl font-semibold tabular-nums text-heading">{metricValue(crawl.counts.pagesEligible)}</div>
           </div>
           <div className="px-4 py-3">
-            <div className="text-xs text-muted">Internal links</div>
+            <div className="flex items-center gap-1 text-xs text-muted">
+              Internal links
+              <InfoTooltip text={siteHealthMetricHelp('internalLinks', false)} />
+            </div>
             <div className="mt-1 text-xl font-semibold tabular-nums text-heading">{metricValue(internalLinkCount)}</div>
           </div>
         </div>
