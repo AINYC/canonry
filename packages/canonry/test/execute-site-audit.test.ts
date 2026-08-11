@@ -246,6 +246,63 @@ describe('executeSiteAudit', () => {
     expect(db.select().from(siteAuditPages).where(eq(siteAuditPages.runId, runId)).all()).toHaveLength(2)
   })
 
+  it('never stores a self-link, so edges agree with the page metrics', async () => {
+    // A page linking to itself is not a link to or from another page, and the
+    // engine already excludes it from that page's metrics. Storing it made a
+    // self-loop appear in BOTH neighbour lists, so the page read one link
+    // higher in each direction than its own tiles.
+    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
+      await options.onEvent?.({
+        type: 'pages', sequence: 1, batchId: 'pages-1', checksum: 'pages-checksum',
+        rows: [page('page:root', 'https://example.com/'), page('page:a', 'https://example.com/a')],
+      })
+      await options.onEvent?.({
+        type: 'edges', sequence: 2, batchId: 'edges-1', checksum: 'edges-checksum',
+        rows: [
+          {
+            key: 'edge:root-a', from: 'https://example.com/', to: 'https://example.com/a',
+            type: 'anchor', classification: 'internal',
+            totalOccurrences: 2, followableOccurrences: 2, nofollowOccurrences: 0,
+            anchorSummaries: [{ text: 'A', occurrences: 2 }],
+          },
+          {
+            // The self-link, with no anchor text, exactly as observed.
+            key: 'edge:a-a', from: 'https://example.com/a', to: 'https://example.com/a',
+            type: 'anchor', classification: 'internal',
+            totalOccurrences: 1, followableOccurrences: 1, nofollowOccurrences: 0,
+            anchorSummaries: [],
+          },
+        ],
+      })
+      await options.onEvent?.({
+        type: 'metrics', sequence: 3, batchId: 'metrics-1', checksum: 'metrics-checksum',
+        rows: [
+          { key: 'page:root', metrics: page('page:root', 'https://example.com/').metrics },
+          { key: 'page:a', metrics: page('page:a', 'https://example.com/a').metrics },
+        ],
+      })
+      const endSummary = summary()
+      await options.onEvent?.({ type: 'summary', sequence: 4, batchId: 'summary', checksum: 'summary', summary: endSummary })
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+    })
+    const runId = seedRun()
+    await executeSiteAudit(db, runId, projectId)
+
+    const edges = db.select().from(siteCrawlEdges).where(eq(siteCrawlEdges.runId, runId)).all()
+    expect(edges.map((edge) => edge.edgeKey)).toEqual(['edge:root-a'])
+    expect(edges.every((edge) => edge.sourceUrl !== edge.targetUrl)).toBe(true)
+    // The published graph sample cannot contain one either, so the map is
+    // never asked to draw a loop from a node to itself.
+    expect(db.select().from(siteCrawlGraphEdges).where(eq(siteCrawlGraphEdges.runId, runId)).all()
+      .every((edge) => edge.sourceNodeKey !== edge.targetNodeKey)).toBe(true)
+
+    // The page metrics the engine reported are untouched: importance and depth
+    // never counted the self-link, and dropping it changes neither.
+    const pageA = db.select().from(siteCrawlPages).where(eq(siteCrawlPages.nodeKey, 'page:a')).get()!
+    expect(pageA.depth).toBe(page('page:a', 'https://example.com/a').metrics.shortestFollowableAnchorDepth)
+    expect(pageA.linkScoreNormalized).toBe(page('page:a', 'https://example.com/a').metrics.linkScore)
+  })
+
   it('publishes the crawl when ForceAtlas2 times out and records layout unavailability', async () => {
     vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => emitCompleteGraph(options))
     const runId = seedRun()

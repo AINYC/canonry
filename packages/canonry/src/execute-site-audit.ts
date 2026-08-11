@@ -28,6 +28,7 @@ import {
   SITE_AUDIT_MAX_PAGE_LIMIT,
   deriveSiteHealthState,
   factorStatusFromScore,
+  isSelfLink,
   type RunStatus,
   type SiteAuditCrossCuttingIssueDto,
   type SiteAuditFactorSummaryDto,
@@ -470,6 +471,14 @@ export async function executeSiteAudit(
   }
 
   const persistEdge = (tx: DatabaseTransaction, edge: CrawlEdgeObservation, now: string): void => {
+    // A page linking to itself is not a link TO or FROM another page, and the
+    // engine's own page metrics already exclude it. Persisting it made the
+    // edge table disagree with the page rows built from the same crawl: a
+    // self-loop landed in BOTH the inbound and the outbound neighbour list, so
+    // every self-linking page read one higher in each direction than its own
+    // tiles. Dropping it here is what makes every reader agree by
+    // construction, instead of each one remembering to filter.
+    if (isSelfLink(edge.from, edge.to)) return
     observedEdges.set(edge.key, edge)
     tx.insert(siteCrawlEdges).values({
       id: crypto.randomUUID(), projectId, runId, attemptId, edgeKey: edge.key,

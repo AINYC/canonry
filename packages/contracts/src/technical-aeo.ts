@@ -232,6 +232,18 @@ export const siteCrawlTerminationSchema = z.enum([
 ])
 export type SiteCrawlTermination = z.infer<typeof siteCrawlTerminationSchema>
 
+/**
+ * A link from a page to itself.
+ *
+ * Self-links carry no navigational meaning: they are not a link to or from
+ * another page, and the crawl engine already leaves them out of a page's
+ * inbound and outbound metrics. Defined once here so every writer and reader
+ * uses the same rule, and compared on the normalized URLs the crawl stores.
+ */
+export function isSelfLink(sourceUrl: string, targetUrl: string): boolean {
+  return sourceUrl === targetUrl
+}
+
 /** Shared meaning behind Site Health node color across API, agents, and UI. */
 /**
  * What a crawled page is, for a reader.
