@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@canonry/canonry)](https://www.npmjs.com/package/@canonry/canonry) [![Node.js >= 22.14](https://img.shields.io/badge/node-%3E%3D22.14-brightgreen)](https://nodejs.org)
 
-Your entire AEO + web analytics stack, agent-first. **Open source. Self-hosted. Local.**
+Your entire AEO/GEO/AI Visibility, technical SEO + web analytics stack, agent-first. **Open source. Self-hosted. Local.**
 
 - **Local-only:** Canonry runs on your machine and stores its data in SQLite.
 - Track web search citations and mentions across Gemini, ChatGPT, Claude, Perplexity, and local LLMs
