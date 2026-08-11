@@ -94,6 +94,7 @@ export function TechnicalAeoSection({
   projectId,
   runId,
   integrated = false,
+  compactCopy = false,
   footer,
   unavailableFooter,
 }: {
@@ -103,6 +104,8 @@ export function TechnicalAeoSection({
   runId?: string | null
   /** Hide duplicate history and run controls when rendered inside Site Health. */
   integrated?: boolean
+  /** Use concise findings copy in the explicit onboarding flow. */
+  compactCopy?: boolean
   /** Rendered only after persisted Page health evidence has loaded successfully. */
   footer?: ReactNode
   /** Rendered after an unavailable/error state so a parent flow can recover. */
@@ -356,7 +359,6 @@ export function TechnicalAeoSection({
   const hasAnyRecommendations = score.crossCuttingIssues.some(
     (issue) => issue.topRecommendations.length > 0,
   )
-
   // For a factor, the audited pages scoring below pass (< 70) on that factor,
   // worst-first — the "what's failing" behind the pass/partial/fail counts.
   function pagesBelowPass(factorId: string): Array<{ url: string; score: number }> {
@@ -527,11 +529,15 @@ export function TechnicalAeoSection({
       <section className={integrated ? 'pt-5' : 'page-section-divider'}>
         {integrated ? (
           <div>
-            <h3 className="text-base font-semibold text-heading">Technical findings</h3>
+            <h3 className="text-base font-semibold text-heading">
+              {compactCopy ? 'Checks' : 'Technical findings'}
+            </h3>
             <p className="mt-1 max-w-2xl text-sm text-secondary">
-              {hasAnyRecommendations
-                ? 'Select a check to see affected pages and recommended fixes.'
-                : 'Select a check to see affected pages and score details.'}
+              {compactCopy
+                ? 'Open a check to see affected pages and fixes.'
+                : hasAnyRecommendations
+                  ? 'Select a check to see affected pages and recommended fixes.'
+                  : 'Select a check to see affected pages and score details.'}
             </p>
           </div>
         ) : (

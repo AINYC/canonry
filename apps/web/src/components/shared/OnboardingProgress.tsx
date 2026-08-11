@@ -2,7 +2,7 @@ export type OnboardingStage = 'site' | 'fixes' | 'visibility'
 
 const ONBOARDING_STAGES = [
   { id: 'site', label: 'Site audit', optional: false },
-  { id: 'fixes', label: 'Review fixes', optional: false },
+  { id: 'fixes', label: 'Page health', optional: false },
   { id: 'visibility', label: 'AI Visibility', optional: true },
 ] as const satisfies ReadonlyArray<{
   id: OnboardingStage
@@ -26,7 +26,7 @@ export function OnboardingProgress({ current }: { current: OnboardingStage }) {
           <li
             key={stage.id}
             aria-current={active ? 'step' : undefined}
-            className="flex min-h-14 items-center gap-3 px-3 py-2.5 first:pl-0 last:pr-0"
+            className="flex min-h-12 items-center gap-3 px-3 py-2 first:pl-0 last:pr-0"
           >
             <span
               aria-hidden="true"
@@ -40,14 +40,12 @@ export function OnboardingProgress({ current }: { current: OnboardingStage }) {
             >
               {complete ? '✓' : index + 1}
             </span>
-            <span className="min-w-0">
-              <span className={`block text-sm font-medium ${active || complete ? 'text-heading' : 'text-secondary'}`}>
+            <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+              <span className={`text-sm font-medium ${active || complete ? 'text-heading' : 'text-secondary'}`}>
                 {stage.label}
               </span>
-              <span className="block text-[13px] text-secondary">
-                {complete ? 'Done' : active ? 'Current' : stage.optional ? 'Optional' : 'Upcoming'}
-                {active && stage.optional ? ' · Optional' : null}
-              </span>
+              {stage.optional ? <span className="text-[13px] text-secondary">Optional</span> : null}
+              {complete ? <span className="sr-only">Complete</span> : null}
             </span>
           </li>
         )

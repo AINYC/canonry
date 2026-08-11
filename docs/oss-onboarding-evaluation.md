@@ -34,19 +34,19 @@ The revised recommendation is therefore:
 
     Domain
       → approved canonical Site Health scan
-      → map reveal and Page health fixes
+      → Page health fixes
       → optional AI Visibility setup
       → Home
 
-“Technical audit” is the action. The map is its first result. Do not insert a scorecard step between them.
+“Technical audit” is the action. Page health is its first result during onboarding.
 
 ### Implementation decision: one explicit setup flow
 
 The shipped onboarding no longer enters the project shell and overlays a guided tour. First open stays on `/setup` and uses real product data in three explicit stages:
 
 1. **Site audit** creates the project and runs the canonical persisted crawl.
-2. **Review fixes** shows the retained map, inventory, and Page health findings.
-3. **AI Visibility** reuses the project-scoped visibility setup and can be skipped.
+2. **Page health** opens automatically with the scan's checks, affected pages, and fixes. The normal Site Health map and inventory remain available after setup.
+3. **AI Visibility** appears above the Page health findings, reuses the project-scoped visibility setup, and can be skipped.
 
 Finishing or skipping AI Visibility replaces the setup route with `/` (Home). The exact project and Site Health run remain recoverable from URL and server state during setup. No local onboarding-complete flag or tutorial state is added, and graph-layout failure does not block Page health or the AI Visibility decision.
 
@@ -65,7 +65,7 @@ The first UI experience should show Canonry's operating loop before asking the u
     Verify the result and keep watching
         ↺
 
-The domain is the opening input. Canonry creates a minimal project and runs an approved provider-free Site Health scan while the operator remains in the focused `/setup` flow. The visual map is the first retained proof that Canonry understands the site as a system rather than a domain string.
+The domain is the opening input. Canonry creates a minimal project and runs an approved provider-free Site Health scan while the operator remains in the focused `/setup` flow. Page health is the first retained proof that Canonry understands the site's pages and can identify concrete fixes.
 
 The destination is not “setup complete” or a raw visibility count. It is an operating brief that answers:
 
@@ -150,9 +150,11 @@ Not every shipped capability has a full web-native control today. WordPress, con
 
 ## The product aha moment
 
-The immediate aha is structural and specific:
+The immediate onboarding aha is specific:
 
-> Canonry mapped my site, showed how its pages and sections connect, and identified an important page that needs attention. Now it can use that structure to define what should be measured.
+> Canonry checked my site, showed which pages need attention, and explained the fixes. Now I can optionally see whether answer engines mention and cite me.
+
+The visual map remains a retained Site Health capability after setup; it is not an onboarding step.
 
 The later, connected aha remains:
 
@@ -160,8 +162,8 @@ The later, connected aha remains:
 
 There are four value moments:
 
-1. **Site understood:** Canonry publishes a real map and inventory without requiring an LLM credential.
-2. **First finding:** Selecting a real page exposes its exact technical evidence and remediation.
+1. **Site understood:** Canonry publishes real Page health evidence without requiring an LLM credential.
+2. **First finding:** A real check exposes affected pages and remediation.
 3. **Connected operating brief:** Canonry combines the evidence available so far into one conclusion and next action.
 4. **Retention proof:** Canonry returns later and explains what changed without being asked.
 
@@ -218,9 +220,9 @@ The map is published only when the crawl reaches a terminal complete or partial 
 
 After the domain is accepted, keep the operator on `/setup` through three visible stages:
 
-    Site audit  →  Review fixes  →  AI Visibility (optional)  →  Home
+    Site audit  →  Page health  →  AI Visibility (optional)  →  Home
 
-The Site audit stage shows real persisted crawl progress. A complete or partial terminal crawl advances to Review fixes, where the retained map, page inventory, and Page health findings are available without a guided overlay. Graph or WebGL failure falls back to the inventory and does not block the Page health review.
+The Site audit stage shows real persisted crawl progress. A complete or partial terminal crawl opens Page health directly, without the normal Map, Pages, or Page health tabs. The AI Visibility decision appears above the findings. Graph or WebGL failure cannot block onboarding because the setup flow does not request or render the visual map.
 
 AI Visibility then reuses the existing project-scoped provider, query, competitor, and first-sweep setup. It is explicitly optional. Finishing or skipping replaces setup history with `/`, so Back does not reopen onboarding.
 
@@ -228,7 +230,7 @@ AI Visibility then reuses the existing project-scoped provider, query, competito
 
 Demand follows the site map. The map can establish which pages and folders exist; the operator may confirm which repeated surfaces represent products, locations, or other Properties. It cannot establish what buyers ask or what answer engines cite.
 
-After map review, offer two scope paths:
+After onboarding, advanced operators can use the normal measurement settings to choose between two scope paths:
 
 1. **Simple measurement:** measure the site as one entity and proceed to reviewed questions.
 2. **Structured measurement:** select real pages or path families from the persisted crawl to seed a draft of Properties and groups.
@@ -244,7 +246,7 @@ When Canonry needs questions, offer four truthful paths:
 
 GSC is the recommended path when available, but it does not define the platform.
 
-If the public site map reveals multiple product lines, markets, locations, or site sections, introduce Properties and Advanced Measurement here. The operator should review a real measurement scope, not a flat prompt list.
+If the public site map later reveals multiple product lines, markets, locations, or site sections, Settings can introduce Properties and Advanced Measurement. The operator should review a real measurement scope, not a flat prompt list.
 
 ### Provider setup appears at the first provider-backed mission
 
@@ -264,21 +266,19 @@ Before collecting answer evidence, show:
 
 The operator approves the provider, question scope, and expected usage. Other answer engines remain contextual additions.
 
-## The first result is an operating picture
+## The first result is actionable Page health
 
-Do not end at “Setup complete.” The first result is the mapped site; the first connected result is the operating brief.
+Do not end at “Setup complete.” The onboarding result is Page health; the first connected result is the operating brief. The visual map remains available in the normal Site Health workspace after setup.
 
     Initial Site Health baseline
 
     186 pages found · 171 checked · 154 technically eligible
 
-    [Interactive map with site sections and internal-link structure]
-
     First finding
     /emergency-services is an important linked page, but its answer
     structure is incomplete. Review exact evidence and remediation.
 
-    [Inspect finding]                    [Build measurement plan]
+    [Inspect finding]                    [Set up AI Visibility]
 
 This result is useful with no demand source, answer provider, analytics connection, or agent. It should be the first retained product surface, not an onboarding-only success card.
 
@@ -502,10 +502,9 @@ Six decisions keep the change inside Canonry's current architecture:
 flowchart LR
   L["First-open launchpad"] --> P["Create-only project"]
   P --> S["Approved canonical Site Health scan"]
-  S --> X["Terminal exact-run map + page finding"]
-  X --> D["Existing site_crawl_* evidence + graph layout"]
-  X --> F["Review Page health fixes"]
-  F --> V["Optional AI Visibility setup"]
+  S --> F["Open Page health findings"]
+  F --> D["Existing site_audit_* and site_crawl_* evidence"]
+  F --> V["Optional AI Visibility setup above findings"]
   V --> H["Home"]
   F --> H
 ```
@@ -518,7 +517,7 @@ Keep one route flow:
       → /setup
       → create project and request approved Site Health scan
       → remain on /setup with the exact project and Site Health run
-      → terminal map, inventory, and Page health review
+      → open Page health directly with no view tabs
       → optional project-scoped AI Visibility setup
       → / (Home)
 
@@ -529,7 +528,7 @@ Required route changes:
 - Make the root redirect await the generated `GET /projects` query. Redirect only after a successful empty response; an API or auth failure must render an error/retry shell, not be interpreted as zero projects. The current cache-only `beforeLoad` can miss a true cold load.
 - Keep `/setup` as the first-open route. Select the legacy or platform experience through runtime configuration during rollout.
 - Add a create-only `POST /projects` operation for the launchpad. The current `PUT /projects/:name` is an upsert and must not overwrite a same-name project after a concurrent CLI/API creation. The server normalizes and validates the canonical domain. Define a dedicated `projects.write` scope; the default `*` key/admin satisfies it. The global create route rejects viewer, read-only, and project-scoped credentials and returns `409` for a normalized name collision; it must not reuse a broad-read helper that also permits unrelated account scopes.
-- Navigate after project creation even if scan dispatch fails. The project is valid; Site Health should show a retry or “Continue without a map.”
+- Continue after project creation even if scan dispatch fails. The project is valid; focused setup should show a Page health retry while preserving it.
 - Start the scan only from the form submission handler. Do not start it from a mount effect that React Strict Mode, reload, or back navigation can replay.
 
 Domain-only creation still needs explicit defaults. Derive the project slug and display name from the normalized host. Keep the domain as the only required visible input; place inferred market and language in a compact optional disclosure so they are editable without becoming new gates. Do not silently assume `US` and `en` for every operator.
@@ -794,7 +793,7 @@ Create these state boundaries:
 
 Before adding more hooks, extract the current Overview branch from `ProjectPage.tsx` into `ProjectOverviewSurface.tsx`. `ProjectPageContent` already coordinates a large hook graph and has a dedicated loading shell to prevent conditional-hook failures.
 
-Lazy-load the explicit Site Health result surface so Sigma, Graphology, and WebGL stay out of the initial setup chunk. In onboarding mode, reuse `SiteHealthSection` while hiding history and ordinary scan controls, exposing only persisted progress, map/inventory, Page health, retry, and continuation actions. Preserve Inventory as the accessible and WebGL-unavailable fallback.
+In onboarding mode, reuse `SiteHealthSection` while hiding history, ordinary scan controls, view tabs, map, and inventory. Expose only persisted progress, Page health, retry, and continuation actions. Sigma, Graphology, and WebGL stay out of the setup path.
 
 Modify the existing surfaces as follows:
 
@@ -938,17 +937,17 @@ These commands render the server DTOs; they do not reimplement readiness or brie
    - Reject run creation when no executor callback exists.
    - Add the stored exact-run progress DTO, generated client, permission tests, and explicit partial/crash/layout states.
 
-5. **Behavior-preserving Site Map extraction**
-   - Extract `SiteMapExplorer` from `SiteHealthSection`, retain the canonical page hierarchy, and add lazy-load, reduced-motion, narrow-screen, WebGL, layout-failure, and Inventory-fallback coverage.
+5. **Behavior-preserving post-setup Site Map extraction**
+   - Keep `SiteMapExplorer` in the normal Site Health workspace, retain the canonical page hierarchy, and add lazy-load, reduced-motion, narrow-screen, WebGL, layout-failure, and Inventory-fallback coverage. This is not an onboarding dependency.
 
 6. **Platform launchpad and Site Health handoff**
-   - Replace the flagged first-open branch, fix cold-load/error behavior, request the approved canonical scan, and navigate to Site Health regardless of dispatch outcome.
+   - Replace the flagged first-open branch, fix cold-load/error behavior, request the approved canonical scan, and remain in focused setup with recoverable Page health progress regardless of dispatch outcome.
 
-7. **Map reveal and immediate proof**
-   - Add progress/resume, terminal exact-run map, one exact page finding, coverage/provenance copy, recovery paths, and the next measurement-scope action.
+7. **Page health and immediate proof**
+   - Add progress/resume, terminal exact-run Page health, exact affected-page evidence, coverage/provenance copy, recovery paths, and the optional AI Visibility handoff above the findings.
 
-8. **Map-to-measurement draft**
-   - Add the canonical-row selection action, draft provenance, ETag/idempotency/limit checks, generated client, MCP parity, and reviewed Property/group handoff.
+8. **Post-setup map-to-measurement draft**
+   - In advanced measurement Settings, add the canonical-row selection action, draft provenance, ETag/idempotency/limit checks, generated client, MCP parity, and reviewed Property/group handoff.
 
 9. **Static catalog and fast capability readiness**
    - Populate the complete catalog, merge dynamic stored state, and add OpenAPI/generated client, CLI reads, embed authorization, and read-only MCP surfaces.
@@ -987,9 +986,9 @@ Include:
 
 1. create-only domain launchpad behind the runtime flag
 2. approved call to the existing canonical Site Health run
-3. immediate navigation into the normal Site Health shell
+3. remain in the focused setup shell and open Page health when the scan is terminal
 4. exact run polling/resume and truthful progress/recovery
-5. terminal map reveal, one page finding, and a CTA into the existing simple/advanced measurement setup
+5. compact Page health findings with an optional AI Visibility handoff above them
 6. focused API, frontend, accessibility, and flag-off regression tests
 
 Do not include automatic map-to-Property inference, the capability catalog, operating brief, Google auth changes, or provider estimate in that one-day slice. Those remain the dependency-ordered continuation above. If the audit-engine fetch-control spike finds an upstream gap, ship the slice dark and do not enable automatic scanning until the gap is fixed.
@@ -1011,7 +1010,7 @@ Frontend:
 
 - invalid domain, non-US/non-English inferred defaults, create conflict, create failure, scan dispatch failure after successful creation, duplicate submit, reload during run, and failed-retry semantics
 - one active mission and one primary action
-- map default, exact finding selection, healthy-site result, one-page site, no sitemap, redirected host, partial/sample coverage, layout failure, and WebGL/Inventory fallback
+- Page health default, exact finding expansion, healthy-site result, one-page site, no sitemap, redirected host, partial/sample coverage, and crawl-detail failure
 - CLI/API-created project resumes at its derived state
 - unmeasured signals never render as `0` or `0%`
 - Aero disabled, local provider, CDP, viewer, read-only, embed, base-path, and remote self-hosted modes
@@ -1058,7 +1057,7 @@ Do not use one binary onboarding-complete event.
 | Watching | The operator explicitly enabled at least one evidence/site monitoring schedule. |
 | Operating | Deferred until Canonry can derive concrete recommendation, approval, execution, and verification predicates. |
 
-First-session success is a useful map plus an exact finding. Connected first-session success is the operating brief. Product activation is Watching, not wizard completion.
+First-session success is useful Page health evidence plus an exact finding. Connected first-session success is the operating brief. Product activation is Watching, not wizard completion.
 
 A technical audit, organic evidence, demand, or visibility finding may create first value when the deterministic brief selects it. Aero may explain that finding, but agent prose alone does not create the milestone. The visibility baseline is one mission completion, not the universal definition of activation.
 
@@ -1066,9 +1065,9 @@ A technical audit, organic evidence, demand, or visibility finding may create fi
 
 Primary:
 
-- time to terminal site map or truthful Inventory fallback
-- percentage who inspect a mapped page and its exact finding
-- percentage who continue from the map into a reviewed measurement scope
+- time to terminal Page health evidence or truthful recovery
+- percentage who inspect a check, its affected pages, and its exact finding
+- percentage who continue from Page health into optional AI Visibility setup
 - time to first useful finding
 - time to first operating brief
 - percentage of new users who describe Canonry as a monitoring and operating platform after 15 seconds
@@ -1095,16 +1094,16 @@ These describe the user-visible outcomes, not implementation order. The dependen
 
 - Replace the five-card wizard with the first-open launchpad.
 - Allow domain and project creation before provider setup.
-- Request the approved canonical Site Health baseline and enter the normal Site Health shell.
+- Request the approved canonical Site Health baseline and remain in the focused setup shell.
 - Show the operating loop and honest scan/capability states.
 - Keep current routes and backend contracts where possible.
 - Add mission telemetry V2.
 
-### Phase 2: map and immediate proof
+### Phase 2: Page health and immediate proof
 
-- Show site discovery and scan progress in the activation workbench.
-- Reveal the terminal map, Inventory fallback, and one exact page finding.
-- Let the operator seed a reviewed measurement draft from canonical pages or path families.
+- Show site discovery and scan progress in the setup flow.
+- Reveal Page health checks, affected pages, and one exact finding.
+- Keep the visual map, inventory, and advanced measurement controls in their normal post-setup surfaces.
 - Route the first exact technical finding into the operating brief.
 - Move system health out of the opening task unless it blocks the scan.
 
@@ -1136,10 +1135,10 @@ Test at least these fresh-install paths:
 3. One-page site with useful technical evidence but no meaningful topology.
 4. Large site with sampled layout and explicit partial coverage.
 5. Public scan partly succeeds, times out, is cancelled, or crashes.
-6. Layout publication fails or the browser has no WebGL; Inventory continues.
+6. Layout publication fails or the browser has no WebGL; onboarding remains unaffected because it opens Page health directly.
 7. Canonical host redirects to a different effective host.
-8. Healthy map has no negative finding.
-9. Map selections create a draft, exceed the Target cap, or conflict with a changed draft.
+8. Healthy Page health result has no negative finding.
+9. Post-setup map selections create a draft, exceed the Target cap, or conflict with a changed draft.
 10. GSC available with useful demand.
 11. GSC unavailable, no data, or cancelled.
 12. Discovery chosen instead of GSC.
@@ -1207,8 +1206,8 @@ Existing gcloud authentication does not automatically become a durable Canonry G
 
 1. Reframe onboarding as a platform reveal, not query setup.
 2. Use the domain and a real canonical Site Health scan as the immediate hook.
-3. Make Map the first result and exact page evidence the first finding.
-4. Let reviewed canonical map selections seed, but never auto-publish, a measurement draft.
+3. Make Page health the first result and exact page evidence the first finding.
+4. Keep Map, inventory, and advanced measurement outside onboarding.
 5. Make the operating brief the connected first-session destination.
 6. Treat queries as measurement inputs and GSC as one optional demand source.
 7. Show the full operating loop and readiness states without forcing every integration.
