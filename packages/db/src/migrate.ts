@@ -3502,6 +3502,31 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
     statements: [],
     run: dropSiteCrawlSelfLinks,
   },
+  {
+    version: 133,
+    name: 'site-crawl-reclassify-template-links-per-anchor',
+    // v131 classified a link as chrome when its MOST ubiquitous anchor was
+    // ubiquitous. One stored link row aggregates every anchor the crawl saw
+    // between the same two pages, so on any site with a comprehensive footer
+    // (which is most sites) an in-prose link to a footer-linked target shared
+    // a row with that page's footer link and inherited its ratio. The
+    // editorial link was marked chrome, hidden from the map, and dropped from
+    // every content count. Observed on canonry.ai: /aeo-methodology had 24
+    // outbound links, all marked chrome at ratio 0.96, with anchors like
+    // "Explore the Canonry platform" that are plainly editorial.
+    //
+    // The rule is now the LEAST ubiquitous anchor: chrome only when every
+    // anchor on the link is chrome. This re-runs the same backfill hook, which
+    // reclassifies each attempt from its own stored rows through the corrected
+    // contract function, so an existing scan is right without a re-crawl.
+    //
+    // Statements stay empty because v131 already added every column; only the
+    // values were wrong. Re-running is safe: the hook resets each attempt to
+    // "classified, not chrome" before it writes, so it is idempotent and its
+    // result depends on nothing but the stored links.
+    statements: [],
+    run: backfillSiteCrawlTemplateLinks,
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

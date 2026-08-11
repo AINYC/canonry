@@ -493,16 +493,35 @@ export function observeTemplateLinkEdges(
 }
 
 /**
- * Share of fetched pages carrying this link's MOST ubiquitous anchor, or null
+ * Share of fetched pages carrying this link's LEAST ubiquitous anchor, or null
  * when nothing about the link is measurable (an unresolved target, or no
  * anchor at all).
  *
- * The maximum is deliberate. One persisted link row aggregates every anchor
- * the crawl saw between the same two pages, so a body link that also appears
- * in the footer arrives as a single row. Taking the maximum keeps that row out
- * of the content map, which is what the reader asked for; taking the minimum
- * would leave the whole nav mesh drawn because one page also links the target
- * editorially.
+ * The MINIMUM is the whole rule, and it is what makes a link editorial as soon
+ * as any one of its anchors is.
+ *
+ * One persisted link row aggregates EVERY anchor the crawl saw between the
+ * same two pages. A site with a comprehensive footer links from nearly every
+ * page to nearly every page, so an in-prose link to a footer-linked target
+ * lands in the SAME row as that page's footer link. This function used to take
+ * the maximum, which handed that row the footer's ubiquity: the editorial link
+ * was marked chrome, hidden from the map, and dropped from content counts.
+ * Most sites have a comprehensive footer, so most sites had this.
+ *
+ * Taking the minimum asks the right question. The pair index is keyed by
+ * (target, ANCHOR), so a footer link and a body link to the same target are
+ * different pairs with different ubiquity. Reading the least ubiquitous one
+ * means: does any anchor on this link appear on few enough pages to be
+ * editorial? A page carrying only the footer link still has one anchor, still
+ * ubiquitous, and stays chrome. The nav mesh does not come back, because a
+ * page's edge only becomes editorial when that page really does link the
+ * target in its own words.
+ *
+ * The residual error now runs the safe way. A nav whose anchor text varies by
+ * page (a breadcrumb reading "Home" on some pages and "Back to home" on
+ * others) splits into low-ubiquity pairs and can read as editorial. That draws
+ * a link that exists; the old direction HID links that exist, on a map whose
+ * whole purpose is showing editorial structure.
  */
 export function templateLinkRatio(
   index: TemplateLinkPairIndex,
@@ -511,23 +530,36 @@ export function templateLinkRatio(
 ): number | null {
   if (edge.targetNodeKey == null || edge.anchors.length === 0) return null
   if (!Number.isFinite(pagesFetched) || pagesFetched <= 0) return null
-  let best: number | null = null
+  let least: number | null = null
   for (const anchor of edge.anchors) {
     const sources = index.sourcePagesByPair.get(
       templateLinkPairKey(edge.targetNodeKey, normalizeTemplateAnchorText(anchor)),
     )
+    // Unreachable for a resolved target: every caller builds the index from
+    // the same link set it then measures, so each anchor here was observed.
+    // Skipping contributes no evidence either way rather than inventing a
+    // zero, which would persist as a confident "editorial" for a link nothing
+    // was ever recorded about.
     if (!sources) continue
     // A source page outside the fetched count (a redirect node, say) must not
     // push the share above 1.
     const ratio = Math.min(1, sources.size / pagesFetched)
-    if (best == null || ratio > best) best = ratio
+    if (least == null || ratio < least) least = ratio
   }
   // Six decimals so the persisted number is stable across runs of the same
   // crawl rather than carrying float noise into an equality assertion.
-  return best == null ? null : Math.round(best * 1_000_000) / 1_000_000
+  return least == null ? null : Math.round(least * 1_000_000) / 1_000_000
 }
 
-/** The single threshold comparison. An unmeasurable link is never a template link. */
+/**
+ * The single threshold comparison. An unmeasurable link is never a template
+ * link.
+ *
+ * Paired with the minimum in `templateLinkRatio`, this reads as: chrome only
+ * when EVERY anchor on the link is ubiquitous. One editorial anchor is enough
+ * to make the whole link editorial, which is the direction that shows links
+ * rather than hiding them.
+ */
 export function isTemplateLinkRatio(ratio: number | null): boolean {
   return ratio != null && ratio >= TEMPLATE_LINK_RATIO_THRESHOLD
 }
@@ -542,7 +574,10 @@ export function templateLinkDetection(pagesFetched: number): SiteHealthTemplateD
 export interface TemplateLinkClassification {
   edgeKey: string
   isTemplate: boolean
-  /** Null when the link carries no measurable (target, anchor) pair. */
+  /**
+   * Ubiquity of the link's least ubiquitous anchor. Null when the link carries
+   * no measurable (target, anchor) pair.
+   */
   templateRatio: number | null
 }
 
@@ -746,7 +781,11 @@ export const siteCrawlEdgeSchema = z.object({
    * response's `templateDetection` explains; it never means "not a nav link".
    */
   isTemplate: z.union([z.boolean(), z.null()]),
-  /** Share of fetched pages carrying this link's most ubiquitous anchor. */
+  /**
+   * Share of fetched pages carrying this link's LEAST ubiquitous anchor: the
+   * most editorial thing anyone says when linking these two pages. At or above
+   * the threshold means every anchor on the link is chrome.
+   */
   templateRatio: z.union([z.number(), z.null()]),
 })
 export type SiteCrawlEdgeDto = z.infer<typeof siteCrawlEdgeSchema>
