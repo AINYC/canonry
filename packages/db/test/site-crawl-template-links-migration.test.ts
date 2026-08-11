@@ -193,3 +193,43 @@ test('runs as part of migrate, so an existing install needs no manual step', () 
   expect(remaining[0]!.n).toBe(0)
   expect(db.select().from(siteCrawlSnapshots).get()?.templateDetection).toBe('applied')
 })
+
+test('keeps an in-prose link that shares a stored row with a nav link', () => {
+  // The regression, end to end through persistence. One row aggregates every
+  // anchor between the same two pages, so page-00's footer link to /services
+  // and its in-prose link to /services are ONE row with two anchors. Reading
+  // the row's most ubiquitous anchor gave it the nav ratio, so the editorial
+  // link was marked chrome: hidden from the map, and absent from every content
+  // count. A site whose footer reaches most pages has this on most of its
+  // editorial links.
+  const db = freshDb()
+  const seeded = seedLegacyCrawl(db, 20)
+  db.run(sql`
+    UPDATE site_crawl_edges
+    SET anchors = ${JSON.stringify(['services', 'why our roof crews book out'])}
+    WHERE edge_key = 'nav:page-00->services'
+  `)
+
+  backfillSiteCrawlTemplateLinks(db)
+
+  const mixed = db.select().from(siteCrawlEdges).where(sql`edge_key = 'nav:page-00->services'`).get()
+  // 1 of 20 pages says "why our roof crews book out". That is what the row is
+  // worth, and it is below the threshold, so the link is editorial.
+  expect(mixed?.isTemplate).toBe(false)
+  expect(mixed?.templateRatio).toBe(0.05)
+
+  // The nav mesh does not come back with it: every other page links /services
+  // with the nav anchor only, so those rows stay chrome. A page's link becomes
+  // editorial only when that page really does link the target in its own words.
+  const stillChrome = db.select().from(siteCrawlEdges).all()
+    .filter((row) => row.edgeKey.startsWith('nav:') && row.edgeKey !== 'nav:page-00->services')
+  expect(stillChrome).toHaveLength(seeded.navEdgeCount - 1)
+  expect(stillChrome.every((row) => row.isTemplate === true)).toBe(true)
+
+  // Every surface that reads the classification moves with it, so the map, the
+  // link filters, and the totals cannot tell three different stories.
+  const graphEdge = db.select().from(siteCrawlGraphEdges).where(sql`edge_key = 'nav:page-00->services'`).get()
+  expect(graphEdge?.isTemplate).toBe(false)
+  const layout = db.select().from(siteCrawlGraphLayouts).get()
+  expect(layout?.totalTemplateEdges).toBe(seeded.navEdgeCount - 1)
+})

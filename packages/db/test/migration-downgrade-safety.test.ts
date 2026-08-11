@@ -116,6 +116,21 @@ const RUN_HOOK_ALLOWLIST: ReadonlySet<number> = new Set([
   // are exactly the rows it was miscounting, so it is strictly better off.
   // Idempotent: a re-run deletes nothing once they are gone.
   132,
+  // v133 makes NO schema change: it re-runs v131's backfill because the rule
+  // v131 applied was wrong. v131 marked a link as chrome when its most
+  // ubiquitous anchor was ubiquitous, but one row aggregates every anchor
+  // between the same two pages, so an in-prose link sharing a row with a
+  // footer link to the same target inherited the footer's ratio and was
+  // hidden. The rule is now the least ubiquitous anchor. Downgrade-safe:
+  // `is_template` and `template_ratio` are unknown to any binary older than
+  // v131, and to a v131-or-newer binary these are the values its own
+  // classifier would now produce from the same stored rows. It uses run() for
+  // the same reason v131 does: the derivation counts DISTINCT source pages per
+  // (target, normalized anchor) pair using the contract's own normalizer,
+  // which SQL cannot express without becoming a second implementation.
+  // Idempotent: the hook resets each attempt before writing, so a retry writes
+  // the same values.
+  133,
 ])
 
 test(`migrations after v${DOWNGRADE_BASELINE} define no run() hook unless explicitly allowlisted`, () => {

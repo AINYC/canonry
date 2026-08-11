@@ -172,10 +172,15 @@ describe('template link detection', () => {
     expect(result.edges.every((edge) => edge.templateRatio === 1)).toBe(true)
   })
 
-  it('uses a link row\'s most ubiquitous anchor, because one row holds them all', () => {
+  it('keeps an editorial link that shares a row with a footer link', () => {
     // One page links to /about twice: once from the footer, once from its
-    // body. The crawl stores that as ONE row carrying both anchors, so the
-    // row cannot be split and the footer anchor is what decides it.
+    // body. The crawl stores that as ONE row carrying both anchors.
+    //
+    // This is the regression. Reading the row's MOST ubiquitous anchor handed
+    // it the footer's ratio, so the in-prose link was marked chrome, hidden
+    // from the map, and dropped from every content count. On a site whose
+    // footer links to nearly every page, that is nearly every editorial link
+    // on the site.
     const edges: TemplateLinkEdgeInput[] = [
       ...Array.from({ length: 19 }, (_, index) => ({
         edgeKey: `footer:${index}`,
@@ -191,7 +196,61 @@ describe('template link detection', () => {
       },
     ]
     const result = classifyTemplateLinks({ pagesFetched: 20, edges })
-    expect(classificationOf(result, 'mixed')).toEqual({ edgeKey: 'mixed', isTemplate: true, templateRatio: 1 })
+    // 1 of 20 pages says "the story behind our shop", so that is what the row
+    // is worth: an editorial link, drawn and counted.
+    expect(classificationOf(result, 'mixed')).toEqual({ edgeKey: 'mixed', isTemplate: false, templateRatio: 0.05 })
+
+    // The nav mesh does not come back with it. Every OTHER page carries only
+    // the footer anchor, so those rows stay chrome: a page's link becomes
+    // editorial only when that page really does link the target in its own
+    // words.
+    for (let index = 0; index < 19; index += 1) {
+      expect(classificationOf(result, `footer:${index}`)).toEqual({
+        edgeKey: `footer:${index}`, isTemplate: true, templateRatio: 1,
+      })
+    }
+    expect(result.edges.filter((edge) => !edge.isTemplate)).toHaveLength(1)
+  })
+
+  it('stays chrome when every anchor on the row is ubiquitous', () => {
+    // A logo link and a nav item to the same target from every page. Two
+    // anchors, both site-wide: nothing here is editorial, and reading the
+    // least ubiquitous anchor must not turn the header into content.
+    const edges: TemplateLinkEdgeInput[] = Array.from({ length: 20 }, (_, index) => ({
+      edgeKey: `chrome:${index}`,
+      sourceNodeKey: `page-${index}`,
+      targetNodeKey: 'home',
+      anchors: ['', 'Home'],
+    }))
+    const result = classifyTemplateLinks({ pagesFetched: 20, edges })
+    expect(result.edges.every((edge) => edge.isTemplate)).toBe(true)
+    expect(result.edges.every((edge) => edge.templateRatio === 1)).toBe(true)
+  })
+
+  it('classifies chrome as a subset of what the old rule classified', () => {
+    // The rule changed from "any anchor is ubiquitous" to "every anchor is",
+    // so the chrome set can only shrink and the content set can only grow.
+    // That is why no count on this surface can go DOWN after the fix, and it
+    // is the property the whole change rests on.
+    const edges: TemplateLinkEdgeInput[] = [
+      ...Array.from({ length: 18 }, (_, index) => ({
+        edgeKey: `footer:${index}`,
+        sourceNodeKey: `page-${index}`,
+        targetNodeKey: 'pricing',
+        anchors: ['Pricing'],
+      })),
+      // Two pages that ALSO link editorially, each in their own words.
+      { edgeKey: 'body:a', sourceNodeKey: 'page-18', targetNodeKey: 'pricing', anchors: ['Pricing', 'what it costs'] },
+      { edgeKey: 'body:b', sourceNodeKey: 'page-19', targetNodeKey: 'pricing', anchors: ['Pricing', 'see our plans'] },
+    ]
+    const result = classifyTemplateLinks({ pagesFetched: 20, edges })
+
+    const contentKeys = result.edges.filter((edge) => !edge.isTemplate).map((edge) => edge.edgeKey)
+    expect(contentKeys).toEqual(['body:a', 'body:b'])
+    // Under the old maximum rule every one of these rows scored 0.9 and the
+    // content count was zero. The content links were always there.
+    expect(contentKeys).toHaveLength(2)
+    expect(result.edges.filter((edge) => edge.isTemplate)).toHaveLength(18)
   })
 
   it('never claims a link it cannot measure', () => {

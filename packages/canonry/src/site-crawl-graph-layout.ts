@@ -256,8 +256,16 @@ export function siteCrawlGraphLayoutSettingsFingerprint(settings: unknown): stri
  * v3 excludes template links from the physics. That changes what the same
  * crawl produces, so it is an ALGORITHM change, not a settings change: v2
  * coordinates must not be reused as seeds for a v3 layout.
+ *
+ * v4 is the same exclusion over a corrected classification. A link that is
+ * both a footer link and an in-prose link used to be marked chrome and was
+ * dropped from the physics, so every stored v3 layout was solved over a graph
+ * missing much of the site's real editorial structure. The settings
+ * fingerprint below cannot catch this: the threshold did not move, the rule
+ * that applies it did. Bumping the algorithm is what stops a v3 layout being
+ * reused, or its coordinates being seeded into the corrected solve.
  */
-const SITE_CRAWL_GRAPH_LAYOUT_ALGORITHM = 'site-health-fa2-v3'
+const SITE_CRAWL_GRAPH_LAYOUT_ALGORITHM = 'site-health-fa2-v4'
 
 export const SITE_CRAWL_GRAPH_LAYOUT_VERSION = `${SITE_CRAWL_GRAPH_LAYOUT_ALGORITHM}-${
   siteCrawlGraphLayoutSettingsFingerprint({

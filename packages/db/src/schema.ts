@@ -904,11 +904,15 @@ export const siteCrawlEdges = sqliteTable('site_crawl_edges', {
   nofollowOccurrences: integer('nofollow_occurrences').notNull().default(0),
   anchors: text('anchors', { mode: 'json' }).$type<string[]>().notNull().default([]),
   /**
-   * True when the same (target page, anchor) pair appears on at least
-   * `TEMPLATE_LINK_RATIO_THRESHOLD` of the attempt's fetched pages: a nav,
-   * header, or footer link rather than an editorial one. Computed once at
+   * True when EVERY (target page, anchor) pair on this link appears on at
+   * least `TEMPLATE_LINK_RATIO_THRESHOLD` of the attempt's fetched pages: a
+   * nav, header, or footer link rather than an editorial one. Computed once at
    * publish time by the contract's `classifyTemplateLinks`, so the map, the
    * API filters, and the agents all read the same decision.
+   *
+   * One row aggregates every anchor between the same two pages, so a link that
+   * is BOTH a footer link and an in-prose link is one row with two anchors. It
+   * is editorial, because the in-prose link exists.
    *
    * NULL means this row was never classified, which reads report as
    * `unavailable-legacy-scan`. It never means "not a template link": the
@@ -917,8 +921,9 @@ export const siteCrawlEdges = sqliteTable('site_crawl_edges', {
    */
   isTemplate: integer('is_template', { mode: 'boolean' }),
   /**
-   * Share of fetched pages carrying this link's most ubiquitous anchor. NULL
-   * when the link has no measurable pair (an unresolved target or no anchor).
+   * Share of fetched pages carrying this link's LEAST ubiquitous anchor, which
+   * is the one that decides `is_template`. NULL when the link has no
+   * measurable pair (an unresolved target or no anchor).
    */
   templateRatio: real('template_ratio'),
   createdAt: text('created_at').notNull(),

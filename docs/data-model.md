@@ -131,7 +131,13 @@ graph-edge endpoints so derived-layout cleanup stays bounded.
 Migration 131 separates nav, header, and footer links from content links. A
 `(target page, normalized anchor)` pair carried by at least 70 percent of the
 scan's fetched pages is template chrome; on real sites that distribution is
-bimodal, so the threshold sits in an empty middle. Template links are excluded
+bimodal, so the threshold sits in an empty middle. A stored link row aggregates
+EVERY anchor the crawl saw between the same two pages, so migration 133
+corrects which anchor decides: chrome only when every anchor on the row is
+ubiquitous. Migration 131 used the most ubiquitous one, which handed an
+in-prose link that shared a row with a footer link to the same target the
+footer's ratio and hid it. Any site with a comprehensive footer had this, so
+133 re-runs the same backfill to reclassify every stored scan. Template links are excluded
 from the ForceAtlas2 physics, so positions describe content structure, but they
 are still published in the sample and tagged, so a viewer can draw them without
 a refetch and without any page moving. Below 15 fetched pages nothing is marked
