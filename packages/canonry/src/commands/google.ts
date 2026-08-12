@@ -274,7 +274,15 @@ export async function googlePerformanceDaily(project: string, opts: {
   }
 
   const { clicks, impressions, ctr, days } = data.totals
-  console.log(`GSC daily summary (${days} day${days === 1 ? '' : 's'}):\n`)
+  const { startDate: from, endDate: to, reportingLagDays } = data.window
+  const range = from && to ? ` ${from} to ${to}` : ''
+  console.log(`GSC daily summary (${days} day${days === 1 ? '' : 's'}${range}):\n`)
+  // Google publishes on a delay, so the window stops short of today by design.
+  // Say so, or a short window looks like a sudden drop in coverage.
+  if (reportingLagDays !== null && reportingLagDays > 0) {
+    console.log(`  Search Console has published through ${to} (${reportingLagDays} day${reportingLagDays === 1 ? '' : 's'} behind today).`)
+    console.log()
+  }
   console.log(`  Clicks:      ${clicks.toLocaleString()}`)
   console.log(`  Impressions: ${impressions.toLocaleString()}`)
   console.log(`  CTR:         ${(ctr * 100).toFixed(2)}%`)

@@ -107,6 +107,35 @@ beforeEach(() => {
   })
 })
 
+describe('executeGscSync — fetch window', () => {
+  test('asks Google through today instead of stopping at a hard-coded lag', async () => {
+    // The ceiling used to be `today - GSC_DATA_LAG_DAYS`, so the sync never
+    // requested the most recent day Google had already published and stored
+    // data stayed a day behind the Search Console UI on every run. Google's
+    // delay varies, so the only correct ceiling is today: the API returns the
+    // days that exist and omits the rest.
+    const { db, tmpDir } = createTempDb()
+    try {
+      seedProject(db)
+      seedRun(db, 'run_window')
+      fetchSearchAnalyticsMock.mockResolvedValue([])
+
+      await executeGscSync(db, 'run_window', 'proj_gsc', { config: testConfig() })
+
+      const today = new Date().toISOString().slice(0, 10)
+      for (const call of fetchSearchAnalyticsMock.mock.calls) {
+        expect((call[2] as { endDate: string }).endDate).toBe(today)
+      }
+      // The lag still pads the START, so a 30-day request still covers 30 days
+      // of PUBLISHED data rather than 30 minus the delay.
+      const firstCall = fetchSearchAnalyticsMock.mock.calls[0]!
+      expect((firstCall[2] as { startDate: string }).startDate).toBe(daysAgo(33))
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('executeGscSync — gsc_daily_totals (property total)', () => {
   test('stores property-level daily totals from the dimensions:[date] call', async () => {
     const { db, tmpDir } = createTempDb()

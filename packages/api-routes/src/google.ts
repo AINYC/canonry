@@ -3,7 +3,7 @@ import { eq, and, desc, sql, inArray } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { gscSearchData, gscUrlInspections, gscCoverageSnapshots, gbpLocations, gbpDailyMetrics, gbpKeywordImpressions, gbpKeywordMonthly, gbpPlaceActions, gbpLodgingSnapshots, gbpAttributesSnapshots, gbpPlaceDetails, runs, projects, type DatabaseClient } from '@ainyc/canonry-db'
 import {
-  validationError, notFound, normalizeProjectDomain, parseWindow, windowCutoff,
+  validationError, notFound, normalizeProjectDomain, parseWindow,
   authRequired, forbidden, quotaExceeded, providerError, escapeLikePattern, AppError,
   hostMatchesDomain,
   hostOf,
@@ -16,7 +16,10 @@ import {
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from './gbp-summary.js'
-import { mergeGscDailyTotalsWithFallback, readGscDailyTotals } from './gsc-totals.js'
+import {
+  mergeGscDailyTotalsWithFallback, readGscDailyTotals,
+  readLatestGscDataDate, resolveGscWindowRange,
+} from './gsc-totals.js'
 import { resolveProject, writeAuditLog } from './helpers.js'
 import {
   getAuthUrl,
@@ -762,9 +765,15 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     }
     const orderBy = parsedOrderBy.data
 
-    // Window-based filtering: when no explicit startDate is provided,
-    // use the window param to compute a cutoff date.
-    const cutoffDate = !startDate ? windowCutoff(parseWindow(request.query.window))?.slice(0, 10) ?? null : null
+    // Window-based filtering: when no explicit startDate is provided, resolve
+    // the labelled window against the last day Google actually published, not
+    // against the clock. See `resolveGscWindowRange`.
+    const resolvedWindow = resolveGscWindowRange(
+      parseWindow(request.query.window),
+      readLatestGscDataDate(app.db, project.id),
+      new Date().toISOString().slice(0, 10),
+    )
+    const cutoffDate = startDate ? null : resolvedWindow.startDate
 
     const conditions = [eq(gscSearchData.projectId, project.id)]
     if (startDate) conditions.push(sql`${gscSearchData.date} >= ${startDate}`)
@@ -851,14 +860,19 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
   }>('/projects/:name/google/gsc/performance/daily', async (request) => {
     const project = resolveProject(app.db, request.params.name)
     const { startDate, endDate } = request.query
-    const cutoffDate = !startDate ? windowCutoff(parseWindow(request.query.window))?.slice(0, 10) ?? null : null
+    const resolvedWindow = resolveGscWindowRange(
+      parseWindow(request.query.window),
+      readLatestGscDataDate(app.db, project.id),
+      new Date().toISOString().slice(0, 10),
+    )
+    const cutoffDate = startDate ? null : resolvedWindow.startDate
 
     // Prefer the property-level daily totals on dates where they exist (match
     // Google's property total). Fall back to summing `gsc_search_data` for
     // missing dates so upgraded installs do not shorten longer/custom windows
     // after their first post-migration sync.
     const windowStart = startDate ?? cutoffDate ?? ''
-    const windowEnd = endDate ?? '9999-12-31'
+    const windowEnd = endDate ?? resolvedWindow.endDate ?? '9999-12-31'
     const dailyTotals = readGscDailyTotals(app.db, project.id, windowStart, windowEnd)
 
     const conditions = [eq(gscSearchData.projectId, project.id)]
@@ -902,6 +916,14 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
         days: daily.length,
       },
       daily,
+      // The period actually returned. An explicit start/end wins over the
+      // label, so echo what was used rather than what the window would have
+      // chosen — a caller must be able to label the data it got.
+      window: {
+        ...resolvedWindow,
+        ...(startDate ? { startDate } : {}),
+        ...(endDate ? { endDate } : {}),
+      },
     }
   })
 
@@ -926,7 +948,12 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
   }>('/projects/:name/google/gsc/top-pages', async (request) => {
     const project = resolveProject(app.db, request.params.name)
     const { startDate, endDate, limit } = request.query
-    const cutoffDate = !startDate ? windowCutoff(parseWindow(request.query.window))?.slice(0, 10) ?? null : null
+    const resolvedWindow = resolveGscWindowRange(
+      parseWindow(request.query.window),
+      readLatestGscDataDate(app.db, project.id),
+      new Date().toISOString().slice(0, 10),
+    )
+    const cutoffDate = startDate ? null : resolvedWindow.startDate
 
     const conditions = [eq(gscSearchData.projectId, project.id)]
     if (startDate) conditions.push(sql`${gscSearchData.date} >= ${startDate}`)
@@ -949,7 +976,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       .all()
 
     const windowStart = startDate ?? cutoffDate ?? ''
-    const windowEnd = endDate ?? '9999-12-31'
+    const windowEnd = endDate ?? resolvedWindow.endDate ?? '9999-12-31'
     const dailyTotals = readGscDailyTotals(app.db, project.id, windowStart, windowEnd)
     const totalClicks = dailyTotals.reduce((sum, d) => sum + d.clicks, 0)
     const totalImpressions = dailyTotals.reduce((sum, d) => sum + d.impressions, 0)

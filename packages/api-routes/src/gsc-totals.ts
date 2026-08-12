@@ -1,12 +1,109 @@
-import { and, asc, eq, sql } from 'drizzle-orm'
-import { gscDailyTotals, gscQueryDailyTotals } from '@ainyc/canonry-db'
+import { and, asc, eq, sql, max } from 'drizzle-orm'
+import { gscDailyTotals, gscQueryDailyTotals, gscSearchData } from '@ainyc/canonry-db'
 import type { DatabaseClient } from '@ainyc/canonry-db'
+import { shiftIsoCalendarDate, type MetricsWindow } from '@ainyc/canonry-contracts'
 
 export interface GscDailyTotal {
   date: string
   clicks: number
   impressions: number
   position: number
+}
+
+/** Days a labelled rolling window covers. `all` has no fixed span. */
+const WINDOW_DAYS: Record<Exclude<MetricsWindow, 'all'>, number> = { '7d': 7, '30d': 30, '90d': 90 }
+
+/**
+ * The inclusive date range a labelled GSC window actually covers, plus the
+ * reporting lag that decided it.
+ */
+export interface GscWindowRange {
+  /** Inclusive lower bound, or `null` for `all`. */
+  startDate: string | null
+  /** Inclusive upper bound: the latest date the property has published. */
+  endDate: string | null
+  /** `MAX(date)` across the project's GSC data, ignoring any window. */
+  latestDataDate: string | null
+  /** Calendar days between `latestDataDate` and today. `null` with no data. */
+  reportingLagDays: number | null
+}
+
+/**
+ * Resolve a labelled window against the last day Search Console actually
+ * published, NOT against the clock.
+ *
+ * Google publishes search analytics on a two-to-three day delay, so the most
+ * recent days of a now-anchored window are dates that cannot ever hold data.
+ * Anchoring `30d` at today therefore returns 27 or 28 days of data under a
+ * label that promises 30, and the shortfall grows as the window shrinks: a
+ * `7d` window spends three of its seven days on the lag and delivers four.
+ *
+ * Worse, the shortfall is invisible and it is not monotonic across labels.
+ * Canonry's now-anchored `30d` covered 2026-07-13..2026-08-09 while Search
+ * Console's own `28 days` covered 2026-07-14..2026-08-10 — neither range
+ * contains the other, so the wider Canonry window reported FEWER impressions
+ * (1,174) than the narrower Google one (1,360). A total that moves the wrong
+ * way when you widen the window reads as missing data, and there is no way for
+ * an operator to tell that apart from a real decline.
+ *
+ * Anchoring on the last published day is what Search Console's own UI does, so
+ * `30d` means thirty days of data and the two surfaces become comparable.
+ *
+ * `today` is injected rather than read from the clock so this stays pure and
+ * testable, matching the `gbp-summary` precedent.
+ */
+export function resolveGscWindowRange(
+  window: MetricsWindow,
+  latestDataDate: string | null,
+  today: string,
+): GscWindowRange {
+  const reportingLagDays = latestDataDate === null
+    ? null
+    : Math.max(0, Math.round(
+      (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${latestDataDate}T00:00:00Z`)) / 86_400_000,
+    ))
+
+  // `all` has no lower bound to place, and with no data at all there is no
+  // anchor: fall back to the now-anchored cutoff so an empty project still
+  // filters rather than returning everything.
+  if (window === 'all') {
+    return { startDate: null, endDate: latestDataDate, latestDataDate, reportingLagDays }
+  }
+  const days = WINDOW_DAYS[window]
+  if (latestDataDate === null) {
+    return {
+      startDate: shiftIsoCalendarDate(today, -days),
+      endDate: null,
+      latestDataDate: null,
+      reportingLagDays: null,
+    }
+  }
+  // `days - 1`, because the range is INCLUSIVE at both ends: a 7-day window
+  // ending on the 10th starts on the 4th, not the 3rd.
+  return {
+    startDate: shiftIsoCalendarDate(latestDataDate, -(days - 1)),
+    endDate: latestDataDate,
+    latestDataDate,
+    reportingLagDays,
+  }
+}
+
+/**
+ * The latest GSC reporting date stored for a project, across BOTH sources.
+ *
+ * The property-level table is preferred everywhere else, but it can lag the
+ * dimensioned one (a project synced before `gsc_daily_totals` existed has only
+ * dimensioned rows). Taking the max of the two means the anchor never sits
+ * behind data the endpoint is about to return.
+ */
+export function readLatestGscDataDate(db: DatabaseClient, projectId: string): string | null {
+  const property = db.select({ latest: max(gscDailyTotals.date) })
+    .from(gscDailyTotals).where(eq(gscDailyTotals.projectId, projectId)).get()?.latest ?? null
+  const dimensioned = db.select({ latest: max(gscSearchData.date) })
+    .from(gscSearchData).where(eq(gscSearchData.projectId, projectId)).get()?.latest ?? null
+  if (property === null) return dimensioned
+  if (dimensioned === null) return property
+  return property >= dimensioned ? property : dimensioned
 }
 
 /**

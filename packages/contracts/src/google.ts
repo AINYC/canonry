@@ -65,6 +65,28 @@ export const gscPerformanceDailyPointSchema = z.object({
 })
 export type GscPerformanceDailyPoint = z.infer<typeof gscPerformanceDailyPointSchema>
 
+/**
+ * The date range a labelled window resolved to, and the reporting lag that
+ * decided it.
+ *
+ * Search Console publishes on a two-to-three day delay, so a window anchored at
+ * today spends its most recent days on dates that cannot hold data. The range
+ * is therefore anchored on the last published day (what Google's own UI does),
+ * and reported here so a caller can label the period it actually got instead of
+ * the period it asked for.
+ */
+export const gscWindowRangeSchema = z.object({
+  /** Inclusive lower bound, or `null` for the `all` window. */
+  startDate: z.string().nullable(),
+  /** Inclusive upper bound: the last date the property published. */
+  endDate: z.string().nullable(),
+  /** `MAX(date)` across the project's GSC data, ignoring the window. */
+  latestDataDate: z.string().nullable(),
+  /** Calendar days between `latestDataDate` and today. `null` with no data. */
+  reportingLagDays: z.number().nullable(),
+})
+export type GscWindowRange = z.infer<typeof gscWindowRangeSchema>
+
 export const gscPerformanceDailyDtoSchema = z.object({
   totals: z.object({
     clicks: z.number(),
@@ -73,6 +95,7 @@ export const gscPerformanceDailyDtoSchema = z.object({
     days: z.number(),
   }),
   daily: z.array(gscPerformanceDailyPointSchema),
+  window: gscWindowRangeSchema,
 })
 export type GscPerformanceDailyDto = z.infer<typeof gscPerformanceDailyDtoSchema>
 

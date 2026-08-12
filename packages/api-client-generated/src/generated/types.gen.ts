@@ -2517,6 +2517,12 @@ export type GscPerformanceDailyDto = {
         impressions: number;
         ctr: number;
     }>;
+    window: {
+        startDate: string | null;
+        endDate: string | null;
+        latestDataDate: string | null;
+        reportingLagDays: number | null;
+    };
 };
 
 export type GscPerformanceResponseDto = {

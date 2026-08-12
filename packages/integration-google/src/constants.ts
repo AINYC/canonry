@@ -8,6 +8,17 @@ export const INDEXING_SCOPE = 'https://www.googleapis.com/auth/indexing'
 export const GSC_API_BASE = 'https://www.googleapis.com/webmasters/v3'
 export const URL_INSPECTION_API = 'https://searchconsole.googleapis.com/v1/urlInspection/index:inspect'
 export const GSC_MAX_ROWS_PER_REQUEST = 25000
+/**
+ * Google's typical search-analytics publishing delay, in days.
+ *
+ * Use it to PAD the start of a fetch window so a `days`-day request still
+ * yields `days` days of published data. Never use it as the window's END:
+ * the real delay varies (it is commonly two days and occasionally one), so a
+ * fixed ceiling of `today - 3` refuses to ask for days Google has already
+ * published and leaves stored data permanently a day behind the Search
+ * Console UI. Ask through today instead; the API returns what exists and
+ * simply omits the rest.
+ */
 export const GSC_DATA_LAG_DAYS = 3
 export const URL_INSPECTION_DAILY_LIMIT = 2000
 export const INDEXING_API_BASE = 'https://indexing.googleapis.com/v3'

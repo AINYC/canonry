@@ -78,9 +78,19 @@ export async function executeGscSync(
       saveConfigPatch(opts.config)
     }
 
-    // Determine date range
+    // Determine date range.
+    //
+    // Ask through TODAY, not through a hard-coded lag boundary. Google's
+    // publishing delay varies; pinning the ceiling at `today - 3` meant the
+    // sync never requested the day Google had already published, so stored
+    // data sat a day behind the Search Console UI forever (measured on
+    // canonry.ai: GSC served through 08-10 while Canonry held 08-09). The API
+    // returns the days that exist and omits the rest, so asking wide is free.
+    //
+    // The lag still pads the START, so a `days`-day request yields `days` days
+    // of PUBLISHED data rather than `days` minus the delay.
     const lagOffset = GSC_DATA_LAG_DAYS
-    const endDate = formatDate(daysAgo(lagOffset))
+    const endDate = formatDate(new Date())
     const days = opts.full ? 480 : (opts.days ?? 30) // 480 days ≈ 16 months (GSC max)
     const startDate = formatDate(daysAgo(days + lagOffset))
 
