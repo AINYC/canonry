@@ -341,27 +341,56 @@ function parsePullEnvelope(value: unknown): CloudflareQueuePullResult {
   if (result.messages.length > MAX_PULL_BATCH_SIZE) {
     throw new CloudflareQueueApiError('Cloudflare Queue returned too many messages', 502)
   }
-  return { messageBacklogCount, messages: result.messages.map((message) => decodeMessage(asRecord(message, 'message'))) }
+  const messages: CloudflareQueueMessage[] = []
+  let skippedUnleasedMessageCount = 0
+  for (const rawMessage of result.messages) {
+    if (rawMessage == null || typeof rawMessage !== 'object' || Array.isArray(rawMessage)) {
+      skippedUnleasedMessageCount += 1
+      continue
+    }
+    const message = rawMessage as Record<string, unknown>
+    if (typeof message.lease_id !== 'string' || !message.lease_id.trim()) {
+      skippedUnleasedMessageCount += 1
+      continue
+    }
+    messages.push(decodeMessage(message))
+  }
+  return { messageBacklogCount, messages, skippedUnleasedMessageCount }
 }
 
-function parseAckEnvelope(value: unknown, expectedAckCount: number, expectedRetryCount: number): void {
+function optionalAckCount(record: Record<string, unknown>, key: 'ackCount' | 'retryCount'): number | undefined {
+  if (!(key in record)) return undefined
+  return nonNegativeInteger(record[key] as number, `ack response ${key}`)
+}
+
+function ackWarningCount(value: unknown): number {
+  if (value == null) return 0
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new CloudflareQueueApiError('Cloudflare Queue acknowledgement warnings are malformed', 502)
+  }
+  const warnings = value as Record<string, unknown>
+  if (Object.values(warnings).some((warning) => typeof warning !== 'string')) {
+    throw new CloudflareQueueApiError('Cloudflare Queue acknowledgement warnings are malformed', 502)
+  }
+  return Object.keys(warnings).length
+}
+
+function parseAckEnvelope(value: unknown, expectedAckCount: number, expectedRetryCount: number): number {
   const envelope = asRecord(value, 'ack response')
   if (envelope.success !== true) {
     throw new CloudflareQueueApiError('Cloudflare Queue acknowledgement was not successful', 502)
   }
+  if (envelope.result == null) return 0
   const result = asRecord(envelope.result, 'ack result')
-  const ackCount = nonNegativeInteger(result.ackCount as number, 'ack response ackCount')
-  const retryCount = nonNegativeInteger(result.retryCount as number, 'ack response retryCount')
-  if (ackCount !== expectedAckCount || retryCount !== expectedRetryCount) {
+  const ackCount = optionalAckCount(result, 'ackCount')
+  const retryCount = optionalAckCount(result, 'retryCount')
+  if (
+    ackCount !== undefined && ackCount !== expectedAckCount
+    || retryCount !== undefined && retryCount !== expectedRetryCount
+  ) {
     throw new CloudflareQueueApiError('Cloudflare Queue acknowledgement was incomplete', 502)
   }
-  const warnings = result.warnings
-  if (warnings != null) {
-    const warningRecord = asRecord(warnings, 'ack response warnings')
-    if (Object.keys(warningRecord).length > 0) {
-      throw new CloudflareQueueApiError('Cloudflare Queue acknowledgement returned warnings', 502)
-    }
-  }
+  return ackWarningCount(result.warnings)
 }
 
 function normalizeRetries(retries: readonly CloudflareQueueRetry[] | undefined): CloudflareQueueRetry[] {
@@ -408,6 +437,6 @@ export async function ackCloudflareQueueMessages(
       ...(delaySeconds === undefined ? {} : { delay_seconds: delaySeconds }),
     })),
   }, options.signal)
-  parseAckEnvelope(envelope, acknowledgedLeaseIds.length, retriedLeaseIds.length)
-  return { acknowledgedLeaseIds, retriedLeaseIds }
+  const warningCount = parseAckEnvelope(envelope, acknowledgedLeaseIds.length, retriedLeaseIds.length)
+  return { acknowledgedLeaseIds, retriedLeaseIds, warningCount }
 }

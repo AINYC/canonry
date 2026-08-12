@@ -61,6 +61,8 @@ export type CloudflareQueueMessage =
 export interface CloudflareQueuePullResult {
   messageBacklogCount: number
   messages: CloudflareQueueMessage[]
+  /** Raw entries without a usable lease. They are excluded because they cannot be acknowledged. */
+  skippedUnleasedMessageCount: number
 }
 
 export interface CloudflareQueueRetry {
@@ -77,4 +79,6 @@ export interface AckCloudflareQueueMessagesOptions {
 export interface CloudflareQueueAckResult {
   acknowledgedLeaseIds: readonly string[]
   retriedLeaseIds: readonly CloudflareQueueRetry[]
+  /** Number of upstream warnings. Warning keys and messages are not exposed. */
+  warningCount: number
 }

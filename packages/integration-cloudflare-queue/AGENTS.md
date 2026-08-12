@@ -32,11 +32,14 @@ Database writes, source lifecycle, leases, and traffic normalization remain in
   Cloudflare.
 - **Poison is ACK-able.** If a message has a usable lease but its envelope,
   body, or content type is malformed, return a poison message without its raw
-  body. Reject the whole pull when the lease is missing or invalid because the
-  caller cannot safely acknowledge that message.
-- **Exact acknowledgement confirmation.** Accept an ACK response only when its
-  official `ackCount` and `retryCount` match the submitted leases and it has no
-  warnings.
+  body.
+- **Skip entries without leases.** Exclude a raw entry that has no usable
+  lease. Increment `skippedUnleasedMessageCount`. Continue with valid entries.
+- **Validate optional ACK counts.** Cloudflare can omit `ackCount` and
+  `retryCount`. If a count is present, it must match the submitted leases.
+- **Return safe warning telemetry.** Return `warningCount`. Do not return
+  warning keys or messages. Valid warnings do not make a successful ACK fail.
+  Reject a malformed warnings value with one fixed, secret-free error.
 - **Secret-free failures.** Never include the bearer token, response body,
   message body, or an injected fetch error in a thrown error.
 
@@ -45,8 +48,8 @@ Database writes, source lifecycle, leases, and traffic normalization remain in
 - Parsing a `text` message as JSON or base64.
 - Returning a malformed raw body with a poison message.
 - Retrying an invalid request, an abort, or an upstream delay without a cap.
-- Treating HTTP success as acknowledgement without validating both counts and
-  warnings.
+- Rejecting an ACK because an optional count is absent.
+- Returning Cloudflare warning keys or messages.
 - Adding database or source-authority behavior to this transport-only package.
 
 ## See Also

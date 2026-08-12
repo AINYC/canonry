@@ -21,6 +21,16 @@ export const VERCEL_MAX_SYNC_WINDOW_MS = 24 * 60 * 60_000
 // timing out the caller and leaving an orphaned 'running' run.
 export const DEFAULT_VERCEL_SYNC_DEADLINE_MS = 4 * 60_000
 
+/** Maximum Queue envelopes requested in one Cloudflare HTTP pull. */
+export const CLOUDFLARE_QUEUE_BATCH_SIZE = 100
+
+/** Maximum Queue batches drained by one sync unless the host overrides it. */
+export const DEFAULT_CLOUDFLARE_QUEUE_MAX_BATCHES = 10
+
+/** Default number of Queue envelopes that one sync can drain. */
+export const DEFAULT_CLOUDFLARE_QUEUE_DRAIN_BUDGET =
+  CLOUDFLARE_QUEUE_BATCH_SIZE * DEFAULT_CLOUDFLARE_QUEUE_MAX_BATCHES
+
 /** Floor/ceiling for the env override, so a typo cannot disable the bound. */
 const MIN_VERCEL_SYNC_DEADLINE_MS = 30_000
 const MAX_VERCEL_SYNC_DEADLINE_MS = 15 * 60_000

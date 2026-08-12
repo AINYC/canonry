@@ -537,6 +537,22 @@ describe('traffic.source.queue-backlog', () => {
     })
   })
 
+  it('reports the residual Queue backlog as within one default drain budget', async () => {
+    insertTrafficSource(h, {
+      sourceType: 'cloudflare',
+      displayName: 'Production Queue',
+      configJson: queueConfig,
+      queueBacklogCount: 1000,
+      queueBacklogObservedAt: '2026-08-11T12:00:00.000Z',
+    })
+
+    const result = await queueBacklogCheck.run(ctxFor(h))
+    expect(result.status).toBe('ok')
+    expect(result.code).toBe('traffic.queue-backlog.within-drain-budget')
+    expect(result.summary).toContain('1,000')
+    expect(result.remediation).toContain('next scheduled sync')
+  })
+
   it('warns with drain remediation while messages remain after a bounded sync', async () => {
     insertTrafficSource(h, {
       sourceType: 'cloudflare',

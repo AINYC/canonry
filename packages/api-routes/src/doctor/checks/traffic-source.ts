@@ -13,7 +13,10 @@ import {
   crawlerEventsHourly,
   trafficSources,
 } from '@ainyc/canonry-db'
-import { TRAFFIC_SOURCE_MAX_CATCHUP_MS } from '../../traffic-limits.js'
+import {
+  DEFAULT_CLOUDFLARE_QUEUE_DRAIN_BUDGET,
+  TRAFFIC_SOURCE_MAX_CATCHUP_MS,
+} from '../../traffic-limits.js'
 import type { CheckDefinition, CheckOutput, DoctorContext, TrafficSourceProbe } from '../types.js'
 
 /**
@@ -731,13 +734,23 @@ const queueBacklogCheck: CheckDefinition = {
     }
 
     const remaining = measured.filter(source => (source.queueBacklogCount ?? 0) > 0)
-    if (remaining.length > 0) {
-      const total = remaining.reduce((sum, source) => sum + source.queueBacklogCount!, 0)
+    const total = remaining.reduce((sum, source) => sum + source.queueBacklogCount!, 0)
+    if (total > DEFAULT_CLOUDFLARE_QUEUE_DRAIN_BUDGET) {
       return {
         status: CheckStatuses.warn,
         code: 'traffic.queue-backlog.remaining',
-        summary: `${total.toLocaleString('en-US')} message(s) remained across ${remaining.length} Cloudflare Queue source(s) after the last bounded sync.`,
-        remediation: 'Run `canonry traffic sync <project> --source <id>` again. If messages remain, shorten the traffic-sync schedule interval.',
+        summary: `${total.toLocaleString('en-US')} message(s) remained across ${remaining.length} Cloudflare Queue source(s) after the last bounded sync, exceeding the default ${DEFAULT_CLOUDFLARE_QUEUE_DRAIN_BUDGET.toLocaleString('en-US')}-message drain budget.`,
+        remediation: 'Run `canonry traffic sync <project> --source <id>` again. If the backlog stays above 1,000 messages, shorten the traffic-sync schedule interval.',
+        details,
+      }
+    }
+
+    if (total > 0) {
+      return {
+        status: CheckStatuses.ok,
+        code: 'traffic.queue-backlog.within-drain-budget',
+        summary: `${total.toLocaleString('en-US')} message(s) remained after the last bounded sync, within the default ${DEFAULT_CLOUDFLARE_QUEUE_DRAIN_BUDGET.toLocaleString('en-US')}-message drain budget.`,
+        remediation: 'If no new messages arrive, the next scheduled sync can drain this residual backlog. Run `canonry traffic sync <project> --source <id>` to accelerate it.',
         details,
       }
     }

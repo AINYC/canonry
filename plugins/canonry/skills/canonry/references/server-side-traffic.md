@@ -690,6 +690,13 @@ Receipts remain for Cloudflare's current 14-day platform maximum plus a replay
 margin. This stays safe even when the locally recorded retention is stale or
 lower than the Queue's actual setting.
 
+Each default Queue sync drains at most 10 batches of 100 messages: **1,000
+messages per tick**. Doctor reports a residual of 1–1,000 messages as within
+that budget. If no new messages arrive, the next scheduled sync can clear it.
+Doctor warns when more than 1,000 messages remain because one default tick
+cannot drain the residual. Run a manual sync to accelerate the drain. If the
+backlog remains above 1,000, shorten the `traffic-sync` schedule interval.
+
 ## Syncing data
 
 ```bash
@@ -801,6 +808,8 @@ The doctor checks are adapter-agnostic. When they fail or warn:
 | `traffic.source.connected` | `traffic.source.all-errored` | Re-connect the source. The check's `details.lastError` shows the underlying reason. |
 | `traffic.source.recent-data` | `traffic.recent-data.stale` | For pull sources, run `cnry traffic sync …`. For Cloudflare direct push, inspect the route and receiver. |
 | `traffic.source.recent-data` | `traffic.recent-data.empty` | Inspect source configuration. For Cloudflare direct push, send the UTM smoke request and inspect Worker logs. |
+| `traffic.source.queue-backlog` | `traffic.queue-backlog.within-drain-budget` | 1–1,000 Queue messages remain. If no new messages arrive, the next scheduled sync can drain them. Run a manual sync to accelerate. |
+| `traffic.source.queue-backlog` | `traffic.queue-backlog.remaining` | More than 1,000 Queue messages remain. Run a manual sync. If the backlog persists, shorten the traffic-sync schedule. |
 | `traffic.source.credentials` | `traffic.credentials.resolve-failed` | Reconnect from the host that owns the source credentials. Queue pull requires a non-empty Account Queues Edit token paired by source ID. |
 | `traffic.source.cache-blindspot` | `traffic.cache-blindspot.wordpress-plugin` | A WordPress source is connected, so the plugin cannot see cache-served page views. Exclude AI user-agents from the page cache and any CDN, or switch to a log/edge source. Warns only, not a failure. |
 | `traffic.source.worker-version` | `traffic.worker-version.waiting-for-first-event` | Send a smoke-test request through the Worker. Then run the doctor again. |

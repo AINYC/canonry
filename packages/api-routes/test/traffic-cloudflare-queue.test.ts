@@ -239,7 +239,7 @@ describe('Cloudflare Queue pull lifecycle', () => {
     const h = await harness({
       queuePull: async () => {
         pullCalled = true
-        return { messageBacklogCount: 0, messages: [] }
+        return { messageBacklogCount: 0, messages: [], skippedUnleasedMessageCount: 0 }
       },
     })
     const connected = await h.app.inject({
@@ -275,10 +275,10 @@ describe('Cloudflare Queue pull lifecycle', () => {
       contentType: 'json' as const, body,
     }
     const h = await harness({
-      queuePull: async () => ({ messageBacklogCount: 0, messages: [message] }),
+      queuePull: async () => ({ messageBacklogCount: 0, messages: [message], skippedUnleasedMessageCount: 0 }),
       queueAck: async () => {
         ackSawCommittedReceipt = h.db.select().from(trafficEventReceipts).all().length === 1
-        return { acknowledgedLeaseIds: ['lease-1'], retriedLeaseIds: [] }
+        return { acknowledgedLeaseIds: ['lease-1'], retriedLeaseIds: [], warningCount: 0 }
       },
     })
     const connected = await h.app.inject({ method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queuePayload })
@@ -302,6 +302,121 @@ describe('Cloudflare Queue pull lifecycle', () => {
     await h.app.close()
   })
 
+  it('poison-ACKs text payloads because the generated Worker contract is JSON-only', async () => {
+    const acknowledged: string[][] = []
+    const textMessage = {
+      id: 'queue-text-message', timestampMs: 1_700_000_000_000, attempts: 1,
+      leaseId: 'queue-text-lease', metadata: { 'CF-Content-Type': 'text' },
+      contentType: 'text' as const,
+      // The injected seam deliberately supplies a schema-valid object under a
+      // text discriminator. The route must reject by declared content type,
+      // not accidentally accept based on body shape.
+      body: {
+        schemaVersion: 1,
+        workerVersion: '1.0.0',
+        events: [{
+          eventId: 'text-event', observedAt: '2026-08-11T12:00:00.000Z', method: 'GET',
+          host: 'example.com', path: '/text', queryString: null, status: 200,
+          userAgent: 'GPTBot/1.0', remoteIp: null, referer: null,
+          cf: { verifiedBot: true, botScore: null, country: null, asn: null, asOrganization: null },
+        }],
+      } as unknown as string,
+    }
+    const h = await harness({
+      queuePull: async () => ({ messageBacklogCount: 0, messages: [textMessage], skippedUnleasedMessageCount: 0 }),
+      queueAck: async (_client, options) => {
+        acknowledged.push([...options.acks])
+        return { acknowledgedLeaseIds: options.acks, retriedLeaseIds: [], warningCount: 0 }
+      },
+    })
+    const connected = await h.app.inject({
+      method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queuePayload,
+    })
+    const sourceId = JSON.parse(connected.payload).sourceId as string
+
+    const synced = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`, payload: {},
+    })
+
+    expect(synced.statusCode).toBe(200)
+    expect(JSON.parse(synced.payload)).toMatchObject({ pulledEvents: 0 })
+    expect(acknowledged).toEqual([['queue-text-lease']])
+    expect(h.db.select().from(trafficEventReceipts).all()).toHaveLength(0)
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()?.lastWorkerVersion)
+      .toBeNull()
+    await h.app.close()
+  })
+
+  it('continues after skipped unleased entries fill a pull batch and logs only their count', async () => {
+    let pulls = 0
+    const validMessage = {
+      id: 'valid-after-unleased', timestampMs: 1_700_000_000_000, attempts: 1,
+      leaseId: 'valid-after-unleased-lease', metadata: {}, contentType: 'json' as const,
+      body: { schemaVersion: 1, workerVersion: '1.0.0', events: [] },
+    }
+    const h = await harness({
+      queuePull: async () => {
+        pulls += 1
+        return pulls === 1
+          ? { messageBacklogCount: 1, messages: [], skippedUnleasedMessageCount: 100 }
+          : { messageBacklogCount: 0, messages: [validMessage], skippedUnleasedMessageCount: 0 }
+      },
+      queueAck: async (_client, options) => ({
+        acknowledgedLeaseIds: options.acks, retriedLeaseIds: [], warningCount: 0,
+      }),
+    })
+    const warnings: Array<Record<string, unknown>> = []
+    h.app.log.warn = ((fields: Record<string, unknown>) => { warnings.push(fields) }) as typeof h.app.log.warn
+    const connected = await h.app.inject({
+      method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queuePayload,
+    })
+    const sourceId = JSON.parse(connected.payload).sourceId as string
+
+    const synced = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`, payload: {},
+    })
+
+    expect(synced.statusCode).toBe(200)
+    expect(pulls).toBe(2)
+    expect(warnings).toContainEqual(expect.objectContaining({
+      sourceId,
+      skippedUnleasedMessageCount: 100,
+    }))
+    await h.app.close()
+  })
+
+  it('logs successful Queue ACK warning counts without failing the sync', async () => {
+    const validMessage = {
+      id: 'ack-warning', timestampMs: 1_700_000_000_000, attempts: 1,
+      leaseId: 'ack-warning-lease', metadata: {}, contentType: 'json' as const,
+      body: { schemaVersion: 1, workerVersion: '1.0.0', events: [] },
+    }
+    const h = await harness({
+      queuePull: async () => ({
+        messageBacklogCount: 0, messages: [validMessage], skippedUnleasedMessageCount: 0,
+      }),
+      queueAck: async (_client, options) => ({
+        acknowledgedLeaseIds: options.acks, retriedLeaseIds: [], warningCount: 2,
+      }),
+    })
+    const warnings: Array<Record<string, unknown>> = []
+    h.app.log.warn = ((fields: Record<string, unknown>) => { warnings.push(fields) }) as typeof h.app.log.warn
+    const connected = await h.app.inject({
+      method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queuePayload,
+    })
+    const sourceId = JSON.parse(connected.payload).sourceId as string
+
+    const synced = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`, payload: {},
+    })
+
+    expect(synced.statusCode).toBe(200)
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()?.lastError)
+      .toBeNull()
+    expect(warnings).toContainEqual(expect.objectContaining({ sourceId, warningCount: 2 }))
+    await h.app.close()
+  })
+
   it('renews the source lease immediately before Queue acknowledgement', async () => {
     let sourceId = ''
     let ackSawRenewedLease = false
@@ -313,12 +428,12 @@ describe('Cloudflare Queue pull lifecycle', () => {
       queuePull: async () => {
         h.db.update(trafficSources).set({ syncLeaseExpiresAt: new Date(0).toISOString() })
           .where(eq(trafficSources.id, sourceId)).run()
-        return { messageBacklogCount: 0, messages: [message] }
+        return { messageBacklogCount: 0, messages: [message], skippedUnleasedMessageCount: 0 }
       },
       queueAck: async () => {
         const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
         ackSawRenewedLease = Date.parse(source.syncLeaseExpiresAt ?? '') > Date.now() + 4 * 60_000
-        return { acknowledgedLeaseIds: ['lease-renew'], retriedLeaseIds: [] }
+        return { acknowledgedLeaseIds: ['lease-renew'], retriedLeaseIds: [], warningCount: 0 }
       },
     })
     const connected = await h.app.inject({
@@ -357,11 +472,11 @@ describe('Cloudflare Queue pull lifecycle', () => {
           payload: { ...queuePayload, queueId: 'queue-2', queueName: 'canonry-events-2', apiToken: 'new-queue-token' },
         })
         expect(reconnected.statusCode).toBe(200)
-        return { messageBacklogCount: 0, messages: [message] }
+        return { messageBacklogCount: 0, messages: [message], skippedUnleasedMessageCount: 0 }
       },
       queueAck: async () => {
         acknowledged = true
-        return { acknowledgedLeaseIds: ['old-queue-lease'], retriedLeaseIds: [] }
+        return { acknowledgedLeaseIds: ['old-queue-lease'], retriedLeaseIds: [], warningCount: 0 }
       },
     })
     const connected = await h.app.inject({
@@ -410,12 +525,12 @@ describe('Cloudflare Queue pull lifecycle', () => {
       queuePull: async () => {
         pulls += 1
         return pulls === 1
-          ? { messageBacklogCount: 1, messages: messages(100, 'first') }
-          : { messageBacklogCount: 0, messages: messages(1, 'second') }
+          ? { messageBacklogCount: 1, messages: messages(100, 'first'), skippedUnleasedMessageCount: 0 }
+          : { messageBacklogCount: 0, messages: messages(1, 'second'), skippedUnleasedMessageCount: 0 }
       },
       queueAck: async (_client, options) => {
         acknowledgedBatchSizes.push(options.acks.length)
-        return { acknowledgedLeaseIds: options.acks, retriedLeaseIds: [] }
+        return { acknowledgedLeaseIds: options.acks, retriedLeaseIds: [], warningCount: 0 }
       },
     })
     const connected = await h.app.inject({ method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queuePayload })
@@ -439,10 +554,10 @@ describe('Cloudflare Queue pull lifecycle', () => {
       queueMaxBatches: 1,
       queuePull: async (_client, options) => {
         visibilityTimeoutMs = options?.visibilityTimeoutMs
-        return { messageBacklogCount: 900, messages }
+        return { messageBacklogCount: 900, messages, skippedUnleasedMessageCount: 0 }
       },
       queueAck: async (_client, options) => ({
-        acknowledgedLeaseIds: options.acks, retriedLeaseIds: [],
+        acknowledgedLeaseIds: options.acks, retriedLeaseIds: [], warningCount: 0,
       }),
     })
     const connected = await h.app.inject({

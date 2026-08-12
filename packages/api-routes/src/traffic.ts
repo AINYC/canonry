@@ -4,7 +4,12 @@ import { isDeepStrictEqual } from 'node:util'
 import { Agent as UndiciAgent } from 'undici'
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { DEFAULT_VERCEL_SYNC_DEADLINE_MS, VERCEL_MAX_SYNC_WINDOW_MS } from './traffic-limits.js'
+import {
+  CLOUDFLARE_QUEUE_BATCH_SIZE,
+  DEFAULT_CLOUDFLARE_QUEUE_MAX_BATCHES,
+  DEFAULT_VERCEL_SYNC_DEADLINE_MS,
+  VERCEL_MAX_SYNC_WINDOW_MS,
+} from './traffic-limits.js'
 import {
   trafficSources,
   crawlerEventsHourly,
@@ -98,6 +103,7 @@ import {
 } from '@ainyc/canonry-integration-cloudflare-queue'
 import type {
   AckCloudflareQueueMessagesOptions,
+  CloudflareQueueAckResult,
   CloudflareQueueClientOptions,
   CloudflareQueuePullResult,
   PullCloudflareQueueMessagesOptions,
@@ -295,7 +301,7 @@ export interface TrafficRoutesOptions {
   ackCloudflareQueueMessages?: (
     client: CloudflareQueueClientOptions,
     options: AckCloudflareQueueMessagesOptions,
-  ) => Promise<unknown>
+  ) => Promise<CloudflareQueueAckResult>
   /** Bounded short-poll batches per sync invocation. */
   cloudflareQueueMaxBatches?: number
   /** Override the canonry ingest URL embedded into generated Worker scripts (for tests). */
@@ -415,7 +421,6 @@ const CLOUDFLARE_INGEST_BODY_LIMIT = 256 * 1024
 // current Cloudflare maximum (14 days) plus a replay margin, so a lower or
 // stale local value can never shorten the redelivery safety window.
 const CLOUDFLARE_QUEUE_RECEIPT_TTL_MS = 14 * 24 * 60 * 60_000 + 10 * 60_000
-const CLOUDFLARE_QUEUE_BATCH_SIZE = 100
 // The Queue client can spend up to 210 seconds on one transient ACK sequence
 // (four 30-second requests plus three capped waits). Keep the upstream message
 // lease beyond that budget so a second consumer cannot receive the same batch
@@ -1149,7 +1154,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
   const pullVercelEvents = opts.pullVercelTrafficEvents ?? listVercelTrafficEvents
   const pullQueueMessages = opts.pullCloudflareQueueMessages ?? pullCloudflareQueueMessages
   const ackQueueMessages = opts.ackCloudflareQueueMessages ?? ackCloudflareQueueMessages
-  const cloudflareQueueMaxBatches = opts.cloudflareQueueMaxBatches ?? 10
+  const cloudflareQueueMaxBatches = opts.cloudflareQueueMaxBatches ?? DEFAULT_CLOUDFLARE_QUEUE_MAX_BATCHES
   if (!Number.isInteger(cloudflareQueueMaxBatches) || cloudflareQueueMaxBatches < 1 || cloudflareQueueMaxBatches > 50) {
     throw new RangeError('cloudflareQueueMaxBatches must be an integer from 1 to 50')
   }
@@ -2346,6 +2351,12 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             visibilityTimeoutMs: CLOUDFLARE_QUEUE_VISIBILITY_TIMEOUT_MS,
           })
           remainingBacklogCount = pulled.messageBacklogCount
+          if (pulled.skippedUnleasedMessageCount > 0) {
+            request.log.warn({
+              sourceId: sourceRow.id,
+              skippedUnleasedMessageCount: pulled.skippedUnleasedMessageCount,
+            }, 'Skipped unacknowledgeable Cloudflare Queue messages; they remain eligible for redelivery')
+          }
           const validLeases: string[] = []
           const poisonLeases: string[] = []
           const normalized: NormalizedTrafficRequest[] = []
@@ -2357,8 +2368,17 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
                 'Dropping malformed Cloudflare Queue message')
               continue
             }
-            if (message.contentType !== 'json' && message.contentType !== 'text') {
+            // The generated Worker is a JSON producer. Do not infer JSON from
+            // a text body: an alternate producer must opt into the same wire
+            // contract explicitly, otherwise ACK/drop the leased poison once.
+            if (message.contentType !== 'json') {
               poisonLeases.push(message.leaseId)
+              request.log.warn({
+                sourceId: sourceRow.id,
+                messageId: message.id,
+                contentType: message.contentType,
+                reason: 'unsupported-content-type',
+              }, 'Dropping Cloudflare Queue message with an unsupported content type')
               continue
             }
             const parsedBatch = cloudflareWorkerIngestRequestSchema.safeParse(message.body)
@@ -2419,7 +2439,13 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
               || !isDeepStrictEqual(latestSource.configJson, sourceRow.configJson)) {
               throw validationError('Cloudflare Queue source was reconfigured before acknowledgement')
             }
-            await ackQueueMessages(queueClient, { acks: [...validLeases, ...poisonLeases] })
+            const ackResult = await ackQueueMessages(queueClient, { acks: [...validLeases, ...poisonLeases] })
+            if (ackResult.warningCount > 0) {
+              request.log.warn({
+                sourceId: sourceRow.id,
+                warningCount: ackResult.warningCount,
+              }, 'Cloudflare Queue acknowledgement completed with warnings')
+            }
           }
           acceptedEvents += writeResult.acceptedEvents
           selfTrafficExcluded += writeResult.selfTrafficExcluded
@@ -2431,7 +2457,8 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           aiUserFetchBucketRows += writeResult.aiUserFetchBucketRows
           aiReferralBucketRows += writeResult.aiReferralBucketRows
           sampleRows += writeResult.sampleRows
-          if (pulled.messages.length < CLOUDFLARE_QUEUE_BATCH_SIZE || remainingBacklogCount === 0) break
+          const pulledEnvelopeCount = pulled.messages.length + pulled.skippedUnleasedMessageCount
+          if (pulledEnvelopeCount < CLOUDFLARE_QUEUE_BATCH_SIZE || remainingBacklogCount === 0) break
         }
         app.db.update(runs).set({ status: RunStatuses.completed, finishedAt: committedAt })
           .where(eq(runs.id, runId)).run()
