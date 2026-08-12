@@ -5,6 +5,7 @@ import {
   getApiV1ProjectsByNameTechnicalAeoGraph,
   getApiV1ProjectsByNameTechnicalAeoChanges,
   getApiV1ProjectsByNameTechnicalAeoPath,
+  getApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreview,
   getApiV1ProjectsByNameTechnicalAeoSubgraph,
   getApiV1ProjectsByNameMeasurementReport,
   postApiV1ProjectsByNameMeasurementDiscovery,
@@ -17,6 +18,7 @@ import type {
   GetApiV1ProjectsByNameTechnicalAeoGraphData,
   GetApiV1ProjectsByNameTechnicalAeoChangesData,
   GetApiV1ProjectsByNameTechnicalAeoPathData,
+  GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewData,
   GetApiV1ProjectsByNameTechnicalAeoSubgraphData,
   GetApiV1ProjectsByNameSearchResponse,
   MeasurementDiscoveryRequest,
@@ -137,6 +139,24 @@ describe('canonry-api-client', () => {
       'https://example.test/api/v1/projects/example/technical-aeo/path?toUrl=https%3A%2F%2Fexample.test%2Fdeep&maxDepth=12',
       'https://example.test/api/v1/projects/example/technical-aeo/changes?scope=pages&change=changed&limit=25',
     ])
+  })
+
+  it('generates the bounded, exact-run live Page Health preview reader', async () => {
+    expectTypeOf<GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewData['path']>()
+      .toEqualTypeOf<{ name: string; runId: string }>()
+
+    const fakeFetch = vi.fn(async () => new Response('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    const client = createClient({ baseUrl: 'https://example.test', fetch: fakeFetch as unknown as typeof fetch })
+    await getApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreview({
+      client,
+      path: { name: 'example', runId: 'run-1' },
+    })
+
+    const request = fakeFetch.mock.calls[0]![0] as Request
+    expect(request.url).toBe('https://example.test/api/v1/projects/example/technical-aeo/runs/run-1/page-health-preview')
   })
 
   it('serializes measurement discovery bodies and report revisions', async () => {

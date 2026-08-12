@@ -334,7 +334,11 @@ function SiteHealthOnboardingPageBody({
     })
   }
   const skipOnboarding = () => {
-    void navigate({ to: '/', replace: true })
+    void navigate({
+      to: '/projects/$projectName',
+      params: { projectName: project.name },
+      replace: true,
+    })
   }
 
   return (
@@ -476,7 +480,7 @@ function PlatformSetupPageBody({ onActivationStarted }: { onActivationStarted: (
         projectId: project.id,
         projectLabel: project.displayName || project.name,
         suppressErrorToast: true,
-        body: {},
+        body: { checkDeadLinks: true },
       })
       const settlement = await settleSiteHealthDispatch(dispatch)
       if (settlement.state === 'queued') {

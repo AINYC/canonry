@@ -438,7 +438,7 @@ function isTechnicalAeoRead(request: FastifyRequest, url: string): boolean {
   if (rest === 'runs') {
     return queryValue(request, 'kind') === RunKinds['site-audit']
   }
-  if (rest && /^technical-aeo\/runs\/[^/]+\/progress$/.test(rest)) {
+  if (rest && /^technical-aeo\/runs\/[^/]+\/(?:progress|page-health-preview)$/.test(rest)) {
     return true
   }
   return rest === 'technical-aeo'

@@ -146,7 +146,15 @@ function SetupPageBody({ visibilityProjectName, siteHealthOnboarding }: SetupPag
     if (node && visibilityProjectName) node.focus()
   }, [visibilityProjectName])
   const skipAiVisibility = () => {
-    void navigate({ to: '/', replace: true })
+    if (!visibilityProjectName) {
+      void navigate({ to: '/', replace: true })
+      return
+    }
+    void navigate({
+      to: '/projects/$projectName',
+      params: { projectName: visibilityProjectName },
+      replace: true,
+    })
   }
 
   if (!safeDashboard || isLoading) {
@@ -310,12 +318,13 @@ function ReadySetupPage({
   const [projectSaving, setProjectSaving] = useState(false)
 
   const openProjectDashboard = () => {
-    if (siteHealthOnboarding) {
-      void navigate({ to: '/', replace: true })
+    if (!createdProjectName) {
+      void navigate({ to: '/', replace: Boolean(visibilityProjectName) })
       return
     }
     void navigate({
-      to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/',
+      to: '/projects/$projectName',
+      params: { projectName: createdProjectName },
       // Project-scoped setup replaces the project route on entry. Replace it
       // again on exit so Back cannot reopen a wizard the operator just finished.
       replace: Boolean(visibilityProjectName),
@@ -1184,7 +1193,7 @@ function ReadySetupPage({
                 <div className="setup-nav">
                   <span />
                   <Button type="button" onClick={openProjectDashboard}>
-                    {siteHealthOnboarding ? 'Finish and go Home' : 'Open project dashboard →'}
+                    {siteHealthOnboarding ? 'Finish and open project' : 'Open project dashboard →'}
                   </Button>
                 </div>
               </div>
@@ -1240,7 +1249,7 @@ function ReadySetupPage({
                 <div className="setup-nav">
                   <span />
                   <Button type="button" variant="outline" onClick={openProjectDashboard}>
-                    {siteHealthOnboarding ? 'Finish and go Home' : 'Watch on project page'}
+                    {siteHealthOnboarding ? 'Finish and open project' : 'Watch on project page'}
                   </Button>
                 </div>
               </div>
@@ -1284,13 +1293,13 @@ function ReadySetupPage({
                 </div>
                 <p className="mt-1 text-sm text-secondary">
                   {siteHealthOnboarding
-                    ? 'Your project is ready. Open it from Home to review the evidence.'
+                    ? 'Your project is ready. Review the evidence in the project.'
                     : 'Open the project to review the evidence.'}
                 </p>
                 <div className="setup-nav">
                   <span />
                   <Button type="button" onClick={openProjectDashboard}>
-                    {siteHealthOnboarding ? 'Finish and go Home' : 'Open project dashboard →'}
+                    {siteHealthOnboarding ? 'Finish and open project' : 'Open project dashboard →'}
                   </Button>
                 </div>
               </div>

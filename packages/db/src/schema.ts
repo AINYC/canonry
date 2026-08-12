@@ -878,6 +878,10 @@ export const siteCrawlPages = sqliteTable('site_crawl_pages', {
   index('idx_site_crawl_pages_parent').on(table.projectId, table.runId, table.attemptId, table.parentPath, table.path),
   index('idx_site_crawl_pages_url').on(table.projectId, table.runId, table.attemptId, table.url),
   index('idx_site_crawl_pages_health').on(table.projectId, table.runId, table.attemptId, table.healthState, table.path, table.nodeKey),
+  // The in-progress Page Health preview reads only completed audits below its
+  // threshold, ordered worst-first. Keep its stable tie-breaker in the index
+  // so a growing crawl never needs a transient sort before its small limit.
+  index('idx_site_crawl_pages_live_preview').on(table.projectId, table.runId, table.attemptId, table.auditState, table.auditScore, table.nodeKey),
   foreignKey({
     name: 'site_crawl_pages_attempt_fk',
     columns: [table.projectId, table.runId, table.attemptId],

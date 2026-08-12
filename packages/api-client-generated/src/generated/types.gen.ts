@@ -7279,6 +7279,22 @@ export type SettingsDto = {
     };
 };
 
+export type SiteAuditLivePageHealthDto = {
+    project: string;
+    runId: string;
+    status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
+    state: 'waiting' | 'collecting' | 'terminal';
+    attemptId: string | null;
+    pagesAudited: number;
+    updatedAt: string | null;
+    examples: Array<{
+        nodeKey: string;
+        url: string;
+        auditScore: number;
+        checksNeedingAttention: number;
+    }>;
+};
+
 export type SiteAuditPagesResponseDto = {
     project: string;
     runId: string | null;
@@ -21715,6 +21731,40 @@ export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressResponses = {
 };
 
 export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressResponse = GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressResponses[keyof GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressResponses];
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Exact site-audit run ID.
+         */
+        runId: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/technical-aeo/runs/{runId}/page-health-preview';
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewErrors = {
+    /**
+     * Project or non-probe site-audit run not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewError = GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewErrors[keyof GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewErrors];
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewResponses = {
+    /**
+     * Bounded provisional Page Health preview returned.
+     */
+    200: SiteAuditLivePageHealthDto;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewResponse = GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewResponses[keyof GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewResponses];
 
 export type DeleteApiV1ProjectsByNameAgentTranscriptData = {
     body?: never;

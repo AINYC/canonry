@@ -31,7 +31,7 @@ The revised recommendation is therefore:
       → approved canonical Site Health scan
       → Page health fixes
       → optional AI Visibility setup
-      → Home
+      → Project overview
 
 “Technical audit” is the action. Page health is its first result during onboarding.
 
@@ -43,7 +43,7 @@ The shipped onboarding no longer enters the project shell and overlays a guided 
 2. **Page health** opens automatically with the scan's checks, affected pages, and fixes. The normal Site Health map and inventory remain available after setup.
 3. **AI Visibility** appears above the Page health findings, reuses the project-scoped visibility setup, and can be skipped.
 
-Finishing or skipping AI Visibility replaces the setup route with `/` (Home). The exact project and Site Health run remain recoverable from URL and server state during setup. No local onboarding-complete flag or tutorial state is added, and graph-layout failure does not block Page health or the AI Visibility decision.
+Finishing or skipping AI Visibility replaces the setup route with the exact project overview (`/projects/:name`). The exact project and Site Health run remain recoverable from URL and server state during setup. No local onboarding-complete flag or tutorial state is added, and graph-layout failure does not block Page health or the AI Visibility decision.
 
 ## Decision
 
@@ -207,19 +207,27 @@ Site Health already runs through public HTTP with no answer provider or paid API
 - prioritized fixes
 - canonical crawl evidence that can seed a structured measurement plan
 
-Use the real canonical Site Health run with the existing server defaults: 1,000 pages and 100,000 internal-link observations, with explicit partial coverage when a limit or deadline is reached. A 5–10 page preview is too small to communicate site structure and is incompatible with the current non-probe graph reads.
+Use the real canonical Site Health run with the existing server defaults: 1,000 pages and 100,000 link relationships, with explicit partial coverage when a limit or deadline is reached. A 5–10 page preview is too small to communicate site structure and is incompatible with the current non-probe graph reads.
 
-The map is published only when the crawl reaches a terminal complete or partial state because layout is calculated and persisted server-side. While it runs, show truthful stages and live counts, not a fake progressive graph or percentage. If layout or WebGL is unavailable, the page inventory and exact technical evidence remain the equivalent continuation path.
+The map is published only when the crawl reaches a terminal complete or partial state because layout is calculated and persisted server-side. While it runs, show truthful stages, live counts, and a bounded sample of already-audited pages that need attention. Label that sample as provisional. Never show a live site score, pass state, “no issues” conclusion, progressive graph, or fabricated percentage. If layout or WebGL is unavailable, the page inventory and exact technical evidence remain the equivalent continuation path.
 
 ## Use one explicit setup surface
 
 After the domain is accepted, keep the operator on `/setup` through three visible stages:
 
-    Site audit  →  Page health  →  AI Visibility (optional)  →  Home
+    Site audit  →  Page health  →  AI Visibility (optional)  →  Project overview
 
 The Site audit stage shows real persisted crawl progress. A complete or partial terminal crawl opens Page health directly, without the normal Map, Pages, or Page health tabs. The AI Visibility decision appears above the findings. Graph or WebGL failure cannot block onboarding because the setup flow does not request or render the visual map.
 
-AI Visibility then reuses the existing project-scoped provider, query, competitor, and first-sweep setup. It is explicitly optional. Finishing or skipping replaces setup history with `/`, so Back does not reopen onboarding.
+If an active scan is still running 20 seconds after its persisted creation time,
+show an explicit choice to continue into AI Visibility or finish setup while the
+scan continues. Do not stop the crawl, auto-navigate, or turn the provisional
+sample into a final Page health conclusion. Canonry completes the same bounded
+scan in the background; Site Health reads its saved Page health and internal
+dead-link evidence after terminal publication. Reloading setup must not restart
+the 20-second wait.
+
+AI Visibility then reuses the existing project-scoped provider, query, competitor, and first-sweep setup. It is explicitly optional. Finishing or skipping replaces setup history with the exact project overview, so Back does not reopen onboarding.
 
 ### Demand is a mission, not onboarding itself
 
@@ -361,7 +369,7 @@ Infrastructure health belongs in a compact global status or doctor drawer. It sh
 | Show immediately | Activate when relevant |
 | --- | --- |
 | Canonry's operating loop | OAuth and provider credential forms |
-| Domain input and approved canonical Site Health scan | Optional dead-link checks and larger rescan settings |
+| Domain input and approved canonical Site Health scan with observed internal dead-link checks | Larger rescan settings |
 | Evidence-readiness model | GA4 and server-log connections |
 | Demand-source choices | Competitor management |
 | Baseline contents and usage | Common Crawl release download |
@@ -437,16 +445,16 @@ Use a normal `site-audit` run for the first scan. It is not disposable preview d
 Reuse the current crawl contract:
 
 - explicit operator approval before public network work
-- server defaults of 1,000 pages and 100,000 internal-link observations
+- server defaults of 1,000 pages and 100,000 link relationships
 - exact active-request replay and typed conflict for different options
 - terminal complete or partial crawl snapshots
 - deterministic persisted graph layout, capped at 20,000 nodes and 50,000 edges
 - exact-run graph reads so a partial first scan remains inspectable
-- optional dead-link checks off during onboarding
+- internal dead-link checks enabled during onboarding; external links are not probed
 
 Do not call this a full map when coverage is partial or sampled. Show pages found, pages checked, omitted nodes/links, termination reason, and effective redirected host.
 
-The main missing read is progress. Add a small stored exact-run progress DTO from `site_crawl_attempts` so onboarding can show discovered and checked counts while work is active. The browser must never render mutable attempt rows as the final graph or run layout physics.
+Use the stored exact-run progress DTO from `site_crawl_attempts` for discovered and checked counts. A separate exact-run Page health preview may read only a bounded, indexed sample of durable page-audit rows while the run is active. It must label those rows provisional and return no final score or pass claim. The browser must never render mutable attempt rows as the final graph or run layout physics.
 
 ### Setup state
 
@@ -480,7 +488,7 @@ Do not claim the browser can execute a capability that exists only through CLI/A
 
 Build this as an additive setup orchestration layer over existing persisted project, Site Health, and AI Visibility state.
 
-The implementation keeps the existing `/setup` and project routes, creates a real project before any provider work, and remains on the focused setup surface through the audit, fixes, and optional visibility stages. It enters the normal shell only after setup exits to Home.
+The implementation keeps the existing `/setup` and project routes, creates a real project before any provider work, and remains on the focused setup surface through the audit, fixes, and optional visibility stages. It enters the normal shell on the exact project overview after setup.
 
 Six decisions keep the change inside Canonry's current architecture:
 
@@ -500,7 +508,7 @@ flowchart LR
   S --> F["Open Page health findings"]
   F --> D["Existing site_audit_* and site_crawl_* evidence"]
   F --> V["Optional AI Visibility setup above findings"]
-  V --> H["Home"]
+  V --> H["Exact project overview"]
   F --> H
 ```
 
@@ -514,7 +522,7 @@ Keep one route flow:
       → remain on /setup with the exact project and Site Health run
       → open Page health directly with no view tabs
       → optional project-scoped AI Visibility setup
-      → / (Home)
+      → /projects/:name
 
 Do not add an `/onboarding/*` route tree. Reloads, server restarts, CLI-created projects, and API-created evidence must all resume from the same durable state.
 
@@ -632,7 +640,7 @@ Use the existing operations:
     GET  /api/v1/projects/:name/technical-aeo/structure?runId=...
     GET  /api/v1/projects/:name/technical-aeo/internal-links/neighbors?runId=...
 
-The launchpad requests a normal server-default run with dead-link checks off. Existing run creation already replays the same active request and returns `409` for different active options. Before inserting, harden it to fail if the runtime did not supply `onSiteAuditRequested`; a queued run must never be stranded without an executor.
+The launchpad requests a normal run with internal dead-link checks explicitly enabled. Existing run creation already replays the same active request and returns `409` for different active options. Before inserting, harden it to fail if the runtime did not supply `onSiteAuditRequested`; a queued run must never be stranded without an executor.
 
 Add one small stored progress read:
 

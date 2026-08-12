@@ -394,5 +394,8 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   // Raw crawl-attempt counters exist for transient onboarding progress. Agents
   // use run_get plus the canonical crawl reads once evidence is published.
   'GET /api/v1/projects/{name}/technical-aeo/runs/{runId}/progress': 'deferred',
+  // This is a transient browser-polling projection with no durable final
+  // findings. Agents use the canonical Page Health reads after publication.
+  'GET /api/v1/projects/{name}/technical-aeo/runs/{runId}/page-health-preview': 'excluded-protocol',
   'POST /api/v1/projects/{name}/technical-aeo/runs': 'included',
 } as const satisfies Record<string, OpenApiMcpClassification>

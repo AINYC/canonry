@@ -1274,3 +1274,33 @@ export const siteAuditRunProgressSchema = z.object({
   error: z.string().nullable(),
 })
 export type SiteAuditRunProgressDto = z.infer<typeof siteAuditRunProgressSchema>
+
+/** Exact lifecycle state for a bounded, in-progress Page Health preview. */
+export const siteAuditLivePageHealthStateSchema = z.enum(['waiting', 'collecting', 'terminal'])
+export type SiteAuditLivePageHealthState = z.infer<typeof siteAuditLivePageHealthStateSchema>
+
+/** One low-score page selected from the active crawl attempt without finding prose. */
+export const siteAuditLivePageHealthExampleSchema = z.object({
+  nodeKey: z.string(),
+  url: z.string(),
+  auditScore: z.number(),
+  checksNeedingAttention: z.number().int().nonnegative(),
+})
+export type SiteAuditLivePageHealthExampleDto = z.infer<typeof siteAuditLivePageHealthExampleSchema>
+
+/**
+ * A small, durable preview for an exact active site-audit run. It is never a
+ * final scorecard: terminal runs deliberately omit examples so callers switch
+ * to the immutable Page Health results once the crawl has published.
+ */
+export const siteAuditLivePageHealthSchema = z.object({
+  project: z.string(),
+  runId: z.string(),
+  status: runStatusSchema,
+  state: siteAuditLivePageHealthStateSchema,
+  attemptId: z.string().nullable(),
+  pagesAudited: z.number().int().nonnegative(),
+  updatedAt: z.string().nullable(),
+  examples: z.array(siteAuditLivePageHealthExampleSchema).max(12).default([]),
+})
+export type SiteAuditLivePageHealthDto = z.infer<typeof siteAuditLivePageHealthSchema>

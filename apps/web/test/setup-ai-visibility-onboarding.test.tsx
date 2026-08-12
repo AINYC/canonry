@@ -1,6 +1,7 @@
 import { afterEach, expect, onTestFinished, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 
 import { DashboardProvider } from '../src/contexts/dashboard-context.js'
 import { createDashboardFixture } from '../src/mock-data.js'
@@ -14,6 +15,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   return {
     ...actual,
     useNavigate: () => navigate,
+    Link: ({ children }: { children: ReactNode }) => <a href="/projects">{children}</a>,
   }
 })
 
@@ -58,8 +60,8 @@ function renderProjectSetup(options: { onboarding: boolean; complete?: boolean }
   return project.project.name
 }
 
-test('marks AI Visibility as the optional final onboarding stage and can skip to Home', async () => {
-  renderProjectSetup({ onboarding: true })
+test('marks AI Visibility as the optional final onboarding stage and can skip to the project', async () => {
+  const projectName = renderProjectSetup({ onboarding: true })
 
   expect(await screen.findByRole('heading', { name: 'Set up AI Visibility' })).toBeTruthy()
   const progress = screen.getByRole('list', { name: 'Onboarding progress' })
@@ -68,16 +70,48 @@ test('marks AI Visibility as the optional final onboarding stage and can skip to
   fireEvent.click(screen.getByRole('button', { name: 'Skip AI Visibility' }))
 
   await waitFor(() => {
-    expect(navigate).toHaveBeenCalledWith({ to: '/', replace: true })
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/projects/$projectName',
+      params: { projectName },
+      replace: true,
+    })
   })
 })
 
-test('finishing the project-scoped onboarding replaces the wizard with Home', async () => {
-  renderProjectSetup({ onboarding: true, complete: true })
+test('keeps a stale project-list handoff scoped to the exact onboarding project', async () => {
+  const fixture = createDashboardFixture()
+  fixture.dashboard.projects = []
+  fixture.dashboard.runs = []
+  const projectName = 'newly-created-project'
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 
-  fireEvent.click(await screen.findByRole('button', { name: 'Finish and go Home' }))
+  render(
+    <QueryClientProvider client={queryClient}>
+      <DashboardProvider value={fixture}>
+        <SetupPage visibilityProjectName={projectName} siteHealthOnboarding />
+      </DashboardProvider>
+    </QueryClientProvider>,
+  )
 
-  expect(navigate).toHaveBeenCalledWith({ to: '/', replace: true })
+  fireEvent.click(screen.getByRole('button', { name: 'Skip AI Visibility' }))
+
+  expect(navigate).toHaveBeenCalledWith({
+    to: '/projects/$projectName',
+    params: { projectName },
+    replace: true,
+  })
+})
+
+test('finishing the project-scoped onboarding replaces the wizard with the project', async () => {
+  const projectName = renderProjectSetup({ onboarding: true, complete: true })
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Finish and open project' }))
+
+  expect(navigate).toHaveBeenCalledWith({
+    to: '/projects/$projectName',
+    params: { projectName },
+    replace: true,
+  })
 })
 
 test('keeps the existing project-scoped setup destination outside Site Health onboarding', async () => {
@@ -88,7 +122,8 @@ test('keeps the existing project-scoped setup destination outside Site Health on
   fireEvent.click(await screen.findByRole('button', { name: /Open project dashboard/ }))
 
   expect(navigate).toHaveBeenCalledWith({
-    to: `/projects/${encodeURIComponent(projectName)}`,
+    to: '/projects/$projectName',
+    params: { projectName },
     replace: true,
   })
 })

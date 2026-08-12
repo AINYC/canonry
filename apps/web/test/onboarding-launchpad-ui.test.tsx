@@ -220,7 +220,7 @@ test('a malformed AI Visibility handoff never falls back to the first project', 
   expect(screen.queryByText('Step 3 of 5')).toBeNull()
 })
 
-test('the explicit Site Health handoff can be skipped to Home', async () => {
+test('the explicit Site Health handoff can be skipped to the mapped project', async () => {
   const restore = mockFetch((url) => pathOf(url) === '/api/v1/projects'
     ? jsonResponse([{
         id: 'project-example',
@@ -239,7 +239,7 @@ test('the explicit Site Health handoff can be skipped to Home', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Skip onboarding' }))
 
   await waitFor(() => {
-    expect(router.state.location.pathname).toBe('/')
+    expect(router.state.location.pathname).toBe('/projects/example-com')
     expect(router.state.location.search).toEqual({})
   })
 })
@@ -583,7 +583,9 @@ test('creates once, queues the canonical Site Health run, and hands off with exa
     country: 'US',
     language: 'en',
   })
-  expect(requests.some((request) => request.path.endsWith('/technical-aeo/runs') && request.method === 'POST')).toBe(true)
+  const siteAudit = requests.find((request) => request.path.endsWith('/technical-aeo/runs') && request.method === 'POST')
+  expect(siteAudit).toBeDefined()
+  expect(JSON.parse(siteAudit?.body ?? '{}')).toEqual({ checkDeadLinks: true })
 })
 
 test('preserves a created project with retry and setup recovery when dispatch fails', async () => {

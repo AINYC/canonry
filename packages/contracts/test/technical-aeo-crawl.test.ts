@@ -7,6 +7,7 @@ import {
   deriveSiteHealthState,
   normalizeSiteAuditRunRequest,
   siteAuditRequestIdentity,
+  siteAuditLivePageHealthSchema,
   siteAuditRunRequestSchema,
   siteAuditRunProgressSchema,
   siteCrawlDeadLinksResponseSchema,
@@ -42,6 +43,30 @@ describe('Technical AEO crawl contracts', () => {
       layout: { state: 'pending', layoutVersion: null, failureCode: null, updatedAt: null },
       error: null,
     })).toMatchObject({ phase: 'checking', layout: { state: 'pending' } })
+  })
+
+  it('models a bounded, provisional Page Health preview separately from final findings', () => {
+    const preview = siteAuditLivePageHealthSchema.parse({
+      project: 'example',
+      runId: 'run-1',
+      status: 'running',
+      state: 'collecting',
+      attemptId: 'attempt-1',
+      pagesAudited: 42,
+      updatedAt: '2026-08-11T12:00:00.000Z',
+      examples: [{
+        nodeKey: 'guide',
+        url: 'https://example.com/guide',
+        auditScore: 42,
+        checksNeedingAttention: 2,
+      }],
+    })
+
+    expect(preview).toMatchObject({ state: 'collecting', pagesAudited: 42 })
+    expect(siteAuditLivePageHealthSchema.safeParse({
+      ...preview,
+      examples: Array.from({ length: 13 }, () => preview.examples[0]),
+    }).success).toBe(false)
   })
 
   it('defaults dead-link checking off while retaining the legacy sitemapUrl and limit aliases', () => {
