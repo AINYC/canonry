@@ -57,19 +57,36 @@ export function resolveGscWindowRange(
   latestDataDate: string | null,
   today: string,
 ): GscWindowRange {
-  const reportingLagDays = latestDataDate === null
-    ? null
-    : Math.max(0, Math.round(
-      (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${latestDataDate}T00:00:00Z`)) / 86_400_000,
-    ))
-
-  // `all` has no lower bound to place, and with no data at all there is no
-  // anchor: fall back to the now-anchored cutoff so an empty project still
-  // filters rather than returning everything.
+  // `all` has no lower bound to place, but it still stops where the data does.
   if (window === 'all') {
-    return { startDate: null, endDate: latestDataDate, latestDataDate, reportingLagDays }
+    return {
+      startDate: null,
+      endDate: latestDataDate,
+      latestDataDate,
+      reportingLagDays: gscReportingLagDays(latestDataDate, today),
+    }
   }
-  const days = WINDOW_DAYS[window]
+  return resolveGscWindowDays(WINDOW_DAYS[window], latestDataDate, today)
+}
+
+/**
+ * The same anchoring for a window expressed as a day count rather than a
+ * label.
+ *
+ * Surfaces that hard-code their own horizon (the suggested-queries basket
+ * mirrors Google's 28-day default) need identical treatment: a now-anchored
+ * 28 days delivers 25 under the reporting lag. There, the shortfall does more
+ * than shrink a number — the surface gates an impression floor, so a query
+ * that clears the floor across the true window can fall under it and be
+ * withheld entirely.
+ */
+export function resolveGscWindowDays(
+  days: number,
+  latestDataDate: string | null,
+  today: string,
+): GscWindowRange {
+  // With no data there is no anchor: fall back to the now-anchored cutoff so
+  // an empty project still filters rather than scanning all history.
   if (latestDataDate === null) {
     return {
       startDate: shiftIsoCalendarDate(today, -days),
@@ -84,8 +101,16 @@ export function resolveGscWindowRange(
     startDate: shiftIsoCalendarDate(latestDataDate, -(days - 1)),
     endDate: latestDataDate,
     latestDataDate,
-    reportingLagDays,
+    reportingLagDays: gscReportingLagDays(latestDataDate, today),
   }
+}
+
+/** Calendar days between the last published date and today. Never negative. */
+function gscReportingLagDays(latestDataDate: string | null, today: string): number | null {
+  if (latestDataDate === null) return null
+  return Math.max(0, Math.round(
+    (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${latestDataDate}T00:00:00Z`)) / 86_400_000,
+  ))
 }
 
 /**

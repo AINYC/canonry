@@ -5,7 +5,7 @@ import path from 'node:path'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createClient, migrate, projects, runs, gscSearchData, gscDailyTotals } from '@ainyc/canonry-db'
 
-import { readLatestGscDataDate, resolveGscWindowRange } from '../src/gsc-totals.js'
+import { readLatestGscDataDate, resolveGscWindowDays, resolveGscWindowRange } from '../src/gsc-totals.js'
 
 /**
  * Reproduces the real canonry.ai disagreement that motivated the change.
@@ -159,5 +159,40 @@ describe('readLatestGscDataDate', () => {
 
     seedProperty('2026-08-11')
     expect(readLatestGscDataDate(db, projectId)).toBe('2026-08-11')
+  })
+})
+
+describe('resolveGscWindowDays', () => {
+  it('anchors a bare day count the same way a label does', () => {
+    // The suggested-queries basket hard-codes 28 days to mirror Google's
+    // default. Under a 3-day lag the now-anchored version delivered 25.
+    expect(resolveGscWindowDays(28, LATEST, TODAY)).toEqual({
+      startDate: '2026-07-13',
+      endDate: '2026-08-09',
+      latestDataDate: '2026-08-09',
+      reportingLagDays: 3,
+    })
+  })
+
+  it('agrees with the labelled resolver on the same span', () => {
+    expect(resolveGscWindowDays(30, LATEST, TODAY)).toEqual(resolveGscWindowRange('30d', LATEST, TODAY))
+    expect(resolveGscWindowDays(7, LATEST, TODAY)).toEqual(resolveGscWindowRange('7d', LATEST, TODAY))
+  })
+
+  it('covers exactly the requested number of inclusive days', () => {
+    const range = resolveGscWindowDays(28, LATEST, TODAY)
+    const spanDays =
+      (Date.parse(`${range.endDate!}T00:00:00Z`) - Date.parse(`${range.startDate!}T00:00:00Z`))
+      / 86_400_000 + 1
+    expect(spanDays).toBe(28)
+  })
+
+  it('falls back to a now-anchored cutoff with no data', () => {
+    expect(resolveGscWindowDays(28, null, TODAY)).toEqual({
+      startDate: '2026-07-15',
+      endDate: null,
+      latestDataDate: null,
+      reportingLagDays: null,
+    })
   })
 })
