@@ -8,11 +8,12 @@ inbound ingest requests it produces; normalizes Worker events into the
 provider-neutral `NormalizedTrafficRequest` shape consumed by
 `packages/integration-traffic`.
 
-The current adapter uses **direct push** — the customer's Worker sends each
-filtered request to a canonry ingest endpoint. The event/batch contract and
-generated capture path are transport-neutral: `deliveryMode = direct-push`
-selects the final delivery adapter, and the reserved `queue-pull` mode will
-reuse the same edge event through a Cloudflare Queue.
+The adapter supports both delivery modes. With **direct push**, the customer's
+Worker sends each filtered request to a canonry ingest endpoint. With
+**queue pull**, the Worker publishes the same event batch to a Cloudflare Queue
+and the single-team canonry deployment drains it over the HTTP pull API. The
+Queue Worker needs only a producer binding; the Queue API token remains in the
+canonry credential store.
 
 The push direction is safe because canonry is single-tenant per
 deployment — the Worker only ever talks to the operator's own canonry
@@ -22,7 +23,7 @@ instance, never to a canonry-hosted SaaS relay.
 
 | File | Role |
 |------|------|
-| `src/script.ts` | `generateWorkerScript` — produces an ES-module Worker with env/secret bindings and a transport-neutral capture path. `generateWranglerToml` emits non-secret vars and the account id, but never attaches a route. Operators attach the exact route manually with Fail open. |
+| `src/script.ts` | `generateWorkerScript` — produces an ES-module Worker with a transport-neutral capture path and direct-push or Queue delivery. `generateWranglerToml` emits non-secret vars and the account id, but never attaches a route. Operators attach the exact route manually with Fail open. |
 | `src/canonical-json.ts` | Deterministic JSON encoding embedded into the generated Worker and reused by receiver signature verification. |
 | `src/normalize.ts` | `normalizeCloudflareEdgeEvent` — one edge event → `NormalizedTrafficRequest`; the old Worker-named export is a compatibility alias. |
 | `src/verify.ts` | `verifyRequestSignature` — timestamp window + HMAC-SHA256 check. Constant-time once inputs are well-formed. |
@@ -53,19 +54,21 @@ instance, never to a canonry-hosted SaaS relay.
   `signature_invalid` / `signature_mismatch`) for receiver-side logging,
   but **never echoed back to the Worker** — an attacker who knows which
   leg failed can enumerate the rest.
-- **Bearer + HMAC secrets live in `~/.canonry/config.yaml` and Worker secret bindings.** The DB
-  stores only the sha256 of the bearer (`traffic_sources.ingestTokenHash`).
-  The HMAC secret never goes to the DB in any form. Neither secret is emitted
-  in generated source, Wrangler TOML, API output, or MCP output.
+- **Direct-push secrets live in `~/.canonry/config.yaml` and Worker secret
+  bindings.** The DB stores only the sha256 of the bearer
+  (`traffic_sources.ingestTokenHash`). The HMAC secret never goes to the DB in
+  any form. Queue pull uses no Worker secret binding; its Cloudflare API token
+  stays server-side in the canonry credential store. No delivery mode emits a
+  secret in generated source, Wrangler TOML, API output, or MCP output.
 - **ES-module Worker + `waitUntil`.** The generated Worker exports
   `{ fetch(request, env, ctx) }` and uses `ctx.waitUntil(...)` so delivery never blocks the customer
   response. Errors are swallowed — AI traffic is statistical, not
   transactional; dropped events are acceptable, and surfacing the failure
   would mask the customer response.
 - **Delivery is the seam.** Filtering builds a `CloudflareEdgeEventBatch`,
-  then `deliverEdgeEventBatch` selects `deliverViaDirectPush`. Queue support
-  adds a delivery branch and Wrangler queue binding; it must not fork the
-  filter, event schema, canonical encoding, or normalizer.
+  then `deliverEdgeEventBatch` selects `deliverViaDirectPush` or
+  `deliverViaQueue`. Delivery modes share the filter, event schema, canonical
+  encoding, and normalizer.
 - **`cf-ray` as event id.** Cloudflare assigns a unique `cf-ray` per
   request. The normalizer namespaces it as `cloudflare-worker:<ray>` so
   it cannot collide with another adapter's event id.
@@ -83,9 +86,11 @@ instance, never to a canonry-hosted SaaS relay.
 - **Echoing the verifier's failure reason in the HTTP response.** Use a
   single 401 envelope; do not let the Worker (or anything else) learn
   which leg of the auth failed.
-- **Putting either secret in generated source/TOML or `traffic_sources.configJson`.** Both
-  shared secrets belong in `~/.canonry/config.yaml`; only the bearer hash
-  goes to the DB, and deployment installs them through Worker secret bindings.
+- **Putting a direct-push secret or Queue API token in generated source/TOML or
+  `traffic_sources.configJson`.** Direct-push shared secrets belong in
+  `~/.canonry/config.yaml`; only the bearer hash goes to the DB. The Queue API
+  token also stays in the local credential store and never becomes a Worker
+  binding.
 - **Adding bot-id or operator classification in this package.** The
   classifier lives in `packages/integration-traffic` for one-place rule
   evolution across every adapter.
