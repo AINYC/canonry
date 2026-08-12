@@ -27,6 +27,7 @@ const sigmaMocks = vi.hoisted(() => ({
       defaultEdgeColor?: string
       defaultDrawNodeHover?: (...args: never[]) => void
       labelColor?: { color?: string }
+      labelFont?: string
     }
   } | null,
 }))
@@ -52,6 +53,7 @@ vi.mock('@react-sigma/core', async () => {
         defaultEdgeColor?: string
         defaultDrawNodeHover?: (...args: never[]) => void
         labelColor?: { color?: string }
+        labelFont?: string
       }
     }) => {
       if (sigmaMocks.shouldThrow) throw new Error('WebGL renderer failed')
@@ -222,6 +224,7 @@ describe('SiteGraphSigma', () => {
 
     await waitFor(() => expect(sigmaMocks.containerProps).not.toBeNull())
     const { graph, settings } = sigmaMocks.containerProps!
+    expect(settings?.labelFont).toBe('Geist Variable, Geist, sans-serif')
     const colors = [
       settings?.defaultNodeColor,
       settings?.defaultEdgeColor,
@@ -277,7 +280,7 @@ describe('SiteGraphSigma', () => {
       context as never,
       { x: 40, y: 30, size: 10, label: '/pricing', color: '#56b4e9' } as never,
       {
-        labelFont: 'Geist Sans, sans-serif',
+        labelFont: 'Geist Variable, Geist, sans-serif',
         labelSize: 13,
         labelWeight: '600',
       } as never,
@@ -423,12 +426,35 @@ describe('SiteGraphSigma', () => {
     await waitFor(() => expect(sigmaMocks.gotoNode).toHaveBeenCalledWith('pricing', expect.any(Object)))
   })
 
+  it('disables camera animation when the operator prefers reduced motion', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }))
+    mockWebGl(true)
+    render(<SiteGraphSigma nodes={nodes} edges={edges} />)
+
+    await screen.findByTestId('sigma-container')
+    const zoomIn = screen.getByRole('button', { name: 'Zoom in' })
+    await waitFor(() => expect(zoomIn).toHaveProperty('disabled', false))
+    fireEvent.click(zoomIn)
+
+    expect(sigmaMocks.zoomIn).toHaveBeenCalledWith({ duration: 0 })
+  })
+
   it('shows a truthful fallback when WebGL is unavailable', async () => {
     mockWebGl(false)
     render(<SiteGraphSigma nodes={nodes} edges={edges} />)
 
     expect(await screen.findByText('Interactive map unavailable')).toBeTruthy()
     expect(screen.getByText(/page inventory remains available/i)).toBeTruthy()
+  })
+
+  it('offers the inventory directly from a WebGL fallback', async () => {
+    const onOpenInventory = vi.fn()
+    mockWebGl(false)
+    render(<SiteGraphSigma nodes={nodes} edges={edges} onOpenInventory={onOpenInventory} />)
+
+    await screen.findByText('Interactive map unavailable')
+    fireEvent.click(screen.getByRole('button', { name: 'Open page inventory' }))
+    expect(onOpenInventory).toHaveBeenCalledOnce()
   })
 
   it('owns a render failure instead of blaming the browser for it', async () => {
@@ -527,5 +553,20 @@ describe('SiteGraphSigma', () => {
     rerender(<SiteGraphSigma nodes={nodes} edges={templateEdges} showTemplateLinks />)
     expect(visibleEdges()).toEqual(['home-pricing', 'nav-pricing'])
     expect(sigmaMocks.graphsSeen).toHaveLength(1)
+  })
+
+  it('offers the inventory directly when the persisted layout is unavailable', () => {
+    const onOpenInventory = vi.fn()
+    render(
+      <SiteGraphSigma
+        nodes={nodes}
+        edges={edges}
+        layoutState="unavailable"
+        onOpenInventory={onOpenInventory}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open page inventory' }))
+    expect(onOpenInventory).toHaveBeenCalledOnce()
   })
 })

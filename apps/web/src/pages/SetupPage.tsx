@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefCallback } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
@@ -11,6 +11,7 @@ import {
 import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
 import { AdminOnly } from '../components/shared/AccessControls.js'
+import { OnboardingProgress } from '../components/shared/OnboardingProgress.js'
 import { ToneBadge } from '../components/shared/ToneBadge.js'
 import { addToast } from '../lib/toast-store.js'
 import {
@@ -84,6 +85,18 @@ function projectHasSuccessfulBaseline(
   return project.queryCounts.total > 0
 }
 
+export function selectSetupProject(
+  projects: ProjectCommandCenterVm[],
+  preferredProjectName?: string,
+): ProjectCommandCenterVm | null {
+  if (preferredProjectName) {
+    return projects.find(project => project.project.name === preferredProjectName) ?? null
+  }
+  return projects.find(project => !projectHasSuccessfulBaseline(project))
+    ?? projects.at(0)
+    ?? null
+}
+
 function SetupStepIndicator({ current, labels }: { current: number; labels: readonly { label: string }[] }) {
   return (
     <div className="setup-steps" role="list" aria-label="Setup progress">
@@ -105,18 +118,44 @@ function SetupStepIndicator({ current, labels }: { current: number; labels: read
  * The setup wizard exists to CREATE things — a project, its queries, its
  * first sweep. There is nothing in it for a view-only account.
  */
-export function SetupPage() {
+interface SetupPageProps {
+  visibilityProjectName?: string
+  siteHealthOnboarding?: boolean
+}
+
+export function SetupPage({
+  visibilityProjectName,
+  siteHealthOnboarding = false,
+}: SetupPageProps = {}) {
   return (
-    <AdminOnly title="Setup">
-      <SetupPageBody />
+    <AdminOnly title={visibilityProjectName ? 'Set up AI Visibility' : 'Setup'}>
+      <SetupPageBody
+        visibilityProjectName={visibilityProjectName}
+        siteHealthOnboarding={siteHealthOnboarding}
+      />
     </AdminOnly>
   )
 }
 
-function SetupPageBody() {
+function SetupPageBody({ visibilityProjectName, siteHealthOnboarding }: SetupPageProps) {
   const contextDashboard = useInitialDashboard()
   const { dashboard, isLoading, refetch } = useDashboard()
   const safeDashboard = dashboard ?? contextDashboard?.dashboard
+  const navigate = useNavigate()
+  const visibilityHeadingRef = useCallback<RefCallback<HTMLHeadingElement>>((node) => {
+    if (node && visibilityProjectName) node.focus()
+  }, [visibilityProjectName])
+  const skipAiVisibility = () => {
+    if (!visibilityProjectName) {
+      void navigate({ to: '/', replace: true })
+      return
+    }
+    void navigate({
+      to: '/projects/$projectName',
+      params: { projectName: visibilityProjectName },
+      replace: true,
+    })
+  }
 
   if (!safeDashboard || isLoading) {
     return (
@@ -143,12 +182,46 @@ function SetupPageBody() {
     )
   }
 
+  if (visibilityProjectName && !safeDashboard.projects.some(project => project.project.name === visibilityProjectName)) {
+    return (
+      <div className="page-container">
+        {siteHealthOnboarding ? <OnboardingProgress current="visibility" /> : null}
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1 ref={visibilityHeadingRef} tabIndex={-1} className="page-title">Set up AI Visibility</h1>
+            <p className="page-subtitle">Choose what to track, then run your first visibility sweep.</p>
+          </div>
+          {siteHealthOnboarding ? (
+            <div className="page-header-right">
+              <Button type="button" variant="outline" onClick={skipAiVisibility}>
+                Skip AI Visibility
+              </Button>
+            </div>
+          ) : null}
+        </div>
+        <Card role="alert" className="compact-stack">
+          <h2>Project not found</h2>
+          <p className="text-secondary">
+            Canonry could not find the project handed off from Site Health. Refresh the project list or choose a project to continue.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={() => { void refetch() }}>Retry</Button>
+            <Button type="button" asChild><Link to="/projects">View projects</Link></Button>
+          </div>
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <ReadySetupPage
       dashboard={safeDashboard}
       initialHealth={contextDashboard?.health}
       enableLiveStatus={!contextDashboard}
       refetch={refetch}
+      visibilityProjectName={visibilityProjectName}
+      visibilityHeadingRef={visibilityHeadingRef}
+      siteHealthOnboarding={siteHealthOnboarding}
     />
   )
 }
@@ -158,11 +231,17 @@ function ReadySetupPage({
   initialHealth,
   enableLiveStatus,
   refetch,
+  visibilityProjectName,
+  visibilityHeadingRef,
+  siteHealthOnboarding,
 }: {
   dashboard: DashboardVm
   initialHealth?: HealthSnapshot
   enableLiveStatus: boolean
   refetch: () => Promise<void>
+  visibilityProjectName?: string
+  visibilityHeadingRef: RefCallback<HTMLHeadingElement>
+  siteHealthOnboarding?: boolean
 }) {
   const settings = safeDashboard.settings
 
@@ -187,9 +266,7 @@ function ReadySetupPage({
     } as OnboardingTelemetryEvent)
   }, [])
 
-  const resumeProject: ProjectCommandCenterVm | null = safeDashboard.projects.find(
-    project => !projectHasSuccessfulBaseline(project),
-  ) ?? safeDashboard.projects.at(0) ?? null
+  const resumeProject = selectSetupProject(safeDashboard.projects, visibilityProjectName)
   const resumeProjectRuns = resumeProject
     ? safeDashboard.runs
       .filter(run => run.projectId === resumeProject.project.id)
@@ -239,6 +316,20 @@ function ReadySetupPage({
   const [createdProjectName, setCreatedProjectName] = useState<string | null>(resumeProject?.project.name ?? null)
   const [projectError, setProjectError] = useState<string | null>(null)
   const [projectSaving, setProjectSaving] = useState(false)
+
+  const openProjectDashboard = () => {
+    if (!createdProjectName) {
+      void navigate({ to: '/', replace: Boolean(visibilityProjectName) })
+      return
+    }
+    void navigate({
+      to: '/projects/$projectName',
+      params: { projectName: createdProjectName },
+      // Project-scoped setup replaces the project route on entry. Replace it
+      // again on exit so Back cannot reopen a wizard the operator just finished.
+      replace: Boolean(visibilityProjectName),
+    })
+  }
 
   const [queriesText, setQueriesText] = useState(durableQueries.map(query => query.query).join('\n'))
   const [queriesSaved, setQueriesSaved] = useState(durableQueryCount > 0)
@@ -900,27 +991,6 @@ function ReadySetupPage({
               fine: you can edit them, research more, and add to them at any time from the
               project.
             </p>
-            <div className="rounded-md border border-base bg-bg-elevated p-3 text-sm">
-              <p className="m-0 font-medium text-heading">Tracking more than one location or property?</p>
-              <p className="mt-1 mb-2 text-secondary">
-                Queries attach to each property separately in Advanced measurement, so
-                there is nothing useful to add here. Skip this and set it up on the project.
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  skipQueries()
-                  // Advanced measurement lives on the portfolio tab. Landing on the
-                  // project root dropped the operator on Overview and made them hunt
-                  // for the thing this button just offered them.
-                  void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}/portfolio` : '/' })
-                }}
-              >
-                Set up Advanced measurement instead
-              </Button>
-            </div>
             {resumeQueriesQuery.isError ? (
               <div className="compact-stack">
                 <div role="alert" className="rounded-md border border-negative bg-negative-soft p-3 text-sm text-negative">
@@ -1122,8 +1192,8 @@ function ReadySetupPage({
                 </p>
                 <div className="setup-nav">
                   <span />
-                  <Button type="button" onClick={() => { void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' }) }}>
-                    Open project dashboard →
+                  <Button type="button" onClick={openProjectDashboard}>
+                    {siteHealthOnboarding ? 'Finish and open project' : 'Open project dashboard →'}
                   </Button>
                 </div>
               </div>
@@ -1146,7 +1216,7 @@ function ReadySetupPage({
                   <Button
                     type="button"
                     variant="ghost"
-                    onClick={() => { void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' }) }}
+                    onClick={openProjectDashboard}
                   >
                     Finish without running
                   </Button>
@@ -1163,7 +1233,7 @@ function ReadySetupPage({
             ) : !terminal ? (
               <div className="compact-stack">
                 <p className="text-neutral">
-                  Sweep running — typically 30-60s. Polling every 2s…
+                  Sweep running. This usually takes 30 to 60 seconds.
                 </p>
                 <div className="rounded-md border border-default bg-surface p-3 text-xs text-muted">
                   <p>Status: <span className="text-neutral">{runStatus ?? 'queued'}</span></p>
@@ -1178,8 +1248,8 @@ function ReadySetupPage({
                 )}
                 <div className="setup-nav">
                   <span />
-                  <Button type="button" variant="outline" onClick={() => { void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' }) }}>
-                    Watch on project page
+                  <Button type="button" variant="outline" onClick={openProjectDashboard}>
+                    {siteHealthOnboarding ? 'Finish and open project' : 'Watch on project page'}
                   </Button>
                 </div>
               </div>
@@ -1222,12 +1292,14 @@ function ReadySetupPage({
                   </div>
                 </div>
                 <p className="mt-1 text-sm text-secondary">
-                  Open the project to review the evidence.
+                  {siteHealthOnboarding
+                    ? 'Your project is ready. Review the evidence in the project.'
+                    : 'Open the project to review the evidence.'}
                 </p>
                 <div className="setup-nav">
                   <span />
-                  <Button type="button" onClick={() => { void navigate({ to: createdProjectName ? `/projects/${encodeURIComponent(createdProjectName)}` : '/' }) }}>
-                    Open project dashboard →
+                  <Button type="button" onClick={openProjectDashboard}>
+                    {siteHealthOnboarding ? 'Finish and open project' : 'Open project dashboard →'}
                   </Button>
                 </div>
               </div>
@@ -1243,11 +1315,29 @@ function ReadySetupPage({
 
   return (
     <div className="page-container">
+      {siteHealthOnboarding ? <OnboardingProgress current="visibility" /> : null}
       <div className="page-header">
         <div className="page-header-left">
-          <h1 className="page-title">Setup</h1>
-          <p className="page-subtitle">Create a project and run its first visibility check.</p>
+          <h1
+            ref={visibilityProjectName ? visibilityHeadingRef : undefined}
+            tabIndex={visibilityProjectName ? -1 : undefined}
+            className="page-title"
+          >
+            {visibilityProjectName ? 'Set up AI Visibility' : 'Setup'}
+          </h1>
+          <p className="page-subtitle">
+            {visibilityProjectName
+              ? 'Choose what to track, then run your first visibility sweep.'
+              : 'Create a project and run its first visibility check.'}
+          </p>
         </div>
+        {siteHealthOnboarding ? (
+          <div className="page-header-right">
+            <Button type="button" variant="outline" onClick={openProjectDashboard}>
+              Skip AI Visibility
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       <SetupStepIndicator current={step} labels={SETUP_STEPS} />

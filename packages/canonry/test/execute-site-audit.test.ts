@@ -25,7 +25,16 @@ import {
 // engine has its own HTTP/BFS suite; Canonry owns receipt, graph, and publish
 // semantics.
 vi.mock('@canonry/aeo-audit', () => ({ runSiteCrawl: vi.fn() }))
-vi.mock('@ainyc/canonry-api-routes', () => ({ resolveWebhookTarget: vi.fn().mockResolvedValue({ ok: true }) }))
+vi.mock('@ainyc/canonry-api-routes', () => ({
+  resolvePublicHttpTarget: vi.fn(),
+  resolveWebhookTarget: vi.fn().mockResolvedValue({ ok: true }),
+}))
+vi.mock('../src/site-audit-root.js', () => ({
+  resolveSiteAuditRootUrl: vi.fn(async (url: string) => {
+    const normalizedUrl = new URL(url).href
+    return { requestedUrl: normalizedUrl, effectiveUrl: normalizedUrl, redirects: [] }
+  }),
+}))
 import { runSiteCrawl } from '@canonry/aeo-audit'
 import {
   clampSiteAuditLimit,
@@ -34,6 +43,7 @@ import {
   SITE_AUDIT_DEFAULT_PAGE_LIMIT,
   SITE_AUDIT_MAX_PAGE_LIMIT,
 } from '../src/execute-site-audit.js'
+import { resolveSiteAuditRootUrl } from '../src/site-audit-root.js'
 import { SITE_CRAWL_GRAPH_LAYOUT_VERSION } from '../src/site-crawl-graph-layout.js'
 import { deriveSiteHealthState } from '@ainyc/canonry-contracts'
 
@@ -129,26 +139,35 @@ function summary(overrides: Record<string, unknown> = {}) {
   }
 }
 
-async function emitCompleteGraph(options: { onEvent?: (event: unknown) => Promise<void> | void }, complete = true) {
+async function emitCompleteGraph(
+  options: { onEvent?: (event: unknown) => Promise<void> | void },
+  complete = true,
+  rootUrl = 'https://example.com/',
+) {
+  const childUrl = new URL('/a', rootUrl).href
   await options.onEvent?.({
     type: 'pages', sequence: 1, batchId: 'pages-1', checksum: 'pages-checksum',
-    rows: [page('page:root', 'https://example.com/'), page('page:a', 'https://example.com/a')],
+    rows: [page('page:root', rootUrl), page('page:a', childUrl)],
   })
   await options.onEvent?.({
     type: 'edges', sequence: 2, batchId: 'edges-1', checksum: 'edges-checksum',
     rows: [{
-      key: 'edge:root-a', from: 'https://example.com/', to: 'https://example.com/a', type: 'anchor', classification: 'internal',
+      key: 'edge:root-a', from: rootUrl, to: childUrl, type: 'anchor', classification: 'internal',
       totalOccurrences: 2, followableOccurrences: 2, nofollowOccurrences: 0, anchorSummaries: [{ text: 'A', occurrences: 2 }],
     }],
   })
   await options.onEvent?.({
     type: 'metrics', sequence: 3, batchId: 'metrics-1', checksum: 'metrics-checksum',
     rows: [
-      { key: 'page:root', metrics: page('page:root', 'https://example.com/').metrics },
-      { key: 'page:a', metrics: page('page:a', 'https://example.com/a').metrics },
+      { key: 'page:root', metrics: page('page:root', rootUrl).metrics },
+      { key: 'page:a', metrics: page('page:a', childUrl).metrics },
     ],
   })
-  const endSummary = summary(complete ? {} : { complete: false, terminationReason: 'max-pages' })
+  const endSummary = summary({
+    rootUrl,
+    finalRootUrl: rootUrl,
+    ...(complete ? {} : { complete: false, terminationReason: 'max-pages' }),
+  })
   await options.onEvent?.({ type: 'summary', sequence: 4, batchId: 'summary-1', checksum: complete ? 'summary-ok' : 'summary-partial', summary: endSummary })
   return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
 }
@@ -188,6 +207,11 @@ describe('executeSiteAudit', () => {
       createdAt: NOW, updatedAt: NOW,
     }).run()
     vi.mocked(runSiteCrawl).mockReset()
+    vi.mocked(resolveSiteAuditRootUrl).mockReset()
+    vi.mocked(resolveSiteAuditRootUrl).mockImplementation(async (url) => {
+      const normalizedUrl = new URL(url).href
+      return { requestedUrl: normalizedUrl, effectiveUrl: normalizedUrl, redirects: [] }
+    })
   })
 
   afterEach(() => {
@@ -202,7 +226,7 @@ describe('executeSiteAudit', () => {
   }
 
   it('persists checkpoint batches, publishes a complete immutable graph, and keeps legacy audit reads populated', async () => {
-    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => emitCompleteGraph(options))
+    vi.mocked(runSiteCrawl).mockImplementation(async (url, options) => emitCompleteGraph(options, true, url))
     const runId = seedRun()
     await executeSiteAudit(db, runId, projectId, { maxPages: 500, maxEdges: 10_000 })
 
@@ -301,6 +325,27 @@ describe('executeSiteAudit', () => {
     const pageA = db.select().from(siteCrawlPages).where(eq(siteCrawlPages.nodeKey, 'page:a')).get()!
     expect(pageA.depth).toBe(page('page:a', 'https://example.com/a').metrics.shortestFollowableAnchorDepth)
     expect(pageA.linkScoreNormalized).toBe(page('page:a', 'https://example.com/a').metrics.linkScore)
+  })
+
+  it('hands the validated effective root to the crawl engine', async () => {
+    vi.mocked(resolveSiteAuditRootUrl).mockResolvedValue({
+      requestedUrl: 'https://example.com/',
+      effectiveUrl: 'https://www.example.com/',
+      redirects: [{ status: 301, from: 'https://example.com/', to: 'https://www.example.com/' }],
+    })
+    vi.mocked(runSiteCrawl).mockImplementation(async (url, options) => emitCompleteGraph(options, true, url))
+    const runId = seedRun()
+
+    await executeSiteAudit(db, runId, projectId)
+
+    expect(resolveSiteAuditRootUrl).toHaveBeenCalledWith('https://example.com', expect.objectContaining({
+      resolveTarget: expect.any(Function),
+    }))
+    expect(runSiteCrawl).toHaveBeenCalledWith('https://www.example.com/', expect.any(Object))
+    expect(db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, runId)).get()).toMatchObject({
+      requestedRootUrl: 'https://example.com/',
+      rootUrl: 'https://www.example.com/',
+    })
   })
 
   it('publishes the crawl when ForceAtlas2 times out and records layout unavailability', async () => {
@@ -630,12 +675,12 @@ describe('executeSiteAudit', () => {
   it('names an off-host root redirect when a complete crawl produces no audits', async () => {
     vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
       const redirectedRoot = page('page:root', 'https://example.com/', {
-        finalUrl: 'https://www.example.com/', state: 'redirect', audit: null,
+        finalUrl: 'https://other.example/', state: 'redirect', audit: null,
         indexability: { state: 'redirect', reasons: ['redirect'], rulesetVersion: '1.0.0' },
       })
       await options.onEvent?.({ type: 'pages', sequence: 1, batchId: 'off-host-root', checksum: 'off-host-root', rows: [redirectedRoot] })
       const endSummary = summary({
-        finalRootUrl: 'https://www.example.com/',
+        finalRootUrl: 'https://other.example/',
         terminationReason: 'root-host-redirect',
         pagesDiscovered: 1,
         pagesFetched: 1,
@@ -649,7 +694,7 @@ describe('executeSiteAudit', () => {
     const runId = seedRun()
 
     await expect(executeSiteAudit(db, runId, projectId)).rejects.toThrow(
-      'root URL redirected off-host from example.com to www.example.com (https://www.example.com/)',
+      'root URL redirected off-host from example.com to other.example (https://other.example/)',
     )
     expect(db.select().from(runs).where(eq(runs.id, runId)).get()).toMatchObject({ status: 'failed' })
     expect(db.select().from(siteAuditSnapshots).where(eq(siteAuditSnapshots.runId, runId)).get()).toBeUndefined()

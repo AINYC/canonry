@@ -36,7 +36,7 @@ import {
   type ApiRun,
 } from './api.js'
 import { useAccount } from './contexts/account-context.js'
-import { embedThemeFontHref, embedThemeMode, embedThemeStyle, embedViewIdForPath } from './embed.js'
+import { embedThemeMode, embedThemeStyle, embedViewIdForPath } from './embed.js'
 import { getApiV1ProjectsOptions, getApiV1RunsOptions } from '@ainyc/canonry-api-client/react-query'
 import { serviceStatusTooltip } from './lib/health-helpers.js'
 import { addToast, type ToastTone } from './lib/toast-store.js'
@@ -418,17 +418,23 @@ export function RootLayout() {
   // While loading or dashboard not yet available, use context data or null (no mock fallback)
   const safeDashboard = dashboard ?? contextDashboard?.dashboard ?? null
 
-  // First-run focus mode: hide the sidebar on /setup when the user has zero
-  // projects. The sidebar's nav items (Portfolio / Projects / Runs / Traffic
-  // sources / Backlink data / Settings) point at surfaces that don't have any
-  // data yet — showing them adds visual noise + shrinks the wizard's
-  // available real estate. Once they create their first project the
-  // sidebar comes back automatically (intentional "you've made it into the
-  // app" moment).
-  const isFirstRunSetup = location.pathname === '/setup'
+  // Focus the first-run setup visit, then keep it focused while creation makes
+  // the project list non-empty. A later /setup visit by an existing operator
+  // retains the normal shell and navigation.
+  const isSetupRoute = location.pathname === '/setup'
+  const isEmptySetup = isSetupRoute
     && safeDashboard !== null
     && safeDashboard.portfolioOverview.projects.length === 0
-  const shellModifier = isFirstRunSetup
+  const [firstRunSetupLatched, setFirstRunSetupLatched] = useState(isEmptySetup)
+  useEffect(() => {
+    if (!isSetupRoute) {
+      setFirstRunSetupLatched(false)
+    } else if (isEmptySetup) {
+      setFirstRunSetupLatched(true)
+    }
+  }, [isEmptySetup, isSetupRoute])
+  const isFocusedSetup = isSetupRoute && (isEmptySetup || firstRunSetupLatched)
+  const shellModifier = isFocusedSetup
     ? 'app-shell-focus'
     : sidebarHidden
       ? 'app-shell-sidebar-hidden'
@@ -499,19 +505,6 @@ export function RootLayout() {
   // non-allowlisted route renders an unavailable state instead of the page, so
   // surfaces like /settings are never reachable inside the iframe. Placed after
   // every hook above so the Rules of Hooks hold on both render paths.
-  // When the embed theme names a client font, inject its Google-Fonts stylesheet
-  // so `--font-sans` resolves to a loaded family. No-op off-embed / when unset.
-  useEffect(() => {
-    const href = embedThemeFontHref(embed?.theme)
-    if (!href) return
-    const link = document.createElement('link')
-    link.rel = 'stylesheet'
-    link.href = href
-    document.head.appendChild(link)
-    return () => {
-      document.head.removeChild(link)
-    }
-  }, [embed])
   if (embed) {
     const viewAllowed = !embed.views || embed.views.includes(embedViewIdForPath(location.pathname))
     return (
@@ -543,7 +536,7 @@ export function RootLayout() {
       </a>
 
       {/* ── Sidebar (desktop) ── */}
-      {!isFirstRunSetup && !sidebarHidden && (
+      {!isFocusedSetup && !sidebarHidden && (
       <aside id="desktop-sidebar" className="sidebar" aria-label="Primary navigation">
         <div className="sidebar-brand">
           <BrandLockup
@@ -714,7 +707,7 @@ export function RootLayout() {
         {/* Topbar */}
         <header className="topbar">
           <div className="topbar-left">
-            {!isFirstRunSetup && (
+            {!isFocusedSetup && (
               <Button
                 className="sidebar-privacy-toggle"
                 variant="ghost"

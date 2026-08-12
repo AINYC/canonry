@@ -107,6 +107,34 @@ export const projectUpsertRequestSchema = z.object({
 
 export type ProjectUpsertRequest = z.infer<typeof projectUpsertRequestSchema>
 
+/**
+ * Body for create-only project creation. `name` is intentionally separate from
+ * the upsert path parameter: the API normalizes it before persistence and
+ * refuses a collision instead of changing an existing project's configuration.
+ */
+export const projectCreateRequestSchema = projectUpsertRequestSchema.extend({
+  name: z.string().trim().min(1).max(120),
+})
+
+export type ProjectCreateRequest = z.infer<typeof projectCreateRequestSchema>
+
+/**
+ * Canonical project route key for the domain-first launchpad.
+ *
+ * Names stay URL-safe and stable across casing, whitespace, punctuation, and
+ * common accented presentation variants. An empty result is invalid and must
+ * be rejected by the caller rather than silently inventing a fallback key.
+ */
+export function normalizeProjectName(input: string): string {
+  return input
+    .trim()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 export const projectDtoSchema = z.object({
   id: z.string(),
   name: z.string(),

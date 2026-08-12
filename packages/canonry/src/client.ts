@@ -55,6 +55,7 @@ import type {
   SiteAuditPagesResponseDto,
   SiteAuditTrendResponseDto,
   SiteAuditRunResponseDto,
+  SiteAuditRunProgressDto,
   SiteCrawlSummaryDto,
   SiteCrawlPagesResponseDto,
   SiteCrawlPageAuditDto,
@@ -436,6 +437,7 @@ import {
   getApiV1ProjectsByNameTechnicalAeoInternalLinks,
   getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighbors,
   getApiV1ProjectsByNameTechnicalAeoDeadLinks,
+  getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgress,
   postApiV1ProjectsByNameTechnicalAeoRuns,
   // Wordpress
   postApiV1ProjectsByNameWordpressConnect,
@@ -3334,6 +3336,16 @@ export class ApiClient {
         client: this.heyClient,
         path: { name: project },
         query: { limit: opts?.limit !== undefined ? String(opts.limit) : undefined } as never,
+      }),
+    )
+  }
+
+  /** Exact durable counters and lifecycle state for one non-probe site-audit run. */
+  async getTechnicalAeoProgress(project: string, runId: string): Promise<SiteAuditRunProgressDto> {
+    return this.invoke<SiteAuditRunProgressDto>(() =>
+      getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgress({
+        client: this.heyClient,
+        path: { name: project, runId },
       }),
     )
   }

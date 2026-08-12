@@ -258,6 +258,7 @@ Site-wide technical audit (structured data, AI-readable content, AI-crawler acce
 cnry technical-aeo run <project> --wait                 # full crawl + audit; defaults to 1,000 pages / 100,000 edges; waits for terminal state
 cnry technical-aeo run <project> --sitemap-url <url> --max-pages 5000 --max-edges 250000 --max-depth 12   # optional crawl seeds and custom budgets; hard caps are 50,000 pages / 1,000,000 edges
 cnry technical-aeo run <project> --check-dead-links --wait   # opt in to dead-link checks; they are off by default
+cnry technical-aeo progress <project> --run-id <id> [--format json] # exact durable phase and pages found / checked / failed counters; never a synthesized percentage
 cnry technical-aeo crawl <project> [--run-id <id>] [--format json]   # crawl metadata, budgets, completeness, and termination
 cnry site-health overview <project> [--run-id <id>] [--format json] # operator-facing alias for crawl metadata
 cnry site-health page-audit <project> (--node-key <key>|--url <url>) [--run-id <id>] [--format json] # exact audit score, factor findings, recommendations, and crawl provenance for one graph page

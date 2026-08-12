@@ -14,8 +14,30 @@ function mockFetch(handler: (url: string, init?: RequestInit) => Response | Prom
 
 const API_SESSION = '/api/v1/session'
 
+const dashboardProject = {
+  id: 'project_auth_gate',
+  name: 'auth-gate-project',
+  displayName: 'Auth gate project',
+  canonicalDomain: 'auth-gate.example',
+  ownedDomains: [],
+  aliases: [],
+  country: 'US',
+  language: 'en',
+  tags: [],
+  labels: {},
+  providers: [],
+  providerModels: {},
+  locations: [],
+  defaultLocation: null,
+  measurement: { marketingHosts: [], brandTerms: [], leadEventNames: [] },
+  autoExtractBacklinks: false,
+  configSource: 'api',
+  configRevision: 1,
+}
+
 function dashboardFallback(urlStr: string) {
-  if (urlStr.includes('/projects')) return jsonResponse([])
+  if (/\/api\/v1\/projects(?:\?|$)/.test(urlStr)) return jsonResponse([dashboardProject])
+  if (urlStr.includes('/projects/') && urlStr.endsWith('/overview')) return jsonResponse({}, 404)
   if (urlStr.includes('/runs')) return jsonResponse([])
   return jsonResponse({})
 }
@@ -44,6 +66,8 @@ describe('AuthGate', () => {
 
       render(<AuthGate />)
       expect(await screen.findByText('Create a dashboard password')).toBeTruthy()
+      expect(screen.getByText('Choose a password to protect the Canonry dashboard.')).toBeTruthy()
+      expect(screen.queryByText(/future visits/i)).toBeNull()
     })
 
     test('renders dashboard when session is authenticated', async () => {

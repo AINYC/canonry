@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { orderLocationsDefaultFirst } from '../src/index.js'
+import { normalizeProjectName, orderLocationsDefaultFirst, projectCreateRequestSchema } from '../src/index.js'
 
 
 // ---------------------------------------------------------------------------
@@ -21,4 +21,16 @@ test('orderLocationsDefaultFirst is a no-op when the default is absent, unknown,
   expect(orderLocationsDefaultFirst([phoenix, tucson], 'nowhere')).toEqual([phoenix, tucson])
   expect(orderLocationsDefaultFirst([phoenix, tucson], 'phoenix')).toEqual([phoenix, tucson])
   expect(orderLocationsDefaultFirst([], 'phoenix')).toEqual([])
+})
+
+test('project creation has a dedicated name field and a stable normalized route key', () => {
+  expect(normalizeProjectName('  Acmé & Co.  ')).toBe('acme-co')
+  expect(normalizeProjectName('---')).toBe('')
+  expect(projectCreateRequestSchema.parse({
+    name: 'Acme & Co.',
+    displayName: 'Acme',
+    canonicalDomain: 'https://www.acme.example/path',
+    country: 'US',
+    language: 'en',
+  }).name).toBe('Acme & Co.')
 })

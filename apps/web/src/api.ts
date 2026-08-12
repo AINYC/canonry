@@ -1,8 +1,9 @@
-import type { EmbedClientConfig, ErrorCode, GroundingSource, ProjectOverviewDto, ScheduleDto, NotificationDto, GscCoverageSummaryDto, GscCoverageSnapshotDto, GscPerformanceDailyDto, IndexingRequestResultDto, MetricsWindow, BrandMetricsDto, GA4AiReferralDailyDto, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry, InsightDto, ProjectReportDto, ReportAudience, ResultsExportFormat, CitationVisibilityResponse, BacklinkSource, BacklinkSummaryDto, BacklinkDomainDto, BacklinkListResponse, BacklinkHistoryEntry, BacklinksInstallStatusDto, BacklinksInstallResultDto, CcAvailableRelease, CcCachedRelease, CcReleaseSyncDto, TrafficSourceDto, TrafficSourceDetailDto, TrafficSourceListResponse, TrafficStatusResponse, TrafficEventsResponse, TrafficConnectCloudRunRequest, TrafficConnectWordpressRequest, TrafficConnectVercelRequest, TrafficSyncResponse, TrafficBackfillResponse, DiscoveryRunRequest, DiscoverySessionDto, DiscoverySessionDetailDto, DiscoveryPromotePreview, DiscoveryPromoteRequest, DiscoveryPromoteResult, ProjectDto, ProjectUpsertRequest, QueryDto, CompetitorDto, LocationContext, GoogleConnectionDto, GscUrlInspectionDto, GscDeindexedRowDto, BingUrlInspectionDto, BingCoverageSummaryDto, BingKeywordStatsDto, BingStatusDto, BingConnectResponseDto, BingSetSiteResponseDto, BingSitesResponseDto, GscSearchDataDto, GscPerformanceResponseDto, GscPerformanceOrderBy, ContentTargetDismissalDto, ContentTargetDismissRequest, SiteAuditRunRequest, SiteAuditRunResponseDto, GscSitemapDto, GscSitemapListResponseDto, GscSubmitSitemapsResponseDto, GscDiscoverSitemapsResponseDto, OnboardingTelemetryEvent, TelemetryEventAcceptedDto } from '@ainyc/canonry-contracts'
+import type { EmbedClientConfig, ErrorCode, GroundingSource, ProjectOverviewDto, ScheduleDto, NotificationDto, GscCoverageSummaryDto, GscCoverageSnapshotDto, GscPerformanceDailyDto, IndexingRequestResultDto, MetricsWindow, BrandMetricsDto, GA4AiReferralDailyDto, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry, InsightDto, ProjectReportDto, ReportAudience, ResultsExportFormat, CitationVisibilityResponse, BacklinkSource, BacklinkSummaryDto, BacklinkDomainDto, BacklinkListResponse, BacklinkHistoryEntry, BacklinksInstallStatusDto, BacklinksInstallResultDto, CcAvailableRelease, CcCachedRelease, CcReleaseSyncDto, TrafficSourceDto, TrafficSourceDetailDto, TrafficSourceListResponse, TrafficStatusResponse, TrafficEventsResponse, TrafficConnectCloudRunRequest, TrafficConnectWordpressRequest, TrafficConnectVercelRequest, TrafficSyncResponse, TrafficBackfillResponse, DiscoveryRunRequest, DiscoverySessionDto, DiscoverySessionDetailDto, DiscoveryPromotePreview, DiscoveryPromoteRequest, DiscoveryPromoteResult, ProjectDto, ProjectCreateRequest, ProjectUpsertRequest, QueryDto, CompetitorDto, LocationContext, GoogleConnectionDto, GscUrlInspectionDto, GscDeindexedRowDto, BingUrlInspectionDto, BingCoverageSummaryDto, BingKeywordStatsDto, BingStatusDto, BingConnectResponseDto, BingSetSiteResponseDto, BingSitesResponseDto, GscSearchDataDto, GscPerformanceResponseDto, GscPerformanceOrderBy, ContentTargetDismissalDto, ContentTargetDismissRequest, SiteAuditRunRequest, SiteAuditRunResponseDto, GscSitemapDto, GscSitemapListResponseDto, GscSubmitSitemapsResponseDto, GscDiscoverSitemapsResponseDto, OnboardingTelemetryEvent, TelemetryEventAcceptedDto } from '@ainyc/canonry-contracts'
 import {
   createClient as createHeyClient,
   // Projects + queries + competitors + locations + runs + apply + settings + telemetry
   getApiV1Projects,
+  postApiV1Projects,
   getApiV1ProjectsByName,
   putApiV1ProjectsByName,
   deleteApiV1ProjectsByName,
@@ -172,7 +173,11 @@ declare global {
         showResourceLinks?: boolean
         showUpdateNotification?: boolean
         showAgentBar?: boolean
+        /** Runtime rollout selection for the first-open setup experience. */
+        onboardingMode?: OnboardingMode
       }
+      /** @deprecated Accept the early flat rollout shape during the transition. */
+      onboardingMode?: OnboardingMode
       /**
        * Read-only embed block injected by `canonry serve --embed` (#716). Present
        * only when embed mode is enabled; drives the chromeless render + the
@@ -181,6 +186,25 @@ declare global {
       embed?: EmbedClientConfig
     }
   }
+}
+
+/** Runtime-selected first-open experience with an operator-configurable override. */
+export type OnboardingMode = 'legacy' | 'platform' | 'auto'
+
+/**
+ * Fresh installs use the domain-first flow by default. `auto` enters it only
+ * after an authoritative empty project-list response, while existing installs
+ * retain the established setup wizard. Operators can still force `legacy`.
+ */
+export function getOnboardingMode(): OnboardingMode {
+  // Server rendering has no authoritative project-list query. Preserve the
+  // established surface there; the browser resolves fresh installs to auto.
+  if (typeof window === 'undefined') return 'legacy'
+  const candidate = window.__CANONRY_CONFIG__?.dashboard?.onboardingMode
+    ?? window.__CANONRY_CONFIG__?.onboardingMode
+  return candidate === 'platform' || candidate === 'auto' || candidate === 'legacy'
+    ? candidate
+    : 'auto'
 }
 
 function getEmbedRenderToken(): string | undefined {
@@ -672,6 +696,19 @@ export function fetchProjectOverview(
 export function createProject(name: string, body: ProjectUpsertRequest): Promise<ApiProject> {
   return invokeWeb<ApiProject>(() =>
     putApiV1ProjectsByName({ client: heyClient, path: { name }, body: body as never }),
+  )
+}
+
+/**
+ * First-open creation is deliberately distinct from `createProject()`: the
+ * established PUT route is an upsert for CLI/dashboard edits, whereas this
+ * POST must reject a normalized name collision instead of overwriting it.
+ */
+export type OnboardingProjectCreateRequest = ProjectCreateRequest
+
+export function createOnboardingProject(body: OnboardingProjectCreateRequest): Promise<ApiProject> {
+  return invokeWeb<ApiProject>(() =>
+    postApiV1Projects({ client: heyClient, body }),
   )
 }
 

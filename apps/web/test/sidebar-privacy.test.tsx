@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, expect, test } from 'vitest'
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 
@@ -62,13 +62,22 @@ async function renderRoute(pathname: string, options: Parameters<typeof createDa
   const router = createAppRouter(queryClient, { initialEntries: [pathname] })
   await router.load()
 
-  return render(
+  const renderFixture = (nextFixture: ReturnType<typeof createDashboardFixture>) => (
     <QueryClientProvider client={queryClient}>
-      <DashboardProvider value={{ dashboard: fixture.dashboard, health: fixture.health }}>
+      <DashboardProvider value={{ dashboard: nextFixture.dashboard, health: nextFixture.health }}>
         <RouterProvider router={router} />
       </DashboardProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   )
+  const rendered = render(renderFixture(fixture))
+
+  return {
+    ...rendered,
+    router,
+    rerenderDashboard(nextOptions: Parameters<typeof createDashboardFixture>[0] = {}) {
+      rendered.rerender(renderFixture(createDashboardFixture(nextOptions)))
+    },
+  }
 }
 
 test('sidebar can be hidden and restored from the desktop topbar', async () => {
@@ -138,4 +147,34 @@ test('does not render the sidebar toggle during first-run setup', async () => {
 
   expect(container.querySelector('#desktop-sidebar')).toBeNull()
   expect(queryByRole('button', { name: /sidebar/i })).toBeNull()
+})
+
+test('keeps the first-run shell focused after onboarding creates a project', async () => {
+  const { container, queryByRole, rerenderDashboard } = await renderRoute('/setup', { emptyPortfolio: true })
+
+  rerenderDashboard()
+
+  expect(container.querySelector('#desktop-sidebar')).toBeNull()
+  expect(queryByRole('button', { name: /sidebar/i })).toBeNull()
+  expect(container.querySelector('.app-shell-focus')).not.toBeNull()
+})
+
+test('keeps navigation available when an existing operator opens setup', async () => {
+  const { container, getByRole } = await renderRoute('/setup')
+
+  expect(container.querySelector('#desktop-sidebar')).not.toBeNull()
+  expect(getByRole('button', { name: 'Hide sidebar' })).toBeDefined()
+  expect(container.querySelector('.app-shell-focus')).toBeNull()
+})
+
+test('resets first-run focus after leaving setup', async () => {
+  const { container, getByRole, router, rerenderDashboard } = await renderRoute('/setup', { emptyPortfolio: true })
+  rerenderDashboard()
+
+  await router.navigate({ to: '/projects' })
+  await waitFor(() => expect(container.querySelector('#desktop-sidebar')).not.toBeNull())
+
+  await router.navigate({ to: '/setup' })
+  await waitFor(() => expect(getByRole('button', { name: 'Hide sidebar' })).toBeDefined())
+  expect(container.querySelector('.app-shell-focus')).toBeNull()
 })

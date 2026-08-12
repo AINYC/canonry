@@ -596,10 +596,10 @@ test('traffic sync lease migration adds nullable per-source lease fields without
   onTestFinished(() => cleanup(tmpDir))
   const db = createClient(path.join(tmpDir, 'test.db'))
 
-  migrate(db, MIGRATION_VERSIONS.filter(migration => migration.version < 134))
+  migrate(db, MIGRATION_VERSIONS.filter(migration => migration.version < 135))
   seedProject(db)
   const now = '2026-08-11T12:00:00.000Z'
-  // This is deliberately a pre-v134 insert. Drizzle's current table model
+  // This is deliberately a pre-v135 insert. Drizzle's current table model
   // names the new lease columns even when values are omitted, so use SQL that
   // names only columns an older binary could have written.
   db.run(sql`
@@ -614,7 +614,7 @@ test('traffic sync lease migration adds nullable per-source lease fields without
   const leaseMigration = MIGRATION_VERSIONS.find(
     migration => migration.name === 'traffic-source-sync-lease',
   )
-  expect(leaseMigration).toMatchObject({ version: 134 })
+  expect(leaseMigration).toMatchObject({ version: 135 })
 
   migrate(db)
   const [row] = db.select().from(trafficSources).where(eq(trafficSources.id, 'src_pre_lease')).all()
@@ -627,7 +627,7 @@ test('traffic queue backlog migration adds nullable observations without changin
   onTestFinished(() => cleanup(tmpDir))
   const db = createClient(path.join(tmpDir, 'test.db'))
 
-  migrate(db, MIGRATION_VERSIONS.filter(migration => migration.version < 135))
+  migrate(db, MIGRATION_VERSIONS.filter(migration => migration.version < 136))
   seedProject(db)
   const now = '2026-08-11T12:00:00.000Z'
   db.run(sql`
@@ -642,7 +642,7 @@ test('traffic queue backlog migration adds nullable observations without changin
   const backlogMigration = MIGRATION_VERSIONS.find(
     migration => migration.name === 'traffic-source-queue-backlog',
   )
-  expect(backlogMigration).toMatchObject({ version: 135 })
+  expect(backlogMigration).toMatchObject({ version: 136 })
 
   migrate(db)
   const [legacy] = db.select().from(trafficSources).where(eq(trafficSources.id, 'src_pre_backlog')).all()

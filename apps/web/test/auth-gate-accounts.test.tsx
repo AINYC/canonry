@@ -19,13 +19,35 @@ import { mockFetch as installMockFetch, jsonResponse } from './mock-fetch.js'
 const ACCOUNT_SESSION = '/api/v1/auth/session'
 const ACCOUNT_LOGIN = '/api/v1/auth/login'
 
+const dashboardProject = {
+  id: 'project_auth_gate',
+  name: 'auth-gate-project',
+  displayName: 'Auth gate project',
+  canonicalDomain: 'auth-gate.example',
+  ownedDomains: [],
+  aliases: [],
+  country: 'US',
+  language: 'en',
+  tags: [],
+  labels: {},
+  providers: [],
+  providerModels: {},
+  locations: [],
+  defaultLocation: null,
+  measurement: { marketingHosts: [], brandTerms: [], leadEventNames: [] },
+  autoExtractBacklinks: false,
+  configSource: 'api',
+  configRevision: 1,
+}
+
 function mockFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
   const restore = installMockFetch(handler)
   onTestFinished(restore)
 }
 
 function dashboardFallback(urlStr: string) {
-  if (urlStr.includes('/projects')) return jsonResponse([])
+  if (/\/api\/v1\/projects(?:\?|$)/.test(urlStr)) return jsonResponse([dashboardProject])
+  if (urlStr.includes('/projects/') && urlStr.endsWith('/overview')) return jsonResponse({}, 404)
   if (urlStr.includes('/runs')) return jsonResponse([])
   return jsonResponse({})
 }

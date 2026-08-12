@@ -7,7 +7,9 @@ import {
   deriveSiteHealthState,
   normalizeSiteAuditRunRequest,
   siteAuditRequestIdentity,
+  siteAuditLivePageHealthSchema,
   siteAuditRunRequestSchema,
+  siteAuditRunProgressSchema,
   siteCrawlDeadLinksResponseSchema,
   siteCrawlGraphResponseSchema,
   siteCrawlPageAuditSchema,
@@ -25,6 +27,46 @@ describe('Technical AEO crawl contracts', () => {
     expect(SITE_AUDIT_MAX_PAGE_LIMIT).toBe(50_000)
     expect(SITE_AUDIT_MAX_EDGE_LIMIT).toBe(1_000_000)
     expect(normalizeSiteAuditRunRequest({})).toMatchObject({ maxPages: 1_000, maxEdges: 100_000 })
+  })
+
+  it('models exact stored run progress without inventing a completion percentage', () => {
+    expect(siteAuditRunProgressSchema.parse({
+      project: 'example',
+      runId: 'run-1',
+      status: 'running',
+      phase: 'checking',
+      attempt: {
+        id: 'attempt-1', state: 'running',
+        pagesDiscovered: 42, pagesFetched: 17, pagesEligible: 12, pagesErrored: 1, edgesDiscovered: 88,
+        lastUpdatedAt: '2026-08-09T12:00:00.000Z', startedAt: '2026-08-09T11:59:00.000Z', finishedAt: null, error: null,
+      },
+      layout: { state: 'pending', layoutVersion: null, failureCode: null, updatedAt: null },
+      error: null,
+    })).toMatchObject({ phase: 'checking', layout: { state: 'pending' } })
+  })
+
+  it('models a bounded, provisional Page Health preview separately from final findings', () => {
+    const preview = siteAuditLivePageHealthSchema.parse({
+      project: 'example',
+      runId: 'run-1',
+      status: 'running',
+      state: 'collecting',
+      attemptId: 'attempt-1',
+      pagesAudited: 42,
+      updatedAt: '2026-08-11T12:00:00.000Z',
+      examples: [{
+        nodeKey: 'guide',
+        url: 'https://example.com/guide',
+        auditScore: 42,
+        checksNeedingAttention: 2,
+      }],
+    })
+
+    expect(preview).toMatchObject({ state: 'collecting', pagesAudited: 42 })
+    expect(siteAuditLivePageHealthSchema.safeParse({
+      ...preview,
+      examples: Array.from({ length: 13 }, () => preview.examples[0]),
+    }).success).toBe(false)
   })
 
   it('defaults dead-link checking off while retaining the legacy sitemapUrl and limit aliases', () => {

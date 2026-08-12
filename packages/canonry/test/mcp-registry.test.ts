@@ -244,6 +244,10 @@ describe('MCP tool registry', () => {
     expect(MCP_OPENAPI_OPERATION_CLASSIFICATIONS[graphOperation]).toBe('deferred')
     expect(canonryMcpTools.flatMap(tool => tool.openApiOperations)).not.toContain(graphOperation)
 
+    const livePreviewOperation = 'GET /api/v1/projects/{name}/technical-aeo/runs/{runId}/page-health-preview'
+    expect(MCP_OPENAPI_OPERATION_CLASSIFICATIONS[livePreviewOperation]).toBe('excluded-protocol')
+    expect(canonryMcpTools.flatMap(tool => tool.openApiOperations)).not.toContain(livePreviewOperation)
+
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(expect.arrayContaining(
       expected.map(([name]) => name),
     ))

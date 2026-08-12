@@ -24,7 +24,9 @@ import {
 } from '@ainyc/canonry-db'
 import type {
   SiteAuditFactorSummaryDto,
+  SiteAuditLivePageHealthDto,
   SiteAuditPagesResponseDto,
+  SiteAuditRunProgressDto,
   SiteAuditScoreDto,
   SiteAuditTrendResponseDto,
   SiteCrawlDeadLinksResponseDto,
@@ -1295,6 +1297,343 @@ describe('POST /technical-aeo/runs', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(ctx.siteAuditRequested[0]!.opts).toMatchObject({ maxPages: 60, maxEdges: 500, maxDepth: 4, checkDeadLinks: false })
+  })
+
+  it('rejects an unavailable executor before a queued run can be persisted', async () => {
+    const before = ctx.db.select().from(runs).all().length
+    const withoutExecutor = Fastify()
+    withoutExecutor.register(apiRoutes, { db: ctx.db, skipAuth: true })
+    await withoutExecutor.ready()
+
+    const response = await withoutExecutor.inject({
+      method: 'POST',
+      url: '/api/v1/projects/tech-aeo/technical-aeo/runs',
+      payload: {},
+    })
+
+    expect(response.statusCode).toBe(422)
+    expect(response.json()).toMatchObject({
+      error: { code: 'MISSING_DEPENDENCY', details: { reason: 'no-site-audit-handler' } },
+    })
+    expect(ctx.db.select().from(runs).all()).toHaveLength(before)
+    await withoutExecutor.close()
+  })
+})
+
+describe('GET /technical-aeo/runs/:runId/progress', () => {
+  it('keeps a legacy terminal audit terminal when no crawl attempt exists', async () => {
+    const response = await get<SiteAuditRunProgressDto>(`/api/v1/projects/tech-aeo/technical-aeo/runs/${ctx.runA}/progress`)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      runId: ctx.runA,
+      status: 'completed',
+      phase: 'completed',
+      attempt: null,
+    })
+  })
+
+  it.each([
+    ['completed', 'completed'],
+    ['partial', 'partial'],
+  ] as const)('keeps a legacy %s audit terminal when its persisted crawl has no graph layout', async (status, phase) => {
+    const now = new Date().toISOString()
+    const runId = crypto.randomUUID()
+    const attemptId = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: runId, projectId: ctx.projectId, kind: 'site-audit', status, trigger: 'manual', createdAt: now, finishedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlAttempts).values({
+      id: attemptId, projectId: ctx.projectId, runId, attemptNumber: 1, state: status,
+      startedAt: now, finishedAt: now, createdAt: now, updatedAt: now,
+    }).run()
+
+    const response = await get<SiteAuditRunProgressDto>(`/api/v1/projects/tech-aeo/technical-aeo/runs/${runId}/progress`)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      runId,
+      status,
+      phase,
+      attempt: { id: attemptId, state: status },
+      layout: { state: 'unavailable', layoutVersion: null, failureCode: null, updatedAt: null },
+    })
+  })
+
+  it('returns raw stored counters for an exact running site-audit without a percentage', async () => {
+    const now = new Date().toISOString()
+    const runId = crypto.randomUUID()
+    const attemptId = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: runId, projectId: ctx.projectId, kind: 'site-audit', status: 'running', trigger: 'manual', createdAt: now, startedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlAttempts).values({
+      id: attemptId, projectId: ctx.projectId, runId, attemptNumber: 1, state: 'running',
+      pagesDiscovered: 48, pagesFetched: 19, pagesEligible: 12, pagesErrored: 2, edgesDiscovered: 97,
+      startedAt: now, createdAt: now, updatedAt: now,
+    }).run()
+
+    const response = await get<SiteAuditRunProgressDto>(`/api/v1/projects/tech-aeo/technical-aeo/runs/${runId}/progress`)
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual(expect.objectContaining({
+      project: 'tech-aeo', runId, status: 'running', phase: 'checking',
+      layout: { state: 'pending', layoutVersion: null, failureCode: null, updatedAt: null },
+    }))
+    expect(response.body.attempt).toEqual(expect.objectContaining({
+      id: attemptId, state: 'running', pagesDiscovered: 48, pagesFetched: 19,
+      pagesEligible: 12, pagesErrored: 2, edgesDiscovered: 97, lastUpdatedAt: now,
+    }))
+    expect(JSON.stringify(response.body)).not.toContain('percent')
+  })
+
+  it('pins terminal map layout state to the exact completed run', async () => {
+    const response = await get<SiteAuditRunProgressDto>(`/api/v1/projects/tech-aeo/technical-aeo/runs/${ctx.runB}/progress`)
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      runId: ctx.runB,
+      status: 'completed',
+      phase: 'completed',
+      layout: { state: 'ready', layoutVersion: 'site-health-fa2-v1' },
+      attempt: { state: 'completed', pagesDiscovered: 3, pagesFetched: 3, pagesEligible: 2, edgesDiscovered: 2 },
+    })
+  })
+
+  it('does not disclose a probe, non-site-audit, or another project\'s run through the project path', async () => {
+    const now = new Date().toISOString()
+    const answerRunId = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: answerRunId, projectId: ctx.projectId, kind: 'answer-visibility', status: 'completed', trigger: 'manual', createdAt: now,
+    }).run()
+
+    const otherProjectId = crypto.randomUUID()
+    const otherRunId = crypto.randomUUID()
+    ctx.db.insert(projects).values({
+      id: otherProjectId, name: 'other-health', displayName: 'Other Health', canonicalDomain: 'other.example',
+      country: 'US', language: 'en', providers: [], locations: [], createdAt: now, updatedAt: now,
+    }).run()
+    ctx.db.insert(runs).values({
+      id: otherRunId, projectId: otherProjectId, kind: 'site-audit', status: 'queued', trigger: 'manual', createdAt: now,
+    }).run()
+
+    for (const runId of [ctx.probeRun, answerRunId, otherRunId]) {
+      const response = await get(`/api/v1/projects/tech-aeo/technical-aeo/runs/${runId}/progress`)
+      expect(response.status, runId).toBe(404)
+    }
+  })
+})
+
+describe('GET /technical-aeo/runs/:runId/page-health-preview', () => {
+  it('keeps a queued scan in a truthful waiting state before an attempt exists', async () => {
+    const now = new Date().toISOString()
+    const runId = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: runId, projectId: ctx.projectId, kind: 'site-audit', status: 'queued', trigger: 'manual', createdAt: now,
+    }).run()
+
+    const response = await get<SiteAuditLivePageHealthDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/runs/${runId}/page-health-preview`,
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({
+      project: 'tech-aeo', runId, status: 'queued', state: 'waiting',
+      attemptId: null, pagesAudited: 0, updatedAt: null, examples: [],
+    })
+  })
+
+  it('returns only bounded, actionable, lowest-score examples from the newest running attempt', async () => {
+    const now = new Date().toISOString()
+    const oldAt = new Date(Date.now() - 1_000).toISOString()
+    const runId = crypto.randomUUID()
+    const oldAttemptId = crypto.randomUUID()
+    const attemptId = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: runId, projectId: ctx.projectId, kind: 'site-audit', status: 'running', trigger: 'manual', createdAt: oldAt, startedAt: oldAt,
+    }).run()
+    ctx.db.insert(siteCrawlAttempts).values([
+      {
+        id: oldAttemptId, projectId: ctx.projectId, runId, attemptNumber: 1, state: 'failed',
+        pagesFetched: 1, startedAt: oldAt, finishedAt: oldAt, createdAt: oldAt, updatedAt: oldAt,
+      },
+      {
+        id: attemptId, projectId: ctx.projectId, runId, attemptNumber: 2, state: 'running',
+        pagesFetched: 16, startedAt: now, createdAt: now, updatedAt: now,
+      },
+    ]).run()
+
+    const actionableFields = (includeCriticalDefect = false) => ({
+      schemaVersion: '1.0',
+      factors: [
+        {
+          id: 'content-depth', name: 'Content depth', weight: 12, score: 20,
+          status: 'fail', applicable: true, findings: [], recommendations: [],
+        },
+        {
+          id: 'not-applicable', name: 'Not applicable', weight: 4, score: 0,
+          status: 'fail', applicable: false, findings: [], recommendations: [],
+        },
+      ],
+      criticalDefects: includeCriticalDefect
+        ? [{ id: 'missing-h1', severity: 'critical', detail: 'No H1 tag found.', recommendation: 'Add one H1.' }]
+        : [],
+    })
+
+    ctx.db.insert(siteCrawlPages).values([
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId, attemptId: oldAttemptId,
+        nodeKey: 'old-attempt', url: 'https://example.com/old-attempt', path: '/old-attempt', parentPath: '/',
+        auditState: 'success', auditScore: 1, auditFields: actionableFields(), createdAt: oldAt, updatedAt: oldAt,
+      },
+      ...Array.from({ length: 14 }, (_, index) => ({
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId, attemptId,
+        nodeKey: `fresh-${String(index).padStart(2, '0')}`,
+        url: `https://example.com/fresh-${index}`,
+        path: `/fresh-${index}`, parentPath: '/',
+        auditState: 'success', auditScore: 10 + index,
+        auditFields: actionableFields(index === 0), createdAt: now, updatedAt: now,
+      })),
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId, attemptId,
+        nodeKey: 'not-applicable', url: 'https://example.com/not-applicable', path: '/not-applicable', parentPath: '/',
+        auditState: 'success', auditScore: 1,
+        auditFields: {
+          schemaVersion: '1.0',
+          factors: [{
+            id: 'not-applicable', name: 'Not applicable', weight: 4, score: 0,
+            status: 'fail', applicable: false, findings: [], recommendations: [],
+          }],
+          criticalDefects: [],
+        },
+        createdAt: now, updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId, attemptId,
+        nodeKey: 'malformed', url: 'https://example.com/malformed', path: '/malformed', parentPath: '/',
+        auditState: 'success', auditScore: 2, auditFields: { factors: 'not-an-array' }, createdAt: now, updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId, attemptId,
+        nodeKey: 'not-a-success', url: 'https://example.com/not-a-success', path: '/not-a-success', parentPath: '/',
+        auditState: 'error', auditScore: 0, auditFields: actionableFields(), createdAt: now, updatedAt: now,
+      },
+    ]).run()
+
+    const response = await get<SiteAuditLivePageHealthDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/runs/${runId}/page-health-preview`,
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      project: 'tech-aeo', runId, status: 'running', state: 'collecting',
+      attemptId, pagesAudited: 16, updatedAt: now,
+    })
+    expect(response.body.examples).toHaveLength(12)
+    expect(response.body.examples.map((example) => example.nodeKey)).toEqual(
+      Array.from({ length: 12 }, (_, index) => `fresh-${String(index).padStart(2, '0')}`),
+    )
+    expect(response.body.examples[0]).toMatchObject({ auditScore: 10, checksNeedingAttention: 2 })
+    expect(response.body.examples.map((example) => example.nodeKey)).not.toContain('old-attempt')
+    expect(JSON.stringify(response.body)).not.toContain('Low content depth')
+  })
+
+  it('does not read beyond the bounded candidate window while a scan is running', async () => {
+    const now = new Date().toISOString()
+    const runId = crypto.randomUUID()
+    const attemptId = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: runId, projectId: ctx.projectId, kind: 'site-audit', status: 'running', trigger: 'manual', createdAt: now, startedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlAttempts).values({
+      id: attemptId, projectId: ctx.projectId, runId, attemptNumber: 1, state: 'running',
+      pagesFetched: 49, startedAt: now, createdAt: now, updatedAt: now,
+    }).run()
+    const passOnly = {
+      schemaVersion: '1.0',
+      factors: [{ id: 'ok', name: 'OK', weight: 1, score: 100, status: 'pass', applicable: true, findings: [], recommendations: [] }],
+      criticalDefects: [],
+    }
+    const actionable = {
+      schemaVersion: '1.0',
+      factors: [{ id: 'bad', name: 'Bad', weight: 1, score: 0, status: 'fail', applicable: true, findings: [], recommendations: [] }],
+      criticalDefects: [],
+    }
+    ctx.db.insert(siteCrawlPages).values([
+      ...Array.from({ length: 48 }, (_, index) => ({
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId, attemptId,
+        nodeKey: `zero-${String(index).padStart(2, '0')}`,
+        url: `https://example.com/zero-${index}`, path: `/zero-${index}`, parentPath: '/',
+        auditState: 'success', auditScore: index, auditFields: passOnly, createdAt: now, updatedAt: now,
+      })),
+      {
+        id: crypto.randomUUID(), projectId: ctx.projectId, runId, attemptId,
+        nodeKey: 'outside-window', url: 'https://example.com/outside-window', path: '/outside-window', parentPath: '/',
+        auditState: 'success', auditScore: 48, auditFields: actionable, createdAt: now, updatedAt: now,
+      },
+    ]).run()
+
+    const response = await get<SiteAuditLivePageHealthDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/runs/${runId}/page-health-preview`,
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body.pagesAudited).toBe(49)
+    expect(response.body.examples).toEqual([])
+  })
+
+  it('stays terminal after a run finishes and never presents provisional examples as final results', async () => {
+    const now = new Date().toISOString()
+    const runId = crypto.randomUUID()
+    const attemptId = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: runId, projectId: ctx.projectId, kind: 'site-audit', status: 'completed', trigger: 'manual', createdAt: now, finishedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlAttempts).values({
+      id: attemptId, projectId: ctx.projectId, runId, attemptNumber: 1, state: 'completed', pagesFetched: 1,
+      startedAt: now, finishedAt: now, createdAt: now, updatedAt: now,
+    }).run()
+    ctx.db.insert(siteCrawlPages).values({
+      id: crypto.randomUUID(), projectId: ctx.projectId, runId, attemptId,
+      nodeKey: 'still-provisional', url: 'https://example.com/still-provisional', path: '/still-provisional', parentPath: '/',
+      auditState: 'success', auditScore: 20,
+      auditFields: {
+        schemaVersion: '1.0',
+        factors: [{ id: 'bad', name: 'Bad', weight: 1, score: 0, status: 'fail', applicable: true, findings: [], recommendations: [] }],
+        criticalDefects: [],
+      },
+      createdAt: now, updatedAt: now,
+    }).run()
+
+    const response = await get<SiteAuditLivePageHealthDto>(
+      `/api/v1/projects/tech-aeo/technical-aeo/runs/${runId}/page-health-preview`,
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      project: 'tech-aeo', runId, status: 'completed', state: 'terminal', attemptId, pagesAudited: 1, updatedAt: now,
+      examples: [],
+    })
+  })
+
+  it('does not disclose a probe, non-site-audit, or another project\'s run through the project path', async () => {
+    const now = new Date().toISOString()
+    const answerRunId = crypto.randomUUID()
+    ctx.db.insert(runs).values({
+      id: answerRunId, projectId: ctx.projectId, kind: 'answer-visibility', status: 'completed', trigger: 'manual', createdAt: now,
+    }).run()
+    const otherProjectId = crypto.randomUUID()
+    const otherRunId = crypto.randomUUID()
+    ctx.db.insert(projects).values({
+      id: otherProjectId, name: 'other-live-preview', displayName: 'Other', canonicalDomain: 'other.example',
+      country: 'US', language: 'en', providers: [], locations: [], createdAt: now, updatedAt: now,
+    }).run()
+    ctx.db.insert(runs).values({
+      id: otherRunId, projectId: otherProjectId, kind: 'site-audit', status: 'running', trigger: 'manual', createdAt: now,
+    }).run()
+
+    for (const runId of [ctx.probeRun, answerRunId, otherRunId]) {
+      const response = await get(`/api/v1/projects/tech-aeo/technical-aeo/runs/${runId}/page-health-preview`)
+      expect(response.status, runId).toBe(404)
+    }
   })
 })
 

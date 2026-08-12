@@ -122,6 +122,17 @@ describe('buildEmbedClientConfig', () => {
     expect(out).not.toHaveProperty('allowedOrigins')
   })
 
+  it('drops configured font overrides so the client uses the bundled family', () => {
+    expect(buildEmbedClientConfig({
+      enabled: true,
+      allowedOrigins: [],
+      theme: { font: 'Inter', Font: 'IBM Plex Sans', accent: '#fff' },
+    })).toEqual({
+      enabled: true,
+      theme: { accent: '#fff' },
+    })
+  })
+
   it('omits projectTabs when the allowlist is empty (= all tabs)', () => {
     expect(buildEmbedClientConfig({ enabled: true, allowedOrigins: [], projectTabs: [] })).toEqual({ enabled: true })
   })
@@ -194,7 +205,7 @@ describe('embedClientConfigForRequest', () => {
     ).toEqual({
       enabled: true,
       projectTabs: ['overview', 'technical-aeo', 'report'],
-      theme: { mode: 'light', font: 'Inter', accent: '#2563eb' },
+      theme: { mode: 'light', accent: '#2563eb' },
     })
   })
 

@@ -18,6 +18,7 @@ import { createDashboardFixture } from '../src/mock-data.js'
 import { DashboardProvider } from '../src/contexts/dashboard-context.js'
 import { heyClient } from '../src/api.js'
 import {
+  getApiV1ProjectsByNameRunsQueryKey,
   getApiV1ProjectsByNameGoogleGscCoverageQueryKey,
   getApiV1ProjectsQueryKey,
   getApiV1RunsByIdQueryKey,
@@ -512,6 +513,12 @@ test('tracks a queued Technical AEO audit for the global task center', async () 
   vi.stubGlobal('fetch', fetchMock)
 
   const queryClient = createQueryClient()
+  const projectSiteAuditRunsKey = getApiV1ProjectsByNameRunsQueryKey({
+    client: heyClient,
+    path: { name: 'citypoint' },
+    query: { kind: 'site-audit', limit: 20 },
+  })
+  queryClient.setQueryData(projectSiteAuditRunsKey, [])
   render(
     <QueryClientProvider client={queryClient}>
       <TriggerSiteAuditButton />
@@ -528,6 +535,7 @@ test('tracks a queued Technical AEO audit for the global task center', async () 
     })
   })
   expect(getToasts().some((toast) => toast.title === 'Site Health scan queued')).toBe(true)
+  expect(queryClient.getQueryState(projectSiteAuditRunsKey)?.isInvalidated).toBe(true)
 })
 
 test('useTriggerGscSync invalidates GSC project queries when the mutation succeeds', async () => {

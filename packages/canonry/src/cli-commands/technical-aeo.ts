@@ -8,6 +8,7 @@ import {
   technicalAeoPageAudit,
   technicalAeoPath,
   technicalAeoPages,
+  technicalAeoProgress,
   technicalAeoRun,
   technicalAeoScore,
   technicalAeoStructure,
@@ -21,6 +22,7 @@ import {
   getString,
   parseIntegerOption,
   requireProject,
+  requireStringOption,
   stringOption,
 } from '../cli-command-helpers.js'
 
@@ -152,6 +154,21 @@ const TECHNICAL_AEO_CLI_COMMANDS_BASE: readonly CliCommandSpec[] = [
       const usage = 'canonry technical-aeo crawl <project> [--run-id <id>] [--format json]'
       const project = requireProject(input, 'technical-aeo.crawl', usage)
       await technicalAeoCrawl(project, { runId: getString(input.values, 'run-id'), format: input.format })
+    },
+  },
+  {
+    path: ['technical-aeo', 'progress'],
+    usage: 'canonry technical-aeo progress <project> --run-id <id> [--format json]',
+    options: { 'run-id': stringOption() },
+    run: async (input) => {
+      const usage = 'canonry technical-aeo progress <project> --run-id <id> [--format json]'
+      const project = requireProject(input, 'technical-aeo.progress', usage)
+      const runId = requireStringOption(input, 'run-id', {
+        command: 'technical-aeo.progress',
+        usage,
+        message: '--run-id is required',
+      })
+      await technicalAeoProgress(project, { runId, format: input.format })
     },
   },
   {
