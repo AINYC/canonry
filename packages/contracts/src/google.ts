@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { linearTrendSchema } from './statistics.js'
 
 export const googleConnectionTypeSchema = z.enum(['gsc', 'ga4', 'gbp'])
 export type GoogleConnectionType = z.infer<typeof googleConnectionTypeSchema>
@@ -62,6 +63,14 @@ export const gscPerformanceDailyPointSchema = z.object({
   clicks: z.number(),
   impressions: z.number(),
   ctr: z.number(),
+  /**
+   * Average ranking position for the day, or `null` on a date served by the
+   * dimensioned fallback. Summing `gsc_search_data` cannot produce a property
+   * position (a mean of per-row positions is not the property's mean), so the
+   * absence is reported rather than a fabricated `0` — which would also read as
+   * an impossibly good rank on a chart with an inverted axis.
+   */
+  position: z.number().nullable(),
 })
 export type GscPerformanceDailyPoint = z.infer<typeof gscPerformanceDailyPointSchema>
 
@@ -95,11 +104,33 @@ export const gscWindowRangeSchema = z.object({
 })
 export type GscWindowRange = z.infer<typeof gscWindowRangeSchema>
 
+/**
+ * Least-squares fit of one metric across the window's days, computed server-side
+ * so the dashboard, the CLI, and the report all draw the SAME line (per the
+ * UI/CLI parity rule — a chart-only regression would be invisible to an agent).
+ *
+ * `null` when the window holds fewer than two days carrying that metric.
+ */
+export const gscPerformanceTrendsSchema = z.object({
+  clicks: linearTrendSchema.nullable(),
+  impressions: linearTrendSchema.nullable(),
+  ctr: linearTrendSchema.nullable(),
+  position: linearTrendSchema.nullable(),
+})
+export type GscPerformanceTrends = z.infer<typeof gscPerformanceTrendsSchema>
+
 export const gscPerformanceDailyDtoSchema = z.object({
   totals: z.object({
     clicks: z.number(),
     impressions: z.number(),
     ctr: z.number(),
+    /**
+     * Impression-weighted mean position over the window, or `null` when no day
+     * carried a property-level position. Weighted, not a plain mean of the
+     * daily values: position is non-additive, and an unweighted mean lets a
+     * one-impression day count as much as a thousand-impression day.
+     */
+    position: z.number().nullable(),
     days: z.number(),
   }),
   daily: z.array(gscPerformanceDailyPointSchema),
@@ -110,6 +141,11 @@ export const gscPerformanceDailyDtoSchema = z.object({
    * response, which is exactly the crash those guards exist to prevent.
    */
   window: gscWindowRangeSchema.optional(),
+  /**
+   * Optional for the same reason as `window`: a server older than this field
+   * omits it, and the chart guards for that skew.
+   */
+  trends: gscPerformanceTrendsSchema.optional(),
 })
 export type GscPerformanceDailyDto = z.infer<typeof gscPerformanceDailyDtoSchema>
 

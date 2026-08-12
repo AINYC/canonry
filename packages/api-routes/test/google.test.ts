@@ -1615,13 +1615,13 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     expect(body.daily.map(d => d.date)).toEqual(['2026-01-05', '2026-01-06'])
 
     // 2026-01-05: 2+3+5=10 clicks, 100+200+50=350 impressions, CTR = 10/350
-    expect(body.daily[0]).toEqual({ date: '2026-01-05', clicks: 10, impressions: 350, ctr: 10 / 350 })
+    expect(body.daily[0]).toEqual({ date: '2026-01-05', clicks: 10, impressions: 350, ctr: 10 / 350, position: null })
     // 2026-01-06: 4+1+5=10 clicks, 200+100+700=1000 impressions, CTR = 10/1000 = 0.01
-    expect(body.daily[1]).toEqual({ date: '2026-01-06', clicks: 10, impressions: 1000, ctr: 0.01 })
+    expect(body.daily[1]).toEqual({ date: '2026-01-06', clicks: 10, impressions: 1000, ctr: 0.01, position: null })
 
     // Window totals: aggregate of all rows, NOT averaged from per-day CTRs
     // Total clicks 20, total impressions 1350, ctr = 20/1350 (not (10/350 + 10/1000) / 2)
-    expect(body.totals).toEqual({ clicks: 20, impressions: 1350, ctr: 20 / 1350, days: 2 })
+    expect(body.totals).toEqual({ clicks: 20, impressions: 1350, ctr: 20 / 1350, position: null, days: 2 })
     // Sanity: averaged per-day CTR would be ~0.019, the bug we're protecting against
     expect(body.totals.ctr).not.toBeCloseTo((10 / 350 + 10 / 1000) / 2, 5)
   })
@@ -1684,12 +1684,14 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     })
     expect(res.statusCode).toBe(200)
     const body = res.json() as GscPerformanceDailyDto
-    expect(body.totals).toEqual({ clicks: 0, impressions: 0, ctr: 0, days: 0 })
+    expect(body.totals).toEqual({ clicks: 0, impressions: 0, ctr: 0, position: null, days: 0 })
     expect(body.daily).toEqual([])
+    // A window with no days has no series to fit.
+    expect(body.trends).toEqual({ clicks: null, impressions: null, ctr: null, position: null })
     // An explicit startDate wins over the label, and the upper bound is the
     // last published day, so the caller can label the period it actually got.
-    expect(body.window.startDate).toBe('2030-01-01')
-    expect(body.window.latestDataDate).toBe('2026-01-06')
+    expect(body.window!.startDate).toBe('2030-01-01')
+    expect(body.window!.latestDataDate).toBe('2026-01-06')
   })
 
   it('returns 404 for an unknown project', async () => {
@@ -1796,10 +1798,12 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
 
     // Property totals — NOT the dimensioned sum (20 / 1350).
     expect(body.daily).toEqual([
-      { date: '2026-01-05', clicks: 25, impressions: 300, ctr: 25 / 300 },
-      { date: '2026-01-06', clicks: 31, impressions: 900, ctr: 31 / 900 },
+      { date: '2026-01-05', clicks: 25, impressions: 300, ctr: 25 / 300, position: 4 },
+      { date: '2026-01-06', clicks: 31, impressions: 900, ctr: 31 / 900, position: 6 },
     ])
-    expect(body.totals).toEqual({ clicks: 56, impressions: 1200, ctr: 56 / 1200, days: 2 })
+    // Position is impression-WEIGHTED: (4*300 + 6*900) / 1200 = 5.5. An
+    // unweighted mean of the two days would read 5.0.
+    expect(body.totals).toEqual({ clicks: 56, impressions: 1200, ctr: 56 / 1200, position: 5.5, days: 2 })
   })
 
   it('falls back to summing gsc_search_data by date when no gsc_daily_totals rows exist in the window', async () => {
@@ -1812,11 +1816,13 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     expect(res.statusCode).toBe(200)
     const body = res.json() as { totals: { clicks: number; impressions: number; ctr: number; days: number }; daily: Array<{ date: string; clicks: number; impressions: number; ctr: number }> }
 
+    // The dimensioned sum cannot produce a property position, so every date
+    // reports `null` rather than the `0` the merge helper carries internally.
     expect(body.daily).toEqual([
-      { date: '2026-01-05', clicks: 10, impressions: 350, ctr: 10 / 350 },
-      { date: '2026-01-06', clicks: 10, impressions: 1000, ctr: 0.01 },
+      { date: '2026-01-05', clicks: 10, impressions: 350, ctr: 10 / 350, position: null },
+      { date: '2026-01-06', clicks: 10, impressions: 1000, ctr: 0.01, position: null },
     ])
-    expect(body.totals).toEqual({ clicks: 20, impressions: 1350, ctr: 20 / 1350, days: 2 })
+    expect(body.totals).toEqual({ clicks: 20, impressions: 1350, ctr: 20 / 1350, position: null, days: 2 })
   })
 
   it('uses daily totals per date without dropping dimensioned fallback dates from the same window', async () => {
@@ -1838,11 +1844,58 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     expect(res.statusCode).toBe(200)
     const body = res.json() as { totals: { clicks: number; impressions: number; ctr: number; days: number }; daily: Array<{ date: string; clicks: number; impressions: number; ctr: number }> }
 
+    // Only 2026-01-06 came from the property table, so only it carries a
+    // position — and it alone weights the window mean.
     expect(body.daily).toEqual([
-      { date: '2026-01-05', clicks: 10, impressions: 350, ctr: 10 / 350 },
-      { date: '2026-01-06', clicks: 31, impressions: 900, ctr: 31 / 900 },
+      { date: '2026-01-05', clicks: 10, impressions: 350, ctr: 10 / 350, position: null },
+      { date: '2026-01-06', clicks: 31, impressions: 900, ctr: 31 / 900, position: 6 },
     ])
-    expect(body.totals).toEqual({ clicks: 41, impressions: 1250, ctr: 41 / 1250, days: 2 })
+    expect(body.totals).toEqual({ clicks: 41, impressions: 1250, ctr: 41 / 1250, position: 6, days: 2 })
+  })
+
+  it('fits a least-squares trend per metric over the window', async () => {
+    // Property rows over four days. Clicks 10 -> 40 (+10/day exactly),
+    // impressions flat at 100, position 8 -> 5 (improving by 1/day).
+    const now = '2026-01-01T00:00:00.000Z'
+    context.db.insert(gscDailyTotals).values([
+      { id: crypto.randomUUID(), projectId, date: '2026-03-01', clicks: 10, impressions: 100, position: '8', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-02', clicks: 20, impressions: 100, position: '7', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-03', clicks: 30, impressions: 100, position: '6', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-04', clicks: 40, impressions: 100, position: '5', createdAt: now },
+    ]).run()
+
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?startDate=2026-03-01&endDate=2026-03-04',
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as GscPerformanceDailyDto
+
+    // Slope is PER DAY, and start/end are the endpoints a chart draws between.
+    expect(body.trends.clicks).toEqual({ slope: 10, intercept: 10, r2: 1, start: 10, end: 40, n: 4 })
+    // A flat series is a perfect flat fit, not an undefined one.
+    expect(body.trends.impressions).toEqual({ slope: 0, intercept: 100, r2: 1, start: 100, end: 100, n: 4 })
+    // Position falls as ranking IMPROVES, so the slope is negative.
+    expect(body.trends.position).toEqual({ slope: -1, intercept: 8, r2: 1, start: 8, end: 5, n: 4 })
+    // CTR rises with clicks against constant impressions: 0.1 -> 0.4.
+    expect(body.trends.ctr!.slope).toBeCloseTo(0.1, 6)
+
+    // The fitted endpoints span the window, so the whole-window change is
+    // slope * (days - 1) — the figure the tile and the CLI both report.
+    expect(body.trends.clicks!.end - body.trends.clicks!.start).toBe(10 * (body.totals.days - 1))
+  })
+
+  it('reports no position trend when every date came from the dimensioned fallback', async () => {
+    // beforeEach seeds only gsc_search_data, so position is null on every date
+    // and there is nothing to fit — while clicks and impressions still fit.
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily',
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as GscPerformanceDailyDto
+    expect(body.trends.position).toBeNull()
+    expect(body.trends.impressions).toEqual({ slope: 650, intercept: 350, r2: 1, start: 350, end: 1000, n: 2 })
   })
 
   it('can return date-only daily totals when no dimensioned rows exist for the window', async () => {
@@ -1863,12 +1916,14 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     })
     expect(res.statusCode).toBe(200)
     const body = res.json() as GscPerformanceDailyDto
-    expect(body.totals).toEqual({ clicks: 12, impressions: 500, ctr: 12 / 500, days: 1 })
-    expect(body.daily).toEqual([{ date: '2026-02-01', clicks: 12, impressions: 500, ctr: 12 / 500 }])
-    expect(body.window.startDate).toBe('2026-02-01')
-    expect(body.window.endDate).toBe('2026-02-01')
+    expect(body.totals).toEqual({ clicks: 12, impressions: 500, ctr: 12 / 500, position: 9, days: 1 })
+    expect(body.daily).toEqual([{ date: '2026-02-01', clicks: 12, impressions: 500, ctr: 12 / 500, position: 9 }])
+    // One day is not a line.
+    expect(body.trends).toEqual({ clicks: null, impressions: null, ctr: null, position: null })
+    expect(body.window!.startDate).toBe('2026-02-01')
+    expect(body.window!.endDate).toBe('2026-02-01')
     // MAX across BOTH tables: the property row here is later than the
     // dimensioned rows the surrounding fixture seeds.
-    expect(body.window.latestDataDate).toBe('2026-02-01')
+    expect(body.window!.latestDataDate).toBe('2026-02-01')
   })
 })

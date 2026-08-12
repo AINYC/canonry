@@ -276,7 +276,7 @@ export async function googlePerformanceDaily(project: string, opts: {
     return
   }
 
-  const { clicks, impressions, ctr, days } = data.totals
+  const { clicks, impressions, ctr, position, days } = data.totals
   // Optional at RUNTIME even though the DTO requires it: a server older than
   // this field omits it, and a new CLI against an older server must degrade to
   // no range label rather than crash. The web guards the same skew.
@@ -299,12 +299,36 @@ export async function googlePerformanceDaily(project: string, opts: {
   console.log(`  Clicks:      ${clicks.toLocaleString()}`)
   console.log(`  Impressions: ${impressions.toLocaleString()}`)
   console.log(`  CTR:         ${(ctr * 100).toFixed(2)}%`)
+  console.log(`  Position:    ${position === null ? '—' : position.toFixed(1)}`)
+
+  // The same fit the dashboard chart draws, so the two surfaces can never
+  // disagree about which way a metric is going.
+  const trendLines: string[] = []
+  for (const [label, trend, fmt] of [
+    ['Clicks', data.trends.clicks, (v: number) => v.toFixed(2)],
+    ['Impressions', data.trends.impressions, (v: number) => v.toFixed(2)],
+    ['CTR', data.trends.ctr, (v: number) => `${(v * 100).toFixed(3)}pp`],
+    ['Position', data.trends.position, (v: number) => v.toFixed(3)],
+  ] as const) {
+    if (!trend) continue
+    // Position improves as it falls, so "up" is the wrong word for a rising rank.
+    const better = label === 'Position' ? trend.slope < 0 : trend.slope > 0
+    const direction = trend.slope === 0 ? 'flat' : better ? 'improving' : 'declining'
+    trendLines.push(
+      `  ${`${label}:`.padEnd(13)}${fmt(trend.slope).padStart(10)}/day  ${direction} (r²=${trend.r2.toFixed(2)})`,
+    )
+  }
+  if (trendLines.length > 0) {
+    console.log(`\nTrend (least-squares fit over ${days} day${days === 1 ? '' : 's'}):`)
+    for (const line of trendLines) console.log(line)
+  }
+
   console.log()
-  console.log(`  ${'DATE'.padEnd(12)}${'CLICKS'.padStart(10)}${'IMPR'.padStart(12)}${'CTR'.padStart(10)}`)
-  console.log(`  ${'─'.repeat(12)}${'─'.repeat(10)}${'─'.repeat(12)}${'─'.repeat(10)}`)
+  console.log(`  ${'DATE'.padEnd(12)}${'CLICKS'.padStart(10)}${'IMPR'.padStart(12)}${'CTR'.padStart(10)}${'POS'.padStart(9)}`)
+  console.log(`  ${'─'.repeat(12)}${'─'.repeat(10)}${'─'.repeat(12)}${'─'.repeat(10)}${'─'.repeat(9)}`)
   for (const row of data.daily) {
     console.log(
-      `  ${row.date.padEnd(12)}${row.clicks.toLocaleString().padStart(10)}${row.impressions.toLocaleString().padStart(12)}${(row.ctr * 100).toFixed(2).padStart(9)}%`,
+      `  ${row.date.padEnd(12)}${row.clicks.toLocaleString().padStart(10)}${row.impressions.toLocaleString().padStart(12)}${(row.ctr * 100).toFixed(2).padStart(9)}%${(row.position === null ? '—' : row.position.toFixed(1)).padStart(9)}`,
     )
   }
 }

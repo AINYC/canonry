@@ -13,7 +13,15 @@ import {
   useClientTable,
 } from '../shared/DataTableControls.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
-import { CHART_NEUTRAL, CHART_TONE, CHART_SERIES_COLORS } from '../shared/ChartPrimitives.js'
+import {
+  CHART_NEUTRAL,
+  CHART_TONE,
+  CHART_SERIES_COLORS,
+  MultiAxisTrendChart,
+  formatChartDateLabel,
+  formatChartDateTick,
+  type TrendChartSeries,
+} from '../shared/ChartPrimitives.js'
 import { formatTimestamp, formatBooleanState, SearchMetric, SEARCH_METRIC_LABELS } from '../../lib/format-helpers.js'
 import { addToast } from '../../lib/toast-store.js'
 import { asyncHandler } from '../../lib/async-handler.js'
@@ -59,6 +67,47 @@ import { invalidateProjectQueryDomain } from '../../queries/query-invalidation.j
 
 const GSC_WINDOWS: MetricsWindow[] = ['7d', '30d', '90d', 'all']
 const EXPANDED_PERFORMANCE_LIMIT = 500
+
+/**
+ * The four Search Console metrics, each on its OWN axis.
+ *
+ * Sharing one axis is what made the previous chart unreadable: 29 clicks
+ * against 1,174 impressions rendered as a flat line on the baseline. Per-metric
+ * axes let each series use the full plot height, which is why the same data
+ * reads as a trend here and as nothing on a shared scale.
+ *
+ * `inverted` on position is not styling — rank 1 beats rank 13, so the axis
+ * has to run the other way for "up" to keep meaning "better" across all four.
+ */
+const GSC_CHART_METRICS = [
+  {
+    key: 'clicks' as const,
+    label: 'Clicks',
+    color: CHART_SERIES_COLORS[1],
+    format: (v: number) => v.toLocaleString(),
+  },
+  {
+    key: 'impressions' as const,
+    label: 'Impressions',
+    color: CHART_SERIES_COLORS[4],
+    format: (v: number) => v.toLocaleString(),
+  },
+  {
+    key: 'ctr' as const,
+    label: 'CTR',
+    color: CHART_TONE.caution,
+    format: (v: number) => `${(v * 100).toFixed(1)}%`,
+  },
+  {
+    key: 'position' as const,
+    label: 'Avg position',
+    color: CHART_SERIES_COLORS[2],
+    inverted: true,
+    format: (v: number) => v.toFixed(1),
+  },
+]
+
+type GscChartMetric = (typeof GSC_CHART_METRICS)[number]['key']
 const COVERAGE_PAGE_SIZE = 25
 const GOOGLE_OAUTH_COMPLETE_MESSAGE = 'canonry:google-oauth-complete'
 
@@ -103,6 +152,9 @@ export function GscSection({
   const [syncDays, setSyncDays] = useState('30')
   const [fullSync, setFullSync] = useState(false)
   const [gscWindow, setGscWindow] = useState<MetricsWindow>('30d')
+  // Clicks + impressions selected by default, matching Search Console.
+  const [chartMetrics, setChartMetrics] = useState<GscChartMetric[]>(['clicks', 'impressions'])
+  const [showTrend, setShowTrend] = useState(true)
   const [performanceFilters, setPerformanceFilters] = useState({
     startDate: '',
     endDate: '',
@@ -1010,105 +1062,102 @@ export function GscSection({
                   </div>
                 </div>
 
-                {/* Clicks + Impressions bar chart — driven by the daily aggregate
-                    endpoint so it reflects the full window, not the current page. */}
+                {/* Search-performance chart — one axis PER METRIC (Search
+                    Console's own shape), driven by the daily aggregate endpoint
+                    so it reflects the whole window, not the current page. The
+                    dashed fits come from the API; nothing is regressed here. */}
                 {performanceDaily && performanceDaily.daily.length > 0 && (() => {
-                  const sorted = performanceDaily.daily
-                  const maxImpressions = Math.max(...sorted.map((d) => d.impressions), 1)
-                  const { clicks: totalClicks, impressions: totalImpressions, ctr: totalCtr } = performanceDaily.totals
-                  const avgCtr = (totalCtr * 100).toFixed(1)
-
-                  const w = 700
-                  const h = 220
-                  const pad = { top: 12, bottom: 36, left: 48, right: 12 }
-                  const plotW = w - pad.left - pad.right
-                  const plotH = h - pad.top - pad.bottom
-                  const barGroupW = plotW / sorted.length
-                  const barW = Math.max(Math.min(barGroupW * 0.35, 24), 4)
-                  const barGap = Math.max(barW * 0.15, 1)
-
-                  // Y-axis ticks
-                  const niceMax = (v: number) => {
-                    if (v <= 0) return 1
-                    const mag = Math.pow(10, Math.floor(Math.log10(v)))
-                    const norm = v / mag
-                    const nice = norm <= 1.5 ? 1.5 : norm <= 3 ? 3 : norm <= 5 ? 5 : 10
-                    return Math.ceil(nice * mag)
-                  }
-                  const tickCount = 4
-                  const ceilVal = Math.ceil(niceMax(maxImpressions) / tickCount) * tickCount
-                  const ticks = Array.from({ length: tickCount + 1 }, (_, i) => (ceilVal / tickCount) * i)
-                  const fmtNum = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n)
+                  const { totals, daily, trends } = performanceDaily
+                  const selected = GSC_CHART_METRICS.filter((m) => chartMetrics.includes(m.key))
+                  const series: TrendChartSeries[] = selected.map((m) => ({
+                    dataKey: m.key,
+                    label: m.label,
+                    color: m.color,
+                    axisId: m.key,
+                    inverted: m.inverted,
+                    formatValue: m.format,
+                    trend: showTrend ? trends[m.key] : null,
+                  }))
+                  const totalFor = (key: GscChartMetric): number | null => totals[key]
 
                   return (
                     <div className="mt-3">
-                      <div className="flex items-center gap-5 mb-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="inline-block h-2.5 w-2.5 rounded-sm bg-positive-500" />
-                          <span className="text-xs text-secondary">Clicks <span className="text-strong tabular-nums font-medium">{totalClicks.toLocaleString()}</span></span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="inline-block h-2.5 w-2.5 rounded-sm bg-chart-series-2" />
-                          <span className="text-xs text-secondary">Impressions <span className="text-strong tabular-nums font-medium">{totalImpressions.toLocaleString()}</span></span>
-                        </div>
-                        <span className="text-xs text-muted">CTR <span className="text-caution-400 tabular-nums font-medium">{avgCtr}%</span></span>
-                      </div>
-                      <div className="relative w-full" style={{ aspectRatio: `${w} / ${h}` }}>
-                        <svg viewBox={`0 0 ${w} ${h}`} className="h-full w-full">
-                          {/* Grid lines + Y-axis */}
-                          {ticks.map((tick, i) => {
-                            const y = pad.top + plotH - (tick / ceilVal) * plotH
-                            return (
-                              <g key={`t-${i}`}>
-                                <line x1={pad.left} y1={y} x2={w - pad.right} y2={y} stroke={CHART_NEUTRAL.gridLine} strokeWidth="1" />
-                                <text x={pad.left - 6} y={y + 3.5} textAnchor="end" fill={CHART_NEUTRAL.text} fontSize="10" fontFamily="inherit">{fmtNum(tick)}</text>
-                              </g>
-                            )
-                          })}
-                          {/* Bars */}
-                          {sorted.map((d, i) => {
-                            const cx = pad.left + barGroupW * i + barGroupW / 2
-                            const impressionH = (d.impressions / ceilVal) * plotH
-                            const clickH = (d.clicks / ceilVal) * plotH
-                            return (
-                              <g key={d.date}>
-                                <title>{`${d.date}\nClicks: ${d.clicks}\nImpressions: ${d.impressions}\nCTR: ${(d.ctr * 100).toFixed(1)}%`}</title>
-                                <rect
-                                  x={cx - barW - barGap / 2}
-                                  y={pad.top + plotH - impressionH}
-                                  width={barW}
-                                  height={Math.max(impressionH, 1)}
-                                  rx={2}
-                                  fill={CHART_SERIES_COLORS[1]}
-                                  opacity={0.85}
+                      {/* Tiles are the metric selector, as in Search Console:
+                          pressing one adds or removes its line. The last
+                          selected tile cannot be turned off — an empty chart
+                          is a dead end, not a state worth reaching. */}
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {GSC_CHART_METRICS.map((m) => {
+                          const on = chartMetrics.includes(m.key)
+                          const value = totalFor(m.key)
+                          const trend = trends[m.key]
+                          const unavailable = value === null
+                          return (
+                            <button
+                              key={m.key}
+                              type="button"
+                              aria-pressed={on}
+                              disabled={unavailable}
+                              className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                                on ? 'border-strong bg-surface-active' : 'border-subtle bg-surface-subtle hover:bg-surface-hover'
+                              } ${unavailable ? 'cursor-not-allowed opacity-50' : ''}`}
+                              onClick={() => {
+                                setChartMetrics((current) => current.includes(m.key)
+                                  ? (current.length === 1 ? current : current.filter((k) => k !== m.key))
+                                  : [...current, m.key])
+                              }}
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <span
+                                  className="inline-block h-2 w-2 rounded-full"
+                                  style={{ backgroundColor: on ? m.color : 'transparent', border: `1px solid ${m.color}` }}
                                 />
-                                <rect
-                                  x={cx + barGap / 2}
-                                  y={pad.top + plotH - clickH}
-                                  width={barW}
-                                  height={Math.max(clickH, 1)}
-                                  rx={2}
-                                  fill={CHART_TONE.positiveDeep}
-                                  opacity={0.85}
-                                />
-                              </g>
-                            )
-                          })}
-                          {/* X-axis date labels — pick up to 7 evenly spaced */}
-                          {(() => {
-                            const labelCount = Math.min(sorted.length, 7)
-                            return Array.from({ length: labelCount }, (_, i) => {
-                              const idx = sorted.length === 1 ? 0 : Math.round((i / (labelCount - 1)) * (sorted.length - 1))
-                              const cx = pad.left + barGroupW * idx + barGroupW / 2
-                              return (
-                                <text key={`xl-${idx}`} x={cx} y={h - 8} textAnchor="middle" fill={CHART_NEUTRAL.textDim} fontSize="10" fontFamily="inherit">
-                                  {sorted[idx]!.date.slice(5)}
-                                </text>
-                              )
-                            })
-                          })()}
-                        </svg>
+                                <span className="text-xs text-secondary">{m.label}</span>
+                              </span>
+                              <span className="mt-0.5 block text-lg tabular-nums text-strong">
+                                {value === null ? '—' : m.format(value)}
+                              </span>
+                              {trend && (
+                                <span className="block text-[11px] tabular-nums text-muted">
+                                  {/* Position improves downward, so the arrow
+                                      tracks BETTER/WORSE, not up/down. */}
+                                  {trend.slope === 0
+                                    ? '→ flat'
+                                    : `${(m.inverted ? trend.slope < 0 : trend.slope > 0) ? '↑' : '↓'} ${m.format(Math.abs(trend.end - trend.start))} over ${totals.days}d`}
+                                </span>
+                              )}
+                            </button>
+                          )
+                        })}
                       </div>
+
+                      <div className="mt-2 flex items-center justify-end">
+                        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-secondary">
+                          <input
+                            type="checkbox"
+                            className="accent-mono-400"
+                            checked={showTrend}
+                            onChange={(e) => setShowTrend(e.target.checked)}
+                          />
+                          Trend line
+                        </label>
+                      </div>
+
+                      <div className="mt-1">
+                        <MultiAxisTrendChart
+                          data={daily}
+                          xKey="date"
+                          series={series}
+                          xTickFormatter={formatChartDateTick}
+                          labelFormatter={formatChartDateLabel}
+                        />
+                      </div>
+
+                      {totals.position === null && (
+                        <p className="mt-1 text-[11px] text-muted">
+                          Average position needs a property-level sync. Run <code>canonry google sync</code> to record it.
+                        </p>
+                      )}
                     </div>
                   )
                 })()}

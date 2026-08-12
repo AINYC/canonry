@@ -14,6 +14,7 @@ import {
   gscSubmitSitemapsRequestDtoSchema,
   gscPerformanceOrderBySchema,
   formatIsoDateInTimeZone,
+  linearTrend,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from './gbp-summary.js'
@@ -960,6 +961,11 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       .orderBy(gscSearchData.date)
       .all()
 
+    // Position exists ONLY on the property-level rows. The dimensioned fallback
+    // has no property position to offer (a mean of per-row positions is not the
+    // property's mean), so those dates report `null` rather than a `0` that
+    // would read as rank #0 on an inverted axis.
+    const propertyDates = new Set(dailyTotals.map((d) => d.date))
     const daily = mergeGscDailyTotalsWithFallback(
       dailyTotals,
       dimensionedRows.map((r) => ({
@@ -973,14 +979,29 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       clicks: d.clicks,
       impressions: d.impressions,
       ctr: d.impressions > 0 ? d.clicks / d.impressions : 0,
+      position: propertyDates.has(d.date) ? d.position : null,
     }))
     const totalClicks = daily.reduce((sum, d) => sum + d.clicks, 0)
     const totalImpressions = daily.reduce((sum, d) => sum + d.impressions, 0)
+
+    // Impression-weighted, because position is non-additive: a day with one
+    // impression must not pull the window mean as hard as a day with a thousand.
+    // Days with no property position, and days with no impressions to weight by,
+    // are excluded from both the numerator and the denominator.
+    let positionWeight = 0
+    let positionWeighted = 0
+    for (const d of daily) {
+      if (d.position === null || d.impressions <= 0) continue
+      positionWeight += d.impressions
+      positionWeighted += d.position * d.impressions
+    }
+
     return {
       totals: {
         clicks: totalClicks,
         impressions: totalImpressions,
         ctr: totalImpressions > 0 ? totalClicks / totalImpressions : 0,
+        position: positionWeight > 0 ? positionWeighted / positionWeight : null,
         days: daily.length,
       },
       daily,
@@ -995,6 +1016,15 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       // dropped rather than reported reversed: an absent bound is honest about
       // being unspecified, a reversed pair is not.
       window: resolveReportedWindow(resolvedWindow, startDate, endDate),
+      // Fitted server-side so the dashboard, the CLI, and the report all draw
+      // the SAME line (UI/CLI parity — a chart-only regression is invisible to
+      // an agent).
+      trends: {
+        clicks: linearTrend(daily.map((d) => d.clicks)),
+        impressions: linearTrend(daily.map((d) => d.impressions)),
+        ctr: linearTrend(daily.map((d) => d.ctr)),
+        position: linearTrend(daily.map((d) => d.position)),
+      },
     }
   })
 
