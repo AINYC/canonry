@@ -3538,6 +3538,17 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE traffic_sources ADD COLUMN sync_lease_expires_at TEXT`,
     ],
   },
+  {
+    version: 135,
+    name: 'traffic-source-queue-backlog',
+    // Persist Cloudflare's residual Queue depth so a bounded successful drain
+    // cannot hide that work remains. NULL preserves every legacy source and
+    // distinguishes "not observed" from an observed empty Queue.
+    statements: [
+      `ALTER TABLE traffic_sources ADD COLUMN queue_backlog_count INTEGER`,
+      `ALTER TABLE traffic_sources ADD COLUMN queue_backlog_observed_at TEXT`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

@@ -15,5 +15,6 @@ export type {
   CloudflareQueuePullResult,
   CloudflareQueuePoisonMessage,
   CloudflareQueueRetry,
+  CloudflareQueueTextMessage,
   PullCloudflareQueueMessagesOptions,
 } from './types.js'

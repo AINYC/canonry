@@ -622,6 +622,42 @@ test('traffic sync lease migration adds nullable per-source lease fields without
   expect(row.syncLeaseExpiresAt).toBeNull()
 })
 
+test('traffic queue backlog migration adds nullable observations without changing legacy rows', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-traffic-backlog-migration-'))
+  onTestFinished(() => cleanup(tmpDir))
+  const db = createClient(path.join(tmpDir, 'test.db'))
+
+  migrate(db, MIGRATION_VERSIONS.filter(migration => migration.version < 135))
+  seedProject(db)
+  const now = '2026-08-11T12:00:00.000Z'
+  db.run(sql`
+    INSERT INTO traffic_sources (
+      id, project_id, source_type, display_name, status, config_json, created_at, updated_at
+    ) VALUES (
+      ${'src_pre_backlog'}, ${'proj_1'}, ${'cloudflare'}, ${'Legacy Queue source'},
+      ${'connected'}, ${JSON.stringify({ deliveryMode: 'queue-pull' })}, ${now}, ${now}
+    )
+  `)
+
+  const backlogMigration = MIGRATION_VERSIONS.find(
+    migration => migration.name === 'traffic-source-queue-backlog',
+  )
+  expect(backlogMigration).toMatchObject({ version: 135 })
+
+  migrate(db)
+  const [legacy] = db.select().from(trafficSources).where(eq(trafficSources.id, 'src_pre_backlog')).all()
+  expect(legacy.queueBacklogCount).toBeNull()
+  expect(legacy.queueBacklogObservedAt).toBeNull()
+
+  db.update(trafficSources)
+    .set({ queueBacklogCount: 125, queueBacklogObservedAt: now })
+    .where(eq(trafficSources.id, 'src_pre_backlog'))
+    .run()
+  const [observed] = db.select().from(trafficSources).where(eq(trafficSources.id, 'src_pre_backlog')).all()
+  expect(observed.queueBacklogCount).toBe(125)
+  expect(observed.queueBacklogObservedAt).toBe(now)
+})
+
 test('traffic ingest migration adds source auth columns and durable receipts without losing source data', () => {
   const { db, tmpDir } = createTempDb()
   onTestFinished(() => cleanup(tmpDir))

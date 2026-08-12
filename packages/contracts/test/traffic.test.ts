@@ -16,6 +16,8 @@ import {
   trafficConnectCloudflareResponseSchema,
   trafficConnectVercelRequestSchema,
   trafficConnectWordpressRequestSchema,
+  trafficSourceDtoSchema,
+  trafficSyncResponseSchema,
   vercelTrafficSourceConfigSchema,
   wordpressTrafficSourceConfigSchema,
 } from '../src/traffic.js'
@@ -55,6 +57,78 @@ describe('traffic contracts', () => {
     expect(parsed.evidenceKind).toBe(TrafficEvidenceKinds['raw-request'])
     expect(parsed.confidence).toBe(TrafficEventConfidences.observed)
     expect(parsed.path).toBe('/blog/post')
+  })
+})
+
+describe('trafficSourceDtoSchema', () => {
+  it('surfaces the last observed residual Queue backlog', () => {
+    const parsed = trafficSourceDtoSchema.parse({
+      id: 'src_queue',
+      projectId: 'project_1',
+      sourceType: 'cloudflare',
+      displayName: 'Cloudflare Queue',
+      status: 'connected',
+      lastSyncedAt: '2026-08-11T12:00:00.000Z',
+      lastCursor: null,
+      lastError: null,
+      skippedThroughAt: null,
+      queueBacklogCount: 125,
+      queueBacklogObservedAt: '2026-08-11T12:00:00.000Z',
+      archivedAt: null,
+      config: { deliveryMode: 'queue-pull' },
+      createdAt: '2026-08-11T11:00:00.000Z',
+      updatedAt: '2026-08-11T12:00:00.000Z',
+    })
+
+    expect(parsed.queueBacklogCount).toBe(125)
+    expect(parsed.queueBacklogObservedAt).toBe('2026-08-11T12:00:00.000Z')
+  })
+
+  it('rejects a negative Queue backlog count', () => {
+    expect(() => trafficSourceDtoSchema.parse({
+      id: 'src_queue',
+      projectId: 'project_1',
+      sourceType: 'cloudflare',
+      displayName: 'Cloudflare Queue',
+      status: 'connected',
+      lastSyncedAt: null,
+      lastCursor: null,
+      lastError: null,
+      skippedThroughAt: null,
+      queueBacklogCount: -1,
+      queueBacklogObservedAt: null,
+      archivedAt: null,
+      config: { deliveryMode: 'queue-pull' },
+      createdAt: '2026-08-11T11:00:00.000Z',
+      updatedAt: '2026-08-11T12:00:00.000Z',
+    })).toThrow()
+  })
+})
+
+describe('trafficSyncResponseSchema', () => {
+  it('optionally reports residual Queue backlog without changing pull-adapter responses', () => {
+    const response = {
+      sourceId: 'src_queue',
+      runId: 'run_1',
+      syncedAt: '2026-08-11T12:00:00.000Z',
+      pulledEvents: 1000,
+      selfTrafficExcluded: 0,
+      crawlerHits: 1000,
+      aiUserFetchHits: 0,
+      aiReferralHits: 0,
+      unknownHits: 0,
+      crawlerBucketRows: 1,
+      aiUserFetchBucketRows: 0,
+      aiReferralBucketRows: 0,
+      sampleRows: 1,
+      windowStart: '2026-08-11T11:30:00.000Z',
+      windowEnd: '2026-08-11T12:00:00.000Z',
+    }
+
+    expect(trafficSyncResponseSchema.parse(response)).not.toHaveProperty('remainingBacklogCount')
+    expect(trafficSyncResponseSchema.parse({ ...response, remainingBacklogCount: 250 }))
+      .toMatchObject({ remainingBacklogCount: 250 })
+    expect(() => trafficSyncResponseSchema.parse({ ...response, remainingBacklogCount: -1 })).toThrow()
   })
 })
 

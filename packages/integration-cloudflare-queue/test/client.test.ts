@@ -20,6 +20,14 @@ function pullResponse(messages: unknown[] = [], backlog = 0): Response {
   }), { headers: { 'content-type': 'application/json' } })
 }
 
+function ackResponse(ackCount: number, retryCount: number, warnings: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify({
+    success: true,
+    errors: [],
+    result: { ackCount, retryCount, warnings },
+  }), { headers: { 'content-type': 'application/json' } })
+}
+
 function message(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'message-1',
@@ -70,17 +78,19 @@ describe('pullCloudflareQueueMessages', () => {
     })
   })
 
-  it('decodes base64 json and bytes, and parses plain text JSON', async () => {
+  it('decodes base64 json and bytes, and preserves text as plain UTF-8', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(pullResponse([
       message(),
       message({ id: 'bytes', lease_id: 'lease-bytes', metadata: { 'CF-Content-Type': 'bytes' }, body: 'AAEC' }),
       message({ id: 'text', lease_id: 'lease-text', metadata: { 'CF-Content-Type': 'text' }, body: '{"plain":true}' }),
+      message({ id: 'plain-text', lease_id: 'lease-plain-text', metadata: { 'CF-Content-Type': 'text' }, body: 'not JSON' }),
     ]))
 
     const result = await pullCloudflareQueueMessages({ ...client, fetchImpl })
 
     expect(result.messages[1]).toMatchObject({ id: 'bytes', contentType: 'bytes', body: new Uint8Array([0, 1, 2]) })
-    expect(result.messages[2]).toMatchObject({ id: 'text', contentType: 'text', body: { plain: true } })
+    expect(result.messages[2]).toMatchObject({ id: 'text', contentType: 'text', body: '{"plain":true}' })
+    expect(result.messages[3]).toMatchObject({ id: 'plain-text', contentType: 'text', body: 'not JSON' })
   })
 
   it('defaults a missing content type to JSON, as Cloudflare documents', async () => {
@@ -119,6 +129,40 @@ describe('pullCloudflareQueueMessages', () => {
 
     expect(error).toBeInstanceOf(CloudflareQueueApiError)
     expect((error as Error).message).not.toContain('queue-secret-token')
+  })
+
+  it.each([
+    ['missing id', { id: undefined }],
+    ['invalid timestamp', { timestamp_ms: 'not-a-number' }],
+    ['invalid attempts', { attempts: -1 }],
+    ['invalid metadata', { metadata: { nested: { value: true } } }],
+    ['invalid body', { body: { secret: 'raw-body-must-not-escape' } }],
+  ])('returns a malformed %s as safe poison when its lease can be acknowledged', async (_label, overrides) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(pullResponse([message(overrides)]))
+
+    const result = await pullCloudflareQueueMessages({ ...client, fetchImpl })
+
+    expect(result.messages[0]).toEqual(expect.objectContaining({
+      leaseId: 'lease-1',
+      contentType: 'poison',
+      reason: 'malformed-envelope',
+    }))
+    expect(result.messages[0]).not.toHaveProperty('body')
+    expect(JSON.stringify(result.messages[0])).not.toContain('raw-body-must-not-escape')
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['empty', ''],
+    ['whitespace', '   '],
+    ['non-string', 123],
+  ])('rejects a %s lease because the message cannot be safely acknowledged', async (_label, leaseId) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(pullResponse([message({ lease_id: leaseId })]))
+
+    await expect(pullCloudflareQueueMessages({ ...client, fetchImpl })).rejects.toMatchObject({
+      name: 'CloudflareQueueApiError',
+      status: 502,
+    })
   })
 
   it('rejects malformed non-success envelopes deterministically', async () => {
@@ -248,7 +292,7 @@ describe('pullCloudflareQueueMessages', () => {
 
 describe('ackCloudflareQueueMessages', () => {
   it('groups acknowledgements and retries with delay_seconds', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ success: true, result: null })))
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(ackResponse(2, 1))
 
     const result = await ackCloudflareQueueMessages({ ...client, fetchImpl }, {
       acks: ['lease-1', 'lease-2'],
@@ -266,6 +310,54 @@ describe('ackCloudflareQueueMessages', () => {
       acknowledgedLeaseIds: ['lease-1', 'lease-2'],
       retriedLeaseIds: [{ leaseId: 'lease-3', delaySeconds: 600 }],
     })
+  })
+
+  it.each([
+    ['acknowledgements', 1, 1],
+    ['retries', 2, 0],
+  ])('rejects partial %s reported by Cloudflare', async (_label, ackCount, retryCount) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(ackResponse(ackCount, retryCount, {
+      'lease-secret': 'upstream warning with queue-secret-token',
+    }))
+
+    const error = await ackCloudflareQueueMessages({ ...client, fetchImpl }, {
+      acks: ['lease-1', 'lease-2'],
+      retries: [{ leaseId: 'lease-3' }],
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({ name: 'CloudflareQueueApiError', status: 502 })
+    expect((error as Error).message).toBe('Cloudflare Queue acknowledgement was incomplete')
+    expect((error as Error).message).not.toContain('queue-secret-token')
+    expect((error as Error).message).not.toContain('lease-secret')
+  })
+
+  it('rejects acknowledgement warnings even when the counts are complete', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(ackResponse(2, 1, {
+      'lease-secret': 'upstream warning with queue-secret-token',
+    }))
+
+    const error = await ackCloudflareQueueMessages({ ...client, fetchImpl }, {
+      acks: ['lease-1', 'lease-2'],
+      retries: [{ leaseId: 'lease-3' }],
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({ name: 'CloudflareQueueApiError', status: 502 })
+    expect((error as Error).message).toBe('Cloudflare Queue acknowledgement returned warnings')
+    expect((error as Error).message).not.toContain('queue-secret-token')
+    expect((error as Error).message).not.toContain('lease-secret')
+  })
+
+  it.each([
+    ['missing result', { success: true }],
+    ['missing acknowledgement count', { success: true, result: { retryCount: 0 } }],
+    ['fractional acknowledgement count', { success: true, result: { ackCount: 0.5, retryCount: 0 } }],
+    ['negative retry count', { success: true, result: { ackCount: 1, retryCount: -1 } }],
+  ])('rejects an ACK response with a %s', async (_label, responseBody) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(responseBody)))
+
+    await expect(ackCloudflareQueueMessages({ ...client, fetchImpl }, {
+      acks: ['lease-1'],
+    })).rejects.toMatchObject({ name: 'CloudflareQueueApiError', status: 502 })
   })
 
   it('requires at least one acknowledgement or retry', async () => {

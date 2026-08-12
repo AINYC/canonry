@@ -44,6 +44,8 @@ const activatedQueueSource: TrafficSourceDto = {
   lastCursor: null,
   lastError: null,
   skippedThroughAt: null,
+  queueBacklogCount: null,
+  queueBacklogObservedAt: null,
   archivedAt: null,
   config: {
     deliveryMode: 'queue-pull',
@@ -262,6 +264,39 @@ describe('trafficConnectCloudflare', () => {
       },
       loadLocalConfig: () => undefined,
     })).rejects.toMatchObject({ code: 'TRAFFIC_CLOUDFLARE_SECRET_EXPOSURE' })
+  })
+
+  it('redacts the token-file input from Queue deploy failures without shared server config', async () => {
+    const apiToken = 'cloudflare-queue-api-token-deploy-unshared'
+    const tokenFile = path.join(scratch(), 'queue-token.txt')
+    fs.writeFileSync(tokenFile, apiToken, { mode: 0o600 })
+
+    const error = await trafficConnectCloudflare('demo', {
+      deliveryMode: 'queue-pull',
+      accountId: queueResponse.accountId,
+      queueId: queueResponse.queueId,
+      queueName: queueResponse.queueName,
+      apiTokenFile: tokenFile,
+      outputDirectory: path.join(scratch(), 'worker'),
+      zoneId: 'zone_test',
+      deploy: true,
+      confirmRoute: true,
+      confirmFailOpen: true,
+    }, {
+      client: { trafficConnectCloudflare: async () => queueResponse },
+      loadLocalConfig: () => undefined,
+      preflightWrangler: async () => {},
+      deployWorker: async () => {
+        throw new Error(`Wrangler diagnostic included ${apiToken}`)
+      },
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({
+      code: 'TRAFFIC_CLOUDFLARE_DEPLOY_FAILED',
+      message: 'Wrangler diagnostic included [REDACTED]',
+    })
+    expect((error as CliError).displayMessage).toContain('[REDACTED]')
+    expect(JSON.stringify(error)).not.toContain(apiToken)
   })
 
   it('prints the mode-agnostic activation command when activation is required', async () => {

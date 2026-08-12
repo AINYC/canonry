@@ -163,6 +163,10 @@ export const trafficSourceDtoSchema = z.object({
    * the skipping sync did.
    */
   skippedThroughAt: z.string().nullable(),
+  /** Residual Cloudflare Queue depth reported by the most recent bounded pull. */
+  queueBacklogCount: z.number().int().nonnegative().nullable(),
+  /** Instant at which `queueBacklogCount` was observed, or null before the first pull. */
+  queueBacklogObservedAt: z.string().nullable(),
   archivedAt: z.string().nullable(),
   config: z.record(z.string(), z.unknown()),
   createdAt: z.string(),
@@ -423,6 +427,8 @@ export const trafficSyncResponseSchema = z.object({
   aiUserFetchBucketRows: z.number().int().nonnegative(),
   aiReferralBucketRows: z.number().int().nonnegative(),
   sampleRows: z.number().int().nonnegative(),
+  /** Residual upstream Queue depth after a bounded sync; present for Queue pull. */
+  remainingBacklogCount: z.number().int().nonnegative().optional(),
   windowStart: z.string(),
   windowEnd: z.string(),
 })

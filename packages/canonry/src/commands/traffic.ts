@@ -287,8 +287,8 @@ export async function trafficConnectCloudflare(project: string, opts: {
         deliveryMode: 'queue-pull',
       })
     } catch (error) {
-      const message = deploymentCredential
-        ? redactCloudflareSecrets(errorMessage(error), deploymentCredential)
+      const message = artifactSecrets
+        ? redactCloudflareSecrets(errorMessage(error), artifactSecrets)
         : errorMessage(error)
       throw new CliError({
         code: 'TRAFFIC_CLOUDFLARE_DEPLOY_FAILED',

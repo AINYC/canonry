@@ -1740,6 +1740,11 @@ export const trafficSources = sqliteTable('traffic_sources', {
   // Both fields are nullable so pre-lease sources remain immediately valid.
   syncLeaseOwner: text('sync_lease_owner'),
   syncLeaseExpiresAt: text('sync_lease_expires_at'),
+  // Residual Queue depth returned by Cloudflare after the most recent bounded
+  // pull. NULL means a queue-backed source has not observed backlog yet; zero
+  // is an explicit observation that the Queue was drained at that instant.
+  queueBacklogCount: integer('queue_backlog_count'),
+  queueBacklogObservedAt: text('queue_backlog_observed_at'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 }, (table) => [

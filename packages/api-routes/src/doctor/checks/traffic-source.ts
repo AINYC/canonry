@@ -43,6 +43,11 @@ function isCloudflareDirectPush(source: TrafficSourceProbe): boolean {
     || deliveryMode === CloudflareTrafficDeliveryModes['direct-push']
 }
 
+function isCloudflareQueuePull(source: TrafficSourceProbe): boolean {
+  return source.sourceType === TrafficSourceTypes.cloudflare
+    && source.configJson.deliveryMode === CloudflareTrafficDeliveryModes['queue-pull']
+}
+
 function isActiveSource(source: TrafficSourceProbe): boolean {
   return source.status !== TrafficSourceStatuses.paused
 }
@@ -94,6 +99,8 @@ function loadProbes(ctx: DoctorContext): TrafficSourceProbe[] {
     lastWorkerVersion: r.lastWorkerVersion,
     ingestTokenHash: r.ingestTokenHash,
     skippedThroughAt: r.skippedThroughAt,
+    queueBacklogCount: r.queueBacklogCount,
+    queueBacklogObservedAt: r.queueBacklogObservedAt,
     lastError: r.lastError,
     configJson: r.configJson,
   }))
@@ -680,6 +687,70 @@ const syncLagCheck: CheckDefinition = {
   },
 }
 
+/**
+ * A Queue pull sync is intentionally bounded. A successful run can therefore
+ * commit useful events while work remains upstream. Persisting and checking
+ * Cloudflare's residual depth keeps that state visible between syncs.
+ */
+const queueBacklogCheck: CheckDefinition = {
+  id: 'traffic.source.queue-backlog',
+  category: CheckCategories.integrations,
+  scope: CheckScopes.project,
+  title: 'Cloudflare Queue backlog',
+  run: (ctx) => {
+    if (!ctx.project) return skippedNoProject()
+
+    const sources = loadProbes(ctx).filter(
+      source => isActiveSource(source) && isCloudflareQueuePull(source),
+    )
+    if (sources.length === 0) {
+      return {
+        status: CheckStatuses.skipped,
+        code: 'traffic.queue-backlog.not-applicable',
+        summary: 'No active Cloudflare Queue pull source is connected.',
+      }
+    }
+
+    const measured = sources.filter(source => source.queueBacklogCount !== null && source.queueBacklogCount !== undefined)
+    const details = {
+      sources: sources.map(source => ({
+        id: source.id,
+        displayName: source.displayName,
+        queueBacklogCount: source.queueBacklogCount ?? null,
+        queueBacklogObservedAt: source.queueBacklogObservedAt ?? null,
+      })),
+    }
+    if (measured.length === 0) {
+      return {
+        status: CheckStatuses.skipped,
+        code: 'traffic.queue-backlog.not-observed',
+        summary: 'Cloudflare Queue backlog has not been observed yet.',
+        remediation: 'Run `canonry traffic sync <project> --source <id>` to pull the Queue and record its residual depth.',
+        details,
+      }
+    }
+
+    const remaining = measured.filter(source => (source.queueBacklogCount ?? 0) > 0)
+    if (remaining.length > 0) {
+      const total = remaining.reduce((sum, source) => sum + source.queueBacklogCount!, 0)
+      return {
+        status: CheckStatuses.warn,
+        code: 'traffic.queue-backlog.remaining',
+        summary: `${total.toLocaleString('en-US')} message(s) remained across ${remaining.length} Cloudflare Queue source(s) after the last bounded sync.`,
+        remediation: 'Run `canonry traffic sync <project> --source <id>` again. If messages remain, shorten the traffic-sync schedule interval.',
+        details,
+      }
+    }
+
+    return {
+      status: CheckStatuses.ok,
+      code: 'traffic.queue-backlog.empty',
+      summary: 'The last observed Cloudflare Queue backlog was empty.',
+      details,
+    }
+  },
+}
+
 const workerVersionCheck: CheckDefinition = {
   id: 'traffic.source.worker-version',
   category: CheckCategories.integrations,
@@ -752,6 +823,7 @@ export const TRAFFIC_SOURCE_CHECKS: readonly CheckDefinition[] = [
   sourceConnectedCheck,
   recentDataCheck,
   syncLagCheck,
+  queueBacklogCheck,
   workerVersionCheck,
   credentialsCheck,
   scopesCheck,

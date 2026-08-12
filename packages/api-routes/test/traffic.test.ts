@@ -388,6 +388,101 @@ describe('traffic source cutover staging', () => {
   beforeEach(async () => { h = await buildHarness([]) })
   afterEach(async () => { await h.close() })
 
+  it.each([
+    {
+      adapter: 'Cloud Run',
+      path: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+      body: { gcpProjectId: 'gcp-race', keyJson: SA_KEY },
+      targetId: (body: Record<string, unknown>) => body.id as string,
+      competingType: TrafficSourceTypes.vercel,
+    },
+    {
+      adapter: 'WordPress',
+      path: '/api/v1/projects/test-project/traffic/connect/wordpress',
+      body: { baseUrl: 'https://8.8.8.8', username: 'race', applicationPassword: 'wp-secret' },
+      targetId: (body: Record<string, unknown>) => body.id as string,
+      competingType: TrafficSourceTypes.vercel,
+    },
+    {
+      adapter: 'Vercel',
+      path: '/api/v1/projects/test-project/traffic/connect/vercel',
+      body: { projectId: 'prj_race', teamId: 'team_race', token: 'vercel-secret' },
+      targetId: (body: Record<string, unknown>) => body.id as string,
+      competingType: TrafficSourceTypes['cloud-run'],
+    },
+    {
+      adapter: 'Cloudflare Queue',
+      path: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      body: {
+        deliveryMode: 'queue-pull', accountId: 'account_race', queueId: 'queue_race',
+        queueName: 'canonry-race', retentionSeconds: 86_400, apiToken: 'queue-secret-token',
+      },
+      targetId: (body: Record<string, unknown>) => body.sourceId as string,
+      competingType: TrafficSourceTypes.vercel,
+    },
+    {
+      adapter: 'Cloudflare direct push',
+      path: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      body: {},
+      targetId: (body: Record<string, unknown>) => body.sourceId as string,
+      competingType: TrafficSourceTypes.vercel,
+    },
+  ])('serializes $adapter authority selection with a competing connect', async ({
+    path, body, targetId, competingType,
+  }) => {
+    const project = (await import('@ainyc/canonry-db')).projects
+    const projectId = h.db.select().from(project).all()[0]!.id
+    const competingSourceId = `race-authority-${crypto.randomUUID()}`
+    const now = new Date().toISOString()
+    const originalTransaction = h.db.transaction.bind(h.db)
+    let injected = false
+    h.db.transaction = ((callback, config) => {
+      if (!injected) {
+        injected = true
+        originalTransaction((tx) => {
+          tx.insert(trafficSources).values({
+            id: competingSourceId,
+            projectId,
+            sourceType: competingType,
+            displayName: 'Concurrent authority',
+            status: TrafficSourceStatuses.connected,
+            configJson: {},
+            createdAt: now,
+            updatedAt: now,
+          }).run()
+          tx.insert(schedules).values({
+            id: crypto.randomUUID(),
+            projectId,
+            kind: SchedulableRunKinds['traffic-sync'],
+            cronExpr: '0 * * * *',
+            preset: null,
+            timezone: 'UTC',
+            enabled: false,
+            providers: [],
+            sourceId: competingSourceId,
+            createdAt: now,
+            updatedAt: now,
+          }).run()
+        }, { behavior: 'immediate' })
+      }
+      return originalTransaction(callback, config)
+    }) as typeof h.db.transaction
+
+    const connected = await h.app.inject({ method: 'POST', url: path, payload: body })
+
+    expect(connected.statusCode, connected.payload).toBe(200)
+    const connectedBody = JSON.parse(connected.payload) as Record<string, unknown>
+    const connectedTargetId = targetId(connectedBody)
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, connectedTargetId)).get()?.status)
+      .toBe(TrafficSourceStatuses.paused)
+    expect(h.db.select().from(trafficSources).all()
+      .filter(row => row.status === TrafficSourceStatuses.connected)
+      .map(row => row.id)).toEqual([competingSourceId])
+    expect(h.db.select().from(schedules).where(eq(schedules.kind, 'traffic-sync')).get())
+      .toEqual(expect.objectContaining({ sourceId: competingSourceId, enabled: false }))
+    expect(h.getScheduleUpdates()).toEqual([])
+  })
+
   it('keeps Cloud Run, WordPress, and Vercel connects staged while Queue pull is active', async () => {
     const queue = await h.app.inject({
       method: 'POST',
@@ -442,6 +537,10 @@ describe('traffic source cutover staging', () => {
         method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`, payload: {},
       })
       expect(pausedSync.statusCode).toBe(400)
+      const pausedBackfill = await h.app.inject({
+        method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/backfill`, payload: {},
+      })
+      expect(pausedBackfill.statusCode).toBe(400)
     }
 
     const cloudRunCredential = h.credentials.get('test-project')!
@@ -491,6 +590,12 @@ describe('traffic source cutover staging', () => {
       payload: {},
     })
     expect(blockedErroredSync.statusCode).toBe(400)
+    const blockedErroredBackfill = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/projects/test-project/traffic/sources/${stagedSourceIds[0]}/backfill`,
+      payload: {},
+    })
+    expect(blockedErroredBackfill.statusCode).toBe(400)
     expect(h.getPullCount()).toBe(0)
     h.db.update(trafficSources).set({ status: TrafficSourceStatuses.paused })
       .where(eq(trafficSources.id, stagedSourceIds[0])).run()
@@ -517,6 +622,87 @@ describe('traffic source cutover staging', () => {
     expect(h.db.select().from(schedules).all()).toEqual([
       expect.objectContaining({ sourceId: queueSourceId, enabled: true }),
     ])
+  })
+
+  it('preserves a disabled traffic-sync schedule across Queue reconnect and activation', async () => {
+    const queueBody = {
+      deliveryMode: 'queue-pull',
+      accountId: 'account_disabled',
+      queueId: 'queue_disabled',
+      queueName: 'canonry-disabled',
+      retentionSeconds: 86_400,
+      apiToken: 'queue-secret-token',
+    } as const
+    const queue = await h.app.inject({
+      method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queueBody,
+    })
+    const queueSourceId = JSON.parse(queue.payload).sourceId as string
+    h.db.update(schedules).set({ enabled: false }).where(eq(schedules.kind, 'traffic-sync')).run()
+
+    const reconnected = await h.app.inject({
+      method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queueBody,
+    })
+    expect(reconnected.statusCode).toBe(200)
+    expect(h.db.select().from(schedules).where(eq(schedules.kind, 'traffic-sync')).get())
+      .toEqual(expect.objectContaining({ sourceId: queueSourceId, enabled: false }))
+
+    const cloudRun = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+      payload: { gcpProjectId: 'gcp-disabled', keyJson: SA_KEY },
+    })
+    const cloudRunSourceId = JSON.parse(cloudRun.payload).id as string
+    const activatedCloudRun = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${cloudRunSourceId}/activate`,
+    })
+    expect(activatedCloudRun.statusCode).toBe(200)
+    const reactivatedQueue = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${queueSourceId}/activate`,
+    })
+    expect(reactivatedQueue.statusCode).toBe(200)
+    expect(h.db.select().from(schedules).where(eq(schedules.kind, 'traffic-sync')).get())
+      .toEqual(expect.objectContaining({ sourceId: queueSourceId, enabled: false }))
+  })
+
+  it('rebinds an existing traffic-sync schedule when a pull adapter connects as authority', async () => {
+    const queue = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {
+        deliveryMode: 'queue-pull', accountId: 'account_stale', queueId: 'queue_stale',
+        queueName: 'canonry-stale-binding', retentionSeconds: 86_400, apiToken: 'queue-secret-token',
+      },
+    })
+    const queueSourceId = JSON.parse(queue.payload).sourceId as string
+    h.db.update(schedules).set({ enabled: false }).where(eq(schedules.kind, 'traffic-sync')).run()
+    h.db.update(trafficSources).set({ status: TrafficSourceStatuses.error })
+      .where(eq(trafficSources.id, queueSourceId)).run()
+
+    const connects = [
+      {
+        path: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+        body: { gcpProjectId: 'gcp-authority', keyJson: SA_KEY },
+      },
+      {
+        path: '/api/v1/projects/test-project/traffic/connect/wordpress',
+        body: { baseUrl: 'https://8.8.8.8', username: 'authority', applicationPassword: 'wp-secret' },
+      },
+      {
+        path: '/api/v1/projects/test-project/traffic/connect/vercel',
+        body: { projectId: 'prj_authority', teamId: 'team_authority', token: 'vercel-secret' },
+      },
+    ] as const
+
+    for (const { path, body } of connects) {
+      const connected = await h.app.inject({ method: 'POST', url: path, payload: body })
+      expect(connected.statusCode, connected.payload).toBe(200)
+      const sourceId = JSON.parse(connected.payload).id as string
+      expect(JSON.parse(connected.payload).status).toBe(TrafficSourceStatuses.connected)
+      expect(h.db.select().from(schedules).where(eq(schedules.kind, 'traffic-sync')).get())
+        .toEqual(expect.objectContaining({ sourceId, enabled: false }))
+      h.db.update(trafficSources).set({ status: TrafficSourceStatuses.error })
+        .where(eq(trafficSources.id, sourceId)).run()
+    }
   })
 
   it('discards an in-flight pull when cutover pauses its source before commit', async () => {
@@ -2819,6 +3005,131 @@ describe('POST /traffic/sources/:id/backfill', () => {
     }
     throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`)
   }
+
+  it('allows an errored source to retry when it has no connected sibling', async () => {
+    const h = await buildHarness([])
+    try {
+      const connected = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+        payload: { gcpProjectId: 'gcp-retry', keyJson: SA_KEY },
+      })
+      const sourceId = JSON.parse(connected.payload).id as string
+      h.db.update(trafficSources).set({ status: TrafficSourceStatuses.error })
+        .where(eq(trafficSources.id, sourceId)).run()
+
+      const submitted = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/backfill`,
+        payload: { days: 1 },
+      })
+
+      expect(submitted.statusCode, submitted.payload).toBe(200)
+      const finalRun = await waitForRunComplete(h.db, JSON.parse(submitted.payload).runId)
+      expect(finalRun.status).toBe(RunStatuses.completed)
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('discards an in-flight backfill when activation cuts over to a sibling source', async () => {
+    let cloudRunSourceId = ''
+    let queueSourceId = ''
+    let activationStatus = 0
+    const liveHarness: { current?: Awaited<ReturnType<typeof buildHarness>> } = {}
+    const h = await buildHarness([buildEvent()], {
+      bypassTimeFilter: true,
+      onCloudRunPull: async () => {
+        if (!cloudRunSourceId || !queueSourceId || !liveHarness.current) return
+        const activated = await liveHarness.current.app.inject({
+          method: 'POST',
+          url: `/api/v1/projects/test-project/traffic/sources/${queueSourceId}/activate`,
+        })
+        activationStatus = activated.statusCode
+      },
+    })
+    liveHarness.current = h
+    try {
+      const cloudRun = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+        payload: { gcpProjectId: 'gcp-backfill-cutover', keyJson: SA_KEY },
+      })
+      cloudRunSourceId = JSON.parse(cloudRun.payload).id as string
+      const queue = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+        payload: {
+          deliveryMode: 'queue-pull', accountId: 'account_cutover', queueId: 'queue_cutover',
+          queueName: 'canonry-cutover', retentionSeconds: 86_400, apiToken: 'queue-secret-token',
+        },
+      })
+      queueSourceId = JSON.parse(queue.payload).sourceId as string
+
+      const submitted = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${cloudRunSourceId}/backfill`,
+        payload: { days: 1 },
+      })
+      const finalRun = await waitForRunComplete(h.db, JSON.parse(submitted.payload).runId)
+
+      expect(activationStatus).toBe(200)
+      expect(finalRun.status).toBe(RunStatuses.failed)
+      expect(finalRun.error).toMatch(/deactivated or reconfigured/)
+      expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, cloudRunSourceId)).get()?.status)
+        .toBe(TrafficSourceStatuses.paused)
+      expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, queueSourceId)).get()?.status)
+        .toBe(TrafficSourceStatuses.connected)
+      expect(h.db.select().from(crawlerEventsHourly).all()).toHaveLength(0)
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('preserves a reset that advances the source while a backfill pull is in flight', async () => {
+    let sourceId = ''
+    let resetSyncedAt: string | null = null
+    const liveHarness: { current?: Awaited<ReturnType<typeof buildHarness>> } = {}
+    const h = await buildHarness([buildEvent()], {
+      bypassTimeFilter: true,
+      onCloudRunPull: async () => {
+        if (!sourceId || !liveHarness.current) return
+        const reset = await liveHarness.current.app.inject({
+          method: 'POST',
+          url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/reset`,
+          payload: { advanceToNow: true },
+        })
+        expect(reset.statusCode).toBe(200)
+        resetSyncedAt = liveHarness.current.db.select().from(trafficSources)
+          .where(eq(trafficSources.id, sourceId)).get()!.lastSyncedAt
+      },
+    })
+    liveHarness.current = h
+    try {
+      const connected = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+        payload: { gcpProjectId: 'gcp-backfill-reset', keyJson: SA_KEY },
+      })
+      sourceId = JSON.parse(connected.payload).id as string
+
+      const submitted = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/backfill`,
+        payload: { days: 1 },
+      })
+      const finalRun = await waitForRunComplete(h.db, JSON.parse(submitted.payload).runId)
+      const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+
+      expect(finalRun.status).toBe(RunStatuses.failed)
+      expect(finalRun.error).toMatch(/deactivated or reconfigured/)
+      expect(source.status).toBe(TrafficSourceStatuses.connected)
+      expect(source.lastSyncedAt).toBe(resetSyncedAt)
+      expect(h.db.select().from(crawlerEventsHourly).all()).toHaveLength(0)
+    } finally {
+      await h.close()
+    }
+  })
 
   it('returns runId + status=running synchronously, then replaces rollups in the window once the background task finishes', async () => {
     const baseTime = new Date(Date.now() - 60 * 60_000)

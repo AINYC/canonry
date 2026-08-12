@@ -20,7 +20,14 @@ export const DIRECT_PUSH_RECEIPT_TTL_MS = 10 * 60_000
 type TrafficSourceRow = typeof trafficSources.$inferSelect
 type TrafficSourceIngestUpdate = Partial<Pick<
   TrafficSourceRow,
-  'lastCursor' | 'lastError' | 'lastSyncedAt' | 'lastWorkerVersion' | 'status' | 'updatedAt'
+  | 'lastCursor'
+  | 'lastError'
+  | 'lastSyncedAt'
+  | 'lastWorkerVersion'
+  | 'queueBacklogCount'
+  | 'queueBacklogObservedAt'
+  | 'status'
+  | 'updatedAt'
 >>
 
 export interface WriteTrafficEventBatchOptions {

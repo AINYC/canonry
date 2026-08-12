@@ -8310,6 +8310,8 @@ export type TrafficSourceDetailDto = {
     lastCursor: string | null;
     lastError: string | null;
     skippedThroughAt: string | null;
+    queueBacklogCount: number | null;
+    queueBacklogObservedAt: string | null;
     archivedAt: string | null;
     config: {
         [key: string]: unknown;
@@ -8350,6 +8352,8 @@ export type TrafficSourceDto = {
     lastCursor: string | null;
     lastError: string | null;
     skippedThroughAt: string | null;
+    queueBacklogCount: number | null;
+    queueBacklogObservedAt: string | null;
     archivedAt: string | null;
     config: {
         [key: string]: unknown;
@@ -8369,6 +8373,8 @@ export type TrafficSourceListResponse = {
         lastCursor: string | null;
         lastError: string | null;
         skippedThroughAt: string | null;
+        queueBacklogCount: number | null;
+        queueBacklogObservedAt: string | null;
         archivedAt: string | null;
         config: {
             [key: string]: unknown;
@@ -8389,6 +8395,8 @@ export type TrafficStatusResponse = {
         lastCursor: string | null;
         lastError: string | null;
         skippedThroughAt: string | null;
+        queueBacklogCount: number | null;
+        queueBacklogObservedAt: string | null;
         archivedAt: string | null;
         config: {
             [key: string]: unknown;
@@ -8434,6 +8442,7 @@ export type TrafficSyncResponse = {
     aiUserFetchBucketRows: number;
     aiReferralBucketRows: number;
     sampleRows: number;
+    remainingBacklogCount?: number;
     windowStart: string;
     windowEnd: string;
 };

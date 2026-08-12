@@ -7,6 +7,7 @@ import Fastify from 'fastify'
 import { and, eq } from 'drizzle-orm'
 import { createClient, migrate, projects, schedules, trafficEventReceipts, trafficSources } from '@ainyc/canonry-db'
 import { SchedulableRunKinds, TrafficSourceStatuses, TrafficSourceTypes } from '@ainyc/canonry-contracts'
+import { CloudflareQueueApiError } from '@ainyc/canonry-integration-cloudflare-queue'
 import { apiRoutes } from '../src/index.js'
 import type { CloudflareTrafficCredentialRecord, CloudflareTrafficCredentialStore } from '../src/traffic.js'
 import { tryClaimTrafficSyncLease } from '../src/traffic-sync-lease.js'
@@ -21,6 +22,7 @@ async function harness(options: {
   queuePull?: Parameters<typeof apiRoutes>[1]['pullCloudflareQueueMessages']
   queueAck?: Parameters<typeof apiRoutes>[1]['ackCloudflareQueueMessages']
   includeDirectIngestUrl?: boolean
+  queueMaxBatches?: number
 } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-cloudflare-queue-'))
   directories.push(directory)
@@ -45,6 +47,7 @@ async function harness(options: {
     }),
     pullCloudflareQueueMessages: options.queuePull,
     ackCloudflareQueueMessages: options.queueAck,
+    cloudflareQueueMaxBatches: options.queueMaxBatches,
   })
   await app.ready()
   await app.inject({ method: 'PUT', url: '/api/v1/projects/test-project', payload: {
@@ -197,6 +200,40 @@ describe('Cloudflare Queue pull lifecycle', () => {
     await h.app.close()
   })
 
+  it('clears observed backlog when reconnect points the source at a different Queue', async () => {
+    const h = await harness()
+    const connected = await h.app.inject({
+      method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queuePayload,
+    })
+    const sourceId = JSON.parse(connected.payload).sourceId as string
+    const observedAt = '2026-08-11T12:00:00.000Z'
+    h.db.update(trafficSources).set({
+      queueBacklogCount: 321,
+      queueBacklogObservedAt: observedAt,
+    }).where(eq(trafficSources.id, sourceId)).run()
+
+    const unchanged = await h.app.inject({
+      method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queuePayload,
+    })
+    expect(unchanged.statusCode).toBe(200)
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()).toMatchObject({
+      queueBacklogCount: 321,
+      queueBacklogObservedAt: observedAt,
+    })
+
+    const replaced = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: { ...queuePayload, queueId: 'queue-2', queueName: 'canonry-events-2' },
+    })
+    expect(replaced.statusCode).toBe(200)
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()).toMatchObject({
+      queueBacklogCount: null,
+      queueBacklogObservedAt: null,
+    })
+    await h.app.close()
+  })
+
   it('refuses to pull when an active Queue source loses its local API token', async () => {
     let pullCalled = false
     const h = await harness({
@@ -217,7 +254,7 @@ describe('Cloudflare Queue pull lifecycle', () => {
       method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`, payload: {},
     })
 
-    expect(sync.statusCode).toBe(502)
+    expect(sync.statusCode).toBe(400)
     expect(pullCalled).toBe(false)
     await h.app.close()
   })
@@ -298,6 +335,54 @@ describe('Cloudflare Queue pull lifecycle', () => {
     await h.app.close()
   })
 
+  it('does not commit or acknowledge a Queue batch after its source reconnects to another Queue', async () => {
+    let sourceId = ''
+    let acknowledged = false
+    const message = {
+      id: 'old-queue-message', timestampMs: 1_700_000_000_000, attempts: 1, leaseId: 'old-queue-lease', metadata: {},
+      contentType: 'json' as const,
+      body: {
+        schemaVersion: 1, workerVersion: '1.0.0', events: [{
+          eventId: 'old-queue-event', observedAt: '2026-08-11T12:00:00.000Z', method: 'GET', host: 'example.com',
+          path: '/old-queue', queryString: null, status: 200, userAgent: 'GPTBot/1.0', remoteIp: null, referer: null,
+          cf: { verifiedBot: true, botScore: null, country: null, asn: null, asOrganization: null },
+        }],
+      },
+    }
+    const h = await harness({
+      queuePull: async () => {
+        const reconnected = await h.app.inject({
+          method: 'POST',
+          url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+          payload: { ...queuePayload, queueId: 'queue-2', queueName: 'canonry-events-2', apiToken: 'new-queue-token' },
+        })
+        expect(reconnected.statusCode).toBe(200)
+        return { messageBacklogCount: 0, messages: [message] }
+      },
+      queueAck: async () => {
+        acknowledged = true
+        return { acknowledgedLeaseIds: ['old-queue-lease'], retriedLeaseIds: [] }
+      },
+    })
+    const connected = await h.app.inject({
+      method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queuePayload,
+    })
+    sourceId = JSON.parse(connected.payload).sourceId as string
+
+    const synced = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`, payload: {},
+    })
+
+    expect(synced.statusCode).toBe(502)
+    expect(acknowledged).toBe(false)
+    expect(h.db.select().from(trafficEventReceipts).where(eq(trafficEventReceipts.sourceId, sourceId)).all()).toHaveLength(0)
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()).toMatchObject({
+      configJson: expect.objectContaining({ queueId: 'queue-2', queueName: 'canonry-events-2' }),
+      lastError: null,
+    })
+    await h.app.close()
+  })
+
   it('returns 409 when a Queue source lease is already live and rejects archived activation', async () => {
     const h = await harness()
     const connected = await h.app.inject({ method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queuePayload })
@@ -340,6 +425,74 @@ describe('Cloudflare Queue pull lifecycle', () => {
     expect(synced.statusCode).toBe(200)
     expect(acknowledgedBatchSizes).toEqual([100, 1])
     expect(acknowledgedBatchSizes.every(size => size <= 100)).toBe(true)
+    await h.app.close()
+  })
+
+  it('uses a visibility timeout beyond the ACK retry budget and persists residual backlog', async () => {
+    let visibilityTimeoutMs: number | undefined
+    const messages = Array.from({ length: 100 }, (_, index) => ({
+      id: `backlog-${index}`, timestampMs: 1_700_000_000_000, attempts: 1,
+      leaseId: `backlog-lease-${index}`, metadata: {}, contentType: 'json' as const,
+      body: { schemaVersion: 1, workerVersion: '1.0.0', events: [] },
+    }))
+    const h = await harness({
+      queueMaxBatches: 1,
+      queuePull: async (_client, options) => {
+        visibilityTimeoutMs = options?.visibilityTimeoutMs
+        return { messageBacklogCount: 900, messages }
+      },
+      queueAck: async (_client, options) => ({
+        acknowledgedLeaseIds: options.acks, retriedLeaseIds: [],
+      }),
+    })
+    const connected = await h.app.inject({
+      method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queuePayload,
+    })
+    const sourceId = JSON.parse(connected.payload).sourceId as string
+
+    const synced = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`, payload: {},
+    })
+
+    expect(synced.statusCode).toBe(200)
+    expect(visibilityTimeoutMs).toBe(5 * 60_000)
+    expect(JSON.parse(synced.payload)).toMatchObject({ remainingBacklogCount: 900 })
+    const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+    expect(source.queueBacklogCount).toBe(900)
+    expect(source.queueBacklogObservedAt).not.toBeNull()
+    await h.app.close()
+  })
+
+  it('surfaces safe Queue API causes without overwriting state after lease ownership changes', async () => {
+    let sourceId = ''
+    const newerUpdatedAt = '2099-01-01T00:00:00.000Z'
+    const h = await harness({
+      queuePull: async () => {
+        h.db.update(trafficSources).set({
+          syncLeaseOwner: 'replacement-owner',
+          syncLeaseExpiresAt: '2099-01-01T00:05:00.000Z',
+          lastError: 'newer authority state',
+          updatedAt: newerUpdatedAt,
+        }).where(eq(trafficSources.id, sourceId)).run()
+        throw new CloudflareQueueApiError('Cloudflare Queue pull failed with HTTP 403', 403)
+      },
+    })
+    const connected = await h.app.inject({
+      method: 'POST', url: '/api/v1/projects/test-project/traffic/connect/cloudflare', payload: queuePayload,
+    })
+    sourceId = JSON.parse(connected.payload).sourceId as string
+
+    const synced = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`, payload: {},
+    })
+
+    expect(synced.statusCode).toBe(502)
+    expect(JSON.parse(synced.payload).error.message).toContain('HTTP 403')
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()).toMatchObject({
+      syncLeaseOwner: 'replacement-owner',
+      lastError: 'newer authority state',
+      updatedAt: newerUpdatedAt,
+    })
     await h.app.close()
   })
 })

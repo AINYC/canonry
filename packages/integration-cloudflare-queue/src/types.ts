@@ -28,10 +28,16 @@ export interface CloudflareQueueMessageBase {
   metadata: Readonly<Record<string, string>>
 }
 
-/** `json` and `text` payloads are parsed JSON for the caller's own Zod schema. */
+/** JSON payloads are decoded from Cloudflare's base64 wire envelope and parsed. */
 export interface CloudflareQueueJsonMessage extends CloudflareQueueMessageBase {
-  contentType: 'json' | 'text'
+  contentType: 'json'
   body: unknown
+}
+
+/** Text payloads are already plain UTF-8 in Cloudflare's pull response. */
+export interface CloudflareQueueTextMessage extends CloudflareQueueMessageBase {
+  contentType: 'text'
+  body: string
 }
 
 /** Bytes are decoded from Cloudflare's base64 wire envelope, not parsed. */
@@ -43,11 +49,12 @@ export interface CloudflareQueueBytesMessage extends CloudflareQueueMessageBase 
 /** Safe per-message rejection. It preserves the lease needed to ACK/drop it, never its raw body. */
 export interface CloudflareQueuePoisonMessage extends CloudflareQueueMessageBase {
   contentType: 'poison'
-  reason: 'malformed-body' | 'unsupported-content-type'
+  reason: 'malformed-envelope' | 'malformed-body' | 'unsupported-content-type'
 }
 
 export type CloudflareQueueMessage =
   | CloudflareQueueJsonMessage
+  | CloudflareQueueTextMessage
   | CloudflareQueueBytesMessage
   | CloudflareQueuePoisonMessage
 

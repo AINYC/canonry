@@ -27,6 +27,10 @@ export interface TrafficSourceProbe {
   ingestTokenHash: string | null
   /** Newest instant a sync clamped past without ingesting; null when none known. */
   skippedThroughAt?: string | null
+  /** Residual Cloudflare Queue depth observed after the most recent bounded pull. */
+  queueBacklogCount?: number | null
+  /** Instant at which `queueBacklogCount` was observed. */
+  queueBacklogObservedAt?: string | null
   lastError: string | null
   configJson: Record<string, unknown>
 }

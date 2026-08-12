@@ -201,7 +201,7 @@ function asRecord(value: unknown, label: string): Record<string, unknown> {
 
 function requiredString(record: Record<string, unknown>, key: string, label: string): string {
   const value = record[key]
-  if (typeof value !== 'string' || !value) {
+  if (typeof value !== 'string' || !value.trim()) {
     throw new CloudflareQueueApiError(`Cloudflare Queue ${label} is malformed`, 502)
   }
   return value
@@ -250,15 +250,57 @@ function decodeUtf8(bytes: Uint8Array): string {
   }
 }
 
+function safeMessageBase(
+  record: Record<string, unknown>,
+  leaseId: string,
+): CloudflareQueueMessageBase {
+  const rawMetadata = record.metadata
+  const safeMetadata: Record<string, string> = {}
+  let metadataIsSafe = rawMetadata != null && typeof rawMetadata === 'object' && !Array.isArray(rawMetadata)
+  if (metadataIsSafe) {
+    for (const [key, value] of Object.entries(rawMetadata as Record<string, unknown>)) {
+      if (typeof value !== 'string') {
+        metadataIsSafe = false
+        break
+      }
+      safeMetadata[key] = value
+    }
+  }
+  return {
+    id: typeof record.id === 'string' && record.id.trim() ? record.id : '<malformed>',
+    leaseId,
+    timestampMs: Number.isInteger(record.timestamp_ms) && (record.timestamp_ms as number) >= 0
+      ? record.timestamp_ms as number
+      : 0,
+    attempts: Number.isInteger(record.attempts) && (record.attempts as number) >= 0
+      ? record.attempts as number
+      : 0,
+    metadata: metadataIsSafe ? safeMetadata : {},
+  }
+}
+
 function decodeMessage(record: Record<string, unknown>): CloudflareQueueMessage {
-  const id = requiredString(record, 'id', 'message')
   const leaseId = requiredString(record, 'lease_id', 'message')
-  const timestampMs = nonNegativeInteger(record.timestamp_ms as number, 'message timestamp_ms')
-  const attempts = nonNegativeInteger(record.attempts as number, 'message attempts')
-  const parsedMetadata = metadata(record)
-  const rawBody = stringField(record, 'body', 'message')
-  const base: CloudflareQueueMessageBase = { id, leaseId, timestampMs, attempts, metadata: parsedMetadata }
-  const contentType = parsedMetadata['CF-Content-Type'] ?? 'json'
+  let base: CloudflareQueueMessageBase
+  let rawBody: string
+  try {
+    base = {
+      id: requiredString(record, 'id', 'message'),
+      leaseId,
+      timestampMs: nonNegativeInteger(record.timestamp_ms as number, 'message timestamp_ms'),
+      attempts: nonNegativeInteger(record.attempts as number, 'message attempts'),
+      metadata: metadata(record),
+    }
+    rawBody = stringField(record, 'body', 'message')
+  } catch (error) {
+    if (!(error instanceof CloudflareQueueApiError)) throw error
+    return {
+      ...safeMessageBase(record, leaseId),
+      contentType: 'poison',
+      reason: 'malformed-envelope',
+    }
+  }
+  const contentType = base.metadata['CF-Content-Type'] ?? 'json'
   const poison = (reason: CloudflareQueuePoisonMessage['reason']): CloudflareQueuePoisonMessage => ({
     ...base,
     contentType: 'poison',
@@ -281,11 +323,7 @@ function decodeMessage(record: Record<string, unknown>): CloudflareQueueMessage 
     }
   }
   if (contentType === 'text') {
-    try {
-      return { ...base, contentType, body: parseJson(rawBody) }
-    } catch {
-      return poison('malformed-body')
-    }
+    return { ...base, contentType, body: rawBody }
   }
   return poison('unsupported-content-type')
 }
@@ -306,10 +344,23 @@ function parsePullEnvelope(value: unknown): CloudflareQueuePullResult {
   return { messageBacklogCount, messages: result.messages.map((message) => decodeMessage(asRecord(message, 'message'))) }
 }
 
-function parseAckEnvelope(value: unknown): void {
+function parseAckEnvelope(value: unknown, expectedAckCount: number, expectedRetryCount: number): void {
   const envelope = asRecord(value, 'ack response')
   if (envelope.success !== true) {
     throw new CloudflareQueueApiError('Cloudflare Queue acknowledgement was not successful', 502)
+  }
+  const result = asRecord(envelope.result, 'ack result')
+  const ackCount = nonNegativeInteger(result.ackCount as number, 'ack response ackCount')
+  const retryCount = nonNegativeInteger(result.retryCount as number, 'ack response retryCount')
+  if (ackCount !== expectedAckCount || retryCount !== expectedRetryCount) {
+    throw new CloudflareQueueApiError('Cloudflare Queue acknowledgement was incomplete', 502)
+  }
+  const warnings = result.warnings
+  if (warnings != null) {
+    const warningRecord = asRecord(warnings, 'ack response warnings')
+    if (Object.keys(warningRecord).length > 0) {
+      throw new CloudflareQueueApiError('Cloudflare Queue acknowledgement returned warnings', 502)
+    }
   }
 }
 
@@ -350,12 +401,13 @@ export async function ackCloudflareQueueMessages(
   if (acknowledgedLeaseIds.length === 0 && retriedLeaseIds.length === 0) {
     throw new CloudflareQueueApiError('at least one acknowledgement or retry is required', 400)
   }
-  await postJson<unknown>(resolved, 'ack', {
+  const envelope = await postJson<unknown>(resolved, 'ack', {
     acks: acknowledgedLeaseIds.map((lease_id) => ({ lease_id })),
     retries: retriedLeaseIds.map(({ leaseId, delaySeconds }) => ({
       lease_id: leaseId,
       ...(delaySeconds === undefined ? {} : { delay_seconds: delaySeconds }),
     })),
-  }, options.signal).then(parseAckEnvelope)
+  }, options.signal)
+  parseAckEnvelope(envelope, acknowledgedLeaseIds.length, retriedLeaseIds.length)
   return { acknowledgedLeaseIds, retriedLeaseIds }
 }
