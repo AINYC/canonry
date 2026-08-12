@@ -16,6 +16,8 @@ test('crawl read routes are public, bounded, and backed by typed OpenAPI schemas
     ['/api/v1/projects/{name}/technical-aeo/internal-links', 'SiteCrawlInternalLinksResponseDto'],
     ['/api/v1/projects/{name}/technical-aeo/internal-links/neighbors', 'SiteCrawlNeighborsResponseDto'],
     ['/api/v1/projects/{name}/technical-aeo/dead-links', 'SiteCrawlDeadLinksResponseDto'],
+    ['/api/v1/projects/{name}/technical-aeo/runs/{runId}/progress', 'SiteAuditRunProgressDto'],
+    ['/api/v1/projects/{name}/technical-aeo/runs/{runId}/page-health-preview', 'SiteAuditLivePageHealthDto'],
   ]
 
   for (const [path, schema] of cases) {
@@ -24,6 +26,10 @@ test('crawl read routes are public, bounded, and backed by typed OpenAPI schemas
     expect(operation?.responses?.['200']?.content?.['application/json']?.schema?.$ref)
       .toBe(`#/components/schemas/${schema}`)
   }
+
+  const livePreview = paths['/api/v1/projects/{name}/technical-aeo/runs/{runId}/page-health-preview']!.get!
+  expect(livePreview.parameters?.some((parameter) => parameter.name === 'runId')).toBe(true)
+  expect(livePreview.description).toMatch(/provisional/i)
 
   const pages = paths['/api/v1/projects/{name}/technical-aeo/crawl/pages']!.get!
   expect(pages.parameters?.some((parameter) => parameter.name === 'cursor')).toBe(true)

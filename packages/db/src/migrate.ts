@@ -3527,6 +3527,20 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
     statements: [],
     run: backfillSiteCrawlTemplateLinks,
   },
+  {
+    version: 134,
+    name: 'site-crawl-live-page-health-preview-index',
+    // The live Page Health preview is deliberately small and stable while a
+    // crawl writes more pages: completed audits below the display threshold,
+    // ordered worst-first by score and then node key. Cover the exact WHERE +
+    // ORDER BY shape so the read stops at LIMIT without sorting every current
+    // crawl row in a temporary b-tree. Its standard composite-index SQL is
+    // also PostgreSQL-compatible; the query shape has no SQLite-only syntax.
+    statements: [
+      `CREATE INDEX IF NOT EXISTS idx_site_crawl_pages_live_preview
+        ON site_crawl_pages(project_id, run_id, attempt_id, audit_state, audit_score, node_key)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

@@ -106,20 +106,6 @@ const COLOR_VALUE =
   /^(?:#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})|rgba?\([0-9.,%\s/]+\)|hsla?\([0-9.,%\s/a-z]+\))$/i
 
 /**
- * A font-family NAME: a letter/digit start then letters, digits, spaces, or
- * hyphens, capped. This is NOT a color, so it must never be validated by
- * `COLOR_VALUE`; its own guard excludes quotes, commas, and all CSS punctuation
- * (`;{}:()<`), so a client value cannot break out of the `--font-sans` string it
- * is written into, and cannot smuggle a `url()` into the Google-Fonts href.
- */
-const FONT_FAMILY = /^[a-z0-9][a-z0-9 -]{0,48}$/i
-
-function sanitizedFontFamily(theme: Record<string, string> | undefined): string | undefined {
-  const font = theme?.font?.trim()
-  return font && FONT_FAMILY.test(font) ? font : undefined
-}
-
-/**
  * The theme `mode` as a validated enum, or undefined. Drives the `data-theme`
  * attribute on the embed shell (only `light` has an override block; `dark` is
  * the default and a no-op). Presentational only.
@@ -131,8 +117,9 @@ export function embedThemeMode(theme: Record<string, string> | undefined): 'ligh
 
 /**
  * Map a host-supplied theme to safe CSS custom properties. Unknown keys and any
- * color value that is not a strict color form are dropped (CSS-injection guard);
- * a valid `font` sets `--font-sans` (quoted, with the standard fallback stack).
+ * color value that is not a strict color form are dropped (CSS-injection guard).
+ * Font overrides are intentionally unsupported: every dashboard uses the Geist
+ * files shipped with Canonry, with no third-party or host-font dependency.
  * Applied via the React `style` prop, never a `<style>` tag.
  */
 export function embedThemeStyle(theme: Record<string, string> | undefined): CSSProperties {
@@ -148,22 +135,5 @@ export function embedThemeStyle(theme: Record<string, string> | undefined): CSSP
     if (!COLOR_VALUE.test(trimmed)) continue
     style[cssVar] = trimmed
   }
-  const font = sanitizedFontFamily(theme)
-  if (font) {
-    style['--font-sans'] =
-      `"${font}", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`
-  }
   return style as CSSProperties
-}
-
-/**
- * Google-Fonts stylesheet URL for the client font family, or undefined. The
- * embed shell injects it as a `<link>` so the family actually loads (the embed
- * CSP is frame-ancestors-only, so the font fetch is permitted). The family is
- * pre-sanitized to `[A-Za-z0-9 -]`, so URL-encoding is just spaces → `+`.
- */
-export function embedThemeFontHref(theme: Record<string, string> | undefined): string | undefined {
-  const font = sanitizedFontFamily(theme)
-  if (!font) return undefined
-  return `https://fonts.googleapis.com/css2?family=${font.replace(/ /g, '+')}:wght@400;500;600;700&display=swap`
 }

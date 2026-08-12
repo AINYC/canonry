@@ -5,6 +5,10 @@ import { compile } from 'tailwindcss'
 import { expect, test } from 'vitest'
 
 const stylesPath = resolve(import.meta.dirname, '../src/styles.css')
+const mainPath = resolve(import.meta.dirname, '../src/main.tsx')
+const appPath = resolve(import.meta.dirname, '../src/App.tsx')
+const embedPath = resolve(import.meta.dirname, '../src/embed.ts')
+const viteConfigPath = resolve(import.meta.dirname, '../vite.config.ts')
 const tailwindRoot = resolve(import.meta.dirname, '../node_modules/tailwindcss')
 
 async function loadTailwindStylesheet(id: string) {
@@ -65,6 +69,23 @@ function ruleFor(css: string, selector: string) {
 
   throw new Error(`Compiled rule for ${selector} was not closed`)
 }
+
+test('self-hosts the default Geist families and never loads Google Fonts', async () => {
+  const [main, styles, app, embed, viteConfig] = await Promise.all([
+    readFile(mainPath, 'utf8'),
+    readFile(stylesPath, 'utf8'),
+    readFile(appPath, 'utf8'),
+    readFile(embedPath, 'utf8'),
+    readFile(viteConfigPath, 'utf8'),
+  ])
+
+  expect(main).toContain("import '@fontsource-variable/geist/wght.css'")
+  expect(main).toContain("import '@fontsource-variable/geist-mono/wght.css'")
+  expect([main, styles, app, embed].join('\n')).not.toMatch(/fonts\.(?:googleapis|gstatic)\.com/)
+  expect(styles).toContain('--font-sans: "Geist Variable"')
+  expect(styles).toContain('--font-mono: "Geist Mono Variable"')
+  expect(viteConfig).toContain("fileName: 'THIRD_PARTY_NOTICES.md'")
+})
 
 test('semantic color utilities compile to runtime-overridable CSS variables', async () => {
   const css = await compileAppStyles([

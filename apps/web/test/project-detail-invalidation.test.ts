@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { QueryClient } from '@tanstack/react-query'
 import { isProjectDetailQuery } from '../src/queries/mutations.js'
-import { patchProjectDashboardCache } from '../src/pages/ProjectPage.js'
+import {
+  patchProjectDashboardCache,
+} from '../src/pages/ProjectPage.js'
 import type { ApiProject } from '../src/api.js'
 
 /**

@@ -4,9 +4,11 @@ import { alias } from 'drizzle-orm/sqlite-core'
 import type { FastifyInstance } from 'fastify'
 import {
   runs,
+  projects,
   siteAuditPages,
   siteAuditSnapshots,
   siteCrawlEdges,
+  siteCrawlAttempts,
   siteCrawlFindings,
   siteCrawlGraphEdges,
   siteCrawlGraphLayouts,
@@ -25,6 +27,7 @@ import {
   SiteAuditTrendDirections,
   SiteCrawlFetchedStates,
   normalizeSiteAuditRunRequest,
+  missingDependency,
   notFound,
   operationInProgress,
   siteAuditPageFactorSchema,
@@ -39,7 +42,10 @@ import {
   validationError,
   type RunStatus,
   type SiteAuditPageDto,
+  type SiteAuditLivePageHealthDto,
   type SiteAuditPagesResponseDto,
+  type SiteAuditRunPhase,
+  type SiteAuditRunProgressDto,
   type SiteAuditScoreDto,
   type SiteAuditTrendResponseDto,
   type SiteCrawlDeadLinksResponseDto,
@@ -106,6 +112,27 @@ export interface TechnicalAeoRoutesOptions {
 
 /** Run statuses that count as a real, surfaceable site audit. */
 const SURFACEABLE_STATUSES = [RunStatuses.completed, RunStatuses.partial]
+
+function siteAuditRunPhase(
+  status: RunStatus,
+  attempt: typeof siteCrawlAttempts.$inferSelect | undefined,
+  layoutState: 'pending' | 'ready' | 'unavailable',
+): SiteAuditRunPhase {
+  switch (status) {
+    case RunStatuses.queued:
+      return 'queued'
+    case RunStatuses.running:
+      return (attempt?.pagesFetched ?? 0) > 0 ? 'checking' : 'discovering'
+    case RunStatuses.completed:
+      return attempt && layoutState === 'pending' ? 'arranging-map' : 'completed'
+    case RunStatuses.partial:
+      return attempt && layoutState === 'pending' ? 'arranging-map' : 'partial'
+    case RunStatuses.failed:
+      return 'failed'
+    case RunStatuses.cancelled:
+      return 'cancelled'
+  }
+}
 
 function emptyScore(projectName: string): SiteAuditScoreDto {
   return {
@@ -271,6 +298,28 @@ function mapCrawlPageAuditEvidence(row: typeof siteCrawlPages.$inferSelect): Pic
     factors,
     criticalDefects: parsedCriticalDefects.flatMap((result) => result.success ? [result.data] : []),
   }
+}
+
+const LIVE_PAGE_HEALTH_CANDIDATE_LIMIT = 48
+const LIVE_PAGE_HEALTH_EXAMPLE_LIMIT = 12
+
+/**
+ * The live preview intentionally projects no finding prose. Invalid or legacy
+ * evidence is skipped rather than guessed, while an explicitly inapplicable
+ * factor cannot make a page appear actionable.
+ */
+function countLivePageHealthChecks(auditFields: Record<string, unknown>): number {
+  const rawFactors = Array.isArray(auditFields.factors) ? auditFields.factors : []
+  const rawCriticalDefects = Array.isArray(auditFields.criticalDefects) ? auditFields.criticalDefects : []
+  let checks = 0
+  for (const rawFactor of rawFactors) {
+    const factor = siteCrawlAuditFactorSchema.safeParse(rawFactor)
+    if (factor.success && factor.data.applicable !== false && factor.data.status !== 'pass') checks++
+  }
+  for (const rawCriticalDefect of rawCriticalDefects) {
+    if (siteCrawlCriticalDefectSchema.safeParse(rawCriticalDefect).success) checks++
+  }
+  return checks
 }
 
 function mapCrawlEdge(row: typeof siteCrawlEdges.$inferSelect): SiteCrawlEdgeDto {
@@ -2202,6 +2251,149 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     }
   })
 
+  // GET /projects/:name/technical-aeo/runs/:runId/progress — exact stored
+  // progress only. It never polls an executor, fetches a page, or invokes a
+  // provider: onboarding can safely resume after a reload without inventing a
+  // progress percentage for an unknown final corpus.
+  app.get<{
+    Params: { name: string; runId: string }
+  }>('/projects/:name/technical-aeo/runs/:runId/progress', async (request): Promise<SiteAuditRunProgressDto> => {
+    const project = resolveProject(app.db, request.params.name)
+    const run = app.db.select().from(runs).where(and(
+      eq(runs.id, request.params.runId),
+      eq(runs.projectId, project.id),
+      eq(runs.kind, RunKinds['site-audit']),
+      notProbeRun(),
+    )).get()
+    if (!run) throw notFound('Site audit run', request.params.runId)
+
+    const attempt = app.db.select().from(siteCrawlAttempts).where(and(
+      eq(siteCrawlAttempts.projectId, project.id),
+      eq(siteCrawlAttempts.runId, run.id),
+    )).orderBy(desc(siteCrawlAttempts.attemptNumber), desc(siteCrawlAttempts.updatedAt)).limit(1).get()
+    const persistedLayout = attempt
+      ? app.db.select().from(siteCrawlGraphLayouts).where(and(
+        eq(siteCrawlGraphLayouts.projectId, project.id),
+        eq(siteCrawlGraphLayouts.runId, run.id),
+        eq(siteCrawlGraphLayouts.attemptId, attempt.id),
+      )).get()
+      : undefined
+    const layoutState = persistedLayout?.state === 'ready' || persistedLayout?.state === 'unavailable'
+      ? persistedLayout.state
+      : run.status === RunStatuses.completed || run.status === RunStatuses.partial
+        ? 'unavailable'
+        : 'pending'
+
+    return {
+      project: project.name,
+      runId: run.id,
+      status: run.status as RunStatus,
+      phase: siteAuditRunPhase(run.status as RunStatus, attempt, layoutState),
+      attempt: attempt
+        ? {
+          id: attempt.id,
+          state: attempt.state,
+          pagesDiscovered: attempt.pagesDiscovered,
+          pagesFetched: attempt.pagesFetched,
+          pagesEligible: attempt.pagesEligible,
+          pagesErrored: attempt.pagesErrored,
+          edgesDiscovered: attempt.edgesDiscovered,
+          lastUpdatedAt: attempt.updatedAt,
+          startedAt: attempt.startedAt,
+          finishedAt: attempt.finishedAt,
+          error: attempt.error,
+        }
+        : null,
+      layout: {
+        state: layoutState,
+        layoutVersion: persistedLayout?.layoutVersion ?? null,
+        failureCode: persistedLayout?.failureCode ?? null,
+        updatedAt: persistedLayout?.updatedAt ?? null,
+      },
+      error: run.error ?? attempt?.error ?? null,
+    }
+  })
+
+  // GET /projects/:name/technical-aeo/runs/:runId/page-health-preview — a
+  // small, durable preview for the active onboarding scan. This deliberately
+  // exposes neither final scorecards nor finding prose: terminal reads hand
+  // the caller back to the immutable Page Health snapshot instead.
+  app.get<{
+    Params: { name: string; runId: string }
+  }>('/projects/:name/technical-aeo/runs/:runId/page-health-preview', async (request): Promise<SiteAuditLivePageHealthDto> => (
+    app.db.transaction((tx) => {
+      const project = tx.select().from(projects).where(eq(projects.name, request.params.name)).get()
+      if (!project) throw notFound('Project', request.params.name)
+
+      const run = tx.select().from(runs).where(and(
+        eq(runs.id, request.params.runId),
+        eq(runs.projectId, project.id),
+        eq(runs.kind, RunKinds['site-audit']),
+        notProbeRun(),
+      )).get()
+      if (!run) throw notFound('Site audit run', request.params.runId)
+
+      const attempt = tx.select().from(siteCrawlAttempts).where(and(
+        eq(siteCrawlAttempts.projectId, project.id),
+        eq(siteCrawlAttempts.runId, run.id),
+      )).orderBy(desc(siteCrawlAttempts.attemptNumber), desc(siteCrawlAttempts.updatedAt)).limit(1).get()
+      const state = run.status === RunStatuses.queued
+        ? 'waiting'
+        : run.status === RunStatuses.running
+          ? 'collecting'
+          : 'terminal'
+      const base = {
+        project: project.name,
+        runId: run.id,
+        status: run.status as RunStatus,
+        state,
+        attemptId: attempt?.id ?? null,
+        updatedAt: attempt?.updatedAt ?? null,
+      } as const
+
+      if (!attempt) {
+        return { ...base, pagesAudited: 0, examples: [] }
+      }
+
+      const auditedWhere = and(
+        eq(siteCrawlPages.projectId, project.id),
+        eq(siteCrawlPages.runId, run.id),
+        eq(siteCrawlPages.attemptId, attempt.id),
+        eq(siteCrawlPages.auditState, 'success'),
+      )
+      const pagesAudited = tx.select({ value: count() }).from(siteCrawlPages).where(auditedWhere).get()?.value ?? 0
+
+      if (state !== 'collecting') {
+        return { ...base, pagesAudited, examples: [] }
+      }
+
+      const candidates = tx.select({
+        nodeKey: siteCrawlPages.nodeKey,
+        url: siteCrawlPages.url,
+        auditScore: siteCrawlPages.auditScore,
+        auditFields: siteCrawlPages.auditFields,
+      }).from(siteCrawlPages).where(and(
+        auditedWhere,
+        isNotNull(siteCrawlPages.auditScore),
+        lt(siteCrawlPages.auditScore, 70),
+      )).orderBy(asc(siteCrawlPages.auditScore), asc(siteCrawlPages.nodeKey)).limit(LIVE_PAGE_HEALTH_CANDIDATE_LIMIT).all()
+      const examples = candidates.flatMap((candidate) => {
+        if (candidate.auditScore == null) return []
+        const checksNeedingAttention = countLivePageHealthChecks(candidate.auditFields)
+        return checksNeedingAttention > 0
+          ? [{
+              nodeKey: candidate.nodeKey,
+              url: candidate.url,
+              auditScore: candidate.auditScore,
+              checksNeedingAttention,
+            }]
+          : []
+      }).slice(0, LIVE_PAGE_HEALTH_EXAMPLE_LIMIT)
+
+      return { ...base, pagesAudited, examples }
+    })
+  ))
+
   // POST /projects/:name/technical-aeo/runs — exact-identity consolidation.
   app.post<{
     Params: { name: string }
@@ -2212,6 +2404,11 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     const parsed = siteAuditRunRequestSchema.safeParse(request.body ?? {})
     if (!parsed.success) {
       throw validationError(parsed.error.issues[0]?.message ?? 'Invalid site-audit request')
+    }
+    if (!opts.onSiteAuditRequested) {
+      throw missingDependency('Site Health execution is not available on this deployment.', {
+        reason: 'no-site-audit-handler',
+      })
     }
 
     const effectiveRequest = normalizeSiteAuditRunRequest(parsed.data)
@@ -2271,7 +2468,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     })
 
     if (result.created) {
-      opts.onSiteAuditRequested?.(result.runId, project.id, {
+      opts.onSiteAuditRequested(result.runId, project.id, {
         sitemapUrl: effectiveRequest.sitemapUrl ?? undefined,
         limit: parsed.data.limit,
         maxPages: effectiveRequest.maxPages,

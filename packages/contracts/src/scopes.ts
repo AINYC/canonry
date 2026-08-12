@@ -19,6 +19,9 @@ export const READ_ONLY_SCOPE = 'read'
 /** Full access. The default `canonry init` root key carries this. */
 export const WILDCARD_SCOPE = '*'
 
+/** Grants creation of a project at the install boundary. */
+export const PROJECTS_WRITE_SCOPE = 'projects.write'
+
 /** Grants access to OpenAI Ads campaign mutations. */
 export const ADS_WRITE_SCOPE = 'ads.write'
 

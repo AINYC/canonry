@@ -157,7 +157,7 @@ test('settings route renders the Google Search Console OAuth configuration card'
 })
 
 test('setup route skips completed health checks and starts at project creation', async () => {
-  const html = await renderApp('/setup', {}, (fixture) => {
+  const html = await renderApp('/setup?experience=legacy', {}, (fixture) => {
     fixture.dashboard.projects = []
     fixture.dashboard.runs = []
   })
@@ -168,7 +168,7 @@ test('setup route skips completed health checks and starts at project creation',
 })
 
 test('setup resumes at queries when a durable project has no query basket', async () => {
-  const html = await renderApp('/setup', {}, (fixture) => {
+  const html = await renderApp('/setup?experience=legacy', {}, (fixture) => {
     fixture.dashboard.projects = [fixture.dashboard.projects[0]!]
     fixture.dashboard.projects[0]!.queryCounts.total = 0
     fixture.dashboard.projects[0]!.competitors = []
@@ -180,7 +180,7 @@ test('setup resumes at queries when a durable project has no query basket', asyn
 })
 
 test('setup blocks progress until API, worker, and provider readiness pass', async () => {
-  const html = await renderApp('/setup', { providerNeedsConfig: true }, (fixture) => {
+  const html = await renderApp('/setup?experience=legacy', { providerNeedsConfig: true }, (fixture) => {
     fixture.dashboard.projects = []
     fixture.dashboard.runs = []
   })
@@ -191,7 +191,7 @@ test('setup blocks progress until API, worker, and provider readiness pass', asy
 })
 
 test('setup treats a cancelled first run as retryable, not complete', async () => {
-  const html = await renderApp('/setup', {}, (fixture) => {
+  const html = await renderApp('/setup?experience=legacy', {}, (fixture) => {
     const project = fixture.dashboard.projects[0]!
     const cancelled = {
       ...fixture.dashboard.runs.find(run => run.projectId === project.project.id)!,
@@ -211,7 +211,7 @@ test('setup treats a cancelled first run as retryable, not complete', async () =
 })
 
 test('setup recognizes an older baseline outside the global run window', async () => {
-  const html = await renderApp('/setup', {}, (fixture) => {
+  const html = await renderApp('/setup?experience=legacy', {}, (fixture) => {
     fixture.dashboard.projects = [fixture.dashboard.projects[0]!]
     fixture.dashboard.runs = []
   })
@@ -237,7 +237,7 @@ test('default overview covers multiple projects and recent runs', async () => {
 })
 
 test('setup route renders step indicator with all step labels', async () => {
-  const html = await renderApp('/setup')
+  const html = await renderApp('/setup?experience=legacy')
 
   expect(html).toMatch(/System check/)
   expect(html).toMatch(/Create project/)

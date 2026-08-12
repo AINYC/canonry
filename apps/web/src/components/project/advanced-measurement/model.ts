@@ -15,6 +15,13 @@ export interface AdvancedMeasurementMode {
   setupAction: AdvancedMeasurementSetupAction
 }
 
+export function advancedMeasurementSetupActionLabel(action: AdvancedMeasurementSetupAction): string {
+  if (action === 'continue') return 'Continue setup'
+  if (action === 'edit') return 'Edit setup'
+  if (action === 'republish') return 'Republish setup'
+  return 'Set up advanced measurement'
+}
+
 /**
  * The active published setup chooses the landing surface. An unpublished draft
  * never replaces the existing project overview.
@@ -31,5 +38,8 @@ export function resolveAdvancedMeasurementMode(status: AdvancedMeasurementStatus
     return { surface: 'advanced-overview-v1', setupAction: 'republish' }
   }
 
-  return { surface: 'advanced-overview', setupAction: 'edit' }
+  return {
+    surface: 'advanced-overview',
+    setupAction: status.hasDraft ? 'continue' : 'edit',
+  }
 }

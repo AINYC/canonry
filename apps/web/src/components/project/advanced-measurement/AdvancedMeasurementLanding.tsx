@@ -6,7 +6,7 @@ import {
   type AdvancedMeasurementOverviewReport,
   type AdvancedMeasurementViewRequest,
 } from './AdvancedMeasurementOverview.js'
-import type { AdvancedMeasurementMode } from './model.js'
+import { advancedMeasurementSetupActionLabel, type AdvancedMeasurementMode } from './model.js'
 
 export interface AdvancedMeasurementLandingProps {
   mode: AdvancedMeasurementMode
@@ -31,25 +31,6 @@ export interface AdvancedMeasurementLandingProps {
   viewSearch?: string
 }
 
-function setupActionLabel(mode: AdvancedMeasurementMode): string {
-  if (mode.setupAction === 'continue') return 'Continue advanced setup'
-  if (mode.setupAction === 'edit') return 'Edit setup'
-  if (mode.setupAction === 'republish') return 'Republish setup'
-  return 'Set up advanced measurement'
-}
-
-/**
- * The control sat alone at the right of an empty row, so it read as a stray
- * affordance rather than the next step. Leading with it and saying what it does
- * puts the action where the eye starts and stops the row being empty.
- */
-function setupActionDetail(mode: AdvancedMeasurementMode): string {
-  if (mode.setupAction === 'continue') return 'Setup is unfinished. Pick up where you left off.'
-  if (mode.setupAction === 'edit') return 'Change which Properties and queries are measured.'
-  if (mode.setupAction === 'republish') return 'Unpublished changes are waiting to go live.'
-  return 'Measure each Property on its own queries, not just the project as a whole.'
-}
-
 export function AdvancedMeasurementLanding({
   mode,
   canEdit,
@@ -72,19 +53,7 @@ export function AdvancedMeasurementLanding({
   viewSearch,
 }: AdvancedMeasurementLandingProps) {
   if (mode.surface === 'simple-overview') {
-    return (
-      <>
-        {canEdit && onOpenSetup ? (
-          <div className="mb-5 flex flex-wrap items-center gap-3">
-            <Button type="button" variant="outline" disabled={isOpeningSetup} onClick={onOpenSetup}>
-              {isOpeningSetup ? 'Opening setup…' : setupActionLabel(mode)}
-            </Button>
-            <p className="supporting-copy m-0">{setupActionDetail(mode)}</p>
-          </div>
-        ) : null}
-        {simpleOverview}
-      </>
-    )
+    return simpleOverview
   }
 
   return (
@@ -98,9 +67,9 @@ export function AdvancedMeasurementLanding({
       {mode.setupAction === 'republish' && !report && canEdit && onOpenSetup ? (
         <div className="flex flex-wrap items-center gap-3">
           <Button type="button" size="sm" disabled={isOpeningSetup} onClick={onOpenSetup}>
-            {isOpeningSetup ? 'Opening setup…' : setupActionLabel(mode)}
+            {isOpeningSetup ? 'Opening setup…' : advancedMeasurementSetupActionLabel(mode.setupAction)}
           </Button>
-          <p className="supporting-copy m-0">{setupActionDetail(mode)}</p>
+          <p className="supporting-copy m-0">Unpublished changes are waiting to go live.</p>
         </div>
       ) : null}
       {reportState === 'loading' ? (

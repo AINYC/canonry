@@ -1,6 +1,6 @@
 {
   "name": "@canonry/canonry",
-  "version": "4.158.0",
+  "version": "4.159.0",
   "type": "module",
   "description": "Agent-first open-source AEO operating platform - track how answer engines cite your domain",
   "license": "FSL-1.1-ALv2",
@@ -33,7 +33,8 @@
     "dist/",
     "assets/",
     "package.json",
-    "README.md"
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
     "node": ">=22.14.0 <26"

@@ -64,6 +64,13 @@ notices active.
 For container deployments, set `CANONRY_DASHBOARD_SHOW_RESOURCE_LINKS=0` or
 `CANONRY_DASHBOARD_SHOW_UPDATE_NOTIFICATION=0`.
 
+### Embed fonts
+
+Canonry ignores the `font` key in `embed.theme` and `X-Canonry-Embed-Theme`.
+All dashboards use the bundled Geist fonts. They do not load Google Fonts or
+fonts from the host page. The `mode`, `bg`, `fg`, and `accent` theme keys remain
+available.
+
 ---
 
 ## Behind a Reverse Proxy

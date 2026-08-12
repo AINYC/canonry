@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -37,6 +44,8 @@ import {
   getApiV1ProjectsByNameTechnicalAeoGraphOptions,
   getApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsOptions,
   getApiV1ProjectsByNameTechnicalAeoRunsOptions,
+  getApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewOptions,
+  getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressOptions,
   getApiV1ProjectsByNameTechnicalAeoStructureInfiniteOptions,
 } from '@ainyc/canonry-api-client/react-query'
 
@@ -55,6 +64,7 @@ import { displayPagePath, siteHostFromUrl } from './site-health-paths.js'
 import { PageAuditEvidence } from './PageAuditEvidence.js'
 import { TechnicalAeoSection } from './TechnicalAeoSection.js'
 import { WriteButton } from '../shared/AccessControls.js'
+import { OnboardingProgress } from '../shared/OnboardingProgress.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { Button } from '../ui/button.js'
@@ -66,7 +76,7 @@ type SiteHealthView = 'map' | 'inventory' | 'technical'
 const SITE_HEALTH_VIEWS = [
   { id: 'map', label: 'Map' },
   { id: 'inventory', label: 'Pages' },
-  { id: 'technical', label: 'Technical checks' },
+  { id: 'technical', label: 'Page health' },
 ] as const satisfies ReadonlyArray<{ id: SiteHealthView; label: string }>
 
 const SITE_HEALTH_VIEW_DESCRIPTIONS: Record<SiteHealthView, string> = {
@@ -131,6 +141,8 @@ const NEIGHBOR_LIMIT = 100
 const DEAD_LINK_LIMIT = 50
 const GRAPH_NODE_LIMIT = SITE_CRAWL_GRAPH_MAX_NODES
 const GRAPH_EDGE_LIMIT = SITE_CRAWL_GRAPH_MAX_EDGES
+const ONBOARDING_CONTINUATION_DELAY_MS = 20_000
+const LIVE_PAGE_HEALTH_SLOT_COUNT = 3
 
 const numberFormatter = new Intl.NumberFormat()
 const scanDateFormatter = new Intl.DateTimeFormat(undefined, {
@@ -258,9 +270,12 @@ function movedSiteHosts(requestedRootUrl: string | null, effectiveRootUrl: strin
 } | null {
   if (!requestedRootUrl || !effectiveRootUrl) return null
   try {
-    const requested = new URL(requestedRootUrl).host
-    const effective = new URL(effectiveRootUrl).host
-    return requested !== effective ? { requested, effective } : null
+    const requestedUrl = new URL(requestedRootUrl)
+    const effectiveUrl = new URL(effectiveRootUrl)
+    const identity = (url: URL) => url.hostname.toLowerCase().replace(/\.$/, '').replace(/^www\./, '')
+    return identity(requestedUrl) !== identity(effectiveUrl)
+      ? { requested: requestedUrl.host, effective: effectiveUrl.host }
+      : null
   } catch {
     return null
   }
@@ -697,7 +712,7 @@ function PageInspector({
         <div className="mt-5">
           {isLoading ? (
           <div className="flex items-center gap-2 py-6 text-sm text-secondary">
-            <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+            <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
             Loading page links...
           </div>
         ) : error ? (
@@ -858,7 +873,7 @@ function InventoryTable({
       {hasNextPage && (
         <div className="flex justify-center border-x border-b border-default px-4 py-3">
           <Button variant="secondary" size="sm" disabled={isFetchingNextPage} onClick={onLoadMore}>
-            {isFetchingNextPage && <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />}
+            {isFetchingNextPage && <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />}
             {isFetchingNextPage ? 'Loading more pages' : 'Load more pages'}
           </Button>
         </div>
@@ -984,7 +999,7 @@ function SiteSectionChildren({
   if (structureQuery.isLoading) {
     return (
       <div className="flex items-center gap-2 px-3 py-4 text-sm text-secondary" role="status">
-        <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> Loading sections...
+        <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" /> Loading sections...
       </div>
     )
   }
@@ -1034,7 +1049,7 @@ function GraphLoadingState() {
       className="flex min-h-[420px] items-center justify-center rounded-lg border border-default bg-surface-inset px-6 text-center lg:min-h-[520px]"
     >
       <div className="max-w-sm">
-        <LoaderCircle className="mx-auto size-5 animate-spin text-muted" aria-hidden="true" />
+        <LoaderCircle className="mx-auto size-5 motion-safe:animate-spin text-muted" aria-hidden="true" />
         <p className="mt-3 text-sm font-medium text-heading">Preparing the interactive site map</p>
         <p className="mt-1 text-sm text-secondary">Page and link data is ready for the graph renderer.</p>
       </div>
@@ -1042,10 +1057,433 @@ function GraphLoadingState() {
   )
 }
 
-export function SiteHealthSection({ projectName, projectId }: { projectName: string; projectId: string }) {
+type SiteAuditProgressSnapshot = {
+  phase: 'queued' | 'discovering' | 'checking' | 'arranging-map' | 'completed' | 'partial' | 'failed' | 'cancelled'
+  attempt: {
+    pagesDiscovered: number
+    pagesFetched: number
+    edgesDiscovered: number
+    pagesErrored: number
+    error: string | null
+  } | null
+  error: string | null
+}
+
+function scanPhaseCopy(phase: SiteAuditProgressSnapshot['phase'] | 'running' | 'queued' | null | undefined): string {
+  if (phase === 'discovering') return 'Discovering pages'
+  if (phase === 'checking') return 'Checking pages'
+  if (phase === 'arranging-map') return 'Arranging map'
+  if (phase === 'queued') return 'Waiting to start'
+  return 'Preparing scan'
+}
+
+function shouldPollSiteAuditProgress(phase: SiteAuditProgressSnapshot['phase'] | undefined): boolean {
+  return phase !== 'completed'
+    && phase !== 'partial'
+    && phase !== 'failed'
+    && phase !== 'cancelled'
+}
+
+function isActiveSiteAuditPhase(phase: SiteAuditProgressSnapshot['phase'] | undefined): boolean {
+  return phase === 'queued'
+    || phase === 'discovering'
+    || phase === 'checking'
+    || phase === 'arranging-map'
+}
+
+function isTerminalSiteAuditPhase(phase: SiteAuditProgressSnapshot['phase'] | undefined): boolean {
+  return phase === 'completed'
+    || phase === 'partial'
+    || phase === 'failed'
+    || phase === 'cancelled'
+}
+
+function queryErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null
+  const candidate = error as { code?: unknown; error?: unknown }
+  if (typeof candidate.code === 'string') return candidate.code
+  if (candidate.error && typeof candidate.error === 'object') {
+    const nested = candidate.error as { code?: unknown }
+    return typeof nested.code === 'string' ? nested.code : null
+  }
+  return null
+}
+
+function onboardingContinuationDeadline(createdAt: string | undefined): number | null {
+  if (!createdAt) return null
+  const createdAtMs = Date.parse(createdAt)
+  if (!Number.isFinite(createdAtMs) || createdAtMs > Date.now()) return null
+  return createdAtMs + ONBOARDING_CONTINUATION_DELAY_MS
+}
+
+/**
+ * This is deliberately keyed to the server-persisted run timestamp. A reload
+ * resumes the same wait, while a replacement run starts with its own window.
+ */
+function useOnboardingContinuationThreshold({
+  active,
+  runId,
+  createdAt,
+}: {
+  active: boolean
+  runId: string | null
+  createdAt: string | undefined
+}): boolean {
+  const deadline = onboardingContinuationDeadline(createdAt)
+  const [elapsedForRun, setElapsedForRun] = useState<{ runId: string; deadline: number } | null>(null)
+
+  useEffect(() => {
+    if (!active || !runId || deadline == null) {
+      setElapsedForRun(null)
+      return
+    }
+
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      setElapsedForRun({ runId, deadline })
+      return
+    }
+
+    setElapsedForRun(null)
+    const timeoutId = window.setTimeout(() => setElapsedForRun({ runId, deadline }), remaining)
+    return () => window.clearTimeout(timeoutId)
+  }, [active, deadline, runId])
+
+  return active
+    && runId != null
+    && deadline != null
+    && (Date.now() >= deadline || (elapsedForRun?.runId === runId && elapsedForRun.deadline === deadline))
+}
+
+function OnboardingContinuationActions({
+  onContinueOnboarding,
+  onSkipOnboarding,
+}: {
+  onContinueOnboarding?: () => void
+  onSkipOnboarding?: () => void
+}) {
+  return (
+    <section aria-labelledby="site-health-continuation-heading" className="mt-5 flex flex-col gap-3 border-t border-default pt-5 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h3 id="site-health-continuation-heading" className="text-base font-semibold text-heading">Continue while Site Health finishes</h3>
+        <p className="mt-1 text-sm text-secondary">Canonry will finish this scan locally. Saved results will appear in Site Health.</p>
+      </div>
+      <div className="flex shrink-0 flex-wrap gap-2">
+        <Button type="button" onClick={onContinueOnboarding}>Set up AI Visibility</Button>
+        <Button type="button" variant="secondary" onClick={onSkipOnboarding}>Skip for now</Button>
+      </div>
+    </section>
+  )
+}
+
+function TransientSiteHealthPanel({
+  view,
+  tabbed = true,
+  children,
+}: {
+  view: Exclude<SiteHealthView, 'technical'>
+  tabbed?: boolean
+  children: ReactNode
+}) {
+  return (
+    <div
+      id={tabbed ? `site-health-${view}-panel` : undefined}
+      role={tabbed ? 'tabpanel' : undefined}
+      aria-labelledby={tabbed ? `site-health-${view}-tab` : undefined}
+      className="min-w-0"
+    >
+      {children}
+    </div>
+  )
+}
+
+function ActiveScanState({
+  status,
+  progress,
+  progressError,
+  onRetryProgress,
+  pageHealthDestination = false,
+  livePageHealthPreview,
+  livePageHealthError = false,
+  livePageHealthRunId = null,
+  continuation,
+}: {
+  status: SiteAuditProgressSnapshot['phase'] | 'running'
+  progress?: SiteAuditProgressSnapshot | null
+  progressError?: boolean
+  onRetryProgress?: () => void
+  pageHealthDestination?: boolean
+  livePageHealthPreview?: LivePageHealthPreviewView | null
+  livePageHealthError?: boolean
+  livePageHealthRunId?: string | null
+  continuation?: ReactNode
+}) {
+  const attempt = progress?.attempt ?? null
+  const phase = progress?.phase ?? status
+  const arrangingMap = phase === 'arranging-map'
+
+  return (
+    <section
+      aria-label="Current scan progress"
+      className="rounded-lg border border-caution bg-caution-soft px-5 py-6"
+    >
+      <h2 className="min-h-6 text-base font-semibold text-heading">
+        {arrangingMap && pageHealthDestination ? 'Preparing page health' : arrangingMap ? 'Preparing site map' : 'Scanning site'}
+      </h2>
+      <p aria-atomic="true" aria-label="Current scan progress" aria-live="polite" role="status" className="mt-1 min-h-[4.5rem] text-sm text-secondary sm:min-h-10">
+        {pageHealthDestination
+          ? arrangingMap
+            ? 'Finalizing page health. The scan is complete and its findings are being published.'
+            : `${scanPhaseCopy(phase)}. Page health appears after the scan finishes.`
+          : arrangingMap
+            ? 'Arranging map. The scan is complete and its map is being published.'
+            : `${scanPhaseCopy(phase)}. The map appears after the scan finishes.`}
+      </p>
+      <dl aria-label="Live scan counters" className="mt-5 grid grid-cols-2 divide-x divide-y divide-default rounded-lg border border-default bg-surface-subtle sm:grid-cols-4 sm:divide-y-0">
+          <div className="px-4 py-3">
+            <dt className="text-sm text-secondary">Pages found</dt>
+            <dd className="mt-1 font-mono text-lg font-semibold tabular-nums text-heading">{attempt ? metricValue(attempt.pagesDiscovered) : '—'}</dd>
+          </div>
+          <div className="px-4 py-3">
+            <dt className="text-sm text-secondary">Pages checked</dt>
+            <dd className="mt-1 font-mono text-lg font-semibold tabular-nums text-heading">{attempt ? metricValue(attempt.pagesFetched) : '—'}</dd>
+          </div>
+          <div className="px-4 py-3">
+            <dt className="text-sm text-secondary">Links found</dt>
+            <dd className="mt-1 font-mono text-lg font-semibold tabular-nums text-heading">{attempt ? metricValue(attempt.edgesDiscovered) : '—'}</dd>
+          </div>
+          <div className="px-4 py-3">
+            <dt className="text-sm text-secondary">Pages failed</dt>
+            <dd className="mt-1 font-mono text-lg font-semibold tabular-nums text-heading">{attempt ? metricValue(attempt.pagesErrored) : '—'}</dd>
+          </div>
+        </dl>
+      {progressError && (
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-secondary">
+          <span>{arrangingMap
+            ? pageHealthDestination ? 'Page health publishing status could not load.' : 'Map publishing status could not load.'
+            : 'Live scan counts could not load. The scan is still running.'}</span>
+          {onRetryProgress && <Button type="button" variant="secondary" size="sm" onClick={onRetryProgress}>Retry progress</Button>}
+        </div>
+      )}
+      {pageHealthDestination ? (
+        <LivePageHealthFindings
+          runId={livePageHealthRunId}
+          preview={livePageHealthPreview}
+          error={livePageHealthError}
+        />
+      ) : null}
+      {continuation}
+    </section>
+  )
+}
+
+export type LivePageHealthExampleView = {
+  nodeKey: string
+  url: string
+  auditScore: number | null
+  checksNeedingAttention: number
+}
+
+export type LivePageHealthPreviewView = {
+  state: 'waiting' | 'collecting' | 'terminal'
+  pagesAudited: number
+  examples: readonly LivePageHealthExampleView[]
+}
+
+type LivePageHealthSlots = ReadonlyArray<LivePageHealthExampleView | null>
+
+function emptyLivePageHealthSlots(): LivePageHealthSlots {
+  return Array.from({ length: LIVE_PAGE_HEALTH_SLOT_COUNT }, () => null)
+}
+
+function sameLivePageHealthExample(
+  left: LivePageHealthExampleView | null,
+  right: LivePageHealthExampleView | null,
+): boolean {
+  return left === right || (left != null
+    && right != null
+    && left.nodeKey === right.nodeKey
+    && left.url === right.url
+    && left.auditScore === right.auditScore
+    && left.checksNeedingAttention === right.checksNeedingAttention)
+}
+
+function sameLivePageHealthSlots(left: LivePageHealthSlots, right: LivePageHealthSlots): boolean {
+  return left.length === right.length && left.every((slot, index) => sameLivePageHealthExample(slot, right[index] ?? null))
+}
+
+/**
+ * An in-progress audit only returns a small, changeable sample. Once an
+ * example has occupied a row, keep it there for this run. That avoids visual
+ * churn when a later poll sorts the sample differently or no longer includes
+ * a previously seen page.
+ */
+function latchLivePageHealthExamples(
+  current: LivePageHealthSlots,
+  examples: readonly LivePageHealthExampleView[],
+): LivePageHealthSlots {
+  const next = [...current]
+
+  for (const example of examples) {
+    const existingIndex = next.findIndex((slot) => slot?.nodeKey === example.nodeKey)
+    if (existingIndex >= 0) {
+      next[existingIndex] = example
+      continue
+    }
+
+    const emptyIndex = next.findIndex((slot) => slot == null)
+    if (emptyIndex < 0) break
+    next[emptyIndex] = example
+  }
+
+  return next
+}
+
+/**
+ * Provisional examples are intentionally not a mini Page Health table. The
+ * fixed three-row sample is enough to establish that useful evidence is
+ * arriving, while keeping the scan panel from moving on every three-second
+ * poll. A different run starts with a clean set of slots.
+ */
+export function LivePageHealthFindings({
+  runId,
+  preview,
+  error = false,
+}: {
+  runId: string | null
+  preview?: LivePageHealthPreviewView | null
+  error?: boolean
+}) {
+  const [latched, setLatched] = useState<{
+    runId: string | null
+    slots: LivePageHealthSlots
+  }>(() => ({ runId, slots: emptyLivePageHealthSlots() }))
+  // A terminal preview is the handoff to immutable Page Health. Hide the
+  // sample in the same render that terminal state arrives, rather than
+  // waiting for scan history or progress to refetch.
+  const terminal = preview?.state === 'terminal'
+  const slots = terminal || latched.runId !== runId ? emptyLivePageHealthSlots() : latched.slots
+
+  useEffect(() => {
+    setLatched((current) => {
+      const baseline = current.runId === runId ? current.slots : emptyLivePageHealthSlots()
+      const nextSlots = terminal
+        ? emptyLivePageHealthSlots()
+        : latchLivePageHealthExamples(baseline, preview?.examples ?? [])
+      if (current.runId === runId && sameLivePageHealthSlots(current.slots, nextSlots)) return current
+      return { runId, slots: nextSlots }
+    })
+  }, [preview?.examples, runId, terminal])
+
+  const pagesAudited = preview?.pagesAudited ?? 0
+  const hasExamples = slots.some((slot) => slot != null)
+
+  return (
+    <section aria-labelledby="live-page-health-findings-heading" className="mt-5 border-t border-default pt-5">
+      <h3 id="live-page-health-findings-heading" className="text-base font-semibold text-heading">Findings so far</h3>
+      <div className="relative mt-1 min-h-[5.25rem] text-sm text-secondary sm:min-h-[3.5rem]">
+        <p>Based on {numberFormatter.format(pagesAudited)} audited pages. Results may change until the scan finishes.</p>
+        <p className={cn('absolute bottom-0 text-caution', error ? 'visible' : 'invisible')}>
+          Live findings paused. The scan is still running.
+        </p>
+      </div>
+      <ul
+        aria-label="Live Page Health findings"
+        className="mt-3 grid h-[10.5rem] grid-rows-3 divide-y divide-default overflow-hidden rounded-lg border border-default bg-surface-subtle"
+      >
+        {slots.map((example, index) => {
+          const placeholder = example == null && index === 0 && !hasExamples
+          const emptySlot = example == null && !placeholder
+
+          return (
+            <li
+              key={`live-page-health-slot-${index}`}
+              aria-hidden={emptySlot || undefined}
+              data-testid="live-page-health-slot"
+              className="grid h-14 min-h-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-4 sm:gap-4"
+            >
+              {example ? (
+                <>
+                  <span className="min-w-0 truncate text-sm font-medium text-strong" title={example.url}>{example.url}</span>
+                  <span className="shrink-0 whitespace-nowrap text-sm tabular-nums text-secondary">
+                    <span aria-hidden="true" className="sm:hidden">{numberFormatter.format(example.checksNeedingAttention)} checks</span>
+                    <span className="hidden sm:inline">{numberFormatter.format(example.checksNeedingAttention)} checks need attention</span>
+                    <span className="sr-only sm:hidden">{numberFormatter.format(example.checksNeedingAttention)} checks need attention</span>
+                  </span>
+                </>
+              ) : placeholder ? (
+                <span className="text-sm text-secondary">Checks that need attention will appear here.</span>
+              ) : null}
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
+}
+
+function TerminalScanRecoveryState({
+  phase,
+  progress,
+  onRunAgain,
+  pageHealthDestination = false,
+}: {
+  phase: 'failed' | 'cancelled'
+  progress?: SiteAuditProgressSnapshot | null
+  onRunAgain: () => void
+  pageHealthDestination?: boolean
+}) {
+  const cancelled = phase === 'cancelled'
+  const error = progress?.error ?? progress?.attempt?.error
+
+  return (
+    <section
+      aria-label="Site scan recovery"
+      role="alert"
+      className="rounded-lg border border-negative bg-negative-soft px-5 py-6"
+    >
+      <h2 className="text-base font-semibold text-negative">{cancelled ? 'Scan cancelled' : 'Scan failed'}</h2>
+      <p className="mt-1 text-sm text-secondary">
+        {pageHealthDestination
+          ? cancelled
+            ? 'The scan was cancelled before Canonry could publish page health results.'
+            : 'The scan did not complete, so page health results are unavailable.'
+          : cancelled
+            ? 'The scan was cancelled before Canonry could publish a site map.'
+            : 'The scan did not complete, so there is no site map for this run.'}
+      </p>
+      {error && <p className="mt-3 text-sm text-negative">{error}</p>}
+      <Button type="button" className="mt-4" onClick={onRunAgain}>Run scan again</Button>
+    </section>
+  )
+}
+
+export function SiteHealthSection({
+  projectName,
+  projectId,
+  initialRunId,
+  onReleaseInitialRun,
+  showOnboardingActions = false,
+  onContinueOnboarding,
+  onSkipOnboarding,
+}: {
+  projectName: string
+  projectId: string
+  /** The durable route handoff wins over a derived latest scan after reload. */
+  initialRunId?: string
+  /** Clears an onboarding handoff from durable route state before a replacement scan. */
+  onReleaseInitialRun?: () => void
+  /** Reserved for the explicit post-scan onboarding flow. */
+  showOnboardingActions?: boolean
+  /** Continues the explicit onboarding flow. */
+  onContinueOnboarding?: () => void
+  /** Leaves the explicit onboarding flow. */
+  onSkipOnboarding?: () => void
+}) {
   const [view, setView] = useState<SiteHealthView>('map')
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(() => initialRunId ?? null)
+  const previousInitialRunId = useRef(initialRunId)
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
   const [checkDeadLinks, setCheckDeadLinks] = useState(false)
   const [inventoryFilter, setInventoryFilter] = useState<InventoryFilterId>('all')
@@ -1054,10 +1492,19 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
    * page, so drawing them buries the structure this view exists to show. The
    * server sends both kinds tagged, so this only changes what is DRAWN: node
    * positions were computed without template links and never move.
-   */
+  */
   const [showTemplateLinks, setShowTemplateLinks] = useState(false)
   const embedded = isEmbed()
+  const explicitOnboarding = showOnboardingActions && !embedded
   const runMutation = useTriggerSiteAudit()
+
+  useEffect(() => {
+    const previous = previousInitialRunId.current
+    if (previous === initialRunId) return
+    previousInitialRunId.current = initialRunId
+    setSelectedRunId((current) => initialRunId ?? (current === previous ? null : current))
+    setSelectedNodeKey(null)
+  }, [initialRunId])
 
   // The Site Health scan history, not the generic run list: it already excludes
   // probes and says which scans kept a crawl.
@@ -1076,7 +1523,79 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
   const activeAudit = auditScans.find((scan) => scan.status === 'queued' || scan.status === 'running')
   const latestTerminalAudit = auditScans
     .find((scan) => scan.status === 'completed' || scan.status === 'partial')
-  const requestedRunId = selectedRunId ?? latestTerminalAudit?.runId ?? null
+  const mutationRunId = explicitOnboarding ? runMutation.data?.runId ?? null : null
+  // During explicit setup, a replacement scan remains the current work through
+  // every status transition. Its own terminal evidence or recovery must replace
+  // the prior result; merely appearing in scan history does not release it.
+  const requestedRunId = selectedRunId ?? (explicitOnboarding
+    ? mutationRunId ?? activeAudit?.runId ?? latestTerminalAudit?.runId
+    : latestTerminalAudit?.runId ?? activeAudit?.runId) ?? null
+  // Scan history is eventually consistent. Keep its active state only until
+  // the exact progress read for this selected run can say otherwise.
+  const activeRequestedRun = activeAudit?.runId === requestedRunId ? activeAudit : null
+  const requestedAuditRun = requestedRunId
+    ? auditScans.find((scan) => scan.runId === requestedRunId)
+    : undefined
+  const isInitialRunSelection = Boolean(initialRunId && requestedRunId === initialRunId)
+  const isMutationRunSelection = Boolean(mutationRunId && requestedRunId === mutationRunId)
+  const mutationNeedsExactProgress = isMutationRunSelection && !requestedAuditRun
+  const exactProgressRunId = activeRequestedRun?.runId
+    ?? (isInitialRunSelection || mutationNeedsExactProgress ? requestedRunId : null)
+
+  const activeProgressQuery = useQuery({
+    ...getApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressOptions({
+      client: heyClient,
+      path: { name: projectName, runId: exactProgressRunId ?? '' },
+    }),
+    enabled: Boolean(exactProgressRunId),
+    refetchInterval: (query) => shouldPollSiteAuditProgress(query.state.data?.phase) ? 3_000 : false,
+  })
+  useEffect(() => {
+    if (!isInitialRunSelection || !activeProgressQuery.isError) return
+    if (queryErrorCode(activeProgressQuery.error) !== 'NOT_FOUND') return
+    setSelectedRunId(null)
+    setSelectedNodeKey(null)
+    onReleaseInitialRun?.()
+  }, [activeProgressQuery.error, activeProgressQuery.isError, isInitialRunSelection, onReleaseInitialRun])
+  const exactProgressActive = isActiveSiteAuditPhase(activeProgressQuery.data?.phase)
+  const exactProgressTerminal = isTerminalSiteAuditPhase(activeProgressQuery.data?.phase)
+  // A terminal exact run is authoritative over stale `running` scan history.
+  // Without this, the active-history guard can withhold a persisted crawl and
+  // leave onboarding on provisional progress after the scan has finished.
+  const activeRunWithoutPublishedMap = exactProgressTerminal ? null : activeRequestedRun
+  const exactProgressPending = Boolean(exactProgressRunId && activeProgressQuery.isPending)
+  const exactProgressNeedsAuthority = Boolean(
+    (isInitialRunSelection || isMutationRunSelection) && !requestedAuditRun,
+  )
+  const exactProgressUnavailable = Boolean(exactProgressNeedsAuthority && activeProgressQuery.isError)
+  const livePageHealthPreviewEnabled = Boolean(
+    explicitOnboarding
+    && exactProgressRunId
+    && (activeRunWithoutPublishedMap?.runId === exactProgressRunId || exactProgressActive),
+  )
+  const livePageHealthPreviewQuery = useQuery({
+    ...getApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewOptions({
+      client: heyClient,
+      path: { name: projectName, runId: exactProgressRunId ?? '' },
+    }),
+    // This is onboarding-only evidence. Normal Site Health retains its
+    // terminal, immutable result model and never fetches this live sample.
+    enabled: livePageHealthPreviewEnabled,
+    refetchInterval: (query) => query.state.data?.state === 'terminal' ? false : 3_000,
+    refetchIntervalInBackground: true,
+  })
+  const deferTerminalEvidence = Boolean(
+    activeRunWithoutPublishedMap
+    || exactProgressActive
+    || exactProgressPending
+    || exactProgressUnavailable,
+  )
+  const recoveryPhase = activeProgressQuery.data?.phase === 'failed' || activeProgressQuery.data?.phase === 'cancelled'
+    ? activeProgressQuery.data.phase
+    : (isInitialRunSelection || isMutationRunSelection)
+      && (requestedAuditRun?.status === 'failed' || requestedAuditRun?.status === 'cancelled')
+      ? requestedAuditRun.status
+      : null
 
   const crawlQuery = useQuery({
     ...getApiV1ProjectsByNameTechnicalAeoCrawlOptions({
@@ -1084,11 +1603,14 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
       path: { name: projectName },
       ...(requestedRunId ? { query: { runId: requestedRunId } } : {}),
     }),
-    refetchInterval: !selectedRunId && activeAudit ? 3_000 : false,
+    // The crawl endpoint deliberately exposes terminal persisted crawls only.
+    // Exact progress is the authoritative read while this run is still active.
+    enabled: !deferTerminalEvidence,
   })
   const crawl = crawlQuery.data
   const resolvedRunId = requestedRunId ?? crawl?.runId ?? null
   const detailsEnabled = Boolean(resolvedRunId && crawl?.hasCrawlData && crawl.detailsAvailable)
+  const siteExplorerEnabled = detailsEnabled && !explicitOnboarding
   const scopedRunQuery = resolvedRunId ? { runId: resolvedRunId } : {}
 
   const graphQuery = useQuery({
@@ -1097,7 +1619,9 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
       path: { name: projectName },
       query: { ...scopedRunQuery, maxNodes: GRAPH_NODE_LIMIT, maxEdges: GRAPH_EDGE_LIMIT },
     }),
-    enabled: detailsEnabled,
+    // Layout publication is terminal. Fetch this large payload once after the
+    // exact progress route leaves `arranging-map`, never while it is pending.
+    enabled: siteExplorerEnabled && !deferTerminalEvidence,
   })
   // The chip narrows on the server, so `total` and the cursor stay truthful
   // instead of describing an unfiltered list.
@@ -1115,7 +1639,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
   }
   const pagesQuery = useInfiniteQuery({
     ...getApiV1ProjectsByNameTechnicalAeoCrawlPagesInfiniteOptions(pagesInput),
-    enabled: detailsEnabled,
+    enabled: siteExplorerEnabled,
     initialPageParam: pagesInput,
     getNextPageParam: (lastPage) => lastPage.nextCursor
       ? {
@@ -1124,7 +1648,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
         }
       : undefined,
   })
-  const deadLinkDetailsEnabled = detailsEnabled
+  const deadLinkDetailsEnabled = siteExplorerEnabled
     && (crawl?.deadLinks.state === 'complete' || crawl?.deadLinks.state === 'partial')
   const deadLinksQuery = useQuery({
     ...getApiV1ProjectsByNameTechnicalAeoDeadLinksOptions({
@@ -1241,7 +1765,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
         limit: NEIGHBOR_LIMIT,
       },
     }),
-    enabled: detailsEnabled && Boolean(effectiveSelectedNodeKey),
+    enabled: siteExplorerEnabled && Boolean(effectiveSelectedNodeKey),
   })
   const pageAuditQuery = useQuery({
     ...getApiV1ProjectsByNameTechnicalAeoCrawlPagesAuditOptions({
@@ -1252,20 +1776,28 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
         nodeKey: effectiveSelectedNodeKey ?? undefined,
       },
     }),
-    enabled: detailsEnabled && Boolean(effectiveSelectedNodeKey),
+    enabled: siteExplorerEnabled && Boolean(effectiveSelectedNodeKey),
   })
 
   // The server already orders scans newest first, so the dropdown does not
   // keep a second ordering of the same list.
-  const selectableScans = useMemo(
-    () => auditScans.filter((scan) => scan.status === 'completed' || scan.status === 'partial'),
-    [auditScans],
-  )
+  const selectableScans = useMemo(() => {
+    const terminalScans = auditScans
+      .filter((scan) => scan.status === 'completed' || scan.status === 'partial')
+    const selectedScan = selectedRunId
+      ? auditScans.find((scan) => scan.runId === selectedRunId)
+      : undefined
+    return selectedScan && !terminalScans.some((scan) => scan.runId === selectedScan.runId)
+      ? [selectedScan, ...terminalScans]
+      : terminalScans
+  }, [auditScans, selectedRunId])
   const newestRunStatus = auditScans[0]?.status ?? null
-  const selectedRun = resolvedRunId ? auditScans.find((scan) => scan.runId === resolvedRunId) : undefined
-  const status = !selectedRunId && activeAudit
-    ? activeAudit.status
-    : crawl?.runStatus ?? selectedRun?.status ?? null
+  const selectedRun = resolvedRunId ? requestedAuditRun : undefined
+  const status = activeRunWithoutPublishedMap
+    ? activeRunWithoutPublishedMap.status
+    : exactProgressActive
+      ? activeProgressQuery.data?.status ?? null
+    : recoveryPhase ?? crawl?.runStatus ?? selectedRun?.status ?? null
   const statusLabel = status === 'running'
     ? 'Scan running'
     : status === 'queued'
@@ -1276,10 +1808,12 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
           ? 'Complete'
           : status === 'failed'
             ? 'Scan failed'
+            : status === 'cancelled'
+              ? 'Scan cancelled'
             : 'No scan'
   const deadLinks = deadLinksQuery.data
   const deadLinkStatus = deadLinkLabel(
-    deadLinks?.state ?? crawl?.deadLinks.state ?? 'unavailable',
+    deadLinks?.state ?? crawl?.deadLinks?.state ?? 'unavailable',
     deadLinks && 'found' in deadLinks ? deadLinks.found : crawl?.deadLinks && 'found' in crawl.deadLinks ? crawl.deadLinks.found : undefined,
   )
   const movedSite = movedSiteHosts(crawl?.requestedRootUrl ?? null, crawl?.rootUrl ?? null)
@@ -1302,17 +1836,42 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
       ?? null,
     [graphPages, rootNodeKey, rootPageQuery.data],
   )
-  const scanBusy = runMutation.isPending || Boolean(activeAudit)
-
+  const scanBusy = runMutation.isPending || Boolean(activeRunWithoutPublishedMap) || exactProgressActive || exactProgressPending
+  const showProgressState = deferTerminalEvidence || (explicitOnboarding && runMutation.isPending)
+  const requestedRunIsActive = requestedAuditRun?.status === 'queued' || requestedAuditRun?.status === 'running'
+  const hasOnboardingContinuationActions = Boolean(onContinueOnboarding && onSkipOnboarding)
+  const showOnboardingContinuation = useOnboardingContinuationThreshold({
+    active: explicitOnboarding
+      && showProgressState
+      && hasOnboardingContinuationActions
+      && Boolean(requestedRunIsActive || (exactProgressRunId === requestedRunId && exactProgressActive)),
+    runId: requestedRunId,
+    createdAt: requestedAuditRun?.createdAt,
+  })
+  const siteAuditReady = Boolean(crawl?.hasCrawlData && !showProgressState && !recoveryPhase)
+  // Explicit onboarding has one task per state. A usable terminal crawl opens
+  // Page health immediately; active and recovery states stay on the scan view.
+  const currentView: SiteHealthView = explicitOnboarding
+    ? siteAuditReady ? 'technical' : 'map'
+    : view
+  const transientView = currentView === 'technical' ? 'map' : currentView
   const selectRun = (runId: string) => {
     setSelectedRunId(runId || null)
     setSelectedNodeKey(null)
   }
-  const startScan = () => runMutation.mutate({
-    projectName,
-    projectId,
-    body: { checkDeadLinks },
-  })
+  const startScan = () => {
+    // Release any pinned scan before dispatching its replacement.
+    // Otherwise the durable URL handoff keeps the old run selected while the
+    // newly queued scan progresses invisibly in the background.
+    setSelectedRunId(null)
+    setSelectedNodeKey(null)
+    if (initialRunId) onReleaseInitialRun?.()
+    runMutation.mutate({
+      projectName,
+      projectId,
+      body: { checkDeadLinks: explicitOnboarding || checkDeadLinks },
+    })
+  }
   const selectSection = (path: string) => {
     const matchingPage = graphPages.find((page) => page.path === path || page.path.startsWith(`${path}/`))
     if (matchingPage) setSelectedNodeKey(matchingPage.nodeKey)
@@ -1338,7 +1897,8 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
 
   return (
     <div className="space-y-5">
-      <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
+      {explicitOnboarding ? <OnboardingProgress current={siteAuditReady ? 'fixes' : 'site'} /> : null}
+      {!explicitOnboarding && <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
         <div>
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-xl font-semibold tracking-tight text-heading">Site Health</h2>
@@ -1347,7 +1907,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
               <span className="text-xs text-muted">{formatScanDate(selectedRun.finishedAt ?? selectedRun.startedAt)}</span>
             )}
           </div>
-          <p className="mt-1 text-sm text-secondary">{SITE_HEALTH_VIEW_DESCRIPTIONS[view]}</p>
+          <p className="mt-1 text-sm text-secondary">{SITE_HEALTH_VIEW_DESCRIPTIONS[currentView]}</p>
         </div>
 
         <div className="flex flex-wrap items-start gap-2">
@@ -1391,15 +1951,15 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
                 </div>
               </details>
               <WriteButton onClick={startScan} disabled={scanBusy}>
-                {scanBusy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Play className="size-4" aria-hidden="true" />}
+                {scanBusy ? <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" /> : <Play className="size-4" aria-hidden="true" />}
                 {activeAudit?.status === 'running' ? 'Scan running' : activeAudit?.status === 'queued' ? 'Scan queued' : 'Run scan'}
               </WriteButton>
             </div>
           )}
         </div>
-      </header>
+      </header>}
 
-      {crawl?.hasCrawlData && view !== 'technical' && (
+      {crawl?.hasCrawlData && currentView !== 'technical' && (
         <div className="grid grid-cols-2 divide-x divide-y divide-default rounded-lg border border-default bg-surface-subtle sm:grid-cols-4 sm:divide-y-0">
           <div className="px-4 py-3">
             <div className="flex items-center gap-1 text-xs text-muted">
@@ -1429,7 +1989,22 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-default">
+      {explicitOnboarding && siteAuditReady && (
+        <section aria-labelledby="ai-visibility-next-heading" className="flex flex-col gap-3 border-b border-default pb-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 id="ai-visibility-next-heading" className="text-base font-semibold text-heading">Next: Set up AI Visibility</h2>
+            <p className="mt-1 text-sm text-secondary">
+              See whether answer engines mention your brand and cite your pages.
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <Button type="button" onClick={onContinueOnboarding}>Set up AI Visibility</Button>
+            <Button type="button" variant="secondary" onClick={onSkipOnboarding}>Skip for now</Button>
+          </div>
+        </section>
+      )}
+
+      {!explicitOnboarding && <div className="flex flex-wrap items-center justify-between gap-3 border-b border-default">
         <div role="tablist" aria-label="Site Health views" aria-orientation="horizontal" className="flex min-w-0 gap-5">
           {SITE_HEALTH_VIEWS.map((item, index) => (
             <button
@@ -1437,14 +2012,14 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
               type="button"
               role="tab"
               id={`site-health-${item.id}-tab`}
-              aria-selected={view === item.id}
+              aria-selected={currentView === item.id}
               aria-controls={`site-health-${item.id}-panel`}
-              tabIndex={view === item.id ? 0 : -1}
+              tabIndex={currentView === item.id ? 0 : -1}
               ref={(element) => { tabRefs.current[index] = element }}
               onClick={() => selectView(item.id)}
               onKeyDown={(event) => handleViewKeyDown(event, index)}
-              className={`min-h-11 border-b-2 px-0.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-mono-400 ${
-                view === item.id
+              className={`min-h-11 border-b-2 px-0.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-mono-400 disabled:cursor-not-allowed disabled:opacity-50 ${
+                currentView === item.id
                   ? 'border-strong text-heading'
                   : 'border-transparent text-secondary hover:border-base hover:text-primary'
               }`}
@@ -1453,24 +2028,27 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
             </button>
           ))}
         </div>
-        {crawl?.hasCrawlData && view !== 'technical' && (
+        {crawl?.hasCrawlData && currentView !== 'technical' && (
           <div className="flex items-center gap-2 pb-2">
             <span className="text-xs text-muted">Dead-link check</span>
             <ToneBadge tone={deadLinkStatus.tone}>{deadLinkStatus.label}</ToneBadge>
           </div>
         )}
-      </div>
+      </div>}
 
-      {!selectedRunId && activeAudit && (
+      {!selectedRunId && activeAudit && !activeRunWithoutPublishedMap && (
         <div className="rounded-lg border border-caution bg-caution-soft px-4 py-3 text-sm text-caution" role="status">
-          The scan is running. The latest completed results remain available until it finishes.
+          A newer scan is running. The latest published result remains available until it finishes.
         </div>
       )}
       {movedSite && (
         <div className="rounded-lg border border-base bg-surface-subtle px-4 py-3 text-sm text-secondary" role="status">
           <span className="font-medium text-heading">Site address changed during this scan.</span>{' '}
           The scan started at <span className="font-mono text-primary">{movedSite.requested}</span> and continued at{' '}
-          <span className="font-mono text-primary">{movedSite.effective}</span>. The map and inventory use the new address.
+          <span className="font-mono text-primary">{movedSite.effective}</span>.{' '}
+          {explicitOnboarding
+            ? 'Page health uses the new address.'
+            : 'The map and inventory use the new address.'}
         </div>
       )}
       {crawl?.hasCrawlData && !crawl.complete && (
@@ -1485,50 +2063,129 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
         </div>
       )}
 
-      {view === 'technical' ? (
-        <div id="site-health-technical-panel" role="tabpanel" aria-labelledby="site-health-technical-tab" className="min-w-0">
+      {recoveryPhase ? (
+        <TransientSiteHealthPanel view={transientView} tabbed={!explicitOnboarding}>
+          <TerminalScanRecoveryState
+            phase={recoveryPhase}
+            progress={activeProgressQuery.data}
+            onRunAgain={startScan}
+            pageHealthDestination={explicitOnboarding}
+          />
+        </TransientSiteHealthPanel>
+      ) : showProgressState ? (
+        <TransientSiteHealthPanel view={transientView} tabbed={!explicitOnboarding}>
+          <ActiveScanState
+            status={activeProgressQuery.data?.phase ?? (activeRunWithoutPublishedMap?.status === 'running' ? 'running' : 'queued')}
+            progress={activeProgressQuery.data}
+            progressError={activeProgressQuery.isError}
+            onRetryProgress={() => { void activeProgressQuery.refetch() }}
+            pageHealthDestination={explicitOnboarding}
+            livePageHealthPreview={livePageHealthPreviewQuery.data}
+            livePageHealthError={livePageHealthPreviewQuery.isError}
+            livePageHealthRunId={exactProgressRunId}
+            continuation={showOnboardingContinuation ? (
+              <OnboardingContinuationActions
+                onContinueOnboarding={onContinueOnboarding}
+                onSkipOnboarding={onSkipOnboarding}
+              />
+            ) : null}
+          />
+        </TransientSiteHealthPanel>
+      ) : currentView === 'technical' ? (
+        <div
+          id="site-health-technical-panel"
+          role={explicitOnboarding ? undefined : 'tabpanel'}
+          aria-labelledby={explicitOnboarding ? undefined : 'site-health-technical-tab'}
+          className="min-w-0 space-y-6"
+        >
+          {explicitOnboarding ? (
+            <h2 className="text-xl font-semibold tracking-tight text-heading">Page health</h2>
+          ) : null}
           <TechnicalAeoSection
             projectName={projectName}
             projectId={projectId}
             runId={resolvedRunId}
             integrated
+            compactCopy={explicitOnboarding}
+            unavailableFooter={explicitOnboarding && siteAuditReady ? (
+              <section aria-label="Page health recovery" className="mt-4">
+                <Button
+                  type="button"
+                  disabled={scanBusy}
+                  onClick={() => {
+                    setView('map')
+                    startScan()
+                  }}
+                >
+                  Run site audit again
+                </Button>
+              </section>
+            ) : undefined}
           />
         </div>
       ) : crawlQuery.isLoading ? (
-        <div className="flex min-h-72 items-center justify-center gap-2 text-sm text-secondary" role="status">
-          <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-          Loading site health...
-        </div>
+        <TransientSiteHealthPanel view={currentView} tabbed={!explicitOnboarding}>
+          <div className="flex min-h-72 items-center justify-center gap-2 text-sm text-secondary" role="status">
+            <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+            Loading site health...
+          </div>
+        </TransientSiteHealthPanel>
       ) : crawlQuery.error ? (
-        <section className="rounded-lg border border-negative bg-negative-soft px-5 py-6" role="alert">
-          <h2 className="font-semibold text-negative">Site Health could not load</h2>
-          <p className="mt-1 text-sm text-negative">Try loading the crawl again.</p>
-          <Button variant="secondary" size="sm" className="mt-4" onClick={() => void crawlQuery.refetch()}>Try again</Button>
-        </section>
+        <TransientSiteHealthPanel view={currentView} tabbed={!explicitOnboarding}>
+          <section className="rounded-lg border border-negative bg-negative-soft px-5 py-6" role="alert">
+            <h2 className="font-semibold text-negative">Site Health could not load</h2>
+            <p className="mt-1 text-sm text-negative">Try loading the crawl again.</p>
+            <Button variant="secondary" size="sm" className="mt-4" onClick={() => void crawlQuery.refetch()}>Try again</Button>
+          </section>
+        </TransientSiteHealthPanel>
       ) : !crawl?.hasCrawlData ? (
-        <section className="rounded-lg border border-default bg-surface-subtle px-5 py-8 text-center">
-          <h2 className="text-base font-semibold text-heading">Full-site map not available</h2>
-          <p className="mx-auto mt-2 max-w-xl text-sm text-secondary">
-            {crawl?.legacyAuditAvailable
-              ? 'Existing technical checks are preserved. Run a new scan to build the page and internal-link map.'
-              : embedded
-                ? 'A full-site scan has not been run for this project.'
-                : 'Run a scan to discover pages, site sections, and internal links.'}
-          </p>
-          {crawl?.legacyAuditAvailable && (
-            <Button variant="secondary" size="sm" className="mt-4" onClick={() => setView('technical')}>View technical checks</Button>
-          )}
-        </section>
+        <TransientSiteHealthPanel view={currentView} tabbed={!explicitOnboarding}>
+          <section className="rounded-lg border border-default bg-surface-subtle px-5 py-8 text-center">
+            <h2 className="text-base font-semibold text-heading">
+              {explicitOnboarding ? 'Page health results unavailable' : 'Full-site map not available'}
+            </h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-secondary">
+              {explicitOnboarding
+                ? 'This scan did not produce page health results. Run it again to continue setup.'
+                : crawl?.legacyAuditAvailable
+                ? 'Existing page health results are preserved. Run a new scan to build the page and internal-link map.'
+                : embedded
+                  ? 'A full-site scan has not been run for this project.'
+                  : 'Run a scan to discover pages, site sections, and internal links.'}
+            </p>
+            {(crawl?.legacyAuditAvailable || explicitOnboarding) && (
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                {crawl?.legacyAuditAvailable && !explicitOnboarding && (
+                  <Button variant="secondary" size="sm" onClick={() => setView('technical')}>View page health</Button>
+                )}
+                {explicitOnboarding && (
+                  <Button type="button" size="sm" onClick={startScan}>Run scan again</Button>
+                )}
+              </div>
+            )}
+          </section>
+        </TransientSiteHealthPanel>
       ) : !crawl.detailsAvailable ? (
-        <section className="rounded-lg border border-caution bg-caution-soft px-5 py-6">
-          <h2 className="font-semibold text-caution">Page details unavailable</h2>
-          <p className="mt-1 text-sm text-caution">Summary metrics are preserved for this scan, but its page graph cannot be opened.</p>
-        </section>
-      ) : view === 'inventory' ? (
+        <TransientSiteHealthPanel view={currentView} tabbed={!explicitOnboarding}>
+          <section className="rounded-lg border border-caution bg-caution-soft px-5 py-6">
+            <h2 className="font-semibold text-caution">
+              {explicitOnboarding ? 'Page health results unavailable' : 'Page details unavailable'}
+            </h2>
+            <p className="mt-1 text-sm text-caution">
+              {explicitOnboarding
+                ? 'This scan did not publish page-level results. Run it again to continue setup.'
+                : 'Summary metrics are preserved for this scan, but its page graph cannot be opened.'}
+            </p>
+            {explicitOnboarding ? (
+              <Button type="button" size="sm" className="mt-4" onClick={startScan}>Run scan again</Button>
+            ) : null}
+          </section>
+        </TransientSiteHealthPanel>
+      ) : currentView === 'inventory' ? (
         <div id="site-health-inventory-panel" role="tabpanel" aria-labelledby="site-health-inventory-tab" className="space-y-5">
           {pagesQuery.isLoading ? (
             <div className="flex min-h-56 items-center justify-center gap-2 text-sm text-secondary" role="status">
-              <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+              <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
               Loading page inventory...
             </div>
           ) : pagesQuery.error ? (
@@ -1623,30 +2280,7 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
               <p className="mb-3 text-sm text-secondary">{templateDetectionCopy(templateDetection)}</p>
             )}
 
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
-              {graphQuery.isLoading ? (
-                <GraphLoadingState />
-              ) : graphQuery.error ? (
-                <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-negative bg-negative-soft px-6 text-center text-sm text-negative lg:min-h-[520px]" role="alert">
-                  The interactive map could not be loaded.
-                </div>
-              ) : (
-                <SiteGraphSigma
-                  nodes={graphQuery.data?.nodes ?? []}
-                  // Every edge, always. Hiding is done by the edge reducer, so
-                  // the graph identity never changes and the renderer is never
-                  // rebuilt when the toggle flips.
-                  edges={graphEdges}
-                  showTemplateLinks={showTemplateLinks || templateFilterUnavailable}
-                  layoutState={graphQuery.data?.layout.state ?? 'unavailable'}
-                  layoutUnavailableReason={graphQuery.data?.layout.state === 'unavailable' ? graphQuery.data.layout.reason : null}
-                  rootNodeKey={graphQuery.data?.rootNodeKey ?? null}
-                  selectedNodeKey={effectiveSelectedNodeKey}
-                  onSelectNode={(node) => setSelectedNodeKey(node.nodeKey)}
-                  ariaLabel={`Interactive site map showing ${metricValue(graphQuery.data?.nodes.length ?? 0)} pages and ${metricValue(visibleGraphEdges.length)} internal links`}
-                />
-              )}
-
+            <div id="site-health-map-explorer" className="grid gap-4 lg:grid-cols-[minmax(14rem,18rem)_minmax(0,1fr)]">
               <aside className="rounded-lg border border-default bg-surface-subtle" aria-labelledby="site-sections-heading">
                 <div className="border-b border-default px-4 py-3">
                   <h3 id="site-sections-heading" className="text-sm font-semibold text-heading">Site sections</h3>
@@ -1665,6 +2299,35 @@ export function SiteHealthSection({ projectName, projectId }: { projectName: str
                   )}
                 </div>
               </aside>
+
+              <div className="min-w-0">
+                {graphQuery.isLoading ? (
+                  <GraphLoadingState />
+                ) : graphQuery.error ? (
+                  <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-negative bg-negative-soft px-6 text-center lg:min-h-[520px]" role="alert">
+                    <div>
+                      <p className="text-sm font-medium text-negative">The interactive map could not be loaded.</p>
+                      <p className="mt-1 text-sm text-secondary">The page inventory and technical findings remain available.</p>
+                      <Button variant="secondary" size="sm" className="mt-4" onClick={() => setView('inventory')}>Open page inventory</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <SiteGraphSigma
+                    nodes={graphQuery.data?.nodes ?? []}
+                    // Every edge, always. Hiding is done by the edge reducer,
+                    // so toggling template links never rebuilds the renderer.
+                    edges={graphEdges}
+                    showTemplateLinks={showTemplateLinks || templateFilterUnavailable}
+                    layoutState={graphQuery.data?.layout.state ?? 'unavailable'}
+                    layoutUnavailableReason={graphQuery.data?.layout.state === 'unavailable' ? graphQuery.data.layout.reason : null}
+                    rootNodeKey={graphQuery.data?.rootNodeKey ?? null}
+                    selectedNodeKey={effectiveSelectedNodeKey}
+                    onSelectNode={(node) => setSelectedNodeKey(node.nodeKey)}
+                    onOpenInventory={() => setView('inventory')}
+                    ariaLabel={`Interactive site map showing ${metricValue(graphQuery.data?.nodes.length ?? 0)} pages and ${metricValue(visibleGraphEdges.length)} internal links`}
+                  />
+                )}
+              </div>
             </div>
 
           </section>

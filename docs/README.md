@@ -38,7 +38,16 @@ Canonry is API-first. The API is the source of truth, the CLI is the standard op
 | [`wordpress-setup.md`](wordpress-setup.md) | current | operators | WordPress REST + Application Password setup, staging diffs, and manual handoff workflows |
 | [`server-side-traffic.md`](../skills/canonry/references/server-side-traffic.md) | current | operators | Cloudflare direct-push and Cloud Run, WordPress, and Vercel pull-source setup, smoke tests, rollback, and troubleshooting |
 
-Implementation plans, product direction, and design rationale live in PR descriptions, not in the repo — a plan doc goes stale the day its PR merges, while the PR record stays attached to the change that realized it. Durable behavior rules live in the per-package `AGENTS.md` files.
+## Implementation Records
+
+| Document | Label | Audience | Purpose |
+| --- | --- | --- | --- |
+| [`oss-onboarding-evaluation.md`](oss-onboarding-evaluation.md) | implemented | product, design, engineers | Source-based evaluation and decisions for the OSS onboarding rework |
+
+New plans, product direction, and design rationale live in PR descriptions.
+The implementation record above preserves context, but it does not define
+current behavior. Durable behavior rules live in the per-package `AGENTS.md`
+files.
 
 ## Reading Order
 

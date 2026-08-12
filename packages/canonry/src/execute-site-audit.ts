@@ -36,8 +36,9 @@ import {
   type SiteCrawlAuditFactorDto,
   type SiteCrawlCriticalDefectDto,
 } from '@ainyc/canonry-contracts'
-import { resolveWebhookTarget } from '@ainyc/canonry-api-routes'
+import { resolvePublicHttpTarget, resolveWebhookTarget } from '@ainyc/canonry-api-routes'
 import { createLogger } from './logger.js'
+import { resolveSiteAuditRootUrl } from './site-audit-root.js'
 import {
   deleteSiteCrawlGraphLayout,
   persistSiteCrawlGraphLayout,
@@ -593,11 +594,24 @@ export async function executeSiteAudit(
     const homepageUrl = toHomepageUrl(project.canonicalDomain)
     const maxPages = clampSiteAuditLimit(opts.maxPages ?? opts.limit)
     const maxEdges = clampSiteAuditEdgeLimit(opts.maxEdges)
-    await assertSiteAuditUrlAllowed(homepageUrl, 'canonicalDomain')
+    const resolvedRoot = await resolveSiteAuditRootUrl(homepageUrl, {
+      resolveTarget: resolvePublicHttpTarget,
+      signal: opts.signal,
+    })
+    const crawlRootUrl = resolvedRoot.effectiveUrl
     if (opts.sitemapUrl) await assertSiteAuditUrlAllowed(opts.sitemapUrl, 'sitemapUrl')
 
-    log.info('start', { runId, projectId, homepageUrl, maxPages, maxEdges, maxDepth: opts.maxDepth ?? null })
-    const report: SiteCrawlReport = await runSiteCrawl(homepageUrl, {
+    log.info('start', {
+      runId,
+      projectId,
+      homepageUrl,
+      crawlRootUrl,
+      redirects: resolvedRoot.redirects.length,
+      maxPages,
+      maxEdges,
+      maxDepth: opts.maxDepth ?? null,
+    })
+    const report: SiteCrawlReport = await runSiteCrawl(crawlRootUrl, {
       mode: 'summary',
       sitemapUrl: opts.sitemapUrl,
       maxPages,
@@ -695,7 +709,7 @@ export async function executeSiteAudit(
       if (hasAuditedPages) {
         tx.insert(siteAuditSnapshots).values({
           id: crypto.randomUUID(), projectId, runId,
-          sitemapUrl: opts.sitemapUrl ?? `${homepageUrl}/sitemap.xml`,
+          sitemapUrl: opts.sitemapUrl ?? new URL('/sitemap.xml', crawlRootUrl).href,
           auditedAt: crawlSummary.completedAt,
           aggregateScore: crawlSummary.auditRollup.aggregateScore ?? 0,
           pagesDiscovered: crawlSummary.pagesDiscovered,
@@ -723,7 +737,7 @@ export async function executeSiteAudit(
 
       tx.insert(siteCrawlSnapshots).values({
         id: crypto.randomUUID(), projectId, runId, attemptId,
-        requestedRootUrl: crawlSummary.rootUrl,
+        requestedRootUrl: resolvedRoot.requestedUrl,
         rootUrl: crawlSummary.finalRootUrl ?? crawlSummary.rootUrl,
         crawlSchemaVersion: crawlSummary.crawlSchemaVersion,
         engineVersion: crawlSummary.engineVersion,

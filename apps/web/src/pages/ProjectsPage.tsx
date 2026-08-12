@@ -9,7 +9,7 @@ import { ToneBadge } from '../components/shared/ToneBadge.js'
 import { YamlApplyPanel } from '../components/project/YamlApplyPanel.js'
 import { addToast } from '../lib/toast-store.js'
 import { asyncHandler } from '../lib/async-handler.js'
-import { createProject } from '../api.js'
+import { createOnboardingProject } from '../api.js'
 import { useDashboardOverview as useDashboard } from '../queries/use-dashboard-overview.js'
 import { Link } from '@tanstack/react-router'
 
@@ -69,7 +69,8 @@ export function ProjectsPage() {
     setSaving(true)
     setError(null)
     try {
-      const project = await createProject(slug, {
+      const project = await createOnboardingProject({
+        name: slug,
         displayName: displayName || projectName,
         canonicalDomain: domain,
         country,
@@ -82,14 +83,20 @@ export function ProjectsPage() {
         dedupeKey: `project:create:${project.name}`,
         dedupeMode: 'drop',
       })
-      void refetch()
+      await refetch()
       setProjectName('')
       setDisplayName('')
       setDomain('')
       setCountry('US')
       setLanguage('en')
       setShowForm(false)
-      void navigate({ to: '/projects/$projectName', params: { projectName: project.name } })
+      void navigate({
+        to: '/setup',
+        search: {
+          experience: 'legacy',
+          setupProject: project.name,
+        },
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project')
     } finally {

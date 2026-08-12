@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { deriveSetupStep, isSuccessfulSetupRun } from '../src/pages/SetupPage.js'
+import { deriveSetupStep, isSuccessfulSetupRun, selectSetupProject } from '../src/pages/SetupPage.js'
+import type { ProjectCommandCenterVm } from '../src/view-models.js'
 
 describe('setup durable progress', () => {
   it('returns the first incomplete durable setup stage', () => {
@@ -51,5 +52,15 @@ describe('setup durable progress', () => {
     expect(isSuccessfulSetupRun('completed', 0)).toBe(false)
     expect(isSuccessfulSetupRun('failed', 2)).toBe(false)
     expect(isSuccessfulSetupRun('cancelled', 2)).toBe(false)
+  })
+
+  it('resumes the project handed off by Site Health before another incomplete project', () => {
+    const projects = [
+      { project: { name: 'older-incomplete' }, queryCounts: { total: 0 } },
+      { project: { name: 'mapped-project' }, queryCounts: { total: 0 } },
+    ] as ProjectCommandCenterVm[]
+
+    expect(selectSetupProject(projects, 'mapped-project')?.project.name).toBe('mapped-project')
+    expect(selectSetupProject(projects, 'missing-project')).toBeNull()
   })
 })

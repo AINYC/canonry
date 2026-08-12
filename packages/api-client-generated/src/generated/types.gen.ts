@@ -5951,6 +5951,39 @@ export type OrganicEvidenceDto = {
     }>;
 };
 
+export type ProjectCreateRequest = {
+    displayName: string;
+    canonicalDomain: string;
+    ownedDomains?: Array<string>;
+    aliases?: Array<string>;
+    country: string;
+    language: string;
+    tags?: Array<string>;
+    labels?: {
+        [key: string]: string;
+    };
+    providers?: Array<string>;
+    providerModels?: {
+        [key: string]: string;
+    };
+    locations?: Array<{
+        label: string;
+        city: string;
+        region: string;
+        country: string;
+        timezone?: string;
+    }>;
+    defaultLocation?: string | null;
+    measurement?: {
+        marketingHosts: Array<string>;
+        brandTerms: Array<string>;
+        leadEventNames: Array<string>;
+    };
+    autoExtractBacklinks?: boolean;
+    configSource?: 'cli' | 'api' | 'config-file';
+    name: string;
+};
+
 export type ProjectDto = {
     id: string;
     name: string;
@@ -7246,6 +7279,22 @@ export type SettingsDto = {
     };
 };
 
+export type SiteAuditLivePageHealthDto = {
+    project: string;
+    runId: string;
+    status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
+    state: 'waiting' | 'collecting' | 'terminal';
+    attemptId: string | null;
+    pagesAudited: number;
+    updatedAt: string | null;
+    examples: Array<{
+        nodeKey: string;
+        url: string;
+        auditScore: number;
+        checksNeedingAttention: number;
+    }>;
+};
+
 export type SiteAuditPagesResponseDto = {
     project: string;
     runId: string | null;
@@ -7263,6 +7312,33 @@ export type SiteAuditPagesResponseDto = {
             score: number;
         }>;
     }>;
+};
+
+export type SiteAuditRunProgressDto = {
+    project: string;
+    runId: string;
+    status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
+    phase: 'queued' | 'discovering' | 'checking' | 'arranging-map' | 'completed' | 'partial' | 'failed' | 'cancelled';
+    attempt: {
+        id: string;
+        state: string;
+        pagesDiscovered: number;
+        pagesFetched: number;
+        pagesEligible: number;
+        pagesErrored: number;
+        edgesDiscovered: number;
+        lastUpdatedAt: string;
+        startedAt: string | null;
+        finishedAt: string | null;
+        error: string | null;
+    } | null;
+    layout: {
+        state: 'pending' | 'ready' | 'unavailable';
+        layoutVersion: string | null;
+        failureCode: string | null;
+        updatedAt: string | null;
+    };
+    error: string | null;
 };
 
 export type SiteAuditRunResponseDto = {
@@ -8883,6 +8959,55 @@ export type PostApiV1ProjectsByNameGoogleGscSitemapsSubmitResponses = {
 };
 
 export type PostApiV1ProjectsByNameGoogleGscSitemapsSubmitResponse = PostApiV1ProjectsByNameGoogleGscSitemapsSubmitResponses[keyof PostApiV1ProjectsByNameGoogleGscSitemapsSubmitResponses];
+
+export type GetApiV1ProjectsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/projects';
+};
+
+export type GetApiV1ProjectsResponses = {
+    /**
+     * Projects returned.
+     */
+    200: Array<ProjectDto>;
+};
+
+export type GetApiV1ProjectsResponse = GetApiV1ProjectsResponses[keyof GetApiV1ProjectsResponses];
+
+export type PostApiV1ProjectsData = {
+    body: ProjectCreateRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/projects';
+};
+
+export type PostApiV1ProjectsErrors = {
+    /**
+     * Invalid project payload, normalized name, or canonical domain.
+     */
+    400: ErrorEnvelope;
+    /**
+     * The caller lacks broad projects.write authority.
+     */
+    403: ErrorEnvelope;
+    /**
+     * A project with the normalized name already exists.
+     */
+    409: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsError = PostApiV1ProjectsErrors[keyof PostApiV1ProjectsErrors];
+
+export type PostApiV1ProjectsResponses = {
+    /**
+     * Project created.
+     */
+    201: ProjectDto;
+};
+
+export type PostApiV1ProjectsResponse = PostApiV1ProjectsResponses[keyof PostApiV1ProjectsResponses];
 
 export type DeleteApiV1ProjectsByNameData = {
     body?: never;
@@ -11782,22 +11907,6 @@ export type PostApiV1ProjectsByNameMeasurementQueryTemplatesByTemplateIdApplyRes
 };
 
 export type PostApiV1ProjectsByNameMeasurementQueryTemplatesByTemplateIdApplyResponse = PostApiV1ProjectsByNameMeasurementQueryTemplatesByTemplateIdApplyResponses[keyof PostApiV1ProjectsByNameMeasurementQueryTemplatesByTemplateIdApplyResponses];
-
-export type GetApiV1ProjectsData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/api/v1/projects';
-};
-
-export type GetApiV1ProjectsResponses = {
-    /**
-     * Projects returned.
-     */
-    200: Array<ProjectDto>;
-};
-
-export type GetApiV1ProjectsResponse = GetApiV1ProjectsResponses[keyof GetApiV1ProjectsResponses];
 
 export type GetApiV1ProjectsByNameDeletePreviewData = {
     body?: never;
@@ -21572,6 +21681,10 @@ export type PostApiV1ProjectsByNameTechnicalAeoRunsErrors = {
      * A crawl with different effective options is already queued or running.
      */
     409: ErrorEnvelope;
+    /**
+     * The site-audit executor is unavailable on this deployment.
+     */
+    422: ErrorEnvelope;
 };
 
 export type PostApiV1ProjectsByNameTechnicalAeoRunsError = PostApiV1ProjectsByNameTechnicalAeoRunsErrors[keyof PostApiV1ProjectsByNameTechnicalAeoRunsErrors];
@@ -21584,6 +21697,74 @@ export type PostApiV1ProjectsByNameTechnicalAeoRunsResponses = {
 };
 
 export type PostApiV1ProjectsByNameTechnicalAeoRunsResponse = PostApiV1ProjectsByNameTechnicalAeoRunsResponses[keyof PostApiV1ProjectsByNameTechnicalAeoRunsResponses];
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Exact site-audit run ID.
+         */
+        runId: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/technical-aeo/runs/{runId}/progress';
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressErrors = {
+    /**
+     * Project or non-probe site-audit run not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressError = GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressErrors[keyof GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressErrors];
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressResponses = {
+    /**
+     * Exact stored Site Health progress returned.
+     */
+    200: SiteAuditRunProgressDto;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressResponse = GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressResponses[keyof GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdProgressResponses];
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Exact site-audit run ID.
+         */
+        runId: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/technical-aeo/runs/{runId}/page-health-preview';
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewErrors = {
+    /**
+     * Project or non-probe site-audit run not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewError = GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewErrors[keyof GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewErrors];
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewResponses = {
+    /**
+     * Bounded provisional Page Health preview returned.
+     */
+    200: SiteAuditLivePageHealthDto;
+};
+
+export type GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewResponse = GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewResponses[keyof GetApiV1ProjectsByNameTechnicalAeoRunsByRunIdPageHealthPreviewResponses];
 
 export type DeleteApiV1ProjectsByNameAgentTranscriptData = {
     body?: never;

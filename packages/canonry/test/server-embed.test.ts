@@ -19,6 +19,7 @@ const EMBED_ENV = [
   'CANONRY_DASHBOARD_REQUIRE_PASSWORD',
   'CANONRY_DASHBOARD_SHOW_RESOURCE_LINKS',
   'CANONRY_DASHBOARD_SHOW_UPDATE_NOTIFICATION',
+  'CANONRY_ONBOARDING_MODE',
 ] as const
 
 interface Built {
@@ -218,6 +219,35 @@ describe('server embed mode (#716)', () => {
       const res = await app.inject({ method: 'GET', url: '/' })
       expect(res.body).toContain(
         '<script>window.__CANONRY_CONFIG__={"dashboard":{"showUpdateNotification":false}}</script>',
+      )
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('dashboard.onboardingMode injects the platform setup selector', async () => {
+    const { app, cleanup } = await buildServer(undefined, true, {
+      dashboard: { onboardingMode: 'platform' },
+    })
+    try {
+      const res = await app.inject({ method: 'GET', url: '/' })
+      expect(res.body).toContain(
+        '<script>window.__CANONRY_CONFIG__={"dashboard":{"onboardingMode":"platform"}}</script>',
+      )
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('CANONRY_ONBOARDING_MODE overrides config and supports auto rollout', async () => {
+    process.env.CANONRY_ONBOARDING_MODE = 'auto'
+    const { app, cleanup } = await buildServer(undefined, true, {
+      dashboard: { onboardingMode: 'legacy' },
+    })
+    try {
+      const res = await app.inject({ method: 'GET', url: '/' })
+      expect(res.body).toContain(
+        '<script>window.__CANONRY_CONFIG__={"dashboard":{"onboardingMode":"auto"}}</script>',
       )
     } finally {
       await cleanup()
@@ -435,7 +465,8 @@ describe('server embed mode (#716)', () => {
         url: '/',
         headers: { 'x-canonry-embed-theme': '{"mode":"light","font":"Inter"}' },
       })
-      expect(scoped.body).toContain('"theme":{"mode":"light","font":"Inter"}')
+      expect(scoped.body).toContain('"theme":{"mode":"light"}')
+      expect(scoped.body).not.toContain('"font"')
 
       // The deep-link fallback honors the header too.
       const deep = await app.inject({
@@ -682,22 +713,56 @@ describe('server embed mode (#716)', () => {
   })
 
   it('ON + per-request tabs: X-Canonry-Embed-Tabs narrows the configured allowlist to technical-AEO', async () => {
-    const { app, apiKey, db, cleanup } = await buildServer({
+    const { app, db, cleanup } = await buildServer({
       enabled: true,
       allowOrigins: ['https://host.example'],
       projectTabs: ['overview', 'technical-aeo', 'report'],
     })
     try {
-      const { name } = seedProject(db)
-      const res = await app.inject({
-        method: 'GET',
-        url: `/api/v1/projects/${name}/technical-aeo`,
-        headers: {
-          authorization: `Bearer ${apiKey}`,
-          'x-canonry-embed-tabs': 'overview,technical-aeo',
-        },
-      })
-      expect(res.statusCode).not.toBe(403)
+      const { id: projectId, name, now } = seedProject(db)
+      const { name: otherProjectName } = seedProject(db, 'proj_2', 'other-project')
+      db.insert(runs).values({
+        id: 'run_embed_site_audit',
+        projectId,
+        kind: RunKinds['site-audit'],
+        status: 'running',
+        trigger: 'manual',
+        createdAt: now,
+      }).run()
+
+      const readOnlyRaw = `cnry_${crypto.randomBytes(16).toString('hex')}`
+      db.insert(apiKeys).values({
+        id: crypto.randomUUID(),
+        name: 'technical-aeo-embed',
+        keyHash: crypto.createHash('sha256').update(readOnlyRaw).digest('hex'),
+        keyPrefix: readOnlyRaw.slice(0, 9),
+        scopes: ['read'],
+        projectId,
+        createdAt: now,
+      }).run()
+      const headers = {
+        authorization: `Bearer ${readOnlyRaw}`,
+        'x-canonry-embed-tabs': 'technical-aeo',
+      }
+      for (const url of [
+        `/api/v1/projects/${name}/technical-aeo`,
+        `/api/v1/projects/${name}/runs?kind=site-audit`,
+        `/api/v1/projects/${name}/technical-aeo/runs/run_embed_site_audit/progress`,
+        `/api/v1/projects/${name}/technical-aeo/runs/run_embed_site_audit/page-health-preview`,
+      ]) {
+        const res = await app.inject({ method: 'GET', url, headers })
+        expect(res.statusCode, `${url} should be reachable for technical-AEO embed data`).not.toBe(403)
+      }
+
+      for (const url of [
+        `/api/v1/projects/${name}/runs`,
+        `/api/v1/projects/${name}/runs?kind=content-recommendation`,
+        `/api/v1/projects/${otherProjectName}/technical-aeo/runs/run_embed_site_audit/progress`,
+        `/api/v1/projects/${otherProjectName}/technical-aeo/runs/run_embed_site_audit/page-health-preview`,
+      ]) {
+        const res = await app.inject({ method: 'GET', url, headers })
+        expect(res.statusCode, `${url} should be hidden from a technical-AEO embed viewer`).toBe(403)
+      }
     } finally {
       await cleanup()
     }

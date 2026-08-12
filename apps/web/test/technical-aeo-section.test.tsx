@@ -273,12 +273,39 @@ test.each([
   )
 
   const alert = await screen.findByRole('alert')
-  expect(alert.textContent).toContain('Technical checks could not load')
-  expect(screen.queryByText('Technical checks unavailable')).toBeNull()
+  expect(alert.textContent).toContain('Page health could not load')
+  expect(screen.queryByText('Page health unavailable')).toBeNull()
 
   const callsBeforeRetry = scoreCalls
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   await waitFor(() => expect(scoreCalls).toBeGreaterThan(callsBeforeRetry))
+})
+
+test('adds the caller recovery path when integrated page health cannot be read', async () => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"not found"}', {
+    status: 404,
+    headers: { 'content-type': 'application/json' },
+  })))
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TechnicalAeoSection
+        projectName={projectName}
+        projectId={projectId}
+        runId="audit_partial"
+        integrated
+        footer={<p>Continue after successful Page health</p>}
+        unavailableFooter={<p>Continue setup without Page health</p>}
+      />
+    </QueryClientProvider>,
+  )
+
+  expect(await screen.findByText('Page health could not load')).not.toBeNull()
+  expect(screen.getByText('Continue setup without Page health')).not.toBeNull()
+  expect(screen.queryByText('Continue after successful Page health')).toBeNull()
 })
 
 test('distills the integrated view to a score and its actionable findings', async () => {
@@ -350,7 +377,13 @@ test('distills the integrated view to a score and its actionable findings', asyn
 
   render(
     <QueryClientProvider client={queryClient}>
-      <TechnicalAeoSection projectName={projectName} projectId={projectId} integrated />
+      <TechnicalAeoSection
+        projectName={projectName}
+        projectId={projectId}
+        integrated
+        footer={<p>Continue onboarding after reviewing fixes</p>}
+        unavailableFooter={<p>Recover unavailable Page health</p>}
+      />
     </QueryClientProvider>,
   )
 
@@ -358,7 +391,10 @@ test('distills the integrated view to a score and its actionable findings', asyn
   expect(screen.getByText('2 pages checked')).not.toBeNull()
   expect(screen.getByText('2 checks need attention')).not.toBeNull()
   expect(screen.getByRole('heading', { name: 'Technical findings' })).not.toBeNull()
+  expect(screen.getByText('Select a check to see affected pages and recommended fixes.')).not.toBeNull()
   expect(screen.getByText('Pages affected')).not.toBeNull()
+  expect(screen.getByText('Continue onboarding after reviewing fixes')).not.toBeNull()
+  expect(screen.queryByText('Recover unavailable Page health')).toBeNull()
 
   const failingFactor = screen.getByRole('button', { name: 'AI Crawler Access' })
   await waitFor(() => expect(failingFactor.getAttribute('aria-expanded')).toBe('true'))
@@ -386,6 +422,22 @@ test('keeps the integrated findings table readable while affected pages load', a
   expect(screen.getByRole('table').className).toContain('min-w-[42rem]')
   expect(screen.queryByText('Page details are not available in the loaded audit sample.')).toBeNull()
   expect(screen.queryByText(/Showing the worst 0 audited pages/)).toBeNull()
+})
+
+test('uses compact findings copy only when the onboarding parent requests it', () => {
+  const queryClient = makeClient()
+  queryClient.setQueryData(scoreKey, scoreWithFinding())
+  queryClient.setQueryData(pagesKey, { project: projectName, pages: [], total: 0 })
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TechnicalAeoSection projectName={projectName} projectId={projectId} integrated compactCopy />
+    </QueryClientProvider>,
+  )
+
+  expect(screen.getByRole('heading', { name: 'Checks' })).not.toBeNull()
+  expect(screen.getByText('Open a check to see affected pages and fixes.')).not.toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Technical findings' })).toBeNull()
 })
 
 test('shows a focused retry when integrated affected pages fail to load', async () => {
@@ -435,7 +487,7 @@ test('keeps recommendation-free integrated findings truthful and single-column',
   )
 
   expect(screen.getByText('Select a check to see affected pages and score details.')).not.toBeNull()
-  expect(screen.queryByText('Select a check to see affected pages and recommended fixes.')).toBeNull()
+  expect(screen.queryByText('Open a check to see affected pages and fixes.')).toBeNull()
   expect(screen.queryByRole('heading', { name: 'Recommended fixes' })).toBeNull()
 
   const factorButton = screen.getByRole('button', { name: 'AI Crawler Access' })

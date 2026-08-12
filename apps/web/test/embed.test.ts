@@ -3,7 +3,6 @@ import {
   embedViewIdForPath,
   embedThemeStyle,
   embedThemeMode,
-  embedThemeFontHref,
   filterEmbedProjectTabs,
   isEmbedProjectTabAllowed,
   resolveEmbedProjectTab,
@@ -59,10 +58,8 @@ describe('embedThemeStyle', () => {
     expect(embedThemeStyle({ accent: '#2563eb' })).toEqual({ '--color-link': '#2563eb' })
   })
 
-  it('maps a valid font to --font-sans with the fallback stack', () => {
-    expect(embedThemeStyle({ font: 'Inter' })).toEqual({
-      '--font-sans': '"Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
-    })
+  it('ignores font overrides so embeds always use the bundled Geist family', () => {
+    expect(embedThemeStyle({ font: 'Inter' })).toEqual({})
   })
 
   it('drops a hostile font-family (its own guard, never the color regex)', () => {
@@ -90,24 +87,6 @@ describe('embedThemeMode', () => {
     expect(embedThemeMode({ mode: 'sepia' })).toBeUndefined()
     expect(embedThemeMode({})).toBeUndefined()
     expect(embedThemeMode(undefined)).toBeUndefined()
-  })
-})
-
-describe('embedThemeFontHref', () => {
-  it('builds a Google Fonts URL for a valid family (spaces → +)', () => {
-    expect(embedThemeFontHref({ font: 'Inter' })).toBe(
-      'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap',
-    )
-    expect(embedThemeFontHref({ font: 'IBM Plex Sans' })).toBe(
-      'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap',
-    )
-  })
-
-  it('returns undefined for a missing or hostile family', () => {
-    expect(embedThemeFontHref(undefined)).toBeUndefined()
-    expect(embedThemeFontHref({})).toBeUndefined()
-    expect(embedThemeFontHref({ font: 'url(x)' })).toBeUndefined()
-    expect(embedThemeFontHref({ font: 'a;b' })).toBeUndefined()
   })
 })
 
