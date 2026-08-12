@@ -429,12 +429,18 @@ or send either secret through chat.
 ### Generate or deploy Queue pull
 
 Queue pull reuses the same edge filter without requiring a public Canonry
-receiver. Create the Queue first and note both its name and ID. Create a
-Cloudflare API token with **Account Queues Edit** for the owning account, put
-only the token in a mode-0600 file, and keep that file off shell argv.
+receiver. Create the Queue first. Then use `wrangler queues info` to get its ID.
+Create a Cloudflare API token with **Account Queues Edit** for the owning
+account. Put only the token in a mode-0600 file. Keep that file off shell argv.
 
 ```bash
 wrangler queues create canonry-traffic-<project>
+
+# Workers Paid only: use this command to change the four-day default.
+wrangler queues update canonry-traffic-<project> \
+  --message-retention-period-secs <seconds>
+
+wrangler queues info canonry-traffic-<project>
 wrangler queues consumer http add canonry-traffic-<project>
 
 cnry traffic connect cloudflare <project> \
@@ -444,7 +450,7 @@ cnry traffic connect cloudflare <project> \
   --queue-id <cloudflare-queue-id> \
   --queue-name canonry-traffic-<project> \
   --api-token-file <path-to-mode-0600-token-file> \
-  --retention-seconds 345600
+  --retention-seconds <actual-queue-retention-seconds>
 
 cnry traffic connect cloudflare <project> \
   --delivery-mode queue-pull \
@@ -453,19 +459,30 @@ cnry traffic connect cloudflare <project> \
   --queue-id <cloudflare-queue-id> \
   --queue-name canonry-traffic-<project> \
   --api-token-file <path-to-token-file> \
+  --retention-seconds <actual-queue-retention-seconds> \
   --deploy --confirm-route --confirm-fail-open
 ```
 
-The second Wrangler command is required. The producer binding does not enable
-HTTP pull, and Cloudflare no longer supports declaring an HTTP pull consumer
-in `wrangler.toml`. Remove any existing Worker consumer before enabling HTTP
-pull because one Queue cannot use both consumer types at once.
+Read the Queue ID from the `wrangler queues info` output. Pass that exact value
+to `--queue-id`.
 
-The default retention is four days (`345600` seconds); accepted values are
-60 seconds through 14 days. The token stays only in Canonry's local credential
-store. It is not written to the source row, Worker, TOML, command output, MCP,
-or Worker bindings. Wrangler authentication remains the operator's active
-Wrangler profile; Canonry does not reuse the Queue pull token for deployment.
+The `queues update` command sets Cloudflare retention on Workers Paid. The
+Canonry `--retention-seconds` option only records the actual value. It does not
+change the Queue. Use `86400` for Workers Free, where retention is fixed at one
+day. Workers Paid defaults to `345600` (four days). Paid accounts accept values
+from 60 seconds through 14 days. If you change the paid Queue, use the same
+value in both commands. See Cloudflare's [Queue limits](https://developers.cloudflare.com/queues/platform/limits/).
+
+The HTTP-consumer command is required. The producer binding does not enable
+HTTP pull. Cloudflare does not support an HTTP pull consumer in
+`wrangler.toml`. Remove any existing Worker consumer before you enable HTTP
+pull. One Queue cannot use both consumer types at the same time. See
+Cloudflare's [pull-consumer setup](https://developers.cloudflare.com/queues/configuration/pull-consumers/).
+
+The token stays only in Canonry's local credential store. It is not written to
+the source row, Worker, TOML, command output, MCP, or Worker bindings. Wrangler
+authentication remains the operator's active Wrangler profile. Canonry does
+not reuse the Queue pull token for deployment.
 
 The generated TOML contains one `[[queues.producers]]` binding named
 `CANONRY_TRAFFIC_QUEUE` and no direct-push ingest URL or Worker secrets. After
@@ -485,6 +502,35 @@ For Queue-to-direct rollback, drain Queue pull until its backlog is empty,
 switch the Cloudflare route, then activate direct push immediately. The route
 change and Canonry activation are separate operator actions, so keep the
 cutover window short.
+
+### Queue-pull acceptance test
+
+Use this test after the Queue-pull source is active and the Worker route is
+attached. The UTM request provides a deterministic classification signal.
+If connect reports `activationRequired`, activate the source before this test:
+
+```bash
+cnry traffic activate <project> --source <source-id>
+```
+
+```bash
+CANONRY_QUEUE_SMOKE_PATH="/canonry-cloudflare-queue-smoke/$(date -u +%Y%m%dT%H%M%SZ)"
+
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  "https://www.example.com${CANONRY_QUEUE_SMOKE_PATH}?utm_source=chatgpt"
+
+sleep 2
+cnry traffic sync <project> --source <source-id>
+cnry traffic events <project> --source <source-id> \
+  --kind all --since-minutes 120 --limit 5000 --format json
+cnry traffic status <project> --format json
+cnry doctor --project <project> --check 'traffic.source.*' --format json
+```
+
+The manual sync must complete. The events output must contain the unique smoke
+path as an AI referral. The status output shows `queueBacklogCount` and
+`queueBacklogObservedAt`. The doctor must not report a credential failure. If
+the path is absent, wait two seconds and repeat the sync up to ten times.
 
 ### Direct-push behavior and smoke test
 
@@ -529,7 +575,7 @@ Raw samples retain the user-agent and normalized path. Do not put personal
 data in URL paths. Canonry replaces numeric, UUID, and long hexadecimal path
 segments with `:id`, but it retains other path segments.
 
-### User acceptance test
+### Direct-push acceptance test
 
 1. Choose a stable, harmless origin path and create a unique smoke-run name.
 2. Before route attachment, capture the origin response and source rollups.
@@ -643,10 +689,25 @@ For a dedicated Canonry-generated Worker:
 1. Detach the exact site route from the Worker.
 2. Request an ordinary site page. Make sure that the origin status,
    headers, and body remain healthy.
-3. Run `wrangler delete --config <artifact-directory>/wrangler.toml`.
-4. Stop the tunnel if no other integration uses it.
-5. Run the doctor. Expect source-health warnings until Canonry supports
+3. If this source uses Queue pull, run manual syncs until its backlog is zero.
+4. If a replacement source exists, activate it after the Queue is empty.
+5. If no replacement source exists, run
+   `cnry schedule remove <project> --kind traffic-sync`.
+6. If this source uses Queue pull, run
+   `wrangler queues consumer http remove <queue-name>`.
+7. Run `wrangler delete --config <artifact-directory>/wrangler.toml`.
+8. If this source uses direct push, stop its unused tunnel.
+9. Run the doctor. Expect source-health warnings until Canonry supports
    Cloudflare disconnect.
+
+CAUTION: If no other producer uses the Queue, delete it only after the drain:
+
+```bash
+wrangler queues delete <queue-name>
+```
+
+If the API token is dedicated to Canonry, revoke it after you remove the HTTP
+consumer.
 
 If Canonry code shares an existing Worker, remove only the Canonry code and
 bindings. Redeploy the prior Worker version. Do not delete the shared Worker.
@@ -662,11 +723,14 @@ source archival and local credential cleanup.
 | Wrangler preflight fails | Install the latest Wrangler. Run `wrangler whoami`. Then rerun connect. |
 | Worker deploys to the wrong account | Make the correct Wrangler profile active. Pass the matching `--account-id`. |
 | Route cannot attach | Make sure that the zone is active, DNS is proxied, and the exact route is unclaimed. Inspect every overlapping route. |
-| Receiver probe returns `403` | Remove the Access or WAF challenge from the exact ingest path. |
-| Worker log shows ingest `401` | Rerun connect from the credential-owning host. Make sure that system clocks differ by less than five minutes. |
-| No events arrive | Make sure that the route matches the exact host and `publicUrl` is reachable. Inspect AI Crawl Control, Access, WAF, and route precedence. Then send the UTM smoke request. |
+| Direct-push receiver returns `403` | Remove the Access or WAF challenge from the exact ingest path. |
+| Direct-push Worker log shows ingest `401` | Rerun connect from the credential-owning host. Make sure that system clocks differ by less than five minutes. |
+| No direct-push events arrive | Make sure that the route matches the exact host. Make sure that `publicUrl` is reachable. Inspect AI Crawl Control, Access, WAF, and route precedence. Then send the UTM smoke request. |
+| No Queue-pull events arrive | Run `wrangler queues info <queue-name>` and `wrangler queues consumer http list <queue-name>`. Make sure that the producer binding uses that Queue. Make sure that the account ID, Queue ID, and token scope match. Then run the Queue acceptance test. |
+| Queue pull returns `403` | Create a token with **Account Queues Edit** for the Queue account. Reconnect with the token file. |
+| Queue backlog remains above 1,000 | Run a manual sync. If the backlog grows again, shorten the 30-minute schedule interval. |
 | Some paths are absent | Inspect more-specific routes and terminating security rules. Integrate Canonry into those routes or document the excluded coverage. |
-| Ingest returns `429` | Wait for the rate window. The Worker retries twice, then drops the event. |
+| Direct-push ingest returns `429` | Wait for the rate window. The Worker retries twice, then drops the event. |
 | Site returns Cloudflare error `1027` | Set the route to **Fail open**, or detach it. The account exhausted its daily Worker requests. |
 | Doctor reports stale or empty direct-push data | Do not run `traffic sync`. Inspect the route, receiver, and Worker logs. Then repeat the smoke request. |
 
@@ -828,7 +892,19 @@ Queue, Cloud Run, WordPress, or Vercel creates or repoints this schedule at a
 30-minute cadence.
 Cloudflare direct push is event-driven and must not receive a traffic-sync
 schedule. Recurring syncs are safe because of the adapter's overlap ring or
-durable Queue receipts. Recommended cadence:
+durable Queue receipts.
+
+Keep the auto-created 30-minute schedule for Queue pull. The Worker sends one
+selected event in each Queue message. At its 1,000-message limit, this cadence
+drains about 0.56 selected events per second. If the Queue backlog remains
+above 1,000, run a manual sync. Then shorten the interval:
+
+```bash
+cnry schedule set <project> --kind traffic-sync \
+  --source <source-id> --cron "*/10 * * * *"
+```
+
+Use these cadences only for Cloud Run, WordPress, and Vercel:
 
 | Cadence | Use case |
 |---|---|
