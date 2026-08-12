@@ -183,6 +183,32 @@ describe('Cloudflare Worker artifacts', () => {
 })
 
 describe('Cloudflare Wrangler deploy', () => {
+  it('deploys queue-pull Workers without a Worker secret file', async () => {
+    const root = scratch()
+    const wranglerTomlPath = path.join(root, 'wrangler.toml')
+    fs.writeFileSync(wranglerTomlPath, 'name = "canonry-test"', 'utf-8')
+
+    await deployCloudflareWorker({
+      wranglerTomlPath,
+      deliveryMode: 'queue-pull',
+      run: async (_command, args) => {
+        expect(args).toEqual([
+          'deploy', '--config', path.resolve(wranglerTomlPath), '--strict',
+        ])
+      },
+    })
+  })
+
+  it('scans queue API tokens for artifact exposure', () => {
+    expect(() => assertCloudflareArtifactsDoNotContainSecrets({
+      workerScript: 'safe',
+      wranglerToml: 'safe',
+      instructions: 'token = queue-api-token',
+    }, {
+      apiToken: 'queue-api-token',
+    })).toThrow(/cleartext secret/)
+  })
+
   it('parses and bundles generated artifacts before setup mutates state', async () => {
     const root = scratch()
     const calls: Array<{ command: string; args: readonly string[]; cwd: string }> = []

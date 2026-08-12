@@ -180,6 +180,13 @@ describe('traffic.source.connected', () => {
     expect(r.details?.sourceCount).toBe(1)
   })
 
+  it('does not report a paused staged source as actively connected', async () => {
+    insertTrafficSource(h, { status: 'paused', displayName: 'Queue staged' })
+    const r = await sourceConnectedCheck.run(ctxFor(h))
+    expect(r.status).toBe('skipped')
+    expect(r.code).toBe('traffic.source.paused')
+  })
+
   it('warns when one of several sources is errored', async () => {
     insertTrafficSource(h, { displayName: 'A' })
     insertTrafficSource(h, { displayName: 'B', status: 'error', lastError: 'auth bad' })
@@ -275,6 +282,18 @@ describe('traffic.source.recent-data', () => {
     expect(r.code).toBe('traffic.recent-data.stale')
     expect(r.remediation).toContain('Cloudflare Worker')
     expect(r.remediation).not.toContain('traffic sync')
+  })
+
+  it('skips a paused staged source instead of reporting its historical watermark as current', async () => {
+    const sourceId = insertTrafficSource(h, {
+      status: 'paused',
+      lastSyncedAt: new Date().toISOString(),
+      displayName: 'Queue staged',
+    })
+    insertCrawlerHit(h, sourceId)
+    const r = await recentDataCheck.run(ctxFor(h))
+    expect(r.status).toBe('skipped')
+    expect(r.code).toBe('traffic.recent-data.no-active-source')
   })
 })
 

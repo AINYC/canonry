@@ -8191,19 +8191,41 @@ export type TrafficBackfillResponse = {
 };
 
 export type TrafficConnectCloudflareRequest = {
-    deliveryMode: 'direct-push';
     displayName?: string;
     zoneId?: string;
+    deliveryMode: 'direct-push';
     accountId?: string;
+} | {
+    displayName?: string;
+    zoneId?: string;
+    deliveryMode: 'queue-pull';
+    accountId: string;
+    queueId: string;
+    queueName: string;
+    retentionSeconds: number;
+    apiToken: string;
 };
 
 export type TrafficConnectCloudflareResponse = {
     sourceId: string;
-    deliveryMode: 'direct-push';
     workerScript: string;
     wranglerToml: string;
     workerVersion: string;
     instructions: string;
+    deliveryMode: 'direct-push';
+    activationRequired: boolean;
+} | {
+    sourceId: string;
+    workerScript: string;
+    wranglerToml: string;
+    workerVersion: string;
+    instructions: string;
+    deliveryMode: 'queue-pull';
+    activationRequired: boolean;
+    accountId: string;
+    queueId: string;
+    queueName: string;
+    retentionSeconds: number;
 };
 
 export type TrafficEventsResponse = {
@@ -20235,10 +20257,48 @@ export type PostApiV1ProjectsByNameTrafficCloudflareIngestResponses = {
 
 export type PostApiV1ProjectsByNameTrafficCloudflareIngestResponse = PostApiV1ProjectsByNameTrafficCloudflareIngestResponses[keyof PostApiV1ProjectsByNameTrafficCloudflareIngestResponses];
 
+export type PostApiV1ProjectsByNameTrafficSourcesByIdActivateData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Staged traffic source ID.
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/traffic/sources/{id}/activate';
+};
+
+export type PostApiV1ProjectsByNameTrafficSourcesByIdActivateErrors = {
+    /**
+     * Source is archived, unsupported, or cannot be activated.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project or traffic source not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameTrafficSourcesByIdActivateError = PostApiV1ProjectsByNameTrafficSourcesByIdActivateErrors[keyof PostApiV1ProjectsByNameTrafficSourcesByIdActivateErrors];
+
+export type PostApiV1ProjectsByNameTrafficSourcesByIdActivateResponses = {
+    /**
+     * Activated traffic source DTO returned.
+     */
+    200: TrafficSourceDto;
+};
+
+export type PostApiV1ProjectsByNameTrafficSourcesByIdActivateResponse = PostApiV1ProjectsByNameTrafficSourcesByIdActivateResponses[keyof PostApiV1ProjectsByNameTrafficSourcesByIdActivateResponses];
+
 export type PostApiV1ProjectsByNameTrafficSourcesByIdSyncData = {
     body?: {
         /**
-         * Lookback window in minutes (default 60).
+         * Optional lookback for time-window sources; Cloudflare Queue pull ignores it.
          */
         sinceMinutes?: number;
     };
@@ -20266,7 +20326,11 @@ export type PostApiV1ProjectsByNameTrafficSourcesByIdSyncErrors = {
      */
     404: ErrorEnvelope;
     /**
-     * Upstream Cloud Run pull or auth-token resolution failed.
+     * Another Queue sync currently owns the source lease.
+     */
+    409: ErrorEnvelope;
+    /**
+     * Upstream pull, acknowledgement, or credential resolution failed.
      */
     502: ErrorEnvelope;
 };

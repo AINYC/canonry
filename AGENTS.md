@@ -45,7 +45,8 @@ packages/integration-google/     Google Search Console integration
 packages/integration-google-analytics/  Google Analytics 4 integration
 packages/integration-bing/       Bing Webmaster Tools integration
 packages/integration-openai-ads/  OpenAI Advertiser API (ChatGPT ads) integration
-packages/integration-cloudflare-worker/ Cloudflare edge-event capture + direct-push delivery adapter (Queue seam reserved)
+packages/integration-cloudflare-worker/ Cloudflare edge-event capture + direct-push / Queue-producer delivery
+packages/integration-cloudflare-queue/ Cloudflare Queues HTTP pull/ack client
 packages/integration-wordpress/  WordPress integration
 docs/                            Architecture, data model, setup guides, testing
 plugins/canonry/                  Portable Agent Plugin + Codex/Claude adapters
@@ -133,6 +134,8 @@ canonry report <project> --format json           # raw report payload to stdout
 # Server-side traffic — Cloudflare setup is intentionally local-CLI-only (not MCP)
 canonry traffic connect cloudflare <project> --zone-id <id> --account-id <id>  # writes secret-free Worker/Wrangler artifacts; refuses overwrite
 canonry traffic connect cloudflare <project> --zone-id <id> --account-id <id> --deploy --confirm-route --confirm-fail-open  # deploy unattached Worker after route preflight; attach exact host/* manually with Fail open
+canonry traffic connect cloudflare <project> --delivery-mode queue-pull --zone-id <id> --account-id <id> --queue-id <id> --queue-name <name> --api-token-file <path> [--retention-seconds 345600] # token stays server-side; Worker gets only a producer binding; enable pull separately with `wrangler queues consumer http add <name>`
+canonry traffic activate <project> --source <id> # explicit cutover: pause the old source and move/remove traffic-sync scheduling for the target mode
 canonry traffic events <project> --source <id> --format json                    # smoke-check forwarded edge events
 
 # Schedules — one row per (project, kind) where kind ∈ {answer-visibility, traffic-sync, gbp-sync, data-refresh, backlinks-sync, site-audit}
@@ -350,7 +353,7 @@ Each check returns `status: ok | warn | fail | skipped`, a stable machine-readab
 | auth | `traffic.source.scopes` | project | Per-source-type scope validation (skipped where the adapter has no explicit scope check — e.g. WordPress Application Passwords, Vercel API tokens) |
 | integrations | `traffic.source.connected` | project | At least one non-archived server-side traffic source exists for the project |
 | integrations | `traffic.source.recent-data` | project | Connected sources have crawler, AI user-fetch, or AI-referral events in the last 7d (warn) or 30d (fail) |
-| integrations | `traffic.source.sync-lag` | project | Pull-source watermark health. Skips only Cloudflare `deliveryMode=direct-push` (legacy missing mode is direct push); future Queue pull remains checked. |
+| integrations | `traffic.source.sync-lag` | project | Pull-source watermark health. Skips only Cloudflare `deliveryMode=direct-push` (legacy missing mode is direct push); Queue pull remains checked. |
 | integrations | `traffic.source.worker-version` | project | Cloudflare direct-push deployment health. Warns before the first versioned event and on mismatches with `configJson.workerVersion`. Other transports skip. |
 | integrations | `backlinks.source.connected` | project | Common Crawl is ready (`autoExtractBacklinks` + a `ready` release sync); warns when it is not set up |
 | integrations | `content.winnability.coverage` | project | Discovery classification coverage for cited-surface domains behind the content winnability gate; warns when discovery has not classified the domains that make ownable/ceded decisions meaningful |
@@ -688,7 +691,7 @@ The CLI and API **are** the agent interface. MCP is allowed only as an adapter o
 7. **UI/CLI parity.** Every piece of data or computed metric visible in the web UI must be retrievable via the API and CLI. If the UI shows it, an agent must be able to `curl` or `canonry ... --format json` it. Derived calculations (percentages, trends, roll-ups) belong in the API response, not in frontend code. See the "UI/CLI parity" section above for the full rules.
 8. **MCP adapter boundary.** `canonry-mcp` may call `createApiClient()` and public client methods only. It must not import DB modules, API routes, job runners, CLI dispatch, telemetry, or loggers, and it must never write non-MCP data to stdout.
 9. **MCP parity by default.** Every new public API endpoint and CLI command must either add an equivalent MCP tool, or classify the OpenAPI operation as `deferred` / `excluded-protocol` with an explicit rationale in `packages/canonry/src/mcp/openapi-classification.ts`. Security-sensitive credential or token operations may be deferred, but the PR must say why.
-   Cloudflare connect is one such deliberate exception: deployment reads locally stored per-source credentials and installs Worker secret bindings, so it remains a local CLI workflow and MUST NOT enter MCP/Aero transcripts.
+   Cloudflare connect is one such deliberate exception: deployment reads locally stored per-source credentials; direct push installs Worker secret bindings, while Queue pull keeps its API token server-side. It remains a local CLI workflow and MUST NOT enter MCP/Aero transcripts.
 
 #### Checklist for any new command or endpoint
 

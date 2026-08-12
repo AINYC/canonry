@@ -24,6 +24,12 @@ export interface CloudflareDirectPushSecrets {
   hmacSecret: string
 }
 
+export interface CloudflareQueuePullSecrets {
+  apiToken: string
+}
+
+export type CloudflareTrafficSecrets = CloudflareDirectPushSecrets | CloudflareQueuePullSecrets
+
 export type WranglerRunner = (
   command: string,
   args: readonly string[],
@@ -232,19 +238,25 @@ export function writeCloudflareWorkerArtifacts(
 
 export function assertCloudflareArtifactsDoNotContainSecrets(
   contents: { workerScript: string; wranglerToml: string; instructions?: string },
-  secrets: CloudflareDirectPushSecrets,
+  secrets: CloudflareTrafficSecrets,
 ): void {
   const artifactText = [contents.workerScript, contents.wranglerToml, contents.instructions ?? '']
-  for (const secret of [secrets.bearerToken, secrets.hmacSecret]) {
+  const secretValues = 'apiToken' in secrets
+    ? [secrets.apiToken]
+    : [secrets.bearerToken, secrets.hmacSecret]
+  for (const secret of secretValues) {
     if (secret && artifactText.some((value) => value.includes(secret))) {
       throw new Error('Cloudflare setup response unexpectedly contained a cleartext secret')
     }
   }
 }
 
-export function redactCloudflareSecrets(message: string, secrets: CloudflareDirectPushSecrets): string {
+export function redactCloudflareSecrets(message: string, secrets: CloudflareTrafficSecrets): string {
   let redacted = message
-  for (const secret of [secrets.bearerToken, secrets.hmacSecret]) {
+  const secretValues = 'apiToken' in secrets
+    ? [secrets.apiToken]
+    : [secrets.bearerToken, secrets.hmacSecret]
+  for (const secret of secretValues) {
     if (secret) redacted = redacted.replaceAll(secret, '[REDACTED]')
   }
   return redacted
@@ -310,17 +322,22 @@ async function runWranglerCapture(
  * bundle Canonry's current generated artifacts before connect mutates state.
  */
 export async function preflightCloudflareWrangler(opts: {
+  deliveryMode?: 'direct-push' | 'queue-pull'
   run?: WranglerCaptureRunner
   cwd?: string
   tempRoot?: string
 } = {}): Promise<void> {
   const runner = opts.run ?? runWranglerCapture
+  const deliveryMode = opts.deliveryMode ?? 'direct-push'
   const help = await runner(
     'wrangler',
     ['deploy', '--help'],
     { cwd: path.resolve(opts.cwd ?? process.cwd()) },
   )
-  const missing = ['--dry-run', '--secrets-file', '--strict'].filter(flag => !help.includes(flag))
+  const requiredFlags = deliveryMode === 'direct-push'
+    ? ['--dry-run', '--secrets-file', '--strict']
+    : ['--dry-run', '--strict']
+  const missing = requiredFlags.filter(flag => !help.includes(flag))
   if (missing.length > 0) {
     throw new Error(`Wrangler deploy does not support required flags: ${missing.join(', ')}`)
   }
@@ -336,21 +353,33 @@ export async function preflightCloudflareWrangler(opts: {
   try {
     fs.chmodSync(tempDirectory, 0o700)
     fs.writeFileSync(workerScriptPath, generateWorkerScript({
-      deliveryMode: 'direct-push',
+      deliveryMode,
       workerVersion: 'preflight',
       botList: DEFAULT_BOT_LIST,
     }), { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
-    fs.writeFileSync(wranglerTomlPath, generateWranglerToml({
-      deliveryMode: 'direct-push',
-      sourceId: 'preflight',
-      hostname: 'example.invalid',
-      ingestUrl: 'https://canonry.example.invalid/api/v1/projects/preflight/traffic/cloudflare/ingest',
-      workerVersion: 'preflight',
-    }), { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
-    fs.writeFileSync(secretsPath, JSON.stringify({
-      [CLOUDFLARE_WORKER_BINDINGS.bearerToken]: 'preflight-bearer',
-      [CLOUDFLARE_WORKER_BINDINGS.hmacSecret]: 'preflight-hmac',
-    }), { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
+    fs.writeFileSync(wranglerTomlPath, generateWranglerToml(
+      deliveryMode === 'queue-pull'
+        ? {
+          deliveryMode,
+          sourceId: 'preflight',
+          hostname: 'example.invalid',
+          queueName: 'canonry-preflight',
+          workerVersion: 'preflight',
+        }
+        : {
+          deliveryMode,
+          sourceId: 'preflight',
+          hostname: 'example.invalid',
+          ingestUrl: 'https://canonry.example.invalid/api/v1/projects/preflight/traffic/cloudflare/ingest',
+          workerVersion: 'preflight',
+        },
+    ), { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
+    if (deliveryMode === 'direct-push') {
+      fs.writeFileSync(secretsPath, JSON.stringify({
+        [CLOUDFLARE_WORKER_BINDINGS.bearerToken]: 'preflight-bearer',
+        [CLOUDFLARE_WORKER_BINDINGS.hmacSecret]: 'preflight-hmac',
+      }), { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
+    }
 
     const validationOutput = await runner(
       'wrangler',
@@ -358,8 +387,7 @@ export async function preflightCloudflareWrangler(opts: {
         'deploy',
         '--config',
         wranglerTomlPath,
-        '--secrets-file',
-        secretsPath,
+        ...(deliveryMode === 'direct-push' ? ['--secrets-file', secretsPath] : []),
         '--strict',
         '--dry-run',
         '--outdir',
@@ -387,10 +415,24 @@ export async function preflightCloudflareWrangler(opts: {
  */
 export async function deployCloudflareWorker(opts: {
   wranglerTomlPath: string
-  secrets: CloudflareDirectPushSecrets
+  /** Queue mode delegates Wrangler authentication to the operator environment. */
+  deliveryMode?: 'direct-push' | 'queue-pull'
+  secrets?: CloudflareDirectPushSecrets
   run?: WranglerRunner
   tempRoot?: string
 }): Promise<void> {
+  const deliveryMode = opts.deliveryMode ?? 'direct-push'
+  if (deliveryMode === 'queue-pull') {
+    const runner = opts.run ?? runWrangler
+    await runner(
+      'wrangler',
+      ['deploy', '--config', path.resolve(opts.wranglerTomlPath), '--strict'],
+      { cwd: path.dirname(path.resolve(opts.wranglerTomlPath)) },
+    )
+    return
+  }
+  if (!opts.secrets) throw new Error('Direct-push Worker deploy requires bearer and HMAC secrets')
+  const secrets = opts.secrets
   const tempDirectory = fs.mkdtempSync(path.join(opts.tempRoot ?? os.tmpdir(), 'canonry-cloudflare-secrets-'))
   const secretsPath = path.join(tempDirectory, 'secrets.json')
 
@@ -399,8 +441,8 @@ export async function deployCloudflareWorker(opts: {
     fs.writeFileSync(
       secretsPath,
       JSON.stringify({
-        [CLOUDFLARE_WORKER_BINDINGS.bearerToken]: opts.secrets.bearerToken,
-        [CLOUDFLARE_WORKER_BINDINGS.hmacSecret]: opts.secrets.hmacSecret,
+        [CLOUDFLARE_WORKER_BINDINGS.bearerToken]: secrets.bearerToken,
+        [CLOUDFLARE_WORKER_BINDINGS.hmacSecret]: secrets.hmacSecret,
       }),
       { encoding: 'utf-8', flag: 'wx', mode: 0o600 },
     )

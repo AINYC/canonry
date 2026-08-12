@@ -1,5 +1,6 @@
 import {
   trafficBackfill,
+  trafficActivate,
   trafficConnectCloudflare,
   trafficConnectCloudRun,
   trafficConnectVercel,
@@ -12,15 +13,21 @@ import {
 } from '../commands/traffic.js'
 import type { CliCommandSpec } from '../cli-dispatch.js'
 import { getBoolean, getString, parseIntegerOption, requireProject, stringOption, unknownSubcommand } from '../cli-command-helpers.js'
+import { DEFAULT_CLOUDFLARE_QUEUE_RETENTION_SECONDS } from '../commands/traffic.js'
 
 export const TRAFFIC_CLI_COMMANDS: readonly CliCommandSpec[] = [
   {
     path: ['traffic', 'connect', 'cloudflare'],
-    usage: 'canonry traffic connect cloudflare <project> [--display-name <name>] [--zone-id <id>] [--account-id <id>] [--output-dir <dir>] [--deploy --confirm-route --confirm-fail-open] [--format json]',
+    usage: 'canonry traffic connect cloudflare <project> [--delivery-mode direct-push|queue-pull] [--display-name <name>] [--zone-id <id>] [--account-id <id>] [--queue-id <id> --queue-name <name> --api-token-file <path> --retention-seconds 345600] [--output-dir <dir>] [--deploy --confirm-route --confirm-fail-open] [--format json]',
     options: {
       'display-name': stringOption(),
       'zone-id': stringOption(),
       'account-id': stringOption(),
+      'delivery-mode': stringOption(),
+      'queue-id': stringOption(),
+      'queue-name': stringOption(),
+      'api-token-file': stringOption(),
+      'retention-seconds': stringOption(),
       'output-dir': stringOption(),
       deploy: { type: 'boolean' },
       'confirm-route': { type: 'boolean' },
@@ -30,12 +37,26 @@ export const TRAFFIC_CLI_COMMANDS: readonly CliCommandSpec[] = [
       const project = requireProject(
         input,
         'traffic.connect.cloudflare',
-        'canonry traffic connect cloudflare <project> [--zone-id <id>] [--output-dir <dir>] [--deploy --confirm-route --confirm-fail-open]',
+        'canonry traffic connect cloudflare <project> [--delivery-mode direct-push|queue-pull] [--zone-id <id>] [--output-dir <dir>] [--deploy --confirm-route --confirm-fail-open]',
       )
+      const deliveryMode = getString(input.values, 'delivery-mode') ?? 'direct-push'
+      if (deliveryMode !== 'direct-push' && deliveryMode !== 'queue-pull') {
+        throw new Error('--delivery-mode must be direct-push or queue-pull')
+      }
+      const retentionSeconds = parseIntegerOption(input, 'retention-seconds', {
+        command: 'traffic.connect.cloudflare',
+        usage: 'canonry traffic connect cloudflare <project> --delivery-mode queue-pull --retention-seconds 345600',
+        message: '--retention-seconds must be an integer',
+      })
       await trafficConnectCloudflare(project, {
+        deliveryMode,
         displayName: getString(input.values, 'display-name'),
         zoneId: getString(input.values, 'zone-id'),
         accountId: getString(input.values, 'account-id'),
+        queueId: getString(input.values, 'queue-id'),
+        queueName: getString(input.values, 'queue-name'),
+        apiTokenFile: getString(input.values, 'api-token-file'),
+        retentionSeconds: retentionSeconds ?? DEFAULT_CLOUDFLARE_QUEUE_RETENTION_SECONDS,
         outputDirectory: getString(input.values, 'output-dir'),
         deploy: getBoolean(input.values, 'deploy'),
         confirmRoute: getBoolean(input.values, 'confirm-route'),
@@ -148,6 +169,23 @@ export const TRAFFIC_CLI_COMMANDS: readonly CliCommandSpec[] = [
         usage: 'canonry traffic connect <provider> <project> [args]',
         available: ['cloud-run', 'cloudflare', 'wordpress', 'vercel'],
       })
+    },
+  },
+  {
+    path: ['traffic', 'activate'],
+    usage: 'canonry traffic activate <project> --source <id> [--format json]',
+    options: {
+      source: stringOption(),
+    },
+    run: async (input) => {
+      const project = requireProject(
+        input,
+        'traffic.activate',
+        'canonry traffic activate <project> --source <id>',
+      )
+      const sourceId = getString(input.values, 'source')
+      if (!sourceId) throw new Error('--source <id> is required')
+      await trafficActivate(project, { sourceId, format: input.format })
     },
   },
   {
@@ -303,7 +341,7 @@ export const TRAFFIC_CLI_COMMANDS: readonly CliCommandSpec[] = [
       unknownSubcommand(input.positionals[0], {
         command: 'traffic',
         usage: 'canonry traffic <subcommand> <project> [args]',
-        available: ['connect', 'sync', 'backfill', 'status', 'sources', 'events'],
+        available: ['connect', 'activate', 'sync', 'backfill', 'status', 'sources', 'events'],
       })
     },
   },

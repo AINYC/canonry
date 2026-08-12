@@ -5,6 +5,7 @@ import {
   getCloudflareTrafficConnectionBySourceId,
   listCloudflareTrafficConnections,
   removeCloudflareTrafficConnection,
+  removeCloudflareTrafficConnectionBySourceId,
   upsertCloudflareTrafficConnection,
 } from '../src/cloudflare-traffic-config.js'
 
@@ -31,6 +32,27 @@ function makeEntry(overrides: Partial<CloudflareTrafficConnectionConfigEntry> = 
     updatedAt: '2026-05-27T00:00:00Z',
     ...overrides,
   }
+}
+
+function makeQueueEntry(
+  overrides: Partial<CloudflareTrafficConnectionConfigEntry> = {},
+): CloudflareTrafficConnectionConfigEntry {
+  return {
+    projectName: 'demo',
+    sourceId: 'src_queue',
+    deliveryMode: 'queue-pull',
+    apiToken: 'queue_secret',
+    workerVersion: '1.0.0',
+    expectedBotListVersion: '2026-05-27',
+    zoneId: 'zone_abc',
+    accountId: 'account_abc',
+    queueId: 'queue_abc',
+    queueName: 'canonry-demo',
+    retentionSeconds: 86_400,
+    createdAt: '2026-05-27T00:00:00Z',
+    updatedAt: '2026-05-27T00:00:00Z',
+    ...overrides,
+  } as CloudflareTrafficConnectionConfigEntry
 }
 
 describe('cloudflare-traffic-config', () => {
@@ -67,16 +89,47 @@ describe('cloudflare-traffic-config', () => {
       expect(getCloudflareTrafficConnection(config, 'demo')?.deliveryMode).toBe('direct-push')
     })
 
+    it('returns a queue-pull connection without coercing its mode', () => {
+      const config = emptyConfig()
+      const queue = makeQueueEntry()
+      config.cloudflareTraffic = { connections: [queue] }
+
+      expect(getCloudflareTrafficConnection(config, 'demo')).toEqual(queue)
+    })
+
+    it.each([59, 1.5, 1_209_601])(
+      'rejects an invalid Queue retention of %s seconds',
+      (retentionSeconds) => {
+        const config = emptyConfig()
+        config.cloudflareTraffic = {
+          connections: [makeQueueEntry({ retentionSeconds })],
+        }
+
+        expect(() => getCloudflareTrafficConnection(config, 'demo'))
+          .toThrow(/invalid.*queue-pull/i)
+      },
+    )
+
+    it('rejects a Queue name that Cloudflare cannot create', () => {
+      const config = emptyConfig()
+      config.cloudflareTraffic = {
+        connections: [makeQueueEntry({ queueName: 'unsafe queue name' })],
+      }
+
+      expect(() => getCloudflareTrafficConnection(config, 'demo'))
+        .toThrow(/invalid.*queue-pull/i)
+    })
+
     it('rejects an unsupported transport instead of treating it as direct-push', () => {
       const config = emptyConfig()
       const unsupported = {
         ...makeEntry(),
-        deliveryMode: 'queue-pull',
+        deliveryMode: 'webhook-push',
       } as unknown as CloudflareTrafficConnectionConfigEntry
       config.cloudflareTraffic = { connections: [unsupported] }
 
-      expect(() => getCloudflareTrafficConnection(config, 'demo')).toThrow(/unsupported.*queue-pull/i)
-      expect(() => listCloudflareTrafficConnections(config)).toThrow(/unsupported.*queue-pull/i)
+      expect(() => getCloudflareTrafficConnection(config, 'demo')).toThrow(/unsupported.*webhook-push/i)
+      expect(() => listCloudflareTrafficConnections(config)).toThrow(/unsupported.*webhook-push/i)
     })
   })
 
@@ -104,12 +157,26 @@ describe('cloudflare-traffic-config', () => {
       expect(config.cloudflareTraffic?.connections).toHaveLength(1)
     })
 
-    it('replaces the existing entry when project names match', () => {
+    it('replaces the existing entry when source ids match', () => {
       const config = emptyConfig()
       config.cloudflareTraffic = { connections: [makeEntry({ bearerToken: 'old' })] }
       upsertCloudflareTrafficConnection(config, makeEntry({ bearerToken: 'new' }))
       expect(config.cloudflareTraffic.connections).toHaveLength(1)
-      expect(config.cloudflareTraffic.connections?.[0]?.bearerToken).toBe('new')
+      expect(config.cloudflareTraffic.connections?.[0]).toMatchObject({
+        deliveryMode: 'direct-push',
+        bearerToken: 'new',
+      })
+    })
+
+    it('retains staged credentials for two source ids in the same project', () => {
+      const config = emptyConfig()
+      upsertCloudflareTrafficConnection(config, makeEntry({ sourceId: 'src_push' }))
+      upsertCloudflareTrafficConnection(config, makeQueueEntry({ sourceId: 'src_queue' }))
+
+      expect(config.cloudflareTraffic?.connections?.map((entry) => entry.sourceId)).toEqual([
+        'src_push',
+        'src_queue',
+      ])
     })
 
     it('initializes the block when cloudflareTraffic is missing', () => {
@@ -136,6 +203,18 @@ describe('cloudflare-traffic-config', () => {
       config.cloudflareTraffic = { connections: [makeEntry({ projectName: 'a' })] }
       expect(removeCloudflareTrafficConnection(config, 'a')).toBe(true)
       expect(config.cloudflareTraffic).toBeUndefined()
+    })
+  })
+
+  describe('removeCloudflareTrafficConnectionBySourceId', () => {
+    it('removes only the requested staged credential', () => {
+      const config = emptyConfig()
+      config.cloudflareTraffic = {
+        connections: [makeEntry({ sourceId: 'src_push' }), makeQueueEntry({ sourceId: 'src_queue' })],
+      }
+
+      expect(removeCloudflareTrafficConnectionBySourceId(config, 'src_queue')).toBe(true)
+      expect(config.cloudflareTraffic?.connections?.map((entry) => entry.sourceId)).toEqual(['src_push'])
     })
   })
 })

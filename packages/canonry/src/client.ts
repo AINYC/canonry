@@ -404,6 +404,7 @@ import {
   postApiV1ProjectsByNameTrafficConnectWordpress,
   postApiV1ProjectsByNameTrafficConnectVercel,
   postApiV1ProjectsByNameTrafficConnectCloudflare,
+  postApiV1ProjectsByNameTrafficSourcesByIdActivate,
   postApiV1ProjectsByNameTrafficSourcesByIdSync,
   postApiV1ProjectsByNameTrafficSourcesByIdBackfill,
   postApiV1ProjectsByNameTrafficSourcesByIdReset,
@@ -3098,6 +3099,15 @@ export class ApiClient {
         client: this.heyClient,
         path: { name: project },
         body,
+      }),
+    )
+  }
+
+  async trafficActivate(project: string, sourceId: string): Promise<TrafficSourceDto> {
+    return this.invoke<TrafficSourceDto>(() =>
+      postApiV1ProjectsByNameTrafficSourcesByIdActivate({
+        client: this.heyClient,
+        path: { name: project, id: sourceId },
       }),
     )
   }

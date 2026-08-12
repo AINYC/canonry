@@ -20,6 +20,7 @@ import {
   TrafficSourceTypes,
   TrafficSourceStatuses,
   TrafficSourceAuthModes,
+  SchedulableRunKinds,
   RunKinds,
   RunStatuses,
 } from '@ainyc/canonry-contracts'
@@ -126,6 +127,8 @@ async function buildHarness(
     failResolveAccessTokenWith?: string
     /** Force the Cloud Run pull to fail with this message. */
     failPullWith?: string
+    /** Mutate lifecycle state while a Cloud Run provider call is in flight. */
+    onCloudRunPull?: () => void | Promise<void>
     /** Force the WordPress traffic pull (used for probe) to throw a `WordpressTrafficApiError`. */
     failWpProbeWith?: { status: number; message: string; body?: string }
     /** Force the WordPress traffic pull (used by sync) to throw an Error with this message. */
@@ -229,6 +232,7 @@ async function buildHarness(
     cloudRunCredentialStore,
     pullCloudRunEvents: async (_token, pullOptions): Promise<CloudRunTrafficEventsPage> => {
       pullInvocations += 1
+      await options.onCloudRunPull?.()
       observedWindows.push({ startTime: pullOptions.startTime, endTime: pullOptions.endTime })
       observedFirstSync.push(pullOptions.firstSync)
       if (options.failPullWith) throw new Error(options.failPullWith)
@@ -377,6 +381,273 @@ async function buildHarness(
 const SA_KEY = JSON.stringify({
   client_email: 'sa@openclaw-nyc.iam.gserviceaccount.com',
   private_key: '-----BEGIN PRIVATE KEY-----\nfake-key\n-----END PRIVATE KEY-----',
+})
+
+describe('traffic source cutover staging', () => {
+  let h: Awaited<ReturnType<typeof buildHarness>>
+  beforeEach(async () => { h = await buildHarness([]) })
+  afterEach(async () => { await h.close() })
+
+  it('keeps Cloud Run, WordPress, and Vercel connects staged while Queue pull is active', async () => {
+    const queue = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {
+        deliveryMode: 'queue-pull',
+        accountId: 'account_queue',
+        queueId: 'queue_queue',
+        queueName: 'canonry-traffic-queue',
+        retentionSeconds: 86_400,
+        apiToken: 'queue-secret-token',
+      },
+    })
+    expect(queue.statusCode).toBe(200)
+    const queueSourceId = JSON.parse(queue.payload).sourceId as string
+
+    const connections = [
+      {
+        path: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+        body: { gcpProjectId: 'gcp-staged', keyJson: SA_KEY },
+      },
+      {
+        path: '/api/v1/projects/test-project/traffic/connect/wordpress',
+        body: { baseUrl: 'https://8.8.8.8', username: 'staged', applicationPassword: 'wp-secret' },
+      },
+      {
+        path: '/api/v1/projects/test-project/traffic/connect/vercel',
+        body: { projectId: 'prj_staged', teamId: 'team_staged', token: 'vercel-secret' },
+      },
+    ] as const
+
+    const stagedSourceIds: string[] = []
+    for (const { path, body } of connections) {
+      const first = await h.app.inject({ method: 'POST', url: path, payload: body })
+      expect(first.statusCode, first.payload).toBe(200)
+      expect(JSON.parse(first.payload).status).toBe(TrafficSourceStatuses.paused)
+      stagedSourceIds.push(JSON.parse(first.payload).id as string)
+
+      const reconnect = await h.app.inject({ method: 'POST', url: path, payload: body })
+      expect(reconnect.statusCode).toBe(200)
+      expect(JSON.parse(reconnect.payload).status).toBe(TrafficSourceStatuses.paused)
+    }
+
+    const rows = h.db.select().from(trafficSources).all()
+    expect(rows.filter(row => row.status === TrafficSourceStatuses.connected).map(row => row.id)).toEqual([queueSourceId])
+    expect(h.db.select().from(schedules).all()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceId: queueSourceId, enabled: true }),
+    ]))
+
+    for (const sourceId of stagedSourceIds) {
+      const pausedSync = await h.app.inject({
+        method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`, payload: {},
+      })
+      expect(pausedSync.statusCode).toBe(400)
+    }
+
+    const cloudRunCredential = h.credentials.get('test-project')!
+    h.credentials.set('test-project', { ...cloudRunCredential, privateKey: '' })
+    const invalidCloudRun = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${stagedSourceIds[0]}/activate`,
+    })
+    expect(invalidCloudRun.statusCode).toBe(400)
+    h.credentials.set('test-project', cloudRunCredential)
+
+    const wpCredential = h.wpCredentials.get('test-project')!
+    h.wpCredentials.set('test-project', { ...wpCredential, applicationPassword: '' })
+    const invalidWordpress = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${stagedSourceIds[1]}/activate`,
+    })
+    expect(invalidWordpress.statusCode).toBe(400)
+    h.wpCredentials.set('test-project', wpCredential)
+
+    const vercelCredential = h.vercelCredentials.get('test-project')!
+    h.vercelCredentials.set('test-project', { ...vercelCredential, token: '' })
+    const invalidVercel = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${stagedSourceIds[2]}/activate`,
+    })
+    expect(invalidVercel.statusCode).toBe(400)
+    h.vercelCredentials.set('test-project', vercelCredential)
+
+    const resetStaged = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/projects/test-project/traffic/sources/${stagedSourceIds[0]}/reset`,
+      payload: { advanceToNow: true },
+    })
+    expect(resetStaged.statusCode).toBe(400)
+
+    h.db.update(trafficSources).set({ status: TrafficSourceStatuses.error })
+      .where(eq(trafficSources.id, stagedSourceIds[0])).run()
+    const resetErroredSibling = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/projects/test-project/traffic/sources/${stagedSourceIds[0]}/reset`,
+      payload: { advanceToNow: true },
+    })
+    expect(resetErroredSibling.statusCode).toBe(400)
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, stagedSourceIds[0])).get()?.status)
+      .toBe(TrafficSourceStatuses.error)
+    const blockedErroredSync = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/projects/test-project/traffic/sources/${stagedSourceIds[0]}/sync`,
+      payload: {},
+    })
+    expect(blockedErroredSync.statusCode).toBe(400)
+    expect(h.getPullCount()).toBe(0)
+    h.db.update(trafficSources).set({ status: TrafficSourceStatuses.paused })
+      .where(eq(trafficSources.id, stagedSourceIds[0])).run()
+
+    for (const sourceId of stagedSourceIds) {
+      const activated = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/activate`,
+      })
+      expect(activated.statusCode, activated.payload).toBe(200)
+      expect(h.db.select().from(trafficSources).all()
+        .filter(row => row.status === TrafficSourceStatuses.connected)
+        .map(row => row.id)).toEqual([sourceId])
+      expect(h.db.select().from(schedules).all()).toEqual([
+        expect.objectContaining({ sourceId, enabled: true }),
+      ])
+    }
+
+    const queueReactivated = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/projects/test-project/traffic/sources/${queueSourceId}/activate`,
+    })
+    expect(queueReactivated.statusCode).toBe(200)
+    expect(h.db.select().from(schedules).all()).toEqual([
+      expect.objectContaining({ sourceId: queueSourceId, enabled: true }),
+    ])
+  })
+
+  it('discards an in-flight pull when cutover pauses its source before commit', async () => {
+    let sourceId = ''
+    const liveHarness: { current?: Awaited<ReturnType<typeof buildHarness>> } = {}
+    await h.close()
+    h = await buildHarness([buildEvent()], {
+      bypassTimeFilter: true,
+      onCloudRunPull: () => {
+        if (!sourceId || !liveHarness.current) return
+        liveHarness.current.db.update(trafficSources).set({ status: TrafficSourceStatuses.paused })
+          .where(eq(trafficSources.id, sourceId)).run()
+      },
+    })
+    liveHarness.current = h
+    const connected = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+      payload: { gcpProjectId: 'gcp-racing', keyJson: SA_KEY },
+    })
+    sourceId = JSON.parse(connected.payload).id as string
+
+    const sync = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`, payload: {},
+    })
+
+    expect(sync.statusCode).toBe(400)
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()?.status)
+      .toBe(TrafficSourceStatuses.paused)
+    expect(h.db.select().from(crawlerEventsHourly).all()).toHaveLength(0)
+    expect(h.db.select().from(runs).where(eq(runs.sourceId, sourceId)).get()?.status)
+      .toBe(RunStatuses.failed)
+  })
+
+  it('preserves an operator reset that completes while a pull is in flight', async () => {
+    let sourceId = ''
+    let resetStatus = 0
+    const liveHarness: { current?: Awaited<ReturnType<typeof buildHarness>> } = {}
+    await h.close()
+    h = await buildHarness([buildEvent()], {
+      bypassTimeFilter: true,
+      onCloudRunPull: async () => {
+        if (!sourceId || !liveHarness.current) return
+        const reset = await liveHarness.current.app.inject({
+          method: 'POST',
+          url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/reset`,
+          payload: { advanceToNow: true },
+        })
+        resetStatus = reset.statusCode
+      },
+    })
+    liveHarness.current = h
+    const connected = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+      payload: { gcpProjectId: 'gcp-reset-racing', keyJson: SA_KEY },
+    })
+    sourceId = JSON.parse(connected.payload).id as string
+
+    const sync = await h.app.inject({
+      method: 'POST', url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`, payload: {},
+    })
+    const after = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+
+    expect(resetStatus).toBe(200)
+    expect(sync.statusCode).toBe(400)
+    expect(after.status).toBe(TrafficSourceStatuses.connected)
+    expect(after.lastSyncedAt).not.toBeNull()
+    expect(h.db.select().from(crawlerEventsHourly).all()).toHaveLength(0)
+    expect(h.db.select().from(runs).where(eq(runs.sourceId, sourceId)).get()?.status)
+      .toBe(RunStatuses.failed)
+  })
+
+  it('removes a stale pull schedule when direct-push becomes authoritative', async () => {
+    const queue = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {
+        deliveryMode: 'queue-pull',
+        accountId: 'account-stale',
+        queueId: 'queue-stale',
+        queueName: 'canonry-stale',
+        retentionSeconds: 86_400,
+        apiToken: 'queue-secret-token',
+      },
+    })
+    const queueSourceId = JSON.parse(queue.payload).sourceId as string
+    h.db.update(trafficSources).set({ status: TrafficSourceStatuses.error })
+      .where(eq(trafficSources.id, queueSourceId)).run()
+
+    const direct = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {},
+    })
+    const directSourceId = JSON.parse(direct.payload).sourceId as string
+
+    expect(direct.statusCode).toBe(200)
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, directSourceId)).get()?.status)
+      .toBe(TrafficSourceStatuses.connected)
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, queueSourceId)).get()?.status)
+      .toBe(TrafficSourceStatuses.error)
+    expect(h.db.select().from(schedules).where(eq(schedules.kind, SchedulableRunKinds['traffic-sync'])).all())
+      .toHaveLength(0)
+    expect(h.getScheduleUpdates().filter(update => update.action === 'delete')).toHaveLength(1)
+
+    const now = new Date().toISOString()
+    h.db.insert(schedules).values({
+      id: crypto.randomUUID(),
+      projectId: h.db.select().from(trafficSources).where(eq(trafficSources.id, directSourceId)).get()!.projectId,
+      kind: SchedulableRunKinds['traffic-sync'],
+      cronExpr: '*/30 * * * *',
+      preset: null,
+      timezone: 'UTC',
+      enabled: true,
+      providers: [],
+      sourceId: queueSourceId,
+      createdAt: now,
+      updatedAt: now,
+    }).run()
+
+    const reconnected = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/test-project/traffic/connect/cloudflare',
+      payload: {},
+    })
+    expect(reconnected.statusCode).toBe(200)
+    expect(h.db.select().from(schedules).where(eq(schedules.kind, SchedulableRunKinds['traffic-sync'])).all())
+      .toHaveLength(0)
+    expect(h.getScheduleUpdates().filter(update => update.action === 'delete')).toHaveLength(2)
+  })
 })
 
 describe('POST /traffic/connect/cloud-run', () => {
@@ -2215,7 +2486,7 @@ describe('POST /traffic/sources/:id/sync', () => {
 
 describe('POST /traffic/sources/:id/sync — WordPress', () => {
   const wpConnectBody = {
-    baseUrl: 'https://example.com',
+    baseUrl: 'https://8.8.8.8',
     username: 'canonry-bot',
     applicationPassword: 'xxxx xxxx xxxx xxxx xxxx xxxx',
   }
@@ -2915,7 +3186,7 @@ describe('POST /traffic/sources/:id/backfill', () => {
 
 describe('POST /traffic/sources/:id/backfill — WordPress', () => {
   const wpConnectBody = {
-    baseUrl: 'https://example.com',
+    baseUrl: 'https://8.8.8.8',
     username: 'canonry-bot',
     applicationPassword: 'xxxx xxxx xxxx xxxx xxxx xxxx',
   }
@@ -4264,6 +4535,31 @@ describe('POST /traffic/sources/:id/reset', () => {
       expect(row.status).toBe(TrafficSourceStatuses.connected)
       expect(row.lastError).toBeNull()
       expect(new Date(row.lastSyncedAt!).getTime()).toBeGreaterThanOrEqual(before)
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('refuses reset when the source no longer has usable credential material', async () => {
+    const h = await buildHarness([])
+    try {
+      const sourceId = await connectVercel(h)
+      h.db.update(trafficSources)
+        .set({ status: TrafficSourceStatuses.error, lastError: 'prior pull failed' })
+        .where(eq(trafficSources.id, sourceId))
+        .run()
+      const credential = h.vercelCredentials.get('test-project')!
+      h.vercelCredentials.set('test-project', { ...credential, token: '' })
+
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/reset`,
+        payload: { advanceToNow: true },
+      })
+
+      expect(res.statusCode).toBe(400)
+      expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get())
+        .toMatchObject({ status: TrafficSourceStatuses.error, lastError: 'prior pull failed' })
     } finally {
       await h.close()
     }

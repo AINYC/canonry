@@ -591,6 +591,37 @@ test('traffic_sources leaves ingest_token_hash and last_worker_version NULL for 
   expect(row.lastWorkerVersion).toBeNull()
 })
 
+test('traffic sync lease migration adds nullable per-source lease fields without changing legacy rows', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-traffic-lease-migration-'))
+  onTestFinished(() => cleanup(tmpDir))
+  const db = createClient(path.join(tmpDir, 'test.db'))
+
+  migrate(db, MIGRATION_VERSIONS.filter(migration => migration.version < 134))
+  seedProject(db)
+  const now = '2026-08-11T12:00:00.000Z'
+  // This is deliberately a pre-v134 insert. Drizzle's current table model
+  // names the new lease columns even when values are omitted, so use SQL that
+  // names only columns an older binary could have written.
+  db.run(sql`
+    INSERT INTO traffic_sources (
+      id, project_id, source_type, display_name, status, config_json, created_at, updated_at
+    ) VALUES (
+      ${'src_pre_lease'}, ${'proj_1'}, ${'cloudflare'}, ${'Legacy Cloudflare source'},
+      ${'connected'}, ${JSON.stringify({ deliveryMode: 'direct-push' })}, ${now}, ${now}
+    )
+  `)
+
+  const leaseMigration = MIGRATION_VERSIONS.find(
+    migration => migration.name === 'traffic-source-sync-lease',
+  )
+  expect(leaseMigration).toMatchObject({ version: 134 })
+
+  migrate(db)
+  const [row] = db.select().from(trafficSources).where(eq(trafficSources.id, 'src_pre_lease')).all()
+  expect(row.syncLeaseOwner).toBeNull()
+  expect(row.syncLeaseExpiresAt).toBeNull()
+})
+
 test('traffic ingest migration adds source auth columns and durable receipts without losing source data', () => {
   const { db, tmpDir } = createTempDb()
   onTestFinished(() => cleanup(tmpDir))

@@ -1,4 +1,4 @@
-import { and, eq, gte, ne, sql } from 'drizzle-orm'
+import { and, eq, gte, inArray, ne, sql } from 'drizzle-orm'
 import {
   CloudflareTrafficDeliveryModes,
   CheckCategories,
@@ -41,6 +41,10 @@ function isCloudflareDirectPush(source: TrafficSourceProbe): boolean {
   const deliveryMode = source.configJson.deliveryMode
   return deliveryMode === undefined
     || deliveryMode === CloudflareTrafficDeliveryModes['direct-push']
+}
+
+function isActiveSource(source: TrafficSourceProbe): boolean {
+  return source.status !== TrafficSourceStatuses.paused
 }
 
 function recentDataRemediation(sources: TrafficSourceProbe[], lastSyncedAt: string | null): string {
@@ -112,32 +116,42 @@ const sourceConnectedCheck: CheckDefinition = {
         details: { sourceCount: 0 },
       }
     }
-    const errored = sources.filter((s) => s.status === 'error')
-    if (errored.length > 0 && errored.length === sources.length) {
+    const activeSources = sources.filter(isActiveSource)
+    if (activeSources.length === 0) {
+      return {
+        status: CheckStatuses.skipped,
+        code: 'traffic.source.paused',
+        summary: `${sources.length} traffic source(s) are paused or staged; none are actively ingesting.`,
+        remediation: 'Activate the intended traffic source after its deployment smoke test succeeds.',
+        details: { sourceCount: sources.length, pausedIds: sources.map((s) => s.id) },
+      }
+    }
+    const errored = activeSources.filter((s) => s.status === 'error')
+    if (errored.length > 0 && errored.length === activeSources.length) {
       return {
         status: CheckStatuses.fail,
         code: 'traffic.source.all-errored',
-        summary: `All ${sources.length} traffic source(s) are in error state. No data is being ingested.`,
+        summary: `All ${activeSources.length} active traffic source(s) are in error state. No data is being ingested.`,
         remediation: errored[0]!.lastError
           ? `Latest error: "${errored[0]!.lastError}". Re-connect the source or run \`canonry traffic sync <project> --source <id>\` to retry.`
           : 'Run `canonry traffic sources <project>` to inspect the failing source(s) and re-connect.',
-        details: { sourceCount: sources.length, erroredIds: errored.map((s) => s.id) },
+        details: { sourceCount: activeSources.length, pausedCount: sources.length - activeSources.length, erroredIds: errored.map((s) => s.id) },
       }
     }
     if (errored.length > 0) {
       return {
         status: CheckStatuses.warn,
         code: 'traffic.source.partially-errored',
-        summary: `${errored.length} of ${sources.length} traffic source(s) are in error state.`,
+        summary: `${errored.length} of ${activeSources.length} active traffic source(s) are in error state.`,
         remediation: 'Run `canonry traffic sources <project>` to inspect the failing sources individually.',
-        details: { sourceCount: sources.length, erroredIds: errored.map((s) => s.id) },
+        details: { sourceCount: activeSources.length, pausedCount: sources.length - activeSources.length, erroredIds: errored.map((s) => s.id) },
       }
     }
     return {
       status: CheckStatuses.ok,
       code: 'traffic.source.connected',
-      summary: `${sources.length} traffic source(s) connected: ${sources.map((s) => s.displayName).join(', ')}.`,
-      details: { sourceCount: sources.length, sourceTypes: [...new Set(sources.map((s) => s.sourceType))] },
+      summary: `${activeSources.length} traffic source(s) connected: ${activeSources.map((s) => s.displayName).join(', ')}.`,
+      details: { sourceCount: activeSources.length, pausedCount: sources.length - activeSources.length, sourceTypes: [...new Set(activeSources.map((s) => s.sourceType))] },
     }
   },
 }
@@ -157,6 +171,17 @@ const recentDataCheck: CheckDefinition = {
         summary: 'No traffic source connected — recent-data check skipped.',
       }
     }
+    const activeSources = sources.filter(isActiveSource)
+    if (activeSources.length === 0) {
+      return {
+        status: CheckStatuses.skipped,
+        code: 'traffic.recent-data.no-active-source',
+        summary: 'Only paused or staged traffic sources are configured — recent-data check skipped.',
+        remediation: 'Activate the intended source after its deployment smoke test succeeds.',
+        details: { sourceCount: sources.length, pausedIds: sources.map((source) => source.id) },
+      }
+    }
+    const activeSourceIds = activeSources.map((source) => source.id)
 
     const now = new Date()
     const warnCutoff = new Date(now.getTime() - RECENT_DATA_WARN_DAYS * 24 * 60 * 60_000).toISOString()
@@ -169,6 +194,7 @@ const recentDataCheck: CheckDefinition = {
         .where(
           and(
             eq(crawlerEventsHourly.projectId, ctx.project.id),
+            inArray(crawlerEventsHourly.sourceId, activeSourceIds),
             gte(crawlerEventsHourly.tsHour, warnCutoff),
           ),
         )
@@ -181,6 +207,7 @@ const recentDataCheck: CheckDefinition = {
         .where(
           and(
             eq(aiReferralEventsHourly.projectId, ctx.project.id),
+            inArray(aiReferralEventsHourly.sourceId, activeSourceIds),
             gte(aiReferralEventsHourly.tsHour, warnCutoff),
           ),
         )
@@ -193,6 +220,7 @@ const recentDataCheck: CheckDefinition = {
         .where(
           and(
             eq(aiUserFetchEventsHourly.projectId, ctx.project.id),
+            inArray(aiUserFetchEventsHourly.sourceId, activeSourceIds),
             gte(aiUserFetchEventsHourly.tsHour, warnCutoff),
           ),
         )
@@ -220,6 +248,7 @@ const recentDataCheck: CheckDefinition = {
         .where(
           and(
             eq(crawlerEventsHourly.projectId, ctx.project.id),
+            inArray(crawlerEventsHourly.sourceId, activeSourceIds),
             gte(crawlerEventsHourly.tsHour, failCutoff),
           ),
         )
@@ -232,6 +261,7 @@ const recentDataCheck: CheckDefinition = {
         .where(
           and(
             eq(aiReferralEventsHourly.projectId, ctx.project.id),
+            inArray(aiReferralEventsHourly.sourceId, activeSourceIds),
             gte(aiReferralEventsHourly.tsHour, failCutoff),
           ),
         )
@@ -244,12 +274,13 @@ const recentDataCheck: CheckDefinition = {
         .where(
           and(
             eq(aiUserFetchEventsHourly.projectId, ctx.project.id),
+            inArray(aiUserFetchEventsHourly.sourceId, activeSourceIds),
             gte(aiUserFetchEventsHourly.tsHour, failCutoff),
           ),
         )
         .get()?.total ?? 0,
     )
-    const lastSyncedAt = sources.map((s) => s.lastSyncedAt).filter(Boolean).sort().at(-1) ?? null
+    const lastSyncedAt = activeSources.map((s) => s.lastSyncedAt).filter(Boolean).sort().at(-1) ?? null
     const hasOlderData = olderCrawlers > 0 || olderUserFetches > 0 || olderReferrals > 0
     if (hasOlderData || lastSyncedAt) {
       return {
@@ -258,8 +289,8 @@ const recentDataCheck: CheckDefinition = {
         summary: hasOlderData
           ? `No crawler, AI user-fetch, or AI-referral hits in the last ${RECENT_DATA_WARN_DAYS} days, though older data exists.`
           : `No crawler, AI user-fetch, or AI-referral hits in the last ${RECENT_DATA_WARN_DAYS} days.`,
-        remediation: recentDataRemediation(sources, lastSyncedAt),
-        details: { lastSyncedAt, sourceCount: sources.length },
+        remediation: recentDataRemediation(activeSources, lastSyncedAt),
+        details: { lastSyncedAt, sourceCount: activeSources.length, pausedCount: sources.length - activeSources.length },
       }
     }
     return {
@@ -267,7 +298,7 @@ const recentDataCheck: CheckDefinition = {
       code: 'traffic.recent-data.empty',
       summary: `No traffic data in the last ${RECENT_DATA_FAIL_DAYS} days. The source is connected but isn't ingesting.`,
       remediation: 'Verify the source\'s configuration with `canonry traffic sources <project>` and run a manual sync to confirm credentials + scopes are still valid.',
-      details: { sourceCount: sources.length },
+      details: { sourceCount: activeSources.length, pausedCount: sources.length - activeSources.length },
     }
   },
 }
@@ -366,6 +397,7 @@ function summarizePerSourceResults(
     status: CheckStatuses.skipped,
     code: `traffic.${fallbackId}.all-skipped`,
     summary: `No source-type validator was available for any of the ${results.length} connected source(s).`,
+    remediation: skipped.find((result) => result.output.remediation)?.output.remediation,
     details: detail,
   }
 }
@@ -512,8 +544,16 @@ const syncLagCheck: CheckDefinition = {
   run: (ctx) => {
     if (!ctx.project) return skippedNoProject()
     const allSources = loadProbes(ctx)
-    const sources = allSources.filter(source => !isCloudflareDirectPush(source))
-    if (allSources.length > 0 && sources.length === 0) {
+    const activeSources = allSources.filter(isActiveSource)
+    if (allSources.length > 0 && activeSources.length === 0) {
+      return {
+        status: CheckStatuses.skipped,
+        code: 'traffic.sync-lag.no-active-source',
+        summary: 'Only paused or staged traffic sources are configured — pull sync lag does not apply.',
+      }
+    }
+    const sources = activeSources.filter(source => !isCloudflareDirectPush(source))
+    if (activeSources.length > 0 && sources.length === 0) {
       return {
         status: CheckStatuses.skipped,
         code: 'traffic.sync-lag.push-only',
@@ -648,7 +688,7 @@ const workerVersionCheck: CheckDefinition = {
   run: (ctx) => {
     if (!ctx.project) return skippedNoProject()
 
-    const sources = loadProbes(ctx).filter(isCloudflareDirectPush)
+    const sources = loadProbes(ctx).filter(source => isActiveSource(source) && isCloudflareDirectPush(source))
     if (sources.length === 0) {
       return {
         status: CheckStatuses.skipped,

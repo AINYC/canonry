@@ -26,6 +26,7 @@ export const CLOUDFLARE_WORKER_BINDINGS = {
   workerVersion: 'CANONRY_WORKER_VERSION',
   bearerToken: 'CANONRY_BEARER_TOKEN',
   hmacSecret: 'CANONRY_HMAC_SECRET',
+  trafficQueue: 'CANONRY_TRAFFIC_QUEUE',
 } as const
 
 export const CLOUDFLARE_DIRECT_PUSH_SECRET_BINDINGS = [
@@ -39,21 +40,33 @@ export const CLOUDFLARE_WORKER_GENERATED_MARKER =
 export const CLOUDFLARE_WRANGLER_GENERATED_MARKER =
   '# canonry traffic Worker configuration — generated; do not edit by hand'
 
-export interface GenerateWorkerScriptOptions {
-  /** Queue pull becomes a second discriminated generator branch later. */
-  deliveryMode: 'direct-push'
+interface GenerateWorkerScriptBaseOptions {
   workerVersion: string
   botList: CloudflareWorkerBotList
   /** Optional `cf.botManagement.score` threshold below which to forward. */
   botScoreMaxForward?: number
 }
 
-export interface GenerateWranglerTomlOptions {
+export type GenerateWorkerScriptOptions = GenerateWorkerScriptBaseOptions & (
+  | { deliveryMode: 'direct-push' }
+  | { deliveryMode: 'queue-pull' }
+)
+
+interface GenerateWranglerTomlBaseOptions {
   deliveryMode: 'direct-push'
   sourceId: string
   hostname: string
-  ingestUrl: string
   workerVersion: string
   accountId?: string | null
   zoneId?: string | null
 }
+
+export type GenerateWranglerTomlOptions =
+  | (Omit<GenerateWranglerTomlBaseOptions, 'deliveryMode'> & {
+    deliveryMode: 'direct-push'
+    ingestUrl: string
+  })
+  | (Omit<GenerateWranglerTomlBaseOptions, 'deliveryMode'> & {
+    deliveryMode: 'queue-pull'
+    queueName: string
+  })

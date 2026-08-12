@@ -64,6 +64,118 @@ function jsArray(values: readonly string[]): string {
 export function generateWorkerScript(opts: GenerateWorkerScriptOptions): string {
   const botScoreMax = opts.botScoreMaxForward ?? DEFAULT_BOT_SCORE_MAX_FORWARD
   const canonicalJsonFunction = canonicalizeCloudflareJson.toString()
+  const directPushDelivery = opts.deliveryMode === 'direct-push'
+    ? `
+function toHex(buffer) {
+  const bytes = new Uint8Array(buffer)
+  let out = ''
+  for (let i = 0; i < bytes.length; i++) {
+    out += bytes[i].toString(16).padStart(2, '0')
+  }
+  return out
+}
+
+async function signBody(secret, timestamp, body) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const sig = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(timestamp + '.' + body),
+  )
+  return toHex(sig)
+}
+
+function isRetryableStatus(status) {
+  return status === 408 || status === 425 || status === 429 || status >= 500
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function cancelUnusedResponseBody(response) {
+  try {
+    if (response.body) await response.body.cancel()
+  } catch (_) {
+    // The ingest response body is unused. Cancellation failure is non-fatal.
+  }
+}
+
+async function withRetry(operation) {
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    let response
+    try {
+      response = await operation()
+    } catch (error) {
+      if (attempt === RETRY_DELAYS_MS.length) throw error
+      await sleep(RETRY_DELAYS_MS[attempt])
+      continue
+    }
+
+    const status = response.status
+    const ok = response.ok
+    await cancelUnusedResponseBody(response)
+    if (ok) return
+    if (!isRetryableStatus(status) || attempt === RETRY_DELAYS_MS.length) {
+      throw new Error('Canonry ingest returned HTTP ' + status)
+    }
+    await sleep(RETRY_DELAYS_MS[attempt])
+  }
+}
+`
+    : ''
+  const directPushDeliveryAdapter = opts.deliveryMode === 'direct-push'
+    ? `
+async function deliverViaDirectPush(env, batch) {
+  const sourceId = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.sourceId}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.sourceId)})
+  const ingestUrl = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.ingestUrl}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.ingestUrl)})
+  const bearerToken = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.bearerToken}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.bearerToken)})
+  const hmacSecret = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.hmacSecret}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.hmacSecret)})
+  const body = canonicalizeJson(batch)
+  const timestamp = String(Math.floor(Date.now() / 1000))
+  const signature = await signBody(hmacSecret, timestamp, body)
+
+  await withRetry(() => fetch(ingestUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'Authorization': 'Bearer ' + bearerToken,
+      'X-Canonry-Timestamp': timestamp,
+      'X-Canonry-Signature': signature,
+      'X-Canonry-Worker-Version': batch.workerVersion,
+      'X-Canonry-Source-Id': sourceId,
+    },
+    body,
+  }))
+}
+`
+    : ''
+  const queuePullDeliveryAdapter = opts.deliveryMode === 'queue-pull'
+    ? `
+function requireQueueBinding(value, name) {
+  if (value && typeof value.send === 'function') return value
+  throw new Error('Missing required Worker binding: ' + name)
+}
+
+async function deliverViaQueue(env, batch) {
+  const queue = requireQueueBinding(env.${CLOUDFLARE_WORKER_BINDINGS.trafficQueue}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.trafficQueue)})
+  await queue.send(batch, { contentType: 'json' })
+}
+`
+    : ''
+  const deliveryModeBranch = opts.deliveryMode === 'direct-push'
+    ? `if (deliveryMode === 'direct-push') {
+    return deliverViaDirectPush(env, batch)
+  }`
+    : `if (deliveryMode === 'queue-pull') {
+    return deliverViaQueue(env, batch)
+  }`
 
   return `${CLOUDFLARE_WORKER_GENERATED_MARKER}
 // worker version: ${opts.workerVersion}
@@ -154,68 +266,7 @@ function shouldForward(request) {
   return botSignals(request.cf)
 }
 
-function toHex(buffer) {
-  const bytes = new Uint8Array(buffer)
-  let out = ''
-  for (let i = 0; i < bytes.length; i++) {
-    out += bytes[i].toString(16).padStart(2, '0')
-  }
-  return out
-}
-
-async function signBody(secret, timestamp, body) {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  const sig = await crypto.subtle.sign(
-    'HMAC',
-    key,
-    new TextEncoder().encode(timestamp + '.' + body),
-  )
-  return toHex(sig)
-}
-
-function isRetryableStatus(status) {
-  return status === 408 || status === 425 || status === 429 || status >= 500
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-async function cancelUnusedResponseBody(response) {
-  try {
-    if (response.body) await response.body.cancel()
-  } catch (_) {
-    // The ingest response body is unused. Cancellation failure is non-fatal.
-  }
-}
-
-async function withRetry(operation) {
-  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-    let response
-    try {
-      response = await operation()
-    } catch (error) {
-      if (attempt === RETRY_DELAYS_MS.length) throw error
-      await sleep(RETRY_DELAYS_MS[attempt])
-      continue
-    }
-
-    const status = response.status
-    const ok = response.ok
-    await cancelUnusedResponseBody(response)
-    if (ok) return
-    if (!isRetryableStatus(status) || attempt === RETRY_DELAYS_MS.length) {
-      throw new Error('Canonry ingest returned HTTP ' + status)
-    }
-    await sleep(RETRY_DELAYS_MS[attempt])
-  }
-}
+${directPushDelivery}
 
 function pickCf(cf) {
   if (!cf) return null
@@ -254,34 +305,11 @@ function buildEdgeEventBatch(env, request, status, observedAt) {
   }
 }
 
-async function deliverViaDirectPush(env, batch) {
-  const sourceId = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.sourceId}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.sourceId)})
-  const ingestUrl = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.ingestUrl}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.ingestUrl)})
-  const bearerToken = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.bearerToken}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.bearerToken)})
-  const hmacSecret = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.hmacSecret}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.hmacSecret)})
-  const body = canonicalizeJson(batch)
-  const timestamp = String(Math.floor(Date.now() / 1000))
-  const signature = await signBody(hmacSecret, timestamp, body)
-
-  await withRetry(() => fetch(ingestUrl, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'Authorization': 'Bearer ' + bearerToken,
-      'X-Canonry-Timestamp': timestamp,
-      'X-Canonry-Signature': signature,
-      'X-Canonry-Worker-Version': batch.workerVersion,
-      'X-Canonry-Source-Id': sourceId,
-    },
-    body,
-  }))
-}
+${directPushDeliveryAdapter}${queuePullDeliveryAdapter}
 
 async function deliverEdgeEventBatch(env, batch) {
   const deliveryMode = requireBinding(env.${CLOUDFLARE_WORKER_BINDINGS.deliveryMode}, ${jsString(CLOUDFLARE_WORKER_BINDINGS.deliveryMode)})
-  if (deliveryMode === 'direct-push') {
-    return deliverViaDirectPush(env, batch)
-  }
+  ${deliveryModeBranch}
   throw new Error('Unsupported Canonry delivery mode: ' + deliveryMode)
 }
 
@@ -363,6 +391,32 @@ export function generateWranglerToml(opts: GenerateWranglerTomlOptions): string 
   const zoneHint = opts.zoneId
     ? `# Target zone id: ${jsString(opts.zoneId)}\n`
     : '# Target zone id was not provided. Select the canonical site zone.\n'
+
+  if (opts.deliveryMode === 'queue-pull') {
+    return `${CLOUDFLARE_WRANGLER_GENERATED_MARKER}
+name = "canonry-traffic-${opts.sourceId}"
+${accountConfig}main = "worker.js"
+compatibility_date = "${WORKER_COMPATIBILITY_DATE}"
+workers_dev = false
+
+[vars]
+${CLOUDFLARE_WORKER_BINDINGS.deliveryMode} = ${jsString(opts.deliveryMode)}
+${CLOUDFLARE_WORKER_BINDINGS.sourceId} = ${jsString(opts.sourceId)}
+${CLOUDFLARE_WORKER_BINDINGS.workerVersion} = ${jsString(opts.workerVersion)}
+
+[[queues.producers]]
+queue = ${jsString(opts.queueName)}
+binding = ${jsString(CLOUDFLARE_WORKER_BINDINGS.trafficQueue)}
+
+# Deploy this Worker via:
+#   wrangler deploy
+# Canonry intentionally does not declare a route in this file.
+# After deploy, attach this exact route in the Cloudflare dashboard:
+#   ${hostname}/*
+${zoneHint}# Set the route Request limit failure mode to Fail open before activation.
+# Wrangler cannot configure this route toggle.
+`
+  }
 
   return `${CLOUDFLARE_WRANGLER_GENERATED_MARKER}
 name = "canonry-traffic-${opts.sourceId}"

@@ -39,11 +39,12 @@ Adapters today:
 | [`cloud-run`](#connecting-a-cloud-run-source) | Pull | GCP Cloud Run request logs via Logging API | Any service running on Cloud Run |
 | [`wordpress`](#connecting-a-wordpress-source) | Pull | Canonry Traffic Logger REST endpoint | WordPress sites where you control wp-admin |
 | [`vercel`](#connecting-a-vercel-source) | Pull | Vercel project logs via the Vercel API | Sites deployed on Vercel |
-| [`cloudflare`](#connecting-a-cloudflare-source-direct-push) | Direct push | A zone Worker selects and sends edge events | Sites whose public traffic passes through Cloudflare |
+| [`cloudflare`](#connecting-a-cloudflare-source) | Direct push or Queue pull | A zone Worker selects edge events; Canonry either receives them directly or pulls them from Cloudflare Queues | Sites whose public traffic passes through Cloudflare |
 
 Future adapters slot in by implementing the same contract.
-Cloud Run, WordPress, and Vercel pull logs during `traffic sync`.
-Cloudflare sends selected events from its Worker and does not use `traffic sync`.
+Cloud Run, WordPress, Vercel, and Cloudflare Queue sources pull during
+`traffic sync`. Cloudflare direct push sends selected events from its Worker
+and does not use `traffic sync`.
 
 ## Connecting a Cloud Run source
 
@@ -195,31 +196,38 @@ Run `cnry traffic backfill <project> --source <id> --days N` (capped at
 history. It's an explicit operator action; the connect flow never pulls
 it implicitly.
 
-## Connecting a Cloudflare source (direct push)
+## Connecting a Cloudflare source
 
-Cloudflare direct push runs a small ES-module Worker on the site's exact
-zone route. It applies a broad AI filter and sends selected edge events
-to Canonry in `ctx.waitUntil()`. The origin response remains independent
-from filtering, scheduling, and delivery errors. The event shape is also
-the contract for the later Queue pull transport.
+Both Cloudflare modes run the same small ES-module Worker on the site's exact
+zone route. It applies a broad AI filter and delivers selected edge events in
+`ctx.waitUntil()`. The origin response remains independent from filtering,
+scheduling, and delivery errors. Both modes use the same
+`CloudflareEdgeEventBatch`, normalizer, classifier, receipts, and rollups.
 
-The shipped adapter does not pull Cloudflare analytics or request logs.
-Queue pull has a reserved transport mode, but it is not available yet.
+- `direct-push` sends a signed batch to a public Canonry HTTPS receiver.
+- `queue-pull` sends the batch to a Cloudflare Queue. The single-team Canonry
+  server pulls and acknowledges it through the Cloudflare Queues HTTP API.
+
+The adapter does not pull Cloudflare analytics or request logs.
 
 ```mermaid
 flowchart LR
   request["Site request"] --> worker["Canonry Cloudflare Worker"]
   worker --> origin["Existing origin or Pages site"]
   origin --> response["Unchanged site response"]
-  worker -. "signed selected event via ctx.waitUntil" .-> ingest["Canonry public HTTPS ingest"]
-  ingest --> classify["Shared traffic classifier"]
+  worker -. "direct-push" .-> ingest["Canonry public HTTPS ingest"]
+  worker -. "queue-pull" .-> queue["Cloudflare Queue"]
+  queue --> pull["Canonry scheduled pull"]
+  ingest --> classify["Shared receipt and traffic pipeline"]
+  pull --> classify
   classify --> rollups["Hourly crawler, user-fetch, and referral rollups"]
 ```
 
 ### Setup flow
 
 1. Create or select a Canonry project with one exact canonical hostname.
-2. Give the Canonry server a stable public HTTPS URL outside the site route.
+2. Choose delivery: direct push needs a stable public Canonry HTTPS URL outside
+   the site route; Queue pull needs a pre-created Queue and HTTP pull consumer.
 3. Authenticate Wrangler with the Cloudflare account that owns the zone.
 4. Inspect existing Worker routes for the exact canonical hostname.
 5. Run the local Cloudflare connect command with `--deploy`.
@@ -228,20 +236,23 @@ flowchart LR
 
 ### Current support boundary
 
-Direct push currently supports a local `canonry serve` instance. The CLI
-and server must read the same `~/.canonry/config.yaml` credential store.
-You can expose that local server through a stable HTTPS tunnel.
+Both modes currently target one local, single-team `canonry serve` instance.
+The Queue consumer is not a multi-tenant Cloudflare control plane. The CLI and
+server must read the same `~/.canonry/config.yaml` credential store. Direct
+push requires a stable public HTTPS receiver; Queue pull does not.
 
 The Cloud Run `apps/api` service has no Cloudflare credential store.
-Therefore, `apps/api` cannot retain the per-source bearer and HMAC values
-that deployment requires.
+Therefore, `apps/api` cannot retain direct-push bearer/HMAC values or the
+Queue API token.
 
-CAUTION: Use one authoritative server-traffic source for the canonical
-site. Overlapping adapters capture the same requests and double-count
-project totals. This is a current limitation. Queue support must define
-source coverage before it permits a transport change.
+CAUTION: Use one authoritative server-traffic source for the canonical site.
+Connecting any adapter while a sibling source is active creates or keeps a
+paused staged source. `canonry traffic activate` validates the target's local
+credential, atomically pauses every sibling, and moves or removes the one
+traffic-sync schedule. Overlapping adapters outside this cutover can still
+double-count project totals.
 
-### Expose the Canonry receiver
+### Expose the Canonry receiver (direct push only)
 
 Complete the local dashboard setup and set its password before you expose
 Canonry. A tunnel makes the loopback server reachable from the public Internet.
@@ -342,18 +353,20 @@ Worker and keeps the origin available. See [Cloudflare Workers limits](https://d
 Free-plan classification uses user-agent, referer, and UTM evidence. Granular
 `request.cf.botManagement` scores require the Enterprise Bot Management add-on.
 
-### Generate or deploy
+### Generate or deploy direct push
 
 ```bash
 # Generate secret-free worker.js and wrangler.toml in
 # ./canonry-cloudflare-<project-slug>:
 cnry traffic connect cloudflare <project> \
+  --delivery-mode direct-push \
   --zone-id <cloudflare-zone-id> \
   --account-id <cloudflare-account-id>
 
 # Deploy only the Worker after the route preflight.
 # Both safety acknowledgements are mandatory:
 cnry traffic connect cloudflare <project> \
+  --delivery-mode direct-push \
   --zone-id <cloudflare-zone-id> \
   --account-id <cloudflare-account-id> \
   --deploy --confirm-route --confirm-fail-open
@@ -413,6 +426,66 @@ Cloudflare connect is absent from MCP because deployment reads local
 secrets. An agent can guide the CLI command. It must not request, print,
 or send either secret through chat.
 
+### Generate or deploy Queue pull
+
+Queue pull reuses the same edge filter without requiring a public Canonry
+receiver. Create the Queue first and note both its name and ID. Create a
+Cloudflare API token with **Account Queues Edit** for the owning account, put
+only the token in a mode-0600 file, and keep that file off shell argv.
+
+```bash
+wrangler queues create canonry-traffic-<project>
+wrangler queues consumer http add canonry-traffic-<project>
+
+cnry traffic connect cloudflare <project> \
+  --delivery-mode queue-pull \
+  --zone-id <cloudflare-zone-id> \
+  --account-id <cloudflare-account-id> \
+  --queue-id <cloudflare-queue-id> \
+  --queue-name canonry-traffic-<project> \
+  --api-token-file <path-to-mode-0600-token-file> \
+  --retention-seconds 345600
+
+cnry traffic connect cloudflare <project> \
+  --delivery-mode queue-pull \
+  --zone-id <cloudflare-zone-id> \
+  --account-id <cloudflare-account-id> \
+  --queue-id <cloudflare-queue-id> \
+  --queue-name canonry-traffic-<project> \
+  --api-token-file <path-to-token-file> \
+  --deploy --confirm-route --confirm-fail-open
+```
+
+The second Wrangler command is required. The producer binding does not enable
+HTTP pull, and Cloudflare no longer supports declaring an HTTP pull consumer
+in `wrangler.toml`. Remove any existing Worker consumer before enabling HTTP
+pull because one Queue cannot use both consumer types at once.
+
+The default retention is four days (`345600` seconds); accepted values are
+60 seconds through 14 days. The token stays only in Canonry's local credential
+store. It is not written to the source row, Worker, TOML, command output, MCP,
+or Worker bindings. Wrangler authentication remains the operator's active
+Wrangler profile; Canonry does not reuse the Queue pull token for deployment.
+
+The generated TOML contains one `[[queues.producers]]` binding named
+`CANONRY_TRAFFIC_QUEUE` and no direct-push ingest URL or Worker secrets. After
+the Worker is deployed and the route is ready, activate a staged source:
+
+```bash
+cnry traffic activate <project> --source <source-id>
+cnry traffic sync <project> --source <source-id>
+```
+
+A new project with no other active traffic source activates immediately. A
+mode change stays paused until the explicit activation command. Activation
+pauses the prior source and points the project's one `traffic-sync` schedule at
+Queue pull; activating direct push removes that Queue schedule.
+
+For Queue-to-direct rollback, drain Queue pull until its backlog is empty,
+switch the Cloudflare route, then activate direct push immediately. The route
+change and Canonry activation are separate operator actions, so keep the
+cutover window short.
+
 ### Direct-push behavior and smoke test
 
 The Worker forwards a request candidate when at least one condition is true:
@@ -434,7 +507,7 @@ Direct push has bounded retries for network failures and HTTP 408, 425,
 429, and 5xx responses (250 ms, then 1 s). Delivery is asynchronous and
 never changes the site's response. If Canonry remains unavailable after
 the retry budget, the selected event is lost. Direct push has no durable
-edge buffer. This limit is the primary reason to add Queue pull next.
+edge buffer. Use Queue pull when delivery needs a durable edge buffer.
 
 The receiver accepts at most 256 KiB per request. Its default budgets are
 6,000 requests per minute for each source and each caller IP. A bearer token
@@ -597,22 +670,25 @@ source archival and local credential cleanup.
 | Site returns Cloudflare error `1027` | Set the route to **Fail open**, or detach it. The account exhausted its daily Worker requests. |
 | Doctor reports stale or empty direct-push data | Do not run `traffic sync`. Inspect the route, receiver, and Worker logs. Then repeat the smoke request. |
 
-### Queue pull seam (not shipped yet)
+### Queue pull delivery guarantees
 
-Queue pull is the first follow-up for hosted or platform deployments with
-loopback-only tenant engines. Customer Workers cannot reach those engines.
-The future pull adapter will let Canonry read events without a public
-tenant-ingest endpoint.
+Queue delivery is at least once. Canonry claims a durable source-scoped sync
+lease, short-polls bounded batches, validates the transport-neutral event
+schema and canonical host, and commits event receipts plus rollups in one DB
+transaction. It acknowledges the Cloudflare lease only after that commit.
 
-Before broad direct-push rollout, consider an edge sampling or batching control
-for high-volume generic bot traffic.
+If acknowledgement fails after commit, Cloudflare can redeliver the batch.
+The durable receipt makes the redelivery a no-op before Canonry acknowledges it
+again. Unsupported V8 messages and malformed message bodies are acknowledged
+as poison after their safe lease metadata is read; raw bodies and the API token
+never enter errors or logs. A process crash leaves unacknowledged messages for
+Cloudflare to redeliver after the visibility timeout.
 
-`deliveryMode: direct-push` is explicit in the source config. The reserved
-`queue-pull` mode will keep the Worker filter, `CloudflareEdgeEventBatch`,
-canonical JSON encoding, normalizer, classifier, and rollups unchanged.
-Only delivery changes to a Queue binding, and Canonry gains a polling
-adapter. A source must use one mode at a time so the same edge event cannot
-arrive through both transports and double-count.
+The source lease rejects concurrent scheduler and operator drains. A stale
+lease can be recovered after its expiry, and only its owner can release it.
+Receipts remain for Cloudflare's current 14-day platform maximum plus a replay
+margin. This stays safe even when the locally recorded retention is stale or
+lower than the Queue's actual setting.
 
 ## Syncing data
 
@@ -627,6 +703,12 @@ cnry traffic sync <project> --source <id>
 # past data already pulled.
 cnry traffic sync <project> --source <id> --since-minutes 4320  # 3 days
 ```
+
+Cloudflare Queue pull is cursorless and ignores `--since-minutes`; each call
+drains a bounded set of leased Queue messages. Repeat the command when you need
+to accelerate a backlog, or let the auto-created 30-minute schedule continue
+draining. Direct push still rejects `traffic sync` because it has no pull
+transport.
 
 ### Unsticking a stuck source
 
@@ -654,9 +736,9 @@ above; clearing `lastError` for a transient WordPress failure also
 works. Archived sources are rejected — re-connect them with
 `cnry traffic connect ...` instead.
 
-Cross-sync dedupe via the `last_event_ids` ring buffer means re-running a
-sync over an overlapping window cannot double-count rolled-up hourly
-hits. Safe to schedule (see "Scheduling" below) or trigger from CI.
+Time-window and cursor adapters use the `last_event_ids` overlap ring. Queue
+pull uses durable event receipts sized to Queue retention. Both paths make a
+repeated pull safe to schedule or trigger from CI.
 
 ## Inspecting source state
 
@@ -706,7 +788,7 @@ schema change, the stored rollups are untouched.
 | Project dashboard `/projects/:name/activity` | Live source table + 24h totals + GA4 referrals (combined view) |
 | Top-level `/traffic` route | Cross-project source admin (connect, sync, archive) |
 | `cnry report <project>` (HTML + SPA) | "AI Visibility — Server-Side" section, ranked above Indexing Health |
-| `cnry doctor --project <name>` | Source health checks, including Cloudflare `traffic.source.worker-version` deployment drift |
+| `cnry doctor --project <name>` | Source health checks, including direct-push Worker drift and Queue-pull local credential/sync state |
 | MCP toolkit `traffic` | Read/status tools plus pull-source setup/sync tools. Cloudflare connect is local-CLI-only so Worker secrets cannot enter an MCP transcript. |
 
 ## Doctor signals
@@ -719,7 +801,7 @@ The doctor checks are adapter-agnostic. When they fail or warn:
 | `traffic.source.connected` | `traffic.source.all-errored` | Re-connect the source. The check's `details.lastError` shows the underlying reason. |
 | `traffic.source.recent-data` | `traffic.recent-data.stale` | For pull sources, run `cnry traffic sync …`. For Cloudflare direct push, inspect the route and receiver. |
 | `traffic.source.recent-data` | `traffic.recent-data.empty` | Inspect source configuration. For Cloudflare direct push, send the UTM smoke request and inspect Worker logs. |
-| `traffic.source.credentials` | `traffic.credentials.resolve-failed` | Reconnect from the host that owns the source credentials. |
+| `traffic.source.credentials` | `traffic.credentials.resolve-failed` | Reconnect from the host that owns the source credentials. Queue pull requires a non-empty Account Queues Edit token paired by source ID. |
 | `traffic.source.cache-blindspot` | `traffic.cache-blindspot.wordpress-plugin` | A WordPress source is connected, so the plugin cannot see cache-served page views. Exclude AI user-agents from the page cache and any CDN, or switch to a log/edge source. Warns only, not a failure. |
 | `traffic.source.worker-version` | `traffic.worker-version.waiting-for-first-event` | Send a smoke-test request through the Worker. Then run the doctor again. |
 | `traffic.source.worker-version` | `traffic.worker-version.stale` | Redeploy the generated Worker from the credential-owning host. Use `--deploy --confirm-route --confirm-fail-open`. Attach the route manually. |
@@ -728,14 +810,16 @@ Cloudflare doctor behavior is capability-driven: only
 `deliveryMode=direct-push` (and legacy Cloudflare rows with no mode) skips
 pull-watermark lag. The same mode enables `traffic.source.worker-version`.
 That check compares `configJson.workerVersion` with `lastWorkerVersion`.
-The reserved Queue pull mode uses pull checks and skips the version check.
+Queue pull uses pull lag checks and skips the direct-push Worker-version check.
 
 ## Scheduling
 
-`cnry schedule` supports `--kind traffic-sync` for pull sources. Cloudflare
-direct push is event-driven and must not receive a traffic-sync schedule. Recurring syncs are
-safe because of the `last_event_ids` cross-sync dedupe ring buffer
-described above. Recommended cadence:
+`cnry schedule` supports `--kind traffic-sync` for pull sources. Activation of
+Queue, Cloud Run, WordPress, or Vercel creates or repoints this schedule at a
+30-minute cadence.
+Cloudflare direct push is event-driven and must not receive a traffic-sync
+schedule. Recurring syncs are safe because of the adapter's overlap ring or
+durable Queue receipts. Recommended cadence:
 
 | Cadence | Use case |
 |---|---|
@@ -798,8 +882,8 @@ domains, or PII are surfaced.
   no client IP, so every Vercel crawler hit is unverified by
   construction (UA-only). A Vercel source reading 100% unverified is
   expected, not a misconfiguration.
-- **Four adapters ship: Cloud Run, WordPress, Vercel, and Cloudflare
-  direct push. More adapters are planned.** The doctor checks and report renderer are
+- **Four adapters ship: Cloud Run, WordPress, Vercel, and Cloudflare with
+  direct-push and queue-pull delivery. More adapters are planned.** The doctor checks and report renderer are
   adapter-agnostic — adding a new adapter is just a new entry in
   `traffic_sources.source_type` and a `TrafficSourceValidator`
   registration.

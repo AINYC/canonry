@@ -3400,7 +3400,7 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
     // Push-receive traffic sources (currently only `cloudflare`) need a
     // per-source bearer for the Worker to authenticate against canonry's
     // ingest endpoint, plus a place to remember the deployed Worker version.
-    // Durable receipts are transport-neutral: direct push and a future Queue
+    // Durable receipts are transport-neutral: direct push and Queue pull
     // pull consumer both claim an event in the same transaction as rollups.
     // Cleartext credentials remain outside the database.
     //
@@ -3526,6 +3526,17 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
     // result depends on nothing but the stored links.
     statements: [],
     run: backfillSiteCrawlTemplateLinks,
+  },
+  {
+    version: 134,
+    name: 'traffic-source-sync-lease',
+    // A source-scoped lease serializes external pull consumers. Nullable
+    // fields preserve every existing source and let an older binary continue
+    // to insert source rows without knowing about leases.
+    statements: [
+      `ALTER TABLE traffic_sources ADD COLUMN sync_lease_owner TEXT`,
+      `ALTER TABLE traffic_sources ADD COLUMN sync_lease_expires_at TEXT`,
+    ],
   },
 ]
 

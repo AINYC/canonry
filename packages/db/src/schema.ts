@@ -1735,6 +1735,11 @@ export const trafficSources = sqliteTable('traffic_sources', {
   // `traffic.source.worker-version` doctor check. NULL until the first
   // event arrives or for source types that don't forward versioned events.
   lastWorkerVersion: text('last_worker_version'),
+  // Pull adapters use this durable, owner-bound lease to prevent a manual
+  // sync and the scheduler from consuming the same source concurrently.
+  // Both fields are nullable so pre-lease sources remain immediately valid.
+  syncLeaseOwner: text('sync_lease_owner'),
+  syncLeaseExpiresAt: text('sync_lease_expires_at'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 }, (table) => [

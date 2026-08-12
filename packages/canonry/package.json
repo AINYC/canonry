@@ -79,6 +79,7 @@
     "@ainyc/canonry-contracts": "workspace:*",
     "@ainyc/canonry-db": "workspace:*",
     "@ainyc/canonry-integration-bing": "workspace:*",
+    "@ainyc/canonry-integration-cloudflare-queue": "workspace:*",
     "@ainyc/canonry-integration-cloudflare-worker": "workspace:*",
     "@ainyc/canonry-integration-openai-ads": "workspace:*",
     "@ainyc/canonry-integration-cloud-run": "workspace:*",

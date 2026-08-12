@@ -249,8 +249,14 @@ export interface ApiRoutesOptions {
   pullVercelTrafficEvents?: TrafficRoutesOptions['pullVercelTrafficEvents']
   /** Wall-clock budget (ms) for a Vercel sync's adaptive drain — see `TrafficRoutesOptions` */
   vercelSyncDeadlineMs?: TrafficRoutesOptions['vercelSyncDeadlineMs']
-  /** Cloudflare Worker traffic credential store — per-source bearer + HMAC secrets in config, not DB */
+  /** Cloudflare Worker traffic credentials — direct-push secrets or Queue API tokens in config, not DB. */
   cloudflareTrafficCredentialStore?: TrafficRoutesOptions['cloudflareTrafficCredentialStore']
+  /** Override Cloudflare Queue pull (tests/hosts). */
+  pullCloudflareQueueMessages?: TrafficRoutesOptions['pullCloudflareQueueMessages']
+  /** Override Cloudflare Queue acknowledgement (tests/hosts). */
+  ackCloudflareQueueMessages?: TrafficRoutesOptions['ackCloudflareQueueMessages']
+  /** Bounded Cloudflare Queue short-poll batches per traffic sync. */
+  cloudflareQueueMaxBatches?: TrafficRoutesOptions['cloudflareQueueMaxBatches']
   /** Override the canonry ingest URL embedded into generated Worker scripts (tests) */
   cloudflareTrafficIngestUrl?: TrafficRoutesOptions['cloudflareTrafficIngestUrl']
   /** Per-source Cloudflare direct-push request budget per minute (tests/hosts). */
@@ -570,6 +576,9 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       pullVercelTrafficEvents: opts.pullVercelTrafficEvents,
       vercelSyncDeadlineMs: opts.vercelSyncDeadlineMs,
       cloudflareTrafficCredentialStore: opts.cloudflareTrafficCredentialStore,
+      pullCloudflareQueueMessages: opts.pullCloudflareQueueMessages,
+      ackCloudflareQueueMessages: opts.ackCloudflareQueueMessages,
+      cloudflareQueueMaxBatches: opts.cloudflareQueueMaxBatches,
       cloudflareTrafficIngestUrl: opts.cloudflareTrafficIngestUrl,
       cloudflareIngestRateLimitMax: opts.cloudflareIngestRateLimitMax,
       cloudflareIngestIpRateLimitMax: opts.cloudflareIngestIpRateLimitMax,
@@ -867,23 +876,35 @@ function buildTrafficSourceValidators(opts: ApiRoutesOptions): Record<string, Tr
     validators[TrafficSourceTypes.cloudflare] = {
       validateCredentials: (source: TrafficSourceProbe): CheckOutput | null => {
         const sourceMode = source.configJson.deliveryMode
-        if (sourceMode !== undefined && sourceMode !== 'direct-push') return null
+        const deliveryMode = sourceMode === 'queue-pull' ? 'queue-pull' : 'direct-push'
 
-        const record = store.getConnection(source.projectName)
+        // A staged pull source and the current direct-push source can coexist
+        // for one project. Project-name lookup silently returns the wrong
+        // credential in that state, so Doctor always follows the source id.
+        const record = store.getConnectionBySourceId(source.id)
         if (!record) {
+          const projectRecord = store.getConnection(source.projectName)
+          if (projectRecord && projectRecord.sourceId !== source.id) {
+            return {
+              status: CheckStatuses.fail,
+              code: 'traffic.credentials.source-mismatch',
+              summary: `The stored Cloudflare credential belongs to a different source than "${source.displayName}".`,
+              remediation: 'Reconnect the Cloudflare source to pair the credential and source row.',
+            }
+          }
           return {
             status: CheckStatuses.fail,
             code: 'traffic.credentials.missing',
-            summary: `No Cloudflare direct-push credential is stored for project "${source.projectName}".`,
+            summary: `No Cloudflare ${deliveryMode} credential is stored for source "${source.displayName}".`,
             remediation: 'Re-run `canonry traffic connect cloudflare <project> --zone-id <id>` from the credential-owning host.',
           }
         }
         const recordMode: unknown = record.deliveryMode
-        if (recordMode !== 'direct-push') {
+        if (recordMode !== deliveryMode) {
           return {
             status: CheckStatuses.fail,
             code: 'traffic.credentials.mode-mismatch',
-            summary: `The stored Cloudflare credential mode does not match direct-push source "${source.displayName}".`,
+            summary: `The stored Cloudflare credential mode does not match ${deliveryMode} source "${source.displayName}".`,
             remediation: 'Reconnect the Cloudflare source from the credential-owning host.',
           }
         }
@@ -895,15 +916,46 @@ function buildTrafficSourceValidators(opts: ApiRoutesOptions): Record<string, Tr
             remediation: 'Reconnect the Cloudflare source to pair the credential and source row.',
           }
         }
-        const bearerToken: unknown = record.bearerToken
-        const hmacSecret: unknown = record.hmacSecret
+        if (record.deliveryMode === 'queue-pull') {
+          const queueConfig = source.configJson
+          if (
+            typeof record.apiToken !== 'string'
+            || record.apiToken.length === 0
+            || typeof record.accountId !== 'string'
+            || record.accountId.length === 0
+            || typeof record.queueId !== 'string'
+            || record.queueId.length === 0
+            || typeof record.queueName !== 'string'
+            || record.queueName.length === 0
+            || !Number.isInteger(record.retentionSeconds)
+            || record.retentionSeconds < 60
+            || record.retentionSeconds > 1_209_600
+            || queueConfig.accountId !== record.accountId
+            || queueConfig.queueId !== record.queueId
+            || queueConfig.queueName !== record.queueName
+            || queueConfig.retentionSeconds !== record.retentionSeconds
+          ) {
+            return {
+              status: CheckStatuses.fail,
+              code: 'traffic.credentials.queue-mismatch',
+              summary: `The stored Cloudflare Queue credential does not match source "${source.displayName}".`,
+              remediation: 'Reconnect the Cloudflare Queue source from the credential-owning host.',
+            }
+          }
+          return {
+            status: CheckStatuses.ok,
+            code: 'traffic.credentials.resolved',
+            summary: `Cloudflare Queue credentials match source "${source.displayName}".`,
+          }
+        }
+
         if (
-          typeof bearerToken !== 'string'
-          || bearerToken.length === 0
-          || typeof hmacSecret !== 'string'
-          || hmacSecret.length === 0
+          typeof record.bearerToken !== 'string'
+          || record.bearerToken.length === 0
+          || typeof record.hmacSecret !== 'string'
+          || record.hmacSecret.length === 0
           || !source.ingestTokenHash
-          || hashCloudflareBearerToken(bearerToken) !== source.ingestTokenHash
+          || hashCloudflareBearerToken(record.bearerToken) !== source.ingestTokenHash
         ) {
           return {
             status: CheckStatuses.fail,
@@ -918,7 +970,15 @@ function buildTrafficSourceValidators(opts: ApiRoutesOptions): Record<string, Tr
           summary: `Cloudflare direct-push credentials match source "${source.displayName}".`,
         }
       },
-      validateScopes: () => null,
+      validateScopes: (source: TrafficSourceProbe): CheckOutput | null => {
+        if (source.configJson.deliveryMode !== 'queue-pull') return null
+        return {
+          status: CheckStatuses.skipped,
+          code: 'traffic.scopes.queue-pull-static',
+          summary: `Cloudflare Queue token scopes for "${source.displayName}" are not inspected by Doctor.`,
+          remediation: `Verify the token has Account Queues Edit permission and run \`wrangler queues consumer http add ${source.configJson.queueName as string}\` for the configured Queue, then re-run the Queue smoke test.`,
+        }
+      },
     }
   }
   return Object.keys(validators).length > 0 ? validators : undefined

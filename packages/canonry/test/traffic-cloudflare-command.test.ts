@@ -4,11 +4,12 @@ import path from 'node:path'
 import type {
   TrafficConnectCloudflareRequest,
   TrafficConnectCloudflareResponse,
+  TrafficSourceDto,
 } from '@ainyc/canonry-contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CliError } from '../src/cli-error.js'
 import type { CanonryConfig } from '../src/config.js'
-import { trafficConnectCloudflare } from '../src/commands/traffic.js'
+import { trafficActivate, trafficConnectCloudflare } from '../src/commands/traffic.js'
 
 const response: TrafficConnectCloudflareResponse = {
   sourceId: 'source-cloudflare-test',
@@ -17,6 +18,39 @@ const response: TrafficConnectCloudflareResponse = {
   wranglerToml: 'main = "worker.js"\n[secrets]\nrequired = ["CANONRY_BEARER_TOKEN", "CANONRY_HMAC_SECRET"]\n',
   workerVersion: '1.0.0',
   instructions: 'Attach `example.com/*` manually. Set Request limit failure mode to Fail open before activation.',
+}
+
+const queueResponse: TrafficConnectCloudflareResponse = {
+  sourceId: 'source-cloudflare-queue-test',
+  deliveryMode: 'queue-pull',
+  activationRequired: true,
+  accountId: 'account_queue',
+  queueId: 'queue_id',
+  queueName: 'canonry-traffic',
+  retentionSeconds: 345_600,
+  workerScript: 'export default { async fetch(request, env) { return fetch(request) } }',
+  wranglerToml: 'main = "worker.js"\n[[queues.producers]]\nqueue = "canonry-traffic"\n',
+  workerVersion: '1.0.0',
+  instructions: 'Deploy the Worker, then activate queue delivery.',
+}
+
+const activatedQueueSource: TrafficSourceDto = {
+  id: queueResponse.sourceId,
+  projectId: 'project-demo',
+  sourceType: 'cloudflare',
+  displayName: 'Cloudflare Queue',
+  status: 'connected',
+  lastSyncedAt: null,
+  lastCursor: null,
+  lastError: null,
+  skippedThroughAt: null,
+  archivedAt: null,
+  config: {
+    deliveryMode: 'queue-pull',
+    queueName: queueResponse.queueName,
+  },
+  createdAt: '2026-08-11T12:00:00.000Z',
+  updatedAt: '2026-08-11T12:01:00.000Z',
 }
 
 const scratchDirectories: string[] = []
@@ -34,7 +68,9 @@ function localConfig(bearerToken: string, hmacSecret: string): CanonryConfig {
     apiKey: 'cnry_test',
     cloudflareTraffic: {
       connections: [{
-        projectName: 'demo',
+        // Source identity survives project rename; deployment lookup must not
+        // fall back to projectName after the connect response returns sourceId.
+        projectName: 'renamed-project',
         sourceId: response.sourceId,
         deliveryMode: 'direct-push',
         bearerToken,
@@ -43,6 +79,31 @@ function localConfig(bearerToken: string, hmacSecret: string): CanonryConfig {
         expectedBotListVersion: '2026-08-09',
         zoneId: 'zone_test',
         accountId: null,
+        createdAt: '2026-08-09T00:00:00.000Z',
+        updatedAt: '2026-08-09T00:00:00.000Z',
+      }],
+    },
+  }
+}
+
+function queueLocalConfig(apiToken: string): CanonryConfig {
+  return {
+    apiUrl: 'http://localhost:4100',
+    database: ':memory:',
+    apiKey: 'cnry_test',
+    cloudflareTraffic: {
+      connections: [{
+        projectName: 'demo',
+        sourceId: queueResponse.sourceId,
+        deliveryMode: 'queue-pull',
+        apiToken,
+        queueId: queueResponse.queueId,
+        queueName: queueResponse.queueName,
+        retentionSeconds: queueResponse.retentionSeconds,
+        workerVersion: queueResponse.workerVersion,
+        expectedBotListVersion: '2026-08-09',
+        zoneId: 'zone_test',
+        accountId: queueResponse.accountId,
         createdAt: '2026-08-09T00:00:00.000Z',
         updatedAt: '2026-08-09T00:00:00.000Z',
       }],
@@ -118,6 +179,116 @@ describe('trafficConnectCloudflare', () => {
       accountId: 'account_test',
       zoneId: 'zone_test',
     })
+  })
+
+  it('reads the queue token only from a regular file and keeps it out of output and artifacts', async () => {
+    const apiToken = 'cloudflare-queue-api-token-do-not-print'
+    const tokenFile = path.join(scratch(), 'queue-token.txt')
+    fs.writeFileSync(tokenFile, `${apiToken}\n`, { mode: 0o600 })
+    const outputDirectory = path.join(scratch(), 'worker')
+    const logs: string[] = []
+    let request: TrafficConnectCloudflareRequest | undefined
+    vi.spyOn(console, 'log').mockImplementation((...parts: unknown[]) => logs.push(parts.join(' ')))
+
+    await trafficConnectCloudflare('demo', {
+      deliveryMode: 'queue-pull',
+      accountId: queueResponse.accountId,
+      queueId: queueResponse.queueId,
+      queueName: queueResponse.queueName,
+      apiTokenFile: tokenFile,
+      outputDirectory,
+      format: 'json',
+    }, {
+      client: {
+        trafficConnectCloudflare: async (_project, body) => {
+          request = body
+          return queueResponse
+        },
+      },
+      loadLocalConfig: () => queueLocalConfig(apiToken),
+    })
+
+    expect(request).toMatchObject({
+      deliveryMode: 'queue-pull',
+      accountId: queueResponse.accountId,
+      queueId: queueResponse.queueId,
+      queueName: queueResponse.queueName,
+      retentionSeconds: 345_600,
+      apiToken,
+    })
+    const workerScript = fs.readFileSync(path.join(outputDirectory, 'worker.js'), 'utf-8')
+    const wranglerToml = fs.readFileSync(path.join(outputDirectory, 'wrangler.toml'), 'utf-8')
+    const stdout = logs.join('\n')
+    for (const output of [stdout, workerScript, wranglerToml]) {
+      expect(output).not.toContain(apiToken)
+    }
+    expect(JSON.parse(stdout)).toMatchObject({
+      deliveryMode: 'queue-pull',
+      activationRequired: true,
+      autoDeployAvailable: true,
+      queuePullConsumer: {
+        required: true,
+        queueName: queueResponse.queueName,
+      },
+    })
+  })
+
+  it('requires every queue-pull identifier and its token file', async () => {
+    await expect(trafficConnectCloudflare('demo', {
+      deliveryMode: 'queue-pull',
+    }, {
+      client: { trafficConnectCloudflare: async () => queueResponse },
+    })).rejects.toMatchObject({ code: 'TRAFFIC_CLOUDFLARE_QUEUE_ACCOUNT_REQUIRED' })
+  })
+
+  it('scans queue artifacts against the token file even without shared server config', async () => {
+    const apiToken = 'cloudflare-queue-api-token-unshared'
+    const tokenFile = path.join(scratch(), 'queue-token.txt')
+    fs.writeFileSync(tokenFile, apiToken, { mode: 0o600 })
+
+    await expect(trafficConnectCloudflare('demo', {
+      deliveryMode: 'queue-pull',
+      accountId: queueResponse.accountId,
+      queueId: queueResponse.queueId,
+      queueName: queueResponse.queueName,
+      apiTokenFile: tokenFile,
+      outputDirectory: path.join(scratch(), 'worker'),
+    }, {
+      client: {
+        trafficConnectCloudflare: async () => ({
+          ...queueResponse,
+          workerScript: `const leaked = ${JSON.stringify(apiToken)}`,
+        }),
+      },
+      loadLocalConfig: () => undefined,
+    })).rejects.toMatchObject({ code: 'TRAFFIC_CLOUDFLARE_SECRET_EXPOSURE' })
+  })
+
+  it('prints the mode-agnostic activation command when activation is required', async () => {
+    const apiToken = 'cloudflare-queue-api-token-activate'
+    const tokenFile = path.join(scratch(), 'queue-token.txt')
+    fs.writeFileSync(tokenFile, apiToken, { mode: 0o600 })
+    const logs: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((...parts: unknown[]) => logs.push(parts.join(' ')))
+
+    await trafficConnectCloudflare('demo', {
+      deliveryMode: 'queue-pull',
+      accountId: queueResponse.accountId,
+      queueId: queueResponse.queueId,
+      queueName: queueResponse.queueName,
+      apiTokenFile: tokenFile,
+      outputDirectory: path.join(scratch(), 'worker'),
+    }, {
+      client: { trafficConnectCloudflare: async () => queueResponse },
+      loadLocalConfig: () => queueLocalConfig(apiToken),
+    })
+
+    expect(logs.join('\n')).toContain(
+      'Activation required: run `canonry traffic activate demo --source source-cloudflare-queue-test`. This command does not activate delivery.',
+    )
+    expect(logs.join('\n')).toContain(
+      'Required: enable HTTP pull with `wrangler queues consumer http add canonry-traffic` before the first sync.',
+    )
   })
 
   it('requires an explicit Fail open acknowledgement before deployment', async () => {
@@ -227,5 +398,83 @@ describe('trafficConnectCloudflare', () => {
     expect(deployCalled).toBe(false)
     expect(fs.existsSync(path.join(outputDirectory, 'worker.js'))).toBe(true)
     expect(fs.existsSync(path.join(outputDirectory, 'wrangler.toml'))).toBe(true)
+  })
+})
+
+describe('trafficActivate', () => {
+  it('activates the exact source and renders its delivery, status, and schedule implication', async () => {
+    const logs: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((...parts: unknown[]) => logs.push(parts.join(' ')))
+    let calledWith: [string, string] | undefined
+
+    await trafficActivate('demo', {
+      sourceId: activatedQueueSource.id,
+    }, {
+      client: {
+        trafficActivate: async (project, sourceId) => {
+          calledWith = [project, sourceId]
+          return activatedQueueSource
+        },
+      },
+    })
+
+    expect(calledWith).toEqual(['demo', activatedQueueSource.id])
+    expect(logs.join('\n')).toContain('Source mode:     queue-pull')
+    expect(logs.join('\n')).toContain('Status:          connected')
+    expect(logs.join('\n')).toContain('Traffic sync:    enabled for this pull source')
+  })
+
+  it('emits the unmodified activated source DTO in machine format', async () => {
+    const logs: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((...parts: unknown[]) => logs.push(parts.join(' ')))
+
+    await trafficActivate('demo', {
+      sourceId: activatedQueueSource.id,
+      format: 'json',
+    }, {
+      client: { trafficActivate: async () => activatedQueueSource },
+    })
+
+    expect(JSON.parse(logs.join('\n'))).toEqual(activatedQueueSource)
+  })
+
+  it('reports that direct-push activation needs no polling schedule', async () => {
+    const logs: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((...parts: unknown[]) => logs.push(parts.join(' ')))
+    await trafficActivate('demo', {
+      sourceId: 'source-direct',
+    }, {
+      client: {
+        trafficActivate: async () => ({
+          ...activatedQueueSource,
+          id: 'source-direct',
+          config: { deliveryMode: 'direct-push' },
+        }),
+      },
+    })
+
+    expect(logs.join('\n')).toContain('Traffic sync:    not required for direct-push delivery')
+  })
+
+  it('renders non-Cloudflare pull adapters without inventing a delivery mode', async () => {
+    const logs: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((...parts: unknown[]) => logs.push(parts.join(' ')))
+    await trafficActivate('demo', {
+      sourceId: 'source-cloud-run',
+    }, {
+      client: {
+        trafficActivate: async () => ({
+          ...activatedQueueSource,
+          id: 'source-cloud-run',
+          sourceType: 'cloud-run',
+          displayName: 'Cloud Run',
+          config: { gcpProjectId: 'project-1' },
+        }),
+      },
+    })
+
+    expect(logs.join('\n')).toContain('Traffic source activated for project "demo".')
+    expect(logs.join('\n')).toContain('Source mode:     cloud-run')
+    expect(logs.join('\n')).toContain('Traffic sync:    enabled for this pull source')
   })
 })

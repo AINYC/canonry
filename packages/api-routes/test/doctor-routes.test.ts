@@ -401,6 +401,60 @@ describe('traffic.source.credentials — Cloudflare direct-push validator', () =
   })
 })
 
+describe('traffic.source.credentials — Cloudflare queue-pull validator', () => {
+  it('finds the staged Queue credential by source id without exposing the API token', async () => {
+    const sourceId = 'src_cloudflare_queue_doctor'
+    const apiToken = 'cf_queue_api_token_secret'
+    const records: CloudflareTrafficCredentialRecord[] = [
+      {
+        projectName: 'demo', deliveryMode: 'direct-push', sourceId: 'src_cloudflare_direct',
+        bearerToken: 'other-bearer', hmacSecret: 'other-hmac', accountId: null,
+        workerVersion: '1.0.0', expectedBotListVersion: 'test-list', zoneId: 'zone_1',
+        createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+      },
+      {
+        projectName: 'demo', deliveryMode: 'queue-pull', sourceId, apiToken,
+        accountId: 'account_1', queueId: 'queue_1', queueName: 'canonry-traffic-queue', retentionSeconds: 345600,
+        workerVersion: '1.0.0', expectedBotListVersion: 'test-list', zoneId: 'zone_1',
+        createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+      },
+    ]
+    const store: CloudflareTrafficCredentialStore = {
+      getConnection: projectName => records.find(record => record.projectName === projectName),
+      getConnectionBySourceId: id => records.find(record => record.sourceId === id),
+      upsertConnection: record => record,
+      deleteConnection: () => true,
+    }
+    const { app, db } = buildApp({ cloudflareTrafficCredentialStore: store })
+    const project = db.select().from(projects).all()[0]!
+    const now = new Date().toISOString()
+    db.insert(trafficSources).values({
+      id: sourceId,
+      projectId: project.id,
+      sourceType: TrafficSourceTypes.cloudflare,
+      displayName: 'Cloudflare Queue · example.com',
+      status: TrafficSourceStatuses.paused,
+      configJson: {
+        deliveryMode: 'queue-pull', workerVersion: '1.0.0', expectedBotListVersion: 'test-list',
+        zoneId: 'zone_1', accountId: 'account_1', queueId: 'queue_1', queueName: 'canonry-traffic-queue', retentionSeconds: 345600,
+      },
+      createdAt: now,
+      updatedAt: now,
+    }).run()
+    await app.ready()
+    const credentials = await app.inject({ method: 'GET', url: '/api/v1/projects/demo/doctor?check=traffic.source.credentials' })
+    const scopes = await app.inject({ method: 'GET', url: '/api/v1/projects/demo/doctor?check=traffic.source.scopes' })
+    expect(credentials.payload).not.toContain(apiToken)
+    expect(scopes.payload).not.toContain(apiToken)
+    const credentialsCheck = (JSON.parse(credentials.payload) as DoctorReportDto).checks[0]!
+    expect(credentialsCheck.status).toBe('ok')
+    const scopesCheck = (JSON.parse(scopes.payload) as DoctorReportDto).checks[0]!
+    expect(scopesCheck.status).toBe('skipped')
+    expect(scopesCheck.remediation).toContain('Account Queues Edit')
+    await app.close()
+  })
+})
+
 describe('GET /api/v1/doctor', () => {
   it('runs global checks and excludes project-scoped ones', async () => {
     const { app } = buildApp({

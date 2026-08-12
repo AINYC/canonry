@@ -205,15 +205,22 @@ describe('cloudflareWorkerSourceConfigSchema', () => {
     expect(parsed.deliveryMode).toBe('direct-push')
   })
 
-  it('rejects queue pull until its source-config variant ships', () => {
-    expect(() => cloudflareTrafficSourceConfigSchema.parse({
+  it('accepts the queue-pull source-config variant without persisting its API token', () => {
+    const parsed = cloudflareTrafficSourceConfigSchema.parse({
       schemaVersion: 1,
       deliveryMode: 'queue-pull',
       workerVersion: '1.0.0',
       expectedBotListVersion: '2026-05-27',
-      zoneId: null,
-      accountId: null,
-    })).toThrow()
+      zoneId: 'zone_abc123',
+      accountId: 'acct_xyz789',
+      queueId: 'queue_abc123',
+      queueName: 'canonry-traffic-src-abc123',
+      retentionSeconds: 345600,
+      apiToken: 'must-not-persist',
+    })
+    expect(parsed.deliveryMode).toBe('queue-pull')
+    expect(parsed.queueName).toBe('canonry-traffic-src-abc123')
+    expect(parsed).not.toHaveProperty('apiToken')
   })
 
   it('keeps the Worker config name as an exact compatibility alias', () => {
@@ -286,13 +293,44 @@ describe('trafficConnectCloudflareRequestSchema', () => {
     expect(() => trafficConnectCloudflareRequestSchema.parse({ accountId: '' })).toThrow()
   })
 
-  it('rejects the reserved queue-pull mode until that adapter ships', () => {
-    expect(() => trafficConnectCloudflareRequestSchema.parse({ deliveryMode: 'queue-pull' })).toThrow()
+  it('requires queue metadata and the Queue API token for queue pull', () => {
+    const parsed = trafficConnectCloudflareRequestSchema.parse({
+      deliveryMode: 'queue-pull',
+      zoneId: 'zone_abc123',
+      accountId: 'acct_xyz789',
+      queueId: 'queue_abc123',
+      queueName: 'canonry-traffic-src-abc123',
+      retentionSeconds: 345600,
+      apiToken: 'queue-secret',
+    })
+    expect(parsed.apiToken).toBe('queue-secret')
+    expect(parsed.retentionSeconds).toBe(345600)
+    expect(() => trafficConnectCloudflareRequestSchema.parse({
+      deliveryMode: 'queue-pull',
+      queueId: 'queue_abc123',
+      queueName: 'canonry-traffic-src-abc123',
+      retentionSeconds: 345600,
+      apiToken: 'queue-secret',
+    })).toThrow()
   })
+
+  it.each(['-leading', 'trailing-', 'contains space', '$(unsafe)', 'a'.repeat(64)])(
+    'rejects the invalid Cloudflare Queue name %s',
+    (queueName) => {
+      expect(() => trafficConnectCloudflareRequestSchema.parse({
+        deliveryMode: 'queue-pull',
+        accountId: 'acct_xyz789',
+        queueId: 'queueabc123',
+        queueName,
+        retentionSeconds: 345600,
+        apiToken: 'queue-secret',
+      })).toThrow()
+    },
+  )
 })
 
 describe('cloudflareTrafficDeliveryModeSchema', () => {
-  it('defines direct push and the reserved Queue pull discriminator', () => {
+  it('defines direct push and Queue pull delivery modes', () => {
     expect(cloudflareTrafficDeliveryModeSchema.options).toEqual(['direct-push', 'queue-pull'])
   })
 
@@ -313,6 +351,40 @@ describe('trafficConnectCloudflareResponseSchema', () => {
     })
     expect(parsed.sourceId).toBe('src_abc123')
     expect(parsed.workerScript).toContain('fetch')
+    expect(parsed.activationRequired).toBe(false)
+  })
+
+  it('returns queue metadata but strips the Queue API token', () => {
+    const parsed = trafficConnectCloudflareResponseSchema.parse({
+      sourceId: 'src_abc123',
+      deliveryMode: 'queue-pull',
+      workerScript: 'addEventListener("fetch", () => {})',
+      wranglerToml: 'name = "canonry-worker"',
+      workerVersion: '1.0.0',
+      instructions: 'Deploy to your zone',
+      activationRequired: false,
+      accountId: 'acct_xyz789',
+      queueId: 'queue_abc123',
+      queueName: 'canonry-traffic-src-abc123',
+      retentionSeconds: 345600,
+      apiToken: 'must-not-return',
+    })
+    expect(parsed.activationRequired).toBe(false)
+    expect(parsed.queueId).toBe('queue_abc123')
+    expect(parsed).not.toHaveProperty('apiToken')
+  })
+
+  it('allows a staged direct-push response to require later activation', () => {
+    const parsed = trafficConnectCloudflareResponseSchema.parse({
+      sourceId: 'src_abc123',
+      deliveryMode: 'direct-push',
+      workerScript: 'addEventListener("fetch", () => {})',
+      wranglerToml: 'name = "canonry-worker"',
+      workerVersion: '1.0.0',
+      instructions: 'Deploy to your zone',
+      activationRequired: true,
+    })
+    expect(parsed.activationRequired).toBe(true)
   })
 
   it('rejects empty string for any required field', () => {
