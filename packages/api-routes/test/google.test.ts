@@ -1532,6 +1532,15 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance offset pagina
   })
 })
 
+/** `YYYY-MM-DD` for N days back on GSC's Pacific reporting calendar. */
+function pacificDayIso(daysAgo: number): string {
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date())
+  return new Date(Date.parse(`${today}T00:00:00Z`) - daysAgo * 86_400_000)
+    .toISOString().slice(0, 10)
+}
+
 describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () => {
   let context: ReturnType<typeof buildApp>
   let projectId: string
@@ -1695,8 +1704,10 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     // The canonry.ai case: Google published through 3 days ago, so a
     // now-anchored 30d spent 3 of its days on dates that cannot hold data and
     // returned 27. Anchored on the last published day it returns all 30.
-    const dayIso = (daysAgo: number) =>
-      new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10)
+    // Seed on GSC's PACIFIC reporting calendar, which is what the route now
+    // measures against. A UTC-seeded fixture drifts by a day between 00:00 and
+    // 08:00 UTC — the same off-by-one the Pacific fix exists to remove.
+    const dayIso = (daysAgo: number) => pacificDayIso(daysAgo)
     const LAG = 3
     const now = '2026-01-01T00:00:00.000Z'
     // 30 consecutive published days ending at the lag boundary, plus two older
@@ -1716,7 +1727,7 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     const body = res.json() as GscPerformanceDailyDto
 
     expect(body.window.latestDataDate).toBe(dayIso(LAG))
-    expect(body.window.reportingLagDays).toBe(LAG)
+    expect(body.window.daysSinceLatestData).toBe(LAG)
     expect(body.window.endDate).toBe(dayIso(LAG))
     expect(body.window.startDate).toBe(dayIso(LAG + 29))
 
@@ -1733,8 +1744,7 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     // The anomaly that started this: a 30d window reported FEWER impressions
     // than a 28d one because the two ranges only overlapped. Whatever the lag,
     // the wider window must contain the narrower.
-    const dayIso = (daysAgo: number) =>
-      new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10)
+    const dayIso = (daysAgo: number) => pacificDayIso(daysAgo)
     const now = '2026-01-01T00:00:00.000Z'
     for (let i = 0; i < 95; i += 1) {
       context.db.insert(gscDailyTotals).values({

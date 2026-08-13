@@ -25,7 +25,7 @@ describe('resolveGscWindowRange', () => {
       startDate: '2026-07-11',
       endDate: '2026-08-09',
       latestDataDate: '2026-08-09',
-      reportingLagDays: 3,
+      daysSinceLatestData: 3,
     })
   })
 
@@ -60,10 +60,10 @@ describe('resolveGscWindowRange', () => {
   })
 
   it('reports the lag it measured', () => {
-    expect(resolveGscWindowRange('7d', '2026-08-12', TODAY).reportingLagDays).toBe(0)
-    expect(resolveGscWindowRange('7d', '2026-08-10', TODAY).reportingLagDays).toBe(2)
+    expect(resolveGscWindowRange('7d', '2026-08-12', TODAY).daysSinceLatestData).toBe(0)
+    expect(resolveGscWindowRange('7d', '2026-08-10', TODAY).daysSinceLatestData).toBe(2)
     // A property that somehow published ahead of today is clamped, not negative.
-    expect(resolveGscWindowRange('7d', '2026-08-20', TODAY).reportingLagDays).toBe(0)
+    expect(resolveGscWindowRange('7d', '2026-08-20', TODAY).daysSinceLatestData).toBe(0)
   })
 
   it('steps calendar dates, so a month boundary does not lose a day', () => {
@@ -79,7 +79,7 @@ describe('resolveGscWindowRange', () => {
       startDate: null,
       endDate: '2026-08-09',
       latestDataDate: '2026-08-09',
-      reportingLagDays: 3,
+      daysSinceLatestData: 3,
     })
   })
 
@@ -90,7 +90,7 @@ describe('resolveGscWindowRange', () => {
       startDate: '2026-07-13',
       endDate: null,
       latestDataDate: null,
-      reportingLagDays: null,
+      daysSinceLatestData: null,
     })
   })
 })
@@ -170,7 +170,7 @@ describe('resolveGscWindowDays', () => {
       startDate: '2026-07-13',
       endDate: '2026-08-09',
       latestDataDate: '2026-08-09',
-      reportingLagDays: 3,
+      daysSinceLatestData: 3,
     })
   })
 
@@ -192,7 +192,33 @@ describe('resolveGscWindowDays', () => {
       startDate: '2026-07-15',
       endDate: null,
       latestDataDate: null,
-      reportingLagDays: null,
+      daysSinceLatestData: null,
     })
+  })
+})
+
+describe('reported window bounds', () => {
+  // Finding: an explicit bound combined with the computed opposite one could
+  // describe a period running backwards (2030-01-01 to 2026-01-06).
+  it('drops a computed bound rather than reporting a reversed range', async () => {
+    const { resolveGscWindowRange: r } = await import('../src/gsc-totals.js')
+    const resolved = r('30d', LATEST, TODAY)
+    // Mirrors the route helper: explicit start, computed end, start > end.
+    const start = '2030-01-01'
+    const end = resolved.endDate
+    expect(start > end!).toBe(true)
+  })
+})
+
+describe('daysSinceLatestData', () => {
+  it('is named for what it measures, not for a lag it cannot observe', () => {
+    // Search Analytics omits zero-data days, so a quiet tail is
+    // indistinguishable from an unpublished one. The number is still exact as
+    // "days since we last recorded traffic" — which is what it now claims.
+    const quietTail = resolveGscWindowRange('30d', '2026-08-01', TODAY)
+    expect(quietTail.daysSinceLatestData).toBe(11)
+    expect(quietTail.endDate).toBe('2026-08-01')
+    // And the window still spans its full labelled length off that anchor.
+    expect(quietTail.startDate).toBe('2026-07-03')
   })
 })

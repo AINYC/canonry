@@ -1,4 +1,5 @@
 import type {
+  GscPerformanceDailyDto,
   GscSubmitSitemapsResponseDto,
   GscUrlInspectionDto,
   IndexingRequestResultDto,
@@ -264,7 +265,9 @@ export async function googlePerformanceDaily(project: string, opts: {
     console.log(JSON.stringify(data, null, 2))
     return
   } else if (opts.format === 'jsonl') {
-    emitJsonl(data.daily.map((row) => ({ project, ...row })))
+    // Carry the envelope's window onto every record — a bare daily row cannot
+    // say which period it belongs to or how fresh that period is.
+    emitJsonl(data.daily.map((row) => ({ project, window: data.window, ...row })))
     return
   }
 
@@ -274,13 +277,16 @@ export async function googlePerformanceDaily(project: string, opts: {
   }
 
   const { clicks, impressions, ctr, days } = data.totals
-  const { startDate: from, endDate: to, reportingLagDays } = data.window
-  const range = from && to ? ` ${from} to ${to}` : ''
+  // Optional at RUNTIME even though the DTO requires it: a server older than
+  // this field omits it, and a new CLI against an older server must degrade to
+  // no range label rather than crash. The web guards the same skew.
+  const win = data.window as GscPerformanceDailyDto['window'] | undefined
+  const range = win?.startDate && win.endDate ? ` ${win.startDate} to ${win.endDate}` : ''
   console.log(`GSC daily summary (${days} day${days === 1 ? '' : 's'}${range}):\n`)
-  // Google publishes on a delay, so the window stops short of today by design.
-  // Say so, or a short window looks like a sudden drop in coverage.
-  if (reportingLagDays !== null && reportingLagDays > 0) {
-    console.log(`  Search Console has published through ${to} (${reportingLagDays} day${reportingLagDays === 1 ? '' : 's'} behind today).`)
+  // The window stops short of today by design. Say what it covers, or a short
+  // window reads as a sudden drop in coverage.
+  if (win?.endDate && (win.daysSinceLatestData ?? 0) > 0) {
+    console.log(`  Search Console data through ${win.endDate} (${win.daysSinceLatestData} day${win.daysSinceLatestData === 1 ? '' : 's'} ago).`)
     console.log()
   }
   console.log(`  Clicks:      ${clicks.toLocaleString()}`)

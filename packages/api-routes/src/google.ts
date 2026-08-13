@@ -13,14 +13,49 @@ import {
   type GbpPlaceDetailsListResponse,
   gscSubmitSitemapsRequestDtoSchema,
   gscPerformanceOrderBySchema,
+  formatIsoDateInTimeZone,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from './gbp-summary.js'
 import {
   mergeGscDailyTotalsWithFallback, readGscDailyTotals,
-  readLatestGscDataDate, resolveGscWindowRange,
+  readLatestGscDataDate, resolveGscWindowRange, type GscWindowRange,
 } from './gsc-totals.js'
 import { resolveProject, writeAuditLog } from './helpers.js'
+
+/**
+ * The window to REPORT, given what the caller actually asked for.
+ *
+ * An explicit bound always wins over the label's computed one. The two are only
+ * combined when the result is a real, forward range; otherwise the computed
+ * side is dropped to `null`, because a caller reading `2030-01-01 to
+ * 2026-01-06` would be told the data covers a period that runs backwards.
+ */
+function resolveReportedWindow(
+  resolved: GscWindowRange,
+  startDate: string | undefined,
+  endDate: string | undefined,
+): GscWindowRange {
+  const start = startDate ?? resolved.startDate
+  const end = endDate ?? resolved.endDate
+  const inverted = start !== null && end !== null && start > end
+  return {
+    ...resolved,
+    startDate: inverted && !startDate ? null : start,
+    endDate: inverted && !endDate ? null : end,
+  }
+}
+
+/**
+ * Today's date on Search Console's own reporting calendar.
+ *
+ * GSC buckets by Pacific Time, so a UTC `toISOString().slice(0, 10)` names the
+ * wrong day between 00:00 and 08:00 UTC and would misreport freshness by a
+ * full day for a third of the clock.
+ */
+function gscToday(): string {
+  return formatIsoDateInTimeZone(new Date().toISOString(), GSC_REPORTING_TIME_ZONE)
+}
 import {
   getAuthUrl,
   exchangeCode,
@@ -35,6 +70,7 @@ import {
   INDEXING_API_DAILY_LIMIT,
   GoogleApiError,
   GoogleAuthError,
+  GSC_REPORTING_TIME_ZONE,
 } from '@ainyc/canonry-integration-google'
 import { GA4_SCOPE } from '@ainyc/canonry-integration-google-analytics'
 import {
@@ -771,7 +807,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     const resolvedWindow = resolveGscWindowRange(
       parseWindow(request.query.window),
       readLatestGscDataDate(app.db, project.id),
-      new Date().toISOString().slice(0, 10),
+      gscToday(),
     )
     const cutoffDate = startDate ? null : resolvedWindow.startDate
 
@@ -863,7 +899,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     const resolvedWindow = resolveGscWindowRange(
       parseWindow(request.query.window),
       readLatestGscDataDate(app.db, project.id),
-      new Date().toISOString().slice(0, 10),
+      gscToday(),
     )
     const cutoffDate = startDate ? null : resolvedWindow.startDate
 
@@ -919,11 +955,14 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       // The period actually returned. An explicit start/end wins over the
       // label, so echo what was used rather than what the window would have
       // chosen — a caller must be able to label the data it got.
-      window: {
-        ...resolvedWindow,
-        ...(startDate ? { startDate } : {}),
-        ...(endDate ? { endDate } : {}),
-      },
+      //
+      // Mixing one explicit bound with the computed opposite one can invert the
+      // range (an explicit `startDate` of 2030-01-01 against a computed
+      // `endDate` of 2026-01-06), which would describe a period that cannot
+      // contain the rows beside it. When only one side is given, the other is
+      // dropped rather than reported reversed: an absent bound is honest about
+      // being unspecified, a reversed pair is not.
+      window: resolveReportedWindow(resolvedWindow, startDate, endDate),
     }
   })
 
@@ -951,7 +990,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     const resolvedWindow = resolveGscWindowRange(
       parseWindow(request.query.window),
       readLatestGscDataDate(app.db, project.id),
-      new Date().toISOString().slice(0, 10),
+      gscToday(),
     )
     const cutoffDate = startDate ? null : resolvedWindow.startDate
 

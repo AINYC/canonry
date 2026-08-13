@@ -9,6 +9,17 @@ export const GSC_API_BASE = 'https://www.googleapis.com/webmasters/v3'
 export const URL_INSPECTION_API = 'https://searchconsole.googleapis.com/v1/urlInspection/index:inspect'
 export const GSC_MAX_ROWS_PER_REQUEST = 25000
 /**
+ * The timezone Search Console buckets its reporting days by.
+ *
+ * Search analytics dates are Pacific Time, not UTC. Deriving "today" from the
+ * UTC calendar names a different day for the eight hours between 00:00 UTC and
+ * 08:00 UTC (16:00-00:00 PT the previous day), which is when a scheduled sync
+ * most often runs — so a UTC "today" would put the fetch ceiling and the
+ * measured freshness a full day out for a third of the clock.
+ */
+export const GSC_REPORTING_TIME_ZONE = 'America/Los_Angeles'
+
+/**
  * Google's typical search-analytics publishing delay, in days.
  *
  * Use it to PAD the start of a fetch window so a `days`-day request still

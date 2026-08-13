@@ -82,8 +82,16 @@ export const gscWindowRangeSchema = z.object({
   endDate: z.string().nullable(),
   /** `MAX(date)` across the project's GSC data, ignoring the window. */
   latestDataDate: z.string().nullable(),
-  /** Calendar days between `latestDataDate` and today. `null` with no data. */
-  reportingLagDays: z.number().nullable(),
+  /**
+   * Calendar days since the last day with recorded traffic, on GSC's Pacific
+   * calendar. `null` with no data.
+   *
+   * NOT Google's publication lag: Search Analytics omits zero-data days, so a
+   * quiet tail is indistinguishable from an unpublished one and inflates this
+   * number. Render it as "data through <endDate>", never as "Search Console is
+   * N days behind".
+   */
+  daysSinceLatestData: z.number().nullable(),
 })
 export type GscWindowRange = z.infer<typeof gscWindowRangeSchema>
 

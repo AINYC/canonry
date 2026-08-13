@@ -122,14 +122,19 @@ describe('executeGscSync — fetch window', () => {
 
       await executeGscSync(db, 'run_window', 'proj_gsc', { config: testConfig() })
 
-      const today = new Date().toISOString().slice(0, 10)
+      // GSC's reporting calendar is Pacific, not UTC.
+      const today = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit',
+      }).format(new Date())
       for (const call of fetchSearchAnalyticsMock.mock.calls) {
         expect((call[2] as { endDate: string }).endDate).toBe(today)
       }
       // The lag still pads the START, so a 30-day request still covers 30 days
       // of PUBLISHED data rather than 30 minus the delay.
       const firstCall = fetchSearchAnalyticsMock.mock.calls[0]!
-      expect((firstCall[2] as { startDate: string }).startDate).toBe(daysAgo(33))
+      const start = new Date(Date.parse(`${today}T00:00:00Z`) - 33 * 86_400_000)
+        .toISOString().slice(0, 10)
+      expect((firstCall[2] as { startDate: string }).startDate).toBe(start)
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true })
     }

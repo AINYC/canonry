@@ -2521,7 +2521,7 @@ export type GscPerformanceDailyDto = {
         startDate: string | null;
         endDate: string | null;
         latestDataDate: string | null;
-        reportingLagDays: number | null;
+        daysSinceLatestData: number | null;
     };
 };
 

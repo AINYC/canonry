@@ -74,7 +74,7 @@ function renderSection() {
       return jsonResponse({
         totals: { clicks: 0, impressions: 0, ctr: 0, days: 0 },
         daily: [],
-        window: { startDate: null, endDate: null, latestDataDate: null, reportingLagDays: null },
+        window: { startDate: null, endDate: null, latestDataDate: null, daysSinceLatestData: null },
       })
     }
     if (path.includes('/google/gsc/performance')) {

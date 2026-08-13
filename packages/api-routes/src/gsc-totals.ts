@@ -24,8 +24,20 @@ export interface GscWindowRange {
   endDate: string | null
   /** `MAX(date)` across the project's GSC data, ignoring any window. */
   latestDataDate: string | null
-  /** Calendar days between `latestDataDate` and today. `null` with no data. */
-  reportingLagDays: number | null
+  /**
+   * Calendar days between `latestDataDate` and today, on GSC's Pacific
+   * calendar. `null` with no data.
+   *
+   * This is NOT Google's publication lag, and must never be labelled as one.
+   * The Search Analytics API returns no row for a day with no data, so a day
+   * that Google HAS published but on which the property earned zero
+   * impressions is indistinguishable from a day Google has not published yet.
+   * A quiet tail therefore inflates this number. It measures exactly what it
+   * says — how long since we last recorded traffic — and any surface reading
+   * it must phrase it that way ("data through X"), never as a claim about
+   * Google being behind.
+   */
+  daysSinceLatestData: number | null
 }
 
 /**
@@ -63,7 +75,7 @@ export function resolveGscWindowRange(
       startDate: null,
       endDate: latestDataDate,
       latestDataDate,
-      reportingLagDays: gscReportingLagDays(latestDataDate, today),
+      daysSinceLatestData: gscDaysSinceLatestData(latestDataDate, today),
     }
   }
   return resolveGscWindowDays(WINDOW_DAYS[window], latestDataDate, today)
@@ -92,7 +104,7 @@ export function resolveGscWindowDays(
       startDate: shiftIsoCalendarDate(today, -days),
       endDate: null,
       latestDataDate: null,
-      reportingLagDays: null,
+      daysSinceLatestData: null,
     }
   }
   // `days - 1`, because the range is INCLUSIVE at both ends: a 7-day window
@@ -101,12 +113,12 @@ export function resolveGscWindowDays(
     startDate: shiftIsoCalendarDate(latestDataDate, -(days - 1)),
     endDate: latestDataDate,
     latestDataDate,
-    reportingLagDays: gscReportingLagDays(latestDataDate, today),
+    daysSinceLatestData: gscDaysSinceLatestData(latestDataDate, today),
   }
 }
 
 /** Calendar days between the last published date and today. Never negative. */
-function gscReportingLagDays(latestDataDate: string | null, today: string): number | null {
+function gscDaysSinceLatestData(latestDataDate: string | null, today: string): number | null {
   if (latestDataDate === null) return null
   return Math.max(0, Math.round(
     (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${latestDataDate}T00:00:00Z`)) / 86_400_000,
@@ -115,6 +127,16 @@ function gscReportingLagDays(latestDataDate: string | null, today: string): numb
 
 /**
  * The latest GSC reporting date stored for a project, across BOTH sources.
+ *
+ * This is a PROXY for Google's publication watermark, not the watermark
+ * itself, and it is the best one the API makes available: Search Analytics
+ * omits zero-data days entirely, so a published day on which the property
+ * earned nothing looks identical to a day that has not been published. On a
+ * quiet property the anchor therefore sits behind Google's real frontier and
+ * the window shifts back with it. The consequence is bounded — the window
+ * still spans its full labelled length and still ends on the last day with
+ * measured traffic — but it means no caller may present the resulting gap as
+ * Google being late. See `daysSinceLatestData`.
  *
  * The property-level table is preferred everywhere else, but it can lag the
  * dimensioned one (a project synced before `gsc_daily_totals` existed has only

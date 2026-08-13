@@ -978,8 +978,11 @@ export function GscSection({
                     {performanceDaily?.window?.startDate && performanceDaily.window.endDate && (
                       <p className="text-xs text-muted">
                         {performanceDaily.window.startDate} to {performanceDaily.window.endDate}
-                        {(performanceDaily.window.reportingLagDays ?? 0) > 0
-                          && ` · Search Console is ${performanceDaily.window.reportingLagDays} day${performanceDaily.window.reportingLagDays === 1 ? '' : 's'} behind`}
+                        {/* "data through X", never "Google is N days behind":
+                            a zero-traffic day returns no row, so a quiet tail
+                            is indistinguishable from an unpublished one. */}
+                        {(performanceDaily.window.daysSinceLatestData ?? 0) > 0
+                          && ` · latest data ${performanceDaily.window.daysSinceLatestData} day${performanceDaily.window.daysSinceLatestData === 1 ? '' : 's'} ago`}
                       </p>
                     )}
                   </div>
