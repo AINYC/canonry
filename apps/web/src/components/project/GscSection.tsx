@@ -1383,7 +1383,10 @@ export function GscSection({
                 <div className="section-head section-head-inline">
                   <div>
                     <p className="eyebrow eyebrow-soft">Coverage</p>
-                    <h3>Index coverage</h3>
+                    <h3 className="flex items-center gap-1.5">
+                      Index coverage
+                      <InfoTooltip text="Google's Indexing API is intended for eligible JobPosting and BroadcastEvent pages. Sitemap resubmission is the general-site bulk path." />
+                    </h3>
                   </div>
                   <div className="flex items-center gap-2">
                     {coverage && coverage.notIndexed.length > 0 && (
@@ -1698,7 +1701,6 @@ export function GscSection({
                         itemLabel="URLs"
                       />
                     </div>
-                    <p className="mt-3 text-xs text-muted">Google's Indexing API is intended for eligible JobPosting and BroadcastEvent pages. Sitemap resubmission is the general-site bulk path.</p>
 
                     <div className="mt-4 border-t border-default pt-3">
                       <button
@@ -1734,7 +1736,10 @@ export function GscSection({
                 <div className="section-head section-head-inline">
                   <div>
                     <p className="eyebrow eyebrow-soft">Sitemaps</p>
-                    <h3>Sitemap operations</h3>
+                    <h3 className="flex items-center gap-1.5">
+                      Sitemap operations
+                      <InfoTooltip text="Submitting asks Google to refetch these sitemaps. Indexing is not guaranteed." />
+                    </h3>
                   </div>
                   <Button
                     type="button"
@@ -1790,7 +1795,6 @@ export function GscSection({
                   )}
                   {sitemapSubmissionProgress && <span className="text-xs text-secondary">Submitting {sitemapSubmissionProgress.completed}/{sitemapSubmissionProgress.total}</span>}
                 </div>
-                <p className="mt-2 text-xs text-muted">Google is asked to refetch these sitemaps. Indexing is not guaranteed.</p>
                 {!canSubmitSitemaps && gscConn && (
                   <div className="mt-2 flex items-center gap-2 text-xs text-caution">
                     <span>Reconnect to let Canonry submit sitemaps. Your current Canonry OAuth grant is read-only.</span>
@@ -2020,7 +2024,10 @@ export function GscSection({
                       <div className="section-head">
                         <div>
                           <p className="eyebrow eyebrow-soft">Property</p>
-                          <h3>Pick the Search Console property</h3>
+                          <h3 className="flex items-center gap-1.5">
+                      Pick the Search Console property
+                      <InfoTooltip text="The selected property is used for future syncs and URL inspections for this project." />
+                    </h3>
                         </div>
                       </div>
                       <div className="mt-3 space-y-2">
@@ -2050,7 +2057,6 @@ export function GscSection({
                             {savingProperty ? 'Saving\u2026' : 'Save property'}
                           </Button>
                         </div>
-                        <p className="text-xs text-muted">The selected property is used for future syncs and URL inspections for this project.</p>
                       </div>
                     </Card>
 
