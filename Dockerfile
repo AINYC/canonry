@@ -7,6 +7,18 @@ ENV PATH="$PNPM_HOME:$PATH"
 
 RUN corepack enable
 
+# `better-sqlite3` installs via `prebuild-install || node-gyp rebuild`. The
+# prebuilt download is a single un-retried network fetch, and without a
+# toolchain the `||` fallback CANNOT succeed — so one blip on the prebuild CDN
+# fails the whole image build. Observed: `prebuild-install warn install socket
+# hang up` followed by `gyp ERR! Could not find any Python installation`.
+#
+# This is the BUILD stage only; the runtime stage below copies `/prod/app` and
+# never sees these packages, so the shipped image is unchanged.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json eslint.config.js ./
