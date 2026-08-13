@@ -1700,6 +1700,17 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     expect(res.statusCode).toBe(404)
   })
 
+  it('refuses a caller range that runs backwards instead of answering it empty', async () => {
+    // Both bounds are the caller's own, so the REQUEST is impossible. An empty
+    // 200 would be technically true and useless.
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?startDate=2030-01-01&endDate=2026-01-06',
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error.message).toMatch(/is after endDate/)
+  })
+
   it('anchors a labelled window on the last published day, not on today', async () => {
     // The canonry.ai case: Google published through 3 days ago, so a
     // now-anchored 30d spent 3 of its days on dates that cannot hold data and
