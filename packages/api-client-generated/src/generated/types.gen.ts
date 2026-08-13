@@ -2517,7 +2517,7 @@ export type GscPerformanceDailyDto = {
         impressions: number;
         ctr: number;
     }>;
-    window: {
+    window?: {
         startDate: string | null;
         endDate: string | null;
         latestDataDate: string | null;
@@ -14814,6 +14814,10 @@ export type GetApiV1ProjectsByNameGoogleGscPerformanceData = {
          * Filter by end date.
          */
         endDate?: string;
+        /**
+         * Relative span in days, resolved server-side against the last published GSC date. Prefer this over client-computed start/end dates: those bypass the published-day anchoring and are pinned to the caller's clock rather than Google's Pacific calendar.
+         */
+        days?: string;
         /**
          * Filter by search query.
          */

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { eq, and, sql } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { runs, projects, gscSearchData, gscDailyTotals, gscQueryDailyTotals } from '@ainyc/canonry-db'
+import { runs, projects, gscSearchData, gscDailyTotals, gscQueryDailyTotals, gscDataWatermarks } from '@ainyc/canonry-db'
 import {
   fetchSearchAnalytics,
   refreshAccessToken,
@@ -179,7 +179,42 @@ export async function executeGscSync(
       }).run()
     }
 
-    log.info('daily-totals.complete', { runId, projectId, rowCount: totalRows.length })
+    // Advance the monotonic data watermark.
+    //
+    // The furthest date this sync SAW, never lower than what a previous sync
+    // already recorded. Search Analytics omits zero-data days, so the observed
+    // max walks backward across a quiet stretch; letting the anchor follow it
+    // would slide every window into the past and move its totals. Monotonic is
+    // the property that makes this usable as a frontier at all.
+    //
+    // `syncedThroughDate` records how far we ASKED, so the gap between the two
+    // is attributable rather than mysterious.
+    const observedThrough = totalRows
+      .map((row) => row.keys[0] ?? '')
+      .filter((date) => date !== '')
+      .reduce<string | null>((max, date) => (max === null || date > max ? date : max), null)
+    if (observedThrough !== null || endDate) {
+      const existing = db.select().from(gscDataWatermarks)
+        .where(eq(gscDataWatermarks.projectId, projectId)).get()
+      const nextThrough = [existing?.dataThroughDate ?? null, observedThrough]
+        .filter((d): d is string => d !== null)
+        .reduce<string | null>((max, d) => (max === null || d > max ? d : max), null)
+      if (nextThrough !== null) {
+        db.insert(gscDataWatermarks).values({
+          projectId,
+          dataThroughDate: nextThrough,
+          syncedThroughDate: endDate,
+          updatedAt: dailyTotalsNow,
+        }).onConflictDoUpdate({
+          target: gscDataWatermarks.projectId,
+          set: { dataThroughDate: nextThrough, syncedThroughDate: endDate, updatedAt: dailyTotalsNow },
+        }).run()
+      }
+    }
+
+    log.info('daily-totals.complete', {
+      runId, projectId, rowCount: totalRows.length, observedThrough, syncedThrough: endDate,
+    })
 
     // Per-query daily totals (no `page` dimension). Same reason as above,
     // applied one level down: summing `gsc_search_data` by query multiplies

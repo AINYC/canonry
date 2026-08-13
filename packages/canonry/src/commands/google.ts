@@ -285,8 +285,15 @@ export async function googlePerformanceDaily(project: string, opts: {
   console.log(`GSC daily summary (${days} day${days === 1 ? '' : 's'}${range}):\n`)
   // The window stops short of today by design. Say what it covers, or a short
   // window reads as a sudden drop in coverage.
-  if (win?.endDate && (win.daysSinceLatestData ?? 0) > 0) {
+  // Freshness describes the PROJECT's latest data, not the requested range, so
+  // it may only be printed beside a range that actually ends there. Against an
+  // explicit historical range it read as `2026-01-31 (2 days ago)`.
+  const endsAtFrontier = win?.endDate !== undefined && win.endDate === win.latestDataDate
+  if (endsAtFrontier && (win.daysSinceLatestData ?? 0) > 0) {
     console.log(`  Search Console data through ${win.endDate} (${win.daysSinceLatestData} day${win.daysSinceLatestData === 1 ? '' : 's'} ago).`)
+    console.log()
+  } else if (win?.latestDataDate && win.endDate !== win.latestDataDate) {
+    console.log(`  Showing a fixed range. Latest Search Console data is ${win.latestDataDate}.`)
     console.log()
   }
   console.log(`  Clicks:      ${clicks.toLocaleString()}`)
@@ -378,11 +385,13 @@ export async function googlePerformance(project: string, opts: {
     if (opts.startDate) params.startDate = opts.startDate
     if (opts.endDate) params.endDate = opts.endDate
   } else if (opts.days) {
-    const end = new Date()
-    const start = new Date()
-    start.setDate(start.getDate() - opts.days)
-    params.startDate = start.toISOString().split('T')[0]!
-    params.endDate = end.toISOString().split('T')[0]!
+    // Forward the SPAN, never client-computed dates. Deriving bounds here
+    // pinned them to the UTC clock and sent them as explicit dates, which the
+    // route honours over its own anchor — so `--days 30` skipped the
+    // published-day anchoring entirely, could end a Pacific day in the future,
+    // and spanned 31 inclusive dates for a 30-day request. The server resolves
+    // the span against the same frontier every other window uses.
+    params.days = String(opts.days)
   }
   if (opts.keyword) params.query = opts.keyword
   if (opts.page) params.page = opts.page

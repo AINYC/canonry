@@ -39,7 +39,15 @@ function makeDb(project: unknown) {
         innerJoin: () => ({ where: () => emptyRows }),
       }),
     }),
-    insert: () => ({ values: (v: unknown) => ({ run: () => { inserted.push(v); return { changes: 1 } } }) }),
+    // `onConflictDoUpdate` is part of the real drizzle insert builder (the
+    // documented pattern for atomic upserts), so the stand-in has to answer it
+    // or it lies about the surface it is standing in for.
+    insert: () => ({
+      values: (v: unknown) => ({
+        run: () => { inserted.push(v); return { changes: 1 } },
+        onConflictDoUpdate: () => ({ run: () => { inserted.push(v); return { changes: 1 } } }),
+      }),
+    }),
     delete: () => ({ where: () => ({ run: () => ({ changes: 0 }) }) }),
   }
 }

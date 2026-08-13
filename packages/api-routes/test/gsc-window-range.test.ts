@@ -3,9 +3,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { createClient, migrate, projects, runs, gscSearchData, gscDailyTotals } from '@ainyc/canonry-db'
+import { createClient, migrate, projects, runs, gscSearchData, gscDailyTotals, gscDataWatermarks } from '@ainyc/canonry-db'
 
 import { readLatestGscDataDate, resolveGscWindowDays, resolveGscWindowRange } from '../src/gsc-totals.js'
+import { assertForwardRange, resolveReportedWindow } from '../src/google.js'
 
 /**
  * Reproduces the real canonry.ai disagreement that motivated the change.
@@ -197,16 +198,58 @@ describe('resolveGscWindowDays', () => {
   })
 })
 
-describe('reported window bounds', () => {
-  // Finding: an explicit bound combined with the computed opposite one could
-  // describe a period running backwards (2030-01-01 to 2026-01-06).
-  it('drops a computed bound rather than reporting a reversed range', async () => {
-    const { resolveGscWindowRange: r } = await import('../src/gsc-totals.js')
-    const resolved = r('30d', LATEST, TODAY)
-    // Mirrors the route helper: explicit start, computed end, start > end.
-    const start = '2030-01-01'
-    const end = resolved.endDate
-    expect(start > end!).toBe(true)
+describe('resolveReportedWindow', () => {
+  const resolved = resolveGscWindowRange('30d', LATEST, TODAY)
+
+  it('passes a forward range through untouched', () => {
+    expect(resolveReportedWindow(resolved, '2026-07-20', '2026-08-01')).toMatchObject({
+      startDate: '2026-07-20', endDate: '2026-08-01',
+    })
+  })
+
+  it('lets an explicit bound win over the computed one', () => {
+    expect(resolveReportedWindow(resolved, '2026-07-20', undefined).startDate).toBe('2026-07-20')
+    expect(resolveReportedWindow(resolved, undefined, '2026-08-01').endDate).toBe('2026-08-01')
+  })
+
+  it('drops the COMPUTED bound when mixing it with an explicit one would reverse the range', () => {
+    // Explicit start past the computed end: report the start, drop the end.
+    // Absent is honest about being unspecified; reversed is not.
+    const forward = resolveReportedWindow(resolved, '2030-01-01', undefined)
+    expect(forward.startDate).toBe('2030-01-01')
+    expect(forward.endDate).toBeNull()
+    // And the mirror case: explicit end before the computed start.
+    const backward = resolveReportedWindow(resolved, undefined, '2020-01-01')
+    expect(backward.endDate).toBe('2020-01-01')
+    expect(backward.startDate).toBeNull()
+  })
+
+  it('never reports a range whose start is after its end, for any combination', () => {
+    for (const start of [undefined, '2020-01-01', '2030-01-01']) {
+      for (const end of [undefined, '2020-06-01', '2030-06-01']) {
+        if (start && end && start > end) continue // refused upstream, see below
+        const w = resolveReportedWindow(resolved, start, end)
+        if (w.startDate !== null && w.endDate !== null) {
+          expect(w.startDate <= w.endDate).toBe(true)
+        }
+      }
+    }
+  })
+})
+
+describe('assertForwardRange', () => {
+  it('refuses a caller range that runs backwards', () => {
+    // Both bounds are the caller's own, so the REQUEST is impossible. Returning
+    // an empty result would be true and useless.
+    expect(() => assertForwardRange('2030-01-01', '2026-01-06')).toThrow(/is after endDate/)
+  })
+
+  it('accepts a forward range, equal bounds, and a partial range', () => {
+    expect(() => assertForwardRange('2026-01-01', '2026-01-06')).not.toThrow()
+    expect(() => assertForwardRange('2026-01-06', '2026-01-06')).not.toThrow()
+    expect(() => assertForwardRange('2026-01-06', undefined)).not.toThrow()
+    expect(() => assertForwardRange(undefined, '2026-01-06')).not.toThrow()
+    expect(() => assertForwardRange(undefined, undefined)).not.toThrow()
   })
 })
 
@@ -220,5 +263,74 @@ describe('daysSinceLatestData', () => {
     expect(quietTail.endDate).toBe('2026-08-01')
     // And the window still spans its full labelled length off that anchor.
     expect(quietTail.startDate).toBe('2026-07-03')
+  })
+})
+
+describe('readLatestGscDataDate — monotonic watermark', () => {
+  let db: ReturnType<typeof createClient>
+  let tmpDir: string
+  let projectId: string
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsc-watermark-test-'))
+    db = createClient(path.join(tmpDir, 'test.db'))
+    migrate(db)
+    projectId = crypto.randomUUID()
+    const now = '2026-08-12T00:00:00.000Z'
+    db.insert(projects).values({
+      id: projectId, name: 'wm', displayName: 'WM', canonicalDomain: 'wm.example.com',
+      country: 'US', language: 'en', createdAt: now, updatedAt: now,
+    }).run()
+  })
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  function seedProperty(date: string) {
+    db.insert(gscDailyTotals).values({
+      id: crypto.randomUUID(), projectId, date, clicks: 1, impressions: 10, position: '5',
+      createdAt: '2026-08-12T00:00:00.000Z',
+    }).run()
+  }
+
+  function setWatermark(dataThroughDate: string) {
+    db.insert(gscDataWatermarks).values({
+      projectId, dataThroughDate, syncedThroughDate: '2026-08-12',
+      updatedAt: '2026-08-12T00:00:00.000Z',
+    }).onConflictDoUpdate({
+      target: gscDataWatermarks.projectId,
+      set: { dataThroughDate },
+    }).run()
+  }
+
+  it('holds the frontier when a quiet tail makes the observed max walk backward', () => {
+    // THE BUG: Search Analytics omits zero-data days. The property reached
+    // 08-09, then went quiet — the newest row is now 08-01. Without the
+    // watermark the anchor follows the rows down and every window slides a week
+    // into the past, changing totals for a reason unrelated to performance.
+    seedProperty('2026-08-01')
+    setWatermark('2026-08-09')
+    expect(readLatestGscDataDate(db, projectId)).toBe('2026-08-09')
+
+    const window = resolveGscWindowRange('30d', readLatestGscDataDate(db, projectId), TODAY)
+    expect(window.endDate).toBe('2026-08-09')
+    expect(window.startDate).toBe('2026-07-11')
+  })
+
+  it('still advances when real data moves past the stored watermark', () => {
+    // Monotonic means "never backward", not "frozen".
+    setWatermark('2026-08-05')
+    seedProperty('2026-08-09')
+    expect(readLatestGscDataDate(db, projectId)).toBe('2026-08-09')
+  })
+
+  it('falls back to the observed max for a project that predates the watermark', () => {
+    seedProperty('2026-08-09')
+    expect(readLatestGscDataDate(db, projectId)).toBe('2026-08-09')
+  })
+
+  it('is null for a project with neither', () => {
+    expect(readLatestGscDataDate(db, projectId)).toBeNull()
   })
 })

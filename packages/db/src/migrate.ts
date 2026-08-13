@@ -3563,6 +3563,25 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE traffic_sources ADD COLUMN queue_backlog_observed_at TEXT`,
     ],
   },
+  {
+    version: 137,
+    name: 'gsc-data-watermark',
+    // The furthest GSC reporting date this project has EVER observed.
+    //
+    // `MAX(date)` over the stored rows is not a frontier: Search Analytics
+    // returns no row for a day with no data, so a quiet tail makes the observed
+    // max walk BACKWARD and drags every anchored window back with it. This
+    // column is monotonic — a sync may only advance it — so a zero-traffic
+    // stretch can never move the frontier the wrong way.
+    statements: [
+      `CREATE TABLE IF NOT EXISTS gsc_data_watermarks (
+        project_id          TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        data_through_date   TEXT NOT NULL,
+        synced_through_date TEXT,
+        updated_at          TEXT NOT NULL
+      )`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

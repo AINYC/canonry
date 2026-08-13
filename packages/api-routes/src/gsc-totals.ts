@@ -1,5 +1,5 @@
 import { and, asc, eq, sql, max } from 'drizzle-orm'
-import { gscDailyTotals, gscQueryDailyTotals, gscSearchData } from '@ainyc/canonry-db'
+import { gscDailyTotals, gscQueryDailyTotals, gscSearchData, gscDataWatermarks } from '@ainyc/canonry-db'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { shiftIsoCalendarDate, type MetricsWindow } from '@ainyc/canonry-contracts'
 
@@ -126,31 +126,35 @@ function gscDaysSinceLatestData(latestDataDate: string | null, today: string): n
 }
 
 /**
- * The latest GSC reporting date stored for a project, across BOTH sources.
+ * The furthest GSC reporting date a project has reached — the anchor every
+ * window hangs off.
  *
- * This is a PROXY for Google's publication watermark, not the watermark
- * itself, and it is the best one the API makes available: Search Analytics
- * omits zero-data days entirely, so a published day on which the property
- * earned nothing looks identical to a day that has not been published. On a
- * quiet property the anchor therefore sits behind Google's real frontier and
- * the window shifts back with it. The consequence is bounded — the window
- * still spans its full labelled length and still ends on the last day with
- * measured traffic — but it means no caller may present the resulting gap as
- * Google being late. See `daysSinceLatestData`.
+ * `MAX(date)` over the stored rows ALONE is not a frontier. Search Analytics
+ * returns no row for a day with no data, so on a quiet property the observed
+ * max walks backward and drags every anchored window back with it: a `30d`
+ * window slides into the previous month and its totals change for a reason
+ * that has nothing to do with the site's performance.
  *
- * The property-level table is preferred everywhere else, but it can lag the
- * dimensioned one (a project synced before `gsc_daily_totals` existed has only
- * dimensioned rows). Taking the max of the two means the anchor never sits
- * behind data the endpoint is about to return.
+ * So the persisted `gsc_data_watermarks.data_through_date` — which a sync may
+ * only ADVANCE — takes precedence, and the observed max is a floor under it
+ * for projects that synced before the watermark existed. A quiet tail can
+ * then leave the frontier where it is instead of moving it backward.
+ *
+ * Both stored tables are consulted for that floor because they sync
+ * independently: a project from before `gsc_daily_totals` existed has only
+ * dimensioned rows, and anchoring behind data the endpoint is about to return
+ * would cut it off.
  */
 export function readLatestGscDataDate(db: DatabaseClient, projectId: string): string | null {
+  const watermark = db.select({ through: gscDataWatermarks.dataThroughDate })
+    .from(gscDataWatermarks).where(eq(gscDataWatermarks.projectId, projectId)).get()?.through ?? null
   const property = db.select({ latest: max(gscDailyTotals.date) })
     .from(gscDailyTotals).where(eq(gscDailyTotals.projectId, projectId)).get()?.latest ?? null
   const dimensioned = db.select({ latest: max(gscSearchData.date) })
     .from(gscSearchData).where(eq(gscSearchData.projectId, projectId)).get()?.latest ?? null
-  if (property === null) return dimensioned
-  if (dimensioned === null) return property
-  return property >= dimensioned ? property : dimensioned
+  return [watermark, property, dimensioned]
+    .filter((d): d is string => d !== null)
+    .reduce<string | null>((maxDate, d) => (maxDate === null || d > maxDate ? d : maxDate), null)
 }
 
 /**

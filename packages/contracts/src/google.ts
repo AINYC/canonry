@@ -103,7 +103,13 @@ export const gscPerformanceDailyDtoSchema = z.object({
     days: z.number(),
   }),
   daily: z.array(gscPerformanceDailyPointSchema),
-  window: gscWindowRangeSchema,
+  /**
+   * Optional because a server older than this field omits it. Both the web and
+   * the CLI guard for that skew; declaring it required here would tell a
+   * generated consumer it may dereference the field safely against a legacy
+   * response, which is exactly the crash those guards exist to prevent.
+   */
+  window: gscWindowRangeSchema.optional(),
 })
 export type GscPerformanceDailyDto = z.infer<typeof gscPerformanceDailyDtoSchema>
 
