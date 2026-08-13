@@ -23,6 +23,23 @@ function round(value: number, dp = 4): number {
 }
 
 /**
+ * Round to `sig` significant figures, not decimal places.
+ *
+ * A fitted slope spans many orders of magnitude across metrics: clicks move by
+ * whole units per day, CTR by ~1e-5. Fixed 4-decimal rounding is fine for the
+ * first and destroys the second — a CTR climbing from 2.0% to 2.1% over a month
+ * has a slope near 0.00003, which rounds to exactly `0` and makes the surface
+ * report "flat" for movement that is really there. Significant figures keep the
+ * same relative precision at every scale, and exact values (1.5, -3) stay exact.
+ */
+function roundSignificant(value: number, sig = 6): number {
+  if (!Number.isFinite(value) || value === 0) return 0
+  const magnitude = Math.ceil(Math.log10(Math.abs(value)))
+  const factor = 10 ** (sig - magnitude)
+  return (Math.round(value * factor) + 0) / factor
+}
+
+/**
  * Wilson score interval for a binomial proportion — the display default for
  * mention / cited / share-of-voice rates.
  *
@@ -77,6 +94,16 @@ export const linearTrendSchema = z.object({
   end: z.number(),
   /** Count of finite observations the fit used (not the series length). */
   n: z.number(),
+  /**
+   * Index of the first observation the fit used, and of the last.
+   *
+   * `start` / `end` are evaluated AT these indices, not at the series' own ends.
+   * A caller drawing the line must span exactly this range: extending it across
+   * leading or trailing indices the metric has no data for draws a fitted claim
+   * over dates that were never measured.
+   */
+  startIndex: z.number(),
+  endIndex: z.number(),
 })
 export type LinearTrend = z.infer<typeof linearTrendSchema>
 
@@ -132,11 +159,13 @@ export function linearTrend(values: readonly (number | null | undefined)[]): Lin
   const firstX = points[0]!.x
   const lastX = points[n - 1]!.x
   return {
-    slope: round(slope),
-    intercept: round(intercept),
+    slope: roundSignificant(slope),
+    intercept: roundSignificant(intercept),
     r2: round(r2),
-    start: round(slope * firstX + intercept),
-    end: round(slope * lastX + intercept),
+    start: roundSignificant(slope * firstX + intercept),
+    end: roundSignificant(slope * lastX + intercept),
     n,
+    startIndex: firstX,
+    endIndex: lastX,
   }
 }

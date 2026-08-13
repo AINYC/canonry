@@ -15,6 +15,7 @@ import {
   gscPerformanceOrderBySchema,
   formatIsoDateInTimeZone,
   linearTrend,
+  shiftIsoCalendarDate,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from './gbp-summary.js'
@@ -996,12 +997,42 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       positionWeighted += d.position * d.impressions
     }
 
+    // Fit over one entry PER CALENDAR DAY, with `null` where a day has no row.
+    //
+    // `daily` contains only dates that produced data, and Search Analytics omits
+    // zero-data days entirely, so consecutive entries are not consecutive dates.
+    // Feeding that straight to a fit whose x is the array index compresses every
+    // quiet stretch into a single step and overstates the slope: three days
+    // falling 100 -> 80 then one day at 70 a week later reads as -10/day
+    // compressed and -2.8/day on the real calendar.
+    const byDate = new Map(daily.map((d) => [d.date, d]))
+    const denseDates: string[] = []
+    if (daily.length > 0) {
+      const firstDate = daily[0]!.date
+      const lastDate = daily[daily.length - 1]!.date
+      for (let cursor = firstDate; cursor <= lastDate; cursor = shiftIsoCalendarDate(cursor, 1)) {
+        denseDates.push(cursor)
+        if (denseDates.length > 800) break // 90d is the widest label; a guard, not a limit
+      }
+    }
+    const densify = (pick: (d: (typeof daily)[number]) => number | null): (number | null)[] =>
+      denseDates.map((date) => {
+        const row = byDate.get(date)
+        return row ? pick(row) : null
+      })
+
     return {
       totals: {
         clicks: totalClicks,
         impressions: totalImpressions,
         ctr: totalImpressions > 0 ? totalClicks / totalImpressions : 0,
         position: positionWeight > 0 ? positionWeighted / positionWeight : null,
+        /**
+         * How many days actually carried a property-level position. Below
+         * `days`, the position figure describes a SUBSET of the window, and a
+         * surface must say so rather than present it as the window's average.
+         */
+        positionDays: daily.filter((d) => d.position !== null).length,
         days: daily.length,
       },
       daily,
@@ -1018,12 +1049,12 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       window: resolveReportedWindow(resolvedWindow, startDate, endDate),
       // Fitted server-side so the dashboard, the CLI, and the report all draw
       // the SAME line (UI/CLI parity — a chart-only regression is invisible to
-      // an agent).
+      // an agent), and fitted over the CALENDAR, not over the rows.
       trends: {
-        clicks: linearTrend(daily.map((d) => d.clicks)),
-        impressions: linearTrend(daily.map((d) => d.impressions)),
-        ctr: linearTrend(daily.map((d) => d.ctr)),
-        position: linearTrend(daily.map((d) => d.position)),
+        clicks: linearTrend(densify((d) => d.clicks)),
+        impressions: linearTrend(densify((d) => d.impressions)),
+        ctr: linearTrend(densify((d) => d.ctr)),
+        position: linearTrend(densify((d) => d.position)),
       },
     }
   })

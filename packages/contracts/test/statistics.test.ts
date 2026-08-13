@@ -49,13 +49,13 @@ describe('linearTrend', () => {
   it('recovers an exact line and reports its endpoints', () => {
     // y = 2x + 1 over indices 0..4.
     const trend = linearTrend([1, 3, 5, 7, 9])
-    expect(trend).toEqual({ slope: 2, intercept: 1, r2: 1, start: 1, end: 9, n: 5 })
+    expect(trend).toEqual({ slope: 2, intercept: 1, r2: 1, start: 1, end: 9, n: 5, startIndex: 0, endIndex: 4 })
   })
 
   it('fits a falling series with a negative slope', () => {
     // y = -3x + 20 over indices 0..3.
     const trend = linearTrend([20, 17, 14, 11])
-    expect(trend).toEqual({ slope: -3, intercept: 20, r2: 1, start: 20, end: 11, n: 4 })
+    expect(trend).toEqual({ slope: -3, intercept: 20, r2: 1, start: 20, end: 11, n: 4, startIndex: 0, endIndex: 3 })
   })
 
   it('reports slope per STEP, so the window change is slope * (n - 1)', () => {
@@ -66,20 +66,20 @@ describe('linearTrend', () => {
 
   it('calls a constant series a perfect flat fit rather than dividing by zero', () => {
     // ssTot is 0 here; r2 must be 1, not NaN.
-    expect(linearTrend([5, 5, 5])).toEqual({ slope: 0, intercept: 5, r2: 1, start: 5, end: 5, n: 3 })
+    expect(linearTrend([5, 5, 5])).toEqual({ slope: 0, intercept: 5, r2: 1, start: 5, end: 5, n: 3, startIndex: 0, endIndex: 2 })
   })
 
   it('computes the exact least-squares fit for a noisy series', () => {
     // [1, 2, 4]: slope 3/2, intercept 5/6, ssRes 1/6, ssTot 14/3.
     const trend = linearTrend([1, 2, 4])
-    expect(trend).toEqual({ slope: 1.5, intercept: 0.8333, r2: 0.9643, start: 0.8333, end: 3.8333, n: 3 })
+    expect(trend).toEqual({ slope: 1.5, intercept: 0.833333, r2: 0.9643, start: 0.833333, end: 3.83333, n: 3, startIndex: 0, endIndex: 2 })
   })
 
   it('keeps the true index of a point across a gap instead of compressing the axis', () => {
     // Observations at x=0 and x=2, so the slope is 2 — NOT the 4 you would get
     // by dropping the hole and treating the points as adjacent.
     const trend = linearTrend([0, null, 4])
-    expect(trend).toEqual({ slope: 2, intercept: 0, r2: 1, start: 0, end: 4, n: 2 })
+    expect(trend).toEqual({ slope: 2, intercept: 0, r2: 1, start: 0, end: 4, n: 2, startIndex: 0, endIndex: 2 })
     expect(linearTrend([0, 4])!.slope).toBe(4)
   })
 
@@ -96,7 +96,7 @@ describe('linearTrend', () => {
 
   it('skips non-finite observations rather than poisoning the fit with NaN', () => {
     expect(linearTrend([1, Number.NaN, 5, Number.POSITIVE_INFINITY, 9])).toEqual({
-      slope: 2, intercept: 1, r2: 1, start: 1, end: 9, n: 3,
+      slope: 2, intercept: 1, r2: 1, start: 1, end: 9, n: 3, startIndex: 0, endIndex: 4,
     })
   })
 
@@ -112,5 +112,35 @@ describe('linearTrend', () => {
     // Guards the tempting-but-wrong reading that "zig-zag" means "flat":
     // this one runs 0 -> 10, and the fit says so.
     expect(linearTrend([0, 10, 0, 10, 0, 10])!.slope).toBeGreaterThan(0)
+  })
+})
+
+describe('linearTrend precision and extent', () => {
+  it('keeps a tiny slope instead of rounding real movement to flat', () => {
+    // A CTR climbing 2.00% -> 2.10% over 31 days. Fixed 4-decimal rounding
+    // made this slope exactly 0, so every surface reported "flat" for movement
+    // that is really there.
+    const ctr = Array.from({ length: 31 }, (_, i) => 0.02 + (0.001 * i) / 30)
+    const trend = linearTrend(ctr)!
+    expect(trend.slope).not.toBe(0)
+    expect(trend.slope).toBeCloseTo(0.001 / 30, 9)
+  })
+
+  it('reports the index range the fit actually covers', () => {
+    // Leading and trailing gaps: the fit spans indices 2..4 only, so a caller
+    // must not draw it across 0..5 as though those dates were measured.
+    const trend = linearTrend([null, null, 10, 20, 30, null])!
+    expect(trend.startIndex).toBe(2)
+    expect(trend.endIndex).toBe(4)
+    expect(trend.n).toBe(3)
+  })
+
+  it('does not compress a calendar gap into a single step', () => {
+    // The route feeds one entry per DATE PRESENT, and GSC omits zero-data days.
+    // Same observations, real spacing: the slope must not be overstated.
+    const compressed = linearTrend([100, 90, 80, 70])!
+    const dense = linearTrend([100, 90, 80, null, null, null, null, null, null, 70])!
+    expect(compressed.slope).toBe(-10)
+    expect(dense.slope).toBeCloseTo(-2.8, 6)
   })
 })

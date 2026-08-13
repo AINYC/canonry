@@ -730,8 +730,14 @@ export function GscSection({
 
   useEffect(() => {
     setPerformanceOffset(0)
+    // Clear the drill's DATE FILTERS too, not just the highlight. Dropping only
+    // `drillDay` left the request pinned to that one date while the header said
+    // 30d, so the table showed a single day under a month's label.
     setDrillDay(null)
-    void loadPerformanceRows(0)
+    setPerformanceFilters((prev) => (
+      prev.startDate || prev.endDate ? { ...prev, startDate: '', endDate: '' } : prev
+    ))
+    setDrillNonce((n) => n + 1)
     void loadPerformanceDaily()
   }, [gscWindow])
 
@@ -1115,7 +1121,10 @@ export function GscSection({
                     formatValue: m.format,
                     trend: showTrend ? trends?.[m.key] ?? null : null,
                   }))
-                  const totalFor = (key: GscChartMetric): number | null => totals[key]
+                  // `undefined` when the server predates the field; a missing
+                  // metric is the same "not measured" as an explicit null, and
+                  // must never reach a formatter.
+                  const totalFor = (key: GscChartMetric): number | null => totals[key] ?? null
 
                   return (
                     <div className="mt-3">
@@ -1192,6 +1201,24 @@ export function GscSection({
                         />
                       </div>
 
+                      {/* Keyboard + screen-reader path to the same drill-in the
+                          chart offers on click. Recharts owns the SVG and gives
+                          no focusable day, so the accessible control is a real
+                          button per day: reachable by Tab, visible on focus. */}
+                      <div role="group" aria-label="Filter the table to a single day">
+                        {daily.map((d) => (
+                          <button
+                            key={d.date}
+                            type="button"
+                            className="sr-only focus:not-sr-only focus:inline-block focus:rounded focus:border focus:border-strong focus:bg-surface-active focus:px-2 focus:py-1 focus:text-xs focus:text-strong"
+                            aria-pressed={drillDay === d.date}
+                            onClick={() => selectDay(d.date)}
+                          >
+                            {formatChartDateLabel(d.date)}: {d.clicks} clicks, {d.impressions} impressions
+                          </button>
+                        ))}
+                      </div>
+
                       {drillDay && (
                         <div className="mt-1 flex items-center gap-2 text-xs">
                           <span className="text-secondary">
@@ -1207,7 +1234,15 @@ export function GscSection({
                         </div>
                       )}
 
-                      {totals.position === null && (
+                      {totals.position !== null
+                        && (totals.positionDays ?? totals.days) < totals.days && (
+                        <p className="mt-1 text-[11px] text-muted">
+                          Average position covers {totals.positionDays} of {totals.days} days. The
+                          rest have no property-level position recorded.
+                        </p>
+                      )}
+
+                      {(totals.position === null || totals.position === undefined) && (
                         <p className="mt-1 text-[11px] text-muted">
                           Average position needs a property-level sync. Run <code>canonry google sync</code> to record it.
                         </p>

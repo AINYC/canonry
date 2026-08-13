@@ -1,7 +1,7 @@
 import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, onTestFinished, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 // Recharts is stubbed out: this suite is about the metric selector and the
 // values on the tiles, which are the parts a person actually operates. The
@@ -41,13 +41,13 @@ const DAILY = [
 
 function performanceDaily(overrides: Record<string, unknown> = {}) {
   return {
-    totals: { clicks: 50, impressions: 2800, ctr: 50 / 2800, position: 10.5, days: 4 },
+    totals: { clicks: 50, impressions: 2800, ctr: 50 / 2800, position: 10.5, positionDays: 4, days: 4 },
     daily: DAILY,
     trends: {
-      clicks: { slope: 5, intercept: 5, r2: 1, start: 5, end: 20, n: 4 },
-      impressions: { slope: -200, intercept: 1000, r2: 1, start: 1000, end: 400, n: 4 },
-      ctr: { slope: 0.015, intercept: 0.0025, r2: 0.97, start: 0.0025, end: 0.0475, n: 4 },
-      position: { slope: -1, intercept: 12, r2: 1, start: 12, end: 9, n: 4 },
+      clicks: { slope: 5, intercept: 5, r2: 1, start: 5, end: 20, n: 4, startIndex: 0, endIndex: 3 },
+      impressions: { slope: -200, intercept: 1000, r2: 1, start: 1000, end: 400, n: 4, startIndex: 0, endIndex: 3 },
+      ctr: { slope: 0.015, intercept: 0.0025, r2: 0.97, start: 0.0025, end: 0.0475, n: 4, startIndex: 0, endIndex: 3 },
+      position: { slope: -1, intercept: 12, r2: 1, start: 12, end: 9, n: 4, startIndex: 0, endIndex: 3 },
     },
     ...overrides,
   }
@@ -154,12 +154,12 @@ test('toggles a metric on and off but refuses to leave the chart empty', async (
 
 test('disables the position tile and explains the gap when no property sync has run', async () => {
   renderSection(performanceDaily({
-    totals: { clicks: 50, impressions: 2800, ctr: 50 / 2800, position: null, days: 4 },
+    totals: { clicks: 50, impressions: 2800, ctr: 50 / 2800, position: null, positionDays: 0, days: 4 },
     daily: DAILY.map((d) => ({ ...d, position: null })),
     trends: {
-      clicks: { slope: 5, intercept: 5, r2: 1, start: 5, end: 20, n: 4 },
-      impressions: { slope: -200, intercept: 1000, r2: 1, start: 1000, end: 400, n: 4 },
-      ctr: { slope: 0.015, intercept: 0.0025, r2: 0.97, start: 0.0025, end: 0.0475, n: 4 },
+      clicks: { slope: 5, intercept: 5, r2: 1, start: 5, end: 20, n: 4, startIndex: 0, endIndex: 3 },
+      impressions: { slope: -200, intercept: 1000, r2: 1, start: 1000, end: 400, n: 4, startIndex: 0, endIndex: 3 },
+      ctr: { slope: 0.015, intercept: 0.0025, r2: 0.97, start: 0.0025, end: 0.0475, n: 4, startIndex: 0, endIndex: 3 },
       position: null,
     },
   }))
@@ -209,4 +209,38 @@ test('the filter explanation is a tooltip, not a paragraph on the page', async (
   const trigger = screen.getByRole('button', { name: /case-insensitive substrings/ })
   expect(trigger).not.toBeNull()
   expect(trigger.getAttribute('aria-label')).toMatch(/Click any day to filter/)
+})
+
+test('survives a response from a server that predates position/trends/window', async () => {
+  // The three fields are new in this change. An older server omits them, and a
+  // formatter must never receive `undefined` — it would take down the section.
+  renderSection({
+    totals: { clicks: 50, impressions: 2800, ctr: 50 / 2800, days: 4 },
+    daily: DAILY.map(({ position: _p, ...rest }) => rest),
+  } as unknown as Record<string, unknown>)
+
+  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+  expect(tile('Clicks').textContent).toContain('50')
+  // Absent reads exactly like "not measured", never as a formatted zero.
+  expect(tile('Avg position').disabled).toBe(true)
+  expect(tile('Avg position').textContent).toContain('—')
+})
+
+test('says so when the position figure covers only part of the window', async () => {
+  renderSection(performanceDaily({
+    totals: { clicks: 50, impressions: 2800, ctr: 50 / 2800, position: 10.5, positionDays: 2, days: 4 },
+  }))
+  await waitFor(() => expect(tile('Avg position')).not.toBeNull())
+  expect(screen.getByText(/covers 2 of 4 days/)).not.toBeNull()
+})
+
+test('exposes a keyboard-reachable control for every day the chart can drill into', async () => {
+  // Recharts owns the SVG and gives no focusable day, so the accessible path is
+  // a real button per day inside a labelled group.
+  renderSection()
+  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+  const group = screen.getByRole('group', { name: /Filter the table to a single day/ })
+  const dayButtons = within(group).getAllByRole('button')
+  expect(dayButtons).toHaveLength(DAILY.length)
+  expect(dayButtons[0]!.getAttribute('aria-pressed')).toBe('false')
 })

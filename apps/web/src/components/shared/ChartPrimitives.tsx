@@ -228,10 +228,15 @@ export interface TrendChartSeries {
   /** Series sharing an id share a scale. Distinct ids get independent scales. */
   axisId: string
   /**
-   * Endpoints of a precomputed straight fit, drawn as a dashed line across the
-   * full width. Pass the server's trend so the chart never fits its own.
+   * Endpoints of a precomputed straight fit, plus the index range it covers.
+   * Pass the server's trend so the chart never fits its own.
+   *
+   * The line is drawn ONLY across `startIndex..endIndex`. Spanning the full
+   * width instead would paint a fitted claim over leading or trailing dates the
+   * metric was never measured on — most visibly for position, which many days
+   * lack entirely.
    */
-  trend?: { start: number; end: number } | null
+  trend?: { start: number; end: number; startIndex?: number; endIndex?: number } | null
   /** Higher is worse (ranking position): reverses the axis so up means better. */
   inverted?: boolean
   formatValue?: (value: number) => string
@@ -278,14 +283,21 @@ export function MultiAxisTrendChart({
   // Recharts draws a line from row fields, so the fit is materialized as two
   // synthetic fields interpolated across the row count. A straight segment
   // needs only its endpoints, so this cannot drift from the server's fit.
-  const lastIndex = data.length - 1
   const rows = data.map((row, index) => {
     const withTrend: Record<string, unknown> = { ...row }
     for (const s of series) {
       if (!s.trend) continue
-      withTrend[`${s.dataKey}__trend`] = lastIndex <= 0
+      const from = s.trend.startIndex ?? 0
+      const to = s.trend.endIndex ?? data.length - 1
+      // Outside the measured range the fit is undefined, not zero. `null`
+      // leaves a gap; `connectNulls` is off, so the dash simply stops.
+      if (index < from || index > to) {
+        withTrend[`${s.dataKey}__trend`] = null
+        continue
+      }
+      withTrend[`${s.dataKey}__trend`] = to <= from
         ? s.trend.start
-        : s.trend.start + ((s.trend.end - s.trend.start) * index) / lastIndex
+        : s.trend.start + ((s.trend.end - s.trend.start) * (index - from)) / (to - from)
     }
     return withTrend
   })
@@ -330,6 +342,10 @@ export function MultiAxisTrendChart({
               orientation={index === 1 ? 'right' : 'left'}
               hide={index > 1}
               reversed={owner.inverted ?? false}
+              // Rank 0 does not exist. Letting the axis run to 0 reserves a
+              // whole band for an impossible value and squashes the real range
+              // into the top half of the plot.
+              domain={owner.inverted ? [1, 'auto'] : [0, 'auto']}
               tick={CHART_AXIS_TICK}
               stroke={CHART_AXIS_STROKE}
               width={48}

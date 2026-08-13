@@ -131,6 +131,11 @@ export const gscPerformanceDailyDtoSchema = z.object({
      * one-impression day count as much as a thousand-impression day.
      */
     position: z.number().nullable(),
+    /**
+     * Days that carried a property-level position. Below `days`, `position`
+     * describes a subset of the window and must be labelled as partial.
+     */
+    positionDays: z.number(),
     days: z.number(),
   }),
   daily: z.array(gscPerformanceDailyPointSchema),

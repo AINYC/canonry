@@ -2510,6 +2510,7 @@ export type GscPerformanceDailyDto = {
         impressions: number;
         ctr: number;
         position: number | null;
+        positionDays: number;
         days: number;
     };
     daily: Array<{
@@ -2533,6 +2534,8 @@ export type GscPerformanceDailyDto = {
             start: number;
             end: number;
             n: number;
+            startIndex: number;
+            endIndex: number;
         } | null;
         impressions: {
             slope: number;
@@ -2541,6 +2544,8 @@ export type GscPerformanceDailyDto = {
             start: number;
             end: number;
             n: number;
+            startIndex: number;
+            endIndex: number;
         } | null;
         ctr: {
             slope: number;
@@ -2549,6 +2554,8 @@ export type GscPerformanceDailyDto = {
             start: number;
             end: number;
             n: number;
+            startIndex: number;
+            endIndex: number;
         } | null;
         position: {
             slope: number;
@@ -2557,6 +2564,8 @@ export type GscPerformanceDailyDto = {
             start: number;
             end: number;
             n: number;
+            startIndex: number;
+            endIndex: number;
         } | null;
     };
 };

@@ -299,7 +299,7 @@ export async function googlePerformanceDaily(project: string, opts: {
   console.log(`  Clicks:      ${clicks.toLocaleString()}`)
   console.log(`  Impressions: ${impressions.toLocaleString()}`)
   console.log(`  CTR:         ${(ctr * 100).toFixed(2)}%`)
-  console.log(`  Position:    ${position === null ? '—' : position.toFixed(1)}`)
+  console.log(`  Position:    ${position == null ? '—' : position.toFixed(1)}`)
 
   // The same fit the dashboard chart draws, so the two surfaces can never
   // disagree about which way a metric is going.
@@ -332,7 +332,7 @@ export async function googlePerformanceDaily(project: string, opts: {
   console.log(`  ${'─'.repeat(12)}${'─'.repeat(10)}${'─'.repeat(12)}${'─'.repeat(10)}${'─'.repeat(9)}`)
   for (const row of data.daily) {
     console.log(
-      `  ${row.date.padEnd(12)}${row.clicks.toLocaleString().padStart(10)}${row.impressions.toLocaleString().padStart(12)}${(row.ctr * 100).toFixed(2).padStart(9)}%${(row.position === null ? '—' : row.position.toFixed(1)).padStart(9)}`,
+      `  ${row.date.padEnd(12)}${row.clicks.toLocaleString().padStart(10)}${row.impressions.toLocaleString().padStart(12)}${(row.ctr * 100).toFixed(2).padStart(9)}%${(row.position == null ? '—' : row.position.toFixed(1)).padStart(9)}`,
     )
   }
 }
