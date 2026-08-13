@@ -152,6 +152,30 @@ export function formatIsoDateInTimeZone(iso: string, timeZone: string): string {
  * A value that is not a calendar date comes back untouched, so a degraded
  * upstream reading degrades once rather than turning into a wrong date.
  */
+/**
+ * Every `YYYY-MM-DD` from `startDate` to `endDate`, inclusive.
+ *
+ * The single source of the CALENDAR INDEX SPACE. Anything that fits, plots, or
+ * indexes a dated series must derive its positions from this one function:
+ * a series built from "rows that exist" and a fit built from "days that exist"
+ * are different index spaces, and mixing them silently rescales the result.
+ * That is not hypothetical — a trend fitted over a 10-day calendar and drawn
+ * over 4 row positions traversed a third of its range and stopped at the wrong
+ * value.
+ *
+ * `cap` bounds the walk so a corrupt or inverted range cannot spin; a reversed
+ * range returns empty, since it names no days.
+ */
+export function calendarDateRange(startDate: string, endDate: string, cap = 800): string[] {
+  const dates: string[] = []
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) return dates
+  for (let cursor = startDate; cursor <= endDate; cursor = shiftIsoCalendarDate(cursor, 1)) {
+    dates.push(cursor)
+    if (dates.length >= cap) break
+  }
+  return dates
+}
+
 export function shiftIsoCalendarDate(isoDate: string, days: number): string {
   if (!Number.isFinite(days)) return isoDate
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate)

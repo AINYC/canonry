@@ -14,6 +14,8 @@ import {
   gscSubmitSitemapsRequestDtoSchema,
   gscPerformanceOrderBySchema,
   formatIsoDateInTimeZone,
+  linearTrend,
+  calendarDateRange,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from './gbp-summary.js'
@@ -960,6 +962,11 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       .orderBy(gscSearchData.date)
       .all()
 
+    // Position exists ONLY on the property-level rows. The dimensioned fallback
+    // has no property position to offer (a mean of per-row positions is not the
+    // property's mean), so those dates report `null` rather than a `0` that
+    // would read as rank #0 on an inverted axis.
+    const propertyDates = new Set(dailyTotals.map((d) => d.date))
     const daily = mergeGscDailyTotalsWithFallback(
       dailyTotals,
       dimensionedRows.map((r) => ({
@@ -973,14 +980,55 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       clicks: d.clicks,
       impressions: d.impressions,
       ctr: d.impressions > 0 ? d.clicks / d.impressions : 0,
+      position: propertyDates.has(d.date) ? d.position : null,
     }))
     const totalClicks = daily.reduce((sum, d) => sum + d.clicks, 0)
     const totalImpressions = daily.reduce((sum, d) => sum + d.impressions, 0)
+
+    // Impression-weighted, because position is non-additive: a day with one
+    // impression must not pull the window mean as hard as a day with a thousand.
+    // Days with no property position, and days with no impressions to weight by,
+    // are excluded from both the numerator and the denominator.
+    let positionWeight = 0
+    let positionWeighted = 0
+    for (const d of daily) {
+      if (d.position === null || d.impressions <= 0) continue
+      positionWeight += d.impressions
+      positionWeighted += d.position * d.impressions
+    }
+
+    // Fit over one entry PER CALENDAR DAY, with `null` where a day has no row.
+    //
+    // `daily` contains only dates that produced data, and Search Analytics omits
+    // zero-data days entirely, so consecutive entries are not consecutive dates.
+    // Feeding that straight to a fit whose x is the array index compresses every
+    // quiet stretch into a single step and overstates the slope: three days
+    // falling 100 -> 80 then one day at 70 a week later reads as -10/day
+    // compressed and -2.8/day on the real calendar.
+    const byDate = new Map(daily.map((d) => [d.date, d]))
+    // `calendarDateRange` is shared with the chart so both derive the SAME index
+    // space. They used to compute it separately and disagree.
+    const denseDates = daily.length === 0
+      ? []
+      : calendarDateRange(daily[0]!.date, daily[daily.length - 1]!.date)
+    const densify = (pick: (d: (typeof daily)[number]) => number | null): (number | null)[] =>
+      denseDates.map((date) => {
+        const row = byDate.get(date)
+        return row ? pick(row) : null
+      })
+
     return {
       totals: {
         clicks: totalClicks,
         impressions: totalImpressions,
         ctr: totalImpressions > 0 ? totalClicks / totalImpressions : 0,
+        position: positionWeight > 0 ? positionWeighted / positionWeight : null,
+        /**
+         * How many days actually carried a property-level position. Below
+         * `days`, the position figure describes a SUBSET of the window, and a
+         * surface must say so rather than present it as the window's average.
+         */
+        positionDays: daily.filter((d) => d.position !== null).length,
         days: daily.length,
       },
       daily,
@@ -995,6 +1043,15 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       // dropped rather than reported reversed: an absent bound is honest about
       // being unspecified, a reversed pair is not.
       window: resolveReportedWindow(resolvedWindow, startDate, endDate),
+      // Fitted server-side so the dashboard, the CLI, and the report all draw
+      // the SAME line (UI/CLI parity — a chart-only regression is invisible to
+      // an agent), and fitted over the CALENDAR, not over the rows.
+      trends: {
+        clicks: linearTrend(densify((d) => d.clicks)),
+        impressions: linearTrend(densify((d) => d.impressions)),
+        ctr: linearTrend(densify((d) => d.ctr)),
+        position: linearTrend(densify((d) => d.position)),
+      },
     }
   })
 

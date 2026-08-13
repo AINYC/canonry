@@ -13,7 +13,17 @@ import {
   useClientTable,
 } from '../shared/DataTableControls.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
-import { CHART_NEUTRAL, CHART_TONE, CHART_SERIES_COLORS } from '../shared/ChartPrimitives.js'
+import { InfoTooltip } from '../shared/InfoTooltip.js'
+import {
+  CHART_NEUTRAL,
+  CHART_TONE,
+  CHART_SERIES_COLORS,
+  MultiAxisTrendChart,
+  formatChartDateLabel,
+  formatChartDateTick,
+  type TrendChartSeries,
+} from '../shared/ChartPrimitives.js'
+import { calendarDateRange } from '@ainyc/canonry-contracts'
 import { formatTimestamp, formatBooleanState, SearchMetric, SEARCH_METRIC_LABELS } from '../../lib/format-helpers.js'
 import { addToast } from '../../lib/toast-store.js'
 import { asyncHandler } from '../../lib/async-handler.js'
@@ -59,6 +69,47 @@ import { invalidateProjectQueryDomain } from '../../queries/query-invalidation.j
 
 const GSC_WINDOWS: MetricsWindow[] = ['7d', '30d', '90d', 'all']
 const EXPANDED_PERFORMANCE_LIMIT = 500
+
+/**
+ * The four Search Console metrics, each on its OWN axis.
+ *
+ * Sharing one axis is what made the previous chart unreadable: 29 clicks
+ * against 1,174 impressions rendered as a flat line on the baseline. Per-metric
+ * axes let each series use the full plot height, which is why the same data
+ * reads as a trend here and as nothing on a shared scale.
+ *
+ * `inverted` on position is not styling — rank 1 beats rank 13, so the axis
+ * has to run the other way for "up" to keep meaning "better" across all four.
+ */
+const GSC_CHART_METRICS = [
+  {
+    key: 'clicks' as const,
+    label: 'Clicks',
+    color: CHART_SERIES_COLORS[1],
+    format: (v: number) => v.toLocaleString(),
+  },
+  {
+    key: 'impressions' as const,
+    label: 'Impressions',
+    color: CHART_SERIES_COLORS[4],
+    format: (v: number) => v.toLocaleString(),
+  },
+  {
+    key: 'ctr' as const,
+    label: 'CTR',
+    color: CHART_TONE.caution,
+    format: (v: number) => `${(v * 100).toFixed(1)}%`,
+  },
+  {
+    key: 'position' as const,
+    label: 'Avg position',
+    color: CHART_SERIES_COLORS[2],
+    inverted: true,
+    format: (v: number) => v.toFixed(1),
+  },
+]
+
+type GscChartMetric = (typeof GSC_CHART_METRICS)[number]['key']
 const COVERAGE_PAGE_SIZE = 25
 const GOOGLE_OAUTH_COMPLETE_MESSAGE = 'canonry:google-oauth-complete'
 
@@ -103,6 +154,14 @@ export function GscSection({
   const [syncDays, setSyncDays] = useState('30')
   const [fullSync, setFullSync] = useState(false)
   const [gscWindow, setGscWindow] = useState<MetricsWindow>('30d')
+  // Clicks + impressions selected by default, matching Search Console.
+  const [chartMetrics, setChartMetrics] = useState<GscChartMetric[]>(['clicks', 'impressions'])
+  const [showTrend, setShowTrend] = useState(true)
+  // The day the table is drilled into, or null for the whole window. Bumping
+  // the nonce is what re-runs the fetch, so re-clicking the same day still
+  // reloads and the effect never reads a stale filter value.
+  const [drillDay, setDrillDay] = useState<string | null>(null)
+  const [drillNonce, setDrillNonce] = useState(0)
   const [performanceFilters, setPerformanceFilters] = useState({
     startDate: '',
     endDate: '',
@@ -672,9 +731,40 @@ export function GscSection({
 
   useEffect(() => {
     setPerformanceOffset(0)
-    void loadPerformanceRows(0)
+    // Clear the drill's DATE FILTERS too, not just the highlight. Dropping only
+    // `drillDay` left the request pinned to that one date while the header said
+    // 30d, so the table showed a single day under a month's label.
+    setDrillDay(null)
+    setPerformanceFilters((prev) => (
+      prev.startDate || prev.endDate ? { ...prev, startDate: '', endDate: '' } : prev
+    ))
+    setDrillNonce((n) => n + 1)
     void loadPerformanceDaily()
   }, [gscWindow])
+
+  // Drill into (or out of) a single day. Only the table reloads — the chart
+  // keeps the whole window so the selected day stays in context.
+  const drillMountRef = useRef(false)
+  useEffect(() => {
+    if (!drillMountRef.current) {
+      drillMountRef.current = true
+      return
+    }
+    setPerformanceOffset(0)
+    performanceTable.setPage(1)
+    void loadPerformanceRows(0)
+  }, [drillNonce])
+
+  function selectDay(date: string) {
+    const next = drillDay === date ? null : date
+    setDrillDay(next)
+    setPerformanceFilters((prev) => ({
+      ...prev,
+      startDate: next ?? '',
+      endDate: next ?? '',
+    }))
+    setDrillNonce((n) => n + 1)
+  }
 
   // Refetch when sort toggles between "off" and "on" so the fetched row set
   // matches the mode (paged vs expanded). Direction flips within "on" don't
@@ -967,7 +1057,10 @@ export function GscSection({
                 <div className="section-head section-head-inline">
                   <div>
                     <p className="eyebrow eyebrow-soft">Performance</p>
-                    <h3>Search performance</h3>
+                    <h3 className="flex items-center gap-1.5">
+                      Search performance
+                      <InfoTooltip text={`Click any day to filter the table below to that date. Query and page filters match case-insensitive substrings and run on Apply filters. Filtering and sorting examine up to ${EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows while the table shows ${DEFAULT_TABLE_PAGE_SIZE} per page.`} />
+                    </h3>
                     {/* The window ends where Google's data ends, not today.
                         Naming the real range is what stops a lagging tail
                         reading as a drop, and lets this be compared against
@@ -1010,105 +1103,164 @@ export function GscSection({
                   </div>
                 </div>
 
-                {/* Clicks + Impressions bar chart — driven by the daily aggregate
-                    endpoint so it reflects the full window, not the current page. */}
+                {/* Search-performance chart — one axis PER METRIC (Search
+                    Console's own shape), driven by the daily aggregate endpoint
+                    so it reflects the whole window, not the current page. The
+                    dashed fits come from the API; nothing is regressed here. */}
                 {performanceDaily && performanceDaily.daily.length > 0 && (() => {
-                  const sorted = performanceDaily.daily
-                  const maxImpressions = Math.max(...sorted.map((d) => d.impressions), 1)
-                  const { clicks: totalClicks, impressions: totalImpressions, ctr: totalCtr } = performanceDaily.totals
-                  const avgCtr = (totalCtr * 100).toFixed(1)
+                  // `trends` is optional at RUNTIME: a server older than the
+                  // field omits it, and the chart must degrade to plain lines
+                  // rather than crash. Same skew guard as `window`.
+                  const { totals, daily, trends } = performanceDaily
+                  const selected = GSC_CHART_METRICS.filter((m) => chartMetrics.includes(m.key))
+                  const series: TrendChartSeries[] = selected.map((m) => ({
+                    dataKey: m.key,
+                    label: m.label,
+                    color: m.color,
+                    axisId: m.key,
+                    inverted: m.inverted,
+                    formatValue: m.format,
+                    trend: showTrend ? trends?.[m.key] ?? null : null,
+                  }))
+                  // `undefined` when the server predates the field; a missing
+                  // metric is the same "not measured" as an explicit null, and
+                  // must never reach a formatter.
+                  const totalFor = (key: GscChartMetric): number | null => totals[key] ?? null
 
-                  const w = 700
-                  const h = 220
-                  const pad = { top: 12, bottom: 36, left: 48, right: 12 }
-                  const plotW = w - pad.left - pad.right
-                  const plotH = h - pad.top - pad.bottom
-                  const barGroupW = plotW / sorted.length
-                  const barW = Math.max(Math.min(barGroupW * 0.35, 24), 4)
-                  const barGap = Math.max(barW * 0.15, 1)
-
-                  // Y-axis ticks
-                  const niceMax = (v: number) => {
-                    if (v <= 0) return 1
-                    const mag = Math.pow(10, Math.floor(Math.log10(v)))
-                    const norm = v / mag
-                    const nice = norm <= 1.5 ? 1.5 : norm <= 3 ? 3 : norm <= 5 ? 5 : 10
-                    return Math.ceil(nice * mag)
-                  }
-                  const tickCount = 4
-                  const ceilVal = Math.ceil(niceMax(maxImpressions) / tickCount) * tickCount
-                  const ticks = Array.from({ length: tickCount + 1 }, (_, i) => (ceilVal / tickCount) * i)
-                  const fmtNum = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n)
+                  // Plot one row per CALENDAR DAY, not per returned row.
+                  // `daily` holds only dates that produced data, but the server
+                  // fits over the calendar, so its `startIndex`/`endIndex` only
+                  // line up with a calendar-dense series — against row
+                  // positions the trend line traversed a fraction of its range
+                  // and ended on the wrong value. It is also the honest x-axis:
+                  // a six-day quiet stretch should look like six days.
+                  const byDate = new Map(daily.map((d) => [d.date, d]))
+                  const chartRows = daily.length === 0
+                    ? []
+                    : calendarDateRange(daily[0]!.date, daily[daily.length - 1]!.date)
+                      .map((date) => byDate.get(date) ?? { date })
 
                   return (
                     <div className="mt-3">
-                      <div className="flex items-center gap-5 mb-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="inline-block h-2.5 w-2.5 rounded-sm bg-positive-500" />
-                          <span className="text-xs text-secondary">Clicks <span className="text-strong tabular-nums font-medium">{totalClicks.toLocaleString()}</span></span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="inline-block h-2.5 w-2.5 rounded-sm bg-chart-series-2" />
-                          <span className="text-xs text-secondary">Impressions <span className="text-strong tabular-nums font-medium">{totalImpressions.toLocaleString()}</span></span>
-                        </div>
-                        <span className="text-xs text-muted">CTR <span className="text-caution-400 tabular-nums font-medium">{avgCtr}%</span></span>
-                      </div>
-                      <div className="relative w-full" style={{ aspectRatio: `${w} / ${h}` }}>
-                        <svg viewBox={`0 0 ${w} ${h}`} className="h-full w-full">
-                          {/* Grid lines + Y-axis */}
-                          {ticks.map((tick, i) => {
-                            const y = pad.top + plotH - (tick / ceilVal) * plotH
-                            return (
-                              <g key={`t-${i}`}>
-                                <line x1={pad.left} y1={y} x2={w - pad.right} y2={y} stroke={CHART_NEUTRAL.gridLine} strokeWidth="1" />
-                                <text x={pad.left - 6} y={y + 3.5} textAnchor="end" fill={CHART_NEUTRAL.text} fontSize="10" fontFamily="inherit">{fmtNum(tick)}</text>
-                              </g>
-                            )
-                          })}
-                          {/* Bars */}
-                          {sorted.map((d, i) => {
-                            const cx = pad.left + barGroupW * i + barGroupW / 2
-                            const impressionH = (d.impressions / ceilVal) * plotH
-                            const clickH = (d.clicks / ceilVal) * plotH
-                            return (
-                              <g key={d.date}>
-                                <title>{`${d.date}\nClicks: ${d.clicks}\nImpressions: ${d.impressions}\nCTR: ${(d.ctr * 100).toFixed(1)}%`}</title>
-                                <rect
-                                  x={cx - barW - barGap / 2}
-                                  y={pad.top + plotH - impressionH}
-                                  width={barW}
-                                  height={Math.max(impressionH, 1)}
-                                  rx={2}
-                                  fill={CHART_SERIES_COLORS[1]}
-                                  opacity={0.85}
+                      {/* Tiles are the metric selector, as in Search Console:
+                          pressing one adds or removes its line. The last
+                          selected tile cannot be turned off — an empty chart
+                          is a dead end, not a state worth reaching. */}
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {GSC_CHART_METRICS.map((m) => {
+                          const on = chartMetrics.includes(m.key)
+                          const value = totalFor(m.key)
+                          const trend = trends?.[m.key] ?? null
+                          const unavailable = value === null
+                          return (
+                            <button
+                              key={m.key}
+                              type="button"
+                              aria-pressed={on}
+                              disabled={unavailable}
+                              className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                                on ? 'border-strong bg-surface-active' : 'border-subtle bg-surface-subtle hover:bg-surface-hover'
+                              } ${unavailable ? 'cursor-not-allowed opacity-50' : ''}`}
+                              onClick={() => {
+                                setChartMetrics((current) => current.includes(m.key)
+                                  ? (current.length === 1 ? current : current.filter((k) => k !== m.key))
+                                  : [...current, m.key])
+                              }}
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <span
+                                  className="inline-block h-2 w-2 rounded-full"
+                                  style={{ backgroundColor: on ? m.color : 'transparent', border: `1px solid ${m.color}` }}
                                 />
-                                <rect
-                                  x={cx + barGap / 2}
-                                  y={pad.top + plotH - clickH}
-                                  width={barW}
-                                  height={Math.max(clickH, 1)}
-                                  rx={2}
-                                  fill={CHART_TONE.positiveDeep}
-                                  opacity={0.85}
-                                />
-                              </g>
-                            )
-                          })}
-                          {/* X-axis date labels — pick up to 7 evenly spaced */}
-                          {(() => {
-                            const labelCount = Math.min(sorted.length, 7)
-                            return Array.from({ length: labelCount }, (_, i) => {
-                              const idx = sorted.length === 1 ? 0 : Math.round((i / (labelCount - 1)) * (sorted.length - 1))
-                              const cx = pad.left + barGroupW * idx + barGroupW / 2
-                              return (
-                                <text key={`xl-${idx}`} x={cx} y={h - 8} textAnchor="middle" fill={CHART_NEUTRAL.textDim} fontSize="10" fontFamily="inherit">
-                                  {sorted[idx]!.date.slice(5)}
-                                </text>
-                              )
-                            })
-                          })()}
-                        </svg>
+                                <span className="text-xs text-secondary">{m.label}</span>
+                              </span>
+                              <span className="mt-0.5 block text-lg tabular-nums text-strong">
+                                {value === null ? '—' : m.format(value)}
+                              </span>
+                              {trend && (
+                                <span className="block text-[11px] tabular-nums text-muted">
+                                  {/* Position improves downward, so the arrow
+                                      tracks BETTER/WORSE, not up/down. */}
+                                  {trend.slope === 0
+                                    ? '→ flat'
+                                    : `${(m.inverted ? trend.slope < 0 : trend.slope > 0) ? '↑' : '↓'} ${m.format(Math.abs(trend.end - trend.start))} over ${totals.days}d`}
+                                </span>
+                              )}
+                            </button>
+                          )
+                        })}
                       </div>
+
+                      <div className="mt-2 flex items-center justify-end">
+                        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-secondary">
+                          <input
+                            type="checkbox"
+                            className="accent-mono-400"
+                            checked={showTrend}
+                            onChange={(e) => setShowTrend(e.target.checked)}
+                          />
+                          Trend line
+                        </label>
+                      </div>
+
+                      <div className="mt-1">
+                        <MultiAxisTrendChart
+                          data={chartRows}
+                          xKey="date"
+                          series={series}
+                          xTickFormatter={formatChartDateTick}
+                          labelFormatter={formatChartDateLabel}
+                          onSelectX={selectDay}
+                          selectedX={drillDay}
+                        />
+                      </div>
+
+                      {/* Keyboard + screen-reader path to the same drill-in the
+                          chart offers on click. Recharts owns the SVG and gives
+                          no focusable day, so the accessible control is a real
+                          button per day: reachable by Tab, visible on focus. */}
+                      <div role="group" aria-label="Filter the table to a single day">
+                        {daily.map((d) => (
+                          <button
+                            key={d.date}
+                            type="button"
+                            className="sr-only focus:not-sr-only focus:inline-block focus:rounded focus:border focus:border-strong focus:bg-surface-active focus:px-2 focus:py-1 focus:text-xs focus:text-strong"
+                            aria-pressed={drillDay === d.date}
+                            onClick={() => selectDay(d.date)}
+                          >
+                            {formatChartDateLabel(d.date)}: {d.clicks} clicks, {d.impressions} impressions
+                          </button>
+                        ))}
+                      </div>
+
+                      {drillDay && (
+                        <div className="mt-1 flex items-center gap-2 text-xs">
+                          <span className="text-secondary">
+                            Table showing {formatChartDateLabel(drillDay)}
+                          </span>
+                          <button
+                            type="button"
+                            className="text-link hover:underline"
+                            onClick={() => selectDay(drillDay)}
+                          >
+                            Show all {totals.days} days
+                          </button>
+                        </div>
+                      )}
+
+                      {totals.position !== null
+                        && (totals.positionDays ?? totals.days) < totals.days && (
+                        <p className="mt-1 text-[11px] text-muted">
+                          Average position covers {totals.positionDays} of {totals.days} days. The
+                          rest have no property-level position recorded.
+                        </p>
+                      )}
+
+                      {(totals.position === null || totals.position === undefined) && (
+                        <p className="mt-1 text-[11px] text-muted">
+                          Average position needs a property-level sync. Run <code>canonry google sync</code> to record it.
+                        </p>
+                      )}
                     </div>
                   )
                 })()}
@@ -1143,10 +1295,6 @@ export function GscSection({
                     placeholder="Contains page URL…"
                   />
                 </div>
-                <p className="mt-2 text-xs text-muted">
-                  Query and page filters match case-insensitive substrings. Click Apply filters to run.
-                  Filtering and sorting examine up to {EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows while the table stays at {DEFAULT_TABLE_PAGE_SIZE} rows per page.
-                </p>
                 {performance.length > 0 ? (
                   <>
                     <div className="mt-3 overflow-x-auto">

@@ -208,3 +208,197 @@ export function formatObservedInstantTick(instant: ObservedInstant): string {
   const d = new Date(instant)
   return `${d.getMonth() + 1}/${d.getDate()}`
 }
+
+/**
+ * One metric drawn on a {@link MultiAxisTrendChart}.
+ *
+ * `axisId` is what keeps a small metric readable next to a large one. Two
+ * series sharing an axis are compared against each other; two series on
+ * DIFFERENT axes each get their own domain, which is the whole reason 29 clicks
+ * and 1,174 impressions can sit on one chart without the clicks flattening into
+ * the baseline. Give two series the same `axisId` only when their units are
+ * genuinely comparable.
+ */
+export interface TrendChartSeries {
+  /** Field on each row holding this metric's value. `null` renders a gap. */
+  dataKey: string
+  label: string
+  /** A `CHART_SERIES_COLORS` / `CHART_TONE` entry. Never a raw hex. */
+  color: string
+  /** Series sharing an id share a scale. Distinct ids get independent scales. */
+  axisId: string
+  /**
+   * Endpoints of a precomputed straight fit, plus the index range it covers.
+   * Pass the server's trend so the chart never fits its own.
+   *
+   * The line is drawn ONLY across `startIndex..endIndex`. Spanning the full
+   * width instead would paint a fitted claim over leading or trailing dates the
+   * metric was never measured on — most visibly for position, which many days
+   * lack entirely.
+   */
+  trend?: { start: number; end: number; startIndex?: number; endIndex?: number } | null
+  /** Higher is worse (ranking position): reverses the axis so up means better. */
+  inverted?: boolean
+  formatValue?: (value: number) => string
+}
+
+/**
+ * Multi-metric time-series chart where each metric may carry its own scale and
+ * its own straight-line fit.
+ *
+ * Deliberately domain-free: it takes rows, an x key, and a series list, so any
+ * dated series (GSC clicks/impressions, sweep mention rate, traffic hits) uses
+ * it without the component learning what the numbers mean. It computes NO
+ * statistics — a caller passes `trend` endpoints that the API already fitted,
+ * which is what keeps the drawn line identical to the one the CLI reports.
+ *
+ * At most two axes render ticks (first left, second right); further axes still
+ * scale their series independently but stay hidden, because a third and fourth
+ * gutter of numbers costs more legibility than it buys.
+ */
+export function MultiAxisTrendChart({
+  data,
+  xKey,
+  series,
+  height = 260,
+  xTickFormatter,
+  labelFormatter,
+  onSelectX,
+  selectedX,
+}: {
+  data: readonly Record<string, unknown>[]
+  xKey: string
+  series: readonly TrendChartSeries[]
+  height?: number
+  xTickFormatter?: (value: string) => string
+  labelFormatter?: (value: string) => string
+  /** Called with the row's x value when a point is clicked. Enables drill-in. */
+  onSelectX?: (value: string) => void
+  /** x value to mark as currently drilled into. */
+  selectedX?: string | null
+}) {
+  const axisIds = [...new Set(series.map((s) => s.axisId))]
+  const formatters = new Map(series.map((s) => [s.label, s.formatValue]))
+
+  // Recharts draws a line from row fields, so the fit is materialized as two
+  // synthetic fields interpolated across the row count. A straight segment
+  // needs only its endpoints, so this cannot drift from the server's fit.
+  const rows = data.map((row, index) => {
+    const withTrend: Record<string, unknown> = { ...row }
+    for (const s of series) {
+      if (!s.trend) continue
+      const from = s.trend.startIndex ?? 0
+      const to = s.trend.endIndex ?? data.length - 1
+      // Outside the measured range the fit is undefined, not zero. `null`
+      // leaves a gap; `connectNulls` is off, so the dash simply stops.
+      if (index < from || index > to) {
+        withTrend[`${s.dataKey}__trend`] = null
+        continue
+      }
+      withTrend[`${s.dataKey}__trend`] = to <= from
+        ? s.trend.start
+        : s.trend.start + ((s.trend.end - s.trend.start) * (index - from)) / (to - from)
+    }
+    return withTrend
+  })
+
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <ComposedChart
+        data={rows}
+        margin={{ top: 8, right: 8, bottom: 4, left: 0 }}
+        // Recharts reports the active row on the CHART, not per-dot, so a click
+        // anywhere in a day's column selects it — a 2px dot is not a target.
+        onClick={onSelectX ? (state: { activeLabel?: string | number }) => {
+          if (state?.activeLabel !== undefined) onSelectX(String(state.activeLabel))
+        } : undefined}
+        style={onSelectX ? { cursor: 'pointer' } : undefined}
+      >
+        <CartesianGrid stroke={CHART_GRID_STROKE} strokeDasharray="3 3" vertical={false} />
+        {/* Marks the drilled-into day so the chart and the table below agree
+            about what is being shown. */}
+        {selectedX != null && (
+          <ReferenceLine
+            x={selectedX}
+            yAxisId={axisIds[0]}
+            stroke={CHART_NEUTRAL.text}
+            strokeDasharray="2 3"
+            strokeWidth={1}
+          />
+        )}
+        <XAxis
+          dataKey={xKey}
+          tick={CHART_AXIS_TICK}
+          stroke={CHART_AXIS_STROKE}
+          tickFormatter={xTickFormatter}
+          minTickGap={24}
+        />
+        {axisIds.map((axisId, index) => {
+          const owner = series.find((s) => s.axisId === axisId)!
+          return (
+            <YAxis
+              key={axisId}
+              yAxisId={axisId}
+              orientation={index === 1 ? 'right' : 'left'}
+              hide={index > 1}
+              reversed={owner.inverted ?? false}
+              // Rank 0 does not exist. Letting the axis run to 0 reserves a
+              // whole band for an impossible value and squashes the real range
+              // into the top half of the plot.
+              domain={owner.inverted ? [1, 'auto'] : [0, 'auto']}
+              tick={CHART_AXIS_TICK}
+              stroke={CHART_AXIS_STROKE}
+              width={48}
+              // Recharts' default (decimals allowed) is required, not cosmetic:
+              // forcing integer ticks snaps a fractional domain like CTR's
+              // 0–0.05 up to 0–1, which flattens the series onto the baseline —
+              // the exact bug per-metric axes exist to prevent.
+              tickFormatter={owner.formatValue}
+            />
+          )
+        })}
+        <RechartsTooltip
+          {...CHART_TOOLTIP_STYLE}
+          labelFormatter={(label) => (labelFormatter ? labelFormatter(String(label)) : String(label))}
+          formatter={(value, name) => {
+            const key = String(name ?? '')
+            if (typeof value !== 'number') return [String(value ?? ''), key]
+            return [formatters.get(key)?.(value) ?? value.toLocaleString(), key]
+          }}
+        />
+        {/* Fits render first so a real series is never hidden behind its own trend. */}
+        {series.filter((s) => s.trend).map((s) => (
+          <Line
+            key={`${s.dataKey}-trend`}
+            yAxisId={s.axisId}
+            dataKey={`${s.dataKey}__trend`}
+            name={`${s.label} trend`}
+            stroke={s.color}
+            strokeWidth={1.5}
+            strokeDasharray="5 4"
+            strokeOpacity={0.55}
+            dot={false}
+            activeDot={false}
+            isAnimationActive={false}
+            legendType="none"
+            tooltipType="none"
+          />
+        ))}
+        {series.map((s) => (
+          <Line
+            key={s.dataKey}
+            yAxisId={s.axisId}
+            dataKey={s.dataKey}
+            name={s.label}
+            stroke={s.color}
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 3 }}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+        ))}
+      </ComposedChart>
+    </ResponsiveContainer>
+  )
+}
