@@ -252,12 +252,12 @@ const FULL_GRAPH_METRICS: ReadonlySet<SiteHealthMetric> = new Set([
 export function siteHealthMetricHelp(metric: SiteHealthMetric, filtered: boolean): string {
   const base = SITE_HEALTH_METRIC_HELP[metric]
   if (FULL_GRAPH_METRICS.has(metric)) {
-    return `${base} This always counts every link, including nav and footer.`
+    return `${base} This always counts every link, including menu and footer.`
   }
   if (metric === 'technicalScore' || metric === 'linkTimes') return base
   return filtered
-    ? `${base} Right now this counts content links only. Nav and footer links are hidden.`
-    : `${base} This counts every link, including nav and footer.`
+    ? `${base} Right now this counts only links written in your page text. Menu and footer links are hidden.`
+    : `${base} This counts every link, including menu and footer.`
 }
 
 /** Counted nouns in map copy. "1 content links" reads like a bug report. */
@@ -342,12 +342,12 @@ function terminationCopy(termination: string | null): string {
  * link sits.
  */
 export const TEMPLATE_DETECTION_COPY: Record<SiteHealthTemplateDetection, string> = {
-  'applied': 'This scan told nav and footer links apart by how often the same link repeats across pages. It cannot spot a link written into the page text when its wording matches the menu. Run a new scan to read the page layout instead.',
+  'applied': 'This scan told menu and footer links apart by how often the same link repeats across pages. It cannot spot a link written into the page text when its wording matches the menu. Run a new scan to read the page layout instead.',
   'applied-placement': 'This scan read where each link sits in the page, so links in the page text are separated from the menu, header, and footer even when they use the same wording.',
   'applied-placement-with-ubiquity': 'This scan read where each link sits in the page. Some pages mark out no menu or main area, so those links fall back to how often the link repeats across pages, which can miss a link written into the page text.',
-  'applied-placement-partial': `This scan read where each link sits in the page. Some pages mark out no menu or main area, and this scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages, so nothing could tell those links apart. They are counted as content links, which is what a link no rule marked as menu, header, or footer means here.`,
-  'unavailable-too-few-pages': `This scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages and did not read where each link sits in the page. On a site that small every link is on most pages, so nav and footer links cannot be told apart from the rest.`,
-  'unavailable-legacy-scan': 'This scan ran before nav and footer links were separated. Run a new scan to split them out.',
+  'applied-placement-partial': `This scan read where each link sits in the page. Some pages mark out no menu or main area, and this scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages, so nothing could tell those links apart. They are counted as links in your page text, which is what a link no rule marked as menu, header, or footer means here.`,
+  'unavailable-too-few-pages': `This scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages and did not read where each link sits in the page. On a site that small every link is on most pages, so menu and footer links cannot be told apart from the rest.`,
+  'unavailable-legacy-scan': 'This scan ran before menu and footer links were separated. Run a new scan to split them out.',
 }
 
 /** Persisted rows stay string-backed, so the lookup must admit a miss. */
@@ -373,7 +373,7 @@ export const SITE_MAP_HELP = 'Scroll to zoom. Click a page to inspect it.'
 export const PAGE_INTERNAL_LINKS_HELP = 'Observed links to and from this page in the selected scan.'
 
 export const SITE_MAP_STALE_LAYOUT_COPY =
-  'Page positions on this map were set before nav and footer links were separated. Run a new scan to update them.'
+  'Page positions on this map were set before menu and footer links were separated. Run a new scan to update them.'
 
 /**
  * The map header's VISIBLE line: the numbers, and nothing else.
@@ -381,6 +381,11 @@ export const SITE_MAP_STALE_LAYOUT_COPY =
  * It used to carry the counts plus two more lines of prose, which is more copy
  * than a header strip can hold. The numbers are what a reader scans for; the
  * explanation behind them is one hover or one tab away in `siteMapLinkRuleHelp`.
+ *
+ * "Content link" and "template link" are OUR words, not a reader's. The real
+ * distinction is where the link was written: in the page's own text, or in the
+ * furniture that repeats on every page. The copy says that; the wire format
+ * (`linkKind=content|template|all`) is unchanged and stays our vocabulary.
  */
 export function siteMapLinkCountsLabel(counts: {
   filterUnavailable: boolean
@@ -390,25 +395,35 @@ export function siteMapLinkCountsLabel(counts: {
   totalEdgeCount: number
 }): string {
   if (counts.filterUnavailable) return `All ${countedLinks(counts.totalEdgeCount, 'link')} shown.`
-  const content = countedLinks(counts.contentEdgeCount, 'content link')
+  const inText = `${numberFormatter.format(counts.contentEdgeCount)} link${counts.contentEdgeCount === 1 ? '' : 's'} in your page text`
   const template = numberFormatter.format(counts.templateEdgeCount)
   return counts.showTemplateLinks
-    ? `${content}, ${template} nav and footer.`
-    : `${content}. ${template} nav and footer hidden.`
+    ? `${inText}, ${template} menu and footer.`
+    : `${inText}. ${template} menu and footer link${counts.templateEdgeCount === 1 ? '' : 's'} hidden.`
 }
 
 /**
- * Everything the header line no longer says out loud: which rule produced the
- * split, and whether the positions predate it. Nothing was dropped in the
- * compression, it moved into the tooltip.
+ * Why the split is worth having, before how it was made.
+ *
+ * A reader does not arrive wanting to know which rule ran. They want to know
+ * why the map hides most of their links, so the tooltip answers that first and
+ * only then explains the rule behind the numbers.
+ */
+export const SITE_MAP_LINK_SPLIT_COPY =
+  'Menu, header, and footer links repeat on every page, so they say nothing about which pages relate to each other. Links written in your page text do.'
+
+/**
+ * Everything the header line no longer says out loud: what the split is for,
+ * which rule produced it, and whether the positions predate it. Nothing was
+ * dropped in the compression, it moved into the tooltip.
  */
 export function siteMapLinkRuleHelp(
   detection: SiteHealthTemplateDetection | null,
   options: { staleLayout: boolean },
 ): string {
-  const rule = templateDetectionCopy(detection)
-  if (!options.staleLayout) return rule
-  return rule ? `${rule} ${SITE_MAP_STALE_LAYOUT_COPY}` : SITE_MAP_STALE_LAYOUT_COPY
+  const parts = [SITE_MAP_LINK_SPLIT_COPY, templateDetectionCopy(detection)]
+  if (options.staleLayout) parts.push(SITE_MAP_STALE_LAYOUT_COPY)
+  return parts.filter(Boolean).join(' ')
 }
 
 /**
@@ -460,8 +475,8 @@ export function linkTileCount(counts: {
     hiddenNote: counts.hidden === 0
       ? null
       : counts.truncated
-        ? `At least ${metricValue(counts.hidden)} nav and footer hidden`
-        : `${metricValue(counts.hidden)} nav and footer hidden`,
+        ? `At least ${metricValue(counts.hidden)} menu and footer hidden`
+        : `${metricValue(counts.hidden)} menu and footer hidden`,
   }
 }
 
@@ -544,13 +559,13 @@ export function emptyLinkCopy(
       : 'This page links to nothing.'
   }
   const lead = direction === 'inbound'
-    ? 'No content links to this page.'
-    : 'No content links from this page.'
+    ? 'No links in the page text point here.'
+    : 'No links in the page text lead away from here.'
   // A truncated list can only prove a lower bound, so it says so rather than
   // rounding a partial count into a fact.
   const hidden = truncated
-    ? `At least ${metricValue(hiddenTemplateCount)} nav and footer links hidden.`
-    : `${countedLinks(hiddenTemplateCount, 'nav and footer link')} hidden.`
+    ? `At least ${metricValue(hiddenTemplateCount)} menu and footer links hidden.`
+    : `${countedLinks(hiddenTemplateCount, 'menu and footer link')} hidden.`
   return `${lead} ${hidden}`
 }
 
@@ -2332,7 +2347,7 @@ export function SiteHealthSection({
                   )}
                   title={templateFilterUnavailable
                     ? templateDetectionCopy(templateDetection)
-                    : 'Nav and footer links are drawn on top. Pages do not move, because the map was laid out from content links.'}
+                    : 'Menu and footer links are drawn on top. Pages do not move, because the map was laid out from the links in your page text.'}
                 >
                   <input
                     type="checkbox"
@@ -2341,7 +2356,7 @@ export function SiteHealthSection({
                     onChange={(event) => setShowTemplateLinks(event.target.checked)}
                     className="size-4 rounded border-base accent-mono-200 focus:ring-2 focus:ring-mono-400"
                   />
-                  Show nav and footer links
+                  Show menu and footer links
                 </label>
               </div>
             )}

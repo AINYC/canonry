@@ -28,6 +28,7 @@ import {
   SiteHealthSection,
   SITE_HEALTH_VIEW_DESCRIPTIONS,
   SITE_MAP_HELP,
+  SITE_MAP_LINK_SPLIT_COPY,
   SITE_MAP_STALE_LAYOUT_COPY,
   TEMPLATE_DETECTION_COPY,
   type LivePageHealthPreviewView,
@@ -2534,10 +2535,10 @@ function seedTemplateLinkGraph(overrides: Record<string, unknown> = {}) {
   return queryClient
 }
 
-test('the map opens on content links only and says what it is hiding', () => {
+test('the map opens on page-text links only and says what it is hiding', () => {
   renderSection(seedTemplateLinkGraph())
 
-  const toggle = screen.getByRole('checkbox', { name: 'Show nav and footer links' }) as HTMLInputElement
+  const toggle = screen.getByRole('checkbox', { name: 'Show menu and footer links' }) as HTMLInputElement
   expect(toggle.checked).toBe(false)
   expect(toggle.disabled).toBe(false)
   // One short line, the numbers only. Asserted against the exported builder so
@@ -2548,7 +2549,7 @@ test('the map opens on content links only and says what it is hiding', () => {
       contentEdgeCount: 1, templateEdgeCount: 1, totalEdgeCount: 2,
     }))
   expect(screen.getByTestId('site-map-link-counts').textContent)
-    .toBe('1 content link. 1 nav and footer hidden.')
+    .toBe('1 link in your page text. 1 menu and footer link hidden.')
 
   // The renderer holds EVERY edge and is told to hide the template ones.
   // Handing it a shorter list instead would rebuild the renderer on a
@@ -2557,11 +2558,11 @@ test('the map opens on content links only and says what it is hiding', () => {
   expect(screen.getByTestId('site-map-show-template').textContent).toBe('false')
 })
 
-test('switching nav and footer links on draws them without moving a page', () => {
+test('switching menu and footer links on draws them without moving a page', () => {
   renderSection(seedTemplateLinkGraph())
 
   const positionsBefore = screen.getByTestId('site-map-node-positions').textContent
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Show nav and footer links' }))
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show menu and footer links' }))
 
   expect(screen.getByTestId('site-map-edge-keys').textContent).toBe('home-services,nav-contact')
   expect(screen.getByTestId('site-map-show-template').textContent).toBe('true')
@@ -2582,9 +2583,11 @@ test('disables the toggle in plain words when a scan is too small to classify', 
     totalContentEdges: 2,
   }))
 
-  const toggle = screen.getByRole('checkbox', { name: 'Show nav and footer links' }) as HTMLInputElement
+  const toggle = screen.getByRole('checkbox', { name: 'Show menu and footer links' }) as HTMLInputElement
   expect(toggle.disabled).toBe(true)
-  expect(screen.getByRole('button', { name: TEMPLATE_DETECTION_COPY['unavailable-too-few-pages'] })).not.toBeNull()
+  expect(screen.getByRole('button', {
+    name: siteMapLinkRuleHelp('unavailable-too-few-pages', { staleLayout: false }),
+  })).not.toBeNull()
   // It must not claim a split it could not make, so every link is drawn.
   expect(screen.getByTestId('site-map-link-counts').textContent)
     .toBe(siteMapLinkCountsLabel({
@@ -2598,8 +2601,10 @@ test('disables the toggle in plain words when a scan is too small to classify', 
 test('disables the toggle and explains a scan that predates the split', () => {
   renderSection(seedTemplateLinkGraph({ templateDetection: 'unavailable-legacy-scan' }))
 
-  expect((screen.getByRole('checkbox', { name: 'Show nav and footer links' }) as HTMLInputElement).disabled).toBe(true)
-  expect(screen.getByRole('button', { name: TEMPLATE_DETECTION_COPY['unavailable-legacy-scan'] })).not.toBeNull()
+  expect((screen.getByRole('checkbox', { name: 'Show menu and footer links' }) as HTMLInputElement).disabled).toBe(true)
+  expect(screen.getByRole('button', {
+    name: siteMapLinkRuleHelp('unavailable-legacy-scan', { staleLayout: false }),
+  })).not.toBeNull()
 })
 
 // Asserting the record's own value, not a substring of it, so the test cannot
@@ -2617,13 +2622,17 @@ test.each([
 
   // The explanation moved into a keyboard-reachable tooltip whose accessible
   // name IS the shipped string. Nothing was dropped in the compression.
-  expect(screen.getByRole('button', { name: TEMPLATE_DETECTION_COPY[templateDetection] })).not.toBeNull()
-  // The visible line is the numbers, and only the numbers.
+  const help = siteMapLinkRuleHelp(templateDetection, { staleLayout: false })
+  expect(screen.getByRole('button', { name: help })).not.toBeNull()
+  // It answers "so what" BEFORE "which rule": a reader wants to know why the
+  // map hides most of their links, not which algorithm decided it.
+  expect(help).toBe(`${SITE_MAP_LINK_SPLIT_COPY} ${TEMPLATE_DETECTION_COPY[templateDetection]}`)
+  // The visible line is the numbers, in words a reader owns.
   expect(screen.getByTestId('site-map-link-counts').textContent)
-    .toBe('1 content link. 1 nav and footer hidden.')
+    .toBe('1 link in your page text. 1 menu and footer link hidden.')
   // Every one of these states DID split the links, so the toggle works and the
   // counts are real.
-  expect((screen.getByRole('checkbox', { name: 'Show nav and footer links' }) as HTMLInputElement).disabled).toBe(false)
+  expect((screen.getByRole('checkbox', { name: 'Show menu and footer links' }) as HTMLInputElement).disabled).toBe(false)
 })
 
 test('the compressed headings keep their own accessible names', () => {
@@ -2646,11 +2655,11 @@ test('the weaker rule names its own blind spot', () => {
   expect(TEMPLATE_DETECTION_COPY.applied).toContain('wording matches the menu')
 })
 
-test('does not claim unmeasured links are excluded, because they are counted as content', () => {
+test('does not claim unmeasured links are excluded, because they are counted as page-text links', () => {
   // This copy used to say those links were "left out of both counts". They
   // never were: they are content links everywhere, and the copy now says so.
   const copy = TEMPLATE_DETECTION_COPY['applied-placement-partial']
-  expect(copy).toContain('counted as content links')
+  expect(copy).toContain('counted as links in your page text')
   expect(copy).not.toContain('left out of both counts')
 })
 
@@ -2670,14 +2679,14 @@ test('says when a map\'s page positions still include the nav mesh', () => {
     name: siteMapLinkRuleHelp('applied', { staleLayout: true }),
   })).not.toBeNull()
   expect(siteMapLinkRuleHelp('applied', { staleLayout: true }))
-    .toBe(`${TEMPLATE_DETECTION_COPY.applied} ${SITE_MAP_STALE_LAYOUT_COPY}`)
+    .toBe(`${SITE_MAP_LINK_SPLIT_COPY} ${TEMPLATE_DETECTION_COPY.applied} ${SITE_MAP_STALE_LAYOUT_COPY}`)
   expect(siteMapLinkRuleHelp('applied', { staleLayout: false }))
-    .toBe(TEMPLATE_DETECTION_COPY.applied)
+    .toBe(`${SITE_MAP_LINK_SPLIT_COPY} ${TEMPLATE_DETECTION_COPY.applied}`)
 })
 
-test('reads an empty content-link set as a finding, with the real hidden counts', async () => {
+test('reads an empty page-text link set as a finding, with the real hidden counts', async () => {
   // canonry.ai: the homepage has 49 inbound / 30 outbound links but only 1
-  // inbound / 5 outbound CONTENT links. With nav and footer hidden (the
+  // inbound / 5 outbound CONTENT links. With menu and footer hidden (the
   // default) a page whose only connections are chrome drew nothing and said
   // nothing, so a correct and interesting result looked like a broken map.
   const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
@@ -2722,13 +2731,13 @@ test('reads an empty content-link set as a finding, with the real hidden counts'
   fireEvent.click(screen.getByRole('button', { name: '/services/roof-repair' }))
 
   // Named counts, not an apology and not silence.
-  expect(await screen.findByText('No content links to this page. 2 nav and footer links hidden.')).toBeTruthy()
+  expect(await screen.findByText('No links in the page text point here. 2 menu and footer links hidden.')).toBeTruthy()
   // Zero of ANY kind is a different fact and says so.
   expect(screen.getByText('This page links to nothing.')).toBeTruthy()
 
   // Switching nav links on shows them rather than the finding.
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Show nav and footer links' }))
-  expect(screen.queryByText('No content links to this page. 2 nav and footer links hidden.')).toBeNull()
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show menu and footer links' }))
+  expect(screen.queryByText('No links in the page text point here. 2 menu and footer links hidden.')).toBeNull()
 })
 
 test('the link tiles count exactly what the tables list, in both toggle states', async () => {
@@ -2796,11 +2805,11 @@ test('the link tiles count exactly what the tables list, in both toggle states',
   // Filter ON (the default): tile and table agree on the content-only count,
   // and the hidden amount is named rather than silently dropped.
   await waitFor(() => expect(within(tile('Links in')).getByText('1')).toBeTruthy())
-  expect(within(tile('Links in')).getByText('4 nav and footer hidden')).toBeTruthy()
+  expect(within(tile('Links in')).getByText('4 menu and footer hidden')).toBeTruthy()
   expect(screen.getByRole('region', { name: 'Links in (1)' })).toBeTruthy()
   // The hidden count is exactly the difference between the two states.
   expect(within(tile('Links out')).getByText('2')).toBeTruthy()
-  expect(within(tile('Links out')).queryByText(/nav and footer hidden/)).toBeNull()
+  expect(within(tile('Links out')).queryByText(/menu and footer hidden/)).toBeNull()
   expect(screen.getByRole('region', { name: 'Links out (2)' })).toBeTruthy()
 
   // Depth and importance are full-graph values, and the panel says so rather
@@ -2811,9 +2820,9 @@ test('the link tiles count exactly what the tables list, in both toggle states',
   expect(screen.getByRole('button', { name: siteHealthMetricHelp('linkImportance', false) })).toBeTruthy()
 
   // Filter OFF: both show totals and the secondary line disappears.
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Show nav and footer links' }))
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show menu and footer links' }))
   expect(within(tile('Links in')).getByText('5')).toBeTruthy()
-  expect(within(tile('Links in')).queryByText(/nav and footer hidden/)).toBeNull()
+  expect(within(tile('Links in')).queryByText(/menu and footer hidden/)).toBeNull()
   expect(screen.getByRole('region', { name: 'Links in (5)' })).toBeTruthy()
   expect(screen.getByRole('button', { name: siteHealthMetricHelp('clicksFromHome', false) })).toBeTruthy()
 })
@@ -2822,10 +2831,10 @@ test('a link tile never presents a bounded count as a total', () => {
   // The neighbour read is capped, so a truncated list proves only a lower
   // bound. Rounding that into a flat number would be a quiet lie.
   expect(linkTileCount({ total: 48, visible: 1, hidden: 47, truncated: false, showTemplateLinks: false, known: true }))
-    .toEqual({ value: '1', hiddenNote: '47 nav and footer hidden', filtered: true })
+    .toEqual({ value: '1', hiddenNote: '47 menu and footer hidden', filtered: true })
 
   expect(linkTileCount({ total: 500, visible: 100, hidden: 400, truncated: true, showTemplateLinks: false, known: true }))
-    .toEqual({ value: '100+', hiddenNote: 'At least 400 nav and footer hidden', filtered: true })
+    .toEqual({ value: '100+', hiddenNote: 'At least 400 menu and footer hidden', filtered: true })
 
   // Filter off: the crawl's own total, and no secondary line.
   expect(linkTileCount({ total: 48, visible: 1, hidden: 47, truncated: false, showTemplateLinks: true, known: true }))
@@ -2905,7 +2914,7 @@ test('both count fixes hold at once: filtered tiles and no self-link anywhere', 
 
   // Filter on: tiles match the tables, and no self-link is listed anywhere.
   await waitFor(() => expect(within(tile('Links in')).getByText('1')).toBeTruthy())
-  expect(within(tile('Links in')).getByText('1 nav and footer hidden')).toBeTruthy()
+  expect(within(tile('Links in')).getByText('1 menu and footer hidden')).toBeTruthy()
   expect(screen.getByRole('region', { name: 'Links in (1)' })).toBeTruthy()
   expect(within(tile('Links out')).getByText('1')).toBeTruthy()
   expect(screen.getByRole('region', { name: 'Links out (1)' })).toBeTruthy()
@@ -2913,7 +2922,7 @@ test('both count fixes hold at once: filtered tiles and no self-link anywhere', 
 
   // Filter off: tiles show the crawl's totals, which also exclude the
   // self-link, and the tables agree with them.
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Show nav and footer links' }))
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show menu and footer links' }))
   expect(within(tile('Links in')).getByText('2')).toBeTruthy()
   expect(screen.getByRole('region', { name: 'Links in (2)' })).toBeTruthy()
   expect(within(tile('Links out')).getByText('1')).toBeTruthy()
@@ -2921,15 +2930,15 @@ test('both count fixes hold at once: filtered tiles and no self-link anywhere', 
   expect(selfLinkRows()).toHaveLength(0)
 })
 
-test('metric help text tells the truth about what the nav and footer filter changes', () => {
+test('metric help text tells the truth about what the menu and footer filter changes', () => {
   // Depth and link score are computed by the crawl over the FULL link graph,
   // before nav links are told apart, so the filter cannot move them. Sitting
   // beside two filtered tiles, they have to say so or they read as filtered.
   expect(siteHealthMetricHelp('clicksFromHome', false)).toBe(
-    'How many clicks it takes to reach this page from the home page, following links. This always counts every link, including nav and footer.',
+    'How many clicks it takes to reach this page from the home page, following links. This always counts every link, including menu and footer.',
   )
   expect(siteHealthMetricHelp('linkImportance', false)).toBe(
-    'How much link value flows to this page, based on how many pages link to it and how important those pages are. Shown relative to the highest page on this site, which is 100%. This always counts every link, including nav and footer.',
+    'How much link value flows to this page, based on how many pages link to it and how important those pages are. Shown relative to the highest page on this site, which is 100%. This always counts every link, including menu and footer.',
   )
   // A full-graph metric ignores the argument entirely: there is no state in
   // which it is a filtered number, so no caller can make it claim otherwise.
@@ -2939,16 +2948,16 @@ test('metric help text tells the truth about what the nav and footer filter chan
   // The two counts that DO follow the toggle describe whichever number is on
   // screen right now.
   expect(siteHealthMetricHelp('linksIn', true)).toBe(
-    'How many other pages link to this page. Right now this counts content links only. Nav and footer links are hidden.',
+    'How many other pages link to this page. Right now this counts only links written in your page text. Menu and footer links are hidden.',
   )
   expect(siteHealthMetricHelp('linksIn', false)).toBe(
-    'How many other pages link to this page. This counts every link, including nav and footer.',
+    'How many other pages link to this page. This counts every link, including menu and footer.',
   )
   expect(siteHealthMetricHelp('linksOut', true)).toBe(
-    'How many other pages this page links to. Right now this counts content links only. Nav and footer links are hidden.',
+    'How many other pages this page links to. Right now this counts only links written in your page text. Menu and footer links are hidden.',
   )
   expect(siteHealthMetricHelp('linksOut', false)).toBe(
-    'How many other pages this page links to. This counts every link, including nav and footer.',
+    'How many other pages this page links to. This counts every link, including menu and footer.',
   )
 
   // Metrics with nothing to qualify are left alone rather than padded with a
@@ -2957,7 +2966,7 @@ test('metric help text tells the truth about what the nav and footer filter chan
   expect(siteHealthMetricHelp('linkTimes', true)).toBe(siteHealthMetricHelp('linkTimes', false))
 })
 
-test('the tile tooltips are keyboard reachable and follow the nav and footer toggle', async () => {
+test('the tile tooltips are keyboard reachable and follow the menu and footer toggle', async () => {
   const fetchMock = vi.fn(async () => new Response('{}', { status: 500 }))
   vi.stubGlobal('fetch', fetchMock)
   const servicesWithLinks = { ...servicesPage, inboundUniqueEdges: 2, outboundUniqueEdges: 1 }
@@ -3022,7 +3031,7 @@ test('the tile tooltips are keyboard reachable and follow the nav and footer tog
 
   // Toggle off the filter and the two filterable tiles stop claiming to be
   // content-only, while the two full-graph tiles are untouched.
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Show nav and footer links' }))
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show menu and footer links' }))
   expect(screen.getByRole('button', { name: siteHealthMetricHelp('linksIn', false) })).toBeTruthy()
   expect(screen.getByRole('button', { name: siteHealthMetricHelp('linksOut', false) })).toBeTruthy()
   expect(screen.queryByRole('button', { name: siteHealthMetricHelp('linksIn', true) })).toBeNull()
