@@ -80,7 +80,7 @@ const SITE_HEALTH_VIEWS = [
   { id: 'technical', label: 'Page health' },
 ] as const satisfies ReadonlyArray<{ id: SiteHealthView; label: string }>
 
-const SITE_HEALTH_VIEW_DESCRIPTIONS: Record<SiteHealthView, string> = {
+export const SITE_HEALTH_VIEW_DESCRIPTIONS: Record<SiteHealthView, string> = {
   map: 'Explore how pages, site sections, and internal links fit together.',
   inventory: 'Review discovered pages and the links that shape their visibility.',
   technical: 'Prioritize audit findings and inspect the pages that need work.',
@@ -361,6 +361,57 @@ function templateDetectionCopy(detection: SiteHealthTemplateDetection | null): s
 }
 
 /**
+ * Why a map's stored page positions predate the current link split. Kept beside
+ * the detection copy because both answer the same question a reader has about
+ * the same numbers, and both belong in the same tooltip rather than in a second
+ * and third line of the header strip.
+ */
+/** Heading help for the map. Was a subtitle line under the heading. */
+export const SITE_MAP_HELP = 'Scroll to zoom. Click a page to inspect it.'
+
+/** Heading help for the page inspector's link section. Was a subtitle line. */
+export const PAGE_INTERNAL_LINKS_HELP = 'Observed links to and from this page in the selected scan.'
+
+export const SITE_MAP_STALE_LAYOUT_COPY =
+  'Page positions on this map were set before nav and footer links were separated. Run a new scan to update them.'
+
+/**
+ * The map header's VISIBLE line: the numbers, and nothing else.
+ *
+ * It used to carry the counts plus two more lines of prose, which is more copy
+ * than a header strip can hold. The numbers are what a reader scans for; the
+ * explanation behind them is one hover or one tab away in `siteMapLinkRuleHelp`.
+ */
+export function siteMapLinkCountsLabel(counts: {
+  filterUnavailable: boolean
+  showTemplateLinks: boolean
+  contentEdgeCount: number
+  templateEdgeCount: number
+  totalEdgeCount: number
+}): string {
+  if (counts.filterUnavailable) return `All ${countedLinks(counts.totalEdgeCount, 'link')} shown.`
+  const content = countedLinks(counts.contentEdgeCount, 'content link')
+  const template = numberFormatter.format(counts.templateEdgeCount)
+  return counts.showTemplateLinks
+    ? `${content}, ${template} nav and footer.`
+    : `${content}. ${template} nav and footer hidden.`
+}
+
+/**
+ * Everything the header line no longer says out loud: which rule produced the
+ * split, and whether the positions predate it. Nothing was dropped in the
+ * compression, it moved into the tooltip.
+ */
+export function siteMapLinkRuleHelp(
+  detection: SiteHealthTemplateDetection | null,
+  options: { staleLayout: boolean },
+): string {
+  const rule = templateDetectionCopy(detection)
+  if (!options.staleLayout) return rule
+  return rule ? `${rule} ${SITE_MAP_STALE_LAYOUT_COPY}` : SITE_MAP_STALE_LAYOUT_COPY
+}
+
+/**
  * Tri-state, and it never shows a bare zero when the check did not run: "0"
  * would read as "we looked and found none".
  */
@@ -439,12 +490,10 @@ function LinkMetrics({ page, inbound, outbound }: {
 }) {
   // Depth and link importance are computed by the crawl engine over the FULL
   // link graph, before nav and footer links are classified, so the filter does
-  // not change them. Saying so is the honest fix: quietly leaving them beside
-  // filtered numbers implies they were filtered too.
-  // The footnote only earns its space when something is actually hidden; the
-  // tooltips key off the filter itself, which is in force even on a page that
-  // happens to have no nav or footer links.
-  const anythingHidden = Boolean(inbound.hiddenNote || outbound.hiddenNote)
+  // not change them. That used to be said twice: once in a footnote under this
+  // grid, and once in the two affected tiles' own tooltips, which
+  // `siteHealthMetricHelp` already appends it to for every FULL_GRAPH_METRIC.
+  // The footnote was the duplicate, so it is gone and nothing was lost.
   return (
     <>
       <dl className="grid grid-cols-2 divide-x divide-y divide-default rounded-lg border border-default sm:grid-cols-4 sm:divide-y-0">
@@ -471,11 +520,6 @@ function LinkMetrics({ page, inbound, outbound }: {
           help={siteHealthMetricHelp('linkImportance', false)}
         />
       </dl>
-      {anythingHidden && (
-        <p className="mt-2 text-xs text-muted">
-          Clicks from home and link importance always count every link, including nav and footer.
-        </p>
-      )}
     </>
   )
 }
@@ -714,8 +758,10 @@ function PageInspector({
       </div>
 
       <section className="mt-5 border-t border-default pt-5" aria-labelledby="site-health-page-links-heading">
-        <h3 id="site-health-page-links-heading" className="text-base font-semibold text-heading">Internal links</h3>
-        <p className="mt-1 text-sm text-secondary">Observed links to and from this page in the selected scan.</p>
+        <div className="flex items-center gap-1">
+          <h3 id="site-health-page-links-heading" className="text-base font-semibold text-heading">Internal links</h3>
+          <InfoTooltip text={PAGE_INTERNAL_LINKS_HELP} />
+        </div>
         <div className="mt-4">
           <LinkMetrics page={page} inbound={inboundTile} outbound={outboundTile} />
         </div>
@@ -1915,12 +1961,12 @@ export function SiteHealthSection({
         <div>
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-xl font-semibold tracking-tight text-heading">Site Health</h2>
+            <InfoTooltip text={SITE_HEALTH_VIEW_DESCRIPTIONS[currentView]} />
             <ToneBadge tone={scanTone(status)}>{statusLabel}</ToneBadge>
             {selectedRun && (
               <span className="text-xs text-muted">{formatScanDate(selectedRun.finishedAt ?? selectedRun.startedAt)}</span>
             )}
           </div>
-          <p className="mt-1 text-sm text-secondary">{SITE_HEALTH_VIEW_DESCRIPTIONS[currentView]}</p>
         </div>
 
         <div className="flex flex-wrap items-start gap-2">
@@ -2243,8 +2289,10 @@ export function SiteHealthSection({
           <section aria-labelledby="site-map-heading">
             <div className="mb-3 flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
               <div>
-                <h2 id="site-map-heading" className="text-base font-semibold text-heading">Site map</h2>
-                <p className="mt-1 text-sm text-secondary">Scroll to zoom. Click a page to inspect it.</p>
+                <div className="flex items-center gap-1">
+                  <h2 id="site-map-heading" className="text-base font-semibold text-heading">Site map</h2>
+                  <InfoTooltip text={SITE_MAP_HELP} />
+                </div>
               </div>
               {graphQuery.data?.sampled && (
                 <span className="text-xs text-muted">
@@ -2257,27 +2305,25 @@ export function SiteHealthSection({
 
             {graphQuery.data?.layout.state === 'ready' && (
               <div className="mb-3 flex flex-col gap-1.5 rounded-lg border border-default bg-surface-subtle px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-secondary" data-testid="site-map-link-counts">
-                  {templateFilterUnavailable
-                    ? `Showing all ${countedLinks(graphEdges.length, 'link')} on this map.`
-                    : showTemplateLinks
-                      ? `Showing ${countedLinks(contentEdgeCount, 'content link')} and ${countedLinks(templateEdgeCount, 'nav and footer link')}.`
-                      : `Showing ${countedLinks(contentEdgeCount, 'content link')}. ${countedLinks(templateEdgeCount, 'nav and footer link')} hidden.`}
-                  {staleTemplateLayout && !templateFilterUnavailable && (
-                    <span className="mt-1 block text-xs text-muted">
-                      Page positions on this map were set before nav and footer links were separated. Run a new scan to update them.
-                    </span>
-                  )}
-                  {/*
-                    Always rendered, in every state, because these counts are the
-                    output of a rule and the rule can change between scans. A
-                    reader who cannot see which rule produced the split cannot
-                    tell a real change on the site from a change in how it was
-                    measured.
-                  */}
-                  <span className="mt-1 block text-xs text-muted" data-testid="site-map-link-rule">
-                    {templateDetectionCopy(templateDetection)}
-                  </span>
+                {/*
+                  One line, the numbers only. The rule that produced them and
+                  any staleness warning are always available on the tooltip, in
+                  every state, because these counts are the output of a rule and
+                  the rule can change between scans: a reader who cannot see
+                  which rule ran cannot tell a real change on the site from a
+                  change in how it was measured.
+                */}
+                <p className="flex items-center gap-1 text-sm text-secondary" data-testid="site-map-link-counts">
+                  {siteMapLinkCountsLabel({
+                    filterUnavailable: templateFilterUnavailable,
+                    showTemplateLinks,
+                    contentEdgeCount,
+                    templateEdgeCount,
+                    totalEdgeCount: graphEdges.length,
+                  })}
+                  <InfoTooltip text={siteMapLinkRuleHelp(templateDetection, {
+                    staleLayout: staleTemplateLayout && !templateFilterUnavailable,
+                  })} />
                 </p>
                 <label
                   className={cn(
