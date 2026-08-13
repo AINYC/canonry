@@ -244,3 +244,31 @@ test('exposes a keyboard-reachable control for every day the chart can drill int
   expect(dayButtons).toHaveLength(DAILY.length)
   expect(dayButtons[0]!.getAttribute('aria-pressed')).toBe('false')
 })
+
+test('plots one row per calendar day, so a quiet gap is not compressed', async () => {
+  // Four dates across a ten-day span. The server fits over the CALENDAR, so the
+  // chart has to plot the calendar too — against the four measured rows the
+  // trend line traversed a third of its range and ended on the wrong value.
+  const sparse = [
+    { date: '2026-04-01', clicks: 10, impressions: 100, ctr: 0.1, position: 5 },
+    { date: '2026-04-02', clicks: 9, impressions: 90, ctr: 0.1, position: 5 },
+    { date: '2026-04-03', clicks: 8, impressions: 80, ctr: 0.1, position: 5 },
+    { date: '2026-04-10', clicks: 7, impressions: 70, ctr: 0.1, position: 5 },
+  ]
+  renderSection(performanceDaily({
+    daily: sparse,
+    totals: { clicks: 34, impressions: 340, ctr: 0.1, position: 5, positionDays: 4, days: 4 },
+    trends: {
+      clicks: { slope: -0.3, intercept: 10, r2: 1, start: 10, end: 7, n: 4, startIndex: 0, endIndex: 9 },
+      impressions: { slope: -3, intercept: 100, r2: 1, start: 100, end: 70, n: 4, startIndex: 0, endIndex: 9 },
+      ctr: null,
+      position: null,
+    },
+  }))
+
+  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+  // The drill controls stay on the MEASURED days — an empty day is nothing to
+  // drill into — which is how we can tell the two series apart.
+  const group = screen.getByRole('group', { name: /Filter the table to a single day/ })
+  expect(within(group).getAllByRole('button')).toHaveLength(4)
+})

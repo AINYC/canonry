@@ -23,6 +23,7 @@ import {
   formatChartDateTick,
   type TrendChartSeries,
 } from '../shared/ChartPrimitives.js'
+import { calendarDateRange } from '@ainyc/canonry-contracts'
 import { formatTimestamp, formatBooleanState, SearchMetric, SEARCH_METRIC_LABELS } from '../../lib/format-helpers.js'
 import { addToast } from '../../lib/toast-store.js'
 import { asyncHandler } from '../../lib/async-handler.js'
@@ -1126,6 +1127,19 @@ export function GscSection({
                   // must never reach a formatter.
                   const totalFor = (key: GscChartMetric): number | null => totals[key] ?? null
 
+                  // Plot one row per CALENDAR DAY, not per returned row.
+                  // `daily` holds only dates that produced data, but the server
+                  // fits over the calendar, so its `startIndex`/`endIndex` only
+                  // line up with a calendar-dense series — against row
+                  // positions the trend line traversed a fraction of its range
+                  // and ended on the wrong value. It is also the honest x-axis:
+                  // a six-day quiet stretch should look like six days.
+                  const byDate = new Map(daily.map((d) => [d.date, d]))
+                  const chartRows = daily.length === 0
+                    ? []
+                    : calendarDateRange(daily[0]!.date, daily[daily.length - 1]!.date)
+                      .map((date) => byDate.get(date) ?? { date })
+
                   return (
                     <div className="mt-3">
                       {/* Tiles are the metric selector, as in Search Console:
@@ -1191,7 +1205,7 @@ export function GscSection({
 
                       <div className="mt-1">
                         <MultiAxisTrendChart
-                          data={daily}
+                          data={chartRows}
                           xKey="date"
                           series={series}
                           xTickFormatter={formatChartDateTick}

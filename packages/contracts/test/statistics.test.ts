@@ -144,3 +144,29 @@ describe('linearTrend precision and extent', () => {
     expect(dense.slope).toBeCloseTo(-2.8, 6)
   })
 })
+
+describe('calendar index space', () => {
+  it('is derived from ONE function, so a fit and a plot cannot disagree', async () => {
+    const { calendarDateRange } = await import('../src/formatting.js')
+    // 4 dates carry data across a 10-day span.
+    const measured = ['2026-04-01', '2026-04-02', '2026-04-03', '2026-04-10']
+    const dense = calendarDateRange(measured[0]!, measured[measured.length - 1]!)
+    expect(dense).toHaveLength(10)
+
+    // The fit runs over the dense series...
+    const byDate = new Map([['2026-04-01', 100], ['2026-04-02', 90], ['2026-04-03', 80], ['2026-04-10', 70]])
+    const trend = linearTrend(dense.map((d) => byDate.get(d) ?? null))!
+    expect(trend.endIndex).toBe(9)
+
+    // ...and the plot must use the SAME length, or the drawn line stops short.
+    // Against the 4 measured rows it ended at 90 instead of 70.
+    const drawn = dense.map((_, i) =>
+      trend.start + ((trend.end - trend.start) * (i - trend.startIndex)) / (trend.endIndex - trend.startIndex))
+    expect(drawn.at(-1)).toBeCloseTo(trend.end, 6)
+  })
+
+  it('returns nothing for a reversed range', async () => {
+    const { calendarDateRange } = await import('../src/formatting.js')
+    expect(calendarDateRange('2026-04-10', '2026-04-01')).toEqual([])
+  })
+})

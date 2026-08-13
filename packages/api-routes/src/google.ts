@@ -15,7 +15,7 @@ import {
   gscPerformanceOrderBySchema,
   formatIsoDateInTimeZone,
   linearTrend,
-  shiftIsoCalendarDate,
+  calendarDateRange,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from './gbp-summary.js'
@@ -1006,15 +1006,11 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     // falling 100 -> 80 then one day at 70 a week later reads as -10/day
     // compressed and -2.8/day on the real calendar.
     const byDate = new Map(daily.map((d) => [d.date, d]))
-    const denseDates: string[] = []
-    if (daily.length > 0) {
-      const firstDate = daily[0]!.date
-      const lastDate = daily[daily.length - 1]!.date
-      for (let cursor = firstDate; cursor <= lastDate; cursor = shiftIsoCalendarDate(cursor, 1)) {
-        denseDates.push(cursor)
-        if (denseDates.length > 800) break // 90d is the widest label; a guard, not a limit
-      }
-    }
+    // `calendarDateRange` is shared with the chart so both derive the SAME index
+    // space. They used to compute it separately and disagree.
+    const denseDates = daily.length === 0
+      ? []
+      : calendarDateRange(daily[0]!.date, daily[daily.length - 1]!.date)
     const densify = (pick: (d: (typeof daily)[number]) => number | null): (number | null)[] =>
       denseDates.map((date) => {
         const row = byDate.get(date)
