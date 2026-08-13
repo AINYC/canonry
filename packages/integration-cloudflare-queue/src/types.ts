@@ -28,7 +28,7 @@ export interface CloudflareQueueMessageBase {
   metadata: Readonly<Record<string, string>>
 }
 
-/** JSON payloads are decoded from Cloudflare's base64 wire envelope and parsed. */
+/** JSON payloads are parsed from direct JSON text or Cloudflare's base64 wire envelope. */
 export interface CloudflareQueueJsonMessage extends CloudflareQueueMessageBase {
   contentType: 'json'
   body: unknown

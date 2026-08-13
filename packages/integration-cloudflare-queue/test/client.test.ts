@@ -93,6 +93,25 @@ describe('pullCloudflareQueueMessages', () => {
     expect(result.messages[3]).toMatchObject({ id: 'plain-text', contentType: 'text', body: 'not JSON' })
   })
 
+  it('accepts direct JSON text returned by the Cloudflare pull API', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(pullResponse([
+      message({
+        id: 'direct-json',
+        lease_id: 'lease-direct-json',
+        body: JSON.stringify({ direct: true }),
+      }),
+    ]))
+
+    const result = await pullCloudflareQueueMessages({ ...client, fetchImpl })
+
+    expect(result.messages[0]).toMatchObject({
+      id: 'direct-json',
+      leaseId: 'lease-direct-json',
+      contentType: 'json',
+      body: { direct: true },
+    })
+  })
+
   it('defaults a missing content type to JSON, as Cloudflare documents', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(pullResponse([
       message({ metadata: {} }),
@@ -107,7 +126,11 @@ describe('pullCloudflareQueueMessages', () => {
     ['v8', message({ metadata: { 'CF-Content-Type': 'v8' } }), 'unsupported-content-type'],
     ['unknown content type', message({ metadata: { 'CF-Content-Type': 'yaml' } }), 'unsupported-content-type'],
     ['bad base64', message({ body: 'not base64!' }), 'malformed-body'],
-    ['bad json', message({ body: Buffer.from('{').toString('base64') }), 'malformed-body'],
+    ['malformed direct json', message({ body: '{"secret":"raw-body-must-not-escape"' }), 'malformed-body'],
+    ['malformed base64 json', message({
+      body: Buffer.from('{"secret":"raw-body-must-not-escape"').toString('base64'),
+    }), 'malformed-body'],
+    ['invalid UTF-8 base64 json', message({ body: Buffer.from([0xff]).toString('base64') }), 'malformed-body'],
   ])('returns %s as safe poison while preserving its lease', async (_label, invalid, reason) => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(pullResponse([invalid]))
 
@@ -120,6 +143,7 @@ describe('pullCloudflareQueueMessages', () => {
       reason,
     }))
     expect(result.messages[0]).not.toHaveProperty('body')
+    expect(JSON.stringify(result.messages[0])).not.toContain('raw-body-must-not-escape')
   })
 
   it.each([

@@ -27,9 +27,9 @@ Database writes, source lifecycle, leases, and traffic normalization remain in
   429 and 5xx responses at most three times, and cap each exponential or
   `Retry-After` delay at 30 seconds so the caller can stay within its source
   lease.
-- **Content-aware decoding.** JSON and bytes bodies are base64-decoded; JSON is
-  then parsed. Text bodies remain the plain UTF-8 strings returned by
-  Cloudflare.
+- **Content-aware decoding.** JSON bodies can be direct JSON text or base64.
+  Base64 JSON uses strict UTF-8 decoding before parsing. Bytes bodies are
+  base64-decoded. Text bodies remain the plain UTF-8 strings from Cloudflare.
 - **Poison is ACK-able.** If a message has a usable lease but its envelope,
   body, or content type is malformed, return a poison message without its raw
   body.

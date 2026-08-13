@@ -250,6 +250,14 @@ function decodeUtf8(bytes: Uint8Array): string {
   }
 }
 
+function decodeJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    return parseJson(decodeUtf8(decodeBase64(value)))
+  }
+}
+
 function safeMessageBase(
   record: Record<string, unknown>,
   leaseId: string,
@@ -316,8 +324,7 @@ function decodeMessage(record: Record<string, unknown>): CloudflareQueueMessage 
   }
   if (contentType === 'json') {
     try {
-      const decoded = decodeUtf8(decodeBase64(rawBody))
-      return { ...base, contentType, body: parseJson(decoded) }
+      return { ...base, contentType, body: decodeJson(rawBody) }
     } catch {
       return poison('malformed-body')
     }
