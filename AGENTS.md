@@ -1149,7 +1149,52 @@ Several rules in this file are true only because a lint guard enforces them — 
 
 - Validation CI: `typecheck`, `test`, `lint` across the full workspace on PRs.
 - Keep explicit job permissions.
-- Publish workflow will be added when `packages/canonry/` is ready for npm.
+- **Run `pnpm verify` before pushing.** It is the merge gate in one command:
+  `gen:check`, `plugin:check`, `typecheck`, `lint`, `test`, cheapest first. The
+  two drift checks fail in seconds and are the ones most often forgotten, since
+  nothing local reminds you that editing a route means regenerating the SDK.
+
+### Landing a PR here (read before opening one)
+
+Four traps in this repo cost real time. None is discoverable from a green CI
+run, because CI validates the branch and these are all about the branch's
+relationship to `main`.
+
+1. **The version race.** `publish.yml` decides whether to release by comparing
+   `packages/canonry/package.json` against the *previous commit on main*. A PR
+   that bumps to a version `main` has since reached merges with no version
+   change, so npm and Homebrew are skipped while Docker still moves `latest` —
+   a silent half-release. `plugin:check --base-ref` only compares against the
+   MERGE BASE, so it passes in exactly this case. The `version-guard` job
+   compares against the base-branch TIP and against npm, which is the check
+   that actually predicts the post-merge outcome. **Re-check the version right
+   before you push**, not when you branch: it was correct at branch time both
+   times this failed.
+
+2. **Stacked PRs after a squash merge.** `main` squashes, so once the parent PR
+   lands, a branch stacked on it still carries the parent's individual commits
+   that `main` replaced with one. GitHub retargets the base automatically, which
+   makes it look handled; it does not rewrite history, and the diff shows the
+   parent's whole change replayed. Rebase with
+   `git rebase --onto origin/main <old-base-tip> <branch>`.
+
+3. **Waiting for CI.** `gh pr checks` returns an EMPTY list in the window
+   between a push landing and the workflows queueing, so any "wait until nothing
+   is pending" loop exits immediately and reports success against no checks at
+   all. Require a non-empty list before believing a green result.
+
+4. **Auto-merge is disabled repo-wide**, so `gh pr merge --auto` is rejected and
+   a green, approved PR still needs a manual merge.
+
+### Adding a guard
+
+The guards that catch real defects here are the ones that compare two sources
+that must agree, and they have caught the changes in this file more than once:
+`db-dto-coverage` (a new table with no classification), `dashboard-class-baseline`
+(a className with no stylesheet selector), `codegen-drift` (a route whose SDK was
+not regenerated), `no-new-loose-routes`, `eslint-guards`. When a change
+introduces a new pair that must stay in step, prefer a guard over a convention —
+see `docs/GUARDS.md` and the "Lint Guards (Critical)" section above.
 
 ## Keeping Documentation Current
 

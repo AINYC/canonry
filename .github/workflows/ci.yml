@@ -141,6 +141,69 @@ jobs:
           fi
           pnpm plugin:check --base-ref "$BASE_REF"
 
+  version-guard:
+    # Catches the release hazard CI is otherwise structurally blind to.
+    #
+    # `plugin:check --base-ref` already asserts the version advanced past the
+    # MERGE BASE, i.e. past where the branch started. It cannot see main moving
+    # underneath a long-lived PR. When it does, the branch still "advanced" and
+    # the check passes, but after merge `publish.yml` compares HEAD against its
+    # parent, finds the version unchanged, and SKIPS npm + Homebrew while Docker
+    # still moves `latest`. A silent half-release, twice observed.
+    #
+    # So compare against the BASE BRANCH TIP, which is what the version will be
+    # measured against after the merge lands.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Version must still be releasable against the base branch tip
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$BASE_REF"
+
+          version_at() {
+            git show "$1":packages/canonry/package.json 2>/dev/null \
+              | node -e "let s='';process.stdin.on('data',c=>s+=c).on('end',()=>{try{console.log(JSON.parse(s).version??'')}catch{console.log('')}})"
+          }
+
+          MERGE_BASE=$(git merge-base "origin/$BASE_REF" HEAD)
+          HEAD_V=$(node -p "require('./packages/canonry/package.json').version")
+          BASE_V=$(version_at "$MERGE_BASE")
+          TIP_V=$(version_at "origin/$BASE_REF")
+
+          echo "branch point: $BASE_V | base tip: $TIP_V | this PR: $HEAD_V"
+
+          # No bump attempted. Legitimate for docs and small changes, and the
+          # repo's versioning rule allows it, so nothing to check.
+          if [ "$HEAD_V" = "$BASE_V" ]; then
+            echo "No version bump in this PR — nothing to verify."
+            exit 0
+          fi
+
+          # A bump WAS attempted. It has to still be a bump once merged.
+          if [ "$(printf '%s\n%s\n' "$TIP_V" "$HEAD_V" | sort -V | tail -1)" != "$HEAD_V" ] || [ "$HEAD_V" = "$TIP_V" ]; then
+            echo "::error::This PR bumps $BASE_V -> $HEAD_V, but $BASE_REF is already at $TIP_V."
+            echo "::error::Merging would leave the version unchanged, so publish.yml would skip npm and Homebrew while Docker still moves 'latest'."
+            echo "::error::Rebase onto $BASE_REF and bump past $TIP_V."
+            exit 1
+          fi
+
+          # And it has to be a version nobody has taken.
+          if npm view "@canonry/canonry@$HEAD_V" version >/dev/null 2>&1; then
+            echo "::error::@canonry/canonry@$HEAD_V is already published to npm. Pick the next unused version."
+            exit 1
+          fi
+
+          echo "OK: $HEAD_V is ahead of the base tip ($TIP_V) and unpublished."
+
   build:
     runs-on: ubuntu-latest
     permissions:
