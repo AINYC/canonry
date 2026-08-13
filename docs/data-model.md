@@ -152,8 +152,10 @@ and those three counts are stored per link beside the landmark ruleset version
 on the snapshot. Any content occurrence makes a link editorial, navigation with
 no content occurrence makes it chrome, and `unknown` carries no evidence, so a
 link the page said nothing about falls back to ubiquity where the scan is large
-enough and is left unclassified (`is_template` NULL, in neither the content nor
-the template bucket) where it is not. Ubiquity keys on (target URL, anchor
+enough. Where it is not, the link is still a content link (`is_template` is a
+strict boolean on every classified row, so the layout input, the graph sample,
+both link filters, the totals, and the map all keep ONE definition of a content
+link) and `templateSource` reports `unmeasured` so a consumer can subtract it. Ubiquity keys on (target URL, anchor
 text), so it cannot see an editorial link whose anchor text matches the nav's,
 which is the common case because good anchor text reuses the destination's name:
 53 editorial links added to canonry.ai moved the measured content-link count by

@@ -7571,7 +7571,7 @@ export type SiteCrawlInternalLinksResponseDto = {
         anchors: Array<string>;
         isTemplate: boolean | null;
         templateRatio: number | null;
-        templateSource: 'placement' | 'ubiquity' | 'unclassified';
+        templateSource: 'placement' | 'ubiquity' | 'unmeasured';
         placementOccurrences: {
             navigation: number;
             content: number;
@@ -7603,7 +7603,7 @@ export type SiteCrawlNeighborsResponseDto = {
         anchors: Array<string>;
         isTemplate: boolean | null;
         templateRatio: number | null;
-        templateSource: 'placement' | 'ubiquity' | 'unclassified';
+        templateSource: 'placement' | 'ubiquity' | 'unmeasured';
         placementOccurrences: {
             navigation: number;
             content: number;
@@ -7625,7 +7625,7 @@ export type SiteCrawlNeighborsResponseDto = {
         anchors: Array<string>;
         isTemplate: boolean | null;
         templateRatio: number | null;
-        templateSource: 'placement' | 'ubiquity' | 'unclassified';
+        templateSource: 'placement' | 'ubiquity' | 'unmeasured';
         placementOccurrences: {
             navigation: number;
             content: number;
@@ -7921,7 +7921,7 @@ export type SiteHealthChangesResponseDto = {
             anchors: Array<string>;
             isTemplate: boolean | null;
             templateRatio: number | null;
-            templateSource: 'placement' | 'ubiquity' | 'unclassified';
+            templateSource: 'placement' | 'ubiquity' | 'unmeasured';
             placementOccurrences: {
                 navigation: number;
                 content: number;
@@ -7943,7 +7943,7 @@ export type SiteHealthChangesResponseDto = {
             anchors: Array<string>;
             isTemplate: boolean | null;
             templateRatio: number | null;
-            templateSource: 'placement' | 'ubiquity' | 'unclassified';
+            templateSource: 'placement' | 'ubiquity' | 'unmeasured';
             placementOccurrences: {
                 navigation: number;
                 content: number;
@@ -8010,7 +8010,7 @@ export type SiteHealthPathResponseDto = {
         anchors: Array<string>;
         isTemplate: boolean | null;
         templateRatio: number | null;
-        templateSource: 'placement' | 'ubiquity' | 'unclassified';
+        templateSource: 'placement' | 'ubiquity' | 'unmeasured';
         placementOccurrences: {
             navigation: number;
             content: number;
@@ -8084,7 +8084,7 @@ export type SiteHealthSubgraphResponseDto = {
         anchors: Array<string>;
         isTemplate: boolean | null;
         templateRatio: number | null;
-        templateSource: 'placement' | 'ubiquity' | 'unclassified';
+        templateSource: 'placement' | 'ubiquity' | 'unmeasured';
         placementOccurrences: {
             navigation: number;
             content: number;

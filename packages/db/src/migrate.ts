@@ -336,7 +336,7 @@ function* streamSiteCrawlTemplateLinkEdges(
   let after = ''
   for (;;) {
     const rows = tx.all(sql`
-      SELECT edge_key, source_node_key, target_node_key, anchors
+      SELECT edge_key, source_node_key, target_node_key, anchors, relation
       FROM site_crawl_edges
       WHERE attempt_id = ${attemptId} AND edge_key > ${after}
       ORDER BY edge_key
@@ -346,6 +346,7 @@ function* streamSiteCrawlTemplateLinkEdges(
       source_node_key: string
       target_node_key: string | null
       anchors: string | null
+      relation: string
     }>
     if (rows.length === 0) return
     yield rows.map((row) => ({
@@ -353,6 +354,7 @@ function* streamSiteCrawlTemplateLinkEdges(
       sourceNodeKey: row.source_node_key,
       targetNodeKey: row.target_node_key,
       anchors: parseJsonColumn<string[]>(row.anchors, []),
+      relation: row.relation,
     }))
     after = rows[rows.length - 1]!.edge_key
     if (rows.length < batchSize) return
@@ -381,7 +383,7 @@ function* chunked<T>(values: readonly T[], size = 500): Generator<T[]> {
  * retry produces the same result.
  *
  * Ubiquity only, on purpose and permanently. This hook runs at migrations 131
- * and 133, both of which land BEFORE the placement columns exist (135), and
+ * and 133, both of which land BEFORE the placement columns exist (138), and
  * every scan it can reach was captured by a crawler that never recorded where a
  * link sat. There is no placement to read and none to invent, so a stored scan
  * keeps the ubiquity answer and its snapshot keeps a NULL ruleset version,

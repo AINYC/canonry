@@ -453,14 +453,26 @@ export type SiteCrawlPlacementOccurrencesDto = z.infer<typeof siteCrawlPlacement
  * The two rules do not measure the same thing, so a consumer reading a count
  * must be able to tell which one produced it. `placement` is DOM ground truth.
  * `ubiquity` is the inference from how many pages carry the link, which cannot
- * see an editorial link whose anchor text matches the nav's. `unclassified`
- * means neither rule could answer, so `isTemplate` is null and the link belongs
- * to neither the content nor the template bucket.
+ * see an editorial link whose anchor text matches the nav's.
+ *
+ * `unmeasured` is the honest answer for a link NEITHER rule had evidence about:
+ * the page declared no landmark AND the scan is below the ubiquity floor, or
+ * the edge is a redirect/canonical that has no position in a page at all, or
+ * its target was never resolved to a fetched page. Such a link is still a
+ * content link, because "not shown to be chrome" is what a content link means
+ * here and has always meant here (`isTemplateLinkRatio(null)` is false). What
+ * `unmeasured` adds is that no rule proved it, so a consumer can subtract it
+ * from a count rather than being told a confident number.
+ *
+ * This is deliberately an EVIDENCE grade, not a third bucket. Every link is in
+ * exactly one of the content and template buckets, on every surface, because a
+ * third bucket that only two of six readers understood is precisely how the
+ * counts came to disagree.
  */
 export const siteHealthLinkClassificationSourceSchema = z.enum([
   'placement',
   'ubiquity',
-  'unclassified',
+  'unmeasured',
 ])
 export type SiteHealthLinkClassificationSource = z.infer<typeof siteHealthLinkClassificationSourceSchema>
 /** Named members so consumers never re-type the literal at a call site. */
@@ -483,9 +495,11 @@ export const SiteHealthLinkClassificationSources = siteHealthLinkClassificationS
  *   landmarks answered for, and ubiquity decided the rest. The two rules are
  *   mixed in one reported number, which is exactly why this value exists.
  * - `applied-placement-partial` — placement decided the links the landmarks
- *   answered for, and the rest could not be classified at all, because the scan
- *   is below the page floor the ubiquity fallback needs. Those links carry a
- *   null `isTemplate` and are in neither bucket.
+ *   answered for, and at least one real page link had no evidence from either
+ *   rule, because the scan is below the page floor the fallback needs. Those
+ *   links are still counted as content, which is what "not shown to be chrome"
+ *   means here; `templateSource` is what marks them `unmeasured` so a consumer
+ *   can subtract them.
  *
  * `unavailable-legacy-scan` covers a scan whose links were never classified,
  * which is also the honest answer for a response that resolved no crawl at
@@ -565,6 +579,32 @@ export function normalizeTemplateAnchorText(anchor: string): string {
   return anchor.trim().replace(/\s+/gu, ' ').toLowerCase()
 }
 
+/**
+ * How a stored edge came to exist. Mirrors `CrawlEdgeType` from
+ * `@canonry/aeo-audit`, plus the historical `link` default that predates the
+ * column carrying the crawler's own value.
+ *
+ * Only `anchor` is a link a person can click on a page, which is the only kind
+ * the nav-vs-content question means anything for: a redirect or canonical edge
+ * has no position in a page, so it can never carry placement and can never be
+ * "a page with no landmarks".
+ */
+export const siteCrawlEdgeRelationSchema = z.enum(['anchor', 'redirect', 'canonical', 'link'])
+export type SiteCrawlEdgeRelation = z.infer<typeof siteCrawlEdgeRelationSchema>
+/** Named members so consumers never re-type the literal at a call site. */
+export const SiteCrawlEdgeRelations = siteCrawlEdgeRelationSchema.enum
+
+/**
+ * Whether the nav-vs-content question is even askable of this edge.
+ *
+ * Persisted rows stay string-backed for forward compatibility, so this takes a
+ * raw string rather than the union and answers false for anything it does not
+ * recognize: a future relation is not an anchor link until someone says so.
+ */
+export function isAnchorLinkRelation(relation: string): boolean {
+  return relation === SiteCrawlEdgeRelations.anchor
+}
+
 /** One persisted link, reduced to exactly what template detection reads. */
 export interface TemplateLinkEdgeInput {
   edgeKey: string
@@ -572,6 +612,12 @@ export interface TemplateLinkEdgeInput {
   /** Null when the crawl never resolved the target to a page it observed. */
   targetNodeKey: string | null
   anchors: readonly string[]
+  /**
+   * Raw stored relation. Only anchor edges can report a page that declares no
+   * landmarks, so this is what keeps a redirect from being counted as evidence
+   * that the SITE is missing markup.
+   */
+  relation: string
   /**
    * Null when this scan recorded no placement for this link: a crawl captured
    * before the landmark ruleset existed. Absence is a real state, never zeros.
@@ -738,46 +784,85 @@ export function templateLinkPlacementAvailable(rulesetVersion: string | null | u
 }
 
 /**
- * Which rules a scan's classification actually used.
+ * Running evidence tally for one scan's classification.
  *
- * `usedUbiquityFallback` must be true only when the ubiquity rule produced real
- * evidence for at least one link. A redirect or canonical edge carries no
- * anchor and no placement, so it reaches the fallback and measures nothing;
- * counting that as a mixed classification would put nearly every scan in the
- * mixed state and make the distinction worthless.
+ * Whole-scan state cannot be decided per link, and BOTH writers (the one-shot
+ * classifier and the streaming publish pass) have to reach the same answer over
+ * the same links. They therefore share this accumulator rather than each
+ * counting for itself, which is what stopped the two from drifting.
  */
+export interface TemplateLinkDetectionTally {
+  /** At least one link was decided by real ubiquity evidence. */
+  usedUbiquityFallback: boolean
+  /** At least one ANCHOR link had no evidence from either rule. */
+  leftUnmeasuredAnchor: boolean
+}
+
+export function createTemplateLinkDetectionTally(): TemplateLinkDetectionTally {
+  return { usedUbiquityFallback: false, leftUnmeasuredAnchor: false }
+}
+
+/**
+ * Fold one link's decision into the scan tally.
+ *
+ * Both conditions are scoped to real evidence about a real page link, and for
+ * the same reason. A redirect or canonical edge carries no anchor and no
+ * placement BY CONSTRUCTION, so it reaches neither rule with anything to
+ * measure. Counting it as a ubiquity fallback would put nearly every scan in
+ * the mixed state; counting it as an unmeasured anchor would tell a customer
+ * with perfectly marked-up pages that "some pages mark out no menu or main
+ * area". Both would be false, and both would be false on almost every scan,
+ * which is worse than saying nothing.
+ */
+export function observeTemplateLinkDetection(
+  tally: TemplateLinkDetectionTally,
+  edge: Pick<TemplateLinkEdgeInput, 'relation'>,
+  classification: TemplateLinkClassification,
+): void {
+  if (classification.source === SiteHealthLinkClassificationSources.ubiquity) {
+    tally.usedUbiquityFallback = true
+  }
+  if (
+    classification.source === SiteHealthLinkClassificationSources.unmeasured
+    && isAnchorLinkRelation(edge.relation)
+  ) {
+    tally.leftUnmeasuredAnchor = true
+  }
+}
+
+/** Which rules a scan's classification actually used. */
 export function templateLinkDetection(input: {
   placementAvailable: boolean
   ubiquityAvailable: boolean
-  usedUbiquityFallback: boolean
-  leftUnclassified: boolean
+  tally: TemplateLinkDetectionTally
 }): SiteHealthTemplateDetectionOutcome {
   if (!input.placementAvailable) {
     return input.ubiquityAvailable
       ? SiteHealthTemplateDetections.applied
       : SiteHealthTemplateDetections['unavailable-too-few-pages']
   }
-  if (input.usedUbiquityFallback) return SiteHealthTemplateDetections['applied-placement-with-ubiquity']
-  if (input.leftUnclassified) return SiteHealthTemplateDetections['applied-placement-partial']
+  if (input.tally.usedUbiquityFallback) return SiteHealthTemplateDetections['applied-placement-with-ubiquity']
+  if (input.tally.leftUnmeasuredAnchor) return SiteHealthTemplateDetections['applied-placement-partial']
   return SiteHealthTemplateDetections['applied-placement']
 }
 
 export interface TemplateLinkClassification {
   edgeKey: string
   /**
-   * Null when neither rule could answer: the DOM said nothing and the scan is
-   * too small for ubiquity. Null is in neither the content nor the template
-   * bucket, which is what stops a link nothing is known about from being
-   * counted as editorial.
+   * Always a real answer. A link no rule could measure is `false`, because
+   * "not shown to be chrome" is what a content link has always meant here, and
+   * `source` is what says nothing proved it. There is no third bucket: one
+   * existed briefly and only two of six readers understood it, which is exactly
+   * how the counts came to disagree.
    */
-  isTemplate: boolean | null
+  isTemplate: boolean
   /**
-   * Ubiquity of the link's least ubiquitous anchor. Populated exactly when
-   * `source` is `ubiquity`: it is that rule's own evidence, and reporting it
-   * beside a placement decision would suggest it had a vote.
+   * Ubiquity of the link's least ubiquitous anchor. Non-null exactly when
+   * `source` is `ubiquity`, by construction: the ratio IS that rule's evidence,
+   * so a link it could not measure is not attributed to it.
    */
   templateRatio: number | null
-  /** Which rule produced `isTemplate`. */
+  /** Which rule produced `isTemplate`, or that none could. */
   source: SiteHealthLinkClassificationSource
 }
 
@@ -823,15 +908,23 @@ export function classifyTemplateLinkEdge(
       source: SiteHealthLinkClassificationSources.placement,
     }
   }
-  if (!context.ubiquityAvailable) {
+  // The ratio is null for a link the fallback cannot measure at all: an
+  // unresolved target, no anchor, or a redirect/canonical edge. Attributing
+  // those to `ubiquity` would claim a rule that measured nothing, and would
+  // falsify the "ratio present exactly when source is ubiquity" invariant. One
+  // grade covers every no-evidence case, including the sub-floor scan where the
+  // fallback never ran at all.
+  const ratio = context.ubiquityAvailable
+    ? templateLinkRatio(context.index, context.pagesFetched, edge)
+    : null
+  if (ratio == null) {
     return {
       edgeKey: edge.edgeKey,
-      isTemplate: null,
+      isTemplate: false,
       templateRatio: null,
-      source: SiteHealthLinkClassificationSources.unclassified,
+      source: SiteHealthLinkClassificationSources.unmeasured,
     }
   }
-  const ratio = templateLinkRatio(context.index, context.pagesFetched, edge)
   return {
     edgeKey: edge.edgeKey,
     isTemplate: isTemplateLinkRatio(ratio),
@@ -859,38 +952,21 @@ export function classifyTemplateLinks(input: {
   const ordered = [...input.edges].sort((left, right) => left.edgeKey.localeCompare(right.edgeKey))
   const placementAvailable = templateLinkPlacementAvailable(input.placementRulesetVersion)
   const ubiquityAvailable = templateLinkUbiquityAvailable(input.pagesFetched)
-  // A scan no rule can touch keeps an explicit `false` rather than a null. Null
-  // is reserved for "this row was never classified", and the whole-scan answer
-  // is already carried by `unavailable-too-few-pages` on the snapshot. Within an
-  // applied scan the roles reverse: a single unclassified link MUST be null, or
-  // the enabled content filter would count a link nothing is known about as
-  // editorial.
-  if (!placementAvailable && !ubiquityAvailable) {
-    return {
-      detection: SiteHealthTemplateDetections['unavailable-too-few-pages'],
-      edges: ordered.map((edge) => ({
-        edgeKey: edge.edgeKey,
-        isTemplate: false,
-        templateRatio: null,
-        source: SiteHealthLinkClassificationSources.unclassified,
-      })),
-    }
-  }
+  // With neither rule in force nothing is measured, so every link comes back
+  // `unmeasured` and the scan says `unavailable-too-few-pages`. That falls out
+  // of the per-link rule rather than needing its own branch, which is what
+  // keeps this classifier and the streaming one from drifting.
   const index = createTemplateLinkPairIndex()
   if (ubiquityAvailable) observeTemplateLinkEdges(index, ordered)
   const context = { index, pagesFetched: input.pagesFetched, placementAvailable, ubiquityAvailable }
-  const edges = ordered.map((edge) => classifyTemplateLinkEdge(edge, context))
+  const tally = createTemplateLinkDetectionTally()
+  const edges = ordered.map((edge) => {
+    const classification = classifyTemplateLinkEdge(edge, context)
+    observeTemplateLinkDetection(tally, edge, classification)
+    return classification
+  })
   return {
-    detection: templateLinkDetection({
-      placementAvailable,
-      ubiquityAvailable,
-      usedUbiquityFallback: edges.some(
-        (edge) => edge.source === SiteHealthLinkClassificationSources.ubiquity && edge.templateRatio != null,
-      ),
-      leftUnclassified: edges.some(
-        (edge) => edge.source === SiteHealthLinkClassificationSources.unclassified,
-      ),
-    }),
+    detection: templateLinkDetection({ placementAvailable, ubiquityAvailable, tally }),
     edges,
   }
 }
@@ -900,28 +976,36 @@ export function classifyTemplateLinks(input: {
  * scan's detection state.
  *
  * Derived rather than stored so there is exactly one place the answer comes
- * from, and so an older row can never disagree with the scan it belongs to. The
- * scan state is load bearing: an explicit `false` written by a scan no rule
- * could touch is not the ubiquity rule's answer, it is the absence of one.
+ * from, and so an older row can never disagree with the scan it belongs to.
+ *
+ * Both inputs are load bearing. The SCAN decides whether placement was ever
+ * recorded, so a row cannot claim a rule its scan never ran. The stored RATIO
+ * decides whether ubiquity actually measured anything, so an edge the fallback
+ * could not measure (an unresolved target, no anchor, a redirect) is reported
+ * as `unmeasured` rather than being credited to a rule that produced no number.
+ * That is what makes "ratio non-null exactly when source is `ubiquity`" true of
+ * persisted rows and not just of freshly computed ones.
  */
 export function templateLinkSource(
   detection: SiteHealthTemplateDetection,
-  edge: { isTemplate: boolean | null; placementOccurrences: SiteCrawlPlacementOccurrencesDto | null },
+  edge: {
+    isTemplate: boolean | null
+    templateRatio: number | null
+    placementOccurrences: SiteCrawlPlacementOccurrencesDto | null
+  },
 ): SiteHealthLinkClassificationSource {
-  if (edge.isTemplate == null) return SiteHealthLinkClassificationSources.unclassified
-  switch (detection) {
-    case 'unavailable-legacy-scan':
-    case 'unavailable-too-few-pages':
-      return SiteHealthLinkClassificationSources.unclassified
-    case 'applied':
-      return SiteHealthLinkClassificationSources.ubiquity
-    case 'applied-placement':
-    case 'applied-placement-with-ubiquity':
-    case 'applied-placement-partial':
-      return placementLinkDecision(edge.placementOccurrences) != null
-        ? SiteHealthLinkClassificationSources.placement
-        : SiteHealthLinkClassificationSources.ubiquity
+  // A row that was never classified at all (a scan published before any of
+  // this) has no rule to name.
+  if (edge.isTemplate == null) return SiteHealthLinkClassificationSources.unmeasured
+  if (
+    isPlacementTemplateDetection(detection)
+    && placementLinkDecision(edge.placementOccurrences) != null
+  ) {
+    return SiteHealthLinkClassificationSources.placement
   }
+  return edge.templateRatio != null
+    ? SiteHealthLinkClassificationSources.ubiquity
+    : SiteHealthLinkClassificationSources.unmeasured
 }
 
 export const siteCrawlPageSchema = z.object({

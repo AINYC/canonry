@@ -2936,7 +2936,7 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_technical_aeo_internal_links',
     title: 'List Technical AEO internal links',
-    description: 'Read a bounded, cursor-paged list of persisted internal crawl edges. Filter by source URL, target URL, followability, or link kind. Nav, header, and footer links are marked isTemplate; templateSource says which rule decided each one (placement, ubiquity, or unclassified) and templateDetection reports the same for the scan, so an empty content-only list is not evidence of no content links and two scans classified by different rules are never compared as if they were the same measurement. Use the neighbors tool for one page rather than loading a graph.',
+    description: 'Read a bounded, cursor-paged list of persisted internal crawl edges. Filter by source URL, target URL, followability, or link kind. Nav, header, and footer links are marked isTemplate; templateSource says which rule decided each one (placement, ubiquity, or unmeasured when neither had evidence) and templateDetection reports the same for the scan, so an empty content-only list is not evidence of no content links and two scans classified by different rules are never compared as if they were the same measurement. Use the neighbors tool for one page rather than loading a graph.',
     access: 'read',
     tier: 'monitoring',
     inputSchema: technicalAeoInternalLinksInputSchema,

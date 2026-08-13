@@ -947,10 +947,17 @@ export const siteCrawlEdges = sqliteTable('site_crawl_edges', {
    * declares no landmark that answers the question, `template_ratio` below is
    * the fallback.
    *
-   * NULL means this row was never classified, which reads report through
-   * `templateSource` and the scan's `template_detection`. It never means "not a
-   * template link": the no-placement, too-few-pages guard writes an explicit
-   * `false` and records its reason on the snapshot instead.
+   * Classification writes a STRICT BOOLEAN and never a NULL. A link no rule
+   * could measure is a real `false` whose `templateSource` reads `unmeasured`,
+   * because "not shown to be chrome" is what a content link means here. A third
+   * stored state would be invisible to every reader that treats this as a
+   * boolean (the layout input, the graph sample, the totals, the map legend,
+   * the inspector tiles) while only the two SQL link filters honoured it, and
+   * one definition of a content link is the whole point of the column.
+   *
+   * NULL therefore means exactly one thing: this row predates classification
+   * entirely, which reads report as `unavailable-legacy-scan`. It never means
+   * "not a template link".
    */
   isTemplate: integer('is_template', { mode: 'boolean' }),
   /**

@@ -295,10 +295,13 @@ describe('site crawl template links, by DOM placement', () => {
     expect(silent?.templateRatio).toBe(1)
   })
 
-  it('leaves a link unclassified rather than guessing on a small scan', () => {
-    // Below the page floor the fallback is unavailable. A link the page said
-    // nothing about therefore has no answer at all, and NULL is what keeps it
-    // out of both the content and the template bucket.
+  it('never writes a NULL is_template, so every reader keeps one definition of a content link', () => {
+    // Below the page floor the fallback is unavailable, so a link the page said
+    // nothing about has no evidence behind it. It is still written as a real
+    // `false`. A NULL here would be invisible to the layout input, the graph
+    // sample, the totals, the map legend, and the inspector tiles, all of which
+    // read `is_template` as a boolean, and it would be excluded by only the two
+    // SQL link filters. That disagreement is the defect this shape prevents.
     const db = freshDb()
     const scope = seedCrawl(db, 4)
     stampPlacement(db, scope.attemptId, { 'nav:page-01->about': { navigation: 0, content: 0, unknown: 3 } })
@@ -307,12 +310,37 @@ describe('site crawl template links, by DOM placement', () => {
     expect(result.detection).toBe('applied-placement-partial')
 
     const rows = edgeRows(db, scope.attemptId)
-    expect(rows.find((row) => row.edgeKey === 'nav:page-01->about')?.isTemplate).toBeNull()
-    expect(rows.filter((row) => row.isTemplate === null)).toHaveLength(1)
+    expect(rows.every((row) => typeof row.isTemplate === 'boolean')).toBe(true)
+    expect(rows.find((row) => row.edgeKey === 'nav:page-01->about')?.isTemplate).toBe(false)
     // Everything the DOM did answer for is still classified normally, which is
     // the whole point: placement has no page floor.
     expect(rows.filter((row) => row.isTemplate === true).length).toBeGreaterThan(0)
     expect(rows.filter((row) => row.isTemplate === false).length).toBeGreaterThan(0)
+    // The template + content split accounts for every stored link, exactly.
+    expect(rows.filter((row) => row.isTemplate).length + rows.filter((row) => !row.isTemplate).length)
+      .toBe(rows.length)
+  })
+
+  it('a redirect edge does not make a well-marked-up small site report missing landmarks', () => {
+    const db = freshDb()
+    const scope = seedCrawl(db, 8)
+    stampPlacement(db, scope.attemptId)
+    const now = new Date().toISOString()
+    db.insert(siteCrawlEdges).values({
+      id: crypto.randomUUID(), projectId: scope.projectId, runId: scope.runId, attemptId: scope.attemptId,
+      edgeKey: 'redirect:page-00', sourceNodeKey: 'page-00', sourceUrl: 'https://example.com/page-00',
+      targetNodeKey: null, targetUrl: 'https://example.com/moved',
+      relation: 'redirect', internal: true, followable: true,
+      occurrences: 1, followableOccurrences: 1, nofollowOccurrences: 0, anchors: [],
+      placementNavigationOccurrences: 0, placementContentOccurrences: 0, placementUnknownOccurrences: 0,
+      createdAt: now, updatedAt: now,
+    }).run()
+
+    // Every ANCHOR link on this site is answered by its landmarks. The redirect
+    // carries no placement by construction and must not be read as evidence
+    // that a page is missing markup.
+    const result = classifySiteCrawlTemplateLinks(db, scope, 8, '1.0.0')
+    expect(result.detection).toBe('applied-placement')
   })
 
   it('is idempotent under placement, including the unclassified rows', () => {

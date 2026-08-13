@@ -341,11 +341,11 @@ function terminationCopy(termination: string | null): string {
  * because the site changed or because the scan could finally see where each
  * link sits.
  */
-const TEMPLATE_DETECTION_COPY: Record<SiteHealthTemplateDetection, string> = {
+export const TEMPLATE_DETECTION_COPY: Record<SiteHealthTemplateDetection, string> = {
   'applied': 'This scan told nav and footer links apart by how often the same link repeats across pages. It cannot spot a link written into the page text when its wording matches the menu. Run a new scan to read the page layout instead.',
   'applied-placement': 'This scan read where each link sits in the page, so links in the page text are separated from the menu, header, and footer even when they use the same wording.',
   'applied-placement-with-ubiquity': 'This scan read where each link sits in the page. Some pages mark out no menu or main area, so those links fall back to how often the link repeats across pages, which can miss a link written into the page text.',
-  'applied-placement-partial': `This scan read where each link sits in the page. Some pages mark out no menu or main area, and this scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages, so those links are left out of both counts rather than guessed at.`,
+  'applied-placement-partial': `This scan read where each link sits in the page. Some pages mark out no menu or main area, and this scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages, so nothing could tell those links apart. They are counted as content links, which is what a link no rule marked as menu, header, or footer means here.`,
   'unavailable-too-few-pages': `This scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages and did not read where each link sits in the page. On a site that small every link is on most pages, so nav and footer links cannot be told apart from the rest.`,
   'unavailable-legacy-scan': 'This scan ran before nav and footer links were separated. Run a new scan to split them out.',
 }

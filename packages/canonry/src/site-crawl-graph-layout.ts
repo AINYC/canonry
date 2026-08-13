@@ -885,7 +885,10 @@ export async function prepareSiteCrawlGraphLayout(
     // slots as content links; at that cap `sampled` already says the map is
     // truncated, and `totalTemplateEdges` still reports the real split.
     // A NULL `is_template` cannot occur here: publish classifies every link in
-    // the attempt before layout runs.
+    // the attempt before layout runs, and it writes a strict boolean. A link no
+    // rule could measure is a real `false` carrying an `unmeasured` source, not
+    // a NULL, so the `Boolean(...)` coercion below cannot silently turn "we do
+    // not know" into "content".
     const edgeRows = nodes.length === 0 ? [] : db.all(sql`
       WITH selected(node_key) AS (SELECT value FROM json_each(${selectedKeys}))
       SELECT

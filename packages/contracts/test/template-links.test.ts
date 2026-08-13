@@ -8,9 +8,12 @@ import {
   normalizeTemplateAnchorText,
   observeTemplateLinkEdges,
   classifyTemplateLinkEdge,
+  isAnchorLinkRelation,
   isPlacementTemplateDetection,
   isTemplateDetectionApplied,
   placementLinkDecision,
+  createTemplateLinkDetectionTally,
+  observeTemplateLinkDetection,
   templateLinkDetection,
   templateLinkPlacementAvailable,
   templateLinkRatio,
@@ -49,6 +52,7 @@ function bimodalCrawl(pageCount: number): {
         sourceNodeKey: source,
         targetNodeKey: target,
         anchors: [target === 'services' ? 'Our services' : target],
+        relation: 'anchor'
       })
     }
     for (const target of FOOTER_TARGETS) {
@@ -57,6 +61,7 @@ function bimodalCrawl(pageCount: number): {
         sourceNodeKey: source,
         targetNodeKey: target,
         anchors: [target],
+        relation: 'anchor'
       })
     }
   }
@@ -67,6 +72,7 @@ function bimodalCrawl(pageCount: number): {
       sourceNodeKey: source,
       targetNodeKey: `guide-${index}`,
       anchors: [`read the ${index} guide`],
+      relation: 'anchor'
     })
   }
   return { pagesFetched: pageCount, placementRulesetVersion: null, edges }
@@ -104,6 +110,7 @@ describe('template link detection (ubiquity fallback)', () => {
         sourceNodeKey: `page-${index}`,
         targetNodeKey: 'services',
         anchors: ['services'],
+        relation: 'anchor'
       }))
 
     expect(TEMPLATE_LINK_RATIO_THRESHOLD).toBe(0.7)
@@ -133,7 +140,7 @@ describe('template link detection (ubiquity fallback)', () => {
     // thing that changed the answer.
     expect(classifyTemplateLinks(bimodalCrawl(TEMPLATE_LINK_MIN_FETCHED_PAGES)).detection).toBe('applied')
 
-    expect(result.edges.every((edge) => edge.source === 'unclassified')).toBe(true)
+    expect(result.edges.every((edge) => edge.source === 'unmeasured')).toBe(true)
 
     expect(templateLinkUbiquityAvailable(0)).toBe(false)
     expect(templateLinkUbiquityAvailable(Number.NaN)).toBe(false)
@@ -186,6 +193,7 @@ describe('template link detection (ubiquity fallback)', () => {
       targetNodeKey: 'home',
       // The same nav item, formatted differently by the template engine.
       anchors: [index % 2 === 0 ? 'Our   Services' : ' our services '],
+      relation: 'anchor'
     }))
     const result = classifyTemplateLinks({ pagesFetched: 20, placementRulesetVersion: null, edges })
     expect(result.edges.every((edge) => edge.isTemplate)).toBe(true)
@@ -207,12 +215,14 @@ describe('template link detection (ubiquity fallback)', () => {
         sourceNodeKey: `page-${index}`,
         targetNodeKey: 'about',
         anchors: ['About'],
+        relation: 'anchor'
       })),
       {
         edgeKey: 'mixed',
         sourceNodeKey: 'page-19',
         targetNodeKey: 'about',
         anchors: ['the story behind our shop', 'About'],
+        relation: 'anchor'
       },
     ]
     const result = classifyTemplateLinks({ pagesFetched: 20, placementRulesetVersion: null, edges })
@@ -241,6 +251,7 @@ describe('template link detection (ubiquity fallback)', () => {
       sourceNodeKey: `page-${index}`,
       targetNodeKey: 'home',
       anchors: ['', 'Home'],
+      relation: 'anchor'
     }))
     const result = classifyTemplateLinks({ pagesFetched: 20, placementRulesetVersion: null, edges })
     expect(result.edges.every((edge) => edge.isTemplate)).toBe(true)
@@ -258,10 +269,11 @@ describe('template link detection (ubiquity fallback)', () => {
         sourceNodeKey: `page-${index}`,
         targetNodeKey: 'pricing',
         anchors: ['Pricing'],
+        relation: 'anchor'
       })),
       // Two pages that ALSO link editorially, each in their own words.
-      { edgeKey: 'body:a', sourceNodeKey: 'page-18', targetNodeKey: 'pricing', anchors: ['Pricing', 'what it costs'] },
-      { edgeKey: 'body:b', sourceNodeKey: 'page-19', targetNodeKey: 'pricing', anchors: ['Pricing', 'see our plans'] },
+      { edgeKey: 'body:a', sourceNodeKey: 'page-18', targetNodeKey: 'pricing', anchors: ['Pricing', 'what it costs'], relation: 'anchor' },
+      { edgeKey: 'body:b', sourceNodeKey: 'page-19', targetNodeKey: 'pricing', anchors: ['Pricing', 'see our plans'], relation: 'anchor' },
     ]
     const result = classifyTemplateLinks({ pagesFetched: 20, placementRulesetVersion: null, edges })
 
@@ -279,14 +291,20 @@ describe('template link detection (ubiquity fallback)', () => {
       placementRulesetVersion: null,
       edges: [
         // The crawl saw the link but never resolved the target to a page.
-        { edgeKey: 'unresolved', sourceNodeKey: 'page-0', targetNodeKey: null, anchors: ['Home'] },
+        { edgeKey: 'unresolved', sourceNodeKey: 'page-0', targetNodeKey: null, anchors: ['Home'], relation: 'anchor' },
         // An observation with no anchor at all.
-        { edgeKey: 'anchorless', sourceNodeKey: 'page-0', targetNodeKey: 'home', anchors: [] },
+        { edgeKey: 'anchorless', sourceNodeKey: 'page-0', targetNodeKey: 'home', anchors: [], relation: 'anchor' },
       ],
     })
+    // Neither is credited to ubiquity. The rule produced no number for them,
+    // and claiming it did would falsify the DTO's own invariant that a ratio is
+    // present exactly when the source is `ubiquity`.
     for (const edgeKey of ['unresolved', 'anchorless']) {
-      expect(classificationOf(result, edgeKey)).toEqual({ edgeKey, isTemplate: false, templateRatio: null, source: 'ubiquity' })
+      expect(classificationOf(result, edgeKey)).toEqual({ edgeKey, isTemplate: false, templateRatio: null, source: 'unmeasured' })
     }
+    // Still content links, which is what "not shown to be chrome" has always
+    // meant here. There is no third bucket for them to fall into.
+    expect(result.edges.every((edge) => edge.isTemplate === false)).toBe(true)
   })
 
   it('never reports a share above one when a source is outside the fetched count', () => {
@@ -297,6 +315,7 @@ describe('template link detection (ubiquity fallback)', () => {
       sourceNodeKey: `node-${index}`,
       targetNodeKey: 'home',
       anchors: ['Home'],
+      relation: 'anchor'
     }))
     const result = classifyTemplateLinks({ pagesFetched: 20, placementRulesetVersion: null, edges })
     expect(result.edges.every((edge) => edge.templateRatio === 1)).toBe(true)
@@ -332,6 +351,7 @@ describe('link placement classification', () => {
       sourceNodeKey: `page-${index}`,
       targetNodeKey: 'pricing',
       anchors: ['Pricing'],
+      relation: 'anchor',
       placementOccurrences: index === 7 ? placement(1, 1, 0) : placement(1, 0, 0),
     }))
     const result = classifyTemplateLinks({ pagesFetched: 20, placementRulesetVersion: RULESET, edges })
@@ -357,7 +377,7 @@ describe('link placement classification', () => {
       pagesFetched: 20,
       placementRulesetVersion: RULESET,
       edges: [{
-        edgeKey: 'nav', sourceNodeKey: 'page-0', targetNodeKey: 'about', anchors: ['About'],
+        edgeKey: 'nav', sourceNodeKey: 'page-0', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor',
         placementOccurrences: placement(3, 0, 0),
       }],
     })
@@ -377,10 +397,11 @@ describe('link placement classification', () => {
         sourceNodeKey: `page-${index}`,
         targetNodeKey: 'about',
         anchors: ['About'],
+        relation: 'anchor',
         placementOccurrences: placement(1, 0, 0),
       })),
       {
-        edgeKey: 'silent', sourceNodeKey: 'page-19', targetNodeKey: 'about', anchors: ['About'],
+        edgeKey: 'silent', sourceNodeKey: 'page-19', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor',
         placementOccurrences: placement(0, 0, 1),
       },
     ]
@@ -405,7 +426,7 @@ describe('link placement classification', () => {
       pagesFetched: 3,
       placementRulesetVersion: RULESET,
       edges: [{
-        edgeKey: 'mixed', sourceNodeKey: 'page-0', targetNodeKey: 'about', anchors: ['About'],
+        edgeKey: 'mixed', sourceNodeKey: 'page-0', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor',
         placementOccurrences: placement(2, 0, 5),
       }],
     })
@@ -421,8 +442,8 @@ describe('link placement classification', () => {
     // nothing to say about placement, so a four-page scan classifies normally
     // where the older rule reported `unavailable-too-few-pages`.
     const edges: TemplateLinkEdgeInput[] = [
-      { edgeKey: 'nav', sourceNodeKey: 'p0', targetNodeKey: 'about', anchors: ['About'], placementOccurrences: placement(1, 0, 0) },
-      { edgeKey: 'body', sourceNodeKey: 'p0', targetNodeKey: 'guide', anchors: ['Guide'], placementOccurrences: placement(0, 1, 0) },
+      { edgeKey: 'nav', sourceNodeKey: 'p0', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor', placementOccurrences: placement(1, 0, 0) },
+      { edgeKey: 'body', sourceNodeKey: 'p0', targetNodeKey: 'guide', anchors: ['Guide'], relation: 'anchor', placementOccurrences: placement(0, 1, 0) },
     ]
     const withPlacement = classifyTemplateLinks({ pagesFetched: 4, placementRulesetVersion: RULESET, edges })
     expect(withPlacement.detection).toBe('applied-placement')
@@ -433,23 +454,28 @@ describe('link placement classification', () => {
     expect(withoutPlacement.edges.every((edge) => edge.isTemplate === false)).toBe(true)
   })
 
-  it('leaves a link unclassified rather than guessing when neither rule can answer', () => {
+  it('grades a link neither rule could measure, and still puts it in one bucket', () => {
     // Small scan, so no ubiquity fallback, and one page declares no landmark.
-    // A null `isTemplate` puts that link in NEITHER bucket: counting it as
-    // content would be the exact lie this change exists to stop.
+    // The link is a CONTENT link, because "not shown to be chrome" is what that
+    // has always meant here; `unmeasured` is what says no rule proved it. It is
+    // deliberately not a third bucket: a third bucket only two of six readers
+    // understood is what made the counts disagree in the first place.
     const result = classifyTemplateLinks({
       pagesFetched: 4,
       placementRulesetVersion: RULESET,
       edges: [
-        { edgeKey: 'nav', sourceNodeKey: 'p0', targetNodeKey: 'about', anchors: ['About'], placementOccurrences: placement(1, 0, 0) },
-        { edgeKey: 'silent', sourceNodeKey: 'p1', targetNodeKey: 'about', anchors: ['About'], placementOccurrences: placement(0, 0, 2) },
+        { edgeKey: 'nav', sourceNodeKey: 'p0', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor', placementOccurrences: placement(1, 0, 0) },
+        { edgeKey: 'silent', sourceNodeKey: 'p1', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor', placementOccurrences: placement(0, 0, 2) },
       ],
     })
     expect(result.detection).toBe('applied-placement-partial')
     expect(classificationOf(result, 'silent')).toEqual({
-      edgeKey: 'silent', isTemplate: null, templateRatio: null, source: 'unclassified',
+      edgeKey: 'silent', isTemplate: false, templateRatio: null, source: 'unmeasured',
     })
     expect(classificationOf(result, 'nav')).toMatchObject({ isTemplate: true, source: 'placement' })
+    // Every link is in exactly one bucket. This is the invariant every reader
+    // downstream assumes, and the one the third state broke.
+    expect(result.edges.every((edge) => typeof edge.isTemplate === 'boolean')).toBe(true)
   })
 
   it('a legacy scan keeps its ubiquity answer and never claims placement', () => {
@@ -470,13 +496,15 @@ describe('link placement classification', () => {
   })
 
   it('reports every rule mix as its own state, and mixes nothing silently', () => {
+    const tally = (usedUbiquityFallback: boolean, leftUnmeasuredAnchor: boolean) =>
+      ({ usedUbiquityFallback, leftUnmeasuredAnchor })
     const cases: Array<[Parameters<typeof templateLinkDetection>[0], SiteHealthTemplateDetection]> = [
-      [{ placementAvailable: false, ubiquityAvailable: true, usedUbiquityFallback: true, leftUnclassified: false }, 'applied'],
-      [{ placementAvailable: false, ubiquityAvailable: false, usedUbiquityFallback: false, leftUnclassified: false }, 'unavailable-too-few-pages'],
-      [{ placementAvailable: true, ubiquityAvailable: true, usedUbiquityFallback: false, leftUnclassified: false }, 'applied-placement'],
-      [{ placementAvailable: true, ubiquityAvailable: true, usedUbiquityFallback: true, leftUnclassified: false }, 'applied-placement-with-ubiquity'],
-      [{ placementAvailable: true, ubiquityAvailable: false, usedUbiquityFallback: false, leftUnclassified: true }, 'applied-placement-partial'],
-      [{ placementAvailable: true, ubiquityAvailable: false, usedUbiquityFallback: false, leftUnclassified: false }, 'applied-placement'],
+      [{ placementAvailable: false, ubiquityAvailable: true, tally: tally(true, false) }, 'applied'],
+      [{ placementAvailable: false, ubiquityAvailable: false, tally: tally(false, true) }, 'unavailable-too-few-pages'],
+      [{ placementAvailable: true, ubiquityAvailable: true, tally: tally(false, false) }, 'applied-placement'],
+      [{ placementAvailable: true, ubiquityAvailable: true, tally: tally(true, false) }, 'applied-placement-with-ubiquity'],
+      [{ placementAvailable: true, ubiquityAvailable: false, tally: tally(false, true) }, 'applied-placement-partial'],
+      [{ placementAvailable: true, ubiquityAvailable: false, tally: tally(false, false) }, 'applied-placement'],
     ]
     for (const [input, expected] of cases) expect(templateLinkDetection(input)).toBe(expected)
 
@@ -500,8 +528,8 @@ describe('link placement classification', () => {
       pagesFetched: 20,
       placementRulesetVersion: RULESET,
       edges: [
-        { edgeKey: 'nav', sourceNodeKey: 'p0', targetNodeKey: 'about', anchors: ['About'], placementOccurrences: placement(1, 0, 0) },
-        { edgeKey: 'redirect', sourceNodeKey: 'p0', targetNodeKey: null, anchors: [], placementOccurrences: placement(0, 0, 0) },
+        { edgeKey: 'nav', sourceNodeKey: 'p0', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor', placementOccurrences: placement(1, 0, 0) },
+        { edgeKey: 'redirect', sourceNodeKey: 'p0', targetNodeKey: null, anchors: [], relation: 'redirect', placementOccurrences: placement(0, 0, 0) },
       ],
     })
     expect(result.detection).toBe('applied-placement')
@@ -516,17 +544,17 @@ describe('link placement classification', () => {
       placementRulesetVersion: RULESET,
       edges: [
         ...Array.from({ length: 19 }, (_, index) => ({
-          edgeKey: `nav:${index}`, sourceNodeKey: `p${index}`, targetNodeKey: 'about', anchors: ['About'],
+          edgeKey: `nav:${index}`, sourceNodeKey: `p${index}`, targetNodeKey: 'about', anchors: ['About'], relation: 'anchor',
           placementOccurrences: placement(1, 0, 0),
         })),
         {
-          edgeKey: 'silent', sourceNodeKey: 'p19', targetNodeKey: 'about', anchors: ['About'],
+          edgeKey: 'silent', sourceNodeKey: 'p19', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor',
           placementOccurrences: placement(0, 0, 1),
         },
       ],
     })
     for (const edge of result.edges) {
-      expect(edge.templateRatio != null).toBe(edge.source === 'ubiquity' && edge.isTemplate != null)
+      expect(edge.templateRatio != null).toBe(edge.source === 'ubiquity')
     }
   })
 
@@ -536,6 +564,7 @@ describe('link placement classification', () => {
       sourceNodeKey: `page-${index}`,
       targetNodeKey: 'pricing',
       anchors: ['Pricing'],
+      relation: 'anchor',
       placementOccurrences: index % 3 === 0 ? placement(1, 1, 0) : index % 3 === 1 ? placement(1, 0, 0) : placement(0, 0, 1),
     }))
     const index = createTemplateLinkPairIndex()
@@ -552,23 +581,119 @@ describe('link placement classification', () => {
     }
   })
 
-  it('attributes a persisted row to the rule its own scan used', () => {
-    // Read-time attribution is what lets a consumer compare two scans. It has
-    // to key off the scan, because an explicit `false` written by a scan no
-    // rule could touch is the absence of an answer, not the ubiquity answer.
-    const navRow = { isTemplate: true, placementOccurrences: placement(1, 0, 0) }
-    const silentRow = { isTemplate: true, placementOccurrences: placement(0, 0, 1) }
-    const legacyRow = { isTemplate: false, placementOccurrences: null }
+  it('attributes a persisted row to the rule its own scan used, and to none when none measured', () => {
+    // Read-time attribution is what lets a consumer compare two scans. It keys
+    // off BOTH the scan (which rule could have run) and the stored ratio
+    // (whether the fallback actually measured anything).
+    const navRow = { isTemplate: true, templateRatio: null, placementOccurrences: placement(1, 0, 0) }
+    const silentRow = { isTemplate: true, templateRatio: 1, placementOccurrences: placement(0, 0, 1) }
+    const ubiquityRow = { isTemplate: false, templateRatio: 0.1, placementOccurrences: null }
 
     expect(templateLinkSource('applied-placement', navRow)).toBe('placement')
     expect(templateLinkSource('applied-placement-with-ubiquity', silentRow)).toBe('ubiquity')
     expect(templateLinkSource('applied-placement-partial', navRow)).toBe('placement')
-    expect(templateLinkSource('applied', legacyRow)).toBe('ubiquity')
-    expect(templateLinkSource('unavailable-too-few-pages', legacyRow)).toBe('unclassified')
-    expect(templateLinkSource('unavailable-legacy-scan', legacyRow)).toBe('unclassified')
-    // A null decision is unclassified whatever the scan says.
-    expect(templateLinkSource('applied-placement-partial', { isTemplate: null, placementOccurrences: placement(0, 0, 2) }))
-      .toBe('unclassified')
-    expect(templateLinkSource('applied', { isTemplate: null, placementOccurrences: null })).toBe('unclassified')
+    expect(templateLinkSource('applied', ubiquityRow)).toBe('ubiquity')
+
+    // A scan that recorded no placement can never report `placement`, even if a
+    // row somehow carries counts: the scan is the authority on which rule ran.
+    expect(templateLinkSource('applied', { ...navRow, templateRatio: 0.9 })).toBe('ubiquity')
+
+    // No ratio means the fallback measured nothing, so it is never credited.
+    // This is the class the old attribution lied about: redirects, canonicals,
+    // and links whose target was never fetched.
+    const unmeasurableRow = { isTemplate: false, templateRatio: null, placementOccurrences: null }
+    expect(templateLinkSource('applied', unmeasurableRow)).toBe('unmeasured')
+    expect(templateLinkSource('applied-placement', unmeasurableRow)).toBe('unmeasured')
+    expect(templateLinkSource('unavailable-too-few-pages', unmeasurableRow)).toBe('unmeasured')
+    expect(templateLinkSource('unavailable-legacy-scan', { ...unmeasurableRow, isTemplate: null })).toBe('unmeasured')
+  })
+
+  it('holds the ratio invariant over EVERY edge class, unmeasurable ones included', () => {
+    // The invariant test used to pass only because its fixture had no
+    // unmeasurable edge. This one has all four classes.
+    const result = classifyTemplateLinks({
+      pagesFetched: 20,
+      placementRulesetVersion: RULESET,
+      edges: [
+        ...Array.from({ length: 18 }, (_, index) => ({
+          edgeKey: `nav:${index}`, sourceNodeKey: `p${index}`, targetNodeKey: 'about',
+          anchors: ['About'], relation: 'anchor', placementOccurrences: placement(1, 0, 0),
+        })),
+        // DOM-silent, measurable by the fallback.
+        { edgeKey: 'silent', sourceNodeKey: 'p18', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor', placementOccurrences: placement(0, 0, 1) },
+        // DOM-silent and unmeasurable: the target was never resolved.
+        { edgeKey: 'unresolved', sourceNodeKey: 'p19', targetNodeKey: null, anchors: ['About'], relation: 'anchor', placementOccurrences: placement(0, 0, 1) },
+        // Not a page link at all.
+        { edgeKey: 'redirect', sourceNodeKey: 'p19', targetNodeKey: null, anchors: [], relation: 'redirect', placementOccurrences: placement(0, 0, 0) },
+      ],
+    })
+    expect(new Set(result.edges.map((edge) => edge.source)))
+      .toEqual(new Set(['placement', 'ubiquity', 'unmeasured']))
+    for (const edge of result.edges) {
+      expect(edge.templateRatio != null).toBe(edge.source === 'ubiquity')
+      expect(typeof edge.isTemplate).toBe('boolean')
+    }
+    expect(classificationOf(result, 'unresolved').source).toBe('unmeasured')
+    expect(classificationOf(result, 'redirect').source).toBe('unmeasured')
+  })
+
+  it('a redirect never makes a well-marked-up site report missing landmarks', () => {
+    // The spurious trigger. A redirect or canonical edge carries no placement
+    // BY CONSTRUCTION, so on any sub-floor scan it used to make the whole scan
+    // report `applied-placement-partial` and tell the customer "Some pages mark
+    // out no menu or main area" about a site whose markup is perfect.
+    const result = classifyTemplateLinks({
+      pagesFetched: 8,
+      placementRulesetVersion: RULESET,
+      edges: [
+        { edgeKey: 'nav', sourceNodeKey: 'p0', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor', placementOccurrences: placement(1, 0, 0) },
+        { edgeKey: 'body', sourceNodeKey: 'p0', targetNodeKey: 'guide', anchors: ['Guide'], relation: 'anchor', placementOccurrences: placement(0, 1, 0) },
+        { edgeKey: 'redirect', sourceNodeKey: 'p0', targetNodeKey: null, anchors: [], relation: 'redirect', placementOccurrences: placement(0, 0, 0) },
+        { edgeKey: 'canonical', sourceNodeKey: 'p1', targetNodeKey: null, anchors: [], relation: 'canonical', placementOccurrences: placement(0, 0, 0) },
+      ],
+    })
+    expect(result.detection).toBe('applied-placement')
+    expect(isAnchorLinkRelation('anchor')).toBe(true)
+    for (const relation of ['redirect', 'canonical', 'link', 'something-new']) {
+      expect(isAnchorLinkRelation(relation)).toBe(false)
+    }
+
+    // One real anchor link the DOM was silent about IS enough to flip it.
+    const withSilentAnchor = classifyTemplateLinks({
+      pagesFetched: 8,
+      placementRulesetVersion: RULESET,
+      edges: [
+        { edgeKey: 'nav', sourceNodeKey: 'p0', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor', placementOccurrences: placement(1, 0, 0) },
+        { edgeKey: 'silent', sourceNodeKey: 'p1', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor', placementOccurrences: placement(0, 0, 1) },
+      ],
+    })
+    expect(withSilentAnchor.detection).toBe('applied-placement-partial')
+  })
+
+  it('both writers share ONE aggregation, so they cannot reach different states', () => {
+    // The streaming publish pass and the one-shot classifier used to count for
+    // themselves. They now fold into the same tally, and this asserts the
+    // streamed fold reproduces the one-shot answer exactly.
+    const edges: TemplateLinkEdgeInput[] = [
+      { edgeKey: 'nav', sourceNodeKey: 'p0', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor', placementOccurrences: placement(1, 0, 0) },
+      { edgeKey: 'silent', sourceNodeKey: 'p1', targetNodeKey: 'about', anchors: ['About'], relation: 'anchor', placementOccurrences: placement(0, 0, 1) },
+      { edgeKey: 'redirect', sourceNodeKey: 'p1', targetNodeKey: null, anchors: [], relation: 'redirect', placementOccurrences: placement(0, 0, 0) },
+    ]
+    for (const pagesFetched of [4, 20]) {
+      const oneShot = classifyTemplateLinks({ pagesFetched, placementRulesetVersion: RULESET, edges })
+      const index = createTemplateLinkPairIndex()
+      const ubiquityAvailable = templateLinkUbiquityAvailable(pagesFetched)
+      if (ubiquityAvailable) observeTemplateLinkEdges(index, edges)
+      const tally = createTemplateLinkDetectionTally()
+      for (const edge of edges) {
+        observeTemplateLinkDetection(
+          tally,
+          edge,
+          classifyTemplateLinkEdge(edge, { index, pagesFetched, placementAvailable: true, ubiquityAvailable }),
+        )
+      }
+      expect(templateLinkDetection({ placementAvailable: true, ubiquityAvailable, tally }))
+        .toBe(oneShot.detection)
+    }
   })
 })

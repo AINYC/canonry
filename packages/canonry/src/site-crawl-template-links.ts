@@ -3,7 +3,9 @@ import type { DatabaseClient } from '@ainyc/canonry-db'
 import { siteCrawlEdges } from '@ainyc/canonry-db'
 import {
   classifyTemplateLinkEdge,
+  createTemplateLinkDetectionTally,
   createTemplateLinkPairIndex,
+  observeTemplateLinkDetection,
   observeTemplateLinkEdges,
   SiteHealthLinkClassificationSources,
   templateLinkDetection,
@@ -72,6 +74,7 @@ function* streamAttemptEdges(
       sourceNodeKey: siteCrawlEdges.sourceNodeKey,
       targetNodeKey: siteCrawlEdges.targetNodeKey,
       anchors: siteCrawlEdges.anchors,
+      relation: siteCrawlEdges.relation,
       placementNavigationOccurrences: siteCrawlEdges.placementNavigationOccurrences,
       placementContentOccurrences: siteCrawlEdges.placementContentOccurrences,
       placementUnknownOccurrences: siteCrawlEdges.placementUnknownOccurrences,
@@ -91,6 +94,7 @@ function* streamAttemptEdges(
       sourceNodeKey: row.sourceNodeKey,
       targetNodeKey: row.targetNodeKey,
       anchors: row.anchors,
+      relation: row.relation,
       placementOccurrences: placementOccurrencesOf(row),
     }))
     after = rows[rows.length - 1]!.edgeKey
@@ -128,10 +132,15 @@ function writeGroupKey(isTemplate: boolean, templateRatio: number | null): strin
  * cannot see an editorial link whose anchor text matches the nav's.
  *
  * With neither rule available (no placement, and fewer pages than the ubiquity
- * floor) this marks NOTHING and returns `unavailable-too-few-pages`, which the
- * snapshot records: on a five-page site every link looks ubiquitous, and an
- * empty template-link list would read as "this site has no nav" rather than
- * "we could not tell".
+ * floor) nothing is measured and this returns `unavailable-too-few-pages`,
+ * which the snapshot records: on a five-page site every link looks ubiquitous,
+ * and an empty template-link list would read as "this site has no nav" rather
+ * than "we could not tell".
+ *
+ * A link no rule could measure is written as a real `false` and reported
+ * `unmeasured`. It is deliberately NOT a third stored state: `is_template` has
+ * exactly two values plus the historical NULL for scans that were never
+ * classified, so every downstream reader keeps one definition of a content link.
  *
  * Idempotent: every link in the attempt is reset before the classified writes,
  * so a retried publish produces the same rows.
@@ -150,25 +159,15 @@ export function classifySiteCrawlTemplateLinks(
   const placementAvailable = templateLinkPlacementAvailable(placementRulesetVersion)
   const ubiquityAvailable = templateLinkUbiquityAvailable(pagesFetched)
 
-  // What a link keeps when no rule writes over it. With a fallback in force
-  // every link gets an answer, so the reset is "classified, not chrome" and a
-  // stray NULL would be misread as a scan that was never classified. Without
-  // one, a link the DOM stayed silent about genuinely has no answer, so it must
-  // keep NULL and stay out of BOTH the content and the template bucket.
-  const unwritten = placementAvailable && !ubiquityAvailable ? null : false
-  db.update(siteCrawlEdges).set({ isTemplate: unwritten, templateRatio: null }).where(scopeFilter).run()
-  if (!placementAvailable && !ubiquityAvailable) {
-    return {
-      detection: templateLinkDetection({
-        placementAvailable,
-        ubiquityAvailable,
-        usedUbiquityFallback: false,
-        leftUnclassified: false,
-      }),
-      templateEdgeCount: 0,
-      placementEdgeCount: 0,
-    }
-  }
+  // Every link in the attempt is reset to "classified, not chrome" and then
+  // written over by whatever rule decides it. NOTHING here ever writes NULL:
+  // NULL means "this row was never classified", and it is left for scans
+  // published before classification existed. A link no rule could measure is a
+  // real `false` with an `unmeasured` source, so `is_template` stays a strict
+  // boolean and every reader downstream (the layout input, the graph sample,
+  // both link filters, the totals, the map legend, the inspector tiles) keeps
+  // the single definition of a content link it already assumed.
+  db.update(siteCrawlEdges).set({ isTemplate: false, templateRatio: null }).where(scopeFilter).run()
 
   const index = createTemplateLinkPairIndex()
   if (ubiquityAvailable) {
@@ -183,26 +182,17 @@ export function classifySiteCrawlTemplateLinks(
   const edgeKeysByValue = new Map<string, { isTemplate: boolean; templateRatio: number | null; edgeKeys: string[] }>()
   let templateEdgeCount = 0
   let placementEdgeCount = 0
-  let usedUbiquityFallback = false
-  let leftUnclassified = false
+  const tally = createTemplateLinkDetectionTally()
   for (const batch of streamAttemptEdges(db, scope)) {
     for (const edge of batch) {
       const decision = classifyTemplateLinkEdge(edge, { index, pagesFetched, placementAvailable, ubiquityAvailable })
+      // One shared accumulator with the one-shot classifier, so the two writers
+      // cannot reach different whole-scan states over the same links.
+      observeTemplateLinkDetection(tally, edge, decision)
       if (decision.source === SiteHealthLinkClassificationSources.placement) placementEdgeCount += 1
-      // Only real evidence counts as a mixed classification. A redirect or
-      // canonical edge has no anchor and no placement, so it reaches the
-      // fallback and measures nothing; counting it would put every scan in the
-      // mixed state and make the distinction worthless.
-      if (decision.source === SiteHealthLinkClassificationSources.ubiquity && decision.templateRatio != null) {
-        usedUbiquityFallback = true
-      }
-      if (decision.isTemplate == null) {
-        leftUnclassified = true
-        continue
-      }
       if (decision.isTemplate) templateEdgeCount += 1
       // Nothing to write when the decision already equals the reset value.
-      if (decision.isTemplate === unwritten && decision.templateRatio == null) continue
+      if (!decision.isTemplate && decision.templateRatio == null) continue
       const key = writeGroupKey(decision.isTemplate, decision.templateRatio)
       const group = edgeKeysByValue.get(key)
       if (group) group.edgeKeys.push(decision.edgeKey)
@@ -226,12 +216,7 @@ export function classifySiteCrawlTemplateLinks(
     }
   }
   return {
-    detection: templateLinkDetection({
-      placementAvailable,
-      ubiquityAvailable,
-      usedUbiquityFallback,
-      leftUnclassified,
-    }),
+    detection: templateLinkDetection({ placementAvailable, ubiquityAvailable, tally }),
     templateEdgeCount,
     placementEdgeCount,
   }

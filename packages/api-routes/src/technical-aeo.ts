@@ -371,7 +371,11 @@ function mapCrawlEdge(
     anchors: row.anchors,
     isTemplate: row.isTemplate,
     templateRatio: row.templateRatio,
-    templateSource: templateLinkSource(detection, { isTemplate: row.isTemplate, placementOccurrences }),
+    templateSource: templateLinkSource(detection, {
+      isTemplate: row.isTemplate,
+      templateRatio: row.templateRatio,
+      placementOccurrences,
+    }),
     placementOccurrences,
   }
 }
@@ -1230,10 +1234,13 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
         ? 'focus' as const
         : directRelations.get(row.nodeKey) ?? 'transitive' as const,
     })).sort((a, b) => a.distance - b.distance || a.nodeKey.localeCompare(b.nodeKey))
+    // Parsed once for the scan, not once per edge: it is a property of the
+    // snapshot, and every other call site already reads it that way.
+    const subgraphDetection = templateDetectionOf(snapshot.templateDetection)
     const edges = [...edgeRows.values()]
       .filter((edge) => edge.targetNodeKey && persistedNodeKeys.has(edge.sourceNodeKey) && persistedNodeKeys.has(edge.targetNodeKey))
       .sort((a, b) => a.edgeKey.localeCompare(b.edgeKey))
-      .map((row) => mapCrawlEdge(row, templateDetectionOf(snapshot.templateDetection)))
+      .map((row) => mapCrawlEdge(row, subgraphDetection))
     const omittedNodes = omittedNodeKeys.size + Math.max(0, distances.size - pageRows.length)
     const omittedEdges = omittedEdgeKeys.size + (queryTruncated ? 1 : 0) + Math.max(0, edgeRows.size - edges.length)
     const truncated = omittedNodes > 0 || omittedEdges > 0
@@ -1393,6 +1400,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       inArray(siteCrawlPages.nodeKey, pathKeys),
     )).all()
     const pageByKey = new Map(pathRows.map((row) => [row.nodeKey, row]))
+    const pathDetection = templateDetectionOf(snapshot.templateDetection)
     return {
       project: project.name,
       runId: snapshot.runId,
@@ -1404,7 +1412,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       maxDepth,
       visitedNodes: visited.size,
       nodes: pathKeys.map((key) => mapCrawlPage(pageByKey.get(key)!)),
-      edges: pathEdges.map((row) => mapCrawlEdge(row, templateDetectionOf(snapshot.templateDetection))),
+      edges: pathEdges.map((row) => mapCrawlEdge(row, pathDetection)),
     }
   })
 
