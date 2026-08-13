@@ -94,7 +94,7 @@ Configure during `cnry init`, in the dashboard `/settings`, or as env vars.
 | **Aero — built-in agent** | [skills/aero/SKILL.md](skills/aero/SKILL.md) |
 | **Agent Plugin — portable core + Codex / Claude adapters** | [docs/plugins.md](docs/plugins.md) |
 | **MCP — Claude Desktop / Cursor / Codex** | [docs/mcp.md](docs/mcp.md) |
-| **Integrations** | [GSC](docs/google-search-console-setup.md) · [GA4](docs/google-analytics-setup.md) · [Bing](docs/bing-webmaster-setup.md) · [Google Business Profile](skills/canonry/references/google-business-profile.md) · [WordPress](docs/wordpress-setup.md) · [Server-side traffic (Cloudflare direct push, Cloud Run, Vercel, WordPress)](skills/canonry/references/server-side-traffic.md) |
+| **Integrations** | [GSC](docs/google-search-console-setup.md) · [GA4](docs/google-analytics-setup.md) · [Bing](docs/bing-webmaster-setup.md) · [Google Business Profile](skills/canonry/references/google-business-profile.md) · [WordPress](docs/wordpress-setup.md) · [Server-side traffic (Cloudflare direct push or Queue pull, Cloud Run, Vercel, WordPress)](skills/canonry/references/server-side-traffic.md) |
 | **Deployment** — Docker, Railway, Render, systemd, Tailscale | [docs/deployment.md](docs/deployment.md) |
 | **API** — 118+ endpoints | `GET /api/v1/openapi.json` (no auth) |
 | **Standalone skills bundle** for Claude Code / Codex | `cnry skills install` ([details](skills/canonry/SKILL.md)) |

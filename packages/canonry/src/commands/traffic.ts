@@ -11,7 +11,8 @@ import type {
   TrafficSyncResponse,
 } from '@ainyc/canonry-contracts'
 import { RunStatuses, TrafficEventKinds, TrafficSeriesGranularities } from '@ainyc/canonry-contracts'
-import { getCloudflareTrafficConnection } from '../cloudflare-traffic-config.js'
+import fs from 'node:fs'
+import { getCloudflareTrafficConnectionBySourceId } from '../cloudflare-traffic-config.js'
 import {
   assertCloudflareArtifactsDoNotContainSecrets,
   deployCloudflareWorker,
@@ -26,6 +27,10 @@ import { CliError, isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
 import { loadConfigRaw } from '../config.js'
 
+export const DEFAULT_CLOUDFLARE_QUEUE_RETENTION_SECONDS = 345_600
+const CLOUDFLARE_QUEUE_RETENTION_MIN_SECONDS = 60
+const CLOUDFLARE_QUEUE_RETENTION_MAX_SECONDS = 1_209_600
+
 function getClient() {
   return createApiClient()
 }
@@ -38,10 +43,57 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function requireCloudflareQueueOption(
+  project: string,
+  value: string | undefined,
+  option: '--account-id' | '--queue-id' | '--queue-name' | '--api-token-file',
+): string {
+  if (value?.trim()) return value.trim()
+  const code = option === '--account-id'
+    ? 'TRAFFIC_CLOUDFLARE_QUEUE_ACCOUNT_REQUIRED'
+    : option === '--queue-id'
+      ? 'TRAFFIC_CLOUDFLARE_QUEUE_ID_REQUIRED'
+      : option === '--queue-name'
+        ? 'TRAFFIC_CLOUDFLARE_QUEUE_NAME_REQUIRED'
+        : 'TRAFFIC_CLOUDFLARE_QUEUE_TOKEN_FILE_REQUIRED'
+  throw new CliError({
+    code,
+    message: `${option} is required with --delivery-mode queue-pull`,
+    displayMessage: `Error: ${option} is required with --delivery-mode queue-pull`,
+    details: { project },
+  })
+}
+
+function readCloudflareQueueApiToken(project: string, tokenFile: string): string {
+  try {
+    const stat = fs.lstatSync(tokenFile)
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error('not a regular file')
+    }
+    const apiToken = fs.readFileSync(tokenFile, 'utf-8').trim()
+    if (!apiToken) throw new Error('file is empty')
+    return apiToken
+  } catch (error) {
+    const message = errorMessage(error)
+    throw new CliError({
+      code: 'TRAFFIC_CLOUDFLARE_QUEUE_TOKEN_FILE_READ_ERROR',
+      message: `Failed to read --api-token-file: ${message}`,
+      displayMessage: `Error: failed to read --api-token-file "${tokenFile}": ${message}`,
+      details: { project, tokenFile },
+    })
+  }
+}
+
 export async function trafficConnectCloudflare(project: string, opts: {
+  deliveryMode?: 'direct-push' | 'queue-pull'
   displayName?: string
   zoneId?: string
   accountId?: string
+  queueId?: string
+  queueName?: string
+  /** Queue token must be read from a regular local file, never an argv value. */
+  apiTokenFile?: string
+  retentionSeconds?: number
   outputDirectory?: string
   deploy?: boolean
   confirmRoute?: boolean
@@ -53,6 +105,40 @@ export async function trafficConnectCloudflare(project: string, opts: {
   deployWorker?: typeof deployCloudflareWorker
   preflightWrangler?: typeof preflightCloudflareWrangler
 } = {}): Promise<void> {
+  const deliveryMode = opts.deliveryMode ?? 'direct-push'
+  let queuePull: {
+    accountId: string
+    queueId: string
+    queueName: string
+    apiToken: string
+    retentionSeconds: number
+  } | undefined
+  if (deliveryMode === 'queue-pull') {
+    const accountId = requireCloudflareQueueOption(project, opts.accountId, '--account-id')
+    const queueId = requireCloudflareQueueOption(project, opts.queueId, '--queue-id')
+    const queueName = requireCloudflareQueueOption(project, opts.queueName, '--queue-name')
+    const tokenFile = requireCloudflareQueueOption(project, opts.apiTokenFile, '--api-token-file')
+    const retentionSeconds = opts.retentionSeconds ?? DEFAULT_CLOUDFLARE_QUEUE_RETENTION_SECONDS
+    if (
+      !Number.isInteger(retentionSeconds)
+      || retentionSeconds < CLOUDFLARE_QUEUE_RETENTION_MIN_SECONDS
+      || retentionSeconds > CLOUDFLARE_QUEUE_RETENTION_MAX_SECONDS
+    ) {
+      throw new CliError({
+        code: 'TRAFFIC_CLOUDFLARE_QUEUE_RETENTION_INVALID',
+        message: '--retention-seconds must be an integer between 60 and 1209600',
+        displayMessage: 'Error: --retention-seconds must be an integer between 60 and 1209600',
+        details: { project },
+      })
+    }
+    queuePull = {
+      accountId,
+      queueId,
+      queueName,
+      apiToken: readCloudflareQueueApiToken(project, tokenFile),
+      retentionSeconds,
+    }
+  }
   if (opts.deploy && !opts.zoneId) {
     throw new CliError({
       code: 'TRAFFIC_CLOUDFLARE_DEPLOY_ZONE_REQUIRED',
@@ -81,7 +167,7 @@ export async function trafficConnectCloudflare(project: string, opts: {
   }
   if (opts.deploy) {
     try {
-      await (deps.preflightWrangler ?? preflightCloudflareWrangler)()
+      await (deps.preflightWrangler ?? preflightCloudflareWrangler)({ deliveryMode })
     } catch (error) {
       const message = errorMessage(error)
       throw new CliError({
@@ -108,24 +194,38 @@ export async function trafficConnectCloudflare(project: string, opts: {
   }
 
   const client = deps.client ?? getClient()
-  const result: TrafficConnectCloudflareResponse = await client.trafficConnectCloudflare(project, {
-    deliveryMode: 'direct-push',
-    displayName: opts.displayName,
-    zoneId: opts.zoneId,
-    accountId: opts.accountId,
-  })
+  const result: TrafficConnectCloudflareResponse = await client.trafficConnectCloudflare(project,
+    deliveryMode === 'queue-pull'
+      ? {
+        deliveryMode,
+        displayName: opts.displayName,
+        zoneId: opts.zoneId,
+        ...queuePull!,
+      }
+      : {
+        deliveryMode,
+        displayName: opts.displayName,
+        zoneId: opts.zoneId,
+        accountId: opts.accountId,
+      },
+  )
 
   const localConfig = (deps.loadLocalConfig ?? loadConfigRaw)()
   const localCredential = localConfig
-    ? getCloudflareTrafficConnection(localConfig, project)
+    ? getCloudflareTrafficConnectionBySourceId(localConfig, result.sourceId)
     : undefined
-  const deploymentCredential = localCredential?.sourceId === result.sourceId
+  const deploymentCredential = localCredential?.deliveryMode === result.deliveryMode
     ? localCredential
     : undefined
+  // Queue setup receives the pull token from a regular local file. It is a
+  // secret even when this CLI cannot read the server's credential store, so
+  // always scan generated artifacts against that input before writing them.
+  const artifactSecrets = deploymentCredential
+    ?? (queuePull ? { apiToken: queuePull.apiToken } : undefined)
 
-  if (deploymentCredential) {
+  if (artifactSecrets) {
     try {
-      assertCloudflareArtifactsDoNotContainSecrets(result, deploymentCredential)
+      assertCloudflareArtifactsDoNotContainSecrets(result, artifactSecrets)
     } catch {
       throw new CliError({
         code: 'TRAFFIC_CLOUDFLARE_SECRET_EXPOSURE',
@@ -148,7 +248,7 @@ export async function trafficConnectCloudflare(project: string, opts: {
     })
   }
 
-  if (opts.deploy && !deploymentCredential) {
+  if (opts.deploy && result.deliveryMode === 'direct-push' && !deploymentCredential) {
     throw new CliError({
       code: 'TRAFFIC_CLOUDFLARE_DEPLOY_CONFIG_UNSHARED',
       message: 'Cloudflare auto-deploy requires the CLI and Canonry server to share the same local config',
@@ -162,7 +262,7 @@ export async function trafficConnectCloudflare(project: string, opts: {
     })
   }
 
-  if (opts.deploy && deploymentCredential) {
+  if (opts.deploy && result.deliveryMode === 'direct-push' && deploymentCredential?.deliveryMode === 'direct-push') {
     try {
       await (deps.deployWorker ?? deployCloudflareWorker)({
         wranglerTomlPath: artifacts.wranglerTomlPath,
@@ -180,16 +280,45 @@ export async function trafficConnectCloudflare(project: string, opts: {
     }
   }
 
+  if (opts.deploy && result.deliveryMode === 'queue-pull') {
+    try {
+      await (deps.deployWorker ?? deployCloudflareWorker)({
+        wranglerTomlPath: artifacts.wranglerTomlPath,
+        deliveryMode: 'queue-pull',
+      })
+    } catch (error) {
+      const message = artifactSecrets
+        ? redactCloudflareSecrets(errorMessage(error), artifactSecrets)
+        : errorMessage(error)
+      throw new CliError({
+        code: 'TRAFFIC_CLOUDFLARE_DEPLOY_FAILED',
+        message,
+        displayMessage: `Error: Cloudflare source connected and artifacts written, but Wrangler deploy failed: ${message}`,
+        details: { project, sourceId: result.sourceId, outputDirectory },
+      })
+    }
+  }
+
   const summary = {
     sourceId: result.sourceId,
     deliveryMode: result.deliveryMode,
+    activationRequired: result.activationRequired === true,
     workerVersion: result.workerVersion,
     outputDirectory: artifacts.outputDirectory,
     files: {
       workerScript: artifacts.workerScriptPath,
       wranglerConfig: artifacts.wranglerTomlPath,
     },
-    autoDeployAvailable: Boolean(deploymentCredential),
+    autoDeployAvailable: result.deliveryMode === 'queue-pull' || Boolean(deploymentCredential),
+    ...(result.deliveryMode === 'queue-pull'
+      ? {
+        queuePullConsumer: {
+          required: true,
+          queueName: result.queueName,
+          configuredBy: 'wrangler-or-cloudflare-dashboard',
+        },
+      }
+      : {}),
     deployment: opts.deploy ? 'worker-deployed-route-unattached' : 'not-requested',
     routeAttachment: 'required-manual',
     requestLimitFailureMode: {
@@ -206,7 +335,7 @@ export async function trafficConnectCloudflare(project: string, opts: {
     return
   }
 
-  console.log(`Cloudflare direct-push traffic source connected for project "${project}".`)
+  console.log(`Cloudflare ${result.deliveryMode} traffic source connected for project "${project}".`)
   console.log(`  Source ID:       ${result.sourceId}`)
   console.log(`  Worker version:  ${result.workerVersion}`)
   console.log(`  Worker script:   ${artifacts.workerScriptPath}`)
@@ -218,16 +347,57 @@ export async function trafficConnectCloudflare(project: string, opts: {
   console.log('Required: set the route Request limit failure mode to Fail open before route activation.')
   console.log('Wrangler cannot configure this toggle. Workers Free includes 100,000 requests per day for the account.')
   console.log('Use one authoritative server-traffic source for this site. Overlapping adapters double-count project totals.')
+  if (result.deliveryMode === 'queue-pull') {
+    console.log(`Required: enable HTTP pull with \`wrangler queues consumer http add ${result.queueName}\` before the first sync.`)
+  }
+  if (result.activationRequired) {
+    console.log(`Activation required: run \`canonry traffic activate ${project} --source ${result.sourceId}\`. This command does not activate delivery.`)
+  }
   if (opts.deploy) {
     console.log('')
     console.log('Required Cloudflare Dashboard steps:')
     console.log(result.instructions)
-    console.log('Keep the Canonry public HTTPS URL reachable so the Worker can push events.')
+    if (result.deliveryMode === 'direct-push') {
+      console.log('Keep the Canonry public HTTPS URL reachable so the Worker can push events.')
+    }
   } else if (deploymentCredential) {
     console.log('Next: install and authenticate Wrangler. Inspect the route, then rerun with --deploy --confirm-route --confirm-fail-open and --zone-id <id>.')
+  } else if (result.deliveryMode === 'queue-pull') {
+    console.log('Next: install and authenticate Wrangler externally, then rerun with --deploy --confirm-route --confirm-fail-open and --zone-id <id>.')
   } else {
     console.log('Auto-deploy is unavailable because this CLI and the Canonry server do not share local config. Ask the server operator to deploy and install the Worker secrets.')
   }
+}
+
+export async function trafficActivate(project: string, opts: {
+  sourceId: string
+  format?: string
+}, deps: {
+  client?: {
+    trafficActivate: (project: string, sourceId: string) => Promise<TrafficSourceDto>
+  }
+} = {}): Promise<void> {
+  const client = deps.client ?? getClient() as {
+    trafficActivate: (project: string, sourceId: string) => Promise<TrafficSourceDto>
+  }
+  const source = await client.trafficActivate(project, opts.sourceId)
+
+  if (isMachineFormat(opts.format)) {
+    console.log(JSON.stringify(source, null, 2))
+    return
+  }
+
+  const sourceMode = typeof source.config.deliveryMode === 'string'
+    ? source.config.deliveryMode
+    : source.sourceType
+  const trafficSync = sourceMode === 'direct-push'
+      ? 'not required for direct-push delivery'
+      : 'enabled for this pull source'
+  console.log(`Traffic source activated for project "${project}".`)
+  console.log(`  Source ID:       ${source.id}`)
+  console.log(`  Source mode:     ${sourceMode}`)
+  console.log(`  Status:          ${source.status}`)
+  console.log(`  Traffic sync:    ${trafficSync}`)
 }
 
 export async function trafficConnectWordpress(project: string, opts: {

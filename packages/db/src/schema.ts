@@ -1739,6 +1739,16 @@ export const trafficSources = sqliteTable('traffic_sources', {
   // `traffic.source.worker-version` doctor check. NULL until the first
   // event arrives or for source types that don't forward versioned events.
   lastWorkerVersion: text('last_worker_version'),
+  // Pull adapters use this durable, owner-bound lease to prevent a manual
+  // sync and the scheduler from consuming the same source concurrently.
+  // Both fields are nullable so pre-lease sources remain immediately valid.
+  syncLeaseOwner: text('sync_lease_owner'),
+  syncLeaseExpiresAt: text('sync_lease_expires_at'),
+  // Residual Queue depth returned by Cloudflare after the most recent bounded
+  // pull. NULL means a queue-backed source has not observed backlog yet; zero
+  // is an explicit observation that the Queue was drained at that instant.
+  queueBacklogCount: integer('queue_backlog_count'),
+  queueBacklogObservedAt: text('queue_backlog_observed_at'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 }, (table) => [

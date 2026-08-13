@@ -49,7 +49,10 @@ Shared Fastify route plugins used by both the local server (`packages/canonry`) 
 Doctor behavior must branch on the persisted `configJson.deliveryMode`, not
 only `sourceType = cloudflare`. Legacy rows with no mode are direct push.
 Only `direct-push` skips pull-watermark lag and receives Worker-deployment
-remediation; reserved/future `queue-pull` sources use the ordinary pull checks.
+remediation; `queue-pull` sources use the ordinary pull checks and a durable
+source-scoped lease. Queue messages are acknowledged only after the receipt +
+rollup transaction commits; a post-commit ACK failure relies on receipt dedupe
+for safe redelivery.
 `traffic.source.worker-version` also applies only to direct push. It compares
 `configJson.workerVersion` with `lastWorkerVersion`, which the ingest path
 records. When `lastWorkerVersion` is null, the check warns with

@@ -163,6 +163,10 @@ export const trafficSourceDtoSchema = z.object({
    * the skipping sync did.
    */
   skippedThroughAt: z.string().nullable(),
+  /** Residual Cloudflare Queue depth reported by the most recent bounded pull. */
+  queueBacklogCount: z.number().int().nonnegative().nullable(),
+  /** Instant at which `queueBacklogCount` was observed, or null before the first pull. */
+  queueBacklogObservedAt: z.string().nullable(),
   archivedAt: z.string().nullable(),
   config: z.record(z.string(), z.unknown()),
   createdAt: z.string(),
@@ -204,12 +208,18 @@ export type TrafficConnectVercelRequest = z.infer<typeof trafficConnectVercelReq
 
 /**
  * How a Cloudflare edge Worker hands selected request events to Canonry.
- * `queue-pull` is reserved for the buffered pull adapter; the current connect
- * route deliberately accepts only `direct-push` until that adapter ships.
+ * Direct push and Queue pull share edge capture but use distinct delivery
+ * credentials and lifecycle semantics.
  */
 export const cloudflareTrafficDeliveryModeSchema = z.enum(['direct-push', 'queue-pull'])
 export type CloudflareTrafficDeliveryMode = z.infer<typeof cloudflareTrafficDeliveryModeSchema>
 export const CloudflareTrafficDeliveryModes = cloudflareTrafficDeliveryModeSchema.enum
+
+/** Cloudflare Queue names are 1-63 alphanumeric/dash characters with alphanumeric ends. */
+export const cloudflareQueueNameSchema = z.string().regex(
+  /^(?=.{1,63}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i,
+  'Cloudflare Queue name must be 1-63 characters, use only letters, numbers, or dashes, and start and end with a letter or number',
+)
 
 /**
  * Persisted in `traffic_sources.configJson` for `sourceType = 'cloudflare'`.
@@ -220,18 +230,47 @@ export const CloudflareTrafficDeliveryModes = cloudflareTrafficDeliveryModeSchem
  * Missing `deliveryMode` means `direct-push` so source rows written before the
  * transport discriminator was introduced continue to parse unchanged.
  */
-export const cloudflareTrafficSourceConfigSchema = z.object({
+const cloudflareTrafficSourceBaseSchema = z.object({
   schemaVersion: z.literal(1),
-  deliveryMode: z.literal(CloudflareTrafficDeliveryModes['direct-push']).default('direct-push'),
   /** Semver of the Worker script bundle that was generated at connect/rotate time. */
   workerVersion: z.string().min(1),
   /** Identifier of the bot/referer keyword set baked into the deployed Worker. */
   expectedBotListVersion: z.string().min(1),
   /** Target Cloudflare zone for the operator-managed Worker route. */
   zoneId: z.string().nullable(),
+})
+
+export const cloudflareDirectPushTrafficSourceConfigSchema = cloudflareTrafficSourceBaseSchema.extend({
+  deliveryMode: z.literal(CloudflareTrafficDeliveryModes['direct-push']),
   /** Cloudflare account id used to target the correct account during Wrangler deploy. */
   accountId: z.string().nullable(),
 })
+
+export const cloudflareQueuePullTrafficSourceConfigSchema = cloudflareTrafficSourceBaseSchema.extend({
+  deliveryMode: z.literal(CloudflareTrafficDeliveryModes['queue-pull']),
+  /** Cloudflare account that owns the Queue. */
+  accountId: z.string().min(1),
+  /** Cloudflare Queue id used by Canonry's pull consumer. */
+  queueId: z.string().min(1),
+  /** Queue producer binding target written to the generated Wrangler file. */
+  queueName: cloudflareQueueNameSchema,
+  /** Operator-recorded Queue retention for configuration drift checks. */
+  retentionSeconds: z.number().int().min(60).max(1_209_600),
+})
+
+function defaultCloudflareDeliveryMode(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const record = value as Record<string, unknown>
+  return 'deliveryMode' in record ? value : { ...record, deliveryMode: 'direct-push' }
+}
+
+export const cloudflareTrafficSourceConfigSchema = z.preprocess(
+  defaultCloudflareDeliveryMode,
+  z.discriminatedUnion('deliveryMode', [
+    cloudflareDirectPushTrafficSourceConfigSchema,
+    cloudflareQueuePullTrafficSourceConfigSchema,
+  ]),
+)
 export type CloudflareTrafficSourceConfig = z.infer<typeof cloudflareTrafficSourceConfigSchema>
 
 /** @deprecated Use `cloudflareTrafficSourceConfigSchema`. */
@@ -239,30 +278,70 @@ export const cloudflareWorkerSourceConfigSchema = cloudflareTrafficSourceConfigS
 /** @deprecated Use `CloudflareTrafficSourceConfig`. */
 export type CloudflareWorkerSourceConfig = CloudflareTrafficSourceConfig
 
-export const trafficConnectCloudflareRequestSchema = z.object({
-  deliveryMode: z.literal(CloudflareTrafficDeliveryModes['direct-push']).default('direct-push'),
+const trafficConnectCloudflareBaseRequestSchema = z.object({
   displayName: z.string().min(1).optional(),
   /** Target Cloudflare zone. Canonry does not validate it against Cloudflare. */
   zoneId: z.string().min(1).optional(),
+})
+
+export const trafficConnectCloudflareDirectPushRequestSchema = trafficConnectCloudflareBaseRequestSchema.extend({
+  deliveryMode: z.literal(CloudflareTrafficDeliveryModes['direct-push']),
   /** Cloudflare account id. Set it when Wrangler can access more than one account. */
   accountId: z.string().min(1).optional(),
 })
+
+export const trafficConnectCloudflareQueuePullRequestSchema = trafficConnectCloudflareBaseRequestSchema.extend({
+  deliveryMode: z.literal(CloudflareTrafficDeliveryModes['queue-pull']),
+  accountId: z.string().min(1),
+  queueId: z.string().min(1),
+  queueName: cloudflareQueueNameSchema,
+  retentionSeconds: z.number().int().min(60).max(1_209_600),
+  /** Queue pull token; secret-store only, never persisted in configJson or returned. */
+  apiToken: z.string().min(1),
+})
+
+export const trafficConnectCloudflareRequestSchema = z.preprocess(
+  defaultCloudflareDeliveryMode,
+  z.discriminatedUnion('deliveryMode', [
+    trafficConnectCloudflareDirectPushRequestSchema,
+    trafficConnectCloudflareQueuePullRequestSchema,
+  ]),
+)
 export type TrafficConnectCloudflareRequest = z.infer<typeof trafficConnectCloudflareRequestSchema>
 
 /**
  * Returned by `POST /traffic/connect/cloudflare`. The operator deploys the
- * generated Worker script to their Cloudflare zone. Per-source bearer + HMAC
- * credentials are installed as Worker secret bindings and are never returned
- * in the generated source or Wrangler configuration.
+ * generated Worker script to their Cloudflare zone. Direct push installs
+ * per-source bearer + HMAC Worker bindings; Queue pull keeps its API token in
+ * Canonry and emits only a producer binding. No secret is returned in source
+ * or Wrangler configuration.
  */
-export const trafficConnectCloudflareResponseSchema = z.object({
+const trafficConnectCloudflareResponseBaseSchema = z.object({
   sourceId: z.string().min(1),
-  deliveryMode: z.literal(CloudflareTrafficDeliveryModes['direct-push']),
   workerScript: z.string().min(1),
   wranglerToml: z.string().min(1),
   workerVersion: z.string().min(1),
   instructions: z.string().min(1),
 })
+
+export const trafficConnectCloudflareDirectPushResponseSchema = trafficConnectCloudflareResponseBaseSchema.extend({
+  deliveryMode: z.literal(CloudflareTrafficDeliveryModes['direct-push']),
+  activationRequired: z.boolean().default(false),
+})
+
+export const trafficConnectCloudflareQueuePullResponseSchema = trafficConnectCloudflareResponseBaseSchema.extend({
+  deliveryMode: z.literal(CloudflareTrafficDeliveryModes['queue-pull']),
+  activationRequired: z.boolean().default(false),
+  accountId: z.string().min(1),
+  queueId: z.string().min(1),
+  queueName: cloudflareQueueNameSchema,
+  retentionSeconds: z.number().int().min(60).max(1_209_600),
+})
+
+export const trafficConnectCloudflareResponseSchema = z.discriminatedUnion('deliveryMode', [
+  trafficConnectCloudflareDirectPushResponseSchema,
+  trafficConnectCloudflareQueuePullResponseSchema,
+])
 export type TrafficConnectCloudflareResponse = z.infer<typeof trafficConnectCloudflareResponseSchema>
 
 /**
@@ -348,6 +427,8 @@ export const trafficSyncResponseSchema = z.object({
   aiUserFetchBucketRows: z.number().int().nonnegative(),
   aiReferralBucketRows: z.number().int().nonnegative(),
   sampleRows: z.number().int().nonnegative(),
+  /** Residual upstream Queue depth after a bounded sync; present for Queue pull. */
+  remainingBacklogCount: z.number().int().nonnegative().optional(),
   windowStart: z.string(),
   windowEnd: z.string(),
 })

@@ -184,23 +184,10 @@ export interface VercelTrafficConfigEntry {
   connections?: VercelTrafficConnectionConfigEntry[]
 }
 
-/**
- * Per-project Cloudflare Worker traffic connection. In direct-push mode the
- * Worker forwards filtered requests to canonry's ingest endpoint. The Worker
- * reads the bearer and HMAC values from Cloudflare secret bindings; generated
- * source and Wrangler configuration never contain either cleartext value.
- * The DB stores only the bearer hash, while both cleartext secrets live here.
- */
-export interface CloudflareTrafficConnectionConfigEntry {
+interface CloudflareTrafficConnectionConfigBase {
   projectName: string
   /** `traffic_sources.id` for this connection — pairs the credential row with the DB row. */
   sourceId: string
-  /** Explicit transport discriminator. Missing legacy values normalize to direct-push. */
-  deliveryMode: 'direct-push'
-  /** Bearer token authenticating ingest requests. Verified server-side via sha256(bearer) === ingestTokenHash. */
-  bearerToken: string
-  /** HMAC-SHA256 shared secret. Worker signs `timestamp + "." + body` with it; server verifies. */
-  hmacSecret: string
   /** Semver of the Worker script bundle that was generated at connect/rotate time. */
   workerVersion: string
   /** Identifier of the bot/referer keyword set baked into the deployed Worker. */
@@ -212,6 +199,38 @@ export interface CloudflareTrafficConnectionConfigEntry {
   createdAt: string
   updatedAt: string
 }
+
+/**
+ * Direct-push credentials. The Worker reads both values from secret bindings;
+ * generated source and Wrangler configuration never contain either cleartext
+ * value. The DB stores only the bearer hash.
+ */
+export interface CloudflareDirectPushConnectionConfigEntry extends CloudflareTrafficConnectionConfigBase {
+  /** Explicit transport discriminator. Missing legacy values normalize to direct-push. */
+  deliveryMode: 'direct-push'
+  /** Bearer token authenticating ingest requests. Verified server-side via sha256(bearer) === ingestTokenHash. */
+  bearerToken: string
+  /** HMAC-SHA256 shared secret. Worker signs `timestamp + "." + body` with it; server verifies. */
+  hmacSecret: string
+}
+
+/**
+ * Queue-pull credentials. The account-scoped token is used only by the local
+ * Canonry server to pull and acknowledge Queue messages. It never enters the
+ * traffic source row, generated Worker artifacts, CLI argv, or MCP output.
+ */
+export interface CloudflareQueuePullConnectionConfigEntry extends CloudflareTrafficConnectionConfigBase {
+  deliveryMode: 'queue-pull'
+  apiToken: string
+  accountId: string
+  queueId: string
+  queueName: string
+  retentionSeconds: number
+}
+
+export type CloudflareTrafficConnectionConfigEntry =
+  | CloudflareDirectPushConnectionConfigEntry
+  | CloudflareQueuePullConnectionConfigEntry
 
 export interface CloudflareTrafficConfigEntry {
   connections?: CloudflareTrafficConnectionConfigEntry[]

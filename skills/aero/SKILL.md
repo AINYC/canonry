@@ -16,7 +16,22 @@ Persist only *user-scoped* context (operator preferences, communication style) i
 
 **Two signals, not one.** Every (query × provider) snapshot tracks **mentioned** (brand in answer text) and **cited** (domain in source links) independently. Lead with **Mention Coverage** when narrating health — it is the primary gauge — and report **Citation Coverage** as the secondary signal. Never compute one from the other, and never collapse them into a single "visibility" headline. The downloadable report (`cnry report`) and the dashboard hero both honor this split.
 
-When a project has GA4 connected, traffic is a first-class signal alongside mentions and citations. Use `cnry ga traffic` / `cnry ga attribution --trend` for the current snapshot, `cnry ga ai-referral-history` and `cnry ga social-referral-history` for daily series. Reads query a local DB synced by `cnry ga sync` — confirm `cnry ga status` shows a recent `lastSyncedAt` before quoting numbers; if stale, ask for explicit approval before re-syncing. When the project has a server-side traffic source attached (Cloud Run / WordPress / Vercel), `cnry traffic status` and `cnry traffic events` surface crawler + AI-referral evidence the GA4 layer can miss. Full command reference and return shapes live in the co-installed `canonry/references/canonry-cli.md`.
+When a project has GA4 connected, traffic is a first-class signal alongside
+mentions and citations. Use `cnry ga traffic` and `cnry ga attribution --trend`
+for the current snapshot. Use the GA referral-history commands for daily series.
+Before you quote GA4 data, make sure that `cnry ga status` has a recent
+`lastSyncedAt`. If it is stale, get approval before you run `cnry ga sync`.
+
+For Cloud Run, WordPress, Vercel, or Cloudflare, use `cnry traffic status` and
+`cnry traffic events` for crawler and AI-referral evidence. Read the Cloudflare
+`deliveryMode` before you recommend an action. Direct push does not use
+`traffic sync`. Queue pull freshness requires an enabled `traffic-sync`
+schedule. Run the `traffic.source.*` doctor checks. Inspect
+`traffic.source.queue-backlog` before you quote current Queue data. If more than
+1,000 messages remain, report that one default tick cannot drain the backlog.
+Get approval before you run a manual sync or change the schedule. The full
+command reference is in the co-installed
+`canonry/references/canonry-cli.md`.
 
 **Diagnosing a stuck Vercel/Cloud Run source:** if `cnry traffic status` shows `status=error` with a recent `lastError` of `refusing to advance` or `ExceedsBillingLimitError`, the source's `lastSyncedAt` has aged past the upstream retention boundary and every sync now throws. Recovery: `cnry traffic reset <project> --source <id> --advance-to-now`. This advances `lastSyncedAt` to NOW and resumes going-forward syncs — historical events in the gap are unrecoverable from the sync path; run `cnry traffic backfill --days N` separately if any of that history is needed (capped at retention).
 

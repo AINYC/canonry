@@ -1,9 +1,15 @@
 import crypto from 'node:crypto'
 import { isIP } from 'node:net'
+import { isDeepStrictEqual } from 'node:util'
 import { Agent as UndiciAgent } from 'undici'
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { DEFAULT_VERCEL_SYNC_DEADLINE_MS, VERCEL_MAX_SYNC_WINDOW_MS } from './traffic-limits.js'
+import {
+  CLOUDFLARE_QUEUE_BATCH_SIZE,
+  DEFAULT_CLOUDFLARE_QUEUE_MAX_BATCHES,
+  DEFAULT_VERCEL_SYNC_DEADLINE_MS,
+  VERCEL_MAX_SYNC_WINDOW_MS,
+} from './traffic-limits.js'
 import {
   trafficSources,
   crawlerEventsHourly,
@@ -17,6 +23,7 @@ import {
 import {
   aiReferralClassCounts,
   notFound,
+  operationInProgress,
   providerError,
   validationError,
   RunKinds,
@@ -49,6 +56,7 @@ import type {
   TrafficBackfillResponse,
   TrafficSourceStatus,
   TrafficSourceAuthMode,
+  TrafficConnectCloudflareRequest,
   TrafficEventEntry,
   TrafficEventKind,
   TrafficEventsResponse,
@@ -89,6 +97,18 @@ import {
   verifyRequestSignature,
 } from '@ainyc/canonry-integration-cloudflare-worker'
 import {
+  ackCloudflareQueueMessages,
+  CloudflareQueueApiError,
+  pullCloudflareQueueMessages,
+} from '@ainyc/canonry-integration-cloudflare-queue'
+import type {
+  AckCloudflareQueueMessagesOptions,
+  CloudflareQueueAckResult,
+  CloudflareQueueClientOptions,
+  CloudflareQueuePullResult,
+  PullCloudflareQueueMessagesOptions,
+} from '@ainyc/canonry-integration-cloudflare-queue'
+import {
   cloudflareWorkerIngestRequestSchema,
   trafficConnectCloudflareRequestSchema,
   authRequired,
@@ -99,6 +119,7 @@ import {
   DIRECT_PUSH_RECEIPT_TTL_MS,
   writeTrafficEventBatch,
 } from './traffic-event-ingest.js'
+import { releaseTrafficSyncLease, tryClaimTrafficSyncLease } from './traffic-sync-lease.js'
 
 export interface CloudRunCredentialRecord {
   projectName: string
@@ -156,25 +177,46 @@ export interface VercelTrafficCredentialStore {
   deleteConnection: (projectName: string) => boolean
 }
 
-export interface CloudflareTrafficCredentialRecord {
+interface CloudflareTrafficCredentialBase {
   projectName: string
   /** Discriminator for the credential/auth mechanism used by this source. */
-  deliveryMode: 'direct-push'
   /** `traffic_sources.id` — pairs the credential row with the DB row. */
   sourceId: string
-  /** Bearer token authenticating ingest requests. Verified against sha256(bearer) === ingestTokenHash. */
-  bearerToken: string
-  /** HMAC-SHA256 shared secret. */
-  hmacSecret: string
+  /** Present only for direct-push records; optional preserves safe legacy-store inspection. */
+  bearerToken?: string
+  /** Present only for direct-push records; optional preserves safe legacy-store inspection. */
+  hmacSecret?: string
   /** Semver of the Worker script bundle that was generated at connect/rotate time. */
   workerVersion: string
   /** Identifier of the bot/referer keyword set baked into the deployed Worker. */
   expectedBotListVersion: string
   zoneId: string | null
-  accountId: string | null
   createdAt: string
   updatedAt: string
 }
+
+export interface CloudflareDirectPushTrafficCredentialRecord extends CloudflareTrafficCredentialBase {
+  deliveryMode: 'direct-push'
+  /** Bearer token authenticating ingest requests. Verified against sha256(bearer) === ingestTokenHash. */
+  bearerToken: string
+  /** HMAC-SHA256 shared secret. */
+  hmacSecret: string
+  accountId: string | null
+}
+
+export interface CloudflareQueuePullTrafficCredentialRecord extends CloudflareTrafficCredentialBase {
+  deliveryMode: 'queue-pull'
+  /** Account-scoped Queue read/write token; config store only. */
+  apiToken: string
+  accountId: string
+  queueId: string
+  queueName: string
+  retentionSeconds: number
+}
+
+export type CloudflareTrafficCredentialRecord =
+  | CloudflareDirectPushTrafficCredentialRecord
+  | CloudflareQueuePullTrafficCredentialRecord
 
 export interface CloudflareTrafficCredentialStore {
   getConnection: (projectName: string) => CloudflareTrafficCredentialRecord | undefined
@@ -182,6 +224,8 @@ export interface CloudflareTrafficCredentialStore {
   getConnectionBySourceId: (sourceId: string) => CloudflareTrafficCredentialRecord | undefined
   upsertConnection: (record: CloudflareTrafficCredentialRecord) => CloudflareTrafficCredentialRecord
   deleteConnection: (projectName: string) => boolean
+  /** Optional while legacy stores migrate from project-name to source-id keys. */
+  deleteConnectionBySourceId?: (sourceId: string) => boolean
 }
 
 export interface TrafficSyncedEvent {
@@ -248,6 +292,18 @@ export interface TrafficRoutesOptions {
    * configuration error.
    */
   cloudflareTrafficCredentialStore?: CloudflareTrafficCredentialStore
+  /** Injectable Queue puller so route tests never call Cloudflare. */
+  pullCloudflareQueueMessages?: (
+    client: CloudflareQueueClientOptions,
+    options?: PullCloudflareQueueMessagesOptions,
+  ) => Promise<CloudflareQueuePullResult>
+  /** Injectable Queue acknowledger so route tests can pin commit-before-ack ordering. */
+  ackCloudflareQueueMessages?: (
+    client: CloudflareQueueClientOptions,
+    options: AckCloudflareQueueMessagesOptions,
+  ) => Promise<CloudflareQueueAckResult>
+  /** Bounded short-poll batches per sync invocation. */
+  cloudflareQueueMaxBatches?: number
   /** Override the canonry ingest URL embedded into generated Worker scripts (for tests). */
   cloudflareTrafficIngestUrl?: string
   /** Per-source direct-push request budget per minute. Invalid auth is budgeted by caller IP. */
@@ -360,6 +416,17 @@ const BACKFILL_SAMPLE_LIMIT = 500
 // regenerates and redeploys.
 const CLOUDFLARE_WORKER_VERSION = '1.0.0'
 const CLOUDFLARE_INGEST_BODY_LIMIT = 256 * 1024
+// Queue retention is configured outside Canonry and this v1 connection only
+// records the operator-provided value. Keep dedupe receipts through the
+// current Cloudflare maximum (14 days) plus a replay margin, so a lower or
+// stale local value can never shorten the redelivery safety window.
+const CLOUDFLARE_QUEUE_RECEIPT_TTL_MS = 14 * 24 * 60 * 60_000 + 10 * 60_000
+// The Queue client can spend up to 210 seconds on one transient ACK sequence
+// (four 30-second requests plus three capped waits). Keep the upstream message
+// lease beyond that budget so a second consumer cannot receive the same batch
+// while Canonry is still acknowledging its committed receipts.
+const CLOUDFLARE_QUEUE_VISIBILITY_TIMEOUT_MS = 5 * 60_000
+const CLOUDFLARE_QUEUE_SYNC_LEASE_TTL_MS = 5 * 60_000
 const DEFAULT_CLOUDFLARE_INGEST_RATE_LIMIT_MAX = 6_000
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i
 
@@ -381,7 +448,16 @@ function timingSafeEqualHex(a: string | null | undefined, b: string | null | und
 
 function parseDirectPushCloudflareSourceConfig(config: unknown) {
   const parsed = cloudflareTrafficSourceConfigSchema.safeParse(config)
-  return parsed.success ? parsed.data : null
+  return parsed.success && parsed.data.deliveryMode === CloudflareTrafficDeliveryModes['direct-push']
+    ? parsed.data
+    : null
+}
+
+function parseQueuePullCloudflareSourceConfig(config: unknown) {
+  const parsed = cloudflareTrafficSourceConfigSchema.safeParse(config)
+  return parsed.success && parsed.data.deliveryMode === CloudflareTrafficDeliveryModes['queue-pull']
+    ? parsed.data
+    : null
 }
 
 function isDirectPushCloudflareDeliveryMode(value: unknown): value is 'direct-push' {
@@ -413,7 +489,7 @@ function authenticateCloudflareIngest(
   if (!bearerToken || !sourceId || !timestamp || !signature) return null
 
   const credential = store.getConnectionBySourceId(sourceId)
-  if (!credential || !isDirectPushCloudflareDeliveryMode(credential.deliveryMode)) return null
+  if (!credential || credential.deliveryMode !== 'direct-push') return null
   const bearerHash = sha256Hex(bearerToken)
   if (!timingSafeEqualHex(bearerHash, sha256Hex(credential.bearerToken))) return null
   if (!verifyRequestSignature({
@@ -446,7 +522,7 @@ function cloudflareIngestRateLimitKey(
     if (
       source
       && source.sourceType === TrafficSourceTypes.cloudflare
-      && source.status !== TrafficSourceStatuses.archived
+      && source.status === TrafficSourceStatuses.connected
       && parseDirectPushCloudflareSourceConfig(source.configJson)
       && timingSafeEqualHex(authenticated.bearerHash, source.ingestTokenHash)
     ) {
@@ -629,6 +705,8 @@ function rowToDto(row: typeof trafficSources.$inferSelect): TrafficSourceDto {
     lastCursor: row.lastCursor ?? null,
     lastError: row.lastError ?? null,
     skippedThroughAt: row.skippedThroughAt ?? null,
+    queueBacklogCount: row.queueBacklogCount ?? null,
+    queueBacklogObservedAt: row.queueBacklogObservedAt ?? null,
     archivedAt: row.archivedAt ?? null,
     config: parseSourceConfig(row),
     createdAt: row.createdAt,
@@ -661,6 +739,81 @@ export async function defaultResolveAccessToken(record: CloudRunCredentialRecord
  * route's closure.
  */
 type BackfillPullFn = () => Promise<NormalizedTrafficRequest[]>
+
+type TrafficTransaction = Parameters<Parameters<DatabaseClient['transaction']>[0]>[0]
+
+function hasConnectedTrafficSourceSibling(
+  db: DatabaseClient | TrafficTransaction,
+  projectId: string,
+  sourceId: string,
+): boolean {
+  return db.select().from(trafficSources)
+    .where(eq(trafficSources.projectId, projectId)).all()
+    .some(row => row.id !== sourceId && row.status === TrafficSourceStatuses.connected)
+}
+
+function isAuthoritativeTrafficSource(
+  db: DatabaseClient | TrafficTransaction,
+  source: typeof trafficSources.$inferSelect,
+): boolean {
+  return (source.status === TrafficSourceStatuses.connected
+      || source.status === TrafficSourceStatuses.error)
+    && !hasConnectedTrafficSourceSibling(db, source.projectId, source.id)
+}
+
+function trafficConnectStatus(
+  tx: TrafficTransaction,
+  projectId: string,
+  existingSource: typeof trafficSources.$inferSelect | undefined,
+): TrafficSourceStatus {
+  return existingSource?.status === TrafficSourceStatuses.paused
+    || hasConnectedTrafficSourceSibling(tx, projectId, existingSource?.id ?? '')
+    ? TrafficSourceStatuses.paused
+    : TrafficSourceStatuses.connected
+}
+
+function isSameTrafficSourceGeneration(
+  current: typeof trafficSources.$inferSelect,
+  started: typeof trafficSources.$inferSelect,
+): boolean {
+  return isDeepStrictEqual(current.configJson, started.configJson)
+    && current.updatedAt === started.updatedAt
+    && current.lastSyncedAt === started.lastSyncedAt
+}
+
+function bindTrafficSyncSchedule(
+  tx: TrafficTransaction,
+  projectId: string,
+  sourceId: string,
+  now: string,
+  createIfMissing = true,
+): { changed: boolean; created: boolean } {
+  const schedule = tx.select().from(schedules).where(and(
+    eq(schedules.projectId, projectId),
+    eq(schedules.kind, SchedulableRunKinds['traffic-sync']),
+  )).get()
+  if (schedule) {
+    if (schedule.sourceId === sourceId) return { changed: false, created: false }
+    tx.update(schedules).set({ sourceId, updatedAt: now })
+      .where(eq(schedules.id, schedule.id)).run()
+    return { changed: true, created: false }
+  }
+  if (!createIfMissing) return { changed: false, created: false }
+  tx.insert(schedules).values({
+    id: crypto.randomUUID(),
+    projectId,
+    kind: SchedulableRunKinds['traffic-sync'],
+    cronExpr: DEFAULT_TRAFFIC_SYNC_CRON,
+    preset: null,
+    timezone: 'UTC',
+    enabled: true,
+    providers: [],
+    sourceId,
+    createdAt: now,
+    updatedAt: now,
+  }).run()
+  return { changed: true, created: true }
+}
 
 function vercelRetentionClampError(requestedStartMs: number, effectiveStartMs: number): Error {
   return new Error(
@@ -712,11 +865,17 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
           .set({ status: RunStatuses.failed, error: msg, finishedAt: failedAt })
           .where(eq(runs.id, runId))
           .run()
-        tx
-          .update(trafficSources)
-          .set({ status: TrafficSourceStatuses.error, lastError: msg, updatedAt: failedAt })
-          .where(eq(trafficSources.id, sourceRow.id))
-          .run()
+        const latestSource = tx.select().from(trafficSources)
+          .where(eq(trafficSources.id, sourceRow.id)).get()
+        if (latestSource
+          && isAuthoritativeTrafficSource(tx, latestSource)
+          && isSameTrafficSourceGeneration(latestSource, sourceRow)) {
+          tx
+            .update(trafficSources)
+            .set({ status: TrafficSourceStatuses.error, lastError: msg, updatedAt: failedAt })
+            .where(eq(trafficSources.id, sourceRow.id))
+            .run()
+        }
       })
     } catch {
       // Last-ditch — if even the failure-recording transaction throws, we
@@ -740,11 +899,21 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
   if (allEvents.length === 0) {
     const finishedAt = new Date().toISOString()
     try {
-      app.db
-        .update(runs)
-        .set({ status: RunStatuses.completed, finishedAt })
-        .where(eq(runs.id, runId))
-        .run()
+      app.db.transaction((tx) => {
+        const latestSource = tx.select().from(trafficSources)
+          .where(eq(trafficSources.id, sourceRow.id)).get()
+        const stillAuthoritative = latestSource
+          && isAuthoritativeTrafficSource(tx, latestSource)
+          && isSameTrafficSourceGeneration(latestSource, sourceRow)
+        tx.update(runs).set(stillAuthoritative
+          ? { status: RunStatuses.completed, finishedAt }
+          : {
+              status: RunStatuses.failed,
+              error: 'Traffic source was deactivated or reconfigured during backfill',
+              finishedAt,
+            })
+          .where(eq(runs.id, runId)).run()
+      })
     } catch {
       // swallow — same last-ditch behavior as markFailed
     }
@@ -785,7 +954,20 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
     : sourceRow.lastSyncedAt!
 
   try {
-    app.db.transaction((tx) => {
+    const commitOutcome = app.db.transaction((tx) => {
+      const latestSource = tx.select().from(trafficSources)
+        .where(eq(trafficSources.id, sourceRow.id)).get()
+      if (!latestSource
+        || !isAuthoritativeTrafficSource(tx, latestSource)
+        || !isSameTrafficSourceGeneration(latestSource, sourceRow)) {
+        tx.update(runs).set({
+          status: RunStatuses.failed,
+          error: 'Traffic source was deactivated or reconfigured during backfill',
+          finishedAt,
+        }).where(eq(runs.id, runId)).run()
+        return 'source-inactive' as const
+      }
+
       // Replace mode: clear the rollup window first, then ingest fresh.
       // Boundaries are inclusive on both ends; windowStart is hour-floored
       // upstream so the boundary hour gets cleanly deleted and reinserted.
@@ -957,7 +1139,9 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
         .set({ status: RunStatuses.completed, finishedAt })
         .where(eq(runs.id, runId))
         .run()
+      return 'committed' as const
     })
+    if (commitOutcome === 'source-inactive') return
   } catch (e) {
     markFailed(`Backfill rollup write failed: ${e instanceof Error ? e.message : String(e)}`)
   }
@@ -968,6 +1152,12 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
   const resolveAccessToken = opts.resolveCloudRunAccessToken ?? defaultResolveAccessToken
   const pullWordpressEvents = opts.pullWordpressTrafficEvents ?? listWordpressTrafficEvents
   const pullVercelEvents = opts.pullVercelTrafficEvents ?? listVercelTrafficEvents
+  const pullQueueMessages = opts.pullCloudflareQueueMessages ?? pullCloudflareQueueMessages
+  const ackQueueMessages = opts.ackCloudflareQueueMessages ?? ackCloudflareQueueMessages
+  const cloudflareQueueMaxBatches = opts.cloudflareQueueMaxBatches ?? DEFAULT_CLOUDFLARE_QUEUE_MAX_BATCHES
+  if (!Number.isInteger(cloudflareQueueMaxBatches) || cloudflareQueueMaxBatches < 1 || cloudflareQueueMaxBatches > 50) {
+    throw new RangeError('cloudflareQueueMaxBatches must be an integer from 1 to 50')
+  }
   const allowLoopback = opts.allowLoopbackWebhooks === true
 
   /**
@@ -1040,6 +1230,73 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       cloudflareIngestRateLimitKey(request, opts.cloudflareTrafficCredentialStore, app.db),
   })
 
+  function validateTrafficSourceCredential(
+    source: typeof trafficSources.$inferSelect,
+    projectName: string,
+  ): { usesPullSchedule: boolean } {
+    if (source.sourceType === TrafficSourceTypes.cloudflare) {
+      const config = cloudflareTrafficSourceConfigSchema.safeParse(source.configJson)
+      if (!config.success) throw validationError('Cloudflare source configuration is invalid')
+      const credential = opts.cloudflareTrafficCredentialStore?.getConnectionBySourceId(source.id)
+      if (config.data.deliveryMode === CloudflareTrafficDeliveryModes['queue-pull']) {
+        if (!credential || credential.deliveryMode !== 'queue-pull'
+          || credential.projectName !== projectName
+          || typeof credential.apiToken !== 'string' || credential.apiToken.trim().length === 0
+          || credential.accountId !== config.data.accountId
+          || credential.queueId !== config.data.queueId
+          || credential.queueName !== config.data.queueName
+          || credential.retentionSeconds !== config.data.retentionSeconds) {
+          throw validationError('Cloudflare Queue credential is not configured for this source')
+        }
+        return { usesPullSchedule: true }
+      }
+      if (!credential || credential.deliveryMode !== 'direct-push'
+        || credential.projectName !== projectName
+        || !credential.bearerToken || !credential.hmacSecret
+        || !source.ingestTokenHash
+        || !timingSafeEqualHex(sha256Hex(credential.bearerToken), source.ingestTokenHash)) {
+        throw validationError('Cloudflare direct-push credential is not configured for this source')
+      }
+      return { usesPullSchedule: false }
+    }
+    if (source.sourceType === TrafficSourceTypes['cloud-run']) {
+      const credential = opts.cloudRunCredentialStore?.getConnection(projectName)
+      if (!credential
+        || credential.authMode !== TrafficSourceAuthModes['service-account']
+        || !credential.clientEmail?.trim()
+        || !credential.privateKey?.trim()
+        || credential.gcpProjectId !== source.configJson.gcpProjectId
+        || source.configJson.authMode !== TrafficSourceAuthModes['service-account']
+        || (credential.serviceName ?? null) !== (source.configJson.serviceName ?? null)
+        || (credential.location ?? null) !== (source.configJson.location ?? null)) {
+        throw validationError('Cloud Run credential is not configured for this source')
+      }
+      return { usesPullSchedule: true }
+    }
+    if (source.sourceType === TrafficSourceTypes.wordpress) {
+      const credential = opts.wordpressTrafficCredentialStore?.getConnection(projectName)
+      if (!credential
+        || typeof credential.applicationPassword !== 'string' || !credential.applicationPassword.trim()
+        || credential.baseUrl !== source.configJson.baseUrl
+        || credential.username !== source.configJson.username) {
+        throw validationError('WordPress traffic credential is not configured for this source')
+      }
+      return { usesPullSchedule: true }
+    }
+    if (source.sourceType === TrafficSourceTypes.vercel) {
+      const credential = opts.vercelTrafficCredentialStore?.getConnection(projectName)
+      if (!credential
+        || typeof credential.token !== 'string' || !credential.token.trim()
+        || credential.projectId !== source.configJson.projectId
+        || credential.teamId !== source.configJson.teamId
+        || credential.environment !== source.configJson.environment) {
+        throw validationError('Vercel traffic credential is not configured for this source')
+      }
+      return { usesPullSchedule: true }
+    }
+    throw validationError(`Traffic source type "${source.sourceType}" cannot be activated`)
+  }
+
   // POST /projects/:name/traffic/connect/cloud-run
   app.post<{
     Params: { name: string }
@@ -1091,15 +1348,6 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       updatedAt: now,
     })
 
-    // Find an existing non-archived source for this (project, sourceType).
-    // v1 supports a single active Cloud Run source per project; reconnect updates it.
-    const activeSource = app.db
-      .select()
-      .from(trafficSources)
-      .where(eq(trafficSources.projectId, project.id))
-      .all()
-      .find((row) => row.sourceType === TrafficSourceTypes['cloud-run'] && row.status !== TrafficSourceStatuses.archived)
-
     const config: Record<string, unknown> = {
       gcpProjectId,
       serviceName: serviceName ?? null,
@@ -1108,34 +1356,31 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     }
     const fallbackName = displayName ?? `Cloud Run · ${gcpProjectId}${serviceName ? ` / ${serviceName}` : ''}`
 
-    let sourceRow: typeof trafficSources.$inferSelect
-    if (activeSource) {
-      app.db
-        .update(trafficSources)
-        .set({
+    const { sourceRow, scheduleChanged } = app.db.transaction((tx) => {
+      // Authority selection must share the same immediate transaction as the
+      // write. A concurrent adapter connect that commits first is visible here
+      // and this source is staged instead of creating a second authority.
+      const activeSource = tx.select().from(trafficSources)
+        .where(eq(trafficSources.projectId, project.id)).all()
+        .find(row => row.sourceType === TrafficSourceTypes['cloud-run']
+          && row.status !== TrafficSourceStatuses.archived)
+      const sourceId = activeSource?.id ?? crypto.randomUUID()
+      const sourceStatus = trafficConnectStatus(tx, project.id, activeSource)
+      if (activeSource) {
+        tx.update(trafficSources).set({
           displayName: fallbackName,
-          status: TrafficSourceStatuses.connected,
+          status: sourceStatus,
           lastError: null,
           configJson: config,
           updatedAt: now,
-        })
-        .where(eq(trafficSources.id, activeSource.id))
-        .run()
-      sourceRow = app.db
-        .select()
-        .from(trafficSources)
-        .where(eq(trafficSources.id, activeSource.id))
-        .get()!
-    } else {
-      const newId = crypto.randomUUID()
-      app.db
-        .insert(trafficSources)
-        .values({
-          id: newId,
+        }).where(eq(trafficSources.id, sourceId)).run()
+      } else {
+        tx.insert(trafficSources).values({
+          id: sourceId,
           projectId: project.id,
           sourceType: TrafficSourceTypes['cloud-run'],
           displayName: fallbackName,
-          status: TrafficSourceStatuses.connected,
+          status: sourceStatus,
           lastSyncedAt: null,
           lastCursor: null,
           lastError: null,
@@ -1143,22 +1388,26 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           configJson: config,
           createdAt: now,
           updatedAt: now,
-        })
-        .run()
-      sourceRow = app.db
-        .select()
-        .from(trafficSources)
-        .where(eq(trafficSources.id, newId))
-        .get()!
+        }).run()
+      }
+      const scheduleBinding = sourceStatus === TrafficSourceStatuses.connected
+        ? bindTrafficSyncSchedule(tx, project.id, sourceId, now, false)
+        : { changed: false, created: false }
+      writeAuditLog(tx, {
+        projectId: project.id,
+        actor: 'api',
+        action: 'traffic.cloud-run.connected',
+        entityType: 'traffic_source',
+        entityId: sourceId,
+      })
+      return {
+        sourceRow: tx.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!,
+        scheduleChanged: scheduleBinding.changed,
+      }
+    }, { behavior: 'immediate' })
+    if (scheduleChanged) {
+      opts.onScheduleUpdated?.('upsert', project.id, SchedulableRunKinds['traffic-sync'])
     }
-
-    writeAuditLog(app.db, {
-      projectId: project.id,
-      actor: 'api',
-      action: 'traffic.cloud-run.connected',
-      entityType: 'traffic_source',
-      entityId: sourceRow.id,
-    })
 
     return rowToDto(sourceRow)
   })
@@ -1234,47 +1483,33 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       updatedAt: now,
     })
 
-    // Single active WordPress source per project; reconnect updates it.
-    const activeSource = app.db
-      .select()
-      .from(trafficSources)
-      .where(eq(trafficSources.projectId, project.id))
-      .all()
-      .find((row) => row.sourceType === TrafficSourceTypes.wordpress && row.status !== TrafficSourceStatuses.archived)
-
     // Only non-secret config goes on the row — the Application Password lives
     // in ~/.canonry/config.yaml via the credential store.
     const config: Record<string, unknown> = { baseUrl, username }
     const fallbackName = displayName ?? `WordPress · ${new URL(baseUrl).host}`
 
-    let sourceRow: typeof trafficSources.$inferSelect
-    if (activeSource) {
-      app.db
-        .update(trafficSources)
-        .set({
+    const { sourceRow, scheduleChanged } = app.db.transaction((tx) => {
+      const activeSource = tx.select().from(trafficSources)
+        .where(eq(trafficSources.projectId, project.id)).all()
+        .find(row => row.sourceType === TrafficSourceTypes.wordpress
+          && row.status !== TrafficSourceStatuses.archived)
+      const sourceId = activeSource?.id ?? crypto.randomUUID()
+      const sourceStatus = trafficConnectStatus(tx, project.id, activeSource)
+      if (activeSource) {
+        tx.update(trafficSources).set({
           displayName: fallbackName,
-          status: TrafficSourceStatuses.connected,
+          status: sourceStatus,
           lastError: null,
           configJson: config,
           updatedAt: now,
-        })
-        .where(eq(trafficSources.id, activeSource.id))
-        .run()
-      sourceRow = app.db
-        .select()
-        .from(trafficSources)
-        .where(eq(trafficSources.id, activeSource.id))
-        .get()!
-    } else {
-      const newId = crypto.randomUUID()
-      app.db
-        .insert(trafficSources)
-        .values({
-          id: newId,
+        }).where(eq(trafficSources.id, sourceId)).run()
+      } else {
+        tx.insert(trafficSources).values({
+          id: sourceId,
           projectId: project.id,
           sourceType: TrafficSourceTypes.wordpress,
           displayName: fallbackName,
-          status: TrafficSourceStatuses.connected,
+          status: sourceStatus,
           lastSyncedAt: null,
           lastCursor: null,
           lastError: null,
@@ -1282,22 +1517,26 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           configJson: config,
           createdAt: now,
           updatedAt: now,
-        })
-        .run()
-      sourceRow = app.db
-        .select()
-        .from(trafficSources)
-        .where(eq(trafficSources.id, newId))
-        .get()!
+        }).run()
+      }
+      const scheduleBinding = sourceStatus === TrafficSourceStatuses.connected
+        ? bindTrafficSyncSchedule(tx, project.id, sourceId, now, false)
+        : { changed: false, created: false }
+      writeAuditLog(tx, {
+        projectId: project.id,
+        actor: 'api',
+        action: 'traffic.wordpress.connected',
+        entityType: 'traffic_source',
+        entityId: sourceId,
+      })
+      return {
+        sourceRow: tx.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!,
+        scheduleChanged: scheduleBinding.changed,
+      }
+    }, { behavior: 'immediate' })
+    if (scheduleChanged) {
+      opts.onScheduleUpdated?.('upsert', project.id, SchedulableRunKinds['traffic-sync'])
     }
-
-    writeAuditLog(app.db, {
-      projectId: project.id,
-      actor: 'api',
-      action: 'traffic.wordpress.connected',
-      entityType: 'traffic_source',
-      entityId: sourceRow.id,
-    })
 
     return rowToDto(sourceRow)
   })
@@ -1367,14 +1606,6 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       updatedAt: now,
     })
 
-    // Single active Vercel source per project; reconnect updates it.
-    const activeSource = app.db
-      .select()
-      .from(trafficSources)
-      .where(eq(trafficSources.projectId, project.id))
-      .all()
-      .find((row) => row.sourceType === TrafficSourceTypes.vercel && row.status !== TrafficSourceStatuses.archived)
-
     // Only non-secret config goes on the row — the API token lives in
     // ~/.canonry/config.yaml via the credential store.
     const config: Record<string, unknown> = { projectId, teamId, environment }
@@ -1383,14 +1614,19 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     // Source upsert + the auto-created traffic-sync schedule are one atomic
     // write — a source must never be left connected without the schedule that
     // keeps it syncing (that's the trap this fixes).
-    const { sourceRow, scheduleCreated } = app.db.transaction((tx) => {
+    const { sourceRow, scheduleChanged } = app.db.transaction((tx) => {
+      const activeSource = tx.select().from(trafficSources)
+        .where(eq(trafficSources.projectId, project.id)).all()
+        .find(row => row.sourceType === TrafficSourceTypes.vercel
+          && row.status !== TrafficSourceStatuses.archived)
+      const sourceStatus = trafficConnectStatus(tx, project.id, activeSource)
       let row: typeof trafficSources.$inferSelect
       if (activeSource) {
         tx
           .update(trafficSources)
           .set({
             displayName: fallbackName,
-            status: TrafficSourceStatuses.connected,
+            status: sourceStatus,
             lastError: null,
             configJson: config,
             updatedAt: now,
@@ -1411,7 +1647,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             projectId: project.id,
             sourceType: TrafficSourceTypes.vercel,
             displayName: fallbackName,
-            status: TrafficSourceStatuses.connected,
+            status: sourceStatus,
             // Seed lastSyncedAt to NOW so the first sync uses a tight window.
             // Leaving this null would make the first sync fall back to
             // DEFAULT_SYNC_WINDOW_MINUTES (30 days) — which exceeds Vercel's
@@ -1442,38 +1678,11 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       // cadence, and nothing does without a schedule. An unscheduled source's
       // watermark drifts, and the next sync pulls an unbounded window that
       // wedges — the half of the first-sync trap (#634) that connect left open.
-      // Idempotent: a reconnect, or a project that already has a traffic-sync
-      // schedule, is left untouched.
-      const existingSchedule = tx
-        .select()
-        .from(schedules)
-        .where(
-          and(
-            eq(schedules.projectId, project.id),
-            eq(schedules.kind, SchedulableRunKinds['traffic-sync']),
-          ),
-        )
-        .get()
-      let created = false
-      if (!existingSchedule) {
-        tx
-          .insert(schedules)
-          .values({
-            id: crypto.randomUUID(),
-            projectId: project.id,
-            kind: SchedulableRunKinds['traffic-sync'],
-            cronExpr: DEFAULT_TRAFFIC_SYNC_CRON,
-            preset: null,
-            timezone: 'UTC',
-            enabled: true,
-            providers: [],
-            sourceId: row.id,
-            createdAt: now,
-            updatedAt: now,
-          })
-          .run()
-        created = true
-      }
+      // Idempotent for the same source. If an old pull source left a stale
+      // binding, repoint it without changing the operator's enabled choice.
+      const scheduleBinding = sourceStatus === TrafficSourceStatuses.connected
+        ? bindTrafficSyncSchedule(tx, project.id, row.id, now)
+        : { changed: false, created: false }
 
       writeAuditLog(tx, {
         projectId: project.id,
@@ -1482,7 +1691,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         entityType: 'traffic_source',
         entityId: row.id,
       })
-      if (created) {
+      if (scheduleBinding.created) {
         writeAuditLog(tx, {
           projectId: project.id,
           actor: 'api',
@@ -1496,13 +1705,12 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         })
       }
 
-      return { sourceRow: row, scheduleCreated: created }
-    })
+      return { sourceRow: row, scheduleChanged: scheduleBinding.changed }
+    }, { behavior: 'immediate' })
 
-    // Register the new cron with the live scheduler after the commit, per the
-    // transaction-callback rule. A reconnect (schedule already present) skips
-    // this — its cron is already ticking.
-    if (scheduleCreated) {
+    // Refresh the live scheduler after creating a schedule or rebinding a
+    // stale one. A reconnect already bound to this source remains a no-op.
+    if (scheduleChanged) {
       opts.onScheduleUpdated?.('upsert', project.id, SchedulableRunKinds['traffic-sync'])
     }
 
@@ -1511,31 +1719,131 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
 
   // POST /projects/:name/traffic/connect/cloudflare
   //
-  // Direct-push adapter — no upstream probe. Canonry issues per-source
-  // credentials but generated source/config only references Worker bindings.
-  // Reconnect is safe to repeat: a matching source reuses its credentials and
-  // omitted metadata instead of invalidating the deployed Worker.
+  // Cloudflare adapter. Direct push issues per-source Worker secrets; Queue
+  // pull stores its API token only in Canonry. Generated artifacts are secret
+  // free in both modes and a matching-mode reconnect reuses the source row.
   app.post<{
     Params: { name: string }
-    Body: {
-      deliveryMode?: 'direct-push'
-      displayName?: string
-      zoneId?: string
-      accountId?: string
-    }
+    Body: TrafficConnectCloudflareRequest
   }>('/projects/:name/traffic/connect/cloudflare', async (request) => {
     const project = resolveProject(app.db, request.params.name)
     if (!opts.cloudflareTrafficCredentialStore) {
       throw validationError('Cloudflare traffic credential storage is not configured for this deployment')
-    }
-    if (!opts.cloudflareTrafficIngestUrl) {
-      throw validationError('Cloudflare ingest URL is not configured for this deployment')
     }
     const credentialStore = opts.cloudflareTrafficCredentialStore
 
     const parsed = trafficConnectCloudflareRequestSchema.safeParse(request.body ?? {})
     if (!parsed.success) {
       throw validationError(parsed.error.issues.map((i) => i.message).join('; '))
+    }
+    if (parsed.data.deliveryMode === CloudflareTrafficDeliveryModes['queue-pull']) {
+      const { displayName, zoneId, accountId, queueId, queueName, retentionSeconds, apiToken } = parsed.data
+      const workerRouteHost = resolveCloudflareWorkerRouteHost(project.canonicalDomain)
+      const now = new Date().toISOString()
+      const cloudflareSources = app.db.select().from(trafficSources)
+        .where(eq(trafficSources.projectId, project.id)).all()
+        .filter(row => row.sourceType === TrafficSourceTypes.cloudflare && row.status !== TrafficSourceStatuses.archived)
+      const sameModeSource = cloudflareSources.find(row => parseQueuePullCloudflareSourceConfig(row.configJson))
+      const sourceId = sameModeSource?.id ?? crypto.randomUUID()
+      const previousCredential = credentialStore.getConnectionBySourceId(sourceId)
+      const workerVersion = CLOUDFLARE_WORKER_VERSION
+      const workerScript = generateWorkerScript({
+        deliveryMode: 'queue-pull', workerVersion, botList: DEFAULT_BOT_LIST,
+      })
+      const wranglerToml = generateWranglerToml({
+        deliveryMode: 'queue-pull', sourceId, hostname: workerRouteHost, workerVersion,
+        queueName, zoneId: zoneId ?? null, accountId,
+      })
+      const config = {
+        schemaVersion: 1 as const,
+        deliveryMode: 'queue-pull' as const,
+        workerVersion,
+        expectedBotListVersion: DEFAULT_BOT_LIST.version,
+        zoneId: zoneId ?? null,
+        accountId,
+        queueId,
+        queueName,
+        retentionSeconds,
+      }
+      const nextCredential: CloudflareQueuePullTrafficCredentialRecord = {
+        projectName: project.name, sourceId, deliveryMode: 'queue-pull', apiToken, accountId, queueId,
+        queueName, retentionSeconds, workerVersion, expectedBotListVersion: DEFAULT_BOT_LIST.version,
+        zoneId: zoneId ?? null, createdAt: previousCredential?.createdAt ?? now, updatedAt: now,
+      }
+      credentialStore.upsertConnection(nextCredential)
+      let sourceRow: typeof trafficSources.$inferSelect
+      let scheduleChanged = false
+      try {
+        const result = app.db.transaction((tx) => {
+          const currentSameModeSource = tx.select().from(trafficSources)
+            .where(eq(trafficSources.projectId, project.id)).all()
+            .find(row => row.sourceType === TrafficSourceTypes.cloudflare
+              && row.status !== TrafficSourceStatuses.archived
+              && parseQueuePullCloudflareSourceConfig(row.configJson) !== null)
+          if ((currentSameModeSource?.id ?? null) !== (sameModeSource?.id ?? null)) {
+            throw operationInProgress('Cloudflare Queue source changed during connect; retry')
+          }
+          const status = trafficConnectStatus(tx, project.id, currentSameModeSource)
+          if (currentSameModeSource) {
+            const queueConfigChanged = !isDeepStrictEqual(currentSameModeSource.configJson, config)
+            tx.update(trafficSources).set({
+              displayName: displayName ?? currentSameModeSource.displayName,
+              status,
+              lastError: null,
+              configJson: config,
+              ingestTokenHash: null,
+              ...(queueConfigChanged ? {
+                queueBacklogCount: null,
+                queueBacklogObservedAt: null,
+              } : {}),
+              updatedAt: now,
+            }).where(eq(trafficSources.id, sourceId)).run()
+          } else {
+            tx.insert(trafficSources).values({
+              id: sourceId, projectId: project.id, sourceType: TrafficSourceTypes.cloudflare,
+              displayName: displayName ?? `Cloudflare Queue · ${queueName}`,
+              status, lastSyncedAt: null, lastCursor: null, lastError: null, archivedAt: null,
+              configJson: config, ingestTokenHash: null, createdAt: now, updatedAt: now,
+            }).run()
+          }
+          const changed = status === TrafficSourceStatuses.connected
+            ? bindTrafficSyncSchedule(tx, project.id, sourceId, now).changed
+            : false
+          return {
+            row: tx.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!,
+            scheduleChanged: changed,
+          }
+        }, { behavior: 'immediate' })
+        sourceRow = result.row
+        scheduleChanged = result.scheduleChanged
+      } catch (error) {
+        if (previousCredential) credentialStore.upsertConnection(previousCredential)
+        else credentialStore.deleteConnectionBySourceId?.(sourceId)
+        throw error
+      }
+      writeAuditLog(app.db, {
+        projectId: project.id, actor: 'api', action: 'traffic.cloudflare.queue-connected',
+        entityType: 'traffic_source', entityId: sourceId,
+      })
+      if (scheduleChanged) {
+        opts.onScheduleUpdated?.('upsert', project.id, SchedulableRunKinds['traffic-sync'])
+      }
+      return {
+        sourceId, deliveryMode: 'queue-pull' as const,
+        activationRequired: sourceRow.status !== TrafficSourceStatuses.connected,
+        accountId, queueId, queueName, retentionSeconds, workerScript, wranglerToml, workerVersion,
+        instructions: [
+          'Deploy this Worker to your Cloudflare zone:',
+          '  1. Save worker.js and wrangler.toml; neither file contains Queue credentials',
+          `  2. Enable the Queue HTTP pull consumer: wrangler queues consumer http add ${queueName}`,
+          `  3. Attach ${workerRouteHost}/* in the Cloudflare Dashboard with Fail open`,
+          `  4. Canonry pulls Queue ${queueName}; activate this source after the route is live.`,
+          `Source id: ${sourceRow.id}`,
+        ].join('\n'),
+      }
+    }
+    if (!opts.cloudflareTrafficIngestUrl) {
+      throw validationError('Cloudflare ingest URL is not configured for this deployment')
     }
     const { deliveryMode, displayName, zoneId, accountId } = parsed.data
     const workerRouteHost = resolveCloudflareWorkerRouteHost(project.canonicalDomain)
@@ -1547,10 +1855,9 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       .from(trafficSources)
       .where(eq(trafficSources.projectId, project.id))
       .all()
-      .find((row) =>
-        row.sourceType === TrafficSourceTypes.cloudflare
-          && row.status !== TrafficSourceStatuses.archived,
-      )
+      .find((row) => row.sourceType === TrafficSourceTypes.cloudflare
+        && row.status !== TrafficSourceStatuses.archived
+        && parseDirectPushCloudflareSourceConfig(row.configJson) !== null)
 
     const sourceId = activeSource?.id ?? crypto.randomUUID()
     const parsedActiveConfig = activeSource
@@ -1559,8 +1866,10 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     if (activeSource && !parsedActiveConfig) {
       throw validationError('Existing Cloudflare source is not configured for direct-push delivery')
     }
-    const previousCredential = credentialStore.getConnection(project.name)
-    if (previousCredential && !isDirectPushCloudflareDeliveryMode(previousCredential.deliveryMode)) {
+    const previousCredential = activeSource
+      ? credentialStore.getConnectionBySourceId(activeSource.id)
+      : undefined
+    if (previousCredential && previousCredential.deliveryMode !== 'direct-push') {
       throw validationError(
         `Cloudflare credential delivery mode "${previousCredential.deliveryMode}" does not match "${deliveryMode}"`,
       )
@@ -1628,59 +1937,94 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     })
 
     let sourceRow: typeof trafficSources.$inferSelect
+    let scheduleRemoved = false
     try {
-      if (activeSource) {
-        app.db
-          .update(trafficSources)
-          .set({
-            displayName: fallbackName,
-            status: TrafficSourceStatuses.connected,
-            lastError: null,
-            configJson: config,
-            ingestTokenHash,
-            updatedAt: now,
-          })
-          .where(eq(trafficSources.id, activeSource.id))
-          .run()
-        sourceRow = app.db
-          .select()
-          .from(trafficSources)
-          .where(eq(trafficSources.id, activeSource.id))
-          .get()!
-      } else {
-        app.db
-          .insert(trafficSources)
-          .values({
-            id: sourceId,
-            projectId: project.id,
-            sourceType: TrafficSourceTypes.cloudflare,
-            displayName: fallbackName,
-            status: TrafficSourceStatuses.connected,
-            // Seed `lastSyncedAt` to NOW so the `traffic.source.recent-data`
-            // doctor check has a non-null baseline. Successful ingest advances
-            // it as the receiver's last-activity timestamp.
-            lastSyncedAt: now,
-            lastCursor: null,
-            lastError: null,
-            archivedAt: null,
-            configJson: config,
-            ingestTokenHash,
-            createdAt: now,
-            updatedAt: now,
-          })
-          .run()
-        sourceRow = app.db
-          .select()
-          .from(trafficSources)
-          .where(eq(trafficSources.id, sourceId))
-          .get()!
-      }
+      const result = app.db.transaction((tx) => {
+        const currentActiveSource = tx.select().from(trafficSources)
+          .where(eq(trafficSources.projectId, project.id)).all()
+          .find(row => row.sourceType === TrafficSourceTypes.cloudflare
+            && row.status !== TrafficSourceStatuses.archived
+            && parseDirectPushCloudflareSourceConfig(row.configJson) !== null)
+        if ((currentActiveSource?.id ?? null) !== (activeSource?.id ?? null)) {
+          throw operationInProgress('Cloudflare direct-push source changed during connect; retry')
+        }
+        const sourceStatus = trafficConnectStatus(tx, project.id, currentActiveSource)
+        let row: typeof trafficSources.$inferSelect
+        if (currentActiveSource) {
+          tx
+            .update(trafficSources)
+            .set({
+              displayName: fallbackName,
+              status: sourceStatus,
+              lastError: null,
+              configJson: config,
+              ingestTokenHash,
+              updatedAt: now,
+            })
+            .where(eq(trafficSources.id, currentActiveSource.id))
+            .run()
+          row = tx
+            .select()
+            .from(trafficSources)
+            .where(eq(trafficSources.id, currentActiveSource.id))
+            .get()!
+        } else {
+          tx
+            .insert(trafficSources)
+            .values({
+              id: sourceId,
+              projectId: project.id,
+              sourceType: TrafficSourceTypes.cloudflare,
+              displayName: fallbackName,
+              status: sourceStatus,
+              // Seed `lastSyncedAt` to NOW so the `traffic.source.recent-data`
+              // doctor check has a non-null baseline. Successful ingest advances
+              // it as the receiver's last-activity timestamp.
+              lastSyncedAt: now,
+              lastCursor: null,
+              lastError: null,
+              archivedAt: null,
+              configJson: config,
+              ingestTokenHash,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .run()
+          row = tx
+            .select()
+            .from(trafficSources)
+            .where(eq(trafficSources.id, sourceId))
+            .get()!
+        }
+
+        // Direct push is the active authority only when it is connected. A
+        // traffic-sync schedule can only drive pull adapters, so remove any
+        // stale schedule in the same transaction as this authority change.
+        let removed = false
+        if (row.status === TrafficSourceStatuses.connected) {
+          const schedule = tx
+            .select()
+            .from(schedules)
+            .where(and(
+              eq(schedules.projectId, project.id),
+              eq(schedules.kind, SchedulableRunKinds['traffic-sync']),
+            ))
+            .get()
+          if (schedule) {
+            tx.delete(schedules).where(eq(schedules.id, schedule.id)).run()
+            removed = true
+          }
+        }
+        return { row, scheduleRemoved: removed }
+      }, { behavior: 'immediate' })
+      sourceRow = result.row
+      scheduleRemoved = result.scheduleRemoved
     } catch (err) {
       try {
         if (previousCredential) {
           credentialStore.upsertConnection(previousCredential)
         } else {
-          credentialStore.deleteConnection(project.name)
+          credentialStore.deleteConnectionBySourceId?.(sourceId)
         }
       } catch {
         // Preserve the original DB failure; rollback failure only affects the
@@ -1696,6 +2040,9 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       entityType: 'traffic_source',
       entityId: sourceRow.id,
     })
+    if (scheduleRemoved) {
+      opts.onScheduleUpdated?.('delete', project.id, SchedulableRunKinds['traffic-sync'])
+    }
 
     const routeInstruction = effectiveZoneId
       ? `  4. Deploy with \`wrangler deploy\`; wrangler.toml records zone ${effectiveZoneId} but does not claim a route`
@@ -1717,11 +2064,67 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     return {
       sourceId: sourceRow.id,
       deliveryMode,
+      activationRequired: sourceRow.status !== TrafficSourceStatuses.connected,
       workerScript,
       wranglerToml,
       workerVersion,
       instructions,
     }
+  })
+
+  // POST /projects/:name/traffic/sources/:id/activate
+  //
+  // Delivery adapters coexist as staged sources. Activation is the sole
+  // cutover point: validate the local credential, pause all project siblings,
+  // connect this source, and hand the one project traffic-sync schedule to a
+  // pull adapter (or remove it for direct push) atomically.
+  app.post<{
+    Params: { name: string; id: string }
+  }>('/projects/:name/traffic/sources/:id/activate', async (request) => {
+    const project = resolveProject(app.db, request.params.name)
+    const now = new Date().toISOString()
+    const result = app.db.transaction((tx) => {
+      const target = tx.select().from(trafficSources).where(eq(trafficSources.id, request.params.id)).get()
+      if (!target || target.projectId !== project.id || target.status === TrafficSourceStatuses.archived) {
+        throw notFound('Traffic source', request.params.id)
+      }
+      const { usesPullSchedule } = validateTrafficSourceCredential(target, project.name)
+
+      const siblings = tx.select().from(trafficSources).where(eq(trafficSources.projectId, project.id)).all()
+      for (const sibling of siblings) {
+        if (sibling.id === target.id || sibling.status === TrafficSourceStatuses.archived) continue
+        tx.update(trafficSources).set({
+          status: TrafficSourceStatuses.paused, updatedAt: now,
+        }).where(eq(trafficSources.id, sibling.id)).run()
+      }
+      tx.update(trafficSources).set({
+        status: TrafficSourceStatuses.connected, lastError: null, archivedAt: null, updatedAt: now,
+      }).where(eq(trafficSources.id, target.id)).run()
+
+      let scheduleAction: 'upsert' | 'delete' | null = null
+      if (usesPullSchedule) {
+        bindTrafficSyncSchedule(tx, project.id, target.id, now)
+        scheduleAction = 'upsert'
+      } else {
+        const schedule = tx.select().from(schedules).where(and(
+          eq(schedules.projectId, project.id), eq(schedules.kind, SchedulableRunKinds['traffic-sync']),
+        )).get()
+        if (schedule) {
+          tx.delete(schedules).where(eq(schedules.id, schedule.id)).run()
+          scheduleAction = 'delete'
+        }
+      }
+      const source = tx.select().from(trafficSources).where(eq(trafficSources.id, target.id)).get()!
+      writeAuditLog(tx, {
+        projectId: project.id, actor: 'api', action: 'traffic.source.activated',
+        entityType: 'traffic_source', entityId: target.id,
+      })
+      return { source, scheduleAction }
+    })
+    if (result.scheduleAction) {
+      opts.onScheduleUpdated?.(result.scheduleAction, project.id, SchedulableRunKinds['traffic-sync'])
+    }
+    return rowToDto(result.source)
   })
 
   // POST /projects/:name/traffic/cloudflare/ingest
@@ -1793,7 +2196,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     if (
       !sourceRow
       || sourceRow.sourceType !== TrafficSourceTypes.cloudflare
-      || sourceRow.status === TrafficSourceStatuses.archived
+      || sourceRow.status !== TrafficSourceStatuses.connected
       || !parseDirectPushCloudflareSourceConfig(sourceRow.configJson)
       || !timingSafeEqualHex(bearerHash, sourceRow.ingestTokenHash)
     ) {
@@ -1843,7 +2246,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           !latestRow
           || latestRow.projectId !== project.id
           || latestRow.sourceType !== TrafficSourceTypes.cloudflare
-          || latestRow.status === TrafficSourceStatuses.archived
+          || latestRow.status !== TrafficSourceStatuses.connected
           || !parseDirectPushCloudflareSourceConfig(latestRow.configJson)
           || !timingSafeEqualHex(bearerHash, latestRow.ingestTokenHash)
         ) {
@@ -1890,6 +2293,224 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     if (!sourceRow || sourceRow.projectId !== project.id) {
       throw notFound('Traffic source', request.params.id)
     }
+    const queueConfig = sourceRow.sourceType === TrafficSourceTypes.cloudflare
+      ? parseQueuePullCloudflareSourceConfig(sourceRow.configJson)
+      : null
+    if (queueConfig) {
+      if (sourceRow.status !== TrafficSourceStatuses.connected) {
+        throw validationError('Cloudflare Queue source must be active before it can sync')
+      }
+      const credential = opts.cloudflareTrafficCredentialStore?.getConnectionBySourceId(sourceRow.id)
+      if (!credential || credential.deliveryMode !== 'queue-pull'
+        || credential.projectName !== project.name
+        || typeof credential.apiToken !== 'string' || credential.apiToken.trim().length === 0
+        || credential.accountId !== queueConfig.accountId
+        || credential.queueId !== queueConfig.queueId
+        || credential.queueName !== queueConfig.queueName
+        || credential.retentionSeconds !== queueConfig.retentionSeconds) {
+        throw validationError('Cloudflare Queue credential is not configured for this source')
+      }
+      const queueClient: CloudflareQueueClientOptions = {
+        accountId: credential.accountId, queueId: credential.queueId, apiToken: credential.apiToken,
+      }
+      const now = new Date().toISOString()
+      const leaseOwner = crypto.randomUUID()
+      if (!tryClaimTrafficSyncLease({
+        db: app.db, sourceId: sourceRow.id, owner: leaseOwner, now, ttlMs: CLOUDFLARE_QUEUE_SYNC_LEASE_TTL_MS,
+      })) {
+        throw operationInProgress('Cloudflare Queue source sync is already in progress', { sourceId: sourceRow.id })
+      }
+      const runId = crypto.randomUUID()
+      const startedAt = new Date().toISOString()
+      const startedMs = Date.now()
+      try {
+        app.db.insert(runs).values({
+          id: runId, projectId: project.id, kind: RunKinds['traffic-sync'], status: RunStatuses.running,
+          trigger: RunTriggers.manual, sourceId: sourceRow.id, startedAt, createdAt: startedAt,
+        }).run()
+        let acceptedEvents = 0
+        let selfTrafficExcluded = 0
+        let crawlerHits = 0
+        let aiUserFetchHits = 0
+        let aiReferralHits = 0
+        let unknownHits = 0
+        let crawlerBucketRows = 0
+        let aiUserFetchBucketRows = 0
+        let aiReferralBucketRows = 0
+        let sampleRows = 0
+        let committedAt = startedAt
+        let remainingBacklogCount = 0
+        const canonicalHost = resolveCloudflareWorkerRouteHost(project.canonicalDomain)
+        for (let batch = 0; batch < cloudflareQueueMaxBatches; batch += 1) {
+          if (!tryClaimTrafficSyncLease({
+            db: app.db, sourceId: sourceRow.id, owner: leaseOwner, now: new Date().toISOString(),
+            ttlMs: CLOUDFLARE_QUEUE_SYNC_LEASE_TTL_MS,
+          })) throw new Error('Queue sync lease was lost')
+          const pulled = await pullQueueMessages(queueClient, {
+            batchSize: CLOUDFLARE_QUEUE_BATCH_SIZE,
+            visibilityTimeoutMs: CLOUDFLARE_QUEUE_VISIBILITY_TIMEOUT_MS,
+          })
+          remainingBacklogCount = pulled.messageBacklogCount
+          if (pulled.skippedUnleasedMessageCount > 0) {
+            request.log.warn({
+              sourceId: sourceRow.id,
+              skippedUnleasedMessageCount: pulled.skippedUnleasedMessageCount,
+            }, 'Skipped unacknowledgeable Cloudflare Queue messages; they remain eligible for redelivery')
+          }
+          const validLeases: string[] = []
+          const poisonLeases: string[] = []
+          const normalized: NormalizedTrafficRequest[] = []
+          let workerVersion: string | null = null
+          for (const message of pulled.messages) {
+            if (message.contentType === 'poison') {
+              poisonLeases.push(message.leaseId)
+              request.log.warn({ sourceId: sourceRow.id, messageId: message.id, reason: message.reason },
+                'Dropping malformed Cloudflare Queue message')
+              continue
+            }
+            // The generated Worker is a JSON producer. Do not infer JSON from
+            // a text body: an alternate producer must opt into the same wire
+            // contract explicitly, otherwise ACK/drop the leased poison once.
+            if (message.contentType !== 'json') {
+              poisonLeases.push(message.leaseId)
+              request.log.warn({
+                sourceId: sourceRow.id,
+                messageId: message.id,
+                contentType: message.contentType,
+                reason: 'unsupported-content-type',
+              }, 'Dropping Cloudflare Queue message with an unsupported content type')
+              continue
+            }
+            const parsedBatch = cloudflareWorkerIngestRequestSchema.safeParse(message.body)
+            if (!parsedBatch.success) {
+              poisonLeases.push(message.leaseId)
+              request.log.warn({ sourceId: sourceRow.id, messageId: message.id },
+                'Dropping Cloudflare Queue message with an invalid Canonry batch')
+              continue
+            }
+            if (parsedBatch.data.events.some(event => normalizeCloudflareEventHost(event.host) !== canonicalHost)) {
+              poisonLeases.push(message.leaseId)
+              request.log.warn({ sourceId: sourceRow.id, messageId: message.id },
+                'Dropping Cloudflare Queue message for another host')
+              continue
+            }
+            workerVersion = parsedBatch.data.workerVersion
+            for (const event of parsedBatch.data.events) {
+              const normalizedEvent = normalizeCloudflareWorkerEvent(event)
+              if (normalizedEvent) normalized.push(normalizedEvent)
+            }
+            validLeases.push(message.leaseId)
+          }
+          committedAt = new Date().toISOString()
+          const writeResult = writeTrafficEventBatch({
+            db: app.db, projectId: project.id, sourceId: sourceRow.id, events: normalized,
+            receivedAt: committedAt,
+            receiptTtlMs: CLOUDFLARE_QUEUE_RECEIPT_TTL_MS,
+            sampleLimit,
+            validateSource: latest => {
+              if (!latest || latest.projectId !== project.id
+                || latest.status !== TrafficSourceStatuses.connected
+                || latest.syncLeaseOwner !== leaseOwner
+                || !isDeepStrictEqual(latest.configJson, sourceRow.configJson)) {
+                throw validationError('Cloudflare Queue source is no longer active')
+              }
+            },
+            sourceUpdate: {
+              status: TrafficSourceStatuses.connected, lastSyncedAt: committedAt, lastError: null,
+              queueBacklogCount: remainingBacklogCount, queueBacklogObservedAt: committedAt,
+              ...(workerVersion ? { lastWorkerVersion: workerVersion } : {}), updatedAt: committedAt,
+            },
+          })
+          // Ack this <=100-message lease batch only after its receipt+rollup commit.
+          if (validLeases.length > 0 || poisonLeases.length > 0) {
+            // A Queue ACK may retry transient 429/5xx responses. Renew right
+            // before it starts so the source lease covers the entire ACK
+            // attempt rather than only the preceding pull/commit work.
+            if (!tryClaimTrafficSyncLease({
+              db: app.db, sourceId: sourceRow.id, owner: leaseOwner,
+              now: new Date().toISOString(), ttlMs: CLOUDFLARE_QUEUE_SYNC_LEASE_TTL_MS,
+            })) throw new Error('Queue sync lease was lost before acknowledgement')
+            const latestSource = app.db.select().from(trafficSources)
+              .where(eq(trafficSources.id, sourceRow.id)).get()
+            if (!latestSource
+              || latestSource.projectId !== project.id
+              || latestSource.status !== TrafficSourceStatuses.connected
+              || latestSource.syncLeaseOwner !== leaseOwner
+              || !isDeepStrictEqual(latestSource.configJson, sourceRow.configJson)) {
+              throw validationError('Cloudflare Queue source was reconfigured before acknowledgement')
+            }
+            const ackResult = await ackQueueMessages(queueClient, { acks: [...validLeases, ...poisonLeases] })
+            if (ackResult.warningCount > 0) {
+              request.log.warn({
+                sourceId: sourceRow.id,
+                warningCount: ackResult.warningCount,
+              }, 'Cloudflare Queue acknowledgement completed with warnings')
+            }
+          }
+          acceptedEvents += writeResult.acceptedEvents
+          selfTrafficExcluded += writeResult.selfTrafficExcluded
+          crawlerHits += writeResult.crawlerHits
+          aiUserFetchHits += writeResult.aiUserFetchHits
+          aiReferralHits += writeResult.aiReferralHits
+          unknownHits += writeResult.unknownHits
+          crawlerBucketRows += writeResult.crawlerBucketRows
+          aiUserFetchBucketRows += writeResult.aiUserFetchBucketRows
+          aiReferralBucketRows += writeResult.aiReferralBucketRows
+          sampleRows += writeResult.sampleRows
+          const pulledEnvelopeCount = pulled.messages.length + pulled.skippedUnleasedMessageCount
+          if (pulledEnvelopeCount < CLOUDFLARE_QUEUE_BATCH_SIZE || remainingBacklogCount === 0) break
+        }
+        app.db.update(runs).set({ status: RunStatuses.completed, finishedAt: committedAt })
+          .where(eq(runs.id, runId)).run()
+        writeAuditLog(app.db, {
+          projectId: project.id, actor: 'api', action: 'traffic.cloudflare.queue-synced',
+          entityType: 'traffic_source', entityId: sourceRow.id,
+        })
+        try {
+          opts.onTrafficSynced?.({
+            status: 'completed', sourceType: sourceRow.sourceType, sourceId: sourceRow.id,
+            pulledEvents: acceptedEvents, selfTrafficExcluded,
+            crawlerHits, aiUserFetchHits, aiReferralHits,
+            durationMs: Date.now() - startedMs,
+          })
+        } catch { /* telemetry never blocks Queue acknowledgement */ }
+        const response: TrafficSyncResponse = {
+          sourceId: sourceRow.id, runId, syncedAt: committedAt, pulledEvents: acceptedEvents,
+          selfTrafficExcluded, crawlerHits, aiUserFetchHits, aiReferralHits, unknownHits,
+          crawlerBucketRows, aiUserFetchBucketRows, aiReferralBucketRows, sampleRows,
+          remainingBacklogCount,
+          windowStart: startedAt, windowEnd: committedAt,
+        }
+        return response
+      } catch (error) {
+        const failedAt = new Date().toISOString()
+        const safeError = error instanceof CloudflareQueueApiError
+          ? error.message
+          : 'Cloudflare Queue sync failed; retry the active source.'
+        app.db.transaction((tx) => {
+          tx.update(runs).set({ status: RunStatuses.failed, error: safeError, finishedAt: failedAt })
+            .where(eq(runs.id, runId)).run()
+          const latestSource = tx.select().from(trafficSources)
+            .where(eq(trafficSources.id, sourceRow.id)).get()
+          if (latestSource
+            && latestSource.status === TrafficSourceStatuses.connected
+            && latestSource.syncLeaseOwner === leaseOwner
+            && isDeepStrictEqual(latestSource.configJson, sourceRow.configJson)) {
+            tx.update(trafficSources).set({ lastError: safeError, updatedAt: failedAt })
+              .where(and(
+                eq(trafficSources.id, sourceRow.id),
+                eq(trafficSources.status, TrafficSourceStatuses.connected),
+                eq(trafficSources.syncLeaseOwner, leaseOwner),
+              )).run()
+          }
+        })
+        throw providerError(safeError)
+      } finally {
+        releaseTrafficSyncLease({
+          db: app.db, sourceId: sourceRow.id, owner: leaseOwner, now: new Date().toISOString(),
+        })
+      }
+    }
     if (
       sourceRow.sourceType !== TrafficSourceTypes['cloud-run']
       && sourceRow.sourceType !== TrafficSourceTypes.wordpress
@@ -1898,6 +2519,17 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       throw validationError(
         `Sync for source type "${sourceRow.sourceType}" is not implemented yet — only cloud-run, wordpress, and vercel are supported in v1.`,
       )
+    }
+    const hasConnectedSibling = sourceRow.status === TrafficSourceStatuses.error
+      && app.db.select().from(trafficSources)
+        .where(eq(trafficSources.projectId, project.id)).all()
+        .some(row => row.id !== sourceRow.id && row.status === TrafficSourceStatuses.connected)
+    if (
+      sourceRow.status === TrafficSourceStatuses.paused
+      || sourceRow.status === TrafficSourceStatuses.archived
+      || hasConnectedSibling
+    ) {
+      throw validationError('Traffic source must be active before it can sync')
     }
 
     // windowEnd is "sync started at" — used as the upper bound of the Cloud
@@ -1930,11 +2562,20 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           .set({ status: RunStatuses.failed, error: msg, finishedAt: failedAt })
           .where(eq(runs.id, runId))
           .run()
-        tx
-          .update(trafficSources)
-          .set({ status: TrafficSourceStatuses.error, lastError: msg, updatedAt: failedAt })
-          .where(eq(trafficSources.id, sourceRow.id))
-          .run()
+        const latestSource = tx.select().from(trafficSources)
+          .where(eq(trafficSources.id, sourceRow.id)).get()
+        // A cutover may have paused or reconfigured this source while the
+        // provider call was in flight. Preserve that newer lifecycle state.
+        if (latestSource?.status === TrafficSourceStatuses.connected
+          && isDeepStrictEqual(latestSource.configJson, sourceRow.configJson)
+          && latestSource.updatedAt === sourceRow.updatedAt
+          && latestSource.lastSyncedAt === sourceRow.lastSyncedAt) {
+          tx
+            .update(trafficSources)
+            .set({ status: TrafficSourceStatuses.error, lastError: msg, updatedAt: failedAt })
+            .where(eq(trafficSources.id, sourceRow.id))
+            .run()
+        }
       })
       // Fire-and-forget: never let a telemetry hook take down the sync.
       try {
@@ -2289,7 +2930,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     let aiReferralHitsCount = 0
     let unknownHitsCount = 0
 
-    app.db.transaction((tx) => {
+    const commitOutcome = app.db.transaction((tx) => {
       // Re-read sourceRow inside the txn so a concurrent sync that committed
       // first is visible — otherwise both syncs would dedupe against the same
       // stale lastEventIds and the second commit would clobber the first
@@ -2298,7 +2939,24 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         .select()
         .from(trafficSources)
         .where(eq(trafficSources.id, sourceRow.id))
-        .get()!
+        .get()
+      const latestHasConnectedSibling = tx.select().from(trafficSources)
+        .where(eq(trafficSources.projectId, project.id)).all()
+        .some(row => row.id !== sourceRow.id && row.status === TrafficSourceStatuses.connected)
+      if (!latestRow
+        || (latestRow.status !== TrafficSourceStatuses.connected && latestRow.status !== TrafficSourceStatuses.error)
+        || latestHasConnectedSibling
+        || !isDeepStrictEqual(latestRow.configJson, sourceRow.configJson)
+        || latestRow.updatedAt !== sourceRow.updatedAt
+        || latestRow.lastSyncedAt !== sourceRow.lastSyncedAt) {
+        const abortedAt = new Date().toISOString()
+        tx.update(runs).set({
+          status: RunStatuses.failed,
+          error: 'Traffic source was deactivated or reconfigured during sync',
+          finishedAt: abortedAt,
+        }).where(eq(runs.id, runId)).run()
+        return 'source-inactive' as const
+      }
 
       // Cross-sync dedupe: drop events whose normalized eventId was already
       // observed in the previous successful sync. The lastSyncedAt clamp
@@ -2526,7 +3184,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         // stuck if you first disabled the schedule and drained the in-flight run.
         lastSyncedAt: new Date(
           Math.max(
-            sourceRow.lastSyncedAt ? new Date(sourceRow.lastSyncedAt).getTime() : Number.NEGATIVE_INFINITY,
+            latestRow.lastSyncedAt ? new Date(latestRow.lastSyncedAt).getTime() : Number.NEGATIVE_INFINITY,
             effectiveWindowEnd.getTime(),
           ),
         ).toISOString(),
@@ -2548,7 +3206,12 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         .set({ status: RunStatuses.completed, finishedAt })
         .where(eq(runs.id, runId))
         .run()
+      return 'committed' as const
     })
+
+    if (commitOutcome === 'source-inactive') {
+      throw validationError('Traffic source is no longer active; discarded the in-flight sync')
+    }
 
     writeAuditLog(app.db, {
       projectId: project.id,
@@ -2637,6 +3300,9 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       throw validationError(
         `Backfill for source type "${sourceRow.sourceType}" is not implemented yet — only cloud-run, wordpress, and vercel are supported in v1.`,
       )
+    }
+    if (!isAuthoritativeTrafficSource(app.db, sourceRow)) {
+      throw validationError('Traffic source must be active before it can backfill')
     }
 
     const requestedDays = request.body?.days ?? DEFAULT_BACKFILL_DAYS
@@ -2829,9 +3495,15 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
 
     const startedAt = windowEnd.toISOString()
     const runId = crypto.randomUUID()
-    app.db
-      .insert(runs)
-      .values({
+    app.db.transaction((tx) => {
+      const latestSource = tx.select().from(trafficSources)
+        .where(eq(trafficSources.id, sourceRow.id)).get()
+      if (!latestSource
+        || !isAuthoritativeTrafficSource(tx, latestSource)
+        || !isSameTrafficSourceGeneration(latestSource, sourceRow)) {
+        throw validationError('Traffic source must remain active and unchanged before it can backfill')
+      }
+      tx.insert(runs).values({
         id: runId,
         projectId: project.id,
         kind: RunKinds['traffic-sync'],
@@ -2840,8 +3512,8 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         sourceId: sourceRow.id,
         startedAt,
         createdAt: startedAt,
-      })
-      .run()
+      }).run()
+    })
 
     // Fire-and-forget. The route returns immediately; the run row carries
     // status until the background task finishes. Errors inside the task are
@@ -3000,26 +3672,39 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       )
     }
 
-    const sourceRow = app.db
-      .select()
-      .from(trafficSources)
-      .where(and(eq(trafficSources.projectId, project.id), eq(trafficSources.id, request.params.id)))
-      .get()
-    if (!sourceRow) {
-      throw notFound('traffic source', request.params.id)
-    }
-    // Archived sources are intentionally hidden from listing endpoints; a
-    // reset would silently un-archive by flipping status to `connected`.
-    // Force the operator to re-connect explicitly instead.
-    if (sourceRow.status === TrafficSourceStatuses.archived) {
-      throw validationError(
-        `Traffic source "${sourceRow.id}" is archived. Re-connect via "canonry traffic connect ..." to start tracking it again.`,
-      )
-    }
-
     const now = new Date().toISOString()
     let updatedRow!: typeof trafficSources.$inferSelect
     app.db.transaction((tx) => {
+      const sourceRow = tx
+        .select()
+        .from(trafficSources)
+        .where(and(eq(trafficSources.projectId, project.id), eq(trafficSources.id, request.params.id)))
+        .get()
+      if (!sourceRow) {
+        throw notFound('traffic source', request.params.id)
+      }
+      // Reset is cursor recovery for the current authority, never a cutover.
+      // Keep every lifecycle check in this transaction so activation cannot
+      // race a stale pre-read and leave two connected sources.
+      if (sourceRow.status === TrafficSourceStatuses.archived) {
+        throw validationError(
+          `Traffic source "${sourceRow.id}" is archived. Re-connect via "canonry traffic connect ..." to start tracking it again.`,
+        )
+      }
+      if (sourceRow.status === TrafficSourceStatuses.paused) {
+        throw validationError(
+          `Traffic source "${sourceRow.id}" is staged. Activate it explicitly instead of resetting it.`,
+        )
+      }
+      const hasConnectedSibling = tx.select().from(trafficSources)
+        .where(eq(trafficSources.projectId, project.id)).all()
+        .some(row => row.id !== sourceRow.id && row.status === TrafficSourceStatuses.connected)
+      if (hasConnectedSibling) {
+        throw validationError(
+          `Traffic source "${sourceRow.id}" is not authoritative. Activate it explicitly instead of resetting it.`,
+        )
+      }
+      validateTrafficSourceCredential(sourceRow, project.name)
       tx.update(trafficSources)
         .set({
           lastSyncedAt: now,

@@ -25,6 +25,7 @@ const recentDataCheck = TRAFFIC_SOURCE_CHECKS.find(c => c.id === 'traffic.source
 function seed(opts: {
   lagMs: number | null
   sourceType?: string
+  status?: 'connected' | 'paused'
   withRecentEvents?: boolean
   skippedThroughAt?: string | null
   configJson?: Record<string, unknown>
@@ -46,7 +47,7 @@ function seed(opts: {
     id: sourceId, projectId,
     sourceType: opts.sourceType ?? 'vercel',
     displayName: 'Vercel (example.com)',
-    status: 'connected',
+    status: opts.status ?? 'connected',
     lastSyncedAt: opts.lagMs === null ? null : new Date(now.getTime() - opts.lagMs).toISOString(),
     lastError: null,
     skippedThroughAt: opts.skippedThroughAt ?? null,
@@ -128,7 +129,7 @@ describe('traffic sync lag', () => {
     } finally { cleanup() }
   })
 
-  it('does not skip a future Cloudflare queue-pull source by provider type alone', async () => {
+  it('does not skip a Cloudflare queue-pull source by provider type alone', async () => {
     const { ctx, cleanup } = seed({
       lagMs: 5 * 3_600_000,
       sourceType: 'cloudflare',
@@ -138,6 +139,20 @@ describe('traffic sync lag', () => {
       const out = await syncLagCheck.run(ctx)
       expect(out.status).toBe('warn')
       expect(out.code).toBe('traffic.sync-lag.behind')
+    } finally { cleanup() }
+  })
+
+  it('excludes a paused staged queue source from pull-lag evaluation', async () => {
+    const { ctx, cleanup } = seed({
+      lagMs: 5 * 3_600_000,
+      status: 'paused',
+      sourceType: 'cloudflare',
+      configJson: { deliveryMode: 'queue-pull' },
+    })
+    try {
+      const out = await syncLagCheck.run(ctx)
+      expect(out.status).toBe('skipped')
+      expect(out.code).toBe('traffic.sync-lag.no-active-source')
     } finally { cleanup() }
   })
 

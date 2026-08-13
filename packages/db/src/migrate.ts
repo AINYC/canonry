@@ -3400,7 +3400,7 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
     // Push-receive traffic sources (currently only `cloudflare`) need a
     // per-source bearer for the Worker to authenticate against canonry's
     // ingest endpoint, plus a place to remember the deployed Worker version.
-    // Durable receipts are transport-neutral: direct push and a future Queue
+    // Durable receipts are transport-neutral: direct push and Queue pull
     // pull consumer both claim an event in the same transaction as rollups.
     // Cleartext credentials remain outside the database.
     //
@@ -3539,6 +3539,28 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
     statements: [
       `CREATE INDEX IF NOT EXISTS idx_site_crawl_pages_live_preview
         ON site_crawl_pages(project_id, run_id, attempt_id, audit_state, audit_score, node_key)`,
+    ],
+  },
+  {
+    version: 135,
+    name: 'traffic-source-sync-lease',
+    // A source-scoped lease serializes external pull consumers. Nullable
+    // fields preserve every existing source and let an older binary continue
+    // to insert source rows without knowing about leases.
+    statements: [
+      `ALTER TABLE traffic_sources ADD COLUMN sync_lease_owner TEXT`,
+      `ALTER TABLE traffic_sources ADD COLUMN sync_lease_expires_at TEXT`,
+    ],
+  },
+  {
+    version: 136,
+    name: 'traffic-source-queue-backlog',
+    // Persist Cloudflare's residual Queue depth so a bounded successful drain
+    // cannot hide that work remains. NULL preserves every legacy source and
+    // distinguishes "not observed" from an observed empty Queue.
+    statements: [
+      `ALTER TABLE traffic_sources ADD COLUMN queue_backlog_count INTEGER`,
+      `ALTER TABLE traffic_sources ADD COLUMN queue_backlog_observed_at TEXT`,
     ],
   },
 ]

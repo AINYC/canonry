@@ -5714,7 +5714,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/traffic/connect/cloudflare',
     summary: 'Connect a Cloudflare Worker traffic source',
     description:
-      'Creates or updates a Cloudflare `direct-push` traffic source and returns a secret-free ES-module Worker plus Wrangler configuration. Per-source bearer and HMAC credentials remain in Canonry\'s credential store and are installed as Worker secret bindings; neither secret appears in source, TOML, API, or MCP output. Reconnect is idempotent: it reuses a matching source and credentials, preserves omitted metadata, and emits the current deployment package. Wrangler deploys the Worker without a route. The operator must attach the exact site route manually and set its Request limit failure mode to Fail open. No upstream probe is performed at connect time.',
+      'Creates or updates a Cloudflare `direct-push` or `queue-pull` traffic source and returns a secret-free ES-module Worker plus Wrangler configuration. Direct bearer/HMAC credentials and the Queue API token remain in Canonry\'s local credential store; none appears in source, TOML, DB config, response, or MCP output. Reconnect is idempotent by source mode. A different mode is staged paused when another project traffic source is active, and requires the explicit activation operation after deployment. Wrangler deploys the Worker without a route; the operator attaches the exact site route manually with Request limit failure mode set to Fail open.',
     tags: ['traffic'],
     parameters: [nameParameter],
     requestBody: {
@@ -5761,10 +5761,27 @@ const routeCatalog: OpenApiOperation[] = [
   },
   {
     method: 'post',
+    path: '/api/v1/projects/{name}/traffic/sources/{id}/activate',
+    summary: 'Activate a staged traffic source',
+    description:
+      'Explicit single-team cutover. Atomically pauses every sibling project traffic source and connects the selected Cloudflare, Cloud Run, WordPress, or Vercel source after validating its local credential. Pull delivery creates or repoints the one project traffic-sync schedule; Cloudflare direct push removes it. Deployment and provider-side routing remain separate operator actions.',
+    tags: ['traffic'],
+    parameters: [
+      nameParameter,
+      { name: 'id', in: 'path', required: true, description: 'Staged traffic source ID.', schema: stringSchema },
+    ],
+    responses: {
+      200: jsonResponse('Activated traffic source DTO returned.', 'TrafficSourceDto'),
+      400: errorResponse('Source is archived, unsupported, or cannot be activated.'),
+      404: errorResponse('Project or traffic source not found.'),
+    },
+  },
+  {
+    method: 'post',
     path: '/api/v1/projects/{name}/traffic/sources/{id}/sync',
     summary: 'Trigger a sync run for a traffic source',
     description:
-      'Pulls request logs from the configured Cloud Run service for the lookback window, classifies crawler hits / AI-referral sessions, and upserts hourly buckets and a bounded sample tail.',
+      'Pulls from the selected Cloud Run, WordPress, Vercel, or Cloudflare Queue source, classifies crawler hits / user fetches / AI-referral sessions, and commits hourly buckets plus a bounded sample tail. Queue pull uses a durable source lease and acknowledges each Cloudflare message only after its event receipts and rollups commit.',
     tags: ['traffic'],
     parameters: [
       nameParameter,
@@ -5777,7 +5794,7 @@ const routeCatalog: OpenApiOperation[] = [
           schema: {
             type: 'object',
             properties: {
-              sinceMinutes: { ...integerSchema, description: 'Lookback window in minutes (default 60).' },
+              sinceMinutes: { ...integerSchema, description: 'Optional lookback for time-window sources; Cloudflare Queue pull ignores it.' },
             },
           },
         },
@@ -5786,8 +5803,9 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('Sync summary returned.', 'TrafficSyncResponse'),
       400: errorResponse('Invalid sync request or missing credentials.'),
+      409: errorResponse('Another Queue sync currently owns the source lease.'),
       404: errorResponse('Project or traffic source not found.'),
-      502: errorResponse('Upstream Cloud Run pull or auth-token resolution failed.'),
+      502: errorResponse('Upstream pull, acknowledgement, or credential resolution failed.'),
     },
   },
   {

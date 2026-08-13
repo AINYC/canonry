@@ -564,6 +564,72 @@ cnry wordpress onboard <project> --url <url> --user <user>  # full onboarding wo
 
 **Onboard** runs: connect → audit → set-meta → schema deploy → Google submit → Bing submit. Use `--skip-schema` or `--skip-submit` to skip steps. `--profile <file>` provides business data and page-to-schema mapping for schema deployment.
 
+## Server-Side Traffic
+
+Cloudflare supports direct push and Queue pull. Run Cloudflare connect only from
+the local host that owns the Canonry configuration and Wrangler profile. This
+operation is not available through MCP because it uses local credentials.
+
+```bash
+# Direct push to a stable public Canonry HTTPS receiver:
+cnry traffic connect cloudflare <project> \
+  --delivery-mode direct-push \
+  --zone-id <zone-id> --account-id <account-id> \
+  --deploy --confirm-route --confirm-fail-open
+
+# Create the Queue and enable its HTTP pull consumer first:
+wrangler queues create canonry-traffic-<project>
+# Workers Paid only: use this command to change the four-day default.
+wrangler queues update canonry-traffic-<project> \
+  --message-retention-period-secs <seconds>
+wrangler queues info canonry-traffic-<project>
+wrangler queues consumer http add canonry-traffic-<project>
+
+# Queue pull keeps the API token in the local Canonry credential store:
+cnry traffic connect cloudflare <project> \
+  --delivery-mode queue-pull \
+  --zone-id <zone-id> --account-id <account-id> \
+  --queue-id <queue-id> --queue-name canonry-traffic-<project> \
+  --api-token-file <mode-0600-token-file> \
+  --retention-seconds <actual-queue-retention-seconds> \
+  --deploy --confirm-route --confirm-fail-open
+```
+
+Workers Free retention is fixed at `86400` seconds. Workers Paid defaults to
+`345600` seconds. If you change paid retention with `wrangler queues update`,
+pass the same value to Canonry. The Canonry flag does not change the Queue.
+
+Both commands deploy an unattached Worker. Attach the exact site route in the
+Cloudflare Dashboard. Then set its request-limit failure mode to **Fail open**.
+Do not put the Queue API token on the command line or in an agent transcript.
+
+```bash
+# If connect reports activationRequired, activate after the route is live:
+cnry traffic activate <project> --source <source-id>
+cnry traffic sync <project> --source <source-id>      # pull adapters, including Cloudflare Queue pull
+cnry traffic sources <project> --format json
+cnry traffic status <project> --format json
+cnry traffic events <project> --source <source-id> --format json
+
+cnry doctor --project <project> --check 'traffic.source.*' --format json
+cnry schedule show <project> --kind traffic-sync --format json
+cnry schedule set <project> --kind traffic-sync \
+  --source <source-id> --cron "*/10 * * * *"
+```
+
+A first source becomes active automatically. A staged source stays paused until
+the explicit activation command. Activation pauses sibling sources and moves the
+one `traffic-sync` schedule for the project. Direct push rejects `traffic sync` and
+does not use this schedule.
+
+Queue pull drains at most 1,000 messages in one default sync. The doctor warns
+when the remaining backlog is more than 1,000 messages. If the operator approves
+a manual drain, run a manual sync. If the backlog recurs, get approval to shorten
+the schedule interval.
+
+Read the [server-side traffic guide](server-side-traffic.md) for token safety,
+route checks, activation order, smoke tests, rollback, and troubleshooting.
+
 ## Google Analytics 4
 
 GA4 integration uses service account authentication (no OAuth). The service account must have Viewer access on the GA4 property. `ga sync` writes to four DB tables (`gaTrafficSnapshots`, `gaAiReferrals`, `gaSocialReferrals`, `gaTrafficSummaries`); every subsequent read command queries the local store rather than re-fetching from GA4, so reads are fast and quotaless. AI-referral rows are tracked across 10 known providers (chatgpt, perplexity, claude, gemini, openai, anthropic, copilot, phind, you.com, meta.ai), three GA4 attribution dimensions (`session` / `first_user` / `manual_utm`), and joined to landing pages. Social referrals are split Organic vs Paid via GA4's `sessionDefaultChannelGroup`. All commands support `--format json`.

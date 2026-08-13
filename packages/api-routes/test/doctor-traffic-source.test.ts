@@ -28,6 +28,7 @@ const credentialsCheck = checkById('traffic.source.credentials')
 const scopesCheck = checkById('traffic.source.scopes')
 const cacheBlindSpotCheck = checkById('traffic.source.cache-blindspot')
 const workerVersionCheck = checkById('traffic.source.worker-version')
+const queueBacklogCheck = checkById('traffic.source.queue-backlog')
 
 interface Harness {
   db: ReturnType<typeof createClient>
@@ -77,6 +78,8 @@ function insertTrafficSource(
     lastError?: string | null
     configJson?: Record<string, unknown>
     lastWorkerVersion?: string | null
+    queueBacklogCount?: number | null
+    queueBacklogObservedAt?: string | null
   } = {},
 ): string {
   const id = crypto.randomUUID()
@@ -91,6 +94,8 @@ function insertTrafficSource(
     lastCursor: null,
     lastError: args.lastError ?? null,
     lastWorkerVersion: args.lastWorkerVersion ?? null,
+    queueBacklogCount: args.queueBacklogCount ?? null,
+    queueBacklogObservedAt: args.queueBacklogObservedAt ?? null,
     lastEventIds: null,
     archivedAt: args.status === 'archived' ? now : null,
     configJson: args.configJson ?? {},
@@ -178,6 +183,13 @@ describe('traffic.source.connected', () => {
     expect(r.status).toBe('ok')
     expect(r.code).toBe('traffic.source.connected')
     expect(r.details?.sourceCount).toBe(1)
+  })
+
+  it('does not report a paused staged source as actively connected', async () => {
+    insertTrafficSource(h, { status: 'paused', displayName: 'Queue staged' })
+    const r = await sourceConnectedCheck.run(ctxFor(h))
+    expect(r.status).toBe('skipped')
+    expect(r.code).toBe('traffic.source.paused')
   })
 
   it('warns when one of several sources is errored', async () => {
@@ -275,6 +287,18 @@ describe('traffic.source.recent-data', () => {
     expect(r.code).toBe('traffic.recent-data.stale')
     expect(r.remediation).toContain('Cloudflare Worker')
     expect(r.remediation).not.toContain('traffic sync')
+  })
+
+  it('skips a paused staged source instead of reporting its historical watermark as current', async () => {
+    const sourceId = insertTrafficSource(h, {
+      status: 'paused',
+      lastSyncedAt: new Date().toISOString(),
+      displayName: 'Queue staged',
+    })
+    insertCrawlerHit(h, sourceId)
+    const r = await recentDataCheck.run(ctxFor(h))
+    expect(r.status).toBe('skipped')
+    expect(r.code).toBe('traffic.recent-data.no-active-source')
   })
 })
 
@@ -468,6 +492,85 @@ describe('traffic.source.worker-version', () => {
   })
 })
 
+describe('traffic.source.queue-backlog', () => {
+  const queueConfig = { deliveryMode: 'queue-pull' }
+
+  it('skips when no active Queue pull source is connected', async () => {
+    insertTrafficSource(h, { sourceType: 'cloud-run', queueBacklogCount: 50 })
+    insertTrafficSource(h, {
+      sourceType: 'cloudflare',
+      status: 'paused',
+      configJson: queueConfig,
+      queueBacklogCount: 50,
+    })
+
+    const result = await queueBacklogCheck.run(ctxFor(h))
+    expect(result.status).toBe('skipped')
+    expect(result.code).toBe('traffic.queue-backlog.not-applicable')
+  })
+
+  it('skips before a Queue backlog has been observed', async () => {
+    insertTrafficSource(h, {
+      sourceType: 'cloudflare',
+      configJson: queueConfig,
+      queueBacklogCount: null,
+    })
+
+    const result = await queueBacklogCheck.run(ctxFor(h))
+    expect(result.status).toBe('skipped')
+    expect(result.code).toBe('traffic.queue-backlog.not-observed')
+  })
+
+  it('reports ok when the observed Queue backlog is empty', async () => {
+    insertTrafficSource(h, {
+      sourceType: 'cloudflare',
+      configJson: queueConfig,
+      queueBacklogCount: 0,
+      queueBacklogObservedAt: '2026-08-11T12:00:00.000Z',
+    })
+
+    const result = await queueBacklogCheck.run(ctxFor(h))
+    expect(result.status).toBe('ok')
+    expect(result.code).toBe('traffic.queue-backlog.empty')
+    expect(result.details).toMatchObject({
+      sources: [{ queueBacklogCount: 0, queueBacklogObservedAt: '2026-08-11T12:00:00.000Z' }],
+    })
+  })
+
+  it('reports the residual Queue backlog as within one default drain budget', async () => {
+    insertTrafficSource(h, {
+      sourceType: 'cloudflare',
+      displayName: 'Production Queue',
+      configJson: queueConfig,
+      queueBacklogCount: 1000,
+      queueBacklogObservedAt: '2026-08-11T12:00:00.000Z',
+    })
+
+    const result = await queueBacklogCheck.run(ctxFor(h))
+    expect(result.status).toBe('ok')
+    expect(result.code).toBe('traffic.queue-backlog.within-drain-budget')
+    expect(result.summary).toContain('1,000')
+    expect(result.remediation).toContain('next scheduled sync')
+  })
+
+  it('warns with drain remediation while messages remain after a bounded sync', async () => {
+    insertTrafficSource(h, {
+      sourceType: 'cloudflare',
+      displayName: 'Production Queue',
+      configJson: queueConfig,
+      queueBacklogCount: 1250,
+      queueBacklogObservedAt: '2026-08-11T12:00:00.000Z',
+    })
+
+    const result = await queueBacklogCheck.run(ctxFor(h))
+    expect(result.status).toBe('warn')
+    expect(result.code).toBe('traffic.queue-backlog.remaining')
+    expect(result.summary).toContain('1,250')
+    expect(result.remediation).toContain('traffic sync <project> --source <id>')
+    expect(result.remediation).toContain('shorten the traffic-sync schedule interval')
+  })
+})
+
 describe('check definitions', () => {
   it('exports the checks at well-known IDs', () => {
     const ids = TRAFFIC_SOURCE_CHECKS.map((c) => c.id)
@@ -475,6 +578,7 @@ describe('check definitions', () => {
       'traffic.source.connected',
       'traffic.source.recent-data',
       'traffic.source.sync-lag',
+      'traffic.source.queue-backlog',
       'traffic.source.worker-version',
       'traffic.source.credentials',
       'traffic.source.scopes',

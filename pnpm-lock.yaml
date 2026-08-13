@@ -230,6 +230,9 @@ importers:
       '@ainyc/canonry-integration-cloud-run':
         specifier: workspace:*
         version: link:../integration-cloud-run
+      '@ainyc/canonry-integration-cloudflare-queue':
+        specifier: workspace:*
+        version: link:../integration-cloudflare-queue
       '@ainyc/canonry-integration-cloudflare-worker':
         specifier: workspace:*
         version: link:../integration-cloudflare-worker
@@ -381,6 +384,9 @@ importers:
       '@ainyc/canonry-integration-cloud-run':
         specifier: workspace:*
         version: link:../integration-cloud-run
+      '@ainyc/canonry-integration-cloudflare-queue':
+        specifier: workspace:*
+        version: link:../integration-cloudflare-queue
       '@ainyc/canonry-integration-cloudflare-worker':
         specifier: workspace:*
         version: link:../integration-cloudflare-worker
@@ -493,6 +499,8 @@ importers:
       '@ainyc/canonry-contracts':
         specifier: workspace:*
         version: link:../contracts
+
+  packages/integration-cloudflare-queue: {}
 
   packages/integration-cloudflare-worker:
     dependencies:

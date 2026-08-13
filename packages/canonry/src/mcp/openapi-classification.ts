@@ -270,6 +270,10 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   // wrong shape — events are pushed by a customer-deployed Worker, not
   // by an AI agent. Exclude it from the MCP catalog.
   'POST /api/v1/projects/{name}/traffic/cloudflare/ingest': 'excluded-protocol',
+  // Activating a staged Cloudflare transport is the human cutover point after
+  // route inspection/deployment. Keep that safety acknowledgement in the
+  // local CLI rather than making it agent-callable.
+  'POST /api/v1/projects/{name}/traffic/sources/{id}/activate': 'excluded-protocol',
   'POST /api/v1/projects/{name}/traffic/sources/{id}/sync': 'included',
   'POST /api/v1/projects/{name}/traffic/sources/{id}/backfill': 'included',
   'POST /api/v1/projects/{name}/traffic/sources/{id}/reset': 'included',

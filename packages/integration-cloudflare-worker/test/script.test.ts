@@ -38,6 +38,23 @@ const BASE_WRANGLER_OPTS = {
   workerVersion: WORKER_ENV.CANONRY_WORKER_VERSION,
 }
 
+const QUEUE_WORKER_ENV = {
+  CANONRY_DELIVERY_MODE: 'queue-pull',
+  CANONRY_SOURCE_ID: 'src_queue123',
+  CANONRY_WORKER_VERSION: '1.0.0',
+  CANONRY_TRAFFIC_QUEUE: {
+    send: vi.fn(async () => {}),
+  },
+}
+
+const QUEUE_WRANGLER_OPTS = {
+  deliveryMode: 'queue-pull' as const,
+  sourceId: QUEUE_WORKER_ENV.CANONRY_SOURCE_ID,
+  hostname: 'example.com',
+  workerVersion: QUEUE_WORKER_ENV.CANONRY_WORKER_VERSION,
+  queueName: 'canonry-traffic-src_queue123',
+}
+
 interface GeneratedRequest {
   url: string
   headers: { get(name: string): string | null }
@@ -47,7 +64,7 @@ interface GeneratedRequest {
 interface GeneratedWorker {
   fetch(
     request: Request,
-    env: Record<string, string>,
+    env: Record<string, unknown>,
     ctx: { waitUntil(task: Promise<unknown>): void },
   ): Promise<Response>
 }
@@ -371,7 +388,7 @@ describe('generateWorkerScript', () => {
   })
 
   it('fails delivery closed for an unsupported mode without masking the origin response', async () => {
-    const result = await runGeneratedWorker([], { CANONRY_DELIVERY_MODE: 'queue-pull' })
+    const result = await runGeneratedWorker([], { CANONRY_DELIVERY_MODE: 'logpush' })
     expect(result.ingestCalls).toBe(0)
     expect(result.warn).toHaveBeenCalledOnce()
   })
@@ -384,6 +401,47 @@ describe('generateWorkerScript', () => {
   it('treats a custom botScoreMaxForward as the score threshold', () => {
     const script = generateWorkerScript({ ...BASE_OPTS, botScoreMaxForward: 42 })
     expect(script).toContain('42')
+  })
+
+  it('sends the same edge batch to the Queue binding inside waitUntil', async () => {
+    const queueSend = vi.fn(async () => {})
+    const scope: { generatedWorker?: GeneratedWorker } = {}
+    const evaluate = new Function(
+      'globalThis',
+      'fetch',
+      'crypto',
+      'console',
+      'setTimeout',
+      executableModuleSource(generateWorkerScript({ ...BASE_OPTS, deliveryMode: 'queue-pull' })),
+    )
+    evaluate(scope, vi.fn(async () => new Response('origin')), globalThis.crypto, { warn: vi.fn() }, setTimeout)
+
+    const waitUntilTasks: Promise<unknown>[] = []
+    const generatedRequest = new Request('https://example.com/?utm_source=chatgpt', {
+      headers: { 'cf-ray': 'evt_queue_test', 'user-agent': 'Mozilla/5.0' },
+    })
+    Object.defineProperty(generatedRequest, 'cf', { value: null })
+    const response = await scope.generatedWorker!.fetch(
+      generatedRequest,
+      { ...QUEUE_WORKER_ENV, CANONRY_TRAFFIC_QUEUE: { send: queueSend } },
+      { waitUntil: task => { waitUntilTasks.push(task) } },
+    )
+
+    expect(await response.text()).toBe('origin')
+    await Promise.all(waitUntilTasks)
+    expect(queueSend).toHaveBeenCalledWith(expect.objectContaining({
+      schemaVersion: 1,
+      workerVersion: '1.0.0',
+      events: [expect.objectContaining({ eventId: 'evt_queue_test' })],
+    }), { contentType: 'json' })
+  })
+
+  it('does not emit direct-push secrets or ingest configuration for queue workers', () => {
+    const script = generateWorkerScript({ ...BASE_OPTS, deliveryMode: 'queue-pull' })
+    expect(script).toContain(`env.${CLOUDFLARE_WORKER_BINDINGS.trafficQueue}`)
+    expect(script).not.toContain(`env.${CLOUDFLARE_WORKER_BINDINGS.ingestUrl}`)
+    expect(script).not.toContain(`env.${CLOUDFLARE_WORKER_BINDINGS.bearerToken}`)
+    expect(script).not.toContain(`env.${CLOUDFLARE_WORKER_BINDINGS.hmacSecret}`)
   })
 })
 
@@ -469,5 +527,18 @@ describe('generateWranglerToml', () => {
     expect(toml).toContain('example.com/*')
     expect(toml).toContain('Target zone id was not provided')
     expect(toml).not.toContain('wrangler route add')
+  })
+
+  it('emits a Queue producer binding without ingest vars or direct-push secrets', () => {
+    const toml = generateWranglerToml(QUEUE_WRANGLER_OPTS)
+    expect(toml).toContain('CANONRY_DELIVERY_MODE = "queue-pull"')
+    expect(toml).toContain('[[queues.producers]]')
+    expect(toml).toContain('queue = "canonry-traffic-src_queue123"')
+    expect(toml).toContain(`binding = "${CLOUDFLARE_WORKER_BINDINGS.trafficQueue}"`)
+    expect(toml).not.toContain('CANONRY_INGEST_URL')
+    expect(toml).not.toContain('[secrets]')
+    for (const binding of CLOUDFLARE_DIRECT_PUSH_SECRET_BINDINGS) {
+      expect(toml).not.toContain(binding)
+    }
   })
 })

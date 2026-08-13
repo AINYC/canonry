@@ -1,6 +1,6 @@
 ---
 name: canonry
-description: "Set up and operate Canonry AEO projects: inspect mention and citation coverage, diagnose regressions, run technical audits, and act through the Canonry CLI or MCP tools. Examples: inspect project acme coverage (run + report), diagnose query drift via attribution (report.html + visibility-attribution), submit GSC sitemaps (gsc-sitemap-submission batched)."
+description: "Set up and operate Canonry AEO projects. Inspect mention and citation coverage, diagnose regressions, and run technical audits. Connect Cloudflare direct-push or queue-pull traffic. Act through the Canonry CLI or MCP tools. Examples: inspect project acme coverage (run + report), diagnose query drift via attribution (report.html + visibility-attribution), or submit GSC sitemaps (gsc-sitemap-submission batched)."
 compatibility: Requires Node.js 22.14+ and globally installed @canonry/canonry; canonry-mcp must be on PATH.
 metadata:
   agent: >-
@@ -131,10 +131,22 @@ GA4 is a first-class signal alongside citation tracking. Connect once with `cnry
 
 When the project ships behind a server you control, connect Cloud Run, WordPress,
 or Vercel. `cnry traffic sync` pulls and classifies their logs into hourly
-buckets. For a Cloudflare site, `cnry traffic connect cloudflare <project> ...`
-deploys a direct-push Worker from the credential-owning host. Cloudflare direct
-push does not use `traffic sync`. Use `cnry traffic events / sources / status`
-for every adapter. See `references/server-side-traffic.md` for setup.
+buckets. For Cloudflare, choose `direct-push` or `queue-pull` on the local,
+credential-owning host. Direct push requires a public Canonry HTTPS receiver.
+It does not use `traffic sync`. Queue pull sends events to a Cloudflare Queue,
+then Canonry drains it through `traffic sync` and the `traffic-sync` schedule.
+
+If the connect response reports `activationRequired`, attach the Worker route
+first. Then run `cnry traffic activate <project> --source <id>`. Activation
+pauses all sibling sources. It also moves the one `traffic-sync` schedule to
+Queue pull. A first source becomes active automatically.
+
+Each default Queue tick drains at most 1,000 messages. Use `cnry traffic status`
+and the `traffic.source.queue-backlog` doctor check to read the backlog. If more
+than 1,000 messages remain, get approval before a manual sync or a shorter
+schedule interval. Use `cnry traffic events`, `cnry traffic sources`, and
+`cnry traffic status` for every adapter. See
+`references/server-side-traffic.md` for setup and smoke tests.
 
 **Vercel gotcha:** a freshly connected Vercel source captures only going-forward traffic — `lastSyncedAt` is seeded to NOW to avoid the 30-day default window exceeding Vercel's ~14-day request-logs retention (which would otherwise throw on every first sync). Use `cnry traffic backfill <project> --source <id> --days N` for historical recovery. If an idle Vercel/Cloud Run source has been failing long enough that `lastSyncedAt` aged past retention, unstick it with `cnry traffic reset <project> --source <id> --advance-to-now`.
 

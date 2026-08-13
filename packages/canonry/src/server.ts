@@ -58,7 +58,11 @@ import {
   type ProviderAdapter,
   type AgentPluginState,
 } from "@ainyc/canonry-contracts";
-import type { CanonryConfig, ProviderConfigEntry } from "./config.js";
+import type {
+  CanonryConfig,
+  CloudflareTrafficConnectionConfigEntry,
+  ProviderConfigEntry,
+} from "./config.js";
 import { resolveEmbedConfig, SERVER_ENFORCED_EMBED_PROJECT_TABS, unsupportedEmbedProjectTabs } from "./embed.js";
 import { resolveAgentEnabled } from "./agent-config.js";
 import { saveConfigPatch, loadConfig, getConfigPath } from "./config.js";
@@ -97,6 +101,7 @@ import {
   getCloudflareTrafficConnectionBySourceId,
   upsertCloudflareTrafficConnection,
   removeCloudflareTrafficConnection,
+  removeCloudflareTrafficConnectionBySourceId,
 } from "./cloudflare-traffic-config.js";
 import { buildCloudflareIngestUrlTemplate } from "./cloudflare-ingest-url.js";
 import {
@@ -1576,25 +1581,21 @@ export async function createServer(opts: {
     getConnectionBySourceId: (sourceId: string) => {
       return getCloudflareTrafficConnectionBySourceId(opts.config, sourceId);
     },
-    upsertConnection: (record: {
-      projectName: string;
-      sourceId: string;
-      deliveryMode: "direct-push";
-      bearerToken: string;
-      hmacSecret: string;
-      workerVersion: string;
-      expectedBotListVersion: string;
-      zoneId: string | null;
-      accountId: string | null;
-      createdAt: string;
-      updatedAt: string;
-    }) => {
+    upsertConnection: (record: CloudflareTrafficConnectionConfigEntry) => {
       const updated = upsertCloudflareTrafficConnection(opts.config, record);
       saveConfigPatch(opts.config);
       return updated;
     },
     deleteConnection: (projectName: string) => {
       const removed = removeCloudflareTrafficConnection(opts.config, projectName);
+      if (removed) saveConfigPatch(opts.config);
+      return removed;
+    },
+    deleteConnectionBySourceId: (sourceId: string) => {
+      const removed = removeCloudflareTrafficConnectionBySourceId(
+        opts.config,
+        sourceId,
+      );
       if (removed) saveConfigPatch(opts.config);
       return removed;
     },

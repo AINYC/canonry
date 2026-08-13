@@ -20,7 +20,14 @@ export const DIRECT_PUSH_RECEIPT_TTL_MS = 10 * 60_000
 type TrafficSourceRow = typeof trafficSources.$inferSelect
 type TrafficSourceIngestUpdate = Partial<Pick<
   TrafficSourceRow,
-  'lastCursor' | 'lastError' | 'lastSyncedAt' | 'lastWorkerVersion' | 'status' | 'updatedAt'
+  | 'lastCursor'
+  | 'lastError'
+  | 'lastSyncedAt'
+  | 'lastWorkerVersion'
+  | 'queueBacklogCount'
+  | 'queueBacklogObservedAt'
+  | 'status'
+  | 'updatedAt'
 >>
 
 export interface WriteTrafficEventBatchOptions {
@@ -40,6 +47,11 @@ export interface WriteTrafficEventBatchOptions {
 export interface WriteTrafficEventBatchResult {
   acceptedEvents: number
   duplicateEvents: number
+  selfTrafficExcluded: number
+  crawlerHits: number
+  aiUserFetchHits: number
+  aiReferralHits: number
+  unknownHits: number
   crawlerBucketRows: number
   aiUserFetchBucketRows: number
   aiReferralBucketRows: number
@@ -58,7 +70,7 @@ function observedUtcHourBounds(observedAt: string): { start: string; end: string
 /**
  * Claim transport-neutral event ids and write their shared rollups atomically.
  *
- * Direct push and a future Queue pull consumer use the same boundary: the
+ * Direct push and the Queue pull consumer use the same boundary: the
  * adapter supplies normalized events, its receipt horizon, source validation,
  * and progress fields. A receipt exists iff every rollup write committed, so an
  * upstream redelivery is safe after a process crash or acknowledgement loss.
@@ -73,6 +85,11 @@ export function writeTrafficEventBatch(
   let aiUserFetchBucketRows = 0
   let aiReferralBucketRows = 0
   let sampleRows = 0
+  let selfTrafficExcluded = 0
+  let crawlerHits = 0
+  let aiUserFetchHits = 0
+  let aiReferralHits = 0
+  let unknownHits = 0
 
   opts.db.transaction((tx) => {
     // Serialize writers for one source before checking its hourly sample
@@ -123,9 +140,14 @@ export function writeTrafficEventBatch(
     if (claimedEvents.length > 0) {
       // Build every eligible sample from this bounded batch. The durable
       // source/hour cap below, not the transport batch size, decides which
-      // samples persist. This keeps one-event push and future Queue batches
+      // samples persist. This keeps one-event push and Queue batches
       // on the same storage boundary.
       const report = buildTrafficProbeReport(claimedEvents, { sampleLimit: claimedEvents.length })
+      selfTrafficExcluded = report.totals.selfTrafficExcluded
+      crawlerHits = report.totals.crawlerHits
+      aiUserFetchHits = report.totals.aiUserFetchHits
+      aiReferralHits = report.totals.aiReferralHits
+      unknownHits = report.totals.unknownHits
 
       for (const bucket of report.crawlerEventsHourly) {
         const status = bucket.status ?? 0
@@ -320,6 +342,11 @@ export function writeTrafficEventBatch(
   return {
     acceptedEvents,
     duplicateEvents,
+    selfTrafficExcluded,
+    crawlerHits,
+    aiUserFetchHits,
+    aiReferralHits,
+    unknownHits,
     crawlerBucketRows,
     aiUserFetchBucketRows,
     aiReferralBucketRows,
