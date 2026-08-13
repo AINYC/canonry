@@ -24,6 +24,7 @@ import {
   LivePageHealthFindings,
   siteHealthMetricHelp,
   SiteHealthSection,
+  TEMPLATE_DETECTION_COPY,
   type LivePageHealthPreviewView,
 } from '../src/components/project/SiteHealthSection.js'
 import { heyClient } from '../src/api.js'
@@ -2579,6 +2580,42 @@ test('disables the toggle and explains a scan that predates the split', () => {
 
   expect((screen.getByRole('checkbox', { name: 'Show nav and footer links' }) as HTMLInputElement).disabled).toBe(true)
   expect(screen.getByText(/ran before nav and footer links were separated/)).not.toBeNull()
+})
+
+// Asserting the record's own value, not a substring of it, so the test cannot
+// keep passing once the shipped copy says something different.
+test.each([
+  'applied',
+  'applied-placement',
+  'applied-placement-with-ubiquity',
+  'applied-placement-partial',
+] as const)('renders the shipped rule copy for %s, and keeps the control usable', (templateDetection) => {
+  // These counts are the output of a rule, and the rule changes between scans.
+  // A reader who cannot see which rule produced the split cannot tell a real
+  // change on the site from a change in how it was measured.
+  renderSection(seedTemplateLinkGraph({ templateDetection }))
+
+  expect(screen.getByTestId('site-map-link-rule').textContent)
+    .toBe(TEMPLATE_DETECTION_COPY[templateDetection])
+  // Every one of these states DID split the links, so the toggle works and the
+  // counts are real.
+  expect((screen.getByRole('checkbox', { name: 'Show nav and footer links' }) as HTMLInputElement).disabled).toBe(false)
+  expect(screen.getByTestId('site-map-link-counts').textContent)
+    .toContain('Showing 1 content link. 1 nav and footer link hidden.')
+})
+
+test('the weaker rule names its own blind spot', () => {
+  // An editorial link whose wording matches the menu is invisible to ubiquity,
+  // and a reader comparing months has to know that.
+  expect(TEMPLATE_DETECTION_COPY.applied).toContain('wording matches the menu')
+})
+
+test('does not claim unmeasured links are excluded, because they are counted as content', () => {
+  // This copy used to say those links were "left out of both counts". They
+  // never were: they are content links everywhere, and the copy now says so.
+  const copy = TEMPLATE_DETECTION_COPY['applied-placement-partial']
+  expect(copy).toContain('counted as content links')
+  expect(copy).not.toContain('left out of both counts')
 })
 
 test('says when a map\'s page positions still include the nav mesh', () => {

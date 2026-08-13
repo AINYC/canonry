@@ -23,6 +23,7 @@ import {
   SiteCrawlIndexabilityReasons,
   SiteHealthStates,
   TEMPLATE_LINK_MIN_FETCHED_PAGES,
+  isTemplateDetectionApplied,
   type SiteCrawlEdgeDto,
   type SiteCrawlGraphNodeDto,
   type SiteCrawlIndexabilityReason,
@@ -330,13 +331,22 @@ function terminationCopy(termination: string | null): string {
 }
 
 /**
- * Why the nav and footer toggle is off the table for this scan. A closed
+ * How this scan told nav and footer links apart, in plain words. A closed
  * Record over the contract's own vocabulary, so a new state is a compile error
- * rather than a silently missing explanation. `applied` has no copy because
- * the control works: the map says what it is showing instead.
+ * rather than a silently missing explanation.
+ *
+ * Every state has copy, including the ones where the control works, because the
+ * two rules do not measure the same thing: a reader comparing this month's
+ * content-link count with last month's needs to know whether the number moved
+ * because the site changed or because the scan could finally see where each
+ * link sits.
  */
-const TEMPLATE_DETECTION_COPY: Record<Exclude<SiteHealthTemplateDetection, 'applied'>, string> = {
-  'unavailable-too-few-pages': `This scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages. On a site that small every link is on most pages, so nav and footer links cannot be told apart from the rest.`,
+export const TEMPLATE_DETECTION_COPY: Record<SiteHealthTemplateDetection, string> = {
+  'applied': 'This scan told nav and footer links apart by how often the same link repeats across pages. It cannot spot a link written into the page text when its wording matches the menu. Run a new scan to read the page layout instead.',
+  'applied-placement': 'This scan read where each link sits in the page, so links in the page text are separated from the menu, header, and footer even when they use the same wording.',
+  'applied-placement-with-ubiquity': 'This scan read where each link sits in the page. Some pages mark out no menu or main area, so those links fall back to how often the link repeats across pages, which can miss a link written into the page text.',
+  'applied-placement-partial': `This scan read where each link sits in the page. Some pages mark out no menu or main area, and this scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages, so nothing could tell those links apart. They are counted as content links, which is what a link no rule marked as menu, header, or footer means here.`,
+  'unavailable-too-few-pages': `This scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages and did not read where each link sits in the page. On a site that small every link is on most pages, so nav and footer links cannot be told apart from the rest.`,
   'unavailable-legacy-scan': 'This scan ran before nav and footer links were separated. Run a new scan to split them out.',
 }
 
@@ -344,7 +354,7 @@ const TEMPLATE_DETECTION_COPY: Record<Exclude<SiteHealthTemplateDetection, 'appl
 const TEMPLATE_DETECTION_LABELS = new Map<string, string>(Object.entries(TEMPLATE_DETECTION_COPY))
 
 function templateDetectionCopy(detection: SiteHealthTemplateDetection | null): string {
-  if (detection === null || detection === 'applied') return ''
+  if (detection === null) return ''
   // A value outside the union can still arrive on the wire. Fall back to the
   // "run a new scan" copy, which is true of any scan we cannot classify.
   return TEMPLATE_DETECTION_LABELS.get(detection) ?? TEMPLATE_DETECTION_COPY['unavailable-legacy-scan']
@@ -1672,7 +1682,10 @@ export function SiteHealthSection({
   )
   const contentEdgeCount = graphEdges.length - templateEdgeCount
   const templateDetection = graphQuery.data?.templateDetection ?? null
-  const templateFilterUnavailable = templateDetection !== 'applied'
+  // Which rule ran is a separate question from whether one ran at all, and only
+  // the second one decides the control. Asking the contract keeps a new
+  // detection value a compile error instead of a silently disabled toggle.
+  const templateFilterUnavailable = templateDetection === null || !isTemplateDetectionApplied(templateDetection)
   // When detection did not run, the per-link flag proves nothing, so nothing
   // is hidden. Hiding on an untrustworthy flag would quietly drop real links
   // from the map and the copy would be a lie.
@@ -2255,6 +2268,16 @@ export function SiteHealthSection({
                       Page positions on this map were set before nav and footer links were separated. Run a new scan to update them.
                     </span>
                   )}
+                  {/*
+                    Always rendered, in every state, because these counts are the
+                    output of a rule and the rule can change between scans. A
+                    reader who cannot see which rule produced the split cannot
+                    tell a real change on the site from a change in how it was
+                    measured.
+                  */}
+                  <span className="mt-1 block text-xs text-muted" data-testid="site-map-link-rule">
+                    {templateDetectionCopy(templateDetection)}
+                  </span>
                 </p>
                 <label
                   className={cn(
@@ -2275,9 +2298,6 @@ export function SiteHealthSection({
                   Show nav and footer links
                 </label>
               </div>
-            )}
-            {templateFilterUnavailable && graphQuery.data?.layout.state === 'ready' && (
-              <p className="mb-3 text-sm text-secondary">{templateDetectionCopy(templateDetection)}</p>
             )}
 
             <div id="site-health-map-explorer" className="grid gap-4 lg:grid-cols-[minmax(14rem,18rem)_minmax(0,1fr)]">

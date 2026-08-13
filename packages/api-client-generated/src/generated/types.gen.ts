@@ -7512,7 +7512,7 @@ export type SiteCrawlGraphResponseDto = {
         version: null;
         reason: 'no-crawl' | 'legacy-snapshot' | 'details-unavailable' | 'layout-failed' | 'empty-crawl';
     };
-    templateDetection: 'applied' | 'unavailable-too-few-pages' | 'unavailable-legacy-scan';
+    templateDetection: 'applied' | 'applied-placement' | 'applied-placement-with-ubiquity' | 'applied-placement-partial' | 'unavailable-too-few-pages' | 'unavailable-legacy-scan';
     linkKind: 'all' | 'content' | 'template';
     totalNodes: number;
     totalEdges: number;
@@ -7554,7 +7554,7 @@ export type SiteCrawlInternalLinksResponseDto = {
     runId: string | null;
     total: number;
     nextCursor: string | null;
-    templateDetection: 'applied' | 'unavailable-too-few-pages' | 'unavailable-legacy-scan';
+    templateDetection: 'applied' | 'applied-placement' | 'applied-placement-with-ubiquity' | 'applied-placement-partial' | 'unavailable-too-few-pages' | 'unavailable-legacy-scan';
     linkKind: 'all' | 'content' | 'template';
     edges: Array<{
         edgeKey: string;
@@ -7571,6 +7571,12 @@ export type SiteCrawlInternalLinksResponseDto = {
         anchors: Array<string>;
         isTemplate: boolean | null;
         templateRatio: number | null;
+        templateSource: 'placement' | 'ubiquity' | 'unmeasured';
+        placementOccurrences: {
+            navigation: number;
+            content: number;
+            unknown: number;
+        } | null;
     }>;
 };
 
@@ -7580,7 +7586,7 @@ export type SiteCrawlNeighborsResponseDto = {
     runId: string | null;
     nodeKey: string | null;
     url: string | null;
-    templateDetection: 'applied' | 'unavailable-too-few-pages' | 'unavailable-legacy-scan';
+    templateDetection: 'applied' | 'applied-placement' | 'applied-placement-with-ubiquity' | 'applied-placement-partial' | 'unavailable-too-few-pages' | 'unavailable-legacy-scan';
     linkKind: 'all' | 'content' | 'template';
     inbound: Array<{
         edgeKey: string;
@@ -7597,6 +7603,12 @@ export type SiteCrawlNeighborsResponseDto = {
         anchors: Array<string>;
         isTemplate: boolean | null;
         templateRatio: number | null;
+        templateSource: 'placement' | 'ubiquity' | 'unmeasured';
+        placementOccurrences: {
+            navigation: number;
+            content: number;
+            unknown: number;
+        } | null;
     }>;
     outbound: Array<{
         edgeKey: string;
@@ -7613,6 +7625,12 @@ export type SiteCrawlNeighborsResponseDto = {
         anchors: Array<string>;
         isTemplate: boolean | null;
         templateRatio: number | null;
+        templateSource: 'placement' | 'ubiquity' | 'unmeasured';
+        placementOccurrences: {
+            navigation: number;
+            content: number;
+            unknown: number;
+        } | null;
     }>;
     inboundTruncated: boolean;
     outboundTruncated: boolean;
@@ -7903,6 +7921,12 @@ export type SiteHealthChangesResponseDto = {
             anchors: Array<string>;
             isTemplate: boolean | null;
             templateRatio: number | null;
+            templateSource: 'placement' | 'ubiquity' | 'unmeasured';
+            placementOccurrences: {
+                navigation: number;
+                content: number;
+                unknown: number;
+            } | null;
         } | null;
         after: {
             edgeKey: string;
@@ -7919,6 +7943,12 @@ export type SiteHealthChangesResponseDto = {
             anchors: Array<string>;
             isTemplate: boolean | null;
             templateRatio: number | null;
+            templateSource: 'placement' | 'ubiquity' | 'unmeasured';
+            placementOccurrences: {
+                navigation: number;
+                content: number;
+                unknown: number;
+            } | null;
         } | null;
     }>;
 };
@@ -7980,6 +8010,12 @@ export type SiteHealthPathResponseDto = {
         anchors: Array<string>;
         isTemplate: boolean | null;
         templateRatio: number | null;
+        templateSource: 'placement' | 'ubiquity' | 'unmeasured';
+        placementOccurrences: {
+            navigation: number;
+            content: number;
+            unknown: number;
+        } | null;
     }>;
 };
 
@@ -8048,6 +8084,12 @@ export type SiteHealthSubgraphResponseDto = {
         anchors: Array<string>;
         isTemplate: boolean | null;
         templateRatio: number | null;
+        templateSource: 'placement' | 'ubiquity' | 'unmeasured';
+        placementOccurrences: {
+            navigation: number;
+            content: number;
+            unknown: number;
+        } | null;
     }>;
     omittedNodes: number;
     omittedEdges: number;
@@ -21204,7 +21246,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoGraphData = {
          */
         maxEdges?: number;
         /**
-         * Restrict links to `content` (excludes nav, header, and footer links) or `template` (only those). Defaults to `all`. A scan whose links were never classified matches neither, which is why every link response also carries `templateDetection`: an empty `content` list means "could not tell" when detection is not `applied`.
+         * Restrict links to `content` (excludes nav, header, and footer links) or `template` (only those). Defaults to `all`. A link neither rule could classify matches neither filter, which is why every link response also carries `templateDetection` and every edge carries `templateSource`: an empty `content` list means "could not tell" under an `unavailable-*` detection, and `templateSource` says whether a link that IS classified was decided by where it sits in the page (`placement`) or by how many pages repeat it (`ubiquity`).
          */
         linkKind?: 'all' | 'content' | 'template';
     };
@@ -21593,7 +21635,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoInternalLinksData = {
          */
         followable?: boolean;
         /**
-         * Restrict links to `content` (excludes nav, header, and footer links) or `template` (only those). Defaults to `all`. A scan whose links were never classified matches neither, which is why every link response also carries `templateDetection`: an empty `content` list means "could not tell" when detection is not `applied`.
+         * Restrict links to `content` (excludes nav, header, and footer links) or `template` (only those). Defaults to `all`. A link neither rule could classify matches neither filter, which is why every link response also carries `templateDetection` and every edge carries `templateSource`: an empty `content` list means "could not tell" under an `unavailable-*` detection, and `templateSource` says whether a link that IS classified was decided by where it sits in the page (`placement`) or by how many pages repeat it (`ubiquity`).
          */
         linkKind?: 'all' | 'content' | 'template';
         /**
@@ -21648,7 +21690,7 @@ export type GetApiV1ProjectsByNameTechnicalAeoInternalLinksNeighborsData = {
          */
         url?: string;
         /**
-         * Restrict links to `content` (excludes nav, header, and footer links) or `template` (only those). Defaults to `all`. A scan whose links were never classified matches neither, which is why every link response also carries `templateDetection`: an empty `content` list means "could not tell" when detection is not `applied`.
+         * Restrict links to `content` (excludes nav, header, and footer links) or `template` (only those). Defaults to `all`. A link neither rule could classify matches neither filter, which is why every link response also carries `templateDetection` and every edge carries `templateSource`: an empty `content` list means "could not tell" under an `unavailable-*` detection, and `templateSource` says whether a link that IS classified was decided by where it sits in the page (`placement`) or by how many pages repeat it (`ubiquity`).
          */
         linkKind?: 'all' | 'content' | 'template';
         /**

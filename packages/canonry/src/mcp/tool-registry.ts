@@ -956,7 +956,7 @@ const technicalAeoStructureInputSchema = z.object({
 })
 
 const linkKindSchema = z.enum(['all', 'content', 'template']).optional().describe(
-  'Restrict to content links (excludes nav, header, and footer links) or to template links only. Defaults to all. Check templateDetection before reading an empty content list as a real zero.',
+  'Restrict to content links (excludes nav, header, and footer links) or to template links only. Defaults to all. Check templateDetection before reading an empty content list as a real zero, and before comparing a count with an older scan: it says whether the split came from where each link sits in the page or from how many pages repeat it.',
 )
 
 const technicalAeoInternalLinksInputSchema = z.object({
@@ -2936,7 +2936,7 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_technical_aeo_internal_links',
     title: 'List Technical AEO internal links',
-    description: 'Read a bounded, cursor-paged list of persisted internal crawl edges. Filter by source URL, target URL, followability, or link kind. Nav, header, and footer links are marked isTemplate; templateDetection reports whether that classification ran, so an empty content-only list is not evidence of no content links. Use the neighbors tool for one page rather than loading a graph.',
+    description: 'Read a bounded, cursor-paged list of persisted internal crawl edges. Filter by source URL, target URL, followability, or link kind. Nav, header, and footer links are marked isTemplate; templateSource says which rule decided each one (placement, ubiquity, or unmeasured when neither had evidence) and templateDetection reports the same for the scan, so an empty content-only list is not evidence of no content links and two scans classified by different rules are never compared as if they were the same measurement. Use the neighbors tool for one page rather than loading a graph.',
     access: 'read',
     tier: 'monitoring',
     inputSchema: technicalAeoInternalLinksInputSchema,

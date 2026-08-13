@@ -1969,6 +1969,15 @@ describe('GET /technical-aeo template link reads', () => {
         .where(eq(siteCrawlEdges.runId, ctx.runB))
         .run()
     }
+    // The writer's no-rule path resets to (false, NULL) and returns before it
+    // measures anything, so a stored ratio under this state is not a row the
+    // product can produce.
+    if (detection === 'unavailable-too-few-pages') {
+      ctx.db.update(siteCrawlEdges)
+        .set({ isTemplate: false, templateRatio: null })
+        .where(eq(siteCrawlEdges.runId, ctx.runB))
+        .run()
+    }
     ctx.db.update(siteCrawlSnapshots)
       .set({ templateDetection: detection })
       .where(eq(siteCrawlSnapshots.runId, ctx.runB))
@@ -2061,6 +2070,141 @@ describe('GET /technical-aeo template link reads', () => {
 
     const graph = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph')
     expect(graph.body.templateDetection).toBe('unavailable-legacy-scan')
+  })
+
+  it('says which rule decided each link, so a count can be attributed', async () => {
+    // Both links look identical to a reader without this: one `isTemplate`
+    // each. Only `templateSource` says whether the answer came from where the
+    // link sits in the page or from how many pages repeat it, and the two rules
+    // do not measure the same thing.
+    classifySeededCrawl('applied-placement-with-ubiquity')
+    ctx.db.update(siteCrawlEdges)
+      .set({
+        placementNavigationOccurrences: 2,
+        placementContentOccurrences: 0,
+        placementUnknownOccurrences: 0,
+      })
+      .where(and(eq(siteCrawlEdges.runId, ctx.runB), eq(siteCrawlEdges.edgeKey, 'home-gone')))
+      .run()
+    ctx.db.update(siteCrawlEdges)
+      .set({
+        placementNavigationOccurrences: 0,
+        placementContentOccurrences: 0,
+        placementUnknownOccurrences: 3,
+      })
+      .where(and(eq(siteCrawlEdges.runId, ctx.runB), eq(siteCrawlEdges.edgeKey, 'home-guide')))
+      .run()
+
+    const { body } = await get<SiteCrawlInternalLinksResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/internal-links')
+    expect(body.templateDetection).toBe('applied-placement-with-ubiquity')
+    // `home-guide` carries a stored ratio, which is what makes it attributable
+    // to the fallback; without one it would read `unmeasured`, not `ubiquity`.
+    expect(body.edges.map((edge) => [edge.edgeKey, edge.templateSource])).toEqual([
+      ['home-gone', 'placement'],
+      ['home-guide', 'ubiquity'],
+    ])
+    expect(body.edges.find((edge) => edge.edgeKey === 'home-gone')?.placementOccurrences)
+      .toEqual({ navigation: 2, content: 0, unknown: 0 })
+
+    const neighbors = await get<SiteCrawlNeighborsResponseDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/internal-links/neighbors?nodeKey=home',
+    )
+    expect(neighbors.body.outbound.map((edge) => edge.templateSource)).toEqual(['placement', 'ubiquity'])
+  })
+
+  it('never reports a link as classified by a rule its own scan did not run', async () => {
+    // The scan is the authority. A scan that recorded no placement reports
+    // `ubiquity` for every classified link even if a row somehow carries
+    // counts, and a scan no rule could touch reports `unclassified` rather than
+    // letting an explicit `false` pass for the ubiquity rule's answer.
+    classifySeededCrawl('applied')
+    ctx.db.update(siteCrawlEdges)
+      .set({
+        placementNavigationOccurrences: 1,
+        placementContentOccurrences: 0,
+        placementUnknownOccurrences: 0,
+      })
+      .where(eq(siteCrawlEdges.runId, ctx.runB))
+      .run()
+    const ubiquityOnly = await get<SiteCrawlInternalLinksResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/internal-links')
+    expect(ubiquityOnly.body.edges.every((edge) => edge.templateSource === 'ubiquity')).toBe(true)
+
+    classifySeededCrawl('unavailable-too-few-pages')
+    const tooSmall = await get<SiteCrawlInternalLinksResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/internal-links')
+    expect(tooSmall.body.edges.every((edge) => edge.templateSource === 'unmeasured')).toBe(true)
+
+    classifySeededCrawl(null)
+    // A real pre-4.7.0 row: the columns were added by the migration and left
+    // NULL, because there was nothing to backfill them from.
+    ctx.db.update(siteCrawlEdges)
+      .set({
+        placementNavigationOccurrences: null,
+        placementContentOccurrences: null,
+        placementUnknownOccurrences: null,
+      })
+      .where(eq(siteCrawlEdges.runId, ctx.runB))
+      .run()
+    const legacy = await get<SiteCrawlInternalLinksResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/internal-links')
+    expect(legacy.body.edges.every((edge) => edge.templateSource === 'unmeasured')).toBe(true)
+    // A legacy scan has no placement to report, and reporting zeros would say
+    // the pages declared no landmarks rather than that nobody looked.
+    expect(legacy.body.edges.every((edge) => edge.placementOccurrences === null)).toBe(true)
+  })
+
+  it('keeps the link filter working under every rule that classified something', async () => {
+    for (const detection of ['applied-placement', 'applied-placement-with-ubiquity', 'applied-placement-partial'] as const) {
+      classifySeededCrawl('applied')
+      ctx.db.update(siteCrawlSnapshots)
+        .set({ templateDetection: detection, linkPlacementRulesetVersion: '1.0.0' })
+        .where(eq(siteCrawlSnapshots.runId, ctx.runB))
+        .run()
+      const content = await get<SiteCrawlInternalLinksResponseDto>(
+        '/api/v1/projects/tech-aeo/technical-aeo/internal-links?linkKind=content',
+      )
+      expect(content.body.templateDetection).toBe(detection)
+      expect(content.body.edges.map((edge) => edge.edgeKey)).toEqual(['home-guide'])
+    }
+  })
+
+  it('agrees about what a content link is across every surface of one scan', async () => {
+    // The graph read, the link list, and the neighbour read each filter on
+    // `is_template` separately. They must return the same set for the same
+    // scan: two reads of one crawl disagreeing about which links are content is
+    // worse than either answer alone.
+    classifySeededCrawl('applied')
+    ctx.db.update(siteCrawlSnapshots)
+      .set({ templateDetection: 'applied-placement-partial', linkPlacementRulesetVersion: '1.0.0' })
+      .where(eq(siteCrawlSnapshots.runId, ctx.runB))
+      .run()
+    ctx.db.update(siteCrawlEdges)
+      .set({
+        placementNavigationOccurrences: 0,
+        placementContentOccurrences: 0,
+        placementUnknownOccurrences: 4,
+        templateRatio: null,
+      })
+      .where(and(eq(siteCrawlEdges.runId, ctx.runB), eq(siteCrawlEdges.edgeKey, 'home-guide')))
+      .run()
+
+    const links = await get<SiteCrawlInternalLinksResponseDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/internal-links?linkKind=content',
+    )
+    const neighbors = await get<SiteCrawlNeighborsResponseDto>(
+      '/api/v1/projects/tech-aeo/technical-aeo/internal-links/neighbors?nodeKey=home&linkKind=content',
+    )
+    const graph = await get<SiteCrawlGraphResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/graph?linkKind=content')
+
+    const contentKeys = ['home-guide']
+    expect(links.body.edges.map((edge) => edge.edgeKey)).toEqual(contentKeys)
+    expect(neighbors.body.outbound.map((edge) => edge.edgeKey)).toEqual(contentKeys)
+    expect(graph.body.edges.map((edge) => edge.edgeKey)).toEqual(contentKeys)
+
+    // And the totals split the same number the payload does: no link is
+    // counted in neither bucket, and none in both.
+    expect(graph.body.totalTemplateEdges + graph.body.totalContentEdges).toBe(graph.body.totalEdges)
+    expect(graph.body.totalContentEdges).toBe(contentKeys.length)
+    // A link nothing measured is still a content link, and says so.
+    expect(links.body.edges[0]?.templateSource).toBe('unmeasured')
   })
 
   it('rejects an unknown link kind instead of silently returning everything', async () => {

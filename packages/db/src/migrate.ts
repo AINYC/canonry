@@ -7,8 +7,8 @@ import {
   normalizeQueryText,
   observeTemplateLinkEdges,
   SiteHealthTemplateDetections,
-  templateLinkDetection,
   templateLinkRatio,
+  templateLinkUbiquityAvailable,
   type TemplateLinkEdgeInput,
 } from '@ainyc/canonry-contracts'
 import type { DatabaseClient } from './client.js'
@@ -336,7 +336,7 @@ function* streamSiteCrawlTemplateLinkEdges(
   let after = ''
   for (;;) {
     const rows = tx.all(sql`
-      SELECT edge_key, source_node_key, target_node_key, anchors
+      SELECT edge_key, source_node_key, target_node_key, anchors, relation
       FROM site_crawl_edges
       WHERE attempt_id = ${attemptId} AND edge_key > ${after}
       ORDER BY edge_key
@@ -346,6 +346,7 @@ function* streamSiteCrawlTemplateLinkEdges(
       source_node_key: string
       target_node_key: string | null
       anchors: string | null
+      relation: string
     }>
     if (rows.length === 0) return
     yield rows.map((row) => ({
@@ -353,6 +354,7 @@ function* streamSiteCrawlTemplateLinkEdges(
       sourceNodeKey: row.source_node_key,
       targetNodeKey: row.target_node_key,
       anchors: parseJsonColumn<string[]>(row.anchors, []),
+      relation: row.relation,
     }))
     after = rows[rows.length - 1]!.edge_key
     if (rows.length < batchSize) return
@@ -379,6 +381,13 @@ function* chunked<T>(values: readonly T[], size = 500): Generator<T[]> {
  *
  * Idempotent: every attempt is reclassified from its own stored rows, so a
  * retry produces the same result.
+ *
+ * Ubiquity only, on purpose and permanently. This hook runs at migrations 131
+ * and 133, both of which land BEFORE the placement columns exist (138), and
+ * every scan it can reach was captured by a crawler that never recorded where a
+ * link sat. There is no placement to read and none to invent, so a stored scan
+ * keeps the ubiquity answer and its snapshot keeps a NULL ruleset version,
+ * which is what makes reads report `applied` rather than `applied-placement`.
  */
 export function backfillSiteCrawlTemplateLinks(tx: MigrationDb): void {
   // Attempts, not links: the small table drives the loop, an attempt with no
@@ -396,7 +405,10 @@ export function backfillSiteCrawlTemplateLinks(tx: MigrationDb): void {
   `)) as Array<{ attempt_id: string; project_id: string; run_id: string; pages_fetched: number }>
 
   for (const attempt of attempts) {
-    const detection = templateLinkDetection(attempt.pages_fetched)
+    const ubiquityAvailable = templateLinkUbiquityAvailable(attempt.pages_fetched)
+    const detection = ubiquityAvailable
+      ? SiteHealthTemplateDetections.applied
+      : SiteHealthTemplateDetections['unavailable-too-few-pages']
     const scope = { attemptId: attempt.attempt_id, projectId: attempt.project_id, runId: attempt.run_id }
 
     // Start from "classified, not a template link" for the whole attempt. A
@@ -3580,6 +3592,35 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
         synced_through_date TEXT,
         updated_at          TEXT NOT NULL
       )`,
+    ],
+  },
+  {
+    version: 138,
+    name: 'site-crawl-link-placement',
+    // The crawler (aeo-audit 4.7.0) now reports where each link occurrence sat
+    // in its page, from the page's own landmarks. That is ground truth about a
+    // link, and it replaces ubiquity as the rule that separates nav from
+    // content: ubiquity keys on (target URL, anchor text), so it cannot see an
+    // editorial link whose anchor text matches the nav's, which is the common
+    // case because good anchor text reuses the destination's name. Measured on
+    // canonry.ai: 53 newly added editorial links moved the content-link count
+    // by ZERO.
+    //
+    // These columns are deliberately nullable and deliberately NOT backfilled.
+    // A crawl captured before the landmark ruleset existed never observed
+    // placement, so there is nothing to derive from and any value written here
+    // would be invented. Those scans keep the ubiquity classification they
+    // already have, and their snapshots keep a NULL ruleset version, which is
+    // exactly what makes a read say `applied` rather than `applied-placement`.
+    // Re-running a scan is what upgrades it.
+    //
+    // Idempotent: `ALTER TABLE ADD COLUMN` errors with "duplicate column name",
+    // which the runner already swallows, and there is no data pass to repeat.
+    statements: [
+      `ALTER TABLE site_crawl_edges ADD COLUMN placement_navigation_occurrences INTEGER`,
+      `ALTER TABLE site_crawl_edges ADD COLUMN placement_content_occurrences INTEGER`,
+      `ALTER TABLE site_crawl_edges ADD COLUMN placement_unknown_occurrences INTEGER`,
+      `ALTER TABLE site_crawl_snapshots ADD COLUMN link_placement_ruleset_version TEXT`,
     ],
   },
 ]

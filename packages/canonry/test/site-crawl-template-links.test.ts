@@ -103,9 +103,12 @@ describe('site crawl template links', () => {
     const db = freshDb()
     const scope = seedCrawl(db, 20)
 
-    const result = classifySiteCrawlTemplateLinks(db, scope, 20)
+    // No placement ruleset: this is the fallback, and it is what a pre-4.7.0
+    // scan looks like forever, since placement can never be backfilled.
+    const result = classifySiteCrawlTemplateLinks(db, scope, 20, null)
     expect(result.detection).toBe('applied')
     expect(result.templateEdgeCount).toBeGreaterThan(0)
+    expect(result.placementEdgeCount).toBe(0)
 
     const rows = edgeRows(db, scope.attemptId)
     const template = rows.filter((row) => row.isTemplate)
@@ -125,7 +128,7 @@ describe('site crawl template links', () => {
     const db = freshDb()
     const scope = seedCrawl(db, TEMPLATE_LINK_MIN_FETCHED_PAGES - 1)
 
-    const result = classifySiteCrawlTemplateLinks(db, scope, TEMPLATE_LINK_MIN_FETCHED_PAGES - 1)
+    const result = classifySiteCrawlTemplateLinks(db, scope, TEMPLATE_LINK_MIN_FETCHED_PAGES - 1, null)
     expect(result.detection).toBe('unavailable-too-few-pages')
     expect(result.templateEdgeCount).toBe(0)
 
@@ -141,9 +144,9 @@ describe('site crawl template links', () => {
     const db = freshDb()
     const scope = seedCrawl(db, 20)
 
-    const first = classifySiteCrawlTemplateLinks(db, scope, 20)
+    const first = classifySiteCrawlTemplateLinks(db, scope, 20, null)
     const firstRows = edgeRows(db, scope.attemptId).map((row) => [row.edgeKey, row.isTemplate, row.templateRatio])
-    const second = classifySiteCrawlTemplateLinks(db, scope, 20)
+    const second = classifySiteCrawlTemplateLinks(db, scope, 20, null)
     const secondRows = edgeRows(db, scope.attemptId).map((row) => [row.edgeKey, row.isTemplate, row.templateRatio])
 
     expect(second).toEqual(first)
@@ -153,7 +156,7 @@ describe('site crawl template links', () => {
   it('keeps template links out of the layout but in the published sample', async () => {
     const db = freshDb()
     const scope = seedCrawl(db, 20)
-    classifySiteCrawlTemplateLinks(db, scope, 20)
+    classifySiteCrawlTemplateLinks(db, scope, 20, null)
 
     const layout = await prepareSiteCrawlGraphLayout(db, { ...scope, rootUrl: 'https://example.com/' })
     expect(layout.state).toBe('ready')
@@ -174,7 +177,7 @@ describe('site crawl template links', () => {
   it('places a page whose only inbound links are template links', async () => {
     const db = freshDb()
     const scope = seedCrawl(db, 20)
-    classifySiteCrawlTemplateLinks(db, scope, 20)
+    classifySiteCrawlTemplateLinks(db, scope, 20, null)
 
     const layout = await prepareSiteCrawlGraphLayout(db, { ...scope, rootUrl: 'https://example.com/' })
     if (layout.state !== 'ready') throw new Error('expected ready layout')
@@ -200,7 +203,7 @@ describe('site crawl template links', () => {
     const scope = seedCrawl(db, 20)
 
     const withNavMesh = await prepareSiteCrawlGraphLayout(db, { ...scope, rootUrl: 'https://example.com/' })
-    classifySiteCrawlTemplateLinks(db, scope, 20)
+    classifySiteCrawlTemplateLinks(db, scope, 20, null)
     const contentOnly = await prepareSiteCrawlGraphLayout(db, { ...scope, rootUrl: 'https://example.com/' })
     if (withNavMesh.state !== 'ready' || contentOnly.state !== 'ready') throw new Error('expected ready layouts')
 
@@ -211,5 +214,164 @@ describe('site crawl template links', () => {
     expect(contentOnly.totalTemplateEdges).toBeGreaterThan(0)
     expect(contentOnly.nodes.map((node) => node.nodeKey)).toEqual(withNavMesh.nodes.map((node) => node.nodeKey))
     expect(contentOnly.nodes).not.toEqual(withNavMesh.nodes)
+  })
+})
+
+/**
+ * Stamp DOM placement onto seeded links: everything is nav chrome except the
+ * `body:` links, which sit in the page's main content. `only` narrows the
+ * placement to a subset so a test can leave the rest with none recorded.
+ */
+function stampPlacement(
+  db: ReturnType<typeof createClient>,
+  attemptId: string,
+  overrides: Record<string, { navigation: number; content: number; unknown: number }> = {},
+) {
+  for (const row of edgeRows(db, attemptId)) {
+    const placement = overrides[row.edgeKey]
+      ?? (row.edgeKey.startsWith('body:')
+        ? { navigation: 0, content: 1, unknown: 0 }
+        : { navigation: 1, content: 0, unknown: 0 })
+    db.update(siteCrawlEdges).set({
+      placementNavigationOccurrences: placement.navigation,
+      placementContentOccurrences: placement.content,
+      placementUnknownOccurrences: placement.unknown,
+    }).where(eq(siteCrawlEdges.id, row.id)).run()
+  }
+}
+
+describe('site crawl template links, by DOM placement', () => {
+  it('classifies by placement and reports which rule it used', () => {
+    const db = freshDb()
+    const scope = seedCrawl(db, 20)
+    stampPlacement(db, scope.attemptId)
+
+    const result = classifySiteCrawlTemplateLinks(db, scope, 20, '1.0.0')
+    expect(result.detection).toBe('applied-placement')
+    expect(result.placementEdgeCount).toBe(edgeRows(db, scope.attemptId).length)
+
+    const rows = edgeRows(db, scope.attemptId)
+    expect(rows.filter((row) => row.edgeKey.startsWith('nav:')).every((row) => row.isTemplate === true)).toBe(true)
+    expect(rows.filter((row) => row.edgeKey.startsWith('body:')).every((row) => row.isTemplate === false)).toBe(true)
+    // The fallback rule never ran, so none of its evidence is persisted. A
+    // ratio beside a placement decision would suggest it had a vote.
+    expect(rows.every((row) => row.templateRatio === null)).toBe(true)
+  })
+
+  it('un-hides an editorial link the ubiquity rule could not see', () => {
+    // The measured canonry.ai failure, at the persistence layer. One page links
+    // a nav target from its own prose, using the nav's exact anchor text, so
+    // the (target, anchor) pair is on all 20 pages and ubiquity marks the row
+    // chrome. Placement sees the content occurrence and does not.
+    const db = freshDb()
+    const scope = seedCrawl(db, 20)
+    const editorialKey = 'nav:page-03->services'
+
+    const ubiquity = classifySiteCrawlTemplateLinks(db, scope, 20, null)
+    expect(ubiquity.detection).toBe('applied')
+    expect(edgeRows(db, scope.attemptId).find((row) => row.edgeKey === editorialKey)?.isTemplate).toBe(true)
+
+    stampPlacement(db, scope.attemptId, { [editorialKey]: { navigation: 1, content: 1, unknown: 0 } })
+    const placement = classifySiteCrawlTemplateLinks(db, scope, 20, '1.0.0')
+    expect(placement.detection).toBe('applied-placement')
+    const row = edgeRows(db, scope.attemptId).find((edge) => edge.edgeKey === editorialKey)
+    expect(row?.isTemplate).toBe(false)
+    // Only that one row moved: the rest of the nav mesh is still chrome.
+    expect(placement.templateEdgeCount).toBe(ubiquity.templateEdgeCount - 1)
+  })
+
+  it('falls back to ubiquity for links the page says nothing about', () => {
+    const db = freshDb()
+    const scope = seedCrawl(db, 20)
+    stampPlacement(db, scope.attemptId, { 'nav:page-05->about': { navigation: 0, content: 0, unknown: 1 } })
+
+    const result = classifySiteCrawlTemplateLinks(db, scope, 20, '1.0.0')
+    expect(result.detection).toBe('applied-placement-with-ubiquity')
+
+    const silent = edgeRows(db, scope.attemptId).find((row) => row.edgeKey === 'nav:page-05->about')
+    // Every page carries this pair, so the fallback still calls it chrome, and
+    // it persists the ratio that decided it.
+    expect(silent?.isTemplate).toBe(true)
+    expect(silent?.templateRatio).toBe(1)
+  })
+
+  it('never writes a NULL is_template, so every reader keeps one definition of a content link', () => {
+    // Below the page floor the fallback is unavailable, so a link the page said
+    // nothing about has no evidence behind it. It is still written as a real
+    // `false`. A NULL here would be invisible to the layout input, the graph
+    // sample, the totals, the map legend, and the inspector tiles, all of which
+    // read `is_template` as a boolean, and it would be excluded by only the two
+    // SQL link filters. That disagreement is the defect this shape prevents.
+    const db = freshDb()
+    const scope = seedCrawl(db, 4)
+    stampPlacement(db, scope.attemptId, { 'nav:page-01->about': { navigation: 0, content: 0, unknown: 3 } })
+
+    const result = classifySiteCrawlTemplateLinks(db, scope, 4, '1.0.0')
+    expect(result.detection).toBe('applied-placement-partial')
+
+    const rows = edgeRows(db, scope.attemptId)
+    expect(rows.every((row) => typeof row.isTemplate === 'boolean')).toBe(true)
+    expect(rows.find((row) => row.edgeKey === 'nav:page-01->about')?.isTemplate).toBe(false)
+    // Everything the DOM did answer for is still classified normally, which is
+    // the whole point: placement has no page floor.
+    expect(rows.filter((row) => row.isTemplate === true).length).toBeGreaterThan(0)
+    expect(rows.filter((row) => row.isTemplate === false).length).toBeGreaterThan(0)
+    // The template + content split accounts for every stored link, exactly.
+    expect(rows.filter((row) => row.isTemplate).length + rows.filter((row) => !row.isTemplate).length)
+      .toBe(rows.length)
+  })
+
+  it('a redirect edge does not make a well-marked-up small site report missing landmarks', () => {
+    const db = freshDb()
+    const scope = seedCrawl(db, 8)
+    stampPlacement(db, scope.attemptId)
+    const now = new Date().toISOString()
+    db.insert(siteCrawlEdges).values({
+      id: crypto.randomUUID(), projectId: scope.projectId, runId: scope.runId, attemptId: scope.attemptId,
+      edgeKey: 'redirect:page-00', sourceNodeKey: 'page-00', sourceUrl: 'https://example.com/page-00',
+      targetNodeKey: null, targetUrl: 'https://example.com/moved',
+      relation: 'redirect', internal: true, followable: true,
+      occurrences: 1, followableOccurrences: 1, nofollowOccurrences: 0, anchors: [],
+      placementNavigationOccurrences: 0, placementContentOccurrences: 0, placementUnknownOccurrences: 0,
+      createdAt: now, updatedAt: now,
+    }).run()
+
+    // Every ANCHOR link on this site is answered by its landmarks. The redirect
+    // carries no placement by construction and must not be read as evidence
+    // that a page is missing markup.
+    const result = classifySiteCrawlTemplateLinks(db, scope, 8, '1.0.0')
+    expect(result.detection).toBe('applied-placement')
+  })
+
+  it('is idempotent under placement, including the unclassified rows', () => {
+    const db = freshDb()
+    const scope = seedCrawl(db, 4)
+    stampPlacement(db, scope.attemptId, { 'nav:page-01->about': { navigation: 0, content: 0, unknown: 3 } })
+
+    const first = classifySiteCrawlTemplateLinks(db, scope, 4, '1.0.0')
+    const firstRows = edgeRows(db, scope.attemptId).map((row) => [row.edgeKey, row.isTemplate, row.templateRatio])
+    const second = classifySiteCrawlTemplateLinks(db, scope, 4, '1.0.0')
+    const secondRows = edgeRows(db, scope.attemptId).map((row) => [row.edgeKey, row.isTemplate, row.templateRatio])
+
+    expect(second).toEqual(first)
+    expect(secondRows).toEqual(firstRows)
+  })
+
+  it('re-running a legacy scan under placement changes which edges reach the physics', async () => {
+    const db = freshDb()
+    const scope = seedCrawl(db, 20)
+    classifySiteCrawlTemplateLinks(db, scope, 20, null)
+    const underUbiquity = await prepareSiteCrawlGraphLayout(db, { ...scope, rootUrl: 'https://example.com/' })
+
+    stampPlacement(db, scope.attemptId, { 'nav:page-03->services': { navigation: 1, content: 1, unknown: 0 } })
+    classifySiteCrawlTemplateLinks(db, scope, 20, '1.0.0')
+    const underPlacement = await prepareSiteCrawlGraphLayout(db, { ...scope, rootUrl: 'https://example.com/' })
+    if (underUbiquity.state !== 'ready' || underPlacement.state !== 'ready') throw new Error('expected ready layouts')
+
+    // One more link now enters the ForceAtlas2 input, so stored coordinates
+    // from the old rule are not valid seeds. That is what the algorithm version
+    // bump exists to prevent.
+    expect(underPlacement.totalTemplateEdges).toBe(underUbiquity.totalTemplateEdges - 1)
+    expect(underPlacement.nodes).not.toEqual(underUbiquity.nodes)
   })
 })
