@@ -130,8 +130,20 @@ function ReadyPageAudit({ audit }: {
 
       {actionableFactors.length > 0 ? (
         <div className="mt-5 divide-y divide-default border-y border-default">
-          {actionableFactors.map((factor, index) => (
-            <details key={factor.id} open={index === 0} className="group py-1">
+          {/*
+            Every check starts CLOSED so the page opens scannable: the summary
+            row below carries the factor name, its score, and its pass/partial/
+            fail badge, which is everything a reader needs to decide what to
+            open. Critical defects are NOT in here: they render above in their
+            own always-visible section, so collapsing these hides nothing that
+            demands attention.
+
+            Native <details> is the disclosure primitive this file already used,
+            so the toggle stays a real button with browser-managed expanded
+            state and the closed content is genuinely out of the tab order.
+          */}
+          {actionableFactors.map((factor) => (
+            <details key={factor.id} className="group py-1">
               <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 rounded-sm px-1 py-2 outline-none marker:hidden focus-visible:ring-2 focus-visible:ring-mono-400 [&::-webkit-details-marker]:hidden">
                 <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-heading">
                   <ChevronRight className="size-4 shrink-0 text-muted transition-transform group-open:rotate-90" aria-hidden="true" />

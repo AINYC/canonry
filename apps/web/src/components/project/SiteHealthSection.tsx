@@ -80,7 +80,7 @@ const SITE_HEALTH_VIEWS = [
   { id: 'technical', label: 'Page health' },
 ] as const satisfies ReadonlyArray<{ id: SiteHealthView; label: string }>
 
-const SITE_HEALTH_VIEW_DESCRIPTIONS: Record<SiteHealthView, string> = {
+export const SITE_HEALTH_VIEW_DESCRIPTIONS: Record<SiteHealthView, string> = {
   map: 'Explore how pages, site sections, and internal links fit together.',
   inventory: 'Review discovered pages and the links that shape their visibility.',
   technical: 'Prioritize audit findings and inspect the pages that need work.',
@@ -252,12 +252,12 @@ const FULL_GRAPH_METRICS: ReadonlySet<SiteHealthMetric> = new Set([
 export function siteHealthMetricHelp(metric: SiteHealthMetric, filtered: boolean): string {
   const base = SITE_HEALTH_METRIC_HELP[metric]
   if (FULL_GRAPH_METRICS.has(metric)) {
-    return `${base} This always counts every link, including nav and footer.`
+    return `${base} This always counts every link, including menu and footer.`
   }
   if (metric === 'technicalScore' || metric === 'linkTimes') return base
   return filtered
-    ? `${base} Right now this counts content links only. Nav and footer links are hidden.`
-    : `${base} This counts every link, including nav and footer.`
+    ? `${base} Right now this counts only links written in your page text. Menu and footer links are hidden.`
+    : `${base} This counts every link, including menu and footer.`
 }
 
 /** Counted nouns in map copy. "1 content links" reads like a bug report. */
@@ -342,12 +342,12 @@ function terminationCopy(termination: string | null): string {
  * link sits.
  */
 export const TEMPLATE_DETECTION_COPY: Record<SiteHealthTemplateDetection, string> = {
-  'applied': 'This scan told nav and footer links apart by how often the same link repeats across pages. It cannot spot a link written into the page text when its wording matches the menu. Run a new scan to read the page layout instead.',
+  'applied': 'This scan told menu and footer links apart by how often the same link repeats across pages. It cannot spot a link written into the page text when its wording matches the menu. Run a new scan to read the page layout instead.',
   'applied-placement': 'This scan read where each link sits in the page, so links in the page text are separated from the menu, header, and footer even when they use the same wording.',
   'applied-placement-with-ubiquity': 'This scan read where each link sits in the page. Some pages mark out no menu or main area, so those links fall back to how often the link repeats across pages, which can miss a link written into the page text.',
-  'applied-placement-partial': `This scan read where each link sits in the page. Some pages mark out no menu or main area, and this scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages, so nothing could tell those links apart. They are counted as content links, which is what a link no rule marked as menu, header, or footer means here.`,
-  'unavailable-too-few-pages': `This scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages and did not read where each link sits in the page. On a site that small every link is on most pages, so nav and footer links cannot be told apart from the rest.`,
-  'unavailable-legacy-scan': 'This scan ran before nav and footer links were separated. Run a new scan to split them out.',
+  'applied-placement-partial': `This scan read where each link sits in the page. Some pages mark out no menu or main area, and this scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages, so nothing could tell those links apart. They are counted as links in your page text, which is what a link no rule marked as menu, header, or footer means here.`,
+  'unavailable-too-few-pages': `This scan found fewer than ${TEMPLATE_LINK_MIN_FETCHED_PAGES} pages and did not read where each link sits in the page. On a site that small every link is on most pages, so menu and footer links cannot be told apart from the rest.`,
+  'unavailable-legacy-scan': 'This scan ran before menu and footer links were separated. Run a new scan to split them out.',
 }
 
 /** Persisted rows stay string-backed, so the lookup must admit a miss. */
@@ -358,6 +358,72 @@ function templateDetectionCopy(detection: SiteHealthTemplateDetection | null): s
   // A value outside the union can still arrive on the wire. Fall back to the
   // "run a new scan" copy, which is true of any scan we cannot classify.
   return TEMPLATE_DETECTION_LABELS.get(detection) ?? TEMPLATE_DETECTION_COPY['unavailable-legacy-scan']
+}
+
+/**
+ * Why a map's stored page positions predate the current link split. Kept beside
+ * the detection copy because both answer the same question a reader has about
+ * the same numbers, and both belong in the same tooltip rather than in a second
+ * and third line of the header strip.
+ */
+/** Heading help for the map. Was a subtitle line under the heading. */
+export const SITE_MAP_HELP = 'Scroll to zoom. Click a page to inspect it.'
+
+/** Heading help for the page inspector's link section. Was a subtitle line. */
+export const PAGE_INTERNAL_LINKS_HELP = 'Observed links to and from this page in the selected scan.'
+
+export const SITE_MAP_STALE_LAYOUT_COPY =
+  'Page positions on this map were set before menu and footer links were separated. Run a new scan to update them.'
+
+/**
+ * The map header's VISIBLE line: the numbers, and nothing else.
+ *
+ * It used to carry the counts plus two more lines of prose, which is more copy
+ * than a header strip can hold. The numbers are what a reader scans for; the
+ * explanation behind them is one hover or one tab away in `siteMapLinkRuleHelp`.
+ *
+ * "Content link" and "template link" are OUR words, not a reader's. The real
+ * distinction is where the link was written: in the page's own text, or in the
+ * furniture that repeats on every page. The copy says that; the wire format
+ * (`linkKind=content|template|all`) is unchanged and stays our vocabulary.
+ */
+export function siteMapLinkCountsLabel(counts: {
+  filterUnavailable: boolean
+  showTemplateLinks: boolean
+  contentEdgeCount: number
+  templateEdgeCount: number
+  totalEdgeCount: number
+}): string {
+  if (counts.filterUnavailable) return `All ${countedLinks(counts.totalEdgeCount, 'link')} shown.`
+  const inText = `${numberFormatter.format(counts.contentEdgeCount)} link${counts.contentEdgeCount === 1 ? '' : 's'} in your page text`
+  const template = numberFormatter.format(counts.templateEdgeCount)
+  return counts.showTemplateLinks
+    ? `${inText}, ${template} menu and footer.`
+    : `${inText}. ${template} menu and footer link${counts.templateEdgeCount === 1 ? '' : 's'} hidden.`
+}
+
+/**
+ * Why the split is worth having, before how it was made.
+ *
+ * A reader does not arrive wanting to know which rule ran. They want to know
+ * why the map hides most of their links, so the tooltip answers that first and
+ * only then explains the rule behind the numbers.
+ */
+export const SITE_MAP_LINK_SPLIT_COPY =
+  'Menu, header, and footer links repeat on every page, so they say nothing about which pages relate to each other. Links written in your page text do.'
+
+/**
+ * Everything the header line no longer says out loud: what the split is for,
+ * which rule produced it, and whether the positions predate it. Nothing was
+ * dropped in the compression, it moved into the tooltip.
+ */
+export function siteMapLinkRuleHelp(
+  detection: SiteHealthTemplateDetection | null,
+  options: { staleLayout: boolean },
+): string {
+  const parts = [SITE_MAP_LINK_SPLIT_COPY, templateDetectionCopy(detection)]
+  if (options.staleLayout) parts.push(SITE_MAP_STALE_LAYOUT_COPY)
+  return parts.filter(Boolean).join(' ')
 }
 
 /**
@@ -409,8 +475,8 @@ export function linkTileCount(counts: {
     hiddenNote: counts.hidden === 0
       ? null
       : counts.truncated
-        ? `At least ${metricValue(counts.hidden)} nav and footer hidden`
-        : `${metricValue(counts.hidden)} nav and footer hidden`,
+        ? `At least ${metricValue(counts.hidden)} menu and footer hidden`
+        : `${metricValue(counts.hidden)} menu and footer hidden`,
   }
 }
 
@@ -439,12 +505,10 @@ function LinkMetrics({ page, inbound, outbound }: {
 }) {
   // Depth and link importance are computed by the crawl engine over the FULL
   // link graph, before nav and footer links are classified, so the filter does
-  // not change them. Saying so is the honest fix: quietly leaving them beside
-  // filtered numbers implies they were filtered too.
-  // The footnote only earns its space when something is actually hidden; the
-  // tooltips key off the filter itself, which is in force even on a page that
-  // happens to have no nav or footer links.
-  const anythingHidden = Boolean(inbound.hiddenNote || outbound.hiddenNote)
+  // not change them. That used to be said twice: once in a footnote under this
+  // grid, and once in the two affected tiles' own tooltips, which
+  // `siteHealthMetricHelp` already appends it to for every FULL_GRAPH_METRIC.
+  // The footnote was the duplicate, so it is gone and nothing was lost.
   return (
     <>
       <dl className="grid grid-cols-2 divide-x divide-y divide-default rounded-lg border border-default sm:grid-cols-4 sm:divide-y-0">
@@ -471,11 +535,6 @@ function LinkMetrics({ page, inbound, outbound }: {
           help={siteHealthMetricHelp('linkImportance', false)}
         />
       </dl>
-      {anythingHidden && (
-        <p className="mt-2 text-xs text-muted">
-          Clicks from home and link importance always count every link, including nav and footer.
-        </p>
-      )}
     </>
   )
 }
@@ -500,13 +559,13 @@ export function emptyLinkCopy(
       : 'This page links to nothing.'
   }
   const lead = direction === 'inbound'
-    ? 'No content links to this page.'
-    : 'No content links from this page.'
+    ? 'No links in the page text point here.'
+    : 'No links in the page text lead away from here.'
   // A truncated list can only prove a lower bound, so it says so rather than
   // rounding a partial count into a fact.
   const hidden = truncated
-    ? `At least ${metricValue(hiddenTemplateCount)} nav and footer links hidden.`
-    : `${countedLinks(hiddenTemplateCount, 'nav and footer link')} hidden.`
+    ? `At least ${metricValue(hiddenTemplateCount)} menu and footer links hidden.`
+    : `${countedLinks(hiddenTemplateCount, 'menu and footer link')} hidden.`
   return `${lead} ${hidden}`
 }
 
@@ -714,8 +773,10 @@ function PageInspector({
       </div>
 
       <section className="mt-5 border-t border-default pt-5" aria-labelledby="site-health-page-links-heading">
-        <h3 id="site-health-page-links-heading" className="text-base font-semibold text-heading">Internal links</h3>
-        <p className="mt-1 text-sm text-secondary">Observed links to and from this page in the selected scan.</p>
+        <div className="flex items-center gap-1">
+          <h3 id="site-health-page-links-heading" className="text-base font-semibold text-heading">Internal links</h3>
+          <InfoTooltip text={PAGE_INTERNAL_LINKS_HELP} />
+        </div>
         <div className="mt-4">
           <LinkMetrics page={page} inbound={inboundTile} outbound={outboundTile} />
         </div>
@@ -1915,12 +1976,12 @@ export function SiteHealthSection({
         <div>
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-xl font-semibold tracking-tight text-heading">Site Health</h2>
+            <InfoTooltip text={SITE_HEALTH_VIEW_DESCRIPTIONS[currentView]} />
             <ToneBadge tone={scanTone(status)}>{statusLabel}</ToneBadge>
             {selectedRun && (
               <span className="text-xs text-muted">{formatScanDate(selectedRun.finishedAt ?? selectedRun.startedAt)}</span>
             )}
           </div>
-          <p className="mt-1 text-sm text-secondary">{SITE_HEALTH_VIEW_DESCRIPTIONS[currentView]}</p>
         </div>
 
         <div className="flex flex-wrap items-start gap-2">
@@ -2243,8 +2304,10 @@ export function SiteHealthSection({
           <section aria-labelledby="site-map-heading">
             <div className="mb-3 flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
               <div>
-                <h2 id="site-map-heading" className="text-base font-semibold text-heading">Site map</h2>
-                <p className="mt-1 text-sm text-secondary">Scroll to zoom. Click a page to inspect it.</p>
+                <div className="flex items-center gap-1">
+                  <h2 id="site-map-heading" className="text-base font-semibold text-heading">Site map</h2>
+                  <InfoTooltip text={SITE_MAP_HELP} />
+                </div>
               </div>
               {graphQuery.data?.sampled && (
                 <span className="text-xs text-muted">
@@ -2257,27 +2320,25 @@ export function SiteHealthSection({
 
             {graphQuery.data?.layout.state === 'ready' && (
               <div className="mb-3 flex flex-col gap-1.5 rounded-lg border border-default bg-surface-subtle px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-secondary" data-testid="site-map-link-counts">
-                  {templateFilterUnavailable
-                    ? `Showing all ${countedLinks(graphEdges.length, 'link')} on this map.`
-                    : showTemplateLinks
-                      ? `Showing ${countedLinks(contentEdgeCount, 'content link')} and ${countedLinks(templateEdgeCount, 'nav and footer link')}.`
-                      : `Showing ${countedLinks(contentEdgeCount, 'content link')}. ${countedLinks(templateEdgeCount, 'nav and footer link')} hidden.`}
-                  {staleTemplateLayout && !templateFilterUnavailable && (
-                    <span className="mt-1 block text-xs text-muted">
-                      Page positions on this map were set before nav and footer links were separated. Run a new scan to update them.
-                    </span>
-                  )}
-                  {/*
-                    Always rendered, in every state, because these counts are the
-                    output of a rule and the rule can change between scans. A
-                    reader who cannot see which rule produced the split cannot
-                    tell a real change on the site from a change in how it was
-                    measured.
-                  */}
-                  <span className="mt-1 block text-xs text-muted" data-testid="site-map-link-rule">
-                    {templateDetectionCopy(templateDetection)}
-                  </span>
+                {/*
+                  One line, the numbers only. The rule that produced them and
+                  any staleness warning are always available on the tooltip, in
+                  every state, because these counts are the output of a rule and
+                  the rule can change between scans: a reader who cannot see
+                  which rule ran cannot tell a real change on the site from a
+                  change in how it was measured.
+                */}
+                <p className="flex items-center gap-1 text-sm text-secondary" data-testid="site-map-link-counts">
+                  {siteMapLinkCountsLabel({
+                    filterUnavailable: templateFilterUnavailable,
+                    showTemplateLinks,
+                    contentEdgeCount,
+                    templateEdgeCount,
+                    totalEdgeCount: graphEdges.length,
+                  })}
+                  <InfoTooltip text={siteMapLinkRuleHelp(templateDetection, {
+                    staleLayout: staleTemplateLayout && !templateFilterUnavailable,
+                  })} />
                 </p>
                 <label
                   className={cn(
@@ -2286,7 +2347,7 @@ export function SiteHealthSection({
                   )}
                   title={templateFilterUnavailable
                     ? templateDetectionCopy(templateDetection)
-                    : 'Nav and footer links are drawn on top. Pages do not move, because the map was laid out from content links.'}
+                    : 'Menu and footer links are drawn on top. Pages do not move, because the map was laid out from the links in your page text.'}
                 >
                   <input
                     type="checkbox"
@@ -2295,7 +2356,7 @@ export function SiteHealthSection({
                     onChange={(event) => setShowTemplateLinks(event.target.checked)}
                     className="size-4 rounded border-base accent-mono-200 focus:ring-2 focus:ring-mono-400"
                   />
-                  Show nav and footer links
+                  Show menu and footer links
                 </label>
               </div>
             )}

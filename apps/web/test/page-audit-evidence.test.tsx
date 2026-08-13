@@ -61,9 +61,103 @@ test('connects a page score to its exact audit findings and fixes', () => {
   expect(screen.getByText('Critical')).not.toBeNull()
   const factor = screen.getByText('Content depth').closest('details')
   expect(factor).not.toBeNull()
+  // Checks start collapsed, so open it before asserting on what it holds.
+  // jsdom keeps closed content in the DOM, so querying without this would
+  // assert on markup a reader cannot actually see.
+  fireEvent.click(within(factor!).getByText('Content depth'))
+  expect(factor!.open).toBe(true)
   expect(within(factor!).getByText('Only 120 words were found.')).not.toBeNull()
   expect(within(factor!).getByText('Answer the key questions visitors ask on this page.')).not.toBeNull()
   expect(screen.queryByText('Structured data')).toBeNull()
+})
+
+test('every technical check starts collapsed, and opens on click', () => {
+  render(
+    <PageAuditEvidence
+      audit={{
+        state: 'ready', project: 'citypoint', runId: 'run_1', complete: true, termination: null,
+        nodeKey: 'page_services', url: 'https://citypoint.example/services',
+        auditState: 'complete', auditScore: 42, evidenceState: 'complete', criticalDefects: [],
+        factors: [
+          {
+            id: 'content-depth', name: 'Content depth', weight: 12, score: 20,
+            status: 'fail', applicable: true,
+            findings: [{ type: 'missing', code: 'content-depth.word-count.low', message: 'Only 120 words were found.' }],
+            recommendations: ['Answer the key questions visitors ask on this page.'],
+          },
+          {
+            id: 'ai-crawler-access', name: 'AI crawler access', weight: 20, score: 55,
+            status: 'partial', applicable: true,
+            findings: [{ type: 'missing', code: 'ai-crawler-access.crawler.blocked', message: 'GPTBot is blocked.' }],
+            recommendations: ['Allow GPTBot in robots.txt.'],
+          },
+        ],
+      }}
+      isLoading={false}
+      error={null}
+      onRetry={vi.fn()}
+    />,
+  )
+
+  // The page opens scannable: nothing is expanded, so the viewport is a list of
+  // checks rather than a wall of findings.
+  const sections = Array.from(document.querySelectorAll('details'))
+  expect(sections).toHaveLength(2)
+  expect(sections.every((section) => section.open)).toBe(false)
+
+  // ...and the summary row still carries everything a reader scans for, so the
+  // collapse costs no information: name, score, and pass/partial/fail.
+  for (const [name, score, state] of [
+    ['Content depth', '20/100', 'Fail'],
+    ['AI crawler access', '55/100', 'Partial'],
+  ]) {
+    const section = screen.getByText(name).closest('details')!
+    expect(within(section).getByText(score)).not.toBeNull()
+    expect(within(section).getByText(state)).not.toBeNull()
+  }
+
+  // Clicking the disclosure opens exactly that one.
+  const first = screen.getByText('Content depth').closest('details')!
+  fireEvent.click(within(first).getByText('Content depth'))
+  expect(first.open).toBe(true)
+  expect(screen.getByText('AI crawler access').closest('details')!.open).toBe(false)
+
+  // The summary is still there once expanded: it is the row, not a placeholder
+  // the expansion replaces.
+  expect(within(first).getByText('Content depth')).not.toBeNull()
+  expect(within(first).getByText('20/100')).not.toBeNull()
+  expect(within(first).getByText('Fail')).not.toBeNull()
+  expect(within(first).getByText('Only 120 words were found.')).not.toBeNull()
+})
+
+test('a critical defect stays visible without expanding anything', () => {
+  // Critical defects render in their OWN always-visible section, not inside the
+  // collapsed checks, so nothing that demands attention is hidden by default.
+  render(
+    <PageAuditEvidence
+      audit={{
+        state: 'ready', project: 'citypoint', runId: 'run_1', complete: true, termination: null,
+        nodeKey: 'page_home', url: 'https://citypoint.example/',
+        auditState: 'complete', auditScore: 42, evidenceState: 'complete',
+        factors: [{
+          id: 'content-depth', name: 'Content depth', weight: 12, score: 20,
+          status: 'fail', applicable: true, findings: [], recommendations: [],
+        }],
+        criticalDefects: [{
+          id: 'missing-h1', severity: 'critical',
+          detail: 'No H1 tag was found.', recommendation: 'Add one descriptive H1.',
+        }],
+      }}
+      isLoading={false}
+      error={null}
+      onRetry={vi.fn()}
+    />,
+  )
+
+  expect(Array.from(document.querySelectorAll('details')).every((section) => section.open)).toBe(false)
+  const defect = screen.getByText('No H1 tag was found.')
+  expect(defect.closest('details')).toBeNull()
+  expect(screen.getByText('Add one descriptive H1.').closest('details')).toBeNull()
 })
 
 test('labels legacy page evidence as scores-only instead of claiming there were no findings', () => {
