@@ -146,14 +146,36 @@ small every link looks ubiquitous. The backfill classifies every stored scan
 from rows the crawl already persisted; it deliberately does not rewrite
 immutable layout coordinates, and those rows keep `template_links_excluded = 0`
 so the map can say their positions predate the split.
+Migration 138 replaces the rule for every NEW scan. The crawler (aeo-audit
+4.7.0) reports where each link occurrence sat, from the page's own landmarks,
+and those three counts are stored per link beside the landmark ruleset version
+on the snapshot. Any content occurrence makes a link editorial, navigation with
+no content occurrence makes it chrome, and `unknown` carries no evidence, so a
+link the page said nothing about falls back to ubiquity where the scan is large
+enough and is left unclassified (`is_template` NULL, in neither the content nor
+the template bucket) where it is not. Ubiquity keys on (target URL, anchor
+text), so it cannot see an editorial link whose anchor text matches the nav's,
+which is the common case because good anchor text reuses the destination's name:
+53 editorial links added to canonry.ai moved the measured content-link count by
+zero. Migration 138 adds only columns and backfills NOTHING, because a crawl
+captured before the ruleset existed never observed placement and any value
+written for it would be invented; those scans keep their ubiquity
+classification and a NULL ruleset version, which is what makes reads report
+`applied` rather than `applied-placement`. Which rule produced a scan's numbers
+is reported by `template_detection` (`applied`, `applied-placement`,
+`applied-placement-with-ubiquity`, `applied-placement-partial`) and per link by
+the derived `templateSource`, so no count mixes the two rules silently.
+Changing which links reach the ForceAtlas2 input changes positions, so the
+layout algorithm moved to `site-health-fa2-v5` and v4 coordinates are not
+reused as seeds.
 
 | Table | Purpose | Key Constraints |
 |-------|---------|----------------|
 | **site_crawl_run_requests** | Canonical effective options and identity for a queued crawl. Identical requests may reuse one active run; different options receive a conflict. | PK: `runId`; composite FK `(projectId, runId)` → runs |
 | **site_crawl_attempts** | Mutable event-stream progress for one execution attempt. | Unique: `(runId, attemptNumber)`; composite FK to runs |
-| **site_crawl_snapshots** | Immutable terminal crawl metadata, including the requested root, effective root, and whether template-link detection ran (`template_detection`; NULL means a scan published before it existed). Default reads select only the latest complete snapshot; explicitly selected partial runs remain historical. | Unique: `runId`; composite FK to runs and attempt |
+| **site_crawl_snapshots** | Immutable terminal crawl metadata, including the requested root, effective root, which rule classified the links (`template_detection`; NULL means a scan published before it existed), and the crawler landmark ruleset behind that rule (`link_placement_ruleset_version`; NULL means the scan recorded no placement and can never be reclassified). Default reads select only the latest complete snapshot; explicitly selected partial runs remain historical. | Unique: `runId`; composite FK to runs and attempt |
 | **site_crawl_pages** | URL inventory with discovery provenance, fetch/indexability state, depth, internal-link counts, and link score. | Unique: `(projectId, runId, attemptId, nodeKey)` |
-| **site_crawl_edges** | Bounded typed link observations with occurrence, followability, anchor summaries, and the template-link decision (`is_template` plus the `template_ratio` that produced it). NULL `is_template` means never classified, never "not a nav link". | Unique: `(projectId, runId, attemptId, edgeKey)` |
+| **site_crawl_edges** | Bounded typed link observations with occurrence, followability, anchor summaries, the crawler placement split (`placement_navigation_occurrences` / `placement_content_occurrences` / `placement_unknown_occurrences`; all NULL means the scan recorded none, which is different from all zero), and the template-link decision (`is_template` plus the `template_ratio` that the ubiquity fallback produced). NULL `is_template` means never classified, never "not a nav link". | Unique: `(projectId, runId, attemptId, edgeKey)` |
 | **site_crawl_graph_layouts** | One immutable derived-layout status per crawl attempt, with version, failure code, source totals (including the template-link share), sampled counts, and whether template links were kept out of the physics. Absent means a pre-v127 snapshot; `unavailable` means layout could not safely publish and does not invalidate the crawl. | Unique: `(projectId, runId, attemptId)` |
 | **site_crawl_graph_nodes** | The bounded, ranked subset of canonical pages rendered by Site Health, carrying only persisted finite `x/y` coordinates. | Unique: `(projectId, runId, attemptId, nodeKey)` and `(projectId, runId, attemptId, sampleRank)` |
 | **site_crawl_graph_edges** | Exact bounded, ranked canonical-edge subset used for both ForceAtlas2 and the WebGL renderer, each carrying its template-link flag; both endpoints reference persisted graph nodes. Template links stay in the sample so the map can draw them without a refetch. | Unique: `(projectId, runId, attemptId, edgeKey)` and `(projectId, runId, attemptId, sampleRank)` |

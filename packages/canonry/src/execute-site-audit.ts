@@ -471,6 +471,22 @@ export async function executeSiteAudit(
     bindReferences(tx, changedUrls, now)
   }
 
+  /**
+   * The crawler's placement report for one link, or nulls when the crawl never
+   * produced one. All three columns move together so a read can tell "we never
+   * looked" from "the page declared no landmark that answers the question",
+   * which is what `{ navigation: 0, content: 0, unknown: n }` means.
+   */
+  const edgePlacementColumns = (edge: CrawlEdgeObservation): {
+    placementNavigationOccurrences: number | null
+    placementContentOccurrences: number | null
+    placementUnknownOccurrences: number | null
+  } => ({
+    placementNavigationOccurrences: edge.placementOccurrences?.navigation ?? null,
+    placementContentOccurrences: edge.placementOccurrences?.content ?? null,
+    placementUnknownOccurrences: edge.placementOccurrences?.unknown ?? null,
+  })
+
   const persistEdge = (tx: DatabaseTransaction, edge: CrawlEdgeObservation, now: string): void => {
     // A page linking to itself is not a link TO or FROM another page, and the
     // engine's own page metrics already exclude it. Persisting it made the
@@ -494,6 +510,7 @@ export async function executeSiteAudit(
       followableOccurrences: edge.followableOccurrences,
       nofollowOccurrences: edge.nofollowOccurrences,
       anchors: edge.anchorSummaries.map((anchor) => anchor.text),
+      ...edgePlacementColumns(edge),
       createdAt: now, updatedAt: now,
     }).onConflictDoUpdate({
       target: [siteCrawlEdges.projectId, siteCrawlEdges.runId, siteCrawlEdges.attemptId, siteCrawlEdges.edgeKey],
@@ -509,6 +526,7 @@ export async function executeSiteAudit(
         followableOccurrences: edge.followableOccurrences,
         nofollowOccurrences: edge.nofollowOccurrences,
         anchors: edge.anchorSummaries.map((anchor) => anchor.text),
+        ...edgePlacementColumns(edge),
         updatedAt: now,
       },
     }).run()
@@ -629,19 +647,24 @@ export async function executeSiteAudit(
     }
 
     // Classification must precede layout: the layout excludes template links
-    // from its physics and the sampling query orders by the same column. It is
-    // a whole-crawl decision (a link's ubiquity is only known once every page
-    // has been fetched), so it cannot happen inside the per-event writes.
+    // from its physics and the sampling query orders by the same column. The
+    // ubiquity fallback is a whole-crawl decision (a link's ubiquity is only
+    // known once every page has been fetched), so it cannot happen inside the
+    // per-event writes even though placement alone could.
+    const placementRulesetVersion = crawlSummary.linkPlacementRulesetVersion ?? null
     const templateLinks = classifySiteCrawlTemplateLinks(
       db,
       { projectId, runId, attemptId },
       crawlSummary.pagesFetched,
+      placementRulesetVersion,
     )
     log.info('template-links', {
       runId,
       projectId,
       detection: templateLinks.detection,
       templateEdges: templateLinks.templateEdgeCount,
+      placementEdges: templateLinks.placementEdgeCount,
+      placementRulesetVersion,
     })
 
     const graphLayout = await prepareSiteCrawlGraphLayout(db, {
@@ -765,6 +788,7 @@ export async function executeSiteAudit(
         deadLinksChecked,
         deadLinksFound,
         templateDetection: templateLinks.detection,
+        linkPlacementRulesetVersion: placementRulesetVersion,
         createdAt: finishedAt,
         updatedAt: finishedAt,
       }).run()

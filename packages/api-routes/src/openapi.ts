@@ -494,7 +494,7 @@ const crawlLimitParameter: OpenApiParameter = {
 const linkKindParameter: OpenApiParameter = {
   name: 'linkKind',
   in: 'query',
-  description: 'Restrict links to `content` (excludes nav, header, and footer links) or `template` (only those). Defaults to `all`. A scan whose links were never classified matches neither, which is why every link response also carries `templateDetection`: an empty `content` list means "could not tell" when detection is not `applied`.',
+  description: 'Restrict links to `content` (excludes nav, header, and footer links) or `template` (only those). Defaults to `all`. A link neither rule could classify matches neither filter, which is why every link response also carries `templateDetection` and every edge carries `templateSource`: an empty `content` list means "could not tell" under an `unavailable-*` detection, and `templateSource` says whether a link that IS classified was decided by where it sits in the page (`placement`) or by how many pages repeat it (`ubiquity`).',
   schema: { type: 'string', enum: ['all', 'content', 'template'], default: 'all' },
 }
 
@@ -6162,7 +6162,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'get',
     path: '/api/v1/projects/{name}/technical-aeo/graph',
     summary: 'Get a persisted Site Health graph projection',
-    description: 'Returns the deterministic graph projection computed once when the latest complete or selected historical crawl was published. ForceAtlas2 positions and the exact internal-anchor edge sample are persisted, so reads run no layout physics and never rescan the crawl edge table. Nav, header, and footer links are excluded from the layout physics but retained in the sample and tagged `isTemplate`, so a viewer can draw them without a refetch and without any node moving. The response is bounded to 20,000 nodes / 50,000 edges; `layout`, `omittedNodes`, `omittedEdges`, and `sampled` disclose legacy/unavailable layouts and intentional truncation, and `templateDetection` says whether template links could be told apart at all.',
+    description: 'Returns the deterministic graph projection computed once when the latest complete or selected historical crawl was published. ForceAtlas2 positions and the exact internal-anchor edge sample are persisted, so reads run no layout physics and never rescan the crawl edge table. Nav, header, and footer links are excluded from the layout physics but retained in the sample and tagged `isTemplate`, so a viewer can draw them without a refetch and without any node moving. The response is bounded to 20,000 nodes / 50,000 edges; `layout`, `omittedNodes`, `omittedEdges`, and `sampled` disclose legacy/unavailable layouts and intentional truncation, and `templateDetection` says whether template links could be told apart at all and by which rule.',
     tags: ['technical-aeo'],
     parameters: [
       nameParameter,
@@ -6302,7 +6302,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'get',
     path: '/api/v1/projects/{name}/technical-aeo/internal-links',
     summary: 'List persisted internal crawl links',
-    description: 'Cursor-paged internal edges for the latest or selected crawl. Optional source/target/followability/link-kind filters remain project-, run-, and attempt-scoped. `total` counts exactly what the requested filters match, and `templateDetection` says whether nav and footer links could be told apart for this scan.',
+    description: 'Cursor-paged internal edges for the latest or selected crawl. Optional source/target/followability/link-kind filters remain project-, run-, and attempt-scoped. `total` counts exactly what the requested filters match, `templateDetection` says whether nav and footer links could be told apart for this scan and by which rule, and the `templateSource` plus `placementOccurrences` on each edge show the evidence behind its own classification.',
     tags: ['technical-aeo'],
     parameters: [
       nameParameter,

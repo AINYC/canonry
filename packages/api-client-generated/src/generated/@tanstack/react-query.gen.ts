@@ -6481,7 +6481,7 @@ export const getApiV1ProjectsByNameTechnicalAeoGraphQueryKey = (options: Options
 /**
  * Get a persisted Site Health graph projection
  *
- * Returns the deterministic graph projection computed once when the latest complete or selected historical crawl was published. ForceAtlas2 positions and the exact internal-anchor edge sample are persisted, so reads run no layout physics and never rescan the crawl edge table. Nav, header, and footer links are excluded from the layout physics but retained in the sample and tagged `isTemplate`, so a viewer can draw them without a refetch and without any node moving. The response is bounded to 20,000 nodes / 50,000 edges; `layout`, `omittedNodes`, `omittedEdges`, and `sampled` disclose legacy/unavailable layouts and intentional truncation, and `templateDetection` says whether template links could be told apart at all.
+ * Returns the deterministic graph projection computed once when the latest complete or selected historical crawl was published. ForceAtlas2 positions and the exact internal-anchor edge sample are persisted, so reads run no layout physics and never rescan the crawl edge table. Nav, header, and footer links are excluded from the layout physics but retained in the sample and tagged `isTemplate`, so a viewer can draw them without a refetch and without any node moving. The response is bounded to 20,000 nodes / 50,000 edges; `layout`, `omittedNodes`, `omittedEdges`, and `sampled` disclose legacy/unavailable layouts and intentional truncation, and `templateDetection` says whether template links could be told apart at all and by which rule.
  */
 export const getApiV1ProjectsByNameTechnicalAeoGraphOptions = (options: Options<GetApiV1ProjectsByNameTechnicalAeoGraphData>) => {
     return queryOptions({
@@ -6728,7 +6728,7 @@ export const getApiV1ProjectsByNameTechnicalAeoInternalLinksQueryKey = (options:
 /**
  * List persisted internal crawl links
  *
- * Cursor-paged internal edges for the latest or selected crawl. Optional source/target/followability/link-kind filters remain project-, run-, and attempt-scoped. `total` counts exactly what the requested filters match, and `templateDetection` says whether nav and footer links could be told apart for this scan.
+ * Cursor-paged internal edges for the latest or selected crawl. Optional source/target/followability/link-kind filters remain project-, run-, and attempt-scoped. `total` counts exactly what the requested filters match, `templateDetection` says whether nav and footer links could be told apart for this scan and by which rule, and the `templateSource` plus `placementOccurrences` on each edge show the evidence behind its own classification.
  */
 export const getApiV1ProjectsByNameTechnicalAeoInternalLinksOptions = (options: Options<GetApiV1ProjectsByNameTechnicalAeoInternalLinksData>) => {
     return queryOptions({
@@ -6750,7 +6750,7 @@ export const getApiV1ProjectsByNameTechnicalAeoInternalLinksInfiniteQueryKey = (
 /**
  * List persisted internal crawl links
  *
- * Cursor-paged internal edges for the latest or selected crawl. Optional source/target/followability/link-kind filters remain project-, run-, and attempt-scoped. `total` counts exactly what the requested filters match, and `templateDetection` says whether nav and footer links could be told apart for this scan.
+ * Cursor-paged internal edges for the latest or selected crawl. Optional source/target/followability/link-kind filters remain project-, run-, and attempt-scoped. `total` counts exactly what the requested filters match, `templateDetection` says whether nav and footer links could be told apart for this scan and by which rule, and the `templateSource` plus `placementOccurrences` on each edge show the evidence behind its own classification.
  */
 export const getApiV1ProjectsByNameTechnicalAeoInternalLinksInfiniteOptions = (options: Options<GetApiV1ProjectsByNameTechnicalAeoInternalLinksData>) => {
     return infiniteQueryOptions<GetApiV1ProjectsByNameTechnicalAeoInternalLinksResponse, GetApiV1ProjectsByNameTechnicalAeoInternalLinksError, InfiniteData<GetApiV1ProjectsByNameTechnicalAeoInternalLinksResponse>, QueryKey<Options<GetApiV1ProjectsByNameTechnicalAeoInternalLinksData>>, string | Pick<QueryKey<Options<GetApiV1ProjectsByNameTechnicalAeoInternalLinksData>>[0], 'body' | 'headers' | 'path' | 'query'>>(

@@ -264,8 +264,14 @@ export function siteCrawlGraphLayoutSettingsFingerprint(settings: unknown): stri
  * fingerprint below cannot catch this: the threshold did not move, the rule
  * that applies it did. Bumping the algorithm is what stops a v3 layout being
  * reused, or its coordinates being seeded into the corrected solve.
+ *
+ * v5 is the same exclusion over a DIFFERENT classification: links are now
+ * separated by where they sit in the page, and ubiquity only decides the ones
+ * the page's landmarks say nothing about. That moves which edges enter the
+ * physics on every site whose editorial anchors reuse the nav's wording, which
+ * is most of them, so v4 coordinates are the wrong seed for a v5 solve.
  */
-const SITE_CRAWL_GRAPH_LAYOUT_ALGORITHM = 'site-health-fa2-v4'
+const SITE_CRAWL_GRAPH_LAYOUT_ALGORITHM = 'site-health-fa2-v5'
 
 export const SITE_CRAWL_GRAPH_LAYOUT_VERSION = `${SITE_CRAWL_GRAPH_LAYOUT_ALGORITHM}-${
   siteCrawlGraphLayoutSettingsFingerprint({

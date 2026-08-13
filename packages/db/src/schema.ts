@@ -832,6 +832,14 @@ export const siteCrawlSnapshots = sqliteTable('site_crawl_snapshots', {
    * pass for "this site has no nav".
    */
   templateDetection: text('template_detection'),
+  /**
+   * The crawler's landmark ruleset version, from the crawl summary's
+   * `linkPlacementRulesetVersion`. NULL means this scan recorded no placement
+   * at all, which is the one thing that decides whether its links could be
+   * classified by where they sit or only by how often they repeat. It cannot be
+   * backfilled: a pre-4.7.0 crawl never observed placement.
+   */
+  linkPlacementRulesetVersion: text('link_placement_ruleset_version'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 }, (table) => [
@@ -929,28 +937,39 @@ export const siteCrawlEdges = sqliteTable('site_crawl_edges', {
   nofollowOccurrences: integer('nofollow_occurrences').notNull().default(0),
   anchors: text('anchors', { mode: 'json' }).$type<string[]>().notNull().default([]),
   /**
-   * True when EVERY (target page, anchor) pair on this link appears on at
-   * least `TEMPLATE_LINK_RATIO_THRESHOLD` of the attempt's fetched pages: a
-   * nav, header, or footer link rather than an editorial one. Computed once at
-   * publish time by the contract's `classifyTemplateLinks`, so the map, the
-   * API filters, and the agents all read the same decision.
+   * True for a nav, header, or footer link rather than an editorial one.
+   * Computed once at publish time by the contract's `classifyTemplateLinkEdge`,
+   * so the map, the API filters, and the agents all read the same decision.
    *
-   * One row aggregates every anchor between the same two pages, so a link that
-   * is BOTH a footer link and an in-prose link is one row with two anchors. It
-   * is editorial, because the in-prose link exists.
+   * The rule is DOM placement where the crawl recorded it: any occurrence
+   * inside a main or article landmark makes the whole link editorial, and
+   * navigation with no content occurrence makes it chrome. Where the page
+   * declares no landmark that answers the question, `template_ratio` below is
+   * the fallback.
    *
-   * NULL means this row was never classified, which reads report as
-   * `unavailable-legacy-scan`. It never means "not a template link": the
-   * too-few-pages guard writes an explicit `false` and records its reason on
-   * the snapshot instead.
+   * NULL means this row was never classified, which reads report through
+   * `templateSource` and the scan's `template_detection`. It never means "not a
+   * template link": the no-placement, too-few-pages guard writes an explicit
+   * `false` and records its reason on the snapshot instead.
    */
   isTemplate: integer('is_template', { mode: 'boolean' }),
   /**
-   * Share of fetched pages carrying this link's LEAST ubiquitous anchor, which
-   * is the one that decides `is_template`. NULL when the link has no
-   * measurable pair (an unresolved target or no anchor).
+   * Share of fetched pages carrying this link's LEAST ubiquitous anchor. NULL
+   * when the link has no measurable pair (an unresolved target or no anchor)
+   * OR when DOM placement decided it, because it is the fallback rule's own
+   * evidence and had no vote.
    */
   templateRatio: real('template_ratio'),
+  /**
+   * Occurrences of this link split by where they sat in the source page, from
+   * the crawler's `placementOccurrences`. NULL means this scan recorded no
+   * placement for this link, which is a real state (a pre-4.7.0 crawl) and
+   * never zeros: `{0, 0, 0}` is what a redirect or canonical edge legitimately
+   * carries, since a non-anchor edge has no position in a page.
+   */
+  placementNavigationOccurrences: integer('placement_navigation_occurrences'),
+  placementContentOccurrences: integer('placement_content_occurrences'),
+  placementUnknownOccurrences: integer('placement_unknown_occurrences'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 }, (table) => [

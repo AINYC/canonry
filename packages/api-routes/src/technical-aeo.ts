@@ -39,6 +39,7 @@ import {
   siteHealthTemplateDetectionSchema,
   SiteHealthLinkKinds,
   SiteHealthTemplateDetections,
+  templateLinkSource,
   validationError,
   type RunStatus,
   type SiteAuditPageDto,
@@ -57,6 +58,7 @@ import {
   type SiteCrawlPageAuditDto,
   type SiteCrawlPagesFilterState,
   type SiteCrawlPagesResponseDto,
+  type SiteCrawlPlacementOccurrencesDto,
   type SiteCrawlStructureResponseDto,
   type SiteCrawlSummaryDto,
   type SiteHealthChangeRecordDto,
@@ -322,7 +324,38 @@ function countLivePageHealthChecks(auditFields: Record<string, unknown>): number
   return checks
 }
 
-function mapCrawlEdge(row: typeof siteCrawlEdges.$inferSelect): SiteCrawlEdgeDto {
+/**
+ * A link's placement counts, or null when this scan recorded none.
+ *
+ * The three columns are written together, so one NULL means the observation is
+ * absent entirely. Zeros are a real, different answer: a redirect edge has no
+ * position in a page, and an all-`unknown` link sits on a page that declares no
+ * landmark. Coalescing absence to zeros would erase that distinction.
+ */
+function mapPlacementOccurrences(
+  row: Pick<
+    typeof siteCrawlEdges.$inferSelect,
+    'placementNavigationOccurrences' | 'placementContentOccurrences' | 'placementUnknownOccurrences'
+  >,
+): SiteCrawlPlacementOccurrencesDto | null {
+  const navigation = row.placementNavigationOccurrences
+  const content = row.placementContentOccurrences
+  const unknown = row.placementUnknownOccurrences
+  if (navigation == null || content == null || unknown == null) return null
+  return { navigation, content, unknown }
+}
+
+/**
+ * The scan's detection state is required, not optional: which rule produced a
+ * link's `isTemplate` is only answerable against the scan it belongs to, and a
+ * count a consumer cannot attribute to a rule is exactly the thing this change
+ * exists to prevent.
+ */
+function mapCrawlEdge(
+  row: typeof siteCrawlEdges.$inferSelect,
+  detection: SiteHealthTemplateDetection,
+): SiteCrawlEdgeDto {
+  const placementOccurrences = mapPlacementOccurrences(row)
   return {
     edgeKey: row.edgeKey,
     sourceNodeKey: row.sourceNodeKey,
@@ -338,6 +371,8 @@ function mapCrawlEdge(row: typeof siteCrawlEdges.$inferSelect): SiteCrawlEdgeDto
     anchors: row.anchors,
     isTemplate: row.isTemplate,
     templateRatio: row.templateRatio,
+    templateSource: templateLinkSource(detection, { isTemplate: row.isTemplate, placementOccurrences }),
+    placementOccurrences,
   }
 }
 
@@ -1198,7 +1233,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     const edges = [...edgeRows.values()]
       .filter((edge) => edge.targetNodeKey && persistedNodeKeys.has(edge.sourceNodeKey) && persistedNodeKeys.has(edge.targetNodeKey))
       .sort((a, b) => a.edgeKey.localeCompare(b.edgeKey))
-      .map(mapCrawlEdge)
+      .map((row) => mapCrawlEdge(row, templateDetectionOf(snapshot.templateDetection)))
     const omittedNodes = omittedNodeKeys.size + Math.max(0, distances.size - pageRows.length)
     const omittedEdges = omittedEdgeKeys.size + (queryTruncated ? 1 : 0) + Math.max(0, edgeRows.size - edges.length)
     const truncated = omittedNodes > 0 || omittedEdges > 0
@@ -1369,7 +1404,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       maxDepth,
       visitedNodes: visited.size,
       nodes: pathKeys.map((key) => mapCrawlPage(pageByKey.get(key)!)),
-      edges: pathEdges.map(mapCrawlEdge),
+      edges: pathEdges.map((row) => mapCrawlEdge(row, templateDetectionOf(snapshot.templateDetection))),
     }
   })
 
@@ -1698,8 +1733,14 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       )).all()
     const beforePages = new Map(pageRowsFor(beforeScope).map((row) => [row.nodeKey, mapCrawlPage(row)]))
     const afterPages = new Map(pageRowsFor(afterScope).map((row) => [row.nodeKey, mapCrawlPage(row)]))
-    const beforeLinks = new Map(edgeRowsFor(beforeScope).map((row) => [row.edgeKey, mapCrawlEdge(row)]))
-    const afterLinks = new Map(edgeRowsFor(afterScope).map((row) => [row.edgeKey, mapCrawlEdge(row)]))
+    // Each side is attributed against ITS OWN scan. The two can disagree: a
+    // re-crawl on a newer engine classifies by placement while the older side
+    // is still ubiquity, and a link that "changed" because the rule changed
+    // must be readable as exactly that.
+    const beforeDetection = templateDetectionOf(beforeSnapshot.templateDetection)
+    const afterDetection = templateDetectionOf(afterSnapshot.templateDetection)
+    const beforeLinks = new Map(edgeRowsFor(beforeScope).map((row) => [row.edgeKey, mapCrawlEdge(row, beforeDetection)]))
+    const afterLinks = new Map(edgeRowsFor(afterScope).map((row) => [row.edgeKey, mapCrawlEdge(row, afterDetection)]))
     const changes: SiteHealthChangeRecordDto[] = visibleKeys.map((row) => {
       if (row.entity === 'page') {
         const before = beforePages.get(row.key) ?? null
@@ -2071,7 +2112,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       nextCursor: nextOffset < total ? encodeCursor(nextOffset) : null,
       templateDetection,
       linkKind,
-      edges: rows.map(mapCrawlEdge),
+      edges: rows.map((row) => mapCrawlEdge(row, templateDetection)),
     }
   })
 
@@ -2132,8 +2173,8 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       url: request.query.url ?? null,
       templateDetection,
       linkKind,
-      inbound: inboundRows.slice(0, limit).map(mapCrawlEdge),
-      outbound: outboundRows.slice(0, limit).map(mapCrawlEdge),
+      inbound: inboundRows.slice(0, limit).map((row) => mapCrawlEdge(row, templateDetection)),
+      outbound: outboundRows.slice(0, limit).map((row) => mapCrawlEdge(row, templateDetection)),
       inboundTruncated: inboundRows.length > limit,
       outboundTruncated: outboundRows.length > limit,
     }

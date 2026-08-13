@@ -270,6 +270,73 @@ describe('executeSiteAudit', () => {
     expect(db.select().from(siteAuditPages).where(eq(siteAuditPages.runId, runId)).all()).toHaveLength(2)
   })
 
+  it('persists the crawler placement report, and the ruleset version that produced it', async () => {
+    // Placement is the evidence behind every nav-vs-content decision, so it is
+    // stored per link rather than collapsed into the decision. The ruleset
+    // version on the snapshot is what a read uses to know the scan HAD
+    // placement at all, which is unanswerable from links alone on a scan with
+    // no links.
+    vi.mocked(runSiteCrawl).mockImplementation(async (_url, options) => {
+      await options.onEvent?.({
+        type: 'pages', sequence: 1, batchId: 'pages-1', checksum: 'pages-checksum',
+        rows: [page('page:root', 'https://example.com/'), page('page:a', 'https://example.com/a')],
+      })
+      await options.onEvent?.({
+        type: 'edges', sequence: 2, batchId: 'edges-1', checksum: 'edges-checksum',
+        rows: [{
+          key: 'edge:root-a', from: 'https://example.com/', to: 'https://example.com/a',
+          type: 'anchor', classification: 'internal',
+          totalOccurrences: 3, followableOccurrences: 3, nofollowOccurrences: 0,
+          anchorSummaries: [{ text: 'A', occurrences: 3 }],
+          placementOccurrences: { navigation: 2, content: 1, unknown: 0 },
+        }],
+      })
+      const endSummary = summary({ edgesObserved: 1, linkPlacementRulesetVersion: '1.0.0' })
+      await options.onEvent?.({ type: 'summary', sequence: 3, batchId: 'summary-1', checksum: 'summary-ok', summary: endSummary })
+      return { mode: 'summary', summary: endSummary, deadLinks: { state: 'disabled', findings: [] } }
+    })
+    const runId = seedRun()
+    await executeSiteAudit(db, runId, projectId, {})
+
+    const attempt = db.select().from(siteCrawlAttempts).where(eq(siteCrawlAttempts.runId, runId)).get()
+    expect(db.select().from(siteCrawlEdges).where(eq(siteCrawlEdges.attemptId, attempt!.id)).get()).toMatchObject({
+      placementNavigationOccurrences: 2,
+      placementContentOccurrences: 1,
+      placementUnknownOccurrences: 0,
+      // One content occurrence makes the whole link editorial, whatever the
+      // two nav repeats on the same row say.
+      isTemplate: false,
+      // The fallback rule never ran, so none of its evidence is invented.
+      templateRatio: null,
+    })
+    expect(db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, runId)).get()).toMatchObject({
+      linkPlacementRulesetVersion: '1.0.0',
+      templateDetection: 'applied-placement',
+    })
+  })
+
+  it('records a crawl with no placement report as classified by the weaker rule', async () => {
+    // A pre-4.7.0 engine image emits no placement. Nothing may be invented for
+    // it: the columns stay NULL and the scan says out loud that ubiquity, not
+    // the page layout, produced its split.
+    vi.mocked(runSiteCrawl).mockImplementation(async (url, options) => emitCompleteGraph(options, true, url))
+    const runId = seedRun()
+    await executeSiteAudit(db, runId, projectId, {})
+
+    const attempt = db.select().from(siteCrawlAttempts).where(eq(siteCrawlAttempts.runId, runId)).get()
+    expect(db.select().from(siteCrawlEdges).where(eq(siteCrawlEdges.attemptId, attempt!.id)).get()).toMatchObject({
+      placementNavigationOccurrences: null,
+      placementContentOccurrences: null,
+      placementUnknownOccurrences: null,
+    })
+    // Two fetched pages is below the ubiquity floor, so this scan could not be
+    // classified by either rule, and it reports exactly that.
+    expect(db.select().from(siteCrawlSnapshots).where(eq(siteCrawlSnapshots.runId, runId)).get()).toMatchObject({
+      linkPlacementRulesetVersion: null,
+      templateDetection: 'unavailable-too-few-pages',
+    })
+  })
+
   it('never stores a self-link, so edges agree with the page metrics', async () => {
     // A page linking to itself is not a link to or from another page, and the
     // engine already excludes it from that page's metrics. Storing it made a
