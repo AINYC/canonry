@@ -303,12 +303,16 @@ export async function googlePerformanceDaily(project: string, opts: {
 
   // The same fit the dashboard chart draws, so the two surfaces can never
   // disagree about which way a metric is going.
+  // Optional at RUNTIME for the same reason as `window`: a server older than
+  // the field omits it, and the CLI degrades to no trend block rather than
+  // crashing.
+  const fits = data.trends
   const trendLines: string[] = []
   for (const [label, trend, fmt] of [
-    ['Clicks', data.trends.clicks, (v: number) => v.toFixed(2)],
-    ['Impressions', data.trends.impressions, (v: number) => v.toFixed(2)],
-    ['CTR', data.trends.ctr, (v: number) => `${(v * 100).toFixed(3)}pp`],
-    ['Position', data.trends.position, (v: number) => v.toFixed(3)],
+    ['Clicks', fits?.clicks, (v: number) => v.toFixed(2)],
+    ['Impressions', fits?.impressions, (v: number) => v.toFixed(2)],
+    ['CTR', fits?.ctr, (v: number) => `${(v * 100).toFixed(3)}pp`],
+    ['Position', fits?.position, (v: number) => v.toFixed(3)],
   ] as const) {
     if (!trend) continue
     // Position improves as it falls, so "up" is the wrong word for a rising rank.

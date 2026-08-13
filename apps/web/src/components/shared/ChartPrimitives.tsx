@@ -258,6 +258,8 @@ export function MultiAxisTrendChart({
   height = 260,
   xTickFormatter,
   labelFormatter,
+  onSelectX,
+  selectedX,
 }: {
   data: readonly Record<string, unknown>[]
   xKey: string
@@ -265,6 +267,10 @@ export function MultiAxisTrendChart({
   height?: number
   xTickFormatter?: (value: string) => string
   labelFormatter?: (value: string) => string
+  /** Called with the row's x value when a point is clicked. Enables drill-in. */
+  onSelectX?: (value: string) => void
+  /** x value to mark as currently drilled into. */
+  selectedX?: string | null
 }) {
   const axisIds = [...new Set(series.map((s) => s.axisId))]
   const formatters = new Map(series.map((s) => [s.label, s.formatValue]))
@@ -286,8 +292,28 @@ export function MultiAxisTrendChart({
 
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={rows} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+      <ComposedChart
+        data={rows}
+        margin={{ top: 8, right: 8, bottom: 4, left: 0 }}
+        // Recharts reports the active row on the CHART, not per-dot, so a click
+        // anywhere in a day's column selects it — a 2px dot is not a target.
+        onClick={onSelectX ? (state: { activeLabel?: string | number }) => {
+          if (state?.activeLabel !== undefined) onSelectX(String(state.activeLabel))
+        } : undefined}
+        style={onSelectX ? { cursor: 'pointer' } : undefined}
+      >
         <CartesianGrid stroke={CHART_GRID_STROKE} strokeDasharray="3 3" vertical={false} />
+        {/* Marks the drilled-into day so the chart and the table below agree
+            about what is being shown. */}
+        {selectedX != null && (
+          <ReferenceLine
+            x={selectedX}
+            yAxisId={axisIds[0]}
+            stroke={CHART_NEUTRAL.text}
+            strokeDasharray="2 3"
+            strokeWidth={1}
+          />
+        )}
         <XAxis
           dataKey={xKey}
           tick={CHART_AXIS_TICK}

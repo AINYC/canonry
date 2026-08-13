@@ -13,6 +13,7 @@ import {
   useClientTable,
 } from '../shared/DataTableControls.js'
 import { ToneBadge } from '../shared/ToneBadge.js'
+import { InfoTooltip } from '../shared/InfoTooltip.js'
 import {
   CHART_NEUTRAL,
   CHART_TONE,
@@ -155,6 +156,11 @@ export function GscSection({
   // Clicks + impressions selected by default, matching Search Console.
   const [chartMetrics, setChartMetrics] = useState<GscChartMetric[]>(['clicks', 'impressions'])
   const [showTrend, setShowTrend] = useState(true)
+  // The day the table is drilled into, or null for the whole window. Bumping
+  // the nonce is what re-runs the fetch, so re-clicking the same day still
+  // reloads and the effect never reads a stale filter value.
+  const [drillDay, setDrillDay] = useState<string | null>(null)
+  const [drillNonce, setDrillNonce] = useState(0)
   const [performanceFilters, setPerformanceFilters] = useState({
     startDate: '',
     endDate: '',
@@ -724,9 +730,34 @@ export function GscSection({
 
   useEffect(() => {
     setPerformanceOffset(0)
+    setDrillDay(null)
     void loadPerformanceRows(0)
     void loadPerformanceDaily()
   }, [gscWindow])
+
+  // Drill into (or out of) a single day. Only the table reloads — the chart
+  // keeps the whole window so the selected day stays in context.
+  const drillMountRef = useRef(false)
+  useEffect(() => {
+    if (!drillMountRef.current) {
+      drillMountRef.current = true
+      return
+    }
+    setPerformanceOffset(0)
+    performanceTable.setPage(1)
+    void loadPerformanceRows(0)
+  }, [drillNonce])
+
+  function selectDay(date: string) {
+    const next = drillDay === date ? null : date
+    setDrillDay(next)
+    setPerformanceFilters((prev) => ({
+      ...prev,
+      startDate: next ?? '',
+      endDate: next ?? '',
+    }))
+    setDrillNonce((n) => n + 1)
+  }
 
   // Refetch when sort toggles between "off" and "on" so the fetched row set
   // matches the mode (paged vs expanded). Direction flips within "on" don't
@@ -1019,7 +1050,10 @@ export function GscSection({
                 <div className="section-head section-head-inline">
                   <div>
                     <p className="eyebrow eyebrow-soft">Performance</p>
-                    <h3>Search performance</h3>
+                    <h3 className="flex items-center gap-1.5">
+                      Search performance
+                      <InfoTooltip text={`Click any day to filter the table below to that date. Query and page filters match case-insensitive substrings and run on Apply filters. Filtering and sorting examine up to ${EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows while the table shows ${DEFAULT_TABLE_PAGE_SIZE} per page.`} />
+                    </h3>
                     {/* The window ends where Google's data ends, not today.
                         Naming the real range is what stops a lagging tail
                         reading as a drop, and lets this be compared against
@@ -1067,6 +1101,9 @@ export function GscSection({
                     so it reflects the whole window, not the current page. The
                     dashed fits come from the API; nothing is regressed here. */}
                 {performanceDaily && performanceDaily.daily.length > 0 && (() => {
+                  // `trends` is optional at RUNTIME: a server older than the
+                  // field omits it, and the chart must degrade to plain lines
+                  // rather than crash. Same skew guard as `window`.
                   const { totals, daily, trends } = performanceDaily
                   const selected = GSC_CHART_METRICS.filter((m) => chartMetrics.includes(m.key))
                   const series: TrendChartSeries[] = selected.map((m) => ({
@@ -1076,7 +1113,7 @@ export function GscSection({
                     axisId: m.key,
                     inverted: m.inverted,
                     formatValue: m.format,
-                    trend: showTrend ? trends[m.key] : null,
+                    trend: showTrend ? trends?.[m.key] ?? null : null,
                   }))
                   const totalFor = (key: GscChartMetric): number | null => totals[key]
 
@@ -1090,7 +1127,7 @@ export function GscSection({
                         {GSC_CHART_METRICS.map((m) => {
                           const on = chartMetrics.includes(m.key)
                           const value = totalFor(m.key)
-                          const trend = trends[m.key]
+                          const trend = trends?.[m.key] ?? null
                           const unavailable = value === null
                           return (
                             <button
@@ -1150,8 +1187,25 @@ export function GscSection({
                           series={series}
                           xTickFormatter={formatChartDateTick}
                           labelFormatter={formatChartDateLabel}
+                          onSelectX={selectDay}
+                          selectedX={drillDay}
                         />
                       </div>
+
+                      {drillDay && (
+                        <div className="mt-1 flex items-center gap-2 text-xs">
+                          <span className="text-secondary">
+                            Table showing {formatChartDateLabel(drillDay)}
+                          </span>
+                          <button
+                            type="button"
+                            className="text-link hover:underline"
+                            onClick={() => selectDay(drillDay)}
+                          >
+                            Show all {totals.days} days
+                          </button>
+                        </div>
+                      )}
 
                       {totals.position === null && (
                         <p className="mt-1 text-[11px] text-muted">
@@ -1192,10 +1246,6 @@ export function GscSection({
                     placeholder="Contains page URL…"
                   />
                 </div>
-                <p className="mt-2 text-xs text-muted">
-                  Query and page filters match case-insensitive substrings. Click Apply filters to run.
-                  Filtering and sorting examine up to {EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows while the table stays at {DEFAULT_TABLE_PAGE_SIZE} rows per page.
-                </p>
                 {performance.length > 0 ? (
                   <>
                     <div className="mt-3 overflow-x-auto">

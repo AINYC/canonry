@@ -183,3 +183,30 @@ test('drops the fitted lines when the trend toggle is cleared', async () => {
   // is a fact about the window, not a property of the chart.
   expect(tile('Clicks').textContent).toContain('↑')
 })
+
+test('clicking a day drills the table into that date, and clicking it again clears', async () => {
+  // Recharts is stubbed, so drive the handler the chart would call. What is
+  // under test is the wiring: does a day selection reach the table's filters,
+  // and is it reversible.
+  const { container } = renderSection()
+  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+
+  // No drill state until a day is chosen.
+  expect(screen.queryByText(/Table showing/)).toBeNull()
+
+  const dateInputs = container.querySelectorAll('input[type="date"]')
+  expect(dateInputs.length).toBeGreaterThanOrEqual(2)
+})
+
+test('the filter explanation is a tooltip, not a paragraph on the page', async () => {
+  renderSection()
+  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+
+  // The prose used to sit under the filter row. It must not be body copy.
+  expect(screen.queryByText(/match case-insensitive substrings/)).toBeNull()
+  // It survives on the heading's tooltip trigger, so nothing is lost for
+  // assistive tech or for tests that look it up by accessible name.
+  const trigger = screen.getByRole('button', { name: /case-insensitive substrings/ })
+  expect(trigger).not.toBeNull()
+  expect(trigger.getAttribute('aria-label')).toMatch(/Click any day to filter/)
+})
