@@ -968,6 +968,23 @@ export function GscSection({
                   <div>
                     <p className="eyebrow eyebrow-soft">Performance</p>
                     <h3>Search performance</h3>
+                    {/* The window ends where Google's data ends, not today.
+                        Naming the real range is what stops a lagging tail
+                        reading as a drop, and lets this be compared against
+                        the Search Console UI, which anchors the same way. */}
+                    {/* Optional at RUNTIME even though the DTO requires it: a
+                        cached response from a server older than this field
+                        must degrade to no label, never take the section down. */}
+                    {performanceDaily?.window?.startDate && performanceDaily.window.endDate && (
+                      <p className="text-xs text-muted">
+                        {performanceDaily.window.startDate} to {performanceDaily.window.endDate}
+                        {/* "data through X", never "Google is N days behind":
+                            a zero-traffic day returns no row, so a quiet tail
+                            is indistinguishable from an unpublished one. */}
+                        {(performanceDaily.window.daysSinceLatestData ?? 0) > 0
+                          && ` · latest data ${performanceDaily.window.daysSinceLatestData} day${performanceDaily.window.daysSinceLatestData === 1 ? '' : 's'} ago`}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="segmented" role="group" aria-label="Performance time period">

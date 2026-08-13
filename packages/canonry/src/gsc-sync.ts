@@ -1,12 +1,14 @@
 import crypto from 'node:crypto'
 import { eq, and, sql } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { runs, projects, gscSearchData, gscDailyTotals, gscQueryDailyTotals } from '@ainyc/canonry-db'
+import { runs, projects, gscSearchData, gscDailyTotals, gscQueryDailyTotals, gscDataWatermarks } from '@ainyc/canonry-db'
 import {
   fetchSearchAnalytics,
   refreshAccessToken,
   GSC_DATA_LAG_DAYS,
+  GSC_REPORTING_TIME_ZONE,
 } from '@ainyc/canonry-integration-google'
+import { formatIsoDateInTimeZone, shiftIsoCalendarDate } from '@ainyc/canonry-contracts'
 import type { CanonryConfig } from './config.js'
 import { saveConfigPatch } from './config.js'
 import { writeCoverageSnapshot } from './gsc-coverage-snapshot.js'
@@ -15,15 +17,10 @@ import { createLogger } from './logger.js'
 
 const log = createLogger('GscSync')
 
-function formatDate(d: Date): string {
-  return d.toISOString().split('T')[0]!
-}
-
-function daysAgo(n: number): Date {
-  const d = new Date()
-  d.setDate(d.getDate() - n)
-  return d
-}
+// `formatDate` / `daysAgo` were the UTC-calendar helpers this file used to
+// bound its fetch window. Both are gone: GSC reports on the Pacific calendar,
+// so the bounds now come from `formatIsoDateInTimeZone` +
+// `shiftIsoCalendarDate`, which step real calendar dates in the right zone.
 
 interface GscSyncOptions {
   days?: number
@@ -78,11 +75,25 @@ export async function executeGscSync(
       saveConfigPatch(opts.config)
     }
 
-    // Determine date range
+    // Determine date range.
+    //
+    // Ask through TODAY, not through a hard-coded lag boundary. Google's
+    // publishing delay varies; pinning the ceiling at `today - 3` meant the
+    // sync never requested the day Google had already published, so stored
+    // data sat a day behind the Search Console UI forever (measured on
+    // canonry.ai: GSC served through 08-10 while Canonry held 08-09). The API
+    // returns the days that exist and omits the rest, so asking wide is free.
+    //
+    // The lag still pads the START, so a `days`-day request yields `days` days
+    // of PUBLISHED data rather than `days` minus the delay.
+    // Both bounds are dates on GOOGLE's reporting calendar, which is Pacific
+    // Time. A UTC date names the following day between 00:00 and 08:00 UTC —
+    // exactly when a nightly sync tends to fire — so both bounds would sit a
+    // day out for a third of the clock.
     const lagOffset = GSC_DATA_LAG_DAYS
-    const endDate = formatDate(daysAgo(lagOffset))
+    const endDate = formatIsoDateInTimeZone(new Date().toISOString(), GSC_REPORTING_TIME_ZONE)
     const days = opts.full ? 480 : (opts.days ?? 30) // 480 days ≈ 16 months (GSC max)
-    const startDate = formatDate(daysAgo(days + lagOffset))
+    const startDate = shiftIsoCalendarDate(endDate, -(days + lagOffset))
 
     // Fetch search analytics with pagination
     log.info('fetch.start', { runId, projectId, propertyId: conn.propertyId, startDate, endDate })
@@ -168,7 +179,42 @@ export async function executeGscSync(
       }).run()
     }
 
-    log.info('daily-totals.complete', { runId, projectId, rowCount: totalRows.length })
+    // Advance the monotonic data watermark.
+    //
+    // The furthest date this sync SAW, never lower than what a previous sync
+    // already recorded. Search Analytics omits zero-data days, so the observed
+    // max walks backward across a quiet stretch; letting the anchor follow it
+    // would slide every window into the past and move its totals. Monotonic is
+    // the property that makes this usable as a frontier at all.
+    //
+    // `syncedThroughDate` records how far we ASKED, so the gap between the two
+    // is attributable rather than mysterious.
+    const observedThrough = totalRows
+      .map((row) => row.keys[0] ?? '')
+      .filter((date) => date !== '')
+      .reduce<string | null>((max, date) => (max === null || date > max ? date : max), null)
+    if (observedThrough !== null || endDate) {
+      const existing = db.select().from(gscDataWatermarks)
+        .where(eq(gscDataWatermarks.projectId, projectId)).get()
+      const nextThrough = [existing?.dataThroughDate ?? null, observedThrough]
+        .filter((d): d is string => d !== null)
+        .reduce<string | null>((max, d) => (max === null || d > max ? d : max), null)
+      if (nextThrough !== null) {
+        db.insert(gscDataWatermarks).values({
+          projectId,
+          dataThroughDate: nextThrough,
+          syncedThroughDate: endDate,
+          updatedAt: dailyTotalsNow,
+        }).onConflictDoUpdate({
+          target: gscDataWatermarks.projectId,
+          set: { dataThroughDate: nextThrough, syncedThroughDate: endDate, updatedAt: dailyTotalsNow },
+        }).run()
+      }
+    }
+
+    log.info('daily-totals.complete', {
+      runId, projectId, rowCount: totalRows.length, observedThrough, syncedThrough: endDate,
+    })
 
     // Per-query daily totals (no `page` dimension). Same reason as above,
     // applied one level down: summing `gsc_search_data` by query multiplies

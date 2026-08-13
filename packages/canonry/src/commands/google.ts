@@ -1,4 +1,5 @@
 import type {
+  GscPerformanceDailyDto,
   GscSubmitSitemapsResponseDto,
   GscUrlInspectionDto,
   IndexingRequestResultDto,
@@ -264,7 +265,9 @@ export async function googlePerformanceDaily(project: string, opts: {
     console.log(JSON.stringify(data, null, 2))
     return
   } else if (opts.format === 'jsonl') {
-    emitJsonl(data.daily.map((row) => ({ project, ...row })))
+    // Carry the envelope's window onto every record — a bare daily row cannot
+    // say which period it belongs to or how fresh that period is.
+    emitJsonl(data.daily.map((row) => ({ project, window: data.window, ...row })))
     return
   }
 
@@ -274,7 +277,25 @@ export async function googlePerformanceDaily(project: string, opts: {
   }
 
   const { clicks, impressions, ctr, days } = data.totals
-  console.log(`GSC daily summary (${days} day${days === 1 ? '' : 's'}):\n`)
+  // Optional at RUNTIME even though the DTO requires it: a server older than
+  // this field omits it, and a new CLI against an older server must degrade to
+  // no range label rather than crash. The web guards the same skew.
+  const win = data.window as GscPerformanceDailyDto['window'] | undefined
+  const range = win?.startDate && win.endDate ? ` ${win.startDate} to ${win.endDate}` : ''
+  console.log(`GSC daily summary (${days} day${days === 1 ? '' : 's'}${range}):\n`)
+  // The window stops short of today by design. Say what it covers, or a short
+  // window reads as a sudden drop in coverage.
+  // Freshness describes the PROJECT's latest data, not the requested range, so
+  // it may only be printed beside a range that actually ends there. Against an
+  // explicit historical range it read as `2026-01-31 (2 days ago)`.
+  const endsAtFrontier = win?.endDate !== undefined && win.endDate === win.latestDataDate
+  if (endsAtFrontier && (win.daysSinceLatestData ?? 0) > 0) {
+    console.log(`  Search Console data through ${win.endDate} (${win.daysSinceLatestData} day${win.daysSinceLatestData === 1 ? '' : 's'} ago).`)
+    console.log()
+  } else if (win?.latestDataDate && win.endDate !== win.latestDataDate) {
+    console.log(`  Showing a fixed range. Latest Search Console data is ${win.latestDataDate}.`)
+    console.log()
+  }
   console.log(`  Clicks:      ${clicks.toLocaleString()}`)
   console.log(`  Impressions: ${impressions.toLocaleString()}`)
   console.log(`  CTR:         ${(ctr * 100).toFixed(2)}%`)
@@ -364,11 +385,13 @@ export async function googlePerformance(project: string, opts: {
     if (opts.startDate) params.startDate = opts.startDate
     if (opts.endDate) params.endDate = opts.endDate
   } else if (opts.days) {
-    const end = new Date()
-    const start = new Date()
-    start.setDate(start.getDate() - opts.days)
-    params.startDate = start.toISOString().split('T')[0]!
-    params.endDate = end.toISOString().split('T')[0]!
+    // Forward the SPAN, never client-computed dates. Deriving bounds here
+    // pinned them to the UTC clock and sent them as explicit dates, which the
+    // route honours over its own anchor — so `--days 30` skipped the
+    // published-day anchoring entirely, could end a Pacific day in the future,
+    // and spanned 31 inclusive dates for a 30-day request. The server resolves
+    // the span against the same frontier every other window uses.
+    params.days = String(opts.days)
   }
   if (opts.keyword) params.query = opts.keyword
   if (opts.page) params.page = opts.page

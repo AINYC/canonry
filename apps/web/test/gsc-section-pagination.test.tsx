@@ -68,9 +68,13 @@ function renderSection() {
       return jsonResponse({ sites: [{ siteUrl: 'sc-domain:example.com', permissionLevel: 'siteOwner' }] })
     }
     if (path.includes('/google/gsc/performance/daily')) {
+      // Mirrors the real response shape, `window` included — the endpoint
+      // always returns it, and a mock that omits a field the component reads
+      // is a mock that cannot catch a crash on it.
       return jsonResponse({
-        totals: { clicks: 0, impressions: 0, ctr: 0 },
+        totals: { clicks: 0, impressions: 0, ctr: 0, days: 0 },
         daily: [],
+        window: { startDate: null, endDate: null, latestDataDate: null, daysSinceLatestData: null },
       })
     }
     if (path.includes('/google/gsc/performance')) {

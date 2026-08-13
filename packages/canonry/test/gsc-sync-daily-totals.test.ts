@@ -10,6 +10,7 @@ import {
   runs,
   gscSearchData,
   gscDailyTotals,
+  gscDataWatermarks,
 } from '@ainyc/canonry-db'
 import type { CanonryConfig } from '../src/config.js'
 
@@ -42,6 +43,16 @@ function daysAgo(n: number): string {
   const d = new Date()
   d.setDate(d.getDate() - n)
   return d.toISOString().slice(0, 10)
+}
+
+/**
+ * Today on GSC's PACIFIC reporting calendar — the calendar the sync bounds its
+ * fetch by. A UTC "today" names the next day between 00:00 and 08:00 UTC.
+ */
+function pacificToday(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date())
 }
 
 function createTempDb() {
@@ -104,6 +115,126 @@ beforeEach(() => {
   // No URL inspections (keeps the secondary inspection pass a no-op).
   inspectUrlMock.mockResolvedValue({
     inspectionResult: { indexStatusResult: { indexingState: 'INDEXING_ALLOWED' } },
+  })
+})
+
+describe('executeGscSync — fetch window', () => {
+  test('asks Google through today instead of stopping at a hard-coded lag', async () => {
+    // The ceiling used to be `today - GSC_DATA_LAG_DAYS`, so the sync never
+    // requested the most recent day Google had already published and stored
+    // data stayed a day behind the Search Console UI on every run. Google's
+    // delay varies, so the only correct ceiling is today: the API returns the
+    // days that exist and omits the rest.
+    const { db, tmpDir } = createTempDb()
+    try {
+      seedProject(db)
+      seedRun(db, 'run_window')
+      fetchSearchAnalyticsMock.mockResolvedValue([])
+
+      await executeGscSync(db, 'run_window', 'proj_gsc', { config: testConfig() })
+
+      // GSC's reporting calendar is Pacific, not UTC.
+      const today = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit',
+      }).format(new Date())
+      for (const call of fetchSearchAnalyticsMock.mock.calls) {
+        expect((call[2] as { endDate: string }).endDate).toBe(today)
+      }
+      // The lag still pads the START, so a 30-day request still covers 30 days
+      // of PUBLISHED data rather than 30 minus the delay.
+      const firstCall = fetchSearchAnalyticsMock.mock.calls[0]!
+      const start = new Date(Date.parse(`${today}T00:00:00Z`) - 33 * 86_400_000)
+        .toISOString().slice(0, 10)
+      expect((firstCall[2] as { startDate: string }).startDate).toBe(start)
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('executeGscSync — data watermark', () => {
+  /** Return only property-level (`dimensions: ['date']`) rows for these dates. */
+  function respondWithDates(dates: readonly string[]) {
+    fetchSearchAnalyticsMock.mockImplementation(
+      (_t: string, _p: string, opts: { dimensions?: string[] }) => {
+        const dateOnly = Array.isArray(opts.dimensions)
+          && opts.dimensions.length === 1 && opts.dimensions[0] === 'date'
+        if (!dateOnly) return Promise.resolve([])
+        return Promise.resolve(dates.map((d) => ({
+          keys: [d], clicks: 1, impressions: 10, ctr: 0.1, position: 5,
+        })))
+      },
+    )
+  }
+
+  function watermark(db: ReturnType<typeof createClient>) {
+    return db.select().from(gscDataWatermarks)
+      .where(eq(gscDataWatermarks.projectId, 'proj_gsc')).get()
+  }
+
+  test('records the furthest date the sync observed, and how far it asked', async () => {
+    const { db, tmpDir } = createTempDb()
+    try {
+      seedProject(db)
+      seedRun(db, 'run_wm1')
+      respondWithDates([daysAgo(9), daysAgo(5), daysAgo(4)])
+
+      await executeGscSync(db, 'run_wm1', 'proj_gsc', { config: testConfig() })
+
+      const row = watermark(db)
+      expect(row?.dataThroughDate).toBe(daysAgo(4))
+      // We asked through today even though Google stopped at day-4; the gap is
+      // what makes "zero traffic" distinguishable from "never requested".
+      expect(row?.syncedThroughDate).toBe(pacificToday())
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('NEVER moves the frontier backward when a later sync sees a quiet tail', async () => {
+    // The P1 this table exists for. Search Analytics omits zero-data days, so a
+    // quiet stretch makes the observed max walk backward. If the watermark
+    // followed it, every anchored window would slide into the past and its
+    // totals would move for a reason unrelated to the site.
+    const { db, tmpDir } = createTempDb()
+    try {
+      seedProject(db)
+
+      seedRun(db, 'run_wm2')
+      respondWithDates([daysAgo(6), daysAgo(4)])
+      await executeGscSync(db, 'run_wm2', 'proj_gsc', { config: testConfig() })
+      expect(watermark(db)?.dataThroughDate).toBe(daysAgo(4))
+
+      // Second sync: the property went quiet, so Google returns nothing past
+      // day-8. The observed max is now OLDER than the stored frontier.
+      seedRun(db, 'run_wm3')
+      respondWithDates([daysAgo(8)])
+      await executeGscSync(db, 'run_wm3', 'proj_gsc', { config: testConfig() })
+
+      expect(watermark(db)?.dataThroughDate).toBe(daysAgo(4))
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('advances when real data moves past the stored frontier', async () => {
+    // Monotonic means "never backward", not "frozen".
+    const { db, tmpDir } = createTempDb()
+    try {
+      seedProject(db)
+
+      seedRun(db, 'run_wm4')
+      respondWithDates([daysAgo(8)])
+      await executeGscSync(db, 'run_wm4', 'proj_gsc', { config: testConfig() })
+      expect(watermark(db)?.dataThroughDate).toBe(daysAgo(8))
+
+      seedRun(db, 'run_wm5')
+      respondWithDates([daysAgo(8), daysAgo(3)])
+      await executeGscSync(db, 'run_wm5', 'proj_gsc', { config: testConfig() })
+      expect(watermark(db)?.dataThroughDate).toBe(daysAgo(3))
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 })
 

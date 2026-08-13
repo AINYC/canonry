@@ -3027,6 +3027,15 @@ const routeCatalog: OpenApiOperation[] = [
       nameParameter,
       { name: 'startDate', in: 'query', description: 'Filter by start date.', schema: stringSchema },
       { name: 'endDate', in: 'query', description: 'Filter by end date.', schema: stringSchema },
+      {
+        name: 'days',
+        in: 'query',
+        description:
+          'Relative span in days, resolved server-side against the last published GSC date. '
+          + 'Prefer this over client-computed start/end dates: those bypass the published-day '
+          + 'anchoring and are pinned to the caller\'s clock rather than Google\'s Pacific calendar.',
+        schema: stringSchema,
+      },
       { name: 'query', in: 'query', description: 'Filter by search query.', schema: stringSchema },
       { name: 'page', in: 'query', description: 'Filter by page URL.', schema: stringSchema },
       {

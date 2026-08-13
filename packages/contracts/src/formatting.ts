@@ -133,17 +133,26 @@ export function formatIsoDateInTimeZone(iso: string, timeZone: string): string {
 /**
  * The calendar date `days` days after `isoDate`, both plain `YYYY-MM-DD`.
  *
+ * Step a `YYYY-MM-DD` calendar date by `days`, forward or back.
+ *
  * Pure calendar arithmetic. `Date.UTC` is only a convenient month/year rollover
  * engine here: UTC has no daylight saving, so adding to its day field cannot
  * gain or lose an hour and cannot land on a different date than a paper
  * calendar would. Doing the same step in milliseconds against a ZONED instant
- * is what produces the off-by-one this exists to prevent, which is why the
- * public entry point below converts to a calendar date FIRST and steps second.
+ * is what produces the off-by-one this exists to prevent, which is why
+ * `isoDateDaysBeforeInTimeZone` converts to a calendar date FIRST and steps
+ * second.
+ *
+ * Use this directly when the input is ALREADY a calendar date with no instant
+ * behind it — a GSC reporting day, a rollup's `tsHour` date. Those have no
+ * clock reading, so there is no zone to resolve and
+ * `isoDateDaysBeforeInTimeZone` would be asking a question the value cannot
+ * answer.
  *
  * A value that is not a calendar date comes back untouched, so a degraded
  * upstream reading degrades once rather than turning into a wrong date.
  */
-function shiftIsoCalendarDate(isoDate: string, days: number): string {
+export function shiftIsoCalendarDate(isoDate: string, days: number): string {
   if (!Number.isFinite(days)) return isoDate
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate)
   if (!match?.[1] || !match[2] || !match[3]) return isoDate

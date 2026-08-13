@@ -172,6 +172,41 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance ordering', ()
     expect(firstBody.truncated).toBe(true)
   })
 
+  it('resolves ?days= server-side against the published frontier', async () => {
+    // The CLI used to turn `--days N` into client-computed UTC dates and send
+    // them as EXPLICIT bounds, which the route honours over its own anchor —
+    // so the relative window skipped the published-day anchoring entirely and
+    // was pinned to the caller's clock. The span is now resolved here.
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance?days=1&limit=500',
+    })
+    expect(res.statusCode).toBe(200)
+    // A 1-day span ends at the frontier and covers exactly that one date.
+    const dates = new Set(rowsOf(res.json()).map((r) => r.date))
+    expect(dates.size).toBe(1)
+    expect([...dates][0]).toBe(DATES[0])
+  })
+
+  it('rejects a non-positive or non-integer ?days=', async () => {
+    for (const bad of ['0', '-3', '2.5', 'abc']) {
+      const res = await context.app.inject({
+        method: 'GET',
+        url: `/projects/perf/google/gsc/performance?days=${bad}`,
+      })
+      expect(res.statusCode, `days=${bad}`).toBe(400)
+    }
+  })
+
+  it('refuses a caller range that runs backwards', async () => {
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance?startDate=2030-01-01&endDate=2026-01-06',
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error.message).toMatch(/is after endDate/)
+  })
+
   it('returns rows spanning more than one date on a default call', async () => {
     const res = await context.app.inject({
       method: 'GET',

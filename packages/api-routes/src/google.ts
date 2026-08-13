@@ -3,7 +3,7 @@ import { eq, and, desc, sql, inArray } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { gscSearchData, gscUrlInspections, gscCoverageSnapshots, gbpLocations, gbpDailyMetrics, gbpKeywordImpressions, gbpKeywordMonthly, gbpPlaceActions, gbpLodgingSnapshots, gbpAttributesSnapshots, gbpPlaceDetails, runs, projects, type DatabaseClient } from '@ainyc/canonry-db'
 import {
-  validationError, notFound, normalizeProjectDomain, parseWindow, windowCutoff,
+  validationError, notFound, normalizeProjectDomain, parseWindow,
   authRequired, forbidden, quotaExceeded, providerError, escapeLikePattern, AppError,
   hostMatchesDomain,
   hostOf,
@@ -13,11 +13,68 @@ import {
   type GbpPlaceDetailsListResponse,
   gscSubmitSitemapsRequestDtoSchema,
   gscPerformanceOrderBySchema,
+  formatIsoDateInTimeZone,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from './gbp-summary.js'
-import { mergeGscDailyTotalsWithFallback, readGscDailyTotals } from './gsc-totals.js'
+import {
+  mergeGscDailyTotalsWithFallback, readGscDailyTotals,
+  readLatestGscDataDate, resolveGscWindowRange, resolveGscWindowDays, type GscWindowRange,
+} from './gsc-totals.js'
 import { resolveProject, writeAuditLog } from './helpers.js'
+
+/**
+ * The window to REPORT, given what the caller actually asked for.
+ *
+ * An explicit bound always wins over the label's computed one. The two are only
+ * combined when the result is a real, forward range; otherwise the computed
+ * side is dropped to `null`, because a caller reading `2030-01-01 to
+ * 2026-01-06` would be told the data covers a period that runs backwards.
+ */
+export function resolveReportedWindow(
+  resolved: GscWindowRange,
+  startDate: string | undefined,
+  endDate: string | undefined,
+): GscWindowRange {
+  const start = startDate ?? resolved.startDate
+  const end = endDate ?? resolved.endDate
+  if (start === null || end === null || start <= end) {
+    return { ...resolved, startDate: start, endDate: end }
+  }
+  // Reversed, and only ONE side is the caller's (a fully explicit reversed pair
+  // is already refused by `assertForwardRange` before we get here). Drop the
+  // computed opposite: absent is honest about being unspecified, reversed is
+  // not.
+  return {
+    ...resolved,
+    startDate: startDate ? start : null,
+    endDate: endDate ? end : null,
+  }
+}
+
+/**
+ * Refuse a caller-supplied range that runs backwards.
+ *
+ * Answering it with an empty result would be technically true and useless: the
+ * caller asked for a period that does not exist, and every route taking
+ * explicit bounds should say so rather than return zeros.
+ */
+export function assertForwardRange(startDate?: string, endDate?: string): void {
+  if (startDate && endDate && startDate > endDate) {
+    throw validationError(`startDate "${startDate}" is after endDate "${endDate}".`)
+  }
+}
+
+/**
+ * Today's date on Search Console's own reporting calendar.
+ *
+ * GSC buckets by Pacific Time, so a UTC `toISOString().slice(0, 10)` names the
+ * wrong day between 00:00 and 08:00 UTC and would misreport freshness by a
+ * full day for a third of the clock.
+ */
+function gscToday(): string {
+  return formatIsoDateInTimeZone(new Date().toISOString(), GSC_REPORTING_TIME_ZONE)
+}
 import {
   getAuthUrl,
   exchangeCode,
@@ -32,6 +89,7 @@ import {
   INDEXING_API_DAILY_LIMIT,
   GoogleApiError,
   GoogleAuthError,
+  GSC_REPORTING_TIME_ZONE,
 } from '@ainyc/canonry-integration-google'
 import { GA4_SCOPE } from '@ainyc/canonry-integration-google-analytics'
 import {
@@ -749,7 +807,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
   // page from a complete answer.
   app.get<{
     Params: { name: string }
-    Querystring: { startDate?: string; endDate?: string; query?: string; page?: string; limit?: string; offset?: string; window?: string; orderBy?: string }
+    Querystring: { startDate?: string; endDate?: string; days?: string; query?: string; page?: string; limit?: string; offset?: string; window?: string; orderBy?: string }
   }>('/projects/:name/google/gsc/performance', async (request) => {
     const project = resolveProject(app.db, request.params.name)
     const { startDate, endDate, query, page, limit, offset } = request.query
@@ -762,14 +820,32 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     }
     const orderBy = parsedOrderBy.data
 
-    // Window-based filtering: when no explicit startDate is provided,
-    // use the window param to compute a cutoff date.
-    const cutoffDate = !startDate ? windowCutoff(parseWindow(request.query.window))?.slice(0, 10) ?? null : null
+    // Window-based filtering: when no explicit startDate is provided, resolve
+    // the labelled window against the last day Google actually published, not
+    // against the clock. See `resolveGscWindowRange`.
+    assertForwardRange(startDate, endDate)
+    // `days` is a SPAN, resolved HERE against the published frontier. The CLI
+    // used to turn `--days N` into client-computed UTC dates and send them as
+    // explicit bounds, which the route honours over its own anchor — so the
+    // relative window skipped the anchoring entirely, could end a Pacific day
+    // in the future, and covered N+1 inclusive dates.
+    const daysParam = request.query.days === undefined ? null : Number(request.query.days)
+    if (daysParam !== null && (!Number.isInteger(daysParam) || daysParam < 1)) {
+      throw validationError('"days" must be a positive integer')
+    }
+    const latestDataDate = readLatestGscDataDate(app.db, project.id)
+    const resolvedWindow = daysParam === null
+      ? resolveGscWindowRange(parseWindow(request.query.window), latestDataDate, gscToday())
+      : resolveGscWindowDays(daysParam, latestDataDate, gscToday())
+    const cutoffDate = startDate ? null : resolvedWindow.startDate
+    // A span bounds the TOP of the range too; a label-only request leaves the
+    // upper edge to the caller's explicit `endDate`, exactly as before.
+    const effectiveEndDate = endDate ?? (daysParam === null ? undefined : resolvedWindow.endDate ?? undefined)
 
     const conditions = [eq(gscSearchData.projectId, project.id)]
     if (startDate) conditions.push(sql`${gscSearchData.date} >= ${startDate}`)
     else if (cutoffDate) conditions.push(sql`${gscSearchData.date} >= ${cutoffDate}`)
-    if (endDate) conditions.push(sql`${gscSearchData.date} <= ${endDate}`)
+    if (effectiveEndDate) conditions.push(sql`${gscSearchData.date} <= ${effectiveEndDate}`)
     // Escape LIKE wildcards so a literal `%`/`_` in the filter matches itself
     // instead of acting as a wildcard (a `%` filter would otherwise match every
     // row — wrong results + a needless full scan). The value is already bound.
@@ -851,14 +927,20 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
   }>('/projects/:name/google/gsc/performance/daily', async (request) => {
     const project = resolveProject(app.db, request.params.name)
     const { startDate, endDate } = request.query
-    const cutoffDate = !startDate ? windowCutoff(parseWindow(request.query.window))?.slice(0, 10) ?? null : null
+    assertForwardRange(startDate, endDate)
+    const resolvedWindow = resolveGscWindowRange(
+      parseWindow(request.query.window),
+      readLatestGscDataDate(app.db, project.id),
+      gscToday(),
+    )
+    const cutoffDate = startDate ? null : resolvedWindow.startDate
 
     // Prefer the property-level daily totals on dates where they exist (match
     // Google's property total). Fall back to summing `gsc_search_data` for
     // missing dates so upgraded installs do not shorten longer/custom windows
     // after their first post-migration sync.
     const windowStart = startDate ?? cutoffDate ?? ''
-    const windowEnd = endDate ?? '9999-12-31'
+    const windowEnd = endDate ?? resolvedWindow.endDate ?? '9999-12-31'
     const dailyTotals = readGscDailyTotals(app.db, project.id, windowStart, windowEnd)
 
     const conditions = [eq(gscSearchData.projectId, project.id)]
@@ -902,6 +984,17 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
         days: daily.length,
       },
       daily,
+      // The period actually returned. An explicit start/end wins over the
+      // label, so echo what was used rather than what the window would have
+      // chosen — a caller must be able to label the data it got.
+      //
+      // Mixing one explicit bound with the computed opposite one can invert the
+      // range (an explicit `startDate` of 2030-01-01 against a computed
+      // `endDate` of 2026-01-06), which would describe a period that cannot
+      // contain the rows beside it. When only one side is given, the other is
+      // dropped rather than reported reversed: an absent bound is honest about
+      // being unspecified, a reversed pair is not.
+      window: resolveReportedWindow(resolvedWindow, startDate, endDate),
     }
   })
 
@@ -926,7 +1019,13 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
   }>('/projects/:name/google/gsc/top-pages', async (request) => {
     const project = resolveProject(app.db, request.params.name)
     const { startDate, endDate, limit } = request.query
-    const cutoffDate = !startDate ? windowCutoff(parseWindow(request.query.window))?.slice(0, 10) ?? null : null
+    assertForwardRange(startDate, endDate)
+    const resolvedWindow = resolveGscWindowRange(
+      parseWindow(request.query.window),
+      readLatestGscDataDate(app.db, project.id),
+      gscToday(),
+    )
+    const cutoffDate = startDate ? null : resolvedWindow.startDate
 
     const conditions = [eq(gscSearchData.projectId, project.id)]
     if (startDate) conditions.push(sql`${gscSearchData.date} >= ${startDate}`)
@@ -949,7 +1048,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       .all()
 
     const windowStart = startDate ?? cutoffDate ?? ''
-    const windowEnd = endDate ?? '9999-12-31'
+    const windowEnd = endDate ?? resolvedWindow.endDate ?? '9999-12-31'
     const dailyTotals = readGscDailyTotals(app.db, project.id, windowStart, windowEnd)
     const totalClicks = dailyTotals.reduce((sum, d) => sum + d.clicks, 0)
     const totalImpressions = dailyTotals.reduce((sum, d) => sum + d.impressions, 0)

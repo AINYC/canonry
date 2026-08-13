@@ -562,6 +562,27 @@ export const gscSearchData = sqliteTable('gsc_search_data', {
 // equal Google's property total. This table stores the un-dimensioned daily
 // figure (`dimensions: ['date']`) so the headline totals + daily trend match
 // the GSC UI. Per-query / per-page breakdowns still read `gsc_search_data`.
+/**
+ * The furthest GSC reporting date a project has EVER observed, plus how far the
+ * last sync asked.
+ *
+ * `MAX(date)` over the stored rows is NOT a frontier. Search Analytics omits
+ * days with no data, so on a quiet property the observed max walks backward and
+ * drags every anchored window back with it — a 30-day window silently slides
+ * into the previous month and its totals move. `dataThroughDate` is monotonic
+ * (a sync may only advance it), which is what makes it usable as an anchor.
+ *
+ * `syncedThroughDate` records the ceiling the last sync actually requested, so
+ * the gap between the two is attributable: days in
+ * `(dataThroughDate, syncedThroughDate]` were asked for and came back empty.
+ */
+export const gscDataWatermarks = sqliteTable('gsc_data_watermarks', {
+  projectId: text('project_id').primaryKey().references(() => projects.id, { onDelete: 'cascade' }),
+  dataThroughDate: text('data_through_date').notNull(),
+  syncedThroughDate: text('synced_through_date'),
+  updatedAt: text('updated_at').notNull(),
+})
+
 export const gscDailyTotals = sqliteTable('gsc_daily_totals', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),

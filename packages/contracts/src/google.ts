@@ -65,6 +65,36 @@ export const gscPerformanceDailyPointSchema = z.object({
 })
 export type GscPerformanceDailyPoint = z.infer<typeof gscPerformanceDailyPointSchema>
 
+/**
+ * The date range a labelled window resolved to, and the reporting lag that
+ * decided it.
+ *
+ * Search Console publishes on a two-to-three day delay, so a window anchored at
+ * today spends its most recent days on dates that cannot hold data. The range
+ * is therefore anchored on the last published day (what Google's own UI does),
+ * and reported here so a caller can label the period it actually got instead of
+ * the period it asked for.
+ */
+export const gscWindowRangeSchema = z.object({
+  /** Inclusive lower bound, or `null` for the `all` window. */
+  startDate: z.string().nullable(),
+  /** Inclusive upper bound: the last date the property published. */
+  endDate: z.string().nullable(),
+  /** `MAX(date)` across the project's GSC data, ignoring the window. */
+  latestDataDate: z.string().nullable(),
+  /**
+   * Calendar days since the last day with recorded traffic, on GSC's Pacific
+   * calendar. `null` with no data.
+   *
+   * NOT Google's publication lag: Search Analytics omits zero-data days, so a
+   * quiet tail is indistinguishable from an unpublished one and inflates this
+   * number. Render it as "data through <endDate>", never as "Search Console is
+   * N days behind".
+   */
+  daysSinceLatestData: z.number().nullable(),
+})
+export type GscWindowRange = z.infer<typeof gscWindowRangeSchema>
+
 export const gscPerformanceDailyDtoSchema = z.object({
   totals: z.object({
     clicks: z.number(),
@@ -73,6 +103,13 @@ export const gscPerformanceDailyDtoSchema = z.object({
     days: z.number(),
   }),
   daily: z.array(gscPerformanceDailyPointSchema),
+  /**
+   * Optional because a server older than this field omits it. Both the web and
+   * the CLI guard for that skew; declaring it required here would tell a
+   * generated consumer it may dereference the field safely against a legacy
+   * response, which is exactly the crash those guards exist to prevent.
+   */
+  window: gscWindowRangeSchema.optional(),
 })
 export type GscPerformanceDailyDto = z.infer<typeof gscPerformanceDailyDtoSchema>
 

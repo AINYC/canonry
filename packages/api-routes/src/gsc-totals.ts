@@ -1,12 +1,160 @@
-import { and, asc, eq, sql } from 'drizzle-orm'
-import { gscDailyTotals, gscQueryDailyTotals } from '@ainyc/canonry-db'
+import { and, asc, eq, sql, max } from 'drizzle-orm'
+import { gscDailyTotals, gscQueryDailyTotals, gscSearchData, gscDataWatermarks } from '@ainyc/canonry-db'
 import type { DatabaseClient } from '@ainyc/canonry-db'
+import { shiftIsoCalendarDate, type MetricsWindow } from '@ainyc/canonry-contracts'
 
 export interface GscDailyTotal {
   date: string
   clicks: number
   impressions: number
   position: number
+}
+
+/** Days a labelled rolling window covers. `all` has no fixed span. */
+const WINDOW_DAYS: Record<Exclude<MetricsWindow, 'all'>, number> = { '7d': 7, '30d': 30, '90d': 90 }
+
+/**
+ * The inclusive date range a labelled GSC window actually covers, plus the
+ * reporting lag that decided it.
+ */
+export interface GscWindowRange {
+  /** Inclusive lower bound, or `null` for `all`. */
+  startDate: string | null
+  /** Inclusive upper bound: the latest date the property has published. */
+  endDate: string | null
+  /** `MAX(date)` across the project's GSC data, ignoring any window. */
+  latestDataDate: string | null
+  /**
+   * Calendar days between `latestDataDate` and today, on GSC's Pacific
+   * calendar. `null` with no data.
+   *
+   * This is NOT Google's publication lag, and must never be labelled as one.
+   * The Search Analytics API returns no row for a day with no data, so a day
+   * that Google HAS published but on which the property earned zero
+   * impressions is indistinguishable from a day Google has not published yet.
+   * A quiet tail therefore inflates this number. It measures exactly what it
+   * says — how long since we last recorded traffic — and any surface reading
+   * it must phrase it that way ("data through X"), never as a claim about
+   * Google being behind.
+   */
+  daysSinceLatestData: number | null
+}
+
+/**
+ * Resolve a labelled window against the last day Search Console actually
+ * published, NOT against the clock.
+ *
+ * Google publishes search analytics on a two-to-three day delay, so the most
+ * recent days of a now-anchored window are dates that cannot ever hold data.
+ * Anchoring `30d` at today therefore returns 27 or 28 days of data under a
+ * label that promises 30, and the shortfall grows as the window shrinks: a
+ * `7d` window spends three of its seven days on the lag and delivers four.
+ *
+ * Worse, the shortfall is invisible and it is not monotonic across labels.
+ * Canonry's now-anchored `30d` covered 2026-07-13..2026-08-09 while Search
+ * Console's own `28 days` covered 2026-07-14..2026-08-10 — neither range
+ * contains the other, so the wider Canonry window reported FEWER impressions
+ * (1,174) than the narrower Google one (1,360). A total that moves the wrong
+ * way when you widen the window reads as missing data, and there is no way for
+ * an operator to tell that apart from a real decline.
+ *
+ * Anchoring on the last published day is what Search Console's own UI does, so
+ * `30d` means thirty days of data and the two surfaces become comparable.
+ *
+ * `today` is injected rather than read from the clock so this stays pure and
+ * testable, matching the `gbp-summary` precedent.
+ */
+export function resolveGscWindowRange(
+  window: MetricsWindow,
+  latestDataDate: string | null,
+  today: string,
+): GscWindowRange {
+  // `all` has no lower bound to place, but it still stops where the data does.
+  if (window === 'all') {
+    return {
+      startDate: null,
+      endDate: latestDataDate,
+      latestDataDate,
+      daysSinceLatestData: gscDaysSinceLatestData(latestDataDate, today),
+    }
+  }
+  return resolveGscWindowDays(WINDOW_DAYS[window], latestDataDate, today)
+}
+
+/**
+ * The same anchoring for a window expressed as a day count rather than a
+ * label.
+ *
+ * Surfaces that hard-code their own horizon (the suggested-queries basket
+ * mirrors Google's 28-day default) need identical treatment: a now-anchored
+ * 28 days delivers 25 under the reporting lag. There, the shortfall does more
+ * than shrink a number — the surface gates an impression floor, so a query
+ * that clears the floor across the true window can fall under it and be
+ * withheld entirely.
+ */
+export function resolveGscWindowDays(
+  days: number,
+  latestDataDate: string | null,
+  today: string,
+): GscWindowRange {
+  // With no data there is no anchor: fall back to the now-anchored cutoff so
+  // an empty project still filters rather than scanning all history.
+  if (latestDataDate === null) {
+    return {
+      startDate: shiftIsoCalendarDate(today, -days),
+      endDate: null,
+      latestDataDate: null,
+      daysSinceLatestData: null,
+    }
+  }
+  // `days - 1`, because the range is INCLUSIVE at both ends: a 7-day window
+  // ending on the 10th starts on the 4th, not the 3rd.
+  return {
+    startDate: shiftIsoCalendarDate(latestDataDate, -(days - 1)),
+    endDate: latestDataDate,
+    latestDataDate,
+    daysSinceLatestData: gscDaysSinceLatestData(latestDataDate, today),
+  }
+}
+
+/** Calendar days between the last published date and today. Never negative. */
+function gscDaysSinceLatestData(latestDataDate: string | null, today: string): number | null {
+  if (latestDataDate === null) return null
+  return Math.max(0, Math.round(
+    (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${latestDataDate}T00:00:00Z`)) / 86_400_000,
+  ))
+}
+
+/**
+ * The furthest GSC reporting date a project has reached — the anchor every
+ * window hangs off.
+ *
+ * `MAX(date)` over the stored rows ALONE is not a frontier. Search Analytics
+ * returns no row for a day with no data, so on a quiet property the observed
+ * max walks backward and drags every anchored window back with it: a `30d`
+ * window slides into the previous month and its totals change for a reason
+ * that has nothing to do with the site's performance.
+ *
+ * So the persisted `gsc_data_watermarks.data_through_date` — which a sync may
+ * only ADVANCE — takes precedence, and the observed max is a floor under it
+ * for projects that synced before the watermark existed. A quiet tail can
+ * then leave the frontier where it is instead of moving it backward.
+ *
+ * Both stored tables are consulted for that floor because they sync
+ * independently: a project from before `gsc_daily_totals` existed has only
+ * dimensioned rows, and anchoring behind data the endpoint is about to return
+ * would cut it off.
+ */
+export function readLatestGscDataDate(db: DatabaseClient, projectId: string): string | null {
+  const watermark = db.select({ through: gscDataWatermarks.dataThroughDate })
+    .from(gscDataWatermarks).where(eq(gscDataWatermarks.projectId, projectId)).get()?.through ?? null
+  const property = db.select({ latest: max(gscDailyTotals.date) })
+    .from(gscDailyTotals).where(eq(gscDailyTotals.projectId, projectId)).get()?.latest ?? null
+  const dimensioned = db.select({ latest: max(gscSearchData.date) })
+    .from(gscSearchData).where(eq(gscSearchData.projectId, projectId)).get()?.latest ?? null
+  return [watermark, property, dimensioned]
+    .filter((d): d is string => d !== null)
+    .reduce<string | null>((maxDate, d) => (maxDate === null || d > maxDate ? d : maxDate), null)
 }
 
 /**

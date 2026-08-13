@@ -6,7 +6,7 @@ import os from 'node:os'
 import Fastify from 'fastify'
 import { eq } from 'drizzle-orm'
 import { createClient, migrate, projects, runs, auditLog, gscCoverageSnapshots, gscUrlInspections, gscSearchData, gscDailyTotals } from '@ainyc/canonry-db'
-import { AppError } from '@ainyc/canonry-contracts'
+import { AppError, type GscPerformanceDailyDto } from '@ainyc/canonry-contracts'
 import { googleOAuthSuccessHtml, googleRoutes } from '../src/google.js'
 
 // Reproduce state signing functions from google.ts to verify behavior.
@@ -1532,6 +1532,15 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance offset pagina
   })
 })
 
+/** `YYYY-MM-DD` for N days back on GSC's Pacific reporting calendar. */
+function pacificDayIso(daysAgo: number): string {
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date())
+  return new Date(Date.parse(`${today}T00:00:00Z`) - daysAgo * 86_400_000)
+    .toISOString().slice(0, 10)
+}
+
 describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () => {
   let context: ReturnType<typeof buildApp>
   let projectId: string
@@ -1674,10 +1683,13 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
       url: '/projects/perf/google/gsc/performance/daily?startDate=2030-01-01',
     })
     expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({
-      totals: { clicks: 0, impressions: 0, ctr: 0, days: 0 },
-      daily: [],
-    })
+    const body = res.json() as GscPerformanceDailyDto
+    expect(body.totals).toEqual({ clicks: 0, impressions: 0, ctr: 0, days: 0 })
+    expect(body.daily).toEqual([])
+    // An explicit startDate wins over the label, and the upper bound is the
+    // last published day, so the caller can label the period it actually got.
+    expect(body.window.startDate).toBe('2030-01-01')
+    expect(body.window.latestDataDate).toBe('2026-01-06')
   })
 
   it('returns 404 for an unknown project', async () => {
@@ -1686,6 +1698,83 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
       url: '/projects/nope/google/gsc/performance/daily',
     })
     expect(res.statusCode).toBe(404)
+  })
+
+  it('refuses a caller range that runs backwards instead of answering it empty', async () => {
+    // Both bounds are the caller's own, so the REQUEST is impossible. An empty
+    // 200 would be technically true and useless.
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?startDate=2030-01-01&endDate=2026-01-06',
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error.message).toMatch(/is after endDate/)
+  })
+
+  it('anchors a labelled window on the last published day, not on today', async () => {
+    // The canonry.ai case: Google published through 3 days ago, so a
+    // now-anchored 30d spent 3 of its days on dates that cannot hold data and
+    // returned 27. Anchored on the last published day it returns all 30.
+    // Seed on GSC's PACIFIC reporting calendar, which is what the route now
+    // measures against. A UTC-seeded fixture drifts by a day between 00:00 and
+    // 08:00 UTC — the same off-by-one the Pacific fix exists to remove.
+    const dayIso = (daysAgo: number) => pacificDayIso(daysAgo)
+    const LAG = 3
+    const now = '2026-01-01T00:00:00.000Z'
+    // 30 consecutive published days ending at the lag boundary, plus two older
+    // days that a correct 30d window must EXCLUDE.
+    for (let i = 0; i < 32; i += 1) {
+      context.db.insert(gscDailyTotals).values({
+        id: crypto.randomUUID(), projectId, date: dayIso(LAG + i),
+        clicks: 1, impressions: 10, position: '5', createdAt: now,
+      }).run()
+    }
+
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?window=30d',
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as GscPerformanceDailyDto
+
+    expect(body.window.latestDataDate).toBe(dayIso(LAG))
+    expect(body.window.daysSinceLatestData).toBe(LAG)
+    expect(body.window.endDate).toBe(dayIso(LAG))
+    expect(body.window.startDate).toBe(dayIso(LAG + 29))
+
+    // The label is honoured exactly: 30 days, not 27.
+    expect(body.daily).toHaveLength(30)
+    expect(body.totals.days).toBe(30)
+    expect(body.totals.impressions).toBe(300)
+    // And it stops: the two older seeded days are outside the window.
+    expect(body.daily[0]!.date).toBe(dayIso(LAG + 29))
+    expect(body.daily.at(-1)!.date).toBe(dayIso(LAG))
+  })
+
+  it('keeps a wider label a superset of a narrower one under reporting lag', () => {
+    // The anomaly that started this: a 30d window reported FEWER impressions
+    // than a 28d one because the two ranges only overlapped. Whatever the lag,
+    // the wider window must contain the narrower.
+    const dayIso = (daysAgo: number) => pacificDayIso(daysAgo)
+    const now = '2026-01-01T00:00:00.000Z'
+    for (let i = 0; i < 95; i += 1) {
+      context.db.insert(gscDailyTotals).values({
+        id: crypto.randomUUID(), projectId, date: dayIso(2 + i),
+        clicks: 1, impressions: 10, position: '5', createdAt: now,
+      }).run()
+    }
+    return Promise.all(['7d', '30d', '90d'].map(async (w) => {
+      const res = await context.app.inject({
+        method: 'GET', url: `/projects/perf/google/gsc/performance/daily?window=${w}`,
+      })
+      return (res.json() as GscPerformanceDailyDto)
+    })).then(([week, month, quarter]) => {
+      expect(week!.totals.impressions).toBe(70)
+      expect(month!.totals.impressions).toBe(300)
+      expect(quarter!.totals.impressions).toBe(900)
+      expect(month!.totals.impressions).toBeGreaterThan(week!.totals.impressions)
+      expect(quarter!.totals.impressions).toBeGreaterThan(month!.totals.impressions)
+    })
   })
 
   it('sources the daily series from gsc_daily_totals (property total), not the summed dimensioned rows', async () => {
@@ -1773,9 +1862,13 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
       url: '/projects/perf/google/gsc/performance/daily?startDate=2026-02-01&endDate=2026-02-01',
     })
     expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({
-      totals: { clicks: 12, impressions: 500, ctr: 12 / 500, days: 1 },
-      daily: [{ date: '2026-02-01', clicks: 12, impressions: 500, ctr: 12 / 500 }],
-    })
+    const body = res.json() as GscPerformanceDailyDto
+    expect(body.totals).toEqual({ clicks: 12, impressions: 500, ctr: 12 / 500, days: 1 })
+    expect(body.daily).toEqual([{ date: '2026-02-01', clicks: 12, impressions: 500, ctr: 12 / 500 }])
+    expect(body.window.startDate).toBe('2026-02-01')
+    expect(body.window.endDate).toBe('2026-02-01')
+    // MAX across BOTH tables: the property row here is later than the
+    // dimensioned rows the surrounding fixture seeds.
+    expect(body.window.latestDataDate).toBe('2026-02-01')
   })
 })

@@ -69,7 +69,10 @@ import {
   type SuggestedQueryGscRow,
 } from '@ainyc/canonry-intelligence'
 import { notProbeRun, resolveProject } from './helpers.js'
-import { mergeGscQueryTotalsWithFallback, readGscQueryDailyRows } from './gsc-totals.js'
+import {
+  mergeGscQueryTotalsWithFallback, readGscQueryDailyRows,
+  readLatestGscDataDate, resolveGscWindowDays,
+} from './gsc-totals.js'
 
 const TOP_INSIGHT_LIMIT = 5
 const SEARCH_HIT_HARD_LIMIT = 50
@@ -670,9 +673,19 @@ function buildSuggestedQueriesFromGsc(
   projectId: string,
   trackedQueries: readonly string[],
 ): SuggestedQueriesSummaryDto {
-  // 28-day window mirrors GSC's default reporting horizon. ISO date string
-  // is what the schema stores (YYYY-MM-DD), comparable lexicographically.
-  const cutoff = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  // 28-day window mirrors GSC's default reporting horizon, ANCHORED on the last
+  // day Google published rather than on the clock. Google publishes on a delay,
+  // so a now-anchored 28 days delivers about 25 — and this surface gates an
+  // impression floor, so the missing days do not just shrink a number: a query
+  // that clears the floor across the true window can fall under it and be
+  // withheld from the basket entirely. Measured on canonry.ai, "new york ai
+  // marketing agency" (16 impressions) was suppressed exactly this way.
+  const suggestionWindow = resolveGscWindowDays(
+    28,
+    readLatestGscDataDate(app.db, projectId),
+    new Date().toISOString().slice(0, 10),
+  )
+  const cutoff = suggestionWindow.startDate ?? ''
 
   // Prefer Google's un-dimensioned per-query rows. This surface both ORDERS by
   // impressions and gates an eligibility floor on them, so the `page` fan-out
@@ -698,14 +711,17 @@ function buildSuggestedQueriesFromGsc(
     .where(and(
       eq(gscSearchData.projectId, projectId),
       sql`${gscSearchData.date} >= ${cutoff}`,
+      // Same upper bound as the accurate source below. The merge picks a source
+      // PER DAY, so an asymmetric range would let a dimensioned-only day past
+      // the window's end into a basket the other source cannot balance.
+      sql`${gscSearchData.date} <= ${suggestionWindow.endDate ?? '9999-12-31'}`,
       sql`${gscSearchData.impressions} > 0`,
     ))
     .groupBy(gscSearchData.date, gscSearchData.query)
     .all()
 
-  const todayIso = new Date().toISOString().slice(0, 10)
   const merged = mergeGscQueryTotalsWithFallback(
-    readGscQueryDailyRows(app.db, projectId, cutoff, todayIso),
+    readGscQueryDailyRows(app.db, projectId, cutoff, suggestionWindow.endDate ?? '9999-12-31'),
     dimensionedRows.map(r => ({
       date: r.date,
       query: r.query,
