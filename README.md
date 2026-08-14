@@ -12,7 +12,7 @@ Canonry gives operators and agents one technical record for AI visibility, site 
 |---|---|
 | **Measure** | Track mentions and citations across Gemini, ChatGPT, Claude, Perplexity, and local models. Join them with GSC, GA4, Bing, traffic, Business Profile, and backlink data. |
 | **Diagnose** | Crawl the site, score Page Health, inspect evidence, compare competitors, and explain regressions. |
-| **Act** | Generate content, create WordPress and JSON-LD changes, submit URLs for indexing, and manage ChatGPT ads through approval workflows. |
+| **Act** | Give your agent the context to make surgical on-site technical SEO changes, submit URLs for indexing, and manage ChatGPT ads through approval workflows. |
 | **Operate** | Create automation workflows, schedule checks, sync data, manage projects as YAML, send webhooks, and generate client-ready reports. |
 
 ### Built-in integrations and workflows
