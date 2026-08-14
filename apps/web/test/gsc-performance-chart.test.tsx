@@ -273,33 +273,7 @@ test('plots one row per calendar day, so a quiet gap is not compressed', async (
   expect(within(group).getAllByRole('button')).toHaveLength(4)
 })
 
-test('explanatory copy lives on headings, not as body prose', async () => {
-  // The repo rule: "if a sentence explains or justifies rather than labels or
-  // names, it goes in a tooltip." These four explained; each is now the
-  // accessible name of a heading trigger instead of a paragraph on the page.
-  renderSection()
-  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
-
-  // The property-picker heading only renders when no property is selected yet,
-  // which this fixture is past, so its tooltip is not asserted here.
-  for (const phrase of [
-    /match case-insensitive substrings/,
-    /Indexing API is intended for eligible JobPosting/,
-    /asks Google to refetch these sitemaps/,
-  ]) {
-    expect(screen.queryByText(phrase), `${phrase} should not be body copy`).toBeNull()
-    expect(screen.getByRole('button', { name: phrase })).not.toBeNull()
-  }
-})
-
-test('keeps the copy the rule exempts inline', async () => {
-  // Not everything short is tooltip material. An onboarding state must
-  // instruct where the reader is looking, and a metric value is a value.
-  renderSection()
-  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
-  // The connect-state line is the only content of that state; burying it in a
-  // tooltip would make setup worse, which is what the carve-out is for.
-  expect(screen.queryByRole('button', { name: /shared across all projects/ })).toBeNull()
-  // And the picker's explanation is not body prose anywhere in this render.
-  expect(screen.queryByText(/used for future syncs and URL inspections/)).toBeNull()
-})
+// Where the rest of the section's explanatory copy lives is asserted in
+// `gsc-copy-placement.test.tsx`, which arranges the three render states those
+// paragraphs actually appeared in. This suite keeps only the filter
+// explanation, which belongs to the chart's own filter row.
