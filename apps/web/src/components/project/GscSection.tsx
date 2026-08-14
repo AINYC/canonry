@@ -1057,10 +1057,10 @@ export function GscSection({
                 <div className="section-head section-head-inline">
                   <div>
                     <p className="eyebrow eyebrow-soft">Performance</p>
-                    <h3 className="flex items-center gap-1.5">
-                      Search performance
+                    <div className="flex items-center gap-1.5">
+                      <h3>Search performance</h3>
                       <InfoTooltip text={`Click any day to filter the table below to that date. Query and page filters match case-insensitive substrings and run on Apply filters. Filtering and sorting examine up to ${EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows while the table shows ${DEFAULT_TABLE_PAGE_SIZE} per page.`} />
-                    </h3>
+                    </div>
                     {/* The window ends where Google's data ends, not today.
                         Naming the real range is what stops a lagging tail
                         reading as a drop, and lets this be compared against
@@ -1383,10 +1383,10 @@ export function GscSection({
                 <div className="section-head section-head-inline">
                   <div>
                     <p className="eyebrow eyebrow-soft">Coverage</p>
-                    <h3 className="flex items-center gap-1.5">
-                      Index coverage
+                    <div className="flex items-center gap-1.5">
+                      <h3>Index coverage</h3>
                       <InfoTooltip text="Google's Indexing API is intended for eligible JobPosting and BroadcastEvent pages. Sitemap resubmission is the general-site bulk path." />
-                    </h3>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
                     {coverage && coverage.notIndexed.length > 0 && (
@@ -1736,10 +1736,10 @@ export function GscSection({
                 <div className="section-head section-head-inline">
                   <div>
                     <p className="eyebrow eyebrow-soft">Sitemaps</p>
-                    <h3 className="flex items-center gap-1.5">
-                      Sitemap operations
+                    <div className="flex items-center gap-1.5">
+                      <h3>Sitemap operations</h3>
                       <InfoTooltip text="Submitting asks Google to refetch these sitemaps. Indexing is not guaranteed." />
-                    </h3>
+                    </div>
                   </div>
                   <Button
                     type="button"
@@ -2024,10 +2024,10 @@ export function GscSection({
                       <div className="section-head">
                         <div>
                           <p className="eyebrow eyebrow-soft">Property</p>
-                          <h3 className="flex items-center gap-1.5">
-                      Pick the Search Console property
-                      <InfoTooltip text="The selected property is used for future syncs and URL inspections for this project." />
-                    </h3>
+                          <div className="flex items-center gap-1.5">
+                            <h3>Pick the Search Console property</h3>
+                            <InfoTooltip text="The selected property is used for future syncs and URL inspections for this project." />
+                          </div>
                         </div>
                       </div>
                       <div className="mt-3 space-y-2">
