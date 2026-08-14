@@ -1211,40 +1211,46 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
             },
           })
           .run()
-        tx
-          .insert(crawlerVerificationManifestsHourly)
-          .values({
-            projectId: project.id,
-            sourceId: sourceRow.id,
-            tsHour: bucket.tsHour,
-            botId: bucket.botId,
-            verificationStatus: bucket.verificationStatus,
-            pathNormalized: bucket.pathNormalized,
-            status,
-            manifestId: bucket.verificationManifest?.id ?? 'none',
-            manifestJson: bucket.verificationManifest,
-            hits: bucket.hits,
-            createdAt: finishedAt,
-            updatedAt: finishedAt,
-          })
-          .onConflictDoUpdate({
-            target: [
-              crawlerVerificationManifestsHourly.projectId,
-              crawlerVerificationManifestsHourly.sourceId,
-              crawlerVerificationManifestsHourly.tsHour,
-              crawlerVerificationManifestsHourly.botId,
-              crawlerVerificationManifestsHourly.verificationStatus,
-              crawlerVerificationManifestsHourly.pathNormalized,
-              crawlerVerificationManifestsHourly.status,
-              crawlerVerificationManifestsHourly.manifestId,
-            ],
-            set: {
-              hits: sql`${crawlerVerificationManifestsHourly.hits} + ${bucket.hits}`,
+        // Nothing was consulted for this bucket, so there is no provenance to
+        // record. A sentinel row would count these hits as ATTRIBUTED and drive
+        // verificationUnattributedHits to 0; the ABSENCE of a sidecar row is what
+        // makes a read report them as unattributed.
+        if (bucket.verificationManifest) {
+          tx
+            .insert(crawlerVerificationManifestsHourly)
+            .values({
+              projectId: project.id,
+              sourceId: sourceRow.id,
+              tsHour: bucket.tsHour,
+              botId: bucket.botId,
+              verificationStatus: bucket.verificationStatus,
+              pathNormalized: bucket.pathNormalized,
+              status,
+              manifestId: bucket.verificationManifest.id,
               manifestJson: bucket.verificationManifest,
+              hits: bucket.hits,
+              createdAt: finishedAt,
               updatedAt: finishedAt,
-            },
-          })
-          .run()
+            })
+            .onConflictDoUpdate({
+              target: [
+                crawlerVerificationManifestsHourly.projectId,
+                crawlerVerificationManifestsHourly.sourceId,
+                crawlerVerificationManifestsHourly.tsHour,
+                crawlerVerificationManifestsHourly.botId,
+                crawlerVerificationManifestsHourly.verificationStatus,
+                crawlerVerificationManifestsHourly.pathNormalized,
+                crawlerVerificationManifestsHourly.status,
+                crawlerVerificationManifestsHourly.manifestId,
+              ],
+              set: {
+                hits: sql`${crawlerVerificationManifestsHourly.hits} + ${bucket.hits}`,
+                manifestJson: bucket.verificationManifest,
+                updatedAt: finishedAt,
+              },
+            })
+            .run()
+        }
       }
 
       for (const bucket of report.aiUserFetchEventsHourly) {
@@ -1282,40 +1288,46 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
             },
           })
           .run()
-        tx
-          .insert(aiUserFetchVerificationManifestsHourly)
-          .values({
-            projectId: project.id,
-            sourceId: sourceRow.id,
-            tsHour: bucket.tsHour,
-            botId: bucket.botId,
-            verificationStatus: bucket.verificationStatus,
-            pathNormalized: bucket.pathNormalized,
-            status,
-            manifestId: bucket.verificationManifest?.id ?? 'none',
-            manifestJson: bucket.verificationManifest,
-            hits: bucket.hits,
-            createdAt: finishedAt,
-            updatedAt: finishedAt,
-          })
-          .onConflictDoUpdate({
-            target: [
-              aiUserFetchVerificationManifestsHourly.projectId,
-              aiUserFetchVerificationManifestsHourly.sourceId,
-              aiUserFetchVerificationManifestsHourly.tsHour,
-              aiUserFetchVerificationManifestsHourly.botId,
-              aiUserFetchVerificationManifestsHourly.verificationStatus,
-              aiUserFetchVerificationManifestsHourly.pathNormalized,
-              aiUserFetchVerificationManifestsHourly.status,
-              aiUserFetchVerificationManifestsHourly.manifestId,
-            ],
-            set: {
-              hits: sql`${aiUserFetchVerificationManifestsHourly.hits} + ${bucket.hits}`,
+        // Nothing was consulted for this bucket, so there is no provenance to
+        // record. A sentinel row would count these hits as ATTRIBUTED and drive
+        // verificationUnattributedHits to 0; the ABSENCE of a sidecar row is what
+        // makes a read report them as unattributed.
+        if (bucket.verificationManifest) {
+          tx
+            .insert(aiUserFetchVerificationManifestsHourly)
+            .values({
+              projectId: project.id,
+              sourceId: sourceRow.id,
+              tsHour: bucket.tsHour,
+              botId: bucket.botId,
+              verificationStatus: bucket.verificationStatus,
+              pathNormalized: bucket.pathNormalized,
+              status,
+              manifestId: bucket.verificationManifest.id,
               manifestJson: bucket.verificationManifest,
+              hits: bucket.hits,
+              createdAt: finishedAt,
               updatedAt: finishedAt,
-            },
-          })
-          .run()
+            })
+            .onConflictDoUpdate({
+              target: [
+                aiUserFetchVerificationManifestsHourly.projectId,
+                aiUserFetchVerificationManifestsHourly.sourceId,
+                aiUserFetchVerificationManifestsHourly.tsHour,
+                aiUserFetchVerificationManifestsHourly.botId,
+                aiUserFetchVerificationManifestsHourly.verificationStatus,
+                aiUserFetchVerificationManifestsHourly.pathNormalized,
+                aiUserFetchVerificationManifestsHourly.status,
+                aiUserFetchVerificationManifestsHourly.manifestId,
+              ],
+              set: {
+                hits: sql`${aiUserFetchVerificationManifestsHourly.hits} + ${bucket.hits}`,
+                manifestJson: bucket.verificationManifest,
+                updatedAt: finishedAt,
+              },
+            })
+            .run()
+        }
       }
 
       for (const bucket of report.aiReferralEventsHourly) {
@@ -3301,40 +3313,46 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             },
           })
           .run()
-        tx
-          .insert(crawlerVerificationManifestsHourly)
-          .values({
-            projectId: project.id,
-            sourceId: sourceRow.id,
-            tsHour: bucket.tsHour,
-            botId: bucket.botId,
-            verificationStatus: bucket.verificationStatus,
-            pathNormalized: bucket.pathNormalized,
-            status,
-            manifestId: bucket.verificationManifest?.id ?? 'none',
-            manifestJson: bucket.verificationManifest,
-            hits: bucket.hits,
-            createdAt: finishedAt,
-            updatedAt: finishedAt,
-          })
-          .onConflictDoUpdate({
-            target: [
-              crawlerVerificationManifestsHourly.projectId,
-              crawlerVerificationManifestsHourly.sourceId,
-              crawlerVerificationManifestsHourly.tsHour,
-              crawlerVerificationManifestsHourly.botId,
-              crawlerVerificationManifestsHourly.verificationStatus,
-              crawlerVerificationManifestsHourly.pathNormalized,
-              crawlerVerificationManifestsHourly.status,
-              crawlerVerificationManifestsHourly.manifestId,
-            ],
-            set: {
-              hits: sql`${crawlerVerificationManifestsHourly.hits} + ${bucket.hits}`,
+        // Nothing was consulted for this bucket, so there is no provenance to
+        // record. A sentinel row would count these hits as ATTRIBUTED and drive
+        // verificationUnattributedHits to 0; the ABSENCE of a sidecar row is what
+        // makes a read report them as unattributed.
+        if (bucket.verificationManifest) {
+          tx
+            .insert(crawlerVerificationManifestsHourly)
+            .values({
+              projectId: project.id,
+              sourceId: sourceRow.id,
+              tsHour: bucket.tsHour,
+              botId: bucket.botId,
+              verificationStatus: bucket.verificationStatus,
+              pathNormalized: bucket.pathNormalized,
+              status,
+              manifestId: bucket.verificationManifest.id,
               manifestJson: bucket.verificationManifest,
+              hits: bucket.hits,
+              createdAt: finishedAt,
               updatedAt: finishedAt,
-            },
-          })
-          .run()
+            })
+            .onConflictDoUpdate({
+              target: [
+                crawlerVerificationManifestsHourly.projectId,
+                crawlerVerificationManifestsHourly.sourceId,
+                crawlerVerificationManifestsHourly.tsHour,
+                crawlerVerificationManifestsHourly.botId,
+                crawlerVerificationManifestsHourly.verificationStatus,
+                crawlerVerificationManifestsHourly.pathNormalized,
+                crawlerVerificationManifestsHourly.status,
+                crawlerVerificationManifestsHourly.manifestId,
+              ],
+              set: {
+                hits: sql`${crawlerVerificationManifestsHourly.hits} + ${bucket.hits}`,
+                manifestJson: bucket.verificationManifest,
+                updatedAt: finishedAt,
+              },
+            })
+            .run()
+        }
         crawlerBucketRows += 1
       }
 
@@ -3373,40 +3391,46 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             },
           })
           .run()
-        tx
-          .insert(aiUserFetchVerificationManifestsHourly)
-          .values({
-            projectId: project.id,
-            sourceId: sourceRow.id,
-            tsHour: bucket.tsHour,
-            botId: bucket.botId,
-            verificationStatus: bucket.verificationStatus,
-            pathNormalized: bucket.pathNormalized,
-            status,
-            manifestId: bucket.verificationManifest?.id ?? 'none',
-            manifestJson: bucket.verificationManifest,
-            hits: bucket.hits,
-            createdAt: finishedAt,
-            updatedAt: finishedAt,
-          })
-          .onConflictDoUpdate({
-            target: [
-              aiUserFetchVerificationManifestsHourly.projectId,
-              aiUserFetchVerificationManifestsHourly.sourceId,
-              aiUserFetchVerificationManifestsHourly.tsHour,
-              aiUserFetchVerificationManifestsHourly.botId,
-              aiUserFetchVerificationManifestsHourly.verificationStatus,
-              aiUserFetchVerificationManifestsHourly.pathNormalized,
-              aiUserFetchVerificationManifestsHourly.status,
-              aiUserFetchVerificationManifestsHourly.manifestId,
-            ],
-            set: {
-              hits: sql`${aiUserFetchVerificationManifestsHourly.hits} + ${bucket.hits}`,
+        // Nothing was consulted for this bucket, so there is no provenance to
+        // record. A sentinel row would count these hits as ATTRIBUTED and drive
+        // verificationUnattributedHits to 0; the ABSENCE of a sidecar row is what
+        // makes a read report them as unattributed.
+        if (bucket.verificationManifest) {
+          tx
+            .insert(aiUserFetchVerificationManifestsHourly)
+            .values({
+              projectId: project.id,
+              sourceId: sourceRow.id,
+              tsHour: bucket.tsHour,
+              botId: bucket.botId,
+              verificationStatus: bucket.verificationStatus,
+              pathNormalized: bucket.pathNormalized,
+              status,
+              manifestId: bucket.verificationManifest.id,
               manifestJson: bucket.verificationManifest,
+              hits: bucket.hits,
+              createdAt: finishedAt,
               updatedAt: finishedAt,
-            },
-          })
-          .run()
+            })
+            .onConflictDoUpdate({
+              target: [
+                aiUserFetchVerificationManifestsHourly.projectId,
+                aiUserFetchVerificationManifestsHourly.sourceId,
+                aiUserFetchVerificationManifestsHourly.tsHour,
+                aiUserFetchVerificationManifestsHourly.botId,
+                aiUserFetchVerificationManifestsHourly.verificationStatus,
+                aiUserFetchVerificationManifestsHourly.pathNormalized,
+                aiUserFetchVerificationManifestsHourly.status,
+                aiUserFetchVerificationManifestsHourly.manifestId,
+              ],
+              set: {
+                hits: sql`${aiUserFetchVerificationManifestsHourly.hits} + ${bucket.hits}`,
+                manifestJson: bucket.verificationManifest,
+                updatedAt: finishedAt,
+              },
+            })
+            .run()
+        }
         aiUserFetchBucketRows += 1
       }
 

@@ -148,7 +148,11 @@ describe('validateIpRangeManifestPayload', () => {
     expect(validateIpRangeManifestPayload(payload).ok).toBe(false)
   })
 
-  it('preserves known provenance while failing closed for empty or invalid ranges', () => {
+  it('claims no provenance when there were no ranges to compare against', () => {
+    // Fails closed on the decision AND on the provenance. A manifest that
+    // yields zero usable prefixes never checked this request, so reporting it
+    // would assert a comparison that did not happen — the same reason an
+    // absent IP yields null below.
     const base = {
       _source: 'https://example.com/bots.json',
       creationTime: 'version-2',
@@ -165,13 +169,34 @@ describe('validateIpRangeManifestPayload', () => {
     for (const payload of payloads) {
       expect(verifyIpAgainstManifest('192.0.2.1', payload)).toEqual({
         verified: false,
-        manifest: {
-          id: `${base._source}#${base.creationTime}#sha256:${ipRangeManifestContentHash(payload)}`,
-          source: base._source,
-          version: base.creationTime,
-        },
+        manifest: null,
       })
     }
+  })
+
+  it('claims no provenance when there was no address to check', () => {
+    // The distinction the sidecar depends on: `manifest: X` means X compared
+    // this address and rejected it; `manifest: null` means nothing compared
+    // anything. A source that does not expose a client IP (Vercel request
+    // logs) must land in the second case, not the first.
+    const payload = {
+      _source: 'https://example.com/bots.json',
+      creationTime: 'version-2',
+      prefixes: [{ ipv4Prefix: '192.0.2.0/24' }],
+    }
+    for (const ip of [null, undefined, '', 'not-an-ip']) {
+      expect(verifyIpAgainstManifest(ip, payload)).toEqual({ verified: false, manifest: null })
+    }
+    // Same manifest, an address it does not contain: a real rejection, so the
+    // provenance is real too.
+    expect(verifyIpAgainstManifest('198.51.100.7', payload)).toEqual({
+      verified: false,
+      manifest: {
+        id: `${payload._source}#${payload.creationTime}#sha256:${ipRangeManifestContentHash(payload)}`,
+        source: payload._source,
+        version: payload.creationTime,
+      },
+    })
   })
 
   it('keys stale publisher versions by canonical prefix content', () => {
@@ -201,9 +226,12 @@ describe('validateIpRangeManifestPayload', () => {
       ],
     }
 
-    const firstManifest = verifyIpAgainstManifest(null, first).manifest
-    const equivalentManifest = verifyIpAgainstManifest(null, reorderedEquivalent).manifest
-    const changedManifest = verifyIpAgainstManifest(null, changed).manifest
+    // A parseable address, so a comparison actually runs and the decision
+    // carries provenance. Whether it matches is irrelevant here; this test is
+    // about manifest IDENTITY across publisher versions.
+    const firstManifest = verifyIpAgainstManifest('192.0.2.1', first).manifest
+    const equivalentManifest = verifyIpAgainstManifest('192.0.2.1', reorderedEquivalent).manifest
+    const changedManifest = verifyIpAgainstManifest('192.0.2.1', changed).manifest
 
     expect(firstManifest).toMatchObject({ source: base._source, version: base.creationTime })
     expect(firstManifest?.id).toMatch(/#sha256:[0-9a-f]{64}$/)
@@ -306,10 +334,15 @@ describe('verifyIpForRule', () => {
       verified: false,
       manifest: ANTHROPIC_MANIFEST,
     })
+    // No address to check. Previously this returned ANTHROPIC_MANIFEST, making
+    // it indistinguishable from the rejection above — a Vercel source, which
+    // never carries a client IP, would have recorded every ClaudeBot hit as
+    // "Anthropic's manifest checked this and rejected it".
     expect(verifyIpForRuleDecision(null, 'anthropic-claudebot')).toEqual({
       verified: false,
-      manifest: ANTHROPIC_MANIFEST,
+      manifest: null,
     })
+    // A rule with no published ranges: also nothing consulted.
     expect(verifyIpForRuleDecision('1.2.3.4', 'meta-externalagent')).toEqual({
       verified: false,
       manifest: null,

@@ -165,9 +165,16 @@ function decideIpVerification(
   ip: string | null | undefined,
   data: VerificationData,
 ): IpVerificationDecision {
-  if (!ip || data.ranges.length === 0) return { verified: false, manifest: data.manifest }
+  // A manifest only CHECKED this request when there was both an address to
+  // test and a parsed range set to test it against. Missing either means
+  // nothing was consulted, so returning the manifest here would assert a check
+  // that never ran — the same claim `backfill.ts` deliberately refuses to make
+  // when it replays a sample whose IP was never retained. Returning null is
+  // what makes the two outcomes below distinguishable: `manifest: X` means X
+  // rejected this IP, `manifest: null` means no comparison happened at all.
+  if (!ip || data.ranges.length === 0) return { verified: false, manifest: null }
   const parsed = parseIp(ip)
-  if (!parsed) return { verified: false, manifest: data.manifest }
+  if (!parsed) return { verified: false, manifest: null }
   for (const cidr of data.ranges) {
     if (parsed.version !== cidr.version) continue
     if ((parsed.addr & cidr.mask) === cidr.network) {
@@ -203,10 +210,13 @@ const CACHE: Map<string, VerificationData> = (() => {
 
 /**
  * Decide whether an IP falls in the published ranges for a crawler rule and
- * return the exact vendored manifest consulted. A known rule retains manifest
- * provenance even when the IP is absent, malformed, or outside the ranges;
- * callers can then distinguish "rejected by snapshot X" from "no publisher
- * manifest exists" without performing runtime I/O.
+ * return the exact vendored manifest that was consulted, or null when none
+ * was. Provenance is retained when the IP was actually compared against a
+ * parsed range set — whether it matched or not — so callers can distinguish
+ * "rejected by snapshot X" from "nothing checked this request". An absent or
+ * malformed IP, a rule with no published ranges, and a manifest that failed
+ * validation all yield `manifest: null`, because no comparison took place.
+ * Resolved without runtime I/O.
  */
 export function verifyIpForRuleDecision(
   ip: string | null | undefined,

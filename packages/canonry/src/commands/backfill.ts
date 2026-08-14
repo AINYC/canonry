@@ -1350,9 +1350,10 @@ export async function backfillTrafficClassificationCommand(opts?: {
     const tsHourIso = tsHour.toISOString()
     const status = snap.status ?? 200
     db.transaction((tx) => {
-      // Raw samples deliberately retain only an IP hash, never the source IP,
-      // so this replay can reclassify the UA but cannot reproduce an IP-range
-      // verification decision. Update the sample and aggregate atomically, and
+      // Raw samples retain no address at all — every writer stores `ipHash:
+      // null` and there has never been a source-IP column — so this replay can
+      // reclassify the UA but cannot reproduce an IP-range verification
+      // decision. Update the sample and aggregate atomically, and
       // leave the added hit without a provenance sidecar so reads report it as
       // unattributed rather than claiming that a manifest checked this request.
       tx.update(rawEventSamples)
