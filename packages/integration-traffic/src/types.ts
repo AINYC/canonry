@@ -1,4 +1,8 @@
-import type { AiReferralTrafficClass, NormalizedTrafficRequest } from '@ainyc/canonry-contracts'
+import type {
+  AiReferralTrafficClass,
+  NormalizedTrafficRequest,
+  TrafficVerificationManifest,
+} from '@ainyc/canonry-contracts'
 
 export type CrawlerVerificationStatus = 'verified' | 'claimed_unverified' | 'unknown_ai_like'
 export type AiReferralEvidenceType = 'referer' | 'utm' | 'referer-utm'
@@ -23,6 +27,7 @@ export interface ClassifiedCrawler {
   product: string
   purpose: string
   verificationStatus: CrawlerVerificationStatus
+  verificationManifest: TrafficVerificationManifest | null
   matchedUserAgent: string
 }
 
@@ -36,6 +41,7 @@ export interface ClassifiedAiUserFetch {
   operator: string
   product: string
   verificationStatus: CrawlerVerificationStatus
+  verificationManifest: TrafficVerificationManifest | null
   matchedUserAgent: string
 }
 
@@ -57,6 +63,7 @@ export interface CrawlerEventHourlyBucket {
   operator: string
   product: string
   verificationStatus: CrawlerVerificationStatus
+  verificationManifest: TrafficVerificationManifest | null
   pathNormalized: string
   status: number | null
   hits: number
@@ -69,6 +76,7 @@ export interface AiUserFetchEventHourlyBucket {
   operator: string
   product: string
   verificationStatus: CrawlerVerificationStatus
+  verificationManifest: TrafficVerificationManifest | null
   pathNormalized: string
   status: number | null
   hits: number

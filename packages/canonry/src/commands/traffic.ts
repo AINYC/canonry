@@ -897,6 +897,18 @@ export async function trafficStatus(project: string, opts: { format?: string }):
   }
 }
 
+function formatVerificationProvenance(
+  event: Extract<TrafficEventEntry, { kind: 'crawler' | 'ai-user-fetch' }>,
+): string {
+  const parts = event.verificationManifests.map(({ manifestId, manifest, hits }) =>
+    `${manifest?.version ?? manifestId}×${hits}`,
+  )
+  if (event.verificationUnattributedHits > 0) {
+    parts.push(`legacy/unattributed ${event.verificationUnattributedHits}`)
+  }
+  return `provenance ${parts.length > 0 ? parts.join(' · ') : 'none'}`
+}
+
 function formatEventLine(event: TrafficEventEntry): string {
   switch (event.kind) {
     case TrafficEventKinds.crawler:
@@ -905,6 +917,7 @@ function formatEventLine(event: TrafficEventEntry): string {
         'crawler',
         event.botId,
         event.verificationStatus,
+        formatVerificationProvenance(event),
         String(event.status),
         `${event.pathNormalized} [${event.pathClass}]`,
         `${event.hits} hits`,
@@ -915,6 +928,7 @@ function formatEventLine(event: TrafficEventEntry): string {
         'ai-user-fetch',
         event.botId,
         event.verificationStatus,
+        formatVerificationProvenance(event),
         String(event.status),
         event.pathNormalized,
         `${event.hits} hits`,
@@ -1020,7 +1034,7 @@ export async function trafficEvents(project: string, opts: {
     return
   }
 
-  console.log('  TS_HOUR  KIND  IDENTITY  EVIDENCE/STATUS  PATH  COUNT')
+  console.log('  TS_HOUR  KIND  IDENTITY  EVIDENCE/STATUS  PROVENANCE  PATH  COUNT')
   for (const event of result.events) {
     console.log(`  ${formatEventLine(event)}`)
   }

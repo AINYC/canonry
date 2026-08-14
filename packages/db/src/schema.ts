@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm'
 import { check, foreignKey, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
-import type { AdsActivationEntityType, AdsActivationGrantState, AdsActivationManifest, AdsOperationStepState, AdsReconcileFields, BacklinkSource, ContentBriefDto, DiscoveryCompetitorMapEntry, DiscoveryCompetitorType, AiReferralTrafficClass, LocationContext, ProviderModels, ProviderName, SiteAuditCrossCuttingIssueDto, SiteAuditEffectiveRequest, SiteAuditFactorSummaryDto, SiteAuditPageFactorDto, MeasurementConfig, GaLeadAttributionScope, GaMeasurementComponentStatus } from '@ainyc/canonry-contracts'
+import type { AdsActivationEntityType, AdsActivationGrantState, AdsActivationManifest, AdsOperationStepState, AdsReconcileFields, BacklinkSource, ContentBriefDto, DiscoveryCompetitorMapEntry, DiscoveryCompetitorType, AiReferralTrafficClass, LocationContext, ProviderModels, ProviderName, SiteAuditCrossCuttingIssueDto, SiteAuditEffectiveRequest, SiteAuditFactorSummaryDto, SiteAuditPageFactorDto, MeasurementConfig, GaLeadAttributionScope, GaMeasurementComponentStatus, TrafficVerificationManifest } from '@ainyc/canonry-contracts'
 
 export const projects = sqliteTable('projects', {
   id: text('id').primaryKey(),
@@ -1853,6 +1853,59 @@ export const crawlerEventsHourly = sqliteTable('crawler_events_hourly', {
   index('idx_crawler_hourly_path').on(table.projectId, table.pathNormalized),
 ])
 
+// Provenance for the classifier manifests represented within one crawler
+// rollup. Kept in an additive sidecar so older writers can continue to upsert
+// the parent table using its original composite conflict target.
+export const crawlerVerificationManifestsHourly = sqliteTable('crawler_verification_manifests_hourly', {
+  projectId: text('project_id').notNull(),
+  sourceId: text('source_id').notNull(),
+  tsHour: text('ts_hour').notNull(),
+  botId: text('bot_id').notNull(),
+  verificationStatus: text('verification_status').notNull(),
+  pathNormalized: text('path_normalized').notNull(),
+  status: integer('status').notNull(),
+  manifestId: text('manifest_id').notNull(),
+  manifestJson: text('manifest_json', { mode: 'json' }).$type<TrafficVerificationManifest | null>(),
+  hits: integer('hits').notNull().default(0),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  primaryKey({
+    columns: [
+      table.projectId,
+      table.sourceId,
+      table.tsHour,
+      table.botId,
+      table.verificationStatus,
+      table.pathNormalized,
+      table.status,
+      table.manifestId,
+    ],
+  }),
+  foreignKey({
+    name: 'crawler_verification_manifests_parent_fk',
+    columns: [
+      table.projectId,
+      table.sourceId,
+      table.tsHour,
+      table.botId,
+      table.verificationStatus,
+      table.pathNormalized,
+      table.status,
+    ],
+    foreignColumns: [
+      crawlerEventsHourly.projectId,
+      crawlerEventsHourly.sourceId,
+      crawlerEventsHourly.tsHour,
+      crawlerEventsHourly.botId,
+      crawlerEventsHourly.verificationStatus,
+      crawlerEventsHourly.pathNormalized,
+      crawlerEventsHourly.status,
+    ],
+  }).onDelete('cascade'),
+  index('idx_crawler_verification_manifests_project_ts').on(table.projectId, table.tsHour),
+])
+
 // Hourly rollup of on-demand per-user fetches from AI surfaces — ChatGPT-User,
 // Perplexity-User, MistralAI-User, etc. UA-evidenced like a crawler, but each
 // hit was initiated by a real user (citation click, "read this URL" prompt).
@@ -1885,6 +1938,58 @@ export const aiUserFetchEventsHourly = sqliteTable('ai_user_fetch_events_hourly'
   }),
   index('idx_ai_user_fetch_hourly_project_ts').on(table.projectId, table.tsHour),
   index('idx_ai_user_fetch_hourly_path').on(table.projectId, table.pathNormalized),
+])
+
+// Manifest provenance for on-demand user-fetch rollups. As with crawler
+// provenance, absence of a sidecar row means legacy/unattributed evidence.
+export const aiUserFetchVerificationManifestsHourly = sqliteTable('ai_user_fetch_verification_manifests_hourly', {
+  projectId: text('project_id').notNull(),
+  sourceId: text('source_id').notNull(),
+  tsHour: text('ts_hour').notNull(),
+  botId: text('bot_id').notNull(),
+  verificationStatus: text('verification_status').notNull(),
+  pathNormalized: text('path_normalized').notNull(),
+  status: integer('status').notNull(),
+  manifestId: text('manifest_id').notNull(),
+  manifestJson: text('manifest_json', { mode: 'json' }).$type<TrafficVerificationManifest | null>(),
+  hits: integer('hits').notNull().default(0),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  primaryKey({
+    columns: [
+      table.projectId,
+      table.sourceId,
+      table.tsHour,
+      table.botId,
+      table.verificationStatus,
+      table.pathNormalized,
+      table.status,
+      table.manifestId,
+    ],
+  }),
+  foreignKey({
+    name: 'ai_user_fetch_verification_manifests_parent_fk',
+    columns: [
+      table.projectId,
+      table.sourceId,
+      table.tsHour,
+      table.botId,
+      table.verificationStatus,
+      table.pathNormalized,
+      table.status,
+    ],
+    foreignColumns: [
+      aiUserFetchEventsHourly.projectId,
+      aiUserFetchEventsHourly.sourceId,
+      aiUserFetchEventsHourly.tsHour,
+      aiUserFetchEventsHourly.botId,
+      aiUserFetchEventsHourly.verificationStatus,
+      aiUserFetchEventsHourly.pathNormalized,
+      aiUserFetchEventsHourly.status,
+    ],
+  }).onDelete('cascade'),
+  index('idx_ai_user_fetch_verification_manifests_project_ts').on(table.projectId, table.tsHour),
 ])
 
 // Hourly rollup of human visits with explicit AI-origin evidence (referer

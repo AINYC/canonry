@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   crawlerEventsHourly,
+  crawlerVerificationManifestsHourly,
   createClient,
   migrate,
   projects,
@@ -133,6 +134,23 @@ describe('backfill traffic-classification', () => {
       ))
       .get()
     expect(mistralBucket?.hits).toBe(1)
+
+    const manifests = db.select().from(crawlerVerificationManifestsHourly).all()
+    expect(manifests).toHaveLength(2)
+    expect(manifests).toContainEqual(expect.objectContaining({
+      botId: 'anthropic-claudebot',
+      manifestJson: expect.objectContaining({
+        source: 'https://claude.com/crawling/bots.json',
+        version: expect.any(String),
+      }),
+      hits: 1,
+    }))
+    expect(manifests).toContainEqual(expect.objectContaining({
+      botId: 'mistral-bot',
+      manifestId: 'none',
+      manifestJson: null,
+      hits: 1,
+    }))
   })
 
   it('is idempotent — second run finds no work to do', async () => {
@@ -162,6 +180,7 @@ describe('backfill traffic-classification', () => {
     expect(sampleAfter?.eventType).toBe('unknown')
     const buckets = db.select().from(crawlerEventsHourly).all()
     expect(buckets).toHaveLength(0)
+    expect(db.select().from(crawlerVerificationManifestsHourly).all()).toHaveLength(0)
   })
 
   it('aggregates multiple matches into the same hour bucket', async () => {
@@ -174,5 +193,9 @@ describe('backfill traffic-classification', () => {
       .where(eq(crawlerEventsHourly.botId, 'openai-gptbot'))
       .get()
     expect(bucket?.hits).toBe(2)
+    const manifest = db.select().from(crawlerVerificationManifestsHourly)
+      .where(eq(crawlerVerificationManifestsHourly.botId, 'openai-gptbot'))
+      .get()
+    expect(manifest?.hits).toBe(2)
   })
 })

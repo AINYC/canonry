@@ -13,7 +13,9 @@ import {
 import {
   trafficSources,
   crawlerEventsHourly,
+  crawlerVerificationManifestsHourly,
   aiUserFetchEventsHourly,
+  aiUserFetchVerificationManifestsHourly,
   aiReferralEventsHourly,
   rawEventSamples,
   runs,
@@ -690,6 +692,64 @@ function trafficSeriesPoint(
   return created
 }
 
+function crawlerVerificationProvenance(
+  db: DatabaseClient,
+  row: typeof crawlerEventsHourly.$inferSelect,
+) {
+  const verificationManifests = db
+    .select({
+      manifestId: crawlerVerificationManifestsHourly.manifestId,
+      manifest: crawlerVerificationManifestsHourly.manifestJson,
+      hits: crawlerVerificationManifestsHourly.hits,
+    })
+    .from(crawlerVerificationManifestsHourly)
+    .where(and(
+      eq(crawlerVerificationManifestsHourly.projectId, row.projectId),
+      eq(crawlerVerificationManifestsHourly.sourceId, row.sourceId),
+      eq(crawlerVerificationManifestsHourly.tsHour, row.tsHour),
+      eq(crawlerVerificationManifestsHourly.botId, row.botId),
+      eq(crawlerVerificationManifestsHourly.verificationStatus, row.verificationStatus),
+      eq(crawlerVerificationManifestsHourly.pathNormalized, row.pathNormalized),
+      eq(crawlerVerificationManifestsHourly.status, row.status),
+    ))
+    .orderBy(crawlerVerificationManifestsHourly.manifestId)
+    .all()
+  const attributedHits = verificationManifests.reduce((sum, manifest) => sum + manifest.hits, 0)
+  return {
+    verificationManifests,
+    verificationUnattributedHits: Math.max(0, row.hits - attributedHits),
+  }
+}
+
+function aiUserFetchVerificationProvenance(
+  db: DatabaseClient,
+  row: typeof aiUserFetchEventsHourly.$inferSelect,
+) {
+  const verificationManifests = db
+    .select({
+      manifestId: aiUserFetchVerificationManifestsHourly.manifestId,
+      manifest: aiUserFetchVerificationManifestsHourly.manifestJson,
+      hits: aiUserFetchVerificationManifestsHourly.hits,
+    })
+    .from(aiUserFetchVerificationManifestsHourly)
+    .where(and(
+      eq(aiUserFetchVerificationManifestsHourly.projectId, row.projectId),
+      eq(aiUserFetchVerificationManifestsHourly.sourceId, row.sourceId),
+      eq(aiUserFetchVerificationManifestsHourly.tsHour, row.tsHour),
+      eq(aiUserFetchVerificationManifestsHourly.botId, row.botId),
+      eq(aiUserFetchVerificationManifestsHourly.verificationStatus, row.verificationStatus),
+      eq(aiUserFetchVerificationManifestsHourly.pathNormalized, row.pathNormalized),
+      eq(aiUserFetchVerificationManifestsHourly.status, row.status),
+    ))
+    .orderBy(aiUserFetchVerificationManifestsHourly.manifestId)
+    .all()
+  const attributedHits = verificationManifests.reduce((sum, manifest) => sum + manifest.hits, 0)
+  return {
+    verificationManifests,
+    verificationUnattributedHits: Math.max(0, row.hits - attributedHits),
+  }
+}
+
 function parseSourceConfig(row: typeof trafficSources.$inferSelect): Record<string, unknown> {
   return row.configJson
 }
@@ -1013,6 +1073,7 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
         .run()
 
       for (const bucket of report.crawlerEventsHourly) {
+        const status = bucket.status ?? 0
         tx
           .insert(crawlerEventsHourly)
           .values({
@@ -1023,16 +1084,67 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
             operator: bucket.operator,
             verificationStatus: bucket.verificationStatus,
             pathNormalized: bucket.pathNormalized,
-            status: bucket.status ?? 0,
+            status,
             hits: bucket.hits,
             sampledUserAgent: bucket.sampledUserAgent,
             createdAt: finishedAt,
             updatedAt: finishedAt,
           })
+          .onConflictDoUpdate({
+            target: [
+              crawlerEventsHourly.projectId,
+              crawlerEventsHourly.sourceId,
+              crawlerEventsHourly.tsHour,
+              crawlerEventsHourly.botId,
+              crawlerEventsHourly.verificationStatus,
+              crawlerEventsHourly.pathNormalized,
+              crawlerEventsHourly.status,
+            ],
+            set: {
+              hits: sql`${crawlerEventsHourly.hits} + ${bucket.hits}`,
+              sampledUserAgent: bucket.sampledUserAgent,
+              updatedAt: finishedAt,
+            },
+          })
+          .run()
+        tx
+          .insert(crawlerVerificationManifestsHourly)
+          .values({
+            projectId: project.id,
+            sourceId: sourceRow.id,
+            tsHour: bucket.tsHour,
+            botId: bucket.botId,
+            verificationStatus: bucket.verificationStatus,
+            pathNormalized: bucket.pathNormalized,
+            status,
+            manifestId: bucket.verificationManifest?.id ?? 'none',
+            manifestJson: bucket.verificationManifest,
+            hits: bucket.hits,
+            createdAt: finishedAt,
+            updatedAt: finishedAt,
+          })
+          .onConflictDoUpdate({
+            target: [
+              crawlerVerificationManifestsHourly.projectId,
+              crawlerVerificationManifestsHourly.sourceId,
+              crawlerVerificationManifestsHourly.tsHour,
+              crawlerVerificationManifestsHourly.botId,
+              crawlerVerificationManifestsHourly.verificationStatus,
+              crawlerVerificationManifestsHourly.pathNormalized,
+              crawlerVerificationManifestsHourly.status,
+              crawlerVerificationManifestsHourly.manifestId,
+            ],
+            set: {
+              hits: sql`${crawlerVerificationManifestsHourly.hits} + ${bucket.hits}`,
+              manifestJson: bucket.verificationManifest,
+              updatedAt: finishedAt,
+            },
+          })
           .run()
       }
 
       for (const bucket of report.aiUserFetchEventsHourly) {
+        const status = bucket.status ?? 0
         tx
           .insert(aiUserFetchEventsHourly)
           .values({
@@ -1043,11 +1155,61 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
             operator: bucket.operator,
             verificationStatus: bucket.verificationStatus,
             pathNormalized: bucket.pathNormalized,
-            status: bucket.status ?? 0,
+            status,
             hits: bucket.hits,
             sampledUserAgent: bucket.sampledUserAgent,
             createdAt: finishedAt,
             updatedAt: finishedAt,
+          })
+          .onConflictDoUpdate({
+            target: [
+              aiUserFetchEventsHourly.projectId,
+              aiUserFetchEventsHourly.sourceId,
+              aiUserFetchEventsHourly.tsHour,
+              aiUserFetchEventsHourly.botId,
+              aiUserFetchEventsHourly.verificationStatus,
+              aiUserFetchEventsHourly.pathNormalized,
+              aiUserFetchEventsHourly.status,
+            ],
+            set: {
+              hits: sql`${aiUserFetchEventsHourly.hits} + ${bucket.hits}`,
+              sampledUserAgent: bucket.sampledUserAgent,
+              updatedAt: finishedAt,
+            },
+          })
+          .run()
+        tx
+          .insert(aiUserFetchVerificationManifestsHourly)
+          .values({
+            projectId: project.id,
+            sourceId: sourceRow.id,
+            tsHour: bucket.tsHour,
+            botId: bucket.botId,
+            verificationStatus: bucket.verificationStatus,
+            pathNormalized: bucket.pathNormalized,
+            status,
+            manifestId: bucket.verificationManifest?.id ?? 'none',
+            manifestJson: bucket.verificationManifest,
+            hits: bucket.hits,
+            createdAt: finishedAt,
+            updatedAt: finishedAt,
+          })
+          .onConflictDoUpdate({
+            target: [
+              aiUserFetchVerificationManifestsHourly.projectId,
+              aiUserFetchVerificationManifestsHourly.sourceId,
+              aiUserFetchVerificationManifestsHourly.tsHour,
+              aiUserFetchVerificationManifestsHourly.botId,
+              aiUserFetchVerificationManifestsHourly.verificationStatus,
+              aiUserFetchVerificationManifestsHourly.pathNormalized,
+              aiUserFetchVerificationManifestsHourly.status,
+              aiUserFetchVerificationManifestsHourly.manifestId,
+            ],
+            set: {
+              hits: sql`${aiUserFetchVerificationManifestsHourly.hits} + ${bucket.hits}`,
+              manifestJson: bucket.verificationManifest,
+              updatedAt: finishedAt,
+            },
           })
           .run()
       }
@@ -3035,6 +3197,40 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             },
           })
           .run()
+        tx
+          .insert(crawlerVerificationManifestsHourly)
+          .values({
+            projectId: project.id,
+            sourceId: sourceRow.id,
+            tsHour: bucket.tsHour,
+            botId: bucket.botId,
+            verificationStatus: bucket.verificationStatus,
+            pathNormalized: bucket.pathNormalized,
+            status,
+            manifestId: bucket.verificationManifest?.id ?? 'none',
+            manifestJson: bucket.verificationManifest,
+            hits: bucket.hits,
+            createdAt: finishedAt,
+            updatedAt: finishedAt,
+          })
+          .onConflictDoUpdate({
+            target: [
+              crawlerVerificationManifestsHourly.projectId,
+              crawlerVerificationManifestsHourly.sourceId,
+              crawlerVerificationManifestsHourly.tsHour,
+              crawlerVerificationManifestsHourly.botId,
+              crawlerVerificationManifestsHourly.verificationStatus,
+              crawlerVerificationManifestsHourly.pathNormalized,
+              crawlerVerificationManifestsHourly.status,
+              crawlerVerificationManifestsHourly.manifestId,
+            ],
+            set: {
+              hits: sql`${crawlerVerificationManifestsHourly.hits} + ${bucket.hits}`,
+              manifestJson: bucket.verificationManifest,
+              updatedAt: finishedAt,
+            },
+          })
+          .run()
         crawlerBucketRows += 1
       }
 
@@ -3069,6 +3265,40 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             set: {
               hits: sql`${aiUserFetchEventsHourly.hits} + ${bucket.hits}`,
               sampledUserAgent: bucket.sampledUserAgent,
+              updatedAt: finishedAt,
+            },
+          })
+          .run()
+        tx
+          .insert(aiUserFetchVerificationManifestsHourly)
+          .values({
+            projectId: project.id,
+            sourceId: sourceRow.id,
+            tsHour: bucket.tsHour,
+            botId: bucket.botId,
+            verificationStatus: bucket.verificationStatus,
+            pathNormalized: bucket.pathNormalized,
+            status,
+            manifestId: bucket.verificationManifest?.id ?? 'none',
+            manifestJson: bucket.verificationManifest,
+            hits: bucket.hits,
+            createdAt: finishedAt,
+            updatedAt: finishedAt,
+          })
+          .onConflictDoUpdate({
+            target: [
+              aiUserFetchVerificationManifestsHourly.projectId,
+              aiUserFetchVerificationManifestsHourly.sourceId,
+              aiUserFetchVerificationManifestsHourly.tsHour,
+              aiUserFetchVerificationManifestsHourly.botId,
+              aiUserFetchVerificationManifestsHourly.verificationStatus,
+              aiUserFetchVerificationManifestsHourly.pathNormalized,
+              aiUserFetchVerificationManifestsHourly.status,
+              aiUserFetchVerificationManifestsHourly.manifestId,
+            ],
+            set: {
+              hits: sql`${aiUserFetchVerificationManifestsHourly.hits} + ${bucket.hits}`,
+              manifestJson: bucket.verificationManifest,
               updatedAt: finishedAt,
             },
           })
@@ -3921,6 +4151,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           botId: r.botId,
           operator: r.operator,
           verificationStatus: r.verificationStatus,
+          ...crawlerVerificationProvenance(app.db, r),
           pathNormalized: r.pathNormalized,
           pathClass: classifyTrafficPath(r.pathNormalized),
           status: r.status,
@@ -3980,6 +4211,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           botId: r.botId,
           operator: r.operator,
           verificationStatus: r.verificationStatus,
+          ...aiUserFetchVerificationProvenance(app.db, r),
           pathNormalized: r.pathNormalized,
           status: r.status,
           hits: r.hits,

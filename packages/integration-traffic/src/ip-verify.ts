@@ -17,13 +17,11 @@
  *   - OpenAI OAI-SearchBot   (openai.com/searchbot.json)
  *   - PerplexityBot          (www.perplexity.ai/perplexitybot.json)
  *   - Perplexity-User        (www.perplexity.ai/perplexity-user.json)
- *   - ClaudeBot, Claude-User (ARIN RDAP — Anthropic does not ship a
- *                             machine-readable JSON; we use the three
- *                             networks registered to Anthropic, PBC
- *                             at ARIN. The crawler block is
- *                             AWS-ANTHROPIC 216.73.216.0/22. Both the
- *                             crawler and the per-user fetcher verify
- *                             against this shared set.)
+ *   - ClaudeBot, Claude-SearchBot, Claude-User
+ *                            (claude.com/crawling/bots.json — Anthropic's
+ *                             shared crawler-origin manifest does not split
+ *                             ranges by bot, so every Claude-* rule verifies
+ *                             against the same published set.)
  *   - Google-Agent           (developers.google.com/static/crawling/ipranges/user-triggered-agents.json
  *                             — Google's shared list covering every
  *                             user-triggered fetcher.)
@@ -51,6 +49,7 @@
  * writes pretty-printed JSON so diffs show exactly which prefixes the
  * operator added/removed.
  */
+import type { TrafficVerificationManifest } from '@ainyc/canonry-contracts'
 import anthropicRaw from './ip-ranges/anthropic.json' with { type: 'json' }
 import bingbotRaw from './ip-ranges/bingbot.json' with { type: 'json' }
 import chatgptUserRaw from './ip-ranges/chatgpt-user.json' with { type: 'json' }
@@ -62,8 +61,15 @@ import perplexityUserRaw from './ip-ranges/perplexity-user.json' with { type: 'j
 import perplexitybotRaw from './ip-ranges/perplexitybot.json' with { type: 'json' }
 
 interface RawIpRanges {
+  _source?: string
   creationTime?: string
   prefixes: Array<{ ipv4Prefix?: string; ipv6Prefix?: string }>
+}
+
+export interface IpVerificationDecision {
+  verified: boolean
+  /** Exact vendored publisher snapshot consulted for this decision. */
+  manifest: TrafficVerificationManifest | null
 }
 
 /** CIDR pre-parsed into the form needed for fast membership checks. */
@@ -73,6 +79,11 @@ interface ParsedCidr {
   readonly network: bigint
   /** Mask as a BigInt — `network & mask === addr & mask` proves membership. */
   readonly mask: bigint
+}
+
+interface VerificationData {
+  readonly ranges: ParsedCidr[]
+  readonly manifest: TrafficVerificationManifest | null
 }
 
 /**
@@ -119,27 +130,25 @@ const RULE_ID_TO_RANGES: Record<string, RawIpRanges> = {
   // src: https://www.perplexity.ai/perplexity-user.json
   'perplexity-user': perplexityUserRaw as RawIpRanges,
 
-  // Anthropic — no machine-readable JSON published. The bundled
-  // anthropic.json is the set of networks registered to Anthropic,
-  // PBC at ARIN (the authoritative allocation record). Maintained by
-  // hand; refresh by re-querying the ARIN entity below. The crawler
-  // block is AWS-ANTHROPIC 216.73.216.0/22 — empirical Cloud Run
-  // logs show all real ClaudeBot traffic comes from there. The same
-  // raw set is shared across every Claude-* UA the classifier emits:
-  // both the training crawler and the per-user fetcher map here.
-  // src: https://rdap.arin.net/registry/entity/AP-2440
+  // Anthropic publishes one shared crawler-origin manifest. It confirms
+  // Anthropic origin but does not attribute a prefix to ClaudeBot,
+  // Claude-SearchBot, or Claude-User individually, so both classifier rules
+  // map to the same file and the UA remains the product discriminator.
+  // src: https://claude.com/crawling/bots.json
   'anthropic-claudebot': anthropicRaw as RawIpRanges,
   'claude-user': anthropicRaw as RawIpRanges,
 }
 
 /**
  * Parses every operator's prefixes into the BigInt form at module-load
- * time. ~657 prefixes total today, parses once per process boot, all
- * subsequent verifications are O(N) bigint AND comparisons. Could be
- * O(log N) with a sorted-range search if hot — not needed yet.
+ * time. Roughly 700 prefixes today, parsed once per process boot; all
+ * subsequent verifications are O(N) bigint AND comparisons. Could be O(log
+ * N) with a sorted-range search if hot — not needed yet. The publisher
+ * metadata is cached beside the ranges so every classification can retain
+ * the exact vendored snapshot used without any runtime I/O.
  */
-const CACHE: Map<string, ParsedCidr[]> = (() => {
-  const cache = new Map<string, ParsedCidr[]>()
+const CACHE: Map<string, VerificationData> = (() => {
+  const cache = new Map<string, VerificationData>()
   for (const [ruleId, raw] of Object.entries(RULE_ID_TO_RANGES)) {
     const parsed: ParsedCidr[] = []
     for (const entry of raw.prefixes) {
@@ -148,7 +157,12 @@ const CACHE: Map<string, ParsedCidr[]> = (() => {
       const p = parseCidr(cidr)
       if (p) parsed.push(p)
     }
-    cache.set(ruleId, parsed)
+    const source = raw._source?.trim()
+    const version = raw.creationTime?.trim()
+    const manifest = source && version
+      ? { id: `${source}#${version}`, source, version }
+      : null
+    cache.set(ruleId, { ranges: parsed, manifest })
   }
   return cache
 })()
@@ -233,25 +247,40 @@ export function ipInCidr(ip: string, cidr: ParsedCidr): boolean {
 }
 
 /**
- * True if the given IP falls in any of the published ranges for the
- * crawler rule. Returns false for unknown ruleIds (no published data
- * to check against — caller stays at `claimed_unverified`).
+ * Decide whether an IP falls in the published ranges for a crawler rule and
+ * return the exact vendored manifest consulted. A known rule retains manifest
+ * provenance even when the IP is absent, malformed, or outside the ranges;
+ * callers can then distinguish "rejected by snapshot X" from "no publisher
+ * manifest exists" without performing runtime I/O.
+ */
+export function verifyIpForRuleDecision(
+  ip: string | null | undefined,
+  ruleId: string,
+): IpVerificationDecision {
+  const data = CACHE.get(ruleId)
+  if (!data || data.ranges.length === 0) return { verified: false, manifest: null }
+  if (!ip) return { verified: false, manifest: data.manifest }
+  const parsed = parseIp(ip)
+  if (!parsed) return { verified: false, manifest: data.manifest }
+  for (const cidr of data.ranges) {
+    if (parsed.version !== cidr.version) continue
+    if ((parsed.addr & cidr.mask) === cidr.network) {
+      return { verified: true, manifest: data.manifest }
+    }
+  }
+  return { verified: false, manifest: data.manifest }
+}
+
+/**
+ * Boolean-compatible verification API retained for existing callers. Use
+ * `verifyIpForRuleDecision` when the publisher snapshot must be persisted.
  */
 export function verifyIpForRule(ip: string | null | undefined, ruleId: string): boolean {
-  if (!ip) return false
-  const ranges = CACHE.get(ruleId)
-  if (!ranges || ranges.length === 0) return false
-  const parsed = parseIp(ip)
-  if (!parsed) return false
-  for (const cidr of ranges) {
-    if (parsed.version !== cidr.version) continue
-    if ((parsed.addr & cidr.mask) === cidr.network) return true
-  }
-  return false
+  return verifyIpForRuleDecision(ip, ruleId).verified
 }
 
 /** Whether a rule id has any verification data available at all. */
 export function hasVerificationDataFor(ruleId: string): boolean {
-  const ranges = CACHE.get(ruleId)
-  return !!ranges && ranges.length > 0
+  const data = CACHE.get(ruleId)
+  return !!data && data.ranges.length > 0
 }

@@ -3623,6 +3623,71 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE site_crawl_snapshots ADD COLUMN link_placement_ruleset_version TEXT`,
     ],
   },
+  {
+    version: 139,
+    name: 'traffic-verification-manifest-provenance',
+    // Verification is evidence produced by one exact range manifest. Store
+    // that provenance in additive sidecars: the existing rollup keys stay
+    // unchanged so an older binary can still upsert them after a rollback.
+    // Historical rows deliberately receive no sidecar row because the old
+    // schema never recorded which bundle classified them.
+    statements: [
+      `CREATE TABLE IF NOT EXISTS crawler_verification_manifests_hourly (
+        project_id          TEXT NOT NULL,
+        source_id           TEXT NOT NULL,
+        ts_hour             TEXT NOT NULL,
+        bot_id              TEXT NOT NULL,
+        verification_status TEXT NOT NULL,
+        path_normalized     TEXT NOT NULL,
+        status              INTEGER NOT NULL,
+        manifest_id         TEXT NOT NULL,
+        manifest_json       TEXT,
+        hits                INTEGER NOT NULL DEFAULT 0,
+        created_at          TEXT NOT NULL,
+        updated_at          TEXT NOT NULL,
+        PRIMARY KEY (
+          project_id, source_id, ts_hour, bot_id, verification_status,
+          path_normalized, status, manifest_id
+        ),
+        FOREIGN KEY (
+          project_id, source_id, ts_hour, bot_id, verification_status,
+          path_normalized, status
+        ) REFERENCES crawler_events_hourly (
+          project_id, source_id, ts_hour, bot_id, verification_status,
+          path_normalized, status
+        ) ON DELETE CASCADE
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_crawler_verification_manifests_project_ts
+        ON crawler_verification_manifests_hourly(project_id, ts_hour)`,
+      `CREATE TABLE IF NOT EXISTS ai_user_fetch_verification_manifests_hourly (
+        project_id          TEXT NOT NULL,
+        source_id           TEXT NOT NULL,
+        ts_hour             TEXT NOT NULL,
+        bot_id              TEXT NOT NULL,
+        verification_status TEXT NOT NULL,
+        path_normalized     TEXT NOT NULL,
+        status              INTEGER NOT NULL,
+        manifest_id         TEXT NOT NULL,
+        manifest_json       TEXT,
+        hits                INTEGER NOT NULL DEFAULT 0,
+        created_at          TEXT NOT NULL,
+        updated_at          TEXT NOT NULL,
+        PRIMARY KEY (
+          project_id, source_id, ts_hour, bot_id, verification_status,
+          path_normalized, status, manifest_id
+        ),
+        FOREIGN KEY (
+          project_id, source_id, ts_hour, bot_id, verification_status,
+          path_normalized, status
+        ) REFERENCES ai_user_fetch_events_hourly (
+          project_id, source_id, ts_hour, bot_id, verification_status,
+          path_normalized, status
+        ) ON DELETE CASCADE
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_ai_user_fetch_verification_manifests_project_ts
+        ON ai_user_fetch_verification_manifests_hourly(project_id, ts_hour)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

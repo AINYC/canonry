@@ -13,6 +13,12 @@ import {
   normalizeTrafficPathPattern,
 } from '../src/index.js'
 
+const ANTHROPIC_MANIFEST = {
+  id: 'https://claude.com/crawling/bots.json#2026-08-13T20:38:01Z',
+  source: 'https://claude.com/crawling/bots.json',
+  version: '2026-08-13T20:38:01Z',
+}
+
 function event(overrides: Partial<NormalizedTrafficRequest>): NormalizedTrafficRequest {
   return {
     sourceType: TrafficSourceTypes['cloud-run'],
@@ -72,30 +78,30 @@ describe('traffic analysis', () => {
     })
   })
 
-  it('promotes ClaudeBot to `verified` when the IP is in Anthropic\'s AWS-allocated crawler prefix', () => {
-    // 216.73.216.0/22 is the AWS-ANTHROPIC ARIN allocation —
-    // empirical Cloud Run logs (canonry-landing 5/2026) show every
-    // real ClaudeBot request comes from here.
+  it('promotes ClaudeBot to `verified` with official manifest provenance', () => {
+    // This /32 is published by Anthropic but was absent from the old bundled
+    // ARIN allocation snapshot.
     expect(classifyCrawler(event({
       userAgent: 'Mozilla/5.0 (compatible; ClaudeBot/1.0; +claudebot@anthropic.com)',
-      remoteIp: '216.73.216.76',
+      remoteIp: '34.162.230.222',
     }))).toMatchObject({
       botId: 'anthropic-claudebot',
       verificationStatus: 'verified',
+      verificationManifest: ANTHROPIC_MANIFEST,
     })
   })
 
-  it('stays `claimed_unverified` for ClaudeBot UA from an IP outside Anthropic ranges (probable spoof)', () => {
-    // Same UA from an AWS IP — this is the case the verification gate
-    // exists to catch. UA is matched (so we know it claims to be
-    // ClaudeBot), but the source IP isn't in Anthropic's published
-    // ranges, so we stay unverified rather than promote.
+  it('rejects the old API/ARIN-only range while retaining manifest provenance', () => {
+    // 160.79.104.0/21 is documented for Claude Platform/API egress, not in
+    // the official crawler manifest. The prior ARIN-derived bundle accepted
+    // it, but crawler verification must now reject it.
     expect(classifyCrawler(event({
       userAgent: 'Mozilla/5.0 (compatible; ClaudeBot/1.0; +claudebot@anthropic.com)',
-      remoteIp: '52.5.1.1',
+      remoteIp: '160.79.104.5',
     }))).toMatchObject({
       botId: 'anthropic-claudebot',
       verificationStatus: 'claimed_unverified',
+      verificationManifest: ANTHROPIC_MANIFEST,
     })
   })
 
@@ -109,6 +115,7 @@ describe('traffic analysis', () => {
     }))).toMatchObject({
       botId: 'meta-externalagent',
       verificationStatus: 'claimed_unverified',
+      verificationManifest: null,
     })
   })
 
@@ -615,15 +622,38 @@ describe('traffic analysis', () => {
     })
   })
 
-  it('promotes Claude-User to `verified` when the source IP is in Anthropic\'s range', () => {
-    // 216.73.216.0/22 is the AWS-ANTHROPIC ARIN allocation; the bundled
-    // anthropic.json verifies both ClaudeBot and Claude-User.
+  it('promotes Claude-User using Anthropic\'s shared official manifest', () => {
     expect(classifyAiUserFetch(event({
       userAgent: 'Mozilla/5.0 (compatible; Claude-User/1.0; +Anthropic)',
-      remoteIp: '216.73.216.76',
+      remoteIp: '34.162.230.222',
     }))).toMatchObject({
       botId: 'claude-user',
       verificationStatus: 'verified',
+      verificationManifest: ANTHROPIC_MANIFEST,
+    })
+  })
+
+  it('carries verification manifest provenance into crawler and user-fetch buckets', () => {
+    const report = buildTrafficProbeReport([
+      event({
+        eventId: 'claude-bot',
+        userAgent: 'Mozilla/5.0 (compatible; ClaudeBot/1.0; +claudebot@anthropic.com)',
+        remoteIp: '34.162.230.222',
+      }),
+      event({
+        eventId: 'claude-user',
+        userAgent: 'Mozilla/5.0 (compatible; Claude-User/1.0; +Anthropic)',
+        remoteIp: '34.162.230.222',
+      }),
+    ])
+
+    expect(report.crawlerEventsHourly[0]).toMatchObject({
+      botId: 'anthropic-claudebot',
+      verificationManifest: ANTHROPIC_MANIFEST,
+    })
+    expect(report.aiUserFetchEventsHourly[0]).toMatchObject({
+      botId: 'claude-user',
+      verificationManifest: ANTHROPIC_MANIFEST,
     })
   })
 

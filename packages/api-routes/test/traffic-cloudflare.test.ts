@@ -10,6 +10,7 @@ import {
   migrate,
   trafficSources,
   crawlerEventsHourly,
+  crawlerVerificationManifestsHourly,
   aiUserFetchEventsHourly,
   aiReferralEventsHourly,
   rawEventSamples,
@@ -473,6 +474,33 @@ describe('POST /traffic/cloudflare/ingest', () => {
     expect(crawlerRows[0]!.botId).toMatch(/.+/)
     expect(crawlerRows[0]!.sourceId).toBe(sourceId)
     expect(crawlerRows[0]!.projectId).toBe(projectId)
+    const manifests = h.db.select().from(crawlerVerificationManifestsHourly).all()
+    expect(manifests).toHaveLength(1)
+    expect(manifests[0]!.manifestJson).toEqual(expect.objectContaining({
+      id: manifests[0]!.manifestId,
+      source: expect.any(String),
+      version: expect.any(String),
+    }))
+    expect(manifests[0]!.hits).toBe(1)
+  })
+
+  it('records a classifier with no published manifest as explicit none usage', async () => {
+    const res = await ingest({
+      body: {
+        schemaVersion: 1,
+        workerVersion: '1.0.0',
+        events: [buildIngestEvent({ userAgent: 'Bytespider/1.0', remoteIp: '192.0.2.1' })],
+      },
+    })
+    expect(res.statusCode).toBe(200)
+
+    const manifests = h.db.select().from(crawlerVerificationManifestsHourly).all()
+    expect(manifests).toHaveLength(1)
+    expect(manifests[0]).toMatchObject({
+      manifestId: 'none',
+      manifestJson: null,
+      hits: 1,
+    })
   })
 
   it('accepts an exact event hostname after case and trailing-dot normalization', async () => {

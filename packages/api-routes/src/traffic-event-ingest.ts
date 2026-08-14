@@ -4,7 +4,9 @@ import type { DatabaseClient } from '@ainyc/canonry-db'
 import {
   aiReferralEventsHourly,
   aiUserFetchEventsHourly,
+  aiUserFetchVerificationManifestsHourly,
   crawlerEventsHourly,
+  crawlerVerificationManifestsHourly,
   rawEventSamples,
   trafficEventReceipts,
   trafficSources,
@@ -184,6 +186,40 @@ export function writeTrafficEventBatch(
             },
           })
           .run()
+        tx
+          .insert(crawlerVerificationManifestsHourly)
+          .values({
+            projectId: opts.projectId,
+            sourceId: opts.sourceId,
+            tsHour: bucket.tsHour,
+            botId: bucket.botId,
+            verificationStatus: bucket.verificationStatus,
+            pathNormalized: bucket.pathNormalized,
+            status,
+            manifestId: bucket.verificationManifest?.id ?? 'none',
+            manifestJson: bucket.verificationManifest,
+            hits: bucket.hits,
+            createdAt: opts.receivedAt,
+            updatedAt: opts.receivedAt,
+          })
+          .onConflictDoUpdate({
+            target: [
+              crawlerVerificationManifestsHourly.projectId,
+              crawlerVerificationManifestsHourly.sourceId,
+              crawlerVerificationManifestsHourly.tsHour,
+              crawlerVerificationManifestsHourly.botId,
+              crawlerVerificationManifestsHourly.verificationStatus,
+              crawlerVerificationManifestsHourly.pathNormalized,
+              crawlerVerificationManifestsHourly.status,
+              crawlerVerificationManifestsHourly.manifestId,
+            ],
+            set: {
+              hits: sql`${crawlerVerificationManifestsHourly.hits} + ${bucket.hits}`,
+              manifestJson: bucket.verificationManifest,
+              updatedAt: opts.receivedAt,
+            },
+          })
+          .run()
         crawlerBucketRows += 1
       }
 
@@ -218,6 +254,40 @@ export function writeTrafficEventBatch(
             set: {
               hits: sql`${aiUserFetchEventsHourly.hits} + ${bucket.hits}`,
               sampledUserAgent: bucket.sampledUserAgent,
+              updatedAt: opts.receivedAt,
+            },
+          })
+          .run()
+        tx
+          .insert(aiUserFetchVerificationManifestsHourly)
+          .values({
+            projectId: opts.projectId,
+            sourceId: opts.sourceId,
+            tsHour: bucket.tsHour,
+            botId: bucket.botId,
+            verificationStatus: bucket.verificationStatus,
+            pathNormalized: bucket.pathNormalized,
+            status,
+            manifestId: bucket.verificationManifest?.id ?? 'none',
+            manifestJson: bucket.verificationManifest,
+            hits: bucket.hits,
+            createdAt: opts.receivedAt,
+            updatedAt: opts.receivedAt,
+          })
+          .onConflictDoUpdate({
+            target: [
+              aiUserFetchVerificationManifestsHourly.projectId,
+              aiUserFetchVerificationManifestsHourly.sourceId,
+              aiUserFetchVerificationManifestsHourly.tsHour,
+              aiUserFetchVerificationManifestsHourly.botId,
+              aiUserFetchVerificationManifestsHourly.verificationStatus,
+              aiUserFetchVerificationManifestsHourly.pathNormalized,
+              aiUserFetchVerificationManifestsHourly.status,
+              aiUserFetchVerificationManifestsHourly.manifestId,
+            ],
+            set: {
+              hits: sql`${aiUserFetchVerificationManifestsHourly.hits} + ${bucket.hits}`,
+              manifestJson: bucket.verificationManifest,
               updatedAt: opts.receivedAt,
             },
           })

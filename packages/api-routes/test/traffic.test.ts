@@ -9,6 +9,7 @@ import {
   migrate,
   trafficSources,
   crawlerEventsHourly,
+  crawlerVerificationManifestsHourly,
   aiUserFetchEventsHourly,
   aiReferralEventsHourly,
   rawEventSamples,
@@ -2039,8 +2040,8 @@ describe('POST /traffic/sources/:id/sync', () => {
 
     const events: NormalizedTrafficRequest[] = [
       // Two crawler hits same hour same path → should accumulate to hits=2 in one bucket
-      buildEvent({ userAgent: 'GPTBot/1.0', path: '/blog/foo', status: 200, observedAt: fromBase(1) }),
-      buildEvent({ userAgent: 'GPTBot/1.0', path: '/blog/foo', status: 200, observedAt: fromBase(30) }),
+      buildEvent({ userAgent: 'GPTBot/1.0', remoteIp: '20.171.207.34', path: '/blog/foo', status: 200, observedAt: fromBase(1) }),
+      buildEvent({ userAgent: 'GPTBot/1.0', remoteIp: '20.171.207.34', path: '/blog/foo', status: 200, observedAt: fromBase(30) }),
       // One AI referral via UTM
       buildEvent({
         userAgent: 'Mozilla/5.0',
@@ -3735,6 +3736,7 @@ describe('POST /traffic/sources/:id/backfill — WordPress', () => {
           buildWpEvent({
             eventId: 'wp-bf-iso:1',
             userAgent: 'GPTBot/1.0',
+            remoteIp: '20.171.207.34',
             path: '/wp-only',
             status: 200,
             observedAt: new Date(Date.now() - 45 * 60_000).toISOString(),
@@ -3807,6 +3809,17 @@ describe('POST /traffic/sources/:id/backfill — WordPress', () => {
         .all()
       expect(wpBuckets.length).toBe(1)
       expect(wpBuckets[0].pathNormalized).toBe('/wp-only')
+      const wpManifests = h.db
+        .select()
+        .from(crawlerVerificationManifestsHourly)
+        .where(eq(crawlerVerificationManifestsHourly.sourceId, wpSourceId))
+        .all()
+      expect(wpManifests).toHaveLength(1)
+      expect(wpManifests[0].manifestJson).toEqual(expect.objectContaining({
+        id: wpManifests[0].manifestId,
+        source: expect.any(String),
+        version: expect.any(String),
+      }))
     } finally {
       await h.close()
     }
@@ -3972,7 +3985,13 @@ describe('GET /traffic/sources/:id', () => {
 
     const events: NormalizedTrafficRequest[] = [
       buildEvent({ userAgent: 'GPTBot/1.0', path: '/blog/foo', status: 200, observedAt: fromBase(1) }),
-      buildEvent({ userAgent: 'Mozilla/5.0 ChatGPT-User/1.0', path: '/', status: 200, observedAt: fromBase(5) }),
+      buildEvent({
+        userAgent: 'Mozilla/5.0 ChatGPT-User/1.0',
+        remoteIp: '104.210.139.193',
+        path: '/',
+        status: 200,
+        observedAt: fromBase(5),
+      }),
       buildEvent({ userAgent: 'Mozilla/5.0 ChatGPT-User/1.0', path: '/pricing', status: 200, observedAt: fromBase(10) }),
     ]
     const h = await buildHarness(events)
@@ -4210,6 +4229,61 @@ describe('GET /traffic/events', () => {
       expect(body.events.length).toBe(2)
       const kinds = body.events.map((e: { kind: string }) => e.kind).sort()
       expect(kinds).toEqual(['ai-referral', 'crawler'])
+      const crawler = body.events.find((e: { kind: string }) => e.kind === 'crawler')
+      expect(crawler.verificationManifests).toEqual([expect.objectContaining({
+        manifestId: expect.any(String),
+        manifest: expect.objectContaining({
+          id: expect.any(String),
+          source: expect.any(String),
+          version: expect.any(String),
+        }),
+        hits: 2,
+      })])
+      expect(crawler.verificationUnattributedHits).toBe(0)
+    } finally { await h.close() }
+  })
+
+  it('reports each manifest usage and keeps legacy parent hits unattributed', async () => {
+    const { h } = await syncedHarness()
+    try {
+      const row = h.db.select().from(crawlerEventsHourly).get()
+      if (!row) throw new Error('Expected crawler rollup')
+      const now = new Date().toISOString()
+      h.db.insert(crawlerVerificationManifestsHourly).values({
+        projectId: row.projectId,
+        sourceId: row.sourceId,
+        tsHour: row.tsHour,
+        botId: row.botId,
+        verificationStatus: row.verificationStatus,
+        pathNormalized: row.pathNormalized,
+        status: row.status,
+        manifestId: 'test-manifest-v2',
+        manifestJson: {
+          id: 'test-manifest-v2',
+          source: 'https://example.test/bots.json',
+          version: '2026-08-14T00:00:00Z',
+        },
+        hits: 1,
+        createdAt: now,
+        updatedAt: now,
+      }).run()
+      h.db.update(crawlerEventsHourly)
+        .set({ hits: 5, updatedAt: now })
+        .where(eq(crawlerEventsHourly.sourceId, row.sourceId))
+        .run()
+
+      const res = await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/projects/test-project/traffic/events?kind=crawler',
+      })
+      expect(res.statusCode).toBe(200)
+      const crawler = JSON.parse(res.payload).events[0]
+      expect(crawler.verificationManifests).toHaveLength(2)
+      expect(crawler.verificationManifests).toContainEqual(expect.objectContaining({
+        manifestId: 'test-manifest-v2',
+        hits: 1,
+      }))
+      expect(crawler.verificationUnattributedHits).toBe(2)
     } finally { await h.close() }
   })
 
@@ -4315,7 +4389,13 @@ describe('GET /traffic/events', () => {
 
     const events: NormalizedTrafficRequest[] = [
       buildEvent({ userAgent: 'GPTBot/1.0', path: '/blog/foo', status: 200, observedAt: fromBase(1) }),
-      buildEvent({ userAgent: 'Mozilla/5.0 ChatGPT-User/1.0', path: '/', status: 200, observedAt: fromBase(5) }),
+      buildEvent({
+        userAgent: 'Mozilla/5.0 ChatGPT-User/1.0',
+        remoteIp: '104.210.139.193',
+        path: '/',
+        status: 200,
+        observedAt: fromBase(5),
+      }),
       buildEvent({
         userAgent: 'Mozilla/5.0',
         path: '/landing',
@@ -4364,6 +4444,16 @@ describe('GET /traffic/events', () => {
         kind: 'ai-user-fetch',
         botId: 'openai-chatgpt-user',
         operator: 'OpenAI',
+        verificationManifests: [expect.objectContaining({
+          manifestId: expect.any(String),
+          manifest: expect.objectContaining({
+            id: expect.any(String),
+            source: expect.any(String),
+            version: expect.any(String),
+          }),
+          hits: 1,
+        })],
+        verificationUnattributedHits: 0,
         pathNormalized: '/',
         hits: 1,
       })

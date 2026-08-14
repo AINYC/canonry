@@ -5,7 +5,7 @@ import {
   hostMatchesDomain,
   hostOf,
 } from '@ainyc/canonry-contracts'
-import { verifyIpForRule } from './ip-verify.js'
+import { verifyIpForRuleDecision } from './ip-verify.js'
 import { DEFAULT_AI_CRAWLER_RULES, DEFAULT_AI_REFERRER_RULES, SELF_TRAFFIC_USER_AGENT_PATTERNS } from './rules.js'
 import type {
   ClassifiedAiReferral,
@@ -136,16 +136,17 @@ export function classifyCrawler(event: NormalizedTrafficRequest): ClassifiedCraw
       // source isn't really the operator).
       //
       // The verified vs unverified split surfaces in the dashboard via
-      // separate `crawler_events_hourly` buckets (verification_status
-      // is part of the primary key), so the operator can sort real
-      // crawler traffic from spoofed traffic at a glance.
-      const verified = verifyIpForRule(event.remoteIp, rule.id)
+      // separate `crawler_events_hourly` buckets. The rollup also keys on
+      // the manifest id so a publisher range update never merges decisions
+      // made from two different snapshots.
+      const decision = verifyIpForRuleDecision(event.remoteIp, rule.id)
       return {
         botId: rule.id,
         operator: rule.operator,
         product: rule.product,
         purpose: rule.purpose,
-        verificationStatus: verified ? 'verified' : 'claimed_unverified',
+        verificationStatus: decision.verified ? 'verified' : 'claimed_unverified',
+        verificationManifest: decision.manifest,
         matchedUserAgent: userAgent,
       }
     }
@@ -162,14 +163,16 @@ export function classifyAiUserFetch(event: NormalizedTrafficRequest): Classified
     if (rule.purpose !== USER_FETCH_PURPOSE) continue
     if (rule.userAgentPatterns.some((pattern) => pattern.test(userAgent))) {
       // Same IP-verification path as classifyCrawler — the operator's
-      // published ranges file (e.g. chatgpt-user.json) is what lifts
-      // a UA-only match to `verified`.
-      const verified = verifyIpForRule(event.remoteIp, rule.id)
+      // published ranges file (e.g. chatgpt-user.json) is what lifts a
+      // UA-only match to `verified`, and its metadata records which vendored
+      // snapshot produced either outcome.
+      const decision = verifyIpForRuleDecision(event.remoteIp, rule.id)
       return {
         botId: rule.id,
         operator: rule.operator,
         product: rule.product,
-        verificationStatus: verified ? 'verified' : 'claimed_unverified',
+        verificationStatus: decision.verified ? 'verified' : 'claimed_unverified',
+        verificationManifest: decision.manifest,
         matchedUserAgent: userAgent,
       }
     }

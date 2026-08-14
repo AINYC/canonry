@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { hasVerificationDataFor, ipInCidr, parseCidr, parseIp, verifyIpForRule } from '../src/index.js'
+import {
+  hasVerificationDataFor,
+  ipInCidr,
+  parseCidr,
+  parseIp,
+  verifyIpForRule,
+  verifyIpForRuleDecision,
+} from '../src/index.js'
+
+const ANTHROPIC_MANIFEST = {
+  id: 'https://claude.com/crawling/bots.json#2026-08-13T20:38:01Z',
+  source: 'https://claude.com/crawling/bots.json',
+  version: '2026-08-13T20:38:01Z',
+}
 
 describe('parseIp', () => {
   it('parses IPv4 to a 32-bit BigInt', () => {
@@ -137,43 +150,60 @@ describe('verifyIpForRule', () => {
     expect(verifyIpForRule('10.0.0.1', 'googlebot')).toBe(false)
   })
 
-  it('verifies a known Anthropic ClaudeBot IPv4 inside the bundled prefix', () => {
-    // 216.73.216.0/22 is the AWS-ANTHROPIC prefix — empirical Cloud
-    // Run logs show all real ClaudeBot traffic comes from here.
+  it('verifies ClaudeBot IPv4 against Anthropic\'s official crawler manifest', () => {
+    // The /22 remains on Anthropic's official list.
     expect(verifyIpForRule('216.73.216.76', 'anthropic-claudebot')).toBe(true)
     expect(verifyIpForRule('216.73.217.125', 'anthropic-claudebot')).toBe(true)
     expect(verifyIpForRule('216.73.219.255', 'anthropic-claudebot')).toBe(true)
-    // 160.79.104.0/21 is Anthropic's own ARIN allocation.
-    expect(verifyIpForRule('160.79.104.5', 'anthropic-claudebot')).toBe(true)
-    expect(verifyIpForRule('160.79.111.254', 'anthropic-claudebot')).toBe(true)
+    // These addresses exist only in the new publisher manifest, not the old
+    // bundled ARIN allocation snapshot.
+    expect(verifyIpForRule('34.162.230.222', 'anthropic-claudebot')).toBe(true)
+    expect(verifyIpForRule('40.124.101.49', 'anthropic-claudebot')).toBe(true)
+    expect(verifyIpForRule('20.64.57.223', 'anthropic-claudebot')).toBe(true)
   })
 
   it('does not verify a random IP outside Anthropic prefixes', () => {
     expect(verifyIpForRule('1.2.3.4', 'anthropic-claudebot')).toBe(false)
-    // Adjacent /22 outside the AWS-ANTHROPIC allocation.
+    // Adjacent /22 outside the official manifest entry.
     expect(verifyIpForRule('216.73.220.1', 'anthropic-claudebot')).toBe(false)
-    // Adjacent /21 outside Anthropic's own allocation.
-    expect(verifyIpForRule('160.79.112.1', 'anthropic-claudebot')).toBe(false)
-    // bgp.tools had once attributed 209.249.57.0/24 to Anthropic's
-    // AS60808; ARIN says it's Mitel Networks. Must NOT verify.
+    // The Claude Platform/API egress range is not in the crawler manifest.
+    expect(verifyIpForRule('160.79.104.5', 'anthropic-claudebot')).toBe(false)
+    expect(verifyIpForRule('160.79.111.254', 'anthropic-claudebot')).toBe(false)
+    // The old ARIN-derived bundle also included this IPv6 allocation, but
+    // Anthropic's official crawler manifest currently publishes IPv4 only.
+    expect(verifyIpForRule('2607:6bc0::1', 'anthropic-claudebot')).toBe(false)
+    // A historical AS-based source attributed this Mitel prefix to Anthropic.
     expect(verifyIpForRule('209.249.57.10', 'anthropic-claudebot')).toBe(false)
   })
 
-  it('verifies Anthropic IPv6 (entire /32 ANTHROPIC-V6 allocation)', () => {
-    expect(verifyIpForRule('2607:6bc0::1', 'anthropic-claudebot')).toBe(true)
-    expect(verifyIpForRule('2607:6bc0:11::cafe', 'anthropic-claudebot')).toBe(true)
-    expect(verifyIpForRule('2607:6bc0:ffff:ffff::1', 'anthropic-claudebot')).toBe(true)
-  })
-
-  it('verifies Claude-User against the shared Anthropic ranges', () => {
-    // Anthropic's per-user fetcher shares the ClaudeBot crawler's ARIN
-    // allocation — the same bundled anthropic.json is keyed to both
-    // rule ids in RULE_ID_TO_RANGES.
+  it('verifies Claude-User against the shared official Anthropic manifest', () => {
+    // The publisher does not split ranges by Claude bot identity, so the same
+    // official manifest is keyed to both classifier rules.
     expect(verifyIpForRule('216.73.216.76', 'claude-user')).toBe(true)
-    expect(verifyIpForRule('160.79.104.5', 'claude-user')).toBe(true)
-    expect(verifyIpForRule('2607:6bc0::1', 'claude-user')).toBe(true)
+    expect(verifyIpForRule('34.162.230.222', 'claude-user')).toBe(true)
+    expect(verifyIpForRule('160.79.104.5', 'claude-user')).toBe(false)
+    expect(verifyIpForRule('2607:6bc0::1', 'claude-user')).toBe(false)
     // Outside Anthropic's allocation — stays unverified.
     expect(verifyIpForRule('1.2.3.4', 'claude-user')).toBe(false)
+  })
+
+  it('returns the exact vendored manifest with verified and rejected decisions', () => {
+    expect(verifyIpForRuleDecision('34.162.230.222', 'anthropic-claudebot')).toEqual({
+      verified: true,
+      manifest: ANTHROPIC_MANIFEST,
+    })
+    expect(verifyIpForRuleDecision('160.79.104.5', 'anthropic-claudebot')).toEqual({
+      verified: false,
+      manifest: ANTHROPIC_MANIFEST,
+    })
+    expect(verifyIpForRuleDecision(null, 'anthropic-claudebot')).toEqual({
+      verified: false,
+      manifest: ANTHROPIC_MANIFEST,
+    })
+    expect(verifyIpForRuleDecision('1.2.3.4', 'meta-externalagent')).toEqual({
+      verified: false,
+      manifest: null,
+    })
   })
 
   it('verifies Google-Agent against Google\'s user-triggered-agents ranges', () => {

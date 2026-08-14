@@ -16,8 +16,12 @@ import {
   trafficConnectCloudflareResponseSchema,
   trafficConnectVercelRequestSchema,
   trafficConnectWordpressRequestSchema,
+  trafficCrawlerEventEntrySchema,
+  trafficAiUserFetchEventEntrySchema,
   trafficSourceDtoSchema,
   trafficSyncResponseSchema,
+  trafficVerificationManifestSchema,
+  trafficVerificationManifestUsageSchema,
   vercelTrafficSourceConfigSchema,
   wordpressTrafficSourceConfigSchema,
 } from '../src/traffic.js'
@@ -57,6 +61,51 @@ describe('traffic contracts', () => {
     expect(parsed.evidenceKind).toBe(TrafficEvidenceKinds['raw-request'])
     expect(parsed.confidence).toBe(TrafficEventConfidences.observed)
     expect(parsed.path).toBe('/blog/post')
+  })
+
+  it('validates crawler verification manifest provenance', () => {
+    const manifest = {
+      id: 'anthropic-claude',
+      source: 'https://www.anthropic.com/ips',
+      version: '2026-08-13T00:00:00Z',
+    }
+
+    expect(trafficVerificationManifestSchema.parse(manifest)).toEqual(manifest)
+    expect(trafficCrawlerEventEntrySchema.parse({
+      kind: 'crawler',
+      sourceId: 'source_1',
+      tsHour: '2026-08-13T12:00:00.000Z',
+      botId: 'anthropic-claudebot',
+      operator: 'Anthropic',
+      verificationStatus: 'verified',
+      verificationManifests: [{ manifestId: manifest.id, manifest, hits: 1 }],
+      verificationUnattributedHits: 0,
+      pathNormalized: '/docs',
+      pathClass: 'content',
+      status: 200,
+      hits: 1,
+    }).verificationManifests).toEqual([{ manifestId: manifest.id, manifest, hits: 1 }])
+    expect(trafficVerificationManifestUsageSchema.parse({
+      manifestId: manifest.id,
+      manifest,
+      hits: 1,
+    }).manifest).toEqual(manifest)
+  })
+
+  it('preserves null manifest provenance for legacy crawler-shaped rows', () => {
+    expect(trafficAiUserFetchEventEntrySchema.parse({
+      kind: 'ai-user-fetch',
+      sourceId: 'source_1',
+      tsHour: '2026-08-13T12:00:00.000Z',
+      botId: 'claude-user',
+      operator: 'Anthropic',
+      verificationStatus: 'claimed_unverified',
+      verificationManifests: [],
+      verificationUnattributedHits: 1,
+      pathNormalized: '/docs',
+      status: 200,
+      hits: 1,
+    }).verificationUnattributedHits).toBe(1)
   })
 })
 

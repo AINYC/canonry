@@ -66,7 +66,7 @@ const eventsResponse: TrafficEventsResponse = {
     aiReferralOrganicHits: 1,
     aiReferralUnknownHits: 0,
   },
-  eventRows: { total: 2, returned: 2, truncated: false },
+  eventRows: { total: 3, returned: 3, truncated: false },
   events: [
     {
       kind: 'crawler',
@@ -75,10 +75,33 @@ const eventsResponse: TrafficEventsResponse = {
       botId: 'GPTBot',
       operator: 'OpenAI',
       verificationStatus: 'verified',
+      verificationManifests: [{
+        manifestId: 'https://openai.com/gptbot.json#2026-05-01T00:00:00Z',
+        manifest: {
+          id: 'https://openai.com/gptbot.json#2026-05-01T00:00:00Z',
+          source: 'https://openai.com/gptbot.json',
+          version: '2026-05-01T00:00:00Z',
+        },
+        hits: 2,
+      }],
+      verificationUnattributedHits: 1,
       pathNormalized: '/about',
       pathClass: 'content',
       status: 200,
       hits: 3,
+    },
+    {
+      kind: 'ai-user-fetch',
+      sourceId: 'src_1',
+      tsHour: '2026-05-01T03:00:00.000Z',
+      botId: 'mistral-user',
+      operator: 'Mistral',
+      verificationStatus: 'claimed_unverified',
+      verificationManifests: [{ manifestId: 'none', manifest: null, hits: 2 }],
+      verificationUnattributedHits: 0,
+      pathNormalized: '/docs',
+      status: 200,
+      hits: 2,
     },
     {
       kind: 'ai-referral',
@@ -91,6 +114,9 @@ const eventsResponse: TrafficEventsResponse = {
       landingPathNormalized: '/pricing',
       status: 200,
       hits: 1,
+      paidHits: 0,
+      organicHits: 1,
+      unknownHits: 0,
     },
   ],
 }
@@ -173,7 +199,7 @@ describe('traffic jsonl output', () => {
       const cap = captureStdout(() => trafficEvents('demo', { format: 'jsonl' }))
       await cap.run
       const lines = cap.lines()
-      expect(lines).toHaveLength(2)
+      expect(lines).toHaveLength(3)
       const records = lines.map(l => JSON.parse(l))
       // Every line parses on its own and carries the injected envelope context.
       for (const record of records) {
@@ -183,8 +209,23 @@ describe('traffic jsonl output', () => {
       }
       // The record's own discriminant fields win (spread last). Crawler rows
       // carry the per-event path class so an agent can segment from jsonl.
-      expect(records[0]).toMatchObject({ kind: 'crawler', sourceId: 'src_1', botId: 'GPTBot', pathClass: 'content' })
-      expect(records[1]).toMatchObject({ kind: 'ai-referral', sourceDomain: 'chatgpt.com' })
+      expect(records[0]).toMatchObject({
+        kind: 'crawler',
+        sourceId: 'src_1',
+        botId: 'GPTBot',
+        pathClass: 'content',
+        verificationManifests: [{
+          manifest: { version: '2026-05-01T00:00:00Z' },
+          hits: 2,
+        }],
+        verificationUnattributedHits: 1,
+      })
+      expect(records[1]).toMatchObject({
+        kind: 'ai-user-fetch',
+        verificationManifests: [{ manifestId: 'none', manifest: null, hits: 2 }],
+        verificationUnattributedHits: 0,
+      })
+      expect(records[2]).toMatchObject({ kind: 'ai-referral', sourceDomain: 'chatgpt.com' })
     })
 
     it('format=text surfaces the content / infra / other crawler split', async () => {
@@ -196,6 +237,8 @@ describe('traffic jsonl output', () => {
       expect(out).toContain('Crawler hits total (window):   5')
       // per-event path class is rendered next to the path
       expect(out).toContain('/about [content]')
+      expect(out).toContain('provenance 2026-05-01T00:00:00Z×2 · legacy/unattributed 1')
+      expect(out).toContain('provenance none×2')
     })
 
     it('format=jsonl writes nothing for an empty event collection', async () => {

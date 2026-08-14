@@ -10,7 +10,9 @@ import {
   trafficSources,
   trafficEventReceipts,
   crawlerEventsHourly,
+  crawlerVerificationManifestsHourly,
   aiUserFetchEventsHourly,
+  aiUserFetchVerificationManifestsHourly,
   aiReferralEventsHourly,
   rawEventSamples,
 } from '../src/index.js'
@@ -296,6 +298,191 @@ test('ai_user_fetch_events_hourly accepts inserts keyed like crawler_events_hour
   expect(row).toBeDefined()
   expect(row.verificationStatus).toBe('verified')
   expect(row.hits).toBe(1)
+})
+
+test('verification manifest sidecars preserve two manifests and cascade with their parent rollups', () => {
+  const { db, tmpDir } = createTempDb()
+  onTestFinished(() => cleanup(tmpDir))
+
+  seedProject(db)
+  const now = '2026-08-13T12:00:00.000Z'
+  db.insert(trafficSources).values({
+    id: 'src_manifest',
+    projectId: 'proj_1',
+    sourceType: 'cloud-run',
+    displayName: 'Manifest source',
+    status: 'connected',
+    configJson: {},
+    createdAt: now,
+    updatedAt: now,
+  }).run()
+
+  const crawlerParent = {
+    projectId: 'proj_1',
+    sourceId: 'src_manifest',
+    tsHour: '2026-08-13T11:00:00.000Z',
+    botId: 'anthropic-claudebot',
+    operator: 'Anthropic',
+    verificationStatus: 'verified',
+    pathNormalized: '/docs',
+    status: 200,
+    hits: 5,
+    sampledUserAgent: 'ClaudeBot/1.0',
+    createdAt: now,
+    updatedAt: now,
+  }
+  db.insert(crawlerEventsHourly).values(crawlerParent).run()
+
+  const manifests = [
+    { id: 'anthropic:v1', source: 'https://api.anthropic.com/ranges', version: '1' },
+    { id: 'anthropic:v2', source: 'https://api.anthropic.com/ranges', version: '2' },
+  ]
+  db.insert(crawlerVerificationManifestsHourly).values(manifests.map((manifest, index) => ({
+    projectId: crawlerParent.projectId,
+    sourceId: crawlerParent.sourceId,
+    tsHour: crawlerParent.tsHour,
+    botId: crawlerParent.botId,
+    verificationStatus: crawlerParent.verificationStatus,
+    pathNormalized: crawlerParent.pathNormalized,
+    status: crawlerParent.status,
+    manifestId: manifest.id,
+    manifestJson: manifest,
+    hits: index + 2,
+    createdAt: now,
+    updatedAt: now,
+  }))).run()
+
+  const crawlerProvenance = db.select().from(crawlerVerificationManifestsHourly).all()
+  expect(crawlerProvenance.map(row => row.manifestId).sort()).toEqual(['anthropic:v1', 'anthropic:v2'])
+  expect(crawlerProvenance.find(row => row.manifestId === 'anthropic:v2')?.manifestJson).toEqual(manifests[1])
+
+  const fetchParent = {
+    ...crawlerParent,
+    botId: 'claude-user',
+    pathNormalized: '/pricing',
+    hits: 4,
+    sampledUserAgent: 'Claude-User/1.0',
+  }
+  db.insert(aiUserFetchEventsHourly).values(fetchParent).run()
+  db.insert(aiUserFetchVerificationManifestsHourly).values(manifests.map(manifest => ({
+    projectId: fetchParent.projectId,
+    sourceId: fetchParent.sourceId,
+    tsHour: fetchParent.tsHour,
+    botId: fetchParent.botId,
+    verificationStatus: fetchParent.verificationStatus,
+    pathNormalized: fetchParent.pathNormalized,
+    status: fetchParent.status,
+    manifestId: manifest.id,
+    manifestJson: manifest,
+    hits: 2,
+    createdAt: now,
+    updatedAt: now,
+  }))).run()
+  expect(db.select().from(aiUserFetchVerificationManifestsHourly).all()).toHaveLength(2)
+
+  db.delete(crawlerEventsHourly).where(and(
+    eq(crawlerEventsHourly.projectId, crawlerParent.projectId),
+    eq(crawlerEventsHourly.sourceId, crawlerParent.sourceId),
+    eq(crawlerEventsHourly.tsHour, crawlerParent.tsHour),
+    eq(crawlerEventsHourly.botId, crawlerParent.botId),
+    eq(crawlerEventsHourly.verificationStatus, crawlerParent.verificationStatus),
+    eq(crawlerEventsHourly.pathNormalized, crawlerParent.pathNormalized),
+    eq(crawlerEventsHourly.status, crawlerParent.status),
+  )).run()
+  db.delete(aiUserFetchEventsHourly).where(and(
+    eq(aiUserFetchEventsHourly.projectId, fetchParent.projectId),
+    eq(aiUserFetchEventsHourly.sourceId, fetchParent.sourceId),
+    eq(aiUserFetchEventsHourly.tsHour, fetchParent.tsHour),
+    eq(aiUserFetchEventsHourly.botId, fetchParent.botId),
+    eq(aiUserFetchEventsHourly.verificationStatus, fetchParent.verificationStatus),
+    eq(aiUserFetchEventsHourly.pathNormalized, fetchParent.pathNormalized),
+    eq(aiUserFetchEventsHourly.status, fetchParent.status),
+  )).run()
+  expect(db.select().from(crawlerVerificationManifestsHourly).all()).toEqual([])
+  expect(db.select().from(aiUserFetchVerificationManifestsHourly).all()).toEqual([])
+})
+
+test('migration 139 leaves legacy rollups unattributed and preserves old-writer upserts', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-traffic-manifest-migration-'))
+  onTestFinished(() => cleanup(tmpDir))
+  const db = createClient(path.join(tmpDir, 'test.db'))
+
+  migrate(db, MIGRATION_VERSIONS.filter(migration => migration.version < 139))
+  seedProject(db)
+  const now = '2026-08-13T12:00:00.000Z'
+  db.insert(trafficSources).values({
+    id: 'src_pre_manifest',
+    projectId: 'proj_1',
+    sourceType: 'cloud-run',
+    displayName: 'Pre-manifest source',
+    status: 'connected',
+    configJson: {},
+    createdAt: now,
+    updatedAt: now,
+  }).run()
+
+  // Raw SQL models the exact table shape an older binary wrote before v139.
+  db.run(sql`
+    INSERT INTO crawler_events_hourly (
+      project_id, source_id, ts_hour, bot_id, operator, verification_status,
+      path_normalized, status, hits, sampled_user_agent, created_at, updated_at
+    ) VALUES (
+      ${'proj_1'}, ${'src_pre_manifest'}, ${'2026-08-13T11:00:00.000Z'},
+      ${'anthropic-claudebot'}, ${'Anthropic'}, ${'verified'}, ${'/docs'},
+      ${200}, ${7}, ${'ClaudeBot/1.0'}, ${now}, ${now}
+    )
+  `)
+  db.run(sql`
+    INSERT INTO ai_user_fetch_events_hourly (
+      project_id, source_id, ts_hour, bot_id, operator, verification_status,
+      path_normalized, status, hits, sampled_user_agent, created_at, updated_at
+    ) VALUES (
+      ${'proj_1'}, ${'src_pre_manifest'}, ${'2026-08-13T11:00:00.000Z'},
+      ${'claude-user'}, ${'Anthropic'}, ${'verified'}, ${'/pricing'},
+      ${200}, ${3}, ${'Claude-User/1.0'}, ${now}, ${now}
+    )
+  `)
+
+  migrate(db)
+
+  // No provenance is invented for rows written before the sidecars existed.
+  expect(db.select().from(crawlerVerificationManifestsHourly).all()).toEqual([])
+  expect(db.select().from(aiUserFetchVerificationManifestsHourly).all()).toEqual([])
+
+  // These are the exact column and ON CONFLICT targets used by a pre-v139
+  // writer. Both still prepare and update after the additive migration.
+  db.$client.prepare(`
+    INSERT INTO crawler_events_hourly (
+      project_id, source_id, ts_hour, bot_id, operator, verification_status,
+      path_normalized, status, hits, sampled_user_agent, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (
+      project_id, source_id, ts_hour, bot_id, verification_status,
+      path_normalized, status
+    ) DO UPDATE SET hits = hits + excluded.hits, updated_at = excluded.updated_at
+  `).run(
+    'proj_1', 'src_pre_manifest', '2026-08-13T11:00:00.000Z',
+    'anthropic-claudebot', 'Anthropic', 'verified', '/docs', 200, 5,
+    'ClaudeBot/1.0', now, now,
+  )
+  db.$client.prepare(`
+    INSERT INTO ai_user_fetch_events_hourly (
+      project_id, source_id, ts_hour, bot_id, operator, verification_status,
+      path_normalized, status, hits, sampled_user_agent, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (
+      project_id, source_id, ts_hour, bot_id, verification_status,
+      path_normalized, status
+    ) DO UPDATE SET hits = hits + excluded.hits, updated_at = excluded.updated_at
+  `).run(
+    'proj_1', 'src_pre_manifest', '2026-08-13T11:00:00.000Z',
+    'claude-user', 'Anthropic', 'verified', '/pricing', 200, 2,
+    'Claude-User/1.0', now, now,
+  )
+
+  expect(db.select().from(crawlerEventsHourly).get()?.hits).toBe(12)
+  expect(db.select().from(aiUserFetchEventsHourly).get()?.hits).toBe(5)
+  expect(db.all(sql.raw('PRAGMA foreign_key_check'))).toEqual([])
 })
 
 test('migration 64 moves legacy user-fetch rows out of crawler_events_hourly', () => {

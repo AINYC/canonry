@@ -8438,6 +8438,16 @@ export type TrafficEventsResponse = {
         botId: string;
         operator: string;
         verificationStatus: string;
+        verificationManifests: Array<{
+            manifestId: string;
+            manifest: {
+                id: string;
+                source: string;
+                version: string;
+            } | null;
+            hits: number;
+        }>;
+        verificationUnattributedHits: number;
         pathNormalized: string;
         pathClass: 'content' | 'sitemap' | 'robots' | 'asset' | 'other';
         status: number;
@@ -8449,6 +8459,16 @@ export type TrafficEventsResponse = {
         botId: string;
         operator: string;
         verificationStatus: string;
+        verificationManifests: Array<{
+            manifestId: string;
+            manifest: {
+                id: string;
+                source: string;
+                version: string;
+            } | null;
+            hits: number;
+        }>;
+        verificationUnattributedHits: number;
         pathNormalized: string;
         status: number;
         hits: number;

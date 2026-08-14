@@ -16,12 +16,6 @@
  * partial failure (still updates the lists that succeeded); prints
  * a per-source summary to stderr.
  *
- * Anthropic is bundled but not refreshed here — it has no
- * machine-readable JSON endpoint, so `anthropic.json` is maintained
- * by hand from bgp.tools for AS399358 + AS60808 (both registered
- * to Anthropic, PBC). See the `_source` and `_notes` fields in
- * `src/ip-ranges/anthropic.json` for the refresh procedure.
- *
  * Other operators NOT covered here (no public JSON, no easily-scrape
  * source as of 2026): Meta, ByteDance, Apple, DeepSeek, Mistral,
  * DuckDuckGo, Yandex, Baidu, Amazon. Add them by editing both
@@ -44,6 +38,11 @@ interface Source {
 }
 
 const SOURCES: Source[] = [
+  {
+    file: 'anthropic.json',
+    url: 'https://claude.com/crawling/bots.json',
+    label: 'Anthropic Bots',
+  },
   {
     file: 'googlebot.json',
     url: 'https://developers.google.com/static/search/apis/ipranges/googlebot.json',
@@ -107,9 +106,12 @@ async function refreshOne(source: Source): Promise<FetchResult> {
     if (!res.ok) {
       return { source, ok: false, error: `HTTP ${res.status}` }
     }
-    const json = await res.json() as { prefixes?: unknown[] }
+    const json = await res.json() as { creationTime?: unknown; prefixes?: unknown[] }
     if (!json || !Array.isArray(json.prefixes)) {
       return { source, ok: false, error: 'response missing `prefixes` array' }
+    }
+    if (typeof json.creationTime !== 'string' || json.creationTime.length === 0) {
+      return { source, ok: false, error: 'response missing `creationTime` version' }
     }
     // Inject `_source` at the top of the file so anyone opening the
     // JSON directly sees where it came from. Re-injected on every
