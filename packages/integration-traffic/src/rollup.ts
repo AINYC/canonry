@@ -147,6 +147,7 @@ function mergeReferralSession(
 function sortCrawlerBuckets(a: CrawlerEventHourlyBucket, b: CrawlerEventHourlyBucket): number {
   return a.tsHour.localeCompare(b.tsHour) ||
     a.botId.localeCompare(b.botId) ||
+    a.verificationStatus.localeCompare(b.verificationStatus) ||
     (a.verificationManifest?.id ?? '').localeCompare(b.verificationManifest?.id ?? '') ||
     a.pathNormalized.localeCompare(b.pathNormalized) ||
     String(a.status).localeCompare(String(b.status))
@@ -155,6 +156,7 @@ function sortCrawlerBuckets(a: CrawlerEventHourlyBucket, b: CrawlerEventHourlyBu
 function sortAiUserFetchBuckets(a: AiUserFetchEventHourlyBucket, b: AiUserFetchEventHourlyBucket): number {
   return a.tsHour.localeCompare(b.tsHour) ||
     a.botId.localeCompare(b.botId) ||
+    a.verificationStatus.localeCompare(b.verificationStatus) ||
     (a.verificationManifest?.id ?? '').localeCompare(b.verificationManifest?.id ?? '') ||
     a.pathNormalized.localeCompare(b.pathNormalized) ||
     String(a.status).localeCompare(String(b.status))

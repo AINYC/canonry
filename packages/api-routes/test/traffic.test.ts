@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, afterEach, expect } from 'vitest'
+import { describe, it, beforeEach, afterEach, expect, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -4243,7 +4243,7 @@ describe('GET /traffic/events', () => {
     } finally { await h.close() }
   })
 
-  it('reports each manifest usage and keeps legacy parent hits unattributed', async () => {
+  it('batch-loads provenance while preserving multi-manifest and legacy attribution', async () => {
     const { h } = await syncedHarness()
     try {
       const row = h.db.select().from(crawlerEventsHourly).get()
@@ -4272,18 +4272,74 @@ describe('GET /traffic/events', () => {
         .where(eq(crawlerEventsHourly.sourceId, row.sourceId))
         .run()
 
-      const res = await h.app.inject({
-        method: 'GET',
-        url: '/api/v1/projects/test-project/traffic/events?kind=crawler',
-      })
-      expect(res.statusCode).toBe(200)
-      const crawler = JSON.parse(res.payload).events[0]
+      const readEventsWithSelectCount = async () => {
+        const selectSpy = vi.spyOn(h.db, 'select')
+        try {
+          const response = await h.app.inject({
+            method: 'GET',
+            url: '/api/v1/projects/test-project/traffic/events?kind=crawler',
+          })
+          return { response, selectCount: selectSpy.mock.calls.length }
+        } finally {
+          selectSpy.mockRestore()
+        }
+      }
+
+      const singleRowRead = await readEventsWithSelectCount()
+      expect(singleRowRead.response.statusCode).toBe(200)
+      expect(singleRowRead.selectCount).toBeGreaterThan(0)
+
+      const extraRowCount = 24
+      h.db.insert(crawlerEventsHourly).values(Array.from({ length: extraRowCount }, (_, index) => ({
+        ...row,
+        pathNormalized: `/batch-${index}`,
+        hits: 1,
+        createdAt: now,
+        updatedAt: now,
+      }))).run()
+      h.db.insert(crawlerVerificationManifestsHourly).values(Array.from(
+        { length: extraRowCount },
+        (_, index) => ({
+          projectId: row.projectId,
+          sourceId: row.sourceId,
+          tsHour: row.tsHour,
+          botId: row.botId,
+          verificationStatus: row.verificationStatus,
+          pathNormalized: `/batch-${index}`,
+          status: row.status,
+          manifestId: 'batch-manifest',
+          manifestJson: {
+            id: 'batch-manifest',
+            source: 'https://example.test/batch-bots.json',
+            version: '2026-08-14T00:00:00Z',
+          },
+          hits: 1,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )).run()
+
+      const manyRowRead = await readEventsWithSelectCount()
+      expect(manyRowRead.response.statusCode).toBe(200)
+      expect(manyRowRead.selectCount).toBe(singleRowRead.selectCount)
+
+      const events = JSON.parse(manyRowRead.response.payload).events
+      expect(events).toHaveLength(extraRowCount + 1)
+      const crawler = events.find((event: { pathNormalized: string }) => (
+        event.pathNormalized === row.pathNormalized
+      ))
       expect(crawler.verificationManifests).toHaveLength(2)
       expect(crawler.verificationManifests).toContainEqual(expect.objectContaining({
         manifestId: 'test-manifest-v2',
         hits: 1,
       }))
       expect(crawler.verificationUnattributedHits).toBe(2)
+      expect(events.find((event: { pathNormalized: string }) => (
+        event.pathNormalized === '/batch-0'
+      ))).toMatchObject({
+        verificationManifests: [expect.objectContaining({ manifestId: 'batch-manifest', hits: 1 })],
+        verificationUnattributedHits: 0,
+      })
     } finally { await h.close() }
   })
 

@@ -24,6 +24,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { validateIpRangeManifestPayload } from '../src/ip-range-manifest.js'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const rangesDir = path.resolve(dirname, '..', 'src', 'ip-ranges')
@@ -106,21 +107,16 @@ async function refreshOne(source: Source): Promise<FetchResult> {
     if (!res.ok) {
       return { source, ok: false, error: `HTTP ${res.status}` }
     }
-    const json = await res.json() as { creationTime?: unknown; prefixes?: unknown[] }
-    if (!json || !Array.isArray(json.prefixes)) {
-      return { source, ok: false, error: 'response missing `prefixes` array' }
-    }
-    if (typeof json.creationTime !== 'string' || json.creationTime.length === 0) {
-      return { source, ok: false, error: 'response missing `creationTime` version' }
-    }
+    const validation = validateIpRangeManifestPayload(await res.json())
+    if (!validation.ok) return { source, ok: false, error: validation.error }
     // Inject `_source` at the top of the file so anyone opening the
     // JSON directly sees where it came from. Re-injected on every
     // refresh because publishers strip unknown fields from their
     // payload — we don't want to lose this trail.
-    const annotated = { _source: source.url, ...json }
+    const annotated = { _source: source.url, ...validation.value }
     const target = path.join(rangesDir, source.file)
     await fs.writeFile(target, JSON.stringify(annotated, null, 2) + '\n', 'utf-8')
-    return { source, ok: true, prefixCount: json.prefixes.length }
+    return { source, ok: true, prefixCount: validation.value.prefixes.length }
   } catch (err) {
     return {
       source,

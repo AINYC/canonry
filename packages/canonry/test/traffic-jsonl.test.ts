@@ -121,6 +121,36 @@ const eventsResponse: TrafficEventsResponse = {
   ],
 }
 
+const preProvenanceEventsResponse: TrafficEventsResponse = {
+  ...eventsResponse,
+  eventRows: { total: 2, returned: 2, truncated: false },
+  events: [
+    {
+      kind: 'crawler',
+      sourceId: 'src_1',
+      tsHour: '2026-05-01T03:00:00.000Z',
+      botId: 'ClaudeBot',
+      operator: 'Anthropic',
+      verificationStatus: 'verified',
+      pathNormalized: '/about',
+      pathClass: 'content',
+      status: 200,
+      hits: 3,
+    },
+    {
+      kind: 'ai-user-fetch',
+      sourceId: 'src_1',
+      tsHour: '2026-05-01T03:00:00.000Z',
+      botId: 'Claude-User',
+      operator: 'Anthropic',
+      verificationStatus: 'claimed_unverified',
+      pathNormalized: '/docs',
+      status: 200,
+      hits: 2,
+    },
+  ],
+}
+
 const sourceA = {
   id: 'src_1',
   projectId: 'proj_1',
@@ -239,6 +269,13 @@ describe('traffic jsonl output', () => {
       expect(out).toContain('/about [content]')
       expect(out).toContain('provenance 2026-05-01T00:00:00Z×2 · legacy/unattributed 1')
       expect(out).toContain('provenance none×2')
+    })
+
+    it('format=text treats pre-provenance server rows as fully unattributed', async () => {
+      mockTrafficListEvents.mockResolvedValue(preProvenanceEventsResponse)
+      const out = await captureLog(() => trafficEvents('demo', {}))
+      expect(out).toContain('ClaudeBot  verified  provenance legacy/unattributed 3')
+      expect(out).toContain('Claude-User  claimed_unverified  provenance legacy/unattributed 2')
     })
 
     it('format=jsonl writes nothing for an empty event collection', async () => {

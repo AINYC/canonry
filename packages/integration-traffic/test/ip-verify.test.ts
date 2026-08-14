@@ -1,17 +1,20 @@
 import { describe, expect, it } from 'vitest'
+import anthropicRaw from '../src/ip-ranges/anthropic.json' with { type: 'json' }
 import {
   hasVerificationDataFor,
   ipInCidr,
   parseCidr,
   parseIp,
+  validateIpRangeManifestPayload,
+  verifyIpAgainstManifest,
   verifyIpForRule,
   verifyIpForRuleDecision,
 } from '../src/index.js'
 
 const ANTHROPIC_MANIFEST = {
-  id: 'https://claude.com/crawling/bots.json#2026-08-13T20:38:01Z',
-  source: 'https://claude.com/crawling/bots.json',
-  version: '2026-08-13T20:38:01Z',
+  id: `${anthropicRaw._source}#${anthropicRaw.creationTime}`,
+  source: anthropicRaw._source,
+  version: anthropicRaw.creationTime,
 }
 
 describe('parseIp', () => {
@@ -27,6 +30,9 @@ describe('parseIp', () => {
     expect(parseIp('1.2.3.256')).toBeNull()
     expect(parseIp('1.2.3.-1')).toBeNull()
     expect(parseIp('a.b.c.d')).toBeNull()
+    expect(parseIp('1.2.3.4x')).toBeNull()
+    expect(parseIp('01.2.3.4')).toBeNull()
+    expect(parseIp(' 1.2.3.4')).toBeNull()
     expect(parseIp('')).toBeNull()
   })
 
@@ -55,6 +61,8 @@ describe('parseIp', () => {
   it('rejects malformed IPv6', () => {
     expect(parseIp('1::2::3')).toBeNull()  // two zero-compressions
     expect(parseIp('xyz::1')).toBeNull()
+    expect(parseIp('2001:db8:ffz::1')).toBeNull()
+    expect(parseIp('1:2:3:4:5:6:7:8::')).toBeNull()
     expect(parseIp(':::')).toBeNull()       // three colons
   })
 })
@@ -99,6 +107,66 @@ describe('parseCidr', () => {
     expect(parseCidr('1.2.3.4')).toBeNull()  // no /
     expect(parseCidr('/24')).toBeNull()      // no ip
     expect(parseCidr('xyz/24')).toBeNull()
+    expect(parseCidr('1.2.3.4/0junk')).toBeNull()
+    expect(parseCidr('1.2.3.4/024')).toBeNull()
+    expect(parseCidr('1.2.3.4/24/extra')).toBeNull()
+  })
+})
+
+describe('validateIpRangeManifestPayload', () => {
+  it('accepts a complete publisher payload, including an empty range set', () => {
+    expect(validateIpRangeManifestPayload({
+      creationTime: 'version-1',
+      prefixes: [
+        { ipv4Prefix: '192.0.2.0/24' },
+        { ipv6Prefix: '2001:db8::/32' },
+      ],
+    })).toEqual({
+      ok: true,
+      value: {
+        creationTime: 'version-1',
+        prefixes: [
+          { ipv4Prefix: '192.0.2.0/24' },
+          { ipv6Prefix: '2001:db8::/32' },
+        ],
+      },
+    })
+    expect(validateIpRangeManifestPayload({ creationTime: 'version-empty', prefixes: [] })).toEqual({
+      ok: true,
+      value: { creationTime: 'version-empty', prefixes: [] },
+    })
+  })
+
+  it.each([
+    { creationTime: 'version-1', prefixes: [null] },
+    { creationTime: 'version-1', prefixes: [{ ipv4Prefix: 123 }] },
+    { creationTime: 'version-1', prefixes: [{ ipv4Prefix: '192.0.2.0/0junk' }] },
+    { creationTime: 'version-1', prefixes: [{ ipv4Prefix: '2001:db8::/32' }] },
+    { creationTime: 'version-1', prefixes: [{ ipv4Prefix: '192.0.2.0/24', ipv6Prefix: '2001:db8::/32' }] },
+  ])('rejects an invalid prefix entry without throwing: %j', (payload) => {
+    expect(validateIpRangeManifestPayload(payload).ok).toBe(false)
+  })
+
+  it('preserves known provenance while failing closed for empty or invalid ranges', () => {
+    const base = {
+      _source: 'https://example.com/bots.json',
+      creationTime: 'version-2',
+    }
+    const expected = {
+      verified: false,
+      manifest: {
+        id: 'https://example.com/bots.json#version-2',
+        source: 'https://example.com/bots.json',
+        version: 'version-2',
+      },
+    }
+
+    expect(verifyIpAgainstManifest('192.0.2.1', { ...base, prefixes: [] })).toEqual(expected)
+    expect(verifyIpAgainstManifest('192.0.2.1', {
+      ...base,
+      prefixes: [{ ipv4Prefix: '192.0.2.0/0junk' }],
+    })).toEqual(expected)
+    expect(verifyIpAgainstManifest('192.0.2.1', { ...base, prefixes: [null] })).toEqual(expected)
   })
 })
 

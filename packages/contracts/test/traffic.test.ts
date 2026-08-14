@@ -92,20 +92,35 @@ describe('traffic contracts', () => {
     }).manifest).toEqual(manifest)
   })
 
-  it('preserves null manifest provenance for legacy crawler-shaped rows', () => {
-    expect(trafficAiUserFetchEventEntrySchema.parse({
+  it('accepts pre-provenance crawler and user-fetch response rows', () => {
+    const crawler = trafficCrawlerEventEntrySchema.parse({
+      kind: 'crawler',
+      sourceId: 'source_1',
+      tsHour: '2026-08-13T12:00:00.000Z',
+      botId: 'claudebot',
+      operator: 'Anthropic',
+      verificationStatus: 'verified',
+      pathNormalized: '/docs',
+      pathClass: 'content',
+      status: 200,
+      hits: 2,
+    })
+    const userFetch = trafficAiUserFetchEventEntrySchema.parse({
       kind: 'ai-user-fetch',
       sourceId: 'source_1',
       tsHour: '2026-08-13T12:00:00.000Z',
       botId: 'claude-user',
       operator: 'Anthropic',
       verificationStatus: 'claimed_unverified',
-      verificationManifests: [],
-      verificationUnattributedHits: 1,
       pathNormalized: '/docs',
       status: 200,
       hits: 1,
-    }).verificationUnattributedHits).toBe(1)
+    })
+
+    expect(crawler.verificationManifests).toBeUndefined()
+    expect(crawler.verificationUnattributedHits).toBeUndefined()
+    expect(userFetch.verificationManifests).toBeUndefined()
+    expect(userFetch.verificationUnattributedHits).toBeUndefined()
   })
 })
 

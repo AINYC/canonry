@@ -900,11 +900,12 @@ export async function trafficStatus(project: string, opts: { format?: string }):
 function formatVerificationProvenance(
   event: Extract<TrafficEventEntry, { kind: 'crawler' | 'ai-user-fetch' }>,
 ): string {
-  const parts = event.verificationManifests.map(({ manifestId, manifest, hits }) =>
+  const parts = (event.verificationManifests ?? []).map(({ manifestId, manifest, hits }) =>
     `${manifest?.version ?? manifestId}×${hits}`,
   )
-  if (event.verificationUnattributedHits > 0) {
-    parts.push(`legacy/unattributed ${event.verificationUnattributedHits}`)
+  const unattributedHits = event.verificationUnattributedHits ?? event.hits
+  if (unattributedHits > 0) {
+    parts.push(`legacy/unattributed ${unattributedHits}`)
   }
   return `provenance ${parts.length > 0 ? parts.join(' · ') : 'none'}`
 }

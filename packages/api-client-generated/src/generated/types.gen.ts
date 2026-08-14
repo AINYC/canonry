@@ -8438,7 +8438,7 @@ export type TrafficEventsResponse = {
         botId: string;
         operator: string;
         verificationStatus: string;
-        verificationManifests: Array<{
+        verificationManifests?: Array<{
             manifestId: string;
             manifest: {
                 id: string;
@@ -8447,7 +8447,7 @@ export type TrafficEventsResponse = {
             } | null;
             hits: number;
         }>;
-        verificationUnattributedHits: number;
+        verificationUnattributedHits?: number;
         pathNormalized: string;
         pathClass: 'content' | 'sitemap' | 'robots' | 'asset' | 'other';
         status: number;
@@ -8459,7 +8459,7 @@ export type TrafficEventsResponse = {
         botId: string;
         operator: string;
         verificationStatus: string;
-        verificationManifests: Array<{
+        verificationManifests?: Array<{
             manifestId: string;
             manifest: {
                 id: string;
@@ -8468,7 +8468,7 @@ export type TrafficEventsResponse = {
             } | null;
             hits: number;
         }>;
-        verificationUnattributedHits: number;
+        verificationUnattributedHits?: number;
         pathNormalized: string;
         status: number;
         hits: number;

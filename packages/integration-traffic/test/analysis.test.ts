@@ -5,6 +5,7 @@ import {
   type NormalizedTrafficRequest,
 } from '@ainyc/canonry-contracts'
 import { describe, expect, it } from 'vitest'
+import anthropicRaw from '../src/ip-ranges/anthropic.json' with { type: 'json' }
 import {
   buildTrafficProbeReport,
   classifyAiReferral,
@@ -14,9 +15,9 @@ import {
 } from '../src/index.js'
 
 const ANTHROPIC_MANIFEST = {
-  id: 'https://claude.com/crawling/bots.json#2026-08-13T20:38:01Z',
-  source: 'https://claude.com/crawling/bots.json',
-  version: '2026-08-13T20:38:01Z',
+  id: `${anthropicRaw._source}#${anthropicRaw.creationTime}`,
+  source: anthropicRaw._source,
+  version: anthropicRaw.creationTime,
 }
 
 function event(overrides: Partial<NormalizedTrafficRequest>): NormalizedTrafficRequest {
@@ -655,6 +656,53 @@ describe('traffic analysis', () => {
       botId: 'claude-user',
       verificationManifest: ANTHROPIC_MANIFEST,
     })
+  })
+
+  it('sorts crawler and user-fetch buckets by verification status independent of input order', () => {
+    const crawlerVerified = event({
+      eventId: 'crawler-verified',
+      userAgent: 'ClaudeBot/1.0',
+      remoteIp: '34.162.230.222',
+    })
+    const crawlerClaimed = event({
+      eventId: 'crawler-claimed',
+      userAgent: 'ClaudeBot/1.0',
+      remoteIp: '192.0.2.1',
+    })
+    const userFetchVerified = event({
+      eventId: 'user-fetch-verified',
+      userAgent: 'Claude-User/1.0',
+      remoteIp: '34.162.230.222',
+    })
+    const userFetchClaimed = event({
+      eventId: 'user-fetch-claimed',
+      userAgent: 'Claude-User/1.0',
+      remoteIp: '192.0.2.1',
+    })
+
+    const forward = buildTrafficProbeReport([
+      crawlerVerified,
+      crawlerClaimed,
+      userFetchVerified,
+      userFetchClaimed,
+    ])
+    const reverse = buildTrafficProbeReport([
+      userFetchClaimed,
+      userFetchVerified,
+      crawlerClaimed,
+      crawlerVerified,
+    ])
+
+    expect(forward.crawlerEventsHourly).toEqual(reverse.crawlerEventsHourly)
+    expect(forward.aiUserFetchEventsHourly).toEqual(reverse.aiUserFetchEventsHourly)
+    expect(forward.crawlerEventsHourly.map(bucket => bucket.verificationStatus)).toEqual([
+      'claimed_unverified',
+      'verified',
+    ])
+    expect(forward.aiUserFetchEventsHourly.map(bucket => bucket.verificationStatus)).toEqual([
+      'claimed_unverified',
+      'verified',
+    ])
   })
 
   it('rolls ChatGPT-User hits into the ai-user-fetch bucket, not crawler', () => {

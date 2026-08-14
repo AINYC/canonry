@@ -59,26 +59,24 @@ import gptbotRaw from './ip-ranges/gptbot.json' with { type: 'json' }
 import oaiSearchbotRaw from './ip-ranges/oai-searchbot.json' with { type: 'json' }
 import perplexityUserRaw from './ip-ranges/perplexity-user.json' with { type: 'json' }
 import perplexitybotRaw from './ip-ranges/perplexitybot.json' with { type: 'json' }
+import {
+  parseCidr,
+  parseIp,
+  validateIpRangeManifestPayload,
+} from './ip-range-manifest.js'
+import type { ParsedCidr } from './ip-range-manifest.js'
 
-interface RawIpRanges {
-  _source?: string
-  creationTime?: string
-  prefixes: Array<{ ipv4Prefix?: string; ipv6Prefix?: string }>
-}
+export {
+  ipInCidr,
+  parseCidr,
+  parseIp,
+  validateIpRangeManifestPayload,
+} from './ip-range-manifest.js'
 
 export interface IpVerificationDecision {
   verified: boolean
   /** Exact vendored publisher snapshot consulted for this decision. */
   manifest: TrafficVerificationManifest | null
-}
-
-/** CIDR pre-parsed into the form needed for fast membership checks. */
-interface ParsedCidr {
-  readonly version: 4 | 6
-  /** Network address as a BigInt (IPv6) or number (IPv4-as-BigInt for uniformity). */
-  readonly network: bigint
-  /** Mask as a BigInt — `network & mask === addr & mask` proves membership. */
-  readonly mask: bigint
 }
 
 interface VerificationData {
@@ -94,49 +92,93 @@ interface VerificationData {
  * intentional (no publisher data) and should be added the moment an
  * operator publishes ranges.
  */
-const RULE_ID_TO_RANGES: Record<string, RawIpRanges> = {
+const RULE_ID_TO_RANGES: Record<string, unknown> = {
   // OpenAI — three separate published lists (training crawler vs
   // user-on-behalf fetcher vs search engine; OpenAI maintains the
   // split because the IPs really do differ between products).
   // src: https://openai.com/gptbot.json
-  'openai-gptbot': gptbotRaw as RawIpRanges,
+  'openai-gptbot': gptbotRaw,
   // src: https://openai.com/chatgpt-user.json
-  'openai-chatgpt-user': chatgptUserRaw as RawIpRanges,
+  'openai-chatgpt-user': chatgptUserRaw,
   // src: https://openai.com/searchbot.json
-  'openai-searchbot': oaiSearchbotRaw as RawIpRanges,
+  'openai-searchbot': oaiSearchbotRaw,
 
   // Search engines.
   // src: https://developers.google.com/static/search/apis/ipranges/googlebot.json
   // (also covers Gemini grounding — Google doesn't publish a
   // separate Gemini list; Google-Extended traffic comes from the
   // same Googlebot ranges)
-  'googlebot': googlebotRaw as RawIpRanges,
+  'googlebot': googlebotRaw,
   // src: https://www.bing.com/toolbox/bingbot.json
   // (also covers Copilot grounding — Microsoft routes Copilot's
   // web fetches through bingbot infrastructure)
-  'bingbot': bingbotRaw as RawIpRanges,
+  'bingbot': bingbotRaw,
 
   // Google-Agent — Google's agentic user-triggered fetcher (Project
   // Mariner et al.). Verified against Google's user-triggered-agents
   // list, which covers every Google user-triggered fetcher collectively
   // (Google publishes no per-fetcher split).
   // src: https://developers.google.com/static/crawling/ipranges/user-triggered-agents.json
-  'google-agent': googleUserTriggeredRaw as RawIpRanges,
+  'google-agent': googleUserTriggeredRaw,
 
   // Perplexity — split between crawler and user-on-behalf fetcher,
   // same shape as OpenAI's split.
   // src: https://www.perplexity.ai/perplexitybot.json
-  'perplexity-bot': perplexitybotRaw as RawIpRanges,
+  'perplexity-bot': perplexitybotRaw,
   // src: https://www.perplexity.ai/perplexity-user.json
-  'perplexity-user': perplexityUserRaw as RawIpRanges,
+  'perplexity-user': perplexityUserRaw,
 
   // Anthropic publishes one shared crawler-origin manifest. It confirms
   // Anthropic origin but does not attribute a prefix to ClaudeBot,
   // Claude-SearchBot, or Claude-User individually, so both classifier rules
   // map to the same file and the UA remains the product discriminator.
   // src: https://claude.com/crawling/bots.json
-  'anthropic-claudebot': anthropicRaw as RawIpRanges,
-  'claude-user': anthropicRaw as RawIpRanges,
+  'anthropic-claudebot': anthropicRaw,
+  'claude-user': anthropicRaw,
+}
+
+function manifestMetadata(raw: unknown): TrafficVerificationManifest | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const record = raw as Record<string, unknown>
+  const source = typeof record._source === 'string' ? record._source.trim() : ''
+  const version = typeof record.creationTime === 'string' ? record.creationTime.trim() : ''
+  return source && version ? { id: `${source}#${version}`, source, version } : null
+}
+
+function verificationDataFromRaw(raw: unknown): VerificationData {
+  const validation = validateIpRangeManifestPayload(raw)
+  const ranges: ParsedCidr[] = []
+  if (validation.ok) {
+    for (const entry of validation.value.prefixes) {
+      const parsed = parseCidr(entry.ipv4Prefix ?? entry.ipv6Prefix)
+      if (parsed) ranges.push(parsed)
+    }
+  }
+  return { ranges, manifest: manifestMetadata(raw) }
+}
+
+function decideIpVerification(
+  ip: string | null | undefined,
+  data: VerificationData,
+): IpVerificationDecision {
+  if (!ip || data.ranges.length === 0) return { verified: false, manifest: data.manifest }
+  const parsed = parseIp(ip)
+  if (!parsed) return { verified: false, manifest: data.manifest }
+  for (const cidr of data.ranges) {
+    if (parsed.version !== cidr.version) continue
+    if ((parsed.addr & cidr.mask) === cidr.network) {
+      return { verified: true, manifest: data.manifest }
+    }
+  }
+  return { verified: false, manifest: data.manifest }
+}
+
+/** Pure verification helper for validating a candidate or fixture manifest. */
+export function verifyIpAgainstManifest(
+  ip: string | null | undefined,
+  raw: unknown,
+): IpVerificationDecision {
+  return decideIpVerification(ip, verificationDataFromRaw(raw))
 }
 
 /**
@@ -150,101 +192,10 @@ const RULE_ID_TO_RANGES: Record<string, RawIpRanges> = {
 const CACHE: Map<string, VerificationData> = (() => {
   const cache = new Map<string, VerificationData>()
   for (const [ruleId, raw] of Object.entries(RULE_ID_TO_RANGES)) {
-    const parsed: ParsedCidr[] = []
-    for (const entry of raw.prefixes) {
-      const cidr = entry.ipv4Prefix ?? entry.ipv6Prefix
-      if (!cidr) continue
-      const p = parseCidr(cidr)
-      if (p) parsed.push(p)
-    }
-    const source = raw._source?.trim()
-    const version = raw.creationTime?.trim()
-    const manifest = source && version
-      ? { id: `${source}#${version}`, source, version }
-      : null
-    cache.set(ruleId, { ranges: parsed, manifest })
+    cache.set(ruleId, verificationDataFromRaw(raw))
   }
   return cache
 })()
-
-/**
- * Parse an IPv4 or IPv6 address into a BigInt. Returns null on malformed
- * input (callers treat null as "can't verify, stay unverified").
- *
- * IPv4: 4 octets → 32-bit BigInt
- * IPv6: 8 groups, supports `::` zero-compression. Returns 128-bit BigInt.
- */
-export function parseIp(ip: string): { version: 4 | 6; addr: bigint } | null {
-  if (!ip) return null
-  // IPv4-mapped IPv6 (e.g. ::ffff:192.0.2.1) — strip prefix and treat as IPv4.
-  // Common for clients that hit IPv6-only edges but originate from IPv4.
-  const mappedMatch = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip)
-  if (mappedMatch) return parseIp(mappedMatch[1]!)
-  if (ip.includes(':')) {
-    // IPv6
-    const sides = ip.split('::')
-    if (sides.length > 2) return null
-    const left = sides[0]!.length > 0 ? sides[0]!.split(':') : []
-    const right = sides.length === 2 && sides[1]!.length > 0 ? sides[1]!.split(':') : []
-    const groupCount = left.length + right.length
-    if (groupCount > 8) return null
-    if (sides.length === 1 && groupCount !== 8) return null
-    const fill = 8 - groupCount
-    const groups: string[] = [...left, ...new Array<string>(fill).fill('0'), ...right]
-    let addr = 0n
-    for (const g of groups) {
-      if (g.length === 0 || g.length > 4) return null
-      const n = Number.parseInt(g, 16)
-      if (!Number.isFinite(n) || n < 0 || n > 0xffff) return null
-      addr = (addr << 16n) | BigInt(n)
-    }
-    return { version: 6, addr }
-  }
-  // IPv4
-  const octets = ip.split('.')
-  if (octets.length !== 4) return null
-  let addr = 0n
-  for (const o of octets) {
-    if (o.length === 0 || o.length > 3) return null
-    const n = Number.parseInt(o, 10)
-    if (!Number.isInteger(n) || n < 0 || n > 255) return null
-    addr = (addr << 8n) | BigInt(n)
-  }
-  return { version: 4, addr }
-}
-
-/** Parse `1.2.3.0/24` or `2001:db8::/32` into a `ParsedCidr`. */
-export function parseCidr(cidr: string): ParsedCidr | null {
-  const [ipPart, prefixStr] = cidr.split('/')
-  if (!ipPart || !prefixStr) return null
-  const prefix = Number.parseInt(prefixStr, 10)
-  if (!Number.isInteger(prefix)) return null
-  const parsed = parseIp(ipPart)
-  if (!parsed) return null
-  const totalBits = parsed.version === 4 ? 32 : 128
-  if (prefix < 0 || prefix > totalBits) return null
-  // Build the mask: top `prefix` bits set, rest zero.
-  // `(1 << totalBits) - 1` = all-ones; right-shift the network suffix off,
-  // then left-shift back to leave the prefix bits on top.
-  const allOnes = (1n << BigInt(totalBits)) - 1n
-  const mask = (allOnes >> BigInt(totalBits - prefix)) << BigInt(totalBits - prefix)
-  return {
-    version: parsed.version,
-    network: parsed.addr & mask,
-    mask,
-  }
-}
-
-/**
- * True if `ip` falls inside `cidr`'s network. Both must be the same
- * IP version (matching v4-in-v4 / v6-in-v6); cross-version returns false.
- */
-export function ipInCidr(ip: string, cidr: ParsedCidr): boolean {
-  const parsed = parseIp(ip)
-  if (!parsed) return false
-  if (parsed.version !== cidr.version) return false
-  return (parsed.addr & cidr.mask) === cidr.network
-}
 
 /**
  * Decide whether an IP falls in the published ranges for a crawler rule and
@@ -258,17 +209,7 @@ export function verifyIpForRuleDecision(
   ruleId: string,
 ): IpVerificationDecision {
   const data = CACHE.get(ruleId)
-  if (!data || data.ranges.length === 0) return { verified: false, manifest: null }
-  if (!ip) return { verified: false, manifest: data.manifest }
-  const parsed = parseIp(ip)
-  if (!parsed) return { verified: false, manifest: data.manifest }
-  for (const cidr of data.ranges) {
-    if (parsed.version !== cidr.version) continue
-    if ((parsed.addr & cidr.mask) === cidr.network) {
-      return { verified: true, manifest: data.manifest }
-    }
-  }
-  return { verified: false, manifest: data.manifest }
+  return data ? decideIpVerification(ip, data) : { verified: false, manifest: null }
 }
 
 /**

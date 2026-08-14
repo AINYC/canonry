@@ -59,6 +59,8 @@ import type {
   TrafficSourceStatus,
   TrafficSourceAuthMode,
   TrafficConnectCloudflareRequest,
+  TrafficCrawlerEventEntry,
+  TrafficAiUserFetchEventEntry,
   TrafficEventEntry,
   TrafficEventKind,
   TrafficEventsResponse,
@@ -692,62 +694,164 @@ function trafficSeriesPoint(
   return created
 }
 
+type VerificationEventKey = Pick<
+  TrafficCrawlerEventEntry,
+  'sourceId' | 'tsHour' | 'botId' | 'verificationStatus' | 'pathNormalized' | 'status' | 'hits'
+>
+
+type VerificationManifestUsage = NonNullable<
+  TrafficCrawlerEventEntry['verificationManifests']
+>[number]
+
+type VerificationManifestRow = Pick<
+  TrafficCrawlerEventEntry,
+  'sourceId' | 'tsHour' | 'botId' | 'verificationStatus' | 'pathNormalized' | 'status'
+> & VerificationManifestUsage
+
+type VerificationProvenance = {
+  verificationManifests: VerificationManifestUsage[]
+  verificationUnattributedHits: number
+}
+
+function verificationEventKey(row: Omit<VerificationEventKey, 'hits'>): string {
+  return JSON.stringify([
+    row.sourceId,
+    row.tsHour,
+    row.botId,
+    row.verificationStatus,
+    row.pathNormalized,
+    row.status,
+  ])
+}
+
+function verificationSelectedRowsJson(
+  projectId: string,
+  rows: readonly VerificationEventKey[],
+): string {
+  return JSON.stringify(rows.map(row => [
+    projectId,
+    row.sourceId,
+    row.tsHour,
+    row.botId,
+    row.verificationStatus,
+    row.pathNormalized,
+    row.status,
+  ]))
+}
+
+function buildVerificationProvenance(
+  events: readonly VerificationEventKey[],
+  rows: readonly VerificationManifestRow[],
+): Map<string, VerificationProvenance> {
+  const manifestsByEvent = new Map<string, VerificationManifestUsage[]>()
+  for (const row of rows) {
+    const key = verificationEventKey(row)
+    const manifests = manifestsByEvent.get(key)
+    const usage = { manifestId: row.manifestId, manifest: row.manifest, hits: row.hits }
+    if (manifests) manifests.push(usage)
+    else manifestsByEvent.set(key, [usage])
+  }
+
+  const provenanceByEvent = new Map<string, VerificationProvenance>()
+  for (const event of events) {
+    const key = verificationEventKey(event)
+    const verificationManifests = manifestsByEvent.get(key) ?? []
+    verificationManifests.sort((a, b) => a.manifestId.localeCompare(b.manifestId))
+    const attributedHits = verificationManifests.reduce((sum, manifest) => sum + manifest.hits, 0)
+    provenanceByEvent.set(key, {
+      verificationManifests,
+      verificationUnattributedHits: Math.max(0, event.hits - attributedHits),
+    })
+  }
+  return provenanceByEvent
+}
+
 function crawlerVerificationProvenance(
   db: DatabaseClient,
-  row: typeof crawlerEventsHourly.$inferSelect,
-) {
-  const verificationManifests = db
+  projectId: string,
+  events: readonly TrafficCrawlerEventEntry[],
+): Map<string, VerificationProvenance> {
+  if (events.length === 0) return new Map()
+  const selectedRows = verificationSelectedRowsJson(projectId, events)
+  const rows = db
     .select({
+      sourceId: crawlerVerificationManifestsHourly.sourceId,
+      tsHour: crawlerVerificationManifestsHourly.tsHour,
+      botId: crawlerVerificationManifestsHourly.botId,
+      verificationStatus: crawlerVerificationManifestsHourly.verificationStatus,
+      pathNormalized: crawlerVerificationManifestsHourly.pathNormalized,
+      status: crawlerVerificationManifestsHourly.status,
       manifestId: crawlerVerificationManifestsHourly.manifestId,
       manifest: crawlerVerificationManifestsHourly.manifestJson,
       hits: crawlerVerificationManifestsHourly.hits,
     })
     .from(crawlerVerificationManifestsHourly)
-    .where(and(
-      eq(crawlerVerificationManifestsHourly.projectId, row.projectId),
-      eq(crawlerVerificationManifestsHourly.sourceId, row.sourceId),
-      eq(crawlerVerificationManifestsHourly.tsHour, row.tsHour),
-      eq(crawlerVerificationManifestsHourly.botId, row.botId),
-      eq(crawlerVerificationManifestsHourly.verificationStatus, row.verificationStatus),
-      eq(crawlerVerificationManifestsHourly.pathNormalized, row.pathNormalized),
-      eq(crawlerVerificationManifestsHourly.status, row.status),
-    ))
+    .where(sql`(
+      ${crawlerVerificationManifestsHourly.projectId},
+      ${crawlerVerificationManifestsHourly.sourceId},
+      ${crawlerVerificationManifestsHourly.tsHour},
+      ${crawlerVerificationManifestsHourly.botId},
+      ${crawlerVerificationManifestsHourly.verificationStatus},
+      ${crawlerVerificationManifestsHourly.pathNormalized},
+      ${crawlerVerificationManifestsHourly.status}
+    ) IN (
+      SELECT
+        json_extract(value, '$[0]'),
+        json_extract(value, '$[1]'),
+        json_extract(value, '$[2]'),
+        json_extract(value, '$[3]'),
+        json_extract(value, '$[4]'),
+        json_extract(value, '$[5]'),
+        json_extract(value, '$[6]')
+      FROM json_each(${selectedRows})
+    )`)
     .orderBy(crawlerVerificationManifestsHourly.manifestId)
     .all()
-  const attributedHits = verificationManifests.reduce((sum, manifest) => sum + manifest.hits, 0)
-  return {
-    verificationManifests,
-    verificationUnattributedHits: Math.max(0, row.hits - attributedHits),
-  }
+  return buildVerificationProvenance(events, rows)
 }
 
 function aiUserFetchVerificationProvenance(
   db: DatabaseClient,
-  row: typeof aiUserFetchEventsHourly.$inferSelect,
-) {
-  const verificationManifests = db
+  projectId: string,
+  events: readonly TrafficAiUserFetchEventEntry[],
+): Map<string, VerificationProvenance> {
+  if (events.length === 0) return new Map()
+  const selectedRows = verificationSelectedRowsJson(projectId, events)
+  const rows = db
     .select({
+      sourceId: aiUserFetchVerificationManifestsHourly.sourceId,
+      tsHour: aiUserFetchVerificationManifestsHourly.tsHour,
+      botId: aiUserFetchVerificationManifestsHourly.botId,
+      verificationStatus: aiUserFetchVerificationManifestsHourly.verificationStatus,
+      pathNormalized: aiUserFetchVerificationManifestsHourly.pathNormalized,
+      status: aiUserFetchVerificationManifestsHourly.status,
       manifestId: aiUserFetchVerificationManifestsHourly.manifestId,
       manifest: aiUserFetchVerificationManifestsHourly.manifestJson,
       hits: aiUserFetchVerificationManifestsHourly.hits,
     })
     .from(aiUserFetchVerificationManifestsHourly)
-    .where(and(
-      eq(aiUserFetchVerificationManifestsHourly.projectId, row.projectId),
-      eq(aiUserFetchVerificationManifestsHourly.sourceId, row.sourceId),
-      eq(aiUserFetchVerificationManifestsHourly.tsHour, row.tsHour),
-      eq(aiUserFetchVerificationManifestsHourly.botId, row.botId),
-      eq(aiUserFetchVerificationManifestsHourly.verificationStatus, row.verificationStatus),
-      eq(aiUserFetchVerificationManifestsHourly.pathNormalized, row.pathNormalized),
-      eq(aiUserFetchVerificationManifestsHourly.status, row.status),
-    ))
+    .where(sql`(
+      ${aiUserFetchVerificationManifestsHourly.projectId},
+      ${aiUserFetchVerificationManifestsHourly.sourceId},
+      ${aiUserFetchVerificationManifestsHourly.tsHour},
+      ${aiUserFetchVerificationManifestsHourly.botId},
+      ${aiUserFetchVerificationManifestsHourly.verificationStatus},
+      ${aiUserFetchVerificationManifestsHourly.pathNormalized},
+      ${aiUserFetchVerificationManifestsHourly.status}
+    ) IN (
+      SELECT
+        json_extract(value, '$[0]'),
+        json_extract(value, '$[1]'),
+        json_extract(value, '$[2]'),
+        json_extract(value, '$[3]'),
+        json_extract(value, '$[4]'),
+        json_extract(value, '$[5]'),
+        json_extract(value, '$[6]')
+      FROM json_each(${selectedRows})
+    )`)
     .orderBy(aiUserFetchVerificationManifestsHourly.manifestId)
     .all()
-  const attributedHits = verificationManifests.reduce((sum, manifest) => sum + manifest.hits, 0)
-  return {
-    verificationManifests,
-    verificationUnattributedHits: Math.max(0, row.hits - attributedHits),
-  }
+  return buildVerificationProvenance(events, rows)
 }
 
 function parseSourceConfig(row: typeof trafficSources.$inferSelect): Record<string, unknown> {
@@ -4151,7 +4255,8 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           botId: r.botId,
           operator: r.operator,
           verificationStatus: r.verificationStatus,
-          ...crawlerVerificationProvenance(app.db, r),
+          verificationManifests: [],
+          verificationUnattributedHits: r.hits,
           pathNormalized: r.pathNormalized,
           pathClass: classifyTrafficPath(r.pathNormalized),
           status: r.status,
@@ -4211,7 +4316,8 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           botId: r.botId,
           operator: r.operator,
           verificationStatus: r.verificationStatus,
-          ...aiUserFetchVerificationProvenance(app.db, r),
+          verificationManifests: [],
+          verificationUnattributedHits: r.hits,
           pathNormalized: r.pathNormalized,
           status: r.status,
           hits: r.hits,
@@ -4290,6 +4396,25 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
 
     events.sort((a, b) => (a.tsHour < b.tsHour ? 1 : a.tsHour > b.tsHour ? -1 : 0))
     const trimmed = events.slice(0, limit)
+    const trimmedCrawlerEvents = trimmed.filter(
+      (event): event is TrafficCrawlerEventEntry => event.kind === TrafficEventKinds.crawler,
+    )
+    const trimmedAiUserFetchEvents = trimmed.filter(
+      (event): event is TrafficAiUserFetchEventEntry => event.kind === TrafficEventKinds['ai-user-fetch'],
+    )
+    const crawlerProvenance = crawlerVerificationProvenance(app.db, project.id, trimmedCrawlerEvents)
+    const aiUserFetchProvenance = aiUserFetchVerificationProvenance(app.db, project.id, trimmedAiUserFetchEvents)
+    const eventsWithProvenance: TrafficEventEntry[] = trimmed.map((event) => {
+      if (event.kind === TrafficEventKinds.crawler) {
+        const provenance = crawlerProvenance.get(verificationEventKey(event))
+        return provenance ? { ...event, ...provenance } : event
+      }
+      if (event.kind === TrafficEventKinds['ai-user-fetch']) {
+        const provenance = aiUserFetchProvenance.get(verificationEventKey(event))
+        return provenance ? { ...event, ...provenance } : event
+      }
+      return event
+    })
 
     const response: TrafficEventsResponse = {
       windowStart: sinceIso,
@@ -4314,7 +4439,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         returned: trimmed.length,
         truncated: trimmed.length < totalEventRows,
       },
-      events: trimmed,
+      events: eventsWithProvenance,
     }
     return response
   })
