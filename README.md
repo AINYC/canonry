@@ -4,87 +4,137 @@
 
 Your entire AEO/GEO/AI Visibility, technical SEO + web analytics stack. **Agent-first. Self-hosted. Local.**
 
-- **Local-only:** Canonry runs on your machine and stores its data in SQLite.
-- Track web search citations and mentions across Gemini, ChatGPT, Claude, Perplexity, and local LLMs
-- Capture server-side traffic from Cloudflare, Cloud Run, Vercel, and WordPress — [setup guide](skills/canonry/references/server-side-traffic.md)
-- Diagnose against real traffic with built-in [GSC](docs/google-search-console-setup.md), [GA4](docs/google-analytics-setup.md), and [Bing Webmaster](docs/bing-webmaster-setup.md)
-- Track local AEO via [Google Business Profile](skills/canonry/references/google-business-profile.md) — search-term impressions, performance metrics, and hotel lodging + booking-CTA gaps
-- Manage [ChatGPT ads](docs/mcp.md#tool-surface) with OpenAI Ads Manager — connect an ad account, inspect conversion setup and performance, prepare paused campaigns, and launch only with an explicit human approval
-- Discover who links to you with [Common Crawl backlinks](skills/canonry/references/canonry-cli.md#backlinks-common-crawl) — follows Common Crawl's rolling monthly hyperlink graph, auto-syncing each new window on a schedule, queried locally with DuckDB
-- Execute fixes via [WordPress](docs/wordpress-setup.md), JSON-LD schema, and indexing submissions
-- Manage many clients declaratively — config-as-code YAML + `cnry apply`
-- Schedule recurring visibility checks, traffic syncs, and Business Profile syncs, with webhook alerts on regressions
-- Generate client-ready HTML reports — `cnry report <project>`
-- Drive from your own agent via the [MCP adapter](docs/mcp.md), the [portable Agent Plugin](docs/plugins.md), or webhooks
-- Or use **Aero** — Canonry's built-in agent that wakes up after every run
+Canonry gives operators and agents one technical record for AI visibility, site health, search, traffic, local presence, and backlinks.
 
-Every dashboard view has a matching CLI command and API endpoint. The CLI is the surface; the UI consumes the same API your agent does.
+**Measure → diagnose → approve action → measure change**
 
-![Canonry Dashboard](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/dashboard.png)
+| Phase | What Canonry does |
+|---|---|
+| **Measure** | Track mentions and citations across Gemini, ChatGPT, Claude, Perplexity, and local models. Join them with GSC, GA4, Bing, traffic, Business Profile, and backlink data. |
+| **Diagnose** | Crawl the site, score Page Health, inspect evidence, compare competitors, and explain regressions. |
+| **Act** | Prepare changes for WordPress, JSON-LD, index submission, content, and ChatGPT ads. ChatGPT ads activation requires an exact human grant. |
+| **Operate** | Schedule checks, sync data, manage projects as YAML, send webhooks, and generate client-ready reports. |
 
-## Run your first AI visibility check in 5 minutes
+The dashboard, CLI, and agent tools share the same project API. Use the built-in Aero agent or connect your own agent through MCP.
+
+![Canonry Site Map graph](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/dashboard.png)
+
+## Get a Page Health baseline
+
+You need Node.js `>=22.14` and `<26`, plus a public, crawlable site. Site Health does not need an answer-provider key.
 
 ```bash
 npm install -g @canonry/canonry
-cnry init
+cnry bootstrap
 cnry serve
 ```
 
-The CLI installs as `cnry` (short form) and `canonry` — the two are interchangeable.
-The legacy package name `@ainyc/canonry` is still published at the same versions for compatibility, but new installs should use `@canonry/canonry`.
+`cnry bootstrap` creates the local configuration, SQLite database, and full-instance API key. Keep its output private. Provider credentials are optional. Bootstrap imports supported variables already in your environment.
 
-Open [http://localhost:4100/setup](http://localhost:4100/setup). A guided wizard walks you through provider keys, project setup, queries, and your first visibility check.
+Open [http://127.0.0.1:4100/setup](http://127.0.0.1:4100/setup). By default, the first open asks you to create a dashboard password. Enter your domain and approve the public-site crawl to build a persisted Page Health baseline. AI Visibility is optional.
 
-Prefer the terminal?
+To use the terminal instead of the setup page, keep `cnry serve` running and open a second terminal:
 
 ```bash
-cnry project create my-site --domain example.com
-cnry query add my-site "your first query" "second query"
-cnry run my-site --wait
-cnry evidence my-site
-cnry insights my-site
+cnry project create my-site --domain example.com --country US --language en
+cnry technical-aeo run my-site --max-pages 100 --wait --format json
 ```
+
+The run command returns a run ID and status. If the status is `completed` or `partial`, read evidence from that run:
+
+```bash
+cnry technical-aeo score my-site --run-id <run-id> --format json
+cnry technical-aeo pages my-site --run-id <run-id> --sort score-asc --limit 10 --format jsonl
+```
+
+`--wait` polls for up to 15 minutes. If the scan remains active, use the progress command below. If it fails or is cancelled, inspect it with `cnry run show <run-id> --format json`.
+
+The CLI installs as both `cnry` and `canonry`. The commands are interchangeable. The compatibility package `@ainyc/canonry` remains available. Use `@canonry/canonry` for new installations.
 
 ## Or use any shell-capable coding agent
 
-Without the native plugin, drop this into any shell-capable agent. It keeps
-credential setup private and asks before each persisted or quota-consuming
-operation:
+If your client supports the [Agent Plugin](docs/plugins.md) or [MCP adapter](docs/mcp.md), use that integration. Otherwise, paste this request into any shell-capable agent.
+
+<details>
+<summary>Copy the Site Health-first setup request</summary>
+
+<br />
 
 ```text
-Set up canonry for me. Canonry is an open-source platform that tracks how AI answer engines (Gemini, ChatGPT, Claude, Perplexity) cite my site.
+Help me set up Canonry for my public site.
 
-1. Ask me for: my domain, 3–5 queries I want to track, and which provider I want to start with (gemini / openai / claude / perplexity). Wait for my answers before proceeding.
-2. Ask for approval, then run `npm install -g @canonry/canonry`.
-3. Do not run `cnry init` yourself or ask me for credentials. Tell me to run `cnry init` in my own private terminal because it prompts for provider secrets and prints the new full-access API key once. Wait for me to confirm completion; never ask me to paste its output. This scaffolds config and installs the Canonry skills.
-4. Read `.claude/skills/canonry/SKILL.md`, run the read-only doctor checks, and show me the exact project/domain/query changes you propose. Ask for explicit approval before creating the project or changing queries.
-5. After project setup, show the provider and query count for the first sweep and ask for explicit approval for that quota-consuming run. Only then trigger it.
-6. Read `.claude/skills/aero/SKILL.md` and summarize the existing mention and citation evidence. Propose the technical audit, including its page limit, and ask for separate approval before running `cnry technical-aeo run <project> --wait`; after approval, read the result with `cnry technical-aeo score <project> --format json`.
-7. Open the dashboard only if I ask, then summarize what you found: mention and citation rates per provider, the top 3 gaps, and the highest-impact site issues. Ask again before drafting content, submitting URLs, editing files, publishing, or performing any other mutation or quota-consuming operation.
+Use the official Canonry docs:
+- Agent quickstart: https://github.com/Canonry/canonry#or-use-any-shell-capable-coding-agent
+- CLI reference: https://github.com/Canonry/canonry/blob/main/skills/canonry/references/canonry-cli.md
+- Plugin setup: https://github.com/Canonry/canonry/blob/main/docs/plugins.md
+- MCP setup: https://github.com/Canonry/canonry/blob/main/docs/mcp.md
+
+If a Canonry installation or connected plugin/MCP is available, use it. Do not create a duplicate. Choose the connected tools or the shell path, not both. The `cnry` and `canonry` commands are interchangeable.
+
+1. Ask for my public domain, country, and language. Do not create or scan anything yet.
+2. If connected tools are available, use them for the remaining steps. For the shell path, make sure that `cnry` is on PATH. Then run `cnry --version`. If Canonry is missing, propose `npm install -g @canonry/canonry` and wait for approval. If configuration is missing, tell me to run `cnry bootstrap` in my private terminal and wait. Never ask me to paste passwords, API keys, OAuth credentials, or command output.
+3. Make sure that the API or connected tool is reachable. If the shell API is unavailable, propose `cnry start`. Wait for approval. List the projects with the connected project tool or `cnry project list --format json`. Reuse a project with the same domain. Make sure that the proposed name is not assigned to a different domain. If no match exists, show the exact create operation and wait for approval.
+4. Propose a bounded Site Health scan. Include `--max-pages` and the state of dead-link checking. Show the connected operation or exact `cnry technical-aeo run ... --wait --format json` command. Wait for separate approval before scanning.
+5. If the run status is `completed` or `partial`, read its score and worst pages with run-pinned connected tools. For the shell path, use `cnry technical-aeo score <project> --run-id <run-id> --format json` and `cnry technical-aeo pages <project> --run-id <run-id> --sort score-asc --limit 10 --format jsonl`. If the run failed or was cancelled, inspect the run error and stop. Summarize completed evidence and propose AI Visibility setup.
+6. Ask before you add queries, connect providers, start a provider-backed or quota-consuming run, edit files, or publish.
 ```
+
+</details>
+
+## Add AI Visibility when you need it
+
+Add provider keys in **Settings**. Settings changes apply immediately. To import environment variables, stop Canonry and set the variables. Then run `cnry bootstrap` and restart Canonry.
+
+| Provider | Key source | Environment variable |
+|---|---|---|
+| Gemini | [Google AI Studio](https://aistudio.google.com/apikey) | `GEMINI_API_KEY` |
+| OpenAI | [OpenAI Platform](https://platform.openai.com/api-keys) | `OPENAI_API_KEY` |
+| Claude | [Anthropic Console](https://console.anthropic.com/settings/keys) | `ANTHROPIC_API_KEY` |
+| Perplexity | [Perplexity settings](https://www.perplexity.ai/settings/api) | `PERPLEXITY_API_KEY` |
+| Local model | Any OpenAI-compatible endpoint | `LOCAL_BASE_URL` |
+
+Then add the queries that matter and run a measured sweep:
+
+```bash
+cnry query add my-site "your first query" "your second query"
+cnry run my-site --wait
+cnry visibility-stats my-site --by-provider
+```
+
+## Technical surface
+
+| Surface | Use it for |
+|---|---|
+| **CLI and REST API** | Script project measurements, diagnoses, actions, reports, and schedules. OpenAPI is available at `GET /api/v1/openapi.json`. |
+| **MCP and Agent Plugin** | Give Codex, Claude, Cursor, or a custom agent a typed, task-shaped tool surface. |
+| **Aero** | When enabled and configured, use the built-in analyst that reviews evidence and wakes after completed runs. |
+| **Dashboard** | Approve work, inspect evidence, and observe the same project record used by agents. |
+| **Config as code** | Declare many projects in YAML and apply them with `cnry apply`. |
+
+Key integrations include [Google Search Console](docs/google-search-console-setup.md), [GA4](docs/google-analytics-setup.md), [Bing Webmaster Tools](docs/bing-webmaster-setup.md), [Google Business Profile](skills/canonry/references/google-business-profile.md), [WordPress](docs/wordpress-setup.md), [Common Crawl backlinks](skills/canonry/references/canonry-cli.md#backlinks-common-crawl), and [server-side traffic](skills/canonry/references/server-side-traffic.md).
+
+## Deployment and trust boundary
+
+Canonry is self-hosted and single-tenant. Run one instance for one operator or team, and isolate unrelated teams on separate instances.
+
+- `cnry serve` runs locally or on your server with SQLite.
+- Provider credentials remain on the Canonry instance.
+- API keys support project scope and read-only access. A write-scoped project key can change instance settings.
+- These key controls do not replace instance isolation.
+- The dashboard is a companion to the CLI, API, MCP, and agent surfaces.
+
+See the [deployment guide](docs/deployment.md) for reverse proxies, daemon mode, Docker, systemd, and Tailscale.
 
 ## If you get stuck
 
 | Problem | Fix |
-|---------|-----|
-| No provider key configured | Open `/setup`, or grab a free [Gemini key](https://aistudio.google.com/apikey), set `GEMINI_API_KEY`, and restart `cnry serve`. |
-| Why did my first audit fail? | Run `cnry doctor`, then reopen `/setup`; it checks provider keys and setup blockers before the first sweep. |
-| No results after a run | Visibility checks are async — check the Runs tab or use `cnry run <project> --wait`. |
-| Not sure what queries to test | Setup wizard auto-generates them; expand the basket later with `cnry discover run <project> --icp "..."` — see the [discovery methodology](skills/aero/references/aeo-discovery.md). |
-| Want to test specific queries without tracking them | Use the **Research queries** workflow in Query Discovery, or run `cnry research run <project> "query one" "query two" --wait`. Results and sources are saved separately and never change the tracked basket. |
+|---|---|
+| Site scan is still running | Read exact counters with `cnry technical-aeo progress <project> --run-id <id> --format json`. |
+| Site scan failed | Read the error with `cnry run show <run-id> --format json`. Read the last phase and counters with the progress command above. |
+| No visibility results | Inspect existing work with `cnry runs <project> --format json`, then `cnry run show <run-id> --format json`. This does not start another paid run. |
+| Need more query candidates | Run `cnry discover run <project> --icp "..."`. This does not change the basket. Preview a completed session with `cnry discover promote preview <project> <session-id>`. Promote only after approval. |
+| Need one-off research | Run `cnry research run <project> "query one" "query two" --wait`. Research does not change the tracked basket. |
 | `npm install` fails on `node-gyp` | Install build tools for `better-sqlite3` ([guide](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md)). |
-
-## Provider keys
-
-| Provider | Key source | Env var |
-|----------|-----------|---------|
-| Gemini | [aistudio.google.com](https://aistudio.google.com/apikey) | `GEMINI_API_KEY` |
-| OpenAI | [platform.openai.com](https://platform.openai.com/api-keys) | `OPENAI_API_KEY` |
-| Claude | [console.anthropic.com](https://console.anthropic.com/settings/keys) | `ANTHROPIC_API_KEY` |
-| Perplexity | [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api) | `PERPLEXITY_API_KEY` |
-| Local LLMs | Any OpenAI-compatible endpoint | `LOCAL_LLM_URL` |
-
-Configure during `cnry init`, in the dashboard `/settings`, or as env vars.
 
 ## Documentation
 
@@ -95,15 +145,10 @@ Configure during `cnry init`, in the dashboard `/settings`, or as env vars.
 | **Agent Plugin — portable core + Codex / Claude adapters** | [docs/plugins.md](docs/plugins.md) |
 | **MCP — Claude Desktop / Cursor / Codex** | [docs/mcp.md](docs/mcp.md) |
 | **Integrations** | [GSC](docs/google-search-console-setup.md) · [GA4](docs/google-analytics-setup.md) · [Bing](docs/bing-webmaster-setup.md) · [Google Business Profile](skills/canonry/references/google-business-profile.md) · [WordPress](docs/wordpress-setup.md) · [Server-side traffic (Cloudflare direct push or Queue pull, Cloud Run, Vercel, WordPress)](skills/canonry/references/server-side-traffic.md) |
-| **Deployment** — Docker, Railway, Render, systemd, Tailscale | [docs/deployment.md](docs/deployment.md) |
-| **API** — 118+ endpoints | `GET /api/v1/openapi.json` (no auth) |
+| **Deployment** — reverse proxies, Docker, systemd, Tailscale | [docs/deployment.md](docs/deployment.md) |
+| **API** | `GET /api/v1/openapi.json` |
 | **Standalone skills bundle** for Claude Code / Codex | `cnry skills install` ([details](skills/canonry/SKILL.md)) |
-| **Roadmap & ADRs** | [docs/roadmap.md](docs/roadmap.md) · [docs/adr/](docs/adr/) |
 | **All docs** | [docs/README.md](docs/README.md) |
-
-## Requirements
-
-Node.js ≥ 22.14.0. At least one provider API key.
 
 ## Contributing
 
