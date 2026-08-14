@@ -12,9 +12,9 @@
  *   tsx packages/integration-traffic/scripts/refresh-ip-ranges.ts
  *
  * Writes pretty-printed JSON so `git diff` shows exactly which
- * prefixes the operator added / removed. Exit code is 0 even on
- * partial failure (still updates the lists that succeeded); prints
- * a per-source summary to stderr.
+ * prefixes the operator added / removed. A partial failure still updates
+ * the lists that succeeded, but exits nonzero so automation cannot silently
+ * retain stale data. Prints a per-source summary to stderr.
  *
  * Other operators NOT covered here (no public JSON, no easily-scrape
  * source as of 2026): Meta, ByteDance, Apple, DeepSeek, Mistral,
@@ -29,7 +29,7 @@ import { validateIpRangeManifestPayload } from '../src/ip-range-manifest.js'
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const rangesDir = path.resolve(dirname, '..', 'src', 'ip-ranges')
 
-interface Source {
+export interface Source {
   /** Filename under `src/ip-ranges/`. Must match the import in `ip-verify.ts`. */
   file: string
   /** Publisher URL — the operator's canonical JSON. */
@@ -86,7 +86,7 @@ const SOURCES: Source[] = [
   },
 ]
 
-interface FetchResult {
+export interface FetchResult {
   source: Source
   ok: boolean
   prefixCount?: number
@@ -126,26 +126,33 @@ async function refreshOne(source: Source): Promise<FetchResult> {
   }
 }
 
-async function main() {
-  process.stderr.write(`Refreshing ${SOURCES.length} crawler IP-range files in ${rangesDir}\n\n`)
+export async function runRefresh(
+  sources: readonly Source[] = SOURCES,
+  refresh: (source: Source) => Promise<FetchResult> = refreshOne,
+  write: (message: string) => unknown = message => process.stderr.write(message),
+): Promise<number> {
+  write(`Refreshing ${sources.length} crawler IP-range files in ${rangesDir}\n\n`)
   // Run in parallel — publishers are independent and the script is
   // bounded by request latency, not local CPU.
-  const results = await Promise.all(SOURCES.map(refreshOne))
+  const results = await Promise.all(sources.map(refresh))
   let ok = 0
   let failed = 0
   for (const r of results) {
     if (r.ok) {
       ok++
-      process.stderr.write(`  ✓ ${r.source.label.padEnd(24)} ${r.source.file}  (${r.prefixCount} prefixes)\n`)
+      write(`  ✓ ${r.source.label.padEnd(24)} ${r.source.file}  (${r.prefixCount} prefixes)\n`)
     } else {
       failed++
-      process.stderr.write(`  ✗ ${r.source.label.padEnd(24)} ${r.source.file}  ${r.error}\n`)
+      write(`  ✗ ${r.source.label.padEnd(24)} ${r.source.file}  ${r.error}\n`)
     }
   }
-  process.stderr.write(`\nDone. ${ok} updated, ${failed} failed.\n`)
+  write(`\nDone. ${ok} updated, ${failed} failed.\n`)
   if (failed > 0) {
-    process.stderr.write(`Failed sources kept their previous JSON — re-run when reachable.\n`)
+    write(`Failed sources kept their previous JSON — re-run when reachable.\n`)
   }
+  return failed > 0 ? 1 : 0
 }
 
-await main()
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = await runRefresh()
+}

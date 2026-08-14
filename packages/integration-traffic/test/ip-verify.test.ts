@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import anthropicRaw from '../src/ip-ranges/anthropic.json' with { type: 'json' }
 import {
   hasVerificationDataFor,
+  ipRangeManifestContentHash,
   ipInCidr,
   parseCidr,
   parseIp,
@@ -12,7 +13,7 @@ import {
 } from '../src/index.js'
 
 const ANTHROPIC_MANIFEST = {
-  id: `${anthropicRaw._source}#${anthropicRaw.creationTime}`,
+  id: `${anthropicRaw._source}#${anthropicRaw.creationTime}#sha256:${ipRangeManifestContentHash(anthropicRaw)}`,
   source: anthropicRaw._source,
   version: anthropicRaw.creationTime,
 }
@@ -152,21 +153,62 @@ describe('validateIpRangeManifestPayload', () => {
       _source: 'https://example.com/bots.json',
       creationTime: 'version-2',
     }
-    const expected = {
-      verified: false,
-      manifest: {
-        id: 'https://example.com/bots.json#version-2',
-        source: 'https://example.com/bots.json',
-        version: 'version-2',
+    const payloads = [
+      { ...base, prefixes: [] },
+      {
+        ...base,
+        prefixes: [{ ipv4Prefix: '192.0.2.0/0junk' }],
       },
+      { ...base, prefixes: [null] },
+    ]
+
+    for (const payload of payloads) {
+      expect(verifyIpAgainstManifest('192.0.2.1', payload)).toEqual({
+        verified: false,
+        manifest: {
+          id: `${base._source}#${base.creationTime}#sha256:${ipRangeManifestContentHash(payload)}`,
+          source: base._source,
+          version: base.creationTime,
+        },
+      })
+    }
+  })
+
+  it('keys stale publisher versions by canonical prefix content', () => {
+    const base = {
+      _source: 'https://example.com/bots.json',
+      creationTime: 'stale-version',
+    }
+    const first = {
+      ...base,
+      prefixes: [
+        { ipv4Prefix: '192.0.2.99/24' },
+        { ipv6Prefix: '2001:DB8::1/32' },
+      ],
+    }
+    const reorderedEquivalent = {
+      ...base,
+      prefixes: [
+        { ipv6Prefix: '2001:0db8:0000:0000:0000:0000:0000:0000/32' },
+        { ipv4Prefix: '192.0.2.0/24' },
+      ],
+    }
+    const changed = {
+      ...base,
+      prefixes: [
+        { ipv4Prefix: '198.51.100.0/24' },
+        { ipv6Prefix: '2001:db8::/32' },
+      ],
     }
 
-    expect(verifyIpAgainstManifest('192.0.2.1', { ...base, prefixes: [] })).toEqual(expected)
-    expect(verifyIpAgainstManifest('192.0.2.1', {
-      ...base,
-      prefixes: [{ ipv4Prefix: '192.0.2.0/0junk' }],
-    })).toEqual(expected)
-    expect(verifyIpAgainstManifest('192.0.2.1', { ...base, prefixes: [null] })).toEqual(expected)
+    const firstManifest = verifyIpAgainstManifest(null, first).manifest
+    const equivalentManifest = verifyIpAgainstManifest(null, reorderedEquivalent).manifest
+    const changedManifest = verifyIpAgainstManifest(null, changed).manifest
+
+    expect(firstManifest).toMatchObject({ source: base._source, version: base.creationTime })
+    expect(firstManifest?.id).toMatch(/#sha256:[0-9a-f]{64}$/)
+    expect(equivalentManifest?.id).toBe(firstManifest?.id)
+    expect(changedManifest?.id).not.toBe(firstManifest?.id)
   })
 })
 

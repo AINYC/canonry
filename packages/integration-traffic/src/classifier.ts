@@ -136,9 +136,9 @@ export function classifyCrawler(event: NormalizedTrafficRequest): ClassifiedCraw
       // source isn't really the operator).
       //
       // The verified vs unverified split surfaces in the dashboard via
-      // separate `crawler_events_hourly` buckets. The rollup also keys on
-      // the manifest id so a publisher range update never merges decisions
-      // made from two different snapshots.
+      // separate `crawler_events_hourly` buckets. The rollup also keys on the
+      // manifest id, whose canonical prefix-content hash prevents a stale
+      // publisher version from merging two different snapshots.
       const decision = verifyIpForRuleDecision(event.remoteIp, rule.id)
       return {
         botId: rule.id,

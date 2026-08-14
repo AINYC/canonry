@@ -117,6 +117,7 @@ export const VerificationStatuses = verificationStatusSchema.enum
  * results auditable after an operator publishes a newer range list.
  */
 export const trafficVerificationManifestSchema = z.object({
+  /** Stable identity: source + publisher version + canonical prefix-content digest. */
   id: z.string().min(1),
   source: z.string().min(1),
   version: z.string().min(1),

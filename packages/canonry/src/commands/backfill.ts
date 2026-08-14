@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type { GroundingSource, NormalizedQueryResult, NormalizedTrafficRequest } from '@ainyc/canonry-contracts'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { aiUserFetchEventsHourly, aiUserFetchVerificationManifestsHourly, auditLog, crawlerEventsHourly, crawlerVerificationManifestsHourly, createClient, gaAiReferrals, gaTrafficSnapshots, migrate, parseJsonColumn, competitors, projects, querySnapshots, rawEventSamples, runs } from '@ainyc/canonry-db'
+import { aiUserFetchEventsHourly, auditLog, crawlerEventsHourly, createClient, gaAiReferrals, gaTrafficSnapshots, migrate, parseJsonColumn, competitors, projects, querySnapshots, rawEventSamples, runs } from '@ainyc/canonry-db'
 import { determineAnswerMentioned, effectiveBrandNames, effectiveDomains, normalizeUrlPath, ProviderNames, RunKinds, TrafficEventConfidences, TrafficEventKinds, TrafficEvidenceKinds, TrafficSourceTypes } from '@ainyc/canonry-contracts'
 import { classifyAiUserFetch, classifyCrawler } from '@ainyc/canonry-integration-traffic'
 import { reparseStoredResult as reparseOpenAIStoredResult } from '@ainyc/canonry-provider-openai'
@@ -1350,8 +1350,11 @@ export async function backfillTrafficClassificationCommand(opts?: {
     const tsHourIso = tsHour.toISOString()
     const status = snap.status ?? 200
     db.transaction((tx) => {
-      // Update the sample and both aggregate/provenance rows atomically so a
-      // re-run cannot skip a partially classified observation.
+      // Raw samples deliberately retain only an IP hash, never the source IP,
+      // so this replay can reclassify the UA but cannot reproduce an IP-range
+      // verification decision. Update the sample and aggregate atomically, and
+      // leave the added hit without a provenance sidecar so reads report it as
+      // unattributed rather than claiming that a manifest checked this request.
       tx.update(rawEventSamples)
         .set({ eventType: userFetch ? TrafficEventKinds['ai-user-fetch'] : TrafficEventKinds.crawler })
         .where(eq(rawEventSamples.id, snap.id))
@@ -1386,36 +1389,6 @@ export async function backfillTrafficClassificationCommand(opts?: {
             updatedAt: now,
           },
         }).run()
-        tx.insert(aiUserFetchVerificationManifestsHourly).values({
-          projectId: snap.projectId,
-          sourceId: snap.sourceId,
-          tsHour: tsHourIso,
-          botId: userFetch.botId,
-          verificationStatus: userFetch.verificationStatus,
-          pathNormalized: snap.pathNormalized,
-          status,
-          manifestId: userFetch.verificationManifest?.id ?? 'none',
-          manifestJson: userFetch.verificationManifest,
-          hits: 1,
-          createdAt: now,
-          updatedAt: now,
-        }).onConflictDoUpdate({
-          target: [
-            aiUserFetchVerificationManifestsHourly.projectId,
-            aiUserFetchVerificationManifestsHourly.sourceId,
-            aiUserFetchVerificationManifestsHourly.tsHour,
-            aiUserFetchVerificationManifestsHourly.botId,
-            aiUserFetchVerificationManifestsHourly.verificationStatus,
-            aiUserFetchVerificationManifestsHourly.pathNormalized,
-            aiUserFetchVerificationManifestsHourly.status,
-            aiUserFetchVerificationManifestsHourly.manifestId,
-          ],
-          set: {
-            hits: sql`${aiUserFetchVerificationManifestsHourly.hits} + 1`,
-            manifestJson: userFetch.verificationManifest,
-            updatedAt: now,
-          },
-        }).run()
       } else {
         tx.insert(crawlerEventsHourly).values({
           projectId: snap.projectId,
@@ -1442,36 +1415,6 @@ export async function backfillTrafficClassificationCommand(opts?: {
           ],
           set: {
             hits: sql`${crawlerEventsHourly.hits} + 1`,
-            updatedAt: now,
-          },
-        }).run()
-        tx.insert(crawlerVerificationManifestsHourly).values({
-          projectId: snap.projectId,
-          sourceId: snap.sourceId,
-          tsHour: tsHourIso,
-          botId: classified.botId,
-          verificationStatus: classified.verificationStatus,
-          pathNormalized: snap.pathNormalized,
-          status,
-          manifestId: classified.verificationManifest?.id ?? 'none',
-          manifestJson: classified.verificationManifest,
-          hits: 1,
-          createdAt: now,
-          updatedAt: now,
-        }).onConflictDoUpdate({
-          target: [
-            crawlerVerificationManifestsHourly.projectId,
-            crawlerVerificationManifestsHourly.sourceId,
-            crawlerVerificationManifestsHourly.tsHour,
-            crawlerVerificationManifestsHourly.botId,
-            crawlerVerificationManifestsHourly.verificationStatus,
-            crawlerVerificationManifestsHourly.pathNormalized,
-            crawlerVerificationManifestsHourly.status,
-            crawlerVerificationManifestsHourly.manifestId,
-          ],
-          set: {
-            hits: sql`${crawlerVerificationManifestsHourly.hits} + 1`,
-            manifestJson: classified.verificationManifest,
             updatedAt: now,
           },
         }).run()

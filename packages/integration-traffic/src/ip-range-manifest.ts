@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 /** A publisher IP-range entry. Exactly one address-family field is present. */
 export type IpRangePrefix =
   | { ipv4Prefix: string; ipv6Prefix?: never }
@@ -28,6 +30,26 @@ export interface ParsedCidr {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function stableJson(value: unknown, seen = new Set<object>()): string {
+  if (value === null) return 'null'
+  if (typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value)
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? JSON.stringify(value) : JSON.stringify(String(value))
+  }
+  if (typeof value !== 'object') return JSON.stringify(`[${typeof value}]`)
+  if (seen.has(value)) return '"[circular]"'
+
+  seen.add(value)
+  const result = Array.isArray(value)
+    ? `[${value.map(entry => stableJson(entry, seen)).join(',')}]`
+    : `{${Object.keys(value)
+      .sort()
+      .map(key => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key], seen)}`)
+      .join(',')}}`
+  seen.delete(value)
+  return result
 }
 
 /**
@@ -96,6 +118,41 @@ export function parseCidr(cidr: string): ParsedCidr | null {
     network: parsed.addr & mask,
     mask,
   }
+}
+
+function canonicalPrefixKey(entry: unknown): string {
+  if (isRecord(entry)) {
+    const hasIpv4 = Object.hasOwn(entry, 'ipv4Prefix')
+    const hasIpv6 = Object.hasOwn(entry, 'ipv6Prefix')
+    if (hasIpv4 !== hasIpv6) {
+      const value = entry[hasIpv4 ? 'ipv4Prefix' : 'ipv6Prefix']
+      if (typeof value === 'string') {
+        const parsed = parseCidr(value)
+        const expectedVersion = hasIpv4 ? 4 : 6
+        if (parsed?.version === expectedVersion) {
+          const hexWidth = parsed.version === 4 ? 8 : 32
+          const network = parsed.network.toString(16).padStart(hexWidth, '0')
+          const mask = parsed.mask.toString(16).padStart(hexWidth, '0')
+          return `cidr:${parsed.version}:${network}:${mask}`
+        }
+      }
+    }
+  }
+  return `invalid:${stableJson(entry)}`
+}
+
+/**
+ * SHA-256 of the executable prefix content. Valid CIDRs are normalized to
+ * address family, network, and mask, then sorted so publisher reordering does
+ * not create a new snapshot identity. Invalid payloads still receive a stable
+ * fail-closed identity for provenance.
+ */
+export function ipRangeManifestContentHash(value: unknown): string {
+  const prefixes = isRecord(value) ? value.prefixes : undefined
+  const canonical = Array.isArray(prefixes)
+    ? prefixes.map(canonicalPrefixKey).sort()
+    : [`invalid-prefixes:${stableJson(prefixes)}`]
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
 }
 
 /** True when `ip` falls inside a same-address-family CIDR. */

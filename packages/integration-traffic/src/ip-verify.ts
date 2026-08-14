@@ -60,6 +60,7 @@ import oaiSearchbotRaw from './ip-ranges/oai-searchbot.json' with { type: 'json'
 import perplexityUserRaw from './ip-ranges/perplexity-user.json' with { type: 'json' }
 import perplexitybotRaw from './ip-ranges/perplexitybot.json' with { type: 'json' }
 import {
+  ipRangeManifestContentHash,
   parseCidr,
   parseIp,
   validateIpRangeManifestPayload,
@@ -67,6 +68,7 @@ import {
 import type { ParsedCidr } from './ip-range-manifest.js'
 
 export {
+  ipRangeManifestContentHash,
   ipInCidr,
   parseCidr,
   parseIp,
@@ -142,7 +144,9 @@ function manifestMetadata(raw: unknown): TrafficVerificationManifest | null {
   const record = raw as Record<string, unknown>
   const source = typeof record._source === 'string' ? record._source.trim() : ''
   const version = typeof record.creationTime === 'string' ? record.creationTime.trim() : ''
-  return source && version ? { id: `${source}#${version}`, source, version } : null
+  if (!source || !version) return null
+  const contentHash = ipRangeManifestContentHash(raw)
+  return { id: `${source}#${version}#sha256:${contentHash}`, source, version }
 }
 
 function verificationDataFromRaw(raw: unknown): VerificationData {

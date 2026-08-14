@@ -11,11 +11,12 @@ import {
   classifyAiReferral,
   classifyAiUserFetch,
   classifyCrawler,
+  ipRangeManifestContentHash,
   normalizeTrafficPathPattern,
 } from '../src/index.js'
 
 const ANTHROPIC_MANIFEST = {
-  id: `${anthropicRaw._source}#${anthropicRaw.creationTime}`,
+  id: `${anthropicRaw._source}#${anthropicRaw.creationTime}#sha256:${ipRangeManifestContentHash(anthropicRaw)}`,
   source: anthropicRaw._source,
   version: anthropicRaw.creationTime,
 }
