@@ -4,7 +4,7 @@
 
 Your entire AEO/GEO/AI Visibility, technical SEO + web analytics stack. **Agent-first. Self-hosted. Local.**
 
-Canonry gives operators and agents one technical record for AI visibility, site health, search, traffic, local presence, and backlinks.
+Canonry gives operators and agents a full tactical view across AI visibility, site health, search, traffic, content, local presence, backlinks, and paid media.
 
 **Measure → diagnose → approve action → measure change**
 
@@ -12,7 +12,7 @@ Canonry gives operators and agents one technical record for AI visibility, site 
 |---|---|
 | **Measure** | Track mentions and citations across Gemini, ChatGPT, Claude, Perplexity, and local models. Join them with GSC, GA4, Bing, traffic, Business Profile, and backlink data. |
 | **Diagnose** | Crawl the site, score Page Health, inspect evidence, compare competitors, and explain regressions. |
-| **Act** | Give your agent the context to make surgical on-site technical SEO changes, submit URLs for indexing, and manage ChatGPT ads through approval workflows. |
+| **Act** | Give your agent the context to make surgical on-site technical SEO changes and coordinate content, indexing, analytics, and paid media. |
 | **Operate** | Create automation workflows, schedule checks, sync data, manage projects as YAML, send webhooks, and generate client-ready reports. |
 
 ### Built-in integrations and workflows
