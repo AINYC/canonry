@@ -70,14 +70,37 @@ jobs:
             tsbuildinfo-${{ runner.os }}-
       - run: pnpm run typecheck
 
+  test_shards:
+    name: test shard ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: pnpm run test --shard=${{ matrix.shard }}/4
+
   test:
+    name: test
+    needs: test_shards
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
-      - run: pnpm run test
+      - name: Verify all test shards succeeded
+        env:
+          SHARD_RESULT: ${{ needs.test_shards.result }}
+        run: |
+          if [ "$SHARD_RESULT" != "success" ]; then
+            echo "One or more test shards failed"
+            exit 1
+          fi
+          echo "All test shards passed"
 
   lint:
     runs-on: ubuntu-latest
