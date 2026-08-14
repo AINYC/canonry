@@ -15,7 +15,19 @@ Canonry gives operators and agents one technical record for AI visibility, site 
 | **Act** | Generate content, create WordPress and JSON-LD changes, submit URLs for indexing, and manage ChatGPT ads through approval workflows. |
 | **Operate** | Create automation workflows, schedule checks, sync data, manage projects as YAML, send webhooks, and generate client-ready reports. |
 
-The dashboard, CLI, and agent tools share the same project API. Use the built-in Aero agent or connect your own agent through MCP.
+### Built-in integrations and workflows
+
+- **Answer engines:** Canonry measures Gemini, ChatGPT, Claude, Perplexity, and OpenAI-compatible local models.
+- **Search and analytics:** Connect [Google Search Console](docs/google-search-console-setup.md), [Google Analytics 4](docs/google-analytics-setup.md), and [Bing Webmaster Tools](docs/bing-webmaster-setup.md).
+- **Local presence:** Connect [Google Business Profile](skills/canonry/references/google-business-profile.md) for search terms, performance, lodging data, and booking actions.
+- **Server traffic:** Capture events from [Cloudflare, Cloud Run, Vercel, and WordPress](skills/canonry/references/server-side-traffic.md).
+- **Publishing and indexing:** Publish through [WordPress](docs/wordpress-setup.md), generate JSON-LD, and [submit sitemaps or URLs for indexing](skills/canonry/references/indexing.md).
+- **Backlinks:** Query [Common Crawl hyperlink releases](skills/canonry/references/canonry-cli.md#backlinks-common-crawl) locally with DuckDB, and sync new releases on a schedule.
+- **Paid media:** Connect [OpenAI Ads Manager](docs/mcp.md#tool-surface) for account, conversion, campaign, and performance workflows.
+- **Operations:** Apply project configuration from YAML with [`cnry apply`](skills/canonry/references/canonry-cli.md#config-as-code). Use [schedules and alerts](skills/canonry/references/canonry-cli.md#scheduling--notifications) and generate [client-ready HTML reports](skills/canonry/references/canonry-cli.md#reports).
+- **Agents:** Use the [MCP adapter](docs/mcp.md), [Agent Plugin](docs/plugins.md), [external webhooks](skills/canonry/references/canonry-cli.md#agent), or built-in [Aero](skills/aero/SKILL.md).
+
+The dashboard, CLI, and agent tools share the same project API.
 
 ![Canonry Site Map graph](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/dashboard.png)
 
@@ -110,8 +122,6 @@ cnry visibility-stats my-site --by-provider
 | **Aero** | When enabled and configured, use the built-in analyst that reviews evidence and wakes after completed runs. |
 | **Dashboard** | Approve work, inspect evidence, and observe the same project record used by agents. |
 | **Config as code** | Declare many projects in YAML and apply them with `cnry apply`. |
-
-Key integrations include [Google Search Console](docs/google-search-console-setup.md), [GA4](docs/google-analytics-setup.md), [Bing Webmaster Tools](docs/bing-webmaster-setup.md), [Google Business Profile](skills/canonry/references/google-business-profile.md), [WordPress](docs/wordpress-setup.md), [Common Crawl backlinks](skills/canonry/references/canonry-cli.md#backlinks-common-crawl), and [server-side traffic](skills/canonry/references/server-side-traffic.md).
 
 ## Deployment and trust boundary
 
