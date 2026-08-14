@@ -1,10 +1,75 @@
 {
-  "_source": "ARIN RDAP — every network registered to Anthropic, PBC (handle AP-2440)",
-  "_query": "https://rdap.arin.net/registry/entity/AP-2440",
-  "_notes": "Anthropic does not publish a clean machine-readable IP-range JSON like Google or OpenAI do. These prefixes are taken straight from ARIN's authoritative allocation records (NOT bgp.tools' AS-based view, which can include misleading announcements — e.g. AS60808 is registered to Anthropic but announces 209.249.57.0/24 which actually belongs to Mitel Networks). 216.73.216.0/22 (AWS-ANTHROPIC) is the load-bearing prefix — empirical Cloud Run logs show 100% of real ClaudeBot traffic comes from there; the other two are Anthropic's own allocations for non-crawler infra (kept since the verification gate still requires a Claude-* UA match). Refresh by re-running the ARIN RDAP query above and replacing the prefix list.",
+  "_source": "https://claude.com/crawling/bots.json",
+  "creationTime": "2026-08-13T20:38:01Z",
   "prefixes": [
-    { "ipv4Prefix": "216.73.216.0/22" },
-    { "ipv4Prefix": "160.79.104.0/21" },
-    { "ipv6Prefix": "2607:6bc0::/32" }
+    {
+      "ipv4Prefix": "216.73.216.0/22"
+    },
+    {
+      "ipv4Prefix": "34.162.230.222/32"
+    },
+    {
+      "ipv4Prefix": "34.162.244.71/32"
+    },
+    {
+      "ipv4Prefix": "34.162.191.81/32"
+    },
+    {
+      "ipv4Prefix": "34.150.241.79/32"
+    },
+    {
+      "ipv4Prefix": "34.85.172.162/32"
+    },
+    {
+      "ipv4Prefix": "35.245.175.129/32"
+    },
+    {
+      "ipv4Prefix": "34.182.222.37/32"
+    },
+    {
+      "ipv4Prefix": "34.186.108.163/32"
+    },
+    {
+      "ipv4Prefix": "35.245.89.239/32"
+    },
+    {
+      "ipv4Prefix": "34.182.161.143/32"
+    },
+    {
+      "ipv4Prefix": "34.182.218.27/32"
+    },
+    {
+      "ipv4Prefix": "34.182.220.85/32"
+    },
+    {
+      "ipv4Prefix": "34.11.34.31/32"
+    },
+    {
+      "ipv4Prefix": "34.182.140.95/32"
+    },
+    {
+      "ipv4Prefix": "136.107.176.208/32"
+    },
+    {
+      "ipv4Prefix": "34.182.226.151/32"
+    },
+    {
+      "ipv4Prefix": "34.182.226.221/32"
+    },
+    {
+      "ipv4Prefix": "35.221.29.174/32"
+    },
+    {
+      "ipv4Prefix": "34.182.225.167/32"
+    },
+    {
+      "ipv4Prefix": "40.124.101.48/28"
+    },
+    {
+      "ipv4Prefix": "20.102.46.224/28"
+    },
+    {
+      "ipv4Prefix": "20.64.57.208/28"
+    }
   ]
 }

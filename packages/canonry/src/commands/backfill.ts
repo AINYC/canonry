@@ -1342,76 +1342,85 @@ export async function backfillTrafficClassificationCommand(opts?: {
 
     if (isDryRun) continue
 
-    // Update the sample row's event_type so the re-run filter excludes it.
-    db.update(rawEventSamples)
-      .set({ eventType: userFetch ? TrafficEventKinds['ai-user-fetch'] : TrafficEventKinds.crawler })
-      .where(eq(rawEventSamples.id, snap.id))
-      .run()
-
     // Bump the hourly rollup bucket. Snap ts → top of hour for the
     // bucket key (matches what the live sync writes). User-fetch and
     // crawler hits go to disjoint tables.
     const tsHour = new Date(snap.ts)
     tsHour.setUTCMinutes(0, 0, 0)
-    if (userFetch) {
-      db.insert(aiUserFetchEventsHourly).values({
-        projectId: snap.projectId,
-        sourceId: snap.sourceId,
-        tsHour: tsHour.toISOString(),
-        botId: userFetch.botId,
-        operator: userFetch.operator,
-        verificationStatus: userFetch.verificationStatus,
-        pathNormalized: snap.pathNormalized,
-        status: snap.status ?? 200,
-        hits: 1,
-        sampledUserAgent: snap.userAgent,
-        createdAt: now,
-        updatedAt: now,
-      }).onConflictDoUpdate({
-        target: [
-          aiUserFetchEventsHourly.projectId,
-          aiUserFetchEventsHourly.sourceId,
-          aiUserFetchEventsHourly.tsHour,
-          aiUserFetchEventsHourly.botId,
-          aiUserFetchEventsHourly.verificationStatus,
-          aiUserFetchEventsHourly.pathNormalized,
-          aiUserFetchEventsHourly.status,
-        ],
-        set: {
-          hits: sql`${aiUserFetchEventsHourly.hits} + 1`,
+    const tsHourIso = tsHour.toISOString()
+    const status = snap.status ?? 200
+    db.transaction((tx) => {
+      // Raw samples retain no address at all — every writer stores `ipHash:
+      // null` and there has never been a source-IP column — so this replay can
+      // reclassify the UA but cannot reproduce an IP-range verification
+      // decision. Update the sample and aggregate atomically, and
+      // leave the added hit without a provenance sidecar so reads report it as
+      // unattributed rather than claiming that a manifest checked this request.
+      tx.update(rawEventSamples)
+        .set({ eventType: userFetch ? TrafficEventKinds['ai-user-fetch'] : TrafficEventKinds.crawler })
+        .where(eq(rawEventSamples.id, snap.id))
+        .run()
+
+      if (userFetch) {
+        tx.insert(aiUserFetchEventsHourly).values({
+          projectId: snap.projectId,
+          sourceId: snap.sourceId,
+          tsHour: tsHourIso,
+          botId: userFetch.botId,
+          operator: userFetch.operator,
+          verificationStatus: userFetch.verificationStatus,
+          pathNormalized: snap.pathNormalized,
+          status,
+          hits: 1,
+          sampledUserAgent: snap.userAgent,
+          createdAt: now,
           updatedAt: now,
-        },
-      }).run()
-    } else {
-      db.insert(crawlerEventsHourly).values({
-        projectId: snap.projectId,
-        sourceId: snap.sourceId,
-        tsHour: tsHour.toISOString(),
-        botId: classified.botId,
-        operator: classified.operator,
-        verificationStatus: classified.verificationStatus,
-        pathNormalized: snap.pathNormalized,
-        status: snap.status ?? 200,
-        hits: 1,
-        sampledUserAgent: snap.userAgent,
-        createdAt: now,
-        updatedAt: now,
-      }).onConflictDoUpdate({
-        target: [
-          crawlerEventsHourly.projectId,
-          crawlerEventsHourly.sourceId,
-          crawlerEventsHourly.tsHour,
-          crawlerEventsHourly.botId,
-          crawlerEventsHourly.verificationStatus,
-          crawlerEventsHourly.pathNormalized,
-          crawlerEventsHourly.status,
-        ],
-        set: {
-          hits: sql`${crawlerEventsHourly.hits} + 1`,
+        }).onConflictDoUpdate({
+          target: [
+            aiUserFetchEventsHourly.projectId,
+            aiUserFetchEventsHourly.sourceId,
+            aiUserFetchEventsHourly.tsHour,
+            aiUserFetchEventsHourly.botId,
+            aiUserFetchEventsHourly.verificationStatus,
+            aiUserFetchEventsHourly.pathNormalized,
+            aiUserFetchEventsHourly.status,
+          ],
+          set: {
+            hits: sql`${aiUserFetchEventsHourly.hits} + 1`,
+            updatedAt: now,
+          },
+        }).run()
+      } else {
+        tx.insert(crawlerEventsHourly).values({
+          projectId: snap.projectId,
+          sourceId: snap.sourceId,
+          tsHour: tsHourIso,
+          botId: classified.botId,
+          operator: classified.operator,
+          verificationStatus: classified.verificationStatus,
+          pathNormalized: snap.pathNormalized,
+          status,
+          hits: 1,
+          sampledUserAgent: snap.userAgent,
+          createdAt: now,
           updatedAt: now,
-        },
-      }).run()
-    }
+        }).onConflictDoUpdate({
+          target: [
+            crawlerEventsHourly.projectId,
+            crawlerEventsHourly.sourceId,
+            crawlerEventsHourly.tsHour,
+            crawlerEventsHourly.botId,
+            crawlerEventsHourly.verificationStatus,
+            crawlerEventsHourly.pathNormalized,
+            crawlerEventsHourly.status,
+          ],
+          set: {
+            hits: sql`${crawlerEventsHourly.hits} + 1`,
+            updatedAt: now,
+          },
+        }).run()
+      }
+    })
   }
 
   // Recompute trailing unknown count so the report shows the net effect.

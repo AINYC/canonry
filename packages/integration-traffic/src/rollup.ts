@@ -147,6 +147,8 @@ function mergeReferralSession(
 function sortCrawlerBuckets(a: CrawlerEventHourlyBucket, b: CrawlerEventHourlyBucket): number {
   return a.tsHour.localeCompare(b.tsHour) ||
     a.botId.localeCompare(b.botId) ||
+    a.verificationStatus.localeCompare(b.verificationStatus) ||
+    (a.verificationManifest?.id ?? '').localeCompare(b.verificationManifest?.id ?? '') ||
     a.pathNormalized.localeCompare(b.pathNormalized) ||
     String(a.status).localeCompare(String(b.status))
 }
@@ -154,6 +156,8 @@ function sortCrawlerBuckets(a: CrawlerEventHourlyBucket, b: CrawlerEventHourlyBu
 function sortAiUserFetchBuckets(a: AiUserFetchEventHourlyBucket, b: AiUserFetchEventHourlyBucket): number {
   return a.tsHour.localeCompare(b.tsHour) ||
     a.botId.localeCompare(b.botId) ||
+    a.verificationStatus.localeCompare(b.verificationStatus) ||
+    (a.verificationManifest?.id ?? '').localeCompare(b.verificationManifest?.id ?? '') ||
     a.pathNormalized.localeCompare(b.pathNormalized) ||
     String(a.status).localeCompare(String(b.status))
 }
@@ -223,6 +227,7 @@ export function buildTrafficProbeReport(
         tsHour,
         crawler.botId,
         crawler.verificationStatus,
+        crawler.verificationManifest?.id ?? 'no-manifest',
         pathNormalized,
         event.status ?? 'null',
       ].join('\t')
@@ -236,6 +241,7 @@ export function buildTrafficProbeReport(
           operator: crawler.operator,
           product: crawler.product,
           verificationStatus: crawler.verificationStatus,
+          verificationManifest: crawler.verificationManifest,
           pathNormalized,
           status: event.status,
           hits: 1,
@@ -255,6 +261,7 @@ export function buildTrafficProbeReport(
         tsHour,
         aiUserFetch.botId,
         aiUserFetch.verificationStatus,
+        aiUserFetch.verificationManifest?.id ?? 'no-manifest',
         pathNormalized,
         event.status ?? 'null',
       ].join('\t')
@@ -268,6 +275,7 @@ export function buildTrafficProbeReport(
           operator: aiUserFetch.operator,
           product: aiUserFetch.product,
           verificationStatus: aiUserFetch.verificationStatus,
+          verificationManifest: aiUserFetch.verificationManifest,
           pathNormalized,
           status: event.status,
           hits: 1,

@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { hasVerificationDataFor, ipInCidr, parseCidr, parseIp, verifyIpForRule } from '../src/index.js'
+import anthropicRaw from '../src/ip-ranges/anthropic.json' with { type: 'json' }
+import {
+  hasVerificationDataFor,
+  ipRangeManifestContentHash,
+  ipInCidr,
+  parseCidr,
+  parseIp,
+  validateIpRangeManifestPayload,
+  verifyIpAgainstManifest,
+  verifyIpForRule,
+  verifyIpForRuleDecision,
+} from '../src/index.js'
+
+const ANTHROPIC_MANIFEST = {
+  id: `${anthropicRaw._source}#${anthropicRaw.creationTime}#sha256:${ipRangeManifestContentHash(anthropicRaw)}`,
+  source: anthropicRaw._source,
+  version: anthropicRaw.creationTime,
+}
 
 describe('parseIp', () => {
   it('parses IPv4 to a 32-bit BigInt', () => {
@@ -14,6 +31,9 @@ describe('parseIp', () => {
     expect(parseIp('1.2.3.256')).toBeNull()
     expect(parseIp('1.2.3.-1')).toBeNull()
     expect(parseIp('a.b.c.d')).toBeNull()
+    expect(parseIp('1.2.3.4x')).toBeNull()
+    expect(parseIp('01.2.3.4')).toBeNull()
+    expect(parseIp(' 1.2.3.4')).toBeNull()
     expect(parseIp('')).toBeNull()
   })
 
@@ -42,6 +62,8 @@ describe('parseIp', () => {
   it('rejects malformed IPv6', () => {
     expect(parseIp('1::2::3')).toBeNull()  // two zero-compressions
     expect(parseIp('xyz::1')).toBeNull()
+    expect(parseIp('2001:db8:ffz::1')).toBeNull()
+    expect(parseIp('1:2:3:4:5:6:7:8::')).toBeNull()
     expect(parseIp(':::')).toBeNull()       // three colons
   })
 })
@@ -86,6 +108,135 @@ describe('parseCidr', () => {
     expect(parseCidr('1.2.3.4')).toBeNull()  // no /
     expect(parseCidr('/24')).toBeNull()      // no ip
     expect(parseCidr('xyz/24')).toBeNull()
+    expect(parseCidr('1.2.3.4/0junk')).toBeNull()
+    expect(parseCidr('1.2.3.4/024')).toBeNull()
+    expect(parseCidr('1.2.3.4/24/extra')).toBeNull()
+  })
+})
+
+describe('validateIpRangeManifestPayload', () => {
+  it('accepts a complete publisher payload, including an empty range set', () => {
+    expect(validateIpRangeManifestPayload({
+      creationTime: 'version-1',
+      prefixes: [
+        { ipv4Prefix: '192.0.2.0/24' },
+        { ipv6Prefix: '2001:db8::/32' },
+      ],
+    })).toEqual({
+      ok: true,
+      value: {
+        creationTime: 'version-1',
+        prefixes: [
+          { ipv4Prefix: '192.0.2.0/24' },
+          { ipv6Prefix: '2001:db8::/32' },
+        ],
+      },
+    })
+    expect(validateIpRangeManifestPayload({ creationTime: 'version-empty', prefixes: [] })).toEqual({
+      ok: true,
+      value: { creationTime: 'version-empty', prefixes: [] },
+    })
+  })
+
+  it.each([
+    { creationTime: 'version-1', prefixes: [null] },
+    { creationTime: 'version-1', prefixes: [{ ipv4Prefix: 123 }] },
+    { creationTime: 'version-1', prefixes: [{ ipv4Prefix: '192.0.2.0/0junk' }] },
+    { creationTime: 'version-1', prefixes: [{ ipv4Prefix: '2001:db8::/32' }] },
+    { creationTime: 'version-1', prefixes: [{ ipv4Prefix: '192.0.2.0/24', ipv6Prefix: '2001:db8::/32' }] },
+  ])('rejects an invalid prefix entry without throwing: %j', (payload) => {
+    expect(validateIpRangeManifestPayload(payload).ok).toBe(false)
+  })
+
+  it('claims no provenance when there were no ranges to compare against', () => {
+    // Fails closed on the decision AND on the provenance. A manifest that
+    // yields zero usable prefixes never checked this request, so reporting it
+    // would assert a comparison that did not happen — the same reason an
+    // absent IP yields null below.
+    const base = {
+      _source: 'https://example.com/bots.json',
+      creationTime: 'version-2',
+    }
+    const payloads = [
+      { ...base, prefixes: [] },
+      {
+        ...base,
+        prefixes: [{ ipv4Prefix: '192.0.2.0/0junk' }],
+      },
+      { ...base, prefixes: [null] },
+    ]
+
+    for (const payload of payloads) {
+      expect(verifyIpAgainstManifest('192.0.2.1', payload)).toEqual({
+        verified: false,
+        manifest: null,
+      })
+    }
+  })
+
+  it('claims no provenance when there was no address to check', () => {
+    // The distinction the sidecar depends on: `manifest: X` means X compared
+    // this address and rejected it; `manifest: null` means nothing compared
+    // anything. A source that does not expose a client IP (Vercel request
+    // logs) must land in the second case, not the first.
+    const payload = {
+      _source: 'https://example.com/bots.json',
+      creationTime: 'version-2',
+      prefixes: [{ ipv4Prefix: '192.0.2.0/24' }],
+    }
+    for (const ip of [null, undefined, '', 'not-an-ip']) {
+      expect(verifyIpAgainstManifest(ip, payload)).toEqual({ verified: false, manifest: null })
+    }
+    // Same manifest, an address it does not contain: a real rejection, so the
+    // provenance is real too.
+    expect(verifyIpAgainstManifest('198.51.100.7', payload)).toEqual({
+      verified: false,
+      manifest: {
+        id: `${payload._source}#${payload.creationTime}#sha256:${ipRangeManifestContentHash(payload)}`,
+        source: payload._source,
+        version: payload.creationTime,
+      },
+    })
+  })
+
+  it('keys stale publisher versions by canonical prefix content', () => {
+    const base = {
+      _source: 'https://example.com/bots.json',
+      creationTime: 'stale-version',
+    }
+    const first = {
+      ...base,
+      prefixes: [
+        { ipv4Prefix: '192.0.2.99/24' },
+        { ipv6Prefix: '2001:DB8::1/32' },
+      ],
+    }
+    const reorderedEquivalent = {
+      ...base,
+      prefixes: [
+        { ipv6Prefix: '2001:0db8:0000:0000:0000:0000:0000:0000/32' },
+        { ipv4Prefix: '192.0.2.0/24' },
+      ],
+    }
+    const changed = {
+      ...base,
+      prefixes: [
+        { ipv4Prefix: '198.51.100.0/24' },
+        { ipv6Prefix: '2001:db8::/32' },
+      ],
+    }
+
+    // A parseable address, so a comparison actually runs and the decision
+    // carries provenance. Whether it matches is irrelevant here; this test is
+    // about manifest IDENTITY across publisher versions.
+    const firstManifest = verifyIpAgainstManifest('192.0.2.1', first).manifest
+    const equivalentManifest = verifyIpAgainstManifest('192.0.2.1', reorderedEquivalent).manifest
+    const changedManifest = verifyIpAgainstManifest('192.0.2.1', changed).manifest
+
+    expect(firstManifest).toMatchObject({ source: base._source, version: base.creationTime })
+    expect(firstManifest?.id).toMatch(/#sha256:[0-9a-f]{64}$/)
+    expect(equivalentManifest?.id).toBe(firstManifest?.id)
+    expect(changedManifest?.id).not.toBe(firstManifest?.id)
   })
 })
 
@@ -137,43 +288,65 @@ describe('verifyIpForRule', () => {
     expect(verifyIpForRule('10.0.0.1', 'googlebot')).toBe(false)
   })
 
-  it('verifies a known Anthropic ClaudeBot IPv4 inside the bundled prefix', () => {
-    // 216.73.216.0/22 is the AWS-ANTHROPIC prefix — empirical Cloud
-    // Run logs show all real ClaudeBot traffic comes from here.
+  it('verifies ClaudeBot IPv4 against Anthropic\'s official crawler manifest', () => {
+    // The /22 remains on Anthropic's official list.
     expect(verifyIpForRule('216.73.216.76', 'anthropic-claudebot')).toBe(true)
     expect(verifyIpForRule('216.73.217.125', 'anthropic-claudebot')).toBe(true)
     expect(verifyIpForRule('216.73.219.255', 'anthropic-claudebot')).toBe(true)
-    // 160.79.104.0/21 is Anthropic's own ARIN allocation.
-    expect(verifyIpForRule('160.79.104.5', 'anthropic-claudebot')).toBe(true)
-    expect(verifyIpForRule('160.79.111.254', 'anthropic-claudebot')).toBe(true)
+    // These addresses exist only in the new publisher manifest, not the old
+    // bundled ARIN allocation snapshot.
+    expect(verifyIpForRule('34.162.230.222', 'anthropic-claudebot')).toBe(true)
+    expect(verifyIpForRule('40.124.101.49', 'anthropic-claudebot')).toBe(true)
+    expect(verifyIpForRule('20.64.57.223', 'anthropic-claudebot')).toBe(true)
   })
 
   it('does not verify a random IP outside Anthropic prefixes', () => {
     expect(verifyIpForRule('1.2.3.4', 'anthropic-claudebot')).toBe(false)
-    // Adjacent /22 outside the AWS-ANTHROPIC allocation.
+    // Adjacent /22 outside the official manifest entry.
     expect(verifyIpForRule('216.73.220.1', 'anthropic-claudebot')).toBe(false)
-    // Adjacent /21 outside Anthropic's own allocation.
-    expect(verifyIpForRule('160.79.112.1', 'anthropic-claudebot')).toBe(false)
-    // bgp.tools had once attributed 209.249.57.0/24 to Anthropic's
-    // AS60808; ARIN says it's Mitel Networks. Must NOT verify.
+    // The Claude Platform/API egress range is not in the crawler manifest.
+    expect(verifyIpForRule('160.79.104.5', 'anthropic-claudebot')).toBe(false)
+    expect(verifyIpForRule('160.79.111.254', 'anthropic-claudebot')).toBe(false)
+    // The old ARIN-derived bundle also included this IPv6 allocation, but
+    // Anthropic's official crawler manifest currently publishes IPv4 only.
+    expect(verifyIpForRule('2607:6bc0::1', 'anthropic-claudebot')).toBe(false)
+    // A historical AS-based source attributed this Mitel prefix to Anthropic.
     expect(verifyIpForRule('209.249.57.10', 'anthropic-claudebot')).toBe(false)
   })
 
-  it('verifies Anthropic IPv6 (entire /32 ANTHROPIC-V6 allocation)', () => {
-    expect(verifyIpForRule('2607:6bc0::1', 'anthropic-claudebot')).toBe(true)
-    expect(verifyIpForRule('2607:6bc0:11::cafe', 'anthropic-claudebot')).toBe(true)
-    expect(verifyIpForRule('2607:6bc0:ffff:ffff::1', 'anthropic-claudebot')).toBe(true)
-  })
-
-  it('verifies Claude-User against the shared Anthropic ranges', () => {
-    // Anthropic's per-user fetcher shares the ClaudeBot crawler's ARIN
-    // allocation — the same bundled anthropic.json is keyed to both
-    // rule ids in RULE_ID_TO_RANGES.
+  it('verifies Claude-User against the shared official Anthropic manifest', () => {
+    // The publisher does not split ranges by Claude bot identity, so the same
+    // official manifest is keyed to both classifier rules.
     expect(verifyIpForRule('216.73.216.76', 'claude-user')).toBe(true)
-    expect(verifyIpForRule('160.79.104.5', 'claude-user')).toBe(true)
-    expect(verifyIpForRule('2607:6bc0::1', 'claude-user')).toBe(true)
+    expect(verifyIpForRule('34.162.230.222', 'claude-user')).toBe(true)
+    expect(verifyIpForRule('160.79.104.5', 'claude-user')).toBe(false)
+    expect(verifyIpForRule('2607:6bc0::1', 'claude-user')).toBe(false)
     // Outside Anthropic's allocation — stays unverified.
     expect(verifyIpForRule('1.2.3.4', 'claude-user')).toBe(false)
+  })
+
+  it('returns the exact vendored manifest with verified and rejected decisions', () => {
+    expect(verifyIpForRuleDecision('34.162.230.222', 'anthropic-claudebot')).toEqual({
+      verified: true,
+      manifest: ANTHROPIC_MANIFEST,
+    })
+    expect(verifyIpForRuleDecision('160.79.104.5', 'anthropic-claudebot')).toEqual({
+      verified: false,
+      manifest: ANTHROPIC_MANIFEST,
+    })
+    // No address to check. Previously this returned ANTHROPIC_MANIFEST, making
+    // it indistinguishable from the rejection above — a Vercel source, which
+    // never carries a client IP, would have recorded every ClaudeBot hit as
+    // "Anthropic's manifest checked this and rejected it".
+    expect(verifyIpForRuleDecision(null, 'anthropic-claudebot')).toEqual({
+      verified: false,
+      manifest: null,
+    })
+    // A rule with no published ranges: also nothing consulted.
+    expect(verifyIpForRuleDecision('1.2.3.4', 'meta-externalagent')).toEqual({
+      verified: false,
+      manifest: null,
+    })
   })
 
   it('verifies Google-Agent against Google\'s user-triggered-agents ranges', () => {

@@ -10,6 +10,7 @@ import {
   migrate,
   trafficSources,
   crawlerEventsHourly,
+  crawlerVerificationManifestsHourly,
   aiUserFetchEventsHourly,
   aiReferralEventsHourly,
   rawEventSamples,
@@ -473,6 +474,56 @@ describe('POST /traffic/cloudflare/ingest', () => {
     expect(crawlerRows[0]!.botId).toMatch(/.+/)
     expect(crawlerRows[0]!.sourceId).toBe(sourceId)
     expect(crawlerRows[0]!.projectId).toBe(projectId)
+    const manifests = h.db.select().from(crawlerVerificationManifestsHourly).all()
+    expect(manifests).toHaveLength(1)
+    expect(manifests[0]!.manifestJson).toEqual(expect.objectContaining({
+      id: manifests[0]!.manifestId,
+      source: expect.any(String),
+      version: expect.any(String),
+    }))
+    expect(manifests[0]!.hits).toBe(1)
+  })
+
+  it('writes NO sidecar for a classifier with no published manifest, so the hit reads as unattributed', async () => {
+    // 16 of the 26 crawler rules have no bundled ranges. A sentinel row here
+    // would count toward `attributedHits`, driving verificationUnattributedHits
+    // to 0 for the majority of traffic — the exact opposite of what the field
+    // means. The hit must still land in the rollup.
+    const res = await ingest({
+      body: {
+        schemaVersion: 1,
+        workerVersion: '1.0.0',
+        events: [buildIngestEvent({ userAgent: 'Bytespider/1.0', remoteIp: '192.0.2.1' })],
+      },
+    })
+    expect(res.statusCode).toBe(200)
+
+    expect(h.db.select().from(crawlerVerificationManifestsHourly).all()).toHaveLength(0)
+    const crawlerRows = h.db.select().from(crawlerEventsHourly).all()
+    expect(crawlerRows).toHaveLength(1)
+    expect(crawlerRows[0]!.botId).toBe('bytespider')
+    expect(crawlerRows[0]!.hits).toBe(1)
+  })
+
+  it('writes NO sidecar when the source carried no IP, even for a bot that HAS a manifest', async () => {
+    // The Vercel case: request logs expose no client IP, so nothing is compared
+    // against Anthropic's manifest. Recording provenance would report
+    // "Anthropic's manifest checked this and rejected it" for traffic that was
+    // never checked at all.
+    const res = await ingest({
+      body: {
+        schemaVersion: 1,
+        workerVersion: '1.0.0',
+        events: [buildIngestEvent({ userAgent: 'ClaudeBot/1.0', remoteIp: null })],
+      },
+    })
+    expect(res.statusCode).toBe(200)
+
+    expect(h.db.select().from(crawlerVerificationManifestsHourly).all()).toHaveLength(0)
+    const crawlerRows = h.db.select().from(crawlerEventsHourly).all()
+    expect(crawlerRows).toHaveLength(1)
+    expect(crawlerRows[0]!.verificationStatus).toBe('claimed_unverified')
+    expect(crawlerRows[0]!.hits).toBe(1)
   })
 
   it('accepts an exact event hostname after case and trailing-dot normalization', async () => {

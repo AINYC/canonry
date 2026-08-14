@@ -13,7 +13,9 @@ import {
 import {
   trafficSources,
   crawlerEventsHourly,
+  crawlerVerificationManifestsHourly,
   aiUserFetchEventsHourly,
+  aiUserFetchVerificationManifestsHourly,
   aiReferralEventsHourly,
   rawEventSamples,
   runs,
@@ -57,6 +59,8 @@ import type {
   TrafficSourceStatus,
   TrafficSourceAuthMode,
   TrafficConnectCloudflareRequest,
+  TrafficCrawlerEventEntry,
+  TrafficAiUserFetchEventEntry,
   TrafficEventEntry,
   TrafficEventKind,
   TrafficEventsResponse,
@@ -690,6 +694,166 @@ function trafficSeriesPoint(
   return created
 }
 
+type VerificationEventKey = Pick<
+  TrafficCrawlerEventEntry,
+  'sourceId' | 'tsHour' | 'botId' | 'verificationStatus' | 'pathNormalized' | 'status' | 'hits'
+>
+
+type VerificationManifestUsage = NonNullable<
+  TrafficCrawlerEventEntry['verificationManifests']
+>[number]
+
+type VerificationManifestRow = Pick<
+  TrafficCrawlerEventEntry,
+  'sourceId' | 'tsHour' | 'botId' | 'verificationStatus' | 'pathNormalized' | 'status'
+> & VerificationManifestUsage
+
+type VerificationProvenance = {
+  verificationManifests: VerificationManifestUsage[]
+  verificationUnattributedHits: number
+}
+
+function verificationEventKey(row: Omit<VerificationEventKey, 'hits'>): string {
+  return JSON.stringify([
+    row.sourceId,
+    row.tsHour,
+    row.botId,
+    row.verificationStatus,
+    row.pathNormalized,
+    row.status,
+  ])
+}
+
+function verificationSelectedRowsJson(
+  projectId: string,
+  rows: readonly VerificationEventKey[],
+): string {
+  return JSON.stringify(rows.map(row => [
+    projectId,
+    row.sourceId,
+    row.tsHour,
+    row.botId,
+    row.verificationStatus,
+    row.pathNormalized,
+    row.status,
+  ]))
+}
+
+function buildVerificationProvenance(
+  events: readonly VerificationEventKey[],
+  rows: readonly VerificationManifestRow[],
+): Map<string, VerificationProvenance> {
+  const manifestsByEvent = new Map<string, VerificationManifestUsage[]>()
+  for (const row of rows) {
+    const key = verificationEventKey(row)
+    const manifests = manifestsByEvent.get(key)
+    const usage = { manifestId: row.manifestId, manifest: row.manifest, hits: row.hits }
+    if (manifests) manifests.push(usage)
+    else manifestsByEvent.set(key, [usage])
+  }
+
+  const provenanceByEvent = new Map<string, VerificationProvenance>()
+  for (const event of events) {
+    const key = verificationEventKey(event)
+    const verificationManifests = manifestsByEvent.get(key) ?? []
+    verificationManifests.sort((a, b) => a.manifestId.localeCompare(b.manifestId))
+    const attributedHits = verificationManifests.reduce((sum, manifest) => sum + manifest.hits, 0)
+    provenanceByEvent.set(key, {
+      verificationManifests,
+      verificationUnattributedHits: Math.max(0, event.hits - attributedHits),
+    })
+  }
+  return provenanceByEvent
+}
+
+function crawlerVerificationProvenance(
+  db: DatabaseClient,
+  projectId: string,
+  events: readonly TrafficCrawlerEventEntry[],
+): Map<string, VerificationProvenance> {
+  if (events.length === 0) return new Map()
+  const selectedRows = verificationSelectedRowsJson(projectId, events)
+  const rows = db
+    .select({
+      sourceId: crawlerVerificationManifestsHourly.sourceId,
+      tsHour: crawlerVerificationManifestsHourly.tsHour,
+      botId: crawlerVerificationManifestsHourly.botId,
+      verificationStatus: crawlerVerificationManifestsHourly.verificationStatus,
+      pathNormalized: crawlerVerificationManifestsHourly.pathNormalized,
+      status: crawlerVerificationManifestsHourly.status,
+      manifestId: crawlerVerificationManifestsHourly.manifestId,
+      manifest: crawlerVerificationManifestsHourly.manifestJson,
+      hits: crawlerVerificationManifestsHourly.hits,
+    })
+    .from(crawlerVerificationManifestsHourly)
+    .where(sql`(
+      ${crawlerVerificationManifestsHourly.projectId},
+      ${crawlerVerificationManifestsHourly.sourceId},
+      ${crawlerVerificationManifestsHourly.tsHour},
+      ${crawlerVerificationManifestsHourly.botId},
+      ${crawlerVerificationManifestsHourly.verificationStatus},
+      ${crawlerVerificationManifestsHourly.pathNormalized},
+      ${crawlerVerificationManifestsHourly.status}
+    ) IN (
+      SELECT
+        json_extract(value, '$[0]'),
+        json_extract(value, '$[1]'),
+        json_extract(value, '$[2]'),
+        json_extract(value, '$[3]'),
+        json_extract(value, '$[4]'),
+        json_extract(value, '$[5]'),
+        json_extract(value, '$[6]')
+      FROM json_each(${selectedRows})
+    )`)
+    .orderBy(crawlerVerificationManifestsHourly.manifestId)
+    .all()
+  return buildVerificationProvenance(events, rows)
+}
+
+function aiUserFetchVerificationProvenance(
+  db: DatabaseClient,
+  projectId: string,
+  events: readonly TrafficAiUserFetchEventEntry[],
+): Map<string, VerificationProvenance> {
+  if (events.length === 0) return new Map()
+  const selectedRows = verificationSelectedRowsJson(projectId, events)
+  const rows = db
+    .select({
+      sourceId: aiUserFetchVerificationManifestsHourly.sourceId,
+      tsHour: aiUserFetchVerificationManifestsHourly.tsHour,
+      botId: aiUserFetchVerificationManifestsHourly.botId,
+      verificationStatus: aiUserFetchVerificationManifestsHourly.verificationStatus,
+      pathNormalized: aiUserFetchVerificationManifestsHourly.pathNormalized,
+      status: aiUserFetchVerificationManifestsHourly.status,
+      manifestId: aiUserFetchVerificationManifestsHourly.manifestId,
+      manifest: aiUserFetchVerificationManifestsHourly.manifestJson,
+      hits: aiUserFetchVerificationManifestsHourly.hits,
+    })
+    .from(aiUserFetchVerificationManifestsHourly)
+    .where(sql`(
+      ${aiUserFetchVerificationManifestsHourly.projectId},
+      ${aiUserFetchVerificationManifestsHourly.sourceId},
+      ${aiUserFetchVerificationManifestsHourly.tsHour},
+      ${aiUserFetchVerificationManifestsHourly.botId},
+      ${aiUserFetchVerificationManifestsHourly.verificationStatus},
+      ${aiUserFetchVerificationManifestsHourly.pathNormalized},
+      ${aiUserFetchVerificationManifestsHourly.status}
+    ) IN (
+      SELECT
+        json_extract(value, '$[0]'),
+        json_extract(value, '$[1]'),
+        json_extract(value, '$[2]'),
+        json_extract(value, '$[3]'),
+        json_extract(value, '$[4]'),
+        json_extract(value, '$[5]'),
+        json_extract(value, '$[6]')
+      FROM json_each(${selectedRows})
+    )`)
+    .orderBy(aiUserFetchVerificationManifestsHourly.manifestId)
+    .all()
+  return buildVerificationProvenance(events, rows)
+}
+
 function parseSourceConfig(row: typeof trafficSources.$inferSelect): Record<string, unknown> {
   return row.configJson
 }
@@ -1013,6 +1177,7 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
         .run()
 
       for (const bucket of report.crawlerEventsHourly) {
+        const status = bucket.status ?? 0
         tx
           .insert(crawlerEventsHourly)
           .values({
@@ -1023,16 +1188,73 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
             operator: bucket.operator,
             verificationStatus: bucket.verificationStatus,
             pathNormalized: bucket.pathNormalized,
-            status: bucket.status ?? 0,
+            status,
             hits: bucket.hits,
             sampledUserAgent: bucket.sampledUserAgent,
             createdAt: finishedAt,
             updatedAt: finishedAt,
           })
+          .onConflictDoUpdate({
+            target: [
+              crawlerEventsHourly.projectId,
+              crawlerEventsHourly.sourceId,
+              crawlerEventsHourly.tsHour,
+              crawlerEventsHourly.botId,
+              crawlerEventsHourly.verificationStatus,
+              crawlerEventsHourly.pathNormalized,
+              crawlerEventsHourly.status,
+            ],
+            set: {
+              hits: sql`${crawlerEventsHourly.hits} + ${bucket.hits}`,
+              sampledUserAgent: bucket.sampledUserAgent,
+              updatedAt: finishedAt,
+            },
+          })
           .run()
+        // Nothing was consulted for this bucket, so there is no provenance to
+        // record. A sentinel row would count these hits as ATTRIBUTED and drive
+        // verificationUnattributedHits to 0; the ABSENCE of a sidecar row is what
+        // makes a read report them as unattributed.
+        if (bucket.verificationManifest) {
+          tx
+            .insert(crawlerVerificationManifestsHourly)
+            .values({
+              projectId: project.id,
+              sourceId: sourceRow.id,
+              tsHour: bucket.tsHour,
+              botId: bucket.botId,
+              verificationStatus: bucket.verificationStatus,
+              pathNormalized: bucket.pathNormalized,
+              status,
+              manifestId: bucket.verificationManifest.id,
+              manifestJson: bucket.verificationManifest,
+              hits: bucket.hits,
+              createdAt: finishedAt,
+              updatedAt: finishedAt,
+            })
+            .onConflictDoUpdate({
+              target: [
+                crawlerVerificationManifestsHourly.projectId,
+                crawlerVerificationManifestsHourly.sourceId,
+                crawlerVerificationManifestsHourly.tsHour,
+                crawlerVerificationManifestsHourly.botId,
+                crawlerVerificationManifestsHourly.verificationStatus,
+                crawlerVerificationManifestsHourly.pathNormalized,
+                crawlerVerificationManifestsHourly.status,
+                crawlerVerificationManifestsHourly.manifestId,
+              ],
+              set: {
+                hits: sql`${crawlerVerificationManifestsHourly.hits} + ${bucket.hits}`,
+                manifestJson: bucket.verificationManifest,
+                updatedAt: finishedAt,
+              },
+            })
+            .run()
+        }
       }
 
       for (const bucket of report.aiUserFetchEventsHourly) {
+        const status = bucket.status ?? 0
         tx
           .insert(aiUserFetchEventsHourly)
           .values({
@@ -1043,13 +1265,69 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
             operator: bucket.operator,
             verificationStatus: bucket.verificationStatus,
             pathNormalized: bucket.pathNormalized,
-            status: bucket.status ?? 0,
+            status,
             hits: bucket.hits,
             sampledUserAgent: bucket.sampledUserAgent,
             createdAt: finishedAt,
             updatedAt: finishedAt,
           })
+          .onConflictDoUpdate({
+            target: [
+              aiUserFetchEventsHourly.projectId,
+              aiUserFetchEventsHourly.sourceId,
+              aiUserFetchEventsHourly.tsHour,
+              aiUserFetchEventsHourly.botId,
+              aiUserFetchEventsHourly.verificationStatus,
+              aiUserFetchEventsHourly.pathNormalized,
+              aiUserFetchEventsHourly.status,
+            ],
+            set: {
+              hits: sql`${aiUserFetchEventsHourly.hits} + ${bucket.hits}`,
+              sampledUserAgent: bucket.sampledUserAgent,
+              updatedAt: finishedAt,
+            },
+          })
           .run()
+        // Nothing was consulted for this bucket, so there is no provenance to
+        // record. A sentinel row would count these hits as ATTRIBUTED and drive
+        // verificationUnattributedHits to 0; the ABSENCE of a sidecar row is what
+        // makes a read report them as unattributed.
+        if (bucket.verificationManifest) {
+          tx
+            .insert(aiUserFetchVerificationManifestsHourly)
+            .values({
+              projectId: project.id,
+              sourceId: sourceRow.id,
+              tsHour: bucket.tsHour,
+              botId: bucket.botId,
+              verificationStatus: bucket.verificationStatus,
+              pathNormalized: bucket.pathNormalized,
+              status,
+              manifestId: bucket.verificationManifest.id,
+              manifestJson: bucket.verificationManifest,
+              hits: bucket.hits,
+              createdAt: finishedAt,
+              updatedAt: finishedAt,
+            })
+            .onConflictDoUpdate({
+              target: [
+                aiUserFetchVerificationManifestsHourly.projectId,
+                aiUserFetchVerificationManifestsHourly.sourceId,
+                aiUserFetchVerificationManifestsHourly.tsHour,
+                aiUserFetchVerificationManifestsHourly.botId,
+                aiUserFetchVerificationManifestsHourly.verificationStatus,
+                aiUserFetchVerificationManifestsHourly.pathNormalized,
+                aiUserFetchVerificationManifestsHourly.status,
+                aiUserFetchVerificationManifestsHourly.manifestId,
+              ],
+              set: {
+                hits: sql`${aiUserFetchVerificationManifestsHourly.hits} + ${bucket.hits}`,
+                manifestJson: bucket.verificationManifest,
+                updatedAt: finishedAt,
+              },
+            })
+            .run()
+        }
       }
 
       for (const bucket of report.aiReferralEventsHourly) {
@@ -3035,6 +3313,46 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             },
           })
           .run()
+        // Nothing was consulted for this bucket, so there is no provenance to
+        // record. A sentinel row would count these hits as ATTRIBUTED and drive
+        // verificationUnattributedHits to 0; the ABSENCE of a sidecar row is what
+        // makes a read report them as unattributed.
+        if (bucket.verificationManifest) {
+          tx
+            .insert(crawlerVerificationManifestsHourly)
+            .values({
+              projectId: project.id,
+              sourceId: sourceRow.id,
+              tsHour: bucket.tsHour,
+              botId: bucket.botId,
+              verificationStatus: bucket.verificationStatus,
+              pathNormalized: bucket.pathNormalized,
+              status,
+              manifestId: bucket.verificationManifest.id,
+              manifestJson: bucket.verificationManifest,
+              hits: bucket.hits,
+              createdAt: finishedAt,
+              updatedAt: finishedAt,
+            })
+            .onConflictDoUpdate({
+              target: [
+                crawlerVerificationManifestsHourly.projectId,
+                crawlerVerificationManifestsHourly.sourceId,
+                crawlerVerificationManifestsHourly.tsHour,
+                crawlerVerificationManifestsHourly.botId,
+                crawlerVerificationManifestsHourly.verificationStatus,
+                crawlerVerificationManifestsHourly.pathNormalized,
+                crawlerVerificationManifestsHourly.status,
+                crawlerVerificationManifestsHourly.manifestId,
+              ],
+              set: {
+                hits: sql`${crawlerVerificationManifestsHourly.hits} + ${bucket.hits}`,
+                manifestJson: bucket.verificationManifest,
+                updatedAt: finishedAt,
+              },
+            })
+            .run()
+        }
         crawlerBucketRows += 1
       }
 
@@ -3073,6 +3391,46 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             },
           })
           .run()
+        // Nothing was consulted for this bucket, so there is no provenance to
+        // record. A sentinel row would count these hits as ATTRIBUTED and drive
+        // verificationUnattributedHits to 0; the ABSENCE of a sidecar row is what
+        // makes a read report them as unattributed.
+        if (bucket.verificationManifest) {
+          tx
+            .insert(aiUserFetchVerificationManifestsHourly)
+            .values({
+              projectId: project.id,
+              sourceId: sourceRow.id,
+              tsHour: bucket.tsHour,
+              botId: bucket.botId,
+              verificationStatus: bucket.verificationStatus,
+              pathNormalized: bucket.pathNormalized,
+              status,
+              manifestId: bucket.verificationManifest.id,
+              manifestJson: bucket.verificationManifest,
+              hits: bucket.hits,
+              createdAt: finishedAt,
+              updatedAt: finishedAt,
+            })
+            .onConflictDoUpdate({
+              target: [
+                aiUserFetchVerificationManifestsHourly.projectId,
+                aiUserFetchVerificationManifestsHourly.sourceId,
+                aiUserFetchVerificationManifestsHourly.tsHour,
+                aiUserFetchVerificationManifestsHourly.botId,
+                aiUserFetchVerificationManifestsHourly.verificationStatus,
+                aiUserFetchVerificationManifestsHourly.pathNormalized,
+                aiUserFetchVerificationManifestsHourly.status,
+                aiUserFetchVerificationManifestsHourly.manifestId,
+              ],
+              set: {
+                hits: sql`${aiUserFetchVerificationManifestsHourly.hits} + ${bucket.hits}`,
+                manifestJson: bucket.verificationManifest,
+                updatedAt: finishedAt,
+              },
+            })
+            .run()
+        }
         aiUserFetchBucketRows += 1
       }
 
@@ -3921,6 +4279,8 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           botId: r.botId,
           operator: r.operator,
           verificationStatus: r.verificationStatus,
+          verificationManifests: [],
+          verificationUnattributedHits: r.hits,
           pathNormalized: r.pathNormalized,
           pathClass: classifyTrafficPath(r.pathNormalized),
           status: r.status,
@@ -3980,6 +4340,8 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           botId: r.botId,
           operator: r.operator,
           verificationStatus: r.verificationStatus,
+          verificationManifests: [],
+          verificationUnattributedHits: r.hits,
           pathNormalized: r.pathNormalized,
           status: r.status,
           hits: r.hits,
@@ -4058,6 +4420,25 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
 
     events.sort((a, b) => (a.tsHour < b.tsHour ? 1 : a.tsHour > b.tsHour ? -1 : 0))
     const trimmed = events.slice(0, limit)
+    const trimmedCrawlerEvents = trimmed.filter(
+      (event): event is TrafficCrawlerEventEntry => event.kind === TrafficEventKinds.crawler,
+    )
+    const trimmedAiUserFetchEvents = trimmed.filter(
+      (event): event is TrafficAiUserFetchEventEntry => event.kind === TrafficEventKinds['ai-user-fetch'],
+    )
+    const crawlerProvenance = crawlerVerificationProvenance(app.db, project.id, trimmedCrawlerEvents)
+    const aiUserFetchProvenance = aiUserFetchVerificationProvenance(app.db, project.id, trimmedAiUserFetchEvents)
+    const eventsWithProvenance: TrafficEventEntry[] = trimmed.map((event) => {
+      if (event.kind === TrafficEventKinds.crawler) {
+        const provenance = crawlerProvenance.get(verificationEventKey(event))
+        return provenance ? { ...event, ...provenance } : event
+      }
+      if (event.kind === TrafficEventKinds['ai-user-fetch']) {
+        const provenance = aiUserFetchProvenance.get(verificationEventKey(event))
+        return provenance ? { ...event, ...provenance } : event
+      }
+      return event
+    })
 
     const response: TrafficEventsResponse = {
       windowStart: sinceIso,
@@ -4082,7 +4463,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         returned: trimmed.length,
         truncated: trimmed.length < totalEventRows,
       },
-      events: trimmed,
+      events: eventsWithProvenance,
     }
     return response
   })

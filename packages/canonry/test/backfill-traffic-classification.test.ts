@@ -4,7 +4,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  aiUserFetchEventsHourly,
+  aiUserFetchVerificationManifestsHourly,
   crawlerEventsHourly,
+  crawlerVerificationManifestsHourly,
   createClient,
   migrate,
   projects,
@@ -133,6 +136,28 @@ describe('backfill traffic-classification', () => {
       ))
       .get()
     expect(mistralBucket?.hits).toBe(1)
+
+    expect(claudeBucket?.verificationStatus).toBe('claimed_unverified')
+    expect(mistralBucket?.verificationStatus).toBe('claimed_unverified')
+    expect(db.select().from(crawlerVerificationManifestsHourly).all()).toHaveLength(0)
+  })
+
+  it('does not fabricate user-fetch manifest provenance without a stored source IP', async () => {
+    seedSample('unknown',
+      'Mozilla/5.0 (compatible; Claude-User/1.0)',
+      '2026-05-18T11:30:00.000Z',
+    )
+
+    await backfillTrafficClassificationCommand({ project: 'demo' })
+
+    const bucket = db.select().from(aiUserFetchEventsHourly)
+      .where(eq(aiUserFetchEventsHourly.botId, 'claude-user'))
+      .get()
+    expect(bucket).toMatchObject({
+      verificationStatus: 'claimed_unverified',
+      hits: 1,
+    })
+    expect(db.select().from(aiUserFetchVerificationManifestsHourly).all()).toHaveLength(0)
   })
 
   it('is idempotent — second run finds no work to do', async () => {
@@ -162,6 +187,7 @@ describe('backfill traffic-classification', () => {
     expect(sampleAfter?.eventType).toBe('unknown')
     const buckets = db.select().from(crawlerEventsHourly).all()
     expect(buckets).toHaveLength(0)
+    expect(db.select().from(crawlerVerificationManifestsHourly).all()).toHaveLength(0)
   })
 
   it('aggregates multiple matches into the same hour bucket', async () => {
@@ -174,5 +200,6 @@ describe('backfill traffic-classification', () => {
       .where(eq(crawlerEventsHourly.botId, 'openai-gptbot'))
       .get()
     expect(bucket?.hits).toBe(2)
+    expect(db.select().from(crawlerVerificationManifestsHourly).all()).toHaveLength(0)
   })
 })

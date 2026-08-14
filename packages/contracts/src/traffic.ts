@@ -111,6 +111,26 @@ export const verificationStatusSchema = z.enum(['verified', 'claimed_unverified'
 export type VerificationStatus = z.infer<typeof verificationStatusSchema>
 export const VerificationStatuses = verificationStatusSchema.enum
 
+/**
+ * Exact bundled IP-range manifest used when a crawler or AI user-fetch event
+ * was classified. Persisting this provenance keeps historical verification
+ * results auditable after an operator publishes a newer range list.
+ */
+export const trafficVerificationManifestSchema = z.object({
+  /** Stable identity: source + publisher version + canonical prefix-content digest. */
+  id: z.string().min(1),
+  source: z.string().min(1),
+  version: z.string().min(1),
+})
+export type TrafficVerificationManifest = z.infer<typeof trafficVerificationManifestSchema>
+
+export const trafficVerificationManifestUsageSchema = z.object({
+  manifestId: z.string().min(1),
+  manifest: trafficVerificationManifestSchema.nullable(),
+  hits: z.number().int().nonnegative(),
+})
+export type TrafficVerificationManifestUsage = z.infer<typeof trafficVerificationManifestUsageSchema>
+
 export const cloudRunSourceConfigSchema = z.object({
   gcpProjectId: z.string().min(1),
   serviceName: z.string().nullable().optional(),
@@ -544,6 +564,8 @@ export const trafficCrawlerEventEntrySchema = z.object({
   botId: z.string(),
   operator: z.string(),
   verificationStatus: z.string(),
+  verificationManifests: z.array(trafficVerificationManifestUsageSchema).optional(),
+  verificationUnattributedHits: z.number().int().nonnegative().optional(),
   pathNormalized: z.string(),
   /** Coarse class of the fetched path — lets the UI split content crawls from sitemap/robots/asset polling. */
   pathClass: trafficPathClassSchema,
@@ -563,6 +585,8 @@ export const trafficAiUserFetchEventEntrySchema = z.object({
   botId: z.string(),
   operator: z.string(),
   verificationStatus: z.string(),
+  verificationManifests: z.array(trafficVerificationManifestUsageSchema).optional(),
+  verificationUnattributedHits: z.number().int().nonnegative().optional(),
   pathNormalized: z.string(),
   status: z.number().int(),
   hits: z.number().int().nonnegative(),
