@@ -6,6 +6,8 @@ Your entire AEO/GEO/AI Visibility, technical SEO + web analytics stack. **Agent-
 
 Canonry gives operators and agents a full tactical view across AI visibility, site health, search, traffic, content, local presence, backlinks, and paid media.
 
+![Canonry Site Map graph](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/dashboard.png)
+
 **Measure → diagnose → approve action → measure change**
 
 | Phase | What Canonry does |
@@ -28,8 +30,6 @@ Canonry gives operators and agents a full tactical view across AI visibility, si
 - **Client reporting:** Automate [scheduled checks and data syncs](skills/canonry/references/canonry-cli.md#scheduling--notifications), send webhook alerts, and generate [client-ready HTML reports](skills/canonry/references/canonry-cli.md#reports).
 
 The dashboard, CLI, and agent tools share the same project API.
-
-![Canonry Site Map graph](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/dashboard.png)
 
 ## Get a Page Health baseline
 
