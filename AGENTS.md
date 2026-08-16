@@ -755,7 +755,7 @@ The contract test `packages/api-routes/test/openapi-contract.test.ts` enforces a
 | Brand identity matching | `packages/contracts/src/brand-matching.ts` (exact approved aliases across case/spacing/punctuation variants; never fuzzy/edit-distance matching for metrics) |
 | Tracked-query text normalization | `packages/contracts/src/query-normalize.ts` (`normalizeQueryText` — trim + lowercase for dedup / FK-null text matching) |
 | Report action / opportunity dedup | `packages/contracts/src/report-dedup.ts` |
-| Error factories | `packages/contracts/src/errors.ts` |
+| Error factories, and rendering a caught `unknown` | `packages/contracts/src/errors.ts` (`describeError` — the one way to turn a `catch` binding into text; never hand-write `err instanceof Error ? err.message : String(err)`, whose `String()` branch prints `[object Object]` for a thrown object) |
 | SQL `LIKE` wildcard escaping | `packages/contracts/src/sql-like.ts` (`escapeLikePattern` — caller adds `ESCAPE '\\'`) |
 | Retry / exponential backoff | `packages/contracts/src/retry.ts` (`withRetry`, `backoffDelayMs`, `isRetryableHttpError`) |
 | Statistics over a series | `packages/contracts/src/statistics.ts` (`wilsonInterval` for a proportion; `linearTrend` for the least-squares fit of any evenly-spaced series, returning slope-per-step plus the two endpoints a chart draws between). Fit trends server-side and put them in the DTO — a regression computed in a chart component is invisible to the CLI and breaks UI/CLI parity. |
