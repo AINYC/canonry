@@ -7,6 +7,7 @@ import { heyClient } from '../../api.js'
 import { STATIC_VISIBILITY_STALE_MS } from '../../queries/query-client.js'
 import { InfoTooltip } from '../shared/InfoTooltip.js'
 import { ProviderBadge } from '../shared/ProviderBadge.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 export function CitationVisibilitySection({ projectName }: { projectName: string }) {
   const visibilityQuery = useQuery({
@@ -29,7 +30,7 @@ export function CitationVisibilitySection({ projectName }: { projectName: string
             <h2>Citation + answer-mention coverage</h2>
           </div>
         </div>
-        <p className="text-sm text-negative-400">{error instanceof Error ? error.message : String(error)}</p>
+        <p className="text-sm text-negative-400">{describeError(error)}</p>
       </section>
     )
   }

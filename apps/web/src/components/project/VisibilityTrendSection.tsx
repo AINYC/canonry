@@ -1,6 +1,6 @@
 import { Fragment, useId, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { buildModelChangeNotice } from '@ainyc/canonry-contracts'
+import { buildModelChangeNotice, describeError } from '@ainyc/canonry-contracts'
 import type { BrandMetricsDto, MetricsWindow } from '@ainyc/canonry-contracts'
 import {
   CartesianGrid,
@@ -667,7 +667,7 @@ export function VisibilityTrendSection({
 
   let body: React.ReactNode
   if (error) {
-    body = <p className="text-sm text-negative-400">{error instanceof Error ? error.message : String(error)}</p>
+    body = <p className="text-sm text-negative-400">{describeError(error)}</p>
   } else if (metricsQuery.isLoading && !data) {
     body = <div className="visibility-trend-chart animate-pulse rounded-lg bg-bg-elevated/40" aria-hidden="true" />
   } else if (metric === 'mentionShare' && competitorCount === 0) {
