@@ -429,16 +429,25 @@ export function siteMapLinkRuleHelp(
 /**
  * Tri-state, and it never shows a bare zero when the check did not run: "0"
  * would read as "we looked and found none".
+ *
+ * `unverified` links are ones the crawler never got a response for, which is a
+ * fact about the scan and not about the link. They must never be added to
+ * `found`, and "none found" must not be shown as a clean bill of health while
+ * some links went unchecked — that is the same claim of proven absence, one
+ * step further along.
  */
-function deadLinkLabel(state: string, found?: number): { label: string; tone: MetricTone } {
+function deadLinkLabel(state: string, found?: number, unverified?: number): { label: string; tone: MetricTone } {
   if (state === 'disabled') return { label: 'Broken links: not checked', tone: 'neutral' }
+  const unchecked = unverified ?? 0
+  const uncheckedSuffix = unchecked > 0 ? `, ${numberFormatter.format(unchecked)} unchecked` : ''
   if (state === 'complete') {
-    return found
-      ? { label: `Broken links: ${numberFormatter.format(found)} found`, tone: 'negative' }
+    if (found) return { label: `Broken links: ${numberFormatter.format(found)} found${uncheckedSuffix}`, tone: 'negative' }
+    return unchecked > 0
+      ? { label: `Broken links: none found, ${numberFormatter.format(unchecked)} unchecked`, tone: 'caution' }
       : { label: 'Broken links: none found', tone: 'positive' }
   }
   if (state === 'partial') {
-    return { label: `Broken links: ${numberFormatter.format(found ?? 0)} found so far`, tone: 'caution' }
+    return { label: `Broken links: ${numberFormatter.format(found ?? 0)} found so far${uncheckedSuffix}`, tone: 'caution' }
   }
   return { label: 'Broken links: not checked', tone: 'neutral' }
 }
@@ -1886,9 +1895,13 @@ export function SiteHealthSection({
               ? 'Scan cancelled'
             : 'No scan'
   const deadLinks = deadLinksQuery.data
+  const deadLinkCounts = deadLinks && 'found' in deadLinks
+    ? deadLinks
+    : crawl?.deadLinks && 'found' in crawl.deadLinks ? crawl.deadLinks : undefined
   const deadLinkStatus = deadLinkLabel(
     deadLinks?.state ?? crawl?.deadLinks?.state ?? 'unavailable',
-    deadLinks && 'found' in deadLinks ? deadLinks.found : crawl?.deadLinks && 'found' in crawl.deadLinks ? crawl.deadLinks.found : undefined,
+    deadLinkCounts?.found,
+    deadLinkCounts?.unverified,
   )
   const movedSite = movedSiteHosts(crawl?.requestedRootUrl ?? null, crawl?.rootUrl ?? null)
   const rootHost = siteHostFromUrl(crawl?.rootUrl ?? null)

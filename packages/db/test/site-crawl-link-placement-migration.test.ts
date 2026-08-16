@@ -26,7 +26,10 @@ test('v138 adds the link-placement columns, and adds only columns', () => {
   expect(edgesBefore).not.toContain('placement_navigation_occurrences')
   expect(snapshotsBefore).not.toContain('link_placement_ruleset_version')
 
-  migrate(db)
+  // Scoped to v138 so this stays an assertion about v138. Migrating everything
+  // made it an assertion about "138 and whatever lands next", which is what
+  // later versions then have to keep true.
+  migrate(db, MIGRATION_VERSIONS.filter((migration) => migration.version <= V138))
 
   const edgesAfter = columnNames(db, 'site_crawl_edges')
   const snapshotsAfter = columnNames(db, 'site_crawl_snapshots')

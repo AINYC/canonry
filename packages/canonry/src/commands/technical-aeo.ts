@@ -513,14 +513,26 @@ export async function technicalAeoDeadLinks(
   }
   const lines = [`Dead links: ${res.found} found from ${res.checked} checked (${res.state})`]
   for (const finding of res.deadLinks) lines.push(`${finding.sourceUrl ?? '-'} → ${finding.targetUrl ?? '-'}`)
+  if (res.unverified > 0) lines.push(unverifiedNote(res.unverified))
   if (res.nextCursor) lines.push(`Next cursor: ${res.nextCursor}`)
   console.log(lines.join('\n'))
 }
 
-function formatDeadLinkState(value: { state: string; checked?: number; found?: number }): string {
+/**
+ * Say plainly that these were not checked. An operator reading a dead-link
+ * report needs to know the difference between "your site has no broken links"
+ * and "we could not reach some of them", and the second one is about us.
+ */
+function unverifiedNote(unverified: number): string {
+  return `${unverified} link${unverified === 1 ? '' : 's'} could not be checked (the crawler never got a response). Not counted as broken; re-run to retry.`
+}
+
+function formatDeadLinkState(value: { state: string; checked?: number; found?: number; unverified?: number }): string {
   if (value.state === 'disabled') return 'disabled (opt in with --check-dead-links)'
   if (value.state === 'unavailable') return 'unavailable'
-  return `${value.found ?? 0} found / ${value.checked ?? 0} checked (${value.state})`
+  const unverified = value.unverified ?? 0
+  const suffix = unverified > 0 ? `, ${unverified} unchecked` : ''
+  return `${value.found ?? 0} found / ${value.checked ?? 0} checked${suffix} (${value.state})`
 }
 
 /** `canonry technical-aeo run <project>` — trigger a site-audit run. Mutation → json (not jsonl). */

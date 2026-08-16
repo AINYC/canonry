@@ -48,6 +48,23 @@ function captureStdout(fn: () => Promise<void>): { run: Promise<void>; lines: ()
   }
 }
 
+/**
+ * Human-format commands print through `console.log`, not `process.stdout`, so
+ * `captureStdout` never sees them. Lines are collected as they are written:
+ * `mockRestore()` clears `mock.calls`, so reading them afterwards yields
+ * nothing and every assertion silently passes against empty output.
+ */
+async function captureConsole(fn: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = []
+  const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(String(args[0])) })
+  try {
+    await fn()
+  } finally {
+    spy.mockRestore()
+  }
+  return lines
+}
+
 describe('Technical AEO full-crawl CLI', () => {
   it('leaves omitted budgets for the API to normalize into the shared default identity', async () => {
     mocked.triggerSiteAudit.mockResolvedValue({ runId: 'run-defaults', status: 'queued' })
@@ -391,6 +408,7 @@ describe('Technical AEO full-crawl CLI', () => {
       checkDeadLinks: true,
       checked: 12,
       found: 0,
+      unverified: 0,
       total: 0,
       nextCursor: null,
       deadLinks: [],
@@ -408,10 +426,53 @@ describe('Technical AEO full-crawl CLI', () => {
         checkDeadLinks: true,
         checked: 12,
         found: 0,
+        unverified: 0,
         total: 0,
         nextCursor: null,
       },
     ])
+  })
+
+  it('names unchecked links as unchecked, and never counts them as broken', async () => {
+    // The reported shape: nothing was broken, six links could not be reached.
+    // "0 found" alone would read as a clean bill of health the scan cannot give.
+    mocked.getTechnicalAeoDeadLinks.mockResolvedValue({
+      project: 'acme',
+      runId: 'run-1',
+      state: 'complete',
+      checkDeadLinks: true,
+      checked: 193,
+      found: 0,
+      unverified: 6,
+      total: 0,
+      nextCursor: null,
+      deadLinks: [],
+    })
+
+    const text = (await captureConsole(() => technicalAeoDeadLinks('acme', {}))).join('\n')
+
+    expect(text).toContain('Dead links: 0 found from 193 checked (complete)')
+    expect(text).toContain('6 links could not be checked')
+    expect(text).not.toContain('6 found')
+  })
+
+  it('says nothing about unchecked links when every link was checked', async () => {
+    mocked.getTechnicalAeoDeadLinks.mockResolvedValue({
+      project: 'acme',
+      runId: 'run-1',
+      state: 'complete',
+      checkDeadLinks: true,
+      checked: 193,
+      found: 0,
+      unverified: 0,
+      total: 0,
+      nextCursor: null,
+      deadLinks: [],
+    })
+
+    const text = (await captureConsole(() => technicalAeoDeadLinks('acme', {}))).join('\n')
+
+    expect(text).not.toContain('could not be checked')
   })
 
   it('preserves crawl-page pagination metadata in JSONL', async () => {

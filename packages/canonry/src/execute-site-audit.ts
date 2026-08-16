@@ -242,19 +242,69 @@ function observedErrorCount(pages: Iterable<CrawlPageObservation>): number {
   return total
 }
 
+/**
+ * A page the crawler never got an answer from. The crawl engine files both an
+ * HTTP 4xx/5xx response AND a failed transport under `state: 'fetch-error'`;
+ * only the second carries no status code, and only the second is silent about
+ * whether the URL is actually broken.
+ */
+function isUnverifiablePage(page: CrawlPageObservation): boolean {
+  return page.state === 'fetch-error' && page.statusCode === null
+}
+
 function deadLinkCheckedCount(edges: Iterable<CrawlEdgeObservation>, pages: Iterable<CrawlPageObservation>): number {
   // Match the engine's dead-link scope: only internal anchor targets count.
   // A discovered or robots-blocked URL was never fetched/attempted, so saying
-  // it was checked would make the opt-in result deceptively optimistic.
+  // it was checked would make the opt-in result deceptively optimistic. A URL
+  // whose fetch never completed is the same overstatement one step later: it
+  // was attempted, but nothing came back, so it was not checked either.
   const attemptedUrls = new Set<string>()
   for (const page of pages) {
     if (page.state === 'discovered' || page.state === 'robots-blocked') continue
+    if (isUnverifiablePage(page)) continue
     attemptedUrls.add(page.requestedUrl)
     if (page.finalUrl) attemptedUrls.add(page.finalUrl)
   }
   return new Set([...edges]
     .filter((edge) => edge.type === 'anchor' && edge.classification === 'internal' && attemptedUrls.has(edge.to))
     .map((edge) => edge.to)).size
+}
+
+/** One dead-link row as the engine reports it, across engine versions. */
+interface EngineLinkFinding {
+  key: string
+  from: string
+  to: string
+  statusCode?: number | null
+  reason?: string
+}
+
+/**
+ * Split what the engine returns into links that are BROKEN and links we could
+ * not CHECK. Those are different claims and only the first may be shown to a
+ * client: a 4xx is the site saying the link is dead, while a timeout or a reset
+ * socket is our crawler failing to ask, and the URL is very often healthy.
+ *
+ * Engine-version tolerant on purpose. From 6.0.0 the engine makes the split
+ * itself and `deadLinks.unverified` carries the second bucket; the pinned
+ * 4.7.0 engine puts everything in `findings` tagged `reason: 'fetch-error'`.
+ * Reading both sources means the platform is correct on either, and the filter
+ * degrades to a no-op guard once the dependency moves.
+ */
+function partitionDeadLinks(deadLinks: SiteCrawlReport['deadLinks']): {
+  dead: EngineLinkFinding[]
+  unverified: EngineLinkFinding[]
+} {
+  const reported: EngineLinkFinding[] = deadLinks.findings
+  const engineUnverified = (deadLinks as { unverified?: EngineLinkFinding[] }).unverified ?? []
+  // `typeof` rather than `!== null` so this keeps compiling once the engine
+  // narrows `statusCode` to a plain number.
+  const dead = reported.filter((finding) => typeof finding.statusCode === 'number' && finding.statusCode >= 400)
+  const unverified = [
+    ...reported.filter((finding) => typeof finding.statusCode !== 'number'),
+    ...engineUnverified,
+  ]
+  return { dead, unverified }
 }
 
 /**
@@ -679,7 +729,17 @@ export async function executeSiteAudit(
     const errorCount = observedErrorCount(observedPages.values())
     const terminalStatus: RunStatus = crawlSummary.complete ? 'completed' : 'partial'
     const deadLinksChecked = opts.checkDeadLinks ? deadLinkCheckedCount(observedEdges.values(), observedPages.values()) : 0
-    const deadLinksFound = report.deadLinks.findings.length
+    const { dead: deadLinkFindings, unverified: unverifiedLinks } = partitionDeadLinks(report.deadLinks)
+    const deadLinksFound = deadLinkFindings.length
+    // Counted per TARGET, not per finding, because this number's partner is
+    // `deadLinksChecked` — the two partition the internal anchor targets the
+    // crawl attempted, and `checked` counts unique targets. The engine reports
+    // one row per (from, to) edge, so six unreachable URLs linked from several
+    // pages each arrive as fifteen rows; printing 15 beside a target-based
+    // "193 checked" states two different units as one comparison.
+    // `deadLinksFound` stays per-finding on purpose: a broken link is an edge,
+    // and each one is a separate thing to fix.
+    const deadLinksUnverified = new Set(unverifiedLinks.map((finding) => finding.to)).size
     const legacyIssues = factors.map((factor) => toLegacyIssue(factor, crawlSummary.auditRollup.auditedPages)).filter((issue): issue is SiteAuditCrossCuttingIssueDto => issue !== null)
 
     // Derived layout persistence is isolated from the canonical crawl
@@ -788,13 +848,18 @@ export async function executeSiteAudit(
         deadLinkState: report.deadLinks.state,
         deadLinksChecked,
         deadLinksFound,
+        deadLinksUnverified,
         templateDetection: templateLinks.detection,
         linkPlacementRulesetVersion: placementRulesetVersion,
         createdAt: finishedAt,
         updatedAt: finishedAt,
       }).run()
       if (opts.checkDeadLinks) {
-        for (const finding of report.deadLinks.findings) {
+        // Only links with a real error STATUS are persisted as findings. An
+        // unverified link is counted on the snapshot and deliberately not
+        // written here, because every reader of this table — the API route,
+        // the CLI, the dashboard — presents a row as a broken link.
+        for (const finding of deadLinkFindings) {
           tx.insert(siteCrawlFindings).values({
             id: crypto.randomUUID(), projectId, runId, attemptId,
             findingKey: finding.key,

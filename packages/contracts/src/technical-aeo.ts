@@ -168,11 +168,19 @@ export const siteCrawlCountsSchema = z.object({
 })
 export type SiteCrawlCountsDto = z.infer<typeof siteCrawlCountsSchema>
 
+/**
+ * `found` counts links whose target ANSWERED with 4xx/5xx. `unverified` counts
+ * targets the crawler could not fetch at all — a timeout, a reset connection,
+ * throttling under crawl concurrency — which is a fact about the crawl and not
+ * about the link. Unverified links are excluded from `found` AND from
+ * `checked`, and must never be rendered as broken. A scan predating the split
+ * reports `unverified: 0`; that is the column default, not a measurement.
+ */
 const siteCrawlDeadLinksSummarySchema = z.discriminatedUnion('state', [
   z.object({ state: z.literal('unavailable') }),
   z.object({ state: z.literal('disabled') }),
-  z.object({ state: z.literal('complete'), checked: z.number().int().nonnegative(), found: z.number().int().nonnegative() }),
-  z.object({ state: z.literal('partial'), checked: z.number().int().nonnegative(), found: z.number().int().nonnegative() }),
+  z.object({ state: z.literal('complete'), checked: z.number().int().nonnegative(), found: z.number().int().nonnegative(), unverified: z.number().int().nonnegative() }),
+  z.object({ state: z.literal('partial'), checked: z.number().int().nonnegative(), found: z.number().int().nonnegative(), unverified: z.number().int().nonnegative() }),
 ])
 
 /**
@@ -1514,18 +1522,27 @@ export const siteCrawlDeadLinkSchema = z.object({
 })
 export type SiteCrawlDeadLinkDto = z.infer<typeof siteCrawlDeadLinkSchema>
 
-/** Dead-link checks are opt-in; disabled and unavailable never masquerade as an empty list. */
+/**
+ * Dead-link checks are opt-in; disabled and unavailable never masquerade as an
+ * empty list. Every row in `deadLinks` carries a 4xx/5xx status code, because
+ * that status is the only evidence a link is broken. Targets the crawler could
+ * not fetch are counted in `unverified` and are deliberately NOT listed here —
+ * every consumer of this array renders a row as a broken link, and a crawl
+ * timeout is not evidence of one.
+ */
 export const siteCrawlDeadLinksResponseSchema = z.discriminatedUnion('state', [
   z.object({ project: z.string(), runId: z.string().nullable(), state: z.literal('unavailable'), legacyAuditAvailable: z.boolean() }),
   z.object({ project: z.string(), runId: z.string(), state: z.literal('disabled'), checkDeadLinks: z.literal(false) }),
   z.object({
     project: z.string(), runId: z.string(), state: z.literal('complete'), checkDeadLinks: z.literal(true),
-    checked: z.number().int().nonnegative(), found: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
+    checked: z.number().int().nonnegative(), found: z.number().int().nonnegative(), unverified: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
     nextCursor: z.string().nullable(), deadLinks: z.array(siteCrawlDeadLinkSchema).default([]),
   }),
   z.object({
     project: z.string(), runId: z.string(), state: z.literal('partial'), checkDeadLinks: z.literal(true),
-    checked: z.number().int().nonnegative(), found: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
+    checked: z.number().int().nonnegative(), found: z.number().int().nonnegative(), unverified: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
     nextCursor: z.string().nullable(), deadLinks: z.array(siteCrawlDeadLinkSchema).default([]),
   }),
 ])

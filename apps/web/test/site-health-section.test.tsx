@@ -2027,7 +2027,7 @@ test('queries dead-link details only when the summary says the check ran', async
   const enabledSummary = {
     ...summary('run_1', 42),
     effectiveOptions: { checkDeadLinks: true },
-    deadLinks: { state: 'complete' as const, checked: 41, found: 3 },
+    deadLinks: { state: 'complete' as const, checked: 41, found: 3, unverified: 0 },
   }
   queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
     client: heyClient,
@@ -2048,6 +2048,7 @@ test('queries dead-link details only when the summary says the check ran', async
       checkDeadLinks: true,
       checked: 41,
       found: 3,
+      unverified: 0,
       total: 3,
       nextCursor: null,
       deadLinks: [],
@@ -2062,6 +2063,85 @@ test('queries dead-link details only when the summary says the check ran', async
     const url = input instanceof Request ? input.url : String(input)
     return url.includes('/technical-aeo/dead-links')
   })).toBe(true)
+})
+
+test('does not call a scan clean when some links could never be fetched', async () => {
+  // The reported shape: nothing broken, six links unreachable. "none found"
+  // alone would claim an absence the scan never established, and the six must
+  // never be folded into the broken count.
+  const queryClient = makeClient()
+  const enabledSummary = {
+    ...summary('run_1', 42),
+    effectiveOptions: { checkDeadLinks: true },
+    deadLinks: { state: 'complete' as const, checked: 193, found: 0, unverified: 6 },
+  }
+  for (const query of [undefined, { runId: 'run_1' }]) {
+    queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
+      client: heyClient,
+      path: { name: projectName },
+      ...(query ? { query } : {}),
+    }), enabledSummary)
+  }
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = input instanceof Request ? input.url : String(input)
+    if (!url.includes('/technical-aeo/dead-links')) return new Response('{}', { status: 500 })
+    return new Response(JSON.stringify({
+      project: projectName,
+      runId: 'run_1',
+      state: 'complete',
+      checkDeadLinks: true,
+      checked: 193,
+      found: 0,
+      unverified: 6,
+      total: 0,
+      nextCursor: null,
+      deadLinks: [],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }))
+
+  renderSection(queryClient)
+
+  await waitFor(() => expect(screen.getByText('Broken links: none found, 6 unchecked')).not.toBeNull())
+  expect(screen.queryByText('Broken links: none found')).toBeNull()
+  expect(screen.queryByText('Broken links: 6 found')).toBeNull()
+})
+
+test('reports broken and unchecked links side by side when both exist', async () => {
+  const queryClient = makeClient()
+  const enabledSummary = {
+    ...summary('run_1', 42),
+    effectiveOptions: { checkDeadLinks: true },
+    deadLinks: { state: 'complete' as const, checked: 40, found: 2, unverified: 5 },
+  }
+  for (const query of [undefined, { runId: 'run_1' }]) {
+    queryClient.setQueryData(getApiV1ProjectsByNameTechnicalAeoCrawlQueryKey({
+      client: heyClient,
+      path: { name: projectName },
+      ...(query ? { query } : {}),
+    }), enabledSummary)
+  }
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = input instanceof Request ? input.url : String(input)
+    if (!url.includes('/technical-aeo/dead-links')) return new Response('{}', { status: 500 })
+    return new Response(JSON.stringify({
+      project: projectName,
+      runId: 'run_1',
+      state: 'complete',
+      checkDeadLinks: true,
+      checked: 40,
+      found: 2,
+      unverified: 5,
+      total: 2,
+      nextCursor: null,
+      deadLinks: [],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }))
+
+  renderSection(queryClient)
+
+  // 2 and 5 stay separate numbers; the badge never shows their sum.
+  await waitFor(() => expect(screen.getByText('Broken links: 2 found, 5 unchecked')).not.toBeNull())
+  expect(screen.queryByText('Broken links: 7 found')).toBeNull()
 })
 
 test('lets long selected paths and URLs wrap in the page inspector', () => {

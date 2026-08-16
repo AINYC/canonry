@@ -7472,6 +7472,7 @@ export type SiteCrawlDeadLinksResponseDto = {
     checkDeadLinks: true;
     checked: number;
     found: number;
+    unverified: number;
     total: number;
     nextCursor: string | null;
     deadLinks: Array<{
@@ -7492,6 +7493,7 @@ export type SiteCrawlDeadLinksResponseDto = {
     checkDeadLinks: true;
     checked: number;
     found: number;
+    unverified: number;
     total: number;
     nextCursor: string | null;
     deadLinks: Array<{
@@ -7808,10 +7810,12 @@ export type SiteCrawlSummaryDto = {
         state: 'complete';
         checked: number;
         found: number;
+        unverified: number;
     } | {
         state: 'partial';
         checked: number;
         found: number;
+        unverified: number;
     };
 };
 

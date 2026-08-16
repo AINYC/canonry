@@ -131,6 +131,24 @@ const RUN_HOOK_ALLOWLIST: ReadonlySet<number> = new Set([
   // Idempotent: the hook resets each attempt before writing, so a retry writes
   // the same values.
   133,
+  // v140 adds a defaulted column in statements[] and uses run() to reclassify
+  // stored dead-link findings: a finding whose `evidence.statusCode` is null
+  // was never evidence of a broken link (the crawl got no response at all — a
+  // timeout, a reset socket, throttling under our own concurrency), and those
+  // rows were being served to clients as broken links. The hook rewrites the
+  // three counts to absolute values derived from the surviving rows and
+  // deletes the fabricated ones. Downgrade-safe on the same grounds as v132:
+  // an older binary sees fewer dead-link rows, and the ones removed are
+  // exactly the rows it was misreporting, so it is strictly better off;
+  // `dead_links_unverified` is unknown to any binary older than v140 and is
+  // NOT NULL with a default, so an older writer's INSERT that omits it still
+  // succeeds. It uses run() because the statement allowlist is schema-shaped
+  // and because `dead_links_checked` must lose exactly the DISTINCT targets
+  // that were never reached, which is a per-attempt figure. Idempotent: the
+  // HAVING clause selects only attempts still holding a fabricated row and
+  // the delete removes exactly those, so a re-run selects nothing and
+  // `dead_links_checked` cannot be reduced twice.
+  140,
 ])
 
 test(`migrations after v${DOWNGRADE_BASELINE} define no run() hook unless explicitly allowlisted`, () => {
