@@ -290,13 +290,16 @@ describe('project-scoped API keys', () => {
   })
 
   /**
-   * The GA4 property listing answers for the operator's Google PRINCIPAL, not
-   * for one project, so it names every GA account and property they can see —
-   * other clients included. A key narrowed to one project must be refused
-   * before any Google call, or the project boundary leaks sibling metadata.
+   * These routes enumerate an UPSTREAM principal's account tree, so the
+   * response names every client on the instance regardless of the project in
+   * the URL. A key narrowed to one project must be refused BEFORE any upstream
+   * call, or the project boundary leaks sibling metadata.
    */
-  it('GET /ga/properties is FORBIDDEN for a project-scoped key even on its OWN project', async () => {
-    const res = await authed('GET', `/api/v1/projects/project-a/ga/properties`, SCOPED_KEY)
+  it.each([
+    ['Bing sites', '/api/v1/projects/project-a/bing/sites'],
+    ['GA4 properties', '/api/v1/projects/project-a/ga/properties'],
+  ])('%s is FORBIDDEN for a project-scoped key', async (_label, path) => {
+    const res = await authed('GET', path, SCOPED_KEY)
     expect(res.statusCode).toBe(403)
     expect(res.json()).toMatchObject({ error: { code: 'FORBIDDEN' } })
   })
