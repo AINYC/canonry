@@ -22,6 +22,7 @@ import {
   verifyConnectionWithToken,
   resolveGa4SyncDays,
   GA4_MAX_SYNC_DAYS,
+  listProperties,
 } from '@ainyc/canonry-integration-google-analytics'
 import type { GoogleConnectionStore } from './google.js'
 import { refreshAccessToken } from '@ainyc/canonry-integration-google'
@@ -573,6 +574,40 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
   })
 
   // GET /projects/:name/ga/status
+  // GET /projects/:name/ga/properties
+  //
+  // Deliberately does NOT go through resolveGa4AccessToken: that helper
+  // requires a propertyId to already be set, which is the exact thing this
+  // route exists to discover. Requiring it here would make the numeric id
+  // unobtainable from canonry and force the operator into the GA4 UI.
+  app.get<{ Params: { name: string } }>('/projects/:name/ga/properties', async (request) => {
+    const project = resolveProject(app.db, request.params.name)
+
+    const googleStore = opts.googleConnectionStore
+    const authConfig = opts.getGoogleAuthConfig?.()
+    if (!googleStore || !authConfig) {
+      throw validationError(
+        'Google OAuth is not configured. Run "canonry google connect <project> --type ga4" first.',
+      )
+    }
+
+    const oauthConn = googleStore.getConnection(project.canonicalDomain, 'ga4')
+    if (!oauthConn?.accessToken || !oauthConn?.refreshToken) {
+      throw validationError(
+        'No GA4 OAuth connection for this project. Run "canonry google connect <project> --type ga4" first. ' +
+        'Service-account connections already carry their property id and do not need this listing.',
+      )
+    }
+
+    const accessToken = await refreshOAuthTokenIfNeeded(googleStore, authConfig, project.canonicalDomain, {
+      accessToken: oauthConn.accessToken,
+      refreshToken: oauthConn.refreshToken,
+      tokenExpiresAt: oauthConn.tokenExpiresAt,
+    })
+
+    return { properties: await listProperties(accessToken) }
+  })
+
   app.get<{ Params: { name: string } }>('/projects/:name/ga/status', async (request, _reply) => {
     const project = resolveProject(app.db, request.params.name)
 

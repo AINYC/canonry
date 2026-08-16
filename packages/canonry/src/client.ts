@@ -92,6 +92,7 @@ import type {
   WordpressSchemaStatusResultDto,
   WordpressStatusDto,
   GaConnectResponse,
+  GA4PropertiesDto,
   GaStatusResponse,
   GaSyncResponse,
   GaTrafficResponse,
@@ -389,6 +390,7 @@ import {
   // GA4
   postApiV1ProjectsByNameGaConnect,
   deleteApiV1ProjectsByNameGaDisconnect,
+  getApiV1ProjectsByNameGaProperties,
   getApiV1ProjectsByNameGaStatus,
   getApiV1ProjectsByNameGaMeasurementAnalysis,
   postApiV1ProjectsByNameGaSync,
@@ -2966,6 +2968,12 @@ export class ApiClient {
   async gaStatus(project: string): Promise<GaStatusResponse> {
     return this.invoke<GaStatusResponse>(() =>
       getApiV1ProjectsByNameGaStatus({ client: this.heyClient, path: { name: project } }),
+    )
+  }
+
+  async gaProperties(project: string): Promise<GA4PropertiesDto> {
+    return this.invoke<GA4PropertiesDto>(() =>
+      getApiV1ProjectsByNameGaProperties({ client: this.heyClient, path: { name: project } }),
     )
   }
 

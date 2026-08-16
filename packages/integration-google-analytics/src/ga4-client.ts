@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { AI_ENGINE_DOMAINS, classifyAiReferralTrafficClass, compactDateToIso, parseBoundedRate, withRetry } from '@ainyc/canonry-contracts'
 import {
+  GA4_ADMIN_API_BASE,
   GA4_DATA_API_BASE,
   GA4_SCOPE,
   GOOGLE_TOKEN_URL,
@@ -696,6 +697,94 @@ export async function verifyConnectionWithToken(
   })
 
   return true
+}
+
+export interface GA4PropertySummary {
+  /** Numeric id, e.g. "375386317". This is what `ga connect --property-id` takes. */
+  propertyId: string
+  displayName: string
+  /** Display name of the GA4 account that owns the property. */
+  accountName: string
+}
+
+/**
+ * List every GA4 property the OAuth principal can read, via the Admin API's
+ * accountSummaries.
+ *
+ * This exists because the numeric property id is the one thing `ga connect`
+ * cannot derive: it is not in the OAuth grant, not on the connection row, and
+ * not guessable from the domain. Without a listing the operator has to open
+ * the GA4 UI, which is not an option for an agent.
+ *
+ * Needs only `analytics.readonly` — the same scope the OAuth connect flow
+ * already requests, so no re-consent.
+ */
+export async function listProperties(accessToken: string): Promise<GA4PropertySummary[]> {
+  validateAccessToken(accessToken)
+
+  const properties: GA4PropertySummary[] = []
+  let pageToken: string | undefined
+
+  do {
+    const url = new URL(`${GA4_ADMIN_API_BASE}/accountSummaries`)
+    url.searchParams.set('pageSize', '200')
+    if (pageToken) url.searchParams.set('pageToken', pageToken)
+
+    const body: GA4AccountSummariesResponse = await withGa4Limit(() => withGa4Retry(async () => {
+      const res = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(GA4_REQUEST_TIMEOUT_MS),
+      })
+
+      if (!res.ok) {
+        const raw = await res.text().catch(() => '')
+        let detail = ''
+        try {
+          const parsed = JSON.parse(raw) as { error?: { message?: string; status?: string } }
+          if (parsed.error?.status === 'SERVICE_DISABLED') {
+            detail =
+              ' The Google Analytics Admin API is not enabled for this GCP project. ' +
+              'Enable it at: https://console.developers.google.com/apis/api/analyticsadmin.googleapis.com/overview'
+          } else if (parsed.error?.message) {
+            detail = ` ${parsed.error.message}`
+          }
+        } catch {
+          if (raw.length < 200) detail = ` ${raw}`
+        }
+        // The token can appear in an upstream echo; never let it reach a log.
+        const sanitized = detail.replace(new RegExp(escapeRegExp(accessToken), 'g'), '***')
+        ga4Log('error', 'admin.account-summaries-failed', { httpStatus: res.status })
+        throw new GA4ApiError(`Failed to list GA4 properties.${sanitized}`, res.status)
+      }
+
+      return await res.json() as GA4AccountSummariesResponse
+    }, 'GA4 accountSummaries'))
+
+    for (const account of body.accountSummaries ?? []) {
+      for (const summary of account.propertySummaries ?? []) {
+        // The Admin API returns "properties/375386317"; callers want the id.
+        const propertyId = (summary.property ?? '').split('/').pop() ?? ''
+        if (!propertyId) continue
+        properties.push({
+          propertyId,
+          displayName: summary.displayName ?? '',
+          accountName: account.displayName ?? '',
+        })
+      }
+    }
+
+    pageToken = body.nextPageToken
+  } while (pageToken)
+
+  return properties
+}
+
+interface GA4AccountSummariesResponse {
+  accountSummaries?: {
+    displayName?: string
+    propertySummaries?: { property?: string; displayName?: string }[]
+  }[]
+  nextPageToken?: string
 }
 
 export interface GA4AggregateSummary {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { createServiceAccountJwt, fetchAiReferrals, fetchTrafficByLandingPage, getAccessToken, verifyConnectionWithToken, fetchAggregateSummary, fetchWindowSummary, _resetGa4ConcurrencyStateForTests } from '../src/ga4-client.js'
+import { createServiceAccountJwt, fetchAiReferrals, fetchTrafficByLandingPage, getAccessToken, verifyConnectionWithToken, listProperties, fetchAggregateSummary, fetchWindowSummary, _resetGa4ConcurrencyStateForTests } from '../src/ga4-client.js'
 import { GA4_MAX_CONCURRENT_REQUESTS, GA4_MAX_RETRIES } from '../src/constants.js'
 import crypto from 'node:crypto'
 
@@ -684,5 +684,91 @@ describe('GA4 concurrency limiter', () => {
 
     expect(maxInFlight).toBe(GA4_MAX_CONCURRENT_REQUESTS)
     expect(fetchSpy).toHaveBeenCalledTimes(N)
+  })
+})
+
+describe('listProperties', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    _resetGa4ConcurrencyStateForTests()
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+  })
+
+  it('flattens account summaries and strips the properties/ prefix', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        accountSummaries: [
+          {
+            displayName: 'Tank Air',
+            propertySummaries: [
+              { property: 'properties/375386317', displayName: 'Tank Air - GA4' },
+              { property: 'properties/496422710', displayName: 'Dummy Account' },
+            ],
+          },
+          {
+            displayName: 'Studio Otto',
+            propertySummaries: [{ property: 'properties/384772186', displayName: 'Studio Otto - GA4' }],
+          },
+        ],
+      }), { status: 200 }),
+    )
+
+    const result = await listProperties('valid-token')
+
+    expect(result).toEqual([
+      { propertyId: '375386317', displayName: 'Tank Air - GA4', accountName: 'Tank Air' },
+      { propertyId: '496422710', displayName: 'Dummy Account', accountName: 'Tank Air' },
+      { propertyId: '384772186', displayName: 'Studio Otto - GA4', accountName: 'Studio Otto' },
+    ])
+
+    const [url, init] = fetchSpy.mock.calls[0]!
+    expect(String(url)).toContain('analyticsadmin.googleapis.com')
+    expect(String(url)).toContain('accountSummaries')
+    expect((init as RequestInit).headers).toMatchObject({ Authorization: 'Bearer valid-token' })
+  })
+
+  it('follows nextPageToken until the listing is exhausted', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        accountSummaries: [{ displayName: 'A', propertySummaries: [{ property: 'properties/1', displayName: 'One' }] }],
+        nextPageToken: 'page-2',
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        accountSummaries: [{ displayName: 'B', propertySummaries: [{ property: 'properties/2', displayName: 'Two' }] }],
+      }), { status: 200 }))
+
+    const result = await listProperties('valid-token')
+
+    expect(result.map((p) => p.propertyId)).toEqual(['1', '2'])
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(String(fetchSpy.mock.calls[1]![0])).toContain('pageToken=page-2')
+  })
+
+  it('skips a summary with no resolvable property id rather than emitting an empty one', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        accountSummaries: [{ displayName: 'A', propertySummaries: [{ displayName: 'No property field' }] }],
+      }), { status: 200 }),
+    )
+
+    await expect(listProperties('valid-token')).resolves.toEqual([])
+  })
+
+  it('rejects an empty access token before making a request', async () => {
+    await expect(listProperties('')).rejects.toThrow(/Access token is required/)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not leak the access token into the error message', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'bad token super-secret-token here' } }), { status: 403 }),
+    )
+
+    await expect(listProperties('super-secret-token')).rejects.toThrow(/\*\*\*/)
   })
 })

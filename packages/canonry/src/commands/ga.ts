@@ -1,4 +1,4 @@
-import type { GaConnectResponse, GaStatusResponse, GaSyncResponse, GaTrafficResponse, GaCoverageResponse, GaMeasurementAnalysisDto, GaSocialReferralTrendResponse, GaAttributionTrendResponse, GA4AiReferralDailyDto, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry } from '@ainyc/canonry-contracts'
+import type { GaConnectResponse, GA4PropertiesDto, GaStatusResponse, GaSyncResponse, GaTrafficResponse, GaCoverageResponse, GaMeasurementAnalysisDto, GaSocialReferralTrendResponse, GaAttributionTrendResponse, GA4AiReferralDailyDto, GA4AiReferralHistoryEntry, GA4SessionHistoryEntry, GA4SocialReferralHistoryEntry } from '@ainyc/canonry-contracts'
 import { createApiClient } from '../client.js'
 import { CliError, isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
@@ -133,6 +133,31 @@ export async function gaStatus(project: string, format?: string): Promise<void> 
   }
   console.log(`  Last Synced:  ${result.lastSyncedAt ?? '(never)'}`)
   console.log(`  Connected:    ${result.createdAt ?? 'unknown'}`)
+}
+
+export async function gaProperties(project: string, format?: string): Promise<void> {
+  const client = getClient()
+  const result: GA4PropertiesDto = await client.gaProperties(project)
+
+  if (isMachineFormat(format)) {
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+
+  if (result.properties.length === 0) {
+    console.log(`No GA4 properties visible to the connected account for "${project}".`)
+    return
+  }
+
+  console.log('Available GA4 properties:\n')
+  const idWidth = Math.max(11, ...result.properties.map((p) => p.propertyId.length))
+  const nameWidth = Math.max(12, ...result.properties.map((p) => p.displayName.length))
+  console.log(`  ${'PROPERTY ID'.padEnd(idWidth)}  ${'DISPLAY NAME'.padEnd(nameWidth)}  ACCOUNT`)
+  console.log(`  ${'─'.repeat(idWidth)}  ${'─'.repeat(nameWidth)}  ${'─'.repeat(12)}`)
+  for (const p of result.properties) {
+    console.log(`  ${p.propertyId.padEnd(idWidth)}  ${p.displayName.padEnd(nameWidth)}  ${p.accountName}`)
+  }
+  console.log('\nUse "canonry ga connect <project> --property-id <id>" to select one.')
 }
 
 export async function gaSync(project: string, opts?: { days?: number; only?: string; format?: string }): Promise<void> {

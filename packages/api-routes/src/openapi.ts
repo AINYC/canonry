@@ -4826,6 +4826,20 @@ const routeCatalog: OpenApiOperation[] = [
   },
   {
     method: 'get',
+    path: '/api/v1/projects/{name}/ga/properties',
+    summary: 'List GA4 properties the connected account can read',
+    description:
+      'Lists every GA4 property visible to the project\'s OAuth connection, so the numeric property id needed by ga/connect can be discovered without leaving canonry. Requires an OAuth GA4 connection; service-account connections already carry their property id.',
+    tags: ['ga4'],
+    parameters: [nameParameter],
+    responses: {
+      200: jsonResponse('GA4 properties returned.', 'GA4PropertiesDto'),
+      400: errorResponse('No OAuth GA4 connection for this project.'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'get',
     path: '/api/v1/projects/{name}/ga/measurement-analysis',
     summary: 'Get GA4 measurement analysis',
     tags: ['ga4'],

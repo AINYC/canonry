@@ -2160,6 +2160,14 @@ export type Ga4SocialReferralHistoryEntry = {
     channelGroup: string;
 };
 
+export type Ga4PropertiesDto = {
+    properties: Array<{
+        propertyId: string;
+        displayName: string;
+        accountName: string;
+    }>;
+};
+
 export type Ga4StatusDto = {
     connected: boolean;
     propertyId: string | null;
@@ -18575,6 +18583,40 @@ export type GetApiV1ProjectsByNameGaStatusResponses = {
 };
 
 export type GetApiV1ProjectsByNameGaStatusResponse = GetApiV1ProjectsByNameGaStatusResponses[keyof GetApiV1ProjectsByNameGaStatusResponses];
+
+export type GetApiV1ProjectsByNameGaPropertiesData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/ga/properties';
+};
+
+export type GetApiV1ProjectsByNameGaPropertiesErrors = {
+    /**
+     * No OAuth GA4 connection for this project.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGaPropertiesError = GetApiV1ProjectsByNameGaPropertiesErrors[keyof GetApiV1ProjectsByNameGaPropertiesErrors];
+
+export type GetApiV1ProjectsByNameGaPropertiesResponses = {
+    /**
+     * GA4 properties returned.
+     */
+    200: Ga4PropertiesDto;
+};
+
+export type GetApiV1ProjectsByNameGaPropertiesResponse = GetApiV1ProjectsByNameGaPropertiesResponses[keyof GetApiV1ProjectsByNameGaPropertiesResponses];
 
 export type GetApiV1ProjectsByNameGaMeasurementAnalysisData = {
     body?: never;

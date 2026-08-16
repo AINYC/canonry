@@ -632,13 +632,16 @@ route checks, activation order, smoke tests, rollback, and troubleshooting.
 
 ## Google Analytics 4
 
-GA4 integration uses service account authentication (no OAuth). The service account must have Viewer access on the GA4 property. `ga sync` writes to four DB tables (`gaTrafficSnapshots`, `gaAiReferrals`, `gaSocialReferrals`, `gaTrafficSummaries`); every subsequent read command queries the local store rather than re-fetching from GA4, so reads are fast and quotaless. AI-referral rows are tracked across 10 known providers (chatgpt, perplexity, claude, gemini, openai, anthropic, copilot, phind, you.com, meta.ai), three GA4 attribution dimensions (`session` / `first_user` / `manual_utm`), and joined to landing pages. Social referrals are split Organic vs Paid via GA4's `sessionDefaultChannelGroup`. All commands support `--format json`.
+GA4 integration supports service-account auth and OAuth (`canonry google connect <project> --type ga4`). With OAuth, `ga properties` lists the readable properties so the numeric id `ga connect --property-id` needs can be discovered without leaving canonry. The service account must have Viewer access on the GA4 property. `ga sync` writes to four DB tables (`gaTrafficSnapshots`, `gaAiReferrals`, `gaSocialReferrals`, `gaTrafficSummaries`); every subsequent read command queries the local store rather than re-fetching from GA4, so reads are fast and quotaless. AI-referral rows are tracked across 10 known providers (chatgpt, perplexity, claude, gemini, openai, anthropic, copilot, phind, you.com, meta.ai), three GA4 attribution dimensions (`session` / `first_user` / `manual_utm`), and joined to landing pages. Social referrals are split Organic vs Paid via GA4's `sessionDefaultChannelGroup`. All commands support `--format json`.
 
 ```bash
 cnry ga connect <project> --property-id <id> --key-file ./sa-key.json
                                                   # connect via service account (auth method = service_account)
 cnry ga disconnect <project>                  # disconnect; deletes all synced rows for the project
 cnry ga status <project>                      # connected, propertyId, authMethod, lastSyncedAt
+cnry ga properties <project>                  # list GA4 properties the connected account can read,
+                                                  # with their numeric ids. OAuth connections only —
+                                                  # the id cannot be derived from the domain or the grant
 cnry ga sync <project> [--days 30] [--only traffic|ai|social]
                                                   # refresh from GA4 → DB; --only restricts which slice is replaced
                                                   # returns: synced, rowCount, aiReferralCount, socialReferralCount,
