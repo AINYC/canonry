@@ -1,6 +1,6 @@
 ---
 name: canonry
-description: "Set up and operate Canonry AEO projects. Inspect mention and citation coverage, diagnose regressions, and run technical audits. Connect Cloudflare direct-push or queue-pull traffic. Act through the Canonry CLI or MCP tools. Examples: inspect project acme coverage (run + report), diagnose query drift via attribution (report.html + visibility-attribution), or submit GSC sitemaps (gsc-sitemap-submission batched)."
+description: "Operate Canonry (the `cnry` / `canonry` CLI) for AEO. Load this BEFORE any canonry operator task: creating or configuring a project, connecting GSC, GA4, Bing, Google Business Profile or a Cloudflare traffic source, running or scheduling a sweep, reading mention and citation coverage, running a technical audit, submitting sitemaps, or diagnosing why a number moved. Covers anything touching cnry, canonry doctor, ~/.canonry, @canonry/canonry, the canonry_* MCP tools, mention share, or direct-push / queue-pull traffic. Load it before acting, not after something fails."
 compatibility: Requires Node.js 22.14+ and globally installed @canonry/canonry; canonry-mcp must be on PATH.
 metadata:
   agent: >-
