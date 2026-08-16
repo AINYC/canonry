@@ -20,6 +20,8 @@ import {
   fetchLeadEvents,
   verifyConnection,
   verifyConnectionWithToken,
+  resolveGa4SyncDays,
+  GA4_MAX_SYNC_DAYS,
 } from '@ainyc/canonry-integration-google-analytics'
 import type { GoogleConnectionStore } from './google.js'
 import { refreshAccessToken } from '@ainyc/canonry-integration-google'
@@ -617,7 +619,11 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
   }>('/projects/:name/ga/sync', async (request, _reply) => {
     const project = resolveProject(app.db, request.params.name)
 
-    const days = request.body?.days ?? 30
+    // Every GA4 fetch bounds its window to [1, GA4_MAX_SYNC_DAYS]. Resolve the
+    // bound HERE too, from the same helper, so `days` in the response is the
+    // window that was actually written rather than the one that was asked for
+    // — a `--days 500` sync writes 90 and used to report 500.
+    const { requestedDays, effectiveDays: days, clamped } = resolveGa4SyncDays(request.body?.days)
     const only = request.body?.only
 
     const validOnlyValues = ['traffic', 'ai', 'social'] as const
@@ -636,8 +642,10 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
 
     const measurementState = app.db.select().from(gaMeasurementSyncStates)
       .where(eq(gaMeasurementSyncStates.projectId, project.id)).get()
-    const acquisitionDays = measurementState?.acquisitionSyncedAt != null ? Math.min(Math.max(1, days), 90) : 90
-    const leadDays = measurementState?.leadSyncedAt != null ? Math.min(Math.max(1, days), 90) : 90
+    // `days` is already bounded, so an incremental refresh reuses it directly;
+    // a first-ever measurement sync backfills the full supported window.
+    const acquisitionDays = measurementState?.acquisitionSyncedAt != null ? days : GA4_MAX_SYNC_DAYS
+    const leadDays = measurementState?.leadSyncedAt != null ? days : GA4_MAX_SYNC_DAYS
     const leadEventNames = project.measurement.leadEventNames
 
     const startedAt = new Date().toISOString()
@@ -962,6 +970,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         aiReferralCount: aiReferrals.length,
         socialReferralCount: socialReferrals.length,
         days,
+        ...(clamped ? { requestedDays, clamped } : {}),
         totalUsers: summary.totalUsers,
         ...(only ? { only } : {}),
       })
@@ -972,6 +981,8 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         aiReferralCount: aiReferrals.length,
         socialReferralCount: socialReferrals.length,
         days,
+        requestedDays,
+        clamped,
         syncedAt: now,
         measurement: {
           acquisition: acquisitionResult,

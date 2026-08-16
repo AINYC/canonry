@@ -4869,6 +4869,7 @@ const routeCatalog: OpenApiOperation[] = [
     method: 'post',
     path: '/api/v1/projects/{name}/ga/sync',
     summary: 'Sync GA4 traffic and AI referral data',
+    description: 'Syncs a window of GA4 history. `days` is bounded to GA4\'s supported sync range (1-90); a request outside it is clamped rather than rejected. The response reports the window ACTUALLY written as `days`, the unbounded request as `requestedDays`, and sets `clamped` when the two differ.',
     tags: ['ga4'],
     parameters: [nameParameter],
     requestBody: {
@@ -4878,7 +4879,7 @@ const routeCatalog: OpenApiOperation[] = [
           schema: {
             type: 'object',
             properties: {
-              days: integerSchema,
+              days: { ...integerSchema, description: 'Days of history to sync. Clamped to 1-90; check `clamped` in the response to detect truncation. Defaults to 30.' },
             },
           },
         },

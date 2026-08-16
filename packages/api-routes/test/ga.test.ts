@@ -2487,6 +2487,128 @@ describe('GA4 routes', () => {
       .run()
   })
 
+  describe('POST /ga/sync reports the window it actually synced', () => {
+    // The bug: `--days 500` returned {"days": 500, "synced": true} while
+    // writing exactly 90 days, so a caller could not tell truncated history
+    // from a property that only had 90 days of data.
+    async function syncWithDays(days: number | undefined, projectName: string) {
+      const now = new Date().toISOString()
+      const today = now.slice(0, 10)
+
+      await app.inject({
+        method: 'PUT',
+        url: `/api/v1/projects/${projectName}`,
+        payload: {
+          displayName: projectName,
+          canonicalDomain: `${projectName}.example`,
+          country: 'US',
+          language: 'en',
+        },
+      })
+
+      credentials.set(projectName, {
+        projectName,
+        propertyId: '424242',
+        clientEmail: 'sa@test.iam.gserviceaccount.com',
+        privateKey: 'fake-key',
+        createdAt: now,
+        updatedAt: now,
+      })
+
+      const gaModule = await import('@ainyc/canonry-integration-google-analytics')
+      const spies = [
+        vi.spyOn(gaModule, 'getAccessToken').mockResolvedValue('mock-token'),
+        vi.spyOn(gaModule, 'fetchTrafficByLandingPage').mockResolvedValue([]),
+        vi.spyOn(gaModule, 'fetchAggregateSummary').mockResolvedValue({
+          periodStart: today,
+          periodEnd: today,
+          totalSessions: 0,
+          totalOrganicSessions: 0,
+          totalUsers: 0,
+        }),
+        vi.spyOn(gaModule, 'fetchWindowSummary').mockImplementation(async (_t, _p, windowKey) => ({
+          windowKey,
+          periodStart: today,
+          periodEnd: today,
+          totalSessions: 0,
+          totalOrganicSessions: 0,
+          totalDirectSessions: 0,
+          totalUsers: 0,
+        })),
+        vi.spyOn(gaModule, 'fetchDailyTotals').mockResolvedValue([]),
+        vi.spyOn(gaModule, 'fetchAiReferrals').mockResolvedValue([]),
+        vi.spyOn(gaModule, 'fetchSocialReferrals').mockResolvedValue([]),
+      ]
+      // fetchDailyTotals is the fetch that writes `ga_daily_totals` — the
+      // table whose 90 rows exposed the bug. Its args are snapshotted BEFORE
+      // mockRestore (which clears the call record) so we can assert the
+      // CLIENT was handed the bounded window too: a response saying 90 while
+      // the fetch was asked for 500 would just move the lie one layer down.
+      const dailyTotalsSpy = spies[4]!
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: `/api/v1/projects/${projectName}/ga/sync`,
+          payload: days === undefined ? {} : { days },
+        })
+        expect(res.statusCode).toBe(200)
+        return {
+          body: JSON.parse(res.payload),
+          dailyTotalsArgs: dailyTotalsSpy.mock.calls.map((call) => call[2]),
+        }
+      } finally {
+        for (const spy of spies) spy.mockRestore()
+        credentials.delete(projectName)
+      }
+    }
+
+    it('reports the clamped window, the request, and the clamped flag for --days 500', async () => {
+      const { body, dailyTotalsArgs } = await syncWithDays(500, 'ga-clamp-over')
+
+      expect(body.synced).toBe(true)
+      expect(body.days).toBe(90)
+      expect(body.requestedDays).toBe(500)
+      expect(body.clamped).toBe(true)
+      // The fetch layer got the bounded window, not the raw request.
+      expect(dailyTotalsArgs).toEqual([90])
+    })
+
+    it('leaves an in-range window untouched and does not flag a clamp', async () => {
+      const { body, dailyTotalsArgs } = await syncWithDays(14, 'ga-clamp-in-range')
+
+      expect(body.days).toBe(14)
+      expect(body.requestedDays).toBe(14)
+      expect(body.clamped).toBe(false)
+      expect(dailyTotalsArgs).toEqual([14])
+    })
+
+    it('treats the cap itself as an exact, unclamped window', async () => {
+      const { body } = await syncWithDays(90, 'ga-clamp-boundary')
+
+      expect(body.days).toBe(90)
+      expect(body.requestedDays).toBe(90)
+      expect(body.clamped).toBe(false)
+    })
+
+    it('clamps a zero-day request up to the floor and flags it', async () => {
+      const { body, dailyTotalsArgs } = await syncWithDays(0, 'ga-clamp-under')
+
+      expect(body.days).toBe(1)
+      expect(body.requestedDays).toBe(0)
+      expect(body.clamped).toBe(true)
+      expect(dailyTotalsArgs).toEqual([1])
+    })
+
+    it('defaults an omitted window to 30 days without flagging a clamp', async () => {
+      const { body } = await syncWithDays(undefined, 'ga-clamp-default')
+
+      expect(body.days).toBe(30)
+      expect(body.requestedDays).toBe(30)
+      expect(body.clamped).toBe(false)
+    })
+  })
+
   it('POST /ga/connect does not accept keyFile parameter', async () => {
     const res = await app.inject({
       method: 'POST',
