@@ -12,44 +12,56 @@ const repoRoot = path.resolve(packageRoot, '..', '..')
 const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs')
 const mcpCli = path.join(packageRoot, 'src', 'mcp', 'cli.ts')
 
+/**
+ * Budget for spawn through the `initialize` response, which is where the two
+ * subprocess cases below spend nearly all of their time. Each one starts
+ * `node tsx src/mcp/cli.ts`, and that child transpiles the whole CLI import
+ * graph — the API client plus the 188-entry tool registry — before it can write
+ * its first frame. Measured: ~1.2-1.9s of handshake on an idle 12-core box,
+ * ~10s at 7x CPU oversubscription, against tens of milliseconds for every
+ * assertion that follows.
+ *
+ * That fits inside vitest's 5000ms default only while the machine is idle. Run
+ * as part of `pnpm run test` (658 files, one worker per core) both cases timed
+ * out in roughly 1 run in 3 — always at the handshake, never with an assertion
+ * diff, which is why the failures read as "no output" rather than as a bug.
+ *
+ * So the ceiling is raised where the cost actually is. There is no sleep to
+ * tune: `startMcpClient` waits on the `initialize` response itself, and this
+ * budget exists only so a child that never answers reports why.
+ */
+const HANDSHAKE_TIMEOUT_MS = 30_000
+
+/**
+ * Per-case ceiling. Deliberately above `HANDSHAKE_TIMEOUT_MS` so a subprocess
+ * that hangs loses the race to the handshake's own error — which names the
+ * phase and carries the child's stderr — instead of to vitest's generic "Test
+ * timed out" pointing at the `it()`.
+ */
+const SUBPROCESS_CASE_TIMEOUT_MS = 45_000
+
 describe('canonry-mcp stdio', () => {
   const clients: Client[] = []
   const servers: Array<{ close: () => Promise<void> }> = []
 
+  // Same contention applies to teardown: killing the child and awaiting its
+  // exit is fast, but not against the default 10s hook budget on a loaded box.
   afterEach(async () => {
     await Promise.all(clients.splice(0).map(client => client.close()))
     await Promise.all(servers.splice(0).map(server => server.close()))
-  })
+  }, HANDSHAKE_TIMEOUT_MS)
 
   it('initializes, lists tools, and calls stubbed read/write tools through stdio frames', async () => {
     const api = await startStubApi()
     servers.push(api)
 
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-mcp-stdio-'))
-    fs.writeFileSync(path.join(configDir, 'config.yaml'), [
-      `apiUrl: ${api.origin}`,
-      'database: /tmp/canonry-mcp-stdio.sqlite',
-      'apiKey: cnry_test',
-      '',
-    ].join('\n'))
-
-    const stderrChunks: string[] = []
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [tsxCli, mcpCli],
-      cwd: packageRoot,
-      env: {
-        ...stringEnv(),
-        CANONRY_CONFIG_DIR: configDir,
-        CANONRY_BASE_PATH: '',
-      },
-      stderr: 'pipe',
+    const { client, stderr } = await startMcpClient({
+      apiOrigin: api.origin,
+      configPrefix: 'canonry-mcp-stdio-',
+      database: '/tmp/canonry-mcp-stdio.sqlite',
+      clientName: 'canonry-mcp-test',
     })
-    transport.stderr?.on('data', chunk => stderrChunks.push(String(chunk)))
-
-    const client = new Client({ name: 'canonry-mcp-test', version: '0.0.0' })
     clients.push(client)
-    await client.connect(transport)
 
     const list = await client.listTools()
     expect(list.tools).toHaveLength(12)
@@ -133,8 +145,8 @@ describe('canonry-mcp stdio', () => {
     expect(trafficSync.isError).not.toBe(true)
     expect(jsonText(trafficSync)).toMatchObject({ runId: 'run-traffic-1', sourceId: 'src-1' })
 
-    expect(stderrChunks.join('')).toBe('')
-  })
+    expect(stderr()).toBe('')
+  }, SUBPROCESS_CASE_TIMEOUT_MS)
 
   it('docs/mcp.md documents the same pipelining error wording the SDK emits', () => {
     const docsPath = path.resolve(repoRoot, 'docs', 'mcp.md')
@@ -146,29 +158,14 @@ describe('canonry-mcp stdio', () => {
     const api = await startStubApi()
     servers.push(api)
 
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-mcp-eager-'))
-    fs.writeFileSync(path.join(configDir, 'config.yaml'), [
-      `apiUrl: ${api.origin}`,
-      'database: /tmp/canonry-mcp-eager.sqlite',
-      'apiKey: cnry_test',
-      '',
-    ].join('\n'))
-
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [tsxCli, mcpCli, '--eager'],
-      cwd: packageRoot,
-      env: {
-        ...stringEnv(),
-        CANONRY_CONFIG_DIR: configDir,
-        CANONRY_BASE_PATH: '',
-      },
-      stderr: 'pipe',
+    const { client } = await startMcpClient({
+      apiOrigin: api.origin,
+      configPrefix: 'canonry-mcp-eager-',
+      database: '/tmp/canonry-mcp-eager.sqlite',
+      clientName: 'canonry-mcp-eager-test',
+      args: ['--eager'],
     })
-
-    const client = new Client({ name: 'canonry-mcp-eager-test', version: '0.0.0' })
     clients.push(client)
-    await client.connect(transport)
 
     const list = await client.listTools()
     // 188 API tools + 2 meta-tools (canonry_help, canonry_load_toolkit).
@@ -289,8 +286,80 @@ describe('canonry-mcp stdio', () => {
         details: { httpStatus: 412 },
       },
     })
-  })
+  }, SUBPROCESS_CASE_TIMEOUT_MS)
 })
+
+/**
+ * Spawn the `canonry-mcp` stdio adapter and return a client that has completed
+ * the MCP handshake.
+ *
+ * The wait is on the `initialize` response — `client.connect()` resolves on that
+ * frame, so readiness is observed rather than guessed at with a sleep. The race
+ * against `HANDSHAKE_TIMEOUT_MS` only bounds a child that never answers, and
+ * reports the phase plus whatever the child wrote to stderr; without it, a
+ * subprocess that dies during startup surfaces as a bare protocol error with the
+ * reason discarded.
+ */
+async function startMcpClient(options: {
+  apiOrigin: string
+  configPrefix: string
+  database: string
+  clientName: string
+  args?: readonly string[]
+}): Promise<{ client: Client; stderr: () => string }> {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), options.configPrefix))
+  fs.writeFileSync(path.join(configDir, 'config.yaml'), [
+    `apiUrl: ${options.apiOrigin}`,
+    `database: ${options.database}`,
+    'apiKey: cnry_test',
+    '',
+  ].join('\n'))
+
+  const stderrChunks: string[] = []
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [tsxCli, mcpCli, ...(options.args ?? [])],
+    cwd: packageRoot,
+    env: {
+      ...stringEnv(),
+      CANONRY_CONFIG_DIR: configDir,
+      CANONRY_BASE_PATH: '',
+    },
+    stderr: 'pipe',
+  })
+  // Drain stderr on both paths: it is an assertion in the first case, the only
+  // diagnostic in a failed handshake, and an unread pipe the child can block on.
+  transport.stderr?.on('data', chunk => stderrChunks.push(String(chunk)))
+
+  const client = new Client({ name: options.clientName, version: '0.0.0' })
+  let timer: NodeJS.Timeout | undefined
+  try {
+    await Promise.race([
+      client.connect(transport),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          const stderr = stderrChunks.join('').trim()
+          reject(new Error(
+            `canonry-mcp did not answer initialize within ${HANDSHAKE_TIMEOUT_MS}ms`
+            + `${stderr ? `; stderr: ${stderr}` : ' (no stderr output)'}`,
+          ))
+        }, HANDSHAKE_TIMEOUT_MS)
+      }),
+    ])
+  } catch (error) {
+    // The caller never received the client, so nothing else can reap the child.
+    await client.close().catch(() => {})
+    const stderr = stderrChunks.join('').trim()
+    if (error instanceof Error && stderr && !error.message.includes(stderr)) {
+      error.message = `${error.message}; canonry-mcp stderr: ${stderr}`
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+
+  return { client, stderr: () => stderrChunks.join('') }
+}
 
 async function startStubApi(): Promise<{ origin: string; close: () => Promise<void> }> {
   const server = createServer(handleRequest)
