@@ -365,8 +365,59 @@ export function getBundledSkillSnapshots(pkgDir?: string): BundledSkillSnapshot[
     for (const rel of walkRelative(skill.bundledPath)) {
       files[rel] = sha256File(path.join(skill.bundledPath, rel))
     }
-    return { name: skill.name, version: PACKAGE_VERSION, files }
+    return {
+      name: skill.name,
+      version: PACKAGE_VERSION,
+      files,
+      description: readBundledSkillDescription(skill.bundledPath),
+    }
   })
+}
+
+/**
+ * Read a bundled skill's `description` frontmatter.
+ *
+ * Deliberately a small hand-rolled reader rather than a YAML dependency: this
+ * runs on the doctor path and only ever needs one scalar out of a frontmatter
+ * block canonry itself writes. Returns undefined when the block or the field
+ * is absent, which the trigger-surface check reports rather than swallows.
+ */
+function readBundledSkillDescription(skillDir: string): string | undefined {
+  let raw: string
+  try {
+    raw = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf-8')
+  } catch {
+    return undefined
+  }
+  const parts = raw.split('---')
+  if (parts.length < 3) return undefined
+
+  // Line-based rather than one regex. A YAML scalar may fold across lines, so
+  // the value ends at the next TOP-LEVEL key, and expressing that as a
+  // lookahead needs an end-of-input anchor. JavaScript has no `\Z`: writing one
+  // matches a literal "Z", so the pattern silently fails whenever `description`
+  // is the last field in the block. Scanning lines has no such trap and cannot
+  // backtrack.
+  const lines = (parts[1] ?? '').split('\n')
+  const collected: string[] = []
+  let inside = false
+  for (const line of lines) {
+    const isTopLevelKey = /^[a-z][\w-]*:/i.test(line)
+    if (inside && isTopLevelKey) break
+    if (isTopLevelKey && line.startsWith('description:')) {
+      inside = true
+      collected.push(line.slice('description:'.length).trim())
+      continue
+    }
+    if (inside) collected.push(line.trim())
+  }
+  if (!inside) return undefined
+
+  const value = collected.join(' ').trim()
+  const unquoted = value.length >= 2 && value.startsWith('"') && value.endsWith('"')
+    ? value.slice(1, -1)
+    : value
+  return unquoted.length > 0 ? unquoted : undefined
 }
 
 export async function installSkills(opts: SkillsInstallOptions = {}): Promise<SkillsInstallSummary> {

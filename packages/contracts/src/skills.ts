@@ -73,6 +73,15 @@ export interface BundledSkillSnapshot {
   version: string
   /** Relative file path → sha256 hex of the bundled content. */
   files: Record<string, string>
+  /**
+   * The skill's `description` frontmatter, which is its ENTIRE trigger
+   * surface: a skill is model-decided, so nothing forces it to load and this
+   * text is the only thing the model matches a request against.
+   *
+   * Carried here so `agent.skills.trigger-surface` can report on it. Undefined
+   * when the frontmatter could not be read, which is itself the finding.
+   */
+  description?: string
 }
 
 /**

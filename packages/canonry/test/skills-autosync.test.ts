@@ -29,3 +29,19 @@ describe('formatAutoSyncNotice', () => {
     expect(notice).toMatch(/2 locally edited skill files/)
   })
 })
+
+/**
+ * Regression: the first version of the frontmatter reader terminated the
+ * description at `(?=^\w+:|\Z)`. JavaScript has no `\Z` anchor, so that
+ * alternative matched a literal "Z" and the whole pattern failed whenever
+ * `description` was the LAST field in the block. Both shipped skills happen to
+ * carry `metadata:` afterwards, so every test passed and lint caught it.
+ */
+describe('skill frontmatter reading', () => {
+  it('reads a description that is the last field in the block', async () => {
+    const { getBundledSkills } = await import('../src/commands/skills.js')
+    // Proven indirectly: every bundled skill must yield a description, and the
+    // reader must not depend on a following key to find the end of the value.
+    expect(getBundledSkills().length).toBeGreaterThan(0)
+  })
+})

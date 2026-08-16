@@ -297,4 +297,98 @@ function readInstalledManifest(skillDir: string): SkillManifest | null {
   }
 }
 
-export const AGENT_CHECKS: readonly CheckDefinition[] = [skillsInstalledCheck, skillsCurrentCheck]
+/**
+ * The Agent Skills spec allows six frontmatter fields and caps a description
+ * at 1024 characters. A host additionally spends part of a per-session budget
+ * listing every available skill, so an overlong description is not merely
+ * verbose, it competes for the space that decides whether the skill is offered
+ * at all.
+ */
+const SKILL_DESCRIPTION_MAX = 1024
+/** Below this a description is too thin to match a request against. */
+const SKILL_DESCRIPTION_MIN = 80
+
+const skillsTriggerSurfaceCheck: CheckDefinition = {
+  id: 'agent.skills.trigger-surface',
+  category: CheckCategories.agent,
+  scope: CheckScopes.global,
+  title: 'Agent skill trigger surface',
+  run: (ctx) => {
+    const bundled = ctx.bundledSkills
+    if (!bundled || bundled.length === 0) {
+      return {
+        status: CheckStatuses.skipped,
+        code: 'agent.skills.bundle-unavailable',
+        summary: 'This deployment does not ship bundled skills, so there is no trigger surface to measure.',
+        remediation: null,
+        details: {},
+      }
+    }
+
+    const skills = bundled.map((skill) => {
+      const description = skill.description ?? ''
+      return {
+        name: skill.name,
+        length: description.length,
+        // The CLI binary name is the single likeliest token to appear in a
+        // request that should load the skill, and the one most easily left out
+        // because the author is thinking in product names.
+        namesCli: /\bcnry\b|\bcanonry\b/i.test(description),
+        missing: skill.description === undefined,
+      }
+    })
+
+    const totalLength = skills.reduce((sum, s) => sum + s.length, 0)
+    const details = { skills, totalDescriptionLength: totalLength }
+
+    const missing = skills.filter((s) => s.missing).map((s) => s.name)
+    if (missing.length > 0) {
+      return {
+        status: CheckStatuses.fail,
+        code: 'agent.skills.description-missing',
+        summary: `No description frontmatter on: ${missing.join(', ')}. Without it the skill can never be selected.`,
+        remediation: 'Add a `description:` to each SKILL.md saying what the skill does and when to load it.',
+        details,
+      }
+    }
+
+    const tooLong = skills.filter((s) => s.length > SKILL_DESCRIPTION_MAX).map((s) => s.name)
+    if (tooLong.length > 0) {
+      return {
+        status: CheckStatuses.fail,
+        code: 'agent.skills.description-too-long',
+        summary: `Description over the ${SKILL_DESCRIPTION_MAX}-character limit on: ${tooLong.join(', ')}.`,
+        remediation: 'Shorten it. Detail belongs in the skill body; the description is only the trigger.',
+        details,
+      }
+    }
+
+    const tooShort = skills.filter((s) => s.length < SKILL_DESCRIPTION_MIN).map((s) => s.name)
+    const unnamed = skills.filter((s) => !s.namesCli).map((s) => s.name)
+    const weak = [...new Set([...tooShort, ...unnamed])]
+    if (weak.length > 0) {
+      const reasons: string[] = []
+      if (tooShort.length > 0) reasons.push(`under ${SKILL_DESCRIPTION_MIN} characters (${tooShort.join(', ')})`)
+      if (unnamed.length > 0) reasons.push(`never names the CLI (${unnamed.join(', ')})`)
+      return {
+        status: CheckStatuses.warn,
+        code: 'agent.skills.description-weak',
+        summary: `A skill description is the whole trigger surface, and one is ${reasons.join('; ')}.`,
+        remediation: 'Name the commands and phrases an operator actually types, `cnry` included, and say when to load the skill.',
+        details,
+      }
+    }
+
+    return {
+      status: CheckStatuses.ok,
+      code: 'agent.skills.trigger-surface-ok',
+      // Deliberately not "the skill will load": nothing forces a model to load
+      // one. This measures the surface, never the outcome.
+      summary: `${skills.length} skill descriptions look loadable (${totalLength} chars total). This measures the trigger surface, not whether an agent actually loads it.`,
+      remediation: null,
+      details,
+    }
+  },
+}
+
+export const AGENT_CHECKS: readonly CheckDefinition[] = [skillsInstalledCheck, skillsCurrentCheck, skillsTriggerSurfaceCheck]

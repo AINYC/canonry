@@ -19,8 +19,22 @@ function frontmatter(skill: string): string {
 }
 
 function field(fm: string, key: string): string {
-  const m = new RegExp(`^${key}: ([\\s\\S]*?)(?=^\\w[\\w_]*:|\\Z)`, 'm').exec(fm)
-  return m ? m[1]!.trim() : ''
+  // Line-based: a folded YAML scalar ends at the next top-level key, and
+  // JavaScript has no end-of-input anchor to express that as a lookahead
+  // (`\\Z` matches a literal "Z").
+  const out: string[] = []
+  let inside = false
+  for (const line of fm.split('\n')) {
+    const isKey = /^[a-z][\w-]*:/i.test(line)
+    if (inside && isKey) break
+    if (isKey && line.startsWith(`${key}:`)) {
+      inside = true
+      out.push(line.slice(key.length + 1).trim())
+      continue
+    }
+    if (inside) out.push(line.trim())
+  }
+  return out.join(' ').trim()
 }
 
 describe.each(['canonry', 'aero'])('%s skill trigger surface', (skill) => {
