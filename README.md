@@ -6,7 +6,9 @@ Your entire AEO/GEO/AI Visibility, technical SEO + web analytics stack. **Agent-
 
 Canonry gives operators and agents a full tactical view across AI visibility, site health, search, traffic, content, local presence, backlinks, and paid media.
 
-![Canonry Site Map graph](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/dashboard.png)
+![Canonry AI Visibility mention share trend across answer engines](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/ai-visibility-trend.png)
+
+*Track your share of answer-engine brand mentions over time.*
 
 **Measure → diagnose → approve action → measure change**
 
@@ -32,6 +34,10 @@ Canonry gives operators and agents a full tactical view across AI visibility, si
 The dashboard, CLI, and agent tools share the same project API.
 
 ## Get a Page Health baseline
+
+![Canonry Site Map graph](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/dashboard.png)
+
+*Map crawlable pages and the internal links connecting them.*
 
 You need Node.js `>=22.14` and `<26`, plus a public, crawlable site. Site Health does not need an answer-provider key.
 
@@ -94,6 +100,10 @@ If a Canonry installation or connected plugin/MCP is available, use it. Do not c
 </details>
 
 ## Add AI Visibility when you need it
+
+![Canonry AI Visibility citation map across queries and answer engines](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/ai-visibility-diagnostics.png)
+
+*Map citation and answer-mention coverage across every tracked query and engine.*
 
 Add provider keys in **Settings**. Settings changes apply immediately. To import environment variables, stop Canonry and set the variables. Then run `cnry bootstrap` and restart Canonry.
 
