@@ -1,4 +1,8 @@
-import { installSkills } from './commands/skills.js'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { SKILL_MANIFEST_FILENAME } from '@ainyc/canonry-contracts'
+import { BUNDLED_SKILL_NAMES, installSkills } from './commands/skills.js'
 import { configExists, loadConfigRaw, saveConfigPatch } from './config.js'
 import { PACKAGE_VERSION } from './package-version.js'
 
@@ -25,30 +29,40 @@ import { PACKAGE_VERSION } from './package-version.js'
 /** Re-verify at most this often when the version has NOT changed. */
 const DEFAULT_SYNC_INTERVAL_SECONDS = 24 * 60 * 60
 
+export type VersionProbe =
+  /** Config is absent or unreadable. We know nothing, so we must do nothing. */
+  | { state: 'unknown' }
+  | { state: 'unchanged' }
+  | { state: 'changed'; lastSeen: string | undefined }
+
 /**
  * Has the running build changed since the last recorded invocation?
  *
  * Split out of `detectAndTrackUpgrade` deliberately. That function opens with
  * `if (!isTelemetryEnabled()) return`, so on a telemetry-disabled install the
  * version was never recorded and an upgrade was never noticed. Tying a
- * correctness behaviour to an analytics opt-in means the users who opt out get
- * a quietly worse product. This probe is analytics-free; the telemetry path
- * still emits `cli.upgraded` on top of it.
+ * correctness behaviour to an analytics opt-in gives the users who opt out a
+ * quietly worse product. This probe is analytics-free; the telemetry path still
+ * emits `cli.upgraded` on top of it.
  *
- * Returns the previously seen version, or null when unchanged / unknowable.
- * Does NOT write: the caller records the new version once the work it gates has
- * actually run, so a crash mid-heal retries rather than marking itself done.
+ * `unknown` is a distinct state from `changed` and the distinction is
+ * load-bearing. `loadConfigRaw()` returns null for BOTH "no config" and
+ * "config present but unparsable" — it does not throw — so folding null into
+ * "no version recorded, therefore changed" makes a malformed config look like
+ * an upgrade. That then reaches `saveConfigPatch`, whose read-modify-write
+ * falls back to an EMPTY base when the file will not parse, so the merge writes
+ * only the keys in the patch and the user's apiKey, database path and provider
+ * credentials are gone. A file we cannot read is the one file we must not
+ * write.
  */
-export function peekVersionChange(): { lastSeen: string | undefined } | null {
-  if (!configExists()) return null
-  try {
-    const raw = loadConfigRaw()
-    const lastSeen = raw?.lastSeenVersion
-    if (lastSeen === PACKAGE_VERSION) return null
-    return { lastSeen }
-  } catch {
-    return null
-  }
+export function peekVersionChange(): VersionProbe {
+  if (!configExists()) return { state: 'unknown' }
+  const raw = loadConfigRaw()
+  // Config file is on disk but did not parse. Never write in this state.
+  if (raw === null) return { state: 'unknown' }
+  const lastSeen = raw.lastSeenVersion
+  if (lastSeen === PACKAGE_VERSION) return { state: 'unchanged' }
+  return { state: 'changed', lastSeen }
 }
 
 function syncIntervalSeconds(env: NodeJS.ProcessEnv = process.env): number {
@@ -63,6 +77,31 @@ function isDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return raw === '1' || raw === 'true'
 }
 
+/**
+ * Directories that already contain a skill tree canonry itself installed.
+ *
+ * Auto-sync REPAIRS; it never adopts. `installSkills` will happily create
+ * `~/.claude/skills/` from nothing, so calling it unconditionally would write
+ * into the home directory of someone who ran `canonry init --skip-skills` and
+ * said no. Presence of the manifest canonry writes is the only honest evidence
+ * that a directory is ours to refresh.
+ *
+ * Both scopes are checked because `canonry init` installs PROJECT-local by
+ * default and only `--user` installs global. Healing just the global path would
+ * miss the common case entirely.
+ */
+export function ownedInstallTargets(cwd = process.cwd(), home = os.homedir()): { dir: string; user: boolean }[] {
+  const candidates: { dir: string; user: boolean }[] = [
+    { dir: home, user: true },
+    { dir: cwd, user: false },
+  ]
+  return candidates.filter(({ dir }) =>
+    BUNDLED_SKILL_NAMES.some((name) =>
+      fs.existsSync(path.join(dir, '.claude', 'skills', name, SKILL_MANIFEST_FILENAME)),
+    ),
+  )
+}
+
 export interface SkillsAutoSyncResult {
   ran: boolean
   reason: 'version-changed' | 'interval-elapsed' | 'skipped'
@@ -70,62 +109,75 @@ export interface SkillsAutoSyncResult {
   updated: string[]
   /** Relative paths left alone because they carry local edits. */
   conflicts: string[]
+  /** Directories actually repaired. Empty when canonry owns no install here. */
+  targets: string[]
 }
 
 /**
  * Refresh only the files that are STALE against the bundled copy.
  *
- * Three properties, all load-bearing:
+ * Four properties, all load-bearing:
  *
- * 1. It never installs where canonry has not installed before. `installSkills`
- *    reconciles against the manifest it wrote, so a directory with no manifest
- *    is not ours to touch. Re-verifying a copy we placed is a different act
- *    from writing into someone's home for the first time, and only the latter
- *    needs their consent (it already has it, via `skills install`).
- * 2. It never overwrites a local edit. `installSkills` classifies each file as
+ * 1. It never writes when the config did not parse. See `peekVersionChange`.
+ * 2. It never installs where canonry has not installed before, proven by the
+ *    manifest rather than assumed. See `ownedInstallTargets`.
+ * 3. It never overwrites a local edit. `installSkills` classifies each file as
  *    missing / unchanged / stale / edited and, without `--force`, replaces only
  *    the first two. We deliberately do not pass `force`.
- * 3. It is silent on success. A heal that had nothing to say says nothing.
+ * 4. It is silent on success. A heal that had nothing to say says nothing.
  */
 export async function autoSyncSkills(env: NodeJS.ProcessEnv = process.env): Promise<SkillsAutoSyncResult> {
-  const skipped: SkillsAutoSyncResult = { ran: false, reason: 'skipped', updated: [], conflicts: [] }
+  const skipped: SkillsAutoSyncResult = { ran: false, reason: 'skipped', updated: [], conflicts: [], targets: [] }
   if (isDisabled(env)) return skipped
-  if (!configExists()) return skipped
 
-  const versionChange = peekVersionChange()
-  let reason: SkillsAutoSyncResult['reason'] | null = versionChange ? 'version-changed' : null
+  const probe = peekVersionChange()
+  if (probe.state === 'unknown') return skipped
 
-  if (!reason) {
+  let reason: SkillsAutoSyncResult['reason']
+  if (probe.state === 'changed') {
+    reason = 'version-changed'
+  } else {
     // A version bump is not the only way a copy goes wrong, so also re-verify
     // on a timer. The comparison is bundled-file hash vs installed-file hash,
-    // entirely local, so it costs no network and can run this often safely.
+    // entirely local, so it costs no network.
     const intervalSeconds = syncIntervalSeconds(env)
     if (intervalSeconds === 0) return skipped
-    try {
-      const raw = loadConfigRaw()
-      const last = raw?.lastSkillsVerifiedAt ? Date.parse(raw.lastSkillsVerifiedAt) : 0
-      const elapsed = (Date.now() - (Number.isFinite(last) ? last : 0)) / 1000
-      if (elapsed < intervalSeconds) return skipped
-      reason = 'interval-elapsed'
-    } catch {
-      return skipped
-    }
+    const raw = loadConfigRaw()
+    if (raw === null) return skipped
+    const last = raw.lastSkillsVerifiedAt ? Date.parse(raw.lastSkillsVerifiedAt) : 0
+    const elapsed = (Date.now() - (Number.isFinite(last) ? last : 0)) / 1000
+    if (elapsed < intervalSeconds) return skipped
+    reason = 'interval-elapsed'
+  }
+
+  const targets = ownedInstallTargets()
+  if (targets.length === 0) {
+    // Nothing here is ours. Record the version anyway so a machine that never
+    // installed skills does not re-probe the filesystem on every invocation.
+    recordVerified()
+    return skipped
   }
 
   const updated: string[] = []
   const conflicts: string[] = []
 
-  try {
-    const summary = await installSkills({ user: true })
-    for (const result of summary.results) {
-      for (const p of result.updated ?? []) updated.push(p)
-      for (const p of result.conflicts ?? []) conflicts.push(p)
+  for (const target of targets) {
+    try {
+      const summary = await installSkills(target.user ? { user: true } : { dir: target.dir })
+      for (const result of summary.results) {
+        for (const p of result.updated ?? []) updated.push(p)
+        for (const p of result.conflicts ?? []) conflicts.push(p)
+      }
+    } catch {
+      // Never let a skills refresh break the command the user actually ran.
     }
-  } catch {
-    // Never let a skills refresh break the command the user actually ran.
-    return skipped
   }
 
+  recordVerified()
+  return { ran: true, reason, updated, conflicts, targets: targets.map((t) => t.dir) }
+}
+
+function recordVerified(): void {
   try {
     saveConfigPatch({
       lastSeenVersion: PACKAGE_VERSION,
@@ -134,8 +186,6 @@ export async function autoSyncSkills(env: NodeJS.ProcessEnv = process.env): Prom
   } catch {
     // A failed write just means we re-check next time. Not worth surfacing.
   }
-
-  return { ran: true, reason, updated, conflicts }
 }
 
 /**
@@ -149,5 +199,5 @@ export function formatAutoSyncNotice(result: SkillsAutoSyncResult): string | nul
   if (!result.ran || result.conflicts.length === 0) return null
   const count = result.conflicts.length
   return `canonry: ${count} locally edited skill file${count === 1 ? '' : 's'} kept as-is `
-    + `(engine is now v${PACKAGE_VERSION}). Run "canonry skills install --user --force" to take the new version.`
+    + `(engine is now v${PACKAGE_VERSION}). Run "canonry skills install --force" to take the new version.`
 }
