@@ -7,6 +7,7 @@ import {
   measurementReportResponseSchema,
   notFound,
   validationError,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { requireScope } from './auth.js'
 import {
@@ -28,7 +29,7 @@ export interface MeasurementServiceRoutesOptions {
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  return describeError(error)
 }
 
 /** Network and persistence adapters around the pure Target discovery/report kernels. */

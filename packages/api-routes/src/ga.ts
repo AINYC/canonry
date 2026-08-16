@@ -3,7 +3,7 @@ import { eq, desc, and, sql } from 'drizzle-orm'
 import type { SQL, SQLWrapper } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { gaTrafficSnapshots, gaTrafficSummaries, gaTrafficWindowSummaries, gaDailyTotals, gaAiReferrals, gaSocialReferrals, gaAcquisitionDaily, gaLeadEventsDaily, gaMeasurementSyncStates, runs } from '@ainyc/canonry-db'
-import { classifyAiReferralTrafficClass, deltaPercent, validationError, notFound, forbidden, quotaExceeded, providerError, AppError, RunKinds, RunStatuses, RunTriggers, resolveDateRange, normalizeUrlPath } from '@ainyc/canonry-contracts'
+import { classifyAiReferralTrafficClass, deltaPercent, validationError, notFound, forbidden, quotaExceeded, providerError, AppError, RunKinds, RunStatuses, RunTriggers, resolveDateRange, normalizeUrlPath, describeError } from '@ainyc/canonry-contracts'
 import type { GA4ChannelBreakdownDto, ResolvedDateRange } from '@ainyc/canonry-contracts'
 import { resolveProject, writeAuditLog } from './helpers.js'
 import { assertNotProjectScoped } from './auth.js'
@@ -382,7 +382,7 @@ function ga4ErrorToAppError(err: unknown, context: string): AppError {
     return providerError(`${context}: ${err.message}`)
   }
 
-  return providerError(`${context}: ${err instanceof Error ? err.message : String(err)}`)
+  return providerError(`${context}: ${describeError(err)}`)
 }
 
 /**
@@ -485,7 +485,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         await verifyConnection(clientEmail, privateKey, propertyId)
         gaLog('info', 'connect.verified.service-account', { projectId: project.id, propertyId })
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
+        const msg = describeError(e)
         gaLog('error', 'connect.verify-failed', { projectId: project.id, propertyId, error: msg })
         throw validationError(`Failed to verify GA4 credentials: ${msg}`)
       }
@@ -542,7 +542,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       await verifyConnectionWithToken(accessToken, propertyId)
       gaLog('info', 'connect.verified.oauth', { projectId: project.id, propertyId })
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = describeError(e)
       gaLog('error', 'connect.verify-failed.oauth', { projectId: project.id, propertyId, error: msg })
       throw validationError(`Failed to verify GA4 access: ${msg}`)
     }
@@ -957,7 +957,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         component: 'acquisition' | 'leads',
         reason: unknown,
       ) => {
-        const message = reason instanceof Error ? reason.message : String(reason)
+        const message = describeError(reason)
         gaLog('warn', 'measurement.component-failed', {
           projectId: project.id,
           runId,
@@ -971,7 +971,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
             projectId: project.id,
             runId,
             component,
-            error: stateError instanceof Error ? stateError.message : String(stateError),
+            error: describeError(stateError),
           })
         }
         return { status: 'error' as const, days: component === 'acquisition' ? acquisitionDays : leadDays, rowCount: 0, error: message }
@@ -1069,7 +1069,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         ...(syncedComponents ? { syncedComponents } : {}),
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = describeError(e)
       gaLog('error', 'sync.fetch-failed', { projectId: project.id, runId, error: msg })
       app.db.update(runs)
         .set({ status: RunStatuses.failed, error: msg, finishedAt: new Date().toISOString() })

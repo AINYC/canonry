@@ -2,6 +2,7 @@ import {
   CheckCategories,
   CheckScopes,
   CheckStatuses,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import {
   verifyConnection,
@@ -34,7 +35,7 @@ async function checkServiceAccount(conn: NonNullable<ReturnType<NonNullable<Doct
   try {
     await verifyConnection(conn.clientEmail, conn.privateKey, conn.propertyId)
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = describeError(err)
     return {
       status: CheckStatuses.fail,
       code: 'ga.auth.verify-failed',
@@ -86,7 +87,7 @@ async function checkOAuthConnection(ctx: DoctorContext, projectName: string, con
     const tokens = await refreshAccessToken(auth.clientId, auth.clientSecret, conn.refreshToken)
     accessToken = tokens.access_token
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = describeError(err)
     return {
       status: CheckStatuses.fail,
       code: 'ga.auth.refresh-failed',
@@ -98,7 +99,7 @@ async function checkOAuthConnection(ctx: DoctorContext, projectName: string, con
   try {
     await verifyConnectionWithToken(accessToken, conn.propertyId)
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = describeError(err)
     return {
       status: CheckStatuses.fail,
       code: 'ga.auth.verify-failed',

@@ -11,6 +11,7 @@ import {
   scheduleUpsertRequestSchema,
   validationError,
   notFound,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { resolveProject, writeAuditLog } from './helpers.js'
 import { resolvePreset, validateCron, isValidTimezone } from './schedule-utils.js'
@@ -114,7 +115,7 @@ export async function scheduleRoutes(app: FastifyInstance, opts: ScheduleRoutesO
       try {
         cronExpr = resolvePreset(preset)
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err)
+        const msg = describeError(err)
         throw validationError(msg)
       }
     } else {

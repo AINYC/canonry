@@ -16,6 +16,7 @@ import {
   formatIsoDateInTimeZone,
   linearTrend,
   calendarDateRange,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from './gbp-summary.js'
@@ -428,7 +429,7 @@ function gscErrorToAppError(err: unknown, context: string): AppError {
     )
   }
 
-  return providerError(`${context}: ${err instanceof Error ? err.message : String(err)}`)
+  return providerError(`${context}: ${describeError(err)}`)
 }
 
 export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptions) {
@@ -636,7 +637,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     try {
       tokens = await exchangeCode(googleClientId, googleClientSecret, code, redirectUri)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       return reply.type('text/html').send(
         `<html><body style="font-family:system-ui;padding:40px;max-width:600px;margin:0 auto">
           <h2 style="color:#ef4444">Token exchange failed</h2>
@@ -1585,7 +1586,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
         })
         results.push({ sitemapUrl, status: 'accepted', submittedAt })
       } catch (err) {
-        results.push({ sitemapUrl, status: 'error', error: err instanceof Error ? err.message : String(err) })
+        results.push({ sitemapUrl, status: 'error', error: describeError(err) })
       }
     }
     const accepted = results.filter((result) => result.status === 'accepted').length
@@ -1842,7 +1843,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
           status: 'success',
         })
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
+        const msg = describeError(err)
         results.push({
           url,
           type: 'URL_UPDATED',

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { AppError, notFound, providerError, validationError } from '@ainyc/canonry-contracts'
+import { AppError, notFound, providerError, validationError, describeError } from '@ainyc/canonry-contracts'
 import type { WordpressEnv } from '@ainyc/canonry-contracts'
 import {
   buildManualLlmsTxtUpdate,
@@ -605,7 +605,7 @@ export async function wordpressRoutes(app: FastifyInstance, opts: WordpressRoute
       })
       steps.push({ name: 'connect', status: 'completed', summary: `Connected to ${url}` })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       steps.push({ name: 'connect', status: 'failed', error: msg })
       return { projectName: project.name, steps }
     }
@@ -628,7 +628,7 @@ export async function wordpressRoutes(app: FastifyInstance, opts: WordpressRoute
 
       steps.push({ name: 'audit', status: 'completed', summary: `${pageCount} pages audited, ${issueCount} issues` })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       steps.push({ name: 'audit', status: 'failed', error: msg })
       return { projectName: project.name, steps }
     }
@@ -671,7 +671,7 @@ export async function wordpressRoutes(app: FastifyInstance, opts: WordpressRoute
         })
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       steps.push({ name: 'set-meta', status: 'failed', error: msg })
       return { projectName: project.name, steps }
     }
@@ -699,7 +699,7 @@ export async function wordpressRoutes(app: FastifyInstance, opts: WordpressRoute
           })
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
+        const msg = describeError(err)
         steps.push({ name: 'schema-deploy', status: 'failed', error: msg })
         return { projectName: project.name, steps }
       }
@@ -735,7 +735,7 @@ export async function wordpressRoutes(app: FastifyInstance, opts: WordpressRoute
           }
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
+        const msg = describeError(err)
         steps.push({ name: 'google-submit', status: 'skipped', summary: `Google not available: ${msg}` })
       }
 
@@ -762,7 +762,7 @@ export async function wordpressRoutes(app: FastifyInstance, opts: WordpressRoute
           }
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
+        const msg = describeError(err)
         steps.push({ name: 'bing-submit', status: 'skipped', summary: `Bing not available: ${msg}` })
       }
     }

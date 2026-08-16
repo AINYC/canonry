@@ -23,6 +23,7 @@ import {
   type MeasurementDraftCounts,
   type MeasurementDraftTarget,
   type MeasurementDraftWarning,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import {
   measurementDiscoveryConfigs,
@@ -504,7 +505,7 @@ function availableStableKey(preferred: string, taken: ReadonlySet<string>): stri
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  return describeError(error)
 }
 
 /**

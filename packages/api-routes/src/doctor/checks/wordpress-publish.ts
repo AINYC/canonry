@@ -2,6 +2,7 @@ import {
   CheckCategories,
   CheckScopes,
   CheckStatuses,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { verifyWordpressConnection, WordpressApiError } from '@ainyc/canonry-integration-wordpress'
 import type { CheckDefinition } from '../types.js'
@@ -68,7 +69,7 @@ export const WORDPRESS_PUBLISH_CHECKS: readonly CheckDefinition[] = [
             details: { error: err.message },
           }
         }
-        const message = err instanceof Error ? err.message : String(err)
+        const message = describeError(err)
         return {
           status: CheckStatuses.fail,
           code: 'wordpress.publish.verification-failed',
