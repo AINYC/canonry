@@ -230,9 +230,19 @@ flowchart LR
    the site route; Queue pull needs a pre-created Queue and HTTP pull consumer.
 3. Authenticate Wrangler with the Cloudflare account that owns the zone.
 4. Inspect existing Worker routes for the exact canonical hostname.
-5. Run the local Cloudflare connect command with `--deploy`.
-6. Attach the printed route in Cloudflare and set it to **Fail open**.
-7. Send the smoke requests and run the Canonry doctor.
+5. **Size the request volume** (see below) and decide whether an
+   asset-exclusion route is needed.
+6. Run the local Cloudflare connect command with `--deploy`.
+7. Attach the printed route in Cloudflare and set it to **Fail open** — it
+   defaults to OFF.
+8. Attach the asset-exclusion route if step 5 called for one.
+9. Activate the source and set a `traffic-sync` schedule. Connect syncs once
+   and does not schedule; use `*/15 * * * *`, not daily, so a failed sync can
+   still recover inside the queue's retention window.
+10. Send the smoke requests and run the Canonry doctor.
+
+A full operator walkthrough with copy-paste commands lives in
+`docs/cloudflare-traffic-setup.md`.
 
 ### Current support boundary
 
@@ -316,6 +326,68 @@ a fragment to this URL.
    Worker instead of attaching a second Worker.
 10. Review the account request volume. A route invokes the Worker for every
    matching request. The filter does not reduce Worker invocations.
+
+### Sizing the route before you attach it
+
+"Review the account request volume" is not a judgement call. Compute it:
+
+```
+sessions/day  x  pageviews/session  x  SAME-ORIGIN requests/pageview
+```
+
+Only same-origin requests count. Assets on a third-party CDN never reach the
+zone and never invoke the Worker. Count them on one real page:
+
+```bash
+curl -s https://<host>/ \
+  | grep -oE '(src|href)="/[^"]+\.(js|css|woff2?|png|jpg|svg)"' | wc -l
+```
+
+A JavaScript app will exceed the Workers Free allowance (100,000 requests/day,
+account-wide) by a wide margin, because the HTML is one request and the bundle
+is dozens. Measured on a Nuxt storefront: 7,238 sessions/day and 27 same-origin
+`/_nuxt/*` assets per page projected 200k-400k/day, and the deployed Worker
+logged 958 invocations in 4 minutes (~345k/day). Images were on
+`cdn.shopify.com` and cost nothing.
+
+Attach an asset-exclusion route unless the site is server-rendered with few
+same-origin assets, or the account is on Workers Paid.
+
+### Excluding static assets from the route
+
+A route with NO script disables Workers on that path, and Cloudflare applies
+the most specific match. This removes the bundle without losing any crawler
+evidence, because crawlers request pages, not JS chunks.
+
+```bash
+# assets -> no worker. Omitting "script" is what disables it.
+curl -s -X POST -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+  --data '{"pattern":"<host>/_nuxt/*"}' \
+  "https://api.cloudflare.com/client/v4/zones/$ZONE/workers/routes"
+```
+
+Prefixes by framework: `/_nuxt/*` Nuxt, `/_next/*` Next.js, plus `/assets/*`,
+`/static/*`, `/build/*`.
+
+**The Worker's own "Domains and Routes" tab cannot do this.** That screen only
+attaches routes TO that Worker, so adding the asset path there routes assets
+INTO the Worker and doubles the load. Asset exclusion is zone-level: the zone's
+Workers Routes page, or the API above.
+
+### Fail open defaults to OFF
+
+`request_limit_fail_open` is per route and defaults to `false`. Left off, a
+Worker error or an exhausted request allowance returns 5xx for every request on
+that route, which on a catch-all is the whole site. Setting it is not optional
+and it is not the default, so verify rather than assume:
+
+```bash
+curl -s -H "Authorization: Bearer $CF_TOKEN" \
+  "https://api.cloudflare.com/client/v4/zones/$ZONE/workers/routes" \
+  | jq '.result[] | {pattern, script, request_limit_fail_open}'
+```
+
+Both route operations need `Zone | Workers Routes | Edit` on the token.
 
 ```bash
 npm install -g wrangler@latest
