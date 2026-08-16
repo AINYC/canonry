@@ -245,3 +245,43 @@ export function internalError(message: string, details?: Record<string, unknown>
 export function runtimeStateMissing(message: string, details?: Record<string, unknown>): AppError {
   return new AppError('RUNTIME_STATE_MISSING', message, 503, details)
 }
+
+/**
+ * Render an unknown caught value as human-readable text for a log line, an
+ * error field, or a message to the operator.
+ *
+ * `catch (err)` binds `unknown`, and the reflex is
+ * `err instanceof Error ? err.message : String(err)`. That `String(err)` is
+ * the problem: a thrown plain object renders `[object Object]`, so the one
+ * line written to explain a failure explains nothing, and the detail is gone
+ * by the time anyone reads it. Rejected promises from HTTP and SDK layers
+ * throw non-`Error` objects often enough for this to be the common case, not
+ * the exotic one.
+ *
+ * Never throws — a helper on the failure path that can itself fail would
+ * replace a logged error with a crash.
+ */
+export function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  if (err === null || err === undefined) return 'unknown error'
+  try {
+    // lib.es5.d.ts types this `string`, but it genuinely returns `undefined`
+    // for a function or symbol input. The assertion corrects the lib, so the
+    // guard below is real rather than "unnecessary".
+    const json = JSON.stringify(err) as string | undefined
+    if (json !== undefined) return json
+  } catch {
+    // Circular references and BigInt both make JSON.stringify throw.
+  }
+  try {
+    // The one intentional base-to-string in the monorepo. Reaching it means
+    // JSON.stringify already declined the value, so '[object Object]' here is
+    // the floor rather than the careless default the rule exists to catch.
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
+    return String(err)
+  } catch {
+    // A null-prototype or throwing-`toString` object cannot be stringified.
+    return 'unknown error'
+  }
+}

@@ -5,6 +5,7 @@ import {
   hostOf,
   normalizeServedModel,
   registrableDomain,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { withRetry } from './utils.js'
 import type {
@@ -65,7 +66,7 @@ export async function healthcheck(config: OpenAIConfig): Promise<OpenAIHealthche
     return {
       ok: false,
       provider: 'openai',
-      message: err instanceof Error ? err.message : String(err),
+      message: describeError(err),
       model: config.model ?? DEFAULT_MODEL,
     }
   }
@@ -108,7 +109,7 @@ export async function executeTrackedQuery(input: OpenAITrackedQueryInput): Promi
       searchQueries: parsed.searchQueries,
     }
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = describeError(err)
     throw new Error(`[provider-openai] ${msg}`)
   }
 }

@@ -6,7 +6,7 @@ import { and, eq, inArray, ne, sql } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { runs, queries, competitors, projects, querySnapshots, siteCrawlAttempts, usageCounters } from '@ainyc/canonry-db'
 import type { ProviderName, LocationContext, MeasurementRunManifestV1 } from '@ainyc/canonry-contracts'
-import { CITED_URL_CAPTURE_VERSION, ONBOARDING_FLOW_VERSION, RunKinds, bucketOnboardingCount, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, normalizeMeasurementExecutionQueryText, parseMeasurementRunManifestV1, providerSupportsLocationContext, serializeRunError } from '@ainyc/canonry-contracts'
+import { CITED_URL_CAPTURE_VERSION, ONBOARDING_FLOW_VERSION, RunKinds, bucketOnboardingCount, buildRunErrorFromMessages, determineAnswerMentioned, effectiveBrandNames, effectiveDomains, isBrowserProvider, normalizeMeasurementExecutionQueryText, parseMeasurementRunManifestV1, providerSupportsLocationContext, serializeRunError, describeError } from '@ainyc/canonry-contracts'
 import type { ProviderRegistry, RegisteredProvider } from './provider-registry.js'
 import { trackEvent } from './telemetry.js'
 import { buildRunCompletedProps, hashDomain, type RunPhaseTimings } from './run-telemetry.js'
@@ -530,7 +530,7 @@ export class JobRunner {
                 runId,
                 provider: providerName,
                 query: q.query,
-                error: err instanceof Error ? err.message : String(err),
+                error: describeError(err),
               })
             }
             this.throwIfRunCancelled(runId)
@@ -641,7 +641,7 @@ export class JobRunner {
             throw err
           }
 
-          const msg = err instanceof Error ? err.message : String(err)
+          const msg = describeError(err)
           const stack = err instanceof Error ? err.stack : undefined
           log.error('query.failed', { runId, provider: providerName, query: q.query, error: msg, stack })
           if (!providerErrors.has(providerName)) {
@@ -720,7 +720,7 @@ export class JobRunner {
                 runId,
                 provider: providerName,
                 query: unit.queryText,
-                error: err instanceof Error ? err.message : String(err),
+                error: describeError(err),
               })
             }
             this.throwIfRunCancelled(runId)
@@ -812,7 +812,7 @@ export class JobRunner {
             throw err
           }
 
-          const msg = err instanceof Error ? err.message : String(err)
+          const msg = describeError(err)
           const stack = err instanceof Error ? err.stack : undefined
           log.error('query.failed', { runId, provider: providerName, query: unit.queryText, executionId: unit.executionId, error: msg, stack })
           if (!providerErrors.has(providerName)) {
@@ -964,7 +964,7 @@ export class JobRunner {
       // Notify after run completion
       if (this.onRunCompleted) {
         this.onRunCompleted(runId, projectId).catch((err: unknown) => {
-          log.error('notification.callback-failed', { runId, error: err instanceof Error ? err.message : String(err) })
+          log.error('notification.callback-failed', { runId, error: describeError(err) })
         })
       }
     } catch (err: unknown) {
@@ -984,7 +984,7 @@ export class JobRunner {
       }
 
       // Mark run as failed
-      const errorMessage = err instanceof Error ? err.message : String(err)
+      const errorMessage = describeError(err)
       this.db
         .update(runs)
         .set({
@@ -1040,7 +1040,7 @@ export class JobRunner {
       // Notify on failure too
       if (this.onRunCompleted) {
         this.onRunCompleted(runId, projectId).catch((notifErr: unknown) => {
-          log.error('notification.callback-failed', { runId, error: notifErr instanceof Error ? notifErr.message : String(notifErr) })
+          log.error('notification.callback-failed', { runId, error: describeError(notifErr) })
         })
       }
     }
@@ -1160,7 +1160,7 @@ export class JobRunner {
 
     if (this.onRunCompleted) {
       this.onRunCompleted(runId, projectId).catch((err: unknown) => {
-        log.error('notification.callback-failed', { runId, error: err instanceof Error ? err.message : String(err) })
+        log.error('notification.callback-failed', { runId, error: describeError(err) })
       })
     }
   }

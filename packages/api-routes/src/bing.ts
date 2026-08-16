@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { eq, and, desc } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { bingUrlInspections, bingCoverageSnapshots, runs } from '@ainyc/canonry-db'
-import { validationError, notFound, RunKinds, RunStatuses, RunTriggers } from '@ainyc/canonry-contracts'
+import { validationError, notFound, RunKinds, RunStatuses, RunTriggers, describeError } from '@ainyc/canonry-contracts'
 import { assertNotProjectScoped } from './auth.js'
 import { resolveProject, writeAuditLog } from './helpers.js'
 import {
@@ -146,7 +146,7 @@ export async function bingRoutes(app: FastifyInstance, opts: BingRoutesOptions) 
       sites = await getSites(apiKey)
       bingLog('info', 'connect.verify-key', { domain: project.canonicalDomain, siteCount: sites.length })
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = describeError(e)
       bingLog('error', 'connect.verify-key-failed', { domain: project.canonicalDomain, error: msg })
       throw validationError(`Failed to verify Bing API key: ${msg}`)
     }
@@ -530,7 +530,7 @@ export async function bingRoutes(app: FastifyInstance, opts: BingRoutesOptions) 
         } catch (e) {
           bingLog('warn', 'inspect-url.crawl-issues-lookup-failed', {
             domain: project.canonicalDomain,
-            error: e instanceof Error ? e.message : String(e),
+            error: describeError(e),
           })
         }
       }
@@ -569,7 +569,7 @@ export async function bingRoutes(app: FastifyInstance, opts: BingRoutesOptions) 
         discoveryDate,
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = describeError(e)
       bingLog('error', 'inspect-url.failed', { domain: project.canonicalDomain, url, error: msg })
       app.db.update(runs)
         .set({ status: RunStatuses.failed, error: msg, finishedAt: new Date().toISOString() })
@@ -689,7 +689,7 @@ export async function bingRoutes(app: FastifyInstance, opts: BingRoutesOptions) 
           }
           bingLog('info', 'index-submit.batch-ok', { domain: project.canonicalDomain, batchSize: batch.length, urls: batch })
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e)
+          const msg = describeError(e)
           const now = new Date().toISOString()
           for (const url of batch) {
             results.push({ url, status: 'error', submittedAt: now, error: msg })
@@ -705,7 +705,7 @@ export async function bingRoutes(app: FastifyInstance, opts: BingRoutesOptions) 
         results.push({ url, status: 'success', submittedAt: new Date().toISOString() })
         bingLog('info', 'index-submit.ok', { domain: project.canonicalDomain, url })
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
+        const msg = describeError(e)
         results.push({ url, status: 'error', submittedAt: new Date().toISOString(), error: msg })
         bingLog('error', 'index-submit.failed', { domain: project.canonicalDomain, url, error: msg })
       }

@@ -1,5 +1,5 @@
 import { type ApiClient, createApiClient } from '../client.js'
-import { CitationStates, resolveProviderInput, type RunDetailDto } from '@ainyc/canonry-contracts'
+import { CitationStates, resolveProviderInput, type RunDetailDto, describeError } from '@ainyc/canonry-contracts'
 import { CliError, isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
 
@@ -201,7 +201,7 @@ export async function triggerRunAll(opts?: { provider?: string; wait?: boolean; 
         })
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       results.push({ project: p.name, runId: '', status: 'error', location: null, error: msg })
     }
   }

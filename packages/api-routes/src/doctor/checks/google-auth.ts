@@ -2,6 +2,7 @@ import {
   CheckCategories,
   CheckScopes,
   CheckStatuses,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import {
   GSC_SCOPE,
@@ -74,7 +75,7 @@ async function resolveAccessToken(ctx: DoctorContext): Promise<{ ok: true; token
     const tokens = await refreshAccessToken(auth.clientId, auth.clientSecret, conn.refreshToken)
     return { ok: true, token: { accessToken: tokens.access_token } }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = describeError(err)
     return {
       ok: false,
       output: {
@@ -169,7 +170,7 @@ const propertyAccessCheck: CheckDefinition = {
           details: { error: err.message },
         }
       }
-      const message = err instanceof Error ? err.message : String(err)
+      const message = describeError(err)
       return {
         status: CheckStatuses.fail,
         code: 'google.auth.list-sites-failed',

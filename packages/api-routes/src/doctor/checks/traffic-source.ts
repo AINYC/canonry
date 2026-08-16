@@ -6,6 +6,7 @@ import {
   CheckStatuses,
   TrafficSourceStatuses,
   TrafficSourceTypes,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import {
   aiReferralEventsHourly,
@@ -343,7 +344,7 @@ async function runValidator(
     }
     return { source, output: result }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
+    const msg = describeError(e)
     return {
       source,
       output: {

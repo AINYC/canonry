@@ -4,6 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core'
 import { createLogger } from '../logger.js'
 import type { ExternalMcpServerConfig } from '../config.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 const log = createLogger('RemoteMcp')
 
@@ -166,7 +167,7 @@ export async function loadExternalMcpTools(
     } catch (err) {
       log.error('external-mcp.connect-failed', {
         label,
-        error: err instanceof Error ? err.message : String(err),
+        error: describeError(err),
       })
       continue
     }
@@ -177,7 +178,7 @@ export async function loadExternalMcpTools(
     } catch (err) {
       log.error('external-mcp.list-failed', {
         label,
-        error: err instanceof Error ? err.message : String(err),
+        error: describeError(err),
       })
       continue
     }

@@ -8,7 +8,7 @@ import {
   GSC_DATA_LAG_DAYS,
   GSC_REPORTING_TIME_ZONE,
 } from '@ainyc/canonry-integration-google'
-import { formatIsoDateInTimeZone, shiftIsoCalendarDate } from '@ainyc/canonry-contracts'
+import { formatIsoDateInTimeZone, shiftIsoCalendarDate, describeError } from '@ainyc/canonry-contracts'
 import type { CanonryConfig } from './config.js'
 import { saveConfigPatch } from './config.js'
 import { writeCoverageSnapshot } from './gsc-coverage-snapshot.js'
@@ -291,7 +291,7 @@ export async function executeGscSync(
 
     log.info('sync.completed', { runId, projectId, searchDataRows: rows.length, indexed: coverage.indexed, notIndexed: coverage.notIndexed, unknown: coverage.unknown, verifiedByInspection: coverage.verifiedByInspection })
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err)
+    const errorMsg = describeError(err)
     db.update(runs)
       .set({ status: 'failed', error: errorMsg, finishedAt: new Date().toISOString() })
       .where(eq(runs.id, runId))

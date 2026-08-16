@@ -7,6 +7,7 @@ import type {
 import { type ApiClient, createApiClient } from '../client.js'
 import { CliError, EXIT_SYSTEM_ERROR, isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 const INDEXING_API_SCOPE_NOTICE =
   "Note: Google's Indexing API officially supports only pages with JobPosting or BroadcastEvent (livestream VideoObject) structured data. " +
@@ -772,7 +773,7 @@ export async function submitGscSitemaps(
       const remaining = sitemapUrls.length - attempted
       const causeDetails = cause instanceof CliError
         ? { code: cause.code, message: cause.message, details: cause.details }
-        : { message: cause instanceof Error ? cause.message : String(cause) }
+        : { message: describeError(cause) }
       throw new CliError({
         code: 'GOOGLE_SITEMAP_SUBMISSION_PARTIAL',
         message: `Sitemap submission stopped at batch ${index + 1}/${batches.length}; ${aggregate.summary.accepted} accepted, ${aggregate.summary.failed} failed, ${batchSitemapUrls.length} unconfirmed, ${remaining} not attempted.`,

@@ -18,7 +18,7 @@ import type {
   WordpressSeoStateDto,
   WordpressSiteStatusDto,
 } from '@ainyc/canonry-contracts'
-import { wordpressEnvSchema } from '@ainyc/canonry-contracts'
+import { wordpressEnvSchema, describeError } from '@ainyc/canonry-contracts'
 import type { WordpressConnectionRecord, WordpressRestPage, WordpressSiteContext } from './types.js'
 import { WordpressApiError } from './types.js'
 import type { SchemaPageEntry, SchemaProfileFile } from './schema-templates.js'
@@ -439,7 +439,7 @@ export async function getSiteStatus(
       authenticatedUser: userInfo,
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = describeError(error)
     return {
       url: site.siteUrl,
       reachable: false,
@@ -811,7 +811,7 @@ export async function bulkSetSeoMeta(
         return {
           slug: entry.slug,
           status: 'skipped',
-          error: error instanceof Error ? error.message : String(error),
+          error: describeError(error),
         }
       }
     },
@@ -909,7 +909,7 @@ export async function deploySchema(
     return {
       slug,
       status: 'failed',
-      error: error instanceof Error ? error.message : String(error),
+      error: describeError(error),
     }
   }
 }

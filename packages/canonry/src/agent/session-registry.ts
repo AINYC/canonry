@@ -8,7 +8,7 @@ import {
 } from '@ainyc/canonry-db'
 import type { Agent, AgentMessage, AgentTool } from '@mariozechner/pi-agent-core'
 import type { Api, Model } from '@mariozechner/pi-ai'
-import { agentBusy, AgentProviderIds } from '@ainyc/canonry-contracts'
+import { agentBusy, AgentProviderIds, describeError } from '@ainyc/canonry-contracts'
 import { createLogger } from '../logger.js'
 import type { ApiClient } from '../client.js'
 import type { CanonryConfig } from '../config.js'
@@ -144,7 +144,7 @@ export class SessionRegistry {
       this.externalToolsPromise = loadExternalMcpTools(this.opts.config.externalMcpServers).catch(
         (err) => {
           log.error('external-mcp.load-failed', {
-            error: err instanceof Error ? err.message : String(err),
+            error: describeError(err),
           })
           return []
         },
@@ -427,7 +427,7 @@ export class SessionRegistry {
     } catch (err) {
       log.error('compaction.failed', {
         projectName,
-        error: err instanceof Error ? err.message : String(err),
+        error: describeError(err),
       })
     }
   }
@@ -560,7 +560,7 @@ export class SessionRegistry {
     } catch (err) {
       log.error('drain.failed', {
         projectName,
-        error: err instanceof Error ? err.message : String(err),
+        error: describeError(err),
       })
     }
   }

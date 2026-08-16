@@ -2,6 +2,7 @@ import type { GaConnectResponse, GA4PropertiesDto, GaStatusResponse, GaSyncRespo
 import { createApiClient } from '../client.js'
 import { CliError, isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 function getClient() {
   return createApiClient()
@@ -63,7 +64,7 @@ export async function gaConnect(project: string, opts: {
       JSON.parse(content)
       body.keyJson = content
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = describeError(e)
       throw new CliError({
         code: 'GA_KEY_FILE_READ_ERROR',
         message: `Failed to read key file: ${msg}`,

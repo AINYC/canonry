@@ -12,6 +12,7 @@ import {
   RunTriggers,
   normalizeSiteAuditRunRequest,
   siteAuditRequestIdentity,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { createLogger } from './logger.js'
 
@@ -566,7 +567,7 @@ export class Scheduler {
       log.info('run.triggered', { runId, projectName: project.name, providers: providers ?? 'all' })
       this.callbacks.onRunCreated(runId, projectId, providers, resolvedLocation)
     } catch (err: unknown) {
-      log.error('trigger.error', { scheduleId, projectId, kind, error: err instanceof Error ? err.message : String(err) })
+      log.error('trigger.error', { scheduleId, projectId, kind, error: describeError(err) })
     }
   }
 }

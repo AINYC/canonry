@@ -2,6 +2,7 @@ import { createApiClient } from '../client.js'
 import { CliError } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
 import type { AuditLogEntry } from '@ainyc/canonry-contracts'
+import { describeError } from '@ainyc/canonry-contracts'
 
 function getClient() {
   return createApiClient()
@@ -61,7 +62,7 @@ export async function showHistory(project: string | undefined, format?: string, 
       if (entry.diff != null) console.log(`    diff: ${JSON.stringify(entry.diff)}`)
     }
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = describeError(err)
     throw new CliError({
       code: 'HISTORY_FETCH_FAILED',
       message: project ? `Failed to fetch history for project "${project}"` : 'Failed to fetch instance history',

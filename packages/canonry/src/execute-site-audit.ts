@@ -35,6 +35,7 @@ import {
   type SiteAuditPageFactorDto,
   type SiteCrawlAuditFactorDto,
   type SiteCrawlCriticalDefectDto,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { resolvePublicHttpTarget, resolveWebhookTarget } from '@ainyc/canonry-api-routes'
 import { createLogger } from './logger.js'
@@ -692,7 +693,7 @@ export async function executeSiteAudit(
       log.warn('graph-layout.persist-failed', {
         runId,
         projectId,
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       })
       // A failed node/edge batch rolls its transaction back. Persist the
       // minimal unavailable marker separately so this new snapshot cannot be
@@ -713,7 +714,7 @@ export async function executeSiteAudit(
         log.warn('graph-layout.marker-persist-failed', {
           runId,
           projectId,
-          error: markerError instanceof Error ? markerError.message : String(markerError),
+          error: describeError(markerError),
         })
       }
     }
@@ -832,7 +833,7 @@ export async function executeSiteAudit(
         log.warn('graph-layout.cleanup-failed', {
           runId,
           projectId,
-          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          error: describeError(cleanupError),
         })
       }
       const current = db.select({ status: runs.status }).from(runs).where(eq(runs.id, runId)).get()
@@ -844,7 +845,7 @@ export async function executeSiteAudit(
   } catch (error) {
     const finishedAt = new Date().toISOString()
     const cancelled = isCancelled(error, opts.signal)
-    const message = error instanceof Error ? error.message : String(error)
+    const message = describeError(error)
     db.transaction((tx) => {
       tx.update(siteCrawlAttempts).set({
         state: cancelled ? 'cancelled' : 'failed',

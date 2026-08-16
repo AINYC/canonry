@@ -1,4 +1,5 @@
 import type { RunDetailDto } from '@ainyc/canonry-contracts'
+import { describeError } from '@ainyc/canonry-contracts'
 import { type ApiClient, createApiClient } from '../client.js'
 import { CliError, isMachineFormat } from '../cli-error.js'
 import { emitJsonl } from '../cli-output.js'
@@ -368,7 +369,7 @@ export async function bingRefresh(project: string, format?: string): Promise<voi
     )
     for (const r of results) {
       if (r.status === 'rejected') {
-        errors.push(r.reason instanceof Error ? r.reason.message : String(r.reason))
+        errors.push(describeError(r.reason))
       }
     }
     if (!isMachineFormat(format)) {

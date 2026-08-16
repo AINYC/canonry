@@ -2,6 +2,7 @@ import {
   CheckCategories,
   CheckScopes,
   CheckStatuses,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { getSites } from '@ainyc/canonry-integration-bing'
 import type { CheckDefinition } from '../types.js'
@@ -60,7 +61,7 @@ export const BING_AUTH_CHECKS: readonly CheckDefinition[] = [
           remediation: null,
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
+        const message = describeError(err)
         return {
           status: CheckStatuses.fail,
           code: 'bing.auth.verification-failed',
@@ -149,7 +150,7 @@ export const BING_AUTH_CHECKS: readonly CheckDefinition[] = [
           remediation: null,
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
+        const message = describeError(err)
         return {
           status: CheckStatuses.fail,
           code: 'bing.auth.site-check-failed',

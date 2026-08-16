@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { fetchSettings, isEmbed, type ApiProject } from '../../api.js'
 import { Button } from '../ui/button.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 type EngineProject = Pick<ApiProject, 'name' | 'providers' | 'providerModels'>
 type EngineSave = Pick<ApiProject, 'providers' | 'providerModels'>
@@ -143,7 +144,7 @@ export function ProjectEngineSettingsSection({
       setEditing(false)
       setNotice('Engine settings saved. They apply on the next sweep.')
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      setError(describeError(cause))
     } finally {
       setSaving(false)
     }

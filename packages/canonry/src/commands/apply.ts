@@ -3,6 +3,7 @@ import { parseAllDocuments } from 'yaml'
 import type { ProjectConfig } from '@ainyc/canonry-contracts'
 import { createApiClient, type ApplyResultDto } from '../client.js'
 import { CliError, isMachineFormat } from '../cli-error.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 
 
@@ -45,7 +46,7 @@ export async function applyConfigFile(filePath: string): Promise<ApplyFileResult
       const result = await client.apply(config)
       applied.push(result)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       errors.push(`Document ${i + 1}: ${msg}`)
     }
   }
@@ -61,7 +62,7 @@ export async function applyConfigs(filePaths: string[], format?: string): Promis
     try {
       result = await applyConfigFile(filePath)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = describeError(err)
       result = {
         filePath,
         applied: [],

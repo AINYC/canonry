@@ -48,6 +48,7 @@ import {
   RunStatuses,
   RunTriggers,
   runStatusSchema,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import type {
   AdsAdDto,
@@ -2236,7 +2237,7 @@ export async function adsRoutes(app: FastifyInstance, opts: AdsRoutesOptions): P
       try {
         account = await opts.verifyAdsAccount(parsed.data.apiKey)
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
+        const message = describeError(err)
         throw validationError(`OpenAI Ads API rejected the key: ${message}`)
       }
 

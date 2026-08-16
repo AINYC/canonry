@@ -1,6 +1,6 @@
 import { createApiClient } from '../client.js'
 import type { ApiClient, DiscoveryRunStartResponse } from '../client.js'
-import { CitationStates } from '@ainyc/canonry-contracts'
+import { CitationStates, describeError } from '@ainyc/canonry-contracts'
 import type {
   DiscoveryBucket,
   DiscoveryCompetitorType,
@@ -89,7 +89,7 @@ export function summarizeAngles(sessions: readonly DiscoverySessionCounts[]): An
 }
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+  return describeError(err)
 }
 
 export async function discoverRun(project: string, opts: DiscoverRunOptions): Promise<void> {

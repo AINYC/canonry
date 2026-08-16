@@ -4,6 +4,7 @@ import {
   CheckCategories,
   CheckScopes,
   CheckStatuses,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { refreshAccessToken } from '@ainyc/canonry-integration-google'
 import { GBP_SCOPE, listAccounts, GbpApiError } from '@ainyc/canonry-integration-google-business-profile'
@@ -85,7 +86,7 @@ async function resolveGbpToken(
     const tokens = await refreshAccessToken(auth.clientId, auth.clientSecret, conn.refreshToken)
     return { ok: true, token: { accessToken: tokens.access_token, conn } }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = describeError(err)
     return {
       ok: false,
       output: {
@@ -222,7 +223,7 @@ const accountAccessCheck: CheckDefinition = {
           details: { reason: err.reason ?? undefined, status: err.status },
         }
       }
-      const message = err instanceof Error ? err.message : String(err)
+      const message = describeError(err)
       return {
         status: CheckStatuses.fail,
         code: 'gbp.account.list-failed',

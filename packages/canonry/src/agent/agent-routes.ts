@@ -14,6 +14,7 @@ import {
   notFound,
   validationError,
   type AgentMemoryListResponse,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import type { AgentEvent, AgentMessage } from '@mariozechner/pi-agent-core'
 import type { SessionRegistry } from './session-registry.js'
@@ -193,7 +194,7 @@ export function registerAgentRoutes(app: FastifyInstance, opts: AgentRoutesOptio
       await agent.waitForIdle()
       opts.sessionRegistry.save(project.name)
     } catch (err) {
-      write({ type: 'error', message: err instanceof Error ? err.message : String(err) })
+      write({ type: 'error', message: describeError(err) })
     } finally {
       unsubscribe()
       write({ type: 'stream_close' })

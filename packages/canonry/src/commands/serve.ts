@@ -6,6 +6,7 @@ import { CliError, type CliFormat, isMachineFormat } from '../cli-error.js'
 import { backfillAiReferralPaths, backfillNormalizedPaths } from './backfill.js'
 import { getMissingUserSkillsNudge } from './skills.js'
 import { detectCanonryAgentPlugin } from '../agent-plugin.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 /**
  * Precedence: `CANONRY_PORT` env var (also set by `--port`) > config.yaml `port:` > 4100.
@@ -44,7 +45,7 @@ export async function serveCommand(format: CliFormat = 'text'): Promise<void> {
     // Don't block startup on backfill failure — the manual CLI command
     // remains available, and the dashboards remain partially correct
     // via COALESCE for non-fragmented legacy rows.
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = describeError(err)
     process.stderr.write(`warning: normalized-path backfill skipped: ${msg}\n`)
   }
 
@@ -60,7 +61,7 @@ export async function serveCommand(format: CliFormat = 'text'): Promise<void> {
       )
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = describeError(err)
     process.stderr.write(`warning: ai-referral-paths backfill skipped: ${msg}\n`)
   }
 
@@ -132,7 +133,7 @@ export async function serveCommand(format: CliFormat = 'text'): Promise<void> {
       providers: providerNames,
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = describeError(err)
     throw new CliError({
       code: 'SERVE_START_FAILED',
       message: `Failed to start server: ${message}`,

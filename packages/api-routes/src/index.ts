@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyError } from 'fastify'
 import rateLimit from '@fastify/rate-limit'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import fs from 'node:fs'
-import { AppError, runtimeStateMissing } from '@ainyc/canonry-contracts'
+import { AppError, runtimeStateMissing, describeError } from '@ainyc/canonry-contracts'
 import { authPlugin } from './auth.js'
 import { projectRoutes } from './projects.js'
 import type { ProjectRoutesOptions } from './projects.js'
@@ -755,7 +755,7 @@ function buildTrafficSourceValidators(opts: ApiRoutesOptions): Record<string, Tr
             summary: `Cloud Run access token resolves for "${source.displayName}" (project ${record.gcpProjectId}).`,
           }
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e)
+          const msg = describeError(e)
           return {
             status: CheckStatuses.fail,
             code: 'traffic.credentials.resolve-failed',
@@ -801,7 +801,7 @@ function buildTrafficSourceValidators(opts: ApiRoutesOptions): Record<string, Tr
           }
         } catch (e) {
           const httpStatus = e instanceof WordpressTrafficApiError ? e.status : null
-          const msg = e instanceof Error ? e.message : String(e)
+          const msg = describeError(e)
           return {
             status: CheckStatuses.fail,
             code: httpStatus === 401 || httpStatus === 403
@@ -854,7 +854,7 @@ function buildTrafficSourceValidators(opts: ApiRoutesOptions): Record<string, Tr
           }
         } catch (e) {
           const httpStatus = e instanceof VercelLogsApiError ? e.status : null
-          const msg = e instanceof Error ? e.message : String(e)
+          const msg = describeError(e)
           return {
             status: CheckStatuses.fail,
             code: httpStatus === 401 || httpStatus === 403

@@ -45,6 +45,7 @@ import {
   classifyTrafficPath,
   segmentCrawlerHits,
   sumInfraHits,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import type {
   NormalizedTrafficRequest,
@@ -1052,7 +1053,7 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
   try {
     allEvents = await pullForBackfill()
   } catch (e) {
-    markFailed(`${pullErrorPrefix}: ${e instanceof Error ? e.message : String(e)}`)
+    markFailed(`${pullErrorPrefix}: ${describeError(e)}`)
     return
   }
 
@@ -1421,7 +1422,7 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
     })
     if (commitOutcome === 'source-inactive') return
   } catch (e) {
-    markFailed(`Backfill rollup write failed: ${e instanceof Error ? e.message : String(e)}`)
+    markFailed(`Backfill rollup write failed: ${describeError(e)}`)
   }
 }
 
@@ -1745,7 +1746,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             `WordPress traffic probe failed (HTTP ${e.status}): ${e.message}${e.body ? ` — ${e.body}` : ''}`,
           )
         }
-        const msg = e instanceof Error ? e.message : String(e)
+        const msg = describeError(e)
         throw providerError(`WordPress traffic probe failed: ${msg}`)
       }
     })
@@ -1868,7 +1869,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
           `Vercel traffic probe failed (HTTP ${e.status}): ${e.message}${e.body ? ` — ${e.body}` : ''}`,
         )
       }
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = describeError(e)
       throw providerError(`Vercel traffic probe failed: ${msg}`)
     }
 
@@ -2924,7 +2925,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       try {
         accessToken = await resolveAccessToken(credential)
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
+        const msg = describeError(e)
         markFailed(msg, 'PROVIDER_AUTH')
         throw providerError(`Failed to resolve Cloud Run access token: ${msg}`)
       }
@@ -2948,7 +2949,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         })
         allEvents = page.events
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
+        const msg = describeError(e)
         markFailed(msg, 'PROVIDER_PULL')
         throw providerError(`Cloud Run pull failed: ${msg}`)
       }
@@ -2998,7 +2999,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       try {
         pinnedDispatcher = await assertWordpressTargetAllowed(credential.baseUrl)
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
+        const msg = describeError(e)
         markFailed(msg, 'PROVIDER_PULL')
         throw e
       }
@@ -3030,7 +3031,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         allEvents = collected
         nextCursor = cursor
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
+        const msg = describeError(e)
         markFailed(msg, 'PROVIDER_PULL')
         throw providerError(`WordPress pull failed: ${msg}`)
       } finally {
@@ -3187,7 +3188,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         }
         allEvents = drained.events
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
+        const msg = describeError(e)
         markFailed(msg, 'PROVIDER_PULL')
         throw providerError(`Vercel pull failed: ${msg}`)
       }

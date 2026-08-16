@@ -4,6 +4,7 @@ import path from 'node:path'
 import { getConfigDir } from '../config.js'
 import type { CliFormat } from '../cli-error.js'
 import { CliError, isMachineFormat } from '../cli-error.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 function getPidPath(): string {
   return path.join(getConfigDir(), 'canonry.pid')
@@ -214,7 +215,7 @@ export function stopDaemon(format: CliFormat = 'text'): void {
     }
     console.log(`Canonry stopped (PID: ${pid})`)
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = describeError(err)
     throw new CliError({
       code: 'DAEMON_STOP_FAILED',
       message: `Failed to stop Canonry (PID: ${pid}): ${msg}`,

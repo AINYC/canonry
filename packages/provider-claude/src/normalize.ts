@@ -6,6 +6,7 @@ import {
   hostOf,
   normalizeServedModel,
   registrableDomain,
+  describeError,
 } from "@ainyc/canonry-contracts";
 import { withRetry } from "./utils.js";
 import type {
@@ -122,7 +123,7 @@ export async function healthcheck(
     return {
       ok: false,
       provider: "claude",
-      message: err instanceof Error ? err.message : String(err),
+      message: describeError(err),
       model: resolveModel(config),
     };
   }
@@ -179,7 +180,7 @@ export async function executeTrackedQuery(
       retrievalContract: CLAUDE_RETRIEVAL_CONTRACT,
     };
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = describeError(err);
     throw new Error(`[provider-claude] ${msg}`);
   }
 }

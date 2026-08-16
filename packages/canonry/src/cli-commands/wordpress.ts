@@ -25,6 +25,7 @@ import {
   wordpressStatus,
   wordpressUpdatePage,
 } from '../commands/wordpress.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 function resolveEnv(input: CliCommandInput, command: string, usage: string): WordpressEnv | undefined {
   const live = getBoolean(input.values, 'live')
@@ -74,7 +75,7 @@ function resolveContent(
     try {
       return fs.readFileSync(contentFile, 'utf-8')
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = describeError(error)
       throw usageError(`Error: could not read --content-file "${contentFile}": ${message}`, {
         message: `could not read --content-file "${contentFile}": ${message}`,
         details: { command, usage },

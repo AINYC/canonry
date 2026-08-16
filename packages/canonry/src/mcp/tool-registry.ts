@@ -60,6 +60,7 @@ import {
   measurementQueryTemplateApplyRequestSchema,
   measurementQueryTemplateUpsertRequestSchema,
   type NotificationEvent,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { z } from 'zod'
 import type { ApiClient } from '../client.js'
@@ -442,7 +443,7 @@ async function submitGscSitemapsFromMcp(
           partialResult: aggregate,
           cause: cause instanceof CliError
             ? { code: cause.code, message: cause.message, details: cause.details }
-            : { message: cause instanceof Error ? cause.message : String(cause) },
+            : { message: describeError(cause) },
         },
       })
     }

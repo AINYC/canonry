@@ -6,6 +6,7 @@ import { ToneBadge } from '../shared/ToneBadge.js'
 import { addToast } from '../../lib/toast-store.js'
 import { asyncHandler } from '../../lib/async-handler.js'
 import { fetchCdpStatus, configureCdp, type ApiCdpStatus } from '../../api.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 function shortCdpError(error: string): string {
   const summary = error.replace(/^Error:\s*/, '').replace(/\s+/g, ' ').trim()
@@ -28,7 +29,7 @@ export function CdpConfigCard() {
         setCdpStatusError(null)
       })
       .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err)
+        const msg = describeError(err)
         if (!msg.includes('501')) setCdpStatusError(msg)
       })
   }, [])
@@ -113,7 +114,7 @@ export function CdpConfigCard() {
                 dedupeMode: 'replace',
               })
             } catch (err) {
-              setCdpStatusError(err instanceof Error ? err.message : String(err))
+              setCdpStatusError(describeError(err))
             } finally {
               setCdpSaving(false)
             }

@@ -4,6 +4,7 @@ import {
   summarizeCheckResults,
   type CheckResultDto,
   type DoctorReportDto,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import type { CheckDefinition, DoctorContext, RunChecksOptions } from './types.js'
 
@@ -41,7 +42,7 @@ export async function runChecks(
     try {
       output = await definition.run(ctx)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = describeError(err)
       output = {
         status: CheckStatuses.fail,
         code: `${definition.id}.runtime-error`,

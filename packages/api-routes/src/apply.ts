@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { projects, competitors, schedules, notifications } from '@ainyc/canonry-db'
-import { forbidden, normalizeProjectAliases, normalizeProjectDomain, projectConfigSchema, registrableDomain, resolveConfigSpecQueries, SchedulableRunKinds, validationError } from '@ainyc/canonry-contracts'
+import { forbidden, normalizeProjectAliases, normalizeProjectDomain, projectConfigSchema, registrableDomain, resolveConfigSpecQueries, SchedulableRunKinds, validationError, describeError } from '@ainyc/canonry-contracts'
 import type { ProviderAdapterInfo } from './settings.js'
 import { pruneProviderModelsForProviders, validateProviderModels } from './provider-models.js'
 import { writeAuditLog } from './helpers.js'
@@ -72,7 +72,7 @@ export async function applyRoutes(app: FastifyInstance, opts?: ApplyRoutesOption
         try {
           cronExpr = resolvePreset(schedSpec.preset)
         } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err)
+          const msg = describeError(err)
           throw validationError(msg)
         }
       } else if (schedSpec.cron) {

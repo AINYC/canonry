@@ -5,6 +5,7 @@ import { Button } from '../ui/button.js'
 import { applyProjectConfig, isEmbed } from '../../api.js'
 import { addToast } from '../../lib/toast-store.js'
 import { asyncHandler } from '../../lib/async-handler.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 export function YamlApplyPanel({ onApplied }: { onApplied: () => void }) {
   const [yamlText, setYamlText] = useState('')
@@ -39,7 +40,7 @@ export function YamlApplyPanel({ onApplied }: { onApplied: () => void }) {
         const result = await applyProjectConfig(config)
         applied.push(`Applied "${result.displayName || result.name}" (revision ${result.configRevision})`)
       } catch (err) {
-        errs.push(`Document ${i + 1}: ${err instanceof Error ? err.message : String(err)}`)
+        errs.push(`Document ${i + 1}: ${describeError(err)}`)
       }
     }
 

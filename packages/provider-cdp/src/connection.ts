@@ -1,6 +1,7 @@
 import CDP from 'chrome-remote-interface'
 import type { CDPTarget } from './targets/types.js'
 import { CDPProviderError } from './targets/types.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 interface TabEntry {
   client: CDP.Client
@@ -110,7 +111,7 @@ export class CDPConnectionManager {
     } catch (err) {
       throw new CDPProviderError(
         'CDP_CONNECTION_REFUSED',
-        `Failed to connect to Chrome at ${this.host}:${this.port}: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to connect to Chrome at ${this.host}:${this.port}: ${describeError(err)}`,
       )
     }
   }
@@ -131,7 +132,7 @@ export class CDPConnectionManager {
     } catch (err) {
       throw new CDPProviderError(
         'CDP_TARGET_SELECTOR_FAILED',
-        `Failed to navigate to ${target.newConversationUrl}: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to navigate to ${target.newConversationUrl}: ${describeError(err)}`,
       )
     }
 

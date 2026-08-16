@@ -8,6 +8,7 @@ import {
   type McpClientFormat,
 } from '../mcp-clients.js'
 import { CliError, isMachineFormat } from '../cli-error.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 export interface McpInstallOptions {
   client: string
@@ -120,7 +121,7 @@ function readJsonConfig(configPath: string): Record<string, unknown> {
   } catch (err) {
     throw new CliError({
       code: 'VALIDATION_ERROR',
-      message: `Failed to parse ${configPath}: ${err instanceof Error ? err.message : String(err)}`,
+      message: `Failed to parse ${configPath}: ${describeError(err)}`,
       exitCode: 1,
       details: { configPath },
     })

@@ -17,7 +17,7 @@ import {
   queryBacklinks,
   type BacklinkRow,
 } from '@ainyc/canonry-integration-commoncrawl'
-import { BacklinkSources, CcReleaseSyncStatuses } from '@ainyc/canonry-contracts'
+import { BacklinkSources, CcReleaseSyncStatuses, describeError } from '@ainyc/canonry-contracts'
 import { createLogger } from './logger.js'
 
 const log = createLogger('CommonCrawlSync')
@@ -207,13 +207,13 @@ export async function executeReleaseSync(
         } catch (err) {
           log.error('auto-extract.enqueue-failed', {
             syncId, release, projectId: p.id,
-            error: err instanceof Error ? err.message : String(err),
+            error: describeError(err),
           })
         }
       }
     }
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err)
+    const errorMsg = describeError(err)
     const finishedAt = deps.now().toISOString()
     db.update(ccReleaseSyncs).set({
       status: CcReleaseSyncStatuses.failed,
