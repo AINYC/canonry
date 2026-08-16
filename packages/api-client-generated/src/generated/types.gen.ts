@@ -2176,6 +2176,8 @@ export type Ga4SyncResponseDto = {
     aiReferralCount: number;
     socialReferralCount: number;
     days: number;
+    requestedDays: number;
+    clamped: boolean;
     syncedAt: string;
     measurement: {
         acquisition: {
@@ -18627,6 +18629,9 @@ export type GetApiV1ProjectsByNameGaMeasurementAnalysisResponse = GetApiV1Projec
 
 export type PostApiV1ProjectsByNameGaSyncData = {
     body?: {
+        /**
+         * Days of history to sync. Clamped to 1-90; check `clamped` in the response to detect truncation. Defaults to 30.
+         */
         days?: number;
     };
     path: {

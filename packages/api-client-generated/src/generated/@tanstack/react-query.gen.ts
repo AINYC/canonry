@@ -5001,6 +5001,8 @@ export const getApiV1ProjectsByNameGaMeasurementAnalysisOptions = (options: Opti
 
 /**
  * Sync GA4 traffic and AI referral data
+ *
+ * Syncs a window of GA4 history. `days` is bounded to GA4's supported sync range (1-90); a request outside it is clamped rather than rejected. The response reports the window ACTUALLY written as `days`, the unbounded request as `requestedDays`, and sets `clamped` when the two differ.
  */
 export const postApiV1ProjectsByNameGaSyncMutation = (options?: Partial<Options<PostApiV1ProjectsByNameGaSyncData>>): UseMutationOptions<PostApiV1ProjectsByNameGaSyncResponse, PostApiV1ProjectsByNameGaSyncError, Options<PostApiV1ProjectsByNameGaSyncData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameGaSyncResponse, PostApiV1ProjectsByNameGaSyncError, Options<PostApiV1ProjectsByNameGaSyncData>> = {

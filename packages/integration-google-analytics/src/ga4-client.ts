@@ -4,8 +4,7 @@ import {
   GA4_DATA_API_BASE,
   GA4_SCOPE,
   GOOGLE_TOKEN_URL,
-  GA4_DEFAULT_SYNC_DAYS,
-  GA4_MAX_SYNC_DAYS,
+  resolveGa4SyncDays,
   GA4_REQUEST_TIMEOUT_MS,
   GA4_MAX_PAGES,
   GA4_MAX_CONCURRENT_REQUESTS,
@@ -384,7 +383,7 @@ function formatDate(d: Date): string {
 }
 
 function measurementDateRange(days?: number) {
-  const syncDays = Math.min(Math.max(1, days ?? GA4_DEFAULT_SYNC_DAYS), GA4_MAX_SYNC_DAYS)
+  const { effectiveDays: syncDays } = resolveGa4SyncDays(days)
   const endDate = new Date()
   const startDate = new Date()
   startDate.setUTCDate(startDate.getUTCDate() - syncDays)
@@ -528,7 +527,7 @@ export async function fetchTrafficByLandingPage(
 ): Promise<GA4TrafficRow[]> {
   validateAccessToken(accessToken)
   validatePropertyId(propertyId)
-  const syncDays = Math.min(Math.max(1, days ?? GA4_DEFAULT_SYNC_DAYS), GA4_MAX_SYNC_DAYS)
+  const { effectiveDays: syncDays } = resolveGa4SyncDays(days)
   const endDate = new Date()
   const startDate = new Date()
   startDate.setDate(startDate.getDate() - syncDays)
@@ -719,7 +718,7 @@ export async function fetchAggregateSummary(
 ): Promise<GA4AggregateSummary> {
   validateAccessToken(accessToken)
   validatePropertyId(propertyId)
-  const syncDays = Math.min(Math.max(1, days ?? GA4_DEFAULT_SYNC_DAYS), GA4_MAX_SYNC_DAYS)
+  const { effectiveDays: syncDays } = resolveGa4SyncDays(days)
   const endDate = new Date()
   const startDate = new Date()
   startDate.setDate(startDate.getDate() - syncDays)
@@ -819,7 +818,7 @@ export async function fetchDailyTotals(
   validateAccessToken(accessToken)
   validatePropertyId(propertyId)
 
-  const syncDays = Math.min(Math.max(1, days ?? GA4_DEFAULT_SYNC_DAYS), GA4_MAX_SYNC_DAYS)
+  const { effectiveDays: syncDays } = resolveGa4SyncDays(days)
   const endDate = new Date()
   const startDate = new Date()
   startDate.setDate(startDate.getDate() - syncDays)
@@ -958,7 +957,7 @@ export async function fetchAiReferrals(
 ): Promise<GA4AiReferralRow[]> {
   validateAccessToken(accessToken)
   validatePropertyId(propertyId)
-  const syncDays = Math.min(Math.max(1, days ?? GA4_DEFAULT_SYNC_DAYS), GA4_MAX_SYNC_DAYS)
+  const { effectiveDays: syncDays } = resolveGa4SyncDays(days)
   const endDate = new Date()
   const startDate = new Date()
   startDate.setDate(startDate.getDate() - syncDays)
@@ -1110,7 +1109,7 @@ export async function fetchSocialReferrals(
 ): Promise<GA4SocialReferralRow[]> {
   validateAccessToken(accessToken)
   validatePropertyId(propertyId)
-  const syncDays = Math.min(Math.max(1, days ?? GA4_DEFAULT_SYNC_DAYS), GA4_MAX_SYNC_DAYS)
+  const { effectiveDays: syncDays } = resolveGa4SyncDays(days)
   const endDate = new Date()
   const startDate = new Date()
   startDate.setDate(startDate.getDate() - syncDays)

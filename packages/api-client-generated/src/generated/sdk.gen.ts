@@ -4406,6 +4406,8 @@ export const getApiV1ProjectsByNameGaMeasurementAnalysis = <ThrowOnError extends
 
 /**
  * Sync GA4 traffic and AI referral data
+ *
+ * Syncs a window of GA4 history. `days` is bounded to GA4's supported sync range (1-90); a request outside it is clamped rather than rejected. The response reports the window ACTUALLY written as `days`, the unbounded request as `requestedDays`, and sets `clamped` when the two differ.
  */
 export const postApiV1ProjectsByNameGaSync = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameGaSyncData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameGaSyncResponses, PostApiV1ProjectsByNameGaSyncErrors, ThrowOnError>({

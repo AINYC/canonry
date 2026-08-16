@@ -142,6 +142,18 @@ export async function gaSync(project: string, opts?: { days?: number; only?: str
   if (opts?.only) body.only = opts.only
   const result: GaSyncResponse = await client.gaSync(project, body)
 
+  // Warn on stderr in BOTH formats. A `--days 500` request silently writes 90
+  // days; the JSON consumer reads `clamped`/`requestedDays` off the payload,
+  // but a person watching the terminal would otherwise see only a truthful
+  // "Period: 90 days" with nothing to connect it to what they typed. stderr
+  // keeps stdout's JSON contract byte-for-byte intact.
+  if (result.clamped) {
+    console.error(
+      `Warning: requested ${result.requestedDays} days but synced ${result.days} — `
+      + `GA4's supported sync window bounded the request. Only ${result.days} days of history were written.`,
+    )
+  }
+
   if (isMachineFormat(opts?.format)) {
     console.log(JSON.stringify(result, null, 2))
     return
@@ -154,7 +166,7 @@ export async function gaSync(project: string, opts?: { days?: number; only?: str
   console.log(`  Page rows:   ${result.rowCount}`)
   console.log(`  AI rows:     ${result.aiReferralCount}`)
   console.log(`  Social rows: ${result.socialReferralCount}`)
-  console.log(`  Period:      ${result.days} days`)
+  console.log(`  Period:      ${result.days} days${result.clamped ? ` (requested ${result.requestedDays})` : ''}`)
   console.log(`  Synced at:   ${result.syncedAt}`)
 }
 

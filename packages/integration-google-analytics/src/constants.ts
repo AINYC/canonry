@@ -5,6 +5,36 @@ export const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 export const GA4_DEFAULT_SYNC_DAYS = 30
 export const GA4_MAX_SYNC_DAYS = 90
 
+/**
+ * Resolve a caller-supplied sync window into the window that will actually be
+ * fetched, and say whether the two differ.
+ *
+ * Every fetch in `ga4-client.ts` bounds `days` to `[1, GA4_MAX_SYNC_DAYS]`.
+ * That clamp is invisible from the outside: `--days 500` used to return
+ * `{"days": 500, "synced": true}` while writing exactly 90 days, so a caller
+ * had no way to tell truncated history from a property that only had 90 days
+ * of data. Resolving the window through one helper is what lets the sync
+ * response report the EFFECTIVE count alongside what was asked for — and
+ * keeps the bound from drifting between the six fetch sites and the route.
+ *
+ * A non-finite `days` (e.g. `parseInt('abc')`) falls back to the default
+ * rather than propagating `NaN` into the response contract.
+ */
+export function resolveGa4SyncDays(days?: number | null): {
+  /** What the caller asked for, after defaulting. Never `NaN`. */
+  requestedDays: number
+  /** What will actually be fetched — `requestedDays` bounded to `[1, GA4_MAX_SYNC_DAYS]`. */
+  effectiveDays: number
+  /** True when the bound moved the window, i.e. the caller did not get the range they asked for. */
+  clamped: boolean
+} {
+  const requestedDays = days != null && Number.isFinite(days)
+    ? Math.trunc(days)
+    : GA4_DEFAULT_SYNC_DAYS
+  const effectiveDays = Math.min(Math.max(1, requestedDays), GA4_MAX_SYNC_DAYS)
+  return { requestedDays, effectiveDays, clamped: effectiveDays !== requestedDays }
+}
+
 // HTTP request timeout (30 s) — prevents the process from hanging indefinitely
 // on a slow or unresponsive GA4 Data API endpoint.
 export const GA4_REQUEST_TIMEOUT_MS = 30_000

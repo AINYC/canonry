@@ -237,7 +237,20 @@ export const ga4SyncResponseDtoSchema = z.object({
   rowCount: z.number().int().nonnegative(),
   aiReferralCount: z.number().int().nonnegative(),
   socialReferralCount: z.number().int().nonnegative(),
+  /**
+   * The window that was ACTUALLY fetched and written, in days — the request's
+   * `days` bounded to GA4's supported sync range (1–90). Read this, not
+   * `requestedDays`, when reporting or reasoning about coverage: a
+   * `--days 500` sync writes 90 days, and this field says 90.
+   */
   days: z.number().int().nonnegative(),
+  /** The window the caller asked for, before bounding. Equals `days` unless `clamped`. */
+  requestedDays: z.number().int().nonnegative(),
+  /**
+   * True when `requestedDays` fell outside GA4's supported range and `days`
+   * differs from it — i.e. the synced history is not the range requested.
+   */
+  clamped: z.boolean(),
   syncedAt: z.string(),
   measurement: z.object({
     acquisition: z.object({ days: z.number().int().nonnegative(), status: z.enum(['ready', 'error']), rowCount: z.number().int().nonnegative(), error: z.string().optional() }),
