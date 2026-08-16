@@ -41,33 +41,45 @@ The dashboard, CLI, and agent tools share the same project API.
 
 You need Node.js `>=22.14` and `<26`, plus a public, crawlable site. Site Health does not need an answer-provider key.
 
-```bash
-npm install -g @canonry/canonry
-cnry bootstrap
-cnry serve
-```
+1. Install Canonry.
 
-`cnry bootstrap` creates the local configuration, SQLite database, and full-instance API key. Keep its output private. Provider credentials are optional. Bootstrap imports supported variables already in your environment.
+   ```bash
+   npm install -g @canonry/canonry
+   ```
 
-Open [http://127.0.0.1:4100/setup](http://127.0.0.1:4100/setup). By default, the first open asks you to create a dashboard password. Enter your domain and approve the public-site crawl to build a persisted Page Health baseline. AI Visibility is optional.
+2. Create the local configuration, SQLite database, and full-instance API key.
 
-To use the terminal instead of the setup page, keep `cnry serve` running and open a second terminal:
+   ```bash
+   cnry bootstrap
+   ```
 
-```bash
-cnry project create my-site --domain example.com --country US --language en
-cnry technical-aeo run my-site --max-pages 100 --wait --format json
-```
+   Keep the output private. Provider credentials are optional. Bootstrap imports supported variables that are already in your environment.
 
-The run command returns a run ID and status. If the status is `completed` or `partial`, read evidence from that run:
+3. Start Canonry.
 
-```bash
-cnry technical-aeo score my-site --run-id <run-id> --format json
-cnry technical-aeo pages my-site --run-id <run-id> --sort score-asc --limit 10 --format jsonl
-```
+   ```bash
+   cnry serve
+   ```
 
-`--wait` polls for up to 15 minutes. If the scan remains active, use the progress command below. If it fails or is cancelled, inspect it with `cnry run show <run-id> --format json`.
+4. Open [http://127.0.0.1:4100/setup](http://127.0.0.1:4100/setup). If prompted, create a dashboard password.
 
-The CLI installs as both `cnry` and `canonry`. The commands are interchangeable. The compatibility package `@ainyc/canonry` remains available. Use `@canonry/canonry` for new installations.
+5. Enter your domain and approve the public-site crawl. This crawl creates a persisted Page Health baseline. AI Visibility is optional.
+
+6. To use the terminal instead, keep `cnry serve` running. Open a second terminal and run:
+
+   ```bash
+   cnry project create my-site --domain example.com --country US --language en
+   cnry technical-aeo run my-site --max-pages 100 --wait --format json
+   ```
+
+7. Read the run ID and status from the output. If the status is `completed` or `partial`, read evidence from that run:
+
+   ```bash
+   cnry technical-aeo score my-site --run-id <run-id> --format json
+   cnry technical-aeo pages my-site --run-id <run-id> --sort score-asc --limit 10 --format jsonl
+   ```
+
+   `--wait` polls for up to 15 minutes. If the scan remains active, use the progress command below. If it fails or is cancelled, inspect it with `cnry run show <run-id> --format json`.
 
 ## Or use any shell-capable coding agent
 
