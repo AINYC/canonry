@@ -49,6 +49,7 @@ import {
   AdsDeliverySnapshotStatuses,
   AdsLiveEntityTypes,
   formatMicros,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import type { z } from 'zod'
 import { createApiClient } from '../client.js'
@@ -74,8 +75,8 @@ function readRequest<TSchema extends z.ZodTypeAny>(inputPath: string | undefined
     if (err instanceof CliError) throw err
     throw new CliError({
       code: 'ADS_INPUT_INVALID',
-      message: err instanceof Error ? err.message : String(err),
-      displayMessage: `Error: invalid ads JSON input (${err instanceof Error ? err.message : String(err)})`,
+      message: describeError(err),
+      displayMessage: `Error: invalid ads JSON input (${describeError(err)})`,
       details: { inputPath },
     })
   }

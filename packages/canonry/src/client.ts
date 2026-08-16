@@ -558,6 +558,7 @@ import {
   type PostApiV1ProjectsByNameMeasurementPlanDraftActionsDiscardResponse,
   type PostApiV1ProjectsByNameMeasurementPlanActionsDeactivateResponse,
 } from '@ainyc/canonry-api-client'
+import { describeError } from '@ainyc/canonry-contracts'
 
 export type { BrandMetricsDto, GapAnalysisDto, SourceBreakdownDto, AuditLogEntry, CompetitorDto, KeywordDto, QueryDto }
 
@@ -791,7 +792,7 @@ export class ApiClient {
       result = await call()
     } catch (err) {
       if (err instanceof CliError) throw err
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       if (traceEnabled) {
         process.stderr.write(`[trace] (sdk-call) → ERROR (${Date.now() - traceStart}ms): ${msg}\n`)
       }
@@ -948,7 +949,7 @@ export class ApiClient {
       res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body ?? {}), signal })
     } catch (err) {
       if (err instanceof CliError) throw err
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       if (msg.includes('fetch failed') || msg.includes('ECONNREFUSED') || msg.includes('connect ECONNREFUSED')) {
         throw new CliError({
           code: 'CONNECTION_ERROR',
@@ -1087,7 +1088,7 @@ export class ApiClient {
         headers: { Authorization: `Bearer ${this.apiKey}` },
       })
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = describeError(err)
       if (message.includes('fetch failed') || message.includes('ECONNREFUSED') || message.includes('connect ECONNREFUSED')) {
         throw new CliError({
           code: 'CONNECTION_ERROR',

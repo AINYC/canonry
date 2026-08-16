@@ -12,6 +12,7 @@ import { apiKeys } from '@ainyc/canonry-db'
 import { CliError, type CliFormat, isMachineFormat } from '../cli-error.js'
 import { installSkills, type SkillsInstallSummary } from './skills.js'
 import { installMcp, type McpInstallResult } from './mcp.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 /**
  * Hand control to `canonry serve` after init finishes.
@@ -325,7 +326,7 @@ export async function initCommand(opts?: InitOptions): Promise<ResolvedAgentLLM 
       try {
         skillsSummary = await installSkills({ dir: skillsTarget })
       } catch (err) {
-        skillsTip = `Skills auto-install failed: ${err instanceof Error ? err.message : String(err)}. Run "canonry skills install" manually.`
+        skillsTip = `Skills auto-install failed: ${describeError(err)}. Run "canonry skills install" manually.`
       }
     } else {
       skillsTip = 'Run "canonry skills install" in a project directory to add the canonry + Aero playbook to .claude/skills/ and .codex/skills/.'
@@ -352,7 +353,7 @@ export async function initCommand(opts?: InitOptions): Promise<ResolvedAgentLLM 
           process.chdir(previousCwd)
         }
       } catch (err) {
-        mcpTip = `MCP auto-install failed: ${err instanceof Error ? err.message : String(err)}. Run "canonry mcp install --client claude-code" manually.`
+        mcpTip = `MCP auto-install failed: ${describeError(err)}. Run "canonry mcp install --client claude-code" manually.`
       }
     } else {
       mcpTip = 'Run "canonry mcp install --client claude-code" in a project directory to register the canonry MCP server in `.mcp.json` for Claude Code sessions.'

@@ -17,6 +17,7 @@ import {
   withRetry,
   type DiscoveryCompetitorType,
   type LocationContext,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { embedQueries } from '@ainyc/canonry-provider-gemini'
 import {
@@ -224,7 +225,7 @@ export async function executeDiscoveryRun(opts: ExecuteDiscoveryRunOptions): Pro
       competitorCount: result.competitorMap.length,
     })
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err)
+    const errorMsg = describeError(err)
     log.error('discovery.failed', { runId: opts.runId, sessionId: opts.sessionId, error: errorMsg })
 
     markSessionFailed(opts.db, opts.sessionId, errorMsg)

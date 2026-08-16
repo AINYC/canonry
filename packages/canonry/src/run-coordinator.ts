@@ -6,6 +6,7 @@ import {
   RunTriggers,
   type DiscoveryCompetitorMapEntry,
   type RunKind,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { measurementRunCompleteness } from '@ainyc/canonry-api-routes'
 import type { Notifier } from './notifier.js'
@@ -96,7 +97,7 @@ export class RunCoordinator {
       try {
         await this.notifier.onRunCompleted(runId, projectId)
       } catch (err) {
-        log.error('notifier.failed', { runId, error: err instanceof Error ? err.message : String(err) })
+        log.error('notifier.failed', { runId, error: describeError(err) })
       }
       return
     }
@@ -121,12 +122,12 @@ export class RunCoordinator {
             try {
               await this.onInsightsGenerated(runId, projectId, result)
             } catch (err) {
-              log.error('insight-webhook.failed', { runId, error: err instanceof Error ? err.message : String(err) })
+              log.error('insight-webhook.failed', { runId, error: describeError(err) })
             }
           }
         }
       } catch (err) {
-        log.error('intelligence.failed', { runId, error: err instanceof Error ? err.message : String(err) })
+        log.error('intelligence.failed', { runId, error: describeError(err) })
       }
     } else if (kind === RunKinds['gbp-sync']) {
       // GBP sync runs produce location-scoped local-AEO insights (lodging gaps,
@@ -144,11 +145,11 @@ export class RunCoordinator {
           try {
             await this.onInsightsGenerated(runId, projectId, analysisResultFromInsights(gbpInsights))
           } catch (err) {
-            log.error('gbp-insight-webhook.failed', { runId, error: err instanceof Error ? err.message : String(err) })
+            log.error('gbp-insight-webhook.failed', { runId, error: describeError(err) })
           }
         }
       } catch (err) {
-        log.error('gbp-intelligence.failed', { runId, error: err instanceof Error ? err.message : String(err) })
+        log.error('gbp-intelligence.failed', { runId, error: describeError(err) })
       }
     }
 
@@ -156,7 +157,7 @@ export class RunCoordinator {
     try {
       await this.notifier.onRunCompleted(runId, projectId)
     } catch (err) {
-      log.error('notifier.failed', { runId, error: err instanceof Error ? err.message : String(err) })
+      log.error('notifier.failed', { runId, error: describeError(err) })
     }
 
     // 3. Aero — enqueue + drain so the built-in agent wakes up unprompted.
@@ -173,7 +174,7 @@ export class RunCoordinator {
             }
         await this.onAeroEvent(ctx)
       } catch (err) {
-        log.error('aero.failed', { runId, error: err instanceof Error ? err.message : String(err) })
+        log.error('aero.failed', { runId, error: describeError(err) })
       }
     }
   }

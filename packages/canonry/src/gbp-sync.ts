@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { eq, and, desc, inArray, lt } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { runs, projects, gbpLocations, gbpDailyMetrics, gbpKeywordImpressions, gbpKeywordMonthly, gbpPlaceActions, gbpLodgingSnapshots, gbpPlaceDetails, gbpAttributesSnapshots } from '@ainyc/canonry-db'
-import { buildRunErrorFromMessages, serializeRunError } from '@ainyc/canonry-contracts'
+import { buildRunErrorFromMessages, serializeRunError, describeError } from '@ainyc/canonry-contracts'
 import { refreshAccessToken } from '@ainyc/canonry-integration-google'
 import {
   listLocations,
@@ -237,7 +237,7 @@ export async function executeGbpSync(
                   placeToTouch = latestPlace.id
                 }
               } catch (placesErr) {
-                log.warn('places.failed', { runId, location: loc.locationName, error: placesErr instanceof Error ? placesErr.message : String(placesErr) })
+                log.warn('places.failed', { runId, location: loc.locationName, error: describeError(placesErr) })
               }
             }
           }
@@ -408,8 +408,8 @@ export async function executeGbpSync(
           })
           okCount++
         } catch (err) {
-          errors.set(loc.locationName, err instanceof Error ? err.message : String(err))
-          log.error('location.failed', { runId, location: loc.locationName, error: err instanceof Error ? err.message : String(err) })
+          errors.set(loc.locationName, describeError(err))
+          log.error('location.failed', { runId, location: loc.locationName, error: describeError(err) })
         }
       }))
     }
@@ -433,7 +433,7 @@ export async function executeGbpSync(
 
     log.info('sync.done', { runId, projectId, ok: okCount, failed: errors.size })
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err)
+    const errorMsg = describeError(err)
     db.update(runs)
       .set({ status: 'failed', error: serializeRunError({ message: errorMsg }), finishedAt: new Date().toISOString() })
       .where(eq(runs.id, runId))

@@ -1,4 +1,4 @@
-import { withRetry, isRetryableHttpError } from '@ainyc/canonry-contracts'
+import { withRetry, isRetryableHttpError, describeError } from '@ainyc/canonry-contracts'
 import { sharedRateGate } from './inspect-rate-gate.js'
 
 /**
@@ -266,7 +266,7 @@ export async function inspectUrlsPaced<TResult>(
             url,
             attempt,
             delayMs: Math.round(delayMs),
-            error: err instanceof Error ? err.message : String(err),
+            error: describeError(err),
           }),
       })
         cb.onResult(url, result, index)

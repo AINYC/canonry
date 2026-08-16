@@ -1,6 +1,7 @@
 import type { GscSubmitSitemapsResponseDto } from '@ainyc/canonry-contracts'
 import type { ApiClient } from './client.js'
 import { CliError, EXIT_SYSTEM_ERROR } from './cli-error.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 export type DiscoveredGscSitemapMode = 'indexes' | 'all-files'
 
@@ -97,7 +98,7 @@ export async function submitGscSitemapBatches(
           partialResult: aggregate,
           cause: cause instanceof CliError
             ? { code: cause.code, message: cause.message, details: cause.details }
-            : { message: cause instanceof Error ? cause.message : String(cause) },
+            : { message: describeError(cause) },
         },
       })
     }

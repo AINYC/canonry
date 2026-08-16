@@ -12,6 +12,7 @@ import {
   type CanonryMcpToolName,
 } from '../mcp/tool-registry.js'
 import { buildMcpAgentTools, truncateToolResult } from './mcp-to-agent-tool.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 /**
  * Context Aero tools close over so the LLM can never target a different
@@ -137,7 +138,7 @@ async function readSection<T>(fn: () => Promise<T>): Promise<ContextSection<T>> 
   } catch (err) {
     return {
       status: 'error',
-      error: err instanceof Error ? err.message : String(err),
+      error: describeError(err),
     }
   }
 }

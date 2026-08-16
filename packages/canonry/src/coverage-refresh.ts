@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { and, desc, eq, inArray } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { projects, runs } from '@ainyc/canonry-db'
-import { RunKinds, RunStatuses, RunTriggers } from '@ainyc/canonry-contracts'
+import { RunKinds, RunStatuses, RunTriggers, describeError } from '@ainyc/canonry-contracts'
 import type { CanonryConfig } from './config.js'
 import { getGoogleAuthConfig, getGoogleConnection } from './google-config.js'
 import { executeInspectSitemap } from './gsc-inspect-sitemap.js'
@@ -197,7 +197,7 @@ export async function maybeRefreshGscCoverage(
     log.error('refresh.failed', {
       projectId,
       runId,
-      error: err instanceof Error ? err.message : String(err),
+      error: describeError(err),
     })
   }
   return runId

@@ -7,6 +7,7 @@ import {
   resolveSnapshotRequestQueries,
   textContainsBrandAlias,
   textContainsDomain,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import type {
   GroundingSource,
@@ -139,7 +140,7 @@ export class SnapshotService {
       const report = await runAeoAudit(homepageUrl)
       return mapAuditReport(report)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = describeError(err)
       log.warn('audit.failed', { homepageUrl, error: message })
       return {
         url: homepageUrl,
@@ -190,7 +191,7 @@ export class SnapshotService {
         log.warn('profile.generation-failed', {
           domain: ctx.domain,
           provider: ctx.analysisProvider.adapter.name,
-          error: err instanceof Error ? err.message : String(err),
+          error: describeError(err),
         })
       }
     }
@@ -294,7 +295,7 @@ export class SnapshotService {
               groundingSources: [],
               searchQueries: [],
               answerText: '',
-              error: err instanceof Error ? err.message : String(err),
+              error: describeError(err),
             } satisfies SnapshotProviderResultDto
           }
         })
@@ -384,7 +385,7 @@ export class SnapshotService {
     } catch (err) {
       log.warn('response.analysis-failed', {
         provider: ctx.analysisProvider.adapter.name,
-        error: err instanceof Error ? err.message : String(err),
+        error: describeError(err),
       })
       return buildFallbackBatchAssessment(ctx.companyName, ctx.audit)
     }

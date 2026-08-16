@@ -14,7 +14,7 @@ import {
   loadDuckdb as defaultLoadDuckdb,
   type BacklinkRow,
 } from '@ainyc/canonry-integration-commoncrawl'
-import { BacklinkSources, CcReleaseSyncStatuses, RunStatuses, computeBacklinkSummaryMetrics } from '@ainyc/canonry-contracts'
+import { BacklinkSources, CcReleaseSyncStatuses, RunStatuses, computeBacklinkSummaryMetrics, describeError } from '@ainyc/canonry-contracts'
 import { createLogger } from './logger.js'
 
 const log = createLogger('BacklinkExtract')
@@ -148,7 +148,7 @@ export async function executeBacklinkExtract(
 
     log.info('extract.completed', { runId, projectId, release, rows: rows.length })
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err)
+    const errorMsg = describeError(err)
     const finishedAt = deps.now().toISOString()
     db.update(runs).set({
       status: RunStatuses.failed, error: errorMsg, finishedAt,

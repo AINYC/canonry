@@ -1,4 +1,5 @@
 import { createLogger } from './logger.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 const log = createLogger('DataRefresh')
 
@@ -43,7 +44,7 @@ export async function refreshAllIntegrations(client: DataRefreshClient, projectN
       log.info('integration.refreshed', { projectName, integration })
     } else {
       const reason: unknown = result.reason
-      const message = reason instanceof Error ? reason.message : String(reason)
+      const message = describeError(reason)
       log.warn('integration.refresh-failed', { projectName, integration, error: message })
     }
   })

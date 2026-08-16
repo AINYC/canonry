@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { eq, desc } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
 import { runs, projects, bingUrlInspections, bingCoverageSnapshots } from '@ainyc/canonry-db'
-import { RunStatuses } from '@ainyc/canonry-contracts'
+import { RunStatuses, describeError } from '@ainyc/canonry-contracts'
 import { getUrlInfo, getCrawlIssues } from '@ainyc/canonry-integration-bing'
 import type { CanonryConfig } from './config.js'
 import { fetchAndParseSitemap } from './sitemap-parser.js'
@@ -25,18 +25,6 @@ const log = createLogger('BingInspectSitemap')
  * so 2s spacing finishes everything in about three minutes.
  */
 export const BING_INSPECT_SPACING_MS = 2_000
-
-/** Render an `unknown` thrown value as text a human can act on. */
-function describeError(err: unknown): string {
-  if (err instanceof Error) return err.message
-  if (typeof err === 'string') return err
-  if (err == null) return 'unknown error'
-  try {
-    return JSON.stringify(err)
-  } catch {
-    return 'unserializable error'
-  }
-}
 
 interface BingInspectSitemapOptions {
   sitemapUrl?: string
@@ -132,7 +120,7 @@ export async function executeBingInspectSitemap(
       log.warn('crawl-issues.lookup-failed', {
         runId,
         projectId,
-        error: err instanceof Error ? err.message : String(err),
+        error: describeError(err),
       })
       blockedUrls = new Set()
     }
@@ -222,7 +210,7 @@ export async function executeBingInspectSitemap(
             runId,
             projectId,
             url: pageUrl,
-            error: err instanceof Error ? err.message : String(err),
+            error: describeError(err),
           })
         },
       },
@@ -367,7 +355,7 @@ export async function executeBingInspectSitemap(
       unknown: snapUnknown,
     })
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err)
+    const errorMsg = describeError(err)
     db.update(runs)
       .set({ status: RunStatuses.failed, error: errorMsg, finishedAt: new Date().toISOString() })
       .where(eq(runs.id, runId))

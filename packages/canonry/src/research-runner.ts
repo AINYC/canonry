@@ -8,6 +8,7 @@ import {
   mapWithConcurrency,
   ResearchQueryStatuses,
   ResearchRunStatuses,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { computeCitedCompetitorDomains, determineCitationState, extractRecommendedCompetitors } from './citation-utils.js'
 import type { ProviderRegistry } from './provider-registry.js'
@@ -103,7 +104,7 @@ export async function executeResearchRun(db: DatabaseClient, registry: ProviderR
         try {
           markResearchQueryFailed(db, runId, row.id, error)
         } catch (persistenceError) {
-          workerPersistenceErrors.push(persistenceError instanceof Error ? persistenceError.message : String(persistenceError))
+          workerPersistenceErrors.push(describeError(persistenceError))
         }
       }
     })
@@ -111,7 +112,7 @@ export async function executeResearchRun(db: DatabaseClient, registry: ProviderR
       fatalError = `Failed to persist one or more research query results: ${workerPersistenceErrors[0]}`
     }
   } catch (error) {
-    fatalError = error instanceof Error ? error.message : String(error)
+    fatalError = describeError(error)
   } finally {
     // A failure before or between worker writes must still leave this batch in a
     // terminal state. Mark only unfinished children so completed evidence stays intact.
@@ -129,7 +130,7 @@ function incrementResearchProgress(db: DatabaseClient, runId: string, column: 'c
 }
 
 function markResearchQueryFailed(db: DatabaseClient, runId: string, queryId: string, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error)
+  const message = describeError(error)
   const failed = db.update(researchRunQueries).set({ status: ResearchQueryStatuses.failed, error: message, finishedAt: new Date().toISOString() })
     .where(and(eq(researchRunQueries.id, queryId), inArray(researchRunQueries.status, unfinishedResearchQueryStatuses))).run()
   if (failed.changes === 1) incrementResearchProgress(db, runId, 'failedQueries')

@@ -10,7 +10,7 @@ import type {
   TrafficStatusResponse,
   TrafficSyncResponse,
 } from '@ainyc/canonry-contracts'
-import { RunStatuses, TrafficEventKinds, TrafficSeriesGranularities } from '@ainyc/canonry-contracts'
+import { RunStatuses, TrafficEventKinds, TrafficSeriesGranularities, describeError } from '@ainyc/canonry-contracts'
 import fs from 'node:fs'
 import { getCloudflareTrafficConnectionBySourceId } from '../cloudflare-traffic-config.js'
 import {
@@ -40,7 +40,7 @@ function configString(value: unknown, fallback = '(unset)'): string {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  return describeError(error)
 }
 
 function requireCloudflareQueueOption(
@@ -440,7 +440,7 @@ export async function trafficConnectWordpress(project: string, opts: {
     try {
       applicationPassword = fs.readFileSync(opts.appPasswordFile, 'utf-8').trim()
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = describeError(e)
       throw new CliError({
         code: 'TRAFFIC_WP_APP_PASSWORD_FILE_READ_ERROR',
         message: `Failed to read --app-password-file: ${msg}`,
@@ -512,7 +512,7 @@ export async function trafficConnectCloudRun(project: string, opts: {
     keyJson = fs.readFileSync(opts.serviceAccountKey, 'utf-8')
     JSON.parse(keyJson)
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
+    const msg = describeError(e)
     throw new CliError({
       code: 'TRAFFIC_KEY_FILE_READ_ERROR',
       message: `Failed to read service-account key: ${msg}`,
@@ -587,7 +587,7 @@ export async function trafficConnectVercel(project: string, opts: {
     try {
       token = fs.readFileSync(opts.tokenFile, 'utf-8').trim()
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = describeError(e)
       throw new CliError({
         code: 'TRAFFIC_VERCEL_TOKEN_FILE_READ_ERROR',
         message: `Failed to read --token-file: ${msg}`,

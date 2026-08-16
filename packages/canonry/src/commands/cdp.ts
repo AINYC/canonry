@@ -1,6 +1,7 @@
 import { loadConfig, saveConfigPatch } from '../config.js'
 import { createApiClient } from '../client.js'
 import { CliError, isMachineFormat } from '../cli-error.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 function getClient() {
   return createApiClient()
@@ -66,7 +67,7 @@ export async function cdpStatus(format?: string): Promise<void> {
       console.log('Launch Chrome with: chrome --remote-debugging-port=9222')
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = describeError(err)
     if (msg.includes('501') || msg.includes('not configured')) {
       if (isMachineFormat(format)) {
         console.log(JSON.stringify({
@@ -144,7 +145,7 @@ export async function cdpScreenshot(query: string, opts?: { targets?: string; fo
       }
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = describeError(err)
     throw new CliError({
       code: 'CDP_SCREENSHOT_FAILED',
       message: `CDP screenshot failed: ${msg}`,

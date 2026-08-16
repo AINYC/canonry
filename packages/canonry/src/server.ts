@@ -57,6 +57,7 @@ import {
   type AdsAdGroupBillingEventType,
   type ProviderAdapter,
   type AgentPluginState,
+  describeError,
 } from "@ainyc/canonry-contracts";
 import type {
   CanonryConfig,
@@ -629,7 +630,7 @@ export async function createServer(opts: {
     dropLegacyCredentialColumns(opts.db);
   } catch (err) {
     log.warn("credentials.migration.failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: describeError(err),
     });
   }
 
@@ -1265,7 +1266,7 @@ export async function createServer(opts: {
           {
             projectName,
             sourceId,
-            err: err instanceof Error ? err.message : String(err),
+            err: describeError(err),
           },
           "Scheduled traffic sync failed",
         );
@@ -1359,7 +1360,7 @@ export async function createServer(opts: {
               {
                 projectName,
                 release: probed.release,
-                err: err instanceof Error ? err.message : String(err),
+                err: describeError(err),
               },
               "Scheduled backlinks sync failed",
             );

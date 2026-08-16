@@ -13,6 +13,7 @@ import { fetchAndParseSitemap } from './sitemap-parser.js'
 import { writeCoverageSnapshot } from './gsc-coverage-snapshot.js'
 import { createLogger } from './logger.js'
 import { inspectUrlsPaced, INSPECT_FAILFAST_THRESHOLD, INSPECT_SWEEP_MAX_URLS, INSPECT_DAILY_QUOTA } from './gsc-inspect-paced.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 const log = createLogger('InspectSitemap')
 
@@ -130,7 +131,7 @@ export async function executeInspectSitemap(
           log.info('inspect.url-done', { runId, projectId, url: pageUrl, progress: `${index + 1}/${urls.length}` })
         },
         onError: (pageUrl, err) => {
-          log.error('inspect.url-failed', { runId, projectId, url: pageUrl, error: err instanceof Error ? err.message : String(err) })
+          log.error('inspect.url-failed', { runId, projectId, url: pageUrl, error: describeError(err) })
         },
       },
       {
@@ -148,7 +149,7 @@ export async function executeInspectSitemap(
     )
 
     if (aborted) {
-      const detail = abortError instanceof Error ? abortError.message : String(abortError)
+      const detail = describeError(abortError)
       throw new Error(
         `URL inspection aborted after ${INSPECT_FAILFAST_THRESHOLD} consecutive rate/access failures (likely GSC URL Inspection quota exhaustion or property access loss). Last error: ${detail}`,
       )
@@ -175,7 +176,7 @@ export async function executeInspectSitemap(
 
     log.info('inspect.completed', { runId, projectId, inspected, errors, total: urls.length, indexed: snapIndexed, notIndexed: snapNotIndexed })
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err)
+    const errorMsg = describeError(err)
     db.update(runs)
       .set({ status: 'failed', error: errorMsg, finishedAt: new Date().toISOString() })
       .where(eq(runs.id, runId))

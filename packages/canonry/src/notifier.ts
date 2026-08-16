@@ -6,6 +6,7 @@ import type { NotificationEvent, WebhookPayload, InsightWebhookPayload, HealthWe
 import type { AnalysisResult } from '@ainyc/canonry-intelligence'
 import crypto from 'node:crypto'
 import { createLogger } from './logger.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 const log = createLogger('Notifier')
 
@@ -519,7 +520,7 @@ export class Notifier {
           this.logDelivery(projectId, notificationId, payload.event, 'failed', errorDetail)
         }
       } catch (err: unknown) {
-        const errorDetail = err instanceof Error ? err.message : String(err)
+        const errorDetail = describeError(err)
         if (attempt === maxRetries - 1) {
           this.logDelivery(projectId, notificationId, payload.event, 'failed', errorDetail)
           log.error('webhook.exhausted', { event: payload.event, url: targetLabel, maxRetries, error: errorDetail })

@@ -1,5 +1,6 @@
 import { resolveWebhookTarget } from '@ainyc/canonry-api-routes'
 import { createLogger } from './logger.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 const log = createLogger('SitemapParser')
 
@@ -74,7 +75,7 @@ async function parseSitemapRecursive(
     if (!isChild) throw err
     log.warn('child-sitemap.fetch-failed', {
       url,
-      error: err instanceof Error ? err.message : String(err),
+      error: describeError(err),
     })
     return
   }
@@ -94,7 +95,7 @@ async function parseSitemapRecursive(
     if (!isChild) throw err
     log.warn('child-sitemap.parse-failed', {
       url,
-      error: err instanceof Error ? err.message : String(err),
+      error: describeError(err),
     })
     return
   }

@@ -8,6 +8,7 @@ import {
   dollarsToMicros,
   formatIsoDateInTimeZone,
   startOfDayHourInTimeZone,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import {
   getAdAccount,
@@ -345,8 +346,8 @@ export async function executeAdsSync(
           insightUpserts.push(...toDailyUpserts('ad_group', group.id, insights))
         }
       } catch (err) {
-        errors.set(campaign.name, err instanceof Error ? err.message : String(err))
-        log.error('campaign.failed', { runId, campaignId: campaign.id, error: err instanceof Error ? err.message : String(err) })
+        errors.set(campaign.name, describeError(err))
+        log.error('campaign.failed', { runId, campaignId: campaign.id, error: describeError(err) })
       }
     }
 
@@ -490,7 +491,7 @@ export async function executeAdsSync(
 
     log.info('sync.done', { runId, projectId, campaigns: syncedCampaigns.length, insightRows: insightUpserts.length, failed: errors.size })
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err)
+    const errorMsg = describeError(err)
     db.update(runs)
       .set({ status: 'failed', error: serializeRunError({ message: errorMsg }), finishedAt: new Date().toISOString() })
       .where(eq(runs.id, runId))
