@@ -6,6 +6,7 @@ import {
   hostOf,
   normalizeServedModel,
   registrableDomain,
+  describeError,
 } from '@ainyc/canonry-contracts'
 import { withRetry } from './utils.js'
 import type {
@@ -113,7 +114,7 @@ export async function healthcheck(config: GeminiConfig): Promise<GeminiHealthche
     return {
       ok: false,
       provider: 'gemini',
-      message: err instanceof Error ? err.message : String(err),
+      message: describeError(err),
       model: config.model ?? DEFAULT_MODEL,
     }
   }
@@ -147,7 +148,7 @@ export async function executeTrackedQuery(input: GeminiTrackedQueryInput): Promi
       searchQueries: parsed.searchQueries,
     }
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = describeError(err)
     throw new Error(`[provider-gemini] ${msg}`)
   }
 }

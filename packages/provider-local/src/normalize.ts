@@ -1,5 +1,5 @@
 import OpenAI from 'openai'
-import { hostOf, normalizeServedModel, registrableDomain } from '@ainyc/canonry-contracts'
+import { hostOf, normalizeServedModel, registrableDomain, describeError } from '@ainyc/canonry-contracts'
 import { withRetry } from './utils.js'
 import type {
   GroundingSource,
@@ -52,7 +52,7 @@ export async function healthcheck(config: LocalConfig): Promise<LocalHealthcheck
     return {
       ok: false,
       provider: 'local',
-      message: err instanceof Error ? err.message : String(err),
+      message: describeError(err),
       model: config.model ?? DEFAULT_MODEL,
     }
   }
@@ -93,7 +93,7 @@ export async function executeTrackedQuery(input: LocalTrackedQueryInput): Promis
       searchQueries: [],
     }
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = describeError(err)
     throw new Error(`[provider-local] ${msg}`)
   }
 }

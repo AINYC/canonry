@@ -13,6 +13,7 @@ import { chatgptTarget } from './targets/chatgpt.js'
 import { captureElementScreenshot } from './screenshot.js'
 import { normalizeResult as cdpNormalizeResult } from './normalize.js'
 import { CDPProviderError } from './targets/types.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 // Connection pool keyed by "host:port" — one manager per distinct CDP endpoint.
 // Using a map (instead of a single shared singleton) prevents concurrent calls
@@ -98,7 +99,7 @@ export const cdpChatgptAdapter: ProviderAdapter = {
       return {
         ok: false,
         provider: 'cdp:chatgpt',
-        message: err instanceof Error ? err.message : String(err),
+        message: describeError(err),
       }
     }
   },
@@ -157,7 +158,7 @@ export const cdpChatgptAdapter: ProviderAdapter = {
         screenshotPath: capturedScreenshotPath,
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       throw new Error(`[provider-cdp] ${msg}`)
     }
   },

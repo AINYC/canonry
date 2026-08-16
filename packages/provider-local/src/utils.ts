@@ -1,4 +1,4 @@
-import { withRetry as sharedWithRetry, isRetryableHttpError } from '@ainyc/canonry-contracts'
+import { withRetry as sharedWithRetry, isRetryableHttpError, describeError } from '@ainyc/canonry-contracts'
 
 /**
  * Provider-flavored `withRetry` — pre-binds the shared retry helper (in
@@ -25,7 +25,7 @@ export async function withRetry<T>(
     onRetry: ({ attempt, err, delayMs }) => {
       console.warn(
         `[provider] Attempt ${attempt + 1} failed, retrying in ${delayMs}ms...`,
-        err instanceof Error ? err.message : String(err),
+        describeError(err),
       )
     },
   })
