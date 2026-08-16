@@ -288,4 +288,19 @@ describe('project-scoped API keys', () => {
     expect(res.statusCode).toBe(200)
     expect((res.json() as { projectId: string }).projectId).toBe(projectAId)
   })
+
+  /**
+   * These routes enumerate an UPSTREAM principal's account tree, so the
+   * response names every client on the instance regardless of the project in
+   * the URL. A key narrowed to one project must be refused BEFORE any upstream
+   * call, or the project boundary leaks sibling metadata.
+   */
+  it.each([
+    ['Bing sites', '/api/v1/projects/project-a/bing/sites'],
+    ['GA4 properties', '/api/v1/projects/project-a/ga/properties'],
+  ])('%s is FORBIDDEN for a project-scoped key', async (_label, path) => {
+    const res = await authed('GET', path, SCOPED_KEY)
+    expect(res.statusCode).toBe(403)
+    expect(res.json()).toMatchObject({ error: { code: 'FORBIDDEN' } })
+  })
 })

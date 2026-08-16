@@ -3,9 +3,10 @@ import { eq, desc, and, sql } from 'drizzle-orm'
 import type { SQL, SQLWrapper } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { gaTrafficSnapshots, gaTrafficSummaries, gaTrafficWindowSummaries, gaDailyTotals, gaAiReferrals, gaSocialReferrals, gaAcquisitionDaily, gaLeadEventsDaily, gaMeasurementSyncStates, runs } from '@ainyc/canonry-db'
-import { classifyAiReferralTrafficClass, validationError, notFound, RunKinds, RunStatuses, RunTriggers, resolveDateRange, normalizeUrlPath } from '@ainyc/canonry-contracts'
+import { classifyAiReferralTrafficClass, validationError, notFound, forbidden, quotaExceeded, providerError, AppError, RunKinds, RunStatuses, RunTriggers, resolveDateRange, normalizeUrlPath } from '@ainyc/canonry-contracts'
 import type { GA4ChannelBreakdownDto, ResolvedDateRange } from '@ainyc/canonry-contracts'
 import { resolveProject, writeAuditLog } from './helpers.js'
+import { assertNotProjectScoped } from './auth.js'
 import { buildSessionHistory } from './ga-session-history.js'
 import { buildAiReferralDailySeries, normalizeAiTrafficClass, summarizeAiReferralCounts } from './ga-ai-referral-aggregation.js'
 import {
@@ -22,6 +23,8 @@ import {
   verifyConnectionWithToken,
   resolveGa4SyncDays,
   GA4_MAX_SYNC_DAYS,
+  listProperties,
+  GA4ApiError,
 } from '@ainyc/canonry-integration-google-analytics'
 import type { GoogleConnectionStore } from './google.js'
 import { refreshAccessToken } from '@ainyc/canonry-integration-google'
@@ -352,6 +355,37 @@ async function refreshOAuthTokenIfNeeded(
 }
 
 /**
+ * Map a GA4 client failure onto a Canonry error.
+ *
+ * Without this an upstream 401 propagates as-is and a web caller is treated as
+ * signed out: Google saying "this refresh token is dead" is a statement about
+ * the operator's GOOGLE credential, never about the caller's Canonry session.
+ * Mirrors `gscErrorToAppError` in google.ts.
+ */
+function ga4ErrorToAppError(err: unknown, context: string): AppError {
+  if (err instanceof AppError) return err
+
+  if (err instanceof GA4ApiError) {
+    if (err.status === 429) {
+      return quotaExceeded('Google Analytics Admin API (rate limited; retries exhausted)')
+    }
+    if (err.status === 401 || err.status === 403) {
+      // Deliberately NOT authRequired(): that is a 401 and logs the dashboard
+      // caller out. The Canonry request authenticated fine; the stored Google
+      // grant is what failed.
+      return forbidden(
+        `${context}: the connected Google account was rejected by Google (${err.status}). ` +
+        'Reconnect with "canonry google connect <project> --type ga4".',
+        { reason: 'ga4-upstream-auth', upstreamStatus: err.status },
+      )
+    }
+    return providerError(`${context}: ${err.message}`)
+  }
+
+  return providerError(`${context}: ${err instanceof Error ? err.message : String(err)}`)
+}
+
+/**
  * Resolve a valid GA4 access token for a project.
  * Priority: service account (ga4CredentialStore) → OAuth token (googleConnectionStore).
  * Returns the access token and the resolved property ID.
@@ -388,7 +422,8 @@ async function resolveGa4AccessToken(
 
   if (!oauthConn.propertyId) {
     throw validationError(
-      'GA4 property ID not set. Run "canonry ga set-property <project> <propertyId>" to configure it.',
+      'GA4 property ID not set. Run "canonry ga properties <project>" to list the readable properties, ' +
+      'then "canonry ga connect <project> --property-id <id>" to select one.',
     )
   }
 
@@ -573,6 +608,49 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
   })
 
   // GET /projects/:name/ga/status
+  // GET /projects/:name/ga/properties
+  //
+  // Deliberately does NOT go through resolveGa4AccessToken: that helper
+  // requires a propertyId to already be set, which is the exact thing this
+  // route exists to discover. Requiring it here would make the numeric id
+  // unobtainable from canonry and force the operator into the GA4 UI.
+  app.get<{ Params: { name: string } }>('/projects/:name/ga/properties', async (request) => {
+    // The Admin API answers for the OAuth PRINCIPAL, not for this project, so
+    // the response names every GA account and property the operator can see —
+    // other clients included. A key narrowed to one project must not read it.
+    assertNotProjectScoped(request, 'listing GA4 properties')
+
+    const project = resolveProject(app.db, request.params.name)
+
+    const googleStore = opts.googleConnectionStore
+    const authConfig = opts.getGoogleAuthConfig?.()
+    if (!googleStore || !authConfig) {
+      throw validationError(
+        'Google OAuth is not configured. Run "canonry google connect <project> --type ga4" first.',
+      )
+    }
+
+    const oauthConn = googleStore.getConnection(project.canonicalDomain, 'ga4')
+    if (!oauthConn?.accessToken || !oauthConn?.refreshToken) {
+      throw validationError(
+        'No GA4 OAuth connection for this project. Run "canonry google connect <project> --type ga4" first. ' +
+        'Service-account connections already carry their property id and do not need this listing.',
+      )
+    }
+
+    try {
+      const accessToken = await refreshOAuthTokenIfNeeded(googleStore, authConfig, project.canonicalDomain, {
+        accessToken: oauthConn.accessToken,
+        refreshToken: oauthConn.refreshToken,
+        tokenExpiresAt: oauthConn.tokenExpiresAt,
+      })
+
+      return { properties: await listProperties(accessToken) }
+    } catch (err) {
+      throw ga4ErrorToAppError(err, 'Failed to list GA4 properties')
+    }
+  })
+
   app.get<{ Params: { name: string } }>('/projects/:name/ga/status', async (request, _reply) => {
     const project = resolveProject(app.db, request.params.name)
 

@@ -1634,6 +1634,18 @@ export const canonryMcpTools = [
     handler: (client, input) => client.gaStatus(input.project),
   }),
   defineTool({
+    name: 'canonry_ga_properties',
+    title: 'List GA4 properties',
+    description:
+      'List the GA4 properties the project\'s connected Google account can read, with their numeric property ids. Use this to find the id that "canonry ga connect --property-id" needs; it cannot be derived from the domain or the OAuth grant.',
+    access: 'read',
+    tier: 'ga',
+    inputSchema: projectInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/ga/properties'],
+    handler: (client, input) => client.gaProperties(input.project),
+  }),
+  defineTool({
     name: 'canonry_ga_measurement_analysis',
     title: 'Analyze GA acquisition and search demand',
     description: 'Compare native GA4 channels and lead events with branded/non-brand Search Console demand over fixed 30-day cohorts.',

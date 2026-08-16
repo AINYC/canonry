@@ -302,6 +302,7 @@ export const MCP_OPENAPI_OPERATION_CLASSIFICATIONS = {
   'POST /api/v1/projects/{name}/wordpress/onboard': 'deferred',
   'POST /api/v1/projects/{name}/ga/connect': 'deferred',
   'DELETE /api/v1/projects/{name}/ga/disconnect': 'deferred',
+  'GET /api/v1/projects/{name}/ga/properties': 'included',
   'GET /api/v1/projects/{name}/ga/status': 'included',
   'GET /api/v1/projects/{name}/ga/measurement-analysis': 'included',
   'POST /api/v1/projects/{name}/ga/sync': 'deferred',

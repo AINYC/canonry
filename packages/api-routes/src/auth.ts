@@ -280,6 +280,28 @@ export function assertProjectScope(request: FastifyRequest, projectId: string): 
 }
 
 /**
+ * Refuse a project-scoped key on a route whose RESPONSE inherently spans more
+ * than the scoped project.
+ *
+ * `assertProjectScope` is not enough for these. It compares the key's project
+ * against one entity, but a route that enumerates an upstream provider's
+ * account tree returns whatever the operator's OAuth principal can see —
+ * every client on the instance, not just the one in the URL. A key deliberately
+ * narrowed to one project would otherwise read a list of unrelated clients'
+ * property and account names, which is exactly the boundary that key exists to
+ * draw.
+ *
+ * A full-instance key (no `projectId`) or a signed-in person passes.
+ */
+export function assertNotProjectScoped(request: FastifyRequest, what: string): void {
+  if (request.apiKey?.projectId) {
+    throw forbidden(
+      `This API key is scoped to a single project, and ${what} covers every account the connected Google principal can see. Use a full-instance key.`,
+    )
+  }
+}
+
+/**
  * Hash a raw `cnry_…` bearer token to the value stored in `api_keys.key_hash`.
  * Plain SHA-256 is sufficient here because the tokens are 128-bit random, so a
  * 64-hex digest has no brute-force exposure. Exported so the key-management

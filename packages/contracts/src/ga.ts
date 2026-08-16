@@ -228,6 +228,25 @@ export type GA4StatusDto = z.infer<typeof ga4StatusDtoSchema>
 export type GaStatusResponse = GA4StatusDto
 
 /**
+ * One GA4 property the connected OAuth principal can read.
+ *
+ * `propertyId` is the numeric id `ga connect --property-id` takes, already
+ * stripped of the Admin API's `properties/` prefix.
+ */
+export const ga4PropertySummaryDtoSchema = z.object({
+  propertyId: z.string(),
+  displayName: z.string(),
+  /** GA4 account that owns the property. Two accounts can hold like-named properties. */
+  accountName: z.string(),
+})
+export type GA4PropertySummaryDto = z.infer<typeof ga4PropertySummaryDtoSchema>
+
+export const ga4PropertiesDtoSchema = z.object({
+  properties: z.array(ga4PropertySummaryDtoSchema),
+})
+export type GA4PropertiesDto = z.infer<typeof ga4PropertiesDtoSchema>
+
+/**
  * Response shape for `POST /projects/:name/ga/sync`. `syncedComponents`
  * is present only when the request specified an `only` filter (`'traffic' |
  * 'ai' | 'social'`).

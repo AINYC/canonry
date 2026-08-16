@@ -9,6 +9,7 @@ import {
   gaSessionHistory,
   gaSocialReferralHistory,
   gaSocialReferralSummary,
+  gaProperties,
   gaStatus,
   gaSync,
   gaTraffic,
@@ -40,14 +41,14 @@ function rangeValues(values: CliValues): { window?: string; startDate?: string; 
 export const GA_CLI_COMMANDS: readonly CliCommandSpec[] = [
   {
     path: ['ga', 'connect'],
-    usage: 'canonry ga connect <project> --property-id <id> --key-file <path> [--key-json <json>] [--format json]',
+    usage: 'canonry ga connect <project> --property-id <id> [--key-file <path>] [--key-json <json>] [--format json]',
     options: {
       'property-id': stringOption(),
       'key-file': stringOption(),
       'key-json': stringOption(),
     },
     run: async (input) => {
-      const project = requireProject(input, 'ga.connect', 'canonry ga connect <project> --property-id <id> --key-file <path>')
+      const project = requireProject(input, 'ga.connect', 'canonry ga connect <project> --property-id <id> [--key-file <path>]')
       const propertyId = getString(input.values, 'property-id')
       if (!propertyId) {
         throw new Error('--property-id is required')
@@ -66,6 +67,14 @@ export const GA_CLI_COMMANDS: readonly CliCommandSpec[] = [
     run: async (input) => {
       const project = requireProject(input, 'ga.disconnect', 'canonry ga disconnect <project> [--format json]')
       await gaDisconnect(project, input.format)
+    },
+  },
+  {
+    path: ['ga', 'properties'],
+    usage: 'canonry ga properties <project> [--format json]',
+    run: async (input) => {
+      const project = requireProject(input, 'ga.properties', 'canonry ga properties <project> [--format json]')
+      await gaProperties(project, input.format)
     },
   },
   {
@@ -225,7 +234,7 @@ export const GA_CLI_COMMANDS: readonly CliCommandSpec[] = [
       unknownSubcommand(input.positionals[0], {
         command: 'ga',
         usage: 'canonry ga <subcommand> <project> [args]',
-        available: ['connect', 'disconnect', 'status', 'sync', 'measurement-analysis', 'traffic', 'coverage', 'ai-referral-history', 'ai-referral-daily', 'social-referral-history', 'session-history', 'social-referral-summary', 'attribution'],
+        available: ['connect', 'disconnect', 'status', 'properties', 'sync', 'measurement-analysis', 'traffic', 'coverage', 'ai-referral-history', 'ai-referral-daily', 'social-referral-history', 'session-history', 'social-referral-summary', 'attribution'],
       })
     },
   },

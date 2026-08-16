@@ -23,6 +23,7 @@ import {
   mergeGscDailyTotalsWithFallback, readGscDailyTotals,
   readLatestGscDataDate, resolveGscWindowRange, resolveGscWindowDays, type GscWindowRange,
 } from './gsc-totals.js'
+import { assertNotProjectScoped } from './auth.js'
 import { resolveProject, writeAuditLog } from './helpers.js'
 
 /**
@@ -748,6 +749,10 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
 
   // GET /projects/:name/google/properties
   app.get<{ Params: { name: string } }>('/projects/:name/google/properties', async (request) => {
+    // Answers for the OAuth PRINCIPAL, not this project: every verified
+    // Search Console property the operator can see, other clients included.
+    assertNotProjectScoped(request, 'listing Search Console properties')
+
     const { clientId: googleClientId, clientSecret: googleClientSecret } = getAuthConfig()
     if (!googleClientId || !googleClientSecret) {
       throw validationError('Google OAuth is not configured')
@@ -2103,6 +2108,10 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
   // GET /projects/:name/gbp/accounts — accounts the OAuth user can access, so
   // the operator can pick which one a project tracks (discover --account).
   app.get<{ Params: { name: string } }>('/projects/:name/gbp/accounts', async (request) => {
+    // Same boundary: every Business Profile account the OAuth principal can
+    // reach, not just this project's.
+    assertNotProjectScoped(request, 'listing Business Profile accounts')
+
     const { clientId: googleClientId, clientSecret: googleClientSecret } = getAuthConfig()
     if (!googleClientId || !googleClientSecret) {
       throw validationError('Google OAuth is not configured')

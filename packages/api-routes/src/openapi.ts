@@ -4777,7 +4777,7 @@ const routeCatalog: OpenApiOperation[] = [
   {
     method: 'post',
     path: '/api/v1/projects/{name}/ga/connect',
-    summary: 'Connect Google Analytics 4 via service account',
+    summary: 'Connect Google Analytics 4 (service account or existing OAuth connection)',
     tags: ['ga4'],
     parameters: [nameParameter],
     requestBody: {
@@ -4786,9 +4786,12 @@ const routeCatalog: OpenApiOperation[] = [
         'application/json': {
           schema: {
             type: 'object',
-            required: ['propertyId', 'keyJson'],
+            required: ['propertyId'],
             properties: {
               propertyId: stringSchema,
+              // Optional: omit it to select a property on an existing OAuth
+              // connection (canonry google connect --type ga4). Required only
+              // for service-account auth.
               keyJson: stringSchema,
             },
           },
@@ -4821,6 +4824,20 @@ const routeCatalog: OpenApiOperation[] = [
     parameters: [nameParameter],
     responses: {
       200: jsonResponse('GA4 status returned.', 'GA4StatusDto'),
+      404: errorResponse('Project not found.'),
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/projects/{name}/ga/properties',
+    summary: 'List GA4 properties the connected account can read',
+    description:
+      'Lists every GA4 property visible to the project\'s OAuth connection, so the numeric property id needed by ga/connect can be discovered without leaving canonry. Requires an OAuth GA4 connection; service-account connections already carry their property id.',
+    tags: ['ga4'],
+    parameters: [nameParameter],
+    responses: {
+      200: jsonResponse('GA4 properties returned.', 'GA4PropertiesDto'),
+      400: errorResponse('No OAuth GA4 connection for this project.'),
       404: errorResponse('Project not found.'),
     },
   },

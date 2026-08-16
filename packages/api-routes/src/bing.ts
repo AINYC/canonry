@@ -3,6 +3,7 @@ import { eq, and, desc } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { bingUrlInspections, bingCoverageSnapshots, runs } from '@ainyc/canonry-db'
 import { validationError, notFound, RunKinds, RunStatuses, RunTriggers } from '@ainyc/canonry-contracts'
+import { assertNotProjectScoped } from './auth.js'
 import { resolveProject, writeAuditLog } from './helpers.js'
 import {
   getSites,
@@ -239,6 +240,10 @@ export async function bingRoutes(app: FastifyInstance, opts: BingRoutesOptions) 
 
   // GET /projects/:name/bing/sites
   app.get<{ Params: { name: string } }>('/projects/:name/bing/sites', async (request) => {
+    // The Bing Webmaster key is ACCOUNT-scoped, so this lists every verified
+    // site in the operator's account, not just this project's.
+    assertNotProjectScoped(request, 'listing Bing Webmaster sites')
+
     const store = requireConnectionStore()
 
     const project = resolveProject(app.db, request.params.name)
