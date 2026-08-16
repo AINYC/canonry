@@ -4777,7 +4777,7 @@ const routeCatalog: OpenApiOperation[] = [
   {
     method: 'post',
     path: '/api/v1/projects/{name}/ga/connect',
-    summary: 'Connect Google Analytics 4 via service account',
+    summary: 'Connect Google Analytics 4 (service account or existing OAuth connection)',
     tags: ['ga4'],
     parameters: [nameParameter],
     requestBody: {
@@ -4786,9 +4786,12 @@ const routeCatalog: OpenApiOperation[] = [
         'application/json': {
           schema: {
             type: 'object',
-            required: ['propertyId', 'keyJson'],
+            required: ['propertyId'],
             properties: {
               propertyId: stringSchema,
+              // Optional: omit it to select a property on an existing OAuth
+              // connection (canonry google connect --type ga4). Required only
+              // for service-account auth.
               keyJson: stringSchema,
             },
           },

@@ -759,6 +759,32 @@ describe('listProperties', () => {
     await expect(listProperties('valid-token')).resolves.toEqual([])
   })
 
+
+  it('treats a quota 403 as retryable rate limiting and honors Retry-After', async () => {
+    const quotaBody = JSON.stringify({
+      error: { message: 'Quota exceeded', errors: [{ reason: 'rateLimitExceeded' }] },
+    })
+    fetchSpy
+      .mockResolvedValueOnce(new Response(quotaBody, { status: 403, headers: { 'retry-after': '1' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        accountSummaries: [{ displayName: 'A', propertySummaries: [{ property: 'properties/9', displayName: 'Nine' }] }],
+      }), { status: 200 }))
+
+    const result = await listProperties('valid-token')
+
+    expect(result.map((p) => p.propertyId)).toEqual(['9'])
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('does NOT retry a permission 403 that carries no quota reason', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'caller lacks permission' } }), { status: 403 }),
+    )
+
+    await expect(listProperties('valid-token')).rejects.toThrow(/Failed to list GA4 properties/)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects an empty access token before making a request', async () => {
     await expect(listProperties('')).rejects.toThrow(/Access token is required/)
     expect(fetchSpy).not.toHaveBeenCalled()

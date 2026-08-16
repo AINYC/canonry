@@ -4926,7 +4926,7 @@ export const postApiV1ProjectsByNameWordpressOnboardMutation = (options?: Partia
 };
 
 /**
- * Connect Google Analytics 4 via service account
+ * Connect Google Analytics 4 (service account or existing OAuth connection)
  */
 export const postApiV1ProjectsByNameGaConnectMutation = (options?: Partial<Options<PostApiV1ProjectsByNameGaConnectData>>): UseMutationOptions<PostApiV1ProjectsByNameGaConnectResponse, PostApiV1ProjectsByNameGaConnectError, Options<PostApiV1ProjectsByNameGaConnectData>> => {
     const mutationOptions: UseMutationOptions<PostApiV1ProjectsByNameGaConnectResponse, PostApiV1ProjectsByNameGaConnectError, Options<PostApiV1ProjectsByNameGaConnectData>> = {

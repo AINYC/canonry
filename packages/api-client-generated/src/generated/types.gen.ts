@@ -18488,7 +18488,7 @@ export type PostApiV1ProjectsByNameWordpressOnboardResponse = PostApiV1ProjectsB
 export type PostApiV1ProjectsByNameGaConnectData = {
     body: {
         propertyId: string;
-        keyJson: string;
+        keyJson?: string;
     };
     path: {
         /**

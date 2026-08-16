@@ -41,14 +41,14 @@ function rangeValues(values: CliValues): { window?: string; startDate?: string; 
 export const GA_CLI_COMMANDS: readonly CliCommandSpec[] = [
   {
     path: ['ga', 'connect'],
-    usage: 'canonry ga connect <project> --property-id <id> --key-file <path> [--key-json <json>] [--format json]',
+    usage: 'canonry ga connect <project> --property-id <id> [--key-file <path>] [--key-json <json>] [--format json]',
     options: {
       'property-id': stringOption(),
       'key-file': stringOption(),
       'key-json': stringOption(),
     },
     run: async (input) => {
-      const project = requireProject(input, 'ga.connect', 'canonry ga connect <project> --property-id <id> --key-file <path>')
+      const project = requireProject(input, 'ga.connect', 'canonry ga connect <project> --property-id <id> [--key-file <path>]')
       const propertyId = getString(input.values, 'property-id')
       if (!propertyId) {
         throw new Error('--property-id is required')

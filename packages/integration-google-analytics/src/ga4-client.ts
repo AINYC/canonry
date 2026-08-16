@@ -215,6 +215,12 @@ function isRetryableGa4Error(err: unknown): boolean {
   if (err instanceof GA4ApiError) {
     return err.status === 429 || err.status >= 500
   }
+  // A request the client itself aborted on `GA4_REQUEST_TIMEOUT_MS` is a
+  // transient network condition, not a decision by Google. Rejecting it
+  // immediately spent an attempt budget on nothing.
+  if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+    return true
+  }
   return false
 }
 
@@ -739,8 +745,11 @@ export async function listProperties(accessToken: string): Promise<GA4PropertySu
       if (!res.ok) {
         const raw = await res.text().catch(() => '')
         let detail = ''
+        let quotaReason = false
         try {
-          const parsed = JSON.parse(raw) as { error?: { message?: string; status?: string } }
+          const parsed = JSON.parse(raw) as {
+            error?: { message?: string; status?: string; errors?: { reason?: string }[] }
+          }
           if (parsed.error?.status === 'SERVICE_DISABLED') {
             detail =
               ' The Google Analytics Admin API is not enabled for this GCP project. ' +
@@ -748,13 +757,35 @@ export async function listProperties(accessToken: string): Promise<GA4PropertySu
           } else if (parsed.error?.message) {
             detail = ` ${parsed.error.message}`
           }
+          // Analytics reports quota exhaustion as 403 as often as 429, and a
+          // 403 is otherwise a permanent permission failure. Only the reason
+          // separates "slow down" from "you may not do this", so retry the
+          // former and never the latter.
+          quotaReason = (parsed.error?.errors ?? []).some((e) =>
+            e.reason === 'rateLimitExceeded' || e.reason === 'quotaExceeded' || e.reason === 'userRateLimitExceeded',
+          ) || parsed.error?.status === 'RESOURCE_EXHAUSTED'
         } catch {
           if (raw.length < 200) detail = ` ${raw}`
         }
         // The token can appear in an upstream echo; never let it reach a log.
         const sanitized = detail.replace(new RegExp(escapeRegExp(accessToken), 'g'), '***')
-        ga4Log('error', 'admin.account-summaries-failed', { httpStatus: res.status })
-        throw new GA4ApiError(`Failed to list GA4 properties.${sanitized}`, res.status)
+        const retryAfterSeconds =
+          res.status === 429 || res.status >= 500 || (res.status === 403 && quotaReason)
+            ? parseRetryAfter(res.headers.get('retry-after'))
+            : undefined
+        ga4Log('error', 'admin.account-summaries-failed', {
+          httpStatus: res.status,
+          retryAfterSeconds,
+          quotaReason,
+        })
+        throw new GA4ApiError(
+          `Failed to list GA4 properties.${sanitized}`,
+          // A quota 403 is surfaced as 429 so every downstream consumer — the
+          // retry predicate and the route's error mapper — reads it as rate
+          // limiting rather than as a permission denial.
+          res.status === 403 && quotaReason ? 429 : res.status,
+          retryAfterSeconds,
+        )
       }
 
       return await res.json() as GA4AccountSummariesResponse

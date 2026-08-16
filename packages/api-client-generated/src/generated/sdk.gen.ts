@@ -4337,7 +4337,7 @@ export const postApiV1ProjectsByNameWordpressOnboard = <ThrowOnError extends boo
 };
 
 /**
- * Connect Google Analytics 4 via service account
+ * Connect Google Analytics 4 (service account or existing OAuth connection)
  */
 export const postApiV1ProjectsByNameGaConnect = <ThrowOnError extends boolean = false>(options: Options<PostApiV1ProjectsByNameGaConnectData, ThrowOnError>) => {
     return (options.client ?? client).post<PostApiV1ProjectsByNameGaConnectResponses, PostApiV1ProjectsByNameGaConnectErrors, ThrowOnError>({

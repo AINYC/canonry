@@ -139,6 +139,11 @@ export async function gaProperties(project: string, format?: string): Promise<vo
   const client = getClient()
   const result: GA4PropertiesDto = await client.gaProperties(project)
 
+  if (format === 'jsonl') {
+    emitJsonl(result.properties.map((p) => ({ project, ...p })))
+    return
+  }
+
   if (isMachineFormat(format)) {
     console.log(JSON.stringify(result, null, 2))
     return
