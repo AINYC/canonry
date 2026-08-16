@@ -863,9 +863,9 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
     const deadLinks = !snapshot.checkDeadLinks || snapshot.deadLinkState === 'disabled'
       ? { state: 'disabled' as const }
       : snapshot.deadLinkState === 'complete'
-        ? { state: 'complete' as const, checked: snapshot.deadLinksChecked, found: snapshot.deadLinksFound }
+        ? { state: 'complete' as const, checked: snapshot.deadLinksChecked, found: snapshot.deadLinksFound, unverified: snapshot.deadLinksUnverified }
         : snapshot.deadLinkState === 'partial'
-          ? { state: 'partial' as const, checked: snapshot.deadLinksChecked, found: snapshot.deadLinksFound }
+          ? { state: 'partial' as const, checked: snapshot.deadLinksChecked, found: snapshot.deadLinksFound, unverified: snapshot.deadLinksUnverified }
           : { state: 'unavailable' as const }
 
     return {
@@ -2209,13 +2209,23 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       return { project: project.name, runId: snapshot.runId, state: 'unavailable', legacyAuditAvailable }
     }
     if (!snapshot.attemptId) {
-      return { project: project.name, runId: snapshot.runId, state: 'partial', checkDeadLinks: true, checked: snapshot.deadLinksChecked, found: snapshot.deadLinksFound, total: 0, nextCursor: null, deadLinks: [] }
+      return { project: project.name, runId: snapshot.runId, state: 'partial', checkDeadLinks: true, checked: snapshot.deadLinksChecked, found: snapshot.deadLinksFound, unverified: snapshot.deadLinksUnverified, total: 0, nextCursor: null, deadLinks: [] }
     }
     const where = and(
       eq(siteCrawlFindings.projectId, project.id),
       eq(siteCrawlFindings.runId, snapshot.runId),
       eq(siteCrawlFindings.attemptId, snapshot.attemptId),
       eq(siteCrawlFindings.findingType, 'dead-link'),
+      // Belt and braces on the client-facing surface: a row without a status
+      // code is not evidence of a broken link, and this response is where such
+      // a row would be read as one. Migration 140 removed every stored row that
+      // looked like this and the writer can no longer produce one, so this
+      // matches nothing today — it is here because a rolling deploy can still
+      // run an older writer against a migrated database for a few minutes, and
+      // a fabricated broken link shown to a client is not worth the saved
+      // predicate. Applied to `total` as well as the rows, or the count would
+      // promise a page the list cannot fill.
+      isNotNull(sql`json_extract(${siteCrawlFindings.evidence}, '$.statusCode')`),
     )
     const total = app.db.select({ value: count() }).from(siteCrawlFindings).where(where).get()?.value ?? 0
     const limit = parseBoundedLimit(request.query.limit, 100, 200)
@@ -2239,6 +2249,7 @@ export async function technicalAeoRoutes(app: FastifyInstance, opts: TechnicalAe
       checkDeadLinks: true,
       checked: snapshot.deadLinksChecked,
       found: snapshot.deadLinksFound,
+      unverified: snapshot.deadLinksUnverified,
       total,
       nextCursor: nextOffset < total ? encodeCursor(nextOffset) : null,
       deadLinks,

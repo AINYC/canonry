@@ -208,6 +208,7 @@ const COVERAGE: Record<string, CoverageEntry> = {
       deadLinkState: 'Represented by the discriminated deadLinks state.',
       deadLinksChecked: 'Represented by the discriminated deadLinks state.',
       deadLinksFound: 'Represented by the discriminated deadLinks state.',
+      deadLinksUnverified: 'Represented by the discriminated deadLinks state.',
       templateDetection: 'Surfaced as templateDetection on every link-bearing response (graph, internal-links, neighbors), not on the crawl summary.',
       linkPlacementRulesetVersion: 'Which rule classified the links is reported as templateDetection on the link-bearing responses; the raw ruleset version is crawl-engine provenance.',
       createdAt: 'Storage timestamp; the summary represents the selected run.',

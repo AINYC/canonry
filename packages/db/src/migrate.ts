@@ -200,6 +200,55 @@ export interface MigrationVersion {
  * re-run is a no-op. Exported so the migration test can exercise it against
  * seeded orphans.
  */
+/**
+ * Split every stored dead-link finding into the two claims it was conflating,
+ * and drop the ones that were never evidence of anything.
+ *
+ * A finding carries `evidence.statusCode`. A number means the target ANSWERED
+ * with an error and the link really is broken. A null means the crawl never got
+ * a response — a timeout, a reset socket, throttling under crawl concurrency —
+ * which says nothing about the URL and was being reported to clients as a
+ * broken link anyway.
+ *
+ * Counts are rewritten to ABSOLUTE values derived from the surviving rows, and
+ * `dead_links_checked` loses exactly the targets that were never reached (it
+ * had counted them as checked). `unverified` is per TARGET, matching `checked`:
+ * one unreachable URL linked from five pages is one unchecked target, not five.
+ *
+ * Idempotent: the `HAVING` clause selects only attempts that still hold a
+ * fabricated row, and the delete removes exactly those, so a re-run selects
+ * nothing and `dead_links_checked` cannot be reduced twice.
+ */
+export function reclassifyFabricatedDeadLinks(tx: MigrationDb): void {
+  const affected = tx.all(sql`
+    SELECT run_id AS runId, attempt_id AS attemptId,
+      COUNT(DISTINCT CASE WHEN json_extract(evidence, '$.statusCode') IS NULL THEN target_url END) AS fabricatedTargets,
+      SUM(CASE WHEN json_extract(evidence, '$.statusCode') IS NOT NULL THEN 1 ELSE 0 END) AS realFindings,
+      SUM(CASE WHEN json_extract(evidence, '$.statusCode') IS NULL THEN 1 ELSE 0 END) AS fabricatedFindings
+    FROM site_crawl_findings
+    WHERE finding_type = 'dead-link'
+    GROUP BY run_id, attempt_id
+    HAVING fabricatedFindings > 0
+  `) as Array<{ runId: string; attemptId: string; fabricatedTargets: number; realFindings: number }>
+
+  for (const row of affected) {
+    tx.run(sql`
+      UPDATE site_crawl_snapshots
+         SET dead_links_unverified = ${row.fabricatedTargets},
+             dead_links_found = ${row.realFindings},
+             findings_count = ${row.realFindings},
+             dead_links_checked = MAX(0, dead_links_checked - ${row.fabricatedTargets})
+       WHERE run_id = ${row.runId} AND attempt_id = ${row.attemptId}
+    `)
+  }
+
+  tx.run(sql`
+    DELETE FROM site_crawl_findings
+     WHERE finding_type = 'dead-link'
+       AND json_extract(evidence, '$.statusCode') IS NULL
+  `)
+}
+
 export function relinkOrphanedSnapshotQueryIds(tx: MigrationDb): void {
   const orphans = tx.all(sql`
     SELECT qs.id AS snapId, qs.query_text AS text, r.project_id AS projectId
@@ -3687,6 +3736,36 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `CREATE INDEX IF NOT EXISTS idx_ai_user_fetch_verification_manifests_project_ts
         ON ai_user_fetch_verification_manifests_hourly(project_id, ts_hour)`,
     ],
+  },
+  {
+    version: 140,
+    name: 'site-crawl-dead-links-unverified',
+    // A "dead link" and "a link we could not check" were the same bucket, and
+    // the second one is far more common than the first. The crawler marks a
+    // page `fetch-error` both when the site answers 4xx/5xx AND when the fetch
+    // never completed at all, and the dead-link derivation accepted either —
+    // so a timeout or a reset connection under crawl concurrency became a
+    // reported broken link. On one 228-page site that produced 15 findings
+    // across 6 URLs, every one `statusCode: null`, and every one of those 6
+    // served a 200 in under a second on a manual check. It was client-facing
+    // output.
+    //
+    // Unverified targets now get their own count, and are excluded from both
+    // `dead_links_found` and `dead_links_checked` — calling them "checked"
+    // was the other half of the overstatement.
+    //
+    // The stored rows ARE reclassified, in `run()`, because the evidence to do
+    // it survives on the rows themselves: each finding carries its own
+    // `evidence.statusCode`, so a fabricated row is identifiable one row at a
+    // time and nothing is inferred from the blended totals. Leaving them would
+    // keep the bug live on every past scan — the read path serves stored
+    // findings, so rescanning one project would fix only that project.
+    statements: [
+      `ALTER TABLE site_crawl_snapshots ADD COLUMN dead_links_unverified INTEGER NOT NULL DEFAULT 0`,
+    ],
+    run: (tx) => {
+      reclassifyFabricatedDeadLinks(tx)
+    },
   },
 ]
 

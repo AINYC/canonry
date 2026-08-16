@@ -154,7 +154,7 @@ function buildCtx(): Ctx {
     effectiveOptions: { maxPages: 100, checkDeadLinks: true }, checkDeadLinks: true,
     complete: true, termination: 'completed', detailsAvailable: true,
     pagesDiscovered: 3, pagesFetched: 3, pagesEligible: 2, edgesDiscovered: 2, findingsCount: 1,
-    deadLinkState: 'complete', deadLinksChecked: 2, deadLinksFound: 1, createdAt: tB, updatedAt: tB,
+    deadLinkState: 'complete', deadLinksChecked: 2, deadLinksFound: 1, deadLinksUnverified: 3, createdAt: tB, updatedAt: tB,
   }).run()
   db.insert(siteCrawlPages).values([
     {
@@ -231,7 +231,10 @@ function buildCtx(): Ctx {
   ]).run()
   db.insert(siteCrawlFindings).values({
     id: crypto.randomUUID(), projectId, runId: runB, attemptId: crawlAttemptId, findingKey: 'dead:gone', findingType: 'dead-link', severity: 'high',
-    sourceNodeKey: 'home', sourceUrl: 'https://example.com/', targetNodeKey: 'gone', targetUrl: 'https://example.com/gone', evidence: { status: 404 },
+    // Matches what `executeSiteAudit` actually writes. The old `{ status: 404 }`
+    // was an idealized shape no writer produces, which hid the fact that a
+    // persisted row's evidence carries `statusCode` and `reason`.
+    sourceNodeKey: 'home', sourceUrl: 'https://example.com/', targetNodeKey: 'gone', targetUrl: 'https://example.com/gone', evidence: { statusCode: 404, reason: 'http-error' },
     createdAt: tB, updatedAt: tB,
   }).run()
 
@@ -390,7 +393,7 @@ describe('GET /technical-aeo crawl reads', () => {
       rootUrl: 'https://example.com/',
       complete: true,
       detailsAvailable: true,
-      deadLinks: { state: 'complete', checked: 2, found: 1 },
+      deadLinks: { state: 'complete', checked: 2, found: 1, unverified: 3 },
     })
     expect(body.counts.pagesEligible).toBe(2)
     expect(body.runId).not.toBe(ctx.probeRun)
@@ -760,7 +763,12 @@ describe('GET /technical-aeo crawl reads', () => {
     expect(neighbors.body.outboundTruncated).toBe(true)
 
     const dead = await get<SiteCrawlDeadLinksResponseDto>('/api/v1/projects/tech-aeo/technical-aeo/dead-links?limit=1')
-    expect(dead.body).toMatchObject({ state: 'complete', total: 1, deadLinks: [{ targetUrl: 'https://example.com/gone' }] })
+    // `unverified` rides alongside `found` and is never folded into it: links
+    // the crawler could not fetch are not broken links, and `deadLinks` lists
+    // only rows a consumer may render as broken.
+    expect(dead.body).toMatchObject({ state: 'complete', total: 1, found: 1, unverified: 3, deadLinks: [{ targetUrl: 'https://example.com/gone' }] })
+    if (!('deadLinks' in dead.body)) throw new Error('expected a listed dead-link response')
+    expect(dead.body.deadLinks.every((row) => typeof (row.evidence as { statusCode?: unknown }).statusCode === 'number')).toBe(true)
   })
 
   it('returns a bounded canonical subgraph without presentation coordinates', async () => {

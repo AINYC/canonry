@@ -826,6 +826,14 @@ export const siteCrawlSnapshots = sqliteTable('site_crawl_snapshots', {
   deadLinksChecked: integer('dead_links_checked').notNull().default(0),
   deadLinksFound: integer('dead_links_found').notNull().default(0),
   /**
+   * Internal link targets the crawler could not fetch at all, so their state is
+   * unknown. These are NOT dead links and are excluded from both `found` and
+   * `deadLinksChecked` — a timeout or a connection reset under crawl
+   * concurrency says nothing about the URL, and reporting one as broken put
+   * fabricated findings in front of clients.
+   */
+  deadLinksUnverified: integer('dead_links_unverified').notNull().default(0),
+  /**
    * Whether nav/header/footer link detection ran for this scan, and if not,
    * why. NULL means the scan predates detection, which reads report as
    * `unavailable-legacy-scan` rather than letting an empty template-link list
