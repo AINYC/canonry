@@ -15,6 +15,7 @@ import {
   formatWindowCountDelta,
   isoDateDaysBeforeInTimeZone,
   parseInclusiveEndMs,
+  relativeChangeRatio,
   startOfDayHourInTimeZone,
   startOfNextDayHourInTimeZone,
 } from '../src/formatting.js'
@@ -459,6 +460,21 @@ describe('formatDateRange', () => {
   test('only one side falls through to a single formatted date', () => {
     expect(formatDateRange('2026-05-01', '')).toBe('May 1, 2026')
     expect(formatDateRange('', '2026-05-08')).toBe('May 8, 2026')
+  })
+})
+
+describe('relativeChangeRatio', () => {
+  test('returns the signed unrounded change relative to a positive baseline', () => {
+    expect(relativeChangeRatio(150, 100)).toBe(0.5)
+    expect(relativeChangeRatio(50, 100)).toBe(-0.5)
+    expect(relativeChangeRatio(100.05, 100)).toBeCloseTo(0.0005, 10)
+  })
+
+  test('returns null for invalid values or a non-positive baseline', () => {
+    expect(relativeChangeRatio(100, 0)).toBeNull()
+    expect(relativeChangeRatio(50, -1)).toBeNull()
+    expect(relativeChangeRatio(Number.NaN, 100)).toBeNull()
+    expect(relativeChangeRatio(100, Number.POSITIVE_INFINITY)).toBeNull()
   })
 })
 

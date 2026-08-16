@@ -23,7 +23,7 @@ import {
   formatChartDateTick,
   type TrendChartSeries,
 } from '../shared/ChartPrimitives.js'
-import { calendarDateRange } from '@ainyc/canonry-contracts'
+import { calendarDateRange, relativeChangeRatio } from '@ainyc/canonry-contracts'
 import { formatTimestamp, formatBooleanState, SearchMetric, SEARCH_METRIC_LABELS } from '../../lib/format-helpers.js'
 import { addToast } from '../../lib/toast-store.js'
 import { asyncHandler } from '../../lib/async-handler.js'
@@ -112,6 +112,60 @@ const GSC_CHART_METRICS = [
 type GscChartMetric = (typeof GSC_CHART_METRICS)[number]['key']
 const COVERAGE_PAGE_SIZE = 25
 const GOOGLE_OAUTH_COMPLETE_MESSAGE = 'canonry:google-oauth-complete'
+
+const GSC_TREND_PERCENT_FORMATTER = new Intl.NumberFormat(undefined, {
+  maximumFractionDigits: 1,
+})
+
+/**
+ * Express the fitted line's start-to-end movement relative to its start.
+ *
+ * The fit is unconstrained, so a non-negative metric can still produce a
+ * zero or negative endpoint. That is not a meaningful percentage baseline;
+ * report the absence instead of dividing by zero or presenting a synthetic
+ * percentage. Position reverses only the desirability arrow, not the math.
+ */
+function formatGscTrendChange(
+  trend: {
+    slope: number
+    start: number
+    end: number
+    startIndex?: number
+    endIndex?: number
+  },
+  inverted: boolean | undefined,
+  fallbackDays: number,
+): string {
+  const { startIndex, endIndex } = trend
+  const spanDays = startIndex !== undefined
+    && endIndex !== undefined
+    && Number.isInteger(startIndex)
+    && Number.isInteger(endIndex)
+    && startIndex >= 0
+    && endIndex >= startIndex
+    ? endIndex - startIndex + 1
+    : fallbackDays
+  if (
+    !Number.isFinite(trend.start)
+    || !Number.isFinite(trend.end)
+    || trend.start <= 0
+    || trend.end < 0
+  ) {
+    return '— no percentage baseline'
+  }
+  if (trend.slope === 0) return `→ 0% over ${spanDays}d`
+
+  const ratio = relativeChangeRatio(trend.end, trend.start)
+  if (ratio === null) return '— no percentage baseline'
+  const percent = Math.abs(ratio * 100)
+  // The fit preserves tiny slopes, but separately rounded endpoints can be
+  // equal at six significant figures. A real non-zero trend must not read 0%.
+  const formatted = percent < 0.1
+    ? '<0.1%'
+    : `${GSC_TREND_PERCENT_FORMATTER.format(percent)}%`
+  const improving = inverted ? trend.slope < 0 : trend.slope > 0
+  return `${improving ? '↑' : '↓'} ${formatted} over ${spanDays}d`
+}
 
 function sitemapDiscoveredUrlCount(sitemap: ApiGscSitemap): number {
   return sitemap.contents?.reduce((total, content) => total + Number(content.submitted || 0), 0) ?? 0
@@ -1059,7 +1113,7 @@ export function GscSection({
                     <p className="eyebrow eyebrow-soft">Performance</p>
                     <div className="flex items-center gap-1.5">
                       <h3>Search performance</h3>
-                      <InfoTooltip text={`Click any day to filter the table below to that date. Query and page filters match case-insensitive substrings and run on Apply filters. Filtering and sorting examine up to ${EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows while the table shows ${DEFAULT_TABLE_PAGE_SIZE} per page.`} />
+                      <InfoTooltip text={`Tile percentages show the fitted trend's relative change from its first measured day to its last. Click any day to filter the table below to that date. Query and page filters match case-insensitive substrings and run on Apply filters. Filtering and sorting examine up to ${EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows while the table shows ${DEFAULT_TABLE_PAGE_SIZE} per page.`} />
                     </div>
                     {/* The window ends where Google's data ends, not today.
                         Naming the real range is what stops a lagging tail
@@ -1181,9 +1235,7 @@ export function GscSection({
                                 <span className="block text-[11px] tabular-nums text-muted">
                                   {/* Position improves downward, so the arrow
                                       tracks BETTER/WORSE, not up/down. */}
-                                  {trend.slope === 0
-                                    ? '→ flat'
-                                    : `${(m.inverted ? trend.slope < 0 : trend.slope > 0) ? '↑' : '↓'} ${m.format(Math.abs(trend.end - trend.start))} over ${totals.days}d`}
+                                  {formatGscTrendChange(trend, m.inverted, totals.days)}
                                 </span>
                               )}
                             </button>

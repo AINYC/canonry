@@ -357,9 +357,21 @@ export interface DeltaWindow {
   deltaPct: number | null
 }
 
+/**
+ * Signed relative change from `baseline` to `current`, expressed as a ratio.
+ * Returns null when either value is non-finite or the baseline is not positive,
+ * because a relative change from zero or a negative baseline is undefined for
+ * the count and rate metrics that consume this helper.
+ */
+export function relativeChangeRatio(current: number, baseline: number): number | null {
+  if (!Number.isFinite(current) || !Number.isFinite(baseline) || baseline <= 0) return null
+  const ratio = (current - baseline) / baseline
+  return Number.isFinite(ratio) ? ratio : null
+}
+
 export function deltaPercent(current: number, prior: number): number | null {
-  if (prior <= 0) return null
-  return Math.round(((current - prior) / prior) * 100)
+  const ratio = relativeChangeRatio(current, prior)
+  return ratio === null ? null : Math.round(ratio * 100)
 }
 
 export type DeltaTone = 'positive' | 'negative' | 'neutral'

@@ -3,7 +3,7 @@ import { eq, desc, and, sql } from 'drizzle-orm'
 import type { SQL, SQLWrapper } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { gaTrafficSnapshots, gaTrafficSummaries, gaTrafficWindowSummaries, gaDailyTotals, gaAiReferrals, gaSocialReferrals, gaAcquisitionDaily, gaLeadEventsDaily, gaMeasurementSyncStates, runs } from '@ainyc/canonry-db'
-import { classifyAiReferralTrafficClass, validationError, notFound, forbidden, quotaExceeded, providerError, AppError, RunKinds, RunStatuses, RunTriggers, resolveDateRange, normalizeUrlPath } from '@ainyc/canonry-contracts'
+import { classifyAiReferralTrafficClass, deltaPercent, validationError, notFound, forbidden, quotaExceeded, providerError, AppError, RunKinds, RunStatuses, RunTriggers, resolveDateRange, normalizeUrlPath } from '@ainyc/canonry-contracts'
 import type { GA4ChannelBreakdownDto, ResolvedDateRange } from '@ainyc/canonry-contracts'
 import { resolveProject, writeAuditLog } from './helpers.js'
 import { assertNotProjectScoped } from './auth.js'
@@ -1564,8 +1564,6 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     const current30d = sumSocial(daysAgo(30), fmt(today))
     const prev30d = sumSocial(daysAgo(60), daysAgo(30))
 
-    const pct = (cur: number, prev: number) => prev === 0 ? null : Math.round(((cur - prev) / prev) * 100)
-
     // Biggest mover: source with largest absolute session change in 7d vs prev 7d
     const sourceCurrent = app.db
       .select({
@@ -1607,7 +1605,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
           source: row.source,
           sessions7d: row.sessions,
           sessionsPrev7d: prev,
-          changePct: pct(row.sessions, prev) ?? (row.sessions > 0 ? 100 : 0),
+          changePct: deltaPercent(row.sessions, prev) ?? (row.sessions > 0 ? 100 : 0),
         }
       }
     }
@@ -1615,10 +1613,10 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     return {
       socialSessions7d: current7d?.sessions ?? 0,
       socialSessionsPrev7d: prev7d?.sessions ?? 0,
-      trend7dPct: pct(current7d?.sessions ?? 0, prev7d?.sessions ?? 0),
+      trend7dPct: deltaPercent(current7d?.sessions ?? 0, prev7d?.sessions ?? 0),
       socialSessions30d: current30d?.sessions ?? 0,
       socialSessionsPrev30d: prev30d?.sessions ?? 0,
-      trend30dPct: pct(current30d?.sessions ?? 0, prev30d?.sessions ?? 0),
+      trend30dPct: deltaPercent(current30d?.sessions ?? 0, prev30d?.sessions ?? 0),
       biggestMover,
     }
   })
@@ -1633,8 +1631,6 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     const today = new Date()
     const fmt = (d: Date) => d.toISOString().split('T')[0]!
     const daysAgo = (n: number) => { const d = new Date(today); d.setDate(d.getDate() - n); return fmt(d) }
-    const pct = (cur: number, prev: number) => prev === 0 ? null : Math.round(((cur - prev) / prev) * 100)
-
     // --- Total sessions (from gaTrafficSnapshots) ---
     const sumTotal = (from: string, to: string) => app.db
       .select({ sessions: sql<number>`COALESCE(SUM(${gaTrafficSnapshots.sessions}), 0)` })
@@ -1684,7 +1680,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       const p7 = sum(daysAgo(14), daysAgo(7))?.sessions ?? 0
       const c30 = sum(daysAgo(30), todayStr)?.sessions ?? 0
       const p30 = sum(daysAgo(60), daysAgo(30))?.sessions ?? 0
-      return { sessions7d: c7, sessionsPrev7d: p7, trend7dPct: pct(c7, p7), sessions30d: c30, sessionsPrev30d: p30, trend30dPct: pct(c30, p30) }
+      return { sessions7d: c7, sessionsPrev7d: p7, trend7dPct: deltaPercent(c7, p7), sessions30d: c30, sessionsPrev30d: p30, trend30dPct: deltaPercent(c30, p30) }
     }
 
     // --- Biggest movers (AI) — sessionSource-only to match the breakdown cell scope. ---
@@ -1724,7 +1720,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         const delta = Math.abs(row.sessions - p)
         if (delta > maxDelta) {
           maxDelta = delta
-          mover = { source: row.source, sessions7d: row.sessions, sessionsPrev7d: p, changePct: pct(row.sessions, p) ?? (row.sessions > 0 ? 100 : 0) }
+          mover = { source: row.source, sessions7d: row.sessions, sessionsPrev7d: p, changePct: deltaPercent(row.sessions, p) ?? (row.sessions > 0 ? 100 : 0) }
         }
       }
       return mover

@@ -1,4 +1,5 @@
 import type { InsightSeverity, InsightType } from './types.js'
+import { relativeChangeRatio } from '@ainyc/canonry-contracts'
 
 /**
  * Pure analyzers for Google Business Profile (local-AEO) signals. Take
@@ -237,7 +238,9 @@ function pickWorstKeywordDrop(loc: GbpLocationSignals): { keyword: string; dropP
   let worst: { keyword: string; dropPct: number; recent: number; prior: number } | null = null
   for (const point of loc.keywordPoints) {
     if (point.recent == null || point.prior == null || point.prior < GBP_KEYWORD_MIN_BASELINE) continue
-    const dropPct = Math.round(((point.prior - point.recent) / point.prior) * 100)
+    const changeRatio = relativeChangeRatio(point.recent, point.prior)
+    if (changeRatio === null) continue
+    const dropPct = Math.round(-changeRatio * 100)
     if (dropPct < GBP_KEYWORD_DROP_PCT) continue
     if (!worst || dropPct > worst.dropPct) {
       worst = { keyword: point.keyword, dropPct, recent: point.recent, prior: point.prior }
