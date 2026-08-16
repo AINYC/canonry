@@ -263,6 +263,45 @@ describe('site audit persists broken links and unfetchable links as different th
     expect(snapshot.deadLinksUnverified).toBe(1)
   })
 
+  it('a throttled target is unchecked, not broken', async () => {
+    // 429 is the server describing OUR request rate. It is the one error status
+    // that says nothing about the resource, so filing it as a broken link
+    // blames the site for how hard we crawled it — the same mistake as filing a
+    // timeout, arriving with a status code attached.
+    const { snapshot, findings } = await run({
+      state: 'complete',
+      findings: [
+        { key: 'dead-link:gone', from: ROOT, to: GONE, statusCode: 404, reason: 'http-error' },
+        { key: 'dead-link:busy', from: ROOT, to: FLAKY, statusCode: 429, reason: 'http-error' },
+      ],
+    })
+
+    expect(findings).toHaveLength(1)
+    expect(findings[0]).toMatchObject({ targetUrl: GONE })
+    expect(findings.some((row) => (row.evidence as { statusCode?: unknown }).statusCode === 429)).toBe(false)
+    expect(snapshot.deadLinksFound).toBe(1)
+    expect(snapshot.deadLinksUnverified).toBe(1)
+  })
+
+  it('keeps every other 4xx and 5xx a dead link, so 429 is a carve-out and not a hole', async () => {
+    // The risk of special-casing a status is over-reaching into ones that ARE
+    // evidence. 404/410/500/503 all stay findings.
+    const { snapshot, findings } = await run({
+      state: 'complete',
+      findings: [404, 410, 500, 503].map((statusCode, index) => ({
+        key: `dead-link:${statusCode}`,
+        from: ROOT,
+        to: `https://example.com/broken-${index}`,
+        statusCode,
+        reason: 'http-error',
+      })),
+    })
+
+    expect(findings).toHaveLength(4)
+    expect(snapshot.deadLinksFound).toBe(4)
+    expect(snapshot.deadLinksUnverified).toBe(0)
+  })
+
   it('a clean crawl reports zero of both, so the counts are not merely never-zero', async () => {
     const { snapshot, findings } = await run({ state: 'complete', findings: [], unverified: [] })
     expect(findings).toHaveLength(0)

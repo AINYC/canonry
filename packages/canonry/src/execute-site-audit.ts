@@ -270,6 +270,19 @@ function deadLinkCheckedCount(edges: Iterable<CrawlEdgeObservation>, pages: Iter
     .map((edge) => edge.to)).size
 }
 
+/**
+ * "Too Many Requests" is the server describing OUR request rate, not the
+ * resource. It is the one error status that is never evidence about the link,
+ * so reporting it as broken blames a site for how hard we crawled it — the
+ * same mistake as reporting a timeout, arriving with a status code attached.
+ *
+ * The engine classifies this correctly from 6.0.0 (`reason: 'throttled'`), but
+ * this repo pins 4.7.0 and the published 5.0.0 carries the bug too, so the
+ * platform has to make the call itself. Redundant once the dependency moves,
+ * exactly like the null-status branch beside it.
+ */
+const RATE_LIMITED_STATUS = 429
+
 /** One dead-link row as the engine reports it, across engine versions. */
 interface EngineLinkFinding {
   key: string
@@ -299,9 +312,11 @@ function partitionDeadLinks(deadLinks: SiteCrawlReport['deadLinks']): {
   const engineUnverified = (deadLinks as { unverified?: EngineLinkFinding[] }).unverified ?? []
   // `typeof` rather than `!== null` so this keeps compiling once the engine
   // narrows `statusCode` to a plain number.
-  const dead = reported.filter((finding) => typeof finding.statusCode === 'number' && finding.statusCode >= 400)
+  const answeredWithError = (finding: EngineLinkFinding): boolean =>
+    typeof finding.statusCode === 'number' && finding.statusCode >= 400
+  const dead = reported.filter((finding) => answeredWithError(finding) && finding.statusCode !== RATE_LIMITED_STATUS)
   const unverified = [
-    ...reported.filter((finding) => typeof finding.statusCode !== 'number'),
+    ...reported.filter((finding) => !answeredWithError(finding) || finding.statusCode === RATE_LIMITED_STATUS),
     ...engineUnverified,
   ]
   return { dead, unverified }
