@@ -122,18 +122,51 @@ test('renders all four Search Console metrics as tiles, with clicks and impressi
   expect(tile('Avg position').textContent).toContain('10.5')
 })
 
-test('reads the trend direction from BETTER/WORSE, not from the sign of the slope', async () => {
+test('renders fitted movement as a relative percentage with better/worse direction', async () => {
   renderSection()
   await waitFor(() => expect(tile('Clicks')).not.toBeNull())
 
-  // Clicks rising is an improvement.
-  expect(tile('Clicks').textContent).toContain('↑')
-  // Impressions falling is a decline.
-  expect(tile('Impressions').textContent).toContain('↓')
+  // Relative fitted changes, not raw clicks, impressions, percentage points,
+  // or position points.
+  expect(tile('Clicks').textContent).toContain('↑ 300% over 4d')
+  expect(tile('Impressions').textContent).toContain('↓ 60% over 4d')
+  expect(tile('CTR').textContent).toContain('↑ 1,800% over 4d')
   // Position FALLING is an improvement — the one metric where a negative
   // slope is good news, and the case a naive `slope > 0` arrow gets backwards.
-  expect(tile('Avg position').textContent).toContain('↑')
-  expect(tile('Avg position').textContent).toContain('3.0')
+  expect(tile('Avg position').textContent).toContain('↑ 25% over 4d')
+})
+
+test('renders flat movement as zero percent and withholds invalid fitted baselines', async () => {
+  renderSection(performanceDaily({
+    trends: {
+      clicks: { slope: 0, intercept: 10, r2: 1, start: 10, end: 10, n: 4, startIndex: 0, endIndex: 3 },
+      impressions: { slope: 0, intercept: 0, r2: 1, start: 0, end: 0, n: 4, startIndex: 0, endIndex: 3 },
+      ctr: { slope: -0.01, intercept: 0.02, r2: 1, start: 0.02, end: -0.01, n: 4, startIndex: 0, endIndex: 3 },
+      position: { slope: -1, intercept: 12, r2: 1, start: 12, end: 9, n: 4, startIndex: 0, endIndex: 3 },
+    },
+  }))
+
+  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+  expect(tile('Clicks').textContent).toContain('→ 0% over 4d')
+  expect(tile('Impressions').textContent).toContain('— no percentage baseline')
+  expect(tile('CTR').textContent).toContain('— no percentage baseline')
+  expect(tile('Impressions').textContent).not.toMatch(/Infinity|NaN/)
+  expect(tile('CTR').textContent).not.toMatch(/Infinity|NaN/)
+})
+
+test('preserves tiny movement and marks a rising average position as worse', async () => {
+  renderSection(performanceDaily({
+    trends: {
+      clicks: { slope: 0.000001, intercept: 1_000_000, r2: 1, start: 1_000_000, end: 1_000_000, n: 4, startIndex: 0, endIndex: 3 },
+      impressions: null,
+      ctr: null,
+      position: { slope: 2 / 3, intercept: 8, r2: 1, start: 8, end: 10, n: 4, startIndex: 0, endIndex: 3 },
+    },
+  }))
+
+  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+  expect(tile('Clicks').textContent).toContain('↑ <0.1% over 4d')
+  expect(tile('Avg position').textContent).toContain('↓ 25% over 4d')
 })
 
 test('toggles a metric on and off but refuses to leave the chart empty', async () => {
@@ -208,6 +241,7 @@ test('the filter explanation is a tooltip, not a paragraph on the page', async (
   // assistive tech or for tests that look it up by accessible name.
   const trigger = screen.getByRole('button', { name: /case-insensitive substrings/ })
   expect(trigger).not.toBeNull()
+  expect(trigger.getAttribute('aria-label')).toMatch(/Tile percentages show the fitted trend's relative change/)
   expect(trigger.getAttribute('aria-label')).toMatch(/Click any day to filter/)
 })
 
@@ -267,6 +301,7 @@ test('plots one row per calendar day, so a quiet gap is not compressed', async (
   }))
 
   await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+  expect(tile('Clicks').textContent).toContain('↓ 30% over 10d')
   // The drill controls stay on the MEASURED days — an empty day is nothing to
   // drill into — which is how we can tell the two series apart.
   const group = screen.getByRole('group', { name: /Filter the table to a single day/ })

@@ -13,6 +13,8 @@
  *   - Empty input yields zeros / empty maps, never `NaN`.
  */
 
+import { deltaPercent } from '@ainyc/canonry-contracts'
+
 export interface DailyMetricInput {
   metric: string
   /** YYYY-MM-DD */
@@ -106,7 +108,7 @@ export function computeWindowDelta(rows: DailyMetricInput[], referenceDate: stri
     const prior = prior7d[metric] ?? 0
     recent7d[metric] = recent
     prior7d[metric] = prior
-    deltaPct[metric] = prior === 0 ? null : Math.round(((recent - prior) / prior) * 100)
+    deltaPct[metric] = deltaPercent(recent, prior)
   }
 
   return { recent7d, prior7d, deltaPct }

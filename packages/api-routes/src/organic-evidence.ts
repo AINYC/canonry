@@ -17,6 +17,7 @@ import {
 import {
   AiReferralTrafficClasses,
   CitationStates,
+  deltaPercent,
   RunKinds,
   RunStatuses,
   VerificationStatuses,
@@ -125,7 +126,7 @@ function summarizeServer(
 
 function comparisonDetail(latest: number, prior: number): string {
   if (prior === 0) return `${latest} in the latest cohort versus 0 in the prior cohort`
-  const change = Math.round(((latest - prior) / prior) * 100)
+  const change = deltaPercent(latest, prior) ?? 0
   return `${latest} in the latest cohort versus ${prior} prior (${change >= 0 ? '+' : ''}${change}%)`
 }
 
