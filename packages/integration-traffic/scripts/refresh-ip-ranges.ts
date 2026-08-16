@@ -25,6 +25,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateIpRangeManifestPayload } from '../src/ip-range-manifest.js'
+import { describeError } from '@ainyc/canonry-contracts'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const rangesDir = path.resolve(dirname, '..', 'src', 'ip-ranges')
@@ -121,7 +122,7 @@ async function refreshOne(source: Source): Promise<FetchResult> {
     return {
       source,
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: describeError(err),
     }
   }
 }
