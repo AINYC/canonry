@@ -18,9 +18,72 @@ const WORD_SEGMENTER = new Intl.Segmenter('en', { granularity: 'word' })
 const NON_WORD = /[^\p{L}\p{N}]+/gu
 const WORD_RUNS = /[\p{L}\p{N}]+/gu
 
-/** Fold presentation variants without changing spelling. */
+/**
+ * The alphabets that write an accent OVER a base letter which stands on its own.
+ * Folding is decided by this base, never by the mark, because "is this mark an
+ * accent" has no script-independent answer: `Script=Inherited` contains the
+ * Japanese dakuten and the Arabic hamza, and stripping those turns `が` into
+ * `か` and `أ` into `ا`, which are different letters, not styled ones.
+ */
+const ACCENT_BEARING_SCRIPT = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}]/u
+
+/**
+ * Cheap reject. Accents live above U+007F, so pure ASCII can skip the fold
+ * entirely, and this runs over every answer text of every project.
+ */
+const NON_ASCII = /\P{ASCII}/u
+
+/**
+ * Drop accents from Latin, Greek and Cyrillic letters, leaving every other
+ * script exactly as written.
+ *
+ * Per character, so the decision is made against the letter UNDER the mark. A
+ * blanket "delete all combining marks" cannot work: the same Unicode category
+ * holds the acute on `É`, the dakuten that separates `が` from `か`, and the
+ * hamza that separates `أ` from `ا`. Only the first is decoration.
+ *
+ * Recomposing is what keeps a key's LENGTH stable, which matters because the
+ * alias floors are counted in characters: NFKD alone explodes Hangul syllables
+ * into jamo and turns a 2-character brand into a 6-character one, sneaking it
+ * past a floor meant to reject it.
+ */
+function foldAccents(value: string): string {
+  if (!NON_ASCII.test(value)) return value
+  let folded = ''
+  for (const character of value) {
+    // An ASCII character can carry no accent, and answer prose is overwhelmingly
+    // ASCII. Without this, one curly quote anywhere in the text sends every
+    // other character through `normalize`, and this runs once per competitor
+    // per answer.
+    if (character.charCodeAt(0) < 0x80) {
+      folded += character
+      continue
+    }
+    const decomposed = character.normalize('NFD')
+    const base = decomposed[0]!
+    folded += decomposed.length > 1 && ACCENT_BEARING_SCRIPT.test(base) ? base : character
+  }
+  return folded
+}
+
+/**
+ * Fold presentation variants without changing spelling.
+ *
+ * ACCENTS ARE A PRESENTATION VARIANT, in the same family as `Demand-IQ` vs
+ * `DemandIQ`. A brand written `Totême` or `Éterne` on its own site is written
+ * `Toteme` and `Eterne` by half the prose that mentions it, and the alias
+ * derived from its domain has no accents at all, so without folding an accented
+ * brand is invisible to every mention metric. Measured on a real run: a
+ * competitor named in two answers scored zero, and another was undercounted.
+ *
+ * NFKC first so a decomposed input is composed before the fold sees it, and the
+ * fold itself recomposes nothing it did not decompose. The cost, accepted: a
+ * Latin brand distinguished from an ordinary word ONLY by its accents now
+ * matches that word. Complete-adjacent-word matching is untouched, so this
+ * widens what counts as the same SPELLING, never what counts as a similar one.
+ */
 function normalizeForMatch(value: string): string {
-  return value.normalize('NFKC').toLocaleLowerCase('en')
+  return foldAccents(value.normalize('NFKC')).toLocaleLowerCase('en')
 }
 
 /** The word tokens of an already-normalized string. */
