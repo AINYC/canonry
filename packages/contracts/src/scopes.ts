@@ -31,6 +31,12 @@ export const ADS_APPROVE_SCOPE = 'ads.approve'
 /** Grants execution of a separately approved OpenAI Ads activation manifest. */
 export const ADS_ACTIVATE_SCOPE = 'ads.activate'
 
+/** Grants live, quota-consuming reads from Google Ads and Tag Manager. */
+export const GOOGLE_MARKETING_LIVE_READ_SCOPE = 'google-marketing.read-live'
+
+/** Grants connection, selection, snapshot, and contract mutations. */
+export const GOOGLE_MARKETING_WRITE_SCOPE = 'google-marketing.write'
+
 /**
  * A scope grants write capability when it is the wildcard, the bare `write`,
  * any `*.write`, or the explicit `ads.approve` / `ads.activate` authority.
