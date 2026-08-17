@@ -19,29 +19,44 @@ const NON_WORD = /[^\p{L}\p{N}]+/gu
 const WORD_RUNS = /[\p{L}\p{N}]+/gu
 
 /**
- * The combining marks NFKD produces when it decomposes a precomposed LATIN,
- * GREEK or CYRILLIC letter: `Totême` -> `tote` + U+0302 + `me`.
- *
- * `Script=Inherited` is what confines this to accents. A mark in that script
- * takes its identity from the base letter it sits on, which is exactly what an
- * accent is; a mark that belongs to a script of its own is part of that
- * script's spelling instead. So a Devanagari matra and Hebrew niqqud survive
- * this step, while the acute on `É` does not.
- *
- * `Script=Inherited` also covers ZWJ and ZWNJ, the only two codepoints where it
- * differs from intersecting with `\p{Mark}` (checked across the whole codepoint
- * range). Dropping them here changes nothing, because `WORD_RUNS` keeps only
- * `\p{L}\p{N}` and would drop them a step later regardless. The intersection is
- * the more exact spelling of the intent but needs the `v` flag, which needs an
- * ES2024 target; the repo is on ES2022.
- *
- * That is a scope limit on THIS regex, not a claim about the module: `WORD_RUNS`
- * below keeps only `\p{L}\p{N}`, so marks of every script are already dropped
- * when word tokens are built. Whether that is right for Devanagari, Thai or
- * Hebrew is a real question and a separate one; it predates accent folding and
- * is unchanged by it.
+ * The alphabets that write an accent OVER a base letter which stands on its own.
+ * Folding is decided by this base, never by the mark, because "is this mark an
+ * accent" has no script-independent answer: `Script=Inherited` contains the
+ * Japanese dakuten and the Arabic hamza, and stripping those turns `が` into
+ * `か` and `أ` into `ا`, which are different letters, not styled ones.
  */
-const ACCENT_MARKS = /\p{Script=Inherited}+/gu
+const ACCENT_BEARING_SCRIPT = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}]/u
+
+/**
+ * Cheap reject. Accents live above U+007F, so pure ASCII can skip the fold
+ * entirely, and this runs over every answer text of every project.
+ */
+const NON_ASCII = /\P{ASCII}/u
+
+/**
+ * Drop accents from Latin, Greek and Cyrillic letters, leaving every other
+ * script exactly as written.
+ *
+ * Per character, so the decision is made against the letter UNDER the mark. A
+ * blanket "delete all combining marks" cannot work: the same Unicode category
+ * holds the acute on `É`, the dakuten that separates `が` from `か`, and the
+ * hamza that separates `أ` from `ا`. Only the first is decoration.
+ *
+ * Recomposing is what keeps a key's LENGTH stable, which matters because the
+ * alias floors are counted in characters: NFKD alone explodes Hangul syllables
+ * into jamo and turns a 2-character brand into a 6-character one, sneaking it
+ * past a floor meant to reject it.
+ */
+function foldAccents(value: string): string {
+  if (!NON_ASCII.test(value)) return value
+  let folded = ''
+  for (const character of value) {
+    const decomposed = character.normalize('NFD')
+    const base = decomposed[0]!
+    folded += decomposed.length > 1 && ACCENT_BEARING_SCRIPT.test(base) ? base : character
+  }
+  return folded
+}
 
 /**
  * Fold presentation variants without changing spelling.
@@ -53,18 +68,14 @@ const ACCENT_MARKS = /\p{Script=Inherited}+/gu
  * brand is invisible to every mention metric. Measured on a real run: a
  * competitor named in two answers scored zero, and another was undercounted.
  *
- * NFKD rather than NFKC, so the accents become separate marks this can drop.
- * The two induce the same equivalence classes (`NFKC(a) === NFKC(b)` exactly
- * when `NFKD(a) === NFKD(b)`), and both the alias and the text pass through
- * here, so the comparison stays symmetric.
- *
- * The cost, accepted: a brand distinguished from an ordinary word ONLY by its
- * accents now matches that word. Complete-adjacent-word matching still applies,
- * so this widens what counts as the same spelling, never what counts as a
- * similar one.
+ * NFKC first so a decomposed input is composed before the fold sees it, and the
+ * fold itself recomposes nothing it did not decompose. The cost, accepted: a
+ * Latin brand distinguished from an ordinary word ONLY by its accents now
+ * matches that word. Complete-adjacent-word matching is untouched, so this
+ * widens what counts as the same SPELLING, never what counts as a similar one.
  */
 function normalizeForMatch(value: string): string {
-  return value.normalize('NFKD').replace(ACCENT_MARKS, '').toLocaleLowerCase('en')
+  return foldAccents(value.normalize('NFKC')).toLocaleLowerCase('en')
 }
 
 /** The word tokens of an already-normalized string. */
