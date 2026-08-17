@@ -11,6 +11,7 @@ import type { Ga4CredentialStore } from './ga.js'
 import type { ProviderSummaryEntry } from './settings.js'
 import type { AgentProviderOption } from '@ainyc/canonry-contracts'
 import { resolveProject } from './helpers.js'
+import type { GoogleMarketingDoctorInputResolver } from './doctor/checks/google-marketing.js'
 
 export interface DoctorRoutesOptions {
   googleConnectionStore?: GoogleConnectionStore
@@ -38,6 +39,8 @@ export interface DoctorRoutesOptions {
   bundledSkills?: BundledSkillSnapshot[]
   /** Live user-global native Canonry plugin state, when available on a local host. */
   getAgentPluginState?: () => AgentPluginState
+  /** Synchronous, secret-free metadata resolver. It must not call Google APIs. */
+  getGoogleMarketingDoctorInput?: GoogleMarketingDoctorInputResolver
 }
 
 function parseCheckIds(raw: string | undefined): string[] {
@@ -79,6 +82,7 @@ export async function doctorRoutes(app: FastifyInstance, opts: DoctorRoutesOptio
       runtimeStatePaths: opts.runtimeStatePaths,
       bundledSkills: opts.bundledSkills,
       getAgentPluginState: opts.getAgentPluginState,
+      getGoogleMarketingDoctorInput: opts.getGoogleMarketingDoctorInput,
     }
     return runChecks(ctx, ALL_CHECKS, { checkIds })
   })
@@ -112,6 +116,7 @@ export async function doctorRoutes(app: FastifyInstance, opts: DoctorRoutesOptio
       runtimeStatePaths: opts.runtimeStatePaths,
       bundledSkills: opts.bundledSkills,
       getAgentPluginState: opts.getAgentPluginState,
+      getGoogleMarketingDoctorInput: opts.getGoogleMarketingDoctorInput,
     }
     return runChecks(ctx, ALL_CHECKS, { checkIds })
   })

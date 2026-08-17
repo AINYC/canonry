@@ -93,4 +93,25 @@ describe('MCP server instructions', () => {
       expect(guarded.size).toBe(BILLED_TOOLS.length)
     })
   })
+
+  it('names every live Google Marketing discovery and sync tool', () => {
+    const googleMarketingTools = [
+      'canonry_google_ads_customers',
+      'canonry_gtm_accounts',
+      'canonry_gtm_containers',
+      'canonry_gtm_workspaces',
+      'canonry_google_ads_sync',
+      'canonry_gtm_sync',
+    ]
+    const text = instructions()
+    const registry = fs.readFileSync(
+      path.join(path.dirname(url.fileURLToPath(import.meta.url)), '../src/mcp/tool-registry.ts'),
+      'utf-8',
+    )
+
+    for (const tool of googleMarketingTools) {
+      expect(text).toContain(tool)
+      expect(registry).toContain(`name: '${tool}'`)
+    }
+  })
 })

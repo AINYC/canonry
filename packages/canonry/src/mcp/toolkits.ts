@@ -1,7 +1,36 @@
-export const CANONRY_MCP_TIERS = ['core', 'monitoring', 'setup', 'gsc', 'ga', 'gbp', 'ads', 'traffic', 'agent', 'discovery'] as const
+export const CANONRY_MCP_TIERS = [
+  'core',
+  'monitoring',
+  'setup',
+  'gsc',
+  'ga',
+  'gbp',
+  // `ads` is deliberately OpenAI / ChatGPT Ads. Google Ads has its own
+  // toolkit so an agent never mistakes the two provider surfaces.
+  'ads',
+  'google-ads',
+  'gtm',
+  'conversion-tracking',
+  'traffic',
+  'agent',
+  'discovery',
+] as const
 export type CanonryMcpTier = typeof CANONRY_MCP_TIERS[number]
 
-export const CANONRY_MCP_TOOLKIT_NAMES = ['monitoring', 'setup', 'gsc', 'ga', 'gbp', 'ads', 'traffic', 'agent', 'discovery'] as const
+export const CANONRY_MCP_TOOLKIT_NAMES = [
+  'monitoring',
+  'setup',
+  'gsc',
+  'ga',
+  'gbp',
+  'ads',
+  'google-ads',
+  'gtm',
+  'conversion-tracking',
+  'traffic',
+  'agent',
+  'discovery',
+] as const
 export type CanonryMcpToolkitName = typeof CANONRY_MCP_TOOLKIT_NAMES[number]
 
 export interface CanonryMcpToolkit {
@@ -47,6 +76,24 @@ export const CANONRY_MCP_TOOLKITS: readonly CanonryMcpToolkit[] = [
     title: 'OpenAI ads (ChatGPT ads)',
     description: 'Live OpenAI ad-account review state, targetable geo IDs, conversion pixels/event settings, synced campaign structure, paid-performance rollups, and guarded lifecycle operations.',
     whenToLoad: 'Load when planning, creating, reviewing, or measuring ChatGPT ads, including geo and conversion-readiness checks before launch.',
+  },
+  {
+    name: 'google-ads',
+    title: 'Google Ads conversion evidence',
+    description: 'Read a connected Google Ads account, its conversion actions, effective campaign goals, and bounded stored snapshots. v1 only reads provider state; it never edits campaigns, conversion actions, or bidding goals.',
+    whenToLoad: 'Load when selecting a Google Ads customer, reviewing conversion-action and effective-goal evidence, or starting a bounded read-only sync.',
+  },
+  {
+    name: 'gtm',
+    title: 'Google Tag Manager conversion evidence',
+    description: 'Read GTM accounts, containers, workspaces, and sanitized live/draft tag graphs used to verify a conversion contract. v1 never edits a workspace or publishes a container version.',
+    whenToLoad: 'Load when selecting a GTM container, reviewing a live or draft conversion-tag graph, or starting a bounded read-only sync.',
+  },
+  {
+    name: 'conversion-tracking',
+    title: 'Cross-provider conversion integrity',
+    description: 'Read declared conversion contracts and assess them against stored Google Ads and GTM evidence without calling or mutating either provider.',
+    whenToLoad: 'Load when listing or inspecting declared conversion contracts, or when checking whether stored Google Ads and GTM evidence is consistent with one contract.',
   },
   {
     name: 'traffic',

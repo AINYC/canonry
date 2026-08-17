@@ -179,6 +179,21 @@ const expectedToolNames = [
   'canonry_technical_aeo_link_neighbors',
   'canonry_technical_aeo_dead_links',
   'canonry_technical_aeo_run',
+  'canonry_google_ads_status',
+  'canonry_google_ads_customers',
+  'canonry_google_ads_snapshots',
+  'canonry_google_ads_snapshot_get',
+  'canonry_google_ads_sync',
+  'canonry_gtm_status',
+  'canonry_gtm_accounts',
+  'canonry_gtm_containers',
+  'canonry_gtm_workspaces',
+  'canonry_gtm_snapshots',
+  'canonry_gtm_snapshot_get',
+  'canonry_gtm_sync',
+  'canonry_conversion_tracking_contracts',
+  'canonry_conversion_tracking_contract_get',
+  'canonry_conversion_tracking_integrity',
   'canonry_ads_status',
   'canonry_ads_account',
   'canonry_ads_geo_search',
@@ -560,8 +575,8 @@ describe('MCP tool registry', () => {
   })
 
   it('ships the curated v1 surface', () => {
-    expect(CANONRY_MCP_TOOL_COUNT).toBe(189)
-    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(125)
+    expect(CANONRY_MCP_TOOL_COUNT).toBe(204)
+    expect(CANONRY_MCP_READ_TOOL_COUNT).toBe(138)
     expect(canonryMcpTools.map(tool => tool.name)).toEqual(expectedToolNames)
     const readNames = canonryMcpTools.filter(tool => tool.access === 'read').map(tool => tool.name)
     expect(getCanonryMcpTools('read-only').map(tool => tool.name)).toEqual(readNames)
@@ -603,6 +618,9 @@ describe('MCP tool registry', () => {
     expect(counts.get('ga')).toBe(11)
     expect(counts.get('gbp')).toBe(13)
     expect(counts.get('ads')).toBe(26)
+    expect(counts.get('google-ads')).toBe(5)
+    expect(counts.get('gtm')).toBe(7)
+    expect(counts.get('conversion-tracking')).toBe(3)
     expect(counts.get('traffic')).toBe(10)
     expect(counts.get('agent')).toBe(5)
     expect(counts.get('discovery')).toBe(9)
@@ -1052,7 +1070,7 @@ describe('Dynamic tool catalog', () => {
       'canonry_run_cancel',
       'canonry_agent_webhook_attach',
     ])
-    expect(help.toolkits.map(t => t.name)).toEqual(['monitoring', 'setup', 'gsc', 'ga', 'gbp', 'ads', 'traffic', 'agent', 'discovery'])
+    expect(help.toolkits.map(t => t.name)).toEqual(['monitoring', 'setup', 'gsc', 'ga', 'gbp', 'ads', 'google-ads', 'gtm', 'conversion-tracking', 'traffic', 'agent', 'discovery'])
     expect(help.toolkits.every(t => !t.loaded)).toBe(true)
 
     const monitoringFirst = catalog.loadToolkit('monitoring')
@@ -1078,8 +1096,20 @@ describe('Dynamic tool catalog', () => {
 
     const help = catalog.helpResult()
     expect(help.eager).toBe(true)
-    expect(help.loadedToolkits.sort()).toEqual(['ads', 'agent', 'discovery', 'ga', 'gbp', 'gsc', 'monitoring', 'setup', 'traffic'])
+    expect(help.loadedToolkits.sort()).toEqual(['ads', 'agent', 'conversion-tracking', 'discovery', 'ga', 'gbp', 'google-ads', 'gsc', 'gtm', 'monitoring', 'setup', 'traffic'])
     expect(help.toolkits.every(t => t.loaded)).toBe(true)
+  })
+
+  it('loads conversion contracts from their cross-provider toolkit', () => {
+    const { catalog } = createCanonryMcpServerWithCatalog({
+      clientFactory: () => makeClient([]),
+    })
+
+    expect(catalog.loadToolkit('conversion-tracking').tools).toEqual([
+      'canonry_conversion_tracking_contracts',
+      'canonry_conversion_tracking_contract_get',
+      'canonry_conversion_tracking_integrity',
+    ])
   })
 
   it('still loads partial reads when read-only scope drops every write tool', () => {

@@ -16,6 +16,8 @@ import { anyUsersExist, apiRoutes, resolveTrustProxy, resolveVercelSyncDeadlineM
 import {
   apiKeys,
   auditLog,
+  googleAdsConnections,
+  gtmConnections,
   projects,
   researchRuns,
   runs,
@@ -2496,6 +2498,47 @@ export async function createServer(opts: {
     // up immediately in the `config.agent-providers` doctor check.
     getAgentProviderSummary: () =>
       buildAgentProvidersResponse(opts.config).providers,
+    getGoogleMarketingDoctorInput: (ctx) => {
+      if (!ctx.project) return null;
+      const googleAds = opts.db.select().from(googleAdsConnections)
+        .where(eq(googleAdsConnections.projectId, ctx.project.id)).get();
+      const gtm = opts.db.select().from(gtmConnections)
+        .where(eq(gtmConnections.projectId, ctx.project.id)).get();
+      const googleAdsCredential = getGoogleAdsConnection(opts.config, ctx.project.id);
+      const gtmCredential = getGtmConnection(opts.config, ctx.project.id);
+      // Disconnect deliberately retains redacted evidence rows while deleting
+      // credentials and clearing selection metadata. Doctor must mirror the
+      // public status routes: a retained row without an active OAuth access
+      // token is not a broken connection.
+      const googleAdsConnected = Boolean(googleAdsCredential?.accessToken);
+      const gtmConnected = Boolean(gtmCredential?.accessToken);
+      return {
+        googleAds: googleAds && googleAdsConnected
+          ? {
+              credentialsPresent: Boolean(
+                googleAdsCredential?.accessToken || googleAdsCredential?.refreshToken,
+              ),
+              grantedScopes: googleAds.scopes,
+              selectedLoginCustomerId: googleAds.selectedLoginCustomerId,
+              selectedCustomerId: googleAds.selectedCustomerId,
+              latestSnapshotAt: [
+                googleAds.lastInventorySnapshotAt,
+                googleAds.lastMetricsSnapshotAt,
+              ].filter((value): value is string => Boolean(value)).sort().at(-1) ?? null,
+            }
+          : null,
+        gtm: gtm && gtmConnected
+          ? {
+              credentialsPresent: Boolean(gtmCredential?.accessToken || gtmCredential?.refreshToken),
+              grantedScopes: gtm.scopes,
+              selectedAccountId: gtm.selectedAccountId,
+              selectedContainerId: gtm.selectedContainerId,
+              selectedWorkspaceId: gtm.selectedWorkspaceId,
+              latestSnapshotAt: gtm.lastSnapshotAt,
+            }
+          : null,
+      };
+    },
     googleConnectionStore,
     googleStateSecret,
     publicUrl: googlePublicUrl,

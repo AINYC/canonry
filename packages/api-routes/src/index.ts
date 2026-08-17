@@ -80,7 +80,7 @@ import {
   listVercelTrafficEvents,
   VercelLogsApiError,
 } from '@ainyc/canonry-integration-vercel'
-import { doctorRoutes } from './doctor.js'
+import { doctorRoutes, type DoctorRoutesOptions } from './doctor.js'
 import { discoveryRoutes } from './discovery/index.js'
 import type { DiscoveryRoutesOptions } from './discovery/index.js'
 import { technicalAeoRoutes } from './technical-aeo.js'
@@ -147,6 +147,8 @@ export interface ApiRoutesOptions {
   providerSummary?: ProviderSummaryEntry[]
   /** Resolves agent LLM provider key status for the `config.agent-providers` doctor check. See `DoctorContext.getAgentProviderSummary`. */
   getAgentProviderSummary?: () => import('@ainyc/canonry-contracts').AgentProviderOption[]
+  /** Offline, secret-free Google Ads/GTM metadata for project Doctor checks. */
+  getGoogleMarketingDoctorInput?: DoctorRoutesOptions['getGoogleMarketingDoctorInput']
   /** Adapter metadata for provider validation */
   providerAdapters?: ProviderAdapterInfo[]
   /** Callback when a provider config is updated via API */
@@ -660,6 +662,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       runtimeStatePaths: opts.runtimeStatePaths,
       bundledSkills: opts.bundledSkills,
       getAgentPluginState: opts.getAgentPluginState,
+      getGoogleMarketingDoctorInput: opts.getGoogleMarketingDoctorInput,
     })
     // Local-only extension hook: canonry passes the Aero agent routes here
     // so they live inside the authenticated scope. Cloud leaves it undefined.

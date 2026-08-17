@@ -1,4 +1,5 @@
 import type { CliCommandSpec } from './cli-dispatch.js'
+import { createApiClient } from './client.js'
 import { BACKFILL_CLI_COMMANDS } from './cli-commands/backfill.js'
 import { BACKLINKS_CLI_COMMANDS } from './cli-commands/backlinks.js'
 import { BING_CLI_COMMANDS } from './cli-commands/bing.js'
@@ -9,6 +10,7 @@ import { DOCTOR_CLI_COMMANDS } from './cli-commands/doctor.js'
 import { ADS_CLI_COMMANDS } from './cli-commands/ads.js'
 import { GA_CLI_COMMANDS } from './cli-commands/ga.js'
 import { GBP_CLI_COMMANDS } from './cli-commands/gbp.js'
+import { createGoogleMarketingCliCommands } from './cli-commands/google-marketing.js'
 import { GET_CLI_COMMANDS } from './cli-commands/get.js'
 import { TRAFFIC_CLI_COMMANDS } from './cli-commands/traffic.js'
 import { COMPETITOR_CLI_COMMANDS } from './cli-commands/competitor.js'
@@ -63,6 +65,7 @@ export const REGISTERED_CLI_COMMANDS: readonly CliCommandSpec[] = [
   ...ADS_CLI_COMMANDS,
   ...GA_CLI_COMMANDS,
   ...GBP_CLI_COMMANDS,
+  ...createGoogleMarketingCliCommands(createApiClient),
   ...TRAFFIC_CLI_COMMANDS,
   ...INTELLIGENCE_CLI_COMMANDS,
   ...VISIBILITY_STATS_CLI_COMMANDS,
