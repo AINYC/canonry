@@ -1482,6 +1482,32 @@ describe('GA4 routes', () => {
       expect(wideBody.directSharePct).not.toBe(body.directSharePct)
       // The specific mix that shipped: 90d direct over the 30d total.
       expect(Math.round((wideBody.totalDirectSessions / body.totalSessions) * 100)).toBe(70)
+
+      // Every UNFILTERED read must cover the same span. /ga/traffic anchors its
+      // totals to the synced period, so a sibling series left on the raw range
+      // spans the whole retained table and puts a chart beside a card that
+      // disagree, with nothing on screen to explain the gap. Social was 3.6x
+      // out on real data, and the AI series drew a false zero over 56 days that
+      // had traffic. Assert the four spans are equal rather than each one's
+      // numbers, so this keeps holding as the fixture changes.
+      const spanOf = async (path: string) => {
+        const r = await app.inject({ method: 'GET', url: `/api/v1/projects/window-share/ga/${path}` })
+        expect(r.statusCode).toBe(200)
+        const rows = JSON.parse(r.payload) as Array<{ date: string }> | { days?: Array<{ date: string }> }
+        const days = Array.isArray(rows) ? rows : (rows.days ?? [])
+        const dates = days.map((d) => d.date).sort()
+        return dates.length ? { first: dates[0], last: dates[dates.length - 1] } : null
+      }
+      // Containment, not equality: a window can legitimately have no data on its
+      // first or last day. What must never happen is a row from OUTSIDE it, which
+      // is exactly what the retained tail row is here.
+      for (const path of ['session-history', 'social-referral-history', 'ai-referral-daily']) {
+        const span = await spanOf(path)
+        if (!span) continue
+        expect(span.first >= body.windowStart!, `${path} returned ${span.first}, before window ${body.windowStart}`).toBe(true)
+        expect(span.last <= body.windowEnd!, `${path} returned ${span.last}, after window ${body.windowEnd}`).toBe(true)
+        expect(span.last, `${path} leaked the retained tail row`).not.toBe(TAIL_DATE)
+      }
     } finally {
       db.delete(gaAiReferrals).where(eq(gaAiReferrals.projectId, shareProjectId)).run()
       db.delete(gaSocialReferrals).where(eq(gaSocialReferrals.projectId, shareProjectId)).run()

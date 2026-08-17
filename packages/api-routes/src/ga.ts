@@ -1580,7 +1580,17 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     requireGa4Connection(opts, project.name, project.canonicalDomain)
 
     const range = resolveDateRange(request.query)
-    const conditions = [eq(gaSocialReferrals.projectId, project.id), ...dateRangeConditions(gaSocialReferrals.date, range)]
+    // Same anchoring as /ga/traffic and /ga/ai-referral-daily: an unfiltered
+    // read covers the SYNCED period, not all retained history. Leaving this
+    // series unbounded beside a card that covers the sync window puts two
+    // totals on screen that disagree, with nothing to explain the gap.
+    const period = range.startDate || range.endDate ? undefined : syncedPeriod(app.db, project.id)
+    // Both bounds or neither, so a half-filled period cannot narrow one end
+    // and leave the other open.
+    const measuredRange: ResolvedDateRange = period?.periodStart && period.periodEnd
+      ? { ...range, startDate: period.periodStart, endDate: period.periodEnd }
+      : range
+    const conditions = [eq(gaSocialReferrals.projectId, project.id), ...dateRangeConditions(gaSocialReferrals.date, measuredRange)]
 
     const rows = app.db
       .select({
@@ -1822,7 +1832,17 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     requireGa4Connection(opts, project.name, project.canonicalDomain)
 
     const range = resolveDateRange(request.query)
-    const conditions = [eq(gaTrafficSnapshots.projectId, project.id), ...dateRangeConditions(gaTrafficSnapshots.date, range)]
+    // Same anchoring as /ga/traffic and /ga/ai-referral-daily: an unfiltered
+    // read covers the SYNCED period, not all retained history. Leaving this
+    // series unbounded beside a card that covers the sync window puts two
+    // totals on screen that disagree, with nothing to explain the gap.
+    const period = range.startDate || range.endDate ? undefined : syncedPeriod(app.db, project.id)
+    // Both bounds or neither, so a half-filled period cannot narrow one end
+    // and leave the other open.
+    const measuredRange: ResolvedDateRange = period?.periodStart && period.periodEnd
+      ? { ...range, startDate: period.periodStart, endDate: period.periodEnd }
+      : range
+    const conditions = [eq(gaTrafficSnapshots.projectId, project.id), ...dateRangeConditions(gaTrafficSnapshots.date, measuredRange)]
 
     const rows = app.db
       .select({
