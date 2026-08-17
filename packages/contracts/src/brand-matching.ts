@@ -18,9 +18,53 @@ const WORD_SEGMENTER = new Intl.Segmenter('en', { granularity: 'word' })
 const NON_WORD = /[^\p{L}\p{N}]+/gu
 const WORD_RUNS = /[\p{L}\p{N}]+/gu
 
-/** Fold presentation variants without changing spelling. */
+/**
+ * The combining marks NFKD produces when it decomposes a precomposed LATIN,
+ * GREEK or CYRILLIC letter: `Totême` -> `tote` + U+0302 + `me`.
+ *
+ * `Script=Inherited` is what confines this to accents. A mark in that script
+ * takes its identity from the base letter it sits on, which is exactly what an
+ * accent is; a mark that belongs to a script of its own is part of that
+ * script's spelling instead. So a Devanagari matra and Hebrew niqqud survive
+ * this step, while the acute on `É` does not.
+ *
+ * `Script=Inherited` also covers ZWJ and ZWNJ, the only two codepoints where it
+ * differs from intersecting with `\p{Mark}` (checked across the whole codepoint
+ * range). Dropping them here changes nothing, because `WORD_RUNS` keeps only
+ * `\p{L}\p{N}` and would drop them a step later regardless. The intersection is
+ * the more exact spelling of the intent but needs the `v` flag, which needs an
+ * ES2024 target; the repo is on ES2022.
+ *
+ * That is a scope limit on THIS regex, not a claim about the module: `WORD_RUNS`
+ * below keeps only `\p{L}\p{N}`, so marks of every script are already dropped
+ * when word tokens are built. Whether that is right for Devanagari, Thai or
+ * Hebrew is a real question and a separate one; it predates accent folding and
+ * is unchanged by it.
+ */
+const ACCENT_MARKS = /\p{Script=Inherited}+/gu
+
+/**
+ * Fold presentation variants without changing spelling.
+ *
+ * ACCENTS ARE A PRESENTATION VARIANT, in the same family as `Demand-IQ` vs
+ * `DemandIQ`. A brand written `Totême` or `Éterne` on its own site is written
+ * `Toteme` and `Eterne` by half the prose that mentions it, and the alias
+ * derived from its domain has no accents at all, so without folding an accented
+ * brand is invisible to every mention metric. Measured on a real run: a
+ * competitor named in two answers scored zero, and another was undercounted.
+ *
+ * NFKD rather than NFKC, so the accents become separate marks this can drop.
+ * The two induce the same equivalence classes (`NFKC(a) === NFKC(b)` exactly
+ * when `NFKD(a) === NFKD(b)`), and both the alias and the text pass through
+ * here, so the comparison stays symmetric.
+ *
+ * The cost, accepted: a brand distinguished from an ordinary word ONLY by its
+ * accents now matches that word. Complete-adjacent-word matching still applies,
+ * so this widens what counts as the same spelling, never what counts as a
+ * similar one.
+ */
 function normalizeForMatch(value: string): string {
-  return value.normalize('NFKC').toLocaleLowerCase('en')
+  return value.normalize('NFKD').replace(ACCENT_MARKS, '').toLocaleLowerCase('en')
 }
 
 /** The word tokens of an already-normalized string. */

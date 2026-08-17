@@ -88,3 +88,46 @@ describe('one segmentation for the whole alias set', () => {
     expect(brandWords('DEMAND-IQ')).toEqual(['demand', 'iq'])
   })
 })
+
+describe('accent folding', () => {
+  // An accented brand used to be invisible to every mention metric: the alias
+  // derived from its domain carries no accents, so `eterne` never matched
+  // `Éterne`. Measured on a real run, one competitor scored 0 against 2 real
+  // mentions and another was undercounted by one.
+  it('matches an accented brand from its unaccented domain alias', () => {
+    expect(textContainsBrandAlias('Éterne 90s Ribbed Tank', 'eterne')).toBe(true)
+    expect(textContainsBrandAlias('Totême is minimal', 'toteme')).toBe(true)
+    expect(textContainsBrandAlias('Loewe and Lóewe', 'loewe')).toBe(true)
+  })
+
+  it('matches in both directions, so an accented alias finds unaccented prose', () => {
+    expect(textContainsBrandAlias('Eterne makes ribbed tanks', 'Éterne')).toBe(true)
+    expect(textContainsBrandAlias('Toteme is minimal', 'Totême')).toBe(true)
+  })
+
+  it('folds accents into the brand key, so the two spellings share one identity', () => {
+    expect(brandKeyFromText('Totême')).toBe(brandKeyFromText('Toteme'))
+    expect(brandKeyFromText('Éterne')).toBe('eterne')
+    // Presentation folding still composes with the punctuation/spacing rules.
+    expect(brandKeyFromText('Café-Noir')).toBe(brandKeyFromText('Cafe Noir'))
+  })
+
+  it('still refuses substrings and spelling guesses', () => {
+    // Folding widens what counts as the SAME spelling, never as a similar one.
+    expect(textContainsBrandAlias('Eterneless brands', 'eterne')).toBe(false)
+    expect(textContainsBrandAlias('acmeology', 'acme')).toBe(false)
+    expect(textContainsBrandAlias('price', 'prime')).toBe(false)
+  })
+
+  it('confines the fold to accent blocks, leaving other scripts as they already were', () => {
+    // `WORD_RUNS` keeps only \p{L}\p{N}, so marks of EVERY script were already
+    // dropped when word tokens are built. Accent folding must not change that
+    // either way, so this pins the pre-existing behaviour rather than claiming
+    // the fold protects it. Whether dropping Devanagari matras is right is a
+    // real question, and a separate one from accents.
+    expect(brandKeyFromText('की')).toBe(brandKeyFromText('क'))
+    // The accent blocks are what this change touches, and only those.
+    expect(brandKeyFromText('Ω')).toBe('ω')
+    expect(brandKeyFromText('Ώ')).toBe(brandKeyFromText('Ω'))
+  })
+})
