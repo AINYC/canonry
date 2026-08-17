@@ -216,7 +216,11 @@ export interface ProjectCommandCenterVm {
   visibilitySummary: ScoreSummaryVm
   /** Mention Share — head-to-head competitive metric. Carries breakdown so
    *  the hero drilldown can render the per-competitor table without re-fetching. */
-  mentionShareSummary: MentionShareDto
+  /** `unavailable` marks the client-side placeholder built when the /overview
+   *  fetch failed. Its counters are all zero, which is indistinguishable from a
+   *  project that has never swept, so the distinction has to be carried
+   *  explicitly rather than inferred. */
+  mentionShareSummary: MentionShareDto & { unavailable?: boolean }
   queryCounts: QueryCountsVm
   gapQueries: ScoreSummaryVm
   mentionGaps: ScoreSummaryVm
