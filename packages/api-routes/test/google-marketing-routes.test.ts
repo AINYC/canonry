@@ -79,7 +79,14 @@ async function confirmGoogleMarketingOAuth(ctx: TestContext, callback: { body: s
       host: 'canonry.example',
       origin: 'https://canonry.example',
       cookie: 'canonry_test_browser_session=present',
+      // What the confirmation page's own `<form method="post">` sends. Omitting
+      // it made every confirm assertion below pass against a request no browser
+      // produces: with no content-type Fastify skips body parsing entirely, so
+      // the suite was green while the real button answered 415 and no Google
+      // Ads or GTM connection could be completed on any install.
+      'content-type': 'application/x-www-form-urlencoded',
     },
+    payload: '',
   })
 }
 
