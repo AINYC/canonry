@@ -19,6 +19,7 @@ import {
   describeError,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
+import { computeGscPeriodComparison } from './gsc-period-comparison.js'
 import { buildGbpSummary } from './gbp-summary.js'
 import {
   mergeGscDailyTotalsWithFallback, readGscDailyTotals,
@@ -68,6 +69,15 @@ export function resolveReportedWindow(
  * explicit bounds should say so rather than return zeros.
  */
 export function assertForwardRange(startDate?: string, endDate?: string): void {
+  for (const [field, value] of [['startDate', startDate], ['endDate', endDate]] as const) {
+    if (value === undefined) continue
+    const parsed = /^\d{4}-\d{2}-\d{2}$/.test(value)
+      ? new Date(`${value}T00:00:00Z`)
+      : null
+    if (parsed === null || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+      throw validationError(`Invalid ${field} "${value}". Expected a calendar date as YYYY-MM-DD.`)
+    }
+  }
   if (startDate && endDate && startDate > endDate) {
     throw validationError(`startDate "${startDate}" is after endDate "${endDate}".`)
   }
@@ -986,6 +996,16 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
         const row = byDate.get(date)
         return row ? pick(row) : null
       })
+    const reportedWindow = resolveReportedWindow(resolvedWindow, startDate, endDate)
+    const comparisonStart = reportedWindow.startDate ?? daily[0]?.date
+    const comparisonEnd = reportedWindow.endDate ?? daily[daily.length - 1]?.date
+    // A missing row INSIDE the monotonic observed-data frontier is a real
+    // zero-count day. A date AFTER that frontier is ambiguous: it may be quiet
+    // or unpublished, so it cannot support a decline. Do not clip silently,
+    // because then the percentage would describe a different period from the
+    // requested/reported window.
+    const comparisonEndsWithinKnownData = reportedWindow.latestDataDate !== null
+      && comparisonEnd <= reportedWindow.latestDataDate
 
     return {
       totals: {
@@ -1012,7 +1032,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       // contain the rows beside it. When only one side is given, the other is
       // dropped rather than reported reversed: an absent bound is honest about
       // being unspecified, a reversed pair is not.
-      window: resolveReportedWindow(resolvedWindow, startDate, endDate),
+      window: reportedWindow,
       // Fitted server-side so the dashboard, the CLI, and the report all draw
       // the SAME line (UI/CLI parity — a chart-only regression is invisible to
       // an agent), and fitted over the CALENDAR, not over the rows.
@@ -1022,6 +1042,20 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
         ctr: linearTrend(densify((d) => d.ctr)),
         position: linearTrend(densify((d) => d.position)),
       },
+      // The headline percentages come from HERE, not from `trends`. The fitted
+      // line answers "which way is it going"; it cannot answer "by how much"
+      // without a baseline, and its own start value is not one — unconstrained,
+      // it goes negative for a metric that cannot be. Computed server-side for
+      // the same UI/CLI parity reason as the fit: a percentage derived in a
+      // chart component is invisible to an agent.
+      periodComparison: comparisonStart && comparisonEnd && comparisonEndsWithinKnownData
+        ? computeGscPeriodComparison(
+            // The source tag is the comparison module's input, NOT part of the
+            // response: `daily` on the wire stays exactly what the DTO declares.
+            daily.map((d) => ({ ...d, fromPropertyTotals: propertyDates.has(d.date) })),
+            { startDate: comparisonStart, endDate: comparisonEnd },
+          )
+        : null,
     }
   })
 

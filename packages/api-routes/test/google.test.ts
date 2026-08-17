@@ -5,7 +5,7 @@ import path from 'node:path'
 import os from 'node:os'
 import Fastify from 'fastify'
 import { eq } from 'drizzle-orm'
-import { createClient, migrate, projects, runs, auditLog, gscCoverageSnapshots, gscUrlInspections, gscSearchData, gscDailyTotals } from '@ainyc/canonry-db'
+import { createClient, migrate, projects, runs, auditLog, gscCoverageSnapshots, gscUrlInspections, gscSearchData, gscDailyTotals, gscDataWatermarks } from '@ainyc/canonry-db'
 import { AppError, type GscPerformanceDailyDto } from '@ainyc/canonry-contracts'
 import { googleOAuthSuccessHtml, googleRoutes } from '../src/google.js'
 
@@ -1713,6 +1713,15 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     expect(res.json().error.message).toMatch(/is after endDate/)
   })
 
+  it.each(['2026-02-30', '2026-2-03'])('refuses invalid calendar boundary %s', async (startDate) => {
+    const res = await context.app.inject({
+      method: 'GET',
+      url: `/projects/perf/google/gsc/performance/daily?startDate=${startDate}&endDate=2026-03-05`,
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error.message).toMatch(/Expected a calendar date as YYYY-MM-DD/)
+  })
+
   it('anchors a labelled window on the last published day, not on today', async () => {
     // The canonry.ai case: Google published through 3 days ago, so a
     // now-anchored 30d spent 3 of its days on dates that cannot hold data and
@@ -1806,6 +1815,144 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     expect(body.totals).toEqual({ clicks: 56, impressions: 1200, ctr: 56 / 1200, position: 5.5, positionDays: 2, days: 2 })
   })
 
+  it('carries a period comparison, and never leaks the internal source tag onto the wire', async () => {
+    // Four property-daily dates so the window splits into two 2-day periods.
+    const now = '2026-01-01T00:00:00.000Z'
+    context.db.insert(gscDailyTotals).values([
+      { id: crypto.randomUUID(), projectId, date: '2026-01-05', clicks: 5, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-01-06', clicks: 5, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-01-07', clicks: 20, impressions: 200, position: '8', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-01-08', clicks: 20, impressions: 200, position: '8', createdAt: now },
+    ]).run()
+
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily',
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as {
+      daily: Array<Record<string, unknown>>
+      periodComparison: {
+        days: number
+        comparable: boolean
+        prior: { clicks: number; source: string }
+        trailing: { clicks: number; source: string }
+        change: { clicks: number | null }
+      }
+    }
+
+    expect(body.periodComparison.days).toBe(2)
+    expect(body.periodComparison.comparable).toBe(true)
+    expect(body.periodComparison.prior.clicks).toBe(10)
+    expect(body.periodComparison.trailing.clicks).toBe(40)
+    expect(body.periodComparison.change.clicks).toBe(3)
+    expect(body.periodComparison.prior.source).toBe('property-daily')
+
+    // `fromPropertyTotals` is the comparison module's INPUT, tagged at the call
+    // site. It must never appear on a daily row: the row shape is the DTO's
+    // contract, and an undeclared field would ship to every SDK consumer.
+    for (const row of body.daily) {
+      expect(Object.keys(row).sort()).toEqual(['clicks', 'ctr', 'date', 'impressions', 'position'])
+    }
+  })
+
+  it('compares the requested window when its prior half has no returned rows', async () => {
+    const now = '2026-01-01T00:00:00.000Z'
+    context.db.insert(gscDailyTotals).values([
+      { id: crypto.randomUUID(), projectId, date: '2026-03-09', clicks: 5, impressions: 50, position: '8', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-10', clicks: 5, impressions: 50, position: '8', createdAt: now },
+    ]).run()
+
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?startDate=2026-03-01&endDate=2026-03-10',
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as {
+      daily: Array<{ date: string }>
+      periodComparison: {
+        days: number
+        comparable: boolean
+        prior: { startDate: string; endDate: string; clicks: number; source: string }
+        trailing: { startDate: string; endDate: string; clicks: number; source: string }
+        change: { clicks: number | null }
+      }
+    }
+
+    expect(body.daily.map(row => row.date)).toEqual(['2026-03-09', '2026-03-10'])
+    expect(body.periodComparison.days).toBe(5)
+    expect(body.periodComparison.prior).toMatchObject({
+      startDate: '2026-03-01', endDate: '2026-03-05', clicks: 0, source: 'empty',
+    })
+    expect(body.periodComparison.trailing).toMatchObject({
+      startDate: '2026-03-06', endDate: '2026-03-10', clicks: 10, source: 'property-daily',
+    })
+    expect(body.periodComparison.comparable).toBe(true)
+    expect(body.periodComparison.change.clicks).toBeNull()
+  })
+
+  it('does not treat trailing dates beyond the known frontier as measured zero', async () => {
+    const now = '2026-01-01T00:00:00.000Z'
+    context.db.insert(gscDailyTotals).values([
+      { id: crypto.randomUUID(), projectId, date: '2026-03-01', clicks: 5, impressions: 50, position: '8', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-02', clicks: 5, impressions: 50, position: '8', createdAt: now },
+    ]).run()
+
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?startDate=2026-03-01&endDate=2026-03-10',
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as GscPerformanceDailyDto
+    expect(body.window).toMatchObject({
+      startDate: '2026-03-01',
+      endDate: '2026-03-10',
+      latestDataDate: '2026-03-02',
+    })
+    expect(body.daily.map(row => row.date)).toEqual(['2026-03-01', '2026-03-02'])
+    expect(body.totals.clicks).toBe(10)
+    // March 3-10 are beyond the observed frontier, so their state is ambiguous
+    // rather than proven zero. Before this guard the request split into an
+    // active prior and an empty trailing half and falsely reported -100%.
+    expect(body.periodComparison).toBeNull()
+  })
+
+  it('does compare a quiet trailing half inside the known data frontier', async () => {
+    const now = '2026-01-01T00:00:00.000Z'
+    context.db.insert(gscDailyTotals).values([
+      { id: crypto.randomUUID(), projectId, date: '2026-03-01', clicks: 5, impressions: 50, position: '8', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-03-02', clicks: 5, impressions: 50, position: '8', createdAt: now },
+    ]).run()
+    // The monotonic watermark can stay at March 10 after a later sync returns
+    // no rows for the quiet tail. That makes March 3-10 known zeroes rather
+    // than dates beyond the project's observed frontier.
+    context.db.insert(gscDataWatermarks).values({
+      projectId,
+      dataThroughDate: '2026-03-10',
+      syncedThroughDate: '2026-03-10',
+      updatedAt: now,
+    }).run()
+
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?startDate=2026-03-01&endDate=2026-03-10',
+    })
+    expect(res.statusCode).toBe(200)
+    const comparison = (res.json() as GscPerformanceDailyDto).periodComparison
+    expect(comparison?.prior.source).toBe('property-daily')
+    expect(comparison?.trailing.source).toBe('empty')
+    expect(comparison?.change.clicks).toBe(-1)
+  })
+
+  it('returns no comparison for an explicitly empty requested window', async () => {
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily?startDate=2030-03-01&endDate=2030-03-10',
+    })
+    expect(res.statusCode).toBe(200)
+    expect((res.json() as { periodComparison: unknown }).periodComparison).toBeNull()
+  })
+
   it('falls back to summing gsc_search_data by date when no gsc_daily_totals rows exist in the window', async () => {
     // No gsc_daily_totals seeded (only the dimensioned gsc_search_data from
     // beforeEach), so the endpoint falls back to the per-date dimensioned sum.
@@ -1814,7 +1961,16 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
       url: '/projects/perf/google/gsc/performance/daily',
     })
     expect(res.statusCode).toBe(200)
-    const body = res.json() as { totals: { clicks: number; impressions: number; ctr: number; days: number }; daily: Array<{ date: string; clicks: number; impressions: number; ctr: number }> }
+    const body = res.json() as {
+      totals: { clicks: number; impressions: number; ctr: number; days: number }
+      daily: Array<{ date: string; clicks: number; impressions: number; ctr: number }>
+      periodComparison: {
+        comparable: boolean
+        prior: { source: string }
+        trailing: { source: string }
+        change: { clicks: number | null }
+      }
+    }
 
     // The dimensioned sum cannot produce a property position, so every date
     // reports `null` rather than the `0` the merge helper carries internally.
@@ -1823,6 +1979,10 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
       { date: '2026-01-06', clicks: 10, impressions: 1000, ctr: 0.01, position: null },
     ])
     expect(body.totals).toEqual({ clicks: 20, impressions: 1350, ctr: 20 / 1350, position: null, positionDays: 0, days: 2 })
+    expect(body.periodComparison.prior.source).toBe('dimensioned')
+    expect(body.periodComparison.trailing.source).toBe('dimensioned')
+    expect(body.periodComparison.comparable).toBe(false)
+    expect(body.periodComparison.change.clicks).toBeNull()
   })
 
   it('uses daily totals per date without dropping dimensioned fallback dates from the same window', async () => {

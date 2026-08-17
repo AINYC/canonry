@@ -2980,6 +2980,34 @@ export type GscPerformanceDailyDto = {
             endIndex: number;
         } | null;
     };
+    periodComparison?: {
+        days: number;
+        prior: {
+            startDate: string;
+            endDate: string;
+            clicks: number;
+            impressions: number;
+            ctr: number | null;
+            position: number | null;
+            source: 'property-daily' | 'dimensioned' | 'mixed' | 'empty';
+        };
+        trailing: {
+            startDate: string;
+            endDate: string;
+            clicks: number;
+            impressions: number;
+            ctr: number | null;
+            position: number | null;
+            source: 'property-daily' | 'dimensioned' | 'mixed' | 'empty';
+        };
+        comparable: boolean;
+        change: {
+            clicks: number | null;
+            impressions: number | null;
+            ctr: number | null;
+            position: number | null;
+        };
+    } | null;
 };
 
 export type GscPerformanceResponseDto = {

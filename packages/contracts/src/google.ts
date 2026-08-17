@@ -119,6 +119,66 @@ export const gscPerformanceTrendsSchema = z.object({
 })
 export type GscPerformanceTrends = z.infer<typeof gscPerformanceTrendsSchema>
 
+const gscPeriodTotalsSchema = z.object({
+  startDate: z.string(),
+  endDate: z.string(),
+  clicks: z.number(),
+  impressions: z.number(),
+  /** The period's own `clicks / impressions`, never a mean of daily ratios. */
+  ctr: z.number().nullable(),
+  /** Impression-weighted mean position, or null when no day carried one. */
+  position: z.number().nullable(),
+  /**
+   * Which table the figures came from. `gsc_daily_totals` (property-daily) and
+   * `SUM(gsc_search_data)` (dimensioned) are not interchangeable: on one real
+   * property-month the same period reads 1,142 clicks / 34,916 impressions from
+   * the first and 792 / 45,266 from the second.
+   */
+  source: z.enum(['property-daily', 'dimensioned', 'mixed', 'empty']),
+})
+
+/**
+ * The window's trailing half measured against the equal-length half before it.
+ *
+ * This is what the headline percentages are computed from. It replaced the
+ * fitted trend line's start-to-end movement, which had two failure modes on
+ * real data: the unconstrained fit predicted a negative day-one value for a
+ * non-negative metric (so there was no baseline and the tile printed nothing
+ * on a metric that had grown six-fold), and where it did print it described the
+ * LINE rather than the property — average position read as a 45.8% improvement
+ * over a window in which the real position got worse.
+ *
+ * Both periods are real, adjacent, equal-length stretches of the window, split
+ * over the CALENDAR rather than the row array, since Search Analytics omits
+ * zero-data days. `null` when the window is too short to make two periods, has
+ * no evidence, or extends beyond the project's known GSC data frontier.
+ */
+export const gscPeriodComparisonSchema = z.object({
+  /** Length of EACH period in calendar days. */
+  days: z.number(),
+  prior: gscPeriodTotalsSchema,
+  trailing: gscPeriodTotalsSchema,
+  /**
+   * False when either period contains dimensioned fallback totals, in which
+   * case every `change` is null. Empty/property-daily halves are comparable;
+   * `SUM(gsc_search_data)` is never valid for property totals.
+   */
+  comparable: z.boolean(),
+  /**
+   * Relative change as a ratio (0.5 = +50%), null where the prior period gives
+   * nothing to divide by or the trailing metric is unavailable. The sign is
+   * mathematical: a POSITIVE `position` means the rank number rose, which is
+   * worse. Desirability is the renderer's call.
+   */
+  change: z.object({
+    clicks: z.number().nullable(),
+    impressions: z.number().nullable(),
+    ctr: z.number().nullable(),
+    position: z.number().nullable(),
+  }),
+})
+export type GscPeriodComparison = z.infer<typeof gscPeriodComparisonSchema>
+
 export const gscPerformanceDailyDtoSchema = z.object({
   totals: z.object({
     clicks: z.number(),
@@ -151,6 +211,13 @@ export const gscPerformanceDailyDtoSchema = z.object({
    * omits it, and the chart guards for that skew.
    */
   trends: gscPerformanceTrendsSchema.optional(),
+  /**
+   * Optional for the same reason as `window` and `trends`, and additionally
+   * null when the window is too short to split into two periods, has no
+   * evidence, or extends beyond the project's known GSC data frontier. A
+   * consumer must render the absence rather than substitute a percentage.
+   */
+  periodComparison: gscPeriodComparisonSchema.nullable().optional(),
 })
 export type GscPerformanceDailyDto = z.infer<typeof gscPerformanceDailyDtoSchema>
 

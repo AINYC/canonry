@@ -328,6 +328,56 @@ export async function googlePerformanceDaily(project: string, opts: {
     for (const line of trendLines) console.log(line)
   }
 
+  // The percentages the dashboard tiles show. Printed here so the two surfaces
+  // cannot disagree about how much a metric moved — the fit above says which
+  // WAY it is going, this says by how much, and only this one has a baseline
+  // the property actually recorded.
+  //
+  // Optional at RUNTIME for the same reason as `window`, and null when the
+  // range is too short to split into two periods.
+  const cmp = data.periodComparison
+  if (cmp && !cmp.comparable) {
+    // Any dimensioned fallback is invalid for property totals, even when both
+    // halves happen to use it.
+    console.log(
+      `\nNo period comparison: period comparison needs property-level daily data.`
+      + ` Sync again, or pick a range covered by property totals.`,
+    )
+  } else if (cmp) {
+    const pct = (
+      ratio: number | null,
+      prior: number | null,
+      trailing: number | null,
+      inverted: boolean,
+    ): string => {
+      if (ratio === null) {
+        if (prior !== null && trailing !== null && prior <= 0 && trailing > 0) {
+          return `new in last ${cmp.days} day${cmp.days === 1 ? '' : 's'}`
+        }
+        if (prior === null || prior <= 0) return 'no prior period to compare'
+        if (trailing === null) return `no value in last ${cmp.days} day${cmp.days === 1 ? '' : 's'}`
+        return 'comparison unavailable'
+      }
+      if (ratio === 0) return 'no change'
+      const better = inverted ? ratio < 0 : ratio > 0
+      const magnitude = Math.abs(ratio * 100)
+      const shown = magnitude < 0.1 ? '<0.1' : magnitude.toFixed(1)
+      return `${ratio > 0 ? '+' : '-'}${shown}%  ${better ? 'better' : 'worse'}`
+    }
+    console.log(
+      `\nLast ${cmp.days} day${cmp.days === 1 ? '' : 's'} (${cmp.trailing.startDate} to ${cmp.trailing.endDate})`
+      + ` vs prior ${cmp.days} (${cmp.prior.startDate} to ${cmp.prior.endDate}):`,
+    )
+    for (const [label, ratio, prior, trailing, inverted] of [
+      ['Clicks', cmp.change.clicks, cmp.prior.clicks, cmp.trailing.clicks, false],
+      ['Impressions', cmp.change.impressions, cmp.prior.impressions, cmp.trailing.impressions, false],
+      ['CTR', cmp.change.ctr, cmp.prior.ctr, cmp.trailing.ctr, false],
+      ['Position', cmp.change.position, cmp.prior.position, cmp.trailing.position, true],
+    ] as const) {
+      console.log(`  ${`${label}:`.padEnd(13)}${pct(ratio, prior, trailing, inverted)}`)
+    }
+  }
+
   console.log()
   console.log(`  ${'DATE'.padEnd(12)}${'CLICKS'.padStart(10)}${'IMPR'.padStart(12)}${'CTR'.padStart(10)}${'POS'.padStart(9)}`)
   console.log(`  ${'─'.repeat(12)}${'─'.repeat(10)}${'─'.repeat(12)}${'─'.repeat(10)}${'─'.repeat(9)}`)
