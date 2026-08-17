@@ -176,6 +176,26 @@ export function calendarDateRange(startDate: string, endDate: string, cap = 800)
   return dates
 }
 
+/**
+ * How many calendar days a `YYYY-MM-DD` range covers, counting BOTH ends.
+ *
+ * The unit a window is labelled in. `2026-03-01`..`2026-03-30` is 30 days, not
+ * 29: a window that names 30 dates contains 30 days of data, and an off-by-one
+ * here turns a "30 days" label on a response into a claim the numbers do not
+ * support. Pure calendar arithmetic on UTC midnights, so no local timezone and
+ * no daylight-saving transition can move the count.
+ *
+ * `null` for a malformed or inverted range — those name no window, and a `0`
+ * would read as a real, empty one.
+ */
+export function inclusiveDayCount(startDate: string, endDate: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) return null
+  const startMs = Date.parse(`${startDate}T00:00:00.000Z`)
+  const endMs = Date.parse(`${endDate}T00:00:00.000Z`)
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs) return null
+  return Math.round((endMs - startMs) / 86_400_000) + 1
+}
+
 export function shiftIsoCalendarDate(isoDate: string, days: number): string {
   if (!Number.isFinite(days)) return isoDate
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate)

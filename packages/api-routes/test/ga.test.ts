@@ -1254,6 +1254,14 @@ describe('GA4 routes', () => {
     // The existing test data has snapshots from 2026-03-19 and 2026-03-20.
     // Query with window=7d — the cutoff will be ~7 days ago from today (2026-04-11),
     // so all the old data from March should be excluded.
+    //
+    // Derived the same way `windowCutoff` derives it, so this asserts the
+    // reported window IS the filter that ran, not a date recomputed here by a
+    // second rule that could drift from it.
+    const cutoff = new Date()
+    cutoff.setDate(cutoff.getDate() - 7)
+    const sevenDayCutoff = cutoff.toISOString().slice(0, 10)
+
     const res = await app.inject({
       method: 'GET',
       url: '/api/v1/projects/test-project/ga/traffic?window=7d',
@@ -1264,12 +1272,224 @@ describe('GA4 routes', () => {
     expect(body.totalSessions).toBe(0)
     expect(body.topPages).toHaveLength(0)
     expect(body.aiReferrals).toEqual([])
-    // periodEnd still reflects full synced range
-    expect(body.periodEnd).toBe('2026-03-20')
-    // periodStart is clamped: cutoff (~2026-04-04) > periodEnd, so falls back to summary start
-    expect(body.periodStart).toBe('2026-02-19')
+    // The window reported is the window MEASURED: the 7d cutoff, open at the
+    // top because no endDate was asked for. It used to report the synced range
+    // (2026-02-19..2026-03-20) here — dates that do have data — next to totals
+    // of 0, which reads as "this period was empty" about a period that was not.
+    expect(body.windowStart).toBe(sevenDayCutoff)
+    expect(body.windowEnd).toBeNull()
+    // Open on one side, so there is no span to state.
+    expect(body.windowDays).toBeNull()
+    expect(body.periodStart).toBe(body.windowStart)
+    expect(body.periodEnd).toBe(body.windowEnd)
 
     credentials.delete('test-project')
+  })
+
+  it('GET /ga/traffic computes every share from the same window as its total', async () => {
+    // Regression for the mixed-window share bug. `/ga/sync` replaces the
+    // project summary row on every run but only range-replaces the detail
+    // tables inside that same period, so a project first synced at 90 days and
+    // since synced at 30 keeps 90 days of direct/social/AI rows behind a
+    // 30-day total. The unfiltered read used to take the total from the
+    // summary and the channel counts from the whole retained table, so
+    // `directSharePct` divided 90 days of direct sessions by 30 days of
+    // sessions. On real data that turned a 20.6% direct share into 69% and
+    // described a mostly-paid business as a direct/social brand.
+    const now = new Date().toISOString()
+    const projRes = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/projects/window-share',
+      payload: {
+        displayName: 'Window Share',
+        canonicalDomain: 'window-share.example',
+        country: 'US',
+        language: 'en',
+      },
+    })
+    const shareProjectId = JSON.parse(projRes.payload).id as string
+    credentials.set('window-share', {
+      projectName: 'window-share',
+      propertyId: '424242',
+      clientEmail: 'sa@test.iam.gserviceaccount.com',
+      privateKey: 'fake-key',
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    // The last sync measured 30 days. This is the ONLY period with a stored
+    // denominator behind it.
+    const WINDOW_30_START = '2026-03-01'
+    const WINDOW_30_END = '2026-03-30'
+    // Retained from an earlier, wider sync. No total covers these days.
+    const TAIL_DATE = '2026-01-15'
+
+    db.insert(gaTrafficSummaries).values({
+      id: crypto.randomUUID(),
+      projectId: shareProjectId,
+      periodStart: WINDOW_30_START,
+      periodEnd: WINDOW_30_END,
+      totalSessions: 1000,
+      totalOrganicSessions: 200,
+      totalUsers: 800,
+      syncedAt: now,
+    }).run()
+
+    // A 90d window summary GA aggregated itself — a genuinely different total
+    // over a genuinely different span, so a handler that mixed the two would
+    // produce a visibly different percentage rather than the same one twice.
+    db.insert(gaTrafficWindowSummaries).values({
+      id: crypto.randomUUID(),
+      projectId: shareProjectId,
+      windowKey: '90d',
+      periodStart: '2026-01-01',
+      periodEnd: WINDOW_30_END,
+      totalSessions: 3000,
+      totalOrganicSessions: 600,
+      totalDirectSessions: 700,
+      totalUsers: 2400,
+      syncedAt: now,
+    }).run()
+
+    const snapshot = (date: string, landingPage: string, sessions: number, directSessions: number) => {
+      db.insert(gaTrafficSnapshots).values({
+        id: crypto.randomUUID(),
+        projectId: shareProjectId,
+        date,
+        landingPage,
+        landingPageNormalized: landingPage,
+        sessions,
+        organicSessions: 0,
+        directSessions,
+        users: sessions,
+        syncedAt: now,
+      }).run()
+    }
+    // In the 30d window: 200 direct. In the retained tail: 500 more.
+    snapshot(WINDOW_30_START, '/in-window', 300, 200)
+    snapshot(TAIL_DATE, '/tail', 600, 500)
+
+    const social = (date: string, source: string, sessions: number) => {
+      db.insert(gaSocialReferrals).values({
+        id: crypto.randomUUID(),
+        projectId: shareProjectId,
+        date,
+        source,
+        medium: 'referral',
+        channelGroup: 'Organic Social',
+        sessions,
+        users: sessions,
+        syncedAt: now,
+      }).run()
+    }
+    social(WINDOW_30_START, 'instagram.com', 100)
+    social(TAIL_DATE, 'instagram.com', 400)
+
+    const ai = (date: string, sessions: number) => {
+      db.insert(gaAiReferrals).values({
+        id: crypto.randomUUID(),
+        projectId: shareProjectId,
+        date,
+        source: 'chatgpt.com',
+        medium: 'referral',
+        sourceDimension: 'session',
+        channelGroup: 'Referral',
+        trafficClass: 'organic',
+        landingPage: '/in-window',
+        landingPageNormalized: '/in-window',
+        sessions,
+        users: sessions,
+        syncedAt: now,
+      }).run()
+    }
+    ai(WINDOW_30_START, 50)
+    ai(TAIL_DATE, 250)
+
+    try {
+      // ---- No window asked for: the synced 30-day period ----
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/projects/window-share/ga/traffic',
+      })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+
+      expect(body.windowStart).toBe(WINDOW_30_START)
+      expect(body.windowEnd).toBe(WINDOW_30_END)
+      expect(body.windowDays).toBe(30)
+      expect(body.periodStart).toBe(WINDOW_30_START)
+      expect(body.periodEnd).toBe(WINDOW_30_END)
+
+      // Denominator: the 30-day total.
+      expect(body.totalSessions).toBe(1000)
+      // Numerators: the in-window rows ONLY. The tail is excluded, so these are
+      // the exact figures a caller can divide. Pre-fix these read 700 / 500 /
+      // 300 — the whole retained table.
+      expect(body.totalDirectSessions).toBe(200)
+      expect(body.socialSessions).toBe(100)
+      expect(body.aiSessionsDeduped).toBe(50)
+
+      // 200/1000 = 20%, 100/1000 = 10%, 50/1000 = 5%. Pre-fix: 70%, 50%, 30%.
+      expect(body.directSharePct).toBe(20)
+      expect(body.directSharePctDisplay).toBe('20%')
+      expect(body.socialSharePct).toBe(10)
+      expect(body.socialSharePctDisplay).toBe('10%')
+      expect(body.aiSharePct).toBe(5)
+      expect(body.aiSharePctDisplay).toBe('5%')
+
+      // The invariant itself, stated once: each share is its own reported
+      // numerator over its own reported denominator. A share sourced from a
+      // different window fails here even if the constants above were updated
+      // to match it.
+      expect(body.directSharePct).toBe(Math.round((body.totalDirectSessions / body.totalSessions) * 100))
+      expect(body.socialSharePct).toBe(Math.round((body.socialSessions / body.totalSessions) * 100))
+      expect(body.aiSharePct).toBe(Math.round((body.aiSessionsDeduped / body.totalSessions) * 100))
+
+      // Top pages come from the same window — the tail page is not in the list
+      // whose sessions the shares are read against.
+      expect(body.topPages.map((p: { landingPage: string }) => p.landingPage)).toEqual(['/in-window'])
+
+      // ---- 90d: a genuinely different window, genuinely different numbers ----
+      const wide = await app.inject({
+        method: 'GET',
+        url: '/api/v1/projects/window-share/ga/traffic?window=90d',
+      })
+      expect(wide.statusCode).toBe(200)
+      const wideBody = JSON.parse(wide.payload)
+
+      expect(wideBody.windowStart).toBe('2026-01-01')
+      expect(wideBody.windowEnd).toBe(WINDOW_30_END)
+      expect(wideBody.windowDays).toBe(89)
+
+      expect(wideBody.totalSessions).toBe(3000)
+      expect(wideBody.totalDirectSessions).toBe(700)
+      // Both dates are inside 90d, so the tail is counted here and only here.
+      expect(wideBody.socialSessions).toBe(500)
+      expect(wideBody.aiSessionsDeduped).toBe(300)
+
+      // 700/3000 = 23.33 → 23. 500/3000 = 16.67 → 17. 300/3000 = 10.
+      expect(wideBody.directSharePct).toBe(23)
+      expect(wideBody.directSharePctDisplay).toBe('23%')
+      expect(wideBody.socialSharePct).toBe(17)
+      expect(wideBody.socialSharePctDisplay).toBe('17%')
+      expect(wideBody.aiSharePct).toBe(10)
+
+      // The two windows disagree on every figure. That is what makes this
+      // fixture able to catch a mix: pairing either window's numerator with the
+      // other's denominator lands on none of the numbers asserted above.
+      expect(wideBody.totalSessions).not.toBe(body.totalSessions)
+      expect(wideBody.totalDirectSessions).not.toBe(body.totalDirectSessions)
+      expect(wideBody.directSharePct).not.toBe(body.directSharePct)
+      // The specific mix that shipped: 90d direct over the 30d total.
+      expect(Math.round((wideBody.totalDirectSessions / body.totalSessions) * 100)).toBe(70)
+    } finally {
+      db.delete(gaAiReferrals).where(eq(gaAiReferrals.projectId, shareProjectId)).run()
+      db.delete(gaSocialReferrals).where(eq(gaSocialReferrals.projectId, shareProjectId)).run()
+      db.delete(gaTrafficSnapshots).where(eq(gaTrafficSnapshots.projectId, shareProjectId)).run()
+      db.delete(gaTrafficSummaries).where(eq(gaTrafficSummaries.projectId, shareProjectId)).run()
+      db.delete(gaTrafficWindowSummaries).where(eq(gaTrafficWindowSummaries.projectId, shareProjectId)).run()
+      credentials.delete('window-share')
+    }
   })
 
   it('GET /ga/traffic uses windowed summary for totalUsers (no per-page SUM overcount)', async () => {
@@ -1544,7 +1764,11 @@ describe('GA4 routes', () => {
     //   currently arriving via Direct/Organic/Social and would be double-counted)
     const sessionRowId = crypto.randomUUID()
     const firstUserRowId = crypto.randomUUID()
-    const distinctDate = '2025-12-31'
+    // Inside the seeded summary period (2026-02-19..2026-03-20) and distinct
+    // from the pre-existing 2026-03-20 row. An unfiltered /ga/traffic measures
+    // exactly that period, so a date outside it contributes nothing — which is
+    // the point of the window fix, not a limitation of this test.
+    const distinctDate = '2026-03-15'
     db.insert(gaAiReferrals).values({
       id: sessionRowId,
       projectId,
@@ -1611,7 +1835,8 @@ describe('GA4 routes', () => {
     const idClaudeSession = crypto.randomUUID()
     const idClaudeFirst = crypto.randomUUID()
     const seededIds = [idChatgptSession, idChatgptFirst, idChatgptUtm, idClaudeSession, idClaudeFirst]
-    const dedupDate = '2025-11-15'
+    // Inside the seeded summary period — see the note on `distinctDate` above.
+    const dedupDate = '2026-03-14'
     db.insert(gaAiReferrals).values([
       {
         id: idChatgptSession,
@@ -2278,12 +2503,15 @@ describe('GA4 routes', () => {
       }
     }
 
-    seed('2026-07-26', 'chatgpt', 35, ['session', 'first_user', 'manual_utm'])
-    seed('2026-07-25', 'chatgpt', 18, ['session', 'first_user', 'manual_utm'])
+    // Dated inside the seeded summary period (2026-02-19..2026-03-20). Both
+    // surfaces measure that period when no window is given, so seeding outside
+    // it would compare two empty windows and prove nothing.
+    seed('2026-03-06', 'chatgpt', 35, ['session', 'first_user', 'manual_utm'])
+    seed('2026-03-05', 'chatgpt', 18, ['session', 'first_user', 'manual_utm'])
     // One date in a single lens, and one source whose lenses disagree.
-    seed('2026-07-23', 'chatgpt', 1, ['session'])
-    seed('2026-07-22', 'perplexity.ai', 3, ['session'])
-    seed('2026-07-22', 'perplexity.ai', 11, ['manual_utm'])
+    seed('2026-03-03', 'chatgpt', 1, ['session'])
+    seed('2026-03-02', 'perplexity.ai', 3, ['session'])
+    seed('2026-03-02', 'perplexity.ai', 11, ['manual_utm'])
 
     const res = await app.inject({
       method: 'GET',
@@ -2302,12 +2530,12 @@ describe('GA4 routes', () => {
 
     const byDate = new Map(daily.days.map((d) => [d.date, d]))
     // 35 real sessions, not 1 (one landing page) and not 105 (three lenses summed).
-    expect(byDate.get('2026-07-26')!.sessions).toBe(35)
-    expect(byDate.get('2026-07-25')!.sessions).toBe(18)
-    expect(byDate.get('2026-07-23')!.sessions).toBe(1)
+    expect(byDate.get('2026-03-06')!.sessions).toBe(35)
+    expect(byDate.get('2026-03-05')!.sessions).toBe(18)
+    expect(byDate.get('2026-03-03')!.sessions).toBe(1)
     // The winning lens for the disagreeing source, not the sum and not the loser.
-    expect(byDate.get('2026-07-22')!.sessions).toBe(11)
-    expect(byDate.get('2026-07-26')!.bySource).toEqual([
+    expect(byDate.get('2026-03-02')!.sessions).toBe(11)
+    expect(byDate.get('2026-03-06')!.bySource).toEqual([
       expect.objectContaining({ source: 'chatgpt', sessions: 35 }),
     ])
     expect(daily.days.map((d) => d.date)).toEqual([...daily.days.map((d) => d.date)].sort())

@@ -410,7 +410,19 @@ function buildGaSection(db: DatabaseClient, projectId: string, windowDays: numbe
 
   if (!windowSummary && !fallbackSummary && !snapshotMaxDate) return null
 
-  const snapshotStartDate = snapshotMaxDate ? windowStartDate(snapshotMaxDate, windowDays) : ''
+  // ONE window for this whole section. Whichever summary supplies the totals
+  // also defines the period, and the per-page / AI counts below are bounded to
+  // it — otherwise a `--period 14` report divided 14 days of channel counts by
+  // the fallback summary's 30-day total, because the fallback row is replaced
+  // on every sync and covers only that sync's window while the snapshot and
+  // referral tables retain everything ever pulled.
+  // `||`, not `??`: a blank period bound is not a bound. Falling through on
+  // null alone would leave an empty string here, and an empty string reads as
+  // "no filter" two lines down — the unbounded read this is here to prevent.
+  const summaryPeriod = windowSummary ?? fallbackSummary
+  const snapshotMaxInWindow = summaryPeriod?.periodEnd || snapshotMaxDate
+  const snapshotStartDate = summaryPeriod?.periodStart
+    || (snapshotMaxDate ? windowStartDate(snapshotMaxDate, windowDays) : '')
   const snapshotRows = snapshotStartDate
     ? db
         .select()
@@ -419,7 +431,7 @@ function buildGaSection(db: DatabaseClient, projectId: string, windowDays: numbe
           and(
             eq(gaTrafficSnapshots.projectId, projectId),
             gte(gaTrafficSnapshots.date, snapshotStartDate),
-            lte(gaTrafficSnapshots.date, snapshotMaxDate),
+            lte(gaTrafficSnapshots.date, snapshotMaxInWindow),
           ),
         )
         .all()
@@ -461,9 +473,9 @@ function buildGaSection(db: DatabaseClient, projectId: string, windowDays: numbe
     eq(gaAiReferrals.projectId, projectId),
     eq(gaAiReferrals.sourceDimension, 'session'),
   ]
-  if (snapshotStartDate && snapshotMaxDate) {
+  if (snapshotStartDate && snapshotMaxInWindow) {
     aiConditions.push(gte(gaAiReferrals.date, snapshotStartDate))
-    aiConditions.push(lte(gaAiReferrals.date, snapshotMaxDate))
+    aiConditions.push(lte(gaAiReferrals.date, snapshotMaxInWindow))
   }
   const aiSessionRows = db
     .select({
@@ -512,13 +524,11 @@ function buildGaSection(db: DatabaseClient, projectId: string, windowDays: numbe
     }
   }
 
-  // Period reflects whichever totals source was used. The window summary is the
-  // authoritative span for its key; otherwise we report the snapshot-derived
-  // window (the same `windowDays`), with the legacy summary as a final fallback.
-  const periodStart = windowSummary?.periodStart
-    ?? (snapshotStartDate || fallbackSummary?.periodStart || '')
-  const periodEnd = windowSummary?.periodEnd
-    ?? (snapshotMaxDate || fallbackSummary?.periodEnd || '')
+  // The window every number in this section was measured over — the same
+  // bounds the queries above ran under, so the period can never name dates the
+  // figures did not come from.
+  const periodStart = snapshotStartDate
+  const periodEnd = snapshotMaxInWindow
 
   return {
     totalSessions,

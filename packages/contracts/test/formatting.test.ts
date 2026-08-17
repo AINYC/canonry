@@ -10,6 +10,7 @@ import {
   formatDeltaCopy,
   formatIsoDate,
   formatIsoDateInTimeZone,
+  inclusiveDayCount,
   formatNumber,
   formatRatio,
   formatWindowCountDelta,
@@ -656,5 +657,38 @@ describe('compactDateToIso', () => {
     // cannot roll the date back to the 19th.
     expect(compactDateToIso('20260101')).toBe('2026-01-01')
     expect(compactDateToIso('20261231')).toBe('2026-12-31')
+  })
+})
+
+describe('inclusiveDayCount', () => {
+  test('counts both ends', () => {
+    // A window that names 30 dates contains 30 days. Off by one here and a
+    // response labelled "30 days" describes a span it did not measure.
+    expect(inclusiveDayCount('2026-03-01', '2026-03-30')).toBe(30)
+    expect(inclusiveDayCount('2026-03-01', '2026-03-01')).toBe(1)
+    expect(inclusiveDayCount('2026-01-01', '2026-03-30')).toBe(89)
+  })
+
+  test('crosses months and years', () => {
+    expect(inclusiveDayCount('2026-02-27', '2026-03-02')).toBe(4)
+    expect(inclusiveDayCount('2025-12-30', '2026-01-02')).toBe(4)
+    // 2024 is a leap year: February contributes 29 days.
+    expect(inclusiveDayCount('2024-02-01', '2024-03-01')).toBe(30)
+  })
+
+  test('spans a daylight-saving transition without drifting', () => {
+    // UTC midnights, so a 23- or 25-hour local day cannot move the count. US
+    // DST began 2026-03-08; EU DST began 2026-03-29.
+    expect(inclusiveDayCount('2026-03-07', '2026-03-09')).toBe(3)
+    expect(inclusiveDayCount('2026-03-28', '2026-03-30')).toBe(3)
+  })
+
+  test('returns null for a range that names no window', () => {
+    // Inverted and malformed both mean "no window", and a 0 would read as a
+    // real, empty one.
+    expect(inclusiveDayCount('2026-03-30', '2026-03-01')).toBeNull()
+    expect(inclusiveDayCount('2026-3-1', '2026-03-30')).toBeNull()
+    expect(inclusiveDayCount('', '2026-03-30')).toBeNull()
+    expect(inclusiveDayCount('2026-03-01', 'not-a-date')).toBeNull()
   })
 })
