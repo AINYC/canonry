@@ -62,6 +62,8 @@ import {
   type GtmContainerListResponse,
   type GtmRawSnapshotDto,
   type GtmWorkspaceListResponse,
+  describeError,
+  AppError,
 } from '@ainyc/canonry-contracts'
 import { assertNotProjectScoped, requireAdminSession, requireBroadInstanceKey, requireScope } from './auth.js'
 import { auditFromRequest, resolveProject, writeAuditLog } from './helpers.js'
@@ -929,6 +931,27 @@ function oauthConfirmationHtml(input: {
  * secrets are host-injected; this plugin stores only typed selection metadata
  * and sanitized, append-only evidence rows.
  */
+/**
+ * Turn a failed provider call into an error an operator can act on.
+ *
+ * These calls fail for a small set of SETUP reasons that look identical from the
+ * dashboard: the API is not enabled on the Cloud project that owns the OAuth
+ * client, the developer token is not approved, or the OAuth user cannot see the
+ * account. Google says which of those it is, precisely. A bare `catch` used to
+ * discard that and answer "discovery failed", which left the operator with no
+ * next step: diagnosing one real case needed a `gcloud services list` against
+ * the Cloud project, because nothing in the product said the API was disabled.
+ *
+ * The provider error is logged in full, and a short summary reaches the caller.
+ * These routes already require an admin session, and Google's messages carry no
+ * credentials, so the summary discloses nothing the operator cannot already see.
+ */
+function discoveryFailure(app: FastifyInstance, what: string, err: unknown): AppError {
+  app.log.error({ err, discovery: what }, `${what} failed`)
+  const detail = describeError(err).trim()
+  return providerError(detail ? `${what} failed: ${detail}` : `${what} failed.`)
+}
+
 export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMarketingRoutesOptions) {
   // The OAuth confirmation page this module serves is plain server-rendered HTML
   // whose only control is a `<form method="post">`. Browsers submit that as
@@ -1044,8 +1067,8 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
         try {
           authorizationUrl = await adapter.authorizationUrl({ provider, redirectUri, state, scopes })
           new URL(authorizationUrl)
-        } catch {
-          throw providerError('Could not start the Google Marketing OAuth flow.')
+        } catch (err) {
+          throw discoveryFailure(app, 'Google Marketing OAuth start', err)
         }
 
         // Do not persist a supplied developer token until the signed-in browser
@@ -1326,8 +1349,8 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
     let result: GoogleAdsAccessibleCustomersResponse
     try {
       result = googleAdsAccessibleCustomersResponseSchema.parse(await reader.listGoogleAdsCustomers(projectRef))
-    } catch {
-      throw providerError('Google Ads customer discovery failed.')
+    } catch (err) {
+      throw discoveryFailure(app, 'Google Ads customer discovery', err)
     }
     return result
   })
@@ -1341,8 +1364,8 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
     const reader = requireLiveReader(opts)
     try {
       return gtmAccountsResponseSchema.parse(await reader.listGtmAccounts(projectRef))
-    } catch {
-      throw providerError('Google Tag Manager account discovery failed.')
+    } catch (err) {
+      throw discoveryFailure(app, 'Google Tag Manager account discovery', err)
     }
   })
 
@@ -1357,8 +1380,8 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
     const reader = requireLiveReader(opts)
     try {
       return gtmContainerListResponseSchema.parse(await reader.listGtmContainers(projectRef, accountId))
-    } catch {
-      throw providerError('Google Tag Manager container discovery failed.')
+    } catch (err) {
+      throw discoveryFailure(app, 'Google Tag Manager container discovery', err)
     }
   })
 
@@ -1380,8 +1403,8 @@ export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMa
         selection.accountId,
         selection.containerId,
       ))
-    } catch {
-      throw providerError('Google Tag Manager workspace discovery failed.')
+    } catch (err) {
+      throw discoveryFailure(app, 'Google Tag Manager workspace discovery', err)
     }
   })
 

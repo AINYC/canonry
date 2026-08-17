@@ -92,12 +92,15 @@ async function confirmGoogleMarketingOAuth(ctx: TestContext, callback: { body: s
 
 interface BuildAppOptions {
   includeLiveReader?: boolean
+  /** Make discovery throw, mirroring a real Google setup failure. */
+  liveReaderError?: Error
   publicUrl?: string | null
   routePrefix?: string
 }
 
 function buildApp({
   includeLiveReader = true,
+  liveReaderError,
   publicUrl = 'https://canonry.example',
   routePrefix,
 }: BuildAppOptions = {}): TestContext {
@@ -205,6 +208,7 @@ function buildApp({
       googleMarketingLiveReader: {
         listGoogleAdsCustomers: async () => {
           liveCalls.push('google-ads-customers')
+          if (liveReaderError) throw liveReaderError
           return {
             customers: [], totalAccessible: 0, truncated: false,
             selection: { loginCustomerId: null, customerId: null, selectedAt: null }, fetchedAt: NOW,
@@ -1225,4 +1229,31 @@ describe('Google Marketing routes', () => {
     expect(staleIntegrity.statusCode).toBe(200)
     expect(staleIntegrity.json()).toMatchObject({ googleAdsSnapshot: null, gtmSnapshot: null })
   })
+
+  it('surfaces the provider cause when discovery fails, instead of a dead end', async () => {
+    // The real failure this came from: the Google Ads API was not enabled on the
+    // Cloud project that owns the OAuth client. Google says exactly that, but a
+    // bare `catch` discarded it and answered "discovery failed", so diagnosing it
+    // needed `gcloud services list` against the project. Nothing in the product
+    // pointed there. Assert the cause reaches the operator.
+    const cause = new Error(
+      'Google Ads API has not been used in project 701814655766 before or it is disabled (SERVICE_DISABLED)',
+    )
+    const ctx = buildApp({ liveReaderError: cause })
+    contexts.push(ctx)
+    await connectGoogleAds(ctx)
+
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/projects/acme/google-ads/customers',
+    })
+    expect(res.statusCode).toBe(502)
+    const body = JSON.parse(res.payload) as { error: { code: string; message: string } }
+    expect(body.error.code).toBe('PROVIDER_ERROR')
+    // Names the operation AND why it failed. The bare-catch version returned
+    // only the first half, which is what made it undiagnosable.
+    expect(body.error.message).toContain('Google Ads customer discovery failed')
+    expect(body.error.message).toContain('SERVICE_DISABLED')
+  })
+
 })
