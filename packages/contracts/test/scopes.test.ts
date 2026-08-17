@@ -3,6 +3,8 @@ import {
   ADS_ACTIVATE_SCOPE,
   ADS_APPROVE_SCOPE,
   ADS_WRITE_SCOPE,
+  GOOGLE_MARKETING_LIVE_READ_SCOPE,
+  GOOGLE_MARKETING_WRITE_SCOPE,
   READ_ONLY_SCOPE,
   WILDCARD_SCOPE,
   isReadOnlyKey,
@@ -15,6 +17,8 @@ describe('scope constants', () => {
     expect(ADS_WRITE_SCOPE).toBe('ads.write')
     expect(ADS_APPROVE_SCOPE).toBe('ads.approve')
     expect(ADS_ACTIVATE_SCOPE).toBe('ads.activate')
+    expect(GOOGLE_MARKETING_LIVE_READ_SCOPE).toBe('google-marketing.read-live')
+    expect(GOOGLE_MARKETING_WRITE_SCOPE).toBe('google-marketing.write')
   })
 })
 
@@ -34,6 +38,7 @@ describe('isReadOnlyKey', () => {
   it('is false when a named *.write scope is present alongside read', () => {
     expect(isReadOnlyKey(['read', 'keys.write'])).toBe(false)
     expect(isReadOnlyKey(['read', 'settings.write'])).toBe(false)
+    expect(isReadOnlyKey(['read', GOOGLE_MARKETING_WRITE_SCOPE])).toBe(false)
   })
 
   it('is false when an approval or activation scope is present alongside read', () => {
