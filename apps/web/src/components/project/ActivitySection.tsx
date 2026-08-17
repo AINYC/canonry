@@ -589,7 +589,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted mb-1">Traffic Overview</p>
             <h2 className="text-base font-semibold text-primary flex items-center gap-1.5">
               Site Traffic
-              <InfoTooltip text={`Aggregated traffic metrics from Google Analytics 4. Sessions and users are summed across the selected period.${traffic?.periodStart && traffic?.periodEnd ? ` Data available: ${new Date(traffic.periodStart + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} – ${new Date(traffic.periodEnd + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}.` : ''} Organic sessions are Google organic search sessions specifically.`} />
+              <InfoTooltip text={`Aggregated traffic metrics from Google Analytics 4.${traffic?.periodStart && traffic?.periodEnd ? ` Data available: ${new Date(traffic.periodStart + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} – ${new Date(traffic.periodEnd + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}.` : ''} Distinct users are unavailable when the selected history extends beyond a stored aggregate. Organic sessions are Google organic search sessions specifically.`} />
             </h2>
           </div>
           <div className="segmented" role="group" aria-label="Traffic time period">
@@ -622,9 +622,9 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
               tone="positive"
             />
             <TrafficMetric
-              value={formatCompact(traffic.totalUsers)}
+              value={traffic.totalUsers === null ? '—' : formatCompact(traffic.totalUsers)}
               label="Total Users"
-              subtitle={traffic.totalUsers.toLocaleString()}
+              subtitle={traffic.totalUsers === null ? 'Unavailable for this range' : traffic.totalUsers.toLocaleString()}
               tone="neutral"
             />
           </div>

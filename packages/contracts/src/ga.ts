@@ -323,7 +323,8 @@ export interface GaTrafficResponse {
   totalOrganicSessions: number
   /** Direct-channel sessions (sessions with no source — bookmarks, typed URLs, AI-driven traffic with stripped referrer). 0 for legacy rows from before the column was added. */
   totalDirectSessions: number
-  totalUsers: number
+  /** Deduplicated users, or null when no stored un-dimensioned aggregate covers the complete selected range. */
+  totalUsers: number | null
   topPages: Array<{ landingPage: string; sessions: number; organicSessions: number; directSessions: number; users: number }>
   /** Deduped to the winning attribution dimension (highest sessions) per (source, medium). `users` is deprecated — see `GA4AiReferralDto.users`; never emitted since 4.135.0. */
   aiReferrals: Array<{ source: string; medium: string; trafficClass: AiReferralTrafficClass; sessions: number; users?: number; sourceDimension: GA4SourceDimension }>
@@ -409,9 +410,26 @@ export interface GaTrafficResponse {
   /** Display string for otherSharePct: 'X%', '<1%' for non-zero shares that round below 1, or '—' when sessions exist but total is unknown (partial sync). */
   otherSharePctDisplay: string
   lastSyncedAt: string | null
-  /** Start of the synced date range (YYYY-MM-DD), null if no data. */
+  /**
+   * Inclusive start (YYYY-MM-DD) of the window EVERY figure in this response
+   * was measured over — totals, channel counts, top pages, and every share
+   * alike. `null` means the window is open on that side (all retained history).
+   *
+   * Read every share against this window. The share fields divide a channel
+   * count by `totalSessions`; both come from these dates and only these dates.
+   */
+  windowStart: string | null
+  /** Inclusive end (YYYY-MM-DD) of the measured window. `null` when open-ended. */
+  windowEnd: string | null
+  /**
+   * Calendar days the measured window covers, counting both ends. `null` when
+   * either bound is open — an unknown span is reported as unknown rather than
+   * guessed.
+   */
+  windowDays: number | null
+  /** Alias of `windowStart`, retained for callers that predate it. */
   periodStart: string | null
-  /** End of the synced date range (YYYY-MM-DD), null if no data. */
+  /** Alias of `windowEnd`, retained for callers that predate it. */
   periodEnd: string | null
 }
 

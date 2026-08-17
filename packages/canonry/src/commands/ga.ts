@@ -224,7 +224,7 @@ export async function gaTraffic(project: string, opts?: GaRangeOptions & { limit
   console.log(`GA4 Traffic for "${project}"\n`)
   console.log(`  Total Sessions:          ${result.totalSessions}`)
   console.log(`  Organic Sessions:        ${result.totalOrganicSessions}`)
-  console.log(`  Total Users:             ${result.totalUsers}`)
+  console.log(`  Total Users:             ${result.totalUsers ?? 'unavailable for this range'}`)
   if (result.aiSessionsDeduped > 0) {
     const share = result.totalSessions > 0 ? Math.round((result.aiSessionsDeduped / result.totalSessions) * 100) : 0
     console.log(`  AI Sessions (deduped):   ${result.aiSessionsDeduped} (${share}% of total)`)
@@ -533,6 +533,20 @@ export async function gaCoverage(project: string, format?: string): Promise<void
   }
 }
 
+/**
+ * The one line that makes every percentage below it readable.
+ *
+ * Printed ABOVE the numbers, never as a footer: a reader who meets "Direct 69%"
+ * first has already formed a view of the business by the time a trailing line
+ * tells them what period it covers. Returns null only when the window is
+ * genuinely open-ended, in which case there is no span to state.
+ */
+function windowLine(traffic: GaTrafficResponse): string | null {
+  if (!traffic.windowStart || !traffic.windowEnd) return null
+  const span = traffic.windowDays === null ? '' : ` (${traffic.windowDays} days)`
+  return `  Window: ${traffic.windowStart} to ${traffic.windowEnd}${span}`
+}
+
 export async function gaSocialReferralSummary(project: string, opts?: { trend?: boolean; format?: string }): Promise<void> {
   const client = getClient()
   const traffic: GaTrafficResponse = await client.gaTraffic(project)
@@ -545,6 +559,9 @@ export async function gaSocialReferralSummary(project: string, opts?: { trend?: 
         socialUsers: traffic.socialUsers,
         totalSessions: traffic.totalSessions,
         socialSharePct: traffic.socialSharePct,
+        windowStart: traffic.windowStart,
+        windowEnd: traffic.windowEnd,
+        windowDays: traffic.windowDays,
         topSources: traffic.socialReferrals.slice(0, 5).map((r) => ({ source: r.source, sessions: r.sessions, channel: r.channelGroup })),
         trend: trend,
       }, null, 2))
@@ -552,6 +569,8 @@ export async function gaSocialReferralSummary(project: string, opts?: { trend?: 
     }
 
     console.log(`Social Traffic Summary for "${project}"\n`)
+    const trendWindow = windowLine(traffic)
+    if (trendWindow) console.log(`${trendWindow}\n`)
     console.log(`  Sessions: ${traffic.socialSessions} (${traffic.socialSharePct}% of ${traffic.totalSessions} total)`)
     console.log(`  Users:    ${traffic.socialUsers}`)
     console.log()
@@ -581,12 +600,17 @@ export async function gaSocialReferralSummary(project: string, opts?: { trend?: 
       socialUsers: traffic.socialUsers,
       totalSessions: traffic.totalSessions,
       socialSharePct: traffic.socialSharePct,
+      windowStart: traffic.windowStart,
+      windowEnd: traffic.windowEnd,
+      windowDays: traffic.windowDays,
       topSources: traffic.socialReferrals.slice(0, 5).map((r) => ({ source: r.source, sessions: r.sessions, channel: r.channelGroup })),
     }, null, 2))
     return
   }
 
   console.log(`Social Traffic Summary for "${project}"\n`)
+  const socialWindow = windowLine(traffic)
+  if (socialWindow) console.log(`${socialWindow}\n`)
   console.log(`  Sessions: ${traffic.socialSessions} (${traffic.socialSharePct}% of ${traffic.totalSessions} total)`)
   console.log(`  Users:    ${traffic.socialUsers}`)
   if (traffic.socialReferrals.length > 0) {
@@ -647,6 +671,9 @@ export async function gaAttribution(project: string, opts?: { trend?: boolean; f
         aiReferrals: traffic.aiReferrals,
         aiReferralLandingPages: traffic.aiReferralLandingPages,
         socialReferrals: traffic.socialReferrals,
+        windowStart: traffic.windowStart,
+        windowEnd: traffic.windowEnd,
+        windowDays: traffic.windowDays,
         trend,
       }, null, 2))
       return
@@ -658,8 +685,10 @@ export async function gaAttribution(project: string, opts?: { trend?: boolean; f
     }
 
     console.log(`GA4 Attribution Overview for "${project}"\n`)
+    const trendWindow = windowLine(traffic)
+    if (trendWindow) console.log(`${trendWindow}\n`)
     console.log(`  Total Sessions:   ${traffic.totalSessions}`)
-    console.log(`  Total Users:      ${traffic.totalUsers}`)
+    console.log(`  Total Users:      ${traffic.totalUsers ?? 'unavailable for this range'}`)
     console.log()
     console.log('  CHANNEL BREAKDOWN                  7d trend     30d trend')
     console.log(`    Organic Search: ${String(traffic.channelBreakdown.organic.sessions).padEnd(6)} (${traffic.channelBreakdown.organic.sharePctDisplay.padStart(4)})    ${fmtTrend(trend.organic.trend7dPct).padEnd(12)} ${fmtTrend(trend.organic.trend30dPct)}`)
@@ -682,11 +711,8 @@ export async function gaAttribution(project: string, opts?: { trend?: boolean; f
       console.log(`  Social Mover: ${m.source} (${m.changePct >= 0 ? '+' : ''}${m.changePct}%, ${m.sessionsPrev7d}→${m.sessions7d} sessions/7d)`)
     }
 
-    if (traffic.periodStart && traffic.periodEnd) {
-      console.log(`\n  Period: ${traffic.periodStart} to ${traffic.periodEnd}`)
-    }
     if (traffic.lastSyncedAt) {
-      console.log(`  Last synced: ${traffic.lastSyncedAt}`)
+      console.log(`\n  Last synced: ${traffic.lastSyncedAt}`)
     }
     return
   }
@@ -730,6 +756,9 @@ export async function gaAttribution(project: string, opts?: { trend?: boolean; f
       aiReferrals: traffic.aiReferrals,
       aiReferralLandingPages: traffic.aiReferralLandingPages,
       socialReferrals: traffic.socialReferrals,
+      windowStart: traffic.windowStart,
+      windowEnd: traffic.windowEnd,
+      windowDays: traffic.windowDays,
       periodStart: traffic.periodStart,
       periodEnd: traffic.periodEnd,
     }, null, 2))
@@ -742,8 +771,10 @@ export async function gaAttribution(project: string, opts?: { trend?: boolean; f
   }
 
   console.log(`GA4 Attribution Overview for "${project}"\n`)
+  const attributionWindow = windowLine(traffic)
+  if (attributionWindow) console.log(`${attributionWindow}\n`)
   console.log(`  Total Sessions:   ${traffic.totalSessions}`)
-  console.log(`  Total Users:      ${traffic.totalUsers}`)
+  console.log(`  Total Users:      ${traffic.totalUsers ?? 'unavailable for this range'}`)
   console.log()
   console.log('  CHANNEL BREAKDOWN')
   console.log(`    Organic Search: ${traffic.channelBreakdown.organic.sessions} sessions (${traffic.channelBreakdown.organic.sharePctDisplay})`)
@@ -785,10 +816,7 @@ export async function gaAttribution(project: string, opts?: { trend?: boolean; f
     }
   }
 
-  if (traffic.periodStart && traffic.periodEnd) {
-    console.log(`\n  Period: ${traffic.periodStart} to ${traffic.periodEnd}`)
-  }
   if (traffic.lastSyncedAt) {
-    console.log(`  Last synced: ${traffic.lastSyncedAt}`)
+    console.log(`\n  Last synced: ${traffic.lastSyncedAt}`)
   }
 }
