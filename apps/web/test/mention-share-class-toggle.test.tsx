@@ -203,3 +203,56 @@ describe('MentionShare class control', () => {
     expect(block().querySelector('.mention-share-rows')).toBeNull()
   })
 })
+
+describe('MentionShare empty-class copy', () => {
+  it('an all-branded basket says so instead of claiming nothing is tracked', () => {
+    // The default selection is non-brand, which is empty here, but 20 branded
+    // snapshots sit one click away. "none tracked" would contradict the control
+    // beside it, and the server already names this state.
+    renderShare({ breakdown: breakdown() })
+    expect(block().querySelector('.mention-share-value-text')?.textContent).toBe('No non-brand queries')
+    expect(block().textContent).toContain('every tracked query names your brand')
+    expect(block().textContent).not.toContain('none tracked')
+    // The branded data is reachable, and reads normally once selected.
+    fireEvent.click(screen.getByRole('radio', { name: 'Branded' }))
+    expect(block().querySelector('.mention-share-value')?.textContent).toBe('100%')
+  })
+
+  it('still says "none tracked" when the project really tracks nothing', () => {
+    renderShare({ breakdown: breakdown({ snapshotsTotal: 0 }), branded: breakdown({ snapshotsTotal: 0 }) })
+    expect(block().textContent).toContain('no sweep has run yet')
+
+    cleanup()
+    // A run happened for branded, none for non-brand, and no branded queries
+    // either: nothing is tracked in either class beyond the run itself.
+    renderShare({ breakdown: breakdown(), branded: breakdown() , unavailable: false })
+    expect(block().textContent).not.toContain('No non-brand queries')
+  })
+})
+
+describe('MentionShare ranking semantics', () => {
+  it('exposes the columns to assistive tech, not just to the eye', () => {
+    renderShare()
+    const table = screen.getByRole('table')
+    expect(table).toBeTruthy()
+
+    // Column headers exist and are associated by scope, so a value is announced
+    // with what it means rather than as a bare number.
+    const columnHeaders = within(table).getAllByRole('columnheader')
+    expect(columnHeaders.map(h => h.textContent?.replace(/\s+/g, ' ').trim())).toEqual(
+      expect.arrayContaining(['Domain', 'Share']),
+    )
+    for (const header of columnHeaders) {
+      if (header.getAttribute('aria-hidden') === 'true') continue
+      expect(header.getAttribute('scope')).toBe('col')
+    }
+
+    // Each row is identified by its domain, as a row header.
+    const rowHeaders = within(table).getAllByRole('rowheader')
+    expect(rowHeaders[0]!.getAttribute('scope')).toBe('row')
+    expect(rowHeaders.map(h => h.textContent)).toContain('rival-one.example')
+
+    // The bar restates the share cell, so it is decorative and hidden.
+    expect(table.querySelector('.mention-share-bar')!.closest('[aria-hidden="true"]')).toBeTruthy()
+  })
+})

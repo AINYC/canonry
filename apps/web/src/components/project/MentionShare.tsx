@@ -39,7 +39,7 @@ const MENTION_COUNT_TOOLTIP = 'Mentioned = brand in the answer. Cited = domain i
  */
 export function mentionClassFigures(
   breakdown: MentionShareBreakdownVm,
-  opts: { hasCompetitors: boolean; noRun: boolean; unavailable: boolean },
+  opts: { hasCompetitors: boolean; noRun: boolean; unavailable: boolean; otherClassHasData: boolean },
 ): { headline: string; numeric: boolean; detail: string; showRows: boolean } {
   // Checked BEFORE `noRun`, because the two produce an identical all-zero
   // payload. `/overview` failing is swallowed by the dashboard fan-out, so
@@ -52,7 +52,14 @@ export function mentionClassFigures(
     return { headline: 'No data', numeric: false, detail: 'no sweep has run yet', showRows: false }
   }
   if (breakdown.snapshotsTotal === 0) {
-    return { headline: 'No queries', numeric: false, detail: 'none tracked', showRows: false }
+    // "none tracked" is only true when NOTHING is tracked. A basket that is
+    // entirely branded has real snapshots one click away, and the server says
+    // so — `buildMentionShare` returns the value 'No non-brand queries' for
+    // exactly this case. Saying "none tracked" there contradicts the control
+    // sitting beside it.
+    return opts.otherClassHasData
+      ? { headline: 'No non-brand queries', numeric: false, detail: 'every tracked query names your brand', showRows: false }
+      : { headline: 'No queries', numeric: false, detail: 'none tracked', showRows: false }
   }
   if (breakdown.snapshotsWithAnswerText === 0) {
     return { headline: 'No answers', numeric: false, detail: 'no answer text in this run', showRows: false }
@@ -111,38 +118,48 @@ function MentionShareRows({
     })),
   ].sort((a, b) => b.mentions - a.mentions || (a.label < b.label ? -1 : 1))
 
+  // A real table, not a header div over an unlabelled list. The columns carry
+  // meaning that only the visual arrangement was expressing, so a screen reader
+  // was reading "9" and "30.0%" with nothing to attach them to. `scope` on each
+  // header is what associates them; the bar is decorative and aria-hidden,
+  // since its width is the share the next cell already states.
   return (
-    <div className="mention-share-table">
-      <div className="mention-share-row mention-share-row-head">
-        <span />
-        <span />
-        <span className="mention-share-count">
-          Mentions
-          <InfoTooltip text={MENTION_COUNT_TOOLTIP} />
-        </span>
-        <span className="mention-share-share">Share</span>
-      </div>
-      <ul className="mention-share-rows">
+    <table className="mention-share-table">
+      <caption className="sr-only">Brand mentions by domain, most mentioned first</caption>
+      <thead>
+        <tr className="mention-share-row mention-share-row-head">
+          <th scope="col" className="mention-share-row-label">Domain</th>
+          <th aria-hidden="true" />
+          <th scope="col" className="mention-share-count">
+            Mentions
+            <InfoTooltip text={MENTION_COUNT_TOOLTIP} />
+          </th>
+          <th scope="col" className="mention-share-share">Share</th>
+        </tr>
+      </thead>
+      <tbody className="mention-share-rows">
         {rows.map(row => {
           const share = (row.mentions / total) * 100
           return (
-            <li key={row.label} className="mention-share-row">
-              <span className={`mention-share-row-label ${row.isYou ? 'text-heading font-medium' : 'text-secondary'}`}>
+            <tr key={row.label} className="mention-share-row">
+              <th scope="row" className={`mention-share-row-label ${row.isYou ? 'text-heading font-medium' : 'text-secondary'}`}>
                 {row.label}
-              </span>
-              <div className="mention-share-bar">
-                <div
-                  className={`mention-share-bar-fill ${row.isYou ? 'bg-positive-500/70' : 'bg-mono-500/60'}`}
-                  style={{ width: `${share > 0 ? Math.max(share, 1.5) : 0}%` }}
-                />
-              </div>
-              <span className="mention-share-count">{row.mentions}</span>
-              <span className="mention-share-share">{share.toFixed(1)}%</span>
-            </li>
+              </th>
+              <td aria-hidden="true">
+                <div className="mention-share-bar">
+                  <div
+                    className={`mention-share-bar-fill ${row.isYou ? 'bg-positive-500/70' : 'bg-mono-500/60'}`}
+                    style={{ width: `${share > 0 ? Math.max(share, 1.5) : 0}%` }}
+                  />
+                </div>
+              </td>
+              <td className="mention-share-count">{row.mentions}</td>
+              <td className="mention-share-share">{share.toFixed(1)}%</td>
+            </tr>
           )
         })}
-      </ul>
-    </div>
+      </tbody>
+    </table>
   )
 }
 
@@ -174,10 +191,12 @@ export function MentionShare({
   const scopeKey: MentionScopeKey = pooled ? 'pooled' : activeKey
   const active = activeKey === 'branded' ? summary.branded : summary.breakdown
 
+  const other = activeKey === 'branded' ? summary.breakdown : summary.branded
   const figures = mentionClassFigures(active, {
     hasCompetitors: competitorDomains.length > 0,
     unavailable: summary.unavailable === true,
     noRun: summary.breakdown.snapshotsTotal === 0 && summary.branded.snapshotsTotal === 0,
+    otherClassHasData: other.snapshotsTotal > 0,
   })
   // Tone bands are calibrated for competitive placement. Branded sits near 100
   // by construction and pooled is not a competitive read at all, so neither is

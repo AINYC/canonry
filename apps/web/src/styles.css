@@ -1441,8 +1441,23 @@
     @apply text-[13px] text-secondary;
   }
 
+  /* A real <table> for semantics, laid out as the same four-column grid it was
+     before. `display: block` on the table and its sections hands layout back to
+     the per-row grid; the columns are still declared in one place. */
   .mention-share-table {
-    @apply pt-1;
+    @apply block pt-1;
+  }
+
+  .mention-share-table thead,
+  .mention-share-table tbody {
+    @apply block;
+  }
+
+  /* A `th` defaults to bold and centred; the row header must look exactly like
+     the span it replaced, so weight comes from the row's own classes. */
+  .mention-share-table th {
+    @apply text-left;
+    font-weight: inherit;
   }
 
   .mention-share-rows {
