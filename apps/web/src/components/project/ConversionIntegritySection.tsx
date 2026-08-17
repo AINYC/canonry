@@ -451,6 +451,145 @@ function providerRow({
   )
 }
 
+function ConversionIntegritySetup({
+  workspace,
+  action,
+  onPrimaryAction,
+  onChangeGoogleAdsSelection,
+  onChangeGtmSelection,
+  actionPending,
+  actionError,
+}: {
+  workspace: ConversionIntegrityWorkspaceVm
+  action: PrimaryActionPresentation
+  onPrimaryAction?: (action: ConversionIntegrityPrimaryAction) => void
+  onChangeGoogleAdsSelection?: () => void
+  onChangeGtmSelection?: () => void
+  actionPending: boolean
+  actionError: string | null
+}) {
+  const googleAdsReady = workspace.googleAds.state === 'connected'
+  const gtmReady = workspace.gtm.state === 'connected'
+  const steps = [
+    {
+      title: 'Google Ads account',
+      ready: googleAdsReady,
+      summary: workspace.googleAds.selection,
+      detail: 'Connect read-only access and choose the customer account.',
+      changeLabel: 'Change Google Ads account',
+      onChange: onChangeGoogleAdsSelection,
+    },
+    {
+      title: 'Tag Manager container',
+      ready: gtmReady,
+      summary: workspace.gtm.selection,
+      detail: 'Connect read-only access and choose the container.',
+      changeLabel: 'Change Tag Manager container',
+      onChange: onChangeGtmSelection,
+    },
+    {
+      title: 'Conversion to check',
+      ready: false,
+      summary: null,
+      detail: 'Choose the website event, conversion action, and tag to check.',
+      changeLabel: null,
+      onChange: undefined,
+    },
+  ]
+  const activeStep = steps.findIndex((step) => !step.ready)
+
+  return (
+    <section className="page-section" aria-labelledby="conversion-integrity-title">
+      <div className="section-head mb-5">
+        <div>
+          <p className="eyebrow">Google marketing</p>
+          <h2 id="conversion-integrity-title" className="mt-1 text-xl font-semibold tracking-[-0.02em] text-heading">
+            Conversion Integrity
+          </h2>
+          <p className="lede mt-2">Check one website conversion across Tag Manager and Google Ads.</p>
+        </div>
+      </div>
+
+      <div className="max-w-3xl pt-3">
+        <h3 className="text-base font-semibold text-heading">Complete setup</h3>
+        <p className="supporting-copy mt-2 max-w-2xl">
+          Connect your existing Google accounts, then choose the conversion Canonry should check.
+        </p>
+
+        <ol className="mt-5 divide-y divide-default border-y border-default">
+          {steps.map((step, index) => {
+            const isActive = index === activeStep
+            const detail = step.ready ? step.summary ?? 'Connected' : isActive ? action.detail : step.detail
+
+            return (
+              <li
+                key={step.title}
+                aria-current={isActive ? 'step' : undefined}
+                className="grid grid-cols-[2rem_minmax(0,1fr)] gap-3 py-4"
+              >
+                <span
+                  aria-hidden="true"
+                  className={`flex size-7 items-center justify-center rounded-full border text-xs font-semibold ${step.ready ? 'border-positive bg-positive-soft text-positive' : isActive ? 'border-strong bg-surface-active text-heading' : 'border-base text-muted'}`}
+                >
+                  {step.ready ? '✓' : index + 1}
+                </span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <h4 className="text-sm font-semibold text-heading">{step.title}</h4>
+                    {step.ready ? <ToneBadge tone="positive">Ready</ToneBadge> : null}
+                    {step.summary && step.changeLabel && step.onChange ? (
+                      <WriteButton
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        aria-label={step.changeLabel}
+                        disabled={actionPending}
+                        onClick={step.onChange}
+                      >
+                        Change
+                      </WriteButton>
+                    ) : null}
+                  </div>
+                  {isActive && !step.ready && step.summary ? (
+                    <p className="mt-1 max-w-xl text-sm font-medium text-heading">{step.summary}</p>
+                  ) : null}
+                  <p className="mt-1 max-w-xl text-sm leading-6 text-secondary">{detail}</p>
+                  {isActive && onPrimaryAction ? (
+                    <div className="mt-3">
+                      {action.id === 'retry-connection-status' ? (
+                        <Button
+                          type="button"
+                          disabled={actionPending}
+                          onClick={() => onPrimaryAction(action.id)}
+                        >
+                          {actionPending ? 'Working…' : action.label}
+                        </Button>
+                      ) : (
+                        <WriteButton
+                          type="button"
+                          disabled={actionPending}
+                          onClick={() => onPrimaryAction(action.id)}
+                        >
+                          {actionPending ? 'Working…' : action.label}
+                        </WriteButton>
+                      )}
+                    </div>
+                  ) : null}
+                  {isActive && actionError ? <p role="alert" className="mt-2 text-sm text-negative">{actionError}</p> : null}
+                </div>
+              </li>
+            )
+          })}
+        </ol>
+
+        <p className="mt-4 text-sm leading-6 text-secondary">
+          Canonry reads your Google configuration. It does not change or publish it.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export function ConversionIntegritySection({
   workspace = EMPTY_CONVERSION_INTEGRITY_WORKSPACE,
   onPrimaryAction,
@@ -491,6 +630,24 @@ export function ConversionIntegritySection({
   const nonPassingFindings = findings.filter((finding) => finding.outcome !== 'pass')
   const passingFindings = findings.filter((finding) => finding.outcome === 'pass')
   const findingsTone: MetricTone = nonPassingFindings.some((finding) => finding.outcome === 'fail') ? 'negative' : 'caution'
+  const setupIncomplete = contracts.length === 0
+    && workspace.contract === null
+    && !workspace.contractSelectionRequired
+    && contractError === null
+
+  if (setupIncomplete) {
+    return (
+      <ConversionIntegritySetup
+        workspace={workspace}
+        action={action}
+        onPrimaryAction={onPrimaryAction}
+        onChangeGoogleAdsSelection={onChangeGoogleAdsSelection}
+        onChangeGtmSelection={onChangeGtmSelection}
+        actionPending={actionPending}
+        actionError={actionError}
+      />
+    )
+  }
 
   return (
     <section className="page-section" aria-labelledby="conversion-integrity-title">
