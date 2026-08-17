@@ -930,6 +930,29 @@ function oauthConfirmationHtml(input: {
  * and sanitized, append-only evidence rows.
  */
 export async function googleMarketingRoutes(app: FastifyInstance, opts: GoogleMarketingRoutesOptions) {
+  // The OAuth confirmation page this module serves is plain server-rendered HTML
+  // whose only control is a `<form method="post">`. Browsers submit that as
+  // `application/x-www-form-urlencoded`, and Fastify parses bodies before the
+  // handler runs, so without a parser for that type the submit answered
+  // `415 Unsupported Media Type` and the request never reached the route. That
+  // made the final step of every Google Ads and GTM connection impossible to
+  // complete: the server's own button posted to an endpoint the server refused.
+  //
+  // Registered HERE rather than on the root instance on purpose. Fastify scopes
+  // content-type parsers to the encapsulation context, and this module is added
+  // with `api.register(googleMarketingRoutes, ...)`, so the rest of the API keeps
+  // rejecting form bodies and stays JSON-only.
+  //
+  // The body is deliberately discarded. The confirmation id travels in the path
+  // and the browser binding is the HttpOnly cookie, so the form carries no
+  // fields worth reading, and accepting an empty object keeps a submitted field
+  // from ever reaching the handler as input.
+  app.addContentTypeParser(
+    'application/x-www-form-urlencoded',
+    { parseAs: 'string' },
+    (_request, _body, done) => { done(null, {}) },
+  )
+
   const pendingOAuthFlows = new PendingGoogleMarketingOAuthFlows()
   let stateSecret: string | null = null
   if (opts.googleStateSecret !== undefined) {
