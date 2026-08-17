@@ -8,7 +8,6 @@ import {
 function snap(overrides: Partial<CompetitorPressureSnapshot> = {}): CompetitorPressureSnapshot {
   return {
     queryId: 'q1',
-    competitorOverlap: [],
     citedDomains: [],
     ...overrides,
   }
@@ -30,9 +29,9 @@ describe('buildCompetitorPressureScore', () => {
 
   it('labels High and tone=negative when ratio >= 0.5', () => {
     const snapshots = [
-      snap({ competitorOverlap: ['rival.com'] }),
-      snap({ competitorOverlap: ['rival.com'] }),
-      snap({ competitorOverlap: [] }),
+      snap({ citedDomains: ['rival.com'] }),
+      snap({ citedDomains: ['rival.com'] }),
+      snap({ citedDomains: [] }),
     ]
     const result = buildCompetitorPressureScore(snapshots, ['rival.com'], 1)
     expect(result.value).toBe('High')
@@ -42,8 +41,8 @@ describe('buildCompetitorPressureScore', () => {
 
   it('labels Moderate and tone=caution when ratio in [0.2, 0.5)', () => {
     const snapshots = [
-      ...Array.from({ length: 2 }, () => snap({ competitorOverlap: ['rival.com'] })),
-      ...Array.from({ length: 6 }, () => snap({ competitorOverlap: [] })),
+      ...Array.from({ length: 2 }, () => snap({ citedDomains: ['rival.com'] })),
+      ...Array.from({ length: 6 }, () => snap({ citedDomains: [] })),
     ]
     const result = buildCompetitorPressureScore(snapshots, ['rival.com'], 1)
     expect(result.value).toBe('Moderate')
@@ -52,8 +51,8 @@ describe('buildCompetitorPressureScore', () => {
 
   it('labels Low and tone=neutral when ratio in (0, 0.2)', () => {
     const snapshots = [
-      snap({ competitorOverlap: ['rival.com'] }),
-      ...Array.from({ length: 9 }, () => snap({ competitorOverlap: [] })),
+      snap({ citedDomains: ['rival.com'] }),
+      ...Array.from({ length: 9 }, () => snap({ citedDomains: [] })),
     ]
     const result = buildCompetitorPressureScore(snapshots, ['rival.com'], 1)
     expect(result.value).toBe('Low')
@@ -70,10 +69,10 @@ describe('buildCompetitorPressureScore', () => {
     expect(result.description).toBe('2 competitors tracked.')
   })
 
-  it('counts a snapshot toward overlap only when competitorOverlap intersects the configured set', () => {
+  it('counts a snapshot toward overlap only when the cited source list intersects the configured set', () => {
     const snapshots = [
-      snap({ competitorOverlap: ['unconfigured.com'] }),
-      snap({ competitorOverlap: ['rival.com'] }),
+      snap({ citedDomains: ['unconfigured.com'] }),
+      snap({ citedDomains: ['rival.com'] }),
     ]
     const result = buildCompetitorPressureScore(snapshots, ['rival.com'], 1)
     expect(result.delta).toBe('1 overlapping citations')
@@ -126,9 +125,9 @@ describe('buildOverviewCompetitors', () => {
     expect(result[0]?.citedQueries).toEqual(['best CRM', 'top SaaS'])
   })
 
-  it('counts a competitor citation when its domain appears in competitorOverlap', () => {
+  it('counts subdomains of a configured competitor', () => {
     const snapshots = [
-      snap({ queryId: 'q1', competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'q1', citedDomains: ['blog.rival.com'] }),
     ]
     const result = buildOverviewCompetitors(snapshots, [{ domain: 'rival.com' }])
     expect(result[0]?.citationCount).toBe(1)
@@ -147,7 +146,7 @@ describe('buildOverviewCompetitors', () => {
   it('labels pressure correctly across all four bands per-competitor', () => {
     const make = (count: number, total: number) => [
       ...Array.from({ length: count }, (_, i) =>
-        snap({ queryId: `q${i}`, competitorOverlap: ['rival.com'] }),
+        snap({ queryId: `q${i}`, citedDomains: ['rival.com'] }),
       ),
       ...Array.from({ length: total - count }, (_, i) =>
         snap({ queryId: `f${i}` }),
@@ -162,8 +161,8 @@ describe('buildOverviewCompetitors', () => {
 
   it('citedQueries are sorted', () => {
     const snapshots = [
-      snap({ queryId: 'banana', competitorOverlap: ['rival.com'] }),
-      snap({ queryId: 'apple', competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'banana', citedDomains: ['rival.com'] }),
+      snap({ queryId: 'apple', citedDomains: ['rival.com'] }),
     ]
     const result = buildOverviewCompetitors(snapshots, [{ domain: 'rival.com' }])
     expect(result[0]?.citedQueries).toEqual(['apple', 'banana'])
@@ -171,11 +170,44 @@ describe('buildOverviewCompetitors', () => {
 
   it('falls back to queryId for snapshots whose queryId is not in the lookup', () => {
     const snapshots = [
-      snap({ queryId: 'q1', competitorOverlap: ['rival.com'] }),
-      snap({ queryId: 'q-missing', competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'q1', citedDomains: ['rival.com'] }),
+      snap({ queryId: 'q-missing', citedDomains: ['rival.com'] }),
     ]
     const lookup = { byId: new Map([['q1', 'best CRM']]) }
     const result = buildOverviewCompetitors(snapshots, [{ domain: 'rival.com' }], lookup)
     expect(result[0]?.citedQueries).toEqual(['best CRM', 'q-missing'])
+  })
+})
+
+describe('competitor pressure is the citation signal only', () => {
+  // `query_snapshots.competitor_overlap` unions cited domains, grounding hosts
+  // AND answer-text brand matches. Every field these builders emit is named for
+  // the citation signal (`citationCount`, `citedQueries`, "overlapping
+  // citations"), so a competitor the engine merely NAMED must not raise them —
+  // that number would be a mention reported under a citation's name.
+  it('a competitor named in prose but absent from the source list adds no pressure', () => {
+    const snapshots: CompetitorPressureSnapshot[] = [
+      { queryId: 'q1', citedDomains: [] },
+      { queryId: 'q2', citedDomains: [] },
+    ]
+    const gauge = buildCompetitorPressureScore(snapshots, ['rival.com'], 1)
+    expect(gauge.value).toBe('None')
+    expect(gauge.delta).toBe('No overlap detected')
+
+    const rows = buildOverviewCompetitors(snapshots, [{ domain: 'rival.com' }])
+    expect(rows[0]!.citationCount).toBe(0)
+    expect(rows[0]!.citedQueries).toEqual([])
+    expect(rows[0]!.pressureLabel).toBe('None')
+  })
+
+  it('the same competitor raises pressure once it is actually cited', () => {
+    const snapshots: CompetitorPressureSnapshot[] = [
+      { queryId: 'q1', citedDomains: ['rival.com'] },
+      { queryId: 'q2', citedDomains: [] },
+    ]
+    // 1 of 2 snapshots = ratio 0.5, which is the High band's lower bound.
+    expect(buildCompetitorPressureScore(snapshots, ['rival.com'], 1).value).toBe('High')
+    expect(buildCompetitorPressureScore(snapshots, ['rival.com'], 1).delta).toBe('1 overlapping citations')
+    expect(buildOverviewCompetitors(snapshots, [{ domain: 'rival.com' }])[0]!.citationCount).toBe(1)
   })
 })

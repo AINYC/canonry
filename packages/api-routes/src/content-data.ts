@@ -30,11 +30,15 @@ import {
   type OrchestratorInput,
   type SitePage,
   isBlogShapedQuery,
+  usableBrandAliases,
 } from '@ainyc/canonry-intelligence'
 import {
+  brandLabelFromDomain,
   CitationStates,
+  compileBrandAliases,
   hostMatchesDomain,
   hostOf,
+  matcherMatchesText,
   RunKinds,
   RunStatuses,
   type GroundingSource,
@@ -505,7 +509,18 @@ function aggregateCandidate(opts: AggregateCandidateOpts): CandidateQuery {
   const ourCitedRate = citedCount / totalSnaps
   const recentMissRate = 1 - ourCitedRate
 
+  // TWO tallies, because a competitor can be cited, named in the prose, or
+  // both, and the two are independent. `competitorDomains` unions them (a
+  // competitor present by EITHER signal is competitive presence on this query),
+  // while each count stays true to the signal its name claims.
   const competitorTally = new Map<string, number>()
+  const competitorMentionTally = new Map<string, number>()
+  const competitorMatchers = new Map(
+    [...opts.competitorSet].map(domain => [
+      domain,
+      compileBrandAliases(usableBrandAliases([brandLabelFromDomain(domain)])),
+    ]),
+  )
   const competitorGroundingTally = new Map<string, GroundingUrlEvidence>()
   const ourGroundingTally = new Map<string, GroundingUrlEvidence>()
   // Full cited surface: every non-own cited domain → citation count, NOT
@@ -517,15 +532,32 @@ function aggregateCandidate(opts: AggregateCandidateOpts): CandidateQuery {
 
   for (const snap of opts.snapshots) {
     const isLatestRun = snap.runId === opts.latestRunId
-    // `competitorCitationCount` is a CITATION count, so it reads the cited
-    // source list. `competitor_overlap` unions cited domains, grounding sources
-    // and answer-text brand matches, and a mention counted under a citation
-    // name is the exact conflation the vocabulary rules forbid.
+    // `competitorCitationCount` is a CITATION count, so it reads the engine's
+    // source material — `citedDomains` and the grounding sources, which is what
+    // `determineCitationState` also treats as cited. It does NOT read
+    // `competitor_overlap`: that column additionally unions answer-text brand
+    // matches, and a mention counted under a citation name is the exact
+    // conflation the vocabulary rules forbid.
+    //
+    // Deduped per snapshot, so a competitor cited three times in one answer
+    // counts once — matching the per-snapshot semantics of every other
+    // competitor figure.
+    const citedCompetitorsHere = new Set<string>()
     for (const domain of snap.citedDomains) {
-      const normalized = hostOf(domain) ?? ''
-      const competitor = findMatchingDomain(normalized, opts.competitorSet)
-      if (!competitor) continue
-      competitorTally.set(competitor, (competitorTally.get(competitor) ?? 0) + 1)
+      const competitor = findMatchingDomain(hostOf(domain) ?? '', opts.competitorSet)
+      if (competitor) citedCompetitorsHere.add(competitor)
+    }
+    // Answer-text presence, matched with the shared brand matcher. An engine
+    // that recommends a competitor without linking to it is still a target
+    // worth writing for, so dropping this would silently shrink the
+    // opportunity list to whatever happened to get a citation.
+    if (snap.answerText) {
+      for (const competitor of opts.competitorSet) {
+        const matcher = competitorMatchers.get(competitor)
+        if (matcher && matcherMatchesText(matcher, snap.answerText)) {
+          competitorMentionTally.set(competitor, (competitorMentionTally.get(competitor) ?? 0) + 1)
+        }
+      }
     }
 
     const grounding = extractGroundingSources(snap.rawResponse)
@@ -539,8 +571,13 @@ function aggregateCandidate(opts: AggregateCandidateOpts): CandidateQuery {
       }
       // Count toward the full cited surface before the tracked-competitor gate.
       citedSurfaceTally.set(domain, (citedSurfaceTally.get(domain) ?? 0) + 1)
-      if (!findMatchingDomain(domain, opts.competitorSet)) continue
+      const competitor = findMatchingDomain(domain, opts.competitorSet)
+      if (!competitor) continue
+      citedCompetitorsHere.add(competitor)
       recordGroundingHit(competitorGroundingTally, g, domain, snap.provider)
+    }
+    for (const competitor of citedCompetitorsHere) {
+      competitorTally.set(competitor, (competitorTally.get(competitor) ?? 0) + 1)
     }
   }
 
@@ -553,8 +590,9 @@ function aggregateCandidate(opts: AggregateCandidateOpts): CandidateQuery {
     gscCtr: opts.gsc?.ctr ?? 0,
     ourCitedRate,
     ourCitedInLatestRun,
-    competitorDomains: Array.from(competitorTally.keys()),
+    competitorDomains: Array.from(new Set([...competitorTally.keys(), ...competitorMentionTally.keys()])),
     competitorCitationCount: Array.from(competitorTally.values()).reduce((a, b) => a + b, 0),
+    competitorMentionCount: Array.from(competitorMentionTally.values()).reduce((a, b) => a + b, 0),
     recentMissRate,
     ourGroundingUrls: Array.from(ourGroundingTally.values()),
     competitorGroundingUrls: Array.from(competitorGroundingTally.values()),
@@ -602,6 +640,7 @@ function emptyCandidate(query: string): CandidateQuery {
     ourCitedInLatestRun: false,
     competitorDomains: [],
     competitorCitationCount: 0,
+    competitorMentionCount: 0,
     recentMissRate: 0,
     ourGroundingUrls: [],
     competitorGroundingUrls: [],

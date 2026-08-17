@@ -1462,8 +1462,12 @@ function renderCompetitorLandscape(report: ProjectReportDto): string {
   const competitors = report.competitorLandscape.competitors
   const mentionLandscape = report.mentionLandscape
   const noCitationData = competitors.length === 0 && report.competitorLandscape.projectCitationCount === 0
-  const brandedMentions = mentionLandscape.branded
-  const hasBrandedMentions = brandedMentions.totalAnswerSnapshots > 0
+  // `canonry report` renders this HTML locally from whatever the API returned,
+  // so a CLI newer than its server sees a payload without the class split. Fall
+  // back to "no branded data" rather than throwing: an older server's numbers
+  // are pooled, which the scope label below already says.
+  const brandedMentions = mentionLandscape.branded as ProjectReportDto['mentionLandscape']['branded'] | undefined
+  const hasBrandedMentions = (brandedMentions?.totalAnswerSnapshots ?? 0) > 0
   const noMentionData = mentionLandscape.competitors.length === 0
     && mentionLandscape.projectMentionCount === 0
     && !hasBrandedMentions
@@ -1495,7 +1499,7 @@ function renderCompetitorLandscape(report: ProjectReportDto): string {
     </tr>`
   }).join('')
 
-  const scopeLabel = MENTION_SCOPE_LABEL[mentionLandscape.scope]
+  const scopeLabel = MENTION_SCOPE_LABEL[mentionLandscape.scope] ?? MENTION_SCOPE_LABEL.pooled
   const table = competitors.length > 0
     ? `<table class="report-table">
         <thead><tr><th>Domain</th><th>Pressure</th><th>Citations</th><th class="numeric" title="Mentions on ${escapeHtml(scopeLabel)}. Branded queries are counted separately — the client is named on nearly all of them and a competitor cannot be, so pooling the two would rank the client on its own brand recall.">Mentions (${escapeHtml(scopeLabel)})</th><th class="numeric" title="Citation share — % of cited-source slots that went to this competitor across tracked queries. Distinct from Mention Share.">Citation share</th><th>Cited queries</th></tr></thead>
@@ -1516,12 +1520,12 @@ function renderCompetitorLandscape(report: ProjectReportDto): string {
   // Branded is shown, never dropped and never merged in. Two labelled charts
   // answer two different questions: "where do I place in my category?" and
   // "when someone asks about me by name, does AI know me?"
-  const brandedBars = hasBrandedMentions
+  const brandedBars = hasBrandedMentions && brandedMentions
     ? renderMentionBars(brandedMentions, report.meta.project.canonicalDomain, 'Mentions per domain · branded queries')
     : ''
   const brandedBlock = brandedBars
     ? `<div class="mention-branded-block">
-        <p class="chart-note">Branded queries contain the client's own name. The client is named on nearly all of them and a competitor structurally cannot be, so these are kept out of the competitive figure above. Read them as brand recall: ${brandedMentions.projectMentionCount} of ${brandedMentions.totalAnswerSnapshots} branded answers named the client.</p>
+        <p class="chart-note">Branded queries contain the client's own name. The client is named on nearly all of them and a competitor structurally cannot be, so these are kept out of the competitive figure above. Read them as brand recall: ${brandedMentions?.projectMentionCount ?? 0} of ${brandedMentions?.totalAnswerSnapshots ?? 0} branded answers named the client.</p>
         ${brandedBars}
       </div>`
     : ''

@@ -81,6 +81,11 @@ function seedProject(db: ReturnType<typeof createClient>): SeededProject {
     queryId: queryIds.get('q1_create')!,
     provider: 'gemini',
     citationState: 'not-cited',
+    // competitor_overlap is DERIVED by the run writer from the evidence below;
+    // a row carrying only the mixed column is a shape production never writes.
+    // competitor-a is cited, competitor-b/-c are named in the prose only.
+    citedDomains: ['competitor-a.com'],
+    answerText: 'For CRM, competitor-b and competitor-c are the usual picks.',
     competitorOverlap: ['competitor-a.com', 'competitor-b.com', 'competitor-c.com'],
     rawResponse: JSON.stringify({
       groundingSources: [
@@ -98,6 +103,7 @@ function seedProject(db: ReturnType<typeof createClient>): SeededProject {
     queryId: queryIds.get('q2_refresh')!,
     provider: 'gemini',
     citationState: 'not-cited',
+    citedDomains: ['competitor-a.com'],
     competitorOverlap: ['competitor-a.com'],
     rawResponse: JSON.stringify({ groundingSources: [] }),
     createdAt: now,
@@ -122,6 +128,8 @@ function seedProject(db: ReturnType<typeof createClient>): SeededProject {
     queryId: queryIds.get('q3_expand')!,
     provider: 'gemini',
     citationState: 'not-cited',
+    // Named in the answer, never linked — competitive presence with zero citations.
+    answerText: 'competitor-b is the tool most teams reach for here.',
     competitorOverlap: ['competitor-b.com'],
     rawResponse: JSON.stringify({ groundingSources: [] }),
     createdAt: now,

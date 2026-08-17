@@ -6,29 +6,31 @@ import { queryClassSchema, queryClassFilterSchema } from '../src/query-class.js'
 
 describe('compileQueryClassifier', () => {
   it('classifies a query that names the brand as branded, and one that does not as non-brand', () => {
-    const classifier = compileQueryClassifier(['Tank Air', 'Tankair'])!
-    expect(classifier.classify('what is Tank Air known for')).toBe('branded')
-    expect(classifier.classify('does Tank Air run small')).toBe('branded')
+    const classifier = compileQueryClassifier(['Acme Tanks', 'AcmeTanks'])!
+    expect(classifier.classify('what is Acme Tanks known for')).toBe('branded')
+    expect(classifier.classify('does Acme Tanks run small')).toBe('branded')
     expect(classifier.classify('what is the best premium white tank')).toBe('non-brand')
-    expect(classifier.classify('what are alternatives to Skims')).toBe('non-brand')
+    expect(classifier.classify('what are alternatives to RivalOne')).toBe('non-brand')
   })
 
-  it('partitions the tankair basket 5 branded / 8 non-brand', () => {
-    // The exact 13 tracked queries on project ce80f41f. The 5/8 split is what
+  it('partitions a 13-query basket 5 branded / 8 non-brand', () => {
+    // The shape of a real basket, identities replaced. The 5/8 split is what
     // makes the pooled mention-share figure wrong, so it is pinned here.
+    // Note the two-word display name and the concatenated alias must both
+    // match, and a query naming only a COMPETITOR stays non-brand.
     const classifier = compileQueryClassifier(effectiveBrandNames({
-      displayName: 'Tank Air',
-      aliases: ['Tankair'],
-      canonicalDomain: 'tankair.com',
-      ownedDomains: ['tankairstudio.com'],
+      displayName: 'Acme Tanks',
+      aliases: ['AcmeTanks'],
+      canonicalDomain: 'acmetanks.example',
+      ownedDomains: ['acmetanksstudio.example'],
     }))!
     const basket = [
-      'Tank Air Studio Tank',
-      'are Tank Air tanks see through',
-      'are Tank Air tanks worth the money',
-      'does Tank Air run small',
-      'what is Tank Air known for',
-      'what are alternatives to Skims',
+      'Acme Tanks Studio Tank',
+      'are Acme Tanks tanks see through',
+      'are Acme Tanks tanks worth the money',
+      'does Acme Tanks run small',
+      'what is Acme Tanks known for',
+      'what are alternatives to RivalOne',
       'what are cool independent contemporary womenswear brands',
       'what are the best elevated basics brands',
       'what is a good tank top for a fuller bust',
@@ -43,12 +45,12 @@ describe('compileQueryClassifier', () => {
   })
 
   it('matches presentation variants but never substrings or spelling guesses', () => {
-    const classifier = compileQueryClassifier(['Demand IQ'])!
-    expect(classifier.classify('is Demand-IQ worth it')).toBe('branded')
-    expect(classifier.classify('is DemandIQ worth it')).toBe('branded')
-    expect(classifier.classify('is demand iq worth it')).toBe('branded')
-    // "demand" alone is not the brand.
-    expect(classifier.classify('how do I forecast solar demand')).toBe('non-brand')
+    const classifier = compileQueryClassifier(['Nimbus IQ'])!
+    expect(classifier.classify('is Nimbus-IQ worth it')).toBe('branded')
+    expect(classifier.classify('is NimbusIQ worth it')).toBe('branded')
+    expect(classifier.classify('is nimbus iq worth it')).toBe('branded')
+    // "nimbus" alone is not the brand.
+    expect(classifier.classify('how do I forecast nimbus coverage')).toBe('non-brand')
   })
 
   it('does not match a brand inside a longer word', () => {

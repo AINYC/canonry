@@ -297,7 +297,7 @@ describe('mentionLandscape', () => {
   })
 
   test('splits branded out of the competitive figure, keeping it visible and separate', async () => {
-    // The tankair shape in miniature: on branded queries the project is named
+    // The lopsided shape in miniature: on branded queries the project is named
     // and no competitor can be; on category queries the competitor wins.
     const projectId = insertProject(ctx.db, 'acmebrand', 'acmebrand.example.com')
     insertCompetitor(ctx.db, projectId, 'rival-a.com')

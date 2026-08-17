@@ -60,8 +60,17 @@ export interface CandidateQuery {
    * intermittent old citations should not suppress current targets.
    */
   ourCitedInLatestRun: boolean
+  /**
+   * Tracked competitors present on this query by EITHER signal — cited in the
+   * source list or named in the answer text. Competitive presence is the thing
+   * the gate and the score care about, and an engine that recommends a rival
+   * without linking to it is still a target worth writing for.
+   */
   competitorDomains: string[]
+  /** Snapshots where a tracked competitor's domain was in the engine's SOURCE LIST. */
   competitorCitationCount: number
+  /** Snapshots where a tracked competitor's brand was in the ANSWER TEXT. Never summed with the above. */
+  competitorMentionCount: number
   recentMissRate: number
   ourGroundingUrls: GroundingUrlEvidence[]
   competitorGroundingUrls: GroundingUrlEvidence[]

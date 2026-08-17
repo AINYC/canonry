@@ -40,6 +40,7 @@ function emptyCandidate(overrides: Partial<CandidateQuery> = {}): CandidateQuery
     ourCitedInLatestRun: false,
     competitorDomains: [],
     competitorCitationCount: 0,
+    competitorMentionCount: 0,
     recentMissRate: 0,
     ourGroundingUrls: [],
     competitorGroundingUrls: [],
@@ -164,6 +165,27 @@ describe('buildContentTargetRows', () => {
       }),
     )
     expect(rows).toEqual([])
+  })
+
+  it('a competitor NAMED but never cited is still competitive evidence', () => {
+    // The two signals are independent, and an engine that recommends a rival
+    // without linking to it is a target worth writing for. Gating this on
+    // citations alone would silently shrink the opportunity list to whatever
+    // happened to earn a link.
+    const rows = buildContentTargetRows(
+      emptyInput({
+        candidateQueries: [
+          emptyCandidate({
+            query: 'best crm for saas',
+            competitorDomains: ['rival.com'],
+            competitorCitationCount: 0,
+            competitorMentionCount: 4,
+          }),
+        ],
+      }),
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.query).toBe('best crm for saas')
   })
 
   it('produces a CREATE row for a query with no page and competitor evidence', () => {
