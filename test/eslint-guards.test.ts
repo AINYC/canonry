@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ESLint, RuleTester } from 'eslint'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { createRestrictedSyntaxRule } from '../eslint-rules/restricted-syntax.js'
 
 /**
@@ -97,6 +97,31 @@ describe('workspace lint guards', () => {
   const eslint = new ESLint({ cwd: workspaceRoot })
   const resolveConfig = async (file: string) =>
     await eslint.calculateConfigForFile(file) as { rules?: Record<string, unknown> }
+
+  // Warm the config resolver once, as SETUP rather than inside a test.
+  //
+  // The first `calculateConfigForFile` loads `eslint.config.js` and every
+  // plugin it imports (typescript-eslint, the local rule files, the whole
+  // flat-config graph). Measured: that first call is ~675ms and every later
+  // one is 0-8ms, because the result is cached. Without this hook that cost
+  // lands on whichever test runs first, under the 5s default timeout.
+  //
+  // This was observed three times as `enables every guard that names
+  // apps/web/src/pages/ProjectPage.tsx` timing out at 5s while a full
+  // `pnpm verify` ran concurrently — always that test, never the four
+  // identically-shaped ones after it, which is the signature of shared setup
+  // rather than of anything about that file (`calculateConfigForFile` never
+  // opens it, so its size is irrelevant). It does NOT reproduce on an idle
+  // machine or under pure CPU saturation, so the exact contention is not
+  // pinned down; what is certain is that a multi-second one-time cost had no
+  // business inside a 5s per-test budget.
+  //
+  // Paying it here leaves each assertion below measuring only its own
+  // marginal work, so the tight default timeout still catches a real
+  // regression in config resolution.
+  beforeAll(async () => {
+    await resolveConfig(GUARD_COVERAGE[0]!.file)
+  }, 120_000)
 
   // `calculateConfigForFile` answers for any path, real or not, so a renamed
   // file would leave the matrix asserting about nothing. Fail on that instead.
