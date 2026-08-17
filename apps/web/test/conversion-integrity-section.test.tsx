@@ -236,6 +236,12 @@ describe('ConversionIntegritySection', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Connect Google Ads' }))
     expect(action).toHaveBeenCalledWith('connect-google-ads')
+
+    // Setup prose is gone from the page and lives on the heading's tooltip, so
+    // nothing is lost for assistive tech or for a reader who wants the detail.
+    expect(screen.queryByText(/Connect your existing Google accounts/)).toBeNull()
+    expect(screen.queryByText(/It does not change or publish it/)).toBeNull()
+    expect(screen.getByRole('button', { name: /never changes or publishes it/ })).toBeTruthy()
     expect(conversionIntegrityPrimaryAction(unconnected)).toMatchObject({ id: 'connect-google-ads' })
   })
 
@@ -243,7 +249,9 @@ describe('ConversionIntegritySection', () => {
     const action = vi.fn()
     render(<ConversionIntegritySection onPrimaryAction={action} />)
 
-    expect(screen.getByRole('heading', { name: 'Complete setup' })).toBeTruthy()
+    // The rows ARE the instructions. A "Complete setup" heading over three
+    // labelled rows with buttons on them restated what the rows already said.
+    expect(screen.queryByRole('heading', { name: 'Complete setup' })).toBeNull()
     expect(screen.getByText('Google Ads account')).toBeTruthy()
     expect(screen.getByText('Tag Manager container')).toBeTruthy()
     expect(screen.getByText('Conversion to check')).toBeTruthy()
