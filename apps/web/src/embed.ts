@@ -39,9 +39,10 @@ export function isEmbedProjectTabAllowed(tab: string, allow: readonly string[] |
 }
 
 /**
- * Project tabs that are safe to expose in the read-only embed. Portfolio is an
- * operator setup surface, so it is deliberately absent even when the host does
- * not provide an explicit allowlist.
+ * Project tabs that are safe to expose in the read-only embed. Portfolio and
+ * Conversion Integrity are operator-only setup and evidence surfaces, so they
+ * are deliberately absent even when the host does not provide an explicit
+ * allowlist.
  */
 export const EMBED_PROJECT_TABS = [
   'overview',

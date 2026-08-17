@@ -67,6 +67,7 @@ tool or `403` by switching credentials.
 - Implementing structured data (JSON‑LD)
 - Diagnosing indexing gaps via Google Search Console / Bing Webmaster Tools
 - Wiring server-side traffic (Cloudflare, Cloud Run, WordPress, Vercel) and GA4 referrals into a single AEO signal
+- Inspecting Google Ads conversion goals and GTM live configuration as read-only conversion evidence
 - Optimizing `llms.txt`, sitemaps, robots.txt for AI crawlers
 - Submitting URLs to Google Indexing API and Bing IndexNow
 - Analyzing competitor citation patterns
@@ -127,6 +128,17 @@ cnry get <project> --from report scores.citationCoverage.value
 
 GA4 is a first-class signal alongside citation tracking. Connect once with `cnry ga connect <project> --property-id <id> --key-file <path>`; `cnry ga sync` then pulls daily landing-page traffic, AI-referral sessions across 10 known providers (chatgpt, perplexity, claude, gemini, openai, anthropic, copilot, phind, you.com, meta.ai), and social referrals split into Organic vs Paid via GA4's `channelGroup` — and persists everything into four DB tables (`gaTrafficSnapshots`, `gaAiReferrals`, `gaSocialReferrals`, `gaTrafficSummaries`). All read commands query that local store, so they are fast and quotaless once a sync has run. AI referrals are tracked across three GA4 attribution dimensions (session source / first-user source / manual UTM) and joined to landing pages, so you can see which page each AI provider sent traffic to. Use `cnry ga traffic` for the current snapshot, `cnry ga attribution --trend` for a unified channel-share overview with biggest-mover deltas, and `cnry ga ai-referral-history` / `cnry ga social-referral-history` for daily series. See `references/canonry-cli.md` for the full command catalog and return-shape details.
 
+## Google Ads and GTM
+
+Google Ads and GTM are separate, project-scoped sources for one conversion
+contract. Provider snapshots are static configuration evidence. They do not
+prove browser events, tag firing, or recorded conversions. Stored snapshots are
+the safe default. A bounded live read needs `google-marketing.read-live`. Version
+1 does not mutate Google Ads or edit, version, or publish GTM. Read
+`references/google-marketing.md` before assessing or refreshing this evidence.
+The operator must complete OAuth, resource selection, and contract creation.
+Never request OAuth credentials or a Google Ads developer token.
+
 ## Server-Side Traffic
 
 When the project ships behind a server you control, connect Cloud Run, WordPress,
@@ -170,12 +182,15 @@ Aero also wakes unprompted after every `run.completed` so insights and regressio
 
 ## Boundaries & Safety
 
-- **Get explicit approval before every mutation or quota-consuming sweep** — reads and `--dry-run` previews are safe defaults
+- **Get explicit approval before every mutation or quota-consuming sweep.** Also get approval before each live provider read. Stored reads and `--dry-run` previews are safe defaults.
 - **Never touch live WordPress without explicit approval**
 - **Back up `~/.canonry/config.yaml` before any config edit**
 - **Never fabricate mention or citation data** — if a sweep hasn't run, say so; never coerce `answerMentioned` null → false (null = "not checked")
 - **Client data stays private** — canonry repo is public; no real domains in issues
 - **Respect API rate limits** — batch operations, avoid tight loops
+- **Keep Google marketing read-only in v1** — stored evidence is the default.
+  `google-marketing.read-live` permits bounded provider reads only. It grants no
+  Google Ads mutation or GTM edit or publish authority.
 
 ## References
 
@@ -187,6 +202,7 @@ Aero also wakes unprompted after every `run.completed` so insights and regressio
 | `references/wordpress-integration.md` | Connecting to WordPress, editing pages, pushing staging → live |
 | `references/server-side-traffic.md` | Wiring server-side evidence from Cloudflare, Cloud Run, WordPress, and Vercel. Connect, inspect, sync pull sources, and troubleshoot. |
 | `references/google-business-profile.md` | Connecting Google Business Profile for local AEO: access-form approval, GCP API enablement, the v4-reviews access gate, hotel lodging/place-action signals, data shapes, troubleshooting. |
+| `references/google-marketing.md` | Inspecting first-class Google Ads and GTM evidence. Covers the conversion-integrity chain, static and runtime truth, live-read scope, v1 read-only boundary, and future write approvals. |
 
 ---
 

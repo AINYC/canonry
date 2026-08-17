@@ -148,10 +148,10 @@ test('traffic route offers a source-agnostic connect entry point', async () => {
   expect(html).not.toMatch(/Cloud Run logs or the WordPress Traffic Logger plugin/)
 })
 
-test('settings route renders the Google Search Console OAuth configuration card', async () => {
+test('settings route renders the shared Google OAuth configuration card', async () => {
   const html = await renderApp('/settings')
 
-  expect(html).toMatch(/Search Console OAuth/)
+  expect(html).toMatch(/Google OAuth/)
   expect(html).toMatch(/~\/\.canonry\/config\.yaml/)
   expect(html).toMatch(/Configure Google OAuth|Update OAuth app/)
 })

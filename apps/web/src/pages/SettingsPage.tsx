@@ -149,7 +149,7 @@ function SettingsPageBody() {
           <div className="section-head">
             <div>
               <p className="eyebrow eyebrow-soft">Google</p>
-              <h2>Search Console OAuth</h2>
+              <h2>Google OAuth</h2>
             </div>
             <ToneBadge tone={settings.google.state === 'ready' ? 'positive' : 'caution'}>
               {settings.google.state === 'ready' ? 'Ready' : 'Needs config'}
@@ -161,7 +161,7 @@ function SettingsPageBody() {
             <dl className="definition-list mt-2">
               <div>
                 <dt>Auth model</dt>
-                <dd>One app credential set, then one OAuth connection per project domain</dd>
+                <dd>One app credential set for Search Console, Business Profile, Google Ads, and Tag Manager</dd>
               </div>
               <div>
                 <dt>Storage</dt>

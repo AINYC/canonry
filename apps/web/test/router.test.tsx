@@ -111,6 +111,12 @@ test('/projects/$id/search-console renders the search engines tab', async () => 
   expect(container.innerHTML).toMatch(/Search engines/)
 })
 
+test('/projects/$id/conversions renders the conversion integrity workspace', async () => {
+  const { container } = await renderRoute('/projects/project_citypoint/conversions')
+  expect(container.innerHTML).toMatch(/Conversion Integrity/)
+  expect(container.innerHTML).toMatch(/Loading conversion setup/)
+})
+
 test('/projects/$id/report renders the report tab', async () => {
   const { container } = await renderRoute('/projects/project_citypoint/report')
   expect(container.innerHTML).toMatch(/Loading report/)

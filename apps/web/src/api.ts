@@ -355,6 +355,10 @@ export function buildGoogleRedirectUri(publicUrl: string): string {
   return `${publicUrl.replace(/\/$/, '')}/api/v1/google/callback`
 }
 
+export function buildGoogleMarketingRedirectUri(publicUrl: string): string {
+  return `${publicUrl.replace(/\/$/, '')}/api/v1/google-marketing/callback`
+}
+
 function getGoogleConnectPublicUrl(): string | undefined {
   if (typeof window === 'undefined') return undefined
   return resolveLocalGooglePublicUrl(window.location, getPublicBase())

@@ -6,6 +6,8 @@ export type TrackedRunSourceAction =
   | 'run-all'
   | 'gsc-sync'
   | 'gbp-sync'
+  | 'google-ads-sync'
+  | 'gtm-sync'
   | 'site-audit'
   | 'discover-sitemaps'
   | 'inspect-sitemap'
