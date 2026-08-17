@@ -15,5 +15,7 @@ export function formatTrackedRunKind(kind: RunKind): string {
     case RunKinds['aeo-discover-probe']: return 'Discovery (probe phase)'
     case RunKinds['gbp-sync']: return 'Business Profile sync'
     case RunKinds['ads-sync']: return 'ChatGPT ads sync'
+    case RunKinds['google-ads-sync']: return 'Google Ads sync'
+    case RunKinds['gtm-sync']: return 'Tag Manager sync'
   }
 }

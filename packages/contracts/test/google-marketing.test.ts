@@ -8,6 +8,7 @@ import {
   GoogleAdsEffectiveGoalSources,
   GtmGoogleAdsTagAssessmentRecognitions,
   GtmGoogleAdsTagMappingSources,
+  RunKinds,
   deriveConversionTrackingIntegrityStatus,
   deriveGoogleAdsEffectiveGoalGraph,
   conversionTrackingContractSchema,
@@ -27,6 +28,8 @@ import {
   gtmGoogleAdsTagAssessmentDtoSchema,
   gtmResourceSelectionRequestSchema,
   gtmRawSnapshotDtoSchema,
+  runKindSchema,
+  schedulableRunKindSchema,
 } from '../src/index.js'
 
 const NOW = '2026-08-14T12:00:00.000Z'
@@ -429,4 +432,13 @@ describe('conversion tracking evidence statuses', () => {
     expect(ConversionTrackingFindingCodes['gtm-hostname-mismatch']).toBe('gtm-hostname-mismatch')
     expect(ConversionTrackingFindingCodes['gtm-conversion-id-mismatch']).toBe('gtm-conversion-id-mismatch')
   })
+})
+
+test('Google marketing sync kinds enter run history but not recurring schedules', () => {
+  expect(RunKinds['google-ads-sync']).toBe('google-ads-sync')
+  expect(RunKinds['gtm-sync']).toBe('gtm-sync')
+  expect(runKindSchema.safeParse(RunKinds['google-ads-sync']).success).toBe(true)
+  expect(runKindSchema.safeParse(RunKinds['gtm-sync']).success).toBe(true)
+  expect(schedulableRunKindSchema.safeParse(RunKinds['google-ads-sync']).success).toBe(false)
+  expect(schedulableRunKindSchema.safeParse(RunKinds['gtm-sync']).success).toBe(false)
 })

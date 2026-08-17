@@ -15,11 +15,17 @@ export interface DataRefreshClient {
     project: string,
     body?: { locationNames?: string[]; daysOfMetrics?: number; monthsOfKeywords?: number },
   ): Promise<unknown>
+  /** OpenAI / ChatGPT Ads — intentionally distinct from Google Ads. */
   triggerAdsSync(project: string): Promise<unknown>
+  /** Queues bounded, read-only Google Ads evidence collection. */
+  triggerGoogleAdsSync(project: string): Promise<unknown>
+  /** Queues bounded, read-only Google Tag Manager evidence collection. */
+  triggerGtmSync(project: string): Promise<unknown>
 }
 
 /**
- * Refresh every data integration for a project in one shot: GSC, Bing, GA, GBP.
+ * Refresh every data integration for a project in one shot: GSC, Bing, GA,
+ * GBP, OpenAI / ChatGPT Ads, Google Ads, and Google Tag Manager.
  *
  * Each integration's sync endpoint owns its own run-row lifecycle and self-gates
  * when that integration isn't connected (a clear error, logged here rather than
@@ -33,7 +39,11 @@ export async function refreshAllIntegrations(client: DataRefreshClient, projectN
     { name: 'bing', run: () => client.bingInspectSitemap(projectName, {}) },
     { name: 'ga', run: () => client.gaSync(projectName, { days: 30 }) },
     { name: 'gbp', run: () => client.triggerGbpSync(projectName, {}) },
+    // `ads` remains the OpenAI / ChatGPT Ads integration. For scheduled
+    // refreshes, Google providers have explicit names and fan out only here.
     { name: 'ads', run: () => client.triggerAdsSync(projectName) },
+    { name: 'google-ads', run: () => client.triggerGoogleAdsSync(projectName) },
+    { name: 'gtm', run: () => client.triggerGtmSync(projectName) },
   ]
 
   const results = await Promise.allSettled(integrations.map((i) => i.run()))

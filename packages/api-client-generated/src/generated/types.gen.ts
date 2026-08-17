@@ -1646,6 +1646,141 @@ export type ContentTargetsResponseDto = {
     };
 };
 
+export type ConversionTrackingContract = {
+    id: string;
+    projectId: string;
+    name: string;
+    eventName: string;
+    googleAds: {
+        customerId: string;
+        conversionActionId: string;
+        conversionId?: string;
+        conversionLabel?: string;
+        campaignIds: Array<string>;
+        requireBiddableGoal: boolean;
+        requirePrimaryAction: boolean;
+    };
+    gtm: {
+        accountId: string;
+        containerId: string;
+        tagId: string;
+        triggerIds: Array<string>;
+        variableIds: Array<string>;
+    };
+    runtime: {
+        verificationRequired: boolean;
+        requireTransactionId: boolean;
+        requireValue: boolean;
+        requireCurrency: boolean;
+        productionHosts: Array<string>;
+    };
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type ConversionTrackingContractWriteRequest = {
+    name: string;
+    eventName: string;
+    googleAds: {
+        customerId: string;
+        conversionActionId: string;
+        conversionId?: string;
+        conversionLabel?: string;
+        campaignIds: Array<string>;
+        requireBiddableGoal: boolean;
+        requirePrimaryAction: boolean;
+    };
+    gtm: {
+        accountId: string;
+        containerId: string;
+        tagId: string;
+        triggerIds: Array<string>;
+        variableIds: Array<string>;
+    };
+    runtime: {
+        verificationRequired: boolean;
+        requireTransactionId: boolean;
+        requireValue: boolean;
+        requireCurrency: boolean;
+        productionHosts: Array<string>;
+    };
+};
+
+export type ConversionTrackingIntegrityReadEnvelope = {
+    assessment: {
+        contract: {
+            id: string;
+            projectId: string;
+            name: string;
+            eventName: string;
+            googleAds: {
+                customerId: string;
+                conversionActionId: string;
+                conversionId?: string;
+                conversionLabel?: string;
+                campaignIds: Array<string>;
+                requireBiddableGoal: boolean;
+                requirePrimaryAction: boolean;
+            };
+            gtm: {
+                accountId: string;
+                containerId: string;
+                tagId: string;
+                triggerIds: Array<string>;
+                variableIds: Array<string>;
+            };
+            runtime: {
+                verificationRequired: boolean;
+                requireTransactionId: boolean;
+                requireValue: boolean;
+                requireCurrency: boolean;
+                productionHosts: Array<string>;
+            };
+            createdAt: string;
+            updatedAt: string;
+        };
+        status: 'configured' | 'statically-consistent' | 'runtime-unverified' | 'observed';
+        findings: Array<{
+            code: 'ads-connection-missing' | 'ads-conversion-action-missing' | 'ads-goal-missing' | 'ads-goal-not-biddable' | 'ads-action-not-primary' | 'gtm-connection-missing' | 'gtm-live-graph-missing' | 'gtm-tag-missing' | 'gtm-tag-unrecognized' | 'gtm-tag-paused' | 'gtm-trigger-missing' | 'gtm-variable-missing' | 'gtm-event-mismatch' | 'gtm-hostname-mismatch' | 'gtm-value-mapping-missing' | 'gtm-transaction-id-mapping-missing' | 'gtm-currency-mapping-missing' | 'gtm-conversion-id-mismatch' | 'gtm-conversion-label-mismatch' | 'runtime-event-not-observed' | 'runtime-gtm-not-observed' | 'runtime-ads-not-observed';
+            subject: string;
+            outcome: 'pass' | 'fail' | 'unknown';
+            status: 'configured' | 'statically-consistent' | 'runtime-unverified' | 'observed';
+            evidenceIds: Array<string>;
+        }>;
+        evaluatedAt: string;
+    };
+    googleAdsSnapshot: {
+        id: string;
+        projectId: string;
+        connectionId: string;
+        runId: string;
+        kind: 'accessible-customers' | 'inventory' | 'campaign-metrics';
+        customerId: string | null;
+        payloadChecksum: string;
+        rawPayloadSha256: string | null;
+        rawPayloadBytes: number | null;
+        redactedFieldCount: number;
+        capturedAt: string;
+        createdAt: string;
+    } | null;
+    gtmSnapshot: {
+        id: string;
+        projectId: string;
+        connectionId: string;
+        runId: string;
+        kind: 'accounts' | 'container' | 'live' | 'draft';
+        accountId: string | null;
+        containerId: string | null;
+        workspaceId: string | null;
+        payloadChecksum: string;
+        rawPayloadSha256: string | null;
+        rawPayloadBytes: number | null;
+        redactedFieldCount: number;
+        capturedAt: string;
+        createdAt: string;
+    } | null;
+};
+
 export type CreateApiKeyRequest = {
     name: string;
     scopes?: Array<string>;
@@ -2417,6 +2552,253 @@ export type GbpSyncResponse = {
     status: string;
 };
 
+export type GoogleAdsAccessibleCustomersResponse = {
+    customers: Array<{
+        resourceName: string;
+        customerId: string;
+        parentCustomerId: string | null;
+        descriptiveName: string | null;
+        currencyCode: string | null;
+        timeZone: string | null;
+        manager: boolean;
+        hidden: boolean;
+        testAccount: boolean;
+        level: number;
+        status: 'enabled' | 'suspended' | 'closed' | 'canceled' | 'unspecified' | 'unknown';
+    }>;
+    totalAccessible: number;
+    truncated: boolean;
+    selection: {
+        loginCustomerId: string | null;
+        customerId: string | null;
+        selectedAt: string | null;
+    };
+    fetchedAt: string;
+};
+
+export type GoogleAdsConnectionStatusDto = {
+    connected: false;
+    status: 'not-connected';
+    connection: null;
+    selectedCustomer: null;
+} | {
+    connected: true;
+    status: 'selection-required';
+    connection: {
+        id: string;
+        projectId: string;
+        scopes: Array<string>;
+        selection: {
+            loginCustomerId: string | null;
+            customerId: string | null;
+            selectedAt: string | null;
+        };
+        lastValidatedAt: string | null;
+        lastInventorySnapshotAt: string | null;
+        lastMetricsSnapshotAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+    };
+    selectedCustomer: null;
+} | {
+    connected: true;
+    status: 'connected';
+    connection: {
+        id: string;
+        projectId: string;
+        scopes: Array<string>;
+        selection: {
+            loginCustomerId: string | null;
+            customerId: string | null;
+            selectedAt: string | null;
+        };
+        lastValidatedAt: string | null;
+        lastInventorySnapshotAt: string | null;
+        lastMetricsSnapshotAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+    };
+    selectedCustomer: {
+        resourceName: string;
+        customerId: string;
+        parentCustomerId: string | null;
+        descriptiveName: string | null;
+        currencyCode: string | null;
+        timeZone: string | null;
+        manager: boolean;
+        hidden: boolean;
+        testAccount: boolean;
+        level: number;
+        status: 'enabled' | 'suspended' | 'closed' | 'canceled' | 'unspecified' | 'unknown';
+    };
+} | {
+    connected: true;
+    status: 'stale';
+    connection: {
+        id: string;
+        projectId: string;
+        scopes: Array<string>;
+        selection: {
+            loginCustomerId: string | null;
+            customerId: string | null;
+            selectedAt: string | null;
+        };
+        lastValidatedAt: string | null;
+        lastInventorySnapshotAt: string | null;
+        lastMetricsSnapshotAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+    };
+    selectedCustomer: {
+        resourceName: string;
+        customerId: string;
+        parentCustomerId: string | null;
+        descriptiveName: string | null;
+        currencyCode: string | null;
+        timeZone: string | null;
+        manager: boolean;
+        hidden: boolean;
+        testAccount: boolean;
+        level: number;
+        status: 'enabled' | 'suspended' | 'closed' | 'canceled' | 'unspecified' | 'unknown';
+    };
+};
+
+export type GoogleAdsCustomerSelectionRequest = {
+    loginCustomerId?: string | null;
+    customerId: string;
+};
+
+export type GoogleAdsStoredSnapshotPage = {
+    snapshots: Array<{
+        id: string;
+        projectId: string;
+        connectionId: string;
+        runId: string;
+        kind: 'accessible-customers' | 'inventory' | 'campaign-metrics';
+        customerId: string | null;
+        payloadChecksum: string;
+        rawPayloadSha256: string | null;
+        rawPayloadBytes: number | null;
+        redactedFieldCount: number;
+        capturedAt: string;
+        createdAt: string;
+    }>;
+    nextCursor: string | null;
+    total: number;
+};
+
+export type GoogleAdsStoredSnapshotReadEnvelope = {
+    snapshot: {
+        metadata: {
+            id: string;
+            projectId: string;
+            connectionId: string;
+            runId: string;
+            kind: 'accessible-customers' | 'inventory' | 'campaign-metrics';
+            customerId: string | null;
+            payloadChecksum: string;
+            rawPayloadSha256: string | null;
+            rawPayloadBytes: number | null;
+            redactedFieldCount: number;
+            capturedAt: string;
+            createdAt: string;
+        };
+        payload: {
+            kind: 'accessible-customers';
+            data: {
+                customers: Array<{
+                    resourceName: string;
+                    customerId: string;
+                    parentCustomerId: string | null;
+                    descriptiveName: string | null;
+                    currencyCode: string | null;
+                    timeZone: string | null;
+                    manager: boolean;
+                    hidden: boolean;
+                    testAccount: boolean;
+                    level: number;
+                    status: 'enabled' | 'suspended' | 'closed' | 'canceled' | 'unspecified' | 'unknown';
+                }>;
+                totalAccessible: number;
+                truncated: boolean;
+                selection: {
+                    loginCustomerId: string | null;
+                    customerId: string | null;
+                    selectedAt: string | null;
+                };
+                fetchedAt: string;
+            };
+        } | {
+            kind: 'inventory';
+            data: {
+                customerId: string;
+                fetchedAt: string;
+                campaigns: Array<{
+                    id: string;
+                    resourceName: string;
+                    name: string;
+                    status: 'enabled' | 'paused' | 'removed' | 'unknown';
+                    advertisingChannelType: string | null;
+                    biddingStrategyType: string | null;
+                }>;
+                conversionActions: Array<{
+                    id: string;
+                    resourceName: string;
+                    name: string;
+                    status: 'enabled' | 'hidden' | 'removed' | 'unknown';
+                    category: string;
+                    origin: string;
+                    primaryForGoal: boolean;
+                    includeInConversionsMetric: boolean;
+                }>;
+                customerConversionGoals: Array<{
+                    category: string;
+                    origin: string;
+                    biddable: boolean;
+                }>;
+                campaignConversionGoals: Array<{
+                    campaignId: string;
+                    category: string;
+                    origin: string;
+                    biddable: boolean;
+                }>;
+                campaignConversionGoalsComplete?: boolean;
+                customConversionGoals: Array<{
+                    id: string;
+                    name: string;
+                    conversionActionIds: Array<string>;
+                }>;
+                campaignGoalConfigurations: Array<{
+                    campaignId: string;
+                    goalConfigLevel: 'customer' | 'campaign';
+                    customGoalId: string | null;
+                }>;
+            };
+        } | {
+            kind: 'campaign-metrics';
+            data: {
+                query: {
+                    campaignIds: Array<string>;
+                    startDate: string;
+                    endDate: string;
+                };
+                rows: Array<{
+                    campaignId: string;
+                    date: string;
+                    impressions: number;
+                    clicks: number;
+                    costMicros: number;
+                    conversions: number;
+                    conversionValueMicros: number | null;
+                }>;
+                truncated: boolean;
+                fetchedAt: string;
+            };
+        };
+    };
+};
+
 export type GoogleConnectionDto = {
     id: string;
     domain: string;
@@ -2426,6 +2808,24 @@ export type GoogleConnectionDto = {
     scopes: Array<string>;
     createdAt: string;
     updatedAt: string;
+};
+
+export type GoogleMarketingDisconnectResponse = {
+    provider: 'google-ads' | 'gtm';
+    disconnected: boolean;
+};
+
+export type GoogleMarketingOAuthConnectRequest = {
+    provider: 'google-ads' | 'gtm';
+    publicUrl?: string;
+    developerToken?: string;
+};
+
+export type GoogleMarketingOAuthConnectResponse = {
+    provider: 'google-ads' | 'gtm';
+    authorizationUrl: string;
+    redirectUri: string;
+    expiresAt: string | null;
 };
 
 export type GscCoverageSnapshotDto = {
@@ -2714,6 +3114,841 @@ export type GscUrlInspectionDto = {
     inspectedAt: string;
 };
 
+export type GtmAccountsResponse = {
+    accounts: Array<{
+        id: string;
+        path: string;
+        name: string;
+        shareData: boolean | null;
+    }>;
+    totalAccessible: number;
+    truncated: boolean;
+    fetchedAt: string;
+};
+
+export type GtmConnectionStatusDto = {
+    connected: false;
+    status: 'not-connected';
+    connection: null;
+    selection: null;
+} | {
+    connected: true;
+    status: 'selection-required';
+    connection: {
+        id: string;
+        projectId: string;
+        scopes: Array<string>;
+        selection: {
+            accountId: string | null;
+            containerId: string | null;
+            workspaceId: string | null;
+            selectedAt: string | null;
+        };
+        lastValidatedAt: string | null;
+        lastSnapshotAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+    };
+    selection: {
+        accountId: string | null;
+        containerId: string | null;
+        workspaceId: string | null;
+        selectedAt: string | null;
+    };
+} | {
+    connected: true;
+    status: 'connected';
+    connection: {
+        id: string;
+        projectId: string;
+        scopes: Array<string>;
+        selection: {
+            accountId: string | null;
+            containerId: string | null;
+            workspaceId: string | null;
+            selectedAt: string | null;
+        };
+        lastValidatedAt: string | null;
+        lastSnapshotAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+    };
+    selection: {
+        accountId: string | null;
+        containerId: string | null;
+        workspaceId: string | null;
+        selectedAt: string | null;
+    };
+} | {
+    connected: true;
+    status: 'stale';
+    connection: {
+        id: string;
+        projectId: string;
+        scopes: Array<string>;
+        selection: {
+            accountId: string | null;
+            containerId: string | null;
+            workspaceId: string | null;
+            selectedAt: string | null;
+        };
+        lastValidatedAt: string | null;
+        lastSnapshotAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+    };
+    selection: {
+        accountId: string | null;
+        containerId: string | null;
+        workspaceId: string | null;
+        selectedAt: string | null;
+    };
+};
+
+export type GtmContainerListResponse = {
+    accountId: string;
+    containers: Array<{
+        accountId: string;
+        id: string;
+        path: string;
+        name: string;
+        publicId: string | null;
+        domainName: string | null;
+        usageContexts: Array<string>;
+    }>;
+    totalAccessible: number;
+    truncated: boolean;
+    fetchedAt: string;
+};
+
+export type GtmResourceSelectionRequest = {
+    accountId: string;
+    containerId: string;
+    workspaceId?: string;
+};
+
+export type GtmStoredSnapshotPage = {
+    snapshots: Array<{
+        id: string;
+        projectId: string;
+        connectionId: string;
+        runId: string;
+        kind: 'accounts' | 'container' | 'live' | 'draft';
+        accountId: string | null;
+        containerId: string | null;
+        workspaceId: string | null;
+        payloadChecksum: string;
+        rawPayloadSha256: string | null;
+        rawPayloadBytes: number | null;
+        redactedFieldCount: number;
+        capturedAt: string;
+        createdAt: string;
+    }>;
+    nextCursor: string | null;
+    total: number;
+};
+
+export type GtmStoredSnapshotReadEnvelope = {
+    snapshot: {
+        metadata: {
+            id: string;
+            projectId: string;
+            connectionId: string;
+            runId: string;
+            kind: 'accounts' | 'container' | 'live' | 'draft';
+            accountId: string | null;
+            containerId: string | null;
+            workspaceId: string | null;
+            payloadChecksum: string;
+            rawPayloadSha256: string | null;
+            rawPayloadBytes: number | null;
+            redactedFieldCount: number;
+            capturedAt: string;
+            createdAt: string;
+        };
+        payload: {
+            kind: 'accounts';
+            data: {
+                accounts: Array<{
+                    id: string;
+                    path: string;
+                    name: string;
+                    shareData: boolean | null;
+                }>;
+                totalAccessible: number;
+                truncated: boolean;
+                fetchedAt: string;
+            };
+        } | {
+            kind: 'container';
+            data: {
+                account: {
+                    id: string;
+                    path: string;
+                    name: string;
+                    shareData: boolean | null;
+                };
+                container: {
+                    accountId: string;
+                    id: string;
+                    path: string;
+                    name: string;
+                    publicId: string | null;
+                    domainName: string | null;
+                    usageContexts: Array<string>;
+                };
+                workspaces: Array<{
+                    accountId: string;
+                    containerId: string;
+                    id: string;
+                    path: string;
+                    name: string;
+                    description: string | null;
+                    fingerprint: string | null;
+                }>;
+                live: {
+                    source: 'live';
+                    version: {
+                        accountId: string;
+                        containerId: string;
+                        id: string;
+                        path: string;
+                        name: string;
+                        description: string | null;
+                        fingerprint: string | null;
+                        deleted: boolean;
+                    };
+                    graph: {
+                        accountId: string;
+                        containerId: string;
+                        workspaceId: string | null;
+                        tags: Array<{
+                            id: string;
+                            name: string;
+                            type: string;
+                            paused: boolean;
+                            firingTriggerIds: Array<string>;
+                            blockingTriggerIds: Array<string>;
+                            referencedVariableIds: Array<string>;
+                            parameterKeys: Array<string>;
+                            fingerprint: string | null;
+                        }>;
+                        triggers: Array<{
+                            id: string;
+                            name: string;
+                            type: string;
+                            customEventNames: Array<string>;
+                            filterKeys: Array<string>;
+                            autoEventFilterKeys: Array<string>;
+                            fingerprint: string | null;
+                        }>;
+                        variables: Array<{
+                            id: string;
+                            name: string;
+                            type: string;
+                            dataLayerVariableName: string | null;
+                            parameterKeys: Array<string>;
+                            fingerprint: string | null;
+                        }>;
+                        googleAdsTagAssessments: Array<{
+                            tagId: string;
+                            tagType: string;
+                            recognition: 'recognized' | 'unknown';
+                            recognitionReason: string | null;
+                            conversionId: {
+                                source: 'literal';
+                                literal: string;
+                                variableRef: null;
+                            } | {
+                                source: 'variable-ref';
+                                literal: null;
+                                variableRef: string;
+                            } | {
+                                source: 'absent';
+                                literal: null;
+                                variableRef: null;
+                            } | {
+                                source: 'unknown';
+                                literal: null;
+                                variableRef: null;
+                            };
+                            conversionLabel: {
+                                source: 'literal';
+                                literal: string;
+                                variableRef: null;
+                            } | {
+                                source: 'variable-ref';
+                                literal: null;
+                                variableRef: string;
+                            } | {
+                                source: 'absent';
+                                literal: null;
+                                variableRef: null;
+                            } | {
+                                source: 'unknown';
+                                literal: null;
+                                variableRef: null;
+                            };
+                            value: {
+                                source: 'literal';
+                                literal: string;
+                                variableRef: null;
+                            } | {
+                                source: 'variable-ref';
+                                literal: null;
+                                variableRef: string;
+                            } | {
+                                source: 'absent';
+                                literal: null;
+                                variableRef: null;
+                            } | {
+                                source: 'unknown';
+                                literal: null;
+                                variableRef: null;
+                            };
+                            transactionId: {
+                                source: 'variable-ref';
+                                literal: null;
+                                variableRef: string;
+                            } | {
+                                source: 'absent';
+                                literal: null;
+                                variableRef: null;
+                            } | {
+                                source: 'unknown';
+                                literal: null;
+                                variableRef: null;
+                            };
+                            currency: {
+                                source: 'literal';
+                                literal: string;
+                                variableRef: null;
+                            } | {
+                                source: 'variable-ref';
+                                literal: null;
+                                variableRef: string;
+                            } | {
+                                source: 'absent';
+                                literal: null;
+                                variableRef: null;
+                            } | {
+                                source: 'unknown';
+                                literal: null;
+                                variableRef: null;
+                            };
+                            triggerStrategy: 'all-pages' | 'custom-event' | 'filtered' | 'unknown';
+                            triggerIds: Array<string>;
+                            triggerPredicates: Array<{
+                                triggerId: string;
+                                triggerType: string;
+                                eventPredicates: Array<{
+                                    operator: string;
+                                    value: string;
+                                    negated: boolean;
+                                    ignoreCase: boolean;
+                                }>;
+                                hostnamePredicates: Array<{
+                                    operator: string;
+                                    value: string;
+                                    negated: boolean;
+                                    ignoreCase: boolean;
+                                }>;
+                                unsupportedConditionCount: number;
+                            }>;
+                            reviewReasons: Array<'not-google-ads-tag' | 'unsupported-tag-type' | 'custom-html-opaque' | 'conversion-id-unresolved' | 'conversion-label-unresolved' | 'value-mapping-missing' | 'transaction-id-mapping-missing' | 'currency-mapping-missing' | 'trigger-unresolved' | 'hostname-filter-unresolved'>;
+                        }>;
+                    };
+                    fetchedAt: string;
+                } | null;
+                draft: {
+                    source: 'draft';
+                    workspace: {
+                        accountId: string;
+                        containerId: string;
+                        id: string;
+                        path: string;
+                        name: string;
+                        description: string | null;
+                        fingerprint: string | null;
+                    };
+                    graph: {
+                        accountId: string;
+                        containerId: string;
+                        workspaceId: string | null;
+                        tags: Array<{
+                            id: string;
+                            name: string;
+                            type: string;
+                            paused: boolean;
+                            firingTriggerIds: Array<string>;
+                            blockingTriggerIds: Array<string>;
+                            referencedVariableIds: Array<string>;
+                            parameterKeys: Array<string>;
+                            fingerprint: string | null;
+                        }>;
+                        triggers: Array<{
+                            id: string;
+                            name: string;
+                            type: string;
+                            customEventNames: Array<string>;
+                            filterKeys: Array<string>;
+                            autoEventFilterKeys: Array<string>;
+                            fingerprint: string | null;
+                        }>;
+                        variables: Array<{
+                            id: string;
+                            name: string;
+                            type: string;
+                            dataLayerVariableName: string | null;
+                            parameterKeys: Array<string>;
+                            fingerprint: string | null;
+                        }>;
+                        googleAdsTagAssessments: Array<{
+                            tagId: string;
+                            tagType: string;
+                            recognition: 'recognized' | 'unknown';
+                            recognitionReason: string | null;
+                            conversionId: {
+                                source: 'literal';
+                                literal: string;
+                                variableRef: null;
+                            } | {
+                                source: 'variable-ref';
+                                literal: null;
+                                variableRef: string;
+                            } | {
+                                source: 'absent';
+                                literal: null;
+                                variableRef: null;
+                            } | {
+                                source: 'unknown';
+                                literal: null;
+                                variableRef: null;
+                            };
+                            conversionLabel: {
+                                source: 'literal';
+                                literal: string;
+                                variableRef: null;
+                            } | {
+                                source: 'variable-ref';
+                                literal: null;
+                                variableRef: string;
+                            } | {
+                                source: 'absent';
+                                literal: null;
+                                variableRef: null;
+                            } | {
+                                source: 'unknown';
+                                literal: null;
+                                variableRef: null;
+                            };
+                            value: {
+                                source: 'literal';
+                                literal: string;
+                                variableRef: null;
+                            } | {
+                                source: 'variable-ref';
+                                literal: null;
+                                variableRef: string;
+                            } | {
+                                source: 'absent';
+                                literal: null;
+                                variableRef: null;
+                            } | {
+                                source: 'unknown';
+                                literal: null;
+                                variableRef: null;
+                            };
+                            transactionId: {
+                                source: 'variable-ref';
+                                literal: null;
+                                variableRef: string;
+                            } | {
+                                source: 'absent';
+                                literal: null;
+                                variableRef: null;
+                            } | {
+                                source: 'unknown';
+                                literal: null;
+                                variableRef: null;
+                            };
+                            currency: {
+                                source: 'literal';
+                                literal: string;
+                                variableRef: null;
+                            } | {
+                                source: 'variable-ref';
+                                literal: null;
+                                variableRef: string;
+                            } | {
+                                source: 'absent';
+                                literal: null;
+                                variableRef: null;
+                            } | {
+                                source: 'unknown';
+                                literal: null;
+                                variableRef: null;
+                            };
+                            triggerStrategy: 'all-pages' | 'custom-event' | 'filtered' | 'unknown';
+                            triggerIds: Array<string>;
+                            triggerPredicates: Array<{
+                                triggerId: string;
+                                triggerType: string;
+                                eventPredicates: Array<{
+                                    operator: string;
+                                    value: string;
+                                    negated: boolean;
+                                    ignoreCase: boolean;
+                                }>;
+                                hostnamePredicates: Array<{
+                                    operator: string;
+                                    value: string;
+                                    negated: boolean;
+                                    ignoreCase: boolean;
+                                }>;
+                                unsupportedConditionCount: number;
+                            }>;
+                            reviewReasons: Array<'not-google-ads-tag' | 'unsupported-tag-type' | 'custom-html-opaque' | 'conversion-id-unresolved' | 'conversion-label-unresolved' | 'value-mapping-missing' | 'transaction-id-mapping-missing' | 'currency-mapping-missing' | 'trigger-unresolved' | 'hostname-filter-unresolved'>;
+                        }>;
+                    };
+                    conflictCount: number;
+                    fetchedAt: string;
+                } | null;
+                fetchedAt: string;
+            };
+        } | {
+            kind: 'live';
+            data: {
+                source: 'live';
+                version: {
+                    accountId: string;
+                    containerId: string;
+                    id: string;
+                    path: string;
+                    name: string;
+                    description: string | null;
+                    fingerprint: string | null;
+                    deleted: boolean;
+                };
+                graph: {
+                    accountId: string;
+                    containerId: string;
+                    workspaceId: string | null;
+                    tags: Array<{
+                        id: string;
+                        name: string;
+                        type: string;
+                        paused: boolean;
+                        firingTriggerIds: Array<string>;
+                        blockingTriggerIds: Array<string>;
+                        referencedVariableIds: Array<string>;
+                        parameterKeys: Array<string>;
+                        fingerprint: string | null;
+                    }>;
+                    triggers: Array<{
+                        id: string;
+                        name: string;
+                        type: string;
+                        customEventNames: Array<string>;
+                        filterKeys: Array<string>;
+                        autoEventFilterKeys: Array<string>;
+                        fingerprint: string | null;
+                    }>;
+                    variables: Array<{
+                        id: string;
+                        name: string;
+                        type: string;
+                        dataLayerVariableName: string | null;
+                        parameterKeys: Array<string>;
+                        fingerprint: string | null;
+                    }>;
+                    googleAdsTagAssessments: Array<{
+                        tagId: string;
+                        tagType: string;
+                        recognition: 'recognized' | 'unknown';
+                        recognitionReason: string | null;
+                        conversionId: {
+                            source: 'literal';
+                            literal: string;
+                            variableRef: null;
+                        } | {
+                            source: 'variable-ref';
+                            literal: null;
+                            variableRef: string;
+                        } | {
+                            source: 'absent';
+                            literal: null;
+                            variableRef: null;
+                        } | {
+                            source: 'unknown';
+                            literal: null;
+                            variableRef: null;
+                        };
+                        conversionLabel: {
+                            source: 'literal';
+                            literal: string;
+                            variableRef: null;
+                        } | {
+                            source: 'variable-ref';
+                            literal: null;
+                            variableRef: string;
+                        } | {
+                            source: 'absent';
+                            literal: null;
+                            variableRef: null;
+                        } | {
+                            source: 'unknown';
+                            literal: null;
+                            variableRef: null;
+                        };
+                        value: {
+                            source: 'literal';
+                            literal: string;
+                            variableRef: null;
+                        } | {
+                            source: 'variable-ref';
+                            literal: null;
+                            variableRef: string;
+                        } | {
+                            source: 'absent';
+                            literal: null;
+                            variableRef: null;
+                        } | {
+                            source: 'unknown';
+                            literal: null;
+                            variableRef: null;
+                        };
+                        transactionId: {
+                            source: 'variable-ref';
+                            literal: null;
+                            variableRef: string;
+                        } | {
+                            source: 'absent';
+                            literal: null;
+                            variableRef: null;
+                        } | {
+                            source: 'unknown';
+                            literal: null;
+                            variableRef: null;
+                        };
+                        currency: {
+                            source: 'literal';
+                            literal: string;
+                            variableRef: null;
+                        } | {
+                            source: 'variable-ref';
+                            literal: null;
+                            variableRef: string;
+                        } | {
+                            source: 'absent';
+                            literal: null;
+                            variableRef: null;
+                        } | {
+                            source: 'unknown';
+                            literal: null;
+                            variableRef: null;
+                        };
+                        triggerStrategy: 'all-pages' | 'custom-event' | 'filtered' | 'unknown';
+                        triggerIds: Array<string>;
+                        triggerPredicates: Array<{
+                            triggerId: string;
+                            triggerType: string;
+                            eventPredicates: Array<{
+                                operator: string;
+                                value: string;
+                                negated: boolean;
+                                ignoreCase: boolean;
+                            }>;
+                            hostnamePredicates: Array<{
+                                operator: string;
+                                value: string;
+                                negated: boolean;
+                                ignoreCase: boolean;
+                            }>;
+                            unsupportedConditionCount: number;
+                        }>;
+                        reviewReasons: Array<'not-google-ads-tag' | 'unsupported-tag-type' | 'custom-html-opaque' | 'conversion-id-unresolved' | 'conversion-label-unresolved' | 'value-mapping-missing' | 'transaction-id-mapping-missing' | 'currency-mapping-missing' | 'trigger-unresolved' | 'hostname-filter-unresolved'>;
+                    }>;
+                };
+                fetchedAt: string;
+            };
+        } | {
+            kind: 'draft';
+            data: {
+                source: 'draft';
+                workspace: {
+                    accountId: string;
+                    containerId: string;
+                    id: string;
+                    path: string;
+                    name: string;
+                    description: string | null;
+                    fingerprint: string | null;
+                };
+                graph: {
+                    accountId: string;
+                    containerId: string;
+                    workspaceId: string | null;
+                    tags: Array<{
+                        id: string;
+                        name: string;
+                        type: string;
+                        paused: boolean;
+                        firingTriggerIds: Array<string>;
+                        blockingTriggerIds: Array<string>;
+                        referencedVariableIds: Array<string>;
+                        parameterKeys: Array<string>;
+                        fingerprint: string | null;
+                    }>;
+                    triggers: Array<{
+                        id: string;
+                        name: string;
+                        type: string;
+                        customEventNames: Array<string>;
+                        filterKeys: Array<string>;
+                        autoEventFilterKeys: Array<string>;
+                        fingerprint: string | null;
+                    }>;
+                    variables: Array<{
+                        id: string;
+                        name: string;
+                        type: string;
+                        dataLayerVariableName: string | null;
+                        parameterKeys: Array<string>;
+                        fingerprint: string | null;
+                    }>;
+                    googleAdsTagAssessments: Array<{
+                        tagId: string;
+                        tagType: string;
+                        recognition: 'recognized' | 'unknown';
+                        recognitionReason: string | null;
+                        conversionId: {
+                            source: 'literal';
+                            literal: string;
+                            variableRef: null;
+                        } | {
+                            source: 'variable-ref';
+                            literal: null;
+                            variableRef: string;
+                        } | {
+                            source: 'absent';
+                            literal: null;
+                            variableRef: null;
+                        } | {
+                            source: 'unknown';
+                            literal: null;
+                            variableRef: null;
+                        };
+                        conversionLabel: {
+                            source: 'literal';
+                            literal: string;
+                            variableRef: null;
+                        } | {
+                            source: 'variable-ref';
+                            literal: null;
+                            variableRef: string;
+                        } | {
+                            source: 'absent';
+                            literal: null;
+                            variableRef: null;
+                        } | {
+                            source: 'unknown';
+                            literal: null;
+                            variableRef: null;
+                        };
+                        value: {
+                            source: 'literal';
+                            literal: string;
+                            variableRef: null;
+                        } | {
+                            source: 'variable-ref';
+                            literal: null;
+                            variableRef: string;
+                        } | {
+                            source: 'absent';
+                            literal: null;
+                            variableRef: null;
+                        } | {
+                            source: 'unknown';
+                            literal: null;
+                            variableRef: null;
+                        };
+                        transactionId: {
+                            source: 'variable-ref';
+                            literal: null;
+                            variableRef: string;
+                        } | {
+                            source: 'absent';
+                            literal: null;
+                            variableRef: null;
+                        } | {
+                            source: 'unknown';
+                            literal: null;
+                            variableRef: null;
+                        };
+                        currency: {
+                            source: 'literal';
+                            literal: string;
+                            variableRef: null;
+                        } | {
+                            source: 'variable-ref';
+                            literal: null;
+                            variableRef: string;
+                        } | {
+                            source: 'absent';
+                            literal: null;
+                            variableRef: null;
+                        } | {
+                            source: 'unknown';
+                            literal: null;
+                            variableRef: null;
+                        };
+                        triggerStrategy: 'all-pages' | 'custom-event' | 'filtered' | 'unknown';
+                        triggerIds: Array<string>;
+                        triggerPredicates: Array<{
+                            triggerId: string;
+                            triggerType: string;
+                            eventPredicates: Array<{
+                                operator: string;
+                                value: string;
+                                negated: boolean;
+                                ignoreCase: boolean;
+                            }>;
+                            hostnamePredicates: Array<{
+                                operator: string;
+                                value: string;
+                                negated: boolean;
+                                ignoreCase: boolean;
+                            }>;
+                            unsupportedConditionCount: number;
+                        }>;
+                        reviewReasons: Array<'not-google-ads-tag' | 'unsupported-tag-type' | 'custom-html-opaque' | 'conversion-id-unresolved' | 'conversion-label-unresolved' | 'value-mapping-missing' | 'transaction-id-mapping-missing' | 'currency-mapping-missing' | 'trigger-unresolved' | 'hostname-filter-unresolved'>;
+                    }>;
+                };
+                conflictCount: number;
+                fetchedAt: string;
+            };
+        };
+    };
+};
+
+export type GtmWorkspaceListResponse = {
+    accountId: string;
+    containerId: string;
+    workspaces: Array<{
+        accountId: string;
+        containerId: string;
+        id: string;
+        path: string;
+        name: string;
+        description: string | null;
+        fingerprint: string | null;
+    }>;
+    totalAccessible: number;
+    truncated: boolean;
+    fetchedAt: string;
+};
+
 export type HealthSnapshotDto = {
     id: string;
     projectId: string;
@@ -2763,7 +3998,7 @@ export type LatestProjectRunDto = {
     run: {
         id: string;
         projectId: string;
-        kind: 'answer-visibility' | 'site-audit' | 'gsc-sync' | 'inspect-sitemap' | 'ga-sync' | 'bing-inspect' | 'bing-inspect-sitemap' | 'backlink-extract' | 'traffic-sync' | 'aeo-discover-seed' | 'aeo-discover-probe' | 'gbp-sync' | 'ads-sync';
+        kind: 'answer-visibility' | 'site-audit' | 'gsc-sync' | 'inspect-sitemap' | 'ga-sync' | 'bing-inspect' | 'bing-inspect-sitemap' | 'backlink-extract' | 'traffic-sync' | 'aeo-discover-seed' | 'aeo-discover-probe' | 'gbp-sync' | 'ads-sync' | 'google-ads-sync' | 'gtm-sync';
         status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
         trigger: 'manual' | 'scheduled' | 'config-apply' | 'backfill' | 'probe';
         measurementPlanVersionId?: string | null;
@@ -6217,7 +7452,7 @@ export type ProjectOverviewDto = {
         run: {
             id: string;
             projectId: string;
-            kind: 'answer-visibility' | 'site-audit' | 'gsc-sync' | 'inspect-sitemap' | 'ga-sync' | 'bing-inspect' | 'bing-inspect-sitemap' | 'backlink-extract' | 'traffic-sync' | 'aeo-discover-seed' | 'aeo-discover-probe' | 'gbp-sync' | 'ads-sync';
+            kind: 'answer-visibility' | 'site-audit' | 'gsc-sync' | 'inspect-sitemap' | 'ga-sync' | 'bing-inspect' | 'bing-inspect-sitemap' | 'backlink-extract' | 'traffic-sync' | 'aeo-discover-seed' | 'aeo-discover-probe' | 'gbp-sync' | 'ads-sync' | 'google-ads-sync' | 'gtm-sync';
             status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
             trigger: 'manual' | 'scheduled' | 'config-apply' | 'backfill' | 'probe';
             measurementPlanVersionId?: string | null;
@@ -7152,7 +8387,7 @@ export type ResultsExportDto = {
 export type RunDetailDto = {
     id: string;
     projectId: string;
-    kind: 'answer-visibility' | 'site-audit' | 'gsc-sync' | 'inspect-sitemap' | 'ga-sync' | 'bing-inspect' | 'bing-inspect-sitemap' | 'backlink-extract' | 'traffic-sync' | 'aeo-discover-seed' | 'aeo-discover-probe' | 'gbp-sync' | 'ads-sync';
+    kind: 'answer-visibility' | 'site-audit' | 'gsc-sync' | 'inspect-sitemap' | 'ga-sync' | 'bing-inspect' | 'bing-inspect-sitemap' | 'backlink-extract' | 'traffic-sync' | 'aeo-discover-seed' | 'aeo-discover-probe' | 'gbp-sync' | 'ads-sync' | 'google-ads-sync' | 'gtm-sync';
     status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
     trigger: 'manual' | 'scheduled' | 'config-apply' | 'backfill' | 'probe';
     measurementPlanVersionId?: string | null;
@@ -7243,7 +8478,7 @@ export type RunDetailDto = {
 export type RunDto = {
     id: string;
     projectId: string;
-    kind: 'answer-visibility' | 'site-audit' | 'gsc-sync' | 'inspect-sitemap' | 'ga-sync' | 'bing-inspect' | 'bing-inspect-sitemap' | 'backlink-extract' | 'traffic-sync' | 'aeo-discover-seed' | 'aeo-discover-probe' | 'gbp-sync' | 'ads-sync';
+    kind: 'answer-visibility' | 'site-audit' | 'gsc-sync' | 'inspect-sitemap' | 'ga-sync' | 'bing-inspect' | 'bing-inspect-sitemap' | 'backlink-extract' | 'traffic-sync' | 'aeo-discover-seed' | 'aeo-discover-probe' | 'gbp-sync' | 'ads-sync' | 'google-ads-sync' | 'gtm-sync';
     status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
     trigger: 'manual' | 'scheduled' | 'config-apply' | 'backfill' | 'probe';
     measurementPlanVersionId?: string | null;
@@ -14666,6 +15901,1040 @@ export type GetApiV1ProjectsByNameGoogleCallbackResponses = {
 };
 
 export type GetApiV1ProjectsByNameGoogleCallbackResponse = GetApiV1ProjectsByNameGoogleCallbackResponses[keyof GetApiV1ProjectsByNameGoogleCallbackResponses];
+
+export type GetApiV1GoogleMarketingCallbackData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * OAuth authorization code.
+         */
+        code?: string;
+        /**
+         * Short-lived signed OAuth state.
+         */
+        state?: string;
+        /**
+         * OAuth provider error code.
+         */
+        error?: string;
+    };
+    url: '/api/v1/google-marketing/callback';
+};
+
+export type GetApiV1GoogleMarketingCallbackErrors = {
+    /**
+     * Invalid, expired, or rejected callback.
+     */
+    400: string;
+    /**
+     * OAuth host configuration is incomplete.
+     */
+    500: string;
+    /**
+     * OAuth code exchange failed.
+     */
+    502: string;
+    /**
+     * Too many pending OAuth confirmations.
+     */
+    503: string;
+};
+
+export type GetApiV1GoogleMarketingCallbackError = GetApiV1GoogleMarketingCallbackErrors[keyof GetApiV1GoogleMarketingCallbackErrors];
+
+export type GetApiV1GoogleMarketingCallbackResponses = {
+    /**
+     * OAuth code exchanged; explicit same-browser confirmation requested.
+     */
+    200: string;
+};
+
+export type GetApiV1GoogleMarketingCallbackResponse = GetApiV1GoogleMarketingCallbackResponses[keyof GetApiV1GoogleMarketingCallbackResponses];
+
+export type PostApiV1GoogleMarketingCallbackConfirmByConfirmationIdData = {
+    body?: never;
+    path: {
+        /**
+         * Short-lived, single-use OAuth confirmation identifier.
+         */
+        confirmationId: string;
+    };
+    query?: never;
+    url: '/api/v1/google-marketing/callback/confirm/{confirmationId}';
+};
+
+export type PostApiV1GoogleMarketingCallbackConfirmByConfirmationIdErrors = {
+    /**
+     * Confirmation is invalid, expired, replaced, or already used.
+     */
+    400: string;
+    /**
+     * The original signed-in browser is required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * OAuth host configuration is incomplete.
+     */
+    500: string;
+};
+
+export type PostApiV1GoogleMarketingCallbackConfirmByConfirmationIdError = PostApiV1GoogleMarketingCallbackConfirmByConfirmationIdErrors[keyof PostApiV1GoogleMarketingCallbackConfirmByConfirmationIdErrors];
+
+export type PostApiV1GoogleMarketingCallbackConfirmByConfirmationIdResponses = {
+    /**
+     * OAuth connection confirmed.
+     */
+    200: string;
+};
+
+export type PostApiV1GoogleMarketingCallbackConfirmByConfirmationIdResponse = PostApiV1GoogleMarketingCallbackConfirmByConfirmationIdResponses[keyof PostApiV1GoogleMarketingCallbackConfirmByConfirmationIdResponses];
+
+export type GetApiV1ProjectsByNameGoogleAdsStatusData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/google-ads/status';
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsStatusErrors = {
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsStatusError = GetApiV1ProjectsByNameGoogleAdsStatusErrors[keyof GetApiV1ProjectsByNameGoogleAdsStatusErrors];
+
+export type GetApiV1ProjectsByNameGoogleAdsStatusResponses = {
+    /**
+     * Google Ads connection status returned.
+     */
+    200: GoogleAdsConnectionStatusDto;
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsStatusResponse = GetApiV1ProjectsByNameGoogleAdsStatusResponses[keyof GetApiV1ProjectsByNameGoogleAdsStatusResponses];
+
+export type PostApiV1ProjectsByNameGoogleAdsOauthConnectData = {
+    body: GoogleMarketingOAuthConnectRequest;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/google-ads/oauth/connect';
+};
+
+export type PostApiV1ProjectsByNameGoogleAdsOauthConnectErrors = {
+    /**
+     * Invalid OAuth request or missing developer token.
+     */
+    400: ErrorEnvelope;
+    /**
+     * OAuth must start from a signed-in browser.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Too many pending OAuth starts.
+     */
+    429: ErrorEnvelope;
+    /**
+     * OAuth is not configured.
+     */
+    501: ErrorEnvelope;
+    /**
+     * OAuth authorization URL could not be built.
+     */
+    502: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameGoogleAdsOauthConnectError = PostApiV1ProjectsByNameGoogleAdsOauthConnectErrors[keyof PostApiV1ProjectsByNameGoogleAdsOauthConnectErrors];
+
+export type PostApiV1ProjectsByNameGoogleAdsOauthConnectResponses = {
+    /**
+     * Safe OAuth browser hand-off returned.
+     */
+    200: GoogleMarketingOAuthConnectResponse;
+};
+
+export type PostApiV1ProjectsByNameGoogleAdsOauthConnectResponse = PostApiV1ProjectsByNameGoogleAdsOauthConnectResponses[keyof PostApiV1ProjectsByNameGoogleAdsOauthConnectResponses];
+
+export type GetApiV1ProjectsByNameGoogleAdsCustomersData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/google-ads/customers';
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsCustomersErrors = {
+    /**
+     * Google Ads is not connected.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Live-read authority is required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Live discovery is not configured.
+     */
+    501: ErrorEnvelope;
+    /**
+     * Google Ads discovery failed.
+     */
+    502: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsCustomersError = GetApiV1ProjectsByNameGoogleAdsCustomersErrors[keyof GetApiV1ProjectsByNameGoogleAdsCustomersErrors];
+
+export type GetApiV1ProjectsByNameGoogleAdsCustomersResponses = {
+    /**
+     * Accessible Google Ads customers returned.
+     */
+    200: GoogleAdsAccessibleCustomersResponse;
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsCustomersResponse = GetApiV1ProjectsByNameGoogleAdsCustomersResponses[keyof GetApiV1ProjectsByNameGoogleAdsCustomersResponses];
+
+export type PutApiV1ProjectsByNameGoogleAdsSelectionData = {
+    body: GoogleAdsCustomerSelectionRequest;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/google-ads/selection';
+};
+
+export type PutApiV1ProjectsByNameGoogleAdsSelectionErrors = {
+    /**
+     * Google Ads is not connected or the selection is invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Write authority is required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type PutApiV1ProjectsByNameGoogleAdsSelectionError = PutApiV1ProjectsByNameGoogleAdsSelectionErrors[keyof PutApiV1ProjectsByNameGoogleAdsSelectionErrors];
+
+export type PutApiV1ProjectsByNameGoogleAdsSelectionResponses = {
+    /**
+     * Google Ads selection updated.
+     */
+    200: GoogleAdsConnectionStatusDto;
+};
+
+export type PutApiV1ProjectsByNameGoogleAdsSelectionResponse = PutApiV1ProjectsByNameGoogleAdsSelectionResponses[keyof PutApiV1ProjectsByNameGoogleAdsSelectionResponses];
+
+export type PostApiV1ProjectsByNameGoogleAdsSyncData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/google-ads/sync';
+};
+
+export type PostApiV1ProjectsByNameGoogleAdsSyncErrors = {
+    /**
+     * Google Ads is not connected.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Live-read and write authority are required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Google Ads sync is not configured.
+     */
+    501: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameGoogleAdsSyncError = PostApiV1ProjectsByNameGoogleAdsSyncErrors[keyof PostApiV1ProjectsByNameGoogleAdsSyncErrors];
+
+export type PostApiV1ProjectsByNameGoogleAdsSyncResponses = {
+    /**
+     * Google Ads sync run queued.
+     */
+    200: RunDto;
+};
+
+export type PostApiV1ProjectsByNameGoogleAdsSyncResponse = PostApiV1ProjectsByNameGoogleAdsSyncResponses[keyof PostApiV1ProjectsByNameGoogleAdsSyncResponses];
+
+export type GetApiV1ProjectsByNameGoogleAdsSnapshotsData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Maximum number of records to return.
+         */
+        limit?: number;
+        /**
+         * Opaque cursor returned by the preceding Google Marketing snapshot page.
+         */
+        cursor?: string;
+    };
+    url: '/api/v1/projects/{name}/google-ads/snapshots';
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsSnapshotsErrors = {
+    /**
+     * Invalid snapshot cursor or limit.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsSnapshotsError = GetApiV1ProjectsByNameGoogleAdsSnapshotsErrors[keyof GetApiV1ProjectsByNameGoogleAdsSnapshotsErrors];
+
+export type GetApiV1ProjectsByNameGoogleAdsSnapshotsResponses = {
+    /**
+     * Google Ads snapshot page returned.
+     */
+    200: GoogleAdsStoredSnapshotPage;
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsSnapshotsResponse = GetApiV1ProjectsByNameGoogleAdsSnapshotsResponses[keyof GetApiV1ProjectsByNameGoogleAdsSnapshotsResponses];
+
+export type GetApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotIdData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Snapshot ID.
+         */
+        snapshotId: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/google-ads/snapshots/{snapshotId}';
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotIdErrors = {
+    /**
+     * Project or snapshot not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * Stored snapshot is invalid.
+     */
+    502: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotIdError = GetApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotIdErrors[keyof GetApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotIdErrors];
+
+export type GetApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotIdResponses = {
+    /**
+     * Google Ads snapshot returned.
+     */
+    200: GoogleAdsStoredSnapshotReadEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotIdResponse = GetApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotIdResponses[keyof GetApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotIdResponses];
+
+export type DeleteApiV1ProjectsByNameGoogleAdsConnectionData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/google-ads/connection';
+};
+
+export type DeleteApiV1ProjectsByNameGoogleAdsConnectionErrors = {
+    /**
+     * Write authority is required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type DeleteApiV1ProjectsByNameGoogleAdsConnectionError = DeleteApiV1ProjectsByNameGoogleAdsConnectionErrors[keyof DeleteApiV1ProjectsByNameGoogleAdsConnectionErrors];
+
+export type DeleteApiV1ProjectsByNameGoogleAdsConnectionResponses = {
+    /**
+     * Google Ads disconnect completed.
+     */
+    200: GoogleMarketingDisconnectResponse;
+};
+
+export type DeleteApiV1ProjectsByNameGoogleAdsConnectionResponse = DeleteApiV1ProjectsByNameGoogleAdsConnectionResponses[keyof DeleteApiV1ProjectsByNameGoogleAdsConnectionResponses];
+
+export type GetApiV1ProjectsByNameGtmStatusData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/gtm/status';
+};
+
+export type GetApiV1ProjectsByNameGtmStatusErrors = {
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGtmStatusError = GetApiV1ProjectsByNameGtmStatusErrors[keyof GetApiV1ProjectsByNameGtmStatusErrors];
+
+export type GetApiV1ProjectsByNameGtmStatusResponses = {
+    /**
+     * GTM connection status returned.
+     */
+    200: GtmConnectionStatusDto;
+};
+
+export type GetApiV1ProjectsByNameGtmStatusResponse = GetApiV1ProjectsByNameGtmStatusResponses[keyof GetApiV1ProjectsByNameGtmStatusResponses];
+
+export type PostApiV1ProjectsByNameGtmOauthConnectData = {
+    body: GoogleMarketingOAuthConnectRequest;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/gtm/oauth/connect';
+};
+
+export type PostApiV1ProjectsByNameGtmOauthConnectErrors = {
+    /**
+     * Invalid OAuth request.
+     */
+    400: ErrorEnvelope;
+    /**
+     * OAuth must start from a signed-in browser.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Too many pending OAuth starts.
+     */
+    429: ErrorEnvelope;
+    /**
+     * OAuth is not configured.
+     */
+    501: ErrorEnvelope;
+    /**
+     * OAuth authorization URL could not be built.
+     */
+    502: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameGtmOauthConnectError = PostApiV1ProjectsByNameGtmOauthConnectErrors[keyof PostApiV1ProjectsByNameGtmOauthConnectErrors];
+
+export type PostApiV1ProjectsByNameGtmOauthConnectResponses = {
+    /**
+     * Safe OAuth browser hand-off returned.
+     */
+    200: GoogleMarketingOAuthConnectResponse;
+};
+
+export type PostApiV1ProjectsByNameGtmOauthConnectResponse = PostApiV1ProjectsByNameGtmOauthConnectResponses[keyof PostApiV1ProjectsByNameGtmOauthConnectResponses];
+
+export type GetApiV1ProjectsByNameGtmAccountsData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/gtm/accounts';
+};
+
+export type GetApiV1ProjectsByNameGtmAccountsErrors = {
+    /**
+     * GTM is not connected.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Live-read authority is required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Live discovery is not configured.
+     */
+    501: ErrorEnvelope;
+    /**
+     * GTM discovery failed.
+     */
+    502: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGtmAccountsError = GetApiV1ProjectsByNameGtmAccountsErrors[keyof GetApiV1ProjectsByNameGtmAccountsErrors];
+
+export type GetApiV1ProjectsByNameGtmAccountsResponses = {
+    /**
+     * GTM accounts returned.
+     */
+    200: GtmAccountsResponse;
+};
+
+export type GetApiV1ProjectsByNameGtmAccountsResponse = GetApiV1ProjectsByNameGtmAccountsResponses[keyof GetApiV1ProjectsByNameGtmAccountsResponses];
+
+export type GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Google Tag Manager account ID.
+         */
+        accountId: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/gtm/accounts/{accountId}/containers';
+};
+
+export type GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersErrors = {
+    /**
+     * GTM is not connected.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Live-read authority is required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Live discovery is not configured.
+     */
+    501: ErrorEnvelope;
+    /**
+     * GTM discovery failed.
+     */
+    502: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersError = GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersErrors[keyof GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersErrors];
+
+export type GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersResponses = {
+    /**
+     * GTM containers returned.
+     */
+    200: GtmContainerListResponse;
+};
+
+export type GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersResponse = GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersResponses[keyof GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersResponses];
+
+export type GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersByContainerIdWorkspacesData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Google Tag Manager account ID.
+         */
+        accountId: string;
+        /**
+         * Google Tag Manager container ID.
+         */
+        containerId: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/gtm/accounts/{accountId}/containers/{containerId}/workspaces';
+};
+
+export type GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersByContainerIdWorkspacesErrors = {
+    /**
+     * GTM is not connected.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Live-read authority is required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Live discovery is not configured.
+     */
+    501: ErrorEnvelope;
+    /**
+     * GTM discovery failed.
+     */
+    502: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersByContainerIdWorkspacesError = GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersByContainerIdWorkspacesErrors[keyof GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersByContainerIdWorkspacesErrors];
+
+export type GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersByContainerIdWorkspacesResponses = {
+    /**
+     * GTM workspaces returned.
+     */
+    200: GtmWorkspaceListResponse;
+};
+
+export type GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersByContainerIdWorkspacesResponse = GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersByContainerIdWorkspacesResponses[keyof GetApiV1ProjectsByNameGtmAccountsByAccountIdContainersByContainerIdWorkspacesResponses];
+
+export type PutApiV1ProjectsByNameGtmSelectionData = {
+    body: GtmResourceSelectionRequest;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/gtm/selection';
+};
+
+export type PutApiV1ProjectsByNameGtmSelectionErrors = {
+    /**
+     * GTM is not connected or the selection is invalid.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Write authority is required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type PutApiV1ProjectsByNameGtmSelectionError = PutApiV1ProjectsByNameGtmSelectionErrors[keyof PutApiV1ProjectsByNameGtmSelectionErrors];
+
+export type PutApiV1ProjectsByNameGtmSelectionResponses = {
+    /**
+     * GTM selection updated.
+     */
+    200: GtmConnectionStatusDto;
+};
+
+export type PutApiV1ProjectsByNameGtmSelectionResponse = PutApiV1ProjectsByNameGtmSelectionResponses[keyof PutApiV1ProjectsByNameGtmSelectionResponses];
+
+export type PostApiV1ProjectsByNameGtmSyncData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/gtm/sync';
+};
+
+export type PostApiV1ProjectsByNameGtmSyncErrors = {
+    /**
+     * GTM is not connected.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Live-read and write authority are required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * GTM sync is not configured.
+     */
+    501: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameGtmSyncError = PostApiV1ProjectsByNameGtmSyncErrors[keyof PostApiV1ProjectsByNameGtmSyncErrors];
+
+export type PostApiV1ProjectsByNameGtmSyncResponses = {
+    /**
+     * GTM sync run queued.
+     */
+    200: RunDto;
+};
+
+export type PostApiV1ProjectsByNameGtmSyncResponse = PostApiV1ProjectsByNameGtmSyncResponses[keyof PostApiV1ProjectsByNameGtmSyncResponses];
+
+export type GetApiV1ProjectsByNameGtmSnapshotsData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Maximum number of records to return.
+         */
+        limit?: number;
+        /**
+         * Opaque cursor returned by the preceding Google Marketing snapshot page.
+         */
+        cursor?: string;
+    };
+    url: '/api/v1/projects/{name}/gtm/snapshots';
+};
+
+export type GetApiV1ProjectsByNameGtmSnapshotsErrors = {
+    /**
+     * Invalid snapshot cursor or limit.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGtmSnapshotsError = GetApiV1ProjectsByNameGtmSnapshotsErrors[keyof GetApiV1ProjectsByNameGtmSnapshotsErrors];
+
+export type GetApiV1ProjectsByNameGtmSnapshotsResponses = {
+    /**
+     * GTM snapshot page returned.
+     */
+    200: GtmStoredSnapshotPage;
+};
+
+export type GetApiV1ProjectsByNameGtmSnapshotsResponse = GetApiV1ProjectsByNameGtmSnapshotsResponses[keyof GetApiV1ProjectsByNameGtmSnapshotsResponses];
+
+export type GetApiV1ProjectsByNameGtmSnapshotsBySnapshotIdData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Snapshot ID.
+         */
+        snapshotId: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/gtm/snapshots/{snapshotId}';
+};
+
+export type GetApiV1ProjectsByNameGtmSnapshotsBySnapshotIdErrors = {
+    /**
+     * Project or snapshot not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * Stored snapshot is invalid.
+     */
+    502: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGtmSnapshotsBySnapshotIdError = GetApiV1ProjectsByNameGtmSnapshotsBySnapshotIdErrors[keyof GetApiV1ProjectsByNameGtmSnapshotsBySnapshotIdErrors];
+
+export type GetApiV1ProjectsByNameGtmSnapshotsBySnapshotIdResponses = {
+    /**
+     * GTM snapshot returned.
+     */
+    200: GtmStoredSnapshotReadEnvelope;
+};
+
+export type GetApiV1ProjectsByNameGtmSnapshotsBySnapshotIdResponse = GetApiV1ProjectsByNameGtmSnapshotsBySnapshotIdResponses[keyof GetApiV1ProjectsByNameGtmSnapshotsBySnapshotIdResponses];
+
+export type DeleteApiV1ProjectsByNameGtmConnectionData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/gtm/connection';
+};
+
+export type DeleteApiV1ProjectsByNameGtmConnectionErrors = {
+    /**
+     * Write authority is required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type DeleteApiV1ProjectsByNameGtmConnectionError = DeleteApiV1ProjectsByNameGtmConnectionErrors[keyof DeleteApiV1ProjectsByNameGtmConnectionErrors];
+
+export type DeleteApiV1ProjectsByNameGtmConnectionResponses = {
+    /**
+     * GTM disconnect completed.
+     */
+    200: GoogleMarketingDisconnectResponse;
+};
+
+export type DeleteApiV1ProjectsByNameGtmConnectionResponse = DeleteApiV1ProjectsByNameGtmConnectionResponses[keyof DeleteApiV1ProjectsByNameGtmConnectionResponses];
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/conversion-tracking/contracts';
+};
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsErrors = {
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsError = GetApiV1ProjectsByNameConversionTrackingContractsErrors[keyof GetApiV1ProjectsByNameConversionTrackingContractsErrors];
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsResponses = {
+    /**
+     * Conversion tracking contracts returned.
+     */
+    200: Array<ConversionTrackingContract>;
+};
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsResponse = GetApiV1ProjectsByNameConversionTrackingContractsResponses[keyof GetApiV1ProjectsByNameConversionTrackingContractsResponses];
+
+export type PostApiV1ProjectsByNameConversionTrackingContractsData = {
+    body: ConversionTrackingContractWriteRequest;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/conversion-tracking/contracts';
+};
+
+export type PostApiV1ProjectsByNameConversionTrackingContractsErrors = {
+    /**
+     * Invalid contract request.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Write authority is required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * A contract with that name already exists.
+     */
+    409: ErrorEnvelope;
+};
+
+export type PostApiV1ProjectsByNameConversionTrackingContractsError = PostApiV1ProjectsByNameConversionTrackingContractsErrors[keyof PostApiV1ProjectsByNameConversionTrackingContractsErrors];
+
+export type PostApiV1ProjectsByNameConversionTrackingContractsResponses = {
+    /**
+     * Conversion tracking contract created.
+     */
+    200: ConversionTrackingContract;
+};
+
+export type PostApiV1ProjectsByNameConversionTrackingContractsResponse = PostApiV1ProjectsByNameConversionTrackingContractsResponses[keyof PostApiV1ProjectsByNameConversionTrackingContractsResponses];
+
+export type DeleteApiV1ProjectsByNameConversionTrackingContractsByContractIdData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Project-scoped conversion tracking contract ID.
+         */
+        contractId: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/conversion-tracking/contracts/{contractId}';
+};
+
+export type DeleteApiV1ProjectsByNameConversionTrackingContractsByContractIdErrors = {
+    /**
+     * Write authority is required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project or contract not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type DeleteApiV1ProjectsByNameConversionTrackingContractsByContractIdError = DeleteApiV1ProjectsByNameConversionTrackingContractsByContractIdErrors[keyof DeleteApiV1ProjectsByNameConversionTrackingContractsByContractIdErrors];
+
+export type DeleteApiV1ProjectsByNameConversionTrackingContractsByContractIdResponses = {
+    /**
+     * Conversion tracking contract deleted.
+     */
+    204: void;
+};
+
+export type DeleteApiV1ProjectsByNameConversionTrackingContractsByContractIdResponse = DeleteApiV1ProjectsByNameConversionTrackingContractsByContractIdResponses[keyof DeleteApiV1ProjectsByNameConversionTrackingContractsByContractIdResponses];
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsByContractIdData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Project-scoped conversion tracking contract ID.
+         */
+        contractId: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/conversion-tracking/contracts/{contractId}';
+};
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsByContractIdErrors = {
+    /**
+     * Project or contract not found.
+     */
+    404: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsByContractIdError = GetApiV1ProjectsByNameConversionTrackingContractsByContractIdErrors[keyof GetApiV1ProjectsByNameConversionTrackingContractsByContractIdErrors];
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsByContractIdResponses = {
+    /**
+     * Conversion tracking contract returned.
+     */
+    200: ConversionTrackingContract;
+};
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsByContractIdResponse = GetApiV1ProjectsByNameConversionTrackingContractsByContractIdResponses[keyof GetApiV1ProjectsByNameConversionTrackingContractsByContractIdResponses];
+
+export type PutApiV1ProjectsByNameConversionTrackingContractsByContractIdData = {
+    body: ConversionTrackingContractWriteRequest;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Project-scoped conversion tracking contract ID.
+         */
+        contractId: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/conversion-tracking/contracts/{contractId}';
+};
+
+export type PutApiV1ProjectsByNameConversionTrackingContractsByContractIdErrors = {
+    /**
+     * Invalid contract request.
+     */
+    400: ErrorEnvelope;
+    /**
+     * Write authority is required.
+     */
+    403: ErrorEnvelope;
+    /**
+     * Project or contract not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * A contract with that name already exists.
+     */
+    409: ErrorEnvelope;
+};
+
+export type PutApiV1ProjectsByNameConversionTrackingContractsByContractIdError = PutApiV1ProjectsByNameConversionTrackingContractsByContractIdErrors[keyof PutApiV1ProjectsByNameConversionTrackingContractsByContractIdErrors];
+
+export type PutApiV1ProjectsByNameConversionTrackingContractsByContractIdResponses = {
+    /**
+     * Conversion tracking contract updated.
+     */
+    200: ConversionTrackingContract;
+};
+
+export type PutApiV1ProjectsByNameConversionTrackingContractsByContractIdResponse = PutApiV1ProjectsByNameConversionTrackingContractsByContractIdResponses[keyof PutApiV1ProjectsByNameConversionTrackingContractsByContractIdResponses];
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrityData = {
+    body?: never;
+    path: {
+        /**
+         * Project name.
+         */
+        name: string;
+        /**
+         * Project-scoped conversion tracking contract ID.
+         */
+        contractId: string;
+    };
+    query?: never;
+    url: '/api/v1/projects/{name}/conversion-tracking/contracts/{contractId}/integrity';
+};
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrityErrors = {
+    /**
+     * Project or contract not found.
+     */
+    404: ErrorEnvelope;
+    /**
+     * Integrity assessment is not configured.
+     */
+    501: ErrorEnvelope;
+    /**
+     * Integrity assessment failed.
+     */
+    502: ErrorEnvelope;
+};
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrityError = GetApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrityErrors[keyof GetApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrityErrors];
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrityResponses = {
+    /**
+     * Conversion tracking integrity returned.
+     */
+    200: ConversionTrackingIntegrityReadEnvelope;
+};
+
+export type GetApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrityResponse = GetApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrityResponses[keyof GetApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrityResponses];
 
 export type GetApiV1ProjectsByNameGoogleConnectionsData = {
     body?: never;

@@ -26,6 +26,12 @@ import type { ProviderAdapterInfo } from './settings.js'
 import { pruneProviderModelsForProviders, validateProviderModels } from './provider-models.js'
 
 export interface ProjectRoutesOptions {
+  /**
+   * Runs before the project-delete transaction. It may throw to abort the
+   * deletion. A returned compensator is called if the database transaction
+   * cannot commit after this pre-delete work has persisted.
+   */
+  onProjectDeleting?: (projectId: string) => void | (() => void)
   onProjectDeleted?: (projectId: string) => void
   onProjectUpserted?: (projectId: string, projectName: string) => void
   /**
@@ -385,15 +391,25 @@ export async function projectRoutes(app: FastifyInstance, opts: ProjectRoutesOpt
   app.delete<{ Params: { name: string } }>('/projects/:name', async (request, reply) => {
     const project = resolveProject(app.db, request.params.name)
 
-    writeAuditLog(app.db, {
-      projectId: project.id,
-      actor: 'api',
-      action: 'project.deleted',
-      entityType: 'project',
-      entityId: project.id,
-    })
-
-    app.db.delete(projects).where(eq(projects.id, project.id)).run()
+    // Private credential stores are outside SQLite. Let their host persist a
+    // durable removal first; if that fails, the project remains fully usable
+    // and the caller can retry rather than leaving an orphaned secret behind.
+    const rollback = opts.onProjectDeleting?.(project.id)
+    try {
+      app.db.transaction((tx) => {
+        writeAuditLog(tx, {
+          projectId: project.id,
+          actor: 'api',
+          action: 'project.deleted',
+          entityType: 'project',
+          entityId: project.id,
+        })
+        tx.delete(projects).where(eq(projects.id, project.id)).run()
+      })
+    } catch (error) {
+      rollback?.()
+      throw error
+    }
     opts.onProjectDeleted?.(project.id)
     return reply.status(204).send()
   })

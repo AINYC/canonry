@@ -51,6 +51,8 @@ import type { ScheduleRoutesOptions } from './schedules.js'
 import { notificationRoutes, type NotificationRoutesOptions } from './notifications.js'
 import { googleRoutes } from './google.js'
 import type { GoogleRoutesOptions } from './google.js'
+import { googleMarketingRoutes } from './google-marketing.js'
+import type { GoogleMarketingRoutesOptions } from './google-marketing.js'
 import { adsRoutes } from './ads.js'
 import type { AdsRoutesOptions } from './ads.js'
 import { bingRoutes } from './bing.js'
@@ -156,6 +158,8 @@ export interface ApiRoutesOptions {
   onScheduleUpdated?: (action: 'upsert' | 'delete', projectId: string, kind: import('@ainyc/canonry-contracts').SchedulableRunKind) => void
   /** Callback when a project is deleted */
   onProjectDeleted?: (projectId: string) => void
+  /** Pre-delete durable cleanup. May throw to abort the database delete. */
+  onProjectDeleting?: ProjectRoutesOptions['onProjectDeleting']
   /** Callback when a project is created or updated */
   onProjectUpserted?: (projectId: string, projectName: string) => void
   /**
@@ -204,6 +208,20 @@ export interface ApiRoutesOptions {
   onGscSyncRequested?: GoogleRoutesOptions['onGscSyncRequested']
   onInspectSitemapRequested?: GoogleRoutesOptions['onInspectSitemapRequested']
   onGbpSyncRequested?: GoogleRoutesOptions['onGbpSyncRequested']
+  /** Private project-scoped Google Ads/GTM OAuth credential storage. */
+  googleMarketingCredentialStore?: GoogleMarketingRoutesOptions['googleMarketingCredentialStore']
+  /** Provider-agnostic OAuth URL/code-exchange adapter for Google Ads and GTM. */
+  googleMarketingOAuth?: GoogleMarketingRoutesOptions['googleMarketingOAuth']
+  /** Host-provided OAuth scopes; api-routes deliberately has no provider package dependency. */
+  googleMarketingOAuthScopes?: GoogleMarketingRoutesOptions['googleMarketingOAuthScopes']
+  /** Bounded read-only Google Ads/GTM discovery adapter. */
+  googleMarketingLiveReader?: GoogleMarketingRoutesOptions['googleMarketingLiveReader']
+  /** Pure stored-evidence integrity evaluator (keeps api-routes free of runtime cycles). */
+  assessConversionTrackingIntegrity?: GoogleMarketingRoutesOptions['assessConversionTrackingIntegrity']
+  /** Called after a tracked Google Ads sync run commits. */
+  onGoogleAdsSyncRequested?: GoogleMarketingRoutesOptions['onGoogleAdsSyncRequested']
+  /** Called after a tracked GTM sync run commits. */
+  onGtmSyncRequested?: GoogleMarketingRoutesOptions['onGtmSyncRequested']
   adsCredentialStore?: AdsRoutesOptions['adsCredentialStore']
   verifyAdsAccount?: AdsRoutesOptions['verifyAdsAccount']
   adsReader?: AdsRoutesOptions['adsReader']
@@ -433,6 +451,7 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
 
     await api.register(openApiRoutes, { ...opts.openApiInfo, routePrefix: opts.routePrefix })
     await api.register(projectRoutes, {
+      onProjectDeleting: opts.onProjectDeleting,
       onProjectDeleted: opts.onProjectDeleted,
       onProjectUpserted: opts.onProjectUpserted,
       onAliasesChanged: opts.onAliasesChanged,
@@ -549,6 +568,18 @@ export async function apiRoutes(app: FastifyInstance, opts: ApiRoutesOptions) {
       onInspectSitemapRequested: opts.onInspectSitemapRequested,
       onGbpSyncRequested: opts.onGbpSyncRequested,
     } satisfies GoogleRoutesOptions)
+    await api.register(googleMarketingRoutes, {
+      googleMarketingCredentialStore: opts.googleMarketingCredentialStore,
+      googleMarketingOAuth: opts.googleMarketingOAuth,
+      googleMarketingOAuthScopes: opts.googleMarketingOAuthScopes,
+      googleMarketingLiveReader: opts.googleMarketingLiveReader,
+      assessConversionTrackingIntegrity: opts.assessConversionTrackingIntegrity,
+      onGoogleAdsSyncRequested: opts.onGoogleAdsSyncRequested,
+      onGtmSyncRequested: opts.onGtmSyncRequested,
+      googleStateSecret: opts.googleStateSecret,
+      publicUrl: opts.publicUrl,
+      routePrefix: opts.routePrefix,
+    } satisfies GoogleMarketingRoutesOptions)
     await api.register(wordpressRoutes, {
       wordpressConnectionStore: opts.wordpressConnectionStore,
       routePrefix: opts.routePrefix ?? '/api/v1',

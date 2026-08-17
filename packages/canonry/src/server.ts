@@ -53,6 +53,7 @@ import {
   adsGeoSearchResponseSchema,
   adsConversionPixelListResponseSchema,
   adsConversionEventSettingListResponseSchema,
+  GoogleMarketingProviders,
   type AdsCampaignBiddingType,
   type AdsAdGroupBillingEventType,
   type ProviderAdapter,
@@ -77,6 +78,23 @@ import {
   setGoogleAuthConfig,
   upsertGoogleConnection,
 } from "./google-config.js";
+import {
+  getGoogleAdsAuthConfig,
+  getGoogleAdsConnection,
+  removeGoogleAdsConnection,
+  removeLegacyGoogleAdsConnections,
+  removeOrphanedGoogleAdsConnections,
+  setGoogleAdsAuthConfig,
+  upsertGoogleAdsConnection,
+} from "./google-ads-config.js";
+import {
+  getGtmAuthConfig,
+  getGtmConnection,
+  removeGtmConnection,
+  removeLegacyGtmConnections,
+  removeOrphanedGtmConnections,
+  upsertGtmConnection,
+} from "./gtm-config.js";
 import {
   getGa4Connection,
   upsertGa4Connection,
@@ -169,6 +187,12 @@ import {
   type OpenAiAdsInsightRow,
   type OpenAiAdsInsightsOptions,
 } from "@ainyc/canonry-integration-openai-ads";
+import {
+  exchangeCode as exchangeGoogleOAuthCode,
+  getAuthUrl as getGoogleOAuthUrl,
+} from "@ainyc/canonry-integration-google";
+import { GOOGLE_ADS_OAUTH_SCOPE } from "@ainyc/canonry-integration-google-ads";
+import { GTM_READONLY_SCOPE } from "@ainyc/canonry-integration-google-tag-manager";
 import { executeInspectSitemap } from "./gsc-inspect-sitemap.js";
 import { executeBingInspectSitemap } from "./bing-inspect-sitemap.js";
 import { maybeRefreshGscCoverage, runWasUserInitiated } from "./coverage-refresh.js";
@@ -210,6 +234,12 @@ import { SnapshotService } from "./snapshot-service.js";
 import { fetchSiteText } from "./site-fetch.js";
 import { createLogger } from "./logger.js";
 import { executeResearchRun } from "./research-runner.js";
+import { createGoogleMarketingRuntime } from "./google-marketing-runtime.js";
+import {
+  executeGoogleAdsMarketingSync,
+  executeGtmMarketingSync,
+} from "./google-marketing-sync.js";
+import { assessConversionTrackingIntegrity } from "@ainyc/canonry-intelligence";
 
 const log = createLogger("Server");
 
@@ -551,6 +581,163 @@ export function resolveGooglePublicUrl(
   }
 }
 
+function cloneGoogleAdsConfig(config: CanonryConfig['googleAds']): CanonryConfig['googleAds'] {
+  if (!config) return undefined
+  return {
+    ...config,
+    ...(config.connections === undefined
+      ? {}
+      : {
+          connections: config.connections.map(connection => ({
+            ...connection,
+            ...(connection.scopes === undefined ? {} : { scopes: [...connection.scopes] }),
+          })),
+        }),
+  }
+}
+
+function cloneGtmConfig(config: CanonryConfig['gtm']): CanonryConfig['gtm'] {
+  if (!config) return undefined
+  return {
+    ...config,
+    ...(config.connections === undefined
+      ? {}
+      : {
+          connections: config.connections.map(connection => ({
+            ...connection,
+            ...(connection.scopes === undefined ? {} : { scopes: [...connection.scopes] }),
+          })),
+        }),
+  }
+}
+
+/**
+ * Private OAuth credentials live outside SQLite. Keep a config snapshot around
+ * each mutation so a failed config persistence cannot leave the live process
+ * believing a connect or disconnect completed when the durable config did not.
+ */
+export function createGoogleMarketingConfigCredentialStore(input: {
+  config: CanonryConfig
+  saveConfigPatch?: (patch: Partial<CanonryConfig>) => void
+  env?: NodeJS.ProcessEnv
+  randomUUID?: () => string
+}) {
+  const persistConfigPatch = input.saveConfigPatch ?? saveConfigPatch
+  const env = input.env ?? process.env
+  const randomUUID = input.randomUUID ?? crypto.randomUUID
+  const snapshot = () => ({
+    googleAds: cloneGoogleAdsConfig(input.config.googleAds),
+    gtm: cloneGtmConfig(input.config.gtm),
+  })
+  const restore = (previous: ReturnType<typeof snapshot>) => {
+    input.config.googleAds = previous.googleAds
+    input.config.gtm = previous.gtm
+  }
+
+  return {
+    hasGoogleAdsDeveloperToken: () => Boolean(
+      env.GOOGLE_ADS_DEVELOPER_TOKEN?.trim()
+      || getGoogleAdsAuthConfig(input.config).developerToken?.trim(),
+    ),
+    get: (project: { id: string; name: string }, provider: 'google-ads' | 'gtm') => {
+      if (provider === GoogleMarketingProviders['google-ads']) {
+        const connection = getGoogleAdsConnection(input.config, project.id)
+        if (!connection) return undefined
+        return {
+          accessToken: connection.accessToken ?? null,
+          refreshToken: connection.refreshToken ?? null,
+          expiresAt: connection.tokenExpiresAt ?? null,
+          scopes: connection.scopes ?? [],
+          developerToken: getGoogleAdsAuthConfig(input.config).developerToken ?? null,
+          createdAt: connection.createdAt,
+          updatedAt: connection.updatedAt,
+        }
+      }
+      const connection = getGtmConnection(input.config, project.id)
+      if (!connection) return undefined
+      return {
+        accessToken: connection.accessToken ?? null,
+        refreshToken: connection.refreshToken ?? null,
+        expiresAt: connection.tokenExpiresAt ?? null,
+        scopes: connection.scopes ?? [],
+        createdAt: connection.createdAt,
+        updatedAt: connection.updatedAt,
+      }
+    },
+    upsert: (
+      project: { id: string; name: string },
+      provider: 'google-ads' | 'gtm',
+      credential: {
+        accessToken: string | null
+        refreshToken?: string | null
+        expiresAt?: string | null
+        scopes: string[]
+        developerToken?: string | null
+        createdAt: string
+        updatedAt: string
+      },
+    ): (() => void) => {
+      const previous = snapshot()
+      try {
+        if (provider === GoogleMarketingProviders['google-ads']) {
+          if (credential.developerToken) {
+            setGoogleAdsAuthConfig(input.config, { developerToken: credential.developerToken })
+          }
+          upsertGoogleAdsConnection(input.config, {
+            projectId: project.id,
+            projectName: project.name,
+            credentialGeneration: randomUUID(),
+            ...(credential.accessToken ? { accessToken: credential.accessToken } : {}),
+            refreshToken: credential.refreshToken ?? null,
+            tokenExpiresAt: credential.expiresAt ?? null,
+            scopes: credential.scopes,
+            createdAt: credential.createdAt,
+            updatedAt: credential.updatedAt,
+          })
+        } else {
+          upsertGtmConnection(input.config, {
+            projectId: project.id,
+            projectName: project.name,
+            credentialGeneration: randomUUID(),
+            ...(credential.accessToken ? { accessToken: credential.accessToken } : {}),
+            refreshToken: credential.refreshToken ?? null,
+            tokenExpiresAt: credential.expiresAt ?? null,
+            scopes: credential.scopes,
+            createdAt: credential.createdAt,
+            updatedAt: credential.updatedAt,
+          })
+        }
+        persistConfigPatch(input.config)
+      } catch (error) {
+        restore(previous)
+        throw error
+      }
+
+      // OAuth persists this private state before its public metadata row. The
+      // route calls this compensator if that following SQLite transaction
+      // cannot commit.
+      return () => {
+        restore(previous)
+        persistConfigPatch(input.config)
+      }
+    },
+    delete: (project: { id: string; name: string }, provider: 'google-ads' | 'gtm') => {
+      const previous = snapshot()
+      const removed = provider === GoogleMarketingProviders['google-ads']
+        ? removeGoogleAdsConnection(input.config, project.id)
+        : removeGtmConnection(input.config, project.id)
+      if (!removed) return false
+      try {
+        persistConfigPatch(input.config)
+      } catch (error) {
+        restore(previous)
+        throw error
+      }
+      return true
+    },
+  }
+}
+
 export async function createServer(opts: {
   config: CanonryConfig;
   db: DatabaseClient;
@@ -768,6 +955,150 @@ export async function createServer(opts: {
   jobRunner.onRunCompleted = (runId, projectId) =>
     runCoordinator.onRunCompleted(runId, projectId);
   const snapshotService = new SnapshotService(registry);
+
+  // Google Ads and Tag Manager share one private OAuth/config boundary while
+  // remaining separate public integrations. Provider reads are bounded inside
+  // this runtime; only its typed, redacted snapshots cross into SQLite.
+  const liveProjectIds = new Set(
+    opts.db.select({ id: projects.id }).from(projects).all().map((project) => project.id),
+  );
+  const removedGoogleMarketingCredentials =
+    removeLegacyGoogleAdsConnections(opts.config)
+    + removeLegacyGtmConnections(opts.config)
+    + removeOrphanedGoogleAdsConnections(opts.config, liveProjectIds)
+    + removeOrphanedGtmConnections(opts.config, liveProjectIds);
+  if (removedGoogleMarketingCredentials > 0) {
+    saveConfigPatch({
+      googleAds: opts.config.googleAds,
+      gtm: opts.config.gtm,
+    });
+  }
+  const googleMarketingRuntime = createGoogleMarketingRuntime({
+    config: opts.config,
+    saveConfigPatch,
+  });
+  const googleMarketingCredentialStore = createGoogleMarketingConfigCredentialStore({
+    config: opts.config,
+  });
+
+  const prepareGoogleMarketingCredentialDelete = (projectId: string): (() => void) | undefined => {
+    // Config storage is outside SQLite, so credential removal is persisted
+    // before the DB delete. The compensator below is best-effort only: these
+    // stores cannot commit atomically, and a failed compensator deliberately
+    // leaves credentials removed (including from memory) rather than making a
+    // still-uncertain project usable with stale OAuth material.
+    const previousGoogleAdsConnections = opts.config.googleAds?.connections;
+    const previousGtmConnections = opts.config.gtm?.connections;
+    const restore = () => {
+      if (opts.config.googleAds) opts.config.googleAds.connections = previousGoogleAdsConnections;
+      if (opts.config.gtm) opts.config.gtm.connections = previousGtmConnections;
+    };
+    const removedGoogleAds = removeGoogleAdsConnection(opts.config, projectId);
+    const removedGtm = removeGtmConnection(opts.config, projectId);
+    if (!removedGoogleAds && !removedGtm) return undefined;
+
+    try {
+      saveConfigPatch({
+        googleAds: opts.config.googleAds,
+        gtm: opts.config.gtm,
+      });
+    } catch (error) {
+      restore();
+      throw error;
+    }
+
+    // If the database transaction fails, try to restore the prior config. A
+    // failed restore remains security-first: the project stays in SQLite but
+    // its OAuth credentials stay durably removed until it is reconnected.
+    return () => {
+      restore();
+      try {
+        saveConfigPatch({
+          googleAds: opts.config.googleAds,
+          gtm: opts.config.gtm,
+        });
+      } catch (error) {
+        removeGoogleAdsConnection(opts.config, projectId);
+        removeGtmConnection(opts.config, projectId);
+        throw error;
+      }
+    };
+  };
+
+  const googleMarketingOAuth = {
+    authorizationUrl: (input: {
+      provider: "google-ads" | "gtm";
+      redirectUri: string;
+      state: string;
+      scopes: readonly string[];
+    }) => {
+      const auth = input.provider === GoogleMarketingProviders["google-ads"]
+        ? getGoogleAdsAuthConfig(opts.config)
+        : getGtmAuthConfig(opts.config);
+      if (!auth.clientId || !auth.clientSecret) {
+        throw new Error("Google OAuth client credentials are not configured.");
+      }
+      return getGoogleOAuthUrl(auth.clientId, input.redirectUri, [...input.scopes], input.state);
+    },
+    exchangeCode: async (input: {
+      provider: "google-ads" | "gtm";
+      code: string;
+      redirectUri: string;
+    }) => {
+      const auth = input.provider === GoogleMarketingProviders["google-ads"]
+        ? getGoogleAdsAuthConfig(opts.config)
+        : getGtmAuthConfig(opts.config);
+      if (!auth.clientId || !auth.clientSecret) {
+        throw new Error("Google OAuth client credentials are not configured.");
+      }
+      const tokens = await exchangeGoogleOAuthCode(
+        auth.clientId,
+        auth.clientSecret,
+        input.code,
+        input.redirectUri,
+      );
+      return {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token ?? null,
+        expiresAt: Number.isFinite(tokens.expires_in) && tokens.expires_in > 0
+          ? new Date(Date.now() + tokens.expires_in * 1_000).toISOString()
+          : null,
+        scopes: tokens.scope?.split(/\s+/).filter(Boolean)
+          ?? [input.provider === GoogleMarketingProviders["google-ads"]
+            ? GOOGLE_ADS_OAUTH_SCOPE
+            : GTM_READONLY_SCOPE],
+      };
+    },
+  };
+
+  const googleMarketingLiveReader = {
+    listGoogleAdsCustomers: (project: { id: string; name: string }) =>
+      googleMarketingRuntime.listGoogleAdsCustomers(project),
+    listGtmAccounts: (project: { id: string; name: string }) =>
+      googleMarketingRuntime.listGtmAccounts(project),
+    listGtmContainers: (project: { id: string; name: string }, accountId: string) =>
+      googleMarketingRuntime.listGtmContainers(project, accountId),
+    listGtmWorkspaces: (
+      project: { id: string; name: string },
+      accountId: string,
+      containerId: string,
+    ) => googleMarketingRuntime.listGtmWorkspaces(project, accountId, containerId),
+  };
+
+  const runGoogleAdsMarketingSync = (runId: string, projectId: string): void => {
+    executeGoogleAdsMarketingSync(opts.db, googleMarketingRuntime, runId, projectId)
+      .then(() => runCoordinator.onRunCompleted(runId, projectId))
+      .catch(() => {
+        app.log.error({ runId, projectId }, "Google Ads sync failed");
+      });
+  };
+  const runGtmMarketingSync = (runId: string, projectId: string): void => {
+    executeGtmMarketingSync(opts.db, googleMarketingRuntime, runId, projectId)
+      .then(() => runCoordinator.onRunCompleted(runId, projectId))
+      .catch(() => {
+        app.log.error({ runId, projectId }, "GTM sync failed");
+      });
+  };
 
   // OpenClaw gateway was removed in the native-agent-loop rewrite. If the user
   // previously ran `canonry agent setup`, warn once so they know the state dir
@@ -2168,6 +2499,33 @@ export async function createServer(opts: {
     googleConnectionStore,
     googleStateSecret,
     publicUrl: googlePublicUrl,
+    googleMarketingCredentialStore,
+    googleMarketingOAuth,
+    googleMarketingOAuthScopes: {
+      [GoogleMarketingProviders["google-ads"]]: [GOOGLE_ADS_OAUTH_SCOPE],
+      [GoogleMarketingProviders.gtm]: [GTM_READONLY_SCOPE],
+    },
+    googleMarketingLiveReader,
+    assessConversionTrackingIntegrity: ({ contract, googleAdsSnapshot, gtmSnapshot }) => {
+      const googleAdsInventory = googleAdsSnapshot?.payload.kind === "inventory"
+        ? googleAdsSnapshot.payload.data
+        : null;
+      const gtmLiveGraph = gtmSnapshot?.payload.kind === "container"
+        ? gtmSnapshot.payload.data.live
+        : gtmSnapshot?.payload.kind === "live"
+          ? gtmSnapshot.payload.data
+          : null;
+      return assessConversionTrackingIntegrity({
+        contract,
+        googleAdsInventory,
+        googleAdsEvidenceId: googleAdsSnapshot?.metadata.id,
+        gtmLiveGraph,
+        gtmEvidenceId: gtmSnapshot?.metadata.id,
+        evaluatedAt: new Date().toISOString(),
+      });
+    },
+    onGoogleAdsSyncRequested: runGoogleAdsMarketingSync,
+    onGtmSyncRequested: runGtmMarketingSync,
     onGscSyncRequested: (
       runId: string,
       projectId: string,
@@ -2641,8 +2999,17 @@ export async function createServer(opts: {
       if (action === "upsert") scheduler.upsert(projectId, kind);
       if (action === "delete") scheduler.remove(projectId, kind);
     },
+    onProjectDeleting: prepareGoogleMarketingCredentialDelete,
     onProjectDeleted: (projectId: string) => {
       scheduler.removeAllForProject(projectId);
+      const removedGoogleAds = removeGoogleAdsConnection(opts.config, projectId);
+      const removedGtm = removeGtmConnection(opts.config, projectId);
+      if (removedGoogleAds || removedGtm) {
+        saveConfigPatch({
+          googleAds: opts.config.googleAds,
+          gtm: opts.config.gtm,
+        });
+      }
     },
     onAliasesChanged: (projectId: string, projectName: string) => {
       // Aliases feed `extractAnswerMentions` at run-time, but the resulting

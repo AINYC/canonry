@@ -26,6 +26,10 @@ import {
 } from './gsc-totals.js'
 import { assertNotProjectScoped } from './auth.js'
 import { resolveProject, writeAuditLog } from './helpers.js'
+import {
+  buildSignedGoogleOAuthState,
+  verifySignedGoogleOAuthState,
+} from './google-oauth-state.js'
 
 /**
  * The window to REPORT, given what the caller actually asked for.
@@ -227,46 +231,6 @@ export interface GoogleRoutesOptions {
   onGbpSyncRequested?: (runId: string, projectId: string, opts?: { locationNames?: string[]; daysOfMetrics?: number; monthsOfKeywords?: number }) => void
   /** API route prefix (default: '/api/v1') */
   routePrefix?: string
-}
-
-function signState(payload: string, secret: string): string {
-  return crypto.createHmac('sha256', secret).update(payload).digest('hex')
-}
-
-/**
- * Signed OAuth states are otherwise valid forever (the HMAC has no expiry
- * built in). A captured `state` — e.g. leaked via a proxy's access log, a
- * browser history entry, or a referrer header on the redirect leg — would
- * stay replayable indefinitely as long as the initiating project still
- * exists with the same id/name/domain. `issuedAt` + this ceiling closes that
- * window; 15 minutes comfortably covers the real user-facing consent flow
- * (redirect to Google, user reviews the consent screen, redirect back)
- * while keeping a stale/leaked state from being useful later.
- */
-const OAUTH_STATE_MAX_AGE_MS = 15 * 60 * 1000
-
-function buildSignedState(data: Record<string, unknown>, secret: string): string {
-  const payload = JSON.stringify({ ...data, issuedAt: Date.now() })
-  const sig = signState(payload, secret)
-  return Buffer.from(JSON.stringify({ payload, sig })).toString('base64url')
-}
-
-function verifySignedState(encoded: string, secret: string): Record<string, unknown> | null {
-  try {
-    const { payload, sig } = JSON.parse(Buffer.from(encoded, 'base64url').toString()) as { payload: string; sig: string }
-    const expected = signState(payload, secret)
-    if (!crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'))) return null
-    const parsed = JSON.parse(payload) as Record<string, unknown>
-    // States minted before this field existed (`issuedAt` absent) are
-    // treated as expired rather than ageless — see the pre-`projectId`
-    // handling at the call site for the same "stale state, restart the
-    // flow" precedent.
-    const issuedAt = typeof parsed.issuedAt === 'number' ? parsed.issuedAt : null
-    if (issuedAt === null || Date.now() - issuedAt > OAUTH_STATE_MAX_AGE_MS) return null
-    return parsed
-  } catch {
-    return null
-  }
 }
 
 async function getValidToken(
@@ -528,7 +492,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     // forged state — the HMAC catches that — or (b) cause the callback to
     // attach the resulting tokens to a project they don't own. See the
     // takeover-prevention comment in `handleOAuthCallback`.
-    const stateEncoded = buildSignedState(
+    const stateEncoded = buildSignedGoogleOAuthState(
       {
         projectId: project.id,
         projectName: project.name,
@@ -569,7 +533,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
             <ol>
               <li>Go to the <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google Cloud Console → Credentials</a></li>
               <li>Click your OAuth 2.0 Client ID</li>
-              <li>Under "Authorized redirect URIs", add:<br><code style="background:#1e1e1e;color:#e0e0e0;padding:4px 8px;border-radius:4px;display:inline-block;margin-top:4px">${request.query.state ? (() => { try { const s = verifySignedState(request.query.state, stateSecret); const uri = s?.redirectUri; return escapeHtml(typeof uri === 'string' ? uri : 'Could not determine URI') } catch { return 'Could not determine URI' } })() : 'Could not determine URI'}</code></li>
+              <li>Under "Authorized redirect URIs", add:<br><code style="background:#1e1e1e;color:#e0e0e0;padding:4px 8px;border-radius:4px;display:inline-block;margin-top:4px">${request.query.state ? (() => { try { const s = verifySignedGoogleOAuthState(request.query.state, stateSecret); const uri = s?.redirectUri; return escapeHtml(typeof uri === 'string' ? uri : 'Could not determine URI') } catch { return 'Could not determine URI' } })() : 'Could not determine URI'}</code></li>
               <li>Click Save, then retry the connection</li>
             </ol>
             <p style="color:#888">You can close this tab.</p>
@@ -584,7 +548,7 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       return reply.status(400).send('Missing code or state parameter')
     }
 
-    const stateData = verifySignedState(state, stateSecret)
+    const stateData = verifySignedGoogleOAuthState(state, stateSecret)
     if (!stateData) {
       return reply.status(400).send('Invalid or tampered state parameter')
     }
@@ -602,9 +566,9 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
     // no owner binding. Accepting one here would skip the ownership-mismatch
     // check below (the `projectId &&` clause short-circuits) and let the
     // upsert overwrite the existing project's `accessToken`/`refreshToken`
-    // with whatever the OAuth `code` exchanged for. Since signed states
-    // have no TTL, a captured pre-upgrade state would otherwise stay
-    // replayable. Reject and force a fresh `/google/connect`.
+    // with whatever the OAuth `code` exchanged for. The shared verifier now
+    // also enforces a short TTL, but a captured pre-upgrade state carries no
+    // owner or issued-at binding. Reject it and force a fresh `/google/connect`.
     if (!projectId) {
       return reply.status(400).send('Stale OAuth state — restart the connect flow.')
     }

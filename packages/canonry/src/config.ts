@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import crypto from 'node:crypto'
 import { parse, stringify } from 'yaml'
 import type { EmbedConfigEntry, ProviderQuotaPolicy } from '@ainyc/canonry-contracts'
 
@@ -125,6 +126,59 @@ export interface OpenAiAdsConnectionConfigEntry {
 
 export interface OpenAiAdsConfigEntry {
   connections?: OpenAiAdsConnectionConfigEntry[]
+}
+
+/**
+ * Private OAuth credentials are bound to the immutable `projects.id`.
+ * `projectName` is descriptive only and must never be used for lookup.
+ */
+export interface GoogleAdsConnectionConfigEntry {
+  projectId: string
+  projectName: string
+  /**
+   * Opaque, secret-free nonce minted on every OAuth connect/reconnect.
+   * Refresh uses it as a compare-and-swap generation so an in-flight token
+   * refresh can never restore an older Google principal.
+   */
+  credentialGeneration?: string
+  accessToken?: string
+  refreshToken?: string | null
+  tokenExpiresAt?: string | null
+  scopes?: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface GoogleAdsConfigEntry {
+  developerToken?: string
+  /** Optional dedicated OAuth app. Falls back to the shared `google` app. */
+  clientId?: string
+  clientSecret?: string
+  connections?: GoogleAdsConnectionConfigEntry[]
+}
+
+/**
+ * Private OAuth credentials are bound to the immutable `projects.id`.
+ * `projectName` is descriptive only and must never be used for lookup.
+ */
+export interface GtmConnectionConfigEntry {
+  projectId: string
+  projectName: string
+  /** See GoogleAdsConnectionConfigEntry.credentialGeneration. */
+  credentialGeneration?: string
+  accessToken?: string
+  refreshToken?: string | null
+  tokenExpiresAt?: string | null
+  scopes?: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface GtmConfigEntry {
+  /** Optional dedicated OAuth app. Falls back to the shared `google` app. */
+  clientId?: string
+  clientSecret?: string
+  connections?: GtmConnectionConfigEntry[]
 }
 
 export type WordpressEnv = 'live' | 'staging'
@@ -339,6 +393,8 @@ export interface CanonryConfig {
   vercelTraffic?: VercelTrafficConfigEntry
   cloudflareTraffic?: CloudflareTrafficConfigEntry
   openaiAds?: OpenAiAdsConfigEntry
+  googleAds?: GoogleAdsConfigEntry
+  gtm?: GtmConfigEntry
   // Dashboard password hash (SHA-256 hex) — set during first dashboard visit
   dashboardPasswordHash?: string
   // Browser dashboard auth gate. `dashboard.requirePassword=false` trusts an
@@ -399,6 +455,25 @@ function normalizeGoogleConfig(config: CanonryConfig): void {
     tokenExpiresAt: connection.tokenExpiresAt ?? null,
     scopes: connection.scopes ?? [],
   }))
+}
+
+function normalizeGoogleMarketingConfig(config: CanonryConfig): void {
+  if (config.googleAds) {
+    config.googleAds.connections = (config.googleAds.connections ?? []).map((connection) => ({
+      ...connection,
+      refreshToken: connection.refreshToken ?? null,
+      tokenExpiresAt: connection.tokenExpiresAt ?? null,
+      scopes: connection.scopes ?? [],
+    }))
+  }
+  if (config.gtm) {
+    config.gtm.connections = (config.gtm.connections ?? []).map((connection) => ({
+      ...connection,
+      refreshToken: connection.refreshToken ?? null,
+      tokenExpiresAt: connection.tokenExpiresAt ?? null,
+      scopes: connection.scopes ?? [],
+    }))
+  }
 }
 
 function normalizeWordpressConfig(config: CanonryConfig): void {
@@ -470,6 +545,7 @@ export function loadConfig(): CanonryConfig {
   }
 
   normalizeGoogleConfig(parsed)
+  normalizeGoogleMarketingConfig(parsed)
   normalizeWordpressConfig(parsed)
   normalizeCloudflareTrafficConfig(parsed)
 
@@ -572,6 +648,48 @@ export function loadConfigRaw(): CanonryConfig | null {
 }
 
 /**
+ * Replace the config as one same-directory rename. A failed write must leave
+ * the previous config readable: OAuth/token lifecycle callers use that fact
+ * to safely restore their in-memory state and let the operator retry.
+ */
+function writeConfigAtomically(configPath: string, contents: string): void {
+  const directory = path.dirname(configPath)
+  const temporaryPath = path.join(
+    directory,
+    `.${path.basename(configPath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
+  )
+  let descriptor: number | undefined
+  try {
+    descriptor = fs.openSync(temporaryPath, 'wx', 0o600)
+    // Explicitly set this after creation as well: umask can only make the
+    // initial mode stricter, but config credentials must consistently remain
+    // owner-readable/writable when an existing file is replaced.
+    fs.fchmodSync(descriptor, 0o600)
+    fs.writeFileSync(descriptor, contents, { encoding: 'utf-8' })
+    fs.fsyncSync(descriptor)
+    fs.closeSync(descriptor)
+    descriptor = undefined
+    // `rename` is atomic when both paths are in this directory/filesystem.
+    fs.renameSync(temporaryPath, configPath)
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try {
+        fs.closeSync(descriptor)
+      } catch {
+        // Preserve the write error; best-effort cleanup follows.
+      }
+    }
+    try {
+      fs.unlinkSync(temporaryPath)
+    } catch {
+      // The original write error is actionable; do not mask it with a
+      // secondary cleanup failure.
+    }
+    throw error
+  }
+}
+
+/**
  * Persist config to disk using a **read-modify-write** strategy.
  *
  * Instead of blindly overwriting the file with the full in-memory config,
@@ -626,7 +744,7 @@ export function saveConfig(config: CanonryConfig): void {
   }
 
   const yaml = stringify(merged)
-  fs.writeFileSync(configPath, yaml, { encoding: 'utf-8', mode: 0o600 })
+  writeConfigAtomically(configPath, yaml)
 }
 
 /**
@@ -675,7 +793,7 @@ export function saveConfigPatch(patch: Partial<CanonryConfig>): void {
   }
 
   const yaml = stringify(merged)
-  fs.writeFileSync(configPath, yaml, { encoding: 'utf-8', mode: 0o600 })
+  writeConfigAtomically(configPath, yaml)
 }
 
 export function configExists(): boolean {

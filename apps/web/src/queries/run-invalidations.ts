@@ -98,6 +98,14 @@ export function invalidateQueriesForRunKind(
     case RunKinds['ads-sync']:
       void invalidateProjectQueryDomain(queryClient, 'ads')
       return
+    case RunKinds['google-ads-sync']:
+      void invalidateProjectQueryDomain(queryClient, 'googleAds')
+      void invalidateProjectQueryDomain(queryClient, 'conversionTracking')
+      return
+    case RunKinds['gtm-sync']:
+      void invalidateProjectQueryDomain(queryClient, 'gtm')
+      void invalidateProjectQueryDomain(queryClient, 'conversionTracking')
+      return
     default: {
       const _exhaustive: never = kind
       return _exhaustive
