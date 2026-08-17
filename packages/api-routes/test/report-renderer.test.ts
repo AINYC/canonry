@@ -36,7 +36,14 @@ function emptyReport(): ProjectReportDto {
     },
     citationScorecard: { queries: [], providers: [], matrix: [], providerRates: [] },
     competitorLandscape: { projectCitationCount: 0, competitors: [] },
-    mentionLandscape: { projectMentionCount: 0, totalAnswerSnapshots: 0, competitors: [] },
+    mentionLandscape: {
+      projectMentionCount: 0,
+      totalAnswerSnapshots: 0,
+      competitors: [],
+      scope: 'non-brand',
+      nonBrand: { projectMentionCount: 0, totalAnswerSnapshots: 0, competitors: [] },
+      branded: { projectMentionCount: 0, totalAnswerSnapshots: 0, competitors: [] },
+    },
     aiSourceOrigin: { categories: [], topDomains: [] },
     gsc: null,
     ga: null,
@@ -176,12 +183,30 @@ function richReport(): ProjectReportDto {
       ],
     },
     mentionLandscape: {
+      // Top level mirrors `nonBrand` — the competitive view the section leads with.
       projectMentionCount: 3,
       totalAnswerSnapshots: 4,
       competitors: [
         { domain: 'rival.com', mentionCount: 2, totalCount: 4, pressureLabel: 'Moderate', mentionedQueries: ['aeo platform'], sharePct: 33 },
         { domain: 'other.com', mentionCount: 1, totalCount: 4, pressureLabel: 'Low', mentionedQueries: ['answer engine'], sharePct: 17 },
       ],
+      scope: 'non-brand',
+      nonBrand: {
+        projectMentionCount: 3,
+        totalAnswerSnapshots: 4,
+        competitors: [
+          { domain: 'rival.com', mentionCount: 2, totalCount: 4, pressureLabel: 'Moderate', mentionedQueries: ['aeo platform'], sharePct: 33 },
+          { domain: 'other.com', mentionCount: 1, totalCount: 4, pressureLabel: 'Low', mentionedQueries: ['answer engine'], sharePct: 17 },
+        ],
+      },
+      branded: {
+        projectMentionCount: 2,
+        totalAnswerSnapshots: 2,
+        competitors: [
+          { domain: 'rival.com', mentionCount: 0, totalCount: 2, pressureLabel: 'None', mentionedQueries: [], sharePct: 0 },
+          { domain: 'other.com', mentionCount: 0, totalCount: 2, pressureLabel: 'None', mentionedQueries: [], sharePct: 0 },
+        ],
+      },
     },
     aiSourceOrigin: {
       categories: [
@@ -1258,10 +1283,47 @@ describe('renderReportHtml', () => {
     const landscape = html.split('id="competitor-landscape"')[1]?.split('</section>')[0] ?? ''
     expect(landscape).toContain('Citations per domain')
     expect(landscape).toContain('Mentions per domain')
-    expect(landscape).toContain('<th class="numeric">Mentions</th>')
     // rival.com has citationCount=3 / totalCount=4 (citations) and mentionCount=2 / totalCount=4 (mentions)
     expect(landscape).toContain('3 / 4')
     expect(landscape).toContain('2 / 4')
+  })
+
+  test('labels the mention chart and column with the query class, never as a bare "Mentions"', () => {
+    const html = renderReportHtml(richReport())
+    const landscape = html.split('id="competitor-landscape"')[1]?.split('</section>')[0] ?? ''
+    expect(landscape).toContain('Mentions per domain \u00b7 non-brand queries')
+    expect(landscape).toContain('Mentions (non-brand queries)')
+    // An unlabelled mention column is the bug: a reader cannot tell a category
+    // figure from one inflated by branded recall.
+    expect(landscape).not.toContain('<th class="numeric">Mentions</th>')
+  })
+
+  test('renders branded mentions as a separate labelled chart, never merged into the competitive one', () => {
+    const html = renderReportHtml(richReport())
+    const landscape = html.split('id="competitor-landscape"')[1]?.split('</section>')[0] ?? ''
+    expect(landscape).toContain('Mentions per domain \u00b7 branded queries')
+    expect(landscape).toContain('2 of 2 branded answers named the client')
+    // The competitive chart's project bar is the non-brand count (3), not 3 + 2.
+    const competitiveChart = landscape.split('Mentions per domain \u00b7 non-brand queries')[1]?.split('</figure>')[0] ?? ''
+    expect(competitiveChart).not.toContain('>5<')
+  })
+
+  test('omits the branded block when no branded query produced an answer', () => {
+    const report = richReport()
+    report.mentionLandscape.branded = { projectMentionCount: 0, totalAnswerSnapshots: 0, competitors: [] }
+    const html = renderReportHtml(report)
+    const landscape = html.split('id="competitor-landscape"')[1]?.split('</section>')[0] ?? ''
+    expect(landscape).not.toContain('Mentions per domain \u00b7 branded queries')
+  })
+
+  test('says "all tracked queries" when the project could not be classified, never "non-brand"', () => {
+    const report = richReport()
+    report.mentionLandscape.scope = 'pooled'
+    const html = renderReportHtml(report)
+    const landscape = html.split('id="competitor-landscape"')[1]?.split('</section>')[0] ?? ''
+    expect(landscape).toContain('Mentions per domain \u00b7 all tracked queries')
+    expect(landscape).toContain('Mentions (all tracked queries)')
+    expect(landscape).not.toContain('non-brand queries')
   })
 
   test('renders GSC × AEO crossover companion blocks when non-empty', () => {

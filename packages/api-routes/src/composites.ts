@@ -16,8 +16,8 @@ import {
   querySnapshots,
   runs,
 } from '@ainyc/canonry-db'
+import { buildMentionShareInputs } from './mention-share-inputs.js'
 import {
-  brandLabelFromDomain,
   CitationStates,
   parseRunError,
   RunKinds,
@@ -222,23 +222,21 @@ export async function compositeRoutes(app: FastifyInstance) {
     const configuredApiProviders = project.providers
       .filter(p => !p.startsWith('cdp:'))
 
-    const mentionShareCompetitors = competitorRows.map(c => ({
-      domain: c.domain,
-      // Single brand token derived from the registrable domain (e.g.
-      // "offers.roofle.com" → "roofle"). Future PR can layer operator-curated
-      // aliases on top via a `competitor_aliases` column.
-      brandTokens: [brandLabelFromDomain(c.domain)].filter(t => t.length >= 3),
-    }))
+    // Branded and non-brand never share a denominator: `buildMentionShare`
+    // headlines the non-brand class and keeps branded beside it.
+    const mentionShareInputs = buildMentionShareInputs({
+      project,
+      competitorDomains: competitorRows.map(c => c.domain),
+      snapshots: trackedLatest,
+      queryTextById: queryLookup.byId,
+    })
 
     const scores: ProjectOverviewScoresDto = {
       mention: buildMentionCoverage(trackedLatest, { configuredApiProviders }),
       visibility: buildVisibilityScore(trackedLatest, { configuredApiProviders }),
       mentionShare: buildMentionShare(
-        trackedLatest.map(s => ({
-          projectMentioned: s.answerMentioned === true,
-          answerText: s.answerText,
-        })),
-        { competitors: mentionShareCompetitors },
+        mentionShareInputs.snapshots,
+        { competitors: mentionShareInputs.competitors },
       ),
       gapQueries: buildGapQueryScore(trackedLatest),
       mentionGaps: buildMentionGapScore(trackedLatest),

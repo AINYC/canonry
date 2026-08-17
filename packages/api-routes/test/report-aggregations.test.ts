@@ -296,6 +296,51 @@ describe('mentionLandscape', () => {
     expect(byDomain['rival-b.com']!.sharePct).toBe(20)
   })
 
+  test('splits branded out of the competitive figure, keeping it visible and separate', async () => {
+    // The tankair shape in miniature: on branded queries the project is named
+    // and no competitor can be; on category queries the competitor wins.
+    const projectId = insertProject(ctx.db, 'acmebrand', 'acmebrand.example.com')
+    insertCompetitor(ctx.db, projectId, 'rival-a.com')
+    const branded = insertQuery(ctx.db, projectId, 'is acmebrand any good')
+    const category = insertQuery(ctx.db, projectId, 'best widget for small teams')
+    const runId = insertRun(ctx.db, projectId)
+
+    insertSnapshot(ctx.db, runId, branded, {
+      answerText: 'acmebrand.example.com is a solid choice for teams.',
+      answerMentioned: true,
+    })
+    insertSnapshot(ctx.db, runId, category, {
+      answerText: 'rival-a.com leads this category.',
+      answerMentioned: false,
+    })
+
+    await ctx.app.ready()
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/acmebrand/report' })
+    const body = JSON.parse(res.body) as ProjectReportDto
+    const landscape = body.mentionLandscape
+
+    expect(landscape.scope).toBe('non-brand')
+    // Top level IS the non-brand view: the project scores zero here.
+    expect(landscape.projectMentionCount).toBe(0)
+    expect(landscape.totalAnswerSnapshots).toBe(1)
+    expect(landscape.nonBrand).toEqual({
+      projectMentionCount: landscape.projectMentionCount,
+      totalAnswerSnapshots: landscape.totalAnswerSnapshots,
+      competitors: landscape.competitors,
+    })
+    const rival = landscape.competitors.find(c => c.domain === 'rival-a.com')!
+    expect(rival.mentionCount).toBe(1)
+    expect(rival.sharePct).toBe(100) // 1 of (0 project + 1 competitor)
+
+    // Branded is reported, and reported separately.
+    expect(landscape.branded.projectMentionCount).toBe(1)
+    expect(landscape.branded.totalAnswerSnapshots).toBe(1)
+    expect(landscape.branded.competitors.find(c => c.domain === 'rival-a.com')!.mentionCount).toBe(0)
+
+    // The classes partition: neither section counts the other's snapshot.
+    expect(landscape.totalAnswerSnapshots + landscape.branded.totalAnswerSnapshots).toBe(2)
+  })
+
   test('skips snapshots with no answer text from the totalCount denominator', async () => {
     const projectId = insertProject(ctx.db, 'no-text', 'no-text.example.com')
     insertCompetitor(ctx.db, projectId, 'rival.com')

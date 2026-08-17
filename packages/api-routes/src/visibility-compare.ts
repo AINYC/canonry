@@ -1,9 +1,11 @@
 import { buildMentionShare } from '@ainyc/canonry-intelligence'
 import {
   CitationStates,
+  compileQueryClassifier,
   hostOf,
   hostMatchesDomain,
   wilsonInterval,
+  type QueryClass,
   type VisibilityCompareDto,
   type VisibilityCompareMetric,
   type VisibilityCompareMetricKey,
@@ -50,6 +52,14 @@ export interface ComputeVisibilityCompareInput {
   from: VisibilityComparePeriodInput
   to: VisibilityComparePeriodInput
   competitors: VisibilityCompareCompetitorInput[]
+  /**
+   * Project brand aliases, used to split the basket into branded and non-brand.
+   * Share of voice is the metric this comparison leads with, so it reads the
+   * non-brand class only: pooling branded queries in would make a month whose
+   * basket gained a branded query look like a month that gained category share.
+   * Empty means no split was possible and the figure stays pooled.
+   */
+  brandNames?: readonly string[]
 }
 
 interface Attributed extends VisibilityCompareSnapshotInput {
@@ -176,7 +186,11 @@ interface PeriodCounts {
   competitors: VisibilityStatsShareCompetitor[]
 }
 
-function countPeriod(snaps: Attributed[], competitors: VisibilityCompareCompetitorInput[]): PeriodCounts {
+function countPeriod(
+  snaps: Attributed[],
+  competitors: VisibilityCompareCompetitorInput[],
+  queryClassOf: (snap: Attributed) => QueryClass | null,
+): PeriodCounts {
   let checked = 0
   let mentioned = 0
   let cited = 0
@@ -224,7 +238,11 @@ function countPeriod(snaps: Attributed[], competitors: VisibilityCompareCompetit
   }
 
   const mentionShare = buildMentionShare(
-    snaps.map((s) => ({ projectMentioned: s.answerMentioned === true, answerText: s.answerText })),
+    snaps.map((s) => ({
+      projectMentioned: s.answerMentioned === true,
+      answerText: s.answerText,
+      queryClass: queryClassOf(s),
+    })),
     { competitors },
   )
 
@@ -263,6 +281,15 @@ function isUnknownModelEvidence(evidence: ReturnType<typeof classifyModelEvidenc
 export function computeVisibilityCompare(input: ComputeVisibilityCompareInput): VisibilityCompareDto {
   const attribution = buildQueryAttribution(input.queries)
 
+  // Classify once against the CURRENT tracked text, so the same query lands in
+  // the same class in both periods. Classifying each period against its own
+  // snapshots would let a rename move a query between classes mid-comparison,
+  // which is exactly the kind of basket churn this function exists to exclude.
+  const classifier = compileQueryClassifier(input.brandNames ?? [])
+  const queryTextById = new Map(input.queries.map((q) => [q.id, q.query]))
+  const queryClassOf = (snap: Attributed): QueryClass | null =>
+    classifier ? classifier.classify(queryTextById.get(snap.queryId) ?? snap.queryText) : null
+
   const fromObs = observed(input.from.snapshots, attribution)
   const toObs = observed(input.to.snapshots, attribution)
 
@@ -277,8 +304,8 @@ export function computeVisibilityCompare(input: ComputeVisibilityCompareInput): 
   const candidateProviders = new Set([...pairsBoth.values()].map((pair) => pair.provider))
   const fromCandidateSnaps = restrict(input.from.snapshots, attribution, pairsBoth)
   const toCandidateSnaps = restrict(input.to.snapshots, attribution, pairsBoth)
-  const fromCandidateCounts = countPeriod(fromCandidateSnaps, input.competitors)
-  const toCandidateCounts = countPeriod(toCandidateSnaps, input.competitors)
+  const fromCandidateCounts = countPeriod(fromCandidateSnaps, input.competitors, queryClassOf)
+  const toCandidateCounts = countPeriod(toCandidateSnaps, input.competitors, queryClassOf)
   const continuityProviders = [...candidateProviders]
     .sort((a, b) => a.localeCompare(b))
     .map((provider) => {
@@ -318,8 +345,8 @@ export function computeVisibilityCompare(input: ComputeVisibilityCompareInput): 
   const fromSnaps = restrict(input.from.snapshots, attribution, comparedPairs)
   const toSnaps = restrict(input.to.snapshots, attribution, comparedPairs)
 
-  const fromCounts = countPeriod(fromSnaps, input.competitors)
-  const toCounts = countPeriod(toSnaps, input.competitors)
+  const fromCounts = countPeriod(fromSnaps, input.competitors, queryClassOf)
+  const toCounts = countPeriod(toSnaps, input.competitors, queryClassOf)
 
   const shareCounts = (c: PeriodCounts): { proj: number; comp: number } => ({
     proj: c.mentionShare.breakdown.projectMentionSnapshots,

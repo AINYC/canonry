@@ -202,3 +202,157 @@ describe('buildMentionShare', () => {
     expect(result.breakdown.perCompetitor[0]!.mentionSnapshots).toBe(20)
   })
 })
+
+describe('buildMentionShare — branded vs non-brand are never pooled', () => {
+  // Replicates the tankair basket (project ce80f41f, run 978f1cb2) that exposed
+  // the bug: 13 queries × 4 providers = 52 snapshots, 5 of the queries branded.
+  // The project is named in EVERY branded answer and in ~none of the category
+  // answers; competitors can only ever surface on the category answers.
+  const FASHION_COMPETITORS: MentionShareCompetitor[] = [
+    { domain: 'skims.com', brandTokens: ['skims'] },
+    { domain: 'toteme.com', brandTokens: ['toteme'] },
+    { domain: 'cos.com', brandTokens: ['cos'] },
+    { domain: 'aritzia.com', brandTokens: ['aritzia'] },
+  ]
+
+  function tankairBasket(): MentionShareSnapshot[] {
+    const snaps: MentionShareSnapshot[] = []
+    // 5 branded queries × 4 providers: project named in all 20, no competitor named.
+    for (let i = 0; i < 20; i++) {
+      snaps.push({ projectMentioned: true, answerText: `Tank Air makes ribbed tanks (${i}).`, queryClass: 'branded' })
+    }
+    // 8 category queries × 4 providers = 32. Project named in exactly one;
+    // competitors named across the rest.
+    snaps.push({ projectMentioned: true, answerText: 'Tank Air is one option here.', queryClass: 'non-brand' })
+    for (let i = 0; i < 9; i++) {
+      snaps.push({ projectMentioned: false, answerText: `Skims is the pick (${i}).`, queryClass: 'non-brand' })
+    }
+    for (let i = 0; i < 6; i++) {
+      snaps.push({ projectMentioned: false, answerText: `Toteme leads here (${i}).`, queryClass: 'non-brand' })
+    }
+    for (let i = 0; i < 5; i++) {
+      snaps.push({ projectMentioned: false, answerText: `COS is the value pick (${i}).`, queryClass: 'non-brand' })
+    }
+    for (let i = 0; i < 4; i++) {
+      snaps.push({ projectMentioned: false, answerText: `Aritzia is worth a look (${i}).`, queryClass: 'non-brand' })
+    }
+    // 8 snapshots that named nobody, filling out the 32-snapshot category half.
+    for (let i = 0; i < 7; i++) {
+      snaps.push({ projectMentioned: false, answerText: `Consider fit and fabric (${i}).`, queryClass: 'non-brand' })
+    }
+    return snaps
+  }
+
+  it('ranks the subject LAST on non-brand queries even though it is named in 100% of branded answers', () => {
+    const result = buildMentionShare(tankairBasket(), { competitors: FASHION_COMPETITORS })
+
+    // The headline is the non-brand figure, and it is last place.
+    expect(result.scope).toBe('non-brand')
+    expect(result.breakdown.projectMentionSnapshots).toBe(1)
+    expect(result.breakdown.competitorMentionSnapshots).toBe(24)
+    expect(result.breakdown.score).toBe(4) // 1 / 25 = 4%
+    expect(result.value).toBe('4')
+    expect(result.tone).toBe('negative')
+
+    // THE INVARIANT: every tracked competitor outranks the subject.
+    const ranked = [
+      { domain: 'you', mentions: result.breakdown.projectMentionSnapshots },
+      ...result.breakdown.perCompetitor.map(c => ({ domain: c.domain, mentions: c.mentionSnapshots })),
+    ].sort((a, b) => b.mentions - a.mentions)
+    expect(ranked.at(-1)!.domain).toBe('you')
+    expect(ranked.map(r => r.domain)).toEqual(['skims.com', 'toteme.com', 'cos.com', 'aritzia.com', 'you'])
+
+    // Branded is reported, separately, and is not in the figure above.
+    expect(result.branded.projectMentionSnapshots).toBe(20)
+    expect(result.branded.competitorMentionSnapshots).toBe(0)
+    expect(result.branded.score).toBe(100)
+    expect(result.branded.snapshotsTotal).toBe(20)
+  })
+
+  it('the SAME basket pooled would have ranked the subject FIRST — which is why the split exists', () => {
+    // Strip the classification and the identical snapshots invert the ranking.
+    const pooled = buildMentionShare(
+      tankairBasket().map(s => ({ projectMentioned: s.projectMentioned, answerText: s.answerText })),
+      { competitors: FASHION_COMPETITORS },
+    )
+    expect(pooled.scope).toBe('pooled')
+    expect(pooled.breakdown.projectMentionSnapshots).toBe(21)
+    expect(pooled.breakdown.competitorMentionSnapshots).toBe(24)
+    expect(pooled.breakdown.score).toBe(47) // 21 / 45
+    const topCompetitor = pooled.breakdown.perCompetitor[0]!
+    expect(pooled.breakdown.projectMentionSnapshots).toBeGreaterThan(topCompetitor.mentionSnapshots)
+  })
+
+  it('the two classes are disjoint: snapshot counts partition, and no mention is counted twice', () => {
+    const snaps = tankairBasket()
+    const result = buildMentionShare(snaps, { competitors: FASHION_COMPETITORS })
+    expect(result.breakdown.snapshotsTotal + result.branded.snapshotsTotal).toBe(snaps.length)
+    expect(result.breakdown.snapshotsTotal).toBe(32)
+    expect(result.branded.snapshotsTotal).toBe(20)
+    // Project mentions partition too: 1 non-brand + 20 branded = the 21 in the run.
+    expect(result.breakdown.projectMentionSnapshots + result.branded.projectMentionSnapshots).toBe(21)
+  })
+
+  it('a partially-classified basket never folds the unclassified rows into the competitive figure', () => {
+    const result = buildMentionShare(
+      [
+        { projectMentioned: false, answerText: 'Rival is the pick.', queryClass: 'non-brand' },
+        { projectMentioned: true, answerText: 'Acme is great.', queryClass: 'branded' },
+        // No class — must not silently join the non-brand denominator.
+        { projectMentioned: true, answerText: 'Acme again.', queryClass: null },
+      ],
+      { competitors: [{ domain: 'rival-a.com', brandTokens: ['rival'] }] },
+    )
+    expect(result.scope).toBe('non-brand')
+    expect(result.breakdown.snapshotsTotal).toBe(1)
+    expect(result.breakdown.projectMentionSnapshots).toBe(0)
+    expect(result.breakdown.competitorMentionSnapshots).toBe(1)
+    expect(result.breakdown.score).toBe(0)
+  })
+
+  it('an all-branded basket says so rather than reporting a 100% competitive score', () => {
+    const result = buildMentionShare(
+      [
+        { projectMentioned: true, answerText: 'Acme is an activewear brand.', queryClass: 'branded' },
+        { projectMentioned: true, answerText: 'Acme runs small.', queryClass: 'branded' },
+      ],
+      { competitors: [{ domain: 'rival-a.com', brandTokens: ['rival'] }] },
+    )
+    expect(result.value).toBe('No non-brand queries')
+    expect(result.tone).toBe('neutral')
+    expect(result.breakdown.score).toBeNull()
+    expect(result.branded.score).toBe(100)
+    expect(result.delta).toBe('2 branded snapshots only')
+  })
+
+  it('the delta and description name the class, so a number is never read as the other one', () => {
+    const result = buildMentionShare(tankairBasket(), { competitors: FASHION_COMPETITORS })
+    expect(result.delta).toBe('1 of 25 brand mentions · non-brand queries')
+    expect(result.description).toContain('on non-brand queries')
+    expect(result.description).toContain('20 of 20 answers to queries that contain your name')
+  })
+
+  it('score is null (not 0) when a class had no brand mentions at all', () => {
+    const result = buildMentionShare(
+      [{ projectMentioned: false, answerText: 'Nobody named here.', queryClass: 'non-brand' }],
+      { competitors: [{ domain: 'rival-a.com', brandTokens: ['rival'] }] },
+    )
+    expect(result.breakdown.score).toBeNull()
+    expect(result.value).toBe('0')
+    expect(result.tone).toBe('neutral')
+  })
+
+  it('a 3-character brand (COS) is matched — the alias floor is 3, and it is the same floor everywhere', () => {
+    const result = buildMentionShare(
+      [{ projectMentioned: false, answerText: 'COS is beloved by editors.', queryClass: 'non-brand' }],
+      { competitors: [{ domain: 'cos.com', brandTokens: ['cos'] }] },
+    )
+    expect(result.breakdown.competitorMentionSnapshots).toBe(1)
+    // Word-boundary matching, not substring: "cosmetics" is not COS.
+    const noMatch = buildMentionShare(
+      [{ projectMentioned: false, answerText: 'Cosmetics and skincare.', queryClass: 'non-brand' }],
+      { competitors: [{ domain: 'cos.com', brandTokens: ['cos'] }] },
+    )
+    expect(noMatch.breakdown.competitorMentionSnapshots).toBe(0)
+  })
+})

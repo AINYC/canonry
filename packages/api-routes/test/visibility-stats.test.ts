@@ -577,6 +577,53 @@ describe('GET /projects/:name/visibility-stats', () => {
     expect(body.shareOfVoice!.percent).toBe(100)
   })
 
+  it('shareOfVoice defaults to non-brand and says so; branded is reachable but never pooled in', async () => {
+    seedCompetitor('rival.com')
+    // 'Vis Stats' is the project display name, so this query is branded.
+    const branded = crypto.randomUUID()
+    ctx.db.insert(queriesTable).values({ id: branded, projectId: ctx.projectId, query: 'is Vis Stats any good', createdAt: iso(30) }).run()
+    seedRun({
+      createdAt: iso(5),
+      snapshots: [
+        // Branded: the project is named, the competitor is not. 2 snapshots.
+        { queryId: branded, queryText: 'is Vis Stats any good', provider: 'openai', cited: false, mentioned: true, answerText: 'Vis Stats is a solid pick.' },
+        { queryId: branded, queryText: 'is Vis Stats any good', provider: 'gemini', cited: false, mentioned: true, answerText: 'Vis Stats does AEO.' },
+        // Non-brand: the competitor wins both, the project is named in neither.
+        { queryId: ctx.q1, queryText: 'best AEO platform', provider: 'openai', cited: false, mentioned: false, answerText: 'rival is the pick.' },
+        { queryId: ctx.q1, queryText: 'best AEO platform', provider: 'gemini', cited: false, mentioned: false, answerText: 'rival again.' },
+      ],
+    })
+
+    const { body } = await getStats('?shareOfVoice=1')
+    const sov = body.shareOfVoice!
+    expect(sov.queryClass).toBe('non-brand')
+    expect(sov.projectMentions).toBe(0)
+    expect(sov.competitorMentions).toBe(2)
+    expect(sov.percent).toBe(0)
+    // Pooled, this same run would have read 2 of 4 = 50% — the exact inversion.
+
+    const brandedRes = await getStats('?shareOfVoice=1&queryClass=branded')
+    const brandedSov = brandedRes.body.shareOfVoice!
+    expect(brandedSov.queryClass).toBe('branded')
+    expect(brandedSov.projectMentions).toBe(2)
+    expect(brandedSov.competitorMentions).toBe(0)
+    expect(brandedSov.percent).toBe(100)
+
+    // The two classes never share a denominator: neither response is the sum.
+    expect(sov.snapshotsWithAnswerText).toBe(2)
+    expect(brandedSov.snapshotsWithAnswerText).toBe(2)
+  })
+
+  it('rejects a queryClass the split does not define, including "all"', async () => {
+    seedCompetitor('rival.com')
+    seedRun({ createdAt: iso(5), snapshots: [{ queryId: ctx.q1, queryText: 'best AEO platform', provider: 'openai', cited: false, mentioned: true, answerText: 'brand' }] })
+    for (const qs of ['?shareOfVoice=1&queryClass=all', '?shareOfVoice=1&queryClass=pooled', '?shareOfVoice=1&queryClass=nonbrand']) {
+      const { status, body } = await getStats(qs)
+      expect(status, qs).toBe(400)
+      expect((body.error as { code: string }).code, qs).toBe('VALIDATION_ERROR')
+    }
+  })
+
   // ── month window ─────────────────────────────────────────────────────────
 
   it('month=YYYY-MM pools only that calendar month and echoes the resolved bounds', async () => {

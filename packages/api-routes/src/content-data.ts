@@ -517,8 +517,11 @@ function aggregateCandidate(opts: AggregateCandidateOpts): CandidateQuery {
 
   for (const snap of opts.snapshots) {
     const isLatestRun = snap.runId === opts.latestRunId
-    const competitorOverlap = snap.competitorOverlap
-    for (const domain of competitorOverlap) {
+    // `competitorCitationCount` is a CITATION count, so it reads the cited
+    // source list. `competitor_overlap` unions cited domains, grounding sources
+    // and answer-text brand matches, and a mention counted under a citation
+    // name is the exact conflation the vocabulary rules forbid.
+    for (const domain of snap.citedDomains) {
       const normalized = hostOf(domain) ?? ''
       const competitor = findMatchingDomain(normalized, opts.competitorSet)
       if (!competitor) continue

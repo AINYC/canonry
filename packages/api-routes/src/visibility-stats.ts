@@ -3,13 +3,14 @@ import type { FastifyInstance } from 'fastify'
 import { competitors, queries, querySnapshots, runs } from '@ainyc/canonry-db'
 import { buildMentionShare } from '@ainyc/canonry-intelligence'
 import {
-  brandLabelFromDomain,
   calendarMonthBounds,
   CitationStates,
+  effectiveBrandNames,
   parseInclusiveEndMs,
   RunKinds,
   RunStatuses,
   validationError,
+  type QueryClass,
   type VisibilityStatsCounts,
   type VisibilityStatsDto,
   type VisibilityStatsGroupBy,
@@ -18,6 +19,7 @@ import {
   type VisibilityStatsShareOfVoice,
 } from '@ainyc/canonry-contracts'
 import { notProbeRun, resolveProject } from './helpers.js'
+import { buildMentionShareInputs, mentionShareCompetitorsFromDomains } from './mention-share-inputs.js'
 import { computeVisibilityCompare } from './visibility-compare.js'
 
 /** Snapshot fields the aggregation reads. Tri-state `answerMentioned` is read RAW. */
@@ -211,6 +213,7 @@ export async function visibilityStatsRoutes(app: FastifyInstance) {
       groupBy?: string
       month?: string
       shareOfVoice?: string
+      queryClass?: string
     }
   }>('/projects/:name/visibility-stats', async (request, reply) => {
     const project = resolveProject(app.db, request.params.name)
@@ -222,6 +225,7 @@ export async function visibilityStatsRoutes(app: FastifyInstance) {
       groupBy: groupByRaw,
       month: monthRaw,
       shareOfVoice: shareOfVoiceRaw,
+      queryClass: queryClassRaw,
     } = request.query
 
     let groupBy: VisibilityStatsGroupBy | null = null
@@ -235,6 +239,14 @@ export async function visibilityStatsRoutes(app: FastifyInstance) {
     const hasLastRuns = lastRunsRaw !== undefined && lastRunsRaw !== ''
     const hasMonth = monthRaw !== undefined && monthRaw !== ''
     const wantShareOfVoice = shareOfVoiceRaw === '1' || shareOfVoiceRaw === 'true'
+    // Non-brand by default. Branded is available but must be asked for, because
+    // a caller who did not think about the split is a caller who would read a
+    // branded-inflated figure as a competitive one.
+    const requestedQueryClass: QueryClass = queryClassRaw === undefined || queryClassRaw === ''
+      ? 'non-brand'
+      : queryClassRaw === 'branded' || queryClassRaw === 'non-brand'
+        ? queryClassRaw
+        : (() => { throw validationError('"queryClass" must be "branded" or "non-brand"') })()
     if (hasLastRuns && (hasSince || hasUntil)) {
       throw validationError('"lastRuns" cannot be combined with "since"/"until" — use one or the other')
     }
@@ -325,10 +337,11 @@ export async function visibilityStatsRoutes(app: FastifyInstance) {
     const stats = computeVisibilityStats({ queries: projectQueries, snapshots, groupBy })
     const queryAttribution = buildQueryAttribution(projectQueries)
 
-    // Pooled share of voice (opt-in) — how often the project's brand is named in
-    // answer text vs tracked competitors, across the SAME window of runs, via the
-    // shared buildMentionShare. Loads answerText only on this path so the default
-    // endpoint stays lean.
+    // Share of voice (opt-in) — how often the project's brand is named in answer
+    // text vs tracked competitors, across the SAME window of runs, via the
+    // shared buildMentionShare. Scoped to one query class (non-brand unless the
+    // caller asks otherwise); branded and non-brand never share a denominator.
+    // Loads answerText only on this path so the default endpoint stays lean.
     let shareOfVoice: VisibilityStatsShareOfVoice | undefined
     if (wantShareOfVoice) {
       const competitorRows = app.db
@@ -336,10 +349,6 @@ export async function visibilityStatsRoutes(app: FastifyInstance) {
         .from(competitors)
         .where(eq(competitors.projectId, project.id))
         .all()
-      const mentionShareCompetitors = competitorRows.map((c) => ({
-        domain: c.domain,
-        brandTokens: [brandLabelFromDomain(c.domain)].filter((t) => t.length >= 3),
-      }))
       const sovSnapshots =
         runIds.length > 0
           ? app.db
@@ -354,13 +363,23 @@ export async function visibilityStatsRoutes(app: FastifyInstance) {
               .all()
           : []
       const attributedSovSnapshots = sovSnapshots.filter((s) => resolveCurrentQuery(queryAttribution, s) !== undefined)
-      const result = buildMentionShare(
-        attributedSovSnapshots.map((s) => ({ projectMentioned: s.answerMentioned === true, answerText: s.answerText })),
-        { competitors: mentionShareCompetitors },
-      )
-      const b = result.breakdown
+      const inputs = buildMentionShareInputs({
+        project,
+        competitorDomains: competitorRows.map((c) => c.domain),
+        snapshots: attributedSovSnapshots,
+      })
+      const result = buildMentionShare(inputs.snapshots, { competitors: inputs.competitors })
+      // An unclassifiable project (no usable brand alias) has no branded and no
+      // non-brand set to serve — it gets the pooled figure LABELLED pooled, for
+      // either request, rather than an empty branded breakdown or a non-brand
+      // claim its data cannot support.
+      const servedQueryClass = result.scope === 'pooled' ? 'pooled' as const : requestedQueryClass
+      // `branded` is the second breakdown the builder always returns, so asking
+      // for it costs one pass over the same snapshots rather than a second query.
+      const b = servedQueryClass === 'branded' ? result.branded : result.breakdown
       const denom = b.projectMentionSnapshots + b.competitorMentionSnapshots
       shareOfVoice = {
+        queryClass: servedQueryClass,
         // `null` (not 0) when there is no competitive frame configured — a 0 here
         // would read as "losing" when the head-to-head metric is simply undefined.
         percent: competitorRows.length === 0 ? null : denom > 0 ? Math.round((b.projectMentionSnapshots / denom) * 100) : 0,
@@ -433,10 +452,7 @@ export async function visibilityStatsRoutes(app: FastifyInstance) {
       .from(competitors)
       .where(eq(competitors.projectId, project.id))
       .all()
-    const competitorInputs = competitorRows.map((c) => ({
-      domain: c.domain,
-      brandTokens: [brandLabelFromDomain(c.domain)].filter((t) => t.length >= 3),
-    }))
+    const competitorInputs = mentionShareCompetitorsFromDomains(competitorRows.map((c) => c.domain))
 
     const loadMonth = (bounds: { since: string; until: string }) => {
       const sinceMs = Date.parse(bounds.since)
@@ -480,6 +496,7 @@ export async function visibilityStatsRoutes(app: FastifyInstance) {
       project: project.name,
       queries: projectQueries,
       competitors: competitorInputs,
+      brandNames: effectiveBrandNames(project),
       from: { month: fromRaw, since: fromBounds.since, until: fromBounds.until, runCount: fromMonth.runCount, snapshots: fromMonth.snapshots },
       to: { month: toRaw, since: toBounds.since, until: toBounds.until, runCount: toMonth.runCount, snapshots: toMonth.snapshots },
     })

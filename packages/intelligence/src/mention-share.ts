@@ -1,9 +1,30 @@
 import {
   brandKeyFromText,
-  textContainsAnyBrandAlias,
+  compileBrandAliases,
+  matcherMatchesText,
+  type BrandAliasMatcher,
   type MetricTone,
+  type QueryClass,
   type ScoreSummaryDto,
 } from '@ainyc/canonry-contracts'
+
+/**
+ * The shortest brand alias that may be matched in answer prose.
+ *
+ * Three, because real brands are three letters (`COS`, `IBM`) and the matcher
+ * this feeds requires COMPLETE adjacent words — `cos` never matches inside
+ * `cosmetics`, so length is not what protects against a false hit. The one
+ * threshold lives here rather than at each call site: the same brand counted by
+ * one surface and dropped by another is a silent disagreement about the same
+ * answer, which is exactly the class of bug that made a stored citation-side
+ * column and this metric report different mention counts for the same run.
+ */
+export const MIN_BRAND_ALIAS_KEY_LENGTH = 3
+
+/** Aliases worth compiling — short/empty tokens would match noise, not identity. */
+export function usableBrandAliases(aliases: readonly string[]): string[] {
+  return aliases.filter(alias => brandKeyFromText(alias).length >= MIN_BRAND_ALIAS_KEY_LENGTH)
+}
 
 export interface MentionShareSnapshot {
   /** True when the project's brand or domain appears in the LLM's answer text.
@@ -13,6 +34,13 @@ export interface MentionShareSnapshot {
   /** Raw answer text for scanning competitor brand presence. May be empty
    *  for failed / pending snapshots — those are excluded from the universe. */
   answerText: string | null
+  /**
+   * Which class the query behind this snapshot belongs to, or `null` when the
+   * caller could not classify (no usable project brand alias). `null` is NOT
+   * `non-brand`: an unclassifiable basket produces a pooled figure that is
+   * labelled pooled, never a non-brand claim the data cannot support.
+   */
+  queryClass?: QueryClass | null
 }
 
 export interface MentionShareCompetitor {
@@ -41,10 +69,84 @@ export interface MentionShareBreakdown {
   perCompetitor: MentionShareCompetitorRow[]
   snapshotsWithAnswerText: number
   snapshotsTotal: number
+  /**
+   * `projectMentionSnapshots / (project + competitor)` as a 0..100 integer, or
+   * `null` when nothing in this class was mentioned at all. Null rather than 0
+   * because "no brand was named" is not "you lost every naming".
+   */
+  score: number | null
 }
 
+/** What the headline and `breakdown` describe. Never a pooled figure under a non-brand name. */
+export type MentionShareScope = 'non-brand' | 'pooled'
+
 export interface MentionShareResult extends ScoreSummaryDto {
+  /**
+   * The competitive figure: NON-BRAND queries only whenever the caller supplied
+   * a classification, because a branded query is one the model was already
+   * handed your name on and a competitor structurally cannot win it.
+   *
+   * Falls back to the pooled set only when nothing could be classified, and
+   * `scope` says which of the two the reader is looking at.
+   */
   breakdown: MentionShareBreakdown
+  scope: MentionShareScope
+  /**
+   * Branded queries, kept visible and kept separate. This is recognition
+   * ("when asked about you, does the model know you?"), not placement — it must
+   * never be pooled into `breakdown`, and it is never null so a surface can
+   * always render the second section rather than silently dropping the data.
+   */
+  branded: MentionShareBreakdown
+}
+
+interface ClassTally {
+  projectMentionSnapshots: number
+  snapshotsWithAnswerText: number
+  snapshotsTotal: number
+  competitorCounts: Map<string, number>
+}
+
+function emptyTally(competitors: readonly MentionShareCompetitor[]): ClassTally {
+  return {
+    projectMentionSnapshots: 0,
+    snapshotsWithAnswerText: 0,
+    snapshotsTotal: 0,
+    competitorCounts: new Map(competitors.map(c => [c.domain, 0])),
+  }
+}
+
+function toBreakdown(tally: ClassTally, competitors: readonly MentionShareCompetitor[]): MentionShareBreakdown {
+  const competitorMentionSnapshots = [...tally.competitorCounts.values()].reduce((a, b) => a + b, 0)
+  const denom = tally.projectMentionSnapshots + competitorMentionSnapshots
+  const perCompetitor: MentionShareCompetitorRow[] = competitors
+    .map(c => ({
+      domain: c.domain,
+      mentionSnapshots: tally.competitorCounts.get(c.domain) ?? 0,
+      shareOfCompetitiveTotal: competitorMentionSnapshots > 0
+        ? Math.round(((tally.competitorCounts.get(c.domain) ?? 0) / competitorMentionSnapshots) * 1000) / 10
+        : 0,
+    }))
+    .filter(row => row.mentionSnapshots > 0)
+    .sort((a, b) => b.mentionSnapshots - a.mentionSnapshots || (a.domain < b.domain ? -1 : 1))
+
+  return {
+    projectMentionSnapshots: tally.projectMentionSnapshots,
+    competitorMentionSnapshots,
+    perCompetitor,
+    snapshotsWithAnswerText: tally.snapshotsWithAnswerText,
+    snapshotsTotal: tally.snapshotsTotal,
+    score: denom > 0 ? Math.round((tally.projectMentionSnapshots / denom) * 100) : null,
+  }
+}
+
+const EMPTY_BREAKDOWN: MentionShareBreakdown = {
+  projectMentionSnapshots: 0,
+  competitorMentionSnapshots: 0,
+  perCompetitor: [],
+  snapshotsWithAnswerText: 0,
+  snapshotsTotal: 0,
+  score: null,
 }
 
 /**
@@ -58,6 +160,15 @@ export interface MentionShareResult extends ScoreSummaryDto {
  * in one answer, that's still one snapshot. Mirrors the binary semantics of
  * `answerMentioned`.
  *
+ * SCOPED TO NON-BRAND QUERIES. A query that contains your own name is one the
+ * model has already been told who you are on: you are named in it ~always and a
+ * competitor structurally cannot be, so a pooled denominator lets branded recall
+ * carry the category number. Measured on a real basket (13 queries × 4
+ * providers, 5 of them branded) the pooled figure ranked the subject FIRST at
+ * 42% while the non-brand figure ranked them LAST at 3% — the same run, the
+ * opposite conclusion. Branded is still returned, under `branded`, because it is
+ * a real signal about recognition; it is simply not this one.
+ *
  * Strips out Wikipedia / news / unrelated sources entirely — answers your
  * question "when the LLM names a brand in its prose, how often is it you?"
  *
@@ -69,14 +180,7 @@ export function buildMentionShare(
   snapshots: readonly MentionShareSnapshot[],
   options: MentionShareOptions,
 ): MentionShareResult {
-  const tooltip = 'When AI answers your tracked queries and names a brand, the % of brand-name-drops that are you vs your tracked competitors. Cleaner than Citation Coverage for "am I winning the conversation".'
-  const emptyBreakdown: MentionShareBreakdown = {
-    projectMentionSnapshots: 0,
-    competitorMentionSnapshots: 0,
-    perCompetitor: [],
-    snapshotsWithAnswerText: 0,
-    snapshotsTotal: snapshots.length,
-  }
+  const tooltip = 'On queries that do NOT contain your name, the % of brand-name-drops in AI answers that are you vs your tracked competitors. Branded queries are excluded on purpose: you are named on almost all of them and a competitor cannot be, so pooling them would hide how you place in your category.'
 
   if (snapshots.length === 0) {
     return {
@@ -87,7 +191,9 @@ export function buildMentionShare(
       description: 'No mention share data yet. Trigger a run to start tracking.',
       tooltip,
       trend: [],
-      breakdown: emptyBreakdown,
+      scope: 'pooled',
+      breakdown: { ...EMPTY_BREAKDOWN, snapshotsTotal: 0 },
+      branded: EMPTY_BREAKDOWN,
     }
   }
 
@@ -100,75 +206,93 @@ export function buildMentionShare(
       description: 'Mention Share is a head-to-head competitive metric — add tracked competitors to compare brand mention rates.',
       tooltip,
       trend: [],
-      breakdown: emptyBreakdown,
+      scope: 'pooled',
+      breakdown: { ...EMPTY_BREAKDOWN, snapshotsTotal: snapshots.length },
+      branded: EMPTY_BREAKDOWN,
     }
   }
 
-  let projectMentionSnapshots = 0
-  let snapshotsWithAnswerText = 0
-  const competitorCounts = new Map<string, number>()
-  const competitorAliases = new Map<string, string[]>()
-  for (const competitor of options.competitors) {
-    competitorCounts.set(competitor.domain, 0)
-    competitorAliases.set(
-      competitor.domain,
-      competitor.brandTokens.filter(alias => brandKeyFromText(alias).length >= 3),
-    )
-  }
+  // One compiled matcher per competitor, reused across every answer: the alias
+  // set is fixed and the answer corpus is not.
+  const competitorMatchers = new Map<string, BrandAliasMatcher>(
+    options.competitors.map(c => [c.domain, compileBrandAliases(usableBrandAliases([...c.brandTokens]))]),
+  )
+
+  const nonBrand = emptyTally(options.competitors)
+  const branded = emptyTally(options.competitors)
+  // Snapshots the caller could not classify. They are pooled ONLY when nothing
+  // at all was classified; a partially-classified basket would otherwise quietly
+  // put branded rows back into the competitive figure.
+  const unclassified = emptyTally(options.competitors)
 
   for (const snap of snapshots) {
+    const tally = snap.queryClass === 'branded'
+      ? branded
+      : snap.queryClass === 'non-brand'
+        ? nonBrand
+        : unclassified
+    tally.snapshotsTotal++
     const text = snap.answerText ?? ''
     if (text.length === 0) continue
-    snapshotsWithAnswerText++
-    if (snap.projectMentioned) projectMentionSnapshots++
+    tally.snapshotsWithAnswerText++
+    if (snap.projectMentioned) tally.projectMentionSnapshots++
     for (const competitor of options.competitors) {
-      const aliases = competitorAliases.get(competitor.domain) ?? []
-      if (textContainsAnyBrandAlias(text, aliases)) {
-        competitorCounts.set(competitor.domain, (competitorCounts.get(competitor.domain) ?? 0) + 1)
+      const matcher = competitorMatchers.get(competitor.domain)
+      if (matcher && matcherMatchesText(matcher, text)) {
+        tally.competitorCounts.set(competitor.domain, (tally.competitorCounts.get(competitor.domain) ?? 0) + 1)
       }
     }
   }
 
-  const competitorMentionSnapshots = [...competitorCounts.values()].reduce((a, b) => a + b, 0)
-  const denom = projectMentionSnapshots + competitorMentionSnapshots
-  const score = denom > 0 ? Math.round((projectMentionSnapshots / denom) * 100) : 0
+  const classified = nonBrand.snapshotsTotal + branded.snapshotsTotal
+  const scope: MentionShareScope = classified > 0 ? 'non-brand' : 'pooled'
+  const headline = toBreakdown(scope === 'non-brand' ? nonBrand : unclassified, options.competitors)
+  const brandedBreakdown = toBreakdown(branded, options.competitors)
 
-  const perCompetitor: MentionShareCompetitorRow[] = options.competitors
-    .map(c => ({
-      domain: c.domain,
-      mentionSnapshots: competitorCounts.get(c.domain) ?? 0,
-      shareOfCompetitiveTotal: competitorMentionSnapshots > 0
-        ? Math.round(((competitorCounts.get(c.domain) ?? 0) / competitorMentionSnapshots) * 1000) / 10
-        : 0,
-    }))
-    .filter(row => row.mentionSnapshots > 0)
-    .sort((a, b) => b.mentionSnapshots - a.mentionSnapshots)
+  const score = headline.score
+  const denom = headline.projectMentionSnapshots + headline.competitorMentionSnapshots
 
-  const breakdown: MentionShareBreakdown = {
-    projectMentionSnapshots,
-    competitorMentionSnapshots,
-    perCompetitor,
-    snapshotsWithAnswerText,
-    snapshotsTotal: snapshots.length,
+  if (scope === 'non-brand' && nonBrand.snapshotsWithAnswerText === 0) {
+    return {
+      label: 'Mention Share',
+      value: 'No non-brand queries',
+      delta: branded.snapshotsTotal > 0
+        ? `${branded.snapshotsTotal} branded ${branded.snapshotsTotal === 1 ? 'snapshot' : 'snapshots'} only`
+        : 'No answers to score',
+      tone: 'neutral',
+      description: 'Every tracked query names your brand. Branded queries measure recognition, not competitive placement — add category queries to measure where you place.',
+      tooltip,
+      trend: [],
+      scope,
+      breakdown: headline,
+      branded: brandedBreakdown,
+    }
   }
-
-  const description = describe({
-    score, projectMentionSnapshots, competitorMentionSnapshots, perCompetitor,
-  })
 
   return {
     label: 'Mention Share',
-    value: denom > 0 ? `${score}` : '0',
-    delta: denom > 0
-      ? `${projectMentionSnapshots} of ${denom} brand mentions`
-      : 'No brand mentions in this run',
-    tone: denom > 0 ? mentionShareTone(score) : 'neutral',
-    description,
+    value: score === null ? '0' : `${score}`,
+    delta: score === null
+      ? scopeLabel(scope, 'No brand mentions in this run')
+      : scopeLabel(scope, `${headline.projectMentionSnapshots} of ${denom} brand mentions`),
+    tone: score === null ? 'neutral' : mentionShareTone(score),
+    description: describe({ scope, score, breakdown: headline, branded: brandedBreakdown }),
     tooltip,
     trend: [],
-    progress: denom > 0 ? score : 0,
-    breakdown,
+    progress: score ?? 0,
+    scope,
+    breakdown: headline,
+    branded: brandedBreakdown,
   }
+}
+
+/**
+ * The scope travels with the number wherever the number goes. A reader who sees
+ * only the delta line must still be able to tell a category figure from a
+ * pooled one, because those two answer opposite questions.
+ */
+function scopeLabel(scope: MentionShareScope, body: string): string {
+  return scope === 'non-brand' ? `${body} · non-brand queries` : `${body} · unclassified queries`
 }
 
 /**
@@ -186,21 +310,31 @@ function mentionShareTone(score: number): MetricTone {
 }
 
 function describe(parts: {
-  score: number
-  projectMentionSnapshots: number
-  competitorMentionSnapshots: number
-  perCompetitor: readonly MentionShareCompetitorRow[]
+  scope: MentionShareScope
+  score: number | null
+  breakdown: MentionShareBreakdown
+  branded: MentionShareBreakdown
 }): string {
-  const { score, projectMentionSnapshots, competitorMentionSnapshots, perCompetitor } = parts
+  const { scope, score, breakdown, branded } = parts
+  const { projectMentionSnapshots, competitorMentionSnapshots, perCompetitor } = breakdown
+  const where = scope === 'non-brand' ? 'on non-brand queries' : 'across your tracked queries'
+  // Branded recall is the sentence that stops a 3% category number reading as a
+  // measurement failure — and stops a 100% branded number reading as category
+  // strength. It is stated next to the figure, never inside it.
+  const brandedNote = branded.snapshotsWithAnswerText > 0 && branded.score !== null
+    ? ` Separately, you are named in ${branded.projectMentionSnapshots} of ${branded.snapshotsWithAnswerText} answers to queries that contain your name.`
+    : ''
+
   if (projectMentionSnapshots === 0 && competitorMentionSnapshots === 0) {
-    return 'No brand mentions detected for you or your tracked competitors in this run.'
+    return `No brand mentions detected for you or your tracked competitors ${where}.${brandedNote}`
   }
   if (competitorMentionSnapshots === 0) {
-    return `${projectMentionSnapshots} brand mentions of you, zero competitor mentions — you own the conversation.`
+    return `${projectMentionSnapshots} brand mentions of you and zero competitor mentions ${where} — you own the conversation.${brandedNote}`
   }
   const top = perCompetitor[0]
+  const total = projectMentionSnapshots + competitorMentionSnapshots
   if (!top) {
-    return `${score}% of brand mentions are you (${projectMentionSnapshots} of ${projectMentionSnapshots + competitorMentionSnapshots}).`
+    return `${score}% of brand mentions ${where} are you (${projectMentionSnapshots} of ${total}).${brandedNote}`
   }
-  return `${score}% of brand mentions are you. Top competitor: ${top.domain} (${top.mentionSnapshots} mentions).`
+  return `${score}% of brand mentions ${where} are you. Top competitor: ${top.domain} (${top.mentionSnapshots} mentions).${brandedNote}`
 }

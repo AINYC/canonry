@@ -406,11 +406,12 @@ const baseProjectCommandCenters: ProjectCommandCenterVm[] = [
     mentionShareSummary: {
       label: 'Mention Share',
       value: '38',
-      delta: '8 of 21 brand mentions',
+      delta: '8 of 21 brand mentions · non-brand queries',
       tone: 'caution',
       description: 'Downtown Smiles leads on emergency intent; Citypoint trails on availability copy.',
       trend: [44, 42, 40, 39, 38],
       progress: 38,
+      scope: 'non-brand',
       breakdown: {
         projectMentionSnapshots: 8,
         competitorMentionSnapshots: 13,
@@ -420,6 +421,15 @@ const baseProjectCommandCenters: ProjectCommandCenterVm[] = [
         ],
         snapshotsWithAnswerText: 24,
         snapshotsTotal: 32,
+        score: 38,
+      },
+      branded: {
+        projectMentionSnapshots: 6,
+        competitorMentionSnapshots: 0,
+        perCompetitor: [],
+        snapshotsWithAnswerText: 6,
+        snapshotsTotal: 8,
+        score: 100,
       },
     },
     gapQueries: {
@@ -612,11 +622,12 @@ const baseProjectCommandCenters: ProjectCommandCenterVm[] = [
     mentionShareSummary: {
       label: 'Mention Share',
       value: '64',
-      delta: '11 of 17 brand mentions',
+      delta: '11 of 17 brand mentions · non-brand queries',
       tone: 'positive',
-      description: 'Harbor Law outpaces Shoreline on branded and informational injury prompts.',
+      description: 'Harbor Law outpaces Shoreline on informational injury prompts.',
       trend: [58, 60, 62, 63, 64],
       progress: 64,
+      scope: 'non-brand',
       breakdown: {
         projectMentionSnapshots: 11,
         competitorMentionSnapshots: 6,
@@ -625,6 +636,15 @@ const baseProjectCommandCenters: ProjectCommandCenterVm[] = [
         ],
         snapshotsWithAnswerText: 19,
         snapshotsTotal: 24,
+        score: 64,
+      },
+      branded: {
+        projectMentionSnapshots: 5,
+        competitorMentionSnapshots: 0,
+        perCompetitor: [],
+        snapshotsWithAnswerText: 5,
+        snapshotsTotal: 5,
+        score: 100,
       },
     },
     gapQueries: {
@@ -780,11 +800,12 @@ const baseProjectCommandCenters: ProjectCommandCenterVm[] = [
     mentionShareSummary: {
       label: 'Mention Share',
       value: '21',
-      delta: '4 of 19 brand mentions',
+      delta: '4 of 19 brand mentions · non-brand queries',
       tone: 'negative',
       description: 'Regional Joint Care dominates broad treatment prompts with deeper physician proof.',
       trend: [28, 26, 24, 22, 21],
       progress: 21,
+      scope: 'non-brand',
       breakdown: {
         projectMentionSnapshots: 4,
         competitorMentionSnapshots: 15,
@@ -793,6 +814,15 @@ const baseProjectCommandCenters: ProjectCommandCenterVm[] = [
         ],
         snapshotsWithAnswerText: 21,
         snapshotsTotal: 28,
+        score: 21,
+      },
+      branded: {
+        projectMentionSnapshots: 7,
+        competitorMentionSnapshots: 0,
+        perCompetitor: [],
+        snapshotsWithAnswerText: 7,
+        snapshotsTotal: 8,
+        score: 100,
       },
     },
     gapQueries: {

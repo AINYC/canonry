@@ -278,12 +278,32 @@ export const mentionRowSchema = z.object({
 
 export type MentionRow = z.infer<typeof mentionRowSchema>
 
-export const mentionLandscapeSchema = z.object({
+export const mentionLandscapeSectionSchema = z.object({
   /** Project's own mention count (for the bar chart comparing project vs competitors). */
   projectMentionCount: z.number(),
   /** Snapshots considered — those with non-empty answerText. Drives the totalCount denominator. */
   totalAnswerSnapshots: z.number(),
   competitors: z.array(mentionRowSchema),
+})
+
+export type MentionLandscapeSection = z.infer<typeof mentionLandscapeSectionSchema>
+
+/**
+ * Who AI names in its prose, SPLIT BY QUERY CLASS and never pooled.
+ *
+ * The top-level counts mirror `nonBrand` — the competitive view — because a
+ * branded query names the project, so it is mentioned on nearly all of them
+ * while a tracked competitor structurally cannot be. One shared denominator
+ * therefore ranks the project on its own brand recall rather than on category
+ * placement, which inverts the chart. Branded stays available and labelled.
+ */
+export const mentionLandscapeSchema = mentionLandscapeSectionSchema.extend({
+  /** `pooled` only when the project has no usable brand alias to classify by. */
+  scope: z.enum(['non-brand', 'pooled']),
+  /** Non-brand queries — identical to the top-level counts, named so a reader can tell. */
+  nonBrand: mentionLandscapeSectionSchema,
+  /** Branded queries — recognition, not competitive placement. */
+  branded: mentionLandscapeSectionSchema,
 })
 
 export type MentionLandscape = z.infer<typeof mentionLandscapeSchema>

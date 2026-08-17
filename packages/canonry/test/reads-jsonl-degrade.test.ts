@@ -182,7 +182,9 @@ function makeOverview(name: string) {
       visibility: { label: 'Citation', value: '0', delta: '', tone: 'neutral', description: '', trend: [], progress: 0 },
       mentionShare: {
         label: 'Mention Share', value: 'Add competitors', delta: '', tone: 'neutral', description: '', trend: [], progress: 0,
-        breakdown: { projectMentionSnapshots: 0, competitorMentionSnapshots: 0, perCompetitor: [], snapshotsWithAnswerText: 0, snapshotsTotal: 0 },
+        scope: 'non-brand',
+        breakdown: { projectMentionSnapshots: 0, competitorMentionSnapshots: 0, perCompetitor: [], snapshotsWithAnswerText: 0, snapshotsTotal: 0, score: null },
+        branded: { projectMentionSnapshots: 0, competitorMentionSnapshots: 0, perCompetitor: [], snapshotsWithAnswerText: 0, snapshotsTotal: 0, score: null },
       },
       gapQueries: { label: 'Gap queries', value: '0', delta: '', tone: 'neutral', description: '', trend: [] },
       mentionGaps: { label: 'Mention gaps', value: '0', delta: '', tone: 'neutral', description: '', trend: [] },

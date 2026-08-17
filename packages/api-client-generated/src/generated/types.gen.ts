@@ -7648,6 +7648,20 @@ export type ProjectOverviewDto = {
                 }>;
                 snapshotsWithAnswerText: number;
                 snapshotsTotal: number;
+                score: number | null;
+            };
+            scope: 'non-brand' | 'pooled';
+            branded: {
+                projectMentionSnapshots: number;
+                competitorMentionSnapshots: number;
+                perCompetitor: Array<{
+                    domain: string;
+                    mentionSnapshots: number;
+                    shareOfCompetitiveTotal: number;
+                }>;
+                snapshotsWithAnswerText: number;
+                snapshotsTotal: number;
+                score: number | null;
             };
         };
         gapQueries: {
@@ -7892,6 +7906,31 @@ export type ProjectReportDto = {
             mentionedQueries: Array<string>;
             sharePct: number;
         }>;
+        scope: 'non-brand' | 'pooled';
+        nonBrand: {
+            projectMentionCount: number;
+            totalAnswerSnapshots: number;
+            competitors: Array<{
+                domain: string;
+                mentionCount: number;
+                totalCount: number;
+                pressureLabel: 'High' | 'Moderate' | 'Low' | 'None';
+                mentionedQueries: Array<string>;
+                sharePct: number;
+            }>;
+        };
+        branded: {
+            projectMentionCount: number;
+            totalAnswerSnapshots: number;
+            competitors: Array<{
+                domain: string;
+                mentionCount: number;
+                totalCount: number;
+                pressureLabel: 'High' | 'Moderate' | 'Low' | 'None';
+                mentionedQueries: Array<string>;
+                sharePct: number;
+            }>;
+        };
     };
     aiSourceOrigin: {
         categories: Array<{
@@ -10061,6 +10100,7 @@ export type VisibilityStatsDto = {
         }>;
     }>;
     shareOfVoice?: {
+        queryClass: 'branded' | 'non-brand' | 'pooled';
         percent: number | null;
         projectMentions: number;
         competitorMentions: number;
@@ -14710,9 +14750,13 @@ export type GetApiV1ProjectsByNameVisibilityStatsData = {
          */
         month?: string;
         /**
-         * Set to "1" to include pooled share of voice (project vs tracked-competitor brand mentions in answer text) across the window.
+         * Set to "1" to include share of voice (project vs tracked-competitor brand mentions in answer text) across the window. Scoped by `queryClass`, which defaults to non-brand.
          */
         shareOfVoice?: '1';
+        /**
+         * Which query class `shareOfVoice` covers. Defaults to `non-brand`: a branded query names the project, so it is mentioned on nearly all of them and a competitor structurally cannot be, and one shared denominator would report brand recall as category placement. Never pooled across classes.
+         */
+        queryClass?: 'branded' | 'non-brand';
     };
     url: '/api/v1/projects/{name}/visibility-stats';
 };

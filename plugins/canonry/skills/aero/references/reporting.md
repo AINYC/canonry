@@ -7,7 +7,7 @@ description: Weekly and monthly report templates with metric tables, regression/
 
 ## Month-over-month AEO (do this right)
 
-For ANY month-over-month AEO claim, use `cnry visibility-compare <project> --from <YYYY-MM> --to <YYYY-MM>` — never diff two `visibility-stats --month` calls by hand. It returns the statistically honest comparison. **Share of voice is less exposed to an engine's broad naming propensity than an absolute rate**, but read the branded-question caveat below before leading with it, and note it does **not** bypass model continuity. The comparison is restricted to the query/provider PAIRS present in BOTH months, then to providers with one known, identical configured model id in both months. Every figure carries a Wilson interval and a `verdict`:
+For ANY month-over-month AEO claim, use `cnry visibility-compare <project> --from <YYYY-MM> --to <YYYY-MM>` — never diff two `visibility-stats --month` calls by hand. It returns the statistically honest comparison. **Share of voice is less exposed to an engine's broad naming propensity than an absolute rate**, and is computed over non-brand queries only (see the branded caveat below), but it does **not** bypass model continuity. The comparison is restricted to the query/provider PAIRS present in BOTH months, then to providers with one known, identical configured model id in both months. Every figure carries a Wilson interval and a `verdict`:
 
 - **`within-noise`** — the periods' intervals overlap. **No confirmed change; never report it as a rise or a decline.**
 - **`moved`** — disjoint intervals; a real directional move (the point sign is the direction).
@@ -19,9 +19,13 @@ A silent upstream version bump under an unchanged configured id is undetectable;
 
 Never pool them into one headline. A branded question ("<brand> reviews") measures demand the brand already created: the answer names the brand because the question did, so a near-100% mention rate is the expected floor, not an achievement. A non-brand question ("best <category> for <use case>") measures demand to win, and it is the number that says whether the work is landing. A pooled figure mostly measures how famous the brand already is and hides whether anything moved.
 
-**This matters most for share of voice.** Share is computed across the attributed snapshot set, branded questions included, so every branded question added to a project raises it without any competitive ground being won. A real project measured 100% self-mention across its branded questions against roughly 20% on non-brand; pooled, it reported 55.6% and read as market leadership. Until a branded filter exists, treat share of voice as an internal directional signal, decompose it before quoting it, and do not put the pooled number in front of a client.
+**This matters most for share of voice, and the split is now enforced.** `visibility-stats --share-of-voice`, `visibility-compare`, the project overview's Mention Share card and its breakdown chart, and the client report's mention landscape are all scoped to NON-BRAND queries by default. Every one of them echoes the class it served (`queryClass` / `scope`), and branded is returned beside the figure rather than inside it. Pass `--query-class branded` when you want brand recall.
 
-Classifying is cheap and does not need a new heuristic: run the project's own identity (display name, aliases, domain labels) against the QUERY text with the same exact-identity matcher that decides whether an ANSWER mentions the brand. Complete-adjacent-word matching means presentation variants fold and near-misses never match, so a project whose identity is two words is not matched by a bare one-word term that belongs to someone else.
+Why it is enforced rather than advised: on a real basket (13 queries × 4 engines, 5 branded), the subject was named in 20 of 20 branded answers and 1 of 32 category answers. Pooled, the chart put them FIRST at ~42%. Non-brand, they were LAST at ~3%, behind all seven tracked competitors. Same run, opposite conclusion, and the pooled version is the one a client would have read as category leadership.
+
+A figure labelled `pooled` means the project has no usable brand alias, so no split was possible. That is a configuration gap to fix (set a display name or aliases), not a number to quote as competitive.
+
+Classification does not use a new heuristic: the project's own identity (display name, aliases, domain labels) is run against the QUERY text with the same exact-identity matcher that decides whether an ANSWER mentions the brand — `compileQueryClassifier` over `packages/contracts/src/brand-matching.ts`, the same enum advanced measurement publishes. Complete-adjacent-word matching means presentation variants fold and near-misses never match, so a project whose identity is two words is not matched by a bare one-word term that belongs to someone else.
 
 ## The measured question set is versioned
 
@@ -65,7 +69,7 @@ The hand-rolled templates below are still the right call when the user wants a f
 
 ## Summary
 - Mention rate: <X>% (Δ<+/-Y>% from last week)        ← primary KPI
-- Mention share: <X>% (Δ<+/-Y>% from last week)       ← AI share-of-voice vs competitors
+- Mention share (non-brand): <X>% (Δ<+/-Y>% from last week)   ← share-of-voice vs competitors; NEVER pooled with branded
 - Cited rate: <X>% (Δ<+/-Y>% from last week)          ← secondary signal
 - Regressions: <N> new, <N> resolved (lead with lost mentions; note lost citations second)
 - Gains: <N> new mentions / <N> new citations

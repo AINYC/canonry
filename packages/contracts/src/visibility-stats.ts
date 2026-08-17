@@ -92,16 +92,27 @@ export const visibilityStatsShareCompetitorSchema = z.object({
 export type VisibilityStatsShareCompetitor = z.infer<typeof visibilityStatsShareCompetitorSchema>
 
 /**
- * Pooled **share of voice** across the window — how often the project's brand is
+ * **Share of voice** across the window — how often the project's brand is
  * named in answer TEXT vs tracked competitors:
  *   `share = projectMentions / (projectMentions + competitorMentions)`.
  * Per-snapshot (binary), mirroring `answerMentioned` — matches `buildMentionShare`.
  * Present only when the caller passes `shareOfVoice=1`.
  *
+ * SCOPED BY `queryClass`, which defaults to `non-brand`. A branded query hands
+ * the model the project's name, so the project is named on nearly all of them
+ * and a competitor structurally cannot be; one pooled denominator therefore
+ * reports brand recall as category placement. `branded` is available on request
+ * and is a recognition figure, never a competitive one.
+ *
  * `percent` is `null` when no competitors are configured (the head-to-head metric
  * is undefined without a competitive frame — reporting 100% would mislead).
  */
 export const visibilityStatsShareOfVoiceSchema = z.object({
+  /**
+   * Which class the figures cover. `pooled` appears only when the project has no
+   * usable brand alias, so no split was possible — never as a default.
+   */
+  queryClass: z.enum(['branded', 'non-brand', 'pooled']),
   /** `projectMentions / (projectMentions + competitorMentions)` as 0-100; `null` when no competitors configured. */
   percent: z.number().nullable(),
   /** Snapshots (with answer text) where the project's brand appeared in the answer. */
@@ -134,7 +145,7 @@ export const visibilityStatsDtoSchema = z.object({
   byProvider: z.array(visibilityStatsProviderEntrySchema).optional(),
   /** Per-query stats, sorted by query text. Only queries with ≥1 snapshot in the window appear. */
   queries: z.array(visibilityStatsQueryEntrySchema),
-  /** Pooled share of voice vs tracked competitors — present only when `shareOfVoice=1` was requested. */
+  /** Share of voice vs tracked competitors, non-brand queries by default — present only when `shareOfVoice=1` was requested. */
   shareOfVoice: visibilityStatsShareOfVoiceSchema.optional(),
 })
 export type VisibilityStatsDto = z.infer<typeof visibilityStatsDtoSchema>

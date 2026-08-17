@@ -1,4 +1,4 @@
-import type { ProjectDto, InsightDto, ProjectOverviewDto, RunErrorDto, RunKind } from '@ainyc/canonry-contracts'
+import type { ProjectDto, InsightDto, MentionShareBreakdownDto, ProjectOverviewDto, RunErrorDto, RunKind } from '@ainyc/canonry-contracts'
 import { RunKinds, RunStatuses, RunTriggers, CitationStates, formatRunErrorOneLine } from '@ainyc/canonry-contracts'
 import type {
   ApiCompetitor,
@@ -573,6 +573,17 @@ function adaptOverviewToCommandCenter(
   }
 }
 
+function emptyMentionShareBreakdown(): MentionShareBreakdownDto {
+  return {
+    projectMentionSnapshots: 0,
+    competitorMentionSnapshots: 0,
+    perCompetitor: [],
+    snapshotsWithAnswerText: 0,
+    snapshotsTotal: 0,
+    score: null,
+  }
+}
+
 function emptyCommandCenter(
   project: ProjectDto,
   evidence: CitationInsightVm[],
@@ -598,13 +609,9 @@ function emptyCommandCenter(
     mentionShareSummary: {
       ...placeholder,
       label: 'Mention Share',
-      breakdown: {
-        projectMentionSnapshots: 0,
-        competitorMentionSnapshots: 0,
-        perCompetitor: [],
-        snapshotsWithAnswerText: 0,
-        snapshotsTotal: 0,
-      },
+      scope: 'non-brand',
+      breakdown: emptyMentionShareBreakdown(),
+      branded: emptyMentionShareBreakdown(),
     },
     queryCounts: { cited: 0, total: 0 },
     gapQueries: { ...placeholder, label: 'Citation Gaps' },

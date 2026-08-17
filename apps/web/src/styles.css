@@ -1402,7 +1402,17 @@
   }
 
   .mention-share-breakdown-title {
-    @apply text-[10px] font-medium uppercase tracking-[0.12em] text-muted mb-2;
+    @apply flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-muted mb-2;
+  }
+
+  /* Branded sits under its own rule and its own heading so the two classes
+     never read as one chart with one denominator. */
+  .mention-share-breakdown-branded {
+    @apply mt-4 pt-3 border-t border-mono-800/40;
+  }
+
+  .mention-share-breakdown-empty {
+    @apply text-xs text-muted;
   }
 
   .mention-share-breakdown-rows {

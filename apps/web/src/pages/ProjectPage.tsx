@@ -1317,6 +1317,62 @@ function OverviewDisclosure({
   )
 }
 
+/**
+ * One class's bars. Never renders two classes into one denominator: `share` is
+ * always a percentage of the class it was passed, and the caller labels which
+ * class that is.
+ */
+function MentionShareBreakdownRows({
+  breakdown,
+  projectLabel,
+}: {
+  breakdown: ProjectCommandCenterVm['mentionShareSummary']['breakdown']
+  projectLabel: string
+}) {
+  const combinedTotal = breakdown.projectMentionSnapshots + breakdown.competitorMentionSnapshots
+  if (combinedTotal === 0) return null
+
+  // Rows merge the project (you) with each tracked competitor, sorted by
+  // mention count. Share is computed against this class's combined total, so
+  // the rows read as "% of the brand mentions in this class".
+  const rows = [
+    { label: `${projectLabel} (you)`, mentions: breakdown.projectMentionSnapshots, isYou: true },
+    ...breakdown.perCompetitor.map(c => ({ label: c.domain, mentions: c.mentionSnapshots, isYou: false })),
+  ].sort((a, b) => b.mentions - a.mentions)
+  const maxMentions = rows[0]?.mentions ?? 1
+
+  return (
+    <ul className="mention-share-breakdown-rows">
+      {rows.map(row => {
+        const share = (row.mentions / combinedTotal) * 100
+        return (
+          <li key={row.label} className="mention-share-breakdown-row">
+            <span className={`mention-share-breakdown-label ${row.isYou ? 'text-heading font-medium' : 'text-secondary'}`}>
+              {row.label}
+            </span>
+            <div className="mention-share-breakdown-bar">
+              <div
+                className={`mention-share-breakdown-bar-fill ${row.isYou ? 'bg-positive-500/70' : 'bg-mono-500/60'}`}
+                style={{ width: `${Math.max((row.mentions / maxMentions) * 100, 2)}%` }}
+              />
+            </div>
+            <span className="mention-share-breakdown-count">{row.mentions}</span>
+            <span className="mention-share-breakdown-share">{share.toFixed(1)}%</span>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+/**
+ * Two labelled sections, never one pooled chart.
+ *
+ * Non-brand leads because it is the competitive question. Branded is kept in
+ * view — dropping it would hide real data — but in its own section with its own
+ * denominator, because a query that contains the brand's own name is one the
+ * brand is named on nearly always and a competitor structurally cannot win.
+ */
 function MentionShareBreakdown({
   summary,
   projectLabel,
@@ -1325,42 +1381,38 @@ function MentionShareBreakdown({
   projectLabel: string
 }) {
   const breakdown = summary.breakdown
-  if (breakdown.perCompetitor.length === 0) return null
-  const combinedTotal = breakdown.projectMentionSnapshots + breakdown.competitorMentionSnapshots
-  if (combinedTotal === 0) return null
+  const branded = summary.branded
+  const nonBrandTotal = breakdown.projectMentionSnapshots + breakdown.competitorMentionSnapshots
+  const brandedTotal = branded.projectMentionSnapshots + branded.competitorMentionSnapshots
+  if (nonBrandTotal === 0 && brandedTotal === 0) return null
 
-  // Rows merge the project (you) with each tracked competitor, sorted by
-  // mention count. Share is computed against the combined total so the rows
-  // read as "% of all brand mentions in the run" — matching the headline.
-  const rows = [
-    { label: `${projectLabel} (you)`, mentions: breakdown.projectMentionSnapshots, isYou: true },
-    ...breakdown.perCompetitor.map(c => ({ label: c.domain, mentions: c.mentionSnapshots, isYou: false })),
-  ].sort((a, b) => b.mentions - a.mentions)
-  const maxMentions = rows[0]?.mentions ?? 1
+  const scopeTitle = summary.scope === 'non-brand'
+    ? 'Mention share breakdown · non-brand queries · latest run'
+    : 'Mention share breakdown · all tracked queries · latest run'
 
   return (
     <div className="mention-share-breakdown">
-      <p className="mention-share-breakdown-title">Mention share breakdown · latest run</p>
-      <ul className="mention-share-breakdown-rows">
-        {rows.map(row => {
-          const share = (row.mentions / combinedTotal) * 100
-          return (
-            <li key={row.label} className="mention-share-breakdown-row">
-              <span className={`mention-share-breakdown-label ${row.isYou ? 'text-heading font-medium' : 'text-secondary'}`}>
-                {row.label}
-              </span>
-              <div className="mention-share-breakdown-bar">
-                <div
-                  className={`mention-share-breakdown-bar-fill ${row.isYou ? 'bg-positive-500/70' : 'bg-mono-500/60'}`}
-                  style={{ width: `${Math.max((row.mentions / maxMentions) * 100, 2)}%` }}
-                />
-              </div>
-              <span className="mention-share-breakdown-count">{row.mentions}</span>
-              <span className="mention-share-breakdown-share">{share.toFixed(1)}%</span>
-            </li>
-          )
-        })}
-      </ul>
+      <p className="mention-share-breakdown-title">
+        {scopeTitle}
+        <InfoTooltip text="Queries that do not contain your name. This is where competitive placement is decided: on a branded query you are named almost always and a competitor cannot be, so counting both in one total would rank you on your own brand recall instead of on your category." />
+      </p>
+      {nonBrandTotal > 0 ? (
+        <MentionShareBreakdownRows breakdown={breakdown} projectLabel={projectLabel} />
+      ) : (
+        <p className="mention-share-breakdown-empty">
+          No brand mentions on non-brand queries in this run.
+        </p>
+      )}
+
+      {brandedTotal > 0 && (
+        <div className="mention-share-breakdown-branded">
+          <p className="mention-share-breakdown-title">
+            Branded queries · recognition, not placement
+            <InfoTooltip text="Queries containing your own name. Counted separately and never pooled with the figure above: these measure whether AI knows you when asked about you by name, not where you place against competitors." />
+          </p>
+          <MentionShareBreakdownRows breakdown={branded} projectLabel={projectLabel} />
+        </div>
+      )}
     </div>
   )
 }
@@ -2441,7 +2493,7 @@ function ProjectPageContent({
                 <OverviewMetricRow
                   label="Mention share"
                   summary={model.mentionShareSummary}
-                  tooltip="Of all brand mentions in answer text across your tracked queries (you + tracked competitors), the percentage that were you. Measured from the latest sweep."
+                  tooltip="Of the brand mentions in answer text on your NON-BRAND queries (you + tracked competitors), the percentage that were you. Measured from the latest sweep. Branded queries are counted separately below: you are named on almost all of them and a competitor cannot be, so pooling them would rank you on brand recall rather than on your category."
                 />
                 <OverviewMetricRow
                   label="Mention gaps"

@@ -518,6 +518,15 @@ table.report-table td .badge {
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
   gap: 16px;
 }
+.mention-branded-block {
+  margin-top: 20px;
+}
+.chart-note {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #4b5563;
+  margin: 0 0 12px;
+}
 .legend {
   display: flex;
   flex-wrap: wrap;
@@ -1431,19 +1440,33 @@ function renderCompetitorBars(landscape: ProjectReportDto['competitorLandscape']
   return renderLandscapeBars(data, 'Citations per domain', 'Citations per domain bar chart')
 }
 
-function renderMentionBars(landscape: ProjectReportDto['mentionLandscape'], canonical: string): string {
+function renderMentionBars(
+  section: ProjectReportDto['mentionLandscape']['nonBrand'],
+  canonical: string,
+  title: string,
+): string {
   const data: LandscapeBar[] = [
-    { label: canonical, count: landscape.projectMentionCount, isProject: true },
-    ...landscape.competitors.map(c => ({ label: c.domain, count: c.mentionCount, isProject: false })),
+    { label: canonical, count: section.projectMentionCount, isProject: true },
+    ...section.competitors.map(c => ({ label: c.domain, count: c.mentionCount, isProject: false })),
   ]
-  return renderLandscapeBars(data, 'Mentions per domain', 'Mentions per domain bar chart')
+  return renderLandscapeBars(data, title, `${title} bar chart`)
+}
+
+/** The label a mention figure must carry so a reader can tell a category number from a brand-recall one. */
+const MENTION_SCOPE_LABEL: Record<ProjectReportDto['mentionLandscape']['scope'], string> = {
+  'non-brand': 'non-brand queries',
+  pooled: 'all tracked queries',
 }
 
 function renderCompetitorLandscape(report: ProjectReportDto): string {
   const competitors = report.competitorLandscape.competitors
   const mentionLandscape = report.mentionLandscape
   const noCitationData = competitors.length === 0 && report.competitorLandscape.projectCitationCount === 0
-  const noMentionData = mentionLandscape.competitors.length === 0 && mentionLandscape.projectMentionCount === 0
+  const brandedMentions = mentionLandscape.branded
+  const hasBrandedMentions = brandedMentions.totalAnswerSnapshots > 0
+  const noMentionData = mentionLandscape.competitors.length === 0
+    && mentionLandscape.projectMentionCount === 0
+    && !hasBrandedMentions
   if (noCitationData && noMentionData) {
     return section(
       { id: 'competitor-landscape', eyebrow: 'Section 4', title: 'Competitor Landscape' },
@@ -1472,18 +1495,36 @@ function renderCompetitorLandscape(report: ProjectReportDto): string {
     </tr>`
   }).join('')
 
+  const scopeLabel = MENTION_SCOPE_LABEL[mentionLandscape.scope]
   const table = competitors.length > 0
     ? `<table class="report-table">
-        <thead><tr><th>Domain</th><th>Pressure</th><th>Citations</th><th class="numeric">Mentions</th><th class="numeric" title="Citation share — % of cited-source slots that went to this competitor across tracked queries. Distinct from Mention Share.">Citation share</th><th>Cited queries</th></tr></thead>
+        <thead><tr><th>Domain</th><th>Pressure</th><th>Citations</th><th class="numeric" title="Mentions on ${escapeHtml(scopeLabel)}. Branded queries are counted separately — the client is named on nearly all of them and a competitor cannot be, so pooling the two would rank the client on its own brand recall.">Mentions (${escapeHtml(scopeLabel)})</th><th class="numeric" title="Citation share — % of cited-source slots that went to this competitor across tracked queries. Distinct from Mention Share.">Citation share</th><th>Cited queries</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`
     : renderEmpty('No competitors configured.')
 
   const citationBars = renderCompetitorBars(report.competitorLandscape, report.meta.project.canonicalDomain)
-  const mentionBars = renderMentionBars(mentionLandscape, report.meta.project.canonicalDomain)
+  const mentionBars = renderMentionBars(
+    mentionLandscape,
+    report.meta.project.canonicalDomain,
+    `Mentions per domain · ${scopeLabel}`,
+  )
   const charts = citationBars && mentionBars
     ? `<div class="chart-grid">${citationBars}${mentionBars}</div>`
     : `${citationBars}${mentionBars}`
+
+  // Branded is shown, never dropped and never merged in. Two labelled charts
+  // answer two different questions: "where do I place in my category?" and
+  // "when someone asks about me by name, does AI know me?"
+  const brandedBars = hasBrandedMentions
+    ? renderMentionBars(brandedMentions, report.meta.project.canonicalDomain, 'Mentions per domain · branded queries')
+    : ''
+  const brandedBlock = brandedBars
+    ? `<div class="mention-branded-block">
+        <p class="chart-note">Branded queries contain the client's own name. The client is named on nearly all of them and a competitor structurally cannot be, so these are kept out of the competitive figure above. Read them as brand recall: ${brandedMentions.projectMentionCount} of ${brandedMentions.totalAnswerSnapshots} branded answers named the client.</p>
+        ${brandedBars}
+      </div>`
+    : ''
 
   return section(
     {
@@ -1492,7 +1533,7 @@ function renderCompetitorLandscape(report: ProjectReportDto): string {
       title: 'Competitor Landscape',
       intro: 'Who AI engines cite and mention instead of the client.',
     },
-    `${charts}${table}`,
+    `${charts}${table}${brandedBlock}`,
   )
 }
 
