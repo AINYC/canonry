@@ -53,6 +53,13 @@ export interface MentionShareCompetitor {
 
 export interface MentionShareOptions {
   competitors: readonly MentionShareCompetitor[]
+  /**
+   * The project has a usable query classifier, even if this snapshot window is
+   * empty. Without this hint an empty array cannot distinguish "no data" from
+   * "no brand alias", and would incorrectly label a classifiable project as
+   * pooled. Classified snapshots imply this automatically.
+   */
+  classificationAvailable?: boolean
 }
 
 export interface MentionShareCompetitorRow {
@@ -140,15 +147,6 @@ function toBreakdown(tally: ClassTally, competitors: readonly MentionShareCompet
   }
 }
 
-const EMPTY_BREAKDOWN: MentionShareBreakdown = {
-  projectMentionSnapshots: 0,
-  competitorMentionSnapshots: 0,
-  perCompetitor: [],
-  snapshotsWithAnswerText: 0,
-  snapshotsTotal: 0,
-  score: null,
-}
-
 /**
  * Mention Share — the head-to-head competitive metric. Counts how often the
  * project's brand surfaces in answer text vs how often competitor brands do.
@@ -180,38 +178,6 @@ export function buildMentionShare(
   snapshots: readonly MentionShareSnapshot[],
   options: MentionShareOptions,
 ): MentionShareResult {
-  const tooltip = 'On queries that do NOT contain your name, the % of brand-name-drops in AI answers that are you vs your tracked competitors. Branded queries are excluded on purpose: you are named on almost all of them and a competitor cannot be, so pooling them would hide how you place in your category.'
-
-  if (snapshots.length === 0) {
-    return {
-      label: 'Mention Share',
-      value: 'No data',
-      delta: 'Run a sweep first',
-      tone: 'neutral',
-      description: 'No mention share data yet. Trigger a run to start tracking.',
-      tooltip,
-      trend: [],
-      scope: 'pooled',
-      breakdown: { ...EMPTY_BREAKDOWN, snapshotsTotal: 0 },
-      branded: EMPTY_BREAKDOWN,
-    }
-  }
-
-  if (options.competitors.length === 0) {
-    return {
-      label: 'Mention Share',
-      value: 'Add competitors',
-      delta: 'No competitors configured',
-      tone: 'neutral',
-      description: 'Mention Share is a head-to-head competitive metric — add tracked competitors to compare brand mention rates.',
-      tooltip,
-      trend: [],
-      scope: 'pooled',
-      breakdown: { ...EMPTY_BREAKDOWN, snapshotsTotal: snapshots.length },
-      branded: EMPTY_BREAKDOWN,
-    }
-  }
-
   // One compiled matcher per competitor, reused across every answer: the alias
   // set is fixed and the answer corpus is not.
   const competitorMatchers = new Map<string, BrandAliasMatcher>(
@@ -245,14 +211,54 @@ export function buildMentionShare(
   }
 
   const classified = nonBrand.snapshotsTotal + branded.snapshotsTotal
-  const scope: MentionShareScope = classified > 0 ? 'non-brand' : 'pooled'
-  const headline = toBreakdown(scope === 'non-brand' ? nonBrand : unclassified, options.competitors)
-  const brandedBreakdown = toBreakdown(branded, options.competitors)
+  // A populated classified basket proves a classifier exists. The explicit
+  // hint covers the empty-window case, where the rows alone cannot prove it.
+  const classificationAvailable = options.classificationAvailable === true || classified > 0
+  const scope: MentionShareScope = classificationAvailable ? 'non-brand' : 'pooled'
+  let headline = toBreakdown(scope === 'non-brand' ? nonBrand : unclassified, options.competitors)
+  let brandedBreakdown = toBreakdown(branded, options.competitors)
+  const tooltip = scope === 'non-brand'
+    ? 'On queries that do NOT contain your name, the % of brand-name-drops in AI answers that are you vs your tracked competitors. Branded queries are excluded on purpose: you are named on almost all of them and a competitor cannot be, so pooling them would hide how you place in your category.'
+    : 'The % of brand-name-drops in AI answers that are you vs your tracked competitors across all tracked queries. This project has no usable brand alias, so branded and non-brand queries could not be separated and the result is labelled pooled.'
+
+  if (snapshots.length === 0) {
+    return {
+      label: 'Mention Share',
+      value: 'No data',
+      delta: 'Run a sweep first',
+      tone: 'neutral',
+      description: 'No mention share data yet. Trigger a run to start tracking.',
+      tooltip,
+      trend: [],
+      scope,
+      breakdown: headline,
+      branded: brandedBreakdown,
+    }
+  }
+
+  if (options.competitors.length === 0) {
+    // Keep the observed class and project counts, but never expose the
+    // project-only denominator as a 100% competitive score.
+    headline = { ...headline, score: null }
+    brandedBreakdown = { ...brandedBreakdown, score: null }
+    return {
+      label: 'Mention Share',
+      value: 'Add competitors',
+      delta: 'No competitors configured',
+      tone: 'neutral',
+      description: 'Mention Share is a head-to-head competitive metric — add tracked competitors to compare brand mention rates.',
+      tooltip,
+      trend: [],
+      scope,
+      breakdown: headline,
+      branded: brandedBreakdown,
+    }
+  }
 
   const score = headline.score
   const denom = headline.projectMentionSnapshots + headline.competitorMentionSnapshots
 
-  if (scope === 'non-brand' && nonBrand.snapshotsWithAnswerText === 0) {
+  if (scope === 'non-brand' && nonBrand.snapshotsTotal === 0) {
     return {
       label: 'Mention Share',
       value: 'No non-brand queries',
@@ -269,17 +275,50 @@ export function buildMentionShare(
     }
   }
 
+  if (headline.snapshotsTotal > 0 && headline.snapshotsWithAnswerText === 0) {
+    const brandedAnswers = brandedBreakdown.snapshotsWithAnswerText
+    return {
+      label: 'Mention Share',
+      value: scope === 'non-brand' ? 'No non-brand answers' : 'No answers',
+      delta: scope === 'non-brand' && brandedAnswers > 0
+        ? `${brandedAnswers} branded ${brandedAnswers === 1 ? 'answer' : 'answers'} only`
+        : 'No answers to score',
+      tone: 'neutral',
+      description: scope === 'non-brand'
+        ? 'Non-brand queries are tracked, but no answer text was recorded for them in this run.'
+        : 'Tracked queries exist, but no answer text was recorded in this run.',
+      tooltip,
+      trend: [],
+      scope,
+      breakdown: headline,
+      branded: brandedBreakdown,
+    }
+  }
+
+  if (score === null) {
+    return {
+      label: 'Mention Share',
+      value: 'No mentions',
+      delta: scopeLabel(scope, 'No brand mentions in this run'),
+      tone: 'neutral',
+      description: describe({ scope, score, breakdown: headline, branded: brandedBreakdown }),
+      tooltip,
+      trend: [],
+      scope,
+      breakdown: headline,
+      branded: brandedBreakdown,
+    }
+  }
+
   return {
     label: 'Mention Share',
-    value: score === null ? '0' : `${score}`,
-    delta: score === null
-      ? scopeLabel(scope, 'No brand mentions in this run')
-      : scopeLabel(scope, `${headline.projectMentionSnapshots} of ${denom} brand mentions`),
-    tone: score === null ? 'neutral' : mentionShareTone(score),
+    value: `${score}`,
+    delta: scopeLabel(scope, `${headline.projectMentionSnapshots} of ${denom} brand mentions`),
+    tone: mentionShareTone(score),
     description: describe({ scope, score, breakdown: headline, branded: brandedBreakdown }),
     tooltip,
     trend: [],
-    progress: score ?? 0,
+    progress: score,
     scope,
     breakdown: headline,
     branded: brandedBreakdown,
@@ -292,7 +331,9 @@ export function buildMentionShare(
  * pooled one, because those two answer opposite questions.
  */
 function scopeLabel(scope: MentionShareScope, body: string): string {
-  return scope === 'non-brand' ? `${body} · non-brand queries` : `${body} · unclassified queries`
+  return scope === 'non-brand'
+    ? `${body} · non-brand queries`
+    : `${body} · pooled queries · classification unavailable`
 }
 
 /**

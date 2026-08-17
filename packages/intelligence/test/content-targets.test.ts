@@ -38,7 +38,8 @@ function emptyCandidate(overrides: Partial<CandidateQuery> = {}): CandidateQuery
     gscCtr: 0,
     ourCitedRate: 0,
     ourCitedInLatestRun: false,
-    competitorDomains: [],
+    competitorCitedDomains: [],
+    competitorMentionedDomains: [],
     competitorCitationCount: 0,
     competitorMentionCount: 0,
     recentMissRate: 0,
@@ -77,7 +78,7 @@ describe('buildContentTargetRows winnabilityClass', () => {
   function gatedCandidate(overrides: Partial<CandidateQuery> = {}): CandidateQuery {
     return emptyCandidate({
       query: 'best boutique hotel',
-      competitorDomains: ['x.com'],
+      competitorCitedDomains: ['x.com'],
       competitorCitationCount: 8,
       ...overrides,
     })
@@ -167,17 +168,13 @@ describe('buildContentTargetRows', () => {
     expect(rows).toEqual([])
   })
 
-  it('a competitor NAMED but never cited is still competitive evidence', () => {
-    // The two signals are independent, and an engine that recommends a rival
-    // without linking to it is a target worth writing for. Gating this on
-    // citations alone would silently shrink the opportunity list to whatever
-    // happened to earn a link.
+  it('uses a mention-only competitor as target evidence without calling it a citation gap', () => {
     const rows = buildContentTargetRows(
       emptyInput({
         candidateQueries: [
           emptyCandidate({
             query: 'best crm for saas',
-            competitorDomains: ['rival.com'],
+            competitorMentionedDomains: ['rival.com'],
             competitorCitationCount: 0,
             competitorMentionCount: 4,
           }),
@@ -194,7 +191,7 @@ describe('buildContentTargetRows', () => {
         candidateQueries: [
           emptyCandidate({
             query: 'best crm for saas',
-            competitorDomains: ['competitor-a.com', 'competitor-b.com', 'competitor-c.com'],
+            competitorCitedDomains: ['competitor-a.com', 'competitor-b.com', 'competitor-c.com'],
             competitorCitationCount: 5,
             recentMissRate: 0.8,
             runsOfHistory: 5,
@@ -229,7 +226,7 @@ describe('buildContentTargetRows', () => {
             gscPosition: 4,
             gscImpressions: 2400,
             gscClicks: 95,
-            competitorDomains: ['competitor-a.com'],
+            competitorCitedDomains: ['competitor-a.com'],
             competitorCitationCount: 2,
             recentMissRate: 1.0,
             runsOfHistory: 5,
@@ -253,7 +250,7 @@ describe('buildContentTargetRows', () => {
             gscPage: '/glossary/mrr',
             gscPosition: 22,
             gscImpressions: 800,
-            competitorDomains: ['competitor-b.com'],
+            competitorCitedDomains: ['competitor-b.com'],
             competitorCitationCount: 1,
             recentMissRate: 0.9,
             runsOfHistory: 5,
@@ -312,7 +309,7 @@ describe('buildContentTargetRows', () => {
         candidateQueries: [
           emptyCandidate({
             query: 'best payment processor',
-            competitorDomains: ['competitor-a.com'],
+            competitorCitedDomains: ['competitor-a.com'],
             competitorCitationCount: 2,
             recentMissRate: 1.0,
             runsOfHistory: 3,
@@ -336,7 +333,7 @@ describe('buildContentTargetRows', () => {
         candidateQueries: [
           emptyCandidate({
             query: 'low-impact',
-            competitorDomains: ['c.com'],
+            competitorCitedDomains: ['c.com'],
             competitorCitationCount: 1,
             recentMissRate: 0.5,
             runsOfHistory: 3,
@@ -344,7 +341,7 @@ describe('buildContentTargetRows', () => {
           emptyCandidate({
             query: 'high-impact',
             gscImpressions: 5000,
-            competitorDomains: ['a.com', 'b.com', 'c.com'],
+            competitorCitedDomains: ['a.com', 'b.com', 'c.com'],
             competitorCitationCount: 10,
             recentMissRate: 1.0,
             runsOfHistory: 5,
@@ -399,7 +396,7 @@ describe('buildContentTargetRows', () => {
         candidateQueries: [
           emptyCandidate({
             query: 'best crm',
-            competitorDomains: ['a.com'],
+            competitorCitedDomains: ['a.com'],
             competitorCitationCount: 1,
             recentMissRate: 1.0,
             runsOfHistory: 3,
@@ -414,7 +411,7 @@ describe('buildContentTargetRows', () => {
         candidateQueries: [
           emptyCandidate({
             query: 'best crm',
-            competitorDomains: ['a.com'],
+            competitorCitedDomains: ['a.com'],
             competitorCitationCount: 1,
             recentMissRate: 1.0,
             runsOfHistory: 3,
@@ -436,7 +433,7 @@ describe('buildContentTargetRows', () => {
         candidateQueries: [
           emptyCandidate({
             query: 'q',
-            competitorDomains: ['a.com'],
+            competitorCitedDomains: ['a.com'],
             competitorCitationCount: 1,
             recentMissRate: 1.0,
             runsOfHistory: 3,
@@ -522,12 +519,12 @@ describe('buildContentGapRows', () => {
         candidateQueries: [
           emptyCandidate({
             query: 'gap-1',
-            competitorDomains: ['a.com', 'b.com'],
+            competitorCitedDomains: ['a.com', 'b.com'],
             recentMissRate: 0.9,
           }),
           emptyCandidate({
             query: 'gap-2',
-            competitorDomains: ['a.com'],
+            competitorCitedDomains: ['a.com'],
             recentMissRate: 0.6,
           }),
         ],
@@ -541,11 +538,27 @@ describe('buildContentGapRows', () => {
     const rows = buildContentGapRows(
       emptyInput({
         candidateQueries: [
-          emptyCandidate({ query: 'no-competitors', competitorDomains: [] }),
+          emptyCandidate({ query: 'no-competitors', competitorCitedDomains: [] }),
         ],
       }),
     )
     expect(rows).toHaveLength(0)
+  })
+
+  it('omits mention-only competitors from citation gaps', () => {
+    const rows = buildContentGapRows(
+      emptyInput({
+        candidateQueries: [
+          emptyCandidate({
+            query: 'mention-only',
+            competitorMentionedDomains: ['rival.com'],
+            competitorMentionCount: 1,
+          }),
+        ],
+      }),
+    )
+
+    expect(rows).toEqual([])
   })
 
   it('omits queries where we are already cited at 100% rate', () => {
@@ -554,7 +567,7 @@ describe('buildContentGapRows', () => {
         candidateQueries: [
           emptyCandidate({
             query: 'we-win',
-            competitorDomains: ['a.com'],
+            competitorCitedDomains: ['a.com'],
             ourCitedRate: 1.0,
           }),
         ],
@@ -569,7 +582,7 @@ describe('buildContentGapRows', () => {
         candidateQueries: [
           emptyCandidate({
             query: 'q',
-            competitorDomains: ['a.com'],
+            competitorCitedDomains: ['a.com'],
             recentMissRate: 1.5,
           }),
         ],
@@ -582,9 +595,9 @@ describe('buildContentGapRows', () => {
     const rows = buildContentGapRows(
       emptyInput({
         candidateQueries: [
-          emptyCandidate({ query: 'mid', competitorDomains: ['a', 'b', 'c'], recentMissRate: 0.5 }),
-          emptyCandidate({ query: 'high', competitorDomains: ['a'], recentMissRate: 0.9 }),
-          emptyCandidate({ query: 'tied', competitorDomains: ['a', 'b'], recentMissRate: 0.5 }),
+          emptyCandidate({ query: 'mid', competitorCitedDomains: ['a', 'b', 'c'], recentMissRate: 0.5 }),
+          emptyCandidate({ query: 'high', competitorCitedDomains: ['a'], recentMissRate: 0.9 }),
+          emptyCandidate({ query: 'tied', competitorCitedDomains: ['a', 'b'], recentMissRate: 0.5 }),
         ],
       }),
     )

@@ -1,6 +1,8 @@
 import { expect, test } from 'vitest'
 
 import {
+  buildHighlightGroups,
+  isCitedCompetitorDomain,
   summarizeSignalHistory,
   summarizeSignalsForItems,
 } from '../src/components/project/EvidenceTable.js'
@@ -17,7 +19,7 @@ function point(overrides: Partial<RunHistoryPoint>): RunHistoryPoint {
   }
 }
 
-function item(history: RunHistoryPoint[]): CitationInsightVm {
+function item(history: RunHistoryPoint[], overrides: Partial<CitationInsightVm> = {}): CitationInsightVm {
   return {
     id: crypto.randomUUID(),
     query: 'test query',
@@ -30,11 +32,14 @@ function item(history: RunHistoryPoint[]): CitationInsightVm {
     answerSnippet: '',
     citedDomains: [],
     evidenceUrls: [],
+    citedCompetitorDomains: [],
+    mentionedCompetitorDomains: [],
     competitorDomains: [],
     relatedTechnicalSignals: [],
     groundingSources: [],
     summary: '',
     runHistory: history,
+    ...overrides,
   } as CitationInsightVm
 }
 
@@ -72,4 +77,36 @@ test('summarizeSignalsForItems aggregates provider rows into latest-run chips', 
     { key: 'mentions', label: 'New mention', tone: 'positive' },
     { key: 'citations', label: 'New citation', tone: 'positive' },
   ])
+})
+
+test('answer highlighting consumes mentioned competitors only', () => {
+  const citationOnly = item([], {
+    citedCompetitorDomains: ['rival.example'],
+    mentionedCompetitorDomains: [],
+    competitorDomains: ['rival.example'],
+  })
+  const mentionOnly = item([], {
+    citedCompetitorDomains: [],
+    mentionedCompetitorDomains: ['rival.example'],
+    competitorDomains: ['rival.example'],
+  })
+
+  expect(buildHighlightGroups(citationOnly)).toEqual([])
+  expect(buildHighlightGroups(mentionOnly)).toEqual([
+    { terms: ['rival'], className: 'answer-highlight-competitor' },
+  ])
+})
+
+test('source competitor tagging consumes cited competitors only', () => {
+  const citationOnly = item([], {
+    citedCompetitorDomains: ['www.rival.example'],
+    mentionedCompetitorDomains: [],
+  })
+  const mentionOnly = item([], {
+    citedCompetitorDomains: [],
+    mentionedCompetitorDomains: ['rival.example'],
+  })
+
+  expect(isCitedCompetitorDomain(citationOnly, 'rival.example')).toBe(true)
+  expect(isCitedCompetitorDomain(mentionOnly, 'rival.example')).toBe(false)
 })

@@ -1455,7 +1455,7 @@ function renderMentionBars(
 /** The label a mention figure must carry so a reader can tell a category number from a brand-recall one. */
 const MENTION_SCOPE_LABEL: Record<ProjectReportDto['mentionLandscape']['scope'], string> = {
   'non-brand': 'non-brand queries',
-  pooled: 'all tracked queries',
+  pooled: 'pooled queries · classification unavailable',
 }
 
 function renderCompetitorLandscape(report: ProjectReportDto): string {
@@ -1500,9 +1500,12 @@ function renderCompetitorLandscape(report: ProjectReportDto): string {
   }).join('')
 
   const scopeLabel = MENTION_SCOPE_LABEL[mentionLandscape.scope] ?? MENTION_SCOPE_LABEL.pooled
+  const mentionScopeTooltip = mentionLandscape.scope === 'non-brand'
+    ? `Mentions on ${scopeLabel}. Branded queries are counted separately — the client is named on nearly all of them and a competitor cannot be, so pooling the two would rank the client on its own brand recall.`
+    : `Mentions on ${scopeLabel}. The project has no usable brand identity for a branded/non-brand split, so all tracked queries remain pooled and this is not a competitive category read.`
   const table = competitors.length > 0
     ? `<table class="report-table">
-        <thead><tr><th>Domain</th><th>Pressure</th><th>Citations</th><th class="numeric" title="Mentions on ${escapeHtml(scopeLabel)}. Branded queries are counted separately — the client is named on nearly all of them and a competitor cannot be, so pooling the two would rank the client on its own brand recall.">Mentions (${escapeHtml(scopeLabel)})</th><th class="numeric" title="Citation share — % of cited-source slots that went to this competitor across tracked queries. Distinct from Mention Share.">Citation share</th><th>Cited queries</th></tr></thead>
+        <thead><tr><th>Domain</th><th>Pressure</th><th>Citations</th><th class="numeric" title="${escapeHtml(mentionScopeTooltip)}">Mentions (${escapeHtml(scopeLabel)})</th><th class="numeric" title="Citation share — % of cited-source slots that went to this competitor across tracked queries. Distinct from Mention Share.">Citation share</th><th>Cited queries</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`
     : renderEmpty('No competitors configured.')
@@ -1516,6 +1519,12 @@ function renderCompetitorLandscape(report: ProjectReportDto): string {
   const charts = citationBars && mentionBars
     ? `<div class="chart-grid">${citationBars}${mentionBars}</div>`
     : `${citationBars}${mentionBars}`
+  const mentionShareUnavailable = mentionLandscape.projectMentionCount === 0
+    && mentionLandscape.competitors.length > 0
+    && mentionLandscape.competitors.every(row => row.sharePct === null)
+  const mentionShareNote = mentionShareUnavailable
+    ? `<p class="chart-note">Mention share unavailable for ${escapeHtml(scopeLabel)}: no tracked brand was named, so the denominator is 0.</p>`
+    : ''
 
   // Branded is shown, never dropped and never merged in. Two labelled charts
   // answer two different questions: "where do I place in my category?" and
@@ -1537,7 +1546,7 @@ function renderCompetitorLandscape(report: ProjectReportDto): string {
       title: 'Competitor Landscape',
       intro: 'Who AI engines cite and mention instead of the client.',
     },
-    `${charts}${table}${brandedBlock}`,
+    `${mentionShareNote}${charts}${table}${brandedBlock}`,
   )
 }
 

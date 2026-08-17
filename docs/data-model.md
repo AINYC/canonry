@@ -367,7 +367,7 @@ Several text columns store serialized JSON. Always use `parseJsonColumn()` from 
 | `runs.measurementManifest` | `MeasurementRunManifest` (native `mode: 'json'`) |
 | `query_snapshots.citedDomains` | `string[]` |
 | `query_snapshots.groundingSources` | `GroundingSource[]` |
-| `query_snapshots.competitorOverlap` | `string[]` |
+| `query_snapshots.competitorOverlap` | `string[]` (legacy mixed mention/citation evidence; never a metric source by itself) |
 | `insights.recommendation` | `{ action: string; detail?: string }` |
 | `insights.cause` | `{ category: string; detail?: string }` |
 | `health_snapshots.providerBreakdown` | `Record<string, { total: number; cited: number; rate: number }>` |

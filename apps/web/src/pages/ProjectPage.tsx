@@ -1376,9 +1376,11 @@ function MentionShareBreakdownRows({
 function MentionShareBreakdown({
   summary,
   projectLabel,
+  hasCompetitiveFrame,
 }: {
   summary: ProjectCommandCenterVm['mentionShareSummary']
   projectLabel: string
+  hasCompetitiveFrame: boolean
 }) {
   const breakdown = summary.breakdown
   const branded = summary.branded
@@ -1396,6 +1398,29 @@ function MentionShareBreakdown({
   const scopeTooltip = isNonBrand
     ? 'Queries that do not contain your name. This is where competitive placement is decided: on a branded query you are named almost always and a competitor cannot be, so counting both in one total would rank you on your own brand recall instead of on your category.'
     : 'Branded and non-brand queries could not be separated because this project has no brand name or domain to match against. Set a display name or aliases to split them — until then this figure pools both and is not a competitive read.'
+
+  // Preserve useful recognition evidence when no competitors are configured,
+  // but never turn the project-only denominator into a 100% share chart.
+  if (!hasCompetitiveFrame) {
+    const answerLabel = isNonBrand ? 'non-brand answers' : 'pooled answers'
+    return (
+      <div className="mention-share-breakdown">
+        <p className="mention-share-breakdown-title">
+          Brand mention counts · {isNonBrand ? 'non-brand queries' : 'pooled queries · classification unavailable'} · latest run
+          <InfoTooltip text={scopeTooltip} />
+        </p>
+        <p className="mention-share-breakdown-empty">
+          Your brand was named in {breakdown.projectMentionSnapshots} of {breakdown.snapshotsWithAnswerText} {answerLabel}.
+          {' '}Add tracked competitors to calculate mention share.
+        </p>
+        {brandedTotal > 0 && (
+          <p className="mention-share-breakdown-empty">
+            On branded queries, your brand was named in {branded.projectMentionSnapshots} of {branded.snapshotsWithAnswerText} answers — recognition, not competitive placement.
+          </p>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="mention-share-breakdown">
@@ -2124,6 +2149,9 @@ function ProjectPageContent({
       : visibilityEvidence
     if (competitorFilter) {
       const needle = competitorFilter.toLowerCase()
+      // Neutral navigation union: a competitor may be present in answer text,
+      // source links, or a legacy mixed row. Signal-labelled evidence views
+      // use the split fields and never infer one signal from this filter.
       filtered = filtered.filter(e => e.competitorDomains.some(d => d.toLowerCase() === needle))
     }
     if (!locationRunHistoryMap) return filtered
@@ -2500,7 +2528,9 @@ function ProjectPageContent({
                 <OverviewMetricRow
                   label="Mention share"
                   summary={model.mentionShareSummary}
-                  tooltip="Of the brand mentions in answer text on your NON-BRAND queries (you + tracked competitors), the percentage that were you. Measured from the latest sweep. Branded queries are counted separately below: you are named on almost all of them and a competitor cannot be, so pooling them would rank you on brand recall rather than on your category."
+                  tooltip={model.mentionShareSummary.tooltip || (model.mentionShareSummary.scope === 'non-brand'
+                    ? 'Of the brand mentions in answer text on your non-brand queries (you + tracked competitors), the percentage that were you. Branded queries are counted separately below.'
+                    : 'Classification is unavailable, so all tracked queries remain pooled. This is not a competitive category read.')}
                 />
                 <OverviewMetricRow
                   label="Mention gaps"
@@ -2519,6 +2549,7 @@ function ProjectPageContent({
               <MentionShareBreakdown
                 summary={model.mentionShareSummary}
                 projectLabel={model.project.displayName || model.project.name}
+                hasCompetitiveFrame={model.competitors.length > 0}
               />
             </div>
 

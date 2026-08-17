@@ -128,6 +128,8 @@ The `GET /runs/:id` endpoint returns snapshots enriched with grounding data:
 }
 ```
 
+`competitorOverlap` is a legacy mixed field: a domain can appear because it was named in the answer, linked as a source, or both. Use `citedDomains` and grounding-source hosts for citation claims, and answer text with Canonry's shared matcher for mention claims.
+
 ## Implementation Status
 
 Live Gemini API calls implemented with Google Search grounding. The `@google/genai` SDK is used for API communication.

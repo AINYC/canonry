@@ -60,13 +60,10 @@ export interface CandidateQuery {
    * intermittent old citations should not suppress current targets.
    */
   ourCitedInLatestRun: boolean
-  /**
-   * Tracked competitors present on this query by EITHER signal — cited in the
-   * source list or named in the answer text. Competitive presence is the thing
-   * the gate and the score care about, and an engine that recommends a rival
-   * without linking to it is still a target worth writing for.
-   */
-  competitorDomains: string[]
+  /** Tracked competitors cited in source-list evidence for this query. */
+  competitorCitedDomains: string[]
+  /** Tracked competitors named in answer prose for this query. */
+  competitorMentionedDomains: string[]
   /** Snapshots where a tracked competitor's domain was in the engine's SOURCE LIST. */
   competitorCitationCount: number
   /** Snapshots where a tracked competitor's brand was in the ANSWER TEXT. Never summed with the above. */
@@ -136,6 +133,7 @@ export function buildContentTargetRows(input: OrchestratorInput): ContentTargetR
   const rows: ContentTargetRowDto[] = []
 
   for (const cq of input.candidateQueries) {
+    const competitiveDomains = competitivePresenceDomains(cq)
     const ourPage = resolveOurPage(cq, input.inventory)
     const ourPageInGroundingSources = cq.ourCitedInLatestRun
     const ourPageHasSchema = ourPage ? input.wpSchemaAudit.get(ourPage.url) ?? null : null
@@ -153,7 +151,7 @@ export function buildContentTargetRows(input: OrchestratorInput): ContentTargetR
     // our own gives the scorer nothing to anchor `demandSource` on and
     // produces a misleading row at score 0.
     const hasGsc = cq.gscImpressions > 0
-    const hasCompetitor = cq.competitorDomains.length > 0
+    const hasCompetitor = competitiveDomains.length > 0
     if (!hasGsc && !hasCompetitor && !cq.ourCitedInLatestRun) continue
 
     const aiReferralFactor = computeAiReferralFactor(
@@ -164,7 +162,7 @@ export function buildContentTargetRows(input: OrchestratorInput): ContentTargetR
     const scoring = scoreContentTarget({
       gscImpressions: cq.gscImpressions,
       aiReferralFactor,
-      competitorCount: cq.competitorDomains.length,
+      competitorCount: competitiveDomains.length,
       recentMissRate: cq.recentMissRate,
       citationCount: cq.competitorCitationCount,
       ourCitedRate: cq.ourCitedRate,
@@ -176,7 +174,7 @@ export function buildContentTargetRows(input: OrchestratorInput): ContentTargetR
       hasGsc: cq.gscPage !== null,
       gscImpressions: cq.gscImpressions,
       runsOfHistory: cq.runsOfHistory,
-      hasCompetitorEvidence: cq.competitorDomains.length > 0,
+      hasCompetitorEvidence: competitiveDomains.length > 0,
       hasInventoryMatch: ourPage?.source === 'inventory',
     })
 
@@ -264,12 +262,12 @@ export function buildContentSourceRows(input: OrchestratorInput): ContentSourceR
 export function buildContentGapRows(input: OrchestratorInput): ContentGapRowDto[] {
   const gaps: ContentGapRowDto[] = []
   for (const cq of input.candidateQueries) {
-    if (cq.competitorDomains.length === 0) continue
+    if (cq.competitorCitedDomains.length === 0) continue
     if (cq.ourCitedRate >= 1) continue
     gaps.push({
       query: cq.query,
-      competitorDomains: cq.competitorDomains,
-      competitorCount: cq.competitorDomains.length,
+      competitorDomains: cq.competitorCitedDomains,
+      competitorCount: cq.competitorCitedDomains.length,
       missRate: clamp01(cq.recentMissRate),
       lastSeenInRunId: input.latestRunId,
     })
@@ -282,6 +280,13 @@ export function buildContentGapRows(input: OrchestratorInput): ContentGapRowDto[
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+function competitivePresenceDomains(cq: CandidateQuery): string[] {
+  return [...new Set([
+    ...cq.competitorCitedDomains,
+    ...cq.competitorMentionedDomains,
+  ])]
+}
 
 function resolveOurPage(
   cq: CandidateQuery,

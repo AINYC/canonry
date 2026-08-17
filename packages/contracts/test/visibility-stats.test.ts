@@ -1,5 +1,34 @@
 import { describe, expect, it } from 'vitest'
-import { calendarMonthBounds } from '../src/visibility-stats.js'
+import {
+  calendarMonthBounds,
+  visibilityCompareMetricPeriodSchema,
+  visibilityStatsShareOfVoiceSchema,
+} from '../src/visibility-stats.js'
+
+describe('visibility comparison availability', () => {
+  it('preserves observations while marking a missing competitive frame unavailable', () => {
+    expect(visibilityCompareMetricPeriodSchema.parse({
+      availability: 'no-competitive-frame',
+      point: null,
+      ciLow: null,
+      ciHigh: null,
+      numerator: 3,
+      denominator: 0,
+    })).toMatchObject({ availability: 'no-competitive-frame', numerator: 3, denominator: 0 })
+  })
+
+  it('carries the configured competitor count beside a null 0/0 share', () => {
+    expect(visibilityStatsShareOfVoiceSchema.parse({
+      queryClass: 'non-brand',
+      percent: null,
+      competitorCount: 1,
+      projectMentions: 0,
+      competitorMentions: 0,
+      snapshotsWithAnswerText: 2,
+      perCompetitor: [],
+    }).competitorCount).toBe(1)
+  })
+})
 
 describe('calendarMonthBounds', () => {
   it('expands a month to inclusive UTC bounds', () => {

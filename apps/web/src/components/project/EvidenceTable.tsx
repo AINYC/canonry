@@ -486,10 +486,10 @@ export function EvidenceTable({
   )
 }
 
-function buildHighlightGroups(item: CitationInsightVm): HighlightTermGroup[] {
+export function buildHighlightGroups(item: CitationInsightVm): HighlightTermGroup[] {
   const brandTerms = (item.matchedTerms ?? []).filter(t => t.trim().length > 2)
   const competitorTerms = [
-    ...item.competitorDomains.flatMap(d => {
+    ...(item.mentionedCompetitorDomains ?? []).flatMap(d => {
       const brand = brandLabelFromDomain(d)
       return brand.length >= 4 ? [brand] : []
     }),
@@ -499,6 +499,13 @@ function buildHighlightGroups(item: CitationInsightVm): HighlightTermGroup[] {
   if (brandTerms.length > 0) groups.push({ terms: brandTerms, className: 'answer-highlight-brand' })
   if (competitorTerms.length > 0) groups.push({ terms: competitorTerms, className: 'answer-highlight-competitor' })
   return groups
+}
+
+export function isCitedCompetitorDomain(item: CitationInsightVm, domain: string): boolean {
+  const normalized = domain.toLowerCase().replace(/^www\./, '')
+  return (item.citedCompetitorDomains ?? []).some(
+    candidate => candidate.toLowerCase().replace(/^www\./, '') === normalized,
+  )
 }
 
 function truncate(text: string, max: number): { body: string; truncated: boolean } {
@@ -533,7 +540,7 @@ function AnswerInlinePanel({
       <p className="text-sm leading-relaxed text-neutral">
         {highlightTermsInText(body, groups)}
       </p>
-      {(item.citedDomains.length > 0 || item.competitorDomains.length > 0) && (
+      {(item.citedDomains.length > 0 || (item.mentionedCompetitorDomains?.length ?? 0) > 0) && (
         <div className="flex flex-wrap items-center gap-1.5">
           {item.citedDomains.length > 0 && (
             <>
@@ -541,9 +548,13 @@ function AnswerInlinePanel({
               {item.citedDomains.slice(0, 6).map(d => (
                 <span
                   key={`c-${d}`}
-                  className="rounded-full border border-mono-700/60 bg-bg-elevated/60 px-2 py-0.5 text-[11px] text-neutral"
+                  className={`rounded-full border px-2 py-0.5 text-[11px] ${
+                    isCitedCompetitorDomain(item, d)
+                      ? 'border-negative-900/40 bg-negative-950/30 text-negative'
+                      : 'border-mono-700/60 bg-bg-elevated/60 text-neutral'
+                  }`}
                 >
-                  {d}
+                  {d}{isCitedCompetitorDomain(item, d) ? ' · competitor source' : ''}
                 </span>
               ))}
               {item.citedDomains.length > 6 && (
@@ -551,10 +562,10 @@ function AnswerInlinePanel({
               )}
             </>
           )}
-          {item.competitorDomains.length > 0 && (
+          {(item.mentionedCompetitorDomains?.length ?? 0) > 0 && (
             <>
-              <span className="ml-2 text-[10px] uppercase tracking-wide text-negative-500/80">Competitors:</span>
-              {item.competitorDomains.slice(0, 4).map(d => (
+              <span className="ml-2 text-[10px] uppercase tracking-wide text-negative-500/80">Competitors in answer:</span>
+              {item.mentionedCompetitorDomains!.slice(0, 4).map(d => (
                 <span
                   key={`co-${d}`}
                   className="rounded-full border border-negative-900/40 bg-negative-950/30 px-2 py-0.5 text-[11px] text-negative"
@@ -562,8 +573,8 @@ function AnswerInlinePanel({
                   {d}
                 </span>
               ))}
-              {item.competitorDomains.length > 4 && (
-                <span className="text-[10px] text-muted">+{item.competitorDomains.length - 4} more</span>
+              {item.mentionedCompetitorDomains!.length > 4 && (
+                <span className="text-[10px] text-muted">+{item.mentionedCompetitorDomains!.length - 4} more</span>
               )}
             </>
           )}

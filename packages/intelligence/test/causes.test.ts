@@ -18,7 +18,7 @@ describe('analyzeCause', () => {
   it('identifies competitor_gain when a competitor domain appeared in the lost snapshot', () => {
     const reg = makeRegression()
     const snapshots: Snapshot[] = [
-      { query: 'roof repair phoenix', provider: 'chatgpt', cited: false, competitorDomains: ['roofco.com'] },
+      { query: 'roof repair phoenix', provider: 'chatgpt', cited: false, citedCompetitorDomains: ['roofco.com'] },
     ]
 
     const result = analyzeCause(reg, snapshots)
@@ -52,7 +52,7 @@ describe('analyzeCause', () => {
         query: 'roof repair phoenix',
         provider: 'chatgpt',
         cited: false,
-        competitorDomains: [],
+        citedCompetitorDomains: [],
         citedDomains: ['phoenix.gov', 'angi.com', 'somebody-else.com'],
       },
     ]
@@ -73,7 +73,7 @@ describe('analyzeCause', () => {
         query: 'roof repair phoenix',
         provider: 'chatgpt',
         cited: false,
-        competitorDomains: ['rival.com'],
+        citedCompetitorDomains: ['rival.com'],
         citedDomains: ['rival.com', 'phoenix.gov'],
       },
     ]
@@ -104,7 +104,7 @@ describe('analyzeCause', () => {
         query: 'roof repair phoenix',
         provider: 'chatgpt',
         cited: false,
-        competitorDomains: ['rival.com'],
+        citedCompetitorDomains: ['rival.com'],
         citedDomains: ['rival.com'],
       },
     ]
@@ -142,7 +142,7 @@ describe('analyzeCause', () => {
   it('ignores snapshots for different queries', () => {
     const reg = makeRegression({ query: 'roof repair phoenix' })
     const snapshots: Snapshot[] = [
-      { query: 'different query', provider: 'chatgpt', cited: false, competitorDomains: ['rival.com'] },
+      { query: 'different query', provider: 'chatgpt', cited: false, citedCompetitorDomains: ['rival.com'] },
     ]
 
     const result = analyzeCause(reg, snapshots)
@@ -152,7 +152,7 @@ describe('analyzeCause', () => {
   it('ignores snapshots for different providers', () => {
     const reg = makeRegression({ provider: 'chatgpt' })
     const snapshots: Snapshot[] = [
-      { query: 'roof repair phoenix', provider: 'gemini', cited: false, competitorDomains: ['rival.com'] },
+      { query: 'roof repair phoenix', provider: 'gemini', cited: false, citedCompetitorDomains: ['rival.com'] },
     ]
 
     const result = analyzeCause(reg, snapshots)
@@ -162,7 +162,7 @@ describe('analyzeCause', () => {
   it('ignores snapshots where cited is true (competitor domain on a cited snapshot is irrelevant)', () => {
     const reg = makeRegression()
     const snapshots: Snapshot[] = [
-      { query: 'roof repair phoenix', provider: 'chatgpt', cited: true, competitorDomains: ['rival.com'] },
+      { query: 'roof repair phoenix', provider: 'chatgpt', cited: true, citedCompetitorDomains: ['rival.com'] },
     ]
 
     const result = analyzeCause(reg, snapshots)
@@ -172,8 +172,8 @@ describe('analyzeCause', () => {
   it('picks the first matching snapshot when multiple competitors exist', () => {
     const reg = makeRegression()
     const snapshots: Snapshot[] = [
-      { query: 'roof repair phoenix', provider: 'chatgpt', cited: false, competitorDomains: ['first-rival.com'] },
-      { query: 'roof repair phoenix', provider: 'chatgpt', cited: false, competitorDomains: ['second-rival.com'] },
+      { query: 'roof repair phoenix', provider: 'chatgpt', cited: false, citedCompetitorDomains: ['first-rival.com'] },
+      { query: 'roof repair phoenix', provider: 'chatgpt', cited: false, citedCompetitorDomains: ['second-rival.com'] },
     ]
 
     const result = analyzeCause(reg, snapshots)
@@ -188,7 +188,7 @@ describe('analyzeCause', () => {
         query: 'roof repair phoenix',
         provider: 'chatgpt',
         cited: false,
-        competitorDomains: ['first-rival.com', 'second-rival.com'],
+        citedCompetitorDomains: ['first-rival.com', 'second-rival.com'],
       },
     ]
 
@@ -199,7 +199,7 @@ describe('analyzeCause', () => {
 
   it('analyzes different regressions independently', () => {
     const snapshots: Snapshot[] = [
-      { query: 'k1', provider: 'chatgpt', cited: false, competitorDomains: ['rival-a.com'] },
+      { query: 'k1', provider: 'chatgpt', cited: false, citedCompetitorDomains: ['rival-a.com'] },
       { query: 'k2', provider: 'gemini', cited: false },
     ]
 

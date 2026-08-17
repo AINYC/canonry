@@ -1,7 +1,8 @@
 import crypto from 'node:crypto'
 import { and, eq, asc, desc, inArray, or, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
-import { runs, querySnapshots, queries, projects, parseJsonColumn } from '@ainyc/canonry-db'
+import { runs, querySnapshots, queries, projects, competitors, parseJsonColumn } from '@ainyc/canonry-db'
+import { compileCompetitiveSignalResolver } from '@ainyc/canonry-intelligence'
 import type { LocationContext, MeasurementExecutionIdentity, MeasurementRunScope } from '@ainyc/canonry-contracts'
 import {
   AppError as AppErrorClass,
@@ -763,6 +764,13 @@ function loadRunDetail(app: FastifyInstance, run: typeof runs.$inferSelect) {
     .from(projects)
     .where(eq(projects.id, run.projectId))
     .get()
+  const competitorDomains = app.db
+    .select({ domain: competitors.domain })
+    .from(competitors)
+    .where(eq(competitors.projectId, run.projectId))
+    .all()
+    .map(row => row.domain)
+  const competitiveSignalResolver = compileCompetitiveSignalResolver(competitorDomains)
 
   const snapshots = app.db
     .select({
@@ -803,6 +811,17 @@ function loadRunDetail(app: FastifyInstance, run: typeof runs.$inferSelect) {
     ...formatRun(run),
     snapshots: snapshots.map(s => {
       const rawParsed = parseSnapshotRawResponse(s.rawResponse)
+      const signalGroundingSources = rawParsed.groundingSources.filter(
+        (source): source is { uri: string } =>
+          typeof source === 'object'
+          && source !== null
+          && typeof (source as { uri?: unknown }).uri === 'string',
+      )
+      const competitiveSignals = competitiveSignalResolver.resolve({
+        citedDomains: s.citedDomains,
+        groundingSources: signalGroundingSources,
+        answerText: s.answerText,
+      })
       const answerMentioned = project
         ? resolveSnapshotAnswerMentioned(s, project)
         : (s.answerMentioned ?? false)
@@ -829,6 +848,8 @@ function loadRunDetail(app: FastifyInstance, run: typeof runs.$inferSelect) {
         sourceCount: s.sourceCount,
         resolvedCount: s.resolvedCount,
         captureVersion: s.captureVersion,
+        ...competitiveSignals,
+        // Legacy mixed signal retained for backwards compatibility.
         competitorOverlap: s.competitorOverlap,
         recommendedCompetitors: s.recommendedCompetitors,
         matchedTerms: project ? resolveSnapshotMatchedTerms(s, project) : [],

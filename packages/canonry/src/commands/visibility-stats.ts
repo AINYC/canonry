@@ -76,6 +76,9 @@ export async function showVisibilityCompare(project: string, opts: VisibilityCom
 
 /** A metric period as `"2.1% [1.3, 3.5]"`, or `"no data"` when the sample was empty. */
 function periodCell(p: VisibilityCompareMetricPeriod): string {
+  if (p.availability === 'no-competitive-frame') {
+    return `unavailable: no competitive frame (${p.numerator} observed)`
+  }
   if (p.point === null || p.ciLow === null || p.ciHigh === null) return 'no data'
   const p1 = (v: number) => formatRatio(v)
   return `${p1(p.point)} [${p1(p.ciLow)}, ${p1(p.ciHigh)}]`
@@ -96,6 +99,12 @@ function verdictCell(m: VisibilityCompareMetric): string {
   }
 }
 
+function metricQueryClassLabel(metric: VisibilityCompareMetric): string {
+  if (metric.queryClass === 'non-brand') return 'non-brand queries'
+  if (metric.queryClass === 'pooled') return 'pooled queries; classification unavailable'
+  return 'all queries'
+}
+
 function printVisibilityCompare(data: VisibilityCompareDto): void {
   console.log(`AEO month over month: ${data.project}   ${data.from.month} -> ${data.to.month}`)
   const b = data.basket
@@ -114,7 +123,7 @@ function printVisibilityCompare(data: VisibilityCompareDto): void {
 
   // Column widths.
   const rows = data.metrics.map((m) => ({
-    label: `${m.label}${m.driftRobust ? ' *' : ''}`,
+    label: `${m.label} · ${metricQueryClassLabel(m)}${m.driftRobust ? ' *' : ''}`,
     to: periodCell(m.to),
     from: periodCell(m.from),
     verdict: verdictCell(m),
@@ -231,12 +240,18 @@ function printVisibilityStats(data: VisibilityStatsDto): void {
   const sov = data.shareOfVoice
   if (sov) {
     console.log('')
-    const pctStr = sov.percent === null ? '— (no competitors configured)' : `${sov.percent}%`
+    const pctStr = sov.percent !== null
+      ? `${sov.percent}%`
+      : sov.competitorCount === 0
+        ? '— (no competitors configured)'
+        : sov.snapshotsWithAnswerText === 0
+          ? '— (no answer text in scope)'
+          : '— (no brands mentioned in scope)'
     // The class is printed with the number, never implied. A reader who sees
     // only this line still has to be able to tell a category figure from a
     // brand-recall one.
     const scope = sov.queryClass === 'pooled'
-      ? 'all queries (no brand alias configured — could not split branded from non-brand)'
+      ? 'pooled queries · classification unavailable'
       : `${sov.queryClass} queries`
     console.log(
       `Share of voice (${scope}): ${pctStr}  (you ${sov.projectMentions} vs competitors ${sov.competitorMentions} brand mentions across ${sov.snapshotsWithAnswerText} answers)`,

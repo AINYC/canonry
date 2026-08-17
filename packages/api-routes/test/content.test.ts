@@ -156,13 +156,14 @@ function seedProject(db: ReturnType<typeof createClient>): SeededProject {
     createdAt: now,
   }).run()
 
-  // Q3: occasionally cited (we have a page that ranks weak)
+  // Q3: competitor is mentioned in prose but never cited (we have a page that ranks weak)
   db.insert(querySnapshots).values({
     id: crypto.randomUUID(),
     runId: latestRunId,
     queryId: queryIds.get('q3_expand')!,
     provider: 'gemini',
     citationState: 'not-cited',
+    answerText: 'Competitor B is a popular option for recurring revenue teams.',
     competitorOverlap: ['competitor-b.com'],
     rawResponse: JSON.stringify({ groundingSources: [] }),
     createdAt: now,
@@ -519,7 +520,8 @@ describe('content routes', () => {
       expect(body.gaps).toBeInstanceOf(Array)
       const q1 = body.gaps.find((g: { query: string }) => g.query === 'best crm for saas')
       expect(q1).toBeDefined()
-      expect(q1.competitorCount).toBeGreaterThan(0)
+      expect(q1.competitorDomains.sort()).toEqual(['competitor-a.com', 'competitor-b.com'])
+      expect(q1.competitorCount).toBe(2)
       expect(q1.missRate).toBeGreaterThan(0)
     })
 
@@ -529,6 +531,15 @@ describe('content routes', () => {
       const body = JSON.parse(res.payload)
       const q4 = body.gaps.find((g: { query: string }) => g.query === 'saas billing guide')
       expect(q4).toBeUndefined()
+    })
+
+    it('does not turn answer-text mentions or legacy mixed overlap into citation gaps', async () => {
+      seedProject(db)
+      const res = await app.inject({ method: 'GET', url: '/projects/example/content/gaps' })
+      const body = JSON.parse(res.payload)
+      const mentionOnly = body.gaps.find((g: { query: string }) => g.query === 'what is mrr')
+
+      expect(mentionOnly).toBeUndefined()
     })
   })
 

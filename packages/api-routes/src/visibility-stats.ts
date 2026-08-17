@@ -367,8 +367,15 @@ export async function visibilityStatsRoutes(app: FastifyInstance) {
         project,
         competitorDomains: competitorRows.map((c) => c.domain),
         snapshots: attributedSovSnapshots,
+        // Attribution prefers the current query row by id; classification must
+        // use that same text or a rename can put the stats row and its SoV row
+        // in different query classes.
+        queryTextById: new Map(projectQueries.map((q) => [q.id, q.query])),
       })
-      const result = buildMentionShare(inputs.snapshots, { competitors: inputs.competitors })
+      const result = buildMentionShare(inputs.snapshots, {
+        competitors: inputs.competitors,
+        classificationAvailable: inputs.classified,
+      })
       // An unclassifiable project (no usable brand alias) has no branded and no
       // non-brand set to serve — it gets the pooled figure LABELLED pooled, for
       // either request, rather than an empty branded breakdown or a non-brand
@@ -380,9 +387,13 @@ export async function visibilityStatsRoutes(app: FastifyInstance) {
       const denom = b.projectMentionSnapshots + b.competitorMentionSnapshots
       shareOfVoice = {
         queryClass: servedQueryClass,
-        // `null` (not 0) when there is no competitive frame configured — a 0 here
-        // would read as "losing" when the head-to-head metric is simply undefined.
-        percent: competitorRows.length === 0 ? null : denom > 0 ? Math.round((b.projectMentionSnapshots / denom) * 100) : 0,
+        // `null` (not 0) when there is no competitive frame or nothing in the
+        // requested class was named. Both are undefined 0/0 proportions, not a
+        // competitive loss.
+        percent: competitorRows.length === 0 || denom === 0
+          ? null
+          : Math.round((b.projectMentionSnapshots / denom) * 100),
+        competitorCount: competitorRows.length,
         projectMentions: b.projectMentionSnapshots,
         competitorMentions: b.competitorMentionSnapshots,
         snapshotsWithAnswerText: b.snapshotsWithAnswerText,

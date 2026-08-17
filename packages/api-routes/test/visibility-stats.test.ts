@@ -501,17 +501,16 @@ describe('GET /projects/:name/visibility-stats', () => {
 
   it('shareOfVoice pools project vs competitor brand mentions across the window', async () => {
     seedCompetitor('rival.com') // brandLabelFromDomain('rival.com') = "rival"
-    // Project side is counted from answerMentioned; the competitor side scans
-    // answerText for the competitor brand token ("rival").
+    // Both sides scan the stored answer text against the current identities.
     seedRun({
       createdAt: iso(5),
       snapshots: [
         // project mention only
-        { queryId: ctx.q1, queryText: 'best AEO platform', provider: 'openai', cited: false, mentioned: true, answerText: 'We recommend brand for AEO.' },
+        { queryId: ctx.q1, queryText: 'best AEO platform', provider: 'openai', cited: false, mentioned: true, answerText: 'We recommend Vis Stats for AEO.' },
         // competitor mention only
         { queryId: ctx.q1, queryText: 'best AEO platform', provider: 'gemini', cited: false, mentioned: false, answerText: 'Try rival instead.' },
         // both
-        { queryId: ctx.q2, queryText: 'AI search optimization', provider: 'openai', cited: false, mentioned: true, answerText: 'Both brand and rival are options.' },
+        { queryId: ctx.q2, queryText: 'AI search optimization', provider: 'openai', cited: false, mentioned: true, answerText: 'Both Vis Stats and rival are options.' },
       ],
     })
 
@@ -519,7 +518,7 @@ describe('GET /projects/:name/visibility-stats', () => {
     expect(status).toBe(200)
     const sov = body.shareOfVoice
     expect(sov).toBeDefined()
-    expect(sov!.projectMentions).toBe(2) // the two answerMentioned=true snapshots (both carry answer text)
+    expect(sov!.projectMentions).toBe(2)
     expect(sov!.competitorMentions).toBe(2) // "rival" appears in two answers
     expect(sov!.snapshotsWithAnswerText).toBe(3)
     expect(sov!.percent).toBe(50) // 2 / (2 + 2)
@@ -531,7 +530,7 @@ describe('GET /projects/:name/visibility-stats', () => {
     seedRun({
       createdAt: iso(5),
       snapshots: [
-        { queryId: ctx.q1, queryText: 'best AEO platform', provider: 'openai', cited: false, mentioned: true, answerText: 'brand is the answer.' },
+        { queryId: ctx.q1, queryText: 'best AEO platform', provider: 'openai', cited: false, mentioned: true, answerText: 'Vis Stats is the answer.' },
         // This old query row is in the same run window, but it is not part of
         // the current query basket. It must not pollute the competitive SoV
         // numerator/denominator when the stats totals drop it.
@@ -547,14 +546,98 @@ describe('GET /projects/:name/visibility-stats', () => {
     expect(body.shareOfVoice!.percent).toBe(100)
   })
 
+  it('classifies shareOfVoice from the current query text when snapshot text is stale', async () => {
+    seedCompetitor('rival.com')
+    const brandedQueryId = crypto.randomUUID()
+    ctx.db.insert(queriesTable).values({
+      id: brandedQueryId,
+      projectId: ctx.projectId,
+      query: 'is Vis Stats any good',
+      createdAt: iso(30),
+    }).run()
+    seedRun({
+      createdAt: iso(5),
+      snapshots: [{
+        queryId: brandedQueryId,
+        // Stale denormalized text says non-brand; the current id says branded.
+        queryText: 'best AEO platform',
+        provider: 'openai',
+        cited: false,
+        mentioned: false,
+        answerText: 'rival is the pick.',
+      }],
+    })
+
+    const currentCompetitive = await getStats('?shareOfVoice=1')
+    expect(currentCompetitive.body.shareOfVoice).toMatchObject({
+      queryClass: 'non-brand',
+      percent: null,
+      projectMentions: 0,
+      competitorMentions: 0,
+      snapshotsWithAnswerText: 0,
+    })
+
+    const currentBranded = await getStats('?shareOfVoice=1&queryClass=branded')
+    expect(currentBranded.body.shareOfVoice).toMatchObject({
+      queryClass: 'branded',
+      percent: 0,
+      projectMentions: 0,
+      competitorMentions: 1,
+      snapshotsWithAnswerText: 1,
+    })
+  })
+
   it('shareOfVoice is null (not 0) when no competitors are configured', async () => {
     seedRun({
       createdAt: iso(5),
-      snapshots: [{ queryId: ctx.q1, queryText: 'best AEO platform', provider: 'openai', cited: false, mentioned: true, answerText: 'brand is great.' }],
+      snapshots: [{ queryId: ctx.q1, queryText: 'best AEO platform', provider: 'openai', cited: false, mentioned: true, answerText: 'Vis Stats is great.' }],
     })
     const { body } = await getStats('?shareOfVoice=1')
     expect(body.shareOfVoice).toBeDefined()
-    expect(body.shareOfVoice!.percent).toBeNull()
+    expect(body.shareOfVoice).toMatchObject({
+      queryClass: 'non-brand',
+      percent: null,
+      competitorCount: 0,
+      projectMentions: 1,
+      competitorMentions: 0,
+      snapshotsWithAnswerText: 1,
+    })
+  })
+
+  it('keeps an empty classifiable window non-brand and returns null for 0/0', async () => {
+    seedCompetitor('rival.com')
+    const { body } = await getStats('?shareOfVoice=1')
+    expect(body.shareOfVoice).toMatchObject({
+      queryClass: 'non-brand',
+      percent: null,
+      competitorCount: 1,
+      projectMentions: 0,
+      competitorMentions: 0,
+      snapshotsWithAnswerText: 0,
+    })
+  })
+
+  it('returns null rather than 0% when a non-brand answer names nobody', async () => {
+    seedCompetitor('rival.com')
+    seedRun({
+      createdAt: iso(5),
+      snapshots: [{
+        queryId: ctx.q1,
+        queryText: 'best AEO platform',
+        provider: 'openai',
+        cited: false,
+        mentioned: false,
+        answerText: 'Compare fit, support, and implementation time.',
+      }],
+    })
+    const { body } = await getStats('?shareOfVoice=1')
+    expect(body.shareOfVoice).toMatchObject({
+      queryClass: 'non-brand',
+      percent: null,
+      projectMentions: 0,
+      competitorMentions: 0,
+      snapshotsWithAnswerText: 1,
+    })
   })
 
   it('shareOfVoice is omitted from the response unless requested', async () => {
@@ -568,7 +651,7 @@ describe('GET /projects/:name/visibility-stats', () => {
 
   it('shareOfVoice excludes probe runs', async () => {
     seedCompetitor('rival.com')
-    seedRun({ createdAt: iso(5), snapshots: [{ queryId: ctx.q1, queryText: 'best AEO platform', provider: 'openai', cited: false, mentioned: true, answerText: 'brand' }] })
+    seedRun({ createdAt: iso(5), snapshots: [{ queryId: ctx.q1, queryText: 'best AEO platform', provider: 'openai', cited: false, mentioned: true, answerText: 'Vis Stats' }] })
     // a probe run naming only the competitor must NOT count toward SoV
     seedRun({ createdAt: iso(4), trigger: 'probe', snapshots: [{ queryId: ctx.q1, queryText: 'best AEO platform', provider: 'openai', cited: false, mentioned: false, answerText: 'rival rival rival' }] })
     const { body } = await getStats('?shareOfVoice=1')

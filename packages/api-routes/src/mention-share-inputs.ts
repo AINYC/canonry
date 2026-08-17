@@ -1,7 +1,12 @@
 import {
+  brandKeyFromText,
   brandLabelFromDomain,
   compileQueryClassifier,
+  determineAnswerMentioned,
   effectiveBrandNames,
+  effectiveDomains,
+  hostOf,
+  MIN_DOMAIN_BRAND_KEY_LENGTH,
   type QueryClass,
 } from '@ainyc/canonry-contracts'
 import { usableBrandAliases, type MentionShareCompetitor, type MentionShareSnapshot } from '@ainyc/canonry-intelligence'
@@ -46,10 +51,20 @@ export interface MentionShareInputs {
  * A future column of operator-curated aliases layers on here.
  */
 export function mentionShareCompetitorsFromDomains(domains: readonly string[]): MentionShareCompetitor[] {
-  return domains.map(domain => ({
-    domain,
-    brandTokens: usableBrandAliases([brandLabelFromDomain(domain)]),
-  }))
+  return domains.map(domain => {
+    const exactDomain = hostOf(domain)
+    const domainLabel = brandLabelFromDomain(domain)
+    return {
+      domain,
+      // A short registrable label is too noisy by itself (`AI`), but the full
+      // written domain is operator-approved identity (`ai.com`). Feeding both
+      // through the shared matcher keeps every mention-share surface aligned.
+      brandTokens: usableBrandAliases([
+        ...(brandKeyFromText(domainLabel).length >= MIN_DOMAIN_BRAND_KEY_LENGTH ? [domainLabel] : []),
+        ...(exactDomain?.includes('.') ? [exactDomain] : []),
+      ]),
+    }
+  })
 }
 
 /**
@@ -85,13 +100,28 @@ export function buildMentionShareInputs(opts: {
   queryTextById?: ReadonlyMap<string, string>
 }): MentionShareInputs {
   const classify = projectQueryClassifier(opts.project)
+  const projectBrandNames = effectiveBrandNames({
+    displayName: opts.project.displayName ?? null,
+    aliases: opts.project.aliases ?? null,
+    canonicalDomain: opts.project.canonicalDomain ?? null,
+    ownedDomains: opts.project.ownedDomains ?? null,
+  })
+  const projectDomains = effectiveDomains({
+    canonicalDomain: opts.project.canonicalDomain ?? '',
+    ownedDomains: opts.project.ownedDomains ?? [],
+  })
   return {
     classified: classify !== null,
     competitors: mentionShareCompetitorsFromDomains(opts.competitorDomains),
     snapshots: opts.snapshots.map(snap => {
       const queryText = (snap.queryId ? opts.queryTextById?.get(snap.queryId) : undefined) ?? snap.queryText ?? null
       return {
-        projectMentioned: snap.answerMentioned === true,
+        // Mention share is a current-identity metric. Recompute stored answer
+        // text after an alias/domain rename; only text-less legacy rows need
+        // the persisted run-time boolean as a fallback.
+        projectMentioned: snap.answerText
+          ? determineAnswerMentioned(snap.answerText, projectBrandNames, projectDomains)
+          : snap.answerMentioned === true,
         answerText: snap.answerText,
         queryClass: classify ? classify(queryText) : null,
       }

@@ -5,7 +5,7 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import Fastify from 'fastify'
 import { and, eq } from 'drizzle-orm'
-import { auditLog, createClient, migrate, projects, queries, querySnapshots, runs } from '@ainyc/canonry-db'
+import { auditLog, competitors, createClient, migrate, projects, queries, querySnapshots, runs } from '@ainyc/canonry-db'
 import { apiRoutes } from '../src/index.js'
 import type { ApiRoutesOptions } from '../src/index.js'
 
@@ -682,7 +682,7 @@ describe('api-routes', () => {
     expect((JSON.parse(filtered.payload) as Array<{ action: string }>).every((entry) => entry.action === action)).toBe(true)
   })
 
-  it('run detail and project snapshot history expose recommendedCompetitors', async () => {
+  it('run detail and project snapshot history expose separated competitor signals', async () => {
     const projectId = crypto.randomUUID()
     const queryId = crypto.randomUUID()
     const runId = crypto.randomUUID()
@@ -707,6 +707,21 @@ describe('api-routes', () => {
       createdAt: now,
     }).run()
 
+    db.insert(competitors).values([
+      {
+        id: crypto.randomUUID(),
+        projectId,
+        domain: 'mentioned-rival.com',
+        createdAt: now,
+      },
+      {
+        id: crypto.randomUUID(),
+        projectId,
+        domain: 'cited-rival.com',
+        createdAt: now,
+      },
+    ]).run()
+
     db.insert(runs).values({
       id: runId,
       projectId,
@@ -721,16 +736,16 @@ describe('api-routes', () => {
       queryId,
       provider: 'gemini',
       citationState: 'not-cited',
-      answerText: '1. Downtown Smiles - strong reviews',
-      citedDomains: ['downtownsmiles.com'],
+      answerText: '1. Mentioned Rival - strong reviews',
+      citedDomains: [],
       citedUrls: ['https://publisher.example/guides/answer'],
       captureStatus: 'complete',
       sourceCount: 1,
       resolvedCount: 1,
       captureVersion: 1,
-      competitorOverlap: ['downtownsmiles.com'],
+      competitorOverlap: ['mentioned-rival.com', 'cited-rival.com'],
       recommendedCompetitors: ['Downtown Smiles'],
-      rawResponse: '{"groundingSources":[],"searchQueries":[]}',
+      rawResponse: '{"groundingSources":[{"uri":"https://cited-rival.com/review"}],"searchQueries":[]}',
       createdAt: now,
     }).run()
 
@@ -746,6 +761,9 @@ describe('api-routes', () => {
         sourceCount?: number | null
         resolvedCount?: number | null
         captureVersion?: number | null
+        competitorOverlap: string[]
+        citedCompetitorDomains: string[]
+        mentionedCompetitorDomains: string[]
       }>
     }
     expect(runBody.snapshots[0]?.recommendedCompetitors).toEqual(['Downtown Smiles'])
@@ -756,6 +774,11 @@ describe('api-routes', () => {
     expect(runBody.snapshots[0]?.sourceCount).toBe(1)
     expect(runBody.snapshots[0]?.resolvedCount).toBe(1)
     expect(runBody.snapshots[0]?.captureVersion).toBe(1)
+    expect(runBody.snapshots[0]).toMatchObject({
+      competitorOverlap: ['mentioned-rival.com', 'cited-rival.com'],
+      citedCompetitorDomains: ['cited-rival.com'],
+      mentionedCompetitorDomains: ['mentioned-rival.com'],
+    })
 
     const historyRes = await app.inject({ method: 'GET', url: '/api/v1/projects/snapshot-history-project/snapshots' })
     expect(historyRes.statusCode).toBe(200)
@@ -769,6 +792,9 @@ describe('api-routes', () => {
         sourceCount?: number | null
         resolvedCount?: number | null
         captureVersion?: number | null
+        competitorOverlap: string[]
+        citedCompetitorDomains: string[]
+        mentionedCompetitorDomains: string[]
       }>
     }
     expect(historyBody.snapshots[0]?.recommendedCompetitors).toEqual(['Downtown Smiles'])
@@ -779,6 +805,11 @@ describe('api-routes', () => {
     expect(historyBody.snapshots[0]?.sourceCount).toBe(1)
     expect(historyBody.snapshots[0]?.resolvedCount).toBe(1)
     expect(historyBody.snapshots[0]?.captureVersion).toBe(1)
+    expect(historyBody.snapshots[0]).toMatchObject({
+      competitorOverlap: ['mentioned-rival.com', 'cited-rival.com'],
+      citedCompetitorDomains: ['cited-rival.com'],
+      mentionedCompetitorDomains: ['mentioned-rival.com'],
+    })
 
     const legacyRunId = crypto.randomUUID()
     db.insert(runs).values({ id: legacyRunId, projectId, status: 'completed', createdAt: now, finishedAt: now }).run()

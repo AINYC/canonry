@@ -1247,6 +1247,7 @@ export type BingUrlInspectionDto = {
 
 export type BrandMetricsDto = {
     window: '7d' | '30d' | '90d' | 'all';
+    mentionShareScope: 'non-brand' | 'pooled';
     buckets: Array<{
         startDate: string;
         endDate: string;
@@ -1260,6 +1261,7 @@ export type BrandMetricsDto = {
         mentionRate: number;
         mentionedCount: number;
         mentionShare: {
+            scope: 'non-brand' | 'pooled';
             rate: number | null;
             projectMentionSnapshots: number;
             competitorMentionSnapshots: number;
@@ -4055,6 +4057,8 @@ export type LatestProjectRunDto = {
             retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
             retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
             competitorOverlap: Array<string>;
+            citedCompetitorDomains: Array<string>;
+            mentionedCompetitorDomains: Array<string>;
             recommendedCompetitors: Array<string>;
             matchedTerms: Array<string>;
             groundingSources: Array<{
@@ -7509,6 +7513,8 @@ export type ProjectOverviewDto = {
                 retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
                 retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
                 competitorOverlap: Array<string>;
+                citedCompetitorDomains: Array<string>;
+                mentionedCompetitorDomains: Array<string>;
                 recommendedCompetitors: Array<string>;
                 matchedTerms: Array<string>;
                 groundingSources: Array<{
@@ -7904,7 +7910,7 @@ export type ProjectReportDto = {
             totalCount: number;
             pressureLabel: 'High' | 'Moderate' | 'Low' | 'None';
             mentionedQueries: Array<string>;
-            sharePct: number;
+            sharePct: number | null;
         }>;
         scope: 'non-brand' | 'pooled';
         nonBrand: {
@@ -7916,7 +7922,7 @@ export type ProjectReportDto = {
                 totalCount: number;
                 pressureLabel: 'High' | 'Moderate' | 'Low' | 'None';
                 mentionedQueries: Array<string>;
-                sharePct: number;
+                sharePct: number | null;
             }>;
         };
         branded: {
@@ -7928,7 +7934,7 @@ export type ProjectReportDto = {
                 totalCount: number;
                 pressureLabel: 'High' | 'Moderate' | 'Low' | 'None';
                 mentionedQueries: Array<string>;
-                sharePct: number;
+                sharePct: number | null;
             }>;
         };
     };
@@ -8483,6 +8489,8 @@ export type RunDetailDto = {
         retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
         retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
         competitorOverlap: Array<string>;
+        citedCompetitorDomains: Array<string>;
+        mentionedCompetitorDomains: Array<string>;
         recommendedCompetitors: Array<string>;
         matchedTerms: Array<string>;
         groundingSources: Array<{
@@ -9426,6 +9434,8 @@ export type SnapshotListResponse = {
         retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
         retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
         competitorOverlap: Array<string>;
+        citedCompetitorDomains: Array<string>;
+        mentionedCompetitorDomains: Array<string>;
         recommendedCompetitors: Array<string>;
         matchedTerms: Array<string>;
         groundingSources: Array<{
@@ -9979,8 +9989,10 @@ export type VisibilityCompareDto = {
     metrics: Array<{
         key: 'mention-share-of-voice' | 'cited-share-of-voice' | 'mention-rate' | 'cited-rate';
         label: string;
+        queryClass: 'all' | 'non-brand' | 'pooled';
         driftRobust: boolean;
         from: {
+            availability: 'available' | 'no-observations' | 'no-competitive-frame';
             point: number | null;
             ciLow: number | null;
             ciHigh: number | null;
@@ -9988,6 +10000,7 @@ export type VisibilityCompareDto = {
             denominator: number;
         };
         to: {
+            availability: 'available' | 'no-observations' | 'no-competitive-frame';
             point: number | null;
             ciLow: number | null;
             ciHigh: number | null;
@@ -10102,6 +10115,7 @@ export type VisibilityStatsDto = {
     shareOfVoice?: {
         queryClass: 'branded' | 'non-brand' | 'pooled';
         percent: number | null;
+        competitorCount: number;
         projectMentions: number;
         competitorMentions: number;
         snapshotsWithAnswerText: number;

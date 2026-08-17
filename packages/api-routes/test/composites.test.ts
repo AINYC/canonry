@@ -6,6 +6,7 @@ import Fastify from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   bingCoverageSnapshots,
+  competitors,
   createClient,
   migrate,
   insights,
@@ -229,16 +230,19 @@ describe('GET /api/v1/projects/:name/overview', () => {
     expect(body.scores.competitorPressure.value).toBe('None')
     expect(body.scores.runStatus.value).toBe('Healthy')
 
-    // Mention Share — no competitors configured, so the breakdown is empty
-    // and the gauge renders the "add competitors" neutral state. The
-    // snapshotsTotal still reflects the seeded snapshots so the UI can
-    // explain why no comparison is possible despite real run data.
+    // Mention Share — no competitors configured, so the gauge renders the
+    // "add competitors" neutral state while preserving the observed project
+    // mentions and non-brand scope. Only the competitive score is unavailable.
     expect(body.scores.mentionShare.label).toBe('Mention Share')
     expect(body.scores.mentionShare.tone).toBe('neutral')
     expect(body.scores.mentionShare.value).toBe('Add competitors')
+    expect(body.scores.mentionShare.scope).toBe('non-brand')
     expect(body.scores.mentionShare.breakdown.perCompetitor).toEqual([])
-    expect(body.scores.mentionShare.breakdown.projectMentionSnapshots).toBe(0)
+    expect(body.scores.mentionShare.breakdown.projectMentionSnapshots).toBe(2)
     expect(body.scores.mentionShare.breakdown.competitorMentionSnapshots).toBe(0)
+    expect(body.scores.mentionShare.breakdown.snapshotsWithAnswerText).toBe(2)
+    expect(body.scores.mentionShare.breakdown.snapshotsTotal).toBe(3)
+    expect(body.scores.mentionShare.breakdown.score).toBeNull()
 
     expect(body.movementSummary).toEqual({
       gained: 1,
@@ -495,6 +499,67 @@ describe('GET /api/v1/projects/:name/overview', () => {
     expect(body.queryCounts).toEqual({ totalQueries: 0, citedQueries: 0, notCitedQueries: 0, citedRate: 0, mentionedQueries: 0, notMentionedQueries: 0, mentionRate: 0 })
     expect(body.providers).toEqual([])
     expect(body.transitions).toEqual({ since: null, gained: 0, lost: 0, emerging: 0 })
+    expect(body.scores.mentionShare.scope).toBe('non-brand')
+    expect(body.scores.mentionShare.breakdown.score).toBeNull()
+
+    await app.close()
+  })
+
+  it('keeps mention-only and citation-only competitors in their matching gap scores', async () => {
+    const { app, db, projectId, latestRunId } = seedProjectWithRuns()
+    const mentionQueryId = crypto.randomUUID()
+    const citationQueryId = crypto.randomUUID()
+    db.insert(competitors).values({
+      id: crypto.randomUUID(),
+      projectId,
+      domain: 'rival.com',
+      createdAt: '2026-04-18T14:19:00.000Z',
+    }).run()
+    db.insert(queries).values([
+      { id: mentionQueryId, projectId, query: 'mention-only rival', createdAt: '2026-04-18T14:19:00.000Z' },
+      { id: citationQueryId, projectId, query: 'citation-only rival', createdAt: '2026-04-18T14:19:00.000Z' },
+    ]).run()
+    db.insert(querySnapshots).values([
+      {
+        id: crypto.randomUUID(),
+        runId: latestRunId,
+        queryId: mentionQueryId,
+        provider: 'gemini',
+        citationState: 'not-cited',
+        answerMentioned: false,
+        answerText: 'Rival is the recommended option.',
+        citedDomains: [],
+        // Deliberately identical legacy mixed overlap on both rows. It must
+        // not decide which score the snapshot enters.
+        competitorOverlap: ['rival.com'],
+        recommendedCompetitors: [],
+        createdAt: '2026-04-18T14:20:30.000Z',
+      },
+      {
+        id: crypto.randomUUID(),
+        runId: latestRunId,
+        queryId: citationQueryId,
+        provider: 'gemini',
+        citationState: 'not-cited',
+        answerMentioned: false,
+        answerText: null,
+        citedDomains: [],
+        competitorOverlap: ['rival.com'],
+        recommendedCompetitors: [],
+        rawResponse: JSON.stringify({
+          groundingSources: [{ uri: 'https://rival.com/guide', title: 'Rival guide' }],
+        }),
+        createdAt: '2026-04-18T14:20:30.000Z',
+      },
+    ]).run()
+    await app.ready()
+
+    const res = await app.inject({ method: 'GET', url: '/api/v1/projects/demo/overview' })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as ProjectOverviewDto
+
+    expect(body.scores.gapQueries.value).toBe('1')
+    expect(body.scores.mentionGaps.value).toBe('1')
 
     await app.close()
   })

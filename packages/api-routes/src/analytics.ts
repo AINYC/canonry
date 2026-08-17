@@ -41,6 +41,8 @@ export async function analyticsRoutes(app: FastifyInstance) {
     Querystring: { window?: string }
   }>('/projects/:name/analytics/metrics', async (request, reply) => {
     const project = resolveProject(app.db, request.params.name)
+    const classifyQuery = projectQueryClassifier(project)
+    const mentionShareScope = classifyQuery ? 'non-brand' as const : 'pooled' as const
 
     const window = parseWindow(request.query.window)
     const cutoff = windowCutoff(window)
@@ -63,6 +65,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
     if (projectRuns.length === 0) {
       return reply.send({
         window,
+        mentionShareScope,
         buckets: [],
         overall: { citationRate: 0, cited: 0, total: 0, mentionRate: 0, mentionedCount: 0 },
         byProvider: {},
@@ -145,7 +148,6 @@ export async function analyticsRoutes(app: FastifyInstance) {
     // Resolve answerMentioned for each snapshot (handles null/legacy data)
     const runCreatedAt = new Map(projectRuns.map(run => [run.id, run.createdAt]))
     const runBasketRevision = new Map(projectRuns.map(run => [run.id, run.queryBasketRevision ?? null]))
-    const classifyQuery = projectQueryClassifier(project)
     const allSnapshots = rawSnapshots.map(s => ({
       ...s,
       runCreatedAt: runCreatedAt.get(s.runId)!,
@@ -185,7 +187,15 @@ export async function analyticsRoutes(app: FastifyInstance) {
     const latest = new Date(projectRuns[projectRuns.length - 1]!.createdAt)
     const spanDays = Math.max(1, Math.ceil((latest.getTime() - earliest.getTime()) / 86_400_000))
     const bucketSize = bucketSizeForSpan(spanDays)
-    const buckets = computeBuckets(allSnapshots, projectRuns, bucketSize, queryCreatedAt, mentionShareCompetitors, referenceBasket)
+    const buckets = computeBuckets(
+      allSnapshots,
+      projectRuns,
+      bucketSize,
+      queryCreatedAt,
+      mentionShareCompetitors,
+      referenceBasket,
+      classifyQuery !== null,
+    )
 
     // Model observations are evidence, not configuration. To avoid a false
     // "first seen" transition at the start of a bounded window, anchor each
@@ -466,7 +476,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
       previousExecutionChecksum = identity.checksum
     }
 
-    return reply.send({ window, buckets, overall, byProvider, trend, mentionTrend, queryChanges, basketChanges, executionIdentityChanges, referenceBasketRevision: latestBasket?.revision ?? null, modelAttribution, servedModelAttribution, modelServiceMismatch, modelPointerChanges } satisfies BrandMetricsDto)
+    return reply.send({ window, mentionShareScope, buckets, overall, byProvider, trend, mentionTrend, queryChanges, basketChanges, executionIdentityChanges, referenceBasketRevision: latestBasket?.revision ?? null, modelAttribution, servedModelAttribution, modelServiceMismatch, modelPointerChanges } satisfies BrandMetricsDto)
   })
 
   // GET /projects/:name/analytics/gaps — brand gap analysis
@@ -939,6 +949,7 @@ function computeBuckets(
    * a trend, and `basketChanges` keeps the restatement visible rather than silent.
    */
   referenceBasket?: Set<string>,
+  classificationAvailable = false,
 ): TimeBucket[] {
   if (projectRuns.length === 0) return []
 
@@ -1016,7 +1027,7 @@ function computeBuckets(
         queryCount,
         mentionRate: metric.mentionRate,
         mentionedCount: metric.mentionedCount,
-        mentionShare: computeMentionShareBucketMetric(usable, mentionShareCompetitors),
+        mentionShare: computeMentionShareBucketMetric(usable, mentionShareCompetitors, classificationAvailable),
         byProvider,
         modelEvidenceByProvider,
         basketRevision,
@@ -1043,11 +1054,8 @@ function bucketStartDateFor(observedAt: string, earliest: Date, bucketDays: numb
 function computeMentionShareBucketMetric(
   snapshots: SnapshotLike[],
   mentionShareCompetitors: readonly MentionShareCompetitor[],
+  classificationAvailable: boolean,
 ): TimeBucket['mentionShare'] {
-  if (mentionShareCompetitors.length === 0) {
-    return { rate: null, projectMentionSnapshots: 0, competitorMentionSnapshots: 0 }
-  }
-
   // Non-brand only — `buildMentionShare` scopes `breakdown` to the competitive
   // class, so the trend line tracks category placement rather than how many
   // branded queries the basket happened to contain in each bucket.
@@ -1057,13 +1065,18 @@ function computeMentionShareBucketMetric(
       answerText: s.answerText,
       queryClass: s.queryClass,
     })),
-    { competitors: mentionShareCompetitors },
+    { competitors: mentionShareCompetitors, classificationAvailable },
   )
   const projectMentionSnapshots = result.breakdown.projectMentionSnapshots
   const competitorMentionSnapshots = result.breakdown.competitorMentionSnapshots
   const denominator = projectMentionSnapshots + competitorMentionSnapshots
   return {
-    rate: denominator > 0 ? round4(projectMentionSnapshots / denominator) : null,
+    scope: result.scope,
+    // A project-only denominator is recognition evidence, not competitive
+    // share. Preserve the count but leave the rate undefined without a frame.
+    rate: mentionShareCompetitors.length > 0 && denominator > 0
+      ? round4(projectMentionSnapshots / denominator)
+      : null,
     projectMentionSnapshots,
     competitorMentionSnapshots,
   }

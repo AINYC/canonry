@@ -2180,11 +2180,7 @@ function buildProjectReport(db: DatabaseClient, projectName: string, periodDays:
   // matching the canonical domain or an owned subdomain counts as "ours".
   const ownedDomains = project.ownedDomains
   const projectDomains = [project.canonicalDomain, ...ownedDomains]
-  const projectAliases = project.aliases
-  const projectBrandNames = effectiveBrandNames({
-    displayName: project.displayName,
-    aliases: projectAliases,
-  })
+  const projectBrandNames = effectiveBrandNames(project)
 
   const citationScorecard = buildCitationScorecard(latestSnapshots, queryLookup)
   const competitorLandscape = buildCompetitorLandscape(

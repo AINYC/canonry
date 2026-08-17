@@ -76,7 +76,7 @@ const METRIC_OPTIONS: Array<{ value: MetricChoice; label: string; description: s
   {
     value: 'mentionShare',
     label: 'Mention share',
-    description: 'Of all answer-text brand mentions for you and tracked competitors, the share that were you.',
+    description: 'On non-brand queries, the share of answer-text brand mentions for you and tracked competitors that were you. Pooled only when query classification is unavailable.',
   },
 ]
 const MENTION_SHARE_COLOR = CHART_SERIES_COLORS[2]!
@@ -138,6 +138,7 @@ function competitorFrameKey(competitorDomains: readonly string[]): string {
 
 type MetricsBucket = BrandMetricsDto['buckets'][number]
 type ProviderMetricBucket = MetricsBucket['byProvider'][string]
+type MentionShareScope = MetricsBucket['mentionShare']['scope']
 
 interface TooltipPayloadItem {
   name?: string | number
@@ -146,9 +147,19 @@ interface TooltipPayloadItem {
   color?: string
 }
 
-function metricLabel(metric: MetricChoice): string {
+function mentionShareScopeLabel(scope: MentionShareScope): string {
+  return scope === 'non-brand'
+    ? 'non-brand queries'
+    : 'pooled queries · classification unavailable'
+}
+
+function metricLabel(metric: MetricChoice, mentionShareScope?: MentionShareScope): string {
   if (metric === 'cited') return 'Cited'
-  if (metric === 'mentionShare') return 'Mention share'
+  if (metric === 'mentionShare') {
+    return mentionShareScope
+      ? `Mention share · ${mentionShareScopeLabel(mentionShareScope)}`
+      : 'Mention share'
+  }
   return 'Mentioned'
 }
 
@@ -355,7 +366,7 @@ function TrendTooltip({
         <p className="trend-tooltip-label">{formatBucketDateLabel(bucket)}</p>
         <div className="trend-tooltip-row">
           <span className="trend-tooltip-swatch trend-tooltip-swatch-ring" style={{ borderColor: MENTION_SHARE_COLOR }} aria-hidden="true" />
-          <span className="trend-tooltip-name">Mention share</span>
+          <span className="trend-tooltip-name">Mention share · {mentionShareScopeLabel(bucket.mentionShare.scope)}</span>
           <span className="trend-tooltip-value">{formatPercent(rate)}</span>
         </div>
         {denominator > 0 ? (
@@ -414,9 +425,10 @@ function TrendDataSummary({
   mode: TrendSeriesMode
   series: readonly string[]
 }) {
+  const summaryScope = buckets[buckets.length - 1]?.mentionShare.scope
   return (
     <table className="sr-only">
-      <caption>{metricLabel(metric)} trend data</caption>
+      <caption>{metricLabel(metric, summaryScope)} trend data</caption>
       <thead>
         <tr>
           <th scope="col">Bucket</th>
@@ -430,9 +442,10 @@ function TrendDataSummary({
             const projectMentions = bucket.mentionShare.projectMentionSnapshots
             const competitorMentions = bucket.mentionShare.competitorMentionSnapshots
             const denominator = projectMentions + competitorMentions
+            const scope = mentionShareScopeLabel(bucket.mentionShare.scope)
             valueText = denominator > 0
-              ? `${formatRatePercent(bucket.mentionShare.rate)} mention share, ${projectMentions} of ${denominator} brand mentions were you`
-              : 'mention share undefined, no project or competitor brand mentions'
+              ? `${formatRatePercent(bucket.mentionShare.rate)} mention share for ${scope}, ${projectMentions} of ${denominator} brand mentions were you`
+              : `mention share undefined for ${scope}, no project or competitor brand mentions`
           } else if (mode === 'byProvider') {
             valueText = series.map(provider => {
               const counts = providerMetricCount(bucket, provider, metric)
@@ -570,7 +583,13 @@ export function VisibilityTrendSection({
   // across the visible window. Quantifies "where it sits now, which way it
   // moved" without reusing the removed trend badges.
   const byProviderMode = metric !== 'mentionShare' && effectiveMode === 'byProvider'
-  const currentMetricLabel = metricLabel(metric)
+  const buckets = data?.buckets ?? []
+  // The top-level scope survives an empty response. Falling back to non-brand
+  // here would relabel an empty, unclassifiable project as classifiable.
+  const mentionShareScope: MentionShareScope = buckets[buckets.length - 1]?.mentionShare.scope
+    ?? data?.mentionShareScope
+    ?? 'pooled'
+  const currentMetricLabel = metricLabel(metric, mentionShareScope)
   const metricColor = metric === 'cited'
     ? CHART_TONE.positive
     : metric === 'mentionShare'
@@ -580,7 +599,6 @@ export function VisibilityTrendSection({
   // which no single line on the chart matches — neutralize the swatch (so it
   // doesn't read as one engine's color) and tag it "avg".
   const headlineDotColor = byProviderMode ? CHART_NEUTRAL.textDim : metricColor
-  const buckets = data?.buckets ?? []
   // The x-axis KEY stays `startDate` (monotonic, and what the model-evidence
   // reference lines are positioned by), but the tick a reader sees is resolved
   // back to the bucket's real first sweep. A key that has no bucket gets no
@@ -623,7 +641,7 @@ export function VisibilityTrendSection({
           <p className="eyebrow eyebrow-soft">Trend</p>
           <h2 className="visibility-trend-title">
             Answer-engine trend
-            <InfoTooltip text="Three separate signals over sweep buckets: answer text mentions, source citations, and your answer-text mention share against tracked competitors. Mentioned and Cited use query-provider snapshot rates; Mention share uses project plus competitor brand mentions." />
+            <InfoTooltip text="Three separate signals over sweep buckets: answer text mentions, source citations, and your answer-text mention share against tracked competitors. Mentioned and Cited use all query-provider snapshots. Mention share uses non-brand queries when classification is available; pooled means the project has no usable brand identity for a split." />
           </h2>
         </div>
         {latestPct !== null && (
@@ -681,7 +699,7 @@ export function VisibilityTrendSection({
       body = (
         <p className="text-sm text-secondary">
           {metric === 'mentionShare'
-            ? 'No answer-text brand mentions for you or tracked competitors in this window yet.'
+            ? `No answer-text brand mentions for you or tracked competitors on ${mentionShareScopeLabel(mentionShareScope)} in this window yet.`
             : 'Run a sweep to start tracking citations and mentions over time.'}
         </p>
       )
@@ -802,7 +820,7 @@ export function VisibilityTrendSection({
           {singleBucket && (
             <p className="visibility-trend-note">
               {metric === 'mentionShare'
-                ? 'Only one competitive mention-share point so far. The trend line fills in after another sweep with brand mentions.'
+                ? `Only one ${mentionShareScopeLabel(mentionShareScope)} mention-share point so far. The trend line fills in after another sweep with brand mentions.`
                 : 'Only one sweep so far. The trend line fills in after the next run.'}
             </p>
           )}

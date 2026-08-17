@@ -59,6 +59,12 @@ describe('compileQueryClassifier', () => {
     expect(classifier.classify('what is acme')).toBe('branded')
   })
 
+  it('classifies an exact short domain without treating its bare label as branded', () => {
+    const classifier = compileQueryClassifier(effectiveBrandNames({ canonicalDomain: 'www.ai.com' }))!
+    expect(classifier.classify('is ai.com worth using')).toBe('branded')
+    expect(classifier.classify('what are the best AI tools')).toBe('non-brand')
+  })
+
   it('returns null when no usable alias exists — unclassifiable is not "non-brand"', () => {
     expect(compileQueryClassifier([])).toBeNull()
     expect(compileQueryClassifier(['', '   '])).toBeNull()

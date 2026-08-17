@@ -2,6 +2,7 @@ import { buildMentionShare } from '@ainyc/canonry-intelligence'
 import {
   CitationStates,
   compileQueryClassifier,
+  determineAnswerMentioned,
   hostOf,
   hostMatchesDomain,
   wilsonInterval,
@@ -126,11 +127,24 @@ function observedPairs(
 function period(numerator: number, denominator: number): VisibilityCompareMetricPeriod {
   const ci = wilsonInterval(numerator, denominator)
   return {
+    availability: denominator > 0 ? 'available' : 'no-observations',
     point: denominator > 0 ? Math.round((numerator / denominator) * 10000) / 10000 : null,
     ciLow: ci ? ci.low : null,
     ciHigh: ci ? ci.high : null,
     numerator,
     denominator,
+  }
+}
+
+/** Keep observed project evidence without turning a project-only count into 100% share. */
+function unavailableCompetitivePeriod(numerator: number): VisibilityCompareMetricPeriod {
+  return {
+    availability: 'no-competitive-frame',
+    point: null,
+    ciLow: null,
+    ciHigh: null,
+    numerator,
+    denominator: 0,
   }
 }
 
@@ -143,6 +157,7 @@ function ciOverlap(a: VisibilityCompareMetricPeriod, b: VisibilityCompareMetricP
 function metric(
   key: VisibilityCompareMetricKey,
   label: string,
+  queryClass: VisibilityCompareMetric['queryClass'],
   driftRobust: boolean,
   from: VisibilityCompareMetricPeriod,
   to: VisibilityCompareMetricPeriod,
@@ -167,7 +182,7 @@ function metric(
     from.point === null || from.point === 0 || to.point === null
       ? null
       : Math.round((to.point / from.point) * 100) / 100
-  return { key, label, driftRobust, from, to, rateRatio, direction, verdict }
+  return { key, label, queryClass, driftRobust, from, to, rateRatio, direction, verdict }
 }
 
 /** Counts one period's snapshots contribute to every metric, over the basket. */
@@ -190,6 +205,8 @@ function countPeriod(
   snaps: Attributed[],
   competitors: VisibilityCompareCompetitorInput[],
   queryClassOf: (snap: Attributed) => QueryClass | null,
+  classificationAvailable: boolean,
+  projectBrandNames: readonly string[],
 ): PeriodCounts {
   let checked = 0
   let mentioned = 0
@@ -239,11 +256,15 @@ function countPeriod(
 
   const mentionShare = buildMentionShare(
     snaps.map((s) => ({
-      projectMentioned: s.answerMentioned === true,
+      // Share uses current identity; named-rate counts above deliberately keep
+      // their historical persisted-boolean semantics.
+      projectMentioned: s.answerText
+        ? determineAnswerMentioned(s.answerText, [...projectBrandNames], [])
+        : s.answerMentioned === true,
       answerText: s.answerText,
       queryClass: queryClassOf(s),
     })),
-    { competitors },
+    { competitors, classificationAvailable },
   )
 
   return {
@@ -286,6 +307,7 @@ export function computeVisibilityCompare(input: ComputeVisibilityCompareInput): 
   // snapshots would let a rename move a query between classes mid-comparison,
   // which is exactly the kind of basket churn this function exists to exclude.
   const classifier = compileQueryClassifier(input.brandNames ?? [])
+  const classificationAvailable = classifier !== null
   const queryTextById = new Map(input.queries.map((q) => [q.id, q.query]))
   const queryClassOf = (snap: Attributed): QueryClass | null =>
     classifier ? classifier.classify(queryTextById.get(snap.queryId) ?? snap.queryText) : null
@@ -304,8 +326,8 @@ export function computeVisibilityCompare(input: ComputeVisibilityCompareInput): 
   const candidateProviders = new Set([...pairsBoth.values()].map((pair) => pair.provider))
   const fromCandidateSnaps = restrict(input.from.snapshots, attribution, pairsBoth)
   const toCandidateSnaps = restrict(input.to.snapshots, attribution, pairsBoth)
-  const fromCandidateCounts = countPeriod(fromCandidateSnaps, input.competitors, queryClassOf)
-  const toCandidateCounts = countPeriod(toCandidateSnaps, input.competitors, queryClassOf)
+  const fromCandidateCounts = countPeriod(fromCandidateSnaps, input.competitors, queryClassOf, classificationAvailable, input.brandNames ?? [])
+  const toCandidateCounts = countPeriod(toCandidateSnaps, input.competitors, queryClassOf, classificationAvailable, input.brandNames ?? [])
   const continuityProviders = [...candidateProviders]
     .sort((a, b) => a.localeCompare(b))
     .map((provider) => {
@@ -345,8 +367,8 @@ export function computeVisibilityCompare(input: ComputeVisibilityCompareInput): 
   const fromSnaps = restrict(input.from.snapshots, attribution, comparedPairs)
   const toSnaps = restrict(input.to.snapshots, attribution, comparedPairs)
 
-  const fromCounts = countPeriod(fromSnaps, input.competitors, queryClassOf)
-  const toCounts = countPeriod(toSnaps, input.competitors, queryClassOf)
+  const fromCounts = countPeriod(fromSnaps, input.competitors, queryClassOf, classificationAvailable, input.brandNames ?? [])
+  const toCounts = countPeriod(toSnaps, input.competitors, queryClassOf, classificationAvailable, input.brandNames ?? [])
 
   const shareCounts = (c: PeriodCounts): { proj: number; comp: number } => ({
     proj: c.mentionShare.breakdown.projectMentionSnapshots,
@@ -359,9 +381,14 @@ export function computeVisibilityCompare(input: ComputeVisibilityCompareInput): 
     metric(
       'mention-share-of-voice',
       'Named share of voice',
+      classificationAvailable ? 'non-brand' : 'pooled',
       true,
-      period(fromShare.proj, fromShare.proj + fromShare.comp),
-      period(toShare.proj, toShare.proj + toShare.comp),
+      input.competitors.length > 0
+        ? period(fromShare.proj, fromShare.proj + fromShare.comp)
+        : unavailableCompetitivePeriod(fromShare.proj),
+      input.competitors.length > 0
+        ? period(toShare.proj, toShare.proj + toShare.comp)
+        : unavailableCompetitivePeriod(toShare.proj),
       continuityBlock,
     ),
     // Share of voice is undefined without a competitive frame: with zero
@@ -372,18 +399,20 @@ export function computeVisibilityCompare(input: ComputeVisibilityCompareInput): 
     metric(
       'cited-share-of-voice',
       'Cited share of voice',
+      'all',
       true,
       input.competitors.length > 0
         ? period(fromCounts.projectCited, fromCounts.projectCited + fromCounts.competitorCited)
-        : period(0, 0),
+        : unavailableCompetitivePeriod(fromCounts.projectCited),
       input.competitors.length > 0
         ? period(toCounts.projectCited, toCounts.projectCited + toCounts.competitorCited)
-        : period(0, 0),
+        : unavailableCompetitivePeriod(toCounts.projectCited),
       continuityBlock,
     ),
     metric(
       'mention-rate',
       'Named rate',
+      'all',
       false,
       period(fromCounts.mentioned, fromCounts.checked),
       period(toCounts.mentioned, toCounts.checked),
@@ -392,6 +421,7 @@ export function computeVisibilityCompare(input: ComputeVisibilityCompareInput): 
     metric(
       'cited-rate',
       'Cited rate',
+      'all',
       false,
       period(fromCounts.cited, fromCounts.total),
       period(toCounts.cited, toCounts.total),

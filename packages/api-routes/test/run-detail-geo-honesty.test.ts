@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createClient, migrate, projects, runs, querySnapshots } from '@ainyc/canonry-db'
+import { createClient, migrate, projects, competitors, runs, querySnapshots } from '@ainyc/canonry-db'
 import { apiRoutes } from '../src/index.js'
 
 /**
@@ -133,5 +133,66 @@ describe('GET /api/v1/runs/:id snapshot geo honesty', () => {
     expect(threaded.location).toBe(NORTH.label)
     expect(threaded.requestedContext).toEqual(NORTH)
     expect(threaded.supportedContext).toEqual({ status: 'applied', resolved: NORTH })
+  })
+
+  it('returns independent competitor citation and mention signals while preserving legacy overlap', async () => {
+    const projectId = insertProject(ctx.db)
+    const runId = insertRun(ctx.db, projectId)
+    ctx.db.insert(competitors).values({
+      id: crypto.randomUUID(),
+      projectId,
+      domain: 'rival.com',
+      createdAt: new Date().toISOString(),
+    }).run()
+
+    const mentionOnlyId = crypto.randomUUID()
+    ctx.db.insert(querySnapshots).values({
+      id: mentionOnlyId,
+      runId,
+      queryId: null,
+      queryText: 'mention only',
+      provider: 'gemini',
+      citationState: 'not-cited',
+      answerText: 'Rival is the recommended option.',
+      citedDomains: [],
+      competitorOverlap: ['rival.com'],
+      createdAt: new Date().toISOString(),
+    }).run()
+
+    const citationOnlyId = crypto.randomUUID()
+    ctx.db.insert(querySnapshots).values({
+      id: citationOnlyId,
+      runId,
+      queryId: null,
+      queryText: 'citation only',
+      provider: 'gemini',
+      citationState: 'not-cited',
+      answerText: 'No tracked brand is named here.',
+      citedDomains: ['rival.com'],
+      competitorOverlap: ['rival.com'],
+      createdAt: new Date().toISOString(),
+    }).run()
+
+    const res = await ctx.app.inject({ method: 'GET', url: `/api/v1/runs/${runId}` })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as {
+      snapshots: Array<{
+        id: string
+        competitorOverlap: string[]
+        citedCompetitorDomains: string[]
+        mentionedCompetitorDomains: string[]
+      }>
+    }
+
+    expect(body.snapshots.find(snapshot => snapshot.id === mentionOnlyId)).toMatchObject({
+      competitorOverlap: ['rival.com'],
+      citedCompetitorDomains: [],
+      mentionedCompetitorDomains: ['rival.com'],
+    })
+    expect(body.snapshots.find(snapshot => snapshot.id === citationOnlyId)).toMatchObject({
+      competitorOverlap: ['rival.com'],
+      citedCompetitorDomains: ['rival.com'],
+      mentionedCompetitorDomains: [],
+    })
   })
 })

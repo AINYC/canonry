@@ -1316,14 +1316,44 @@ describe('renderReportHtml', () => {
     expect(landscape).not.toContain('Mentions per domain \u00b7 branded queries')
   })
 
-  test('says "all tracked queries" when the project could not be classified, never "non-brand"', () => {
+  test('labels pooled queries as classification unavailable and explains why they remain pooled', () => {
     const report = richReport()
     report.mentionLandscape.scope = 'pooled'
     const html = renderReportHtml(report)
     const landscape = html.split('id="competitor-landscape"')[1]?.split('</section>')[0] ?? ''
-    expect(landscape).toContain('Mentions per domain \u00b7 all tracked queries')
-    expect(landscape).toContain('Mentions (all tracked queries)')
+    expect(landscape).toContain('Mentions per domain \u00b7 pooled queries \u00b7 classification unavailable')
+    expect(landscape).toContain('Mentions (pooled queries \u00b7 classification unavailable)')
+    expect(landscape).toContain('all tracked queries remain pooled')
+    expect(landscape).not.toContain('Branded queries are counted separately')
     expect(landscape).not.toContain('non-brand queries')
+  })
+
+  test('renders mention share unavailable and preserves null in embedded report JSON for a 0/0 frame', () => {
+    const report = richReport()
+    const emptyMentionRows = report.mentionLandscape.competitors.map(row => ({
+      ...row,
+      mentionCount: 0,
+      mentionedQueries: [],
+      pressureLabel: 'None' as const,
+      sharePct: null,
+    }))
+    report.mentionLandscape = {
+      ...report.mentionLandscape,
+      projectMentionCount: 0,
+      competitors: emptyMentionRows,
+      nonBrand: {
+        projectMentionCount: 0,
+        totalAnswerSnapshots: report.mentionLandscape.totalAnswerSnapshots,
+        competitors: emptyMentionRows,
+      },
+    }
+
+    const html = renderReportHtml(report)
+    const landscape = html.split('id="competitor-landscape"')[1]?.split('</section>')[0] ?? ''
+    expect(landscape).toContain('Mention share unavailable for non-brand queries')
+    expect(landscape).toContain('denominator is 0')
+    expect(html).toContain('"mentionCount":0')
+    expect(html).toContain('"sharePct":null')
   })
 
   test('renders GSC × AEO crossover companion blocks when non-empty', () => {

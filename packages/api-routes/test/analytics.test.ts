@@ -233,7 +233,78 @@ describe('analytics routes', () => {
       // names Example.com. Mention share must follow answer-text mentions, not
       // citation overlap.
       expect(latest.mentionShare).toMatchObject({
+        scope: 'non-brand',
         rate: 1,
+        projectMentionSnapshots: 1,
+        competitorMentionSnapshots: 0,
+      })
+    })
+
+    it('preserves project mention counts but never reports project-only share without competitors', async () => {
+      const noFrameProjectId = crypto.randomUUID()
+      const noFrameQueryId = crypto.randomUUID()
+      const noFrameRunId = crypto.randomUUID()
+      const observedAt = new Date().toISOString()
+      db.insert(projects).values({
+        id: noFrameProjectId,
+        name: 'no-competitive-frame',
+        displayName: 'Solo Brand',
+        canonicalDomain: 'solo.example',
+        ownedDomains: '[]',
+        country: 'US',
+        language: 'en',
+        tags: '[]',
+        labels: '{}',
+        providers: '["gemini"]',
+        locations: '[]',
+        defaultLocation: null,
+        configSource: 'api',
+        configRevision: 1,
+        createdAt: observedAt,
+        updatedAt: observedAt,
+      }).run()
+      db.insert(queries).values({
+        id: noFrameQueryId,
+        projectId: noFrameProjectId,
+        query: 'best category tools',
+        createdAt: observedAt,
+      }).run()
+      db.insert(runs).values({
+        id: noFrameRunId,
+        projectId: noFrameProjectId,
+        kind: 'answer-visibility',
+        status: 'completed',
+        trigger: 'manual',
+        location: null,
+        startedAt: observedAt,
+        finishedAt: observedAt,
+        error: null,
+        createdAt: observedAt,
+      }).run()
+      db.insert(querySnapshots).values({
+        id: crypto.randomUUID(),
+        runId: noFrameRunId,
+        queryId: noFrameQueryId,
+        queryText: 'best category tools',
+        provider: 'gemini',
+        citationState: 'not-cited',
+        answerMentioned: true,
+        answerText: 'Solo Brand is a category tool.',
+        citedDomains: [],
+        competitorOverlap: [],
+        location: null,
+        rawResponse: '{}',
+        createdAt: observedAt,
+      }).run()
+
+      const res = await app.inject({ method: 'GET', url: '/api/v1/projects/no-competitive-frame/analytics/metrics' })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+
+      expect(body.mentionShareScope).toBe('non-brand')
+      expect(body.buckets[0].mentionShare).toEqual({
+        scope: 'non-brand',
+        rate: null,
         projectMentionSnapshots: 1,
         competitorMentionSnapshots: 0,
       })

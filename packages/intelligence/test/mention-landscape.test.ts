@@ -27,6 +27,12 @@ describe('buildMentionLandscape', () => {
     expect(result.projectMentionCount).toBe(0)
     expect(result.totalAnswerSnapshots).toBe(0)
     expect(result.competitors.map(c => c.domain).sort()).toEqual(['foe.com', 'rival.com'])
+    expect(result.scope).toBe('non-brand')
+  })
+
+  it('labels an empty report pooled only when no project identity can classify it', () => {
+    const result = buildMentionLandscape([], ['rival.com'], [], PROJECT_DOMAINS, lookup([]))
+    expect(result.scope).toBe('pooled')
   })
 
   it('skips snapshots with null answerText (excluded from denominator and counts)', () => {
@@ -36,22 +42,21 @@ describe('buildMentionLandscape', () => {
     expect(result.projectMentionCount).toBe(0)
   })
 
-  it('counts a project mention when answerMentioned is true on a snapshot with answerText', () => {
-    const snapshots = [snap({ answerMentioned: true })]
+  it('ignores a stale persisted false when current identity appears in answer text', () => {
+    const snapshots = [snap({ answerMentioned: false })]
     const result = buildMentionLandscape(snapshots, [], PROJECT_BRAND_NAMES, PROJECT_DOMAINS, lookup([]))
     expect(result.projectMentionCount).toBe(1)
     expect(result.totalAnswerSnapshots).toBe(1)
   })
 
-  it('does not count a project mention when answerMentioned is false', () => {
-    const snapshots = [snap({ answerText: 'no mention here', answerMentioned: false })]
+  it('ignores a stale persisted true when current identity is absent from answer text', () => {
+    const snapshots = [snap({ answerText: 'no tracked brand here', answerMentioned: true })]
     const result = buildMentionLandscape(snapshots, [], PROJECT_BRAND_NAMES, PROJECT_DOMAINS, lookup([]))
     expect(result.projectMentionCount).toBe(0)
     expect(result.totalAnswerSnapshots).toBe(1)
   })
 
-  it('falls back to determineAnswerMentioned when answerMentioned is null', () => {
-    // answerMentioned null on a row whose text mentions the project — should fall back to true.
+  it('recomputes from text when the persisted answerMentioned value is null', () => {
     const snapshots = [snap({ answerText: 'Try Acme Inc — see acme.com', answerMentioned: null })]
     const result = buildMentionLandscape(snapshots, [], PROJECT_BRAND_NAMES, PROJECT_DOMAINS, lookup([]))
     expect(result.projectMentionCount).toBe(1)
@@ -71,6 +76,22 @@ describe('buildMentionLandscape', () => {
     const rival = result.competitors.find(c => c.domain === 'rival.com')!
     expect(rival.mentionCount).toBe(1)
     expect(rival.mentionedQueries).toEqual(['best CRM'])
+  })
+
+  it('matches a short competitor only by its exact domain, not the bare derived label', () => {
+    const result = buildMentionLandscape(
+      [
+        snap({ queryId: 'q1', answerText: 'IBM is a common acronym.', answerMentioned: false }),
+        snap({ queryId: 'q2', answerText: 'See ibm.com for details.', answerMentioned: false }),
+      ],
+      ['ibm.com'],
+      PROJECT_BRAND_NAMES,
+      PROJECT_DOMAINS,
+      lookup([['q1', 'first'], ['q2', 'second']]),
+    )
+
+    expect(result.competitors[0]?.mentionCount).toBe(1)
+    expect(result.competitors[0]?.mentionedQueries).toEqual(['second'])
   })
 
   it('omits a competitor mention from queries set when queryId is not in the lookup', () => {
@@ -161,9 +182,9 @@ describe('buildMentionLandscape', () => {
     expect(result.competitors.map(c => c.domain)).toEqual(['rival.com', 'foe.com'])
   })
 
-  it('returns sharePct of 0 when nobody is mentioned', () => {
+  it('returns unavailable sharePct when nobody is mentioned', () => {
     const snapshots = [snap({ answerText: 'nothing here', answerMentioned: false })]
     const result = buildMentionLandscape(snapshots, ['rival.com'], PROJECT_BRAND_NAMES, PROJECT_DOMAINS, lookup([]))
-    expect(result.competitors[0]?.sharePct).toBe(0)
+    expect(result.competitors[0]?.sharePct).toBeNull()
   })
 })

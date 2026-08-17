@@ -9,7 +9,8 @@ function snap(overrides: Partial<GapQueryScoreSnapshot> = {}): GapQueryScoreSnap
   return {
     queryId: 'q1',
     citationState: 'not-cited',
-    competitorOverlap: [],
+    citedCompetitorDomains: [],
+    mentionedCompetitorDomains: [],
     ...overrides,
   }
 }
@@ -22,9 +23,9 @@ describe('buildGapQueryScore', () => {
     expect(result.progress).toBeUndefined()
   })
 
-  it('counts a query as a gap when not cited but a competitor is in overlap', () => {
+  it('counts a query as a gap when not cited but a competitor is cited', () => {
     const snapshots = [
-      snap({ queryId: 'q1', citationState: 'not-cited', competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'q1', citationState: 'not-cited', citedCompetitorDomains: ['rival.com'] }),
     ]
     const result = buildGapQueryScore(snapshots)
     expect(result.value).toBe('1')
@@ -33,7 +34,7 @@ describe('buildGapQueryScore', () => {
 
   it('does not count a query as a gap when cited, even if competitors are present', () => {
     const snapshots = [
-      snap({ queryId: 'q1', citationState: 'cited', competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'q1', citationState: 'cited', citedCompetitorDomains: ['rival.com'] }),
     ]
     const result = buildGapQueryScore(snapshots)
     expect(result.value).toBe('0')
@@ -41,7 +42,7 @@ describe('buildGapQueryScore', () => {
 
   it('does not count a query as a gap when not cited but no competitors are in overlap', () => {
     const snapshots = [
-      snap({ queryId: 'q1', citationState: 'not-cited', competitorOverlap: [] }),
+      snap({ queryId: 'q1', citationState: 'not-cited', citedCompetitorDomains: [] }),
     ]
     const result = buildGapQueryScore(snapshots)
     expect(result.value).toBe('0')
@@ -49,8 +50,8 @@ describe('buildGapQueryScore', () => {
 
   it('treats a query as cited when ANY snapshot for it is cited', () => {
     const snapshots = [
-      snap({ queryId: 'q1', citationState: 'not-cited', competitorOverlap: ['rival.com'] }),
-      snap({ queryId: 'q1', citationState: 'cited', competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'q1', citationState: 'not-cited', citedCompetitorDomains: ['rival.com'] }),
+      snap({ queryId: 'q1', citationState: 'cited', citedCompetitorDomains: ['rival.com'] }),
     ]
     const result = buildGapQueryScore(snapshots)
     expect(result.value).toBe('0')
@@ -58,7 +59,7 @@ describe('buildGapQueryScore', () => {
 
   it('uses singular "query" in description when exactly 1 gap', () => {
     const snapshots = [
-      snap({ queryId: 'q1', citationState: 'not-cited', competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'q1', citationState: 'not-cited', citedCompetitorDomains: ['rival.com'] }),
     ]
     const result = buildGapQueryScore(snapshots)
     expect(result.description).toContain('1 tracked query currently cite')
@@ -66,8 +67,8 @@ describe('buildGapQueryScore', () => {
 
   it('uses plural "queries" in description when more than 1 gap', () => {
     const snapshots = [
-      snap({ queryId: 'q1', citationState: 'not-cited', competitorOverlap: ['rival.com'] }),
-      snap({ queryId: 'q2', citationState: 'not-cited', competitorOverlap: ['foe.com'] }),
+      snap({ queryId: 'q1', citationState: 'not-cited', citedCompetitorDomains: ['rival.com'] }),
+      snap({ queryId: 'q2', citationState: 'not-cited', citedCompetitorDomains: ['foe.com'] }),
     ]
     const result = buildGapQueryScore(snapshots)
     expect(result.description).toContain('2 tracked queries currently cite')
@@ -75,7 +76,7 @@ describe('buildGapQueryScore', () => {
 
   it('returns positive tone when there are zero gaps', () => {
     const snapshots = [
-      snap({ queryId: 'q1', citationState: 'cited', competitorOverlap: [] }),
+      snap({ queryId: 'q1', citationState: 'cited', citedCompetitorDomains: [] }),
     ]
     const result = buildGapQueryScore(snapshots)
     expect(result.tone).toBe('positive')
@@ -83,9 +84,9 @@ describe('buildGapQueryScore', () => {
 
   it('returns negative tone when gap ratio is 30% or more', () => {
     const snapshots = [
-      snap({ queryId: 'q1', citationState: 'not-cited', competitorOverlap: ['rival.com'] }),
-      snap({ queryId: 'q2', citationState: 'cited', competitorOverlap: [] }),
-      snap({ queryId: 'q3', citationState: 'cited', competitorOverlap: [] }),
+      snap({ queryId: 'q1', citationState: 'not-cited', citedCompetitorDomains: ['rival.com'] }),
+      snap({ queryId: 'q2', citationState: 'cited', citedCompetitorDomains: [] }),
+      snap({ queryId: 'q3', citationState: 'cited', citedCompetitorDomains: [] }),
     ]
     const result = buildGapQueryScore(snapshots)
     expect(result.tone).toBe('negative') // 1/3 = 33% >= 30
@@ -93,7 +94,7 @@ describe('buildGapQueryScore', () => {
 
   it('returns caution tone when gap ratio is between 0 and 30%', () => {
     const snapshots = [
-      snap({ queryId: 'q1', citationState: 'not-cited', competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'q1', citationState: 'not-cited', citedCompetitorDomains: ['rival.com'] }),
       ...Array.from({ length: 9 }, (_, i) =>
         snap({ queryId: `q${i + 2}`, citationState: 'cited' }),
       ),
@@ -104,7 +105,7 @@ describe('buildGapQueryScore', () => {
 
   it('reports progress as 0–100 percentage of gaps', () => {
     const snapshots = [
-      snap({ queryId: 'q1', citationState: 'not-cited', competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'q1', citationState: 'not-cited', citedCompetitorDomains: ['rival.com'] }),
       snap({ queryId: 'q2', citationState: 'cited' }),
     ]
     const result = buildGapQueryScore(snapshots)
@@ -126,9 +127,9 @@ describe('buildMentionGapScore', () => {
     expect(result.progress).toBeUndefined()
   })
 
-  it('counts a query as a mention gap when not mentioned but a competitor is in overlap', () => {
+  it('counts a query as a mention gap when not mentioned but a competitor is mentioned', () => {
     const snapshots = [
-      snap({ queryId: 'q1', answerMentioned: false, competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'q1', answerMentioned: false, mentionedCompetitorDomains: ['rival.com'] }),
     ]
     const result = buildMentionGapScore(snapshots)
     expect(result.value).toBe('1')
@@ -137,7 +138,7 @@ describe('buildMentionGapScore', () => {
 
   it('does not count a query as a gap when mentioned, even if competitors are present', () => {
     const snapshots = [
-      snap({ queryId: 'q1', answerMentioned: true, competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'q1', answerMentioned: true, mentionedCompetitorDomains: ['rival.com'] }),
     ]
     const result = buildMentionGapScore(snapshots)
     expect(result.value).toBe('0')
@@ -145,7 +146,7 @@ describe('buildMentionGapScore', () => {
 
   it('does not count a query as a gap when not mentioned but no competitors are in overlap', () => {
     const snapshots = [
-      snap({ queryId: 'q1', answerMentioned: false, competitorOverlap: [] }),
+      snap({ queryId: 'q1', answerMentioned: false, mentionedCompetitorDomains: [] }),
     ]
     const result = buildMentionGapScore(snapshots)
     expect(result.value).toBe('0')
@@ -153,8 +154,8 @@ describe('buildMentionGapScore', () => {
 
   it('treats a query as mentioned when ANY snapshot for it is answerMentioned=true', () => {
     const snapshots = [
-      snap({ queryId: 'q1', answerMentioned: false, competitorOverlap: ['rival.com'] }),
-      snap({ queryId: 'q1', answerMentioned: true, competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'q1', answerMentioned: false, mentionedCompetitorDomains: ['rival.com'] }),
+      snap({ queryId: 'q1', answerMentioned: true, mentionedCompetitorDomains: ['rival.com'] }),
     ]
     const result = buildMentionGapScore(snapshots)
     expect(result.value).toBe('0')
@@ -162,7 +163,7 @@ describe('buildMentionGapScore', () => {
 
   it('treats null answerMentioned as "not mentioned" (legacy snapshot pre-mention-tracking)', () => {
     const snapshots = [
-      snap({ queryId: 'q1', answerMentioned: null, competitorOverlap: ['rival.com'] }),
+      snap({ queryId: 'q1', answerMentioned: null, mentionedCompetitorDomains: ['rival.com'] }),
     ]
     const result = buildMentionGapScore(snapshots)
     expect(result.value).toBe('1')
@@ -170,9 +171,9 @@ describe('buildMentionGapScore', () => {
 
   it('uses negative tone when gap ratio is 30% or more', () => {
     const snapshots = [
-      snap({ queryId: 'q1', answerMentioned: false, competitorOverlap: ['rival.com'] }),
-      snap({ queryId: 'q2', answerMentioned: true, competitorOverlap: [] }),
-      snap({ queryId: 'q3', answerMentioned: true, competitorOverlap: [] }),
+      snap({ queryId: 'q1', answerMentioned: false, mentionedCompetitorDomains: ['rival.com'] }),
+      snap({ queryId: 'q2', answerMentioned: true, mentionedCompetitorDomains: [] }),
+      snap({ queryId: 'q3', answerMentioned: true, mentionedCompetitorDomains: [] }),
     ]
     const result = buildMentionGapScore(snapshots)
     expect(result.tone).toBe('negative')
@@ -182,12 +183,41 @@ describe('buildMentionGapScore', () => {
     // q1: cited but not mentioned + competitor present → mention gap only
     // q2: mentioned but not cited + competitor present → citation gap only
     const snapshots = [
-      snap({ queryId: 'q1', citationState: 'cited', answerMentioned: false, competitorOverlap: ['rival.com'] }),
-      snap({ queryId: 'q2', citationState: 'not-cited', answerMentioned: true, competitorOverlap: ['rival.com'] }),
+      snap({
+        queryId: 'q1',
+        citationState: 'cited',
+        answerMentioned: false,
+        mentionedCompetitorDomains: ['rival.com'],
+      }),
+      snap({
+        queryId: 'q2',
+        citationState: 'not-cited',
+        answerMentioned: true,
+        citedCompetitorDomains: ['rival.com'],
+      }),
     ]
     const cite = buildGapQueryScore(snapshots)
     const mention = buildMentionGapScore(snapshots)
     expect(cite.value).toBe('1')      // q2 is the citation gap
     expect(mention.value).toBe('1')   // q1 is the mention gap
+  })
+
+  it('does not let either competitor signal leak into the other gap', () => {
+    const mentionOnly = snap({
+      queryId: 'mention-only',
+      answerMentioned: false,
+      mentionedCompetitorDomains: ['rival.com'],
+    })
+    const citationOnly = snap({
+      queryId: 'citation-only',
+      citationState: 'not-cited',
+      answerMentioned: false,
+      citedCompetitorDomains: ['rival.com'],
+    })
+
+    expect(buildGapQueryScore([mentionOnly]).value).toBe('0')
+    expect(buildMentionGapScore([mentionOnly]).value).toBe('1')
+    expect(buildGapQueryScore([citationOnly]).value).toBe('1')
+    expect(buildMentionGapScore([citationOnly]).value).toBe('0')
   })
 })

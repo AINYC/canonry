@@ -269,11 +269,12 @@ export const mentionRowSchema = z.object({
   /**
    * Mention share 0..100. Numerator = this competitor's `mentionCount`.
    * Denominator = sum of `mentionCount` across all competitors plus the
-   * project's own `projectMentionCount`. Equals 0 when no snapshot had any
-   * mention. Per-competitor split of the same head-to-head measure the
-   * project's hero `MentionShareDto` gauge headlines.
+   * project's own `projectMentionCount`. Null when that denominator is 0:
+   * no tracked brand being named is not a measured 0% share. Per-competitor
+   * split of the same head-to-head measure the project's hero
+   * `MentionShareDto` gauge headlines.
    */
-  sharePct: z.number(),
+  sharePct: z.number().nullable(),
 })
 
 export type MentionRow = z.infer<typeof mentionRowSchema>

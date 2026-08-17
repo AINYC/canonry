@@ -206,14 +206,19 @@ describe('effectiveBrandNames', () => {
       .toEqual(['Example', 'example-group'])
   })
 
-  it('does not add short domain labels, while preserving explicit short approved names', () => {
+  it('keeps exact short domains without approving their bare labels', () => {
+    expect(effectiveBrandNames({
+      canonicalDomain: 'www.ai.com',
+      ownedDomains: ['go.io', 'four.com'],
+    })).toEqual(['ai.com', 'go.io', 'four'])
+
     expect(effectiveBrandNames({
       canonicalDomain: 'www.ai.com',
       ownedDomains: ['go.io', 'four.com'],
       displayName: 'AI',
       aliases: ['Go'],
     }))
-      .toEqual(['AI', 'Go', 'four'])
+      .toEqual(['AI', 'Go', 'ai.com', 'go.io', 'four'])
   })
 
   it('keeps an owned-domain label distinct from the canonical-domain label', () => {
@@ -432,6 +437,8 @@ test('querySnapshotDtoSchema applies defaults', () => {
   expect(snapshot.resolvedCount).toBeNull()
   expect(snapshot.captureVersion).toBeNull()
   expect(snapshot.competitorOverlap).toEqual([])
+  expect(snapshot.citedCompetitorDomains).toEqual([])
+  expect(snapshot.mentionedCompetitorDomains).toEqual([])
   expect(snapshot.recommendedCompetitors).toEqual([])
   expect(snapshot.matchedTerms).toEqual([])
   expect(snapshot.answerMentioned).toBeUndefined()

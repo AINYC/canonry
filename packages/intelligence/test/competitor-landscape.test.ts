@@ -10,7 +10,6 @@ function snap(overrides: Partial<CompetitorLandscapeSnapshot> = {}): CompetitorL
   return {
     queryId: 'q1',
     citedDomains: [],
-    competitorOverlap: [],
     groundingSources: [],
     ...overrides,
   }
@@ -36,10 +35,10 @@ describe('buildCompetitorLandscape', () => {
     expect(result.projectCitationCount).toBe(1)
   })
 
-  it('counts a competitor citation when any cited domain belongs to that competitor', () => {
-    const snapshots = [
+  it('counts only source-backed competitor citations and ignores legacy mixed overlap', () => {
+    const snapshots: Array<CompetitorLandscapeSnapshot & { competitorOverlap?: string[] }> = [
       snap({ queryId: 'q1', citedDomains: ['rival.com'] }),
-      snap({ queryId: 'q2', competitorOverlap: ['rival.com'] }),
+      { ...snap({ queryId: 'q2' }), competitorOverlap: ['rival.com'] },
     ]
     const result = buildCompetitorLandscape(
       snapshots,
@@ -48,8 +47,8 @@ describe('buildCompetitorLandscape', () => {
       lookup([['q1', 'a'], ['q2', 'b']]),
     )
     const rival = result.competitors.find(c => c.domain === 'rival.com')!
-    expect(rival.citationCount).toBe(2)
-    expect(rival.citedQueries).toEqual(['a', 'b'])
+    expect(rival.citationCount).toBe(1)
+    expect(rival.citedQueries).toEqual(['a'])
   })
 
   it('counts a competitor citation regardless of queryId presence in the lookup', () => {
@@ -123,12 +122,28 @@ describe('buildCompetitorLandscape', () => {
       lookup([['q1', 'best CRM']]),
     )
     const pages = result.competitors[0]?.theirCitedPages ?? []
+    expect(result.competitors[0]?.citationCount).toBe(1)
     const urls = pages.map(p => p.url).sort()
     expect(urls).toEqual([
       'https://blog.rival.com/post-1',
       'https://www.rival.com/page',
     ])
     expect(pages.every(p => p.citedFor.includes('best CRM'))).toBe(true)
+  })
+
+  it('deduplicates a competitor present in cited domains and grounding sources', () => {
+    const snapshots = [snap({
+      citedDomains: ['rival.com'],
+      groundingSources: [{ uri: 'https://rival.com/page', title: 'Rival' }],
+    })]
+    const result = buildCompetitorLandscape(
+      snapshots,
+      ['rival.com'],
+      PROJECT_DOMAINS,
+      lookup([['q1', 'best CRM']]),
+    )
+
+    expect(result.competitors[0]?.citationCount).toBe(1)
   })
 
   it('sorts competitor rows by citation count descending', () => {

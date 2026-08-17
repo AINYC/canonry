@@ -10,6 +10,7 @@ import {
   gscUrlInspections,
   insights,
   healthSnapshots,
+  parseJsonColumn,
   pickGroupRepresentative,
   queries,
   projects,
@@ -51,6 +52,7 @@ import {
 } from '@ainyc/canonry-contracts'
 import {
   buildCompetitorPressureScore,
+  compileCompetitiveSignalResolver,
   buildGapQueryScore,
   buildMentionGapScore,
   buildCitationMovementSummary,
@@ -230,16 +232,30 @@ export async function compositeRoutes(app: FastifyInstance) {
       snapshots: trackedLatest,
       queryTextById: queryLookup.byId,
     })
+    const competitiveSignalResolver = compileCompetitiveSignalResolver(
+      competitorRows.map(c => c.domain),
+    )
+    const gapSignalSnapshots = trackedLatest.map(snapshot => ({
+      ...snapshot,
+      ...competitiveSignalResolver.resolve({
+        citedDomains: snapshot.citedDomains,
+        groundingSources: snapshot.groundingSources,
+        answerText: snapshot.answerText,
+      }),
+    }))
 
     const scores: ProjectOverviewScoresDto = {
       mention: buildMentionCoverage(trackedLatest, { configuredApiProviders }),
       visibility: buildVisibilityScore(trackedLatest, { configuredApiProviders }),
       mentionShare: buildMentionShare(
         mentionShareInputs.snapshots,
-        { competitors: mentionShareInputs.competitors },
+        {
+          competitors: mentionShareInputs.competitors,
+          classificationAvailable: mentionShareInputs.classified,
+        },
       ),
-      gapQueries: buildGapQueryScore(trackedLatest),
-      mentionGaps: buildMentionGapScore(trackedLatest),
+      gapQueries: buildGapQueryScore(gapSignalSnapshots),
+      mentionGaps: buildMentionGapScore(gapSignalSnapshots),
       indexCoverage: buildIndexCoverageScore(app, project.id),
       competitorPressure: buildCompetitorPressureScore(
         trackedLatest,
@@ -479,6 +495,8 @@ interface OverviewSnapshot {
    *  brand mentions. Variable size; ~3-5KB per snapshot for an 80-snapshot
    *  run is ~400KB total — manageable to include in the overview payload. */
   answerText: string | null
+  groundingSources: Array<{ uri: string }>
+  /** Legacy mixed signal retained for raw compatibility; score readers ignore it. */
   competitorOverlap: string[]
   citedDomains: string[]
 }
@@ -500,6 +518,7 @@ function loadSnapshotsByRunIds(
       citationState: querySnapshots.citationState,
       answerMentioned: querySnapshots.answerMentioned,
       answerText: querySnapshots.answerText,
+      rawResponse: querySnapshots.rawResponse,
       competitorOverlap: querySnapshots.competitorOverlap,
       citedDomains: querySnapshots.citedDomains,
     })
@@ -541,12 +560,24 @@ function loadSnapshotsByRunIds(
       citationState: row.citationState,
       answerMentioned: row.answerMentioned,
       answerText: row.answerText,
+      groundingSources: parseOverviewGroundingSources(row.rawResponse),
       competitorOverlap: row.competitorOverlap,
       citedDomains: row.citedDomains,
     })
     result.set(row.runId, list)
   }
   return result
+}
+
+function parseOverviewGroundingSources(rawResponse: string | null): Array<{ uri: string }> {
+  const parsed = parseJsonColumn<Record<string, unknown>>(rawResponse, {})
+  const sources = parsed.groundingSources
+  if (!Array.isArray(sources)) return []
+  return sources.flatMap(source => {
+    if (!source || typeof source !== 'object') return []
+    const uri = (source as { uri?: unknown }).uri
+    return typeof uri === 'string' ? [{ uri }] : []
+  })
 }
 
 function summarizeFromSnapshots(

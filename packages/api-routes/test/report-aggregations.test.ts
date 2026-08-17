@@ -33,14 +33,20 @@ function buildApp() {
   return { app, db, tmpDir }
 }
 
-function insertProject(db: ReturnType<typeof createClient>, name: string, canonicalDomain?: string) {
+function insertProject(
+  db: ReturnType<typeof createClient>,
+  name: string,
+  canonicalDomain?: string,
+  identity?: { displayName?: string; ownedDomains?: string[] },
+) {
   const id = crypto.randomUUID()
   const now = new Date().toISOString()
   db.insert(projects).values({
     id,
     name,
-    displayName: name,
+    displayName: identity?.displayName ?? name,
     canonicalDomain: canonicalDomain ?? `${name}.example.com`,
+    ownedDomains: identity?.ownedDomains ?? [],
     country: 'US',
     language: 'en',
     locations: '[]',
@@ -168,6 +174,29 @@ describe('CompetitorRow.sharePct (SOV)', () => {
     for (const row of body.competitorLandscape.competitors) {
       expect(row.sharePct).toBe(0)
     }
+  })
+
+  test('does not count answer mentions or legacy mixed overlap as competitor citations', async () => {
+    const projectId = insertProject(ctx.db, 'signal-split', 'signal-split.example.com')
+    insertCompetitor(ctx.db, projectId, 'rival.com')
+    const queryId = insertQuery(ctx.db, projectId, 'best category option')
+    const runId = insertRun(ctx.db, projectId)
+    insertSnapshot(ctx.db, runId, queryId, {
+      citationState: 'not-cited',
+      citedDomains: [],
+      answerText: 'Rival is the recommended category option.',
+      competitorOverlap: ['rival.com'],
+    })
+
+    await ctx.app.ready()
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/signal-split/report' })
+    const body = JSON.parse(res.body) as ProjectReportDto
+    const citationRow = body.competitorLandscape.competitors.find(c => c.domain === 'rival.com')!
+    const mentionRow = body.mentionLandscape.competitors.find(c => c.domain === 'rival.com')!
+
+    expect(citationRow.citationCount).toBe(0)
+    expect(citationRow.citedQueries).toEqual([])
+    expect(mentionRow.mentionCount).toBe(1)
   })
 })
 
@@ -341,6 +370,29 @@ describe('mentionLandscape', () => {
     expect(landscape.totalAnswerSnapshots + landscape.branded.totalAnswerSnapshots).toBe(2)
   })
 
+  test('classifies canonical and owned domain identities the same way as other surfaces', async () => {
+    const projectId = insertProject(ctx.db, 'holding-company', 'acme.com', {
+      displayName: 'Holding Company',
+      ownedDomains: ['brand-studio.com'],
+    })
+    const canonicalBranded = insertQuery(ctx.db, projectId, 'is acme worth it')
+    const ownedBranded = insertQuery(ctx.db, projectId, 'brand studio pricing')
+    const category = insertQuery(ctx.db, projectId, 'best workflow platform')
+    const runId = insertRun(ctx.db, projectId)
+
+    insertSnapshot(ctx.db, runId, canonicalBranded, { answerText: 'Acme is established.', answerMentioned: true })
+    insertSnapshot(ctx.db, runId, ownedBranded, { answerText: 'Brand Studio has plans.', answerMentioned: true })
+    insertSnapshot(ctx.db, runId, category, { answerText: 'Generic category guidance.', answerMentioned: false })
+
+    await ctx.app.ready()
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/holding-company/report' })
+    const body = JSON.parse(res.body) as ProjectReportDto
+
+    expect(body.mentionLandscape.scope).toBe('non-brand')
+    expect(body.mentionLandscape.branded.totalAnswerSnapshots).toBe(2)
+    expect(body.mentionLandscape.nonBrand.totalAnswerSnapshots).toBe(1)
+  })
+
   test('skips snapshots with no answer text from the totalCount denominator', async () => {
     const projectId = insertProject(ctx.db, 'no-text', 'no-text.example.com')
     insertCompetitor(ctx.db, projectId, 'rival.com')
@@ -361,7 +413,7 @@ describe('mentionLandscape', () => {
     expect(rival.totalCount).toBe(1)
   })
 
-  test('returns zero mentions when no snapshot text references competitors or project', async () => {
+  test('returns unavailable mention share when no snapshot text references competitors or project', async () => {
     const projectId = insertProject(ctx.db, 'empty-mentions', 'empty.example.com')
     insertCompetitor(ctx.db, projectId, 'rival.com')
     const k = insertQuery(ctx.db, projectId, 'k')
@@ -374,7 +426,7 @@ describe('mentionLandscape', () => {
 
     expect(body.mentionLandscape.projectMentionCount).toBe(0)
     expect(body.mentionLandscape.competitors[0]!.mentionCount).toBe(0)
-    expect(body.mentionLandscape.competitors[0]!.sharePct).toBe(0)
+    expect(body.mentionLandscape.competitors[0]!.sharePct).toBeNull()
     expect(body.mentionLandscape.competitors[0]!.pressureLabel).toBe('None')
   })
 })

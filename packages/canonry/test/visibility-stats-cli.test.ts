@@ -1,11 +1,13 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest'
-import type { VisibilityStatsDto } from '@ainyc/canonry-contracts'
+import type { VisibilityCompareDto, VisibilityStatsDto } from '@ainyc/canonry-contracts'
 
 const mockGetVisibilityStats = vi.fn()
+const mockGetVisibilityCompare = vi.fn()
 
 vi.mock('../src/client.js', () => ({
   createApiClient: () => ({
     getVisibilityStats: mockGetVisibilityStats,
+    getVisibilityCompare: mockGetVisibilityCompare,
   }),
 }))
 
@@ -26,7 +28,7 @@ function captureOutput(fn: () => Promise<void>): { run: Promise<void>; text: () 
   return { run, text: () => buf, lines: () => buf.split('\n').filter(Boolean) }
 }
 
-const { showVisibilityStats } = await import('../src/commands/visibility-stats.js')
+const { showVisibilityCompare, showVisibilityStats } = await import('../src/commands/visibility-stats.js')
 
 const data: VisibilityStatsDto = {
   project: 'acme',
@@ -68,6 +70,39 @@ const data: VisibilityStatsDto = {
       providers: [],
     },
   ],
+}
+
+function compareData(queryClass: 'non-brand' | 'pooled'): VisibilityCompareDto {
+  const window = (month: string) => ({
+    month,
+    since: `${month}-01T00:00:00.000Z`,
+    until: `${month}-28T23:59:59.999Z`,
+    runCount: 6,
+    lowRunCount: false,
+  })
+  const period = { availability: 'available' as const, point: 0.5, ciLow: 0.2, ciHigh: 0.8, numerator: 2, denominator: 4 }
+  return {
+    project: 'acme',
+    from: window('2026-05'),
+    to: window('2026-06'),
+    basket: { queryCount: 1, excludedFromOnly: 0, excludedToOnly: 0, providers: ['openai'], excludedProviders: [] },
+    metrics: [{
+      key: 'mention-share-of-voice',
+      label: 'Named share of voice',
+      queryClass,
+      driftRobust: true,
+      from: period,
+      to: period,
+      rateRatio: 1,
+      direction: 'flat',
+      verdict: 'within-noise',
+    }],
+    queriesMentioned: { from: { count: 1, of: 1 }, to: { count: 1, of: 1 } },
+    byProvider: [],
+    modelChanges: [],
+    continuity: { status: 'comparable', comparedProviders: ['openai'], providers: [] },
+    competitors: { from: [], to: [] },
+  }
 }
 
 describe('showVisibilityStats', () => {
@@ -135,5 +170,70 @@ describe('showVisibilityStats', () => {
     const cap = captureOutput(() => showVisibilityStats('acme', {}))
     await cap.run
     expect(cap.text()).toContain('No answer-visibility snapshots')
+  })
+
+  it('distinguishes a missing competitor frame from a configured frame with no mentions', async () => {
+    const share = {
+      queryClass: 'non-brand' as const,
+      percent: null,
+      competitorCount: 0,
+      projectMentions: 0,
+      competitorMentions: 0,
+      snapshotsWithAnswerText: 2,
+      perCompetitor: [],
+    }
+    mockGetVisibilityStats.mockResolvedValue({ ...data, shareOfVoice: share })
+    let cap = captureOutput(() => showVisibilityStats('acme', { shareOfVoice: true }))
+    await cap.run
+    expect(cap.text()).toContain('— (no competitors configured)')
+
+    mockGetVisibilityStats.mockResolvedValue({
+      ...data,
+      shareOfVoice: { ...share, competitorCount: 1 },
+    })
+    cap = captureOutput(() => showVisibilityStats('acme', { shareOfVoice: true }))
+    await cap.run
+    expect(cap.text()).toContain('— (no brands mentioned in scope)')
+    expect(cap.text()).not.toContain('no competitors configured')
+  })
+})
+
+describe('showVisibilityCompare', () => {
+  it.each([
+    ['non-brand', 'Named share of voice · non-brand queries'],
+    ['pooled', 'Named share of voice · pooled queries; classification unavailable'],
+  ] as const)('prints the metric query class for %s scope', async (queryClass, expected) => {
+    mockGetVisibilityCompare.mockResolvedValue(compareData(queryClass))
+    const cap = captureOutput(() => showVisibilityCompare('acme', { from: '2026-05', to: '2026-06' }))
+    await cap.run
+    expect(cap.text()).toContain(expected)
+  })
+
+  it('prints preserved observations without presenting project-only counts as share', async () => {
+    const dto = compareData('non-brand')
+    const unavailable = {
+      availability: 'no-competitive-frame' as const,
+      point: null,
+      ciLow: null,
+      ciHigh: null,
+      numerator: 3,
+      denominator: 0,
+    }
+    dto.metrics[0] = {
+      ...dto.metrics[0]!,
+      from: unavailable,
+      to: { ...unavailable, numerator: 2 },
+      rateRatio: null,
+      direction: null,
+      verdict: 'insufficient-data',
+    }
+    mockGetVisibilityCompare.mockResolvedValue(dto)
+
+    const cap = captureOutput(() => showVisibilityCompare('acme', { from: '2026-05', to: '2026-06' }))
+    await cap.run
+
+    expect(cap.text()).toContain('unavailable: no competitive frame (3 observed)')
+    expect(cap.text()).toContain('unavailable: no competitive frame (2 observed)')
+    expect(cap.text()).not.toContain('100.0%')
   })
 })

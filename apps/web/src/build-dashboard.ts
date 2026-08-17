@@ -285,6 +285,15 @@ function buildEvidenceFromTimeline(
             ? 'model'
             : baseHistoryScope
           const modelTransitions = computeModelTransitions(runHistory)
+          const citedCompetitorDomains = snap?.citedCompetitorDomains ?? []
+          const mentionedCompetitorDomains = snap?.mentionedCompetitorDomains ?? []
+          // Keep the legacy mixed field only in a neutral union used by the
+          // competitor filter. Signal-labelled UI consumes one split field.
+          const competitorDomains = [...new Set([
+            ...citedCompetitorDomains,
+            ...mentionedCompetitorDomains,
+            ...(snap?.competitorOverlap ?? []),
+          ])]
 
           results.push({
             id: `evidence_${projectName}_${idx++}`,
@@ -304,7 +313,9 @@ function buildEvidenceFromTimeline(
             answerSnippet: snap?.answerText ?? '',
             citedDomains: snap?.citedDomains ?? [],
             evidenceUrls: [],
-            competitorDomains: snap?.competitorOverlap ?? [],
+            citedCompetitorDomains,
+            mentionedCompetitorDomains,
+            competitorDomains,
             recommendedCompetitors: snap?.recommendedCompetitors ?? [],
             matchedTerms: snap?.matchedTerms ?? [],
             relatedTechnicalSignals: [],
@@ -337,6 +348,8 @@ function buildEvidenceFromTimeline(
       answerSnippet: '',
       citedDomains: [],
       evidenceUrls: [],
+      citedCompetitorDomains: [],
+      mentionedCompetitorDomains: [],
       competitorDomains: [],
       recommendedCompetitors: [],
       matchedTerms: [],

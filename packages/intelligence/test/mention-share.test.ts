@@ -15,24 +15,53 @@ describe('buildMentionShare', () => {
     expect(result.value).toBe('No data')
     expect(result.tone).toBe('neutral')
     expect(result.breakdown.snapshotsTotal).toBe(0)
+    expect(result.scope).toBe('pooled')
   })
 
-  it('returns "Add competitors" tone:neutral when no competitors are configured', () => {
-    const result = buildMentionShare([snap(true, 'You are great')], { competitors: [] })
+  it('keeps an empty classifiable window scoped to non-brand', () => {
+    const result = buildMentionShare([], { ...baseOpts, classificationAvailable: true })
+    expect(result.value).toBe('No data')
+    expect(result.scope).toBe('non-brand')
+    expect(result.breakdown.snapshotsTotal).toBe(0)
+  })
+
+  it('returns "Add competitors" while preserving class scope and observed counts', () => {
+    const result = buildMentionShare([
+      { projectMentioned: true, answerText: 'You are great', queryClass: 'non-brand' },
+      { projectMentioned: true, answerText: 'Your branded answer', queryClass: 'branded' },
+    ], { competitors: [] })
     expect(result.value).toBe('Add competitors')
     expect(result.tone).toBe('neutral')
     expect(result.delta).toMatch(/No competitors configured/i)
+    expect(result.scope).toBe('non-brand')
+    expect(result.breakdown).toMatchObject({
+      projectMentionSnapshots: 1,
+      competitorMentionSnapshots: 0,
+      snapshotsWithAnswerText: 1,
+      snapshotsTotal: 1,
+      score: null,
+    })
+    expect(result.branded).toMatchObject({
+      projectMentionSnapshots: 1,
+      competitorMentionSnapshots: 0,
+      snapshotsWithAnswerText: 1,
+      snapshotsTotal: 1,
+      score: null,
+    })
   })
 
-  it('returns 0 with neutral tone when no brand mentions detected', () => {
+  it('returns an unavailable state, not 0%, when no brand mentions are detected', () => {
     const result = buildMentionShare(
       [snap(false, 'Some unrelated answer with no brand mentions.')],
       baseOpts,
     )
-    expect(result.value).toBe('0')
+    expect(result.value).toBe('No mentions')
     expect(result.tone).toBe('neutral')
+    expect(result.progress).toBeUndefined()
+    expect(result.breakdown.score).toBeNull()
     expect(result.breakdown.projectMentionSnapshots).toBe(0)
     expect(result.breakdown.competitorMentionSnapshots).toBe(0)
+    expect(result.delta).toBe('No brand mentions in this run · pooled queries · classification unavailable')
   })
 
   it('100% when only project is mentioned, no competitors surface', () => {
@@ -280,6 +309,7 @@ describe('buildMentionShare — branded vs non-brand are never pooled', () => {
     expect(pooled.breakdown.projectMentionSnapshots).toBe(21)
     expect(pooled.breakdown.competitorMentionSnapshots).toBe(24)
     expect(pooled.breakdown.score).toBe(47) // 21 / 45
+    expect(pooled.delta).toBe('21 of 45 brand mentions · pooled queries · classification unavailable')
     const topCompetitor = pooled.breakdown.perCompetitor[0]!
     expect(pooled.breakdown.projectMentionSnapshots).toBeGreaterThan(topCompetitor.mentionSnapshots)
   })
@@ -326,6 +356,21 @@ describe('buildMentionShare — branded vs non-brand are never pooled', () => {
     expect(result.delta).toBe('2 branded snapshots only')
   })
 
+  it('distinguishes non-brand queries with no answer text from having no non-brand queries', () => {
+    const result = buildMentionShare(
+      [
+        { projectMentioned: false, answerText: null, queryClass: 'non-brand' },
+        { projectMentioned: true, answerText: 'Acme is known by name.', queryClass: 'branded' },
+      ],
+      { competitors: [{ domain: 'rival-a.com', brandTokens: ['rival'] }] },
+    )
+    expect(result.value).toBe('No non-brand answers')
+    expect(result.delta).toBe('1 branded answer only')
+    expect(result.description).toContain('Non-brand queries are tracked')
+    expect(result.breakdown.snapshotsTotal).toBe(1)
+    expect(result.breakdown.snapshotsWithAnswerText).toBe(0)
+  })
+
   it('the delta and description name the class, so a number is never read as the other one', () => {
     const result = buildMentionShare(lopsidedBasket(), { competitors: RIVALS })
     expect(result.delta).toBe('1 of 25 brand mentions · non-brand queries')
@@ -339,8 +384,9 @@ describe('buildMentionShare — branded vs non-brand are never pooled', () => {
       { competitors: [{ domain: 'rival-a.com', brandTokens: ['rival'] }] },
     )
     expect(result.breakdown.score).toBeNull()
-    expect(result.value).toBe('0')
+    expect(result.value).toBe('No mentions')
     expect(result.tone).toBe('neutral')
+    expect(result.progress).toBeUndefined()
   })
 
   it('a 3-character brand is matched — the alias floor is 3, and it is the same floor everywhere', () => {

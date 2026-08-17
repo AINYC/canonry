@@ -500,6 +500,7 @@ if (answerMentioned) mentioned++
 3. **The class travels with the number.** Every surface that prints a class-scoped figure prints the class too (`scope` / `queryClass` on the wire; "· non-brand queries" in the delta, chart title, column header, and CLI line). A reader who sees only the number must still be able to tell which instrument produced it.
 4. **`pooled` is a confession, not a default.** It appears only when the project has no usable brand alias to classify by. Never label an unsplit figure `non-brand`, and never silently classify an unclassifiable basket.
 5. **One classifier.** `compileQueryClassifier` (`packages/contracts/src/query-class.ts`) runs the project's `effectiveBrandNames` against the query text with the shared brand matcher, and `queryClassSchema` IS `measurementQueryClassSchema`. Never hand-roll a regex or a second enum.
+6. **`competitorOverlap` is legacy MIXED evidence.** It may contain a rival found in answer text, source links, or both. Citation metrics use `citedDomains` plus grounding-source hosts; mention metrics use answer text with the shared matcher. Never use `competitorOverlap` alone for either claim.
 
 ### Query vs question
 

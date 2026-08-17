@@ -260,6 +260,23 @@ describe('canonry overview — jsonl degrades to the json document', () => {
     expect(JSON.parse(jsonlCap.text())).toEqual(overviews)
   })
 
+  it('--all: human table carries each mention-share query scope', async () => {
+    const projects = [{ name: 'a' }, { name: 'b' }]
+    const overviews = [makeOverview('a'), makeOverview('b')]
+    overviews[1]!.scores.mentionShare.scope = 'pooled'
+    mockListProjects.mockResolvedValue(projects)
+    mockGetProjectOverview.mockImplementation((name: string) =>
+      Promise.resolve(overviews.find(o => o.project.name === name)),
+    )
+
+    const cap = captureLog(() => showAllOverviews({}))
+    await cap.run
+
+    expect(cap.text()).toContain('Mention share · scope')
+    expect(cap.text()).toContain('Add competitors · non-brand queries')
+    expect(cap.text()).toContain('Add competitors · pooled queries')
+  })
+
   it('--all: empty project list emits "[]" for both json and jsonl', async () => {
     mockListProjects.mockResolvedValue([])
     const jsonCap = captureLog(() => showAllOverviews({ format: 'json' }))

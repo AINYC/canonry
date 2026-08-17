@@ -1,12 +1,13 @@
 import {
+  brandKeyFromText,
   brandLabelFromDomain,
   compileQueryClassifier,
   determineAnswerMentioned,
+  MIN_DOMAIN_BRAND_KEY_LENGTH,
   type MentionRow,
   type ProjectReportDto,
   type QueryClass,
 } from '@ainyc/canonry-contracts'
-import { usableBrandAliases } from './mention-share.js'
 
 export interface MentionLandscapeSnapshot {
   queryId: string
@@ -48,7 +49,7 @@ function toSection(tally: SectionTally): LandscapeSection {
     }
     const sharePct = totalMentionedSlots > 0
       ? Math.round((data.count / totalMentionedSlots) * 100)
-      : 0
+      : null
     return {
       domain,
       mentionCount: data.count,
@@ -91,11 +92,14 @@ export function buildMentionLandscape(
   const unclassified = emptySection(competitorDomains)
 
   // Answer-text brand matching is what a mention IS. The stored, run-time
-  // `competitor_overlap` column is a citation-side signal and is deliberately
-  // not read here — deriving a mention count from it would report one signal
-  // under the other's name.
+  // `competitor_overlap` column is legacy MIXED evidence (answer mentions plus
+  // cited/grounding hosts) and is deliberately not read here — deriving a
+  // mention count from it would report one signal under the other's name.
   const competitorAliases = new Map<string, string[]>(
-    competitorDomains.map(domain => [domain, usableBrandAliases([brandLabelFromDomain(domain)])]),
+    competitorDomains.map(domain => {
+      const label = brandLabelFromDomain(domain)
+      return [domain, brandKeyFromText(label).length >= MIN_DOMAIN_BRAND_KEY_LENGTH ? [label] : []]
+    }),
   )
 
   for (const snap of snapshots) {
@@ -107,9 +111,9 @@ export function buildMentionLandscape(
     const tally = queryClass === 'branded' ? branded : queryClass === 'non-brand' ? nonBrand : unclassified
     tally.totalAnswerSnapshots++
 
-    // Prefer the run-time computed answerMentioned (against project's own brand
-    // + domains). Fall back to a recompute when the column is null (legacy rows).
-    const projectMentioned = snap.answerMentioned ?? determineAnswerMentioned(
+    // The report uses the current project identity. A persisted boolean may be
+    // stale after an alias/domain rename; answer text is the source of truth.
+    const projectMentioned = determineAnswerMentioned(
       text,
       [...projectBrandNames],
       [...projectDomains],
@@ -127,8 +131,10 @@ export function buildMentionLandscape(
     }
   }
 
-  const classified = nonBrand.totalAnswerSnapshots + branded.totalAnswerSnapshots
-  const scope = classified > 0 ? 'non-brand' as const : 'pooled' as const
+  // Scope describes classifier availability, not whether this particular
+  // window happened to contain an answer. An empty classifiable report remains
+  // non-brand; pooled is reserved for projects with no usable identity.
+  const scope = classifier ? 'non-brand' as const : 'pooled' as const
   const headline = toSection(scope === 'non-brand' ? nonBrand : unclassified)
 
   return {

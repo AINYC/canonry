@@ -68,8 +68,10 @@ test('buildProjectCommandCenter evidence summary uses canonical mention vocabula
         visibilityState: 'visible',
         mentionState: 'mentioned',
         answerText: 'The brand is mentioned.',
-        citedDomains: ['example.com'],
-        competitorOverlap: [],
+        citedDomains: ['example.com', 'source-rival.example'],
+        competitorOverlap: ['legacy-mixed.example'],
+        citedCompetitorDomains: ['source-rival.example'],
+        mentionedCompetitorDomains: ['answer-rival.example'],
         groundingSources: [],
         searchQueries: [],
         model: 'gemini-2.5-flash',
@@ -86,6 +88,14 @@ test('buildProjectCommandCenter evidence summary uses canonical mention vocabula
   // Summary text must use the canonical "mentioned" vocabulary, not "visible".
   expect(evidence!.summary).toMatch(/mentioned/i)
   expect(evidence!.summary).not.toMatch(/\bvisible\b/i)
+  expect(evidence!.citedCompetitorDomains).toEqual(['source-rival.example'])
+  expect(evidence!.mentionedCompetitorDomains).toEqual(['answer-rival.example'])
+  // The legacy mixed value survives only in the neutral filter union.
+  expect(evidence!.competitorDomains).toEqual([
+    'source-rival.example',
+    'answer-rival.example',
+    'legacy-mixed.example',
+  ])
 })
 
 test('buildProjectCommandCenter carries the model web search queries into evidence', () => {

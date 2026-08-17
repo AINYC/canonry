@@ -4,7 +4,10 @@ import { gapTone } from './score-tones.js'
 export interface GapQueryScoreSnapshot {
   queryId: string
   citationState: string
-  competitorOverlap: string[]
+  /** Tracked competitors present in source-list citation evidence. */
+  citedCompetitorDomains: readonly string[]
+  /** Tracked competitors present in answer prose. */
+  mentionedCompetitorDomains: readonly string[]
   /** True when the project's brand/domain appears in the LLM answer text. */
   answerMentioned?: boolean | null
 }
@@ -13,7 +16,7 @@ export interface GapQueryScoreSnapshot {
  * Computes the "Gap Queries" score gauge — tracked queries where a competitor
  * is cited but the project is not. A query counts as a gap when:
  *   1. No snapshot for that query has citationState='cited' for the project
- *   2. At least one snapshot has a non-empty competitorOverlap
+ *   2. At least one snapshot cites a tracked competitor in source evidence
  *
  * The gauge value is the gap count itself (so the dashboard reads the magnitude
  * directly), with `progress` set to the 0–100 percentage of tracked queries
@@ -36,18 +39,18 @@ export function buildGapQueryScore(
     }
   }
 
-  const byQuery = new Map<string, { cited: boolean; competitorOverlap: Set<string> }>()
+  const byQuery = new Map<string, { cited: boolean; citedCompetitors: Set<string> }>()
   for (const snap of snapshots) {
     const key = snap.queryId
-    const current = byQuery.get(key) ?? { cited: false, competitorOverlap: new Set<string>() }
+    const current = byQuery.get(key) ?? { cited: false, citedCompetitors: new Set<string>() }
     if (snap.citationState === CitationStates.cited) current.cited = true
-    for (const domain of snap.competitorOverlap) current.competitorOverlap.add(domain)
+    for (const domain of snap.citedCompetitorDomains) current.citedCompetitors.add(domain)
     byQuery.set(key, current)
   }
 
   const totalCount = byQuery.size
   const gapCount = [...byQuery.values()].filter(
-    entry => !entry.cited && entry.competitorOverlap.size > 0,
+    entry => !entry.cited && entry.citedCompetitors.size > 0,
   ).length
   const gapQueryLabel = gapCount === 1 ? 'query' : 'queries'
 
@@ -70,8 +73,7 @@ export function buildGapQueryScore(
  * as a mention gap when:
  *   1. No snapshot for that query has `answerMentioned=true` (your brand /
  *      domain never appears in the LLM answer prose)
- *   2. At least one snapshot has a non-empty competitorOverlap (some
- *      competitor surfaced in either the answer text or the source list)
+ *   2. At least one snapshot mentions a tracked competitor in answer prose
  *
  * Reported alongside the citation gap because per AGENTS.md the two signals
  * are independent — a query can be cited but not mentioned (citation card
@@ -94,18 +96,18 @@ export function buildMentionGapScore(
     }
   }
 
-  const byQuery = new Map<string, { mentioned: boolean; competitorOverlap: Set<string> }>()
+  const byQuery = new Map<string, { mentioned: boolean; mentionedCompetitors: Set<string> }>()
   for (const snap of snapshots) {
     const key = snap.queryId
-    const current = byQuery.get(key) ?? { mentioned: false, competitorOverlap: new Set<string>() }
+    const current = byQuery.get(key) ?? { mentioned: false, mentionedCompetitors: new Set<string>() }
     if (snap.answerMentioned === true) current.mentioned = true
-    for (const domain of snap.competitorOverlap) current.competitorOverlap.add(domain)
+    for (const domain of snap.mentionedCompetitorDomains) current.mentionedCompetitors.add(domain)
     byQuery.set(key, current)
   }
 
   const totalCount = byQuery.size
   const gapCount = [...byQuery.values()].filter(
-    entry => !entry.mentioned && entry.competitorOverlap.size > 0,
+    entry => !entry.mentioned && entry.mentionedCompetitors.size > 0,
   ).length
   const gapQueryLabel = gapCount === 1 ? 'query' : 'queries'
 

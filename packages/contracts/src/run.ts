@@ -296,7 +296,15 @@ export const querySnapshotDtoSchema = z.object({
   // Spelled as unions so the OpenAPI generator preserves null on the enums.
   retrievalStatus: z.union([retrievalStatusSchema, z.null()]).default(null),
   retrievalContract: z.union([retrievalContractSchema, z.null()]).default(null),
+  /**
+   * Legacy mixed field: source-list citations plus answer-text mentions.
+   * Retained for compatibility; new readers use the two explicit fields.
+   */
   competitorOverlap: z.array(z.string()).default([]),
+  /** Tracked competitors present in source-list citation evidence. */
+  citedCompetitorDomains: z.array(z.string()).default([]),
+  /** Tracked competitors present in answer prose. */
+  mentionedCompetitorDomains: z.array(z.string()).default([]),
   recommendedCompetitors: z.array(z.string()).default([]),
   matchedTerms: z.array(z.string()).default([]),
   groundingSources: z.array(groundingSourceSchema).default([]),
