@@ -493,6 +493,12 @@
     font-feature-settings: "cv11", "ss01", "ss03";
   }
 
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+
   body {
     @apply min-h-screen bg-bg font-sans text-primary antialiased;
   }

@@ -1,7 +1,12 @@
 import { useState } from 'react'
 
 import { Button } from '../ui/button.js'
-import { buildGoogleRedirectUri, resolveLocalGooglePublicUrl, updateGoogleAuthConfig } from '../../api.js'
+import {
+  buildGoogleMarketingRedirectUri,
+  buildGoogleRedirectUri,
+  resolveLocalGooglePublicUrl,
+  updateGoogleAuthConfig,
+} from '../../api.js'
 import { addToast } from '../../lib/toast-store.js'
 import { asyncHandler } from '../../lib/async-handler.js'
 
@@ -17,6 +22,7 @@ export function GoogleOAuthConfigForm({ onSaved }: { onSaved: () => void }) {
     ? undefined
     : resolveLocalGooglePublicUrl(window.location, window.__CANONRY_CONFIG__?.basePath)
   const redirectUri = localPublicUrl ? buildGoogleRedirectUri(localPublicUrl) : undefined
+  const marketingRedirectUri = localPublicUrl ? buildGoogleMarketingRedirectUri(localPublicUrl) : undefined
 
   async function handleSave() {
     if (!canSave) return
@@ -80,10 +86,19 @@ export function GoogleOAuthConfigForm({ onSaved }: { onSaved: () => void }) {
           onChange={(e) => setClientSecret(e.target.value)}
         />
       </div>
-      {redirectUri && (
+      {redirectUri && marketingRedirectUri && (
         <div className="rounded border border-default bg-surface px-3 py-2">
-          <p className="text-sm text-secondary">Authorized redirect URI</p>
-          <code className="mt-1 block break-all text-xs text-strong">{redirectUri}</code>
+          <p className="text-sm text-secondary">Authorized redirect URIs</p>
+          <dl className="mt-1 space-y-2 text-xs">
+            <div>
+              <dt className="text-muted">Search Console and Business Profile</dt>
+              <dd><code className="block break-all text-strong">{redirectUri}</code></dd>
+            </div>
+            <div>
+              <dt className="text-muted">Google Ads and Tag Manager</dt>
+              <dd><code className="block break-all text-strong">{marketingRedirectUri}</code></dd>
+            </div>
+          </dl>
         </div>
       )}
       {error && <p className="text-sm text-negative-400">{error}</p>}

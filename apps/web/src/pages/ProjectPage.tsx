@@ -28,6 +28,7 @@ import { VisibilityTrendSection } from '../components/project/VisibilityTrendSec
 import { DiscoverySection } from '../components/project/DiscoverySection.js'
 import { SiteHealthSection } from '../components/project/SiteHealthSection.js'
 import { ProjectHistorySection } from '../components/project/ProjectHistorySection.js'
+import { ConversionIntegrityWorkspace } from '../components/project/ConversionIntegrityWorkspace.js'
 import { AdvancedMeasurementSection } from '../components/project/advanced-measurement/AdvancedMeasurementSection.js'
 import { AdvancedMeasurementLanding } from '../components/project/advanced-measurement/AdvancedMeasurementLanding.js'
 import {
@@ -106,7 +107,7 @@ import { useDrawer } from '../hooks/use-drawer.js'
 import { useAccount } from '../contexts/account-context.js'
 import type { ProjectCommandCenterVm, RunHistoryPoint } from '../view-models.js'
 
-export type ProjectPageTab = 'overview' | 'portfolio' | 'search-console' | 'local' | 'discovery' | 'report' | 'activity' | 'backlinks' | 'technical-aeo' | 'history' | 'settings'
+export type ProjectPageTab = 'overview' | 'portfolio' | 'search-console' | 'conversions' | 'local' | 'discovery' | 'report' | 'activity' | 'backlinks' | 'technical-aeo' | 'history' | 'settings'
 
 type SearchConsoleWorkspace = 'google' | 'bing'
 
@@ -2227,6 +2228,7 @@ function ProjectPageContent({
     { key: 'activity', label: 'Activity', href: `${projectTabBase}/activity` },
     // `technical-aeo` is a stable route and embed token. Site Health is the product label.
     { key: 'technical-aeo', label: 'Site Health', href: `${projectTabBase}/technical-aeo` },
+    { key: 'conversions', label: 'Conversions', href: `${projectTabBase}/conversions` },
     { key: 'local', label: 'Local Presence', href: `${projectTabBase}/local` },
     { key: 'discovery', label: 'Query Discovery', href: `${projectTabBase}/discovery` },
     { key: 'backlinks', label: 'Backlinks', href: `${projectTabBase}/backlinks` },
@@ -2793,6 +2795,12 @@ function ProjectPageContent({
           projectId={model.project.id}
           initialRunId={projectSearchParams.siteHealthRunId}
           onReleaseInitialRun={releaseInitialSiteHealthRun}
+        />
+      ) : tab === 'conversions' ? (
+        <ConversionIntegrityWorkspace
+          key={model.project.id}
+          projectId={model.project.id}
+          projectName={model.project.name}
         />
       ) : tab === 'history' ? (
         <ProjectHistorySection projectName={model.project.name} />

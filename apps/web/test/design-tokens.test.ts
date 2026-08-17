@@ -87,6 +87,14 @@ test('self-hosts the default Geist families and never loads Google Fonts', async
   expect(viteConfig).toContain("fileName: 'THIRD_PARTY_NOTICES.md'")
 })
 
+test('reduced motion disables global smooth scrolling', async () => {
+  const styles = await readFile(stylesPath, 'utf8')
+
+  expect(styles).toMatch(
+    /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*html\s*\{\s*scroll-behavior:\s*auto;\s*\}/,
+  )
+})
+
 test('semantic color utilities compile to runtime-overridable CSS variables', async () => {
   const css = await compileAppStyles([
     'bg-bg',

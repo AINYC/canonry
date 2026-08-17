@@ -746,6 +746,124 @@ cnry gbp summary <project> [--location locations/{n}]
 
 `gbp sync` produces a run with the standard statuses (`completed` / `partial` / `failed`); `partial` means some selected locations synced and others errored (the per-location errors are on the run). Non-lodging locations are skipped cleanly (Google answers the lodging call with HTTP 400, not 404). Reviews are **not** synced — the v4 Reviews API is producer-restricted by Google and unavailable on most projects; the Q&A API was retired (2025-11-03).
 
+## Google Ads + Google Tag Manager conversion integrity
+
+`google-ads` and `gtm` are separate first-class namespaces. **`ads` remains
+OpenAI / ChatGPT Ads**; do not use it for Google Ads. Canonry v1 only reads
+provider state: it never changes a Google Ads campaign/conversion action/goal,
+and it never edits or publishes GTM.
+
+```bash
+# OAuth is an explicit same-browser operator flow. Start and confirm it from
+# the project's Conversion Integrity dashboard; the CLI does not print OAuth URLs.
+
+cnry google-ads status <project>                 # local connection + selection/freshness only
+cnry google-ads customers <project> --format jsonl
+cnry google-ads select <project> --customer <customer-id> [--login-customer <manager-id>]
+cnry google-ads sync <project>                   # bounded read-only queries (GET + SearchStream POST) + redacted snapshots
+cnry google-ads snapshots <project> --format jsonl
+cnry google-ads snapshot <project> <snapshot-id>
+cnry google-ads disconnect <project>             # removes private credential; retains redacted evidence
+
+cnry gtm status <project>                         # local connection + selection/freshness only
+cnry gtm accounts <project> --format jsonl
+cnry gtm containers <project> --account <account-id> --format jsonl
+cnry gtm workspaces <project> --account <account-id> --container <container-id> --format jsonl
+cnry gtm select <project> --account <account-id> --container <container-id> [--workspace <workspace-id>]
+cnry gtm sync <project>                           # bounded provider GETs + redacted live/draft snapshots
+cnry gtm snapshots <project> --format jsonl
+cnry gtm snapshot <project> <snapshot-id>
+cnry gtm disconnect <project>                     # removes private credential; retains redacted evidence
+
+# One contract joins business meaning to the selected Google Ads action and GTM graph.
+cnry conversion-tracking contracts <project> --format jsonl
+cnry conversion-tracking contracts get <project> <contract-id>
+cnry conversion-tracking contracts create <project> --input contract.json
+cnry conversion-tracking contracts update <project> <contract-id> --input contract.json
+cnry conversion-tracking contracts delete <project> <contract-id>
+cnry conversion-tracking contracts integrity <project> <contract-id> --format jsonl
+```
+
+Use this purchase contract as `contract.json`:
+
+```json
+{
+  "name": "Purchase completed",
+  "eventName": "purchase",
+  "googleAds": {
+    "customerId": "1234567890",
+    "conversionActionId": "987654321",
+    "conversionId": "AW-1234567890",
+    "conversionLabel": "purchase_label",
+    "campaignIds": [],
+    "requireBiddableGoal": true,
+    "requirePrimaryAction": true
+  },
+  "gtm": {
+    "accountId": "123456",
+    "containerId": "654321",
+    "tagId": "42",
+    "triggerIds": ["17"],
+    "variableIds": ["21", "22", "23"]
+  },
+  "runtime": {
+    "verificationRequired": true,
+    "requireTransactionId": true,
+    "requireValue": true,
+    "requireCurrency": true,
+    "productionHosts": ["example.com"]
+  }
+}
+```
+
+Replace every example ID with a canonical ID from the current snapshots. Use
+the Ads customer ID without dashes, the conversion-action `id`, and each GTM
+resource `id`. Do not use GTM resource paths or the public `GTM-...` container
+ID.
+
+Empty campaign, trigger, or variable arrays disable their corresponding
+assertions. Canonry checks `requireBiddableGoal` only for listed campaigns. If
+you do not know the exact GTM-facing values, omit `conversionId` and
+`conversionLabel`. Do not supply server-owned IDs or timestamps.
+
+Use the
+[Google Marketing setup guide](https://github.com/Canonry/canonry/blob/main/docs/google-marketing.md)
+for the operator workflow.
+
+Stored snapshot and contract reads are local, redacted, and quota-free. Customer,
+account, container, and workspace discovery plus sync are live Google reads; the
+caller needs `google-marketing.read-live` in addition to normal write authority
+for a sync. `google-ads sync` captures conversion actions and the **effective
+per-campaign goal graph**; `gtm sync` captures sanitized live and selected-draft
+configuration graphs. They do not prove a browser event fired or that Google Ads
+recorded a conversion.
+
+The integrity result is intentionally monotonic:
+
+- `configured` means a contract exists but its static graph is unproven or inconsistent.
+- `statically-consistent` means the stored Ads and GTM evidence agrees.
+- `runtime-unverified` means the static graph agrees but runtime proof is missing.
+- `observed` means static and trusted runtime evidence are both present.
+
+The default Canonry runtime does not store runtime evidence in version 1. A
+runtime-required contract therefore stops at `runtime-unverified`.
+
+A selected GTM draft workspace produces stored draft evidence. Integrity uses
+the live container graph and does not assess the draft graph.
+
+Treat unrecognized GTM custom HTML/templates as `unknown` / needs-review, never
+as a pass. An Ads action's `primaryForGoal` flag is not proof that a campaign
+effectively bids toward it; inspect the effective campaign goal evidence.
+
+`--format jsonl` streams one record per line for Google Ads customers and
+snapshots, GTM accounts/containers/workspaces and snapshots, and
+conversion-tracking contracts. Each line is stamped with `project`; live
+discovery rows also include `fetchedAt`. Integrity JSONL streams deterministic
+findings, each stamped with `project`, `contractId`, `integrityStatus`, and
+`evaluatedAt`. Status, sync, one-snapshot, one-contract, connect/select, and
+disconnect commands emit their normal JSON document when passed `--format
+jsonl`.
+
 ## OpenAI ads (ChatGPT ads)
 
 Paid-surface data for the project's connected OpenAI ad account. Ads render only in the ChatGPT consumer UI (never in API answers), so the Advertiser API is the only window into the paid layer. Money is integer micros in all stored/JSON data; insights `ctr`/`cpcMicros` are derived server-side and `null` on zero denominators. Paid metrics are "paid"/"sponsored" — never conflate with organic `cited`/`mentioned`.
@@ -1092,7 +1210,7 @@ Every command takes `--format`:
 - **`json`** — one pretty-printed JSON document (the full envelope). Stable contract.
 - **`jsonl`** — newline-delimited JSON: the command's **primary collection**, one self-contained record per line. The agent-friendly machine format — no envelope key to guess (`.checks` vs `.results` vs `.rows`), no `jq` flattening, greppable line by line.
 
-`jsonl` is supported by every **collection** command — one whose primary output is a list: `insights`, `runs`, `evidence`, `history`, `query/keyword/competitor list`, `notify list/events`, `google` reads (`performance`, `performance-daily`, `inspections`, `coverage-history`, `deindexed`, `status`, `properties`, `list-sitemaps`), `bing` reads (`coverage-history`, `inspections`, `performance`, `sites`), `ga` reads (`ai-referral-daily`, `ai-referral-history`, `social-referral-history`, `session-history`, `coverage`), `ads geo search` and `ads conversions` reads, `traffic events/sources/status`, `discover list/show`, `content targets/sources/gaps/map`, `backlinks list/releases`, `project list/locations`, `key list`, `agent memory list`, `agent providers`, `sources` (streams the ranked cited-domain list), and `doctor`. (`content brief` is an object command — `jsonl` degrades to its JSON document.)
+`jsonl` is supported by every **collection** command — one whose primary output is a list: `insights`, `runs`, `evidence`, `history`, `query/keyword/competitor list`, `notify list/events`, `google` reads (`performance`, `performance-daily`, `inspections`, `coverage-history`, `deindexed`, `status`, `properties`, `list-sitemaps`), `bing` reads (`coverage-history`, `inspections`, `performance`, `sites`), `ga` reads (`ai-referral-daily`, `ai-referral-history`, `social-referral-history`, `session-history`, `coverage`), `google-ads` customer/snapshot reads, `gtm` account/container/workspace/snapshot reads, conversion-tracking contracts and integrity findings, `ads geo search` and `ads conversions` reads, `traffic events/sources/status`, `discover list/show`, `content targets/sources/gaps/map`, `backlinks list/releases`, `project list/locations`, `key list`, `agent memory list`, `agent providers`, `sources` (streams the ranked cited-domain list), and `doctor`. (`content brief` is an object command — `jsonl` degrades to its JSON document.)
 
 Each `jsonl` line re-injects the envelope context it would otherwise lose, so a line lifted out still self-describes:
 
