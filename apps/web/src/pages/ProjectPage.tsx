@@ -12,6 +12,7 @@ import { Button } from '../components/ui/button.js'
 import { Card } from '../components/ui/card.js'
 import { WriteButton } from '../components/shared/AccessControls.js'
 import { InfoTooltip } from '../components/shared/InfoTooltip.js'
+import { MentionShare } from '../components/project/MentionShare.js'
 import { CitationBadge } from '../components/shared/CitationBadge.js'
 import { ProviderBadge } from '../components/shared/ProviderBadge.js'
 import { RunRow } from '../components/shared/RunRow.js'
@@ -1317,138 +1318,6 @@ function OverviewDisclosure({
   )
 }
 
-/**
- * One class's bars. Never renders two classes into one denominator: `share` is
- * always a percentage of the class it was passed, and the caller labels which
- * class that is.
- */
-function MentionShareBreakdownRows({
-  breakdown,
-  projectLabel,
-}: {
-  breakdown: ProjectCommandCenterVm['mentionShareSummary']['breakdown']
-  projectLabel: string
-}) {
-  const combinedTotal = breakdown.projectMentionSnapshots + breakdown.competitorMentionSnapshots
-  if (combinedTotal === 0) return null
-
-  // Rows merge the project (you) with each tracked competitor, sorted by
-  // mention count. Share is computed against this class's combined total, so
-  // the rows read as "% of the brand mentions in this class".
-  const rows = [
-    { label: `${projectLabel} (you)`, mentions: breakdown.projectMentionSnapshots, isYou: true },
-    ...breakdown.perCompetitor.map(c => ({ label: c.domain, mentions: c.mentionSnapshots, isYou: false })),
-  ].sort((a, b) => b.mentions - a.mentions)
-  const maxMentions = rows[0]?.mentions ?? 1
-
-  return (
-    <ul className="mention-share-breakdown-rows">
-      {rows.map(row => {
-        const share = (row.mentions / combinedTotal) * 100
-        return (
-          <li key={row.label} className="mention-share-breakdown-row">
-            <span className={`mention-share-breakdown-label ${row.isYou ? 'text-heading font-medium' : 'text-secondary'}`}>
-              {row.label}
-            </span>
-            <div className="mention-share-breakdown-bar">
-              <div
-                className={`mention-share-breakdown-bar-fill ${row.isYou ? 'bg-positive-500/70' : 'bg-mono-500/60'}`}
-                style={{ width: `${Math.max((row.mentions / maxMentions) * 100, 2)}%` }}
-              />
-            </div>
-            <span className="mention-share-breakdown-count">{row.mentions}</span>
-            <span className="mention-share-breakdown-share">{share.toFixed(1)}%</span>
-          </li>
-        )
-      })}
-    </ul>
-  )
-}
-
-/**
- * Two labelled sections, never one pooled chart.
- *
- * Non-brand leads because it is the competitive question. Branded is kept in
- * view — dropping it would hide real data — but in its own section with its own
- * denominator, because a query that contains the brand's own name is one the
- * brand is named on nearly always and a competitor structurally cannot win.
- */
-function MentionShareBreakdown({
-  summary,
-  projectLabel,
-  hasCompetitiveFrame,
-}: {
-  summary: ProjectCommandCenterVm['mentionShareSummary']
-  projectLabel: string
-  hasCompetitiveFrame: boolean
-}) {
-  const breakdown = summary.breakdown
-  const branded = summary.branded
-  const nonBrandTotal = breakdown.projectMentionSnapshots + breakdown.competitorMentionSnapshots
-  const brandedTotal = branded.projectMentionSnapshots + branded.competitorMentionSnapshots
-  if (nonBrandTotal === 0 && brandedTotal === 0) return null
-
-  // `pooled` is only reachable when the project has no brand name or domain to
-  // classify against, so the title and the tooltip both say what the reader is
-  // actually looking at rather than claiming a split that did not happen.
-  const isNonBrand = summary.scope === 'non-brand'
-  const scopeTitle = isNonBrand
-    ? 'Mention share breakdown · non-brand queries · latest run'
-    : 'Mention share breakdown · all tracked queries · latest run'
-  const scopeTooltip = isNonBrand
-    ? 'Queries that do not contain your name. This is where competitive placement is decided: on a branded query you are named almost always and a competitor cannot be, so counting both in one total would rank you on your own brand recall instead of on your category.'
-    : 'Branded and non-brand queries could not be separated because this project has no brand name or domain to match against. Set a display name or aliases to split them — until then this figure pools both and is not a competitive read.'
-
-  // Preserve useful recognition evidence when no competitors are configured,
-  // but never turn the project-only denominator into a 100% share chart.
-  if (!hasCompetitiveFrame) {
-    const answerLabel = isNonBrand ? 'non-brand answers' : 'pooled answers'
-    return (
-      <div className="mention-share-breakdown">
-        <p className="mention-share-breakdown-title">
-          Brand mention counts · {isNonBrand ? 'non-brand queries' : 'pooled queries · classification unavailable'} · latest run
-          <InfoTooltip text={scopeTooltip} />
-        </p>
-        <p className="mention-share-breakdown-empty">
-          Your brand was named in {breakdown.projectMentionSnapshots} of {breakdown.snapshotsWithAnswerText} {answerLabel}.
-          {' '}Add tracked competitors to calculate mention share.
-        </p>
-        {brandedTotal > 0 && (
-          <p className="mention-share-breakdown-empty">
-            On branded queries, your brand was named in {branded.projectMentionSnapshots} of {branded.snapshotsWithAnswerText} answers — recognition, not competitive placement.
-          </p>
-        )}
-      </div>
-    )
-  }
-
-  return (
-    <div className="mention-share-breakdown">
-      <p className="mention-share-breakdown-title">
-        {scopeTitle}
-        <InfoTooltip text={scopeTooltip} />
-      </p>
-      {nonBrandTotal > 0 ? (
-        <MentionShareBreakdownRows breakdown={breakdown} projectLabel={projectLabel} />
-      ) : (
-        <p className="mention-share-breakdown-empty">
-          No brand mentions on non-brand queries in this run.
-        </p>
-      )}
-
-      {brandedTotal > 0 && (
-        <div className="mention-share-breakdown-branded">
-          <p className="mention-share-breakdown-title">
-            Branded queries · recognition, not placement
-            <InfoTooltip text="Queries containing your own name. Counted separately and never pooled with the figure above: these measure whether AI knows you when asked about you by name, not where you place against competitors." />
-          </p>
-          <MentionShareBreakdownRows breakdown={branded} projectLabel={projectLabel} />
-        </div>
-      )}
-    </div>
-  )
-}
-
 function OverviewSignals({
   insights,
   suggestedQueries,
@@ -2524,33 +2393,29 @@ function ProjectPageContent({
             </div>
 
             <div className="aeo-hero competitive-summary">
-              <div className="aeo-hero-rows">
-                <OverviewMetricRow
-                  label="Mention share"
-                  summary={model.mentionShareSummary}
-                  tooltip={model.mentionShareSummary.tooltip || (model.mentionShareSummary.scope === 'non-brand'
-                    ? 'Of the brand mentions in answer text on your non-brand queries (you + tracked competitors), the percentage that were you. Branded queries are counted separately below.'
-                    : 'Classification is unavailable, so all tracked queries remain pooled. This is not a competitive category read.')}
-                />
-                <OverviewMetricRow
-                  label="Mention gaps"
-                  summary={model.mentionGaps}
-                  displayValue={<><span className="text-primary">{model.mentionGaps.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
-                  tooltip="Queries where a competitor was mentioned in the answer but your brand was not."
-                />
-                <OverviewMetricRow
-                  label="Citation gaps"
-                  summary={model.gapQueries}
-                  displayValue={<><span className="text-primary">{model.gapQueries.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
-                  tooltip="Queries where a competitor was cited as a source but you were not."
-                />
-              </div>
-
-              <MentionShareBreakdown
+              <MentionShare
+                key={model.project.name}
                 summary={model.mentionShareSummary}
                 projectLabel={model.project.displayName || model.project.name}
-                hasCompetitiveFrame={model.competitors.length > 0}
+                competitorDomains={competitorDomains}
               />
+
+              <div className="competitive-gaps">
+                <div className="aeo-hero-rows">
+                  <OverviewMetricRow
+                    label="Mention gaps"
+                    summary={model.mentionGaps}
+                    displayValue={<><span className="text-primary">{model.mentionGaps.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
+                    tooltip="Queries where a competitor was mentioned in the answer but your brand was not."
+                  />
+                  <OverviewMetricRow
+                    label="Citation gaps"
+                    summary={model.gapQueries}
+                    displayValue={<><span className="text-primary">{model.gapQueries.value}</span><span className="text-faint"> / {model.queryCounts.total}</span></>}
+                    tooltip="Queries where a competitor was cited as a source but you were not."
+                  />
+                </div>
+              </div>
             </div>
 
             {addingCompetitor && (

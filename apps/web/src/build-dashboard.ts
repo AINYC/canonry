@@ -623,6 +623,10 @@ function emptyCommandCenter(
       ...placeholder,
       label: 'Mention Share',
       scope: 'non-brand',
+      // This shell is reached only when the /overview fetch failed, and its
+      // zero counters look exactly like a project that has never swept. Say
+      // which one it is instead of letting the reader infer the wrong one.
+      unavailable: true,
       breakdown: emptyMentionShareBreakdown(),
       branded: emptyMentionShareBreakdown(),
     },
