@@ -219,7 +219,7 @@ describe('ConversionIntegritySection', () => {
     expect(screen.getByRole('button', { name: 'Add conversion' }).hasAttribute('disabled')).toBe(true)
   })
 
-  test('uses a single primary action, selected by the first unresolved provider step', () => {
+  test('offers the Google Ads step its own action', () => {
     const action = vi.fn()
     const unconnected = workspace({
       contract: null,
@@ -363,4 +363,63 @@ describe('ConversionIntegritySection', () => {
     expect(screen.getAllByText('Use the next step above')).toHaveLength(2)
     expect(screen.queryByText('—')).toBeNull()
   })
+
+  test('a blocked Google Ads step does not hide the Tag Manager step', () => {
+    // The providers are independent: separate OAuth, separate APIs, separate
+    // selections. A Google Ads developer token awaiting Basic approval pins Ads
+    // at `selection-required` indefinitely, and the strictly-advancing list used
+    // to show a button only on the first incomplete row, so Tag Manager became
+    // unreachable in the UI despite needing no developer token at all.
+    const action = vi.fn()
+    const adsBlocked = workspace({
+      contract: null,
+      assessment: null,
+      googleAds: {
+        state: 'selection-required',
+        selection: null,
+        snapshotCount: 0,
+        evidence: 'No stored evidence yet.',
+        lastSnapshotAt: null,
+      },
+      gtm: {
+        state: 'not-connected',
+        selection: null,
+        snapshotCount: 0,
+        evidence: 'No stored evidence yet.',
+        lastSnapshotAt: null,
+      },
+    })
+    render(<ConversionIntegritySection workspace={adsBlocked} onPrimaryAction={action} />)
+
+    // Both providers are actionable at once.
+    expect(screen.getByRole('button', { name: 'Select Google Ads account' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Connect Google Tag Manager' })).toBeTruthy()
+
+    // And the blocked one does not intercept the other's click.
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Google Tag Manager' }))
+    expect(action).toHaveBeenCalledWith('connect-gtm')
+  })
+
+  test('the conversion step stays gated until BOTH providers are ready', () => {
+    // Unlike the provider rows, a contract names resources from each side, so
+    // this dependency is real and must survive the change above.
+    const action = vi.fn()
+    const gtmMissing = workspace({
+      contract: null,
+      assessment: null,
+      gtm: {
+        state: 'not-connected',
+        selection: null,
+        snapshotCount: 0,
+        evidence: 'No stored evidence yet.',
+        lastSnapshotAt: null,
+      },
+    })
+    render(<ConversionIntegritySection workspace={gtmMissing} onPrimaryAction={action} />)
+
+    expect(screen.getByText('Conversion to check')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Declare conversion' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Select conversion' })).toBeNull()
+  })
+
 })
