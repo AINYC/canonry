@@ -93,6 +93,9 @@ import {
   getGtmConnection,
   upsertGtmConnection,
 } from './gtm-config.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('GoogleMarketing')
 
 const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1_000
 const DEFAULT_LIST_LIMIT = 100
@@ -763,6 +766,22 @@ class DefaultGoogleMarketingRuntime implements GoogleMarketingRuntime {
     }
     const customers = [...customersById.values()]
       .sort((left, right) => left.level - right.level || left.customerId.localeCompare(right.customerId))
+    // Per-customer detail failures are rich (status, providerStatus, requestId,
+    // sanitized message) and were collapsed into the `truncated` boolean and
+    // otherwise discarded. That hid the only useful signal in the common case:
+    // `listAccessibleCustomers` succeeds, every `getCustomerDetails` is denied
+    // because the developer token's manager cannot reach the customer, and the
+    // dashboard reports "0 of 0 accessible customers" as though the account
+    // simply had none. Log them; the response shape is unchanged.
+    if (result.data.failures.length > 0) {
+      log.error('google-ads.customer-details-failed', {
+        project: normalizedProject.name,
+        totalAccessible: result.data.totalAccessible,
+        attempted: result.data.attempted,
+        returned: customers.length,
+        failures: result.data.failures,
+      })
+    }
     return googleAdsAccessibleCustomersResponseSchema.parse({
       customers,
       totalAccessible: customers.length,
