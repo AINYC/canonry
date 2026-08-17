@@ -49,6 +49,29 @@ function performanceDaily(overrides: Record<string, unknown> = {}) {
       ctr: { slope: 0.015, intercept: 0.0025, r2: 0.97, start: 0.0025, end: 0.0475, n: 4, startIndex: 0, endIndex: 3 },
       position: { slope: -1, intercept: 12, r2: 1, start: 12, end: 9, n: 4, startIndex: 0, endIndex: 3 },
     },
+    // Derived from DAILY: prior = 07-01..07-02, trailing = 07-03..07-04.
+    // clicks 15 -> 35 (+133.3%), impressions 1800 -> 1000 (-44.4%),
+    // ctr 15/1800 -> 35/1000 (+320%), position 11.556 -> 9.6 (-16.9%, BETTER).
+    periodComparison: {
+      days: 2,
+      comparable: true,
+      prior: {
+        startDate: '2026-07-01', endDate: '2026-07-02',
+        clicks: 15, impressions: 1800, ctr: 15 / 1800,
+        position: (12 * 1000 + 11 * 800) / 1800, source: 'property-daily' as const,
+      },
+      trailing: {
+        startDate: '2026-07-03', endDate: '2026-07-04',
+        clicks: 35, impressions: 1000, ctr: 35 / 1000,
+        position: (10 * 600 + 9 * 400) / 1000, source: 'property-daily' as const,
+      },
+      change: {
+        clicks: 35 / 15 - 1,
+        impressions: 1000 / 1800 - 1,
+        ctr: (35 / 1000) / (15 / 1800) - 1,
+        position: ((10 * 600 + 9 * 400) / 1000) / ((12 * 1000 + 11 * 800) / 1800) - 1,
+      },
+    },
     ...overrides,
   }
 }
@@ -122,51 +145,81 @@ test('renders all four Search Console metrics as tiles, with clicks and impressi
   expect(tile('Avg position').textContent).toContain('10.5')
 })
 
-test('renders fitted movement as a relative percentage with better/worse direction', async () => {
+test('compares the trailing period against the prior equal period', async () => {
   renderSection()
   await waitFor(() => expect(tile('Clicks')).not.toBeNull())
 
-  // Relative fitted changes, not raw clicks, impressions, percentage points,
-  // or position points.
-  expect(tile('Clicks').textContent).toContain('↑ 300% over 4d')
-  expect(tile('Impressions').textContent).toContain('↓ 60% over 4d')
-  expect(tile('CTR').textContent).toContain('↑ 1,800% over 4d')
+  // Relative period-over-period change, not raw clicks, impressions,
+  // percentage points, or position points. These come from real recorded
+  // totals; nothing is read off the fitted line.
+  expect(tile('Clicks').textContent).toContain('↑ 133.3% vs prior 2d')
+  expect(tile('Impressions').textContent).toContain('↓ 44.4% vs prior 2d')
+  expect(tile('CTR').textContent).toContain('↑ 320% vs prior 2d')
   // Position FALLING is an improvement — the one metric where a negative
-  // slope is good news, and the case a naive `slope > 0` arrow gets backwards.
-  expect(tile('Avg position').textContent).toContain('↑ 25% over 4d')
+  // change is good news, and the case a naive `change > 0` arrow gets
+  // backwards.
+  expect(tile('Avg position').textContent).toContain('↑ 16.9% vs prior 2d')
 })
 
-test('renders flat movement as zero percent and withholds invalid fitted baselines', async () => {
+test('renders a flat period as no change, and a zero baseline as new rather than a percentage', async () => {
   renderSection(performanceDaily({
-    trends: {
-      clicks: { slope: 0, intercept: 10, r2: 1, start: 10, end: 10, n: 4, startIndex: 0, endIndex: 3 },
-      impressions: { slope: 0, intercept: 0, r2: 1, start: 0, end: 0, n: 4, startIndex: 0, endIndex: 3 },
-      ctr: { slope: -0.01, intercept: 0.02, r2: 1, start: 0.02, end: -0.01, n: 4, startIndex: 0, endIndex: 3 },
-      position: { slope: -1, intercept: 12, r2: 1, start: 12, end: 9, n: 4, startIndex: 0, endIndex: 3 },
+    periodComparison: {
+      days: 2,
+      comparable: true,
+      prior: {
+        startDate: '2026-07-01', endDate: '2026-07-02',
+        clicks: 10, impressions: 0, ctr: null, position: 12, source: 'property-daily' as const,
+      },
+      trailing: {
+        startDate: '2026-07-03', endDate: '2026-07-04',
+        clicks: 10, impressions: 500, ctr: 0.02, position: 12, source: 'property-daily' as const,
+      },
+      // Impressions grew from nothing: an infinite increase, so no percentage.
+      change: { clicks: 0, impressions: null, ctr: null, position: 0 },
     },
   }))
 
   await waitFor(() => expect(tile('Clicks')).not.toBeNull())
-  expect(tile('Clicks').textContent).toContain('→ 0% over 4d')
-  expect(tile('Impressions').textContent).toContain('— no percentage baseline')
-  expect(tile('CTR').textContent).toContain('— no percentage baseline')
+  expect(tile('Clicks').textContent).toContain('→ no change vs prior 2d')
+  // Growth from zero is named, not silently blanked and not faked as +100%.
+  expect(tile('Impressions').textContent).toContain('new in the last 2d')
+  // CTR was never measurable in the prior period (no impressions to divide by).
+  expect(tile('CTR').textContent).toContain('no prior 2d to compare')
   expect(tile('Impressions').textContent).not.toMatch(/Infinity|NaN/)
   expect(tile('CTR').textContent).not.toMatch(/Infinity|NaN/)
 })
 
+test('says so plainly when the server predates the comparison field', async () => {
+  renderSection(performanceDaily({ periodComparison: undefined }))
+  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+  // A server older than the field must degrade to a stated absence, never to
+  // a flat reading that implies the metric did not move.
+  expect(tile('Clicks').textContent).toContain('no comparison period')
+  expect(tile('Clicks').textContent).not.toMatch(/Infinity|NaN|0%/)
+})
+
 test('preserves tiny movement and marks a rising average position as worse', async () => {
   renderSection(performanceDaily({
-    trends: {
-      clicks: { slope: 0.000001, intercept: 1_000_000, r2: 1, start: 1_000_000, end: 1_000_000, n: 4, startIndex: 0, endIndex: 3 },
-      impressions: null,
-      ctr: null,
-      position: { slope: 2 / 3, intercept: 8, r2: 1, start: 8, end: 10, n: 4, startIndex: 0, endIndex: 3 },
+    periodComparison: {
+      days: 2,
+      comparable: true,
+      prior: {
+        startDate: '2026-07-01', endDate: '2026-07-02',
+        clicks: 1_000_000, impressions: 10_000_000, ctr: 0.1, position: 8, source: 'property-daily' as const,
+      },
+      trailing: {
+        startDate: '2026-07-03', endDate: '2026-07-04',
+        clicks: 1_000_001, impressions: 10_000_000, ctr: 0.1, position: 10, source: 'property-daily' as const,
+      },
+      // A real but sub-0.1% rise must not round away to a flat reading.
+      change: { clicks: 0.000001, impressions: 0, ctr: 0, position: 0.25 },
     },
   }))
 
   await waitFor(() => expect(tile('Clicks')).not.toBeNull())
-  expect(tile('Clicks').textContent).toContain('↑ <0.1% over 4d')
-  expect(tile('Avg position').textContent).toContain('↓ 25% over 4d')
+  expect(tile('Clicks').textContent).toContain('↑ <0.1% vs prior 2d')
+  // Position ROSE, which is a worse rank, so the arrow points down.
+  expect(tile('Avg position').textContent).toContain('↓ 25% vs prior 2d')
 })
 
 test('toggles a metric on and off but refuses to leave the chart empty', async () => {
@@ -298,10 +351,27 @@ test('plots one row per calendar day, so a quiet gap is not compressed', async (
       ctr: null,
       position: null,
     },
+    // 2026-04-01..2026-04-10 is a TEN day calendar span carrying only four
+    // rows, so each period is 5 calendar days, not 2 rows.
+    periodComparison: {
+      days: 5,
+      comparable: true,
+      prior: {
+        startDate: '2026-04-01', endDate: '2026-04-05',
+        clicks: 27, impressions: 270, ctr: 0.1, position: 5, source: 'property-daily' as const,
+      },
+      trailing: {
+        startDate: '2026-04-06', endDate: '2026-04-10',
+        clicks: 7, impressions: 70, ctr: 0.1, position: 5, source: 'property-daily' as const,
+      },
+      change: { clicks: 7 / 27 - 1, impressions: 70 / 270 - 1, ctr: 0, position: 0 },
+    },
   }))
 
   await waitFor(() => expect(tile('Clicks')).not.toBeNull())
-  expect(tile('Clicks').textContent).toContain('↓ 30% over 10d')
+  // The comparison periods are CALENDAR halves of the 10-day span, so the
+  // label says 5d even though only four days carried rows.
+  expect(tile('Clicks').textContent).toContain('vs prior 5d')
   // The drill controls stay on the MEASURED days — an empty day is nothing to
   // drill into — which is how we can tell the two series apart.
   const group = screen.getByRole('group', { name: /Filter the table to a single day/ })
@@ -312,3 +382,35 @@ test('plots one row per calendar day, so a quiet gap is not compressed', async (
 // `gsc-copy-placement.test.tsx`, which arranges the three render states those
 // paragraphs actually appeared in. This suite keeps only the filter
 // explanation, which belongs to the chart's own filter row.
+
+/**
+ * The two halves came from different Search Console tables, whose totals are
+ * not interchangeable. A ratio across that boundary reports the gap between
+ * two counting methods as if the site had changed, so the tile must refuse.
+ */
+test('refuses to compare periods drawn from different data sources', async () => {
+  renderSection(performanceDaily({
+    periodComparison: {
+      days: 2,
+      comparable: false,
+      prior: {
+        startDate: '2026-07-01', endDate: '2026-07-02',
+        clicks: 792, impressions: 45266, ctr: 792 / 45266, position: 12,
+        source: 'dimensioned' as const,
+      },
+      trailing: {
+        startDate: '2026-07-03', endDate: '2026-07-04',
+        clicks: 1142, impressions: 34916, ctr: 1142 / 34916, position: 10,
+        source: 'property-daily' as const,
+      },
+      change: { clicks: null, impressions: null, ctr: null, position: null },
+    },
+  }))
+
+  await waitFor(() => expect(tile('Clicks')).not.toBeNull())
+  for (const label of ['Clicks', 'Impressions', 'CTR', 'Avg position']) {
+    expect(tile(label).textContent).toContain('periods use different data')
+    // A flat property would otherwise read +44% clicks / -23% impressions.
+    expect(tile(label).textContent).not.toMatch(/[+↑↓]\s*\d/)
+  }
+})

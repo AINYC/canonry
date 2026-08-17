@@ -19,6 +19,7 @@ import {
   describeError,
 } from '@ainyc/canonry-contracts'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
+import { computeGscPeriodComparison } from './gsc-period-comparison.js'
 import { buildGbpSummary } from './gbp-summary.js'
 import {
   mergeGscDailyTotalsWithFallback, readGscDailyTotals,
@@ -1022,6 +1023,17 @@ export async function googleRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
         ctr: linearTrend(densify((d) => d.ctr)),
         position: linearTrend(densify((d) => d.position)),
       },
+      // The headline percentages come from HERE, not from `trends`. The fitted
+      // line answers "which way is it going"; it cannot answer "by how much"
+      // without a baseline, and its own start value is not one — unconstrained,
+      // it goes negative for a metric that cannot be. Computed server-side for
+      // the same UI/CLI parity reason as the fit: a percentage derived in a
+      // chart component is invisible to an agent.
+      periodComparison: computeGscPeriodComparison(
+        // The source tag is the comparison module's input, NOT part of the
+        // response: `daily` on the wire stays exactly what the DTO declares.
+        daily.map((d) => ({ ...d, fromPropertyTotals: propertyDates.has(d.date) })),
+      ),
     }
   })
 

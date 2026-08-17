@@ -23,7 +23,7 @@ import {
   formatChartDateTick,
   type TrendChartSeries,
 } from '../shared/ChartPrimitives.js'
-import { calendarDateRange, relativeChangeRatio } from '@ainyc/canonry-contracts'
+import { calendarDateRange, type GscPeriodComparison } from '@ainyc/canonry-contracts'
 import { formatTimestamp, formatBooleanState, SearchMetric, SEARCH_METRIC_LABELS } from '../../lib/format-helpers.js'
 import { addToast } from '../../lib/toast-store.js'
 import { asyncHandler } from '../../lib/async-handler.js'
@@ -118,53 +118,56 @@ const GSC_TREND_PERCENT_FORMATTER = new Intl.NumberFormat(undefined, {
 })
 
 /**
- * Express the fitted line's start-to-end movement relative to its start.
+ * Express the trailing period's change against the equal period before it.
  *
- * The fit is unconstrained, so a non-negative metric can still produce a
- * zero or negative endpoint. That is not a meaningful percentage baseline;
- * report the absence instead of dividing by zero or presenting a synthetic
- * percentage. Position reverses only the desirability arrow, not the math.
+ * This replaced a percentage taken off the fitted trend line's own start value.
+ * That baseline was a value the property never had: the fit is unconstrained,
+ * so it predicted a NEGATIVE day-one figure for impressions on a real property
+ * and the tile printed nothing at all on a metric that had grown six-fold. Where
+ * it did print, it described the line rather than the data — average position
+ * read as a 45.8% improvement across a window in which the real position got
+ * worse. Both periods here are stretches the property actually recorded.
+ *
+ * Position reverses only the desirability arrow, not the math: a rank number
+ * going UP is a WORSE result, so `inverted` flips which direction reads as an
+ * improvement.
  */
-function formatGscTrendChange(
-  trend: {
-    slope: number
-    start: number
-    end: number
-    startIndex?: number
-    endIndex?: number
-  },
+export function formatGscPeriodChange(
+  comparison: GscPeriodComparison | null | undefined,
+  metric: GscChartMetric,
   inverted: boolean | undefined,
-  fallbackDays: number,
 ): string {
-  const { startIndex, endIndex } = trend
-  const spanDays = startIndex !== undefined
-    && endIndex !== undefined
-    && Number.isInteger(startIndex)
-    && Number.isInteger(endIndex)
-    && startIndex >= 0
-    && endIndex >= startIndex
-    ? endIndex - startIndex + 1
-    : fallbackDays
-  if (
-    !Number.isFinite(trend.start)
-    || !Number.isFinite(trend.end)
-    || trend.start <= 0
-    || trend.end < 0
-  ) {
-    return '— no percentage baseline'
-  }
-  if (trend.slope === 0) return `→ 0% over ${spanDays}d`
+  // A server older than this field, or a window too short to split, gives us
+  // nothing to compare. Say so plainly rather than imply a flat period.
+  if (!comparison) return 'no comparison period'
 
-  const ratio = relativeChangeRatio(trend.end, trend.start)
-  if (ratio === null) return '— no percentage baseline'
+  const days = comparison.days
+  // The two periods came from different Search Console tables, whose totals are
+  // not interchangeable. A ratio across that boundary reports the gap between
+  // two counting methods as if the site had changed.
+  if (!comparison.comparable) return 'periods use different data'
+
+  const ratio = comparison.change[metric]
+  // The prior period was zero or unmeasured. Growth from nothing has no
+  // percentage; naming the two figures is more use than "no baseline" was.
+  if (ratio === null || !Number.isFinite(ratio)) {
+    const prior = comparison.prior[metric]
+    const trailing = comparison.trailing[metric]
+    if (prior !== null && trailing !== null && prior <= 0 && trailing > 0) {
+      return `new in the last ${days}d`
+    }
+    return `no prior ${days}d to compare`
+  }
+
+  if (ratio === 0) return `→ no change vs prior ${days}d`
+
   const percent = Math.abs(ratio * 100)
-  // The fit preserves tiny slopes, but separately rounded endpoints can be
-  // equal at six significant figures. A real non-zero trend must not read 0%.
+  // Rounding must not turn a real movement into a flat reading.
   const formatted = percent < 0.1
     ? '<0.1%'
     : `${GSC_TREND_PERCENT_FORMATTER.format(percent)}%`
-  const improving = inverted ? trend.slope < 0 : trend.slope > 0
-  return `${improving ? '↑' : '↓'} ${formatted} over ${spanDays}d`
+  const improving = inverted ? ratio < 0 : ratio > 0
+  return `${improving ? '↑' : '↓'} ${formatted} vs prior ${days}d`
 }
 
 function sitemapDiscoveredUrlCount(sitemap: ApiGscSitemap): number {
@@ -1165,7 +1168,7 @@ export function GscSection({
                   // `trends` is optional at RUNTIME: a server older than the
                   // field omits it, and the chart must degrade to plain lines
                   // rather than crash. Same skew guard as `window`.
-                  const { totals, daily, trends } = performanceDaily
+                  const { totals, daily, trends, periodComparison } = performanceDaily
                   const selected = GSC_CHART_METRICS.filter((m) => chartMetrics.includes(m.key))
                   const series: TrendChartSeries[] = selected.map((m) => ({
                     dataKey: m.key,
@@ -1204,7 +1207,6 @@ export function GscSection({
                         {GSC_CHART_METRICS.map((m) => {
                           const on = chartMetrics.includes(m.key)
                           const value = totalFor(m.key)
-                          const trend = trends?.[m.key] ?? null
                           const unavailable = value === null
                           return (
                             <button
@@ -1231,13 +1233,11 @@ export function GscSection({
                               <span className="mt-0.5 block text-lg tabular-nums text-strong">
                                 {value === null ? '—' : m.format(value)}
                               </span>
-                              {trend && (
-                                <span className="block text-[11px] tabular-nums text-muted">
-                                  {/* Position improves downward, so the arrow
-                                      tracks BETTER/WORSE, not up/down. */}
-                                  {formatGscTrendChange(trend, m.inverted, totals.days)}
-                                </span>
-                              )}
+                              <span className="block text-[11px] tabular-nums text-muted">
+                                {/* Position improves downward, so the arrow
+                                    tracks BETTER/WORSE, not up/down. */}
+                                {formatGscPeriodChange(periodComparison, m.key, m.inverted)}
+                              </span>
                             </button>
                           )
                         })}

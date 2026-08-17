@@ -1806,6 +1806,47 @@ describe('googleRoutes: GET /projects/:name/google/gsc/performance/daily', () =>
     expect(body.totals).toEqual({ clicks: 56, impressions: 1200, ctr: 56 / 1200, position: 5.5, positionDays: 2, days: 2 })
   })
 
+  it('carries a period comparison, and never leaks the internal source tag onto the wire', async () => {
+    // Four property-daily dates so the window splits into two 2-day periods.
+    const now = '2026-01-01T00:00:00.000Z'
+    context.db.insert(gscDailyTotals).values([
+      { id: crypto.randomUUID(), projectId, date: '2026-01-05', clicks: 5, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-01-06', clicks: 5, impressions: 100, position: '10', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-01-07', clicks: 20, impressions: 200, position: '8', createdAt: now },
+      { id: crypto.randomUUID(), projectId, date: '2026-01-08', clicks: 20, impressions: 200, position: '8', createdAt: now },
+    ]).run()
+
+    const res = await context.app.inject({
+      method: 'GET',
+      url: '/projects/perf/google/gsc/performance/daily',
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as {
+      daily: Array<Record<string, unknown>>
+      periodComparison: {
+        days: number
+        comparable: boolean
+        prior: { clicks: number; source: string }
+        trailing: { clicks: number; source: string }
+        change: { clicks: number | null }
+      }
+    }
+
+    expect(body.periodComparison.days).toBe(2)
+    expect(body.periodComparison.comparable).toBe(true)
+    expect(body.periodComparison.prior.clicks).toBe(10)
+    expect(body.periodComparison.trailing.clicks).toBe(40)
+    expect(body.periodComparison.change.clicks).toBe(3)
+    expect(body.periodComparison.prior.source).toBe('property-daily')
+
+    // `fromPropertyTotals` is the comparison module's INPUT, tagged at the call
+    // site. It must never appear on a daily row: the row shape is the DTO's
+    // contract, and an undeclared field would ship to every SDK consumer.
+    for (const row of body.daily) {
+      expect(Object.keys(row).sort()).toEqual(['clicks', 'ctr', 'date', 'impressions', 'position'])
+    }
+  })
+
   it('falls back to summing gsc_search_data by date when no gsc_daily_totals rows exist in the window', async () => {
     // No gsc_daily_totals seeded (only the dimensioned gsc_search_data from
     // beforeEach), so the endpoint falls back to the per-date dimensioned sum.

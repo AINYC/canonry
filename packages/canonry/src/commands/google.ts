@@ -328,6 +328,46 @@ export async function googlePerformanceDaily(project: string, opts: {
     for (const line of trendLines) console.log(line)
   }
 
+  // The percentages the dashboard tiles show. Printed here so the two surfaces
+  // cannot disagree about how much a metric moved — the fit above says which
+  // WAY it is going, this says by how much, and only this one has a baseline
+  // the property actually recorded.
+  //
+  // Optional at RUNTIME for the same reason as `window`, and null when the
+  // range is too short to split into two periods.
+  const cmp = data.periodComparison
+  if (cmp && !cmp.comparable) {
+    // The halves came from different Search Console tables (the property-daily
+    // table vs the dimensioned sum), whose totals are not interchangeable. A
+    // ratio across that boundary would report the gap between two counting
+    // methods as if the site had changed.
+    console.log(
+      `\nNo period comparison: the two halves of this range come from different`
+      + ` Search Console data sources. Sync again, or pick a shorter range.`,
+    )
+  } else if (cmp) {
+    const pct = (ratio: number | null, inverted: boolean): string => {
+      if (ratio === null) return 'no prior period to compare'
+      if (ratio === 0) return 'no change'
+      const better = inverted ? ratio < 0 : ratio > 0
+      const magnitude = Math.abs(ratio * 100)
+      const shown = magnitude < 0.1 ? '<0.1' : magnitude.toFixed(1)
+      return `${ratio > 0 ? '+' : '-'}${shown}%  ${better ? 'better' : 'worse'}`
+    }
+    console.log(
+      `\nLast ${cmp.days} day${cmp.days === 1 ? '' : 's'} (${cmp.trailing.startDate} to ${cmp.trailing.endDate})`
+      + ` vs prior ${cmp.days} (${cmp.prior.startDate} to ${cmp.prior.endDate}):`,
+    )
+    for (const [label, ratio, inverted] of [
+      ['Clicks', cmp.change.clicks, false],
+      ['Impressions', cmp.change.impressions, false],
+      ['CTR', cmp.change.ctr, false],
+      ['Position', cmp.change.position, true],
+    ] as const) {
+      console.log(`  ${`${label}:`.padEnd(13)}${pct(ratio, inverted)}`)
+    }
+  }
+
   console.log()
   console.log(`  ${'DATE'.padEnd(12)}${'CLICKS'.padStart(10)}${'IMPR'.padStart(12)}${'CTR'.padStart(10)}${'POS'.padStart(9)}`)
   console.log(`  ${'─'.repeat(12)}${'─'.repeat(10)}${'─'.repeat(12)}${'─'.repeat(10)}${'─'.repeat(9)}`)
