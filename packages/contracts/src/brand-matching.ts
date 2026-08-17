@@ -51,6 +51,14 @@ function foldAccents(value: string): string {
   if (!NON_ASCII.test(value)) return value
   let folded = ''
   for (const character of value) {
+    // An ASCII character can carry no accent, and answer prose is overwhelmingly
+    // ASCII. Without this, one curly quote anywhere in the text sends every
+    // other character through `normalize`, and this runs once per competitor
+    // per answer.
+    if (character.charCodeAt(0) < 0x80) {
+      folded += character
+      continue
+    }
     const decomposed = character.normalize('NFD')
     const base = decomposed[0]!
     folded += decomposed.length > 1 && ACCENT_BEARING_SCRIPT.test(base) ? base : character
