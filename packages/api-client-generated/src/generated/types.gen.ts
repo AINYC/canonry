@@ -2989,7 +2989,7 @@ export type GscPerformanceDailyDto = {
             impressions: number;
             ctr: number | null;
             position: number | null;
-            source: 'property-daily' | 'dimensioned' | 'mixed';
+            source: 'property-daily' | 'dimensioned' | 'mixed' | 'empty';
         };
         trailing: {
             startDate: string;
@@ -2998,7 +2998,7 @@ export type GscPerformanceDailyDto = {
             impressions: number;
             ctr: number | null;
             position: number | null;
-            source: 'property-daily' | 'dimensioned' | 'mixed';
+            source: 'property-daily' | 'dimensioned' | 'mixed' | 'empty';
         };
         comparable: boolean;
         change: {

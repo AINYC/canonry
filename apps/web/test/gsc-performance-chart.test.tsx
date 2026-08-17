@@ -189,6 +189,29 @@ test('renders a flat period as no change, and a zero baseline as new rather than
   expect(tile('CTR').textContent).not.toMatch(/Infinity|NaN/)
 })
 
+test('distinguishes a missing trailing metric from a missing prior baseline', async () => {
+  renderSection(performanceDaily({
+    periodComparison: {
+      days: 2,
+      comparable: true,
+      prior: {
+        startDate: '2026-07-01', endDate: '2026-07-02',
+        clicks: 10, impressions: 100, ctr: 0.1, position: 12, source: 'property-daily' as const,
+      },
+      trailing: {
+        startDate: '2026-07-03', endDate: '2026-07-04',
+        clicks: 0, impressions: 0, ctr: null, position: null, source: 'empty' as const,
+      },
+      change: { clicks: -1, impressions: -1, ctr: null, position: null },
+    },
+  }))
+
+  await waitFor(() => expect(tile('CTR')).not.toBeNull())
+  expect(tile('CTR').textContent).toContain('no value in the last 2d')
+  expect(tile('Avg position').textContent).toContain('no value in the last 2d')
+  expect(tile('CTR').textContent).not.toContain('no prior')
+})
+
 test('says so plainly when the server predates the comparison field', async () => {
   renderSection(performanceDaily({ periodComparison: undefined }))
   await waitFor(() => expect(tile('Clicks')).not.toBeNull())
@@ -294,7 +317,9 @@ test('the filter explanation is a tooltip, not a paragraph on the page', async (
   // assistive tech or for tests that look it up by accessible name.
   const trigger = screen.getByRole('button', { name: /case-insensitive substrings/ })
   expect(trigger).not.toBeNull()
-  expect(trigger.getAttribute('aria-label')).toMatch(/Tile percentages show the fitted trend's relative change/)
+  expect(trigger.getAttribute('aria-label')).toMatch(/Tile percentages compare the trailing half of the selected window with the prior equal-length half/)
+  expect(trigger.getAttribute('aria-label')).toMatch(/optional trend line shows the fitted direction/)
+  expect(trigger.getAttribute('aria-label')).not.toMatch(/fitted trend's relative change/)
   expect(trigger.getAttribute('aria-label')).toMatch(/Click any day to filter/)
 })
 
@@ -409,7 +434,7 @@ test('refuses to compare periods drawn from different data sources', async () =>
 
   await waitFor(() => expect(tile('Clicks')).not.toBeNull())
   for (const label of ['Clicks', 'Impressions', 'CTR', 'Avg position']) {
-    expect(tile(label).textContent).toContain('periods use different data')
+    expect(tile(label).textContent).toContain('property-level comparison unavailable')
     // A flat property would otherwise read +44% clicks / -23% impressions.
     expect(tile(label).textContent).not.toMatch(/[+↑↓]\s*\d/)
   }

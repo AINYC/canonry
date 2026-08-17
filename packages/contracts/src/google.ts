@@ -134,7 +134,7 @@ const gscPeriodTotalsSchema = z.object({
    * property-month the same period reads 1,142 clicks / 34,916 impressions from
    * the first and 792 / 45,266 from the second.
    */
-  source: z.enum(['property-daily', 'dimensioned', 'mixed']),
+  source: z.enum(['property-daily', 'dimensioned', 'mixed', 'empty']),
 })
 
 /**
@@ -150,7 +150,8 @@ const gscPeriodTotalsSchema = z.object({
  *
  * Both periods are real, adjacent, equal-length stretches of the window, split
  * over the CALENDAR rather than the row array, since Search Analytics omits
- * zero-data days. `null` when the window is too short to make two periods.
+ * zero-data days. `null` when the window is too short to make two periods, has
+ * no evidence, or extends beyond the project's known GSC data frontier.
  */
 export const gscPeriodComparisonSchema = z.object({
   /** Length of EACH period in calendar days. */
@@ -158,15 +159,16 @@ export const gscPeriodComparisonSchema = z.object({
   prior: gscPeriodTotalsSchema,
   trailing: gscPeriodTotalsSchema,
   /**
-   * False when the two periods do not rest on the same measurement, in which
-   * case every `change` is null. Dividing one source by the other reports the
-   * gap between two counting methods as if it were a change in the property.
+   * False when either period contains dimensioned fallback totals, in which
+   * case every `change` is null. Empty/property-daily halves are comparable;
+   * `SUM(gsc_search_data)` is never valid for property totals.
    */
   comparable: z.boolean(),
   /**
    * Relative change as a ratio (0.5 = +50%), null where the prior period gives
-   * nothing to divide by. The sign is mathematical: a POSITIVE `position` means
-   * the rank number rose, which is worse. Desirability is the renderer's call.
+   * nothing to divide by or the trailing metric is unavailable. The sign is
+   * mathematical: a POSITIVE `position` means the rank number rose, which is
+   * worse. Desirability is the renderer's call.
    */
   change: z.object({
     clicks: z.number().nullable(),
@@ -211,8 +213,9 @@ export const gscPerformanceDailyDtoSchema = z.object({
   trends: gscPerformanceTrendsSchema.optional(),
   /**
    * Optional for the same reason as `window` and `trends`, and additionally
-   * null when the window is too short to split into two periods. A consumer
-   * must render the absence rather than substitute a percentage.
+   * null when the window is too short to split into two periods, has no
+   * evidence, or extends beyond the project's known GSC data frontier. A
+   * consumer must render the absence rather than substitute a percentage.
    */
   periodComparison: gscPeriodComparisonSchema.nullable().optional(),
 })

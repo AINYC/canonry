@@ -142,10 +142,9 @@ export function formatGscPeriodChange(
   if (!comparison) return 'no comparison period'
 
   const days = comparison.days
-  // The two periods came from different Search Console tables, whose totals are
-  // not interchangeable. A ratio across that boundary reports the gap between
-  // two counting methods as if the site had changed.
-  if (!comparison.comparable) return 'periods use different data'
+  // Any dimensioned fallback makes property totals unavailable. This can be
+  // true even when both halves carry the same source.
+  if (!comparison.comparable) return 'property-level comparison unavailable'
 
   const ratio = comparison.change[metric]
   // The prior period was zero or unmeasured. Growth from nothing has no
@@ -156,7 +155,9 @@ export function formatGscPeriodChange(
     if (prior !== null && trailing !== null && prior <= 0 && trailing > 0) {
       return `new in the last ${days}d`
     }
-    return `no prior ${days}d to compare`
+    if (prior === null || prior <= 0) return `no prior ${days}d to compare`
+    if (trailing === null) return `no value in the last ${days}d`
+    return 'comparison unavailable'
   }
 
   if (ratio === 0) return `→ no change vs prior ${days}d`
@@ -1116,7 +1117,7 @@ export function GscSection({
                     <p className="eyebrow eyebrow-soft">Performance</p>
                     <div className="flex items-center gap-1.5">
                       <h3>Search performance</h3>
-                      <InfoTooltip text={`Tile percentages show the fitted trend's relative change from its first measured day to its last. Click any day to filter the table below to that date. Query and page filters match case-insensitive substrings and run on Apply filters. Filtering and sorting examine up to ${EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows while the table shows ${DEFAULT_TABLE_PAGE_SIZE} per page.`} />
+                      <InfoTooltip text={`Tile percentages compare the trailing half of the selected window with the prior equal-length half. The optional trend line shows the fitted direction. Click any day to filter the table below to that date. Query and page filters match case-insensitive substrings and run on Apply filters. Filtering and sorting examine up to ${EXPANDED_PERFORMANCE_LIMIT.toLocaleString()} matching rows while the table shows ${DEFAULT_TABLE_PAGE_SIZE} per page.`} />
                     </div>
                     {/* The window ends where Google's data ends, not today.
                         Naming the real range is what stops a lagging tail

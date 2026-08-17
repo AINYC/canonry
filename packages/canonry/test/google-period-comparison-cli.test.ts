@@ -89,12 +89,34 @@ describe('canonry google performance-daily — period comparison', () => {
     gscPerformanceDaily.mockResolvedValue(response({
       periodComparison: {
         ...response().periodComparison,
+        prior: {
+          ...response().periodComparison.prior,
+          clicks: 0, impressions: 0, ctr: null, position: null,
+        },
         change: { clicks: null, impressions: null, ctr: null, position: null },
       },
     }))
     const out = await captureLog(() => googlePerformanceDaily('demo', { format: 'text' }))
+    expect(out).toMatch(/Clicks:\s+new in last 2 days/)
     expect(out).toContain('no prior period to compare')
     expect(out).not.toMatch(/Infinity|NaN/)
+  })
+
+  it('distinguishes an empty trailing metric from a missing prior baseline', async () => {
+    gscPerformanceDaily.mockResolvedValue(response({
+      periodComparison: {
+        ...response().periodComparison,
+        trailing: {
+          ...response().periodComparison.trailing,
+          clicks: 0, impressions: 0, ctr: null, position: null, source: 'empty' as const,
+        },
+        change: { clicks: -1, impressions: -1, ctr: null, position: null },
+      },
+    }))
+    const out = await captureLog(() => googlePerformanceDaily('demo', { format: 'text' }))
+    expect(out).toMatch(/CTR:\s+no value in last 2 days/)
+    expect(out).toMatch(/Position:\s+no value in last 2 days/)
+    expect(out).not.toMatch(/CTR:\s+no prior period/)
   })
 
   it('reports an exact zero as no change rather than a signed zero', async () => {
@@ -143,7 +165,7 @@ describe('mixed data sources', () => {
       },
     }))
     const out = await captureLog(() => googlePerformanceDaily('demo', { format: 'text' }))
-    expect(out).toContain('different')
+    expect(out).toContain('needs property-level daily data')
     expect(out).not.toContain('vs prior 2')
     // A flat property would otherwise read +44% clicks / -23% impressions.
     expect(out).not.toMatch(/Clicks:\s+[+-]\d/)

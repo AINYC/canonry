@@ -39,6 +39,16 @@ describe('gscCalendarDates', () => {
       '2026-03-07', '2026-03-08', '2026-03-09', '2026-03-10',
     ])
   })
+
+  it('rejects impossible dates instead of normalizing them', () => {
+    expect(gscCalendarDates('2026-02-30', '2026-03-05')).toEqual([])
+  })
+
+  it('bounds fixture-sized date materialization', () => {
+    const dates = gscCalendarDates('0001-01-01', '9999-12-31')
+    expect(dates).toHaveLength(800)
+    expect(dates[0]).toBe('0001-01-01')
+  })
 })
 
 describe('computeGscPeriodComparison', () => {
@@ -107,6 +117,61 @@ describe('computeGscPeriodComparison', () => {
     expect(result.prior.clicks).toBe(3)
     expect(result.trailing.clicks).toBe(15)
     expect(result.change.clicks).toBe(4)
+  })
+
+  it('uses authoritative bounds when the requested prior half has no rows', () => {
+    const result = computeGscPeriodComparison(
+      [day('2026-03-09', 5, 50), day('2026-03-10', 5, 50)],
+      { startDate: '2026-03-01', endDate: '2026-03-10' },
+    )!
+
+    expect(result.days).toBe(5)
+    expect(result.prior).toMatchObject({
+      startDate: '2026-03-01', endDate: '2026-03-05', clicks: 0, source: 'empty',
+    })
+    expect(result.trailing).toMatchObject({
+      startDate: '2026-03-06', endDate: '2026-03-10', clicks: 10, source: 'property-daily',
+    })
+    expect(result.comparable).toBe(true)
+    expect(result.change.clicks).toBeNull()
+  })
+
+  it('compares a property-daily prior half with a quiet trailing half', () => {
+    const result = computeGscPeriodComparison(
+      [day('2026-03-01', 5, 50), day('2026-03-02', 5, 50)],
+      { startDate: '2026-03-01', endDate: '2026-03-10' },
+    )!
+
+    expect(result.prior.source).toBe('property-daily')
+    expect(result.trailing.source).toBe('empty')
+    expect(result.comparable).toBe(true)
+    expect(result.change.clicks).toBe(-1)
+    expect(result.change.impressions).toBe(-1)
+  })
+
+  it('returns null when an explicit range has no evidence in either half', () => {
+    expect(computeGscPeriodComparison([], {
+      startDate: '2026-03-01',
+      endDate: '2026-03-10',
+    })).toBeNull()
+  })
+
+  it('splits a multi-millennial range without materializing every day', () => {
+    const result = computeGscPeriodComparison(
+      [day('9999-12-31', 5, 50)],
+      { startDate: '0001-01-01', endDate: '9999-12-31' },
+    )!
+
+    expect(result.days).toBeGreaterThan(1_000_000)
+    expect(result.trailing.endDate).toBe('9999-12-31')
+    expect(result.trailing.clicks).toBe(5)
+  })
+
+  it('rejects impossible authoritative bounds instead of normalizing them', () => {
+    expect(computeGscPeriodComparison(
+      [day('2026-03-02', 5, 50)],
+      { startDate: '2026-02-30', endDate: '2026-03-05' },
+    )).toBeNull()
   })
 
   describe('non-additive metrics', () => {
@@ -308,13 +373,25 @@ describe('mixed measurement sources', () => {
     expect(result.change.clicks).toBe(1)
   })
 
-  it('compares normally when BOTH periods are dimensioned', () => {
+  it('refuses when BOTH periods are dimensioned, despite matching sources', () => {
     const result = computeGscPeriodComparison([
       dim('2026-03-01', 10, 100), dim('2026-03-02', 10, 100),
       dim('2026-03-03', 20, 100), dim('2026-03-04', 20, 100),
     ])!
     expect(result.prior.source).toBe('dimensioned')
-    expect(result.comparable).toBe(true)
-    expect(result.change.clicks).toBe(1)
+    expect(result.trailing.source).toBe('dimensioned')
+    expect(result.comparable).toBe(false)
+    expect(result.change.clicks).toBeNull()
+  })
+
+  it('refuses dimensioned evidence even when the other half is empty', () => {
+    const result = computeGscPeriodComparison(
+      [dim('2026-03-01', 10, 100), dim('2026-03-02', 10, 100)],
+      { startDate: '2026-03-01', endDate: '2026-03-10' },
+    )!
+    expect(result.prior.source).toBe('dimensioned')
+    expect(result.trailing.source).toBe('empty')
+    expect(result.comparable).toBe(false)
+    expect(result.change.clicks).toBeNull()
   })
 })

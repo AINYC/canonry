@@ -18,9 +18,10 @@
  *    property's actual position went from 22.6 to 24.2, i.e. slightly WORSE.
  *    A number that points the opposite way to reality is worse than a blank.
  *
- * So the comparison is between two real, equal-length stretches of the window.
- * Nothing is extrapolated and every figure is one the property actually
- * recorded.
+ * So the comparison is between two equal-length stretches of the known data
+ * window. Nothing is extrapolated; omitted dates inside that observed frontier
+ * are zero-count days, while dates beyond the frontier are kept out by the
+ * route because their state is unknown.
  *
  * No DB, no clock, no I/O — same posture as `gbp-summary.ts` and
  * `visibility-compare.ts`, so the whole thing is unit-testable from literals.
@@ -36,7 +37,22 @@
  * withholds rare queries (under-counting clicks) and fans one impression out
  * across every query x page x country x device row (over-counting impressions).
  */
-export type GscTotalsSource = 'property-daily' | 'dimensioned' | 'mixed'
+export type GscTotalsSource = 'property-daily' | 'dimensioned' | 'mixed' | 'empty'
+
+const DAY_MS = 86_400_000
+const GSC_CALENDAR_RANGE_CAP = 800
+
+/** UTC midnight for one canonical `YYYY-MM-DD`, or null for an impossible date. */
+function calendarDateMs(value: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const parsed = new Date(`${value}T00:00:00Z`)
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) return null
+  return parsed.getTime()
+}
+
+function calendarDateAt(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10)
+}
 
 /** One day as the performance route assembles it. `position` is nullable. */
 export interface GscDailyRow {
@@ -81,29 +97,32 @@ export interface GscPeriodComparison {
   prior: GscPeriodTotals
   trailing: GscPeriodTotals
   /**
-   * False when the two periods do not rest on the same measurement, in which
-   * case every `change` is null.
+   * False when either period contains dimensioned fallback totals, in which
+   * case every `change` is null. Empty/property-daily halves remain comparable.
    *
    * A ratio of one source to the other is not a change in the property, it is
    * the gap between two counting methods. On the measured pair above, a
-   * perfectly FLAT property whose window straddles the boundary would report
+   * perfectly FLAT property whose window uses the two sources would report
    * clicks +44%, impressions -23% and CTR +87%. `totals` tolerates the mix
    * because a uniform bias in a level is still monotone; a ratio of two
-   * differently-sourced halves is not. Same posture as `top-pages`, which
-   * returns null rather than falling back for a total.
+   * differently-sourced halves is not. Even dimensioned/dimensioned is refused:
+   * the table is valid for rankings, not property totals. Same posture as
+   * `top-pages`, which returns null rather than falling back for a total.
    */
   comparable: boolean
   /**
    * Relative change as a ratio (0.5 = +50%), or null where the prior period
-   * gives nothing to divide by. Sign is mathematical: for position, a POSITIVE
-   * value means the number went up, which is a worse rank. Desirability is the
-   * renderer's business, not this module's.
+   * gives nothing to divide by or the trailing metric is unavailable. Sign is
+   * mathematical: for position, a POSITIVE value means the number went up,
+   * which is a worse rank. Desirability is the renderer's business, not this
+   * module's.
    */
   change: GscPeriodChange
 }
 
 /**
- * Relative change, or null when the baseline cannot support one.
+ * Relative change, or null when the baseline cannot support one or the trailing
+ * value is unavailable.
  *
  * A zero baseline is the honest blank: going from no clicks to some clicks is
  * an infinite increase, and "+∞%" or a silently substituted "+100%" would both
@@ -120,21 +139,27 @@ function relativeChange(trailing: number | null, prior: number | null): number |
  * Every calendar date from `start` to `end` inclusive, as `YYYY-MM-DD`.
  *
  * Stepped in UTC so a DST transition in the host's zone cannot drop or repeat a
- * date. These are calendar labels, not instants.
+ * date. These are calendar labels, not instants. The bounded result is for
+ * fixtures and display-sized series; the comparator itself computes boundaries
+ * arithmetically and never allocates one entry per requested day.
  */
-export function gscCalendarDates(start: string, end: string): string[] {
-  const dates: string[] = []
-  const cursor = new Date(`${start}T00:00:00Z`)
-  const last = new Date(`${end}T00:00:00Z`)
-  if (Number.isNaN(cursor.getTime()) || Number.isNaN(last.getTime())) return dates
-  while (cursor.getTime() <= last.getTime()) {
-    dates.push(cursor.toISOString().slice(0, 10))
-    cursor.setUTCDate(cursor.getUTCDate() + 1)
-  }
-  return dates
+export function gscCalendarDates(
+  start: string,
+  end: string,
+  cap = GSC_CALENDAR_RANGE_CAP,
+): string[] {
+  const first = calendarDateMs(start)
+  const last = calendarDateMs(end)
+  if (first === null || last === null || first > last || !Number.isFinite(cap) || cap < 1) return []
+  const length = Math.min(Math.floor((last - first) / DAY_MS) + 1, Math.floor(cap))
+  return Array.from({ length }, (_, index) => calendarDateAt(first + index * DAY_MS))
 }
 
-function aggregate(dates: string[], byDate: Map<string, GscDailyRow>): GscPeriodTotals {
+function aggregate(
+  startDate: string,
+  endDate: string,
+  byDate: Map<string, GscDailyRow>,
+): GscPeriodTotals {
   let clicks = 0
   let impressions = 0
   let positionWeight = 0
@@ -142,16 +167,13 @@ function aggregate(dates: string[], byDate: Map<string, GscDailyRow>): GscPeriod
   let propertyDays = 0
   let dimensionedDays = 0
 
-  for (const date of dates) {
-    const row = byDate.get(date)
-    if (row) {
-      if (row.fromPropertyTotals) propertyDays += 1
-      else dimensionedDays += 1
-    }
-    // A calendar day with no row is a real zero for counts. Search Analytics
-    // omits zero-data days rather than reporting them, so treating the gap as
-    // missing data would silently shorten the period.
-    if (!row) continue
+  for (const row of byDate.values()) {
+    if (row.date < startDate || row.date > endDate) continue
+    if (row.fromPropertyTotals) propertyDays += 1
+    else dimensionedDays += 1
+    // Calendar dates with no row add zero to the counts. Search Analytics omits
+    // zero-data days rather than reporting them, so the explicit boundaries —
+    // not the number of returned rows — define the period length.
     clicks += row.clicks
     impressions += row.impressions
     // Position is non-additive and weighted by impressions, matching how the
@@ -165,8 +187,8 @@ function aggregate(dates: string[], byDate: Map<string, GscDailyRow>): GscPeriod
   }
 
   return {
-    startDate: dates[0] ?? '',
-    endDate: dates[dates.length - 1] ?? '',
+    startDate,
+    endDate,
     clicks,
     impressions,
     // CTR is a ratio of the period's own totals. Averaging the daily ratios
@@ -174,12 +196,11 @@ function aggregate(dates: string[], byDate: Map<string, GscDailyRow>): GscPeriod
     // one and would not reconcile with the clicks and impressions beside it.
     ctr: impressions > 0 ? clicks / impressions : null,
     position: positionWeight > 0 ? positionWeighted / positionWeight : null,
-    // A period with no rows at all reports `dimensioned`: it carries no
-    // property-daily evidence, so it must not be treated as commensurable with
-    // one that does.
+    // Empty is its own provenance. It is a real zero-count period, not evidence
+    // from the invalid-for-totals dimensioned table.
     source: propertyDays > 0 && dimensionedDays > 0
       ? 'mixed'
-      : propertyDays > 0 ? 'property-daily' : 'dimensioned',
+      : propertyDays > 0 ? 'property-daily' : dimensionedDays > 0 ? 'dimensioned' : 'empty',
   }
 }
 
@@ -198,26 +219,42 @@ function aggregate(dates: string[], byDate: Map<string, GscDailyRow>): GscPeriod
  *
  * Returns null when the span cannot make two periods of at least one day each.
  */
-export function computeGscPeriodComparison(daily: readonly GscDailyRow[]): GscPeriodComparison | null {
-  if (daily.length === 0) return null
-
-  const first = daily[0]!.date
-  const last = daily[daily.length - 1]!.date
-  const calendar = gscCalendarDates(first, last)
-  const periodDays = Math.floor(calendar.length / 2)
+export function computeGscPeriodComparison(
+  daily: readonly GscDailyRow[],
+  bounds?: { startDate: string; endDate: string },
+): GscPeriodComparison | null {
+  const first = bounds?.startDate ?? daily[0]?.date
+  const last = bounds?.endDate ?? daily[daily.length - 1]?.date
+  if (!first || !last) return null
+  const firstMs = calendarDateMs(first)
+  const lastMs = calendarDateMs(last)
+  if (firstMs === null || lastMs === null || firstMs > lastMs) return null
+  const spanDays = Math.floor((lastMs - firstMs) / DAY_MS) + 1
+  const periodDays = Math.floor(spanDays / 2)
   if (periodDays < 1) return null
 
   const byDate = new Map(daily.map((row) => [row.date, row]))
-  const trailingDates = calendar.slice(calendar.length - periodDays)
-  const priorDates = calendar.slice(calendar.length - periodDays * 2, calendar.length - periodDays)
+  // Anchor both periods on the requested end. This drops the OLDEST day when
+  // the span is odd and needs only four boundary strings even for a very wide
+  // custom range — no million-entry calendar allocation.
+  const trailingStart = calendarDateAt(lastMs - (periodDays - 1) * DAY_MS)
+  const priorEnd = calendarDateAt(lastMs - periodDays * DAY_MS)
+  const priorStart = calendarDateAt(lastMs - (periodDays * 2 - 1) * DAY_MS)
 
-  const prior = aggregate(priorDates, byDate)
-  const trailing = aggregate(trailingDates, byDate)
+  const prior = aggregate(priorStart, priorEnd, byDate)
+  const trailing = aggregate(trailingStart, last, byDate)
 
-  // Both periods must rest on the same measurement. `mixed` fails on its own:
-  // a period that is itself half one source and half the other has no single
-  // meaning to compare against anything.
-  const comparable = prior.source === trailing.source && prior.source !== 'mixed'
+  // An explicitly requested range can be entirely quiet. There is then no
+  // observed measurement source and no useful comparison payload to return.
+  if (prior.source === 'empty' && trailing.source === 'empty') return null
+
+  // Only property-level daily evidence can support totals. An empty half is a
+  // real zero and may be compared with a property-daily half; any dimensioned
+  // evidence (alone or mixed into a half) makes the ratio unavailable.
+  const comparable = prior.source !== 'dimensioned'
+    && prior.source !== 'mixed'
+    && trailing.source !== 'dimensioned'
+    && trailing.source !== 'mixed'
 
   return {
     days: periodDays,

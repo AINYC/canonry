@@ -337,17 +337,27 @@ export async function googlePerformanceDaily(project: string, opts: {
   // range is too short to split into two periods.
   const cmp = data.periodComparison
   if (cmp && !cmp.comparable) {
-    // The halves came from different Search Console tables (the property-daily
-    // table vs the dimensioned sum), whose totals are not interchangeable. A
-    // ratio across that boundary would report the gap between two counting
-    // methods as if the site had changed.
+    // Any dimensioned fallback is invalid for property totals, even when both
+    // halves happen to use it.
     console.log(
-      `\nNo period comparison: the two halves of this range come from different`
-      + ` Search Console data sources. Sync again, or pick a shorter range.`,
+      `\nNo period comparison: period comparison needs property-level daily data.`
+      + ` Sync again, or pick a range covered by property totals.`,
     )
   } else if (cmp) {
-    const pct = (ratio: number | null, inverted: boolean): string => {
-      if (ratio === null) return 'no prior period to compare'
+    const pct = (
+      ratio: number | null,
+      prior: number | null,
+      trailing: number | null,
+      inverted: boolean,
+    ): string => {
+      if (ratio === null) {
+        if (prior !== null && trailing !== null && prior <= 0 && trailing > 0) {
+          return `new in last ${cmp.days} day${cmp.days === 1 ? '' : 's'}`
+        }
+        if (prior === null || prior <= 0) return 'no prior period to compare'
+        if (trailing === null) return `no value in last ${cmp.days} day${cmp.days === 1 ? '' : 's'}`
+        return 'comparison unavailable'
+      }
       if (ratio === 0) return 'no change'
       const better = inverted ? ratio < 0 : ratio > 0
       const magnitude = Math.abs(ratio * 100)
@@ -358,13 +368,13 @@ export async function googlePerformanceDaily(project: string, opts: {
       `\nLast ${cmp.days} day${cmp.days === 1 ? '' : 's'} (${cmp.trailing.startDate} to ${cmp.trailing.endDate})`
       + ` vs prior ${cmp.days} (${cmp.prior.startDate} to ${cmp.prior.endDate}):`,
     )
-    for (const [label, ratio, inverted] of [
-      ['Clicks', cmp.change.clicks, false],
-      ['Impressions', cmp.change.impressions, false],
-      ['CTR', cmp.change.ctr, false],
-      ['Position', cmp.change.position, true],
+    for (const [label, ratio, prior, trailing, inverted] of [
+      ['Clicks', cmp.change.clicks, cmp.prior.clicks, cmp.trailing.clicks, false],
+      ['Impressions', cmp.change.impressions, cmp.prior.impressions, cmp.trailing.impressions, false],
+      ['CTR', cmp.change.ctr, cmp.prior.ctr, cmp.trailing.ctr, false],
+      ['Position', cmp.change.position, cmp.prior.position, cmp.trailing.position, true],
     ] as const) {
-      console.log(`  ${`${label}:`.padEnd(13)}${pct(ratio, inverted)}`)
+      console.log(`  ${`${label}:`.padEnd(13)}${pct(ratio, prior, trailing, inverted)}`)
     }
   }
 
