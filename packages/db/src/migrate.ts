@@ -3767,6 +3767,155 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       reclassifyFabricatedDeadLinks(tx)
     },
   },
+  {
+    version: 141,
+    name: 'google-marketing-read-only-foundation',
+    // Project-scoped Google Ads / GTM metadata plus append-only, sanitized
+    // observations. OAuth credentials and provider bodies are never persisted:
+    // snapshots contain only the bounded DTO-shaped projection and raw-body
+    // hashes/size for provenance. Composite foreign keys prevent a snapshot
+    // from joining a run or connection owned by a different project.
+    statements: [
+      `CREATE TABLE IF NOT EXISTS google_ads_connections (
+        id                              TEXT PRIMARY KEY,
+        project_id                      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        selected_login_customer_id      TEXT,
+        selected_customer_id            TEXT,
+        selected_customer_name          TEXT,
+        selected_customer_currency_code TEXT,
+        selected_customer_time_zone     TEXT,
+        selected_customer_status        TEXT,
+        scopes                          TEXT NOT NULL DEFAULT '[]',
+        last_validated_at               TEXT,
+        last_inventory_snapshot_at      TEXT,
+        last_metrics_snapshot_at        TEXT,
+        created_at                      TEXT NOT NULL,
+        updated_at                      TEXT NOT NULL
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_google_ads_connections_project
+        ON google_ads_connections(project_id)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_google_ads_connections_project_id
+        ON google_ads_connections(project_id, id)`,
+      `CREATE INDEX IF NOT EXISTS idx_google_ads_connections_selected_customer
+        ON google_ads_connections(selected_customer_id)`,
+      `CREATE TABLE IF NOT EXISTS gtm_connections (
+        id                           TEXT PRIMARY KEY,
+        project_id                   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        selected_account_id          TEXT,
+        selected_account_name        TEXT,
+        selected_container_id        TEXT,
+        selected_container_name      TEXT,
+        selected_container_public_id TEXT,
+        selected_workspace_id        TEXT,
+        selected_workspace_name      TEXT,
+        scopes                       TEXT NOT NULL DEFAULT '[]',
+        last_validated_at            TEXT,
+        last_snapshot_at             TEXT,
+        created_at                   TEXT NOT NULL,
+        updated_at                   TEXT NOT NULL
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_gtm_connections_project
+        ON gtm_connections(project_id)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_gtm_connections_project_id
+        ON gtm_connections(project_id, id)`,
+      `CREATE INDEX IF NOT EXISTS idx_gtm_connections_selected_container
+        ON gtm_connections(selected_container_id)`,
+      `CREATE TABLE IF NOT EXISTS google_ads_raw_snapshots (
+        id                   TEXT PRIMARY KEY,
+        project_id           TEXT NOT NULL,
+        connection_id        TEXT NOT NULL,
+        run_id               TEXT NOT NULL,
+        kind                 TEXT NOT NULL,
+        customer_id          TEXT,
+        payload_checksum     TEXT NOT NULL,
+        raw_payload_sha256   TEXT,
+        raw_payload_bytes    INTEGER,
+        redacted_field_count INTEGER NOT NULL DEFAULT 0,
+        payload              TEXT NOT NULL,
+        captured_at          TEXT NOT NULL,
+        created_at           TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id)
+          REFERENCES runs(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, connection_id)
+          REFERENCES google_ads_connections(project_id, id) ON DELETE CASCADE
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_google_ads_raw_snapshots_project_run
+        ON google_ads_raw_snapshots(project_id, run_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_google_ads_raw_snapshots_connection_kind_captured
+        ON google_ads_raw_snapshots(connection_id, kind, captured_at)`,
+      `CREATE INDEX IF NOT EXISTS idx_google_ads_raw_snapshots_project_captured
+        ON google_ads_raw_snapshots(project_id, captured_at)`,
+      `CREATE TABLE IF NOT EXISTS gtm_raw_snapshots (
+        id                   TEXT PRIMARY KEY,
+        project_id           TEXT NOT NULL,
+        connection_id        TEXT NOT NULL,
+        run_id               TEXT NOT NULL,
+        kind                 TEXT NOT NULL,
+        account_id           TEXT,
+        container_id         TEXT,
+        workspace_id         TEXT,
+        payload_checksum     TEXT NOT NULL,
+        raw_payload_sha256   TEXT,
+        raw_payload_bytes    INTEGER,
+        redacted_field_count INTEGER NOT NULL DEFAULT 0,
+        payload              TEXT NOT NULL,
+        captured_at          TEXT NOT NULL,
+        created_at           TEXT NOT NULL,
+        FOREIGN KEY (project_id, run_id)
+          REFERENCES runs(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, connection_id)
+          REFERENCES gtm_connections(project_id, id) ON DELETE CASCADE
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_gtm_raw_snapshots_project_run
+        ON gtm_raw_snapshots(project_id, run_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_gtm_raw_snapshots_connection_kind_captured
+        ON gtm_raw_snapshots(connection_id, kind, captured_at)`,
+      `CREATE INDEX IF NOT EXISTS idx_gtm_raw_snapshots_project_container_captured
+        ON gtm_raw_snapshots(project_id, container_id, captured_at)`,
+    ],
+  },
+  {
+    version: 142,
+    name: 'conversion-tracking-contracts',
+    // A durable desired-state anchor for integrity reads. This intentionally
+    // has no FK to a live Google connection or snapshot: a missing provider
+    // entity is itself a meaningful static finding. Nested JSON is restricted
+    // to the typed contract's safe identifiers and verification requirements.
+    statements: [
+      `CREATE TABLE IF NOT EXISTS conversion_tracking_contracts (
+        id          TEXT PRIMARY KEY,
+        project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name        TEXT NOT NULL,
+        event_name  TEXT NOT NULL,
+        google_ads  TEXT NOT NULL,
+        gtm         TEXT NOT NULL,
+        runtime     TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_conversion_tracking_contracts_project_name
+        ON conversion_tracking_contracts(project_id, name)`,
+      `CREATE INDEX IF NOT EXISTS idx_conversion_tracking_contracts_project_event
+        ON conversion_tracking_contracts(project_id, event_name)`,
+    ],
+  },
+  {
+    version: 143,
+    name: 'google-marketing-selection-generation-anchors',
+    // Timestamps are presentation metadata, not a generation boundary: an old
+    // snapshot and a same-millisecond reselection/sync can share one ISO value.
+    // Keep private monotonic CAS tokens on the connections and exact snapshot
+    // IDs for current-evidence reads. Existing observations intentionally are
+    // not backfilled: their generation provenance was never recorded.
+    statements: [
+      `ALTER TABLE google_ads_connections ADD COLUMN selection_generation INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE google_ads_connections ADD COLUMN last_customer_snapshot_id TEXT`,
+      `ALTER TABLE google_ads_connections ADD COLUMN last_inventory_snapshot_id TEXT`,
+      `ALTER TABLE google_ads_connections ADD COLUMN last_metrics_snapshot_id TEXT`,
+      `ALTER TABLE gtm_connections ADD COLUMN selection_generation INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE gtm_connections ADD COLUMN last_snapshot_id TEXT`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

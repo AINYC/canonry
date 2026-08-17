@@ -106,6 +106,24 @@ import type {
   GA4SessionHistoryEntry,
   AuditLogEntry,
   GoogleConnectionDto,
+  GoogleAdsAccessibleCustomersResponse,
+  GoogleAdsConnectionStatusDto,
+  GoogleAdsCustomerSelectionRequest,
+  GoogleAdsStoredSnapshotPage,
+  GoogleAdsStoredSnapshotReadEnvelope,
+  GoogleMarketingDisconnectResponse,
+  GoogleMarketingOAuthConnectRequest,
+  GoogleMarketingOAuthConnectResponse,
+  GtmAccountsResponse,
+  GtmConnectionStatusDto,
+  GtmContainerListResponse,
+  GtmResourceSelectionRequest,
+  GtmStoredSnapshotPage,
+  GtmStoredSnapshotReadEnvelope,
+  GtmWorkspaceListResponse,
+  ConversionTrackingContract,
+  ConversionTrackingContractWriteRequest,
+  ConversionTrackingIntegrityReadEnvelope,
   GbpAccountListResponse,
   GbpLocationDto,
   GbpLocationListResponse,
@@ -310,6 +328,31 @@ import {
   getApiV1ProjectsByNameGoogleProperties,
   putApiV1ProjectsByNameGoogleConnectionsByTypeProperty,
   putApiV1ProjectsByNameGoogleConnectionsByTypeSitemap,
+  // Google Marketing (Google Ads + Google Tag Manager)
+  getApiV1ProjectsByNameGoogleAdsStatus,
+  postApiV1ProjectsByNameGoogleAdsOauthConnect,
+  getApiV1ProjectsByNameGoogleAdsCustomers,
+  putApiV1ProjectsByNameGoogleAdsSelection,
+  postApiV1ProjectsByNameGoogleAdsSync,
+  getApiV1ProjectsByNameGoogleAdsSnapshots,
+  getApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotId,
+  deleteApiV1ProjectsByNameGoogleAdsConnection,
+  getApiV1ProjectsByNameGtmStatus,
+  postApiV1ProjectsByNameGtmOauthConnect,
+  getApiV1ProjectsByNameGtmAccounts,
+  getApiV1ProjectsByNameGtmAccountsByAccountIdContainers,
+  getApiV1ProjectsByNameGtmAccountsByAccountIdContainersByContainerIdWorkspaces,
+  putApiV1ProjectsByNameGtmSelection,
+  postApiV1ProjectsByNameGtmSync,
+  getApiV1ProjectsByNameGtmSnapshots,
+  getApiV1ProjectsByNameGtmSnapshotsBySnapshotId,
+  deleteApiV1ProjectsByNameGtmConnection,
+  getApiV1ProjectsByNameConversionTrackingContracts,
+  postApiV1ProjectsByNameConversionTrackingContracts,
+  getApiV1ProjectsByNameConversionTrackingContractsByContractId,
+  putApiV1ProjectsByNameConversionTrackingContractsByContractId,
+  deleteApiV1ProjectsByNameConversionTrackingContractsByContractId,
+  getApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrity,
   // Google Business Profile
   getApiV1ProjectsByNameGbpAccounts,
   postApiV1ProjectsByNameGbpLocationsDiscover,
@@ -2276,6 +2319,264 @@ export class ApiClient {
         client: this.heyClient,
         path: { name: project, type } as never,
         body: { sitemapUrl },
+      }),
+    )
+  }
+
+  // ── Google Marketing: Google Ads + Google Tag Manager ──────────────────
+
+  async connectGoogleAds(
+    project: string,
+    request: GoogleMarketingOAuthConnectRequest,
+  ): Promise<GoogleMarketingOAuthConnectResponse> {
+    return this.invoke<GoogleMarketingOAuthConnectResponse>(() =>
+      postApiV1ProjectsByNameGoogleAdsOauthConnect({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+      }),
+    )
+  }
+
+  async connectGtm(
+    project: string,
+    request: GoogleMarketingOAuthConnectRequest,
+  ): Promise<GoogleMarketingOAuthConnectResponse> {
+    return this.invoke<GoogleMarketingOAuthConnectResponse>(() =>
+      postApiV1ProjectsByNameGtmOauthConnect({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+      }),
+    )
+  }
+
+  async disconnectGoogleAds(project: string): Promise<GoogleMarketingDisconnectResponse> {
+    return this.invoke<GoogleMarketingDisconnectResponse>(() =>
+      deleteApiV1ProjectsByNameGoogleAdsConnection({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async disconnectGtm(project: string): Promise<GoogleMarketingDisconnectResponse> {
+    return this.invoke<GoogleMarketingDisconnectResponse>(() =>
+      deleteApiV1ProjectsByNameGtmConnection({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async getGoogleAdsStatus(project: string): Promise<GoogleAdsConnectionStatusDto> {
+    return this.invoke<GoogleAdsConnectionStatusDto>(() =>
+      getApiV1ProjectsByNameGoogleAdsStatus({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async listGoogleAdsCustomers(project: string): Promise<GoogleAdsAccessibleCustomersResponse> {
+    return this.invoke<GoogleAdsAccessibleCustomersResponse>(() =>
+      getApiV1ProjectsByNameGoogleAdsCustomers({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async setGoogleAdsSelection(
+    project: string,
+    request: GoogleAdsCustomerSelectionRequest,
+  ): Promise<GoogleAdsConnectionStatusDto> {
+    return this.invoke<GoogleAdsConnectionStatusDto>(() =>
+      putApiV1ProjectsByNameGoogleAdsSelection({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+      }),
+    )
+  }
+
+  async triggerGoogleAdsSync(project: string): Promise<RunDto> {
+    return this.invoke<RunDto>(() =>
+      postApiV1ProjectsByNameGoogleAdsSync({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async listGoogleAdsSnapshots(
+    project: string,
+    query?: { limit?: number; cursor?: string },
+  ): Promise<GoogleAdsStoredSnapshotPage> {
+    return this.invoke<GoogleAdsStoredSnapshotPage>(() =>
+      getApiV1ProjectsByNameGoogleAdsSnapshots({
+        client: this.heyClient,
+        path: { name: project },
+        query,
+      }),
+    )
+  }
+
+  async getGoogleAdsSnapshot(project: string, snapshotId: string): Promise<GoogleAdsStoredSnapshotReadEnvelope> {
+    return this.invoke<GoogleAdsStoredSnapshotReadEnvelope>(() =>
+      getApiV1ProjectsByNameGoogleAdsSnapshotsBySnapshotId({
+        client: this.heyClient,
+        path: { name: project, snapshotId },
+      }),
+    )
+  }
+
+  async getGtmStatus(project: string): Promise<GtmConnectionStatusDto> {
+    return this.invoke<GtmConnectionStatusDto>(() =>
+      getApiV1ProjectsByNameGtmStatus({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async listGtmAccounts(project: string): Promise<GtmAccountsResponse> {
+    return this.invoke<GtmAccountsResponse>(() =>
+      getApiV1ProjectsByNameGtmAccounts({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async listGtmContainers(project: string, accountId: string): Promise<GtmContainerListResponse> {
+    return this.invoke<GtmContainerListResponse>(() =>
+      getApiV1ProjectsByNameGtmAccountsByAccountIdContainers({
+        client: this.heyClient,
+        path: { name: project, accountId },
+      }),
+    )
+  }
+
+  async listGtmWorkspaces(
+    project: string,
+    accountId: string,
+    containerId: string,
+  ): Promise<GtmWorkspaceListResponse> {
+    return this.invoke<GtmWorkspaceListResponse>(() =>
+      getApiV1ProjectsByNameGtmAccountsByAccountIdContainersByContainerIdWorkspaces({
+        client: this.heyClient,
+        path: { name: project, accountId, containerId },
+      }),
+    )
+  }
+
+  async setGtmSelection(
+    project: string,
+    request: GtmResourceSelectionRequest,
+  ): Promise<GtmConnectionStatusDto> {
+    return this.invoke<GtmConnectionStatusDto>(() =>
+      putApiV1ProjectsByNameGtmSelection({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+      }),
+    )
+  }
+
+  async triggerGtmSync(project: string): Promise<RunDto> {
+    return this.invoke<RunDto>(() =>
+      postApiV1ProjectsByNameGtmSync({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async listGtmSnapshots(
+    project: string,
+    query?: { limit?: number; cursor?: string },
+  ): Promise<GtmStoredSnapshotPage> {
+    return this.invoke<GtmStoredSnapshotPage>(() =>
+      getApiV1ProjectsByNameGtmSnapshots({
+        client: this.heyClient,
+        path: { name: project },
+        query,
+      }),
+    )
+  }
+
+  async getGtmSnapshot(project: string, snapshotId: string): Promise<GtmStoredSnapshotReadEnvelope> {
+    return this.invoke<GtmStoredSnapshotReadEnvelope>(() =>
+      getApiV1ProjectsByNameGtmSnapshotsBySnapshotId({
+        client: this.heyClient,
+        path: { name: project, snapshotId },
+      }),
+    )
+  }
+
+  async listConversionTrackingContracts(project: string): Promise<ConversionTrackingContract[]> {
+    return this.invoke<ConversionTrackingContract[]>(() =>
+      getApiV1ProjectsByNameConversionTrackingContracts({
+        client: this.heyClient,
+        path: { name: project },
+      }),
+    )
+  }
+
+  async getConversionTrackingContract(project: string, contractId: string): Promise<ConversionTrackingContract> {
+    return this.invoke<ConversionTrackingContract>(() =>
+      getApiV1ProjectsByNameConversionTrackingContractsByContractId({
+        client: this.heyClient,
+        path: { name: project, contractId },
+      }),
+    )
+  }
+
+  async createConversionTrackingContract(
+    project: string,
+    request: ConversionTrackingContractWriteRequest,
+  ): Promise<ConversionTrackingContract> {
+    return this.invoke<ConversionTrackingContract>(() =>
+      postApiV1ProjectsByNameConversionTrackingContracts({
+        client: this.heyClient,
+        path: { name: project },
+        body: request,
+      }),
+    )
+  }
+
+  async updateConversionTrackingContract(
+    project: string,
+    contractId: string,
+    request: ConversionTrackingContractWriteRequest,
+  ): Promise<ConversionTrackingContract> {
+    return this.invoke<ConversionTrackingContract>(() =>
+      putApiV1ProjectsByNameConversionTrackingContractsByContractId({
+        client: this.heyClient,
+        path: { name: project, contractId },
+        body: request,
+      }),
+    )
+  }
+
+  async deleteConversionTrackingContract(project: string, contractId: string): Promise<void> {
+    await this.invoke<void>(() =>
+      deleteApiV1ProjectsByNameConversionTrackingContractsByContractId({
+        client: this.heyClient,
+        path: { name: project, contractId },
+      }),
+    )
+  }
+
+  async getConversionTrackingIntegrity(
+    project: string,
+    contractId: string,
+  ): Promise<ConversionTrackingIntegrityReadEnvelope> {
+    return this.invoke<ConversionTrackingIntegrityReadEnvelope>(() =>
+      getApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrity({
+        client: this.heyClient,
+        path: { name: project, contractId },
       }),
     )
   }

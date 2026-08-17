@@ -91,6 +91,8 @@ const INTEGRATION_SYNC_KINDS: ReadonlySet<string> = new Set<RunKind>([
   RunKinds['bing-inspect-sitemap'],
   RunKinds['backlink-extract'],
   RunKinds['traffic-sync'],
+  RunKinds['google-ads-sync'],
+  RunKinds['gtm-sync'],
 ])
 
 type SnapshotMatchedField = ProjectSearchSnapshotHitDto['matchedField']

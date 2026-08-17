@@ -9,12 +9,14 @@ function makeClient(overrides: Partial<DataRefreshClient> = {}): DataRefreshClie
     gaSync: vi.fn(async () => ({})),
     triggerGbpSync: vi.fn(async () => ({ runId: 'r', status: 'running' })),
     triggerAdsSync: vi.fn(async () => ({ runId: 'a', status: 'queued' })),
+    triggerGoogleAdsSync: vi.fn(async () => ({ id: 'google-ads-run', status: 'queued' })),
+    triggerGtmSync: vi.fn(async () => ({ id: 'gtm-run', status: 'queued' })),
     ...overrides,
   }
 }
 
 describe('refreshAllIntegrations', () => {
-  test('fires all five integration syncs for the project', async () => {
+  test('fans out every integration sync for the project with explicit Google provider calls', async () => {
     const client = makeClient()
 
     await refreshAllIntegrations(client, 'proj')
@@ -24,7 +26,11 @@ describe('refreshAllIntegrations', () => {
     expect(client.bingInspectSitemap).toHaveBeenCalledWith('proj', {})
     expect(client.gaSync).toHaveBeenCalledWith('proj', { days: 30 })
     expect(client.triggerGbpSync).toHaveBeenCalledWith('proj', {})
+    // Existing `ads` remains OpenAI / ChatGPT Ads, rather than being reused
+    // for Google Ads. The Google provider calls are independently explicit.
     expect(client.triggerAdsSync).toHaveBeenCalledWith('proj')
+    expect(client.triggerGoogleAdsSync).toHaveBeenCalledWith('proj')
+    expect(client.triggerGtmSync).toHaveBeenCalledWith('proj')
   })
 
   test('one integration failing does not block the others and never throws', async () => {
@@ -36,11 +42,13 @@ describe('refreshAllIntegrations', () => {
 
     await expect(refreshAllIntegrations(client, 'proj')).resolves.toBeUndefined()
 
-    // The remaining four still fired despite Bing rejecting.
+    // The remaining six still fired despite Bing rejecting.
     expect(client.gscSync).toHaveBeenCalledTimes(1)
     expect(client.gaSync).toHaveBeenCalledTimes(1)
     expect(client.triggerGbpSync).toHaveBeenCalledTimes(1)
     expect(client.triggerAdsSync).toHaveBeenCalledTimes(1)
+    expect(client.triggerGoogleAdsSync).toHaveBeenCalledTimes(1)
+    expect(client.triggerGtmSync).toHaveBeenCalledTimes(1)
   })
 
   test('all integrations failing still resolves (fire-and-forget)', async () => {
@@ -53,9 +61,11 @@ describe('refreshAllIntegrations', () => {
       gaSync: boom,
       triggerGbpSync: boom,
       triggerAdsSync: boom,
+      triggerGoogleAdsSync: boom,
+      triggerGtmSync: boom,
     })
 
     await expect(refreshAllIntegrations(client, 'proj')).resolves.toBeUndefined()
-    expect(boom).toHaveBeenCalledTimes(5)
+    expect(boom).toHaveBeenCalledTimes(7)
   })
 })

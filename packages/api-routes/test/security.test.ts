@@ -71,6 +71,12 @@ test('auth protects non-public routes while keeping public exceptions reachable'
 
     const callbackRes = await app.inject({ method: 'GET', url: '/api/v1/google/callback' })
     expect(callbackRes.statusCode).toBe(400)
+
+    // The Google Ads / GTM callback is also public ONLY at its exact signed
+    // callback endpoint; a missing state reaches its verifier (400), not the
+    // auth middleware (401).
+    const marketingCallbackRes = await app.inject({ method: 'GET', url: '/api/v1/google-marketing/callback' })
+    expect(marketingCallbackRes.statusCode).toBe(400)
   } finally {
     await app.close()
     fs.rmSync(tmpDir, { recursive: true, force: true })

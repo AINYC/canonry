@@ -68,6 +68,8 @@ export default defineConfig({
     '@ainyc/canonry-provider-cdp',
     '@ainyc/canonry-provider-perplexity',
     '@ainyc/canonry-integration-google',
+    '@ainyc/canonry-integration-google-ads',
+    '@ainyc/canonry-integration-google-tag-manager',
     '@ainyc/canonry-integration-bing',
     '@ainyc/canonry-integration-cloudflare-queue',
     '@ainyc/canonry-integration-cloudflare-worker',

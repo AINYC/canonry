@@ -322,6 +322,10 @@ export function shouldSkipAuth(url: string): boolean {
   // `includes`) so a future route that merely contains the substring — e.g.
   // `/google/callback/anything` — does not silently become unauthenticated.
   if (url.endsWith('/google/callback')) return true
+  // Shared Google Ads / Tag Manager OAuth callback. This is intentionally the
+  // same exact-suffix rule as the legacy Google callback above: only the
+  // signed state verifier in that route may receive an unauthenticated request.
+  if (url.endsWith('/google-marketing/callback')) return true
   if (url.endsWith('/session') || url.endsWith('/session/setup')) return true
   // The sign-in surface. It cannot require a credential: the sign-in screen has
   // to be able to ask whether a sign-in is needed, offer the form, and clear a

@@ -6,7 +6,7 @@ import Fastify from 'fastify'
 import { createClient, migrate } from '@ainyc/canonry-db'
 import { apiRoutes } from '../src/index.js'
 import type { ApiRoutesOptions } from '../src/index.js'
-import { canonryLocalRouteCatalog } from '../src/openapi.js'
+import { buildOpenApiDocument, canonryLocalRouteCatalog } from '../src/openapi.js'
 
 interface RouteObserverContext {
   app: ReturnType<typeof Fastify>
@@ -89,6 +89,23 @@ describe('openapi contract', () => {
       await ctx.app.close()
       fs.rmSync(ctx.tmpDir, { recursive: true, force: true })
     }
+  })
+
+  it('documents Google Marketing OAuth capacity responses', () => {
+    const paths = buildOpenApiDocument().paths ?? {}
+    const callback = paths['/api/v1/google-marketing/callback'] as Record<string, {
+      responses: Record<string, unknown>
+    }>
+    const adsConnect = paths['/api/v1/projects/{name}/google-ads/oauth/connect'] as Record<string, {
+      responses: Record<string, unknown>
+    }>
+    const gtmConnect = paths['/api/v1/projects/{name}/gtm/oauth/connect'] as Record<string, {
+      responses: Record<string, unknown>
+    }>
+
+    expect(callback.get.responses).toHaveProperty('503')
+    expect(adsConnect.post.responses).toHaveProperty('429')
+    expect(gtmConnect.post.responses).toHaveProperty('429')
   })
 
   it('documents every public route method registered under /api/v1', async () => {

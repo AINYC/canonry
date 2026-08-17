@@ -150,6 +150,22 @@ test('invalidates GBP operations for gbp-sync runs', () => {
   expect(predicateMatches('getApiV1ProjectsByNameGbpKeywords')).toBe(true)
 })
 
+test('invalidates Google Ads evidence and conversion integrity after a Google Ads sync', () => {
+  invalidateQueriesForRunKind(queryClient, RunKinds['google-ads-sync'], 'demo')
+  expect(predicateMatches('getApiV1ProjectsByNameGoogleAdsStatus')).toBe(true)
+  expect(predicateMatches('getApiV1ProjectsByNameGoogleAdsSnapshots')).toBe(true)
+  expect(predicateMatches('getApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrity')).toBe(true)
+  expect(predicateMatches('getApiV1ProjectsByNameGtmStatus')).toBe(false)
+})
+
+test('invalidates Tag Manager evidence and conversion integrity after a Tag Manager sync', () => {
+  invalidateQueriesForRunKind(queryClient, RunKinds['gtm-sync'], 'demo')
+  expect(predicateMatches('getApiV1ProjectsByNameGtmStatus')).toBe(true)
+  expect(predicateMatches('getApiV1ProjectsByNameGtmSnapshots')).toBe(true)
+  expect(predicateMatches('getApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrity')).toBe(true)
+  expect(predicateMatches('getApiV1ProjectsByNameGoogleAdsStatus')).toBe(false)
+})
+
 test('invalidates every Site Health operation for site-audit runs', () => {
   invalidateQueriesForRunKind(queryClient, RunKinds['site-audit'], 'demo')
   expect(predicateMatches('getApiV1ProjectsByNameTechnicalAeo')).toBe(true)

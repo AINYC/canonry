@@ -1,10 +1,10 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { test, expect, beforeEach, afterEach } from 'vitest'
+import { test, expect, beforeEach, afterEach, vi } from 'vitest'
 import { parse, stringify } from 'yaml'
 
-import { saveConfig, loadConfig, loadConfigRaw, getConfigPath } from '../src/config.js'
+import { saveConfig, saveConfigPatch, loadConfig, loadConfigRaw, getConfigPath } from '../src/config.js'
 import type { CanonryConfig } from '../src/config.js'
 
 let tmpDir: string
@@ -48,6 +48,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   restoreEnv()
   fs.rmSync(tmpDir, { recursive: true, force: true })
 })
@@ -124,6 +125,38 @@ test('saveConfig creates config file when none exists', () => {
   const result = readOnDisk()
   expect(result.apiUrl).toBe('http://localhost:4100')
   expect((result.providers as Record<string, unknown>).openai).toEqual({ apiKey: 'oai-key' })
+})
+
+test('saveConfig and saveConfigPatch replace config through a same-directory 0600 file', () => {
+  const configPath = getConfigPath()
+  fs.writeFileSync(configPath, stringify(baseConfig({ telemetry: false })), 'utf-8')
+  const rename = vi.spyOn(fs, 'renameSync')
+
+  saveConfig(baseConfig({ telemetry: true }))
+  saveConfigPatch({ telemetry: false })
+
+  expect(rename).toHaveBeenCalledTimes(2)
+  for (const [temporaryPath, targetPath] of rename.mock.calls) {
+    expect(path.dirname(String(temporaryPath))).toBe(tmpDir)
+    expect(String(targetPath)).toBe(configPath)
+  }
+  expect(fs.readdirSync(tmpDir).filter(name => name.endsWith('.tmp'))).toEqual([])
+  expect(fs.statSync(configPath).mode & 0o777).toBe(0o600)
+  expect(readOnDisk().telemetry).toBe(false)
+})
+
+test('atomic config replacement preserves the prior config and cleans its temporary file on rename failure', () => {
+  const configPath = getConfigPath()
+  const original = stringify(baseConfig({ telemetry: false }))
+  fs.writeFileSync(configPath, original, 'utf-8')
+  vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+    throw new Error('simulated rename failure')
+  })
+
+  expect(() => saveConfigPatch({ telemetry: true })).toThrow('simulated rename failure')
+
+  expect(fs.readFileSync(configPath, 'utf-8')).toBe(original)
+  expect(fs.readdirSync(tmpDir)).toEqual(['config.yaml'])
 })
 
 test('saveConfig merges targeted provider update without clobbering database', () => {

@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm'
 import { check, foreignKey, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
-import type { AdsActivationEntityType, AdsActivationGrantState, AdsActivationManifest, AdsOperationStepState, AdsReconcileFields, BacklinkSource, ContentBriefDto, DiscoveryCompetitorMapEntry, DiscoveryCompetitorType, AiReferralTrafficClass, LocationContext, ProviderModels, ProviderName, SiteAuditCrossCuttingIssueDto, SiteAuditEffectiveRequest, SiteAuditFactorSummaryDto, SiteAuditPageFactorDto, MeasurementConfig, GaLeadAttributionScope, GaMeasurementComponentStatus, TrafficVerificationManifest } from '@ainyc/canonry-contracts'
+import type { AdsActivationEntityType, AdsActivationGrantState, AdsActivationManifest, AdsOperationStepState, AdsReconcileFields, BacklinkSource, ContentBriefDto, ConversionTrackingContract, DiscoveryCompetitorMapEntry, DiscoveryCompetitorType, AiReferralTrafficClass, LocationContext, ProviderModels, ProviderName, SiteAuditCrossCuttingIssueDto, SiteAuditEffectiveRequest, SiteAuditFactorSummaryDto, SiteAuditPageFactorDto, MeasurementConfig, GaLeadAttributionScope, GaMeasurementComponentStatus, GoogleAdsCustomerStatus, GoogleAdsSnapshotKind, GoogleAdsSnapshotPayload, GtmSnapshotKind, GtmSnapshotPayload, TrafficVerificationManifest } from '@ainyc/canonry-contracts'
 
 export const projects = sqliteTable('projects', {
   id: text('id').primaryKey(),
@@ -2674,4 +2674,163 @@ export const adsInsightsDaily = sqliteTable('ads_insights_daily', {
 }, (table) => [
   uniqueIndex('uniq_ads_insights_daily').on(table.projectId, table.level, table.entityId, table.date),
   index('idx_ads_insights_project_date').on(table.projectId, table.date),
+])
+
+// --- Google Ads + Google Tag Manager (read-only marketing evidence) ---
+
+/**
+ * One Google Ads connection per project. OAuth material is intentionally held
+ * only in private config; this row records the selected read context and its
+ * last known public metadata.
+ */
+export const googleAdsConnections = sqliteTable('google_ads_connections', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  selectedLoginCustomerId: text('selected_login_customer_id'),
+  selectedCustomerId: text('selected_customer_id'),
+  selectedCustomerName: text('selected_customer_name'),
+  selectedCustomerCurrencyCode: text('selected_customer_currency_code'),
+  selectedCustomerTimeZone: text('selected_customer_time_zone'),
+  selectedCustomerStatus: text('selected_customer_status').$type<GoogleAdsCustomerStatus>(),
+  scopes: text('scopes', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  /** Monotonic CAS token; selection writes increment it even when values match. */
+  selectionGeneration: integer('selection_generation').notNull().default(0),
+  lastValidatedAt: text('last_validated_at'),
+  /** Internal exact anchors for the current selection generation. */
+  lastCustomerSnapshotId: text('last_customer_snapshot_id'),
+  lastInventorySnapshotAt: text('last_inventory_snapshot_at'),
+  lastInventorySnapshotId: text('last_inventory_snapshot_id'),
+  lastMetricsSnapshotAt: text('last_metrics_snapshot_at'),
+  lastMetricsSnapshotId: text('last_metrics_snapshot_id'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_google_ads_connections_project').on(table.projectId),
+  // Required parent key for project-scoped snapshot foreign keys below.
+  uniqueIndex('idx_google_ads_connections_project_id').on(table.projectId, table.id),
+  index('idx_google_ads_connections_selected_customer').on(table.selectedCustomerId),
+])
+
+/**
+ * One Google Tag Manager connection per project. Account/container/workspace
+ * selection and safe labels persist; OAuth client credentials and tokens do not.
+ */
+export const gtmConnections = sqliteTable('gtm_connections', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  selectedAccountId: text('selected_account_id'),
+  selectedAccountName: text('selected_account_name'),
+  selectedContainerId: text('selected_container_id'),
+  selectedContainerName: text('selected_container_name'),
+  selectedContainerPublicId: text('selected_container_public_id'),
+  selectedWorkspaceId: text('selected_workspace_id'),
+  selectedWorkspaceName: text('selected_workspace_name'),
+  scopes: text('scopes', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  /** Monotonic CAS token; selection writes increment it even when values match. */
+  selectionGeneration: integer('selection_generation').notNull().default(0),
+  lastValidatedAt: text('last_validated_at'),
+  lastSnapshotAt: text('last_snapshot_at'),
+  /** Internal exact anchor for the current selection generation. */
+  lastSnapshotId: text('last_snapshot_id'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_gtm_connections_project').on(table.projectId),
+  // Required parent key for project-scoped snapshot foreign keys below.
+  uniqueIndex('idx_gtm_connections_project_id').on(table.projectId, table.id),
+  index('idx_gtm_connections_selected_container').on(table.selectedContainerId),
+])
+
+/**
+ * Declared project-local conversion semantics. This remains independent from
+ * live Google connection/snapshot rows so the integrity reader can truthfully
+ * report a missing connection, tag, or goal against a durable desired state.
+ * The nested JSON shapes are the matching `ConversionTrackingContract` fields;
+ * they contain identifiers and verification requirements only, never OAuth or
+ * provider-body material.
+ */
+export const conversionTrackingContracts = sqliteTable('conversion_tracking_contracts', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  eventName: text('event_name').notNull(),
+  googleAds: text('google_ads', { mode: 'json' }).$type<ConversionTrackingContract['googleAds']>().notNull(),
+  gtm: text('gtm', { mode: 'json' }).$type<ConversionTrackingContract['gtm']>().notNull(),
+  runtime: text('runtime', { mode: 'json' }).$type<ConversionTrackingContract['runtime']>().notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_conversion_tracking_contracts_project_name').on(table.projectId, table.name),
+  index('idx_conversion_tracking_contracts_project_event').on(table.projectId, table.eventName),
+])
+
+/**
+ * Append-only, redacted Google Ads reads. The exact provider body is never
+ * persisted; `payload` is constrained to the secret-free contract DTO and the
+ * raw body is represented only by metadata/hash for forensic correlation.
+ */
+export const googleAdsRawSnapshots = sqliteTable('google_ads_raw_snapshots', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull(),
+  connectionId: text('connection_id').notNull(),
+  runId: text('run_id').notNull(),
+  kind: text('kind').$type<GoogleAdsSnapshotKind>().notNull(),
+  customerId: text('customer_id'),
+  payloadChecksum: text('payload_checksum').notNull(),
+  rawPayloadSha256: text('raw_payload_sha256'),
+  rawPayloadBytes: integer('raw_payload_bytes'),
+  redactedFieldCount: integer('redacted_field_count').notNull().default(0),
+  payload: text('payload', { mode: 'json' }).$type<GoogleAdsSnapshotPayload>().notNull(),
+  capturedAt: text('captured_at').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  index('idx_google_ads_raw_snapshots_project_run').on(table.projectId, table.runId),
+  index('idx_google_ads_raw_snapshots_connection_kind_captured').on(table.connectionId, table.kind, table.capturedAt),
+  index('idx_google_ads_raw_snapshots_project_captured').on(table.projectId, table.capturedAt),
+  foreignKey({
+    name: 'google_ads_raw_snapshots_project_run_fk',
+    columns: [table.projectId, table.runId],
+    foreignColumns: [runs.projectId, runs.id],
+  }).onDelete('cascade'),
+  foreignKey({
+    name: 'google_ads_raw_snapshots_project_connection_fk',
+    columns: [table.projectId, table.connectionId],
+    foreignColumns: [googleAdsConnections.projectId, googleAdsConnections.id],
+  }).onDelete('cascade'),
+])
+
+/**
+ * Append-only, redacted GTM reads. Tags, triggers, and variables are stored as
+ * the typed safe graph; raw template/parameter values and OAuth material stay out.
+ */
+export const gtmRawSnapshots = sqliteTable('gtm_raw_snapshots', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull(),
+  connectionId: text('connection_id').notNull(),
+  runId: text('run_id').notNull(),
+  kind: text('kind').$type<GtmSnapshotKind>().notNull(),
+  accountId: text('account_id'),
+  containerId: text('container_id'),
+  workspaceId: text('workspace_id'),
+  payloadChecksum: text('payload_checksum').notNull(),
+  rawPayloadSha256: text('raw_payload_sha256'),
+  rawPayloadBytes: integer('raw_payload_bytes'),
+  redactedFieldCount: integer('redacted_field_count').notNull().default(0),
+  payload: text('payload', { mode: 'json' }).$type<GtmSnapshotPayload>().notNull(),
+  capturedAt: text('captured_at').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  index('idx_gtm_raw_snapshots_project_run').on(table.projectId, table.runId),
+  index('idx_gtm_raw_snapshots_connection_kind_captured').on(table.connectionId, table.kind, table.capturedAt),
+  index('idx_gtm_raw_snapshots_project_container_captured').on(table.projectId, table.containerId, table.capturedAt),
+  foreignKey({
+    name: 'gtm_raw_snapshots_project_run_fk',
+    columns: [table.projectId, table.runId],
+    foreignColumns: [runs.projectId, runs.id],
+  }).onDelete('cascade'),
+  foreignKey({
+    name: 'gtm_raw_snapshots_project_connection_fk',
+    columns: [table.projectId, table.connectionId],
+    foreignColumns: [gtmConnections.projectId, gtmConnections.id],
+  }).onDelete('cascade'),
 ])
