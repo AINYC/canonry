@@ -35,9 +35,10 @@ function provider(citationRate: number, mentionRate: number) {
   return { citationRate, cited: 1, total: 4, mentionRate, mentionedCount: 2 }
 }
 
-function metricsDto(buckets: unknown[]) {
+function metricsDto(buckets: unknown[], mentionShareScope: 'non-brand' | 'pooled' = 'non-brand') {
   return {
     window: 'all',
+    mentionShareScope,
     buckets,
     overall: provider(0.5, 0.5),
     byProvider: { gemini: provider(0.5, 0.5) },
@@ -71,7 +72,7 @@ const TWO_BUCKETS = [
     startDate: '2026-04-01T00:00:00.000Z', endDate: '2026-04-08T00:00:00.000Z',
     dataStartDate: '2026-04-03T14:20:00.000Z', dataEndDate: '2026-04-03T14:20:00.000Z', sweepCount: 1,
     citationRate: 0.25, cited: 1, total: 4, queryCount: 4, mentionRate: 0.5, mentionedCount: 2,
-    mentionShare: { rate: 0.25, projectMentionSnapshots: 1, competitorMentionSnapshots: 3 },
+    mentionShare: { scope: 'non-brand', rate: 0.25, projectMentionSnapshots: 1, competitorMentionSnapshots: 3 },
     byProvider: { gemini: provider(0.25, 0.5), openai: provider(0.5, 0.25) },
     modelEvidenceByProvider: {
       gemini: { status: 'known', model: 'gemini-2.0-flash' },
@@ -82,7 +83,7 @@ const TWO_BUCKETS = [
     startDate: '2026-04-08T00:00:00.000Z', endDate: '2026-04-15T00:00:00.000Z',
     dataStartDate: '2026-04-11T08:05:00.000Z', dataEndDate: '2026-04-11T08:05:00.000Z', sweepCount: 1,
     citationRate: 0.75, cited: 3, total: 4, queryCount: 4, mentionRate: 0.5, mentionedCount: 2,
-    mentionShare: { rate: 0.75, projectMentionSnapshots: 3, competitorMentionSnapshots: 1 },
+    mentionShare: { scope: 'non-brand', rate: 0.75, projectMentionSnapshots: 3, competitorMentionSnapshots: 1 },
     byProvider: { gemini: provider(0.75, 0.5) },
     modelEvidenceByProvider: {
       gemini: { status: 'mixed', models: ['gemini-2.0-flash', 'gemini-2.5-flash'], includesUnknown: false },
@@ -222,6 +223,23 @@ test('shows an empty state when there are no buckets yet', async () => {
   })
 })
 
+test('carries pooled classification-unavailable scope through an empty response', async () => {
+  const restore = mockFetch((url) => {
+    const path = url.split('?')[0]!
+    if (path.endsWith('/projects/test-project/analytics/metrics')) {
+      return jsonResponse(metricsDto([], 'pooled'))
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  onTestFinished(restore)
+
+  renderSection(['competitor.com'])
+  await screen.findByText('Run a sweep to start tracking citations and mentions over time.')
+  act(() => { fireEvent.click(screen.getByRole('button', { name: 'Mention share' })) })
+
+  expect(screen.getByText(/pooled queries.*classification unavailable/i)).toBeTruthy()
+})
+
 test('renders mention-share as a metric view and hides the engine split', async () => {
   const restore = mockFetch((url) => {
     const path = url.split('?')[0]!
@@ -242,8 +260,31 @@ test('renders mention-share as a metric view and hides the engine split', async 
   expect(screen.queryByRole('group', { name: 'Series' })).toBeNull()
   expect(screen.queryByRole('list', { name: 'Engines' })).toBeNull()
   expect(screen.getByText('75%')).toBeTruthy()
-  expect(screen.getByRole('img', { name: /Mention share trend chart/i })).toBeTruthy()
-  expect(screen.getByText(/75% mention share, 3 of 4 brand mentions were you/)).toBeTruthy()
+  expect(screen.getByRole('img', { name: /Mention share.*non-brand queries.*trend chart/i })).toBeTruthy()
+  expect(screen.getByText(/75% mention share for non-brand queries, 3 of 4 brand mentions were you/)).toBeTruthy()
+  expect(screen.getAllByText('Mention share · non-brand queries').length).toBeGreaterThan(0)
+})
+
+test('labels a pooled mention-share trend as classification unavailable', async () => {
+  const pooledBuckets = TWO_BUCKETS.map(bucket => ({
+    ...bucket,
+    mentionShare: { ...bucket.mentionShare, scope: 'pooled' },
+  }))
+  const restore = mockFetch((url) => {
+    const path = url.split('?')[0]!
+    if (path.endsWith('/projects/test-project/analytics/metrics')) {
+      return jsonResponse(metricsDto(pooledBuckets))
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  onTestFinished(restore)
+
+  renderSection(['competitor.com'])
+  await screen.findByRole('list', { name: 'Engines' })
+  act(() => { fireEvent.click(screen.getByRole('button', { name: 'Mention share' })) })
+
+  expect(screen.getByRole('img', { name: /Mention share.*pooled queries.*classification unavailable.*trend chart/i })).toBeTruthy()
+  expect(screen.getAllByText('Mention share · pooled queries · classification unavailable').length).toBeGreaterThan(0)
 })
 
 test('prompts for competitors before rendering the mention-share metric view', async () => {

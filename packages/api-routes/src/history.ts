@@ -1,7 +1,8 @@
 import { and, asc, desc, eq, gte, inArray } from 'drizzle-orm'
 import type { SQL } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
-import { auditLog, querySnapshots, runs, queries, parseJsonColumn } from '@ainyc/canonry-db'
+import { auditLog, competitors, querySnapshots, runs, queries, parseJsonColumn } from '@ainyc/canonry-db'
+import { compileCompetitiveSignalResolver } from '@ainyc/canonry-intelligence'
 import {
   CitationStates,
   mentionStateFromAnswerMentioned,
@@ -77,6 +78,14 @@ export async function historyRoutes(app: FastifyInstance) {
       return reply.send({ snapshots: [], total: 0 })
     }
 
+    const competitorDomains = app.db
+      .select({ domain: competitors.domain })
+      .from(competitors)
+      .where(eq(competitors.projectId, project.id))
+      .all()
+      .map(row => row.domain)
+    const competitiveSignalResolver = compileCompetitiveSignalResolver(competitorDomains)
+
     // Get snapshots for these runs
     const allSnapshots = app.db
       .select({
@@ -98,6 +107,7 @@ export async function historyRoutes(app: FastifyInstance) {
         competitorOverlap: querySnapshots.competitorOverlap,
         recommendedCompetitors: querySnapshots.recommendedCompetitors,
         location: querySnapshots.location,
+        rawResponse: querySnapshots.rawResponse,
         createdAt: querySnapshots.createdAt,
       })
       .from(querySnapshots)
@@ -116,29 +126,49 @@ export async function historyRoutes(app: FastifyInstance) {
     const paged = filtered.slice(offset, offset + limit)
 
     return reply.send({
-      snapshots: paged.map(s => ({
-        id: s.id,
-        runId: s.runId,
-        queryId: s.queryId,
-        query: s.query,
-        provider: s.provider,
-        model: s.model,
-        citationState: s.citationState,
-        answerMentioned: resolveSnapshotAnswerMentioned(s, project),
-        visibilityState: resolveSnapshotVisibilityState(s, project),
-        mentionState: resolveSnapshotMentionState(s, project),
-        answerText: s.answerText,
-        citedDomains: s.citedDomains,
-        citedUrls: s.citedUrls,
-        captureStatus: s.captureStatus,
-        sourceCount: s.sourceCount,
-        resolvedCount: s.resolvedCount,
-        captureVersion: s.captureVersion,
-        competitorOverlap: s.competitorOverlap,
-        recommendedCompetitors: s.recommendedCompetitors,
-        location: s.location,
-        createdAt: s.createdAt,
-      })),
+      snapshots: paged.map(s => {
+        const rawResponse = parseJsonColumn<Record<string, unknown>>(s.rawResponse, {})
+        const rawGroundingSources = Array.isArray(rawResponse.groundingSources)
+          ? rawResponse.groundingSources
+          : []
+        const groundingSources = rawGroundingSources.filter(
+          (source): source is { uri: string } =>
+            typeof source === 'object'
+            && source !== null
+            && typeof (source as { uri?: unknown }).uri === 'string',
+        )
+        const competitiveSignals = competitiveSignalResolver.resolve({
+          citedDomains: s.citedDomains,
+          groundingSources,
+          answerText: s.answerText,
+        })
+
+        return {
+          id: s.id,
+          runId: s.runId,
+          queryId: s.queryId,
+          query: s.query,
+          provider: s.provider,
+          model: s.model,
+          citationState: s.citationState,
+          answerMentioned: resolveSnapshotAnswerMentioned(s, project),
+          visibilityState: resolveSnapshotVisibilityState(s, project),
+          mentionState: resolveSnapshotMentionState(s, project),
+          answerText: s.answerText,
+          citedDomains: s.citedDomains,
+          citedUrls: s.citedUrls,
+          captureStatus: s.captureStatus,
+          sourceCount: s.sourceCount,
+          resolvedCount: s.resolvedCount,
+          captureVersion: s.captureVersion,
+          ...competitiveSignals,
+          // Legacy mixed signal retained for backwards compatibility.
+          competitorOverlap: s.competitorOverlap,
+          recommendedCompetitors: s.recommendedCompetitors,
+          location: s.location,
+          createdAt: s.createdAt,
+        }
+      }),
       total,
     })
   })

@@ -7,8 +7,8 @@ interface BuildOptions {
 function buildCompetitorQueryMap(run: RunData, tracked: Set<string>): Map<string, Set<string>> {
   const result = new Map<string, Set<string>>()
   for (const snap of run.snapshots) {
-    if (!snap.query || !snap.competitorDomains || snap.competitorDomains.length === 0) continue
-    for (const domain of snap.competitorDomains) {
+    if (!snap.query || !snap.citedCompetitorDomains || snap.citedCompetitorDomains.length === 0) continue
+    for (const domain of snap.citedCompetitorDomains) {
       if (!tracked.has(domain)) continue
       const existing = result.get(domain) ?? new Set<string>()
       existing.add(snap.query)

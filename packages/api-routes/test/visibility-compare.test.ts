@@ -131,15 +131,43 @@ describe('computeVisibilityCompare — provider-count robustness', () => {
 })
 
 describe('computeVisibilityCompare — share of voice', () => {
+  it('uses current project identity for share while preserving historical named-rate counts', () => {
+    const competitors = [{ domain: 'rival.com', brandTokens: ['rival'] }]
+    const stale = snap({
+      queryId: 'q1',
+      provider: 'openai',
+      answerMentioned: false,
+      answerText: 'Demo and Rival are both options.',
+    })
+    const dto = computeVisibilityCompare(build([stale], [stale], { competitors, brandNames: ['demo'] }))
+
+    expect(metricOf(dto, 'mention-share-of-voice').from).toMatchObject({
+      numerator: 1,
+      denominator: 2,
+      point: 0.5,
+    })
+    expect(metricOf(dto, 'mention-rate').from).toMatchObject({ numerator: 0, denominator: 1, point: 0 })
+  })
+
   it('computes named SoV as project / (project + competitor) brand mentions, drift-robust flag set', () => {
     const competitors = [{ domain: 'rival.com', brandTokens: ['rival'] }]
     // 2 snapshots: project named + competitor "rival" present in prose.
     const s = () => snap({ queryId: 'q1', provider: 'openai', answerMentioned: true, answerText: 'we recommend Rival and demo' })
-    const dto = computeVisibilityCompare(build([s(), s()], [s()], { competitors }))
+    const dto = computeVisibilityCompare(build([s(), s()], [s()], { competitors, brandNames: ['demo'] }))
     const sov = metricOf(dto, 'mention-share-of-voice')
     expect(sov.driftRobust).toBe(true)
+    expect(sov.queryClass).toBe('non-brand')
     expect(sov.from).toMatchObject({ numerator: 2, denominator: 4, point: 0.5 }) // 2 proj / (2 proj + 2 comp)
     expect(dto.competitors.from).toEqual([{ domain: 'rival.com', mentions: 2 }])
+    expect(metricOf(dto, 'mention-rate').queryClass).toBe('all')
+  })
+
+  it('labels named SoV pooled when no project identity can classify the basket', () => {
+    const competitors = [{ domain: 'rival.com', brandTokens: ['rival'] }]
+    const s = () => snap({ queryId: 'q1', provider: 'openai', answerText: 'Rival is one option.' })
+    const dto = computeVisibilityCompare(build([s()], [s()], { competitors }))
+
+    expect(metricOf(dto, 'mention-share-of-voice').queryClass).toBe('pooled')
   })
 
   it('computes cited SoV from citedDomains, matching a competitor stored as a raw mixed-case URL and a subdomain', () => {
@@ -168,12 +196,18 @@ describe('computeVisibilityCompare — no competitive frame', () => {
     // mirror buildMentionShare's refusal and report insufficient-data instead.
     const s = () =>
       snap({ queryId: 'q1', provider: 'openai', citationState: 'cited', answerMentioned: true, answerText: 'demo is great' })
-    const dto = computeVisibilityCompare(build([s(), s()], [s()])) // competitors: [] (build default)
+    const dto = computeVisibilityCompare(build([s(), s()], [s()], { brandNames: ['demo'] }))
     for (const key of ['mention-share-of-voice', 'cited-share-of-voice'] as const) {
       const m = metricOf(dto, key)
       expect(m.verdict).toBe('insufficient-data')
       expect(m.from.point).toBeNull() // never a fabricated 100%
       expect(m.to.point).toBeNull()
+      expect(m.from.availability).toBe('no-competitive-frame')
+      expect(m.to.availability).toBe('no-competitive-frame')
+      expect(m.from.numerator).toBe(2)
+      expect(m.to.numerator).toBe(1)
+      expect(m.from.denominator).toBe(0)
+      expect(m.to.denominator).toBe(0)
     }
     // The absolute cited rate still reports the citations — the frame-free info lives there.
     expect(metricOf(dto, 'cited-rate').from.point).toBe(1)
@@ -199,8 +233,13 @@ describe('computeVisibilityCompare — verdict', () => {
   })
 
   it('calls a period with no basket data insufficient-data', () => {
-    const dto = computeVisibilityCompare(build([snap({ queryId: 'q1', provider: 'openai' })], []))
+    const dto = computeVisibilityCompare(build(
+      [snap({ queryId: 'q1', provider: 'openai' })],
+      [],
+      { brandNames: ['demo'] },
+    ))
     for (const m of dto.metrics) expect(m.verdict).toBe('insufficient-data')
+    expect(metricOf(dto, 'mention-share-of-voice').queryClass).toBe('non-brand')
     expect(dto.basket.queryCount).toBe(0)
     expect(dto.continuity.status).toBe('insufficient-data')
   })

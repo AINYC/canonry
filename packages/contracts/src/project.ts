@@ -277,9 +277,10 @@ export function normalizeProjectAliases(
  * Returns the brand-name identities used for mention detection: `displayName`
  * (when set), normalized aliases, then every owned domain's registrable
  * brand label. Domain labels use the same four-character key floor as
- * `extractAnswerMentions`; display names and explicit aliases remain
- * operator-approved at any length. Identity-equivalent entries collapse with
- * the same key used by `extractAnswerMentions`.
+ * `extractAnswerMentions`; a shorter label contributes only its normalized
+ * full domain, so `ai.com` is identity evidence while bare `AI` is not unless
+ * the operator approved it as a display name or alias. Identity-equivalent
+ * entries collapse with the same key used by `extractAnswerMentions`.
  */
 export function effectiveBrandNames(project: {
   displayName?: string | null
@@ -305,7 +306,12 @@ export function effectiveBrandNames(project: {
     ownedDomains: project.ownedDomains ?? [],
   })) {
     const domainBrand = brandLabelFromDomain(domain)
-    if (brandKeyFromText(domainBrand).length >= MIN_DOMAIN_BRAND_KEY_LENGTH) add(domainBrand)
+    if (brandKeyFromText(domainBrand).length >= MIN_DOMAIN_BRAND_KEY_LENGTH) {
+      add(domainBrand)
+    } else {
+      const exactDomain = normalizeProjectDomain(domain)
+      if (exactDomain.includes('.')) add(exactDomain)
+    }
   }
   return names
 }

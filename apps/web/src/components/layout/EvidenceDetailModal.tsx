@@ -20,7 +20,8 @@ export interface EvidenceDisplayData {
   model: string | null
   answerSnippet: string
   citedDomains: string[]
-  competitorDomains: string[]
+  citedCompetitorDomains: string[]
+  mentionedCompetitorDomains: string[]
   recommendedCompetitors: string[]
   matchedTerms: string[]
   groundingSources: GroundingSource[]
@@ -28,6 +29,22 @@ export interface EvidenceDisplayData {
   evidenceUrls: string[]
   changeLabel: string
   summary: string
+}
+
+interface CompetitorSignalFields {
+  citedCompetitorDomains?: readonly string[]
+  mentionedCompetitorDomains?: readonly string[]
+}
+
+/** Preserve the two evidence signals independently for current, auto-fetched, and historical rows. */
+export function evidenceCompetitorSignals(
+  value: CompetitorSignalFields,
+  fallback?: CompetitorSignalFields,
+): Pick<EvidenceDisplayData, 'citedCompetitorDomains' | 'mentionedCompetitorDomains'> {
+  return {
+    citedCompetitorDomains: [...(value.citedCompetitorDomains ?? fallback?.citedCompetitorDomains ?? [])],
+    mentionedCompetitorDomains: [...(value.mentionedCompetitorDomains ?? fallback?.mentionedCompetitorDomains ?? [])],
+  }
 }
 
 function describeMentionChange(transition?: string, mentionState?: string): string {
@@ -92,7 +109,7 @@ export function EvidenceDetailModal({
           model: snap.model ?? evidence.model,
           answerSnippet: snap.answerText ?? evidence.answerSnippet,
           citedDomains: snap.citedDomains ?? evidence.citedDomains,
-          competitorDomains: snap.competitorOverlap ?? evidence.competitorDomains,
+          ...evidenceCompetitorSignals(snap, evidence),
           recommendedCompetitors: snap.recommendedCompetitors ?? evidence.recommendedCompetitors ?? [],
           matchedTerms: snap.matchedTerms ?? evidence.matchedTerms ?? [],
           groundingSources: snap.groundingSources ?? evidence.groundingSources,
@@ -118,7 +135,7 @@ export function EvidenceDetailModal({
       model: evidence.model,
       answerSnippet: evidence.answerSnippet,
       citedDomains: evidence.citedDomains,
-      competitorDomains: evidence.competitorDomains,
+      ...evidenceCompetitorSignals(evidence),
       recommendedCompetitors: evidence.recommendedCompetitors ?? [],
       matchedTerms: evidence.matchedTerms ?? [],
       groundingSources: evidence.groundingSources,
@@ -138,8 +155,10 @@ export function EvidenceDetailModal({
         : (display.citationState === CitationStates.cited || display.citationState === 'emerging')
   const hasMentionData = display.answerMentioned != null
     || display.visibilityState != null
+    || display.mentionedCompetitorDomains.length > 0
     || display.recommendedCompetitors.length > 0
   const hasSourceData = display.citedDomains.length > 0
+    || display.citedCompetitorDomains.length > 0
     || display.groundingSources.length > 0
     || display.evidenceUrls.length > 0
 
@@ -158,7 +177,7 @@ export function EvidenceDetailModal({
   // a stored subdomain (e.g. `offers.roofle.com` → `offers`) would highlight
   // arbitrary words like "offers" in the prose. Use `roofle` instead.
   const competitorHighlightTerms = [
-    ...display.competitorDomains.flatMap(d => {
+    ...display.mentionedCompetitorDomains.flatMap(d => {
       const brand = brandLabelFromDomain(d)
       return brand.length >= 4 ? [brand] : []
     }),
@@ -226,7 +245,7 @@ export function EvidenceDetailModal({
         model: snap.model ?? null,
         answerSnippet: snap.answerText ?? '',
         citedDomains: snap.citedDomains,
-        competitorDomains: snap.competitorOverlap,
+        ...evidenceCompetitorSignals(snap),
         recommendedCompetitors: snap.recommendedCompetitors ?? [],
         matchedTerms: snap.matchedTerms ?? [],
         groundingSources: snap.groundingSources,
@@ -243,7 +262,8 @@ export function EvidenceDetailModal({
         model: run.model ?? null,
         answerSnippet: '',
         citedDomains: [],
-        competitorDomains: [],
+        citedCompetitorDomains: [],
+        mentionedCompetitorDomains: [],
         recommendedCompetitors: [],
         matchedTerms: [],
         groundingSources: [],
@@ -266,7 +286,8 @@ export function EvidenceDetailModal({
         model: run.model ?? null,
         answerSnippet: '',
         citedDomains: [],
-        competitorDomains: [],
+        citedCompetitorDomains: [],
+        mentionedCompetitorDomains: [],
         recommendedCompetitors: [],
         matchedTerms: [],
         groundingSources: [],
@@ -626,15 +647,15 @@ export function EvidenceDetailModal({
                         )}
                       </div>
 
-                      {(display.recommendedCompetitors.length > 0 || display.competitorDomains.length > 0) && (
+                      {(display.recommendedCompetitors.length > 0 || display.mentionedCompetitorDomains.length > 0) && (
                         <div>
                           <div className="drawer-section-label flex items-center">
                             <span>Competitors in answer</span>
-                            <InfoTooltip text="Competitors detected in the answer text or cited source links. Includes both tracked competitors and names extracted by Canonry." />
+                            <InfoTooltip text="Competitors detected in the answer text. Includes tracked competitor brands and names extracted by Canonry; source-link competitors stay in the Sources tab." />
                           </div>
                           <div className="flex flex-wrap gap-1.5">
                             {(() => {
-                              const domainChips = display.competitorDomains.map(d => d.replace(/^www\./, ''))
+                              const domainChips = display.mentionedCompetitorDomains.map(d => d.replace(/^www\./, ''))
                               const domainKeys = new Set(domainChips.map(d => brandKeyFromText(d.replace(/\.[^.]+$/, ''))))
                               const filteredNames = display.recommendedCompetitors.filter(
                                 name => !domainKeys.has(brandKeyFromText(name))
@@ -662,7 +683,7 @@ export function EvidenceDetailModal({
                             {display.citedDomains.map((domain, i) => {
                               const norm = domain.toLowerCase().replace(/^www\./, '')
                               const isYou = myDomains.has(norm)
-                              const isCompetitor = !isYou && display.competitorDomains.some(
+                              const isCompetitor = !isYou && display.citedCompetitorDomains.some(
                                 c => c.toLowerCase().replace(/^www\./, '') === norm,
                               )
                               const variant = isYou ? 'you' : isCompetitor ? 'competitor' : 'other'

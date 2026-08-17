@@ -1247,6 +1247,7 @@ export type BingUrlInspectionDto = {
 
 export type BrandMetricsDto = {
     window: '7d' | '30d' | '90d' | 'all';
+    mentionShareScope: 'non-brand' | 'pooled';
     buckets: Array<{
         startDate: string;
         endDate: string;
@@ -1260,6 +1261,7 @@ export type BrandMetricsDto = {
         mentionRate: number;
         mentionedCount: number;
         mentionShare: {
+            scope: 'non-brand' | 'pooled';
             rate: number | null;
             projectMentionSnapshots: number;
             competitorMentionSnapshots: number;
@@ -4055,6 +4057,8 @@ export type LatestProjectRunDto = {
             retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
             retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
             competitorOverlap: Array<string>;
+            citedCompetitorDomains: Array<string>;
+            mentionedCompetitorDomains: Array<string>;
             recommendedCompetitors: Array<string>;
             matchedTerms: Array<string>;
             groundingSources: Array<{
@@ -7509,6 +7513,8 @@ export type ProjectOverviewDto = {
                 retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
                 retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
                 competitorOverlap: Array<string>;
+                citedCompetitorDomains: Array<string>;
+                mentionedCompetitorDomains: Array<string>;
                 recommendedCompetitors: Array<string>;
                 matchedTerms: Array<string>;
                 groundingSources: Array<{
@@ -7648,6 +7654,20 @@ export type ProjectOverviewDto = {
                 }>;
                 snapshotsWithAnswerText: number;
                 snapshotsTotal: number;
+                score: number | null;
+            };
+            scope: 'non-brand' | 'pooled';
+            branded: {
+                projectMentionSnapshots: number;
+                competitorMentionSnapshots: number;
+                perCompetitor: Array<{
+                    domain: string;
+                    mentionSnapshots: number;
+                    shareOfCompetitiveTotal: number;
+                }>;
+                snapshotsWithAnswerText: number;
+                snapshotsTotal: number;
+                score: number | null;
             };
         };
         gapQueries: {
@@ -7890,8 +7910,33 @@ export type ProjectReportDto = {
             totalCount: number;
             pressureLabel: 'High' | 'Moderate' | 'Low' | 'None';
             mentionedQueries: Array<string>;
-            sharePct: number;
+            sharePct: number | null;
         }>;
+        scope: 'non-brand' | 'pooled';
+        nonBrand: {
+            projectMentionCount: number;
+            totalAnswerSnapshots: number;
+            competitors: Array<{
+                domain: string;
+                mentionCount: number;
+                totalCount: number;
+                pressureLabel: 'High' | 'Moderate' | 'Low' | 'None';
+                mentionedQueries: Array<string>;
+                sharePct: number | null;
+            }>;
+        };
+        branded: {
+            projectMentionCount: number;
+            totalAnswerSnapshots: number;
+            competitors: Array<{
+                domain: string;
+                mentionCount: number;
+                totalCount: number;
+                pressureLabel: 'High' | 'Moderate' | 'Low' | 'None';
+                mentionedQueries: Array<string>;
+                sharePct: number | null;
+            }>;
+        };
     };
     aiSourceOrigin: {
         categories: Array<{
@@ -8444,6 +8489,8 @@ export type RunDetailDto = {
         retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
         retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
         competitorOverlap: Array<string>;
+        citedCompetitorDomains: Array<string>;
+        mentionedCompetitorDomains: Array<string>;
         recommendedCompetitors: Array<string>;
         matchedTerms: Array<string>;
         groundingSources: Array<{
@@ -9387,6 +9434,8 @@ export type SnapshotListResponse = {
         retrievalStatus: 'used' | 'not-used' | 'unknown' | 'not-applicable' | null;
         retrievalContract: 'native-auto-v1' | 'search-required-v1' | null;
         competitorOverlap: Array<string>;
+        citedCompetitorDomains: Array<string>;
+        mentionedCompetitorDomains: Array<string>;
         recommendedCompetitors: Array<string>;
         matchedTerms: Array<string>;
         groundingSources: Array<{
@@ -9940,8 +9989,10 @@ export type VisibilityCompareDto = {
     metrics: Array<{
         key: 'mention-share-of-voice' | 'cited-share-of-voice' | 'mention-rate' | 'cited-rate';
         label: string;
+        queryClass: 'all' | 'non-brand' | 'pooled';
         driftRobust: boolean;
         from: {
+            availability: 'available' | 'no-observations' | 'no-competitive-frame';
             point: number | null;
             ciLow: number | null;
             ciHigh: number | null;
@@ -9949,6 +10000,7 @@ export type VisibilityCompareDto = {
             denominator: number;
         };
         to: {
+            availability: 'available' | 'no-observations' | 'no-competitive-frame';
             point: number | null;
             ciLow: number | null;
             ciHigh: number | null;
@@ -10061,7 +10113,9 @@ export type VisibilityStatsDto = {
         }>;
     }>;
     shareOfVoice?: {
+        queryClass: 'branded' | 'non-brand' | 'pooled';
         percent: number | null;
+        competitorCount: number;
         projectMentions: number;
         competitorMentions: number;
         snapshotsWithAnswerText: number;
@@ -14710,9 +14764,13 @@ export type GetApiV1ProjectsByNameVisibilityStatsData = {
          */
         month?: string;
         /**
-         * Set to "1" to include pooled share of voice (project vs tracked-competitor brand mentions in answer text) across the window.
+         * Set to "1" to include share of voice (project vs tracked-competitor brand mentions in answer text) across the window. Scoped by `queryClass`, which defaults to non-brand.
          */
         shareOfVoice?: '1';
+        /**
+         * Which query class `shareOfVoice` covers. Defaults to `non-brand`: a branded query names the project, so it is mentioned on nearly all of them and a competitor structurally cannot be, and one shared denominator would report brand recall as category placement. Never pooled across classes.
+         */
+        queryClass?: 'branded' | 'non-brand';
     };
     url: '/api/v1/projects/{name}/visibility-stats';
 };

@@ -233,7 +233,78 @@ describe('analytics routes', () => {
       // names Example.com. Mention share must follow answer-text mentions, not
       // citation overlap.
       expect(latest.mentionShare).toMatchObject({
+        scope: 'non-brand',
         rate: 1,
+        projectMentionSnapshots: 1,
+        competitorMentionSnapshots: 0,
+      })
+    })
+
+    it('preserves project mention counts but never reports project-only share without competitors', async () => {
+      const noFrameProjectId = crypto.randomUUID()
+      const noFrameQueryId = crypto.randomUUID()
+      const noFrameRunId = crypto.randomUUID()
+      const observedAt = new Date().toISOString()
+      db.insert(projects).values({
+        id: noFrameProjectId,
+        name: 'no-competitive-frame',
+        displayName: 'Solo Brand',
+        canonicalDomain: 'solo.example',
+        ownedDomains: '[]',
+        country: 'US',
+        language: 'en',
+        tags: '[]',
+        labels: '{}',
+        providers: '["gemini"]',
+        locations: '[]',
+        defaultLocation: null,
+        configSource: 'api',
+        configRevision: 1,
+        createdAt: observedAt,
+        updatedAt: observedAt,
+      }).run()
+      db.insert(queries).values({
+        id: noFrameQueryId,
+        projectId: noFrameProjectId,
+        query: 'best category tools',
+        createdAt: observedAt,
+      }).run()
+      db.insert(runs).values({
+        id: noFrameRunId,
+        projectId: noFrameProjectId,
+        kind: 'answer-visibility',
+        status: 'completed',
+        trigger: 'manual',
+        location: null,
+        startedAt: observedAt,
+        finishedAt: observedAt,
+        error: null,
+        createdAt: observedAt,
+      }).run()
+      db.insert(querySnapshots).values({
+        id: crypto.randomUUID(),
+        runId: noFrameRunId,
+        queryId: noFrameQueryId,
+        queryText: 'best category tools',
+        provider: 'gemini',
+        citationState: 'not-cited',
+        answerMentioned: true,
+        answerText: 'Solo Brand is a category tool.',
+        citedDomains: [],
+        competitorOverlap: [],
+        location: null,
+        rawResponse: '{}',
+        createdAt: observedAt,
+      }).run()
+
+      const res = await app.inject({ method: 'GET', url: '/api/v1/projects/no-competitive-frame/analytics/metrics' })
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.payload)
+
+      expect(body.mentionShareScope).toBe('non-brand')
+      expect(body.buckets[0].mentionShare).toEqual({
+        scope: 'non-brand',
+        rate: null,
         projectMentionSnapshots: 1,
         competitorMentionSnapshots: 0,
       })
@@ -786,9 +857,19 @@ describe('analytics routes', () => {
       // → resolvedMentioned=true → mentionedQueries
       expect(body.mentionedQueries.some((k: { query: string }) => k.query === 'best seo tools')).toBe(true)
 
-      // q2 answerText='AEO monitoring is...' — does NOT mention example.com
-      // competitor.com is cited → mentionGap
-      expect(body.mentionGap.some((k: { query: string }) => k.query === 'aeo monitoring')).toBe(true)
+      // q2 answerText='AEO monitoring is...' — names neither example.com nor
+      // any competitor's brand. competitor.com IS cited, but a citation is not
+      // a mention: a MENTION gap requires a competitor named in the prose, so
+      // this is "not mentioned", not a mention gap.
+      expect(body.mentionGap.some((k: { query: string }) => k.query === 'aeo monitoring')).toBe(false)
+      expect(body.notMentioned.some((k: { query: string }) => k.query === 'aeo monitoring')).toBe(true)
+      // The citation lane is unaffected and still reports it as a citation gap.
+      expect(body.gap.some((k: { query: string }) => k.query === 'aeo monitoring')).toBe(true)
+
+      // The two competitor sets are reported separately and are not equal here.
+      const aeo = body.notMentioned.find((k: { query: string }) => k.query === 'aeo monitoring')
+      expect(aeo.competitorsCiting).toEqual(['competitor.com'])
+      expect(aeo.competitorsMentioned).toEqual([])
 
       // q3 answerText='Website analytics are...' — no mention, no competitor → notMentioned
       expect(body.notMentioned.some((k: { query: string }) => k.query === 'website analytics')).toBe(true)
@@ -796,6 +877,41 @@ describe('analytics routes', () => {
       // Consistency includes mentionedRuns
       const mentioned = body.mentionedQueries.find((k: { query: string }) => k.query === 'best seo tools')
       expect(mentioned.consistency.mentionedRuns).toBeGreaterThan(0)
+    })
+
+    it('a competitor named in the prose but NOT cited is a mention gap', async () => {
+      // The mirror image of the "aeo monitoring" case above, and the one the
+      // old code could not see: the engine talks about the competitor without
+      // linking to it, which is exactly a mention gap and not a citation gap.
+      const q4Id = crypto.randomUUID()
+      db.insert(queries).values({
+        id: q4Id, projectId, query: 'who makes the best rank tracker', createdAt: new Date().toISOString(),
+      }).run()
+      db.insert(querySnapshots).values({
+        id: crypto.randomUUID(),
+        runId,
+        queryId: q4Id,
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        citationState: 'not-cited',
+        answerText: 'Competitor is the usual recommendation here.',
+        citedDomains: [],
+        competitorOverlap: [],
+        location: null,
+        rawResponse: JSON.stringify({ model: 'gemini-2.5-flash', groundingSources: [], searchQueries: [] }),
+        createdAt: new Date().toISOString(),
+      }).run()
+
+      const res = await app.inject({ method: 'GET', url: '/api/v1/projects/test-site/analytics/gaps' })
+      const body = JSON.parse(res.payload)
+
+      const row = body.mentionGap.find((k: { query: string }) => k.query === 'who makes the best rank tracker')
+      expect(row).toBeDefined()
+      expect(row.competitorsMentioned).toEqual(['competitor.com'])
+      expect(row.competitorsCiting).toEqual([])
+      // Nothing was cited, so the citation lane calls it uncited, not a gap.
+      expect(body.uncited.some((k: { query: string }) => k.query === 'who makes the best rank tracker')).toBe(true)
+      expect(body.gap.some((k: { query: string }) => k.query === 'who makes the best rank tracker')).toBe(false)
     })
 
     it('supports window parameter', async () => {

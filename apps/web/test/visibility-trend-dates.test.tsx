@@ -71,7 +71,7 @@ function bucket(over: Record<string, unknown>) {
     dataEndDate: '2026-05-15T19:38:00.000Z',
     sweepCount: 1,
     citationRate: 0.25, cited: 1, total: 4, queryCount: 4, mentionRate: 0.5, mentionedCount: 2,
-    mentionShare: { rate: 0.25, projectMentionSnapshots: 1, competitorMentionSnapshots: 3 },
+    mentionShare: { scope: 'non-brand', rate: 0.25, projectMentionSnapshots: 1, competitorMentionSnapshots: 3 },
     byProvider: { gemini: provider(0.25, 0.5) },
     modelEvidenceByProvider: { gemini: { status: 'known', model: 'gemini-2.0-flash' } },
     ...over,
@@ -139,6 +139,7 @@ test('the calendar formatters never shift a UTC-stamped value a day early', () =
 function metricsDto(buckets: unknown[]) {
   return {
     window: 'all',
+    mentionShareScope: 'non-brand',
     buckets,
     overall: provider(0.5, 0.5),
     byProvider: { gemini: provider(0.5, 0.5) },

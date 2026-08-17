@@ -12,7 +12,7 @@ describe('detectCompetitorGains', () => {
       { query: 'k1', provider: 'gemini', cited: false },
     ])
     const curr = makeRun('r2', [
-      { query: 'k1', provider: 'gemini', cited: false, competitorDomains: ['rival.com'] },
+      { query: 'k1', provider: 'gemini', cited: false, citedCompetitorDomains: ['rival.com'] },
     ])
 
     const result = detectCompetitorGains(curr, prev, { trackedCompetitors: ['rival.com'] })
@@ -21,27 +21,27 @@ describe('detectCompetitorGains', () => {
 
   it('ignores untracked competitors', () => {
     const prev = makeRun('r1', [{ query: 'k1', provider: 'gemini', cited: false }])
-    const curr = makeRun('r2', [{ query: 'k1', provider: 'gemini', cited: false, competitorDomains: ['untracked.com'] }])
+    const curr = makeRun('r2', [{ query: 'k1', provider: 'gemini', cited: false, citedCompetitorDomains: ['untracked.com'] }])
 
     expect(detectCompetitorGains(curr, prev, { trackedCompetitors: ['rival.com'] })).toEqual([])
   })
 
   it('returns empty when competitor was already on the query', () => {
-    const prev = makeRun('r1', [{ query: 'k1', provider: 'gemini', cited: false, competitorDomains: ['rival.com'] }])
-    const curr = makeRun('r2', [{ query: 'k1', provider: 'gemini', cited: false, competitorDomains: ['rival.com'] }])
+    const prev = makeRun('r1', [{ query: 'k1', provider: 'gemini', cited: false, citedCompetitorDomains: ['rival.com'] }])
+    const curr = makeRun('r2', [{ query: 'k1', provider: 'gemini', cited: false, citedCompetitorDomains: ['rival.com'] }])
     expect(detectCompetitorGains(curr, prev, { trackedCompetitors: ['rival.com'] })).toEqual([])
   })
 
   it('returns empty when no competitors are tracked', () => {
     const prev = makeRun('r1', [{ query: 'k1', provider: 'gemini', cited: false }])
-    const curr = makeRun('r2', [{ query: 'k1', provider: 'gemini', cited: false, competitorDomains: ['rival.com'] }])
+    const curr = makeRun('r2', [{ query: 'k1', provider: 'gemini', cited: false, citedCompetitorDomains: ['rival.com'] }])
     expect(detectCompetitorGains(curr, prev, { trackedCompetitors: [] })).toEqual([])
   })
 
   it('detects every tracked competitor on a snapshot — not just the first array entry', () => {
     const prev = makeRun('r1', [{ query: 'k1', provider: 'gemini', cited: false }])
     const curr = makeRun('r2', [
-      { query: 'k1', provider: 'gemini', cited: false, competitorDomains: ['rival-a.com', 'rival-b.com'] },
+      { query: 'k1', provider: 'gemini', cited: false, citedCompetitorDomains: ['rival-a.com', 'rival-b.com'] },
     ])
 
     const result = detectCompetitorGains(curr, prev, { trackedCompetitors: ['rival-a.com', 'rival-b.com'] })
@@ -55,7 +55,7 @@ describe('detectCompetitorGains', () => {
 
 describe('detectCompetitorLosses', () => {
   it('flags queries where a tracked competitor disappeared', () => {
-    const prev = makeRun('r1', [{ query: 'k1', provider: 'gemini', cited: false, competitorDomains: ['rival.com'] }])
+    const prev = makeRun('r1', [{ query: 'k1', provider: 'gemini', cited: false, citedCompetitorDomains: ['rival.com'] }])
     const curr = makeRun('r2', [{ query: 'k1', provider: 'gemini', cited: false }])
 
     const result = detectCompetitorLosses(curr, prev, { trackedCompetitors: ['rival.com'] })
@@ -63,18 +63,18 @@ describe('detectCompetitorLosses', () => {
   })
 
   it('returns empty when competitor is still present', () => {
-    const prev = makeRun('r1', [{ query: 'k1', provider: 'gemini', cited: false, competitorDomains: ['rival.com'] }])
-    const curr = makeRun('r2', [{ query: 'k1', provider: 'gemini', cited: false, competitorDomains: ['rival.com'] }])
+    const prev = makeRun('r1', [{ query: 'k1', provider: 'gemini', cited: false, citedCompetitorDomains: ['rival.com'] }])
+    const curr = makeRun('r2', [{ query: 'k1', provider: 'gemini', cited: false, citedCompetitorDomains: ['rival.com'] }])
     expect(detectCompetitorLosses(curr, prev, { trackedCompetitors: ['rival.com'] })).toEqual([])
   })
 
   it('detects loss for any tracked competitor in the array — not just the first entry', () => {
     const prev = makeRun('r1', [
-      { query: 'k1', provider: 'gemini', cited: false, competitorDomains: ['rival-a.com', 'rival-b.com'] },
+      { query: 'k1', provider: 'gemini', cited: false, citedCompetitorDomains: ['rival-a.com', 'rival-b.com'] },
     ])
     // rival-a is still present, rival-b dropped
     const curr = makeRun('r2', [
-      { query: 'k1', provider: 'gemini', cited: false, competitorDomains: ['rival-a.com'] },
+      { query: 'k1', provider: 'gemini', cited: false, citedCompetitorDomains: ['rival-a.com'] },
     ])
 
     const result = detectCompetitorLosses(curr, prev, { trackedCompetitors: ['rival-a.com', 'rival-b.com'] })

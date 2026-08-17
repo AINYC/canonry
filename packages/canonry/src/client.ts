@@ -4276,6 +4276,7 @@ export class ApiClient {
       groupBy?: 'provider'
       month?: string
       shareOfVoice?: boolean
+      queryClass?: 'branded' | 'non-brand'
     } = {},
   ): Promise<VisibilityStatsDto> {
     return this.invoke<VisibilityStatsDto>(() =>
@@ -4289,6 +4290,7 @@ export class ApiClient {
           groupBy: opts.groupBy,
           month: opts.month,
           shareOfVoice: opts.shareOfVoice ? '1' : undefined,
+          queryClass: opts.queryClass,
         } as never,
       }),
     )

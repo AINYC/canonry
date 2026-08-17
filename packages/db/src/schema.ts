@@ -334,6 +334,21 @@ export const querySnapshots = sqliteTable('query_snapshots', {
   // observation predates the field, NOT that retrieval did not happen.
   retrievalStatus: text('retrieval_status').$type<import('@ainyc/canonry-contracts').RetrievalStatus>(),
   retrievalContract: text('retrieval_contract').$type<import('@ainyc/canonry-contracts').RetrievalContract>(),
+  /**
+   * LEGACY MIXED SIGNAL — never read this for a mention or a citation metric.
+   *
+   * The run writer unions three different things into it: cited domains,
+   * grounding-source hosts, and answer-text brand matches. A count taken from it
+   * is therefore neither the citation signal nor the mention signal, and naming
+   * it either one reports a number for one signal under the other's name (see
+   * AGENTS.md "Vocabulary"). It is also frozen at run time against the competitor
+   * set and the alias threshold that existed then, so it drifts from any
+   * read-time recomputation as soon as either changes.
+   *
+   * For citations read `citedDomains`. For mentions match the project/competitor
+   * brand aliases against `answerText` with `packages/contracts/src/brand-matching.ts`.
+   * The column is retained for the raw results export and historical inspection.
+   */
   competitorOverlap: text('competitor_overlap', { mode: 'json' }).$type<string[]>().notNull().default([]),
   recommendedCompetitors: text('recommended_competitors', { mode: 'json' }).$type<string[]>().notNull().default([]),
   location: text('location'),

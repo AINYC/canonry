@@ -99,12 +99,25 @@ export interface MentionShareBreakdownDto {
   perCompetitor: MentionShareCompetitorRowDto[]
   snapshotsWithAnswerText: number
   snapshotsTotal: number
+  /** `project / (project + competitor)` as 0..100, or null when nothing in this class was named. */
+  score: number | null
 }
 
+/** Which query class `MentionShareDto.breakdown` covers. `pooled` appears only
+ *  when the project has no usable brand alias to classify its queries by. */
+export type MentionShareScopeDto = 'non-brand' | 'pooled'
+
 /** Mention Share — `ScoreSummaryDto` plus a structured breakdown so the
- *  dashboard can render a per-competitor table without parsing prose. */
+ *  dashboard can render a per-competitor table without parsing prose.
+ *
+ *  `breakdown` is NON-BRAND queries only. Branded queries name the project, so
+ *  it is mentioned on ~all of them and a competitor structurally cannot be;
+ *  sharing one denominator lets branded recall carry the category figure and
+ *  inverts the ranking. They stay visible under `branded`, never pooled in. */
 export interface MentionShareDto extends ScoreSummaryDto {
   breakdown: MentionShareBreakdownDto
+  scope: MentionShareScopeDto
+  branded: MentionShareBreakdownDto
 }
 
 // Gained / lost since the previous comparable run. The surrounding field name
@@ -268,18 +281,25 @@ const scoreSummarySchema = z.object({
   providerCoverage: z.string().optional(),
 })
 
+const mentionShareBreakdownSchema = z.object({
+  projectMentionSnapshots: z.number().int().nonnegative(),
+  competitorMentionSnapshots: z.number().int().nonnegative(),
+  perCompetitor: z.array(z.object({
+    domain: z.string(),
+    mentionSnapshots: z.number().int().nonnegative(),
+    shareOfCompetitiveTotal: z.number(),
+  })),
+  snapshotsWithAnswerText: z.number().int().nonnegative(),
+  snapshotsTotal: z.number().int().nonnegative(),
+  score: z.number().int().min(0).max(100).nullable(),
+})
+
 const mentionShareSchema = scoreSummarySchema.extend({
-  breakdown: z.object({
-    projectMentionSnapshots: z.number().int().nonnegative(),
-    competitorMentionSnapshots: z.number().int().nonnegative(),
-    perCompetitor: z.array(z.object({
-      domain: z.string(),
-      mentionSnapshots: z.number().int().nonnegative(),
-      shareOfCompetitiveTotal: z.number(),
-    })),
-    snapshotsWithAnswerText: z.number().int().nonnegative(),
-    snapshotsTotal: z.number().int().nonnegative(),
-  }),
+  /** Non-brand queries — the competitive figure. See `MentionShareDto`. */
+  breakdown: mentionShareBreakdownSchema,
+  scope: z.enum(['non-brand', 'pooled']),
+  /** Branded queries, beside the competitive figure and never inside it. */
+  branded: mentionShareBreakdownSchema,
 })
 
 const movementSummarySchema = z.object({

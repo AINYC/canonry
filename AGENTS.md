@@ -491,6 +491,17 @@ if (answerMentioned) mentioned++
 "Mentioned in 3 of 4 answers" // answerMentioned
 ```
 
+### Branded vs non-brand (Critical)
+
+**Branded and non-brand queries never share a denominator.** A branded query contains the project's own name, so the model was handed the answer: the project is mentioned on ~all of them and a tracked competitor structurally cannot be. A non-brand query is where competitive placement is actually decided. Pooling them lets brand recall outvote the category and can invert the ranking a chart claims to show — measured on a real basket (13 queries × 4 engines, 5 branded), the pooled figure ranked the subject FIRST at 42% while the non-brand figure ranked them LAST at 3%.
+
+1. **Competitive metrics default to non-brand.** Mention Share (card, breakdown chart, trend buckets), `visibility-stats --share-of-voice`, `visibility-compare`, and the report's mention landscape are all non-brand by default.
+2. **Branded stays visible, never merged.** Return it as a sibling field (`branded`) and render it as its own labelled section with its own denominator. Dropping the data is as wrong as pooling it.
+3. **The class travels with the number.** Every surface that prints a class-scoped figure prints the class too (`scope` / `queryClass` on the wire; "· non-brand queries" in the delta, chart title, column header, and CLI line). A reader who sees only the number must still be able to tell which instrument produced it.
+4. **`pooled` is a confession, not a default.** It appears only when the project has no usable brand alias to classify by. Never label an unsplit figure `non-brand`, and never silently classify an unclassifiable basket.
+5. **One classifier.** `compileQueryClassifier` (`packages/contracts/src/query-class.ts`) runs the project's `effectiveBrandNames` against the query text with the shared brand matcher, and `queryClassSchema` IS `measurementQueryClassSchema`. Never hand-roll a regex or a second enum.
+6. **`competitorOverlap` is legacy MIXED evidence.** It may contain a rival found in answer text, source links, or both. Citation metrics use `citedDomains` plus grounding-source hosts; mention metrics use answer text with the shared matcher. Never use `competitorOverlap` alone for either claim.
+
 ### Query vs question
 
 The tracked thing an operator adds with `canonry query add` — stored in the `queries` / `query_snapshots` tables, carried on the wire as `queryText` / `queryId` / `queryClass` — is a **query**. Advanced measurement is the only surface that ever called it a "question", and even that surface's own API fields say query.

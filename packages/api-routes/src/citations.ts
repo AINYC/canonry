@@ -220,12 +220,12 @@ export function computeCitationVisibility(input: ComputeInput): CitationVisibili
   for (const snap of latestByPair.values()) {
     if (citationStateToCited(snap.citationState as CitationState)) continue
     if (competitorDomains.length === 0) continue
-    const cited = snap.citedDomains
-    const overlap = snap.competitorOverlap
-    // Some normalizers populate competitorOverlap directly; others only
-    // populate citedDomains. Use either source for resilience.
+    // The engine's source list only. `competitor_overlap` is not read here:
+    // the run writer unions cited domains, grounding sources AND answer-text
+    // brand matches into that column, so folding it in would let an answer-text
+    // mention create a row in a table of CITATION gaps.
     const candidates = new Set(
-      [...cited, ...overlap].map(d => hostOf(d) ?? '').filter(d => d.length > 0),
+      snap.citedDomains.map(d => hostOf(d) ?? '').filter(d => d.length > 0),
     )
     const citingCompetitors = competitorDomains.filter(
       competitor => [...candidates].some(candidate => hostMatchesDomain(candidate, competitor)),

@@ -554,7 +554,7 @@ describe('analytics command', () => {
           startDate: '2026-05-15T00:00:00.000Z', endDate: '2026-05-29T00:00:00.000Z',
           dataStartDate: '2026-05-15T19:38:00.000Z', dataEndDate: '2026-05-15T19:38:00.000Z', sweepCount: 1,
           citationRate: 0.25, cited: 1, total: 4, queryCount: 4, mentionRate: 0.5, mentionedCount: 2,
-          mentionShare: { rate: null, projectMentionSnapshots: 0, competitorMentionSnapshots: 0 },
+          mentionShare: { scope: 'non-brand', rate: null, projectMentionSnapshots: 0, competitorMentionSnapshots: 0 },
           byProvider: { gemini: { citationRate: 0.25, cited: 1, total: 4, mentionRate: 0.5, mentionedCount: 2 } },
           modelEvidenceByProvider: {},
         },
@@ -562,7 +562,7 @@ describe('analytics command', () => {
           startDate: '2026-07-10T00:00:00.000Z', endDate: '2026-07-24T00:00:00.000Z',
           dataStartDate: '2026-07-14T09:00:00.000Z', dataEndDate: '2026-07-20T01:52:51.000Z', sweepCount: 2,
           citationRate: 0.75, cited: 3, total: 4, queryCount: 4, mentionRate: 0.5, mentionedCount: 2,
-          mentionShare: { rate: null, projectMentionSnapshots: 0, competitorMentionSnapshots: 0 },
+          mentionShare: { scope: 'non-brand', rate: null, projectMentionSnapshots: 0, competitorMentionSnapshots: 0 },
           byProvider: { gemini: { citationRate: 0.75, cited: 3, total: 4, mentionRate: 0.5, mentionedCount: 2 } },
           modelEvidenceByProvider: {},
         },
@@ -598,7 +598,7 @@ describe('analytics command', () => {
     const legacyBucket = {
       startDate: '2026-07-10T00:00:00.000Z', endDate: '2026-07-24T00:00:00.000Z',
       citationRate: 0.5, cited: 2, total: 4, queryCount: 4, mentionRate: 0.5, mentionedCount: 2,
-      mentionShare: { rate: null, projectMentionSnapshots: 0, competitorMentionSnapshots: 0 },
+      mentionShare: { scope: 'non-brand', rate: null, projectMentionSnapshots: 0, competitorMentionSnapshots: 0 },
       byProvider: {},
       modelEvidenceByProvider: {},
     }

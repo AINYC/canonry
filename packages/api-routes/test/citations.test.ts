@@ -245,7 +245,11 @@ test('competitor gaps lists not-cited queries where a configured competitor appe
   expect(gap.citingCompetitors).toEqual(['rival.com'])
 })
 
-test('competitor gap reads from competitorOverlap when citedDomains is empty', async () => {
+test('a competitor present only in competitorOverlap does NOT create a citation gap', async () => {
+  // `competitor_overlap` is a MIXED column: the run writer unions cited domains,
+  // grounding hosts AND answer-text brand matches into it. A competitor that is
+  // only named in the prose was not cited, so it must not appear in a table of
+  // CITATION gaps — that is the mention signal wearing the citation's name.
   const projectId = insertProject(ctx.db, 'overlap-only', ['gemini'])
   const q = insertQuery(ctx.db, projectId, 'query X')
   insertCompetitor(ctx.db, projectId, 'rival.com')
@@ -263,6 +267,28 @@ test('competitor gap reads from competitorOverlap when citedDomains is empty', a
 
   await ctx.app.ready()
   const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/overlap-only/citations/visibility' })
+  const body = JSON.parse(res.body) as CitationVisibilityResponse
+  expect(body.competitorGaps).toHaveLength(0)
+})
+
+test('the same competitor DOES create a citation gap once it appears in citedDomains', async () => {
+  const projectId = insertProject(ctx.db, 'cited-rival', ['gemini'])
+  const q = insertQuery(ctx.db, projectId, 'query X')
+  insertCompetitor(ctx.db, projectId, 'rival.com')
+
+  const run = insertRun(ctx.db, projectId, '2026-04-28T00:00:00Z')
+  insertSnapshot(ctx.db, {
+    runId: run,
+    queryId: q,
+    provider: 'gemini',
+    citationState: 'not-cited',
+    citedDomains: ['www.rival.com'],
+    competitorOverlap: [],
+    createdAt: '2026-04-28T00:00:01Z',
+  })
+
+  await ctx.app.ready()
+  const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/cited-rival/citations/visibility' })
   const body = JSON.parse(res.body) as CitationVisibilityResponse
   expect(body.competitorGaps).toHaveLength(1)
   expect(body.competitorGaps[0]!.citingCompetitors).toEqual(['rival.com'])

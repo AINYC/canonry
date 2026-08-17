@@ -136,6 +136,11 @@ export interface CitationInsightVm {
   answerSnippet: string
   citedDomains: string[]
   evidenceUrls: string[]
+  /** Tracked competitors present in grounding/source URLs. Source-side only. */
+  citedCompetitorDomains?: string[]
+  /** Tracked competitors whose brand appears in the answer prose. Answer-side only. */
+  mentionedCompetitorDomains?: string[]
+  /** Neutral union for filtering/navigation only. Never label this as an answer mention or citation. */
   competitorDomains: string[]
   recommendedCompetitors?: string[]
   matchedTerms?: string[]

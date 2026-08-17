@@ -24,12 +24,11 @@ export interface Snapshot {
    */
   location?: string | null
   /**
-   * All competitor domains observed in this snapshot's competitorOverlap.
-   * Detectors that filter against the project's tracked-competitor set must
-   * iterate this array — taking the first element drops every additional
-   * tracked rival on the same (query, provider) pair.
+   * Tracked competitor domains present in source-list citation evidence.
+   * Answer-text mentions are deliberately excluded: every detector consuming
+   * this field emits a citation-specific cause or gained/lost-citation alert.
    */
-  competitorDomains?: readonly string[]
+  citedCompetitorDomains?: readonly string[]
   /**
    * Every domain the engine actually cited for this (query, provider) —
    * tracked competitors + third-party sources (publishers, gov sites,

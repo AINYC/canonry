@@ -197,6 +197,8 @@ export type ModelServiceMismatch = z.infer<typeof modelServiceMismatchSchema>
 /** Mention-share metric for one time bucket. Null rate means the competitive
  *  frame had no brand mentions in that bucket, so the share is undefined. */
 export const mentionShareBucketMetricSchema = z.object({
+  /** Query scope behind this number. `pooled` means the project had no usable identity for a split. */
+  scope: z.enum(['non-brand', 'pooled']),
   rate: z.number().nullable(),
   projectMentionSnapshots: z.number().int().nonnegative(),
   competitorMentionSnapshots: z.number().int().nonnegative(),
@@ -294,6 +296,8 @@ export type ExecutionIdentityChangeEvent = z.infer<typeof executionIdentityChang
 
 export const brandMetricsDtoSchema = z.object({
   window: metricsWindowSchema,
+  /** Scope that applies even when `buckets` is empty. `pooled` means classification was unavailable. */
+  mentionShareScope: z.enum(['non-brand', 'pooled']),
   buckets: z.array(timeBucketSchema),
   overall: providerMetricSchema,
   byProvider: z.record(z.string(), providerMetricSchema),
@@ -360,7 +364,15 @@ export interface GapQuery {
   queryId: string
   category: GapCategory
   providers: string[]
+  /** Tracked competitors whose domain appeared in the engine's SOURCE LIST for this query. */
   competitorsCiting: string[]
+  /**
+   * Tracked competitors whose brand appeared in the ANSWER TEXT for this query.
+   * A different signal from `competitorsCiting` and never derived from it — the
+   * mention lanes (`mentionedQueries` / `mentionGap` / `notMentioned`) are
+   * classified by THIS field, the citation lanes by the one above.
+   */
+  competitorsMentioned: string[]
   consistency: { citedRuns: number; totalRuns: number; mentionedRuns: number }
 }
 

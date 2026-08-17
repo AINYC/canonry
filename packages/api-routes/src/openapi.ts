@@ -459,8 +459,16 @@ const shareOfVoiceQueryParameter: OpenApiParameter = {
   name: 'shareOfVoice',
   in: 'query',
   description:
-    'Set to "1" to include pooled share of voice (project vs tracked-competitor brand mentions in answer text) across the window.',
+    'Set to "1" to include share of voice (project vs tracked-competitor brand mentions in answer text) across the window. Scoped by `queryClass`, which defaults to non-brand.',
   schema: { type: 'string', enum: ['1'] },
+}
+
+const shareOfVoiceQueryClassParameter: OpenApiParameter = {
+  name: 'queryClass',
+  in: 'query',
+  description:
+    'Which query class `shareOfVoice` covers. Defaults to `non-brand`: a branded query names the project, so it is mentioned on nearly all of them and a competitor structurally cannot be, and one shared denominator would report brand recall as category placement. Never pooled across classes.',
+  schema: { type: 'string', enum: ['branded', 'non-brand'], default: 'non-brand' },
 }
 
 const wordpressEnvQueryParameter: OpenApiParameter = {
@@ -2251,7 +2259,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/visibility-stats',
     summary: 'Get aggregated mention/citation stats per query',
     description:
-      'Per-query mention (answer-text) and citation (source-list) counts with a sample size, pooled across many answer-visibility runs (probe-excluded). Tri-state aware: `checked` counts only snapshots where answerMentioned was recorded (null = not checked is excluded). Lets a consumer compute confidence-aware (e.g. Wilson) proportions without N+1 run fetches. With no since/until/lastRuns, EVERY completed/partial answer-visibility run is pooled — `window.runCount` reports how many; bound the window with lastRuns, since/until, or month=YYYY-MM for a recent sample. Set groupBy=provider for a per-provider breakdown whose counts sum to the pooled counts, or shareOfVoice=1 to add pooled share of voice vs tracked competitors.',
+      'Per-query mention (answer-text) and citation (source-list) counts with a sample size, pooled across many answer-visibility runs (probe-excluded). Tri-state aware: `checked` counts only snapshots where answerMentioned was recorded (null = not checked is excluded). Lets a consumer compute confidence-aware (e.g. Wilson) proportions without N+1 run fetches. With no since/until/lastRuns, EVERY completed/partial answer-visibility run is pooled — `window.runCount` reports how many; bound the window with lastRuns, since/until, or month=YYYY-MM for a recent sample. Set groupBy=provider for a per-provider breakdown whose counts sum to the pooled counts, or shareOfVoice=1 to add share of voice vs tracked competitors (non-brand queries by default; set queryClass=branded for brand recall).',
     tags: ['analytics'],
     parameters: [
       nameParameter,
@@ -2261,6 +2269,7 @@ const routeCatalog: OpenApiOperation[] = [
       groupByProviderQueryParameter,
       monthQueryParameter,
       shareOfVoiceQueryParameter,
+      shareOfVoiceQueryClassParameter,
     ],
     responses: {
       200: jsonResponse('Aggregated visibility stats returned.', 'VisibilityStatsDto'),

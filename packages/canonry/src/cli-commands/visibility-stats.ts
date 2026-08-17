@@ -9,7 +9,16 @@ import {
 } from '../cli-command-helpers.js'
 
 const USAGE =
-  'canonry visibility-stats <project> [--since <iso>] [--until <iso>] [--month <YYYY-MM>] [--last-runs <n>] [--by-provider] [--share-of-voice] [--format json|jsonl]'
+  'canonry visibility-stats <project> [--since <iso>] [--until <iso>] [--month <YYYY-MM>] [--last-runs <n>] [--by-provider] [--share-of-voice] [--query-class branded|non-brand] [--format json|jsonl]'
+
+/** Branded and non-brand are the only classes; there is deliberately no "all" — pooling them is the bug this option exists to prevent. */
+function parseQueryClass(value: string | undefined): 'branded' | 'non-brand' | undefined {
+  if (value === undefined || value === '') return undefined
+  if (value !== 'branded' && value !== 'non-brand') {
+    throw new Error(`--query-class must be "branded" or "non-brand" (got "${value}")`)
+  }
+  return value
+}
 
 const COMPARE_USAGE = 'canonry visibility-compare <project> --from <YYYY-MM> --to <YYYY-MM> [--format json]'
 
@@ -24,6 +33,7 @@ export const VISIBILITY_STATS_CLI_COMMANDS: readonly CliCommandSpec[] = [
       'last-runs': stringOption(),
       'by-provider': { type: 'boolean', default: false },
       'share-of-voice': { type: 'boolean', default: false },
+      'query-class': stringOption(),
     },
     run: async (input) => {
       const project = requireProject(input, 'visibility-stats', USAGE)
@@ -38,6 +48,7 @@ export const VISIBILITY_STATS_CLI_COMMANDS: readonly CliCommandSpec[] = [
         }),
         byProvider: getBoolean(input.values, 'by-provider'),
         shareOfVoice: getBoolean(input.values, 'share-of-voice'),
+        queryClass: parseQueryClass(getString(input.values, 'query-class')),
         format: input.format,
       })
     },

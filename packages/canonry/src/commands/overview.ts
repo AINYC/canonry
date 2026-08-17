@@ -63,8 +63,8 @@ export async function showAllOverviews(opts: ShowOverviewOpts): Promise<void> {
   // truncated to its column width so multi-word score values like
   // "Add competitors" or "No data" don't bleed into adjacent columns.
   console.log(`\nOverviews (${overviews.length} project${overviews.length === 1 ? '' : 's'}):\n`)
-  const cols = { project: 20, mention: 10, cited: 10, share: 18, queries: 10 }
-  console.log(`  ${cell('Project', cols.project)}${cell('Mention', cols.mention)}${cell('Cited', cols.cited)}${cell('Share', cols.share)}${cell('Queries', cols.queries)}Latest run`)
+  const cols = { project: 20, mention: 10, cited: 10, share: 42, queries: 10 }
+  console.log(`  ${cell('Project', cols.project)}${cell('Mention', cols.mention)}${cell('Cited', cols.cited)}${cell('Mention share · scope', cols.share)}${cell('Queries', cols.queries)}Latest run`)
   for (const ov of overviews) {
     const project = ov.project.displayName || ov.project.name
     const queries = `${ov.queryCounts.citedQueries}/${ov.queryCounts.totalQueries}`
@@ -73,7 +73,7 @@ export async function showAllOverviews(opts: ShowOverviewOpts): Promise<void> {
       `  ${cell(project, cols.project)}`
       + `${cell(ov.scores.mention.value, cols.mention)}`
       + `${cell(ov.scores.visibility.value, cols.cited)}`
-      + `${cell(ov.scores.mentionShare.value, cols.share)}`
+      + `${cell(`${ov.scores.mentionShare.value} · ${ov.scores.mentionShare.scope} queries`, cols.share)}`
       + `${cell(queries, cols.queries)}`
       + `${latest}`,
     )

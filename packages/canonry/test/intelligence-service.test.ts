@@ -62,7 +62,13 @@ function seedSnapshot(
   queryId: string,
   provider: string,
   citationState: string,
-  opts?: { citedDomains?: string[]; competitorOverlap?: string[]; answerMentioned?: boolean | null },
+  opts?: {
+    citedDomains?: string[]
+    competitorOverlap?: string[]
+    answerMentioned?: boolean | null
+    answerText?: string | null
+    groundingSources?: Array<{ uri: string; title?: string }>
+  },
 ) {
   db.insert(querySnapshots).values({
     id: crypto.randomUUID(),
@@ -74,8 +80,12 @@ function seedSnapshot(
     // Tri-state mention signal. Default null ("not checked") when the caller
     // doesn't specify, mirroring legacy snapshots written before the signal.
     answerMentioned: opts?.answerMentioned ?? null,
+    answerText: opts?.answerText ?? null,
     citedDomains: opts?.citedDomains ?? [],
     competitorOverlap: opts?.competitorOverlap ?? [],
+    rawResponse: opts?.groundingSources
+      ? JSON.stringify({ groundingSources: opts.groundingSources })
+      : null,
     createdAt: new Date().toISOString(),
   }).run()
 }
@@ -358,7 +368,10 @@ describe('IntelligenceService', () => {
       seedSnapshot(db, run1, k2, 'gemini', 'cited', { citedDomains: ['example.com'] })
       seedSnapshot(db, run1, k3, 'gemini', 'not-cited')
       seedSnapshot(db, run1, k4, 'gemini', 'not-cited')
-      seedSnapshot(db, run1, k5, 'gemini', 'not-cited', { competitorOverlap: ['rival.com'] })
+      seedSnapshot(db, run1, k5, 'gemini', 'not-cited', {
+        citedDomains: ['rival.com'],
+        competitorOverlap: ['rival.com'],
+      })
 
       // Run 2
       const run2 = seedRun(db, projectId, 'completed', '2024-02-01T00:00:00Z')
@@ -366,7 +379,10 @@ describe('IntelligenceService', () => {
       seedSnapshot(db, run2, k2, 'gemini', 'cited', { citedDomains: ['example.com'] })
       seedSnapshot(db, run2, k3, 'gemini', 'not-cited')
       seedSnapshot(db, run2, k4, 'gemini', 'not-cited')
-      seedSnapshot(db, run2, k5, 'gemini', 'not-cited', { competitorOverlap: ['rival.com'] })
+      seedSnapshot(db, run2, k5, 'gemini', 'not-cited', {
+        citedDomains: ['rival.com'],
+        competitorOverlap: ['rival.com'],
+      })
 
       // Run 3 — the run we're analyzing
       const run3 = seedRun(db, projectId, 'completed', '2024-03-01T00:00:00Z')
@@ -374,7 +390,10 @@ describe('IntelligenceService', () => {
       seedSnapshot(db, run3, k2, 'gemini', 'cited', { citedDomains: ['example.com'] })
       seedSnapshot(db, run3, k2, 'openai', 'cited', { citedDomains: ['example.com'] }) // provider-pickup
       seedSnapshot(db, run3, k3, 'gemini', 'not-cited') // persistent-gap (3 in a row)
-      seedSnapshot(db, run3, k4, 'gemini', 'not-cited', { competitorOverlap: ['rival.com'] }) // competitor-gained
+      seedSnapshot(db, run3, k4, 'gemini', 'not-cited', {
+        citedDomains: ['rival.com'],
+        competitorOverlap: ['rival.com'],
+      }) // competitor-gained
       seedSnapshot(db, run3, k5, 'gemini', 'not-cited') // competitor-lost (rival dropped)
 
       const service = new IntelligenceService(db)
@@ -394,6 +413,61 @@ describe('IntelligenceService', () => {
       expect(savedTypes.has('persistent-gap')).toBe(true)
       expect(savedTypes.has('competitor-gained')).toBe(true)
       expect(savedTypes.has('competitor-lost')).toBe(true)
+    })
+
+    it('does not turn a competitor mention in legacy overlap into a citation cause or alert', () => {
+      const { db } = createTempDb('intel-mention-only-competitor-')
+      const projectId = seedProject(db)
+      db.insert(competitors).values({
+        id: crypto.randomUUID(),
+        projectId,
+        domain: 'rival.com',
+        createdAt: new Date().toISOString(),
+      }).run()
+      const queryId = seedQuery(db, projectId, 'best roofing company')
+      const run1 = seedRun(db, projectId, 'completed', '2024-01-01T00:00:00Z')
+      seedSnapshot(db, run1, queryId, 'gemini', 'cited', { citedDomains: ['example.com'] })
+      const run2 = seedRun(db, projectId, 'completed', '2024-02-01T00:00:00Z')
+      seedSnapshot(db, run2, queryId, 'gemini', 'not-cited', {
+        answerText: 'Rival is a popular roofing company.',
+        competitorOverlap: ['rival.com'],
+      })
+
+      const result = new IntelligenceService(db).analyzeAndPersist(run2, projectId)!
+      const regression = result.insights.find(insight => insight.type === 'regression')
+
+      expect(result.competitorGains).toEqual([])
+      expect(regression?.cause?.cause).toBe('unknown')
+      expect(result.insights.some(insight => insight.type === 'competitor-gained')).toBe(false)
+    })
+
+    it('treats a tracked competitor in grounding evidence as a real citation alert', () => {
+      const { db } = createTempDb('intel-grounded-competitor-')
+      const projectId = seedProject(db)
+      db.insert(competitors).values({
+        id: crypto.randomUUID(),
+        projectId,
+        domain: 'rival.com',
+        createdAt: new Date().toISOString(),
+      }).run()
+      const queryId = seedQuery(db, projectId, 'best roofing company')
+      const run1 = seedRun(db, projectId, 'completed', '2024-01-01T00:00:00Z')
+      seedSnapshot(db, run1, queryId, 'gemini', 'cited', { citedDomains: ['example.com'] })
+      const run2 = seedRun(db, projectId, 'completed', '2024-02-01T00:00:00Z')
+      seedSnapshot(db, run2, queryId, 'gemini', 'not-cited', {
+        groundingSources: [{ uri: 'https://rival.com/roofing', title: 'Rival' }],
+      })
+
+      const result = new IntelligenceService(db).analyzeAndPersist(run2, projectId)!
+      const regression = result.insights.find(insight => insight.type === 'regression')
+
+      expect(result.competitorGains).toEqual([
+        { query: 'best roofing company', competitorDomain: 'rival.com' },
+      ])
+      expect(regression?.cause).toMatchObject({
+        cause: 'competitor_gain',
+        competitorDomain: 'rival.com',
+      })
     })
   })
 

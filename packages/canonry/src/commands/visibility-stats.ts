@@ -17,6 +17,8 @@ export interface VisibilityStatsOptions {
   lastRuns?: number
   byProvider?: boolean
   shareOfVoice?: boolean
+  /** Which query class share of voice covers. Defaults to `non-brand` server-side. */
+  queryClass?: 'branded' | 'non-brand'
   format?: string
 }
 
@@ -30,6 +32,7 @@ export async function showVisibilityStats(project: string, opts: VisibilityStats
     lastRuns: opts.lastRuns,
     groupBy: opts.byProvider ? 'provider' : undefined,
     shareOfVoice: opts.shareOfVoice,
+    queryClass: opts.queryClass,
   })
 
   if (opts.format === 'jsonl') {
@@ -73,6 +76,9 @@ export async function showVisibilityCompare(project: string, opts: VisibilityCom
 
 /** A metric period as `"2.1% [1.3, 3.5]"`, or `"no data"` when the sample was empty. */
 function periodCell(p: VisibilityCompareMetricPeriod): string {
+  if (p.availability === 'no-competitive-frame') {
+    return `unavailable: no competitive frame (${p.numerator} observed)`
+  }
   if (p.point === null || p.ciLow === null || p.ciHigh === null) return 'no data'
   const p1 = (v: number) => formatRatio(v)
   return `${p1(p.point)} [${p1(p.ciLow)}, ${p1(p.ciHigh)}]`
@@ -93,6 +99,12 @@ function verdictCell(m: VisibilityCompareMetric): string {
   }
 }
 
+function metricQueryClassLabel(metric: VisibilityCompareMetric): string {
+  if (metric.queryClass === 'non-brand') return 'non-brand queries'
+  if (metric.queryClass === 'pooled') return 'pooled queries; classification unavailable'
+  return 'all queries'
+}
+
 function printVisibilityCompare(data: VisibilityCompareDto): void {
   console.log(`AEO month over month: ${data.project}   ${data.from.month} -> ${data.to.month}`)
   const b = data.basket
@@ -111,7 +123,7 @@ function printVisibilityCompare(data: VisibilityCompareDto): void {
 
   // Column widths.
   const rows = data.metrics.map((m) => ({
-    label: `${m.label}${m.driftRobust ? ' *' : ''}`,
+    label: `${m.label} · ${metricQueryClassLabel(m)}${m.driftRobust ? ' *' : ''}`,
     to: periodCell(m.to),
     from: periodCell(m.from),
     verdict: verdictCell(m),
@@ -228,10 +240,25 @@ function printVisibilityStats(data: VisibilityStatsDto): void {
   const sov = data.shareOfVoice
   if (sov) {
     console.log('')
-    const pctStr = sov.percent === null ? '— (no competitors configured)' : `${sov.percent}%`
+    const pctStr = sov.percent !== null
+      ? `${sov.percent}%`
+      : sov.competitorCount === 0
+        ? '— (no competitors configured)'
+        : sov.snapshotsWithAnswerText === 0
+          ? '— (no answer text in scope)'
+          : '— (no brands mentioned in scope)'
+    // The class is printed with the number, never implied. A reader who sees
+    // only this line still has to be able to tell a category figure from a
+    // brand-recall one.
+    const scope = sov.queryClass === 'pooled'
+      ? 'pooled queries · classification unavailable'
+      : `${sov.queryClass} queries`
     console.log(
-      `Share of voice: ${pctStr}  (you ${sov.projectMentions} vs competitors ${sov.competitorMentions} brand mentions across ${sov.snapshotsWithAnswerText} answers)`,
+      `Share of voice (${scope}): ${pctStr}  (you ${sov.projectMentions} vs competitors ${sov.competitorMentions} brand mentions across ${sov.snapshotsWithAnswerText} answers)`,
     )
+    if (sov.queryClass === 'non-brand') {
+      console.log('  branded queries excluded on purpose — re-run with --query-class branded for brand recall')
+    }
     for (const c of sov.perCompetitor.slice(0, 8)) {
       console.log(`  ${c.domain}: ${c.mentions}`)
     }

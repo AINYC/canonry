@@ -36,7 +36,7 @@ function bucket(date: string, byProvider: BrandMetricsDto['buckets'][number]['by
     queryCount: 4,
     mentionRate: rates.mentionRate,
     mentionedCount: 1,
-    mentionShare: { rate: 0.6, projectMentionSnapshots: 3, competitorMentionSnapshots: 2 },
+    mentionShare: { scope: 'non-brand', rate: 0.6, projectMentionSnapshots: 3, competitorMentionSnapshots: 2 },
     byProvider,
   }
 }
@@ -44,6 +44,7 @@ function bucket(date: string, byProvider: BrandMetricsDto['buckets'][number]['by
 function dto(buckets: BrandMetricsDto['buckets']): BrandMetricsDto {
   return {
     window: 'all',
+    mentionShareScope: 'non-brand',
     buckets,
     overall: provider(0.5, 0.25),
     byProvider: {},
@@ -271,8 +272,8 @@ describe('model attribution helpers', () => {
 describe('buildMentionShareTrendRows', () => {
   it('plots bucket mention share as percentages', () => {
     const d = dto([
-      { ...bucket('2026-04-01', { gemini: provider(0.25, 0.1) }), mentionShare: { rate: 0.25, projectMentionSnapshots: 1, competitorMentionSnapshots: 3 } },
-      { ...bucket('2026-04-08', { gemini: provider(0.5, 0.4) }), mentionShare: { rate: 0.75, projectMentionSnapshots: 3, competitorMentionSnapshots: 1 } },
+      { ...bucket('2026-04-01', { gemini: provider(0.25, 0.1) }), mentionShare: { scope: 'non-brand' as const, rate: 0.25, projectMentionSnapshots: 1, competitorMentionSnapshots: 3 } },
+      { ...bucket('2026-04-08', { gemini: provider(0.5, 0.4) }), mentionShare: { scope: 'non-brand' as const, rate: 0.75, projectMentionSnapshots: 3, competitorMentionSnapshots: 1 } },
     ])
 
     const res = buildMentionShareTrendRows(d)
@@ -283,8 +284,8 @@ describe('buildMentionShareTrendRows', () => {
 
   it('emits null when a bucket has no competitive brand mentions', () => {
     const d = dto([
-      { ...bucket('2026-04-01', { gemini: provider(0.25, 0.1) }), mentionShare: { rate: null, projectMentionSnapshots: 0, competitorMentionSnapshots: 0 } },
-      { ...bucket('2026-04-08', { gemini: provider(0.5, 0.4) }), mentionShare: { rate: 0.5, projectMentionSnapshots: 1, competitorMentionSnapshots: 1 } },
+      { ...bucket('2026-04-01', { gemini: provider(0.25, 0.1) }), mentionShare: { scope: 'non-brand' as const, rate: null, projectMentionSnapshots: 0, competitorMentionSnapshots: 0 } },
+      { ...bucket('2026-04-08', { gemini: provider(0.5, 0.4) }), mentionShare: { scope: 'non-brand' as const, rate: 0.5, projectMentionSnapshots: 1, competitorMentionSnapshots: 1 } },
     ])
 
     const res = buildMentionShareTrendRows(d)
@@ -306,7 +307,7 @@ describe('buildSelectedTrendRows', () => {
 
   it('uses mention-share rows regardless of requested series mode', () => {
     const d = dto([
-      { ...bucket('2026-04-01', { gemini: provider(0.25, 0.1) }), mentionShare: { rate: 0.25, projectMentionSnapshots: 1, competitorMentionSnapshots: 3 } },
+      { ...bucket('2026-04-01', { gemini: provider(0.25, 0.1) }), mentionShare: { scope: 'non-brand' as const, rate: 0.25, projectMentionSnapshots: 1, competitorMentionSnapshots: 3 } },
     ])
 
     expect(buildSelectedTrendRows(d, 'mentionShare', 'byProvider')).toEqual(buildMentionShareTrendRows(d))

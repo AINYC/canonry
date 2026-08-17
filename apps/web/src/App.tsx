@@ -967,9 +967,14 @@ export function RootLayout() {
                         <span className="text-secondary">Sources:</span> {snap.citedDomains.join(', ')}
                       </p>
                     )}
-                    {snap.competitorOverlap.length > 0 && (
+                    {snap.citedCompetitorDomains.length > 0 && (
                       <p className="text-xs text-negative-400/80 mt-0.5">
-                        Competitor cited: {snap.competitorOverlap.join(', ')}
+                        Competitor cited: {snap.citedCompetitorDomains.join(', ')}
+                      </p>
+                    )}
+                    {snap.mentionedCompetitorDomains.length > 0 && (
+                      <p className="text-xs text-negative-400/80 mt-0.5">
+                        Competitor mentioned: {snap.mentionedCompetitorDomains.join(', ')}
                       </p>
                     )}
                     {snap.groundingSources && snap.groundingSources.length > 0 && (

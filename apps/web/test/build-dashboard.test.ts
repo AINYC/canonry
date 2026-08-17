@@ -68,8 +68,10 @@ test('buildProjectCommandCenter evidence summary uses canonical mention vocabula
         visibilityState: 'visible',
         mentionState: 'mentioned',
         answerText: 'The brand is mentioned.',
-        citedDomains: ['example.com'],
-        competitorOverlap: [],
+        citedDomains: ['example.com', 'source-rival.example'],
+        competitorOverlap: ['legacy-mixed.example'],
+        citedCompetitorDomains: ['source-rival.example'],
+        mentionedCompetitorDomains: ['answer-rival.example'],
         groundingSources: [],
         searchQueries: [],
         model: 'gemini-2.5-flash',
@@ -86,6 +88,14 @@ test('buildProjectCommandCenter evidence summary uses canonical mention vocabula
   // Summary text must use the canonical "mentioned" vocabulary, not "visible".
   expect(evidence!.summary).toMatch(/mentioned/i)
   expect(evidence!.summary).not.toMatch(/\bvisible\b/i)
+  expect(evidence!.citedCompetitorDomains).toEqual(['source-rival.example'])
+  expect(evidence!.mentionedCompetitorDomains).toEqual(['answer-rival.example'])
+  // The legacy mixed value survives only in the neutral filter union.
+  expect(evidence!.competitorDomains).toEqual([
+    'source-rival.example',
+    'answer-rival.example',
+    'legacy-mixed.example',
+  ])
 })
 
 test('buildProjectCommandCenter carries the model web search queries into evidence', () => {
@@ -1181,7 +1191,7 @@ test('buildPortfolioProject carries the mention-rate trend, score, and subtitle 
         // mention, not cited.
         mention: { label: 'Mention Coverage', value: '60', delta: '3 of 4 queries mentioned', tone: 'positive', description: '', tooltip: '', trend: [40, 60, 80], progress: 60 },
         visibility: { label: 'Citation Coverage', value: '75', delta: '3 of 4 queries', tone: 'positive', description: '', tooltip: '', trend: [25, 50, 75], progress: 75 },
-        mentionShare: { label: 'Mention Share', value: 'No data', delta: '', tone: 'neutral', description: '', tooltip: '', trend: [], breakdown: { projectMentionSnapshots: 0, competitorMentionSnapshots: 0, perCompetitor: [], snapshotsWithAnswerText: 0, snapshotsTotal: 0 } },
+        mentionShare: { label: 'Mention Share', value: 'No data', delta: '', tone: 'neutral', description: '', tooltip: '', trend: [], scope: 'non-brand', breakdown: { projectMentionSnapshots: 0, competitorMentionSnapshots: 0, perCompetitor: [], snapshotsWithAnswerText: 0, snapshotsTotal: 0, score: null }, branded: { projectMentionSnapshots: 0, competitorMentionSnapshots: 0, perCompetitor: [], snapshotsWithAnswerText: 0, snapshotsTotal: 0, score: null } },
         mentionGaps: { label: 'Mention Gaps', value: '0', delta: '', tone: 'positive', description: '', tooltip: '', trend: [] },
         gapQueries: { label: 'Gap Queries', value: '0', delta: '', tone: 'positive', description: '', tooltip: '', trend: [] },
         indexCoverage: { label: 'Index Coverage', value: 'No data', delta: '', tone: 'neutral', description: '', tooltip: '', trend: [] },

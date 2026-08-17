@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { locationContextSchema, providerNameSchema } from './provider.js'
+import { queryClassFilterSchema, queryClassSchema } from './query-class.js'
 import { hostOf } from './url-normalize.js'
 
 /**
@@ -130,8 +131,12 @@ export const measurementV2ExecutionNodeSchema = z.object({
 }).strict()
 export type MeasurementV2ExecutionNode = z.output<typeof measurementV2ExecutionNodeSchema>
 
-/** Published classes are exhaustive: an unclassified assignment never survives publish validation. */
-export const measurementQueryClassSchema = z.enum(['branded', 'non-brand'])
+/**
+ * Published classes are exhaustive: an unclassified assignment never survives
+ * publish validation. The enum itself is the project-wide `queryClassSchema` —
+ * measurement must not drift from the class the read-time surfaces classify by.
+ */
+export const measurementQueryClassSchema = queryClassSchema
 export type MeasurementQueryClass = z.output<typeof measurementQueryClassSchema>
 
 export const measurementV2AssignmentSchema = z.object({
@@ -366,7 +371,7 @@ export type MetricValue = z.output<typeof measurementMetricValueSchema>
 export const measurementOverviewScopeKindSchema = z.enum(['all', 'group', 'property'])
 export type MeasurementOverviewScopeKind = z.output<typeof measurementOverviewScopeKindSchema>
 
-export const measurementQueryClassFilterSchema = z.enum(['all', 'branded', 'non-brand'])
+export const measurementQueryClassFilterSchema = queryClassFilterSchema
 export type MeasurementQueryClassFilter = z.output<typeof measurementQueryClassFilterSchema>
 
 /** A single HTTP-friendly sort token keeps cursors bound to the exact ordering. */

@@ -182,7 +182,9 @@ function makeOverview(name: string) {
       visibility: { label: 'Citation', value: '0', delta: '', tone: 'neutral', description: '', trend: [], progress: 0 },
       mentionShare: {
         label: 'Mention Share', value: 'Add competitors', delta: '', tone: 'neutral', description: '', trend: [], progress: 0,
-        breakdown: { projectMentionSnapshots: 0, competitorMentionSnapshots: 0, perCompetitor: [], snapshotsWithAnswerText: 0, snapshotsTotal: 0 },
+        scope: 'non-brand',
+        breakdown: { projectMentionSnapshots: 0, competitorMentionSnapshots: 0, perCompetitor: [], snapshotsWithAnswerText: 0, snapshotsTotal: 0, score: null },
+        branded: { projectMentionSnapshots: 0, competitorMentionSnapshots: 0, perCompetitor: [], snapshotsWithAnswerText: 0, snapshotsTotal: 0, score: null },
       },
       gapQueries: { label: 'Gap queries', value: '0', delta: '', tone: 'neutral', description: '', trend: [] },
       mentionGaps: { label: 'Mention gaps', value: '0', delta: '', tone: 'neutral', description: '', trend: [] },
@@ -256,6 +258,23 @@ describe('canonry overview — jsonl degrades to the json document', () => {
 
     expect(jsonlCap.text()).toBe(jsonCap.text())
     expect(JSON.parse(jsonlCap.text())).toEqual(overviews)
+  })
+
+  it('--all: human table carries each mention-share query scope', async () => {
+    const projects = [{ name: 'a' }, { name: 'b' }]
+    const overviews = [makeOverview('a'), makeOverview('b')]
+    overviews[1]!.scores.mentionShare.scope = 'pooled'
+    mockListProjects.mockResolvedValue(projects)
+    mockGetProjectOverview.mockImplementation((name: string) =>
+      Promise.resolve(overviews.find(o => o.project.name === name)),
+    )
+
+    const cap = captureLog(() => showAllOverviews({}))
+    await cap.run
+
+    expect(cap.text()).toContain('Mention share · scope')
+    expect(cap.text()).toContain('Add competitors · non-brand queries')
+    expect(cap.text()).toContain('Add competitors · pooled queries')
   })
 
   it('--all: empty project list emits "[]" for both json and jsonl', async () => {

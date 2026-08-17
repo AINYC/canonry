@@ -1,11 +1,10 @@
 import type { CompetitorRow, GroundingSource, ProjectReportDto } from '@ainyc/canonry-contracts'
 import { hostMatchesDomain } from '@ainyc/canonry-contracts'
-import { citedDomainBelongsToProject } from './domain-matching.js'
+import { compileCompetitiveSignalResolver } from './competitive-signals.js'
 
 export interface CompetitorLandscapeSnapshot {
   queryId: string
   citedDomains: string[]
-  competitorOverlap: string[]
   groundingSources: GroundingSource[]
 }
 
@@ -27,16 +26,24 @@ export function buildCompetitorLandscape(
   for (const c of competitorDomains) {
     competitorMap.set(c, { count: 0, queries: new Set(), pages: new Map() })
   }
+  const competitorResolver = compileCompetitiveSignalResolver(competitorDomains)
+  const projectResolver = compileCompetitiveSignalResolver(projectDomains)
 
   for (const snap of snapshots) {
     const q = queryLookup.byId.get(snap.queryId)
-    const allDomains = [...snap.citedDomains, ...snap.competitorOverlap]
-    if (allDomains.some(d => citedDomainBelongsToProject(d, projectDomains))) {
+    const evidence = {
+      citedDomains: snap.citedDomains,
+      groundingSources: snap.groundingSources,
+    }
+    if (projectResolver.resolve(evidence).citedCompetitorDomains.length > 0) {
       projectCitationCount++
     }
+    const citedCompetitors = new Set(
+      competitorResolver.resolve(evidence).citedCompetitorDomains,
+    )
 
     for (const competitor of competitorDomains) {
-      if (allDomains.some(d => citedDomainBelongsToProject(d, [competitor]))) {
+      if (citedCompetitors.has(competitor)) {
         const entry = competitorMap.get(competitor)!
         entry.count++
         if (q) entry.queries.add(q)

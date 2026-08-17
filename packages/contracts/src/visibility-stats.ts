@@ -92,18 +92,32 @@ export const visibilityStatsShareCompetitorSchema = z.object({
 export type VisibilityStatsShareCompetitor = z.infer<typeof visibilityStatsShareCompetitorSchema>
 
 /**
- * Pooled **share of voice** across the window — how often the project's brand is
+ * **Share of voice** across the window — how often the project's brand is
  * named in answer TEXT vs tracked competitors:
  *   `share = projectMentions / (projectMentions + competitorMentions)`.
  * Per-snapshot (binary), mirroring `answerMentioned` — matches `buildMentionShare`.
  * Present only when the caller passes `shareOfVoice=1`.
  *
- * `percent` is `null` when no competitors are configured (the head-to-head metric
- * is undefined without a competitive frame — reporting 100% would mislead).
+ * SCOPED BY `queryClass`, which defaults to `non-brand`. A branded query hands
+ * the model the project's name, so the project is named on nearly all of them
+ * and a competitor structurally cannot be; one pooled denominator therefore
+ * reports brand recall as category placement. `branded` is available on request
+ * and is a recognition figure, never a competitive one.
+ *
+ * `percent` is `null` when no competitors are configured or no brand is named
+ * in scope. Both are undefined proportions; `competitorCount` distinguishes
+ * the missing frame from a configured 0/0 frame.
  */
 export const visibilityStatsShareOfVoiceSchema = z.object({
-  /** `projectMentions / (projectMentions + competitorMentions)` as 0-100; `null` when no competitors configured. */
+  /**
+   * Which class the figures cover. `pooled` appears only when the project has no
+   * usable brand alias, so no split was possible — never as a default.
+   */
+  queryClass: z.enum(['branded', 'non-brand', 'pooled']),
+  /** `projectMentions / (projectMentions + competitorMentions)` as 0-100; `null` without a frame or for 0/0 mentions. */
   percent: z.number().nullable(),
+  /** Number of tracked competitors in the frame, including those with zero mentions. */
+  competitorCount: z.number().int().nonnegative(),
   /** Snapshots (with answer text) where the project's brand appeared in the answer. */
   projectMentions: z.number().int(),
   /** Snapshots (with answer text) where any tracked competitor's brand appeared. */
@@ -134,7 +148,7 @@ export const visibilityStatsDtoSchema = z.object({
   byProvider: z.array(visibilityStatsProviderEntrySchema).optional(),
   /** Per-query stats, sorted by query text. Only queries with ≥1 snapshot in the window appear. */
   queries: z.array(visibilityStatsQueryEntrySchema),
-  /** Pooled share of voice vs tracked competitors — present only when `shareOfVoice=1` was requested. */
+  /** Share of voice vs tracked competitors, non-brand queries by default — present only when `shareOfVoice=1` was requested. */
   shareOfVoice: visibilityStatsShareOfVoiceSchema.optional(),
 })
 export type VisibilityStatsDto = z.infer<typeof visibilityStatsDtoSchema>
@@ -176,13 +190,15 @@ export type VisibilityCompareDirection = z.infer<typeof visibilityCompareDirecti
 
 /** One period's value for one metric: a proportion `[0,1]` with its Wilson interval and the raw counts it came from. */
 export const visibilityCompareMetricPeriodSchema = z.object({
+  /** Why this period can or cannot produce a proportion. Raw numerator counts remain visible when the frame is missing. */
+  availability: z.enum(['available', 'no-observations', 'no-competitive-frame']),
   /** The proportion in `[0,1]`, rounded to 4 dp; `null` when `denominator === 0` (undefined over no data). */
   point: z.number().nullable(),
   /** Wilson 95% lower bound `[0,1]`; `null` when `denominator === 0`. */
   ciLow: z.number().nullable(),
   /** Wilson 95% upper bound `[0,1]`; `null` when `denominator === 0`. */
   ciHigh: z.number().nullable(),
-  /** Successes (mentions / citations / project-brand mentions). */
+  /** Successes (mentions / citations / project-brand mentions), preserved even when the competitive frame is unavailable. */
   numerator: z.number().int(),
   /** Sample size the proportion is over (checked snapshots / total / project+competitor brand mentions). */
   denominator: z.number().int(),
@@ -202,6 +218,11 @@ export const visibilityCompareMetricSchema = z.object({
   key: visibilityCompareMetricKeySchema,
   /** Human label ("Named share of voice", "Cited rate", …). */
   label: z.string(),
+  /**
+   * Query class behind this metric. `all` is an intentional all-query rate;
+   * `pooled` means no usable project identity existed for the requested split.
+   */
+  queryClass: z.enum(['all', 'non-brand', 'pooled']),
   /**
    * `true` for share of voice, which is less exposed to broad model-wide naming
    * propensity than an absolute rate. It does not bypass model continuity: no

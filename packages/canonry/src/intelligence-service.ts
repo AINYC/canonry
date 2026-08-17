@@ -1,7 +1,7 @@
 import { eq, desc, asc, and, ne, or, inArray, gte, lte } from 'drizzle-orm'
 import type { DatabaseClient } from '@ainyc/canonry-db'
-import { competitors, groupRunsByCreatedAt, gscSearchData, healthSnapshots, insights, projects, queries, querySnapshots, runs, gbpLocations, gbpDailyMetrics, gbpKeywordMonthly, gbpPlaceActions, gbpLodgingSnapshots, gbpPlaceDetails } from '@ainyc/canonry-db'
-import { analyzeRuns, analyzeGbp, classifyRegressionSeverity, PERSISTENT_GAP_THRESHOLD, GBP_INSIGHT_PROVIDER } from '@ainyc/canonry-intelligence'
+import { competitors, groupRunsByCreatedAt, gscSearchData, healthSnapshots, insights, projects, queries, querySnapshots, runs, gbpLocations, gbpDailyMetrics, gbpKeywordMonthly, gbpPlaceActions, gbpLodgingSnapshots, gbpPlaceDetails, parseJsonColumn } from '@ainyc/canonry-db'
+import { analyzeRuns, analyzeGbp, classifyRegressionSeverity, compileCompetitiveSignalResolver, PERSISTENT_GAP_THRESHOLD, GBP_INSIGHT_PROVIDER } from '@ainyc/canonry-intelligence'
 import type { RunData, Snapshot, AnalysisResult, Insight, GbpLocationSignals, GbpKeywordPoint } from '@ainyc/canonry-intelligence'
 import { extractPlaceAmenities, type PlaceDetails } from '@ainyc/canonry-integration-google-places'
 import { buildGbpSummary } from '@ainyc/canonry-api-routes'
@@ -15,6 +15,17 @@ const RECURRENCE_LOOKBACK_RUNS = 5
 const HISTORY_WINDOW_RUNS = Math.max(PERSISTENT_GAP_THRESHOLD, 5)
 
 const log = createLogger('IntelligenceService')
+
+function readStoredGroundingSources(rawResponse: string | null): Array<{ uri: string }> {
+  const parsed = parseJsonColumn<Record<string, unknown>>(rawResponse, {})
+  const sources = parsed.groundingSources
+  if (!Array.isArray(sources)) return []
+  return sources.flatMap(source => {
+    if (!source || typeof source !== 'object') return []
+    const uri = (source as { uri?: unknown }).uri
+    return typeof uri === 'string' ? [{ uri }] : []
+  })
+}
 
 /**
  * The two mutually-exclusive lodging insights (`gbp-lodging-gap` and its
@@ -87,12 +98,15 @@ export class IntelligenceService {
       return null
     }
 
+    const trackedCompetitors = this.loadTrackedCompetitors(projectId)
+
     // 2. Build RunData for the current run
     const currentRun = this.buildRunData(
       runId,
       projectId,
       currentRunRecord.finishedAt ?? currentRunRecord.createdAt,
       currentRunRecord.location ?? null,
+      trackedCompetitors,
     )
 
     if (currentRun.snapshots.length === 0) {
@@ -119,15 +133,21 @@ export class IntelligenceService {
         projectId,
         previousRunRecord.finishedAt ?? previousRunRecord.createdAt,
         previousRunRecord.location ?? null,
+        trackedCompetitors,
       )
       : null
 
-    const trackedCompetitors = this.loadTrackedCompetitors(projectId)
     const history = sameLocationOrdered
       .slice(0, currentLocIdx + 1)
       .map(r => r.id === runId
         ? currentRun
-        : this.buildRunData(r.id, projectId, r.finishedAt ?? r.createdAt, r.location ?? null))
+        : this.buildRunData(
+          r.id,
+          projectId,
+          r.finishedAt ?? r.createdAt,
+          r.location ?? null,
+          trackedCompetitors,
+        ))
 
     // 4. Run analysis — skip transition detection on first run (no baseline to compare)
     if (!previousRun) {
@@ -427,11 +447,13 @@ export class IntelligenceService {
     historyRecords?: readonly { id: string; projectId: string; finishedAt: string | null; createdAt: string; location?: string | null }[],
     opts?: { dryRun?: boolean },
   ): AnalysisResult | null {
+    const trackedCompetitors = this.loadTrackedCompetitors(runRecord.projectId)
     const currentRun = this.buildRunData(
       runRecord.id,
       runRecord.projectId,
       runRecord.finishedAt ?? runRecord.createdAt,
       runRecord.location ?? null,
+      trackedCompetitors,
     )
 
     if (currentRun.snapshots.length === 0) {
@@ -444,14 +466,20 @@ export class IntelligenceService {
         previousRunRecord.projectId,
         previousRunRecord.finishedAt ?? previousRunRecord.createdAt,
         previousRunRecord.location ?? null,
+        trackedCompetitors,
       )
       : null
 
-    const trackedCompetitors = this.loadTrackedCompetitors(runRecord.projectId)
     const history = (historyRecords ?? [])
       .map(r => r.id === runRecord.id
         ? currentRun
-        : this.buildRunData(r.id, r.projectId, r.finishedAt ?? r.createdAt, r.location ?? null))
+        : this.buildRunData(
+          r.id,
+          r.projectId,
+          r.finishedAt ?? r.createdAt,
+          r.location ?? null,
+          trackedCompetitors,
+        ))
 
     // Skip transition detection on first run (no baseline to compare)
     if (!previousRun) {
@@ -863,6 +891,7 @@ export class IntelligenceService {
     projectId: string,
     completedAt: string,
     location: string | null = null,
+    trackedCompetitors: readonly string[] = [],
   ): RunData {
     // Project-owned domains, used to label a citation gain/regression with the
     // project's OWN cited URL rather than `citedDomains[0]` (which is often a
@@ -878,6 +907,7 @@ export class IntelligenceService {
           ownedDomains: projectDomainRow.ownedDomains,
         })
       : []
+    const competitiveSignalResolver = compileCompetitiveSignalResolver(trackedCompetitors)
 
     const rows = this.db
       .select({
@@ -890,7 +920,7 @@ export class IntelligenceService {
         citationState: querySnapshots.citationState,
         answerMentioned: querySnapshots.answerMentioned,
         citedDomains: querySnapshots.citedDomains,
-        competitorOverlap: querySnapshots.competitorOverlap,
+        rawResponse: querySnapshots.rawResponse,
         snapshotLocation: querySnapshots.location,
       })
       .from(querySnapshots)
@@ -914,7 +944,10 @@ export class IntelligenceService {
       }
 
       const domains = r.citedDomains
-      const competitors = r.competitorOverlap
+      const citedCompetitorDomains = competitiveSignalResolver.resolve({
+        citedDomains: domains,
+        groundingSources: readStoredGroundingSources(r.rawResponse),
+      }).citedCompetitorDomains
       snapshots.push({
         query: resolvedQuery,
         provider: r.provider,
@@ -932,7 +965,7 @@ export class IntelligenceService {
         // we read it from the snapshot row so a stale runs.location can't
         // mask snapshot truth.
         location: r.snapshotLocation ?? location ?? null,
-        competitorDomains: competitors,
+        citedCompetitorDomains,
         // citedDomains is the FULL set (tracked competitors + third-party
         // sources). Cause analysis uses it to name the displacing source
         // when no tracked competitor appears in the response.

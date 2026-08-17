@@ -15,9 +15,9 @@ export function analyzeCause(regression: Regression, currentSnapshots: Snapshot[
   // Tracked competitor displacement — strongest signal (the operator
   // already cares about this domain). Wins over third-party even if a
   // third-party-only snapshot happens to come first in the array.
-  const withCompetitor = matchingSnaps.find(s => s.competitorDomains?.length)
+  const withCompetitor = matchingSnaps.find(s => s.citedCompetitorDomains?.length)
   if (withCompetitor) {
-    const competitor = withCompetitor.competitorDomains![0]!
+    const competitor = withCompetitor.citedCompetitorDomains![0]!
     return {
       cause: 'competitor_gain',
       competitorDomain: competitor,

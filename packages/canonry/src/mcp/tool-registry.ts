@@ -1381,7 +1381,7 @@ export const canonryMcpTools = [
     name: 'canonry_visibility_stats',
     title: 'Get aggregated mention/citation stats',
     description:
-      'Per-query mention (answer-text) and citation (source-list) counts WITH a sample size, pooled across many answer-visibility runs (probe-excluded) — the data to compute a confidence-aware (Wilson) proportion or detect drift without fetching every run. Tri-state aware: `checked` (the n for the mention proportion) counts only snapshots where answerMentioned was recorded; `null` ("not checked") is excluded, never counted as not-mentioned. Returns per-query `total`/`checked`/`mentioned`/`cited` + derived `mentionRate` (mentioned/checked) and `citedRate` (cited/total), `firstObserved`/`lastObserved`, and pooled `totals`. Window with `since`/`until` (ISO), `lastRuns`, or `month=YYYY-MM` (mutually exclusive); with none set, EVERY completed/partial run is pooled (`window.runCount` says how many) — pass `lastRuns` for a recent sample. Set `groupBy=provider` for a per-provider breakdown whose counts sum to the pooled counts (`groupBy` is omitted from the response otherwise). Set `shareOfVoice=true` for pooled project-vs-tracked-competitor brand-mention share across the same attributed snapshot set.',
+      'Per-query mention (answer-text) and citation (source-list) counts WITH a sample size, pooled across many answer-visibility runs (probe-excluded) — the data to compute a confidence-aware (Wilson) proportion or detect drift without fetching every run. Tri-state aware: `checked` (the n for the mention proportion) counts only snapshots where answerMentioned was recorded; `null` ("not checked") is excluded, never counted as not-mentioned. Returns per-query `total`/`checked`/`mentioned`/`cited` + derived `mentionRate` (mentioned/checked) and `citedRate` (cited/total), `firstObserved`/`lastObserved`, and pooled `totals`. Window with `since`/`until` (ISO), `lastRuns`, or `month=YYYY-MM` (mutually exclusive); with none set, EVERY completed/partial run is pooled (`window.runCount` says how many) — pass `lastRuns` for a recent sample. Set `groupBy=provider` for a per-provider breakdown whose counts sum to the pooled counts (`groupBy` is omitted from the response otherwise). Set `shareOfVoice=true` for project-vs-tracked-competitor brand-mention share across the same attributed snapshot set — scoped to NON-BRAND queries by default, because a branded query names the project (it is mentioned on nearly all of them and a competitor cannot be), so a pooled figure reports brand recall as category placement. Pass `queryClass="branded"` for the recall figure; the response echoes which class it served.',
     access: 'read',
     tier: 'monitoring',
     inputSchema: z.object({
@@ -1391,7 +1391,8 @@ export const canonryMcpTools = [
       lastRuns: z.number().int().positive().optional().describe('Aggregate only the most recent N answer-visibility runs. Mutually exclusive with since/until/month.'),
       month: z.string().optional().describe('Aggregate one calendar month (YYYY-MM), expanded to that month\'s inclusive UTC bounds. Mutually exclusive with since/until/lastRuns.'),
       groupBy: z.enum(['provider']).optional().describe('Set to "provider" for a per-provider breakdown.'),
-      shareOfVoice: z.boolean().optional().describe('Include pooled project-vs-tracked-competitor brand-mention share across the same window.'),
+      shareOfVoice: z.boolean().optional().describe('Include project-vs-tracked-competitor brand-mention share across the same window (non-brand queries unless queryClass says otherwise).'),
+      queryClass: z.enum(['branded', 'non-brand']).optional().describe('Query class for shareOfVoice. Defaults to non-brand. There is no "all": branded and non-brand never share a denominator.'),
     }),
     annotations: readAnnotations(),
     openApiOperations: ['GET /api/v1/projects/{name}/visibility-stats'],
@@ -1403,6 +1404,7 @@ export const canonryMcpTools = [
         groupBy: input.groupBy,
         month: input.month,
         shareOfVoice: input.shareOfVoice,
+        queryClass: input.queryClass,
       }),
   }),
   defineTool({

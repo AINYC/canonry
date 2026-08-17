@@ -42,7 +42,7 @@ const bucket = {
   queryCount: 2,
   mentionRate: 0.75,
   mentionedCount: 3,
-  mentionShare: { rate: 0.6, projectMentionSnapshots: 3, competitorMentionSnapshots: 2 },
+  mentionShare: { scope: 'non-brand', rate: 0.6, projectMentionSnapshots: 3, competitorMentionSnapshots: 2 },
   byProvider: {
     gemini: providerMetric,
     openai: { citationRate: 0.5, cited: 1, total: 2, mentionRate: 0.5, mentionedCount: 1 },
@@ -206,11 +206,13 @@ describe('mentionShareBucketMetricSchema', () => {
 
   it('allows null rate when no competitive brand mentions exist', () => {
     const parsed = mentionShareBucketMetricSchema.parse({
+      scope: 'pooled',
       rate: null,
       projectMentionSnapshots: 0,
       competitorMentionSnapshots: 0,
     })
     expect(parsed.rate).toBeNull()
+    expect(parsed.scope).toBe('pooled')
   })
 })
 
@@ -231,6 +233,7 @@ describe('brandMetricsDtoSchema', () => {
   it('round-trips a full payload with per-bucket byProvider', () => {
     const dto = {
       window: 'all' as const,
+      mentionShareScope: 'non-brand' as const,
       buckets: [bucket],
       overall: providerMetric,
       byProvider: { gemini: providerMetric },
@@ -247,6 +250,7 @@ describe('brandMetricsDtoSchema', () => {
     expect(() =>
       brandMetricsDtoSchema.parse({
         window: '14d',
+        mentionShareScope: 'non-brand',
         buckets: [],
         overall: providerMetric,
         byProvider: {},

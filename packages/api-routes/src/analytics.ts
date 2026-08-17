@@ -2,19 +2,21 @@ import { and, desc, eq, gte, inArray, lt } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { filterTrackedSnapshots, groupRunsByCreatedAt, pickGroupRepresentative, querySnapshots, runs, queries, queryBasketVersions, competitors, domainClassifications, parseJsonColumn, type DatabaseClient } from '@ainyc/canonry-db'
 import {
-  AI_PROVIDER_INFRA_DOMAINS, brandLabelFromDomain, categorizeSource, categoryLabel, CitationStates,
+  AI_PROVIDER_INFRA_DOMAINS, categorizeSource, categoryLabel, CitationStates,
   classifySurfaceFromCategory, surfaceClassFromCompetitorType, surfaceClassLabel,
   effectiveDomains, evaluateModelPointerExposure, normalizeProjectDomain, parseWindow, RunKinds, RunStatuses,
-  windowCutoff, validationError, hostMatchesAnyDomain, normalizeQueryText,
+  windowCutoff, validationError, compileBrandAliases, hostMatchesAnyDomain, hostMatchesDomain,
+  matcherMatchesText, normalizeQueryText,
 } from '@ainyc/canonry-contracts'
 import type {
   BrandMetricsDto, GapAnalysisDto, SourceBreakdownDto,
   TimeBucket, TrendDirection, GapQuery, GapCategory,
-  SourceCategory, SourceCategoryCount, ProviderMetric, QueryChangeEvent,
+  SourceCategory, SourceCategoryCount, ProviderMetric, QueryChangeEvent, QueryClass,
   RankedSourceList, SourceRankEntry, SurfaceClass, SurfaceClassCount, ModelEvidenceState,
   ModelExposureWindow, ModelPointerChangeDisclosure, ModelServiceMismatch, ExecutionIdentityChangeEvent,
 } from '@ainyc/canonry-contracts'
-import { buildMentionShare } from '@ainyc/canonry-intelligence'
+import { buildMentionShare, type MentionShareCompetitor } from '@ainyc/canonry-intelligence'
+import { mentionShareCompetitorsFromDomains, projectQueryClassifier } from './mention-share-inputs.js'
 import { notProbeRun, resolveProject, resolveSnapshotAnswerMentioned } from './helpers.js'
 import { buildModelAttribution, buildServedModelAttribution } from './analytics-model-attribution.js'
 import {
@@ -39,6 +41,8 @@ export async function analyticsRoutes(app: FastifyInstance) {
     Querystring: { window?: string }
   }>('/projects/:name/analytics/metrics', async (request, reply) => {
     const project = resolveProject(app.db, request.params.name)
+    const classifyQuery = projectQueryClassifier(project)
+    const mentionShareScope = classifyQuery ? 'non-brand' as const : 'pooled' as const
 
     const window = parseWindow(request.query.window)
     const cutoff = windowCutoff(window)
@@ -61,6 +65,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
     if (projectRuns.length === 0) {
       return reply.send({
         window,
+        mentionShareScope,
         buckets: [],
         overall: { citationRate: 0, cited: 0, total: 0, mentionRate: 0, mentionedCount: 0 },
         byProvider: {},
@@ -147,6 +152,9 @@ export async function analyticsRoutes(app: FastifyInstance) {
       ...s,
       runCreatedAt: runCreatedAt.get(s.runId)!,
       resolvedMentioned: resolveSnapshotAnswerMentioned(s, project),
+      queryClass: classifyQuery
+        ? classifyQuery((s.queryId ? queryTextById.get(s.queryId) : undefined) ?? s.queryText ?? null)
+        : null,
       // Falls back to the id if no text resolves, so two distinct queries can
       // never collapse into one member on an empty key. (An orphan only gets
       // this far when its text matched the basket, so its key is never empty.)
@@ -155,15 +163,14 @@ export async function analyticsRoutes(app: FastifyInstance) {
         s.queryId || '',
       runBasketRevision: runBasketRevision.get(s.runId) ?? null,
     }))
-    const mentionShareCompetitors = app.db
-      .select({ domain: competitors.domain })
-      .from(competitors)
-      .where(eq(competitors.projectId, project.id))
-      .all()
-      .map(c => ({
-        domain: c.domain,
-        brandTokens: [brandLabelFromDomain(c.domain)].filter(t => t.length >= 3),
-      }))
+    const mentionShareCompetitors = mentionShareCompetitorsFromDomains(
+      app.db
+        .select({ domain: competitors.domain })
+        .from(competitors)
+        .where(eq(competitors.projectId, project.id))
+        .all()
+        .map(c => c.domain),
+    )
 
     // Overall metrics
     const overall = computeProviderMetric(allSnapshots)
@@ -180,7 +187,15 @@ export async function analyticsRoutes(app: FastifyInstance) {
     const latest = new Date(projectRuns[projectRuns.length - 1]!.createdAt)
     const spanDays = Math.max(1, Math.ceil((latest.getTime() - earliest.getTime()) / 86_400_000))
     const bucketSize = bucketSizeForSpan(spanDays)
-    const buckets = computeBuckets(allSnapshots, projectRuns, bucketSize, queryCreatedAt, mentionShareCompetitors, referenceBasket)
+    const buckets = computeBuckets(
+      allSnapshots,
+      projectRuns,
+      bucketSize,
+      queryCreatedAt,
+      mentionShareCompetitors,
+      referenceBasket,
+      classifyQuery !== null,
+    )
 
     // Model observations are evidence, not configuration. To avoid a false
     // "first seen" transition at the start of a bounded window, anchor each
@@ -461,7 +476,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
       previousExecutionChecksum = identity.checksum
     }
 
-    return reply.send({ window, buckets, overall, byProvider, trend, mentionTrend, queryChanges, basketChanges, executionIdentityChanges, referenceBasketRevision: latestBasket?.revision ?? null, modelAttribution, servedModelAttribution, modelServiceMismatch, modelPointerChanges } satisfies BrandMetricsDto)
+    return reply.send({ window, mentionShareScope, buckets, overall, byProvider, trend, mentionTrend, queryChanges, basketChanges, executionIdentityChanges, referenceBasketRevision: latestBasket?.revision ?? null, modelAttribution, servedModelAttribution, modelServiceMismatch, modelPointerChanges } satisfies BrandMetricsDto)
   })
 
   // GET /projects/:name/analytics/gaps — brand gap analysis
@@ -510,6 +525,18 @@ export async function analyticsRoutes(app: FastifyInstance) {
       .filter(r => !cutoff || r.createdAt >= cutoff)
 
     const windowRunIds = windowRuns.map(r => r.id)
+    // Tracked competitors, resolved once, plus one compiled alias matcher each:
+    // the alias set is fixed and the answer corpus is not.
+    const competitorDomains = app.db
+      .select({ domain: competitors.domain })
+      .from(competitors)
+      .where(eq(competitors.projectId, project.id))
+      .all()
+      .map(c => c.domain)
+    const competitorMatchers = new Map(
+      mentionShareCompetitorsFromDomains(competitorDomains)
+        .map(c => [c.domain, compileBrandAliases([...c.brandTokens])]),
+    )
     // Map runId → createdAt so we can key consistency sets by time-point
     // instead of by raw runId. Under `--all-locations` fan-out, a single
     // time-point has N runs (one per location); keying by runId would
@@ -557,7 +584,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
         citationState: querySnapshots.citationState,
         answerMentioned: querySnapshots.answerMentioned,
         answerText: querySnapshots.answerText,
-        competitorOverlap: querySnapshots.competitorOverlap,
+        citedDomains: querySnapshots.citedDomains,
       })
       .from(querySnapshots)
       .leftJoin(queries, eq(querySnapshots.queryId, queries.id))
@@ -594,10 +621,22 @@ export async function analyticsRoutes(app: FastifyInstance) {
       const mentionedProviders = qSnapshots
         .filter(s => s.resolvedMentioned)
         .map(s => s.provider)
+      // TWO SETS, computed from two different signals, because the two lanes
+      // below are named for two different signals. `competitor_overlap` is read
+      // for neither: that column unions cited domains, grounding sources AND
+      // answer-text brand matches, so it is not either one.
       const competitorsCiting = new Set<string>()
+      const competitorsMentioned = new Set<string>()
       for (const s of qSnapshots) {
-        const overlap = s.competitorOverlap
-        for (const c of overlap) competitorsCiting.add(c)
+        for (const domain of s.citedDomains) {
+          const match = competitorDomains.find(c => hostMatchesDomain(domain, c))
+          if (match) competitorsCiting.add(match)
+        }
+        if (!s.answerText) continue
+        for (const competitor of competitorDomains) {
+          const matcher = competitorMatchers.get(competitor)
+          if (matcher && matcherMatchesText(matcher, s.answerText)) competitorsMentioned.add(competitor)
+        }
       }
 
       const cons = consistencyMap.get(queryId)
@@ -621,6 +660,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
         query, queryId, category,
         providers: citedProviders,
         competitorsCiting: [...competitorsCiting],
+        competitorsMentioned: [...competitorsMentioned],
         consistency,
       }
 
@@ -628,11 +668,13 @@ export async function analyticsRoutes(app: FastifyInstance) {
       else if (category === 'gap') gap.push(citationEntry)
       else uncited.push(citationEntry)
 
-      // Answer-mention classification (new)
+      // Answer-mention classification. A MENTION gap is "a competitor's brand
+      // was named in the prose and yours was not" — it must not be decided by
+      // who got cited, which is a different thing an engine can do independently.
       let mentionCategory: GapCategory
       if (mentionedProviders.length > 0) {
         mentionCategory = 'cited'
-      } else if (competitorsCiting.size > 0) {
+      } else if (competitorsMentioned.size > 0) {
         mentionCategory = 'gap'
       } else {
         mentionCategory = 'uncited'
@@ -642,6 +684,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
         query, queryId, category: mentionCategory,
         providers: mentionedProviders,
         competitorsCiting: [...competitorsCiting],
+        competitorsMentioned: [...competitorsMentioned],
         consistency,
       }
 
@@ -654,7 +697,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
     gap.sort((a, b) => b.competitorsCiting.length - a.competitorsCiting.length)
     cited.sort((a, b) => a.query.localeCompare(b.query))
     uncited.sort((a, b) => a.query.localeCompare(b.query))
-    mentionGap.sort((a, b) => b.competitorsCiting.length - a.competitorsCiting.length)
+    mentionGap.sort((a, b) => b.competitorsMentioned.length - a.competitorsMentioned.length)
     mentionedQueries.sort((a, b) => a.query.localeCompare(b.query))
     notMentioned.sort((a, b) => a.query.localeCompare(b.query))
 
@@ -864,11 +907,14 @@ interface SnapshotLike {
   basketKey: string
   /** Query-set version the parent run measured, null when the run was never stamped. */
   runBasketRevision: number | null
-}
-
-interface MentionShareCompetitorInput {
-  domain: string
-  brandTokens: string[]
+  /**
+   * Branded / non-brand, or null when the project has no usable brand alias to
+   * classify by. The mention-share trend headlines the non-brand class only —
+   * a branded query names the project, so pooling it into the same denominator
+   * turns a trend in category placement into a trend in how many branded
+   * queries happen to be in the basket.
+   */
+  queryClass: QueryClass | null
 }
 
 function computeProviderMetric(snapshots: SnapshotLike[]): ProviderMetric {
@@ -889,7 +935,7 @@ function computeBuckets(
   projectRuns: Array<{ createdAt: string }>,
   bucketDays: number,
   queryCreatedAt?: Map<string, string>,
-  mentionShareCompetitors: MentionShareCompetitorInput[] = [],
+  mentionShareCompetitors: MentionShareCompetitor[] = [],
   /**
    * Normalized membership of the project's CURRENT query basket. When present it
    * replaces the `createdAt < bucketStart` heuristic outright: comparability is a
@@ -903,6 +949,7 @@ function computeBuckets(
    * a trend, and `basketChanges` keeps the restatement visible rather than silent.
    */
   referenceBasket?: Set<string>,
+  classificationAvailable = false,
 ): TimeBucket[] {
   if (projectRuns.length === 0) return []
 
@@ -980,7 +1027,7 @@ function computeBuckets(
         queryCount,
         mentionRate: metric.mentionRate,
         mentionedCount: metric.mentionedCount,
-        mentionShare: computeMentionShareBucketMetric(usable, mentionShareCompetitors),
+        mentionShare: computeMentionShareBucketMetric(usable, mentionShareCompetitors, classificationAvailable),
         byProvider,
         modelEvidenceByProvider,
         basketRevision,
@@ -1006,24 +1053,30 @@ function bucketStartDateFor(observedAt: string, earliest: Date, bucketDays: numb
 
 function computeMentionShareBucketMetric(
   snapshots: SnapshotLike[],
-  mentionShareCompetitors: MentionShareCompetitorInput[],
+  mentionShareCompetitors: readonly MentionShareCompetitor[],
+  classificationAvailable: boolean,
 ): TimeBucket['mentionShare'] {
-  if (mentionShareCompetitors.length === 0) {
-    return { rate: null, projectMentionSnapshots: 0, competitorMentionSnapshots: 0 }
-  }
-
+  // Non-brand only — `buildMentionShare` scopes `breakdown` to the competitive
+  // class, so the trend line tracks category placement rather than how many
+  // branded queries the basket happened to contain in each bucket.
   const result = buildMentionShare(
     snapshots.map(s => ({
       projectMentioned: s.resolvedMentioned,
       answerText: s.answerText,
+      queryClass: s.queryClass,
     })),
-    { competitors: mentionShareCompetitors },
+    { competitors: mentionShareCompetitors, classificationAvailable },
   )
   const projectMentionSnapshots = result.breakdown.projectMentionSnapshots
   const competitorMentionSnapshots = result.breakdown.competitorMentionSnapshots
   const denominator = projectMentionSnapshots + competitorMentionSnapshots
   return {
-    rate: denominator > 0 ? round4(projectMentionSnapshots / denominator) : null,
+    scope: result.scope,
+    // A project-only denominator is recognition evidence, not competitive
+    // share. Preserve the count but leave the rate undefined without a frame.
+    rate: mentionShareCompetitors.length > 0 && denominator > 0
+      ? round4(projectMentionSnapshots / denominator)
+      : null,
     projectMentionSnapshots,
     competitorMentionSnapshots,
   }
