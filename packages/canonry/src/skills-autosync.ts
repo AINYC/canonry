@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { SKILL_MANIFEST_FILENAME } from '@ainyc/canonry-contracts'
+import { SKILL_MANIFEST_FILENAME, SkillsClients, type SkillsClient } from '@ainyc/canonry-contracts'
 import { BUNDLED_SKILL_NAMES, installSkills } from './commands/skills.js'
 import { configExists, loadConfigRaw, saveConfigPatch } from './config.js'
 import { PACKAGE_VERSION } from './package-version.js'
@@ -60,7 +60,11 @@ export function peekVersionChange(): VersionProbe {
   const raw = loadConfigRaw()
   // Config file is on disk but did not parse. Never write in this state.
   if (raw === null) return { state: 'unknown' }
-  const lastSeen = raw.lastSeenVersion
+  // Deliberately NOT telemetry's `lastSeenVersion`. Sharing that field made
+  // this the first writer on an upgrade, and `detectAndTrackUpgrade` bails on
+  // `lastSeen === VERSION`, so stamping it here permanently suppressed the
+  // `cli.upgraded` event. Two subsystems, two keys.
+  const lastSeen = raw.lastSkillsSyncedVersion
   if (lastSeen === PACKAGE_VERSION) return { state: 'unchanged' }
   return { state: 'changed', lastSeen }
 }
@@ -90,16 +94,53 @@ function isDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
  * default and only `--user` installs global. Healing just the global path would
  * miss the common case entirely.
  */
-export function ownedInstallTargets(cwd = process.cwd(), home = os.homedir()): { dir: string; user: boolean }[] {
-  const candidates: { dir: string; user: boolean }[] = [
-    { dir: home, user: true },
-    { dir: cwd, user: false },
+export interface OwnedInstallTarget {
+  dir: string
+  user: boolean
+  /** Only the skills whose manifest is present. Never the full bundled set. */
+  skills: string[]
+  /** Codex is refreshed only where canonry already linked it. */
+  client: SkillsClient
+}
+
+export function ownedInstallTargets(cwd = process.cwd(), home = os.homedir()): OwnedInstallTarget[] {
+  // Resolve before comparing: `cwd` and `home` are frequently the same
+  // directory, and installing it twice double-reports every preserved local
+  // edit, so the notice claims two diverged files when one did.
+  const seen = new Set<string>()
+  const candidates = [
+    { dir: path.resolve(home), user: true },
+    { dir: path.resolve(cwd), user: false },
   ]
-  return candidates.filter(({ dir }) =>
-    BUNDLED_SKILL_NAMES.some((name) =>
+
+  const targets: OwnedInstallTarget[] = []
+  for (const { dir, user } of candidates) {
+    if (seen.has(dir)) continue
+    seen.add(dir)
+
+    // Per SKILL, not per directory. `some()` was enough to prove the directory
+    // is ours, but not to decide WHAT to write into it: an operator who ran
+    // `canonry skills install aero` has one manifest, and refreshing on the
+    // strength of it would install `canonry` too — adopting a skill they
+    // declined, which is the behaviour the manifest gate exists to prevent.
+    const skills = BUNDLED_SKILL_NAMES.filter((name) =>
       fs.existsSync(path.join(dir, '.claude', 'skills', name, SKILL_MANIFEST_FILENAME)),
-    ),
-  )
+    )
+    if (skills.length === 0) continue
+
+    // Same argument for the client. `installSkills` defaults to every client,
+    // so healing unscoped creates `.codex/skills/` for someone who installed
+    // with `--client claude`. Only refresh the codex link where one already is.
+    const hasCodex = skills.some((name) => {
+      try {
+        return fs.lstatSync(path.join(dir, '.codex', 'skills', name)).isSymbolicLink()
+      } catch {
+        return false
+      }
+    })
+    targets.push({ dir, user, skills, client: hasCodex ? SkillsClients.all : SkillsClients.claude })
+  }
+  return targets
 }
 
 export interface SkillsAutoSyncResult {
@@ -152,9 +193,12 @@ export async function autoSyncSkills(env: NodeJS.ProcessEnv = process.env): Prom
 
   const targets = ownedInstallTargets()
   if (targets.length === 0) {
-    // Nothing here is ours. Record the version anyway so a machine that never
-    // installed skills does not re-probe the filesystem on every invocation.
-    recordVerified()
+    // Record NOTHING here. Ownership is per-directory but this record is
+    // global, so stamping it from a directory canonry does not own consumed the
+    // upgrade signal for the directory that does: one `cnry` run from /tmp (or
+    // an MCP host launched anywhere) marked the version synced, and the next
+    // run from the project root saw `unchanged` and skipped the heal the whole
+    // feature exists to perform. Re-probing costs two `existsSync` calls.
     return skipped
   }
 
@@ -162,14 +206,24 @@ export async function autoSyncSkills(env: NodeJS.ProcessEnv = process.env): Prom
   const conflicts: string[] = []
 
   for (const target of targets) {
-    try {
-      const summary = await installSkills(target.user ? { user: true } : { dir: target.dir })
-      for (const result of summary.results) {
-        for (const p of result.updated ?? []) updated.push(p)
-        for (const p of result.conflicts ?? []) conflicts.push(p)
+    // Per skill, not per target. `installCodexSymlink` throws without `--force`
+    // when `.codex/skills/<name>` exists but is not the symlink it expects, and
+    // `installSkills` installs skills in one loop — so one broken codex entry
+    // aborted the whole call and the SECOND skill was never reconciled at all.
+    for (const skill of target.skills) {
+      try {
+        const summary = await installSkills({
+          ...(target.user ? { user: true } : { dir: target.dir }),
+          skills: [skill],
+          client: target.client,
+        })
+        for (const result of summary.results) {
+          for (const p of result.updated ?? []) updated.push(p)
+          for (const p of result.conflicts ?? []) conflicts.push(p)
+        }
+      } catch {
+        // Never let a skills refresh break the command the user actually ran.
       }
-    } catch {
-      // Never let a skills refresh break the command the user actually ran.
     }
   }
 
@@ -179,8 +233,11 @@ export async function autoSyncSkills(env: NodeJS.ProcessEnv = process.env): Prom
 
 function recordVerified(): void {
   try {
+    // `lastSkillsSyncedVersion`, never telemetry's `lastSeenVersion`. See
+    // `peekVersionChange`: writing that field here made this the first writer
+    // on an upgrade and permanently suppressed `cli.upgraded`.
     saveConfigPatch({
-      lastSeenVersion: PACKAGE_VERSION,
+      lastSkillsSyncedVersion: PACKAGE_VERSION,
       lastSkillsVerifiedAt: new Date().toISOString(),
     })
   } catch {
