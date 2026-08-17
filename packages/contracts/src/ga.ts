@@ -323,7 +323,8 @@ export interface GaTrafficResponse {
   totalOrganicSessions: number
   /** Direct-channel sessions (sessions with no source — bookmarks, typed URLs, AI-driven traffic with stripped referrer). 0 for legacy rows from before the column was added. */
   totalDirectSessions: number
-  totalUsers: number
+  /** Deduplicated users, or null when no stored un-dimensioned aggregate covers the complete selected range. */
+  totalUsers: number | null
   topPages: Array<{ landingPage: string; sessions: number; organicSessions: number; directSessions: number; users: number }>
   /** Deduped to the winning attribution dimension (highest sessions) per (source, medium). `users` is deprecated — see `GA4AiReferralDto.users`; never emitted since 4.135.0. */
   aiReferrals: Array<{ source: string; medium: string; trafficClass: AiReferralTrafficClass; sessions: number; users?: number; sourceDimension: GA4SourceDimension }>

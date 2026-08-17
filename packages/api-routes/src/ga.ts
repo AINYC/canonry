@@ -26,7 +26,6 @@ import {
   listProperties,
   GA4ApiError,
 } from '@ainyc/canonry-integration-google-analytics'
-import type { DatabaseClient } from '@ainyc/canonry-db'
 import type { GoogleConnectionStore } from './google.js'
 import { refreshAccessToken } from '@ainyc/canonry-integration-google'
 
@@ -62,28 +61,6 @@ function dateRangeConditions(column: SQLWrapper, range: ResolvedDateRange): SQL[
   if (range.startDate) conditions.push(sql`${column} >= ${range.startDate}`)
   if (range.endDate) conditions.push(sql`${column} <= ${range.endDate}`)
   return conditions
-}
-
-/**
- * The period the project's last GA sync actually measured.
- *
- * `/ga/sync` deletes and reinserts `ga_traffic_summaries` on every run, so this
- * row always describes the LAST sync's window (30 days by default). The detail
- * tables — snapshots, AI referrals, social referrals — are only range-replaced
- * inside that same window, so they retain every older row a wider earlier sync
- * pulled. Reading them unbounded therefore covers a strictly longer span than
- * any stored total does, which is what let a 90-day channel count sit under a
- * 30-day denominator.
- */
-function syncedPeriod(db: DatabaseClient, projectId: string): { periodStart: string; periodEnd: string } | undefined {
-  return db
-    .select({
-      periodStart: gaTrafficSummaries.periodStart,
-      periodEnd: gaTrafficSummaries.periodEnd,
-    })
-    .from(gaTrafficSummaries)
-    .where(eq(gaTrafficSummaries.projectId, projectId))
-    .get()
 }
 
 const SOCIAL_CHANNEL_GROUPS = new Set(['Organic Social', 'Paid Social'])
@@ -1112,7 +1089,6 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
 
     const limit = Math.max(1, Math.min(parseInt(request.query.limit ?? '50', 10) || 50, 500))
     const range = resolveDateRange(request.query)
-    const dateFiltered = range.startDate !== null || range.endDate !== null
 
     // When filtering by window, prefer the per-window summary row populated by
     // /ga/sync — it carries deduplicated totalUsers (no landing-page dimension).
@@ -1144,9 +1120,6 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
           .get()
       : null
 
-    // The project-level summary — totals plus the period they cover. See
-    // `syncedPeriod` for why that period is the last sync's window and not the
-    // span retained in the detail tables.
     const projectSummaryRow = app.db
       .select({
         periodStart: gaTrafficSummaries.periodStart,
@@ -1158,6 +1131,30 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       .from(gaTrafficSummaries)
       .where(eq(gaTrafficSummaries.projectId, project.id))
       .get()
+
+    const retainedBounds = [
+      app.db
+        .select({ min: sql<string | null>`MIN(${gaTrafficSnapshots.date})`, max: sql<string | null>`MAX(${gaTrafficSnapshots.date})` })
+        .from(gaTrafficSnapshots)
+        .where(eq(gaTrafficSnapshots.projectId, project.id))
+        .get(),
+      app.db
+        .select({ min: sql<string | null>`MIN(${gaAiReferrals.date})`, max: sql<string | null>`MAX(${gaAiReferrals.date})` })
+        .from(gaAiReferrals)
+        .where(eq(gaAiReferrals.projectId, project.id))
+        .get(),
+      app.db
+        .select({ min: sql<string | null>`MIN(${gaSocialReferrals.date})`, max: sql<string | null>`MAX(${gaSocialReferrals.date})` })
+        .from(gaSocialReferrals)
+        .where(eq(gaSocialReferrals.projectId, project.id))
+        .get(),
+    ]
+    const retainedDates = retainedBounds.flatMap(bound => [bound?.min, bound?.max]).filter((date): date is string => Boolean(date))
+    const projectSummaryCoversAll = Boolean(
+      projectSummaryRow?.periodStart
+      && projectSummaryRow.periodEnd
+      && retainedDates.every(date => date >= projectSummaryRow.periodStart && date <= projectSummaryRow.periodEnd),
+    )
 
     // THE window. Every figure in this response is measured over exactly these
     // dates, and `windowStart` / `windowEnd` / `windowDays` report them.
@@ -1177,7 +1174,11 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     // Both bounds must be present to be usable: `dateRangeConditions` drops a
     // blank bound, so a half-filled period would narrow one end and leave the
     // other open — the mix again, in a shape that looks bounded.
-    const denominatorRow = windowSummaryRow ?? (dateFiltered ? null : projectSummaryRow)
+    // Only an exact rolling-window aggregate can supply an un-dimensioned
+    // denominator. `all` (including an omitted window) means full retained
+    // history, so the latest sync summary must not silently narrow that read.
+    const denominatorRow = windowSummaryRow
+      ?? (range.window === 'all' && projectSummaryCoversAll ? projectSummaryRow : null)
     const denominatorPeriod = denominatorRow?.periodStart && denominatorRow.periodEnd
       ? { startDate: denominatorRow.periodStart, endDate: denominatorRow.periodEnd }
       : null
@@ -1200,7 +1201,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     // honest answer for an explicit range is that the figure is unavailable.
     // Emitting the inflated sum would be a plausible wrong number, which is
     // worse than a missing one.
-    const snapshotTotalsRow = dateFiltered && !windowSummaryRow
+    const snapshotTotalsRow = !denominatorRow
       ? (() => {
         const summed = app.db
           .select({
@@ -1214,18 +1215,17 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
         return {
           totalSessions: summed?.totalSessions ?? 0,
           totalOrganicSessions: summed?.totalOrganicSessions ?? 0,
-          // Unavailable for an EXPLICIT calendar range. The rolling-window
-          // fallback keeps its historical summed value: it is wrong for the
-          // same reason, but it predates this branch and correcting it is a
-          // separate, visible behaviour change rather than one bundled here.
-          totalUsers: range.explicitDates ? null : (summed?.totalUsers ?? 0),
+          // Unavailable for an explicit or all-history range. The rolling-
+          // window fallback keeps its historical summed value for projects
+          // that have not yet backfilled window summaries.
+          totalUsers: range.explicitDates || range.window === 'all'
+            ? null
+            : (summed?.totalUsers ?? 0),
         }
       })()
       : null
 
-    const summaryRow = dateFiltered
-      ? windowSummaryRow ?? snapshotTotalsRow
-      : projectSummaryRow
+    const summaryRow = denominatorRow ?? snapshotTotalsRow
 
     // Direct-channel total. With a window filter, prefer the deduplicated value
     // from gaTrafficWindowSummaries; otherwise fall back to summing snapshots
@@ -1392,7 +1392,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
       // it. GA counts users as a COUNT DISTINCT at the grain requested, so the
       // landing-page dimensioned sum is inflated, and a 0 would read as
       // "nobody visited" rather than "not measurable for this range".
-      totalUsers: summaryRow ? summaryRow.totalUsers : 0,
+      totalUsers: summaryRow ? summaryRow.totalUsers : null,
       topPages: rows.map((r) => ({
         landingPage: r.landingPage,
         sessions: r.sessions ?? 0,
@@ -1533,18 +1533,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     requireGa4Connection(opts, project.name, project.canonicalDomain)
 
     const range = resolveDateRange(request.query)
-    // An unfiltered read anchors to the synced period, exactly as /ga/traffic
-    // anchors its unfiltered totals. That is what keeps the promise above true
-    // in the no-window case: leaving this series unbounded while the card it
-    // must agree with covers the sync window puts a chart total beside a card
-    // total that disagree, with nothing on screen to explain the gap.
-    const period = range.startDate || range.endDate ? undefined : syncedPeriod(app.db, project.id)
-    // Both bounds or neither — a half-filled period narrows one end and leaves
-    // the other open, which is the mix wearing the shape of a window.
-    const measuredRange: ResolvedDateRange = period?.periodStart && period.periodEnd
-      ? { ...range, startDate: period.periodStart, endDate: period.periodEnd }
-      : range
-    const conditions = [eq(gaAiReferrals.projectId, project.id), ...dateRangeConditions(gaAiReferrals.date, measuredRange)]
+    const conditions = [eq(gaAiReferrals.projectId, project.id), ...dateRangeConditions(gaAiReferrals.date, range)]
 
     // Deliberately unaggregated in SQL. Landing pages must be summed inside a
     // dimension and dimensions must not be summed at all, which is not a single
@@ -1580,17 +1569,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     requireGa4Connection(opts, project.name, project.canonicalDomain)
 
     const range = resolveDateRange(request.query)
-    // Same anchoring as /ga/traffic and /ga/ai-referral-daily: an unfiltered
-    // read covers the SYNCED period, not all retained history. Leaving this
-    // series unbounded beside a card that covers the sync window puts two
-    // totals on screen that disagree, with nothing to explain the gap.
-    const period = range.startDate || range.endDate ? undefined : syncedPeriod(app.db, project.id)
-    // Both bounds or neither, so a half-filled period cannot narrow one end
-    // and leave the other open.
-    const measuredRange: ResolvedDateRange = period?.periodStart && period.periodEnd
-      ? { ...range, startDate: period.periodStart, endDate: period.periodEnd }
-      : range
-    const conditions = [eq(gaSocialReferrals.projectId, project.id), ...dateRangeConditions(gaSocialReferrals.date, measuredRange)]
+    const conditions = [eq(gaSocialReferrals.projectId, project.id), ...dateRangeConditions(gaSocialReferrals.date, range)]
 
     const rows = app.db
       .select({
@@ -1832,17 +1811,7 @@ export async function ga4Routes(app: FastifyInstance, opts: GA4RoutesOptions) {
     requireGa4Connection(opts, project.name, project.canonicalDomain)
 
     const range = resolveDateRange(request.query)
-    // Same anchoring as /ga/traffic and /ga/ai-referral-daily: an unfiltered
-    // read covers the SYNCED period, not all retained history. Leaving this
-    // series unbounded beside a card that covers the sync window puts two
-    // totals on screen that disagree, with nothing to explain the gap.
-    const period = range.startDate || range.endDate ? undefined : syncedPeriod(app.db, project.id)
-    // Both bounds or neither, so a half-filled period cannot narrow one end
-    // and leave the other open.
-    const measuredRange: ResolvedDateRange = period?.periodStart && period.periodEnd
-      ? { ...range, startDate: period.periodStart, endDate: period.periodEnd }
-      : range
-    const conditions = [eq(gaTrafficSnapshots.projectId, project.id), ...dateRangeConditions(gaTrafficSnapshots.date, measuredRange)]
+    const conditions = [eq(gaTrafficSnapshots.projectId, project.id), ...dateRangeConditions(gaTrafficSnapshots.date, range)]
 
     const rows = app.db
       .select({

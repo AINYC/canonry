@@ -1335,21 +1335,34 @@ describe('GA4 routes', () => {
       syncedAt: now,
     }).run()
 
-    // A 90d window summary GA aggregated itself — a genuinely different total
-    // over a genuinely different span, so a handler that mixed the two would
-    // produce a visibly different percentage rather than the same one twice.
-    db.insert(gaTrafficWindowSummaries).values({
-      id: crypto.randomUUID(),
-      projectId: shareProjectId,
-      windowKey: '90d',
-      periodStart: '2026-01-01',
-      periodEnd: WINDOW_30_END,
-      totalSessions: 3000,
-      totalOrganicSessions: 600,
-      totalDirectSessions: 700,
-      totalUsers: 2400,
-      syncedAt: now,
-    }).run()
+    // Exact rolling-window summaries GA aggregated itself. Their totals and
+    // periods must travel together; neither may narrow an `all` read.
+    db.insert(gaTrafficWindowSummaries).values([
+      {
+        id: crypto.randomUUID(),
+        projectId: shareProjectId,
+        windowKey: '30d',
+        periodStart: WINDOW_30_START,
+        periodEnd: WINDOW_30_END,
+        totalSessions: 1000,
+        totalOrganicSessions: 200,
+        totalDirectSessions: 200,
+        totalUsers: 800,
+        syncedAt: now,
+      },
+      {
+        id: crypto.randomUUID(),
+        projectId: shareProjectId,
+        windowKey: '90d',
+        periodStart: '2026-01-01',
+        periodEnd: WINDOW_30_END,
+        totalSessions: 3000,
+        totalOrganicSessions: 600,
+        totalDirectSessions: 700,
+        totalUsers: 2400,
+        syncedAt: now,
+      },
+    ]).run()
 
     const snapshot = (date: string, landingPage: string, sessions: number, directSessions: number) => {
       db.insert(gaTrafficSnapshots).values({
@@ -1406,10 +1419,10 @@ describe('GA4 routes', () => {
     ai(TAIL_DATE, 250)
 
     try {
-      // ---- No window asked for: the synced 30-day period ----
+      // ---- Explicit 30d: the synced 30-day period ----
       const res = await app.inject({
         method: 'GET',
-        url: '/api/v1/projects/window-share/ga/traffic',
+        url: '/api/v1/projects/window-share/ga/traffic?window=30d',
       })
       expect(res.statusCode).toBe(200)
       const body = JSON.parse(res.payload)
@@ -1483,13 +1496,39 @@ describe('GA4 routes', () => {
       // The specific mix that shipped: 90d direct over the 30d total.
       expect(Math.round((wideBody.totalDirectSessions / body.totalSessions) * 100)).toBe(70)
 
-      // Every UNFILTERED read must cover the same span. /ga/traffic anchors its
-      // totals to the synced period, so a sibling series left on the raw range
-      // spans the whole retained table and puts a chart beside a card that
-      // disagree, with nothing on screen to explain the gap. Social was 3.6x
-      // out on real data, and the AI series drew a false zero over 56 days that
-      // had traffic. Assert the four spans are equal rather than each one's
-      // numbers, so this keeps holding as the fixture changes.
+      // ---- All/omitted: full retained history, never the latest sync window ----
+      const all = await app.inject({
+        method: 'GET',
+        url: '/api/v1/projects/window-share/ga/traffic',
+      })
+      expect(all.statusCode).toBe(200)
+      const allBody = JSON.parse(all.payload)
+      expect(allBody.windowStart).toBeNull()
+      expect(allBody.windowEnd).toBeNull()
+      expect(allBody.windowDays).toBeNull()
+      expect(allBody.totalSessions).toBe(900)
+      expect(allBody.totalDirectSessions).toBe(700)
+      expect(allBody.socialSessions).toBe(500)
+      expect(allBody.aiSessionsDeduped).toBe(300)
+      expect(allBody.totalUsers).toBeNull()
+      expect(allBody.topPages.map((p: { landingPage: string }) => p.landingPage)).toEqual(['/tail', '/in-window'])
+
+      const explicitAll = await app.inject({
+        method: 'GET',
+        url: '/api/v1/projects/window-share/ga/traffic?window=all',
+      })
+      expect(explicitAll.statusCode).toBe(200)
+      expect(JSON.parse(explicitAll.payload)).toMatchObject({
+        totalSessions: allBody.totalSessions,
+        totalDirectSessions: allBody.totalDirectSessions,
+        socialSessions: allBody.socialSessions,
+        aiSessionsDeduped: allBody.aiSessionsDeduped,
+        windowStart: null,
+        windowEnd: null,
+      })
+
+      // Every omitted-window series has the same full-history semantics as
+      // /ga/traffic. The retained tail must remain visible on each surface.
       const spanOf = async (path: string) => {
         const r = await app.inject({ method: 'GET', url: `/api/v1/projects/window-share/ga/${path}` })
         expect(r.statusCode).toBe(200)
@@ -1498,15 +1537,11 @@ describe('GA4 routes', () => {
         const dates = days.map((d) => d.date).sort()
         return dates.length ? { first: dates[0], last: dates[dates.length - 1] } : null
       }
-      // Containment, not equality: a window can legitimately have no data on its
-      // first or last day. What must never happen is a row from OUTSIDE it, which
-      // is exactly what the retained tail row is here.
       for (const path of ['session-history', 'social-referral-history', 'ai-referral-daily']) {
         const span = await spanOf(path)
-        if (!span) continue
-        expect(span.first >= body.windowStart!, `${path} returned ${span.first}, before window ${body.windowStart}`).toBe(true)
-        expect(span.last <= body.windowEnd!, `${path} returned ${span.last}, after window ${body.windowEnd}`).toBe(true)
-        expect(span.last, `${path} leaked the retained tail row`).not.toBe(TAIL_DATE)
+        expect(span, `${path} returned no history`).not.toBeNull()
+        expect(span!.first, `${path} dropped the retained tail row`).toBe(TAIL_DATE)
+        expect(span!.last).toBe(WINDOW_30_START)
       }
     } finally {
       db.delete(gaAiReferrals).where(eq(gaAiReferrals.projectId, shareProjectId)).run()

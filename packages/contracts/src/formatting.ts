@@ -192,7 +192,12 @@ export function inclusiveDayCount(startDate: string, endDate: string): number | 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) return null
   const startMs = Date.parse(`${startDate}T00:00:00.000Z`)
   const endMs = Date.parse(`${endDate}T00:00:00.000Z`)
-  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs) return null
+  if (Number.isNaN(startMs) || Number.isNaN(endMs)) return null
+  // Date.parse normalizes impossible dates (`2026-02-30` -> March 2). A
+  // round-trip keeps a well-shaped but invalid boundary from naming a window.
+  if (new Date(startMs).toISOString().slice(0, 10) !== startDate) return null
+  if (new Date(endMs).toISOString().slice(0, 10) !== endDate) return null
+  if (endMs < startMs) return null
   return Math.round((endMs - startMs) / 86_400_000) + 1
 }
 

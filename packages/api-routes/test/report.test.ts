@@ -756,6 +756,69 @@ describe('GET /api/v1/projects/:name/report', () => {
     expect(direct?.sessions).toBe(1111)
   })
 
+  test('GA section ignores a legacy summary whose period does not match the report', async () => {
+    const projectId = insertProject(ctx.db, 'ga-14d-window')
+    const now = new Date().toISOString()
+    ctx.db.insert(gaTrafficSummaries).values({
+      id: crypto.randomUUID(),
+      projectId,
+      periodStart: '2026-04-01',
+      periodEnd: '2026-04-30',
+      totalSessions: 3000,
+      totalOrganicSessions: 1800,
+      totalUsers: 2400,
+      syncedAt: now,
+    }).run()
+    ctx.db.insert(gaTrafficSnapshots).values([
+      {
+        id: crypto.randomUUID(),
+        projectId,
+        date: '2026-04-01',
+        landingPage: '/outside-14d',
+        sessions: 1000,
+        organicSessions: 600,
+        directSessions: 200,
+        users: 800,
+        syncedAt: now,
+      },
+      {
+        id: crypto.randomUUID(),
+        projectId,
+        date: '2026-04-17',
+        landingPage: '/inside-14d',
+        sessions: 140,
+        organicSessions: 70,
+        directSessions: 30,
+        users: 100,
+        syncedAt: now,
+      },
+      {
+        id: crypto.randomUUID(),
+        projectId,
+        date: '2026-04-30',
+        landingPage: '/latest',
+        sessions: 60,
+        organicSessions: 20,
+        directSessions: 10,
+        users: 50,
+        syncedAt: now,
+      },
+    ]).run()
+
+    await ctx.app.ready()
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/ga-14d-window/report?period=14',
+    })
+    const body = JSON.parse(res.body) as ProjectReportDto
+
+    expect(body.ga).not.toBeNull()
+    expect(body.ga!.periodStart).toBe('2026-04-17')
+    expect(body.ga!.periodEnd).toBe('2026-04-30')
+    expect(body.ga!.totalSessions).toBe(200)
+    expect(body.ga!.topLandingPages.map(page => page.page)).not.toContain('/outside-14d')
+  })
+
   test('GA section trims per-page snapshots to the same 30-day window', async () => {
     const projectId = insertProject(ctx.db, 'ga-page-window')
     ctx.db.insert(gaTrafficWindowSummaries).values({

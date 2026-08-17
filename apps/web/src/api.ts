@@ -1763,9 +1763,10 @@ export interface ApiGaChannelBreakdown {
 export interface ApiGaTraffic {
   totalSessions: number
   totalOrganicSessions: number
-  /** Total Direct-channel sessions across the synced window. */
+  /** Total Direct-channel sessions across the selected range. */
   totalDirectSessions: number
-  totalUsers: number
+  /** Deduplicated users, unavailable when no stored aggregate covers the complete range. */
+  totalUsers: number | null
   topPages: ApiGaTrafficPage[]
   aiReferrals: ApiGaTrafficReferral[]
   aiReferralLandingPages: ApiGaTrafficAiLandingPage[]

@@ -224,7 +224,7 @@ export async function gaTraffic(project: string, opts?: GaRangeOptions & { limit
   console.log(`GA4 Traffic for "${project}"\n`)
   console.log(`  Total Sessions:          ${result.totalSessions}`)
   console.log(`  Organic Sessions:        ${result.totalOrganicSessions}`)
-  console.log(`  Total Users:             ${result.totalUsers}`)
+  console.log(`  Total Users:             ${result.totalUsers ?? 'unavailable for this range'}`)
   if (result.aiSessionsDeduped > 0) {
     const share = result.totalSessions > 0 ? Math.round((result.aiSessionsDeduped / result.totalSessions) * 100) : 0
     console.log(`  AI Sessions (deduped):   ${result.aiSessionsDeduped} (${share}% of total)`)
@@ -688,7 +688,7 @@ export async function gaAttribution(project: string, opts?: { trend?: boolean; f
     const trendWindow = windowLine(traffic)
     if (trendWindow) console.log(`${trendWindow}\n`)
     console.log(`  Total Sessions:   ${traffic.totalSessions}`)
-    console.log(`  Total Users:      ${traffic.totalUsers}`)
+    console.log(`  Total Users:      ${traffic.totalUsers ?? 'unavailable for this range'}`)
     console.log()
     console.log('  CHANNEL BREAKDOWN                  7d trend     30d trend')
     console.log(`    Organic Search: ${String(traffic.channelBreakdown.organic.sessions).padEnd(6)} (${traffic.channelBreakdown.organic.sharePctDisplay.padStart(4)})    ${fmtTrend(trend.organic.trend7dPct).padEnd(12)} ${fmtTrend(trend.organic.trend30dPct)}`)
@@ -774,7 +774,7 @@ export async function gaAttribution(project: string, opts?: { trend?: boolean; f
   const attributionWindow = windowLine(traffic)
   if (attributionWindow) console.log(`${attributionWindow}\n`)
   console.log(`  Total Sessions:   ${traffic.totalSessions}`)
-  console.log(`  Total Users:      ${traffic.totalUsers}`)
+  console.log(`  Total Users:      ${traffic.totalUsers ?? 'unavailable for this range'}`)
   console.log()
   console.log('  CHANNEL BREAKDOWN')
   console.log(`    Organic Search: ${traffic.channelBreakdown.organic.sessions} sessions (${traffic.channelBreakdown.organic.sharePctDisplay})`)

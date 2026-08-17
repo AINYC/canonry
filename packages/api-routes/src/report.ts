@@ -27,6 +27,7 @@ import {
   AiReferralTrafficClasses,
   aiReferralClassCounts,
   formatAiReferralClassSummary,
+  inclusiveDayCount,
   RunKinds,
   RunStatuses,
   TrafficSourceStatuses,
@@ -396,8 +397,16 @@ function buildGaSection(db: DatabaseClient, projectId: string, windowDays: numbe
         .from(gaTrafficSummaries)
         .where(eq(gaTrafficSummaries.projectId, projectId))
         .orderBy(desc(gaTrafficSummaries.syncedAt))
-        .limit(1)
-        .get()
+      .limit(1)
+      .get()
+
+  // A legacy summary is usable only when it covers the requested report
+  // period. In particular, the usual 30-day sync summary must not turn a
+  // `--period 14` report into a silently mislabeled 30-day GA section.
+  const matchingFallbackSummary = fallbackSummary
+    && inclusiveDayCount(fallbackSummary.periodStart, fallbackSummary.periodEnd) === windowDays
+    ? fallbackSummary
+    : null
 
   // Per-page snapshots: push the window into SQL — a retained GA history
   // of many months otherwise loads 10k+ rows to keep 30 days.
@@ -408,7 +417,7 @@ function buildGaSection(db: DatabaseClient, projectId: string, windowDays: numbe
       .where(eq(gaTrafficSnapshots.projectId, projectId))
       .get()?.m ?? ''
 
-  if (!windowSummary && !fallbackSummary && !snapshotMaxDate) return null
+  if (!windowSummary && !matchingFallbackSummary && !snapshotMaxDate) return null
 
   // ONE window for this whole section. Whichever summary supplies the totals
   // also defines the period, and the per-page / AI counts below are bounded to
@@ -419,7 +428,7 @@ function buildGaSection(db: DatabaseClient, projectId: string, windowDays: numbe
   // `||`, not `??`: a blank period bound is not a bound. Falling through on
   // null alone would leave an empty string here, and an empty string reads as
   // "no filter" two lines down — the unbounded read this is here to prevent.
-  const summaryPeriod = windowSummary ?? fallbackSummary
+  const summaryPeriod = windowSummary ?? matchingFallbackSummary
   const snapshotMaxInWindow = summaryPeriod?.periodEnd || snapshotMaxDate
   const snapshotStartDate = summaryPeriod?.periodStart
     || (snapshotMaxDate ? windowStartDate(snapshotMaxDate, windowDays) : '')
@@ -438,13 +447,13 @@ function buildGaSection(db: DatabaseClient, projectId: string, windowDays: numbe
     : db.select().from(gaTrafficSnapshots).where(eq(gaTrafficSnapshots.projectId, projectId)).all()
 
   const totalSessions = windowSummary?.totalSessions
-    ?? fallbackSummary?.totalSessions
+    ?? matchingFallbackSummary?.totalSessions
     ?? snapshotRows.reduce((s, r) => s + r.sessions, 0)
   const totalUsers = windowSummary?.totalUsers
-    ?? fallbackSummary?.totalUsers
+    ?? matchingFallbackSummary?.totalUsers
     ?? snapshotRows.reduce((s, r) => s + r.users, 0)
   const totalOrganicSessions = windowSummary?.totalOrganicSessions
-    ?? fallbackSummary?.totalOrganicSessions
+    ?? matchingFallbackSummary?.totalOrganicSessions
     ?? snapshotRows.reduce((s, r) => s + r.organicSessions, 0)
 
   const pageAgg = new Map<string, { sessions: number; users: number; organic: number }>()

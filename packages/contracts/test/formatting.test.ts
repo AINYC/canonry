@@ -690,5 +690,7 @@ describe('inclusiveDayCount', () => {
     expect(inclusiveDayCount('2026-3-1', '2026-03-30')).toBeNull()
     expect(inclusiveDayCount('', '2026-03-30')).toBeNull()
     expect(inclusiveDayCount('2026-03-01', 'not-a-date')).toBeNull()
+    expect(inclusiveDayCount('2026-02-30', '2026-03-30')).toBeNull()
+    expect(inclusiveDayCount('2025-02-01', '2025-02-29')).toBeNull()
   })
 })
