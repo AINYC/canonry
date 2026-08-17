@@ -172,6 +172,75 @@ export function conversionIntegrityPresentation(
   }
 }
 
+/**
+ * Google Ads and Tag Manager are INDEPENDENT providers: separate OAuth, separate
+ * APIs, separate selections. Nothing about choosing an Ads customer is a
+ * prerequisite for authorizing Tag Manager.
+ *
+ * The setup list used to advance strictly, showing a button only on the first
+ * incomplete row, which implied a dependency that does not exist. The cost is
+ * not theoretical: a Google Ads developer token still awaiting Basic approval
+ * pins Ads at `selection-required` indefinitely, and that left Tag Manager
+ * unreachable in the UI even though it needs no developer token and would have
+ * connected in seconds.
+ *
+ * Each provider now owns its own next step. The conversion step is deliberately
+ * still gated on both, because a contract genuinely names resources from each.
+ */
+function googleAdsSetupAction(
+  workspace: ConversionIntegrityWorkspaceVm,
+): PrimaryActionPresentation | null {
+  switch (workspace.googleAds.state) {
+    case 'not-connected':
+      return {
+        id: 'connect-google-ads',
+        label: 'Connect Google Ads',
+        detail: 'Canonry only queries data; connect a Google Ads user with the Read-only role.',
+      }
+    case 'selection-required':
+      return {
+        id: 'select-google-ads',
+        label: 'Select Google Ads account',
+        detail: 'Choose the customer account Canonry should inspect.',
+      }
+    case 'stale':
+      return {
+        id: 'sync-google-ads',
+        label: 'Refresh Google Ads evidence',
+        detail: 'Read the selected account again and save a new sanitized observation.',
+      }
+    default:
+      return null
+  }
+}
+
+function gtmSetupAction(
+  workspace: ConversionIntegrityWorkspaceVm,
+): PrimaryActionPresentation | null {
+  switch (workspace.gtm.state) {
+    case 'not-connected':
+      return {
+        id: 'connect-gtm',
+        label: 'Connect Google Tag Manager',
+        detail: 'Authorize read-only Tag Manager access for this project.',
+      }
+    case 'selection-required':
+      return {
+        id: 'select-gtm',
+        label: 'Select Tag Manager container',
+        detail: 'Choose the account and container Canonry should inspect.',
+      }
+    case 'stale':
+      return {
+        id: 'sync-gtm',
+        label: 'Refresh Tag Manager evidence',
+        detail: 'Read the selected container again and save a new sanitized observation.',
+      }
+    default:
+      return null
+  }
+}
+
 export function conversionIntegrityPrimaryAction(
   workspace: ConversionIntegrityWorkspaceVm,
 ): PrimaryActionPresentation {
@@ -453,7 +522,6 @@ function providerRow({
 
 function ConversionIntegritySetup({
   workspace,
-  action,
   onPrimaryAction,
   onChangeGoogleAdsSelection,
   onChangeGtmSelection,
@@ -461,7 +529,6 @@ function ConversionIntegritySetup({
   actionError,
 }: {
   workspace: ConversionIntegrityWorkspaceVm
-  action: PrimaryActionPresentation
   onPrimaryAction?: (action: ConversionIntegrityPrimaryAction) => void
   onChangeGoogleAdsSelection?: () => void
   onChangeGtmSelection?: () => void
@@ -470,6 +537,16 @@ function ConversionIntegritySetup({
 }) {
   const googleAdsReady = workspace.googleAds.state === 'connected'
   const gtmReady = workspace.gtm.state === 'connected'
+  // A provider read that failed is the one case that outranks everything: the
+  // states below are not trustworthy until it is retried, so it takes over the
+  // whole list rather than showing two buttons over stale data.
+  const connectionUnavailable = workspace.googleAds.state === 'unavailable'
+    || workspace.gtm.state === 'unavailable'
+  const retryAction: PrimaryActionPresentation = {
+    id: 'retry-connection-status',
+    label: 'Retry connection status',
+    detail: 'Retry the stored connection reads before starting another provider action.',
+  }
   const steps = [
     {
       title: 'Google Ads account',
@@ -478,6 +555,7 @@ function ConversionIntegritySetup({
       detail: 'Connect read-only access and choose the customer account.',
       changeLabel: 'Change Google Ads account',
       onChange: onChangeGoogleAdsSelection,
+      action: connectionUnavailable ? retryAction : googleAdsSetupAction(workspace),
     },
     {
       title: 'Tag Manager container',
@@ -486,6 +564,7 @@ function ConversionIntegritySetup({
       detail: 'Connect read-only access and choose the container.',
       changeLabel: 'Change Tag Manager container',
       onChange: onChangeGtmSelection,
+      action: connectionUnavailable ? null : gtmSetupAction(workspace),
     },
     {
       title: 'Conversion to check',
@@ -494,6 +573,11 @@ function ConversionIntegritySetup({
       detail: 'Choose the website event, conversion action, and tag to check.',
       changeLabel: null,
       onChange: undefined,
+      // Genuinely dependent: a contract names resources from BOTH providers, so
+      // this stays gated where the provider rows no longer are.
+      action: googleAdsReady && gtmReady && !connectionUnavailable
+        ? conversionIntegrityPrimaryAction(workspace)
+        : null,
     },
   ]
   const activeStep = steps.findIndex((step) => !step.ready)
@@ -519,7 +603,8 @@ function ConversionIntegritySetup({
         <ol className="mt-5 divide-y divide-default border-y border-default">
           {steps.map((step, index) => {
             const isActive = index === activeStep
-            const detail = step.ready ? step.summary ?? 'Connected' : isActive ? action.detail : step.detail
+            // Each row explains ITS own next step, not the list's single active one.
+            const detail = step.ready ? step.summary ?? 'Connected' : step.action?.detail ?? step.detail
 
             return (
               <li
@@ -554,23 +639,23 @@ function ConversionIntegritySetup({
                     <p className="mt-1 max-w-xl text-sm font-medium text-heading">{step.summary}</p>
                   ) : null}
                   <p className="mt-1 max-w-xl text-sm leading-6 text-secondary">{detail}</p>
-                  {isActive && onPrimaryAction ? (
+                  {step.action && onPrimaryAction ? (
                     <div className="mt-3">
-                      {action.id === 'retry-connection-status' ? (
+                      {step.action.id === 'retry-connection-status' ? (
                         <Button
                           type="button"
                           disabled={actionPending}
-                          onClick={() => onPrimaryAction(action.id)}
+                          onClick={() => onPrimaryAction(step.action!.id)}
                         >
-                          {actionPending ? 'Working…' : action.label}
+                          {actionPending ? 'Working…' : step.action.label}
                         </Button>
                       ) : (
                         <WriteButton
                           type="button"
                           disabled={actionPending}
-                          onClick={() => onPrimaryAction(action.id)}
+                          onClick={() => onPrimaryAction(step.action!.id)}
                         >
-                          {actionPending ? 'Working…' : action.label}
+                          {actionPending ? 'Working…' : step.action.label}
                         </WriteButton>
                       )}
                     </div>
@@ -639,7 +724,6 @@ export function ConversionIntegritySection({
     return (
       <ConversionIntegritySetup
         workspace={workspace}
-        action={action}
         onPrimaryAction={onPrimaryAction}
         onChangeGoogleAdsSelection={onChangeGoogleAdsSelection}
         onChangeGtmSelection={onChangeGtmSelection}
