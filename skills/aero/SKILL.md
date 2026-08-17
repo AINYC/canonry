@@ -1,6 +1,6 @@
 ---
 name: aero
-description: AEO analyst orchestration — coordinates canonry sweeps and aeo-audit analysis with persistent memory and proactive regression response.
+description: "Diagnose AEO regressions and report on them: why mention or citation coverage moved, which queries and answer engines changed, and what to do about it. Use when a coverage number moved and needs explaining, when preparing a client report or month-over-month comparison, or when a `cnry` sweep completed and needs analysis. Coordinates canonry sweeps with aeo-audit site analysis and keeps durable project memory. Use the canonry skill for setup and operations instead."
 metadata:
   homepage: https://canonry.ai
   repository: https://github.com/AINYC/aero

@@ -1,6 +1,7 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { isReadOnlyKey } from '@ainyc/canonry-contracts'
 import { createApiClient, type ApiClient } from '../client.js'
+import { autoSyncSkills } from '../skills-autosync.js'
 import { createCanonryMcpServer, type CanonryMcpScope } from './server.js'
 
 export const HELP_TEXT = `Usage: canonry-mcp [--read-only | --scope=<all|read-only>] [--eager]
@@ -43,6 +44,22 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     throw error
   }
+  // Heal installed skills here too, not only in the `cnry` CLI. A plugin host
+  // launches THIS binary and may never invoke the CLI at all, so gating the
+  // refresh on a CLI run leaves exactly the MCP-only user — the one who never
+  // types a canonry command — reading a playbook for an older engine.
+  //
+  // SILENT, unlike the CLI. The conflict notice is human guidance ("run
+  // `canonry skills install --force`"), and the CLI prints it only on a TTY.
+  // Nothing here is a terminal: stdout is the JSON-RPC framing and must never
+  // be written to, and stderr is the host's log, where a line addressed to a
+  // person who is not reading it is noise on every single launch. The heal
+  // itself still happens; only the narration is dropped.
+  //
+  // Fire-and-forget: the server must not wait on a filesystem refresh, and the
+  // sync swallows its own errors.
+  void autoSyncSkills()
+
   // Build the client once, auto-detect a read-only key, then reuse the same
   // client for the server (keeps one client per server instance).
   const client = createApiClient()

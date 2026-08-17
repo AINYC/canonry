@@ -9,6 +9,7 @@ import {
   showFirstRunNotice,
   detectAndTrackUpgrade,
 } from './telemetry.js'
+import { autoSyncSkills, formatAutoSyncNotice } from './skills-autosync.js'
 import { buildSetupState } from './setup-state.js'
 import type { CliFormat } from './cli-error.js'
 import { CliError, EXIT_SYSTEM_ERROR, printCliError, usageError } from './cli-error.js'
@@ -180,6 +181,16 @@ export async function runCli(args = process.argv.slice(2)): Promise<number> {
 
   // Track CLI command usage (fire-and-forget).
   // Skip for `telemetry` commands and help requests.
+  // Refresh installed skills when the engine moved under them, or on the
+  // re-verify timer. Deliberately OUTSIDE the telemetry gate below: this is a
+  // correctness behaviour, and tying it to an analytics opt-in would give the
+  // users who opt out a quietly worse product. Never throws, never overwrites a
+  // local edit, and prints only when it left one alone.
+  void autoSyncSkills().then((result) => {
+    const notice = formatAutoSyncNotice(result)
+    if (notice && process.stderr.isTTY) console.error(notice)
+  })
+
   if (shouldTrackCommandStart) {
     // Emit `cli.upgraded` once per version bump, before `cli.command`, so
     // upgrade events are correlated with the first command on the new build.

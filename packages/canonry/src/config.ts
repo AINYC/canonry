@@ -350,6 +350,25 @@ export interface CanonryConfig {
   // Last canonry CLI version observed by this install — used to fire a
   // single `cli.upgraded` event when the running binary version changes.
   lastSeenVersion?: string
+  /**
+   * The engine version the installed skill trees were last synced against.
+   *
+   * Deliberately separate from `lastSeenVersion`, which telemetry owns. Both
+   * fields answer "have we seen this build before?", but they are consumed by
+   * different subsystems and whichever writes first silences the other:
+   * `detectAndTrackUpgrade` returns early on `lastSeenVersion === VERSION`, so
+   * when auto-sync shared that field it permanently suppressed `cli.upgraded`.
+   */
+  lastSkillsSyncedVersion?: string
+  /**
+   * When the installed skill trees were last verified against the bundled
+   * copies. Drives the interval half of the skills auto-sync: a version bump
+   * is not the only way an installed copy goes wrong (hand-deleted files, a
+   * partial install, a `$HOME` shared across machines), so the check also runs
+   * on a timer. The comparison is local hash vs local hash, so it costs no
+   * network. See `skills-autosync.ts`.
+   */
+  lastSkillsVerifiedAt?: string
   /** Set once when the first-activation notice has been shown; never unset. */
   activationNoticeShown?: boolean
   // Update-check opt-out — `false` disables the daily npm-registry probe.

@@ -30,6 +30,38 @@ export function createCanonryMcpServer(options: CanonryMcpServerOptions = {}): M
   return createCanonryMcpServerWithCatalog(options).server
 }
 
+
+/**
+ * Text every MCP client receives at `initialize`, before any tool is called.
+ *
+ * This is the only channel that is BOTH automatic and impossible to make
+ * stale: it ships inside the running engine, so it always describes the build
+ * the caller is actually talking to, and the client gets it without the model
+ * choosing to load anything. A skill has to be selected; this does not.
+ *
+ * It is therefore a POINTER AND A WARNING, never a playbook. Keep it under 2KB
+ * (Claude Code truncates there) and put procedures in the skill.
+ *
+ * What earns a place here: a fact whose absence causes a wrong action rather
+ * than a slower one.
+ */
+const SERVER_INSTRUCTIONS = `Canonry tracks how AI answer engines mention a brand and cite a domain.
+
+Load the "canonry" skill before operator work (project setup, integrations, traffic sources, sweeps, diagnosis). It carries the procedures and the failure modes; this text is only a pointer. Use "aero" for analyst work: regression diagnosis, reporting.
+
+Two signals, never interchangeable:
+- mentioned = the brand appears in the answer TEXT the model wrote.
+- cited = the domain appears in the SOURCE links behind the answer.
+A model can do either, both or neither. Never compute one from the other, and never report a number for one under the other's name.
+
+Sweeps and probes spend provider quota and write rows. Get explicit approval before any run, apply, or other mutation.
+
+Most reads are free. Five ads reads are NOT: canonry_ads_account, canonry_ads_geo_search, canonry_ads_live_delivery, canonry_ads_conversion_pixels and canonry_ads_conversion_event_settings call the provider live and spend against the advertiser account. They are marked read, so nothing in the tool list warns you. Get approval for those exactly as for a mutation.
+
+A null answerMentioned means NOT CHECKED, not "not mentioned". Never coerce it to false.
+
+If no sweep has run, say so. Never state a mention or citation figure that no run produced.`
+
 export function createCanonryMcpServerWithCatalog(options: CanonryMcpServerOptions = {}): CreateCanonryMcpServerResult {
   const clientFactory = options.clientFactory ?? createApiClient
   const client = clientFactory()
@@ -37,6 +69,8 @@ export function createCanonryMcpServerWithCatalog(options: CanonryMcpServerOptio
   const server = new McpServer({
     name: 'canonry',
     version: PACKAGE_VERSION,
+  }, {
+    instructions: SERVER_INSTRUCTIONS,
   })
 
   ;(server as unknown as WithValidate).validateToolInput = async (_tool, args) => args
