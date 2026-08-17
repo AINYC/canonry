@@ -10,28 +10,33 @@
  *
  * **Coverage today.** Operators with ranges bundled under
  * `./ip-ranges/<operator>.json`:
- *   - Googlebot              (developers.google.com/static/search/apis/ipranges/googlebot.json)
+ *   - Googlebot              (developers.google.com/static/crawling/ipranges/common-crawlers.json)
  *   - bingbot                (www.bing.com/toolbox/bingbot.json)
  *   - OpenAI GPTBot          (openai.com/gptbot.json)
  *   - OpenAI ChatGPT-User    (openai.com/chatgpt-user.json)
  *   - OpenAI OAI-SearchBot   (openai.com/searchbot.json)
- *   - PerplexityBot          (www.perplexity.ai/perplexitybot.json)
- *   - Perplexity-User        (www.perplexity.ai/perplexity-user.json)
+ *   - OpenAI OAI-AdsBot      (openai.com/adsbot.json)
+ *   - OpenAI ChatGPT integrations (openai.com/chatgpt-connectors.json)
+ *   - PerplexityBot          (www.perplexity.com/perplexitybot.json)
+ *   - Perplexity-User        (www.perplexity.com/perplexity-user.json)
  *   - ClaudeBot, Claude-SearchBot, Claude-User
  *                            (claude.com/crawling/bots.json — Anthropic's
  *                             shared crawler-origin manifest does not split
  *                             ranges by bot, so every Claude-* rule verifies
  *                             against the same published set.)
  *   - Google-Agent           (developers.google.com/static/crawling/ipranges/user-triggered-agents.json
- *                             — Google's shared list covering every
- *                             user-triggered fetcher.)
+ *                             — Google's agentic user-request list.)
+ *   - Google-GeminiNotebook  (developers.google.com/static/crawling/ipranges/user-triggered-fetchers-google.json)
+ *   - Google-CloudVertexBot  (Google common crawlers manifest)
+ *   - Parallel ShapBot, Applebot, Common Crawl CCBot
+ *   - DuckDuckBot, DuckAssistBot
+ *   - MistralAI-User, MistralAI-Index
+ *   - Amazonbot, Amzn-SearchBot, Amzn-User
  *
- * **Not covered (yet).** Meta, ByteDance, Apple, DeepSeek, Mistral,
- * DuckDuckGo, Yandex, Baidu, Amazon — these either don't publish a
- * public IP-range JSON or only publish via PDF/docs pages that need
- * parsing. Add them by dropping a JSON file alongside the existing
- * ones (same shape: `{ prefixes: [{ ipv4Prefix } | { ipv6Prefix }] }`)
- * and adding the rule-id mapping below.
+ * **Not covered (yet).** Meta, ByteDance, DeepSeek, xAI, You.com, Cohere,
+ * Diffbot, Yandex, and Baidu do not publish a compatible range source.
+ * Parallel's Shap-User and MistralAI-Training are also UA-only. Add them the moment an
+ * official source appears; never infer crawler identity from cloud ASNs.
  *
  * **User-fetch agents and on-device fetches.** A user-triggered fetch
  * (`ChatGPT-User`, `Claude-User`, `Perplexity-User`, …) does not always
@@ -50,13 +55,26 @@
  * operator added/removed.
  */
 import type { TrafficVerificationManifest } from '@ainyc/canonry-contracts'
+import amazonbotRaw from './ip-ranges/amazonbot.json' with { type: 'json' }
+import amznSearchbotRaw from './ip-ranges/amzn-searchbot.json' with { type: 'json' }
+import amznUserRaw from './ip-ranges/amzn-user.json' with { type: 'json' }
 import anthropicRaw from './ip-ranges/anthropic.json' with { type: 'json' }
+import applebotRaw from './ip-ranges/applebot.json' with { type: 'json' }
 import bingbotRaw from './ip-ranges/bingbot.json' with { type: 'json' }
+import ccbotRaw from './ip-ranges/ccbot.json' with { type: 'json' }
+import chatgptConnectorsRaw from './ip-ranges/chatgpt-connectors.json' with { type: 'json' }
 import chatgptUserRaw from './ip-ranges/chatgpt-user.json' with { type: 'json' }
+import duckassistbotRaw from './ip-ranges/duckassistbot.json' with { type: 'json' }
+import duckduckbotRaw from './ip-ranges/duckduckbot.json' with { type: 'json' }
 import googleUserTriggeredRaw from './ip-ranges/google-user-triggered-agents.json' with { type: 'json' }
+import googleUserFetchersRaw from './ip-ranges/google-user-triggered-fetchers.json' with { type: 'json' }
 import googlebotRaw from './ip-ranges/googlebot.json' with { type: 'json' }
 import gptbotRaw from './ip-ranges/gptbot.json' with { type: 'json' }
+import mistralAiIndexRaw from './ip-ranges/mistral-ai-index.json' with { type: 'json' }
+import mistralAiUserRaw from './ip-ranges/mistral-ai-user.json' with { type: 'json' }
+import oaiAdsbotRaw from './ip-ranges/oai-adsbot.json' with { type: 'json' }
 import oaiSearchbotRaw from './ip-ranges/oai-searchbot.json' with { type: 'json' }
+import parallelShapbotRaw from './ip-ranges/parallel-shapbot.json' with { type: 'json' }
 import perplexityUserRaw from './ip-ranges/perplexity-user.json' with { type: 'json' }
 import perplexitybotRaw from './ip-ranges/perplexitybot.json' with { type: 'json' }
 import {
@@ -95,21 +113,21 @@ interface VerificationData {
  * operator publishes ranges.
  */
 const RULE_ID_TO_RANGES: Record<string, unknown> = {
-  // OpenAI — three separate published lists (training crawler vs
-  // user-on-behalf fetcher vs search engine; OpenAI maintains the
-  // split because the IPs really do differ between products).
+  // OpenAI publishes separate lists for each traffic surface because the
+  // ranges differ between products.
   // src: https://openai.com/gptbot.json
   'openai-gptbot': gptbotRaw,
   // src: https://openai.com/chatgpt-user.json
   'openai-chatgpt-user': chatgptUserRaw,
   // src: https://openai.com/searchbot.json
   'openai-searchbot': oaiSearchbotRaw,
+  // src: https://openai.com/adsbot.json
+  'openai-adsbot': oaiAdsbotRaw,
+  // src: https://openai.com/chatgpt-connectors.json
+  'openai-chatgpt-connector': chatgptConnectorsRaw,
 
   // Search engines.
-  // src: https://developers.google.com/static/search/apis/ipranges/googlebot.json
-  // (also covers Gemini grounding — Google doesn't publish a
-  // separate Gemini list; Google-Extended traffic comes from the
-  // same Googlebot ranges)
+  // src: https://developers.google.com/static/crawling/ipranges/common-crawlers.json
   'googlebot': googlebotRaw,
   // src: https://www.bing.com/toolbox/bingbot.json
   // (also covers Copilot grounding — Microsoft routes Copilot's
@@ -118,17 +136,48 @@ const RULE_ID_TO_RANGES: Record<string, unknown> = {
 
   // Google-Agent — Google's agentic user-triggered fetcher (Project
   // Mariner et al.). Verified against Google's user-triggered-agents
-  // list, which covers every Google user-triggered fetcher collectively
-  // (Google publishes no per-fetcher split).
+  // list. Google publishes a different shared list for its non-agentic
+  // user-triggered fetchers such as Gemini Notebook.
   // src: https://developers.google.com/static/crawling/ipranges/user-triggered-agents.json
   'google-agent': googleUserTriggeredRaw,
+  // src: https://developers.google.com/static/crawling/ipranges/user-triggered-fetchers-google.json
+  'google-gemini-notebook': googleUserFetchersRaw,
+  // Google documents CloudVertexBot as a common crawler.
+  'google-cloudvertexbot': googlebotRaw,
 
   // Perplexity — split between crawler and user-on-behalf fetcher,
   // same shape as OpenAI's split.
-  // src: https://www.perplexity.ai/perplexitybot.json
+  // src: https://www.perplexity.com/perplexitybot.json
   'perplexity-bot': perplexitybotRaw,
-  // src: https://www.perplexity.ai/perplexity-user.json
+  // src: https://www.perplexity.com/perplexity-user.json
   'perplexity-user': perplexityUserRaw,
+
+  // Parallel publishes ranges for ShapBot, but not Shap-User.
+  // src: https://docs.parallel.ai/resources/shapbot.json
+  'parallel-shapbot': parallelShapbotRaw,
+
+  // Other publisher manifests with the common Google-style schema.
+  // src: https://search.developer.apple.com/applebot.json
+  'applebot': applebotRaw,
+  // src: https://index.commoncrawl.org/ccbot.json
+  'ccbot': ccbotRaw,
+  // src: https://duckduckgo.com/duckduckbot.json
+  'duckduckbot': duckduckbotRaw,
+  // src: https://duckduckgo.com/duckassistbot.json
+  'duckassistbot': duckassistbotRaw,
+  // src: https://mistral.ai/mistralai-user-ips.json
+  'mistral-ai-user': mistralAiUserRaw,
+  // src: https://mistral.ai/mistralai-index-ips.json
+  'mistral-ai-index': mistralAiIndexRaw,
+
+  // Amazon publishes embedded JSON in documentation pages. The refresh script
+  // extracts it and normalizes bare host addresses to /32 or /128.
+  // src: https://developer.amazon.com/amazonbot/ip-addresses/
+  'amazonbot': amazonbotRaw,
+  // src: https://developer.amazon.com/amazonbot/searchbot-ip-addresses/
+  'amzn-searchbot': amznSearchbotRaw,
+  // src: https://developer.amazon.com/amazonbot/live-ip-addresses/
+  'amzn-user': amznUserRaw,
 
   // Anthropic publishes one shared crawler-origin manifest. It confirms
   // Anthropic origin but does not attribute a prefix to ClaudeBot,
@@ -194,9 +243,10 @@ export function verifyIpAgainstManifest(
 
 /**
  * Parses every operator's prefixes into the BigInt form at module-load
- * time. Roughly 700 prefixes today, parsed once per process boot; all
- * subsequent verifications are O(N) bigint AND comparisons. Could be O(log
- * N) with a sorted-range search if hot — not needed yet. The publisher
+ * time. Roughly 4,500 prefixes across all manifests today, parsed once per
+ * process boot; a verification scans only the one mapped manifest (currently
+ * at most ~1,100 prefixes). Could be O(log N) with a sorted-range search if
+ * hot — not needed yet. The publisher
  * metadata is cached beside the ranges so every classification can retain
  * the exact vendored snapshot used without any runtime I/O.
  */

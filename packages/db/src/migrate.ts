@@ -3916,6 +3916,16 @@ export const MIGRATION_VERSIONS: ReadonlyArray<MigrationVersion> = [
       `ALTER TABLE gtm_connections ADD COLUMN last_snapshot_id TEXT`,
     ],
   },
+  {
+    version: 144,
+    name: 'raw-event-sample-retention-index',
+    // New sample timestamps are canonical UTC, so the startup/daily retention
+    // sweep can use one global expiry index. Legacy offsets are handled by the
+    // sweep's compatibility predicate without mutating data in this migration.
+    statements: [
+      `CREATE INDEX IF NOT EXISTS idx_raw_event_samples_ts ON raw_event_samples(ts)`,
+    ],
+  },
 ]
 
 function addRunsMeasurementPlanVersionForeignKey(tx: MigrationDb): void {

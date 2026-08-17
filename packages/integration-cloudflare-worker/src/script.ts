@@ -21,7 +21,7 @@ import {
  * `traffic.source.worker-version` detects stale deployments.
  */
 export const DEFAULT_BOT_LIST: CloudflareWorkerBotList = {
-  version: '2026-08-09',
+  version: '2026-08-17',
   uaKeywords: [
     ...DEFAULT_AI_CRAWLER_USER_AGENT_SUBSTRINGS,
     // Preserve a small forward-looking machine-traffic net. The shared

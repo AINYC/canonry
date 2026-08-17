@@ -2061,7 +2061,7 @@ export const aiReferralEventsHourly = sqliteTable('ai_referral_events_hourly', {
 ])
 
 // Short-retention raw evidence for classifier debugging and replay.
-// Default retention is 30 days; older rows are pruned out-of-band.
+// Source writes plus a startup/daily global sweep enforce the 30-day ceiling.
 export const rawEventSamples = sqliteTable('raw_event_samples', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
@@ -2076,6 +2076,7 @@ export const rawEventSamples = sqliteTable('raw_event_samples', {
   classifierDetailsJson: text('classifier_details_json', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
   createdAt: text('created_at').notNull(),
 }, (table) => [
+  index('idx_raw_event_samples_ts').on(table.ts),
   index('idx_raw_event_samples_project_ts').on(table.projectId, table.ts),
   index('idx_raw_event_samples_source_ts').on(table.sourceId, table.ts),
   index('idx_raw_event_samples_event_type').on(table.eventType),

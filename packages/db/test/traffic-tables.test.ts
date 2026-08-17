@@ -248,6 +248,60 @@ test('raw_event_samples stores debug samples without full IPs', () => {
   expect(row.userAgent).toBe('GPTBot/1.0')
 })
 
+test('raw sample retention migration adds a global expiry index without rewriting evidence', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonry-raw-sample-migration-'))
+  onTestFinished(() => cleanup(tmpDir))
+  const db = createClient(path.join(tmpDir, 'test.db'))
+
+  migrate(db, MIGRATION_VERSIONS.filter(migration => migration.version < 144))
+  seedProject(db)
+  const now = '2026-08-17T12:00:00.000Z'
+  db.insert(trafficSources).values({
+    id: 'src_raw_migration',
+    projectId: 'proj_1',
+    sourceType: 'cloud-run',
+    displayName: 'Cloud Run',
+    status: 'connected',
+    configJson: {},
+    createdAt: now,
+    updatedAt: now,
+  }).run()
+  db.insert(rawEventSamples).values([
+    {
+      id: 'offset_timestamp',
+      projectId: 'proj_1',
+      sourceId: 'src_raw_migration',
+      ts: '2026-07-18T08:00:00-04:00',
+      eventType: 'unknown',
+      pathNormalized: '/',
+      classifierDetailsJson: {},
+      createdAt: now,
+    },
+    {
+      id: 'invalid_timestamp',
+      projectId: 'proj_1',
+      sourceId: 'src_raw_migration',
+      ts: 'not-a-timestamp',
+      eventType: 'unknown',
+      pathNormalized: '/',
+      classifierDetailsJson: {},
+      createdAt: now,
+    },
+  ]).run()
+
+  expect(MIGRATION_VERSIONS.find(migration => migration.version === 144)?.name)
+    .toBe('raw-event-sample-retention-index')
+  migrate(db)
+
+  expect(db.select().from(rawEventSamples).all().map(row => ({ id: row.id, ts: row.ts })))
+    .toEqual([
+      { id: 'offset_timestamp', ts: '2026-07-18T08:00:00-04:00' },
+      { id: 'invalid_timestamp', ts: 'not-a-timestamp' },
+    ])
+  const indexes = db.all(sql.raw("PRAGMA index_list('raw_event_samples')")) as Array<{ name: string }>
+  expect(indexes.map(index => index.name)).toContain('idx_raw_event_samples_ts')
+})
+
 test('ai_user_fetch_events_hourly accepts inserts keyed like crawler_events_hourly', () => {
   // The new table mirrors crawler_events_hourly schema-wise but holds the
   // human-in-the-loop UA matches (ChatGPT-User, Perplexity-User, etc.) so

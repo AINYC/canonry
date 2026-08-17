@@ -20,6 +20,7 @@ import {
 import { TrafficSourceStatuses, TrafficSourceTypes } from '@ainyc/canonry-contracts'
 import { canonicalizeCloudflareJson } from '@ainyc/canonry-integration-cloudflare-worker'
 import { apiRoutes } from '../src/index.js'
+import { CURRENT_CLOUDFLARE_WORKER_VERSION } from '../src/cloudflare-worker-version.js'
 import type {
   CloudflareTrafficCredentialRecord,
   CloudflareTrafficCredentialStore,
@@ -102,7 +103,7 @@ function signPayload(timestamp: number, payload: unknown, secret: string): strin
 function buildIngestEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     eventId: `ray-${Math.random().toString(36).slice(2)}`,
-    observedAt: '2026-05-27T15:30:00.123Z',
+    observedAt: new Date(Date.now() - 60_000).toISOString(),
     method: 'GET',
     host: 'example.com',
     path: '/blog/foo',
@@ -136,7 +137,7 @@ describe('POST /traffic/connect/cloudflare', () => {
     expect((body.workerScript as string)).toContain('export default')
     expect(body.wranglerToml).toContain('workers_dev = false')
     expect(body.wranglerToml).toContain('example.com/*')
-    expect(typeof body.workerVersion).toBe('string')
+    expect(body.workerVersion).toBe(CURRENT_CLOUDFLARE_WORKER_VERSION)
     expect(typeof body.instructions).toBe('string')
     expect(body.instructions).toMatch(/inspect existing Cloudflare Worker routes/i)
     expect(body.instructions).toContain('Request limit failure mode to Fail open')
@@ -459,7 +460,7 @@ describe('POST /traffic/cloudflare/ingest', () => {
     const res = await ingest({
       body: {
         schemaVersion: 1,
-        workerVersion: '1.0.0',
+        workerVersion: CURRENT_CLOUDFLARE_WORKER_VERSION,
         events: [buildIngestEvent()],
       },
     })
@@ -467,13 +468,15 @@ describe('POST /traffic/cloudflare/ingest', () => {
     const body = JSON.parse(res.payload) as Record<string, unknown>
     expect(body.acceptedEvents).toBe(1)
     expect(body.droppedEvents).toBe(0)
-    expect(body.workerVersionAck).toBe('1.0.0')
+    expect(body.workerVersionAck).toBe(CURRENT_CLOUDFLARE_WORKER_VERSION)
 
     const crawlerRows = h.db.select().from(crawlerEventsHourly).all()
     expect(crawlerRows.length).toBeGreaterThanOrEqual(1)
     expect(crawlerRows[0]!.botId).toMatch(/.+/)
     expect(crawlerRows[0]!.sourceId).toBe(sourceId)
     expect(crawlerRows[0]!.projectId).toBe(projectId)
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()?.lastWorkerVersion)
+      .toBe(CURRENT_CLOUDFLARE_WORKER_VERSION)
     const manifests = h.db.select().from(crawlerVerificationManifestsHourly).all()
     expect(manifests).toHaveLength(1)
     expect(manifests[0]!.manifestJson).toEqual(expect.objectContaining({
@@ -836,10 +839,15 @@ describe('POST /traffic/cloudflare/ingest', () => {
     bearer = credential.bearerToken
     secret = credential.hmacSecret
 
+    const firstHour = new Date(Date.now() - 2 * 60 * 60_000)
+    firstHour.setUTCMinutes(0, 0, 0)
+    const firstSampleAt = new Date(firstHour.getTime() + 60_000).toISOString()
+    const secondSampleAt = new Date(firstHour.getTime() + 59 * 60_000 + 59_000).toISOString()
+    const nextHourSampleAt = new Date(firstHour.getTime() + 60 * 60_000).toISOString()
     for (const [eventId, observedAt] of [
-      ['sample-hour-a', '2026-05-27T15:01:00.000Z'],
-      ['sample-hour-b', '2026-05-27T15:59:59.000Z'],
-      ['sample-next-hour', '2026-05-27T16:00:00.000Z'],
+      ['sample-hour-a', firstSampleAt],
+      ['sample-hour-b', secondSampleAt],
+      ['sample-next-hour', nextHourSampleAt],
     ] as const) {
       const res = await ingest({
         body: {
@@ -856,8 +864,8 @@ describe('POST /traffic/cloudflare/ingest', () => {
     expect(h.db.select().from(crawlerEventsHourly).all().reduce((sum, row) => sum + row.hits, 0))
       .toBe(3)
     expect(h.db.select().from(rawEventSamples).all().map(row => row.ts).sort()).toEqual([
-      '2026-05-27T15:01:00.000Z',
-      '2026-05-27T16:00:00.000Z',
+      firstSampleAt,
+      nextHourSampleAt,
     ])
   })
 

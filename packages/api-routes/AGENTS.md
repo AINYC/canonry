@@ -49,16 +49,19 @@ Shared Fastify route plugins used by both the local server (`packages/canonry`) 
 
 Doctor behavior must branch on the persisted `configJson.deliveryMode`, not
 only `sourceType = cloudflare`. Legacy rows with no mode are direct push.
-Only `direct-push` skips pull-watermark lag and receives Worker-deployment
-remediation; `queue-pull` sources use the ordinary pull checks and a durable
-source-scoped lease. Queue messages are acknowledged only after the receipt +
-rollup transaction commits; a post-commit ACK failure relies on receipt dedupe
-for safe redelivery.
-`traffic.source.worker-version` also applies only to direct push. It compares
-`configJson.workerVersion` with `lastWorkerVersion`, which the ingest path
-records. When `lastWorkerVersion` is null, the check warns with
+Only `direct-push` skips pull-watermark lag; `queue-pull` sources use the
+ordinary pull checks and a durable source-scoped lease. Queue messages are
+acknowledged only after the receipt + rollup transaction commits; a post-commit
+ACK failure relies on receipt dedupe for safe redelivery.
+`traffic.source.worker-version` applies to both `direct-push` and `queue-pull`.
+It compares the last-observed, ingest-recorded `lastWorkerVersion` with the shared
+`CURRENT_CLOUDFLARE_WORKER_VERSION`, not the persisted
+`configJson.workerVersion`, so a package upgrade detects a stale deployment
+before the source is reconnected. This is latest-batch evidence, not proof that
+every deployment or queued message runs one version. When `lastWorkerVersion` is null, it warns with
 `traffic.worker-version.waiting-for-first-event`. A mismatch warns with
-`traffic.worker-version.stale` and requires redeployment.
+`traffic.worker-version.stale` and requires regeneration and redeployment using
+the source's existing delivery mode.
 
 ## Discovery replay suite (quality regression)
 

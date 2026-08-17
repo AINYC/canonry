@@ -89,7 +89,7 @@ CLI + Fastify server + job runner + scheduler + bundled SPA. Only published pack
 | `src/composites.ts` / `src/db-derived-dtos.ts` | Composite reads, `drizzle-zod` row schemas |
 | `src/analytics.ts` / `visibility-stats.ts` / `visibility-compare.ts` | Aggregated metrics, per-query rates, month compare |
 | `src/google.ts` / `src/bing.ts` / `src/ga.ts` / `src/traffic.ts` / `src/backlinks.ts` / `src/ads.ts` | Integration routes |
-| `src/doctor/*` | Health checks — `registry.ts`, `runner.ts`, `checks/*`. Cloudflare direct push skips pull lag and uses `traffic.source.worker-version` to compare the generated and last-observed Worker versions. Queue pull remains measurable and skips the Worker-version check. |
+| `src/doctor/*` | Health checks — `registry.ts`, `runner.ts`, `checks/*`. Cloudflare direct push skips pull lag. Both direct and Queue sources use `traffic.source.worker-version` to compare the generated version with the most recently ingested batch's Worker version. |
 | `src/discovery/*` | Discovery orchestrator + routes |
 | `src/measurement-*` | Advanced measurement plans, overview, property evidence |
 | `src/visibility-attribution.ts` | Query attribution helpers (`buildQueryAttribution`, `resolveCurrentQuery`) — by-id then by-text fallback for historical snapshots |

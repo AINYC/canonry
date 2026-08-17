@@ -36,11 +36,31 @@ export const DEFAULT_AI_CRAWLER_RULES: AiCrawlerRule[] = [
     userAgentPatterns: [/OAI-SearchBot\//i],
   },
   {
+    // OpenAI's ads landing-page crawler. It has a dedicated publisher range
+    // manifest and is neither GPTBot training traffic nor a per-user fetch.
+    id: 'openai-adsbot',
+    operator: 'OpenAI',
+    product: 'OAI-AdsBot',
+    purpose: 'ad-validation',
+    userAgentPatterns: [/OAI-AdsBot\//i],
+  },
+  {
     id: 'openai-chatgpt-user',
     operator: 'OpenAI',
     product: 'ChatGPT-User',
     purpose: 'user-agent',
     userAgentPatterns: [/ChatGPT-User\//i],
+  },
+  {
+    // Observed MCP requests from ChatGPT integrations use this UA. OpenAI's
+    // official IP guide publishes a shared integrations range list (plugins,
+    // connectors, GPT Actions, and agentic commerce), but does not establish
+    // the UA as an authentication contract; UA + range is analytics evidence.
+    id: 'openai-chatgpt-connector',
+    operator: 'OpenAI',
+    product: 'ChatGPT Integrations',
+    purpose: 'user-agent',
+    userAgentPatterns: [/openai-mcp\//i],
   },
   {
     id: 'anthropic-claudebot',
@@ -86,10 +106,9 @@ export const DEFAULT_AI_CRAWLER_RULES: AiCrawlerRule[] = [
     userAgentPatterns: [/PerplexityBot\//i],
   },
   {
-    // User-initiated fetches when a Perplexity user opens a citation
-    // link. Separate from PerplexityBot (crawl) — different ranges and
-    // different operational signal. Perplexity publishes both UA
-    // patterns at perplexity.ai/perplexity-user.json.
+    // On-demand fetches performed while answering a Perplexity user's query.
+    // Separate from PerplexityBot (crawl) — different ranges and a different
+    // operational signal.
     id: 'perplexity-user',
     operator: 'Perplexity',
     product: 'Perplexity-User',
@@ -97,26 +116,51 @@ export const DEFAULT_AI_CRAWLER_RULES: AiCrawlerRule[] = [
     userAgentPatterns: [/Perplexity-User\//i],
   },
   {
-    id: 'google-extended',
-    operator: 'Google',
-    product: 'Google-Extended',
-    purpose: 'training-control',
-    userAgentPatterns: [/Google-Extended/i],
+    // Parallel's search/index crawler. The user-triggered Shap-User surface
+    // is a distinct rule because Parallel publishes a range list only for
+    // ShapBot today.
+    id: 'parallel-shapbot',
+    operator: 'Parallel',
+    product: 'ShapBot',
+    purpose: 'search',
+    userAgentPatterns: [/ShapBot\//i],
   },
   {
-    // Google-Agent: agents on Google infrastructure that navigate the
-    // web and act "upon user request" (e.g. Project Mariner) — a
-    // user-driven fetch, routed to the user-fetch bucket. Google ships
-    // no distinct Gemini fetch UA (`Google-Extended` above is a
-    // robots.txt control token, not a request UA), so this is the
-    // closest Google equivalent to ChatGPT-User. The UA is browser-like
-    // with a `compatible; Google-Agent;` token. IP ranges:
-    // user-triggered-agents.json.
+    id: 'parallel-shap-user',
+    operator: 'Parallel',
+    product: 'Shap-User',
+    purpose: 'user-agent',
+    userAgentPatterns: [/Shap-User\//i],
+  },
+  {
+    // Google-Agent navigates the web and acts upon a user's request (for
+    // example, Project Mariner), so it belongs in the user-fetch channel. Its
+    // browser-like UA carries a `compatible; Google-Agent;` token. This is
+    // distinct from the Gemini Notebook fetcher below; Google-Extended is only
+    // a robots.txt control token and never makes an HTTP request.
     id: 'google-agent',
     operator: 'Google',
     product: 'Google-Agent',
     purpose: 'user-agent',
     userAgentPatterns: [/Google-Agent/i],
+  },
+  {
+    // NotebookLM/Gemini notebook fetches happen on a user's request. Google
+    // renamed the UA and documents both tokens during the transition.
+    id: 'google-gemini-notebook',
+    operator: 'Google',
+    product: 'Google-GeminiNotebook',
+    purpose: 'user-agent',
+    userAgentPatterns: [/Google-GeminiNotebook/i, /Google-NotebookLM/i],
+  },
+  {
+    // Vertex AI's crawler uses Google's common crawler ranges, but has its own
+    // UA so it remains distinguishable from Googlebot in traffic reporting.
+    id: 'google-cloudvertexbot',
+    operator: 'Google',
+    product: 'Google-CloudVertexBot',
+    purpose: 'crawl',
+    userAgentPatterns: [/Google-CloudVertexBot/i],
   },
   {
     id: 'bytespider',
@@ -126,17 +170,8 @@ export const DEFAULT_AI_CRAWLER_RULES: AiCrawlerRule[] = [
     userAgentPatterns: [/Bytespider/i],
   },
   {
-    id: 'applebot-extended',
-    operator: 'Apple',
-    product: 'Applebot-Extended',
-    purpose: 'training',
-    userAgentPatterns: [/Applebot-Extended/i],
-  },
-  {
-    // Apple's general crawler (separate from Applebot-Extended, which is
-    // the training-opt-out signaling UA). Both indexes pages for Apple
-    // services (Siri/Spotlight); only Applebot-Extended is gated by
-    // training-data opt-out.
+    // Applebot-Extended is a robots.txt data-use token and never makes HTTP
+    // requests, so only the actual Applebot crawler belongs in this list.
     id: 'applebot',
     operator: 'Apple',
     product: 'Applebot',
@@ -182,8 +217,26 @@ export const DEFAULT_AI_CRAWLER_RULES: AiCrawlerRule[] = [
     userAgentPatterns: [/MistralAI-User\//i],
   },
   {
-    // Mistral's general crawler. Distinct from MistralAI-User (per-user
-    // fetch) — same operator, different operational signal.
+    // Mistral's search-index crawler. Unlike the legacy MistralBot UA below,
+    // Mistral publishes a dedicated range manifest for this current token.
+    id: 'mistral-ai-index',
+    operator: 'Mistral AI',
+    product: 'MistralAI-Index',
+    purpose: 'search',
+    userAgentPatterns: [/MistralAI-Index\//i],
+  },
+  {
+    // Mistral documents this training crawler but does not publish an IP
+    // manifest for it, so matching requests remain claimed_unverified.
+    id: 'mistral-ai-training',
+    operator: 'Mistral AI',
+    product: 'MistralAI-Training',
+    purpose: 'training',
+    userAgentPatterns: [/MistralAI-Training\//i],
+  },
+  {
+    // Preserve classification for the older MistralBot token observed in
+    // historical traffic. It is not covered by Mistral's current manifests.
     id: 'mistral-bot',
     operator: 'Mistral AI',
     product: 'MistralBot',
@@ -211,6 +264,16 @@ export const DEFAULT_AI_CRAWLER_RULES: AiCrawlerRule[] = [
     // 'user-agent'` Grok rule can be added later if xAI ships a citation
     // user-fetcher UA (the way OpenAI ships ChatGPT-User alongside GPTBot).
     userAgentPatterns: [/xAI-Bot\//i, /Grok-Bot\//i, /GrokBot\//i],
+  },
+  {
+    // You.com authenticates YouBot with HTTP Message Signatures rather than a
+    // publisher IP manifest. Canonry does not verify signatures yet, so this
+    // official UA is classified but remains claimed_unverified.
+    id: 'you-youbot',
+    operator: 'You.com',
+    product: 'YouBot',
+    purpose: 'search',
+    userAgentPatterns: [/YouBot\//i],
   },
   // Classic search-engine crawlers. Not strictly "AI" by training origin,
   // but the same audience: machine traffic indexing the site for query
@@ -246,6 +309,15 @@ export const DEFAULT_AI_CRAWLER_RULES: AiCrawlerRule[] = [
     userAgentPatterns: [/DuckDuckBot/i],
   },
   {
+    // DuckDuckGo's crawler for cited AI-assisted answers. It shares ranges
+    // with DuckDuckBot today, but the publisher exposes a separate manifest.
+    id: 'duckassistbot',
+    operator: 'DuckDuckGo',
+    product: 'DuckAssistBot',
+    purpose: 'search',
+    userAgentPatterns: [/DuckAssistBot/i],
+  },
+  {
     id: 'yandexbot',
     operator: 'Yandex',
     product: 'YandexBot',
@@ -263,43 +335,68 @@ export const DEFAULT_AI_CRAWLER_RULES: AiCrawlerRule[] = [
     id: 'amazonbot',
     operator: 'Amazon',
     product: 'Amazonbot',
-    purpose: 'crawl',
+    purpose: 'training',
     userAgentPatterns: [/Amazonbot\//i],
+  },
+  {
+    id: 'amzn-searchbot',
+    operator: 'Amazon',
+    product: 'Amzn-SearchBot',
+    purpose: 'search',
+    userAgentPatterns: [/Amzn-SearchBot\//i],
+  },
+  {
+    id: 'amzn-user',
+    operator: 'Amazon',
+    product: 'Amzn-User',
+    purpose: 'user-agent',
+    userAgentPatterns: [/Amzn-User\//i],
   },
 ]
 
 export const DEFAULT_AI_CRAWLER_USER_AGENT_SUBSTRINGS = [
   'GPTBot/',
   'OAI-SearchBot/',
+  'OAI-AdsBot/',
   'ChatGPT-User/',
+  'openai-mcp/',
   'ClaudeBot/',
   'Claude-Web/',
   'Claude-SearchBot/',
   'Claude-User/',
   'anthropic-ai',
   'PerplexityBot/',
-  'Google-Extended',
+  'Perplexity-User/',
+  'ShapBot/',
+  'Shap-User/',
   'Google-Agent',
+  'Google-GeminiNotebook',
+  'Google-NotebookLM',
+  'Google-CloudVertexBot',
   'Bytespider',
-  'Applebot-Extended',
   'Applebot/',
   'meta-externalagent',
   'CCBot/',
   'cohere-ai',
   'Diffbot',
   'MistralAI-User/',
+  'MistralAI-Index/',
+  'MistralAI-Training/',
   'MistralBot/',
   'DeepSeekBot',
   'xAI-Bot/',
   'Grok-Bot/',
   'GrokBot/',
+  'YouBot/',
   'Googlebot',
   'bingbot/',
   'DuckDuckBot',
+  'DuckAssistBot',
   'YandexBot/',
   'Baiduspider',
   'Amazonbot/',
-  'Perplexity-User/',
+  'Amzn-SearchBot/',
+  'Amzn-User/',
 ]
 
 export const DEFAULT_AI_REFERRER_RULES: AiReferrerRule[] = [

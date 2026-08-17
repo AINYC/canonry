@@ -2116,6 +2116,46 @@ describe('POST /traffic/sources/:id/sync', () => {
     }
   })
 
+  it('prunes source-local stale samples and does not persist stale pull evidence', async () => {
+    const expiredAt = new Date(Date.now() - 31 * 86_400_000).toISOString()
+    const retainedAt = new Date(Date.now() - 60_000).toISOString()
+    const h = await buildHarness([
+      buildEvent({ eventId: 'expired-pull-event', observedAt: expiredAt, path: '/expired' }),
+      buildEvent({ eventId: 'retained-pull-event', observedAt: retainedAt, path: '/retained' }),
+    ], { bypassTimeFilter: true })
+    try {
+      const connected = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+        payload: { gcpProjectId: 'retention-sync', keyJson: SA_KEY },
+      })
+      const sourceId = JSON.parse(connected.payload).id as string
+      const source = h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()!
+      h.db.insert(rawEventSamples).values({
+        id: 'expired-before-sync',
+        projectId: source.projectId,
+        sourceId,
+        ts: expiredAt,
+        eventType: 'unknown',
+        pathNormalized: '/expired-existing',
+        classifierDetailsJson: {},
+        createdAt: new Date().toISOString(),
+      }).run()
+
+      const synced = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/sync`,
+        payload: { sinceMinutes: 120 },
+      })
+
+      expect(synced.statusCode).toBe(200)
+      expect(JSON.parse(synced.payload)).toMatchObject({ pulledEvents: 2, sampleRows: 1 })
+      expect(h.db.select().from(rawEventSamples).all().map(row => row.ts)).toEqual([retainedAt])
+    } finally {
+      await h.close()
+    }
+  })
+
   it('drops Canonry self-traffic before rollup and surfaces the count in the sync response', async () => {
     const baseTime = new Date(Date.now() - 60 * 60_000)
     baseTime.setMinutes(0, 0, 0)
@@ -3189,6 +3229,39 @@ describe('POST /traffic/sources/:id/backfill', () => {
     }
   })
 
+  it('keeps 90-day backfill rollups but retains only 30 days of raw samples', async () => {
+    const expiredAt = new Date(Date.now() - 60 * 86_400_000).toISOString()
+    const retainedAt = new Date(Date.now() - 29 * 86_400_000).toISOString()
+    const h = await buildHarness([
+      buildEvent({ eventId: 'expired-backfill-event', observedAt: expiredAt, path: '/expired' }),
+      buildEvent({ eventId: 'retained-backfill-event', observedAt: retainedAt, path: '/retained' }),
+    ])
+    try {
+      const connected = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+        payload: { gcpProjectId: 'retention-backfill', keyJson: SA_KEY },
+      })
+      const sourceId = JSON.parse(connected.payload).id as string
+
+      const submitted = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}/backfill`,
+        payload: { days: 90 },
+      })
+      const body = JSON.parse(submitted.payload)
+      expect(body.daysApplied).toBe(90)
+      expect((await waitForRunComplete(h.db, body.runId, 5_000)).status)
+        .toBe(RunStatuses.completed)
+
+      expect(h.db.select().from(crawlerEventsHourly).all().reduce((sum, row) => sum + row.hits, 0))
+        .toBe(2)
+      expect(h.db.select().from(rawEventSamples).all().map(row => row.ts)).toEqual([retainedAt])
+    } finally {
+      await h.close()
+    }
+  })
+
   it('replaces existing buckets in the window rather than accumulating (no double-counting)', async () => {
     // Seed via a normal sync, then backfill the same window with the same
     // source events. Crawler hits must stay at 2, not 4.
@@ -3377,6 +3450,28 @@ describe('POST /traffic/sources/:id/backfill', () => {
         createdAt: seedTime,
         updatedAt: seedTime,
       }).run()
+      h.db.insert(rawEventSamples).values([
+        {
+          id: 'expired-empty-backfill-sample',
+          projectId: source.projectId,
+          sourceId: source.id,
+          ts: new Date(Date.now() - 31 * 86_400_000).toISOString(),
+          eventType: 'unknown',
+          pathNormalized: '/expired',
+          classifierDetailsJson: {},
+          createdAt: seedTime,
+        },
+        {
+          id: 'retained-empty-backfill-sample',
+          projectId: source.projectId,
+          sourceId: source.id,
+          ts: new Date(Date.now() - 29 * 86_400_000).toISOString(),
+          eventType: 'unknown',
+          pathNormalized: '/retained',
+          classifierDetailsJson: {},
+          createdAt: seedTime,
+        },
+      ]).run()
 
       const submitRes = await h.app.inject({
         method: 'POST',
@@ -3390,6 +3485,9 @@ describe('POST /traffic/sources/:id/backfill', () => {
       const buckets = h.db.select().from(crawlerEventsHourly).all()
       expect(buckets.length).toBe(1)
       expect(buckets[0].hits).toBe(7)
+      expect(h.db.select().from(rawEventSamples).all().map(row => row.id)).toEqual([
+        'retained-empty-backfill-sample',
+      ])
     } finally {
       await h.close()
     }

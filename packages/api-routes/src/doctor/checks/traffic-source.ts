@@ -18,6 +18,7 @@ import {
   DEFAULT_CLOUDFLARE_QUEUE_DRAIN_BUDGET,
   TRAFFIC_SOURCE_MAX_CATCHUP_MS,
 } from '../../traffic-limits.js'
+import { CURRENT_CLOUDFLARE_WORKER_VERSION } from '../../cloudflare-worker-version.js'
 import type { CheckDefinition, CheckOutput, DoctorContext, TrafficSourceProbe } from '../types.js'
 
 /**
@@ -50,6 +51,10 @@ function isCloudflareDirectPush(source: TrafficSourceProbe): boolean {
 function isCloudflareQueuePull(source: TrafficSourceProbe): boolean {
   return source.sourceType === TrafficSourceTypes.cloudflare
     && source.configJson.deliveryMode === CloudflareTrafficDeliveryModes['queue-pull']
+}
+
+function isCloudflareWorkerSource(source: TrafficSourceProbe): boolean {
+  return isCloudflareDirectPush(source) || isCloudflareQueuePull(source)
 }
 
 function isActiveSource(source: TrafficSourceProbe): boolean {
@@ -773,29 +778,29 @@ const workerVersionCheck: CheckDefinition = {
   run: (ctx) => {
     if (!ctx.project) return skippedNoProject()
 
-    const sources = loadProbes(ctx).filter(source => isActiveSource(source) && isCloudflareDirectPush(source))
+    const sources = loadProbes(ctx).filter(source => isActiveSource(source) && isCloudflareWorkerSource(source))
     if (sources.length === 0) {
       return {
         status: CheckStatuses.skipped,
         code: 'traffic.worker-version.not-applicable',
-        summary: 'No Cloudflare direct-push source is connected.',
+        summary: 'No active Cloudflare Worker source is connected.',
       }
     }
 
     const measured = sources.map((source) => {
-      const expected = source.configJson.workerVersion
-      const expectedVersion = typeof expected === 'string' && expected.length > 0
-        ? expected
-        : null
+      const expectedVersion = CURRENT_CLOUDFLARE_WORKER_VERSION
       const observedVersion = source.lastWorkerVersion
       const state = observedVersion === null
         ? 'waiting-for-first-event'
-        : expectedVersion !== null && observedVersion === expectedVersion
+        : observedVersion === expectedVersion
           ? 'current'
           : 'stale'
       return {
         sourceId: source.id,
         displayName: source.displayName,
+        deliveryMode: isCloudflareQueuePull(source)
+          ? CloudflareTrafficDeliveryModes['queue-pull']
+          : CloudflareTrafficDeliveryModes['direct-push'],
         expectedVersion,
         observedVersion,
         state,
@@ -807,8 +812,8 @@ const workerVersionCheck: CheckDefinition = {
       return {
         status: CheckStatuses.warn,
         code: 'traffic.worker-version.stale',
-        summary: `${stale.length} Cloudflare Worker source(s) report a version that differs from the generated version.`,
-        remediation: 'Redeploy the generated Worker from the credential-owning host. Use `canonry traffic connect cloudflare <project> --zone-id <id> --deploy --confirm-route --confirm-fail-open`, then attach the route manually.',
+        summary: `${stale.length} Cloudflare Worker source(s) most recently reported a version that differs from the generated version.`,
+        remediation: 'Regenerate and redeploy each source\'s Cloudflare Worker from the credential-owning host with `canonry traffic connect cloudflare <project>` and the source\'s existing delivery-mode options; then verify its route or Queue binding.',
         details,
       }
     }
@@ -818,8 +823,8 @@ const workerVersionCheck: CheckDefinition = {
       return {
         status: CheckStatuses.warn,
         code: 'traffic.worker-version.waiting-for-first-event',
-        summary: `${waiting.length} Cloudflare Worker source(s) have not delivered an event yet.`,
-        remediation: 'Send a smoke-test request through the Worker. Then run `canonry doctor --project <project>` again.',
+        summary: `${waiting.length} Cloudflare Worker source(s) have not reported a version yet.`,
+        remediation: 'Send a smoke-test request through the Worker. For Queue sources, run `canonry traffic sync <project> --source <id>` to consume it. Then run `canonry doctor --project <project>` again.',
         details,
       }
     }
@@ -827,7 +832,7 @@ const workerVersionCheck: CheckDefinition = {
     return {
       status: CheckStatuses.ok,
       code: 'traffic.worker-version.current',
-      summary: 'All Cloudflare direct-push Workers report the generated version.',
+      summary: 'Every Cloudflare Worker source most recently reported the generated version.',
       details,
     }
   },
