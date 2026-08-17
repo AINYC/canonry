@@ -54,6 +54,53 @@ describe('traffic analysis', () => {
     })
   })
 
+  it('keeps OpenAI search, ads validation, and per-user fetches disjoint', () => {
+    expect(classifyCrawler(event({ userAgent: 'Mozilla/5.0 OAI-SearchBot/1.0' }))).toMatchObject({
+      botId: 'openai-searchbot',
+      product: 'OAI-SearchBot',
+    })
+    expect(classifyCrawler(event({ userAgent: 'Mozilla/5.0 OAI-AdsBot/1.0' }))).toMatchObject({
+      botId: 'openai-adsbot',
+      product: 'OAI-AdsBot',
+      purpose: 'ad-validation',
+    })
+    expect(classifyAiUserFetch(event({ userAgent: 'Mozilla/5.0 OAI-AdsBot/1.0' }))).toBeNull()
+  })
+
+  it('classifies observed ChatGPT integration traffic as a user fetch', () => {
+    const connector = event({
+      userAgent: 'openai-mcp/1.0.0',
+      remoteIp: '100.31.168.162',
+    })
+    expect(classifyAiUserFetch(connector)).toMatchObject({
+      botId: 'openai-chatgpt-connector',
+      product: 'ChatGPT Integrations',
+      verificationStatus: 'verified',
+    })
+    expect(classifyCrawler(connector)).toBeNull()
+
+    expect(classifyAiUserFetch(event({
+      userAgent: connector.userAgent,
+      remoteIp: '203.0.113.10',
+    }))).toMatchObject({
+      botId: 'openai-chatgpt-connector',
+      verificationStatus: 'claimed_unverified',
+    })
+    // ChatGPT's cloud browser uses a generic browser UA. Its separate Web Bot
+    // Auth signatures require cryptographic verification, not an IP shortcut.
+    expect(classifyAiUserFetch(event({
+      userAgent: 'Mozilla/5.0 Chrome/138.0.0.0 Safari/537.36',
+    }))).toBeNull()
+  })
+
+  it('does not classify robots-only data-use tokens as HTTP user agents', () => {
+    for (const userAgent of ['Google-Extended', 'Applebot-Extended']) {
+      const evt = event({ userAgent })
+      expect(classifyCrawler(evt)).toBeNull()
+      expect(classifyAiUserFetch(evt)).toBeNull()
+    }
+  })
+
   it('promotes to `verified` when the source IP is in the operator\'s published range', () => {
     // 66.249.64.1 is in Googlebot's published 66.249.64.0/19 — bundled
     // in `src/ip-ranges/googlebot.json`. UA match + IP match should
@@ -172,6 +219,27 @@ describe('traffic analysis', () => {
       botId: 'applebot',
       operator: 'Apple',
     })
+
+    expect(classifyCrawler(event({
+      userAgent: 'Mozilla/5.0 (compatible; ShapBot/0.1.0; +https://parallel.ai/bot)',
+    }))).toMatchObject({
+      botId: 'parallel-shapbot',
+      operator: 'Parallel',
+    })
+
+    expect(classifyCrawler(event({ userAgent: 'MistralAI-Index/1.0' }))).toMatchObject({
+      botId: 'mistral-ai-index',
+      operator: 'Mistral AI',
+    })
+    expect(classifyCrawler(event({ userAgent: 'MistralAI-Training/1.0' }))).toMatchObject({
+      botId: 'mistral-ai-training',
+      operator: 'Mistral AI',
+    })
+
+    expect(classifyCrawler(event({ userAgent: 'Google-CloudVertexBot' }))).toMatchObject({
+      botId: 'google-cloudvertexbot',
+      operator: 'Google',
+    })
   })
 
   it('classifies xAI Grok as a crawler (xAI-Bot / Grok-Bot UAs)', () => {
@@ -192,6 +260,17 @@ describe('traffic analysis', () => {
     }))).toMatchObject({
       botId: 'xai-grok-bot',
       operator: 'xAI',
+    })
+  })
+
+  it('classifies signed YouBot traffic while leaving IP verification unclaimed', () => {
+    expect(classifyCrawler(event({
+      userAgent: 'Mozilla/5.0 (compatible; YouBot/1.0; +https://you.com/youbot)',
+    }))).toMatchObject({
+      botId: 'you-youbot',
+      operator: 'You.com',
+      verificationStatus: 'claimed_unverified',
+      verificationManifest: null,
     })
   })
 
@@ -239,6 +318,10 @@ describe('traffic analysis', () => {
     }))).toMatchObject({ botId: 'duckduckbot', operator: 'DuckDuckGo' })
 
     expect(classifyCrawler(event({
+      userAgent: 'DuckAssistBot/1.2; (+https://duckduckgo.com/duckassistbot)',
+    }))).toMatchObject({ botId: 'duckassistbot', operator: 'DuckDuckGo' })
+
+    expect(classifyCrawler(event({
       userAgent: 'Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)',
     }))).toMatchObject({ botId: 'yandexbot', operator: 'Yandex' })
 
@@ -249,6 +332,10 @@ describe('traffic analysis', () => {
     expect(classifyCrawler(event({
       userAgent: 'Mozilla/5.0 (compatible; Amazonbot/0.1; +https://developer.amazon.com/support/amazonbot)',
     }))).toMatchObject({ botId: 'amazonbot', operator: 'Amazon' })
+
+    expect(classifyCrawler(event({
+      userAgent: 'Mozilla/5.0 (compatible; Amzn-SearchBot/0.1; +https://developer.amazon.com/amazonbot)',
+    }))).toMatchObject({ botId: 'amzn-searchbot', operator: 'Amazon' })
   })
 
   it('classifies explicit AI referrals from referer and UTM evidence', () => {
@@ -528,6 +615,21 @@ describe('traffic analysis', () => {
     })
   })
 
+  it('routes Parallel and Amazon user-triggered fetchers outside crawler traffic', () => {
+    const cases = [
+      { userAgent: 'Shap-User/0.1.0', botId: 'parallel-shap-user', operator: 'Parallel' },
+      { userAgent: 'Amzn-User/0.1', botId: 'amzn-user', operator: 'Amazon' },
+    ]
+    for (const candidate of cases) {
+      const evt = event({ userAgent: candidate.userAgent })
+      expect(classifyCrawler(evt)).toBeNull()
+      expect(classifyAiUserFetch(evt)).toMatchObject({
+        botId: candidate.botId,
+        operator: candidate.operator,
+      })
+    }
+  })
+
   it('promotes ChatGPT-User to `verified` when the source IP is in OpenAI\'s published range', () => {
     // 104.210.139.193 is in 104.210.139.192/28 — first published prefix in
     // `src/ip-ranges/chatgpt-user.json`. UA match + IP match should upgrade
@@ -567,6 +669,18 @@ describe('traffic analysis', () => {
       botId: 'google-agent',
       verificationStatus: 'verified',
     })
+  })
+
+  it('routes current and transitional Gemini Notebook fetchers to one user-fetch metric', () => {
+    for (const userAgent of ['Google-GeminiNotebook', 'Google-NotebookLM']) {
+      const evt = event({ userAgent })
+      expect(classifyCrawler(evt)).toBeNull()
+      expect(classifyAiUserFetch(evt)).toMatchObject({
+        botId: 'google-gemini-notebook',
+        operator: 'Google',
+        product: 'Google-GeminiNotebook',
+      })
+    }
   })
 
   it('classifyAiUserFetch returns null for bulk crawler UAs', () => {

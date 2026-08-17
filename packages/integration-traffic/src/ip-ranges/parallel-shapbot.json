@@ -1,0 +1,36 @@
+{
+  "_source": "https://docs.parallel.ai/resources/shapbot.json",
+  "creationTime": "2026-07-14T00:00:00.000000",
+  "prefixes": [
+    {
+      "ipv4Prefix": "23.251.146.115/32"
+    },
+    {
+      "ipv4Prefix": "34.122.173.216/32"
+    },
+    {
+      "ipv4Prefix": "34.31.203.120/32"
+    },
+    {
+      "ipv4Prefix": "34.44.142.114/32"
+    },
+    {
+      "ipv4Prefix": "34.44.196.215/32"
+    },
+    {
+      "ipv4Prefix": "34.45.55.180/32"
+    },
+    {
+      "ipv4Prefix": "34.46.138.166/32"
+    },
+    {
+      "ipv4Prefix": "34.68.39.29/32"
+    },
+    {
+      "ipv4Prefix": "34.70.129.79/32"
+    },
+    {
+      "ipv4Prefix": "34.9.172.22/32"
+    }
+  ]
+}

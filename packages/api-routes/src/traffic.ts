@@ -419,7 +419,7 @@ const BACKFILL_SAMPLE_LIMIT = 500
 // the doctor check `traffic.source.worker-version` will then surface
 // deployments still running an older revision so the operator
 // regenerates and redeploys.
-const CLOUDFLARE_WORKER_VERSION = '1.0.0'
+const CLOUDFLARE_WORKER_VERSION = '1.0.1'
 const CLOUDFLARE_INGEST_BODY_LIMIT = 256 * 1024
 // Queue retention is configured outside Canonry and this v1 connection only
 // records the operator-provided value. Keep dedupe receipts through the

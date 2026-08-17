@@ -1,0 +1,18 @@
+{
+  "_source": "https://mistral.ai/mistralai-user-ips.json",
+  "creationTime": "2025-02-19T12:00:00.000000",
+  "prefixes": [
+    {
+      "ipv4Prefix": "20.240.160.1/32"
+    },
+    {
+      "ipv4Prefix": "20.240.160.161/32"
+    },
+    {
+      "ipv4Prefix": "20.240.194.83/32"
+    },
+    {
+      "ipv4Prefix": "51.12.243.114/32"
+    }
+  ]
+}

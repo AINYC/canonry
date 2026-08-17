@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest'
+import amazonbotRaw from '../src/ip-ranges/amazonbot.json' with { type: 'json' }
+import amznSearchbotRaw from '../src/ip-ranges/amzn-searchbot.json' with { type: 'json' }
+import amznUserRaw from '../src/ip-ranges/amzn-user.json' with { type: 'json' }
 import anthropicRaw from '../src/ip-ranges/anthropic.json' with { type: 'json' }
+import applebotRaw from '../src/ip-ranges/applebot.json' with { type: 'json' }
+import ccbotRaw from '../src/ip-ranges/ccbot.json' with { type: 'json' }
+import chatgptConnectorsRaw from '../src/ip-ranges/chatgpt-connectors.json' with { type: 'json' }
+import duckassistbotRaw from '../src/ip-ranges/duckassistbot.json' with { type: 'json' }
+import duckduckbotRaw from '../src/ip-ranges/duckduckbot.json' with { type: 'json' }
+import googleUserFetchersRaw from '../src/ip-ranges/google-user-triggered-fetchers.json' with { type: 'json' }
+import googlebotRaw from '../src/ip-ranges/googlebot.json' with { type: 'json' }
+import mistralAiIndexRaw from '../src/ip-ranges/mistral-ai-index.json' with { type: 'json' }
+import mistralAiUserRaw from '../src/ip-ranges/mistral-ai-user.json' with { type: 'json' }
+import oaiAdsbotRaw from '../src/ip-ranges/oai-adsbot.json' with { type: 'json' }
+import parallelShapbotRaw from '../src/ip-ranges/parallel-shapbot.json' with { type: 'json' }
 import {
   hasVerificationDataFor,
   ipRangeManifestContentHash,
@@ -16,6 +30,17 @@ const ANTHROPIC_MANIFEST = {
   id: `${anthropicRaw._source}#${anthropicRaw.creationTime}#sha256:${ipRangeManifestContentHash(anthropicRaw)}`,
   source: anthropicRaw._source,
   version: anthropicRaw.creationTime,
+}
+
+interface TestManifest {
+  prefixes: Array<{ ipv4Prefix?: string; ipv6Prefix?: string }>
+}
+
+function firstPublishedIp(raw: TestManifest): string {
+  const first = raw.prefixes[0]
+  const prefix = first?.ipv4Prefix ?? first?.ipv6Prefix
+  if (!prefix) throw new Error('test manifest has no prefixes')
+  return prefix.split('/')[0]!
 }
 
 describe('parseIp', () => {
@@ -350,13 +375,32 @@ describe('verifyIpForRule', () => {
   })
 
   it('verifies Google-Agent against Google\'s user-triggered-agents ranges', () => {
-    // user-triggered-agents.json is Google's shared list for every
-    // user-triggered fetcher; the google-agent rule maps to it.
+    // user-triggered-agents.json is Google's agentic-fetcher list; the
+    // google-agent rule maps to it.
     expect(verifyIpForRule('136.122.0.10', 'google-agent')).toBe(true)    // 136.122.0.0/16
     expect(verifyIpForRule('136.121.16.5', 'google-agent')).toBe(true)    // 136.121.16.0/24
     expect(verifyIpForRule('2001:4860:c::5', 'google-agent')).toBe(true)  // IPv6 2001:4860:c::/124
     // Outside every published prefix — stays unverified.
     expect(verifyIpForRule('1.2.3.4', 'google-agent')).toBe(false)
+  })
+
+  it.each([
+    ['openai-adsbot', oaiAdsbotRaw],
+    ['openai-chatgpt-connector', chatgptConnectorsRaw],
+    ['parallel-shapbot', parallelShapbotRaw],
+    ['applebot', applebotRaw],
+    ['ccbot', ccbotRaw],
+    ['duckduckbot', duckduckbotRaw],
+    ['duckassistbot', duckassistbotRaw],
+    ['mistral-ai-user', mistralAiUserRaw],
+    ['mistral-ai-index', mistralAiIndexRaw],
+    ['amazonbot', amazonbotRaw],
+    ['amzn-searchbot', amznSearchbotRaw],
+    ['amzn-user', amznUserRaw],
+    ['google-gemini-notebook', googleUserFetchersRaw],
+    ['google-cloudvertexbot', googlebotRaw],
+  ] as const)('verifies %s against its official vendored manifest', (ruleId, raw) => {
+    expect(verifyIpForRule(firstPublishedIp(raw), ruleId)).toBe(true)
   })
 
   it('returns false for a rule id without published ranges', () => {
@@ -396,19 +440,37 @@ describe('hasVerificationDataFor', () => {
     expect(hasVerificationDataFor('openai-gptbot')).toBe(true)
     expect(hasVerificationDataFor('openai-chatgpt-user')).toBe(true)
     expect(hasVerificationDataFor('openai-searchbot')).toBe(true)
+    expect(hasVerificationDataFor('openai-adsbot')).toBe(true)
     expect(hasVerificationDataFor('perplexity-bot')).toBe(true)
     expect(hasVerificationDataFor('perplexity-user')).toBe(true)
     expect(hasVerificationDataFor('anthropic-claudebot')).toBe(true)
     expect(hasVerificationDataFor('claude-user')).toBe(true)
     expect(hasVerificationDataFor('google-agent')).toBe(true)
+    expect(hasVerificationDataFor('google-gemini-notebook')).toBe(true)
+    expect(hasVerificationDataFor('google-cloudvertexbot')).toBe(true)
+    expect(hasVerificationDataFor('parallel-shapbot')).toBe(true)
+    expect(hasVerificationDataFor('applebot')).toBe(true)
+    expect(hasVerificationDataFor('ccbot')).toBe(true)
+    expect(hasVerificationDataFor('duckduckbot')).toBe(true)
+    expect(hasVerificationDataFor('duckassistbot')).toBe(true)
+    expect(hasVerificationDataFor('mistral-ai-user')).toBe(true)
+    expect(hasVerificationDataFor('mistral-ai-index')).toBe(true)
+    expect(hasVerificationDataFor('amazonbot')).toBe(true)
+    expect(hasVerificationDataFor('amzn-searchbot')).toBe(true)
+    expect(hasVerificationDataFor('amzn-user')).toBe(true)
   })
 
   it('is false for operators without bundled ranges yet', () => {
-    expect(hasVerificationDataFor('mistral-ai-user')).toBe(false)
+    // OpenAI assigns chatgpt-agents.json to Codex cloud service egress, not
+    // ChatGPT browser identity, so it must never verify a crawler rule.
+    expect(hasVerificationDataFor('openai-chatgpt-agent')).toBe(false)
+    expect(hasVerificationDataFor('parallel-shap-user')).toBe(false)
+    expect(hasVerificationDataFor('mistral-ai-training')).toBe(false)
     expect(hasVerificationDataFor('mistral-bot')).toBe(false)
     expect(hasVerificationDataFor('deepseek')).toBe(false)
     expect(hasVerificationDataFor('bytespider')).toBe(false)
     expect(hasVerificationDataFor('meta-externalagent')).toBe(false)
+    expect(hasVerificationDataFor('you-youbot')).toBe(false)
   })
 
   it('is false for unknown rule ids', () => {

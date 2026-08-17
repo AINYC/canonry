@@ -1,0 +1,12 @@
+{
+  "_source": "https://openai.com/adsbot.json",
+  "creationTime": "2026-05-12T03:00:00.000000",
+  "prefixes": [
+    {
+      "ipv4Prefix": "130.131.229.128/25"
+    },
+    {
+      "ipv4Prefix": "20.168.90.128/25"
+    }
+  ]
+}
