@@ -5,7 +5,8 @@ import {
   AI_PROVIDER_INFRA_DOMAINS, categorizeSource, categoryLabel, CitationStates,
   classifySurfaceFromCategory, surfaceClassFromCompetitorType, surfaceClassLabel,
   effectiveDomains, evaluateModelPointerExposure, normalizeProjectDomain, parseWindow, RunKinds, RunStatuses,
-  windowCutoff, validationError, hostMatchesAnyDomain, hostMatchesDomain, normalizeQueryText,
+  windowCutoff, validationError, compileBrandAliases, hostMatchesAnyDomain, hostMatchesDomain,
+  matcherMatchesText, normalizeQueryText,
 } from '@ainyc/canonry-contracts'
 import type {
   BrandMetricsDto, GapAnalysisDto, SourceBreakdownDto,
@@ -514,15 +515,18 @@ export async function analyticsRoutes(app: FastifyInstance) {
       .filter(r => !cutoff || r.createdAt >= cutoff)
 
     const windowRunIds = windowRuns.map(r => r.id)
-    // Tracked competitors, resolved once — `competitorsCiting` below matches
-    // cited hosts against these rather than reading the mixed-signal
-    // `competitor_overlap` column.
+    // Tracked competitors, resolved once, plus one compiled alias matcher each:
+    // the alias set is fixed and the answer corpus is not.
     const competitorDomains = app.db
       .select({ domain: competitors.domain })
       .from(competitors)
       .where(eq(competitors.projectId, project.id))
       .all()
       .map(c => c.domain)
+    const competitorMatchers = new Map(
+      mentionShareCompetitorsFromDomains(competitorDomains)
+        .map(c => [c.domain, compileBrandAliases([...c.brandTokens])]),
+    )
     // Map runId → createdAt so we can key consistency sets by time-point
     // instead of by raw runId. Under `--all-locations` fan-out, a single
     // time-point has N runs (one per location); keying by runId would
@@ -607,14 +611,21 @@ export async function analyticsRoutes(app: FastifyInstance) {
       const mentionedProviders = qSnapshots
         .filter(s => s.resolvedMentioned)
         .map(s => s.provider)
-      // The engine's source list, not `competitor_overlap`. That column unions
-      // cited domains, grounding sources AND answer-text brand matches, so a set
-      // taken from it is not the citation signal this field is named for.
+      // TWO SETS, computed from two different signals, because the two lanes
+      // below are named for two different signals. `competitor_overlap` is read
+      // for neither: that column unions cited domains, grounding sources AND
+      // answer-text brand matches, so it is not either one.
       const competitorsCiting = new Set<string>()
+      const competitorsMentioned = new Set<string>()
       for (const s of qSnapshots) {
         for (const domain of s.citedDomains) {
           const match = competitorDomains.find(c => hostMatchesDomain(domain, c))
           if (match) competitorsCiting.add(match)
+        }
+        if (!s.answerText) continue
+        for (const competitor of competitorDomains) {
+          const matcher = competitorMatchers.get(competitor)
+          if (matcher && matcherMatchesText(matcher, s.answerText)) competitorsMentioned.add(competitor)
         }
       }
 
@@ -639,6 +650,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
         query, queryId, category,
         providers: citedProviders,
         competitorsCiting: [...competitorsCiting],
+        competitorsMentioned: [...competitorsMentioned],
         consistency,
       }
 
@@ -646,11 +658,13 @@ export async function analyticsRoutes(app: FastifyInstance) {
       else if (category === 'gap') gap.push(citationEntry)
       else uncited.push(citationEntry)
 
-      // Answer-mention classification (new)
+      // Answer-mention classification. A MENTION gap is "a competitor's brand
+      // was named in the prose and yours was not" — it must not be decided by
+      // who got cited, which is a different thing an engine can do independently.
       let mentionCategory: GapCategory
       if (mentionedProviders.length > 0) {
         mentionCategory = 'cited'
-      } else if (competitorsCiting.size > 0) {
+      } else if (competitorsMentioned.size > 0) {
         mentionCategory = 'gap'
       } else {
         mentionCategory = 'uncited'
@@ -660,6 +674,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
         query, queryId, category: mentionCategory,
         providers: mentionedProviders,
         competitorsCiting: [...competitorsCiting],
+        competitorsMentioned: [...competitorsMentioned],
         consistency,
       }
 
@@ -672,7 +687,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
     gap.sort((a, b) => b.competitorsCiting.length - a.competitorsCiting.length)
     cited.sort((a, b) => a.query.localeCompare(b.query))
     uncited.sort((a, b) => a.query.localeCompare(b.query))
-    mentionGap.sort((a, b) => b.competitorsCiting.length - a.competitorsCiting.length)
+    mentionGap.sort((a, b) => b.competitorsMentioned.length - a.competitorsMentioned.length)
     mentionedQueries.sort((a, b) => a.query.localeCompare(b.query))
     notMentioned.sort((a, b) => a.query.localeCompare(b.query))
 

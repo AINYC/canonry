@@ -1386,15 +1386,22 @@ function MentionShareBreakdown({
   const brandedTotal = branded.projectMentionSnapshots + branded.competitorMentionSnapshots
   if (nonBrandTotal === 0 && brandedTotal === 0) return null
 
-  const scopeTitle = summary.scope === 'non-brand'
+  // `pooled` is only reachable when the project has no brand name or domain to
+  // classify against, so the title and the tooltip both say what the reader is
+  // actually looking at rather than claiming a split that did not happen.
+  const isNonBrand = summary.scope === 'non-brand'
+  const scopeTitle = isNonBrand
     ? 'Mention share breakdown · non-brand queries · latest run'
     : 'Mention share breakdown · all tracked queries · latest run'
+  const scopeTooltip = isNonBrand
+    ? 'Queries that do not contain your name. This is where competitive placement is decided: on a branded query you are named almost always and a competitor cannot be, so counting both in one total would rank you on your own brand recall instead of on your category.'
+    : 'Branded and non-brand queries could not be separated because this project has no brand name or domain to match against. Set a display name or aliases to split them — until then this figure pools both and is not a competitive read.'
 
   return (
     <div className="mention-share-breakdown">
       <p className="mention-share-breakdown-title">
         {scopeTitle}
-        <InfoTooltip text="Queries that do not contain your name. This is where competitive placement is decided: on a branded query you are named almost always and a competitor cannot be, so counting both in one total would rank you on your own brand recall instead of on your category." />
+        <InfoTooltip text={scopeTooltip} />
       </p>
       {nonBrandTotal > 0 ? (
         <MentionShareBreakdownRows breakdown={breakdown} projectLabel={projectLabel} />

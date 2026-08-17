@@ -360,7 +360,15 @@ export interface GapQuery {
   queryId: string
   category: GapCategory
   providers: string[]
+  /** Tracked competitors whose domain appeared in the engine's SOURCE LIST for this query. */
   competitorsCiting: string[]
+  /**
+   * Tracked competitors whose brand appeared in the ANSWER TEXT for this query.
+   * A different signal from `competitorsCiting` and never derived from it — the
+   * mention lanes (`mentionedQueries` / `mentionGap` / `notMentioned`) are
+   * classified by THIS field, the citation lanes by the one above.
+   */
+  competitorsMentioned: string[]
   consistency: { citedRuns: number; totalRuns: number; mentionedRuns: number }
 }
 
