@@ -7,6 +7,8 @@ import type {
   GtmConnectionStatusDto,
 } from '@ainyc/canonry-api-client'
 import {
+  deleteApiV1ProjectsByNameGoogleAdsConnectionMutation,
+  deleteApiV1ProjectsByNameGtmConnectionMutation,
   getApiV1ProjectsByNameConversionTrackingContractsByContractIdIntegrityOptions,
   getApiV1ProjectsByNameConversionTrackingContractsOptions,
   getApiV1ProjectsByNameGoogleAdsCustomersOptions,
@@ -328,6 +330,84 @@ function CheckField({
   )
 }
 
+function DisconnectConnection({
+  providerLabel,
+  disabled,
+  onDisconnect,
+}: {
+  providerLabel: string
+  disabled: boolean
+  onDisconnect: () => Promise<void>
+}) {
+  const [armed, setArmed] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const controlRef = useRef<HTMLDivElement>(null)
+  const keepConnectedRef = useRef<HTMLButtonElement>(null)
+  const wasArmedRef = useRef(false)
+
+  useEffect(() => {
+    const wasArmed = wasArmedRef.current
+    wasArmedRef.current = armed
+    if (armed) keepConnectedRef.current?.focus()
+    else if (wasArmed) controlRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+  }, [armed])
+
+  function arm() {
+    setError(null)
+    setArmed(true)
+  }
+
+  function cancel() {
+    setError(null)
+    setArmed(false)
+  }
+
+  async function disconnect() {
+    setDisconnecting(true)
+    setError(null)
+    try {
+      await onDisconnect()
+    } catch (disconnectError) {
+      setError(extractErrorMessage(disconnectError))
+      setDisconnecting(false)
+    }
+  }
+
+  return (
+    <div ref={controlRef} className="mt-5 border-t border-subtle pt-4">
+      {armed ? (
+        <div role="group" aria-label={`Confirm disconnect ${providerLabel}`} className="max-w-2xl">
+          <p className="text-sm font-medium text-heading">Remove Canonry's stored access and selection?</p>
+          <p className="mt-1 text-sm leading-6 text-secondary">
+            Saved evidence and conversion contracts remain. New checks stop until you reconnect.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button ref={keepConnectedRef} type="button" variant="outline" size="sm" className="min-h-11" disabled={disconnecting} onClick={cancel}>
+              Keep connected
+            </Button>
+            <WriteButton type="button" variant="destructive" size="sm" className="min-h-11" disabled={disabled || disconnecting} onClick={() => void disconnect()}>
+              {disconnecting ? 'Disconnecting…' : `Disconnect ${providerLabel}`}
+            </WriteButton>
+          </div>
+          {error ? <p role="alert" className="mt-2 text-sm text-negative">{error}</p> : null}
+        </div>
+      ) : (
+        <WriteButton
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="min-h-11 text-negative hover:text-negative"
+          disabled={disabled}
+          onClick={arm}
+        >
+          Disconnect {providerLabel}
+        </WriteButton>
+      )}
+    </div>
+  )
+}
+
 export function ConversionIntegrityWorkspace({ projectId, projectName }: { projectId: string; projectName: string }) {
   const account = useAccount()
   const [actionError, setActionError] = useState<string | null>(null)
@@ -416,6 +496,8 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
   const gtmSelectionMutation = useMutation(putApiV1ProjectsByNameGtmSelectionMutation({ client: heyClient }))
   const googleAdsSyncMutation = useMutation(postApiV1ProjectsByNameGoogleAdsSyncMutation({ client: heyClient }))
   const gtmSyncMutation = useMutation(postApiV1ProjectsByNameGtmSyncMutation({ client: heyClient }))
+  const googleAdsDisconnectMutation = useMutation(deleteApiV1ProjectsByNameGoogleAdsConnectionMutation({ client: heyClient }))
+  const gtmDisconnectMutation = useMutation(deleteApiV1ProjectsByNameGtmConnectionMutation({ client: heyClient }))
   const createContractMutation = useMutation(postApiV1ProjectsByNameConversionTrackingContractsMutation({ client: heyClient }))
 
   useEffect(() => {
@@ -545,6 +627,8 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
     || gtmSelectionMutation.isPending
     || googleAdsSyncMutation.isPending
     || gtmSyncMutation.isPending
+    || googleAdsDisconnectMutation.isPending
+    || gtmDisconnectMutation.isPending
     || createContractMutation.isPending
     || googleMarketingSyncInFlight
 
@@ -768,6 +852,50 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
     } catch (error) {
       setActionError(extractErrorMessage(error))
     }
+  }
+
+  async function disconnectGoogleAds() {
+    assertCanWrite(account)
+    setActionError(null)
+    await googleAdsDisconnectMutation.mutateAsync({ path: { name: projectName } })
+    setSelectionPanel(null)
+    setShowGoogleAdsConnect(false)
+    setGoogleAdsCustomerId('')
+    setLoginCustomerId('')
+    setGoogleAdsSelectionSeeded(false)
+    setOauthNotice(null)
+    await refreshStoredEvidence()
+    addToast({
+      title: 'Google Ads disconnected',
+      detail: 'Stored evidence and conversion contracts were retained.',
+      tone: 'neutral',
+      dedupeKey: `google-ads-disconnected:${projectId}`,
+      dedupeMode: 'replace',
+    })
+    openerRef.current = null
+    scheduleAfterRender(() => focusElement(document.getElementById('conversion-integrity-title')))
+  }
+
+  async function disconnectGtm() {
+    assertCanWrite(account)
+    setActionError(null)
+    await gtmDisconnectMutation.mutateAsync({ path: { name: projectName } })
+    setSelectionPanel(null)
+    setGtmAccountId('')
+    setGtmContainerId('')
+    setGtmWorkspaceId('')
+    setGtmSelectionSeeded(false)
+    setOauthNotice(null)
+    await refreshStoredEvidence()
+    addToast({
+      title: 'Tag Manager disconnected',
+      detail: 'Stored evidence and conversion contracts were retained.',
+      tone: 'neutral',
+      dedupeKey: `gtm-disconnected:${projectId}`,
+      dedupeMode: 'replace',
+    })
+    openerRef.current = null
+    scheduleAfterRender(() => focusElement(document.getElementById('conversion-integrity-title')))
   }
 
   async function queueGoogleAdsSync() {
@@ -1116,6 +1244,13 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
             </WriteButton>
             <Button type="button" variant="outline" onClick={cancelSelection}>Cancel</Button>
           </div>
+          {googleAdsStatusQuery.data?.connected ? (
+            <DisconnectConnection
+              providerLabel="Google Ads"
+              disabled={actionPending}
+              onDisconnect={disconnectGoogleAds}
+            />
+          ) : null}
         </section>
       ) : null}
 
@@ -1190,6 +1325,13 @@ export function ConversionIntegrityWorkspace({ projectId, projectName }: { proje
             </WriteButton>
             <Button type="button" variant="outline" onClick={cancelSelection}>Cancel</Button>
           </div>
+          {gtmStatusQuery.data?.connected ? (
+            <DisconnectConnection
+              providerLabel="Tag Manager"
+              disabled={actionPending}
+              onDisconnect={disconnectGtm}
+            />
+          ) : null}
         </section>
       ) : null}
 

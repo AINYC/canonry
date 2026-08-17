@@ -137,6 +137,8 @@ type MarketingFixture = {
   gtmRun?: unknown
   gtmSelectionResponse?: unknown
   createdContract?: unknown
+  googleAdsDisconnect?: { body: unknown; status?: number }
+  gtmDisconnect?: { body: unknown; status?: number }
   onRequest?: (path: string, init?: RequestInit) => void
 }
 
@@ -150,6 +152,12 @@ function installMarketingFetch(fixture: MarketingFixture, requested: string[]) {
     const path = pathOf(url)
     requested.push(path)
     fixture.onRequest?.(path, init)
+    if (path === `${prefix}/google-ads/connection` && init?.method === 'DELETE') {
+      return jsonResponse(fixture.googleAdsDisconnect?.body ?? { provider: 'google-ads', disconnected: true }, fixture.googleAdsDisconnect?.status ?? 200)
+    }
+    if (path === `${prefix}/gtm/connection` && init?.method === 'DELETE') {
+      return jsonResponse(fixture.gtmDisconnect?.body ?? { provider: 'gtm', disconnected: true }, fixture.gtmDisconnect?.status ?? 200)
+    }
     if (path.startsWith(`${prefix}/google-ads/status`)) return jsonResponse(googleAds)
     if (path.startsWith(`${prefix}/gtm/status`)) return jsonResponse(gtm)
     if (path.startsWith(`${prefix}/google-ads/snapshots`)) {
@@ -301,6 +309,135 @@ describe('ConversionIntegrityWorkspace', () => {
       expect.stringMatching(/^\/api\/v1\/projects\/example\/conversion-tracking\/contracts$/),
       expect.stringMatching(/^\/api\/v1\/projects\/example\/conversion-tracking\/contracts\/contract_purchase\/integrity/),
     ]))
+
+    queryClient.clear()
+  })
+
+  test.each([
+    {
+      provider: 'Google Ads',
+      changeAction: 'Change Google Ads account',
+      connectionPath: '/api/v1/projects/example/google-ads/connection',
+      connectAction: 'Connect Google Ads',
+    },
+    {
+      provider: 'Tag Manager',
+      changeAction: 'Change Tag Manager container',
+      connectionPath: '/api/v1/projects/example/gtm/connection',
+      connectAction: 'Connect Google Tag Manager',
+    },
+  ])('disconnects $provider only after inline confirmation and retains saved evidence', async ({
+    provider,
+    changeAction,
+    connectionPath,
+    connectAction,
+  }) => {
+    const requests: Array<{ path: string; method: string }> = []
+    let disconnectedProvider: string | null = null
+    const restore = mockFetch((url, init) => {
+      const path = pathOf(url)
+      const method = init?.method ?? 'GET'
+      requests.push({ path, method })
+
+      if (path === connectionPath && method === 'DELETE') {
+        disconnectedProvider = provider
+        return jsonResponse({ provider: provider === 'Google Ads' ? 'google-ads' : 'gtm', disconnected: true })
+      }
+      if (path.startsWith('/api/v1/projects/example/google-ads/status')) {
+        return jsonResponse(disconnectedProvider === 'Google Ads'
+          ? { connected: false, status: 'not-connected', connection: null, selectedCustomer: null }
+          : googleAdsStatus())
+      }
+      if (path.startsWith('/api/v1/projects/example/gtm/status')) {
+        return jsonResponse(disconnectedProvider === 'Tag Manager'
+          ? { connected: false, status: 'not-connected', connection: null, selection: null }
+          : gtmStatus())
+      }
+      if (path.startsWith('/api/v1/projects/example/conversion-tracking/contracts/contract_purchase/integrity')) {
+        return jsonResponse({
+          assessment: {
+            contract,
+            status: 'runtime-unverified',
+            evaluatedAt: capturedAt,
+            findings: [],
+          },
+          googleAdsSnapshot: null,
+          gtmSnapshot: null,
+        })
+      }
+      if (path.startsWith('/api/v1/projects/example/conversion-tracking/contracts')) return jsonResponse([contract])
+      if (path.startsWith('/api/v1/projects/example/google-ads/snapshots')) {
+        return jsonResponse({ snapshots: [{ id: 'ads_retained', kind: 'inventory', capturedAt }], nextCursor: null, total: 1 })
+      }
+      if (path.startsWith('/api/v1/projects/example/gtm/snapshots')) {
+        return jsonResponse({ snapshots: [{ id: 'gtm_retained', kind: 'live', capturedAt }], nextCursor: null, total: 1 })
+      }
+      if (path.startsWith('/api/v1/projects/example/google-ads/customers')) {
+        return jsonResponse({ customers: [googleAdsStatus().selectedCustomer], totalAccessible: 1, truncated: false, selection: adsConnection.selection, fetchedAt: capturedAt })
+      }
+      if (path.includes('/gtm/accounts/account_example/containers/GTM-TEST123/workspaces')) {
+        return jsonResponse({ accountId: 'account_example', containerId: 'GTM-TEST123', workspaces: [], totalAccessible: 0, truncated: false, fetchedAt: capturedAt })
+      }
+      if (path.includes('/gtm/accounts/account_example/containers')) {
+        return jsonResponse({ accountId: 'account_example', containers: [{ id: 'GTM-TEST123', name: 'Production container' }], totalAccessible: 1, truncated: false, fetchedAt: capturedAt })
+      }
+      if (path.startsWith('/api/v1/projects/example/gtm/accounts')) {
+        return jsonResponse({ accounts: [{ id: 'account_example', name: 'Example account' }], totalAccessible: 1, truncated: false, fetchedAt: capturedAt })
+      }
+      return jsonResponse({ error: { message: `Unexpected request: ${path}` } }, 500)
+    })
+    onTestFinished(restore)
+
+    const { queryClient } = renderWorkspace()
+    const changeButton = await screen.findByRole('button', { name: changeAction })
+    fireEvent.click(changeButton)
+
+    const disconnectTrigger = await screen.findByRole('button', { name: `Disconnect ${provider}` })
+    disconnectTrigger.focus()
+    fireEvent.click(disconnectTrigger)
+    expect(requests.some((request) => request.path === connectionPath && request.method === 'DELETE')).toBe(false)
+    expect(screen.getByRole('group', { name: `Confirm disconnect ${provider}` })).toBeTruthy()
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Keep connected' })))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep connected' }))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: `Disconnect ${provider}` })))
+
+    fireEvent.click(screen.getByRole('button', { name: `Disconnect ${provider}` }))
+    fireEvent.click(screen.getByRole('button', { name: `Disconnect ${provider}` }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: connectAction })).toBeTruthy())
+    expect(requests.filter((request) => request.path === connectionPath && request.method === 'DELETE')).toHaveLength(1)
+    expect(screen.getByRole('heading', { name: 'Payment confirmed' })).toBeTruthy()
+    expect(screen.getByText('ads_retained')).toBeTruthy()
+    expect(screen.getByText('gtm_retained')).toBeTruthy()
+
+    queryClient.clear()
+  })
+
+  test('keeps disconnect confirmation open and surfaces a provider error when the request fails', async () => {
+    const requested: string[] = []
+    installMarketingFetch({
+      contracts: [contract],
+      integrity: () => ({
+        assessment: { contract, status: 'runtime-unverified', evaluatedAt: capturedAt, findings: [] },
+        googleAdsSnapshot: null,
+        gtmSnapshot: null,
+      }),
+      googleAdsDisconnect: {
+        body: { error: { message: 'Google Ads disconnect unavailable' } },
+        status: 503,
+      },
+    }, requested)
+
+    const { queryClient } = renderWorkspace()
+    fireEvent.click(await screen.findByRole('button', { name: 'Change Google Ads account' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Disconnect Google Ads' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect Google Ads' }))
+
+    await waitFor(() => expect(screen.getByText('Google Ads disconnect unavailable')).toBeTruthy())
+    expect(screen.getByRole('group', { name: 'Confirm disconnect Google Ads' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Disconnect Google Ads' }).hasAttribute('disabled')).toBe(false)
+    expect(requested).toContain('/api/v1/projects/example/google-ads/connection')
 
     queryClient.clear()
   })

@@ -239,14 +239,65 @@ describe('ConversionIntegritySection', () => {
     expect(conversionIntegrityPrimaryAction(unconnected)).toMatchObject({ id: 'connect-google-ads' })
   })
 
-  test('renders the no-contract state without pretending that static checks ran', () => {
-    render(<ConversionIntegritySection />)
+  test('replaces the no-contract workspace with one focused setup path', () => {
+    const action = vi.fn()
+    render(<ConversionIntegritySection onPrimaryAction={action} />)
 
-    expect(screen.getByText('Setup needed')).toBeTruthy()
-    expect(screen.getByText('No conversion declared')).toBeTruthy()
-    expect(screen.getByText('Not declared')).toBeTruthy()
-    expect(screen.getAllByText('Not checked')).toHaveLength(2)
+    expect(screen.getByRole('heading', { name: 'Complete setup' })).toBeTruthy()
+    expect(screen.getByText('Google Ads account')).toBeTruthy()
+    expect(screen.getByText('Tag Manager container')).toBeTruthy()
+    expect(screen.getByText('Conversion to check')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Connect Google Ads' })).toBeTruthy()
+    expect(screen.queryByText('Setup needed')).toBeNull()
+    expect(screen.queryByText('No conversion declared')).toBeNull()
+    expect(screen.queryByText('Evidence progression')).toBeNull()
+    expect(screen.queryByText('Connection evidence')).toBeNull()
     expect(screen.queryByText('Latest sanitized snapshots')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Google Ads' }))
+    expect(action).toHaveBeenCalledWith('connect-google-ads')
+  })
+
+  test('advances the focused setup path through Tag Manager and conversion declaration', () => {
+    const action = vi.fn()
+    const changeGoogleAdsSelection = vi.fn()
+    const changeGtmSelection = vi.fn()
+    const gtmNotConnected = {
+      state: 'not-connected' as const,
+      selection: null,
+      snapshotCount: 0,
+      evidence: 'No stored evidence yet.',
+      lastSnapshotAt: null,
+    }
+    const setup = workspace({ contract: null, assessment: null, gtm: gtmNotConnected })
+    const { rerender } = render(
+      <ConversionIntegritySection
+        workspace={setup}
+        onPrimaryAction={action}
+        onChangeGoogleAdsSelection={changeGoogleAdsSelection}
+        onChangeGtmSelection={changeGtmSelection}
+      />,
+    )
+
+    expect(screen.getByText('Example Hotel').closest('li')?.textContent).toContain('Ready')
+    expect(screen.getByRole('button', { name: 'Connect Google Tag Manager' }).closest('li')?.getAttribute('aria-current')).toBe('step')
+    fireEvent.click(screen.getByRole('button', { name: 'Change Google Ads account' }))
+    expect(changeGoogleAdsSelection).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: 'Declare conversion' })).toBeNull()
+
+    rerender(
+      <ConversionIntegritySection
+        workspace={workspace({ contract: null, assessment: null })}
+        onPrimaryAction={action}
+        onChangeGoogleAdsSelection={changeGoogleAdsSelection}
+        onChangeGtmSelection={changeGtmSelection}
+      />,
+    )
+
+    expect(screen.getAllByText('Ready')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Declare conversion' }).closest('li')?.getAttribute('aria-current')).toBe('step')
+    fireEvent.click(screen.getByRole('button', { name: 'Change Tag Manager container' }))
+    expect(changeGtmSelection).toHaveBeenCalledTimes(1)
   })
 
   test('keeps a declared conversion configured while its integrity assessment loads', () => {
