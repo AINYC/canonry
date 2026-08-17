@@ -59,6 +59,9 @@ import {
   measurementQuerySetUpsertRequestSchema,
   measurementQueryTemplateApplyRequestSchema,
   measurementQueryTemplateUpsertRequestSchema,
+  GOOGLE_MARKETING_STORED_SNAPSHOT_PAGE_MAX,
+  canonicalizeGtmAccountId,
+  canonicalizeGtmResourceSelection,
   type NotificationEvent,
   describeError,
 } from '@ainyc/canonry-contracts'
@@ -620,6 +623,68 @@ const adsAdPauseInputSchema = z.object({
   adId: z.string().min(1),
   request: adsPauseRequestSchema,
 })
+
+// Google Marketing keeps Google Ads and GTM explicit: `ads` remains the
+// OpenAI/ChatGPT Ads surface. OAuth, resource selection, disconnect, and
+// conversion-contract mutations remain deliberate operator actions outside
+// MCP. These schemas cover the agent-safe stored/live/sync/integrity reads.
+const googleMarketingSnapshotPageInputSchema = z.object({
+  project: projectNameSchema,
+  limit: z.number().int().min(1).max(GOOGLE_MARKETING_STORED_SNAPSHOT_PAGE_MAX).optional(),
+  cursor: z.string().trim().min(1).optional(),
+}).strict()
+
+const googleMarketingSnapshotInputSchema = z.object({
+  project: projectNameSchema,
+  snapshotId: z.string().trim().min(1),
+}).strict()
+
+const gtmAccountInputSchema = z.object({
+  project: projectNameSchema,
+  accountId: z.string().trim().min(1),
+}).strict().superRefine((input, context) => {
+  if (!canonicalizeGtmAccountId(input.accountId)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['accountId'],
+      message: 'Expected a safe GTM account ID or accounts/{id} resource path.',
+    })
+  }
+})
+
+const gtmContainerInputSchema = z.object({
+  project: projectNameSchema,
+  accountId: z.string().trim().min(1),
+  containerId: z.string().trim().min(1),
+}).strict().superRefine((input, context) => {
+  if (!canonicalizeGtmResourceSelection(input)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['containerId'],
+      message: 'Expected matching safe GTM account/container IDs or resource paths.',
+    })
+  }
+})
+
+function canonicalGtmMcpAccountId(accountId: string): string {
+  const canonical = canonicalizeGtmAccountId(accountId)
+  if (!canonical) throw new Error('Invalid GTM account input.')
+  return canonical
+}
+
+function canonicalGtmMcpSelection(accountId: string, containerId: string): {
+  accountId: string
+  containerId: string
+} {
+  const canonical = canonicalizeGtmResourceSelection({ accountId, containerId })
+  if (!canonical) throw new Error('Invalid GTM account/container input.')
+  return canonical
+}
+
+const conversionTrackingContractInputSchema = z.object({
+  project: projectNameSchema,
+  contractId: z.string().trim().min(1),
+}).strict()
 
 const keywordsInputSchema = z.object({
   project: projectNameSchema,
@@ -3015,6 +3080,187 @@ export const canonryMcpTools = [
       maxDepth: input.maxDepth,
       checkDeadLinks: input.checkDeadLinks,
     }),
+  }),
+  // ----- Google Marketing: Google Ads + Google Tag Manager -----
+  // OAuth, selection, disconnect, and contract writes deliberately stay on
+  // the operator CLI/dashboard. The agent surface can only inspect bounded
+  // evidence, trigger bounded read-only syncs, and assess stored integrity.
+  defineTool({
+    name: 'canonry_google_ads_status',
+    title: 'Get Google Ads connection status',
+    description: 'Read the project-local Google Ads connection, selected customer, and stored-evidence freshness. This never exposes credentials or changes a Google Ads account.',
+    access: 'read',
+    tier: 'google-ads',
+    inputSchema: projectInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/google-ads/status'],
+    handler: (client, input) => client.getGoogleAdsStatus(input.project),
+  }),
+  defineTool({
+    name: 'canonry_google_ads_customers',
+    title: 'List live Google Ads customers',
+    description: 'Read the bounded set of Google Ads customers available to the project OAuth connection. This makes live provider GET requests and requires google-marketing.read-live; customer selection remains an explicit operator action.',
+    access: 'read',
+    tier: 'google-ads',
+    inputSchema: projectInputSchema,
+    annotations: readAnnotations(true),
+    openApiOperations: ['GET /api/v1/projects/{name}/google-ads/customers'],
+    handler: (client, input) => client.listGoogleAdsCustomers(input.project),
+  }),
+  defineTool({
+    name: 'canonry_google_ads_snapshots',
+    title: 'List stored Google Ads evidence',
+    description: 'List a bounded page of redacted, append-only Google Ads snapshots. Stored reads are quota-free and do not call Google.',
+    access: 'read',
+    tier: 'google-ads',
+    inputSchema: googleMarketingSnapshotPageInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/google-ads/snapshots'],
+    handler: (client, input) => client.listGoogleAdsSnapshots(input.project, {
+      limit: input.limit,
+      cursor: input.cursor,
+    }),
+  }),
+  defineTool({
+    name: 'canonry_google_ads_snapshot_get',
+    title: 'Get stored Google Ads evidence',
+    description: 'Read one redacted Google Ads evidence snapshot by ID. It can show conversion actions and effective campaign goals, but cannot prove a browser conversion fired.',
+    access: 'read',
+    tier: 'google-ads',
+    inputSchema: googleMarketingSnapshotInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/google-ads/snapshots/{snapshotId}'],
+    handler: (client, input) => client.getGoogleAdsSnapshot(input.project, input.snapshotId),
+  }),
+  defineTool({
+    name: 'canonry_google_ads_sync',
+    title: 'Sync Google Ads conversion evidence',
+    description: 'Queue a bounded read-only Google Ads evidence sync using GETs and SearchStream POSTs. It creates a local run and sanitized snapshots, but never changes campaigns, conversion actions, goals, bids, or budgets. Requires google-marketing.read-live and write authority.',
+    access: 'write',
+    tier: 'google-ads',
+    inputSchema: projectInputSchema,
+    annotations: writeAnnotations({ idempotentHint: false, openWorldHint: true }),
+    openApiOperations: ['POST /api/v1/projects/{name}/google-ads/sync'],
+    handler: (client, input) => client.triggerGoogleAdsSync(input.project),
+  }),
+  defineTool({
+    name: 'canonry_gtm_status',
+    title: 'Get Google Tag Manager connection status',
+    description: 'Read the project-local GTM connection, selected account/container/workspace, and stored-evidence freshness. This never exposes credentials or edits GTM.',
+    access: 'read',
+    tier: 'gtm',
+    inputSchema: projectInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/gtm/status'],
+    handler: (client, input) => client.getGtmStatus(input.project),
+  }),
+  defineTool({
+    name: 'canonry_gtm_accounts',
+    title: 'List live GTM accounts',
+    description: 'Read the bounded set of GTM accounts available to the project OAuth connection. This makes live provider GET requests and requires google-marketing.read-live; resource selection remains operator-only.',
+    access: 'read',
+    tier: 'gtm',
+    inputSchema: projectInputSchema,
+    annotations: readAnnotations(true),
+    openApiOperations: ['GET /api/v1/projects/{name}/gtm/accounts'],
+    handler: (client, input) => client.listGtmAccounts(input.project),
+  }),
+  defineTool({
+    name: 'canonry_gtm_containers',
+    title: 'List live GTM containers',
+    description: 'Read the bounded set of containers in one GTM account. This is a live GET-only provider read; it cannot edit or publish a container.',
+    access: 'read',
+    tier: 'gtm',
+    inputSchema: gtmAccountInputSchema,
+    annotations: readAnnotations(true),
+    openApiOperations: ['GET /api/v1/projects/{name}/gtm/accounts/{accountId}/containers'],
+    handler: (client, input) => client.listGtmContainers(
+      input.project,
+      canonicalGtmMcpAccountId(input.accountId),
+    ),
+  }),
+  defineTool({
+    name: 'canonry_gtm_workspaces',
+    title: 'List live GTM workspaces',
+    description: 'Read the bounded set of workspaces in one GTM container. This is a live GET-only provider read; it cannot edit a workspace or publish a version.',
+    access: 'read',
+    tier: 'gtm',
+    inputSchema: gtmContainerInputSchema,
+    annotations: readAnnotations(true),
+    openApiOperations: ['GET /api/v1/projects/{name}/gtm/accounts/{accountId}/containers/{containerId}/workspaces'],
+    handler: (client, input) => {
+      const selection = canonicalGtmMcpSelection(input.accountId, input.containerId)
+      return client.listGtmWorkspaces(input.project, selection.accountId, selection.containerId)
+    },
+  }),
+  defineTool({
+    name: 'canonry_gtm_snapshots',
+    title: 'List stored GTM evidence',
+    description: 'List a bounded page of redacted, append-only GTM live/draft graph snapshots. Stored reads are quota-free and do not call Google.',
+    access: 'read',
+    tier: 'gtm',
+    inputSchema: googleMarketingSnapshotPageInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/gtm/snapshots'],
+    handler: (client, input) => client.listGtmSnapshots(input.project, {
+      limit: input.limit,
+      cursor: input.cursor,
+    }),
+  }),
+  defineTool({
+    name: 'canonry_gtm_snapshot_get',
+    title: 'Get stored GTM evidence',
+    description: 'Read one redacted GTM live/draft graph snapshot by ID. It can prove static tag and trigger configuration only; it cannot prove a browser event fired.',
+    access: 'read',
+    tier: 'gtm',
+    inputSchema: googleMarketingSnapshotInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/gtm/snapshots/{snapshotId}'],
+    handler: (client, input) => client.getGtmSnapshot(input.project, input.snapshotId),
+  }),
+  defineTool({
+    name: 'canonry_gtm_sync',
+    title: 'Sync GTM conversion evidence',
+    description: 'Queue a bounded GTM GET-only evidence sync. It creates a local run and sanitized live/draft snapshots, but never edits a workspace or publishes a container version. Requires google-marketing.read-live and write authority.',
+    access: 'write',
+    tier: 'gtm',
+    inputSchema: projectInputSchema,
+    annotations: writeAnnotations({ idempotentHint: false, openWorldHint: true }),
+    openApiOperations: ['POST /api/v1/projects/{name}/gtm/sync'],
+    handler: (client, input) => client.triggerGtmSync(input.project),
+  }),
+  defineTool({
+    name: 'canonry_conversion_tracking_contracts',
+    title: 'List conversion-tracking contracts',
+    description: 'List the project’s declared business contracts linking an application event to Google Ads and GTM identifiers. Contract creation and changes remain operator-only.',
+    access: 'read',
+    tier: 'conversion-tracking',
+    inputSchema: projectInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/conversion-tracking/contracts'],
+    handler: (client, input) => client.listConversionTrackingContracts(input.project),
+  }),
+  defineTool({
+    name: 'canonry_conversion_tracking_contract_get',
+    title: 'Get conversion-tracking contract',
+    description: 'Read one declared conversion-tracking contract. It declares intended semantics; use integrity assessment to evaluate stored evidence.',
+    access: 'read',
+    tier: 'conversion-tracking',
+    inputSchema: conversionTrackingContractInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/conversion-tracking/contracts/{contractId}'],
+    handler: (client, input) => client.getConversionTrackingContract(input.project, input.contractId),
+  }),
+  defineTool({
+    name: 'canonry_conversion_tracking_integrity',
+    title: 'Assess stored conversion integrity',
+    description: 'Evaluate a declared contract against stored redacted Google Ads and GTM evidence. This does not call providers and cannot treat static configuration as proof of a browser event or observed Google Ads conversion.',
+    access: 'read',
+    tier: 'conversion-tracking',
+    inputSchema: conversionTrackingContractInputSchema,
+    annotations: readAnnotations(),
+    openApiOperations: ['GET /api/v1/projects/{name}/conversion-tracking/contracts/{contractId}/integrity'],
+    handler: (client, input) => client.getConversionTrackingIntegrity(input.project, input.contractId),
   }),
   // ----- OpenAI ads (ChatGPT ads) -----
   defineTool({

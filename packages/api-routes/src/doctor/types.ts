@@ -99,6 +99,10 @@ export interface DoctorContext {
   bundledSkills?: BundledSkillSnapshot[]
   /** Live user-global native Canonry plugin state, when available on a local host. */
   getAgentPluginState?: () => AgentPluginState
+  /** Offline, secret-free Google Ads/GTM metadata used by project Doctor checks. */
+  getGoogleMarketingDoctorInput?: (
+    ctx: DoctorContext,
+  ) => import('./checks/google-marketing.js').GoogleMarketingDoctorInput | null | undefined
 }
 
 export interface ProjectInfo {

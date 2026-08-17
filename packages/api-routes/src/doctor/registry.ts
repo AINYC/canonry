@@ -11,6 +11,7 @@ import { PROVIDERS_CHECKS } from './checks/providers.js'
 import { RUNTIME_STATE_CHECKS } from './checks/runtime-state.js'
 import { TRAFFIC_SOURCE_CHECKS } from './checks/traffic-source.js'
 import { WORDPRESS_PUBLISH_CHECKS } from './checks/wordpress-publish.js'
+import { GOOGLE_MARKETING_DOCTOR_CHECKS } from './checks/google-marketing.js'
 import type { CheckDefinition } from './types.js'
 
 export const ALL_CHECKS: readonly CheckDefinition[] = [
@@ -24,6 +25,7 @@ export const ALL_CHECKS: readonly CheckDefinition[] = [
   ...WORDPRESS_PUBLISH_CHECKS,
   ...GA_AUTH_CHECKS,
   ...ADS_CHECKS,
+  ...GOOGLE_MARKETING_DOCTOR_CHECKS,
   ...PROVIDERS_CHECKS,
   ...TRAFFIC_SOURCE_CHECKS,
   ...BACKLINKS_CHECKS,

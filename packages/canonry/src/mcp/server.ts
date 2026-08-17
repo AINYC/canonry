@@ -58,6 +58,8 @@ Sweeps and probes spend provider quota and write rows. Get explicit approval bef
 
 Most reads are free. Five ads reads are NOT: canonry_ads_account, canonry_ads_geo_search, canonry_ads_live_delivery, canonry_ads_conversion_pixels and canonry_ads_conversion_event_settings call the provider live and spend against the advertiser account. They are marked read, so nothing in the tool list warns you. Get approval for those exactly as for a mutation.
 
+Google Marketing also calls providers live. Get approval before canonry_google_ads_customers, canonry_gtm_accounts, canonry_gtm_containers, canonry_gtm_workspaces, canonry_google_ads_sync or canonry_gtm_sync.
+
 A null answerMentioned means NOT CHECKED, not "not mentioned". Never coerce it to false.
 
 If no sweep has run, say so. Never state a mention or citation figure that no run produced.`
