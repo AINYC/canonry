@@ -587,24 +587,23 @@ function ConversionIntegritySetup({
       <div className="section-head mb-5">
         <div>
           <p className="eyebrow">Google marketing</p>
-          <h2 id="conversion-integrity-title" className="mt-1 text-xl font-semibold tracking-[-0.02em] text-heading">
-            Conversion Integrity
-          </h2>
-          <p className="lede mt-2">Check one website conversion across Tag Manager and Google Ads.</p>
+          <div className="mt-1 flex items-center gap-1.5">
+            <h2 id="conversion-integrity-title" className="text-xl font-semibold tracking-[-0.02em] text-heading">
+              Conversion Integrity
+            </h2>
+            <InfoTooltip text="Canonry reads your Google configuration and never changes or publishes it. Connect Google Ads and Tag Manager, then choose one website conversion to check across both." />
+          </div>
         </div>
       </div>
 
       <div className="max-w-3xl pt-3">
-        <h3 className="text-base font-semibold text-heading">Complete setup</h3>
-        <p className="supporting-copy mt-2 max-w-2xl">
-          Connect your existing Google accounts, then choose the conversion Canonry should check.
-        </p>
-
-        <ol className="mt-5 divide-y divide-default border-y border-default">
+        <ol className="divide-y divide-default border-y border-default">
           {steps.map((step, index) => {
             const isActive = index === activeStep
-            // Each row explains ITS own next step, not the list's single active one.
-            const detail = step.ready ? step.summary ?? 'Connected' : step.action?.detail ?? step.detail
+            // A connected row states what it is connected TO. An unconnected row
+            // says nothing: its title and its button already carry the meaning,
+            // and a sentence restating the button is the copy an operator skips.
+            const detail = step.ready ? step.summary ?? 'Connected' : null
 
             return (
               <li
@@ -638,7 +637,7 @@ function ConversionIntegritySetup({
                   {isActive && !step.ready && step.summary ? (
                     <p className="mt-1 max-w-xl text-sm font-medium text-heading">{step.summary}</p>
                   ) : null}
-                  <p className="mt-1 max-w-xl text-sm leading-6 text-secondary">{detail}</p>
+                  {detail ? <p className="mt-1 max-w-xl text-sm leading-6 text-secondary">{detail}</p> : null}
                   {step.action && onPrimaryAction ? (
                     <div className="mt-3">
                       {step.action.id === 'retry-connection-status' ? (
@@ -667,9 +666,6 @@ function ConversionIntegritySetup({
           })}
         </ol>
 
-        <p className="mt-4 text-sm leading-6 text-secondary">
-          Canonry reads your Google configuration. It does not change or publish it.
-        </p>
       </div>
     </section>
   )
