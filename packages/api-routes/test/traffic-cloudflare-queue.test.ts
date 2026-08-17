@@ -9,6 +9,7 @@ import { createClient, migrate, projects, schedules, trafficEventReceipts, traff
 import { SchedulableRunKinds, TrafficSourceStatuses, TrafficSourceTypes } from '@ainyc/canonry-contracts'
 import { CloudflareQueueApiError } from '@ainyc/canonry-integration-cloudflare-queue'
 import { apiRoutes } from '../src/index.js'
+import { CURRENT_CLOUDFLARE_WORKER_VERSION } from '../src/cloudflare-worker-version.js'
 import type { CloudflareTrafficCredentialRecord, CloudflareTrafficCredentialStore } from '../src/traffic.js'
 import { tryClaimTrafficSyncLease } from '../src/traffic-sync-lease.js'
 
@@ -263,7 +264,7 @@ describe('Cloudflare Queue pull lifecycle', () => {
     let ackSawCommittedReceipt = false
     const body = {
       schemaVersion: 1,
-      workerVersion: '1.0.0',
+      workerVersion: CURRENT_CLOUDFLARE_WORKER_VERSION,
       events: [{
         eventId: 'ray-queue-redelivery', observedAt: '2026-08-11T12:00:00.000Z', method: 'GET', host: 'example.com',
         path: '/queue', queryString: null, status: 200, userAgent: 'GPTBot/1.0', remoteIp: null, referer: null,
@@ -292,6 +293,8 @@ describe('Cloudflare Queue pull lifecycle', () => {
     expect(JSON.parse(first.payload)).toMatchObject({ pulledEvents: 1, crawlerHits: 1 })
     expect(JSON.parse(second.payload)).toMatchObject({ pulledEvents: 0, crawlerHits: 0 })
     expect(ackSawCommittedReceipt).toBe(true)
+    expect(h.db.select().from(trafficSources).where(eq(trafficSources.id, sourceId)).get()?.lastWorkerVersion)
+      .toBe(CURRENT_CLOUDFLARE_WORKER_VERSION)
     const [receipt] = h.db.select().from(trafficEventReceipts).all()
     expect(receipt).toBeDefined()
     // Queue configuration is caller supplied and is not verified against

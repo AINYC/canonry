@@ -12,6 +12,7 @@ import {
   aiUserFetchEventsHourly,
   aiReferralEventsHourly,
 } from '@ainyc/canonry-db'
+import { CURRENT_CLOUDFLARE_WORKER_VERSION } from '../src/cloudflare-worker-version.js'
 import { TRAFFIC_SOURCE_CHECKS } from '../src/doctor/checks/traffic-source.js'
 import type { CheckOutput, DoctorContext, ProjectInfo, TrafficSourceProbe, TrafficSourceValidator } from '../src/doctor/types.js'
 
@@ -441,54 +442,79 @@ describe('traffic.source.cache-blindspot', () => {
 })
 
 describe('traffic.source.worker-version', () => {
-  it.each([
-    ['a non-Cloudflare source', { sourceType: 'cloud-run' }],
-    ['a Cloudflare queue-pull source', {
+  it('skips when no active Cloudflare Worker source is connected', async () => {
+    insertTrafficSource(h, { sourceType: 'cloud-run' })
+    insertTrafficSource(h, {
       sourceType: 'cloudflare',
-      configJson: { deliveryMode: 'queue-pull', workerVersion: '1.2.3' },
-    }],
-  ])('skips for %s', async (_label, source) => {
-    insertTrafficSource(h, source)
+      status: 'paused',
+      configJson: { deliveryMode: 'queue-pull', workerVersion: '1.0.0' },
+    })
     const r = await workerVersionCheck.run(ctxFor(h))
     expect(r.status).toBe('skipped')
     expect(r.code).toBe('traffic.worker-version.not-applicable')
   })
 
-  it('warns while a direct-push source waits for its first event', async () => {
+  it.each(['direct-push', 'queue-pull'])('warns while a %s source waits for its first event', async (deliveryMode) => {
     insertTrafficSource(h, {
       sourceType: 'cloudflare',
-      configJson: { deliveryMode: 'direct-push', workerVersion: '1.2.3' },
+      configJson: { deliveryMode, workerVersion: '1.0.0' },
     })
     const r = await workerVersionCheck.run(ctxFor(h))
     expect(r.status).toBe('warn')
     expect(r.code).toBe('traffic.worker-version.waiting-for-first-event')
     expect(r.remediation).toContain('smoke-test request')
     expect(r.details).toMatchObject({
-      sources: [{ expectedVersion: '1.2.3', observedVersion: null, state: 'waiting-for-first-event' }],
+      sources: [{
+        deliveryMode,
+        expectedVersion: CURRENT_CLOUDFLARE_WORKER_VERSION,
+        observedVersion: null,
+        state: 'waiting-for-first-event',
+      }],
     })
   })
 
-  it('warns and requests redeployment when the observed version differs', async () => {
-    insertTrafficSource(h, {
-      sourceType: 'cloudflare',
-      configJson: { deliveryMode: 'direct-push', workerVersion: '1.2.3' },
-      lastWorkerVersion: '1.2.2',
-    })
-    const r = await workerVersionCheck.run(ctxFor(h))
-    expect(r.status).toBe('warn')
-    expect(r.code).toBe('traffic.worker-version.stale')
-    expect(r.remediation).toContain('--deploy --confirm-route')
-  })
+  it.each(['direct-push', 'queue-pull'])(
+    'warns and requests redeployment when a %s source still reports its persisted old version',
+    async (deliveryMode) => {
+      insertTrafficSource(h, {
+        sourceType: 'cloudflare',
+        configJson: { deliveryMode, workerVersion: '1.0.0' },
+        lastWorkerVersion: '1.0.0',
+      })
+      const r = await workerVersionCheck.run(ctxFor(h))
+      expect(r.status).toBe('warn')
+      expect(r.code).toBe('traffic.worker-version.stale')
+      expect(r.remediation).toContain('traffic connect cloudflare')
+      expect(r.details).toMatchObject({
+        sources: [{
+          deliveryMode,
+          expectedVersion: CURRENT_CLOUDFLARE_WORKER_VERSION,
+          observedVersion: '1.0.0',
+          state: 'stale',
+        }],
+      })
+    },
+  )
 
-  it('reports current for an equal legacy direct-push version', async () => {
+  it.each([
+    ['legacy direct-push', { workerVersion: '1.0.0' }],
+    ['queue-pull', { deliveryMode: 'queue-pull', workerVersion: '1.0.0' }],
+  ])('reports current for a %s source running the current generated version', async (label, configJson) => {
     insertTrafficSource(h, {
       sourceType: 'cloudflare',
-      configJson: { workerVersion: '1.2.3' },
-      lastWorkerVersion: '1.2.3',
+      configJson,
+      lastWorkerVersion: CURRENT_CLOUDFLARE_WORKER_VERSION,
     })
     const r = await workerVersionCheck.run(ctxFor(h))
     expect(r.status).toBe('ok')
     expect(r.code).toBe('traffic.worker-version.current')
+    expect(r.details).toMatchObject({
+      sources: [{
+        deliveryMode: label === 'queue-pull' ? 'queue-pull' : 'direct-push',
+        expectedVersion: CURRENT_CLOUDFLARE_WORKER_VERSION,
+        state: 'current',
+      }],
+    })
   })
 })
 

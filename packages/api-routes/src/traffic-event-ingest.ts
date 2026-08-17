@@ -13,6 +13,10 @@ import {
 } from '@ainyc/canonry-db'
 import type { NormalizedTrafficRequest } from '@ainyc/canonry-contracts'
 import { buildTrafficProbeReport } from '@ainyc/canonry-integration-traffic'
+import {
+  enforceRawEventSampleRetention,
+  retainedRawEventSampleTimestamp,
+} from './raw-event-sample-retention.js'
 
 // Signatures expire after five minutes. Keep receipts for one additional
 // replay window so clock skew and an edge retry cannot double-count, without
@@ -111,6 +115,12 @@ export function writeTrafficEventBatch(
       .where(eq(trafficSources.id, opts.sourceId))
       .get()
     opts.validateSource(source)
+
+    const rawSampleCutoff = enforceRawEventSampleRetention(
+      tx,
+      opts.sourceId,
+      opts.receivedAt,
+    )
 
     // Opportunistic, source-local sweep. The expiry index keeps this bounded,
     // and scoping prevents one noisy source from doing cleanup work for all.
@@ -353,7 +363,9 @@ export function writeTrafficEventBatch(
       const hourlySampleLimit = Math.max(0, Math.floor(opts.sampleLimit))
       const remainingSamplesByHour = new Map<string, number>()
       for (const sample of report.samples) {
-        const hour = observedUtcHourBounds(sample.observedAt)
+        const sampleTimestamp = retainedRawEventSampleTimestamp(sample.observedAt, rawSampleCutoff)
+        if (!sampleTimestamp) continue
+        const hour = observedUtcHourBounds(sampleTimestamp)
         if (!hour || hourlySampleLimit === 0) continue
         let remaining = remainingSamplesByHour.get(hour.start)
         if (remaining === undefined) {
@@ -394,7 +406,7 @@ export function writeTrafficEventBatch(
             id: crypto.randomUUID(),
             projectId: opts.projectId,
             sourceId: opts.sourceId,
-            ts: sample.observedAt,
+            ts: sampleTimestamp,
             eventType,
             ipHash: null,
             userAgent: sample.userAgent,

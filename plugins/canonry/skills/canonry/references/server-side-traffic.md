@@ -29,7 +29,7 @@ Four tables store the shared output from every adapter:
 | `crawler_events_hourly` | One row per `(project, source, hour, bot, verification, path, status)` — bot crawls rolled up by hour |
 | `ai_user_fetch_events_hourly` | One row per `(project, source, hour, bot, verification, path, status)` — user-initiated AI fetches rolled up by hour |
 | `ai_referral_events_hourly` | One row per `(project, source, hour, product, source_domain, evidence_type, landing_path, status)` — click-through arrivals rolled up by hour |
-| `raw_event_samples` | Bounded forensic samples for spot checks. Cloudflare uses a per-source, per-hour cap |
+| `raw_event_samples` | Bounded forensic samples for spot checks. Source writes plus a startup/daily global sweep enforce 30-day retention; Cloudflare also uses a per-source, per-hour cap |
 
 Each `traffic_sources` row is one server-log integration for a project.
 Adapters today:
@@ -931,7 +931,7 @@ schema change, the stored rollups are untouched.
 | Project dashboard `/projects/:name/activity` | Live source table + 24h totals + GA4 referrals (combined view) |
 | Top-level `/traffic` route | Cross-project source admin (connect, sync, archive) |
 | `cnry report <project>` (HTML + SPA) | "AI Visibility — Server-Side" section, ranked above Indexing Health |
-| `cnry doctor --project <name>` | Source health checks, including direct-push Worker drift and Queue-pull local credential/sync state |
+| `cnry doctor --project <name>` | Source health checks, including last-observed Worker drift for direct and Queue sources plus Queue local credential/sync state |
 | MCP toolkit `traffic` | Read/status tools plus pull-source setup/sync tools. Cloudflare connect is local-CLI-only so Worker secrets cannot enter an MCP transcript. |
 
 ## Doctor signals
@@ -948,14 +948,16 @@ The doctor checks are adapter-agnostic. When they fail or warn:
 | `traffic.source.queue-backlog` | `traffic.queue-backlog.remaining` | More than 1,000 Queue messages remain. Run a manual sync. If the backlog persists, shorten the traffic-sync schedule. |
 | `traffic.source.credentials` | `traffic.credentials.resolve-failed` | Reconnect from the host that owns the source credentials. Queue pull requires a non-empty Account Queues Edit token paired by source ID. |
 | `traffic.source.cache-blindspot` | `traffic.cache-blindspot.wordpress-plugin` | A WordPress source is connected, so the plugin cannot see cache-served page views. Exclude AI user-agents from the page cache and any CDN, or switch to a log/edge source. Warns only, not a failure. |
-| `traffic.source.worker-version` | `traffic.worker-version.waiting-for-first-event` | Send a smoke-test request through the Worker. Then run the doctor again. |
-| `traffic.source.worker-version` | `traffic.worker-version.stale` | Redeploy the generated Worker from the credential-owning host. Use `--deploy --confirm-route --confirm-fail-open`. Attach the route manually. |
+| `traffic.source.worker-version` | `traffic.worker-version.waiting-for-first-event` | Send a smoke-test request through the Worker. For Queue delivery, run a sync to ingest it. Then run the doctor again. |
+| `traffic.source.worker-version` | `traffic.worker-version.stale` | Regenerate and redeploy the Worker from the credential-owning host with the source's existing delivery mode, then verify the route or Queue binding. |
 
 Cloudflare doctor behavior is capability-driven: only
 `deliveryMode=direct-push` (and legacy Cloudflare rows with no mode) skips
-pull-watermark lag. The same mode enables `traffic.source.worker-version`.
-That check compares `configJson.workerVersion` with `lastWorkerVersion`.
-Queue pull uses pull lag checks and skips the direct-push Worker-version check.
+pull-watermark lag. Both direct and Queue modes enable
+`traffic.source.worker-version`. That check compares the shared current
+generated version with `lastWorkerVersion`, the version on the most recently
+ingested batch. It is last-observed evidence, not proof that every deployment
+or queued message runs that version. Queue pull also keeps its pull-lag checks.
 
 ## Scheduling
 

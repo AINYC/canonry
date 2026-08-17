@@ -748,7 +748,7 @@ const COVERAGE: Record<string, CoverageEntry> = {
       lastEventIds: 'Bounded ring buffer of recent event IDs; internal dedup state, not part of the source DTO.',
       configJson: 'Exposed on the DTO as `config`; the DB column keeps the `Json` suffix for grep-ability.',
       ingestTokenHash: 'sha256 of the per-source bearer token issued to push-receive adapters (Cloudflare Worker). Auth-only — never returned via the DTO.',
-      lastWorkerVersion: 'Semver reported by the most recent forwarded event from a push-receive Worker. Surfaced through the doctor check, not the source DTO.',
+      lastWorkerVersion: 'Semver reported by the most recently ingested Cloudflare Worker batch, whether direct or Queue. Surfaced through the doctor check, not the source DTO.',
       syncLeaseOwner: 'Ephemeral owner of a pull-source sync lease; internal concurrency state.',
       syncLeaseExpiresAt: 'Expiry for stale pull-source lease recovery; internal concurrency state.',
     },

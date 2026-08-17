@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { Agent as UndiciAgent } from 'undici'
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { CURRENT_CLOUDFLARE_WORKER_VERSION } from './cloudflare-worker-version.js'
 import {
   CLOUDFLARE_QUEUE_BATCH_SIZE,
   DEFAULT_CLOUDFLARE_QUEUE_MAX_BATCHES,
@@ -124,6 +125,12 @@ import {
   DIRECT_PUSH_RECEIPT_TTL_MS,
   writeTrafficEventBatch,
 } from './traffic-event-ingest.js'
+import {
+  enforceGlobalRawEventSampleRetention,
+  enforceRawEventSampleRetention,
+  RAW_EVENT_SAMPLE_RETENTION_SWEEP_INTERVAL_MS,
+  retainedRawEventSampleTimestamp,
+} from './raw-event-sample-retention.js'
 import { releaseTrafficSyncLease, tryClaimTrafficSyncLease } from './traffic-sync-lease.js'
 
 export interface CloudRunCredentialRecord {
@@ -414,12 +421,6 @@ const DEFAULT_TRAFFIC_SYNC_CRON = '*/30 * * * *'
 const MAX_BACKFILL_DAYS = 90
 const BACKFILL_MAX_PAGES = 1_000
 const BACKFILL_SAMPLE_LIMIT = 500
-// Semver of the canonry-issued Worker bundle. Bump when the Worker's
-// generic edge-side filter, payload shape, or auth header set changes —
-// the doctor check `traffic.source.worker-version` will then surface
-// deployments still running an older revision so the operator
-// regenerates and redeploys.
-const CLOUDFLARE_WORKER_VERSION = '1.0.1'
 const CLOUDFLARE_INGEST_BODY_LIMIT = 256 * 1024
 // Queue retention is configured outside Canonry and this v1 connection only
 // records the operator-provided value. Keep dedupe receipts through the
@@ -1070,6 +1071,9 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
         const stillAuthoritative = latestSource
           && isAuthoritativeTrafficSource(tx, latestSource)
           && isSameTrafficSourceGeneration(latestSource, sourceRow)
+        if (stillAuthoritative) {
+          enforceRawEventSampleRetention(tx, sourceRow.id, finishedAt)
+        }
         tx.update(runs).set(stillAuthoritative
           ? { status: RunStatuses.completed, finishedAt }
           : {
@@ -1132,6 +1136,12 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
         }).where(eq(runs.id, runId)).run()
         return 'source-inactive' as const
       }
+
+      const rawSampleCutoff = enforceRawEventSampleRetention(
+        tx,
+        sourceRow.id,
+        finishedAt,
+      )
 
       // Replace mode: clear the rollup window first, then ingest fresh.
       // Boundaries are inclusive on both ends; windowStart is hour-floored
@@ -1355,6 +1365,8 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
       }
 
       for (const sample of report.samples) {
+        const sampleTimestamp = retainedRawEventSampleTimestamp(sample.observedAt, rawSampleCutoff)
+        if (!sampleTimestamp) continue
         const eventType = sample.crawler
           ? 'crawler'
           : sample.aiUserFetch
@@ -1376,7 +1388,7 @@ async function runBackfillTask(options: RunBackfillTaskOptions): Promise<void> {
             id: crypto.randomUUID(),
             projectId: project.id,
             sourceId: sourceRow.id,
-            ts: sample.observedAt,
+            ts: sampleTimestamp,
             eventType,
             ipHash: null,
             userAgent: sample.userAgent,
@@ -1438,6 +1450,28 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     throw new RangeError('cloudflareQueueMaxBatches must be an integer from 1 to 50')
   }
   const allowLoopback = opts.allowLoopbackWebhooks === true
+
+  let rawSampleRetentionTimer: ReturnType<typeof setInterval> | undefined
+  app.addHook('onReady', async () => {
+    const pruneExpiredSamples = (): void => {
+      try {
+        enforceGlobalRawEventSampleRetention(app.db, new Date().toISOString())
+      } catch {
+        // Raw samples are optional debug evidence. Keep route startup and live
+        // traffic available if maintenance fails, but make the failure visible.
+        app.log.error('Raw traffic sample retention sweep failed')
+      }
+    }
+    pruneExpiredSamples()
+    rawSampleRetentionTimer = setInterval(
+      pruneExpiredSamples,
+      RAW_EVENT_SAMPLE_RETENTION_SWEEP_INTERVAL_MS,
+    )
+    rawSampleRetentionTimer.unref()
+  })
+  app.addHook('onClose', async () => {
+    if (rawSampleRetentionTimer) clearInterval(rawSampleRetentionTimer)
+  })
 
   /**
    * SSRF guard for the operator-supplied WordPress `baseUrl`. Every pull-side
@@ -2025,7 +2059,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       const sameModeSource = cloudflareSources.find(row => parseQueuePullCloudflareSourceConfig(row.configJson))
       const sourceId = sameModeSource?.id ?? crypto.randomUUID()
       const previousCredential = credentialStore.getConnectionBySourceId(sourceId)
-      const workerVersion = CLOUDFLARE_WORKER_VERSION
+      const workerVersion = CURRENT_CLOUDFLARE_WORKER_VERSION
       const workerScript = generateWorkerScript({
         deliveryMode: 'queue-pull', workerVersion, botList: DEFAULT_BOT_LIST,
       })
@@ -2173,7 +2207,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
     assertCloudflareIngestUrlIsPublicHttps(ingestUrl)
     assertCloudflareIngestUrlOutsideWorkerRoute(ingestUrl, workerRouteHost)
 
-    const workerVersion = CLOUDFLARE_WORKER_VERSION
+    const workerVersion = CURRENT_CLOUDFLARE_WORKER_VERSION
     const workerScript = generateWorkerScript({
       deliveryMode,
       workerVersion,
@@ -3271,6 +3305,11 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
 
       const report = buildTrafficProbeReport(dedupedEvents, { sampleLimit })
       finishedAt = new Date().toISOString()
+      const rawSampleCutoff = enforceRawEventSampleRetention(
+        tx,
+        sourceRow.id,
+        finishedAt,
+      )
       pulledEventsCount = report.totals.normalizedEvents
       selfTrafficExcludedCount = report.totals.selfTrafficExcluded
       crawlerHitsCount = report.totals.crawlerHits
@@ -3482,6 +3521,8 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       }
 
       for (const sample of report.samples) {
+        const sampleTimestamp = retainedRawEventSampleTimestamp(sample.observedAt, rawSampleCutoff)
+        if (!sampleTimestamp) continue
         const eventType = sample.crawler
           ? 'crawler'
           : sample.aiUserFetch
@@ -3503,7 +3544,7 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
             id: crypto.randomUUID(),
             projectId: project.id,
             sourceId: sourceRow.id,
-            ts: sample.observedAt,
+            ts: sampleTimestamp,
             eventType,
             ipHash: null,
             userAgent: sample.userAgent,

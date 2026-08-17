@@ -21,7 +21,7 @@ export interface TrafficSourceProbe {
   displayName: string
   status: string
   lastSyncedAt: string | null
-  /** Worker version reported by the most recent pushed event, if any. */
+  /** Worker version reported by the most recently ingested direct or Queue batch, if any. */
   lastWorkerVersion: string | null
   /** Hash of the bearer accepted by a push receiver. Never contains plaintext credentials. */
   ingestTokenHash: string | null

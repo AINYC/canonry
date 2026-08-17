@@ -355,7 +355,7 @@ Each check returns `status: ok | warn | fail | skipped`, a stable machine-readab
 | integrations | `traffic.source.connected` | project | At least one non-archived server-side traffic source exists for the project |
 | integrations | `traffic.source.recent-data` | project | Connected sources have crawler, AI user-fetch, or AI-referral events in the last 7d (warn) or 30d (fail) |
 | integrations | `traffic.source.sync-lag` | project | Pull-source watermark health. Skips only Cloudflare `deliveryMode=direct-push` (legacy missing mode is direct push); Queue pull remains checked. |
-| integrations | `traffic.source.worker-version` | project | Cloudflare direct-push deployment health. Warns before the first versioned event and on mismatches with `configJson.workerVersion`. Other transports skip. |
+| integrations | `traffic.source.worker-version` | project | Cloudflare direct/Queue last-observed Worker health. Warns before the first ingested batch and when the most recently ingested version differs from the current generated version. |
 | integrations | `backlinks.source.connected` | project | Common Crawl is ready (`autoExtractBacklinks` + a `ready` release sync); warns when it is not set up |
 | integrations | `content.winnability.coverage` | project | Discovery classification coverage for cited-surface domains behind the content winnability gate; warns when discovery has not classified the domains that make ownable/ceded decisions meaningful |
 | providers | `config.providers` | global | At least one answer-engine provider key configured |
