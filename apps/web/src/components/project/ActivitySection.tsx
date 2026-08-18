@@ -274,18 +274,30 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
       // `window === 'all'` collapses to omitting the param; helper-level
       // contracts treat unset / 'all' identically.
       const windowParam = trafficWindow === 'all' ? undefined : trafficWindow
-      const [trafficData, aiDailyData, sessionHistoryData, socialHistoryData] = await Promise.all([
-        // `/ga/traffic` still returns a loose-object response in the spec —
-        // cast through `ApiGaTraffic` until `GaTrafficResponse` gains a Zod
-        // schema and gets registered. SDK type is `{[k: string]: unknown}`.
-        queryClient.fetchQuery({
-          ...getApiV1ProjectsByNameGaTrafficOptions({
-            client: heyClient,
-            path: { name: projectName },
-            query: windowParam ? { window: windowParam } : undefined,
-          }),
-          staleTime: TRAFFIC_STALE_MS,
-        }).then((data) => data as unknown as ApiGaTraffic),
+      // `/ga/traffic` still returns a loose-object response in the spec —
+      // cast through `ApiGaTraffic` until `GaTrafficResponse` gains a Zod
+      // schema and gets registered. SDK type is `{[k: string]: unknown}`.
+      const trafficData = await queryClient.fetchQuery({
+        ...getApiV1ProjectsByNameGaTrafficOptions({
+          client: heyClient,
+          path: { name: projectName },
+          query: windowParam ? { window: windowParam } : undefined,
+        }),
+        staleTime: TRAFFIC_STALE_MS,
+      }).then((data) => data as unknown as ApiGaTraffic)
+
+      // A window token is rolling for direct API/CLI callers, while the
+      // traffic response may use a stored aggregate's exact measured dates.
+      // Pin the Social chart to those returned bounds so it cannot drift from
+      // the Social cards and table beside it without changing the public API.
+      const socialRangeQuery = trafficData.windowStart || trafficData.windowEnd
+        ? {
+            ...(trafficData.windowStart ? { startDate: trafficData.windowStart } : {}),
+            ...(trafficData.windowEnd ? { endDate: trafficData.windowEnd } : {}),
+          }
+        : undefined
+
+      const [aiDailyData, sessionHistoryData, socialHistoryData] = await Promise.all([
         queryClient.fetchQuery({
           ...getApiV1ProjectsByNameGaAiReferralDailyOptions({
             client: heyClient,
@@ -306,7 +318,7 @@ export function ClickThroughActivity({ projectName }: { projectName: string }) {
           ...getApiV1ProjectsByNameGaSocialReferralHistoryOptions({
             client: heyClient,
             path: { name: projectName },
-            query: windowParam ? { window: windowParam } : undefined,
+            query: socialRangeQuery,
           }),
           staleTime: TRAFFIC_STALE_MS,
         }).catch(() => [] as GA4SocialReferralHistoryEntry[]),

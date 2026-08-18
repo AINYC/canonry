@@ -781,7 +781,7 @@ export function GscSection({
     }
   }
 
-  // Reloads on mount, on project switch, and when a project-level "Refresh all"
+  // Reloads on mount, on project switch, and when a project-level "Refresh search data"
   // bumps refreshNonce (after it syncs Google data and invalidates the cache).
   useEffect(() => {
     void loadSection()

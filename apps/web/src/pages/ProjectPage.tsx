@@ -75,7 +75,6 @@ import {
   type ApiBingCoverageSummary,
   type ApiBingKeywordStats,
   type ApiGoogleConnection,
-  type ApiGscCoverageSummary,
   type ApiProject,
 } from '../api.js'
 import { filterEmbedProjectTabs, isEmbedProjectTabAllowed, resolveEmbedProjectTab } from '../embed.js'
@@ -86,7 +85,6 @@ import {
   getApiV1ProjectsByNameBingSitesOptions,
   getApiV1ProjectsByNameBingStatusOptions,
   getApiV1ProjectsByNameGoogleConnectionsOptions,
-  getApiV1ProjectsByNameGoogleGscCoverageOptions,
   getApiV1ProjectsByNameMeasurementOverviewInfiniteOptions,
   getApiV1ProjectsByNameMeasurementPlanOptions,
   getApiV1ProjectsByNameScheduleOptions,
@@ -95,7 +93,6 @@ import {
   getApiV1ProjectsByNameQueriesOptions,
   getApiV1ProjectsQueryKey,
   getApiV1ProjectsByNameQueryKey,
-  getApiV1SettingsOptions,
 } from '@ainyc/canonry-api-client/react-query'
 import { useAppendQueries, useTriggerRun } from '../queries/mutations.js'
 import { GSC_STALE_MS } from '../queries/query-client.js'
@@ -124,7 +121,7 @@ type SearchConsoleWorkspace = 'google' | 'bing'
  * previously-visited project then rendered — and saved to — the wrong project.
  */
 /**
- * How often the "Refresh all" flow polls a triggered sweep, and how long it
+ * How often the "Refresh search data" flow polls a triggered sweep, and how long it
  * waits before reporting the run as still in flight.
  *
  * The old 120s deadline was shorter than a normal sweep: a paced Bing run over
@@ -780,21 +777,16 @@ function SearchConsoleSection({
   const [refreshState, setRefreshState] = useState<'idle' | 'syncing' | 'reloading'>('idle')
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
-  const [googleConfigured, setGoogleConfigured] = useState(false)
   const [googleConnection, setGoogleConnection] = useState<ApiGoogleConnection | null>(null)
-  const [googleCoverage, setGoogleCoverage] = useState<ApiGscCoverageSummary | null>(null)
-  const [bingConfigured, setBingConfigured] = useState(false)
   const [bingConnection, setBingConnection] = useState<ApiBingConnection | null>(null)
-  const [bingCoverage, setBingCoverage] = useState<ApiBingCoverageSummary | null>(null)
   const [workspaceRefreshNonce, setWorkspaceRefreshNonce] = useState(0)
 
-  async function loadSummary(silent = false) {
+  async function loadConnectionState(silent = false) {
     if (!silent) setLoading(true)
     setError(null)
 
     try {
-      const [settings, connections, bingStatus] = await Promise.all([
-        queryClient.fetchQuery(getApiV1SettingsOptions({ client: heyClient })).catch(() => null),
+      const [connections, bingStatus] = await Promise.all([
         queryClient.fetchQuery({
           ...getApiV1ProjectsByNameGoogleConnectionsOptions({ client: heyClient, path: { name: projectName } }),
           staleTime: GSC_STALE_MS,
@@ -806,30 +798,10 @@ function SearchConsoleSection({
       ])
 
       const gscConnection = connections.find((connection) => connection.connectionType === 'gsc') ?? null
-      setGoogleConfigured(Boolean(settings?.google?.configured))
-      setBingConfigured(Boolean(settings?.bing?.configured))
       setGoogleConnection(gscConnection)
       setBingConnection(bingStatus)
-
-      const [googleCoverageData, bingCoverageData] = await Promise.all([
-        gscConnection
-          ? queryClient.fetchQuery({
-              ...getApiV1ProjectsByNameGoogleGscCoverageOptions({ client: heyClient, path: { name: projectName } }),
-              staleTime: GSC_STALE_MS,
-            }).catch(() => null)
-          : Promise.resolve(null),
-        bingStatus?.connected
-          ? queryClient.fetchQuery({
-              ...getApiV1ProjectsByNameBingCoverageOptions({ client: heyClient, path: { name: projectName } }),
-              staleTime: GSC_STALE_MS,
-            }).catch(() => null)
-          : Promise.resolve(null),
-      ])
-
-      setGoogleCoverage(googleCoverageData)
-      setBingCoverage(bingCoverageData)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load search console overview')
+      setError(err instanceof Error ? err.message : 'Failed to load search engine connections')
     } finally {
       setLoading(false)
     }
@@ -957,7 +929,7 @@ function SearchConsoleSection({
 
       // Everything below touches THIS component's state, so it stays guarded.
       setRefreshState('reloading')
-      await loadSummary(true)
+      await loadConnectionState(true)
       setWorkspaceRefreshNonce((current) => current + 1)
 
       if (failures.length > 0) {
@@ -1012,97 +984,52 @@ function SearchConsoleSection({
   }
 
   useEffect(() => {
-    void loadSummary()
+    void loadConnectionState()
     return () => {
       abortRef.current?.abort()
     }
   }, [projectName])
 
-  const googleTone = googleConnection ? 'positive' : googleConfigured ? 'caution' : 'negative'
-  const googleStatus = googleConnection ? 'Connected' : googleConfigured ? 'Ready to connect' : 'Needs setup'
-  const googleCoverageValue = googleCoverage
-    ? `${googleCoverage.summary.percentage}% indexed`
-    : googleConnection
-      ? 'Awaiting coverage'
-      : 'No coverage data'
-  const googleNote = googleCoverage
-    ? `${googleCoverage.summary.notIndexed} not indexed${googleCoverage.summary.deindexed > 0 ? ` · ${googleCoverage.summary.deindexed} deindexed` : ''}`
-    : googleConnection
-      ? 'Run sitemap inspection to populate coverage'
-      : googleConfigured
-        ? 'Connect Search Console for this domain'
-        : 'Add Google OAuth credentials in Settings'
-
-  const bingTone = bingConnection?.connected ? 'positive' : bingConfigured ? 'caution' : 'negative'
-  const bingStatus = bingConnection?.connected ? 'Connected' : bingConfigured ? 'Ready to connect' : 'Needs setup'
-  const bingCoverageValue = bingCoverage
-    ? `${bingCoverage.summary.percentage}% indexed`
-    : bingConnection?.connected
-      ? 'Awaiting coverage'
-      : 'No coverage data'
-  const bingNotInIndex = bingCoverage
-    ? bingCoverage.summary.notIndexed + (bingCoverage.summary.unknown ?? 0)
-    : 0
-  const bingNote = bingCoverage
-    ? `${bingNotInIndex} not in index`
-    : bingConnection?.connected
-      ? 'Inspect URLs to populate coverage'
-      : bingConfigured
-        ? 'Connect Bing Webmaster Tools for this domain'
-        : 'Add a Bing API key in Settings'
-
   return (
     <div className="space-y-6">
-      <Card className="surface-card">
-        <div className="section-head section-head-inline">
-          <div>
-            <p className="eyebrow eyebrow-soft">Search engines</p>
-            <h2>Coverage and performance</h2>
-          </div>
-          {!isEmbed() && (
-            <WriteButton type="button" variant="outline" size="sm" disabled={loading || refreshState !== 'idle'} onClick={() => void handleRefresh()}>
-              <RefreshCw className={`h-3.5 w-3.5 ${refreshState !== 'idle' ? 'animate-spin' : ''}`} aria-hidden="true" />
-              {loading ? 'Loading…' : refreshState === 'syncing' ? 'Refreshing Google & Bing…' : refreshState === 'reloading' ? 'Reloading workspaces…' : 'Refresh all'}
-            </WriteButton>
-          )}
-        </div>
-
-        {error && (
-          <div className="mb-3 rounded-lg border border-negative-800/40 bg-negative-950/20 px-3 py-2 text-sm text-negative">
-            {error}
-          </div>
-        )}
-
-        <div className="mt-4 divide-y divide-default border-y border-default">
-          {[
-            ['Google Search Console', loading ? 'Loading…' : googleStatus, loading ? 'neutral' : googleTone, loading ? 'Loading overview…' : googleNote, googleCoverageValue],
-            ['Bing Webmaster Tools', loading ? 'Loading…' : bingStatus, loading ? 'neutral' : bingTone, loading ? 'Loading overview…' : bingNote, bingCoverageValue],
-          ].map(([name, status, tone, note, coverage]) => (
-            <div key={name} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
-              <div><span className="font-medium text-heading">{name}</span><span className="ml-2 text-secondary">{note}</span></div>
-              <div className="flex items-center gap-3"><span className="tabular-nums text-secondary">{coverage}</span><ToneBadge tone={tone as 'positive' | 'caution' | 'negative' | 'neutral'}>{status}</ToneBadge></div>
-            </div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Search engine workspaces">
+          {([
+            ['google', 'Google'],
+            ['bing', 'Bing'],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={workspace === key}
+              className={`project-subnav-link ${workspace === key ? 'project-subnav-link-active' : ''}`}
+              onClick={() => setWorkspace(key)}
+            >
+              {label}
+            </button>
           ))}
         </div>
-      </Card>
-
-      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Search engine workspaces">
-        {([
-          ['google', 'Google'],
-          ['bing', 'Bing'],
-        ] as const).map(([key, label]) => (
-          <button
-            key={key}
+        {!isEmbed() && (
+          <WriteButton
             type="button"
-            role="tab"
-            aria-selected={workspace === key}
-            className={`project-subnav-link ${workspace === key ? 'project-subnav-link-active' : ''}`}
-            onClick={() => setWorkspace(key)}
+            variant="outline"
+            size="sm"
+            aria-label="Refresh search data"
+            disabled={loading || refreshState !== 'idle'}
+            onClick={() => void handleRefresh()}
           >
-            {label}
-          </button>
-        ))}
+            <RefreshCw className={`h-3.5 w-3.5 ${refreshState !== 'idle' ? 'animate-spin' : ''}`} aria-hidden="true" />
+            {loading ? 'Loading…' : refreshState === 'syncing' ? 'Refreshing search data…' : refreshState === 'reloading' ? 'Reloading workspaces…' : 'Refresh search data'}
+          </WriteButton>
+        )}
       </div>
+
+      {error && (
+        <div className="rounded-lg border border-negative-800/40 bg-negative-950/20 px-3 py-2 text-sm text-negative">
+          {error}
+        </div>
+      )}
 
       {workspace === 'google' && (
         <GscSection projectName={projectName} refreshNonce={workspaceRefreshNonce} />

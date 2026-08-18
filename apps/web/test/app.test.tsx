@@ -283,9 +283,14 @@ test('project route renders server attention without restoring the action queue'
 test('project search console route renders the Search Engines section', async () => {
   const html = await renderApp('/projects/project_citypoint/search-console')
 
-  expect(html).toMatch(/Search engines/)
+  expect(html).toMatch(/Search Engines/)
+  expect(html).toMatch(/Search engine workspaces/)
   expect(html).toMatch(/Google Search Console/)
-  expect(html).toMatch(/Bing Webmaster Tools/)
+  expect(html).toMatch(/>Google</)
+  expect(html).toMatch(/>Bing</)
+  expect(html).toMatch(/aria-label="Refresh search data"/)
+  expect(html).not.toMatch(/Coverage and performance/)
+  expect(html.indexOf('Search engine workspaces')).toBeLessThan(html.indexOf('Google Search Console'))
   expect(html).not.toMatch(/Bing \(OpenAI\)/)
   expect(html).not.toMatch(/Operator snapshot/)
   expect(html).not.toMatch(/Opportunities/)

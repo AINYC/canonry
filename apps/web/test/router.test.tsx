@@ -108,7 +108,7 @@ test('unknown path renders the not-found page', async () => {
 
 test('/projects/$id/search-console renders the search engines tab', async () => {
   const { container } = await renderRoute('/projects/project_citypoint/search-console')
-  expect(container.innerHTML).toMatch(/Search engines/)
+  expect(container.innerHTML).toMatch(/Search Engines/)
 })
 
 test('/projects/$id/conversions renders the conversion integrity workspace', async () => {
