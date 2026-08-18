@@ -2,7 +2,7 @@
   "name": "@canonry/canonry",
   "version": "4.174.0",
   "type": "module",
-  "description": "Agent-first open-source AEO operating platform - track how answer engines cite your domain",
+  "description": "Self-hosted AI visibility (AEO) platform: track how ChatGPT, Claude, Gemini, and Perplexity cite your domain, join it with Search Console, GA4, and server-side traffic, and fix what you find through agent tools (CLI, REST, MCP). Local SQLite.",
   "license": "FSL-1.1-ALv2",
   "homepage": "https://canonry.ai",
   "repository": {
