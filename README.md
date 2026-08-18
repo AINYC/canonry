@@ -1,6 +1,6 @@
 # Canonry <img src="https://raw.githubusercontent.com/Canonry/canonry/main/apps/web/public/favicon-32.png" alt="Canonry canary icon" width="24" />
 
-[![npm version](https://img.shields.io/npm/v/@canonry/canonry)](https://www.npmjs.com/package/@canonry/canonry) [![Node.js >= 22.14](https://img.shields.io/badge/node-%3E%3D22.14-brightgreen)](https://nodejs.org) [![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2%20%E2%86%92%20Apache--2.0-blue)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/@canonry/canonry)](https://www.npmjs.com/package/@canonry/canonry) [![Node.js >= 22.14](https://img.shields.io/badge/node-%3E%3D22.14-brightgreen)](https://nodejs.org)
 
 Your entire AEO/GEO/AI Visibility, technical SEO + web analytics stack. **Agent-first. Self-hosted. Local.**
 
