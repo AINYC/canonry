@@ -100,6 +100,22 @@ function formatRelative(iso: string | null): string {
 }
 
 /**
+ * Which event kind to ASK THE SERVER for, given the series the user has on.
+ *
+ * Exported for test: this one value decides whether a narrow series is
+ * reachable at all. The events fetch is row-capped, so requesting 'all' returns
+ * the most recent N rows across every series and the browser then filters them.
+ * Where one series dominates, the others never make the cut and the table
+ * reports an honest but misleading "no rows".
+ */
+export function trafficFetchKind(visibleSeries: ReadonlySet<SeriesKind>): 'all' | SeriesKind {
+  // Exactly one selected is both the case that breaks and the case where the
+  // caller has already told us what it wants. Zero or several means the union,
+  // which is what 'all' returns anyway.
+  return visibleSeries.size === 1 ? [...visibleSeries][0]! : 'all'
+}
+
+/**
  * "← Back" affordance on the source detail page. Prefers browser history
  * (so a user arriving from `/projects/$id/activity` goes back to that
  * tab, not to /traffic) and falls back to a hard `/traffic` link when
@@ -170,9 +186,25 @@ export function TrafficSourceDetailPage() {
     [windowMinutes],
   )
 
+  // Ask the server for the series the user is actually looking at.
+  //
+  // `kind: 'all'` with a 500-row cap made the series checkboxes cosmetic: the
+  // fetch returned the 500 most RECENT rows regardless of selection, then the
+  // table filtered them in the browser. On a source where one series dominates
+  // that hides the others entirely. Measured on a live project: 2,199 crawler
+  // rows against 8 AI-referral rows in 24h, and every AI-referral row sat at
+  // position 640 or later, so none were ever fetched. The chart aggregates
+  // server-side and drew the bar correctly; clicking it filtered a set that had
+  // never contained the rows, and the table truthfully reported "0 of 0".
+  //
+  // A single selected series is the case worth scoping, and it is the case that
+  // breaks: the caller already knows it wants one narrow slice. With several
+  // selected the union is what 'all' already returns.
+  const selectedKind = useMemo(() => trafficFetchKind(visibleSeries), [visibleSeries])
+
   const sourceQuery = useServerTrafficSource(projectName || null, sourceId || null)
   const eventsQuery = useServerTrafficEvents(projectName || null, {
-    kind: 'all',
+    kind: selectedKind,
     sourceId: sourceId || undefined,
     sinceMinutes: windowMinutes,
     limit: activeWindow.fetchLimit,
@@ -659,7 +691,7 @@ export function TrafficSourceDetailPage() {
           </div>
         ) : null}
 
-        <EventsTable events={pagedEvents} />
+        <EventsTable events={pagedEvents} truncated={eventRows?.truncated ?? false} />
 
         {showPagination ? (
           <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-secondary">
@@ -835,9 +867,25 @@ function renderEvidence(event: TrafficEventEntry): string {
   }
 }
 
-function EventsTable({ events }: { events: readonly TrafficEventEntry[] }) {
+export function EventsTable({
+  events,
+  truncated = false,
+}: {
+  events: readonly TrafficEventEntry[]
+  /** The fetch hit its row cap, so filtering ran over a prefix of the window. */
+  truncated?: boolean
+}) {
   if (events.length === 0) {
-    return <Card className="p-6 text-center text-sm text-muted">No event rows match the current filters.</Card>
+    // A confident "nothing matched" is a lie when the filter ran over a
+    // truncated set: rows beyond the cap were never loaded, so their absence
+    // was never tested. Say which of the two it is.
+    return (
+      <Card className="p-6 text-center text-sm text-muted">
+        {truncated
+          ? 'No matches in the rows loaded so far. More rows exist beyond the load limit, so narrow the time window to search them.'
+          : 'No event rows match the current filters.'}
+      </Card>
+    )
   }
   return (
     <div className="rounded-xl border border-default bg-surface overflow-hidden">
