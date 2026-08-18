@@ -27,7 +27,7 @@ const log = createLogger('CoverageRefresh')
  * longer means "refresh a bit less thoroughly", it means NO URL is inspected
  * and index coverage cannot change.
  *
- * That is what a user hit: they pressed "Refresh all" 46 minutes after the
+ * That is what a user hit: they pressed "Refresh search data" 46 minutes after the
  * daily scheduled refresh, the chain was silently skipped, and the dashboard's
  * coverage numbers were structurally incapable of moving. Nothing failed and
  * nothing said so.
@@ -38,7 +38,7 @@ export const COVERAGE_REFRESH_MIN_INTERVAL_MS = 60 * 60 * 1000
  * Minimum spacing when a PERSON asked for the refresh.
  *
  * Short enough that pressing the button does what it says, long enough to
- * collapse the two arms of "Refresh all" (the GSC sync and the Bing sync both
+ * collapse the two arms of "Refresh search data" (the GSC sync and the Bing sync both
  * chain into a coverage refresh, milliseconds apart) into one sweep. The
  * in-flight check below is what actually dedupes those two; this window covers
  * the case where the first sweep has already finished.
@@ -63,7 +63,7 @@ const ACTIVE_OR_DONE_STATUSES = [
 
 /**
  * States that mean a sweep is happening RIGHT NOW. Always blocking, at any
- * spacing — this is what collapses the GSC and Bing arms of "Refresh all" into
+ * spacing — this is what collapses the GSC and Bing arms of "Refresh search data" into
  * a single sweep, and it is a correctness guard rather than a quota one.
  */
 const IN_FLIGHT_STATUSES = [RunStatuses.queued, RunStatuses.running]
@@ -97,7 +97,7 @@ const defaultDeps: CoverageRefreshDeps = { executeInspectSitemap }
  *
  * The project lookup, spacing guard, and run-row insert run synchronously with
  * no `await` between them, so two near-simultaneous callers (the GSC + Bing
- * arms of "Refresh all") cannot both pass the guard — the second observes the
+ * arms of "Refresh search data") cannot both pass the guard — the second observes the
  * first's freshly-inserted `queued` row and bails.
  */
 export async function maybeRefreshGscCoverage(
@@ -125,7 +125,7 @@ export async function maybeRefreshGscCoverage(
   if (!conn?.refreshToken || !conn.propertyId) return null
 
   // In-flight guard — never start a second sweep alongside a running one, at
-  // any spacing. This is what makes the GSC and Bing arms of "Refresh all"
+  // any spacing. This is what makes the GSC and Bing arms of "Refresh search data"
   // collapse into one sweep, and it holds even when the caller is a person.
   const inFlight = db
     .select({ createdAt: runs.createdAt })

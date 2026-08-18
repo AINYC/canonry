@@ -121,7 +121,7 @@ type SearchConsoleWorkspace = 'google' | 'bing'
  * previously-visited project then rendered — and saved to — the wrong project.
  */
 /**
- * How often the "Refresh all" flow polls a triggered sweep, and how long it
+ * How often the "Refresh search data" flow polls a triggered sweep, and how long it
  * waits before reporting the run as still in flight.
  *
  * The old 120s deadline was shorter than a normal sweep: a paced Bing run over

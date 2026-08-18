@@ -281,7 +281,7 @@ describe('maybeRefreshGscCoverage', () => {
 /**
  * The bug a user actually hit on 2026-08-06.
  *
- * They pressed "Refresh all" at 13:16 UTC, 46 minutes after the daily 12:30
+ * They pressed "Refresh search data" at 13:16 UTC, 46 minutes after the daily 12:30
  * scheduled refresh. The chained `inspect-sitemap` was inside the 60-minute
  * spacing window, so it was skipped — and because `gsc-sync` inspects no URLs
  * at all, that skip meant NOTHING could update the index-coverage dashboard.
@@ -328,7 +328,7 @@ describe('maybeRefreshGscCoverage — user-initiated refresh', () => {
     expect(deps.calls).toHaveLength(0)
   })
 
-  it('still collapses the two arms of "Refresh all" into one sweep', async () => {
+  it('still collapses the two arms of "Refresh search data" into one sweep', async () => {
     // Both arms are user-initiated, so neither is stopped by the spacing
     // window — the IN-FLIGHT check is what dedupes them. Losing that would
     // double every manual refresh's quota spend.
