@@ -244,6 +244,8 @@ function ModelEvidenceSummary({
   const descriptionId = useId()
   const servedEntries = Object.entries(served).sort(([a], [b]) => a.localeCompare(b))
   const hasChanges = partition.buckets.length > 0 || partition.beforeWindow.length > 0
+  if (!available || !hasChanges) return null
+
   return (
     <aside className="trend-model-evidence" aria-labelledby="trend-model-evidence-title" aria-describedby={descriptionId}>
       <div className="trend-model-evidence-head">
@@ -254,57 +256,49 @@ function ModelEvidenceSummary({
         Model evidence is recorded from the exact snapshots that produced each trend bucket. It is not the project’s configured provider model.
         {counts.total > 0 ? ` ${counts.shown} of ${counts.total} recorded changes are listed.` : ''}
       </p>
-      {!available ? (
-        <p className="trend-model-evidence-empty">Attribution unavailable from this API version.</p>
-      ) : !hasChanges ? (
-        <p className="trend-model-evidence-empty">No model evidence changes in this window.</p>
-      ) : (
+      {partition.buckets.length > 0 && (
+        <ul className="trend-model-evidence-list">
+          {partition.buckets.flatMap(({ bucketStartDate, events: bucketEvents }) => bucketEvents.map(({ provider, event }) => (
+            <li key={`${provider}-${event.observedAt}-${event.bucketStartDate}`} className="trend-model-evidence-item">
+              <span className="trend-model-evidence-date">{modelEventDateLabel(buckets, bucketStartDate, event.observedAt)}</span>
+              <span>{providerDisplayName(provider)}: {formatModelEvidence(event.from)} → {formatModelEvidence(event.to)}</span>
+            </li>
+          )))}
+        </ul>
+      )}
+      {/* These changes happened before the chart starts. They are listed so
+          nothing is lost, but they get no chart marker — a marker would put
+          a date on a change that did not happen on that date. */}
+      {partition.beforeWindow.length > 0 && (
         <>
-          {partition.buckets.length > 0 && (
-            <ul className="trend-model-evidence-list">
-              {partition.buckets.flatMap(({ bucketStartDate, events: bucketEvents }) => bucketEvents.map(({ provider, event }) => (
-                <li key={`${provider}-${event.observedAt}-${event.bucketStartDate}`} className="trend-model-evidence-item">
-                  <span className="trend-model-evidence-date">{modelEventDateLabel(buckets, bucketStartDate, event.observedAt)}</span>
-                  <span>{providerDisplayName(provider)}: {formatModelEvidence(event.from)} → {formatModelEvidence(event.to)}</span>
-                </li>
-              )))}
-            </ul>
-          )}
-          {/* These changes happened before the chart starts. They are listed so
-              nothing is lost, but they get no chart marker — a marker would put
-              a date on a change that did not happen on that date. */}
-          {partition.beforeWindow.length > 0 && (
-            <>
-              <p className="trend-model-evidence-note">Changed before this date range</p>
-              <ul className="trend-model-evidence-list">
-                {partition.beforeWindow.map(({ provider, event }) => (
-                  <li key={`before-${provider}-${event.observedAt}`} className="trend-model-evidence-item">
-                    <span className="trend-model-evidence-date">
-                      on or before {formatObservedInstantLabel(observedInstant(event.observedAt))}
-                    </span>
-                    <span>
-                      {providerDisplayName(provider)}: {formatModelEvidence(event.from)} → {formatModelEvidence(event.to)}
-                      {event.anchorObservedAt
-                        ? ` (last seen ${formatModelEvidence(event.from)} on ${formatObservedInstantLabel(observedInstant(event.anchorObservedAt))})`
-                        : ''}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-          {truncated.map(entry => (
-            <p key={`truncated-${entry.provider}`} className="trend-model-evidence-note">
-              {providerDisplayName(entry.provider)}: showing the most recent {entry.shown} of {entry.total} changes.
-            </p>
-          ))}
-          {incompleteHistory.map(provider => (
-            <p key={`incomplete-${provider}`} className="trend-model-evidence-note">
-              We did not look far enough back to be sure this is every {providerDisplayName(provider)} change.
-            </p>
-          ))}
+          <p className="trend-model-evidence-note">Changed before this date range</p>
+          <ul className="trend-model-evidence-list">
+            {partition.beforeWindow.map(({ provider, event }) => (
+              <li key={`before-${provider}-${event.observedAt}`} className="trend-model-evidence-item">
+                <span className="trend-model-evidence-date">
+                  on or before {formatObservedInstantLabel(observedInstant(event.observedAt))}
+                </span>
+                <span>
+                  {providerDisplayName(provider)}: {formatModelEvidence(event.from)} → {formatModelEvidence(event.to)}
+                  {event.anchorObservedAt
+                    ? ` (last seen ${formatModelEvidence(event.from)} on ${formatObservedInstantLabel(observedInstant(event.anchorObservedAt))})`
+                    : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
         </>
       )}
+      {truncated.map(entry => (
+        <p key={`truncated-${entry.provider}`} className="trend-model-evidence-note">
+          {providerDisplayName(entry.provider)}: showing the most recent {entry.shown} of {entry.total} changes.
+        </p>
+      ))}
+      {incompleteHistory.map(provider => (
+        <p key={`incomplete-${provider}`} className="trend-model-evidence-note">
+          We did not look far enough back to be sure this is every {providerDisplayName(provider)} change.
+        </p>
+      ))}
       {servedEntries.length > 0 && (
         <>
           <p className="trend-model-evidence-note">What the engines answered with</p>
@@ -571,9 +565,8 @@ export function VisibilityTrendSection({
   )
   const servedAttribution = useMemo(() => (data ? readServedModelAttribution(data) : {}), [data])
   const serviceMismatch = useMemo(() => (data ? readModelServiceMismatch(data) : {}), [data])
-  // Null on an older API and on a project whose engines are all on fixed model
-  // ids. An engine that CAN be moved but has no update on record is a separate,
-  // quieter state — see `buildModelChangeNotice`.
+  // Only a recorded update is surfaced in the dashboard. A moving model id
+  // with no update on record does not add persistent commentary to the chart.
   const modelChangeNotice = useMemo(
     () => (data ? buildModelChangeNotice(readModelPointerChanges(data)) : null),
     [data],
@@ -669,17 +662,6 @@ export function VisibilityTrendSection({
         )}
         <Segmented options={WINDOW_OPTIONS} value={window} onChange={setWindow} ariaLabel="Time window" className="sm:ml-auto" />
       </div>
-      {/* The common case, and the reason it is a bare muted line under the
-          controls rather than a tinted box above the head: it caveats nothing,
-          it only refuses to let an un-updated record read as proof that nothing
-          happened. Untinted, one line, with the explanation in the tooltip so
-          the surface stays a data surface. */}
-      {modelChangeNotice?.kind === 'no-known-change' && (
-        <p className="mt-3 text-[11px] leading-snug text-muted">
-          {modelChangeNotice.text}
-          <InfoTooltip text={modelChangeNotice.detail} />
-        </p>
-      )}
     </>
   )
 
@@ -693,7 +675,7 @@ export function VisibilityTrendSection({
   } else if (!data || !trend) {
     body = null
   } else {
-    const { rows, series, hasData, singleBucket } = trend
+    const { rows, series, hasData } = trend
     const caption = formatQueryChangeCaption(data.queryChanges)
     if (!hasData) {
       body = (
@@ -817,13 +799,6 @@ export function VisibilityTrendSection({
             mismatch={serviceMismatch}
             buckets={buckets}
           />
-          {singleBucket && (
-            <p className="visibility-trend-note">
-              {metric === 'mentionShare'
-                ? `Only one ${mentionShareScopeLabel(mentionShareScope)} mention-share point so far. The trend line fills in after another sweep with brand mentions.`
-                : 'Only one sweep so far. The trend line fills in after the next run.'}
-            </p>
-          )}
           {caption && <p className="visibility-trend-note">{caption}</p>}
         </>
       )
