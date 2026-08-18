@@ -18,7 +18,7 @@ vi.mock('recharts', () => {
   }
 })
 
-import { ActivitySection } from '../src/components/project/ActivitySection.js'
+import { ActivitySection, ClickThroughActivity } from '../src/components/project/ActivitySection.js'
 
 function renderActivitySection() {
   const queryClient = new QueryClient({
@@ -381,4 +381,161 @@ test('social table collapses to top 25 with show-all toggle and surfaces Other-s
   await waitFor(() => {
     expect(breakdown.queryAllByRole('row').length - 1).toBe(25)
   })
+})
+
+test('top time picker reloads every GA surface and replaces all Social data', async () => {
+  const seen = new Set<string>()
+  const requestQueries = new Map<string, URLSearchParams>()
+  const sources = {
+    '7d': { source: 'linkedin.com', sessions: 7, start: '2026-08-11', end: '2026-08-17' },
+    '30d': { source: 'facebook.com', sessions: 30, start: '2026-07-19', end: '2026-08-17' },
+    '90d': { source: 'x.com', sessions: 90, start: '2026-05-20', end: '2026-08-17' },
+    all: { source: 'reddit.com', sessions: 120, start: null, end: null },
+  } as const
+  const surfaces = ['traffic', 'ai-referral-daily', 'session-history', 'social-referral-history'] as const
+
+  const restoreFetch = mockFetch((url) => {
+    const parsed = new URL(url, window.location.origin)
+    if (parsed.pathname.endsWith('/projects/test-project/ga/status')) {
+      return jsonResponse({
+        connected: true,
+        propertyId: '999888',
+        clientEmail: 'sa@test.iam.gserviceaccount.com',
+        authMethod: 'service-account',
+        lastSyncedAt: '2026-08-17T12:00:00.000Z',
+        createdAt: '2026-08-17T12:00:00.000Z',
+        updatedAt: '2026-08-17T12:00:00.000Z',
+      })
+    }
+
+    const surface = surfaces.find(candidate => parsed.pathname.endsWith(`/ga/${candidate}`))
+    if (!surface) throw new Error(`Unexpected fetch: ${url}`)
+    const selectedWindow = surface === 'social-referral-history'
+      ? (Object.keys(sources) as Array<keyof typeof sources>).find((key) => {
+          const source = sources[key]
+          return parsed.searchParams.get('startDate') === source.start
+            && parsed.searchParams.get('endDate') === source.end
+        })
+      : (parsed.searchParams.get('window') ?? 'all') as keyof typeof sources
+    if (!selectedWindow) throw new Error(`Request did not match a picker window: ${url}`)
+    const selected = sources[selectedWindow]
+    seen.add(`${surface}:${selectedWindow}`)
+    requestQueries.set(`${surface}:${selectedWindow}`, parsed.searchParams)
+
+    if (surface === 'traffic') {
+      const emptyBucket = { sessions: 0, sharePct: 0, sharePctDisplay: '0%' }
+      const socialBucket = { sessions: selected.sessions, sharePct: 50, sharePctDisplay: '50%' }
+      return jsonResponse({
+        totalSessions: selected.sessions * 2,
+        totalOrganicSessions: 0,
+        totalDirectSessions: 0,
+        totalUsers: selected.sessions,
+        topPages: [],
+        aiReferrals: [],
+        aiReferralLandingPages: [],
+        aiSessionsDeduped: 0,
+        paidAiSessionsDeduped: 0,
+        organicAiSessionsDeduped: 0,
+        aiSessionsBySession: 0,
+        paidAiSessionsBySession: 0,
+        organicAiSessionsBySession: 0,
+        socialReferrals: [{
+          source: selected.source,
+          medium: 'social',
+          channelGroup: 'Organic Social',
+          sessions: selected.sessions,
+          users: selected.sessions,
+        }],
+        socialSessions: selected.sessions,
+        socialUsers: selected.sessions,
+        channelBreakdown: {
+          organic: emptyBucket,
+          social: socialBucket,
+          direct: emptyBucket,
+          ai: emptyBucket,
+          other: emptyBucket,
+        },
+        organicSharePct: 0,
+        aiSharePct: 0,
+        aiSharePctBySession: 0,
+        paidAiSharePct: 0,
+        paidAiSharePctBySession: 0,
+        organicAiSharePct: 0,
+        organicAiSharePctBySession: 0,
+        directSharePct: 0,
+        socialSharePct: 50,
+        organicSharePctDisplay: '0%',
+        aiSharePctDisplay: '0%',
+        aiSharePctBySessionDisplay: '0%',
+        paidAiSharePctDisplay: '0%',
+        paidAiSharePctBySessionDisplay: '0%',
+        organicAiSharePctDisplay: '0%',
+        organicAiSharePctBySessionDisplay: '0%',
+        directSharePctDisplay: '0%',
+        socialSharePctDisplay: '50%',
+        otherSessions: 0,
+        otherSharePct: 0,
+        otherSharePctDisplay: '0%',
+        lastSyncedAt: '2026-08-17T12:00:00.000Z',
+        windowStart: selected.start,
+        windowEnd: selected.end,
+        windowDays: selected.start ? selected.sessions : null,
+        periodStart: selected.start,
+        periodEnd: selected.end,
+      })
+    }
+    if (surface === 'social-referral-history') {
+      return jsonResponse([{
+        date: selected.end ?? '2026-08-17',
+        source: selected.source,
+        medium: 'social',
+        channelGroup: 'Organic Social',
+        sessions: selected.sessions,
+        users: selected.sessions,
+      }])
+    }
+    if (surface === 'ai-referral-daily') {
+      return jsonResponse({ days: [], sources: [], totalSessions: 0, totalPaidSessions: 0, totalOrganicSessions: 0 })
+    }
+    return jsonResponse([])
+  })
+  onTestFinished(restoreFetch)
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <ClickThroughActivity projectName="test-project" />
+    </QueryClientProvider>,
+  )
+
+  const assertWindow = async (windowKey: keyof typeof sources) => {
+    const selected = sources[windowKey]
+    await waitFor(() => {
+      for (const surface of surfaces) expect(seen.has(`${surface}:${windowKey}`)).toBe(true)
+      expect(screen.getAllByText(selected.source).length).toBeGreaterThan(0)
+    })
+    for (const surface of surfaces) {
+      const query = requestQueries.get(`${surface}:${windowKey}`)!
+      if (surface === 'social-referral-history') {
+        expect(query.get('window')).toBeNull()
+        expect(query.get('startDate')).toBe(selected.start)
+        expect(query.get('endDate')).toBe(selected.end)
+      } else {
+        expect(query.get('window')).toBe(windowKey === 'all' ? null : windowKey)
+      }
+    }
+    const socialSection = screen.getByText('Social Media Traffic').closest('section') as HTMLElement
+    for (const [otherWindow, other] of Object.entries(sources)) {
+      if (otherWindow !== windowKey) expect(within(socialSection).queryByText(other.source)).toBeNull()
+    }
+  }
+
+  await assertWindow('30d')
+  const picker = screen.getByRole('group', { name: 'Traffic time period' })
+  fireEvent.click(within(picker).getByRole('button', { name: '7d' }))
+  await assertWindow('7d')
+  fireEvent.click(within(picker).getByRole('button', { name: '90d' }))
+  await assertWindow('90d')
+  fireEvent.click(within(picker).getByRole('button', { name: 'All' }))
+  await assertWindow('all')
 })
