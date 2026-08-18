@@ -44,8 +44,6 @@ The dashboard, CLI, and agent tools share the same project API.
 
 *Map crawlable pages and the internal links connecting them.*
 
-You need Node.js `>=22.14` and `<26`, plus a public, crawlable site. Site Health does not need an answer-provider key.
-
 1. Install Canonry.
 
    ```bash
@@ -121,8 +119,6 @@ If a Canonry installation or connected plugin/MCP is available, use it. Do not c
 ![Canonry AI Visibility citation map across queries and answer engines](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/ai-visibility-diagnostics.png)
 
 *Map citation and answer-mention coverage across every tracked query and engine.*
-
-Add provider keys in **Settings**. Settings changes apply immediately. To import environment variables, stop Canonry and set the variables. Then run `cnry bootstrap` and restart Canonry.
 
 | Provider | Key source | Environment variable |
 |---|---|---|
