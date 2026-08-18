@@ -419,6 +419,52 @@ test('says nothing about served models when the API omits them', async () => {
   expect(screen.queryByText('What the engines answered with')).toBeNull()
 })
 
+test('hides model details and sweep commentary when there are no model changes', async () => {
+  const unchanged = metricsDto([TWO_BUCKETS[0]])
+  Object.assign(unchanged, {
+    modelAttribution: {
+      gemini: {
+        latestObservation: {
+          observedAt: '2026-04-03T14:20:00.000Z',
+          state: { status: 'known', model: 'gemini-2.0-flash' },
+        },
+        events: [],
+      },
+    },
+    servedModelAttribution: {
+      gemini: {
+        latestObservation: {
+          observedAt: '2026-04-03T14:20:00.000Z',
+          state: { status: 'known', model: 'gemini-2.0-flash' },
+        },
+        events: [],
+        eventTotal: 0,
+        latestServedModelIds: ['gemini-2.0-flash'],
+      },
+    },
+  })
+
+  const restore = mockFetch((url) => {
+    const path = url.split('?')[0]!
+    if (path.endsWith('/projects/test-project/analytics/metrics')) {
+      return jsonResponse(unchanged)
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  onTestFinished(restore)
+
+  renderSection(['competitor.com'])
+
+  await screen.findByRole('list', { name: 'Engines' })
+  expect(screen.queryByText('Model evidence changes')).toBeNull()
+  expect(screen.queryByText('No model evidence changes in this window.')).toBeNull()
+  expect(screen.queryByText('What the engines answered with')).toBeNull()
+  expect(screen.queryByText('Only one sweep so far. The trend line fills in after the next run.')).toBeNull()
+
+  act(() => { fireEvent.click(screen.getByRole('button', { name: 'Mention share' })) })
+  expect(screen.queryByText(/Only one .* mention-share point so far/)).toBeNull()
+})
+
 const CLOSING_LINE = 'rather than from a real change in how AI answers about you, so compare periods carefully.'
 
 /** One confirmed update. The `summary` is a LEGACY field an older server used
@@ -494,22 +540,15 @@ test('states one fact per affected engine and closes with a single consequence',
   expect(new Set(sentences).size).toBe(sentences.length)
 })
 
-test('reports an engine that can be updated with nothing on record, quietly', async () => {
+test('does not render model-pointer commentary when no update is on record', async () => {
   onTestFinished(mockMetrics({
     modelPointerChanges: { openai: { modelIds: ['chat-latest'], changeCount: 0, unverifiedChangeCount: 0 } },
   }))
 
   renderSection()
 
-  const line = await screen.findByText('No model updates are on record for ChatGPT in this period.')
-  // Quiet: no caution box, and the explanation is in a tooltip rather than set
-  // as prose on the surface. This renders on every load for anyone on a moving
-  // model id, so weight matters as much as the words.
-  expect(line.className).not.toContain('caution')
-  expect(within(line).getByRole('button')).toBeTruthy()
-  // And it does NOT jump the headline — nothing is being caveated.
-  const headline = document.querySelector('.visibility-trend-current-value')!
-  expect(line.compareDocumentPosition(headline) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+  await screen.findByRole('list', { name: 'Engines' })
+  expect(screen.queryByText('No model updates are on record for ChatGPT in this period.')).toBeNull()
 })
 
 test('renders nothing at all when the API omits the field or reports no exposure', async () => {
@@ -532,51 +571,4 @@ test('renders nothing at all when the API omits the field or reports no exposure
   await screen.findByRole('list', { name: 'Engines' })
   expect(screen.queryByText(/The model behind/)).toBeNull()
   expect(screen.queryByText(/No model updates are on record/)).toBeNull()
-})
-
-test('tells the reader how recently the update record was checked', async () => {
-  // The quiet line on its own is indistinguishable from a record nobody has
-  // updated in six months. The date is what separates "we looked and found
-  // nothing" from "nobody has looked", so it has to reach the reader — not
-  // merely ride on the DTO, which is where an earlier cut left it.
-  onTestFinished(mockMetrics({
-    modelPointerChanges: {
-      openai: {
-        modelIds: ['chat-latest'],
-        changeCount: 0,
-        unverifiedChangeCount: 0,
-        knownGoodAsOf: '2026-07-20',
-        checkedThroughPeriodEnd: true,
-      },
-    },
-  }))
-
-  renderSection()
-
-  const line = await screen.findByText('No model updates are on record for ChatGPT in this period.')
-  const tip = within(line).getByRole('button')
-  expect(tip.getAttribute('aria-label')).toContain('We last checked for model updates on 2026-07-20.')
-})
-
-test('says when the period runs past the last time the record was checked', async () => {
-  onTestFinished(mockMetrics({
-    modelPointerChanges: {
-      openai: {
-        modelIds: ['chat-latest'],
-        changeCount: 0,
-        unverifiedChangeCount: 0,
-        knownGoodAsOf: '2026-07-20',
-        checkedThroughPeriodEnd: false,
-      },
-    },
-  }))
-
-  renderSection()
-
-  const line = await screen.findByText('No model updates are on record for ChatGPT in this period.')
-  const tip = within(line).getByRole('button')
-  expect(tip.getAttribute('aria-label')).toContain(
-    'We last checked for model updates on 2026-07-20, and this period runs past that date,'
-    + ' so there may be later updates we do not know about.',
-  )
 })
