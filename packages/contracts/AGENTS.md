@@ -24,6 +24,7 @@ Shared DTOs, enums, Zod schemas, error codes, config validation, and **generic u
 | `src/report-dedup.ts` | Report action / opportunity dedup utilities |
 | `src/retry.ts` | Generic retry helpers: `backoffDelayMs`, `withRetry`, `isRetryableHttpError`, `isRateLimitError`, `retryAfterDelayMs`. Used by every API provider, GA4, GBP, and Bing — domain-specific code only supplies the `isRetryable` predicate; the math (jittered exponential backoff per Google's documented formula) lives here. **Rate limiting is detected semantically, not by status code**: a service may report a throttle on a 4xx (Bing answers `400` with `ErrorCode 5 ThrottleHost`), so `isRateLimitError` checks `Retry-After`, then 429, then documented throttle markers in the message. A new integration whose throttle signal is a private numeric code must surface that code's meaning in the error message or set `retryAfter`, or the shared predicate cannot see it. |
 | `src/concurrency.ts` | `mapWithConcurrency` — generic order-preserving bounded worker pool (fail-fast on the first rejection, in-flight tasks settle cleanly). Used by the discovery probe phase. |
+| `src/http-status.ts` | `LOCATION_REDIRECT_STATUSES` / `isLocationRedirectStatus` — the five statuses that mean "fetch a different URL" (301/302/303/307/308). Deliberately NOT all of 3xx: a 304 is a served page view from cache, so classing it as a redirect drops real visits. Shared by the AI-referral landed/hop split and the sitemap fetcher. |
 | `src/index.ts` | Barrel re-export of all modules |
 
 ## Patterns

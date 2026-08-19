@@ -1963,7 +1963,13 @@ function renderServerActivity(report: ProjectReportDto, audience: ReportAudience
   // Referral arrivals mix paid and organic clicks. Without the split a reader
   // takes the whole number for earned AI traffic. Same string on both surfaces
   // — the API renders it (`referralArrivalsClassSummary`) so they cannot drift.
-  const referralSubtitle = [formatDelta(sa.referralArrivals, 'sessions'), escapeHtml(sa.referralArrivalsClassSummary)]
+  // Same fragment verbatim in ReportPage.tsx (report parity). Without it an
+  // all-redirect site reads as having no AI traffic instead of naming the one
+  // thing to fix.
+  const referralRedirectNote = sa.referralRedirects > 0
+    ? `${formatNumber(sa.referralRedirects)} blocked by redirects`
+    : ''
+  const referralSubtitle = [formatDelta(sa.referralArrivals, 'sessions'), escapeHtml(sa.referralArrivalsClassSummary), referralRedirectNote]
     .filter(Boolean)
     .join(' · ')
 

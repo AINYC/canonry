@@ -185,7 +185,7 @@ function ServerActivityPanel({ projectName }: { projectName: string }) {
                     {s.totals24h.aiUserFetchHits.toLocaleString('en-US')}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums text-heading">
-                    {s.totals24h.aiReferralHits.toLocaleString('en-US')}
+                    {s.totals24h.aiReferralLandedHits.toLocaleString('en-US')}
                   </td>
                   <td className="px-4 py-3 text-right text-secondary text-xs">
                     {s.lastSyncedAt ? relativeTime(s.lastSyncedAt) : 'never'}

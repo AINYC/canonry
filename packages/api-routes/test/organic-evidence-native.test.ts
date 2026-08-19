@@ -755,7 +755,7 @@ describe('organic evidence native measurement reconciliation', () => {
   })
 
   /**
-   * A 3xx referral row is a redirect hop, not a session. Counting it inflates
+   * A Location-redirect referral row is a hop, not a session. Counting it inflates
    * the total AND attributes the arrival to the redirecting path rather than
    * the page the visitor actually reached, so both the summary and the
    * per-page rows have to skip it.
@@ -1002,4 +1002,3 @@ describe('organic evidence native measurement reconciliation', () => {
     expect(observedReads).toBeGreaterThan(0)
   })
 })
-

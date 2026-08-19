@@ -292,6 +292,7 @@ function richReport(): ProjectReportDto {
       unverifiedCrawlerHits: { current: 15, prior: 5, deltaPct: 200 },
       aiUserFetchHits: { current: 42, prior: 18, deltaPct: 133 },
       referralArrivals: { current: 12, prior: 6, deltaPct: 100 },
+      referralRedirects: 0,
       referralArrivalsByClass: {
         paid: { current: 9, prior: 4, deltaPct: 125 },
         organic: { current: 2, prior: 2, deltaPct: 0 },
@@ -751,6 +752,24 @@ describe('renderReportHtml', () => {
       // never disagree about a client's paid-vs-earned AI traffic.
       expect(html, audience).toContain('Paid 9 · Organic 2 · Unclassified 1')
     }
+  })
+
+  /**
+   * The redirect note is the report's only way to say WHY arrivals are low on
+   * a site whose AI traffic bounces off a redirect. Same fragment verbatim in
+   * ReportPage.tsx (report parity); absent entirely at zero so the common case
+   * carries no noise.
+   */
+  test('names arrivals blocked by redirects, and only when there are any', () => {
+    const report = richReport()
+    report.serverActivity = { ...report.serverActivity!, referralRedirects: 120 }
+    for (const audience of ['client', 'agency'] as const) {
+      const html = renderReportHtml(report, { audience })
+      expect(html, audience).toContain('120 blocked by redirects')
+    }
+    const quiet = richReport()
+    quiet.serverActivity = { ...quiet.serverActivity!, referralRedirects: 0 }
+    expect(renderReportHtml(quiet, { audience: 'agency' })).not.toContain('blocked by redirects')
   })
 
   test('an all-unclassified window says so instead of rendering a bare total', () => {

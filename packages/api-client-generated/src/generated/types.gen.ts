@@ -8090,6 +8090,7 @@ export type ProjectReportDto = {
             prior: number;
             deltaPct: number | null;
         };
+        referralRedirects: number;
         referralArrivalsByClass: {
             paid: {
                 current: number;
@@ -9733,6 +9734,7 @@ export type TrafficEventsResponse = {
             crawlerHits: number;
             aiUserFetchHits: number;
             aiReferralHits: number;
+            aiReferralLandedHits: number;
         }>;
     };
     totals: {
@@ -9748,6 +9750,8 @@ export type TrafficEventsResponse = {
         };
         aiUserFetchHits: number;
         aiReferralHits: number;
+        aiReferralLandedHits: number;
+        aiReferralRedirectedHits: number;
         aiReferralPaidHits: number;
         aiReferralOrganicHits: number;
         aiReferralUnknownHits: number;

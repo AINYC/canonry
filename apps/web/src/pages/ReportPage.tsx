@@ -230,7 +230,14 @@ function ServerActivityClientView({ report }: { report: ProjectReportDto }) {
   // Referral arrivals mix paid and organic clicks. Without the split a reader
   // takes the whole number for earned AI traffic. The API renders the summary
   // string so this and the HTML report cannot drift.
-  const referralSubtitle = [referralDelta, sa.referralArrivalsClassSummary].filter(Boolean).join(' · ')
+  // Same fragment verbatim in report-renderer.ts (report parity). Without it
+  // an all-redirect site reads as having no AI traffic instead of naming the
+  // one thing to fix.
+  const referralRedirectNote = sa.referralRedirects > 0
+    ? `${formatNumber(sa.referralRedirects)} blocked by redirects`
+    : ''
+  const referralSubtitle = [referralDelta, sa.referralArrivalsClassSummary, referralRedirectNote]
+    .filter(Boolean).join(' · ')
   // For the client view we cap at the top 5 entries — agencies see the full breakdown in the HTML report.
   const topOperators = sa.byOperator
     .filter(o => o.verifiedHits > 0 || o.unverifiedHits > 0 || o.userFetchHits > 0 || o.referralArrivals > 0)

@@ -1,4 +1,4 @@
-import { isReferralRedirectStatus } from './ai-referral-status.js'
+import { countableReferralCondition } from './ai-referral-status.js'
 import { and, desc, eq, gte, lte, or, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import {
@@ -107,13 +107,9 @@ function summarizeServer(
   fetches: Array<typeof aiUserFetchEventsHourly.$inferSelect>,
   referrals: Array<typeof aiReferralEventsHourly.$inferSelect>,
 ) {
-  // A 3xx is a redirect hop, not an arrival. `referralSessions` is presented as
-  // sessions, so it counts only rows the visitor was actually served. See
-  // `ai-referral-status.ts` for why 4xx/5xx stay.
-  const landed = referrals.filter((row) => !isReferralRedirectStatus(row.status))
-  const total = landed.reduce((count, row) => count + row.sessionsOrHits, 0)
-  const paid = landed.reduce((count, row) => count + row.paidSessionsOrHits, 0)
-  const organic = landed.reduce((count, row) => count + row.organicSessionsOrHits, 0)
+  const total = referrals.reduce((count, row) => count + row.sessionsOrHits, 0)
+  const paid = referrals.reduce((count, row) => count + row.paidSessionsOrHits, 0)
+  const organic = referrals.reduce((count, row) => count + row.organicSessionsOrHits, 0)
   const crawlerHits = summarizeVerificationHits(crawlers)
   const userFetchHits = summarizeVerificationHits(fetches)
   return {
@@ -337,8 +333,13 @@ export function buildOrganicEvidence(
     .where(and(eq(crawlerEventsHourly.projectId, project.id), gte(crawlerEventsHourly.tsHour, serverStart), lte(crawlerEventsHourly.tsHour, serverEnd))).all()
   const allFetches = db.select().from(aiUserFetchEventsHourly)
     .where(and(eq(aiUserFetchEventsHourly.projectId, project.id), gte(aiUserFetchEventsHourly.tsHour, serverStart), lte(aiUserFetchEventsHourly.tsHour, serverEnd))).all()
+  // Countable rows only (no redirect hops, no subresource fetches), enforced
+  // once here so every consumer of this array inherits the rule. Filtering
+  // downstream in two JS sites let a future third consumer forget it, and this
+  // also stops materializing rows nothing reads. Same predicate as the report,
+  // so the two surfaces' session figures cannot diverge on status or path.
   const allReferrals = db.select().from(aiReferralEventsHourly)
-    .where(and(eq(aiReferralEventsHourly.projectId, project.id), gte(aiReferralEventsHourly.tsHour, serverStart), lte(aiReferralEventsHourly.tsHour, serverEnd))).all()
+    .where(and(eq(aiReferralEventsHourly.projectId, project.id), countableReferralCondition(), gte(aiReferralEventsHourly.tsHour, serverStart), lte(aiReferralEventsHourly.tsHour, serverEnd))).all()
   const [serverCoverageRow] = db.all(sql`
     select
       min(day) as startDate,
@@ -356,6 +357,7 @@ export function buildOrganicEvidence(
       select substr(${aiReferralEventsHourly.tsHour}, 1, 10) as day
       from ${aiReferralEventsHourly}
       where ${aiReferralEventsHourly.projectId} = ${project.id}
+        and ${countableReferralCondition()}
     )
   `) as Array<{
     startDate: string | null
@@ -433,10 +435,6 @@ export function buildOrganicEvidence(
     counts[tier] += row.hits
   }
   for (const row of referrals) {
-    // Same rule as the summary: a redirect hop is not a session, and counting
-    // it here would also attribute the arrival to the redirecting path rather
-    // than the page the visitor actually reached.
-    if (isReferralRedirectStatus(row.status)) continue
     const counts = ensurePage(row.landingPathNormalized).server.referralSessions
     counts.total += row.sessionsOrHits
     counts.paid += row.paidSessionsOrHits

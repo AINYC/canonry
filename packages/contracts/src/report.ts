@@ -503,8 +503,22 @@ export const serverActivitySectionSchema = z.object({
    * not "is this a confirmed bot identity?"
    */
   aiUserFetchHits: z.object({ current: z.number(), prior: z.number(), deltaPct: z.number().nullable() }),
-  /** Last-7d AI-referral sessions (sessionized from server-side request evidence). Paid + organic + unclassified. */
+  /**
+   * Last-7d AI-referral sessions (sessionized from server-side request
+   * evidence). Paid + organic + unclassified. Excludes subresource fetches and
+   * requests answered with a Location redirect (301/302/303/307/308): a hop is
+   * not an arrival, and its destination raises its own row. Redirect-answered
+   * requests are reported separately in `referralRedirects`.
+   */
   referralArrivals: z.object({ current: z.number(), prior: z.number(), deltaPct: z.number().nullable() }),
+  /**
+   * AI-referred requests in the current window that were answered with a
+   * Location redirect instead of a page. Not arrivals — but a site where this
+   * dominates has its AI traffic bouncing off a redirect before landing, which
+   * is exactly the thing to fix, so the report must be able to say it rather
+   * than render an empty section.
+   */
+  referralRedirects: z.number().int().nonnegative(),
   /**
    * `referralArrivals` split by traffic class. The three buckets sum to it.
    *

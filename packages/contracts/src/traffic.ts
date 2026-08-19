@@ -515,16 +515,19 @@ export const trafficSourceTotalsSchema = z.object({
    */
   aiReferralHits: z.number().int().nonnegative(),
   /**
-   * Referral hits the visitor actually received a response for (non-3xx).
-   * This is the figure to present as visits, visitors, sessions or arrivals.
+   * Referral hits not answered with a proven Location redirect
+   * (301/302/303/307/308). This is the figure to present as visits, visitors,
+   * sessions or arrivals. "Not proven", not "proven served": a source that
+   * never observed a status stores 0, and an unobserved status is not a hop,
+   * so those rows count here — the benefit-of-the-doubt default.
    */
   aiReferralLandedHits: z.number().int().nonnegative(),
   /**
-   * Referral hits answered with a redirect. The visitor got no content here;
-   * the destination raises its own row when it carries the same evidence, so
-   * counting these as arrivals double-counts one person. A site where this is
-   * most of the total is a finding in itself: its AI arrivals are all landing
-   * on a redirect.
+   * Referral hits answered with a Location redirect. The visitor got no
+   * content here; the destination raises its own row when it carries the same
+   * evidence, so counting these as arrivals double-counts one person. A site
+   * where this is most of the total is a finding in itself: its AI arrivals
+   * all bounce off a redirect.
    */
   aiReferralRedirectedHits: z.number().int().nonnegative(),
   sampleCount: z.number().int().nonnegative(),
@@ -572,6 +575,11 @@ export const trafficSeriesPointSchema = z.object({
   crawlerHits: z.number().int().nonnegative(),
   aiUserFetchHits: z.number().int().nonnegative(),
   aiReferralHits: z.number().int().nonnegative(),
+  /**
+   * The part of `aiReferralHits` not answered with a Location redirect — the
+   * series to chart under any label that says sessions or visits.
+   */
+  aiReferralLandedHits: z.number().int().nonnegative(),
 })
 export type TrafficSeriesPoint = z.infer<typeof trafficSeriesPointSchema>
 
@@ -664,13 +672,22 @@ export const trafficEventsResponseSchema = z.object({
     /** Full per-class crawler-hit breakdown; the five buckets sum to `crawlerHits`. */
     crawlerSegments: trafficCrawlerSegmentsSchema,
     aiUserFetchHits: z.number().int().nonnegative(),
-    /** Total AI-referral sessions. The three class buckets below sum to it. */
+    /**
+     * Every AI-referral request in the window, whatever the server answered.
+     * NOT a session count: use `aiReferralLandedHits` for anything presented
+     * as sessions or visits. The three class buckets sum to the LANDED figure,
+     * because a redirect hop's paid tags are not a paid session.
+     */
     aiReferralHits: z.number().int().nonnegative(),
-    /** AI-referral sessions carrying paid-attribution UTM evidence. */
+    /** Referral hits not answered with a proven Location redirect. */
+    aiReferralLandedHits: z.number().int().nonnegative(),
+    /** Referral hits answered with a Location redirect — hops, not arrivals. */
+    aiReferralRedirectedHits: z.number().int().nonnegative(),
+    /** LANDED sessions carrying paid-attribution UTM evidence. */
     aiReferralPaidHits: z.number().int().nonnegative(),
-    /** AI-referral sessions with no paid-attribution evidence. */
+    /** LANDED sessions with no paid-attribution evidence. */
     aiReferralOrganicHits: z.number().int().nonnegative(),
-    /** AI-referral sessions ingested before the classifier shipped; unresolvable, never organic. */
+    /** LANDED sessions ingested before the classifier shipped; unresolvable, never organic. */
     aiReferralUnknownHits: z.number().int().nonnegative(),
   }),
   eventRows: z.object({

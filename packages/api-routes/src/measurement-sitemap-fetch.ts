@@ -1,3 +1,4 @@
+import { isLocationRedirectStatus } from '@ainyc/canonry-contracts'
 import crypto from 'node:crypto'
 import dns from 'node:dns/promises'
 import { gunzip } from 'node:zlib'
@@ -306,7 +307,7 @@ async function requestFollowingValidatedRedirects(
       timeoutMs: remainingTime(deadlineAt),
       maxBodyBytes: limits.maxBodyBytes,
     }), deadlineAt)
-    if (!isRedirect(response.status)) return response
+    if (!isLocationRedirectStatus(response.status)) return response
     if (redirects >= limits.maxRedirects) throw new Error(`Sitemap redirect count exceeds the maximum of ${limits.maxRedirects}`)
     const location = firstHeader(response.headers.location)
     if (!location) throw new Error('Sitemap redirect response has no Location header')
@@ -555,9 +556,7 @@ function decodeXmlEntities(value: string): string {
   return value.replace(/&(?:amp|lt|gt|quot|apos);/g, (entity) => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'" })[entity]!)
 }
 
-function isRedirect(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308
-}
+
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value

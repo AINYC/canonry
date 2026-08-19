@@ -417,8 +417,8 @@ export function TrafficSourceDetailPage() {
           />
           <TrafficKpi
             label="AI referral sessions"
-            value={detail.totals24h.aiReferralHits}
-            tooltip="Browser click-throughs from AI surfaces, identified by Referer or UTM evidence."
+            value={detail.totals24h.aiReferralLandedHits}
+            tooltip={`Browser click-throughs from AI surfaces, identified by Referer or UTM evidence. Excludes ${detail.totals24h.aiReferralRedirectedHits.toLocaleString('en-US')} request(s) answered with a redirect: a hop is not an arrival. Total including hops: ${detail.totals24h.aiReferralHits.toLocaleString('en-US')}.`}
           />
         </div>
       </section>
@@ -461,7 +461,7 @@ export function TrafficSourceDetailPage() {
                 {totals.crawlerContentHits.toLocaleString('en-US')} content crawls ·{' '}
                 {totals.crawlerInfraHits.toLocaleString('en-US')} infra (sitemap/robots/assets) ·{' '}
                 {totals.aiUserFetchHits.toLocaleString('en-US')} AI user fetches ·{' '}
-                {totals.aiReferralHits.toLocaleString('en-US')} AI referral sessions · last {activeWindow.label} · {LOCAL_TZ}
+                {totals.aiReferralLandedHits.toLocaleString('en-US')} AI referral sessions · last {activeWindow.label} · {LOCAL_TZ}
               </p>
             ) : null}
           </div>
@@ -502,7 +502,7 @@ export function TrafficSourceDetailPage() {
             <SeriesToggle
               label="AI referral sessions"
               color={AI_REFERRAL_COLOR}
-              count={totals?.aiReferralHits ?? 0}
+              count={totals?.aiReferralLandedHits ?? 0}
               active={visibleSeries.has('ai-referral')}
               onToggle={() => toggleSeries('ai-referral')}
             />
@@ -758,7 +758,7 @@ function buildChartData(
     label: bucketLabelFor(point.bucket, granularity),
     crawler: point.crawlerHits,
     aiUserFetch: point.aiUserFetchHits,
-    aiReferral: point.aiReferralHits,
+    aiReferral: point.aiReferralLandedHits,
   }))
 }
 

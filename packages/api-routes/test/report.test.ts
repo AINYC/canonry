@@ -2192,8 +2192,8 @@ describe('serverActivity (AI visibility — server-side)', () => {
   })
 
   /**
-   * A 3xx is a redirect hop, not an arrival: the visitor received nothing at
-   * that URL and their browser was sent elsewhere, where the destination raises
+   * A Location redirect is a hop, not an arrival: the visitor received nothing
+   * at that URL and their browser was sent elsewhere, where the destination raises
    * its own row. Counting the hop reports one person as two on any site that
    * redirects, and on a site whose redirect target drops the AI evidence it
    * reports arrivals that were never observed at all.
@@ -2238,19 +2238,49 @@ describe('serverActivity (AI visibility — server-side)', () => {
     expect(sa.referralArrivals.current).toBe(10)
   })
 
-  /** The boundaries themselves: 299 and 400 are arrivals, 300 and 399 are not. */
-  test('the redirect band is exactly 300 to 399', async () => {
+  /**
+   * The band is the five Location redirects, NOT all of 3xx. A 304 is a served
+   * page view from cache with no follow-on request — on live data 122 of 248
+   * excluded hits were 304s, i.e. real returning visitors — and 300 carries a
+   * body the client renders. Blanket 300-399 dropped those arrivals and they
+   * were recouped nowhere.
+   */
+  test('the redirect band is exactly the Location redirects 301/302/303/307/308', async () => {
     const projectId = insertProject(ctx.db, 'referral-boundaries')
     const sourceId = insertTrafficSource(projectId)
+    // Arrivals: below the band, above it, and the served 3xx statuses.
     insertReferral(projectId, sourceId, { landingPathNormalized: '/a', status: 299, hits: 1 })
-    insertReferral(projectId, sourceId, { landingPathNormalized: '/b', status: 300, hits: 100 })
-    insertReferral(projectId, sourceId, { landingPathNormalized: '/c', status: 399, hits: 100 })
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/b', status: 300, hits: 1 })
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/c', status: 304, hits: 1 })
     insertReferral(projectId, sourceId, { landingPathNormalized: '/d', status: 400, hits: 1 })
+    // Hops: every Location redirect.
+    for (const [i, status] of [301, 302, 303, 307, 308].entries()) {
+      insertReferral(projectId, sourceId, { landingPathNormalized: `/hop-${i}`, status, hits: 100 })
+    }
     await ctx.app.ready()
     const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/referral-boundaries/report' })
     const sa = (JSON.parse(res.body) as ProjectReportDto).serverActivity!
 
-    expect(sa.referralArrivals.current).toBe(2)
+    expect(sa.referralArrivals.current).toBe(4)
+    expect(sa.referralRedirects).toBe(500)
+  })
+
+  /**
+   * The section must not go silent when every referral is a hop: the redirect
+   * figure is what lets the report say WHY arrivals are zero — the most
+   * actionable diagnosis for such a site.
+   */
+  test('an all-redirect project still renders server activity, with the hops named', async () => {
+    const projectId = insertProject(ctx.db, 'referral-all-hops')
+    const sourceId = insertTrafficSource(projectId)
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/hop', status: 301, hits: 120 })
+    await ctx.app.ready()
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/referral-all-hops/report' })
+    const sa = (JSON.parse(res.body) as ProjectReportDto).serverActivity!
+
+    expect(sa.hasData).toBe(true)
+    expect(sa.referralArrivals.current).toBe(0)
+    expect(sa.referralRedirects).toBe(120)
   })
 
   test('events outside the trend window are excluded', async () => {
