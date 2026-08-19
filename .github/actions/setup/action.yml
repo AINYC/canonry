@@ -1,5 +1,15 @@
 name: Setup canonry
 description: Install pnpm, Node, and project dependencies. Assumes the repo is already checked out.
+inputs:
+  node-version:
+    description: >
+      Node major to install. Defaults to 22 — the version Docker images, the
+      published build, and .nvmrc all pin — so every existing caller is
+      unchanged. Pass a higher major only to prove a supported major still
+      works; `packages/db/test/node-support-range.test.ts` asserts the CI
+      matrix covers the highest major in scripts/check-node.mjs.
+    required: false
+    default: '22'
 runs:
   using: composite
   steps:
@@ -8,7 +18,7 @@ runs:
         version: 10.28.2
     - uses: actions/setup-node@v4
       with:
-        node-version: 22
+        node-version: ${{ inputs.node-version }}
         cache: pnpm
     - run: pnpm install --frozen-lockfile
       shell: bash

@@ -1,6 +1,6 @@
 {
   "name": "@canonry/canonry",
-  "version": "4.175.0",
+  "version": "4.176.0",
   "type": "module",
   "description": "Self-hosted AI visibility (AEO) platform: track how ChatGPT, Claude, Gemini, and Perplexity cite your domain, join it with Search Console, GA4, server-side traffic, and paid media, and fix what you find through agent tools (CLI, REST, MCP). Local SQLite.",
   "license": "FSL-1.1-ALv2",
@@ -37,7 +37,7 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
-    "node": ">=22.14.0 <26"
+    "node": ">=22.14.0 <27"
   },
   "scripts": {
     "build": "tsx scripts/copy-agent-assets.ts && tsup && tsx build-web.ts",
@@ -57,7 +57,7 @@
     "@mariozechner/pi-ai": "0.67.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@sinclair/typebox": "^0.34.41",
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "^12.11.1",
     "chrome-remote-interface": "^0.33.2",
     "cron-parser": "^5.5.0",
     "drizzle-orm": "^0.45.2",
@@ -80,16 +80,16 @@
     "@ainyc/canonry-contracts": "workspace:*",
     "@ainyc/canonry-db": "workspace:*",
     "@ainyc/canonry-integration-bing": "workspace:*",
+    "@ainyc/canonry-integration-cloud-run": "workspace:*",
     "@ainyc/canonry-integration-cloudflare-queue": "workspace:*",
     "@ainyc/canonry-integration-cloudflare-worker": "workspace:*",
-    "@ainyc/canonry-integration-openai-ads": "workspace:*",
-    "@ainyc/canonry-integration-cloud-run": "workspace:*",
     "@ainyc/canonry-integration-commoncrawl": "workspace:*",
     "@ainyc/canonry-integration-google": "workspace:*",
     "@ainyc/canonry-integration-google-ads": "workspace:*",
     "@ainyc/canonry-integration-google-business-profile": "workspace:*",
     "@ainyc/canonry-integration-google-places": "workspace:*",
     "@ainyc/canonry-integration-google-tag-manager": "workspace:*",
+    "@ainyc/canonry-integration-openai-ads": "workspace:*",
     "@ainyc/canonry-integration-traffic": "workspace:*",
     "@ainyc/canonry-integration-wordpress": "workspace:*",
     "@ainyc/canonry-intelligence": "workspace:*",

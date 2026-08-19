@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@ainyc/canonry-contracts": "workspace:*",
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "^12.11.1",
     "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
