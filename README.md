@@ -6,7 +6,7 @@ Your entire AEO/GEO/AI Visibility, technical SEO + web analytics stack. **Agent-
 
 Think PostHog, for AI search visibility. Canonry tracks what ChatGPT, Claude, Gemini, and Perplexity say about you, joins it with your search, server side traffic data and paid media, and gives your agent the tools to fix what it finds.
 
-`npm install -g @canonry/canonry`. One SQLite file. All yours.
+`npm install -g @canonry/canonry`.
 
 ![Canonry AI Visibility mention share trend across answer engines](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/ai-visibility-trend.png)
 
@@ -146,12 +146,6 @@ cnry visibility-stats my-site --by-provider
 ## Deployment and trust boundary
 
 Canonry is self-hosted and single-tenant. Run one instance for one operator or team, and isolate unrelated teams on separate instances.
-
-- `cnry serve` runs locally or on your server with SQLite.
-- Provider credentials remain on the Canonry instance.
-- API keys support project scope and read-only access. A write-scoped project key can change instance settings.
-- These key controls do not replace instance isolation.
-- The dashboard is a companion to the CLI, API, MCP, and agent surfaces.
 
 See the [deployment guide](docs/deployment.md) for reverse proxies, daemon mode, Docker, systemd, and Tailscale.
 
