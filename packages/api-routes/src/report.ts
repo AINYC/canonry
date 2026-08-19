@@ -1,3 +1,4 @@
+import { referralLandedCondition } from './ai-referral-status.js'
 import { and, desc, eq, gte, inArray, lt, lte, ne, or, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import {
@@ -888,6 +889,7 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
         and(
           eq(aiReferralEventsHourly.projectId, projectId),
           nonSubresourceReferralPathCondition(),
+          referralLandedCondition(),
           gte(aiReferralEventsHourly.tsHour, windowStartIso),
           exclusiveEnd
             ? lt(aiReferralEventsHourly.tsHour, windowEndIso)
@@ -973,6 +975,7 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
       and(
         eq(aiReferralEventsHourly.projectId, projectId),
         nonSubresourceReferralPathCondition(),
+          referralLandedCondition(),
         gte(aiReferralEventsHourly.tsHour, headlineStart),
         lte(aiReferralEventsHourly.tsHour, headlineEnd),
       ),
@@ -1077,6 +1080,7 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
       and(
         eq(aiReferralEventsHourly.projectId, projectId),
         nonSubresourceReferralPathCondition(),
+          referralLandedCondition(),
         gte(aiReferralEventsHourly.tsHour, headlineStart),
         lte(aiReferralEventsHourly.tsHour, headlineEnd),
       ),
@@ -1102,6 +1106,7 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
       and(
         eq(aiReferralEventsHourly.projectId, projectId),
         nonSubresourceReferralPathCondition(),
+          referralLandedCondition(),
         gte(aiReferralEventsHourly.tsHour, headlineStart),
         lte(aiReferralEventsHourly.tsHour, headlineEnd),
       ),
@@ -1143,6 +1148,7 @@ function buildServerActivity(db: DatabaseClient, projectId: string, windowDays: 
       and(
         eq(aiReferralEventsHourly.projectId, projectId),
         nonSubresourceReferralPathCondition(),
+          referralLandedCondition(),
         gte(aiReferralEventsHourly.tsHour, trendStart),
         lte(aiReferralEventsHourly.tsHour, headlineEnd),
       ),

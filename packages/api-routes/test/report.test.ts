@@ -2034,6 +2034,7 @@ describe('serverActivity (AI visibility — server-side)', () => {
       operator?: string
       sourceDomain?: string
       landingPathNormalized?: string
+      status?: number
       hits: number
     },
   ) {
@@ -2047,7 +2048,7 @@ describe('serverActivity (AI visibility — server-side)', () => {
       sourceDomain: args.sourceDomain ?? 'chatgpt.com',
       evidenceType: 'utm',
       landingPathNormalized: args.landingPathNormalized ?? '/landing',
-      status: 200,
+      status: args.status ?? 200,
       sessionsOrHits: args.hits,
       usersEstimated: null,
       createdAt: now,
@@ -2188,6 +2189,68 @@ describe('serverActivity (AI visibility — server-side)', () => {
     expect(sa.topReferralLandingPaths).toEqual([
       { path: '/blog/post', arrivals: 2, distinctProducts: 1 },
     ])
+  })
+
+  /**
+   * A 3xx is a redirect hop, not an arrival: the visitor received nothing at
+   * that URL and their browser was sent elsewhere, where the destination raises
+   * its own row. Counting the hop reports one person as two on any site that
+   * redirects, and on a site whose redirect target drops the AI evidence it
+   * reports arrivals that were never observed at all.
+   *
+   * Measured on live data before this filter existed: 248 of 1,572 referral
+   * hits across five projects were 3xx, and on one project every single hit was
+   * a redirect. Its report claimed 120 visitors where its own analytics saw 2.
+   */
+  test('referral session metrics exclude redirect hops', async () => {
+    const projectId = insertProject(ctx.db, 'referral-redirects')
+    const sourceId = insertTrafficSource(projectId)
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/blog/post', status: 200, hits: 2 })
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/redirected', status: 301, hits: 40 })
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/moved', status: 302, hits: 7 })
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/perm', status: 308, hits: 5 })
+    await ctx.app.ready()
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/referral-redirects/report' })
+    const sa = (JSON.parse(res.body) as ProjectReportDto).serverActivity!
+
+    // 52 of the 54 hits were redirects and none of them is a visitor.
+    expect(sa.referralArrivals.current).toBe(2)
+    expect(sa.topReferralLandingPaths).toEqual([
+      { path: '/blog/post', arrivals: 2, distinctProducts: 1 },
+    ])
+  })
+
+  /**
+   * 4xx and 5xx are deliberately KEPT. Someone did arrive, they just landed on
+   * a broken page, which is a finding rather than a miscount. Dropping them
+   * would hide exactly the pages worth fixing.
+   */
+  test('referral session metrics keep error responses, which are real arrivals', async () => {
+    const projectId = insertProject(ctx.db, 'referral-errors')
+    const sourceId = insertTrafficSource(projectId)
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/ok', status: 200, hits: 3 })
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/gone', status: 404, hits: 6 })
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/broken', status: 500, hits: 1 })
+    await ctx.app.ready()
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/referral-errors/report' })
+    const sa = (JSON.parse(res.body) as ProjectReportDto).serverActivity!
+
+    expect(sa.referralArrivals.current).toBe(10)
+  })
+
+  /** The boundaries themselves: 299 and 400 are arrivals, 300 and 399 are not. */
+  test('the redirect band is exactly 300 to 399', async () => {
+    const projectId = insertProject(ctx.db, 'referral-boundaries')
+    const sourceId = insertTrafficSource(projectId)
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/a', status: 299, hits: 1 })
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/b', status: 300, hits: 100 })
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/c', status: 399, hits: 100 })
+    insertReferral(projectId, sourceId, { landingPathNormalized: '/d', status: 400, hits: 1 })
+    await ctx.app.ready()
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/projects/referral-boundaries/report' })
+    const sa = (JSON.parse(res.body) as ProjectReportDto).serverActivity!
+
+    expect(sa.referralArrivals.current).toBe(2)
   })
 
   test('events outside the trend window are excluded', async () => {

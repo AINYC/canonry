@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import { isIP } from 'node:net'
 import { isDeepStrictEqual } from 'node:util'
 import { Agent as UndiciAgent } from 'undici'
+import { referralLandedCondition, referralRedirectedCondition } from './ai-referral-status.js'
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { CURRENT_CLOUDFLARE_WORKER_VERSION } from './cloudflare-worker-version.js'
@@ -3992,8 +3993,15 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
       )
       .get()
 
+    // Split by status: a 3xx is a redirect hop, not an arrival. `aiReferralHits`
+    // keeps its full-count contract; the two new figures say how much of it the
+    // visitor actually received.
     const aiTotals = app.db
-      .select({ total: sql<number>`COALESCE(SUM(${aiReferralEventsHourly.sessionsOrHits}), 0)` })
+      .select({
+        total: sql<number>`COALESCE(SUM(${aiReferralEventsHourly.sessionsOrHits}), 0)`,
+        landed: sql<number>`COALESCE(SUM(CASE WHEN ${referralLandedCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
+        redirected: sql<number>`COALESCE(SUM(CASE WHEN ${referralRedirectedCondition()} THEN ${aiReferralEventsHourly.sessionsOrHits} ELSE 0 END), 0)`,
+      })
       .from(aiReferralEventsHourly)
       .where(
         and(
@@ -4037,6 +4045,8 @@ export async function trafficRoutes(app: FastifyInstance, opts: TrafficRoutesOpt
         crawlerSegments,
         aiUserFetchHits: Number(aiUserFetchTotals?.total ?? 0),
         aiReferralHits: Number(aiTotals?.total ?? 0),
+        aiReferralLandedHits: Number(aiTotals?.landed ?? 0),
+        aiReferralRedirectedHits: Number(aiTotals?.redirected ?? 0),
         sampleCount: Number(sampleTotals?.total ?? 0),
       },
       latestRun: latestRun

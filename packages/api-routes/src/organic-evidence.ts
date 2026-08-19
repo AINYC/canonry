@@ -1,3 +1,4 @@
+import { isReferralRedirectStatus } from './ai-referral-status.js'
 import { and, desc, eq, gte, lte, or, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import {
@@ -106,9 +107,13 @@ function summarizeServer(
   fetches: Array<typeof aiUserFetchEventsHourly.$inferSelect>,
   referrals: Array<typeof aiReferralEventsHourly.$inferSelect>,
 ) {
-  const total = referrals.reduce((count, row) => count + row.sessionsOrHits, 0)
-  const paid = referrals.reduce((count, row) => count + row.paidSessionsOrHits, 0)
-  const organic = referrals.reduce((count, row) => count + row.organicSessionsOrHits, 0)
+  // A 3xx is a redirect hop, not an arrival. `referralSessions` is presented as
+  // sessions, so it counts only rows the visitor was actually served. See
+  // `ai-referral-status.ts` for why 4xx/5xx stay.
+  const landed = referrals.filter((row) => !isReferralRedirectStatus(row.status))
+  const total = landed.reduce((count, row) => count + row.sessionsOrHits, 0)
+  const paid = landed.reduce((count, row) => count + row.paidSessionsOrHits, 0)
+  const organic = landed.reduce((count, row) => count + row.organicSessionsOrHits, 0)
   const crawlerHits = summarizeVerificationHits(crawlers)
   const userFetchHits = summarizeVerificationHits(fetches)
   return {
@@ -428,6 +433,10 @@ export function buildOrganicEvidence(
     counts[tier] += row.hits
   }
   for (const row of referrals) {
+    // Same rule as the summary: a redirect hop is not a session, and counting
+    // it here would also attribute the arrival to the redirecting path rather
+    // than the page the visitor actually reached.
+    if (isReferralRedirectStatus(row.status)) continue
     const counts = ensurePage(row.landingPathNormalized).server.referralSessions
     counts.total += row.sessionsOrHits
     counts.paid += row.paidSessionsOrHits

@@ -4042,6 +4042,50 @@ describe('GET /traffic/sources/:id', () => {
     } finally { await h.close() }
   })
 
+  /**
+   * A 3xx referral row is a redirect hop, not an arrival. `aiReferralHits`
+   * keeps its full-count contract, so the split is what tells a surface which
+   * part of it a visitor actually received.
+   */
+  it('splits referral hits into landed and redirected by status', async () => {
+    const h = await buildHarness([])
+    try {
+      const connectRes = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/test-project/traffic/connect/cloud-run',
+        payload: { gcpProjectId: 'openclaw-nyc', keyJson: SA_KEY },
+      })
+      const sourceId = JSON.parse(connectRes.payload).id
+      const projectId = h.db.select().from(trafficSources)
+        .where(eq(trafficSources.id, sourceId)).get()!.projectId
+      const tsHour = new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 13) + ':00:00.000Z'
+      const now = new Date().toISOString()
+      const base = {
+        projectId, sourceId, tsHour, product: 'ChatGPT', operator: 'OpenAI',
+        sourceDomain: 'chatgpt.com', evidenceType: 'utm', paidSessionsOrHits: 0,
+        usersEstimated: null, createdAt: now, updatedAt: now,
+      }
+      h.db.insert(aiReferralEventsHourly).values([
+        { ...base, landingPathNormalized: '/landed', status: 200, sessionsOrHits: 4, organicSessionsOrHits: 4 },
+        { ...base, landingPathNormalized: '/hop', status: 301, sessionsOrHits: 90, organicSessionsOrHits: 90 },
+        { ...base, landingPathNormalized: '/gone', status: 404, sessionsOrHits: 6, organicSessionsOrHits: 6 },
+      ]).run()
+
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/test-project/traffic/sources/${sourceId}`,
+      })
+      const t = JSON.parse(res.payload).totals24h
+
+      // Full count is unchanged, and the two parts of it add back up.
+      expect(t.aiReferralHits).toBe(100)
+      // 404 is an arrival at a broken page, so it lands. Only the 301 does not.
+      expect(t.aiReferralLandedHits).toBe(10)
+      expect(t.aiReferralRedirectedHits).toBe(90)
+      expect(t.aiReferralLandedHits + t.aiReferralRedirectedHits).toBe(t.aiReferralHits)
+    } finally { await h.close() }
+  })
+
   it('returns null latestRun when the source has never synced', async () => {
     const h = await buildHarness([])
     try {
@@ -4066,6 +4110,8 @@ describe('GET /traffic/sources/:id', () => {
         crawlerSegments: { content: 0, sitemap: 0, robots: 0, asset: 0, other: 0 },
         aiUserFetchHits: 0,
         aiReferralHits: 0,
+        aiReferralLandedHits: 0,
+        aiReferralRedirectedHits: 0,
         sampleCount: 0,
       })
     } finally { await h.close() }

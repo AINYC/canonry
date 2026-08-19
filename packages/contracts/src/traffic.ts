@@ -508,7 +508,25 @@ export const trafficSourceTotalsSchema = z.object({
   /** Full per-class crawler-hit breakdown; the five buckets sum to `crawlerHits`. */
   crawlerSegments: trafficCrawlerSegmentsSchema,
   aiUserFetchHits: z.number().int().nonnegative(),
+  /**
+   * Every request carrying AI-origin evidence. UNCHANGED contract — still the
+   * full count across every status. Use `aiReferralLandedHits` for the
+   * "someone actually arrived" signal.
+   */
   aiReferralHits: z.number().int().nonnegative(),
+  /**
+   * Referral hits the visitor actually received a response for (non-3xx).
+   * This is the figure to present as visits, visitors, sessions or arrivals.
+   */
+  aiReferralLandedHits: z.number().int().nonnegative(),
+  /**
+   * Referral hits answered with a redirect. The visitor got no content here;
+   * the destination raises its own row when it carries the same evidence, so
+   * counting these as arrivals double-counts one person. A site where this is
+   * most of the total is a finding in itself: its AI arrivals are all landing
+   * on a redirect.
+   */
+  aiReferralRedirectedHits: z.number().int().nonnegative(),
   sampleCount: z.number().int().nonnegative(),
 })
 export type TrafficSourceTotals = z.infer<typeof trafficSourceTotalsSchema>

@@ -9846,6 +9846,8 @@ export type TrafficSourceDetailDto = {
         };
         aiUserFetchHits: number;
         aiReferralHits: number;
+        aiReferralLandedHits: number;
+        aiReferralRedirectedHits: number;
         sampleCount: number;
     };
     latestRun: {
@@ -9931,6 +9933,8 @@ export type TrafficStatusResponse = {
             };
             aiUserFetchHits: number;
             aiReferralHits: number;
+            aiReferralLandedHits: number;
+            aiReferralRedirectedHits: number;
             sampleCount: number;
         };
         latestRun: {
