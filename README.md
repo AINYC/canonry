@@ -6,7 +6,7 @@ Your entire AEO/GEO/AI Visibility, technical SEO + web analytics stack. **Agent-
 
 Think PostHog, for AI search visibility. Canonry tracks what ChatGPT, Claude, Gemini, and Perplexity say about you, joins it with your search, server side traffic data and paid media, and gives your agent the tools to fix what it finds.
 
-`npm install -g @canonry/canonry`.
+`npm install -g @canonry/canonry`
 
 ![Canonry AI Visibility mention share trend across answer engines](https://raw.githubusercontent.com/Canonry/canonry/main/docs/images/ai-visibility-trend.png)
 
