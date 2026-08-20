@@ -168,8 +168,8 @@ function testShardsJob(): CiJob {
  * Distinct Node majors the CI test matrix actually installs and runs on.
  *
  * The entries are deliberately asymmetric (Node 22 sharded 4x, the highest
- * major unsharded) to hold CI cost down, so this counts DISTINCT majors and
- * says nothing about how each one is split.
+ * major 2x) to balance feedback time and runner cost, so this counts DISTINCT
+ * majors and says nothing about how each one is split.
  */
 function ciMatrixMajors(): number[] {
   const include = testShardsJob().strategy?.matrix?.include
@@ -179,6 +179,25 @@ function ciMatrixMajors(): number[] {
     .filter((n) => Number.isFinite(n))
   if (majors.length === 0) throw new Error('no `node:` keys in the test_shards matrix')
   return [...new Set(majors)].sort((a, b) => a - b)
+}
+
+function ciMatrixShards(): Array<{ major: number; index: number; total: number }> {
+  const include = testShardsJob().strategy?.matrix?.include
+  if (!include?.length) throw new Error('`test_shards` declares no matrix include entries')
+
+  return include.map((entry) => {
+    const major = Number.parseInt(String(entry.node), 10)
+    const shard = /^(\d+)\/(\d+)$/.exec(String(entry.shard))
+    if (!Number.isFinite(major) || !shard) {
+      throw new Error(`invalid test-shard matrix entry: ${JSON.stringify(entry)}`)
+    }
+    const index = Number.parseInt(shard[1]!, 10)
+    const total = Number.parseInt(shard[2]!, 10)
+    if (index < 1 || total < index) {
+      throw new Error(`invalid shard ${String(entry.shard)} for Node ${major}`)
+    }
+    return { major, index, total }
+  })
 }
 
 function declaredEnginesCeiling(pkgRelPath: string[]): { declared: string; ceiling: number } {
@@ -263,6 +282,28 @@ describe('Node support range', () => {
     expect(ci).toContain(highest)
     // And CI must not claim to test a major the guard refuses to install on.
     for (const major of ci) expect(guardMajors()).toContain(major)
+  })
+
+  test('every CI Node major covers every shard it declares', () => {
+    // A matrix entry for Node 26 is not enough: `1/2` alone would test the
+    // major but silently sample only half its suite. Each major must include
+    // every member of one complete Vitest shard partition.
+    const byMajor = new Map<number, Array<{ index: number; total: number }>>()
+    for (const { major, index, total } of ciMatrixShards()) {
+      const shards = byMajor.get(major) ?? []
+      shards.push({ index, total })
+      byMajor.set(major, shards)
+    }
+
+    for (const [major, shards] of byMajor) {
+      const totals = [...new Set(shards.map((shard) => shard.total))]
+      expect(totals, `Node ${major} has inconsistent shard totals`).toHaveLength(1)
+      const total = totals[0]!
+      expect(
+        shards.map((shard) => shard.index).sort((a, b) => a - b),
+        `Node ${major} is missing or duplicating a shard`,
+      ).toEqual(Array.from({ length: total }, (_, index) => index + 1))
+    }
   })
 
   test('the matrix job actually runs the test suite', () => {
