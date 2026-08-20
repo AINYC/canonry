@@ -25,14 +25,33 @@
  * Dockerfile, rather than an arbitrary local runtime, controls that version.
  *
  * KEEPING THIS HONEST
- * `SUPPORTED_MAJORS` is the intersection of Canonry's Node 22+ policy and
- * better-sqlite3's supported majors. It is asserted against the installed
- * package by `packages/db/test/node-support-range.test.ts`, so a dependency
- * bump that narrows support fails a test rather than silently drifting.
+ * `SUPPORTED_MAJORS` is the intersection of Canonry's Node 22+ policy and the
+ * majors better-sqlite3 ships PREBUILT BINARIES for — which is NOT the same as
+ * its `engines.node`, see the note on the list itself. It is asserted against
+ * the installed package by `packages/db/test/node-support-range.test.ts`, so a
+ * dependency bump that narrows OR widens support fails a test rather than silently
+ * drifting — which is exactly how this list went stale once already: it was
+ * pinned at 25 while better-sqlite3 had shipped Node 26 prebuilds since
+ * 12.10.0, and the test hardcoded the same ceiling so the two agreed on a
+ * fact that had expired.
+ *
+ * That test also asserts CI actually runs the highest major listed here, so
+ * "supported" stays a claim with evidence behind it.
  */
 
-// Canonry supports Node 22+ while better-sqlite3 supports 22.x through 25.x.
-const SUPPORTED_MAJORS = [22, 23, 24, 25]
+// Canonry's Node 22+ floor intersected with the majors better-sqlite3 ships a
+// PREBUILT binary for.
+//
+// 23 is absent on purpose. better-sqlite3 12.10.0 added the Node 26 prebuild and
+// in the same release dropped the EOL Node 20 and 23 ones — but left both in
+// `engines.node`, which still reads "20.x || 22.x || 23.x || 24.x || 25.x || 26.x".
+// That field is therefore a SUPERSET of what actually has a binary, and deriving
+// this list from it alone would promise Node 23 an install it cannot deliver:
+// prebuild-install misses, node-gyp starts compiling, and the reader gets the
+// C++ wall this guard exists to replace.
+//
+// Asserted by packages/db/test/node-support-range.test.ts — read it before editing.
+const SUPPORTED_MAJORS = [22, 24, 25, 26]
 
 const major = Number.parseInt(process.versions.node.split('.')[0], 10)
 const bypassed = process.env.CANONRY_SKIP_NODE_CHECK === '1'
@@ -57,13 +76,18 @@ if (!SUPPORTED_MAJORS.includes(major) && bypassed) {
       '    install tries to compile from source and fails deep inside node-gyp,',
       '    which looks like an unrelated build error.',
       '',
-      '    Fix: switch Node, do NOT change dependencies.',
+      '    Fix: switch to a supported Node.',
       `      nvm use 22        (or fnm/volta/asdf — see .nvmrc)`,
-      '      CI and Docker images run Node 22.',
+      '      Docker images and the published build run Node 22.',
       '',
-      '    If you are intentionally testing a newer Node, set',
-      '    CANONRY_SKIP_NODE_CHECK=1 to bypass this and expect the native build',
-      '    to fail.',
+      '    If your Node is NEWER than every major above, better-sqlite3 may since',
+      '    have added a prebuild for it. Check whether a newer release lists your',
+      '    major in `engines.node`; if so, updating the dependency and this list',
+      '    together is the correct fix, not a workaround:',
+      '      pnpm update better-sqlite3 -r',
+      '',
+      '    To proceed anyway, set CANONRY_SKIP_NODE_CHECK=1. If no prebuild exists',
+      '    for your major, expect the native build to fail.',
       '',
     ].join('\n'),
   )

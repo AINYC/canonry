@@ -13,6 +13,29 @@ const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs')
 const mcpCli = path.join(packageRoot, 'src', 'mcp', 'cli.ts')
 
 /**
+ * The MCP adapter must write NOTHING to stderr (AGENTS.md → MCP adapter
+ * boundary), so the assertion below is an exact empty-string match.
+ *
+ * One Node-generated line would otherwise break it: the subprocess is
+ * `node <tsx>/cli.mjs src/mcp/cli.ts`, and tsx's ESM loader calls
+ * `module.register()`, deprecated in Node 26 (DEP0205). That is a dev-only
+ * transpiler emitting it, not canonry, and it says nothing about the MCP
+ * contract.
+ *
+ * It is silenced at the SOURCE — `--disable-warning=DEP0205` via NODE_OPTIONS
+ * on the child, see `startMcpClient` below — rather than by filtering the
+ * stream afterwards. A
+ * filter is the wrong instrument here: any pattern broad enough to catch
+ * Node's `(node:<pid>) ...` prefix also catches `MaxListenersExceededWarning`
+ * and `UnhandledPromiseRejectionWarning`, which are exactly the signals this
+ * assertion exists to surface. Disabling one warning code by name keeps every
+ * other diagnostic — and every byte canonry writes — a test failure.
+ *
+ * `--disable-warning` landed in Node 21.3, so it is available on every major
+ * in this repo's supported range.
+ */
+
+/**
  * Budget for spawn through the `initialize` response, which is where the two
  * subprocess cases below spend nearly all of their time. Each one starts
  * `node tsx src/mcp/cli.ts`, and that child transpiles the whole CLI import
@@ -325,6 +348,16 @@ async function startMcpClient(options: {
     cwd: packageRoot,
     env: {
       ...stringEnv(),
+      // NODE_OPTIONS, not a CLI flag: tsx re-execs node with an execArgv of its
+      // own (--require preflight.cjs --import loader.mjs) and drops whatever
+      // was passed on the original command line, so `node
+      // --disable-warning=... tsx cli.ts` never reaches the process that emits
+      // the warning. NODE_OPTIONS survives the re-exec. Verified both ways on
+      // this repo's tsx; the CLI-flag form shipped green on Node 22 and failed
+      // only on the Node 26 lane, which is the whole reason that lane exists.
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, '--disable-warning=DEP0205']
+        .filter(Boolean)
+        .join(' '),
       CANONRY_CONFIG_DIR: configDir,
       CANONRY_BASE_PATH: '',
     },

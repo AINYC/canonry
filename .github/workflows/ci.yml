@@ -71,18 +71,43 @@ jobs:
       - run: pnpm run typecheck
 
   test_shards:
-    name: test shard ${{ matrix.shard }}/4
+    name: test ${{ matrix.shard }} (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
     strategy:
       fail-fast: false
+      # Deliberately asymmetric to keep CI cost down.
+      #
+      # Node 22 is what Docker and the published build pin, so it stays sharded
+      # 4x for fast feedback on the version that actually ships.
+      #
+      # Node 26 is the highest major in `SUPPORTED_MAJORS`
+      # (scripts/check-node.mjs) and the current Homebrew default. It runs the
+      # WHOLE suite in ONE job: +1 runner instead of +4, still 100% coverage.
+      # Sampling a single shard there would have been cheaper by the same
+      # amount and would have covered a quarter of the suite — and the Node 26
+      # break this matrix was added to catch (tsx's `module.register()` tripping
+      # DEP0205) lives in packages/canonry, which one shard may not hold.
+      #
+      # The pairing is the point: better-sqlite3 is a NATIVE module, so a major
+      # is only "supported" if its prebuilt binary resolves and loads.
+      # `node-support-range.test.ts` asserts this matrix covers the highest
+      # supported major, so the claim cannot drift from its evidence the way it
+      # did while the guard sat at 25 for months.
       matrix:
-        shard: [1, 2, 3, 4]
+        include:
+          - { node: '22', shard: '1/4' }
+          - { node: '22', shard: '2/4' }
+          - { node: '22', shard: '3/4' }
+          - { node: '22', shard: '4/4' }
+          - { node: '26', shard: '1/1' }
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-      - run: pnpm run test --shard=${{ matrix.shard }}/4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: pnpm run test --shard=${{ matrix.shard }}
 
   test:
     name: test

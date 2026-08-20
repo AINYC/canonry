@@ -7,6 +7,18 @@ import { createClient, migrate, apiKeys } from '@ainyc/canonry-db'
 import { createServer } from '../src/server.js'
 import { ApiClient } from '../src/client.js'
 
+/**
+ * The two googleRefresh cases trigger a real gsc-sync run and poll
+ * `waitForRunStatus` every 2s until it reaches a terminal status. Vitest's 5s
+ * default only covers ~2 poll cycles, so under the unsharded Node 26 CI lane —
+ * the whole suite in one job (ci.yml / scripts/check-node.mjs) — CPU
+ * oversubscription keeps the run from finishing in time and the test times out
+ * with no assertion diff. Same load effect already handled for
+ * `mcp-stdio.test.ts`. 30s gives the poll loop ample headroom; a genuine hang
+ * still fails via `waitForRunStatus`'s own 10-minute cap inside `googleRefresh`.
+ */
+const REFRESH_POLL_TIMEOUT_MS = 30_000
+
 describe('google CLI commands', () => {
   let tmpDir: string
   let origConfigDir: string | undefined
@@ -348,7 +360,7 @@ describe('google CLI commands', () => {
 
     // With no inspections, it should print the "No URL inspections found" message from coverage
     expect(logs.join('\n')).toMatch(/No URL inspections found/)
-  })
+  }, REFRESH_POLL_TIMEOUT_MS)
 
   it('googleRefresh outputs valid JSON when format is json', async () => {
     await client.putProject('test-proj', {
@@ -382,7 +394,7 @@ describe('google CLI commands', () => {
     const parsed = JSON.parse(logs.join('\n')) as { summary: { total: number } }
     expect(parsed.summary).toBeDefined()
     expect(parsed.summary.total).toBe(0)
-  })
+  }, REFRESH_POLL_TIMEOUT_MS)
 
   it('googleRequestIndexing throws a usage error when neither URL nor --all-unindexed is provided', async () => {
     await client.putProject('test-proj', {
