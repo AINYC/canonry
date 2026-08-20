@@ -10,10 +10,10 @@ import { ApiClient } from '../src/client.js'
 /**
  * The two googleRefresh cases trigger a real gsc-sync run and poll
  * `waitForRunStatus` every 2s until it reaches a terminal status. Vitest's 5s
- * default only covers ~2 poll cycles, so under the unsharded Node 26 CI lane —
- * the whole suite in one job (ci.yml / scripts/check-node.mjs) — CPU
- * oversubscription keeps the run from finishing in time and the test times out
- * with no assertion diff. Same load effect already handled for
+ * default only covers ~2 poll cycles, so under the full-coverage Node 26 CI
+ * lane (ci.yml / scripts/check-node.mjs), CPU oversubscription can keep the
+ * run from finishing in time and the test times out with no assertion diff.
+ * Same load effect is already handled for
  * `mcp-stdio.test.ts`. 30s gives the poll loop ample headroom; a genuine hang
  * still fails via `waitForRunStatus`'s own 10-minute cap inside `googleRefresh`.
  */
