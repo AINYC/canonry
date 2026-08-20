@@ -6106,7 +6106,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/traffic/connect/wordpress',
     summary: 'Connect a WordPress traffic-logger source',
     description:
-      'Probes the WordPress traffic-logger plugin endpoint with the supplied Application Password (single page, `limit=1`) before persisting. On success, stores the credential in `~/.canonry/config.yaml` and creates / updates the project\'s active WordPress `traffic_sources` row. A probe failure (HTTP 4xx/5xx, network error) surfaces as 502 with the upstream status in the message so the caller learns about a bad credential up front instead of at the first sync.',
+      'Probes the WordPress traffic-logger plugin endpoint with the supplied Application Password (single page, `limit=1`) before persisting. On success, stores the credential in `~/.canonry/config.yaml` and creates / updates the project\'s active WordPress `traffic_sources` row. Changing `baseUrl` archives the old source lineage and creates a fresh source so historical rollups cannot mix across endpoints. A probe failure (HTTP 4xx/5xx, network error) surfaces as 502 with the upstream status in the message so the caller learns about a bad credential up front instead of at the first sync.',
     tags: ['traffic'],
     parameters: [nameParameter],
     requestBody: {
@@ -6238,7 +6238,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/traffic/sources/{id}/sync',
     summary: 'Trigger a sync run for a traffic source',
     description:
-      'Pulls from the selected Cloud Run, WordPress, Vercel, or Cloudflare Queue source, classifies crawler hits / user fetches / AI-referral sessions, and commits hourly buckets plus a bounded sample tail. Queue pull uses a durable source lease and acknowledges each Cloudflare message only after its event receipts and rollups commit.',
+      'Pulls from the selected Cloud Run, WordPress, Vercel, or Cloudflare Queue source, classifies crawler hits / user fetches / AI-referral sessions, and commits hourly buckets plus a bounded sample tail. WordPress uses a fixed half-open `[since, until)` window and a source lease; its first or idle sync defaults to the plugin maximum retention horizon (365d) unless `sinceMinutes` is supplied. Queue pull also uses a durable source lease and acknowledges each Cloudflare message only after its event receipts and rollups commit.',
     tags: ['traffic'],
     parameters: [
       nameParameter,
@@ -6251,7 +6251,7 @@ const routeCatalog: OpenApiOperation[] = [
           schema: {
             type: 'object',
             properties: {
-              sinceMinutes: { ...integerSchema, description: 'Optional lookback for time-window sources; Cloudflare Queue pull ignores it.' },
+              sinceMinutes: { ...integerSchema, description: 'Optional lookback for time-window sources. Defaults are adapter-specific; a new or idle WordPress source uses 365d to cover the plugin’s maximum configurable retention. Cloudflare Queue pull ignores it.' },
             },
           },
         },
@@ -6260,7 +6260,7 @@ const routeCatalog: OpenApiOperation[] = [
     responses: {
       200: jsonResponse('Sync summary returned.', 'TrafficSyncResponse'),
       400: errorResponse('Invalid sync request or missing credentials.'),
-      409: errorResponse('Another Queue sync currently owns the source lease.'),
+      409: errorResponse('Another WordPress or Queue sync currently owns the source lease.'),
       404: errorResponse('Project or traffic source not found.'),
       502: errorResponse('Upstream pull, acknowledgement, or credential resolution failed.'),
     },
@@ -6270,7 +6270,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/traffic/sources/{id}/backfill',
     summary: 'Reclassify historical traffic-source logs',
     description:
-      'Async one-shot backfill: pulls the last `days` of events (clamped server-side to the upstream retention ceiling — 30d for Cloud Logging `_Default`; the WordPress plugin honours the same window via `since`/`until` query params), classifies them with the current rules, and replaces the hourly rollup buckets + sample slice in the window inside one transaction. Returns immediately with `{ runId, status: "running" }`; poll `GET /runs/{id}` for completion. lastSyncedAt only advances forward, so a backfill never undoes incremental sync progress that ran ahead of it. Supported source types: `cloud-run`, `wordpress`, `vercel`.',
+      'Async one-shot reclassification: pulls the last `days` of events, classifies them with current rules, and replaces hourly rollup buckets plus the sample slice in that window inside one transaction. Adapter limits apply (Cloud Logging `_Default` is typically 30d; request payloads are capped at 90d). Generic replace backfill supports `cloud-run` and `vercel`. WordPress is always rejected because its retained event feed cannot prove it covers every bucket; use a retention-aware repair that explicitly declares any unrecoverable span. Returns immediately with `{ runId, status: "running" }`; poll `GET /runs/{id}` for completion. lastSyncedAt only advances forward.',
     tags: ['traffic'],
     parameters: [
       nameParameter,
@@ -6283,7 +6283,7 @@ const routeCatalog: OpenApiOperation[] = [
           schema: {
             type: 'object',
             properties: {
-              days: { ...integerSchema, description: 'Lookback window in days (default 30, capped at the upstream retention ceiling).' },
+              days: { ...integerSchema, description: 'Lookback window in days (default 30, capped by the adapter; generic WordPress replace backfill is unavailable).' },
             },
           },
         },
@@ -6300,7 +6300,7 @@ const routeCatalog: OpenApiOperation[] = [
     path: '/api/v1/projects/{name}/traffic/sources/{id}/reset',
     summary: 'Advance lastSyncedAt to NOW and clear the error state',
     description:
-      'Operator recovery: advances `lastSyncedAt` to NOW, sets `status` back to `connected`, and clears `last_error`. WordPress resets also clear `last_cursor` and the pending-window marker, so the next drain starts at the new watermark instead of combining it with an old cursor. That abandons any ambiguous pending WordPress history; reset prevents replay but is not a historical repair. Common trigger: an idle Vercel/Cloud Run source whose `lastSyncedAt` has aged past the upstream retention window (`request-logs` ~14d, Cloud Logging 30d) and now throws on every sync. Any pre-existing rollup history stays in place; the skipped history is the explicit trade-off — run `traffic backfill` separately to recover any of it. `advanceToNow: true` is required (no implicit reset). Archived sources are rejected with 400 — re-connect them via the appropriate `traffic/connect/*` endpoint instead.',
+      'Operator recovery: advances `lastSyncedAt` to NOW, sets `status` back to `connected`, and clears `last_error`. WordPress resets also clear `last_cursor` and the pending-window marker, then record an unrecovered skip through the reset instant so the next drain cannot combine an old cursor with a new window. That prevents replay but is not a historical repair. Generic WordPress replace-mode backfill is unavailable because the plugin feed cannot prove retained coverage; use a retention-aware repair and explicitly declare any unrecoverable span. Common trigger: an idle Vercel/Cloud Run source whose `lastSyncedAt` has aged past upstream retention (`request-logs` ~14d, Cloud Logging 30d) and now throws on every sync. `advanceToNow: true` is required (no implicit reset). Archived sources are rejected with 400 — re-connect them via the appropriate `traffic/connect/*` endpoint instead.',
     tags: ['traffic'],
     parameters: [
       nameParameter,

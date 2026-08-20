@@ -37,6 +37,7 @@ export interface WordpressTrafficEventPayload {
 /**
  * Top-level response shape of `GET /wp-json/canonry/v1/events`.
  * `next_cursor` is opaque to canonry — pass it back verbatim as `?cursor=`.
+ * It is a nonempty string exactly when `has_more=true`, and otherwise null.
  */
 export interface WordpressTrafficEventsResponseBody {
   events: WordpressTrafficEventPayload[]
@@ -103,10 +104,9 @@ export interface WordpressTrafficEventsPage {
    * Mirrors the plugin's `has_more` boolean. `true` means another page is
    * waiting at `nextCursor` and the caller should keep fetching within
    * this sync. `false` means the plugin is caught up — clear `nextCursor`
-   * and stop iterating. The integration
-   * sets this to `false` when it could not determine `has_more` (e.g.
-   * older plugin versions); callers should treat `false` as the
-   * stop-iterating signal.
+   * and stop iterating. The integration rejects a response that omits or
+   * contradicts `has_more` / `next_cursor`; it never guesses that a page is
+   * terminal.
    */
   hasMore: boolean
   /** Resolved REST endpoint path, useful for diagnostics. */

@@ -62,6 +62,121 @@ async function readErrorBody(response: Response): Promise<string | undefined> {
   return text.length <= 500 ? text : `${text.slice(0, 500)}... [truncated]`
 }
 
+interface RequestedWindowBoundary {
+  value: string
+  timestampMs: number
+}
+
+interface RequestedWindow {
+  since?: RequestedWindowBoundary
+  until?: RequestedWindowBoundary
+}
+
+interface ParsedWordpressTrafficEventsResponseBody {
+  events: unknown[]
+  nextCursor: string | null
+  hasMore: boolean
+  site?: WordpressTrafficEventsResponseBody['site']
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function parseRequestedBoundary(
+  name: 'since' | 'until',
+  value: string | undefined,
+): RequestedWindowBoundary | undefined {
+  if (value === undefined || value === '') return undefined
+  const timestampMs = Date.parse(value)
+  if (!Number.isFinite(timestampMs)) {
+    throw new WordpressTrafficApiError(`${name} must be a valid ISO 8601 timestamp`, 400)
+  }
+  return { value, timestampMs }
+}
+
+function parseRequestedWindow(options: ListWordpressTrafficEventsOptions): RequestedWindow {
+  const since = parseRequestedBoundary('since', options.since)
+  const until = parseRequestedBoundary('until', options.until)
+  if (since && until && since.timestampMs >= until.timestampMs) {
+    throw new WordpressTrafficApiError('since must be earlier than until', 400)
+  }
+  return { since, until }
+}
+
+function parseSiteMetadata(value: unknown): WordpressTrafficEventsResponseBody['site'] | undefined {
+  if (!isRecord(value)) return undefined
+  return {
+    url: typeof value.url === 'string' ? value.url : undefined,
+    anonymous_id: typeof value.anonymous_id === 'string' ? value.anonymous_id : undefined,
+    wordpress_version: typeof value.wordpress_version === 'string' ? value.wordpress_version : undefined,
+    plugin_version: typeof value.plugin_version === 'string' ? value.plugin_version : undefined,
+  }
+}
+
+function invalidResponse(message: string): WordpressTrafficApiError {
+  return new WordpressTrafficApiError(
+    `WordPress traffic endpoint returned an invalid response: ${message}`,
+    502,
+  )
+}
+
+function parseResponseBody(value: unknown): ParsedWordpressTrafficEventsResponseBody {
+  if (!isRecord(value)) {
+    throw invalidResponse('expected an object body')
+  }
+  if (!Array.isArray(value.events)) {
+    throw invalidResponse('events must be an array')
+  }
+  if (typeof value.has_more !== 'boolean') {
+    throw invalidResponse('has_more must be a boolean')
+  }
+
+  const nextCursor = value.next_cursor
+  if (value.has_more) {
+    if (typeof nextCursor !== 'string' || nextCursor.trim().length === 0) {
+      throw invalidResponse('has_more=true requires a nonempty next_cursor')
+    }
+  } else if (nextCursor !== null) {
+    throw invalidResponse('has_more=false requires next_cursor=null')
+  }
+
+  return {
+    events: value.events,
+    nextCursor: nextCursor as string | null,
+    hasMore: value.has_more,
+    site: parseSiteMetadata(value.site),
+  }
+}
+
+async function readResponseJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json()
+  } catch {
+    throw invalidResponse('body is not valid JSON')
+  }
+}
+
+function assertEntryIsWithinRequestedWindow(entry: unknown, window: RequestedWindow): void {
+  if (!window.since && !window.until) return
+
+  const observedAt = isRecord(entry) && typeof entry.observed_at === 'string'
+    ? entry.observed_at
+    : undefined
+  const observedAtMs = observedAt === undefined ? Number.NaN : Date.parse(observedAt)
+  const outsideWindow = !Number.isFinite(observedAtMs)
+    || (window.since !== undefined && observedAtMs < window.since.timestampMs)
+    || (window.until !== undefined && observedAtMs >= window.until.timestampMs)
+  if (!outsideWindow) return
+
+  const lower = window.since?.value ?? '-infinity'
+  const upper = window.until?.value ?? '+infinity'
+  throw new WordpressTrafficApiError(
+    `WordPress traffic endpoint returned an invalid or out-of-window observed_at for the requested [${lower}, ${upper}) window. Upgrade to a bounded-window-capable Canonry traffic-logger extension before syncing.`,
+    502,
+  )
+}
+
 /**
  * Fetch a page (or up to `maxPages` pages) of WordPress traffic events from
  * the canonry traffic-logger plugin's REST endpoint, normalize each event into
@@ -80,6 +195,7 @@ export async function listWordpressTrafficEvents(
   const pageSize = normalizePageSize(options.pageSize)
   const maxPages = normalizeMaxPages(options.maxPages)
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const requestedWindow = parseRequestedWindow(options)
 
   let cursor = options.cursor
   let rawEntryCount = 0
@@ -135,14 +251,20 @@ export async function listWordpressTrafficEvents(
       )
     }
 
-    // `response.json()` is untrusted wire data; `Partial` keeps the cast honest
-    // so a malformed page (missing `events`) degrades to empty instead of throwing.
-    const body = (await response.json()) as Partial<WordpressTrafficEventsResponseBody>
-    const entries = body.events ?? []
+    const body = parseResponseBody(await readResponseJson(response))
+    const entries = body.events
     rawEntryCount += entries.length
 
     for (const entry of entries) {
-      const normalized = normalizeWordpressTrafficEvent(entry, body.site)
+      assertEntryIsWithinRequestedWindow(entry, requestedWindow)
+      if (!isRecord(entry)) {
+        skippedEntryCount += 1
+        continue
+      }
+      const normalized = normalizeWordpressTrafficEvent(
+        entry as unknown as WordpressTrafficEventsResponseBody['events'][number],
+        body.site,
+      )
       if (normalized) {
         events.push(normalized)
       } else {
@@ -150,21 +272,11 @@ export async function listWordpressTrafficEvents(
       }
     }
 
-    const nextCursor = body.next_cursor ?? undefined
-    // `has_more=true` without a continuation cursor is contradictory wire
-    // data. Do not turn it into a terminal page: callers would advance their
-    // watermark and silently lose the remaining events.
-    if (body.has_more && !nextCursor) {
-      throw new WordpressTrafficApiError(
-        'WordPress traffic endpoint returned has_more=true without next_cursor',
-        502,
-      )
-    }
-    cursor = nextCursor
+    cursor = body.nextCursor ?? undefined
     // Track the latest `has_more` so a single-page call (maxPages=1)
     // surfaces the plugin's continuation signal to the caller. Internal
     // pagination still uses the same break rule as before.
-    hasMore = Boolean(body.has_more)
+    hasMore = body.hasMore
     if (!hasMore) break
   }
 

@@ -155,21 +155,33 @@ window change it in `Settings → Canonry Traffic Logger`.
 
 Each incremental WordPress sync uses one fixed half-open `[since, until)`
 window. A fresh source, or an idle source without an explicit
-`--since-minutes`, starts with the plugin's default 90-day horizon; this is
-best-effort because the site's configured retention may be shorter. If the
-window needs more than one capped drain, Canonry persists both its lower and
-upper bounds with the continuation cursor and retries that exact interval
-until the plugin reports it is terminal. It then advances the normal watermark.
+`--since-minutes`, starts with a 365-day horizon, matching the plugin's
+maximum configurable retention. A site configured for less retention simply
+returns its available tail. If the window needs more than one capped drain,
+Canonry persists both its lower and upper bounds with the continuation cursor
+and retries that exact interval until the plugin reports it is terminal. It
+then advances the normal watermark. Every returned event is validated against
+the requested interval; an older or custom extension that ignores `since` or
+`until` fails closed before any rollup is written. Update that extension to a
+bounded-window-capable Canonry traffic logger before syncing again.
 
-Do not run a WordPress replace-mode backfill while that continuation is
-pending. It is rejected because replacing a window and then resuming an
-additive cursor walk could re-add the same events.
+Do not run generic replace-mode backfill for a WordPress source. The plugin
+prunes retained events and cannot prove that it covers every bucket a replace
+transaction would delete, even when no continuation is pending. Canonry
+rejects that generic path universally. Keep existing rollups intact, use a
+retention-aware repair, and explicitly declare any unrecoverable portion before
+reporting a historical trend.
 
 After upgrading from the former unbounded WordPress sync, a source with an old
 continuation cursor is intentionally rejected rather than guessed at. Keep its
 schedule paused, record the ambiguous historical span, then use the explicit
 reset below to start fresh. Reset stops future replay; it does not repair past
-rollups.
+rollups. Generic WordPress replace-mode backfill remains unavailable until a
+retention-aware repair can establish coverage.
+
+Reconnecting with a different WordPress `baseUrl` archives the old source and
+creates a fresh one. Its existing rollups and any unrecovered marker remain
+with the old lineage rather than mixing with the new endpoint's traffic.
 
 ## Connecting a Vercel source
 

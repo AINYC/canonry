@@ -22947,7 +22947,7 @@ export type PostApiV1ProjectsByNameTrafficSourcesByIdActivateResponse = PostApiV
 export type PostApiV1ProjectsByNameTrafficSourcesByIdSyncData = {
     body?: {
         /**
-         * Optional lookback for time-window sources; Cloudflare Queue pull ignores it.
+         * Optional lookback for time-window sources. Defaults are adapter-specific; a new or idle WordPress source uses 365d to cover the plugin’s maximum configurable retention. Cloudflare Queue pull ignores it.
          */
         sinceMinutes?: number;
     };
@@ -22975,7 +22975,7 @@ export type PostApiV1ProjectsByNameTrafficSourcesByIdSyncErrors = {
      */
     404: ErrorEnvelope;
     /**
-     * Another Queue sync currently owns the source lease.
+     * Another WordPress or Queue sync currently owns the source lease.
      */
     409: ErrorEnvelope;
     /**
@@ -22998,7 +22998,7 @@ export type PostApiV1ProjectsByNameTrafficSourcesByIdSyncResponse = PostApiV1Pro
 export type PostApiV1ProjectsByNameTrafficSourcesByIdBackfillData = {
     body?: {
         /**
-         * Lookback window in days (default 30, capped at the upstream retention ceiling).
+         * Lookback window in days (default 30, capped by the adapter; generic WordPress replace backfill is unavailable).
          */
         days?: number;
     };

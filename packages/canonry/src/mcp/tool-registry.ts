@@ -794,9 +794,9 @@ const trafficSyncInputSchema = z.object({
     .number()
     .int()
     .positive()
-    .max(7 * 24 * 60)
+    .max(365 * 24 * 60)
     .optional()
-    .describe('Lookback window in minutes. Defaults to the source\'s configured window (60 min) when omitted; clamped forward to lastSyncedAt to avoid double-counting.'),
+    .describe('Optional lookback in minutes. Defaults are adapter-specific and clamp forward to lastSyncedAt; a new or idle WordPress source uses 365d to cover the plugin’s maximum configurable retention.'),
 })
 
 const trafficBackfillInputSchema = z.object({
@@ -806,9 +806,9 @@ const trafficBackfillInputSchema = z.object({
     .number()
     .int()
     .positive()
-    .max(30)
+    .max(90)
     .optional()
-    .describe('Lookback window in days. Default 30, capped server-side at the upstream log retention ceiling (Cloud Logging _Default = 30d).'),
+    .describe('Lookback window in days. Default 30, capped by the adapter at 90d. Generic WordPress replace backfill is unavailable because retained coverage is unproven.'),
 })
 
 const trafficResetInputSchema = z.object({
@@ -816,7 +816,7 @@ const trafficResetInputSchema = z.object({
   sourceId: z.string().min(1).describe('Traffic source ID returned by canonry_traffic_sources_list.'),
   advanceToNow: z
     .literal(true)
-    .describe('Must be `true`. Explicit gate against accidental resets. Advances lastSyncedAt to NOW and clears the source\'s error state; WordPress also clears its continuation cursor and pending-window marker.'),
+    .describe('Must be `true`. Explicit gate against accidental resets. Advances lastSyncedAt to NOW and clears the source\'s error state; WordPress also clears its continuation state and records an unrecovered span that needs retention-aware repair.'),
 })
 
 const trafficEventsInputSchema = z.object({
@@ -2035,7 +2035,7 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_traffic_connect_wordpress',
     title: 'Connect WordPress traffic-logger source',
-    description: 'Connect a WordPress site (running the canonry traffic-logger plugin) as a server-side traffic source. Probes the plugin endpoint with the supplied Application Password before persisting — a bad credential or unreachable host surfaces as a 502 error. Reconnecting updates the existing active WordPress source in place. The Application Password is stored in ~/.canonry/config.yaml (not the DB) and never echoed back.',
+    description: 'Connect a WordPress site (running the canonry traffic-logger plugin) as a server-side traffic source. Probes the plugin endpoint with the supplied Application Password before persisting; a bad credential or unreachable host surfaces as a 502 error. Reconnecting the same endpoint updates the active source in place. Changing baseUrl archives the old lineage and creates a fresh source so rollups cannot mix across endpoints. The Application Password is stored in ~/.canonry/config.yaml (not the DB) and never echoed back.',
     access: 'write',
     tier: 'traffic',
     inputSchema: trafficConnectWordpressInputSchema,
@@ -2056,8 +2056,8 @@ export const canonryMcpTools = [
   }),
   defineTool({
     name: 'canonry_traffic_sync',
-    title: 'Sync Cloud Run traffic source',
-    description: 'Pull the most recent Cloud Logging entries for a Cloud Run traffic source, classify them as crawler / AI-referral / unknown, and upsert hourly rollups + raw samples. Returns totals, bucket counts, and the run id. The window auto-clamps forward to lastSyncedAt to avoid double-counting on back-to-back calls.',
+    title: 'Sync traffic source',
+    description: 'Pull a Cloud Run, WordPress, Vercel, or Cloudflare Queue traffic source, classify crawler / AI-referral / unknown traffic, and upsert hourly rollups plus raw samples. Time-window pulls clamp forward to lastSyncedAt. WordPress uses a fixed bounded window, defaults a new or idle source to 365d, validates the returned events remain inside that window, and serializes syncs with a source lease.',
     access: 'write',
     tier: 'traffic',
     inputSchema: trafficSyncInputSchema,
@@ -2067,8 +2067,8 @@ export const canonryMcpTools = [
   }),
   defineTool({
     name: 'canonry_traffic_backfill',
-    title: 'Backfill Cloud Run traffic source',
-    description: 'Async one-shot reclassification of historical Cloud Run logs. Pulls the last `days` of request logs (capped at the 30d Cloud Logging retention ceiling), classifies them with current rules, and replaces the hourly rollup buckets + sample slice in the window. Returns immediately with `{ runId, status: "running" }`; poll canonry_run_get for completion. lastSyncedAt only advances forward — a backfill never undoes incremental sync progress that ran ahead of it.',
+    title: 'Backfill traffic source',
+    description: 'Async one-shot reclassification for Cloud Run or Vercel traffic. It replaces the selected window’s rollups with a fresh bounded pull and current classifier output. WordPress generic replace backfill is unavailable because the endpoint cannot prove retained coverage; use a retention-aware repair that explicitly declares any unrecoverable span. Returns `{ runId, status: "running" }`; poll canonry_run_get for completion.',
     access: 'write',
     tier: 'traffic',
     inputSchema: trafficBackfillInputSchema,
@@ -2079,7 +2079,7 @@ export const canonryMcpTools = [
   defineTool({
     name: 'canonry_traffic_reset',
     title: 'Advance traffic source lastSyncedAt to NOW',
-    description: 'Operator recovery for a stuck traffic source. Advances `lastSyncedAt` to NOW, sets `status` back to `connected`, and clears `last_error`. A WordPress reset also clears `last_cursor` and its pending-window marker, so its next bounded drain begins at the new watermark instead of combining it with an old cursor. That prevents future replay but is not a historical repair. Common trigger: an idle Vercel/Cloud Run source whose `lastSyncedAt` aged past the upstream retention boundary and every sync now throws a retention error. Historical events in the gap are unrecoverable from the sync path; run canonry_traffic_backfill separately if any of them are needed. Archived sources are rejected — re-connect via the appropriate canonry_traffic_connect_* tool instead.',
+    description: 'Operator recovery for a stuck traffic source. Advances `lastSyncedAt` to NOW, sets `status` back to `connected`, and clears `last_error`. A WordPress reset also clears its continuation state and records an unrecovered span so its next bounded drain cannot combine an old cursor with a new window. That stops replay but is not historical repair. Generic WordPress replace-mode backfill is unavailable because retained coverage is unproven; use a retention-aware repair that explicitly declares any unrecoverable span. Archived sources are rejected; reconnect them with the appropriate canonry_traffic_connect_* tool.',
     access: 'write',
     tier: 'traffic',
     inputSchema: trafficResetInputSchema,

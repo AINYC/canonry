@@ -178,9 +178,10 @@ export const trafficSourceDtoSchema = z.object({
   /**
    * Newest instant a sync clamped past instead of ingesting, or null when no
    * skip is outstanding. Non-null means this source has a known gap in its
-   * history that only a backfill covering the span will close — it does not
-   * clear when the watermark catches up, because catching up is exactly what
-   * the skipping sync did.
+   * history that only a repair with proven source coverage can close — it does
+   * not clear when the watermark catches up, because catching up is exactly
+   * what the skipping sync did. WordPress generic replace-mode backfill is
+   * deliberately unavailable because the retained feed cannot prove coverage.
    */
   skippedThroughAt: z.string().nullable(),
   /** Residual Cloudflare Queue depth reported by the most recent bounded pull. */
@@ -455,7 +456,7 @@ export const trafficSyncResponseSchema = z.object({
 export type TrafficSyncResponse = z.infer<typeof trafficSyncResponseSchema>
 
 export const trafficBackfillRequestSchema = z.object({
-  /** Lookback window in days. Capped server-side at the upstream log retention ceiling (Cloud Logging _Default = 30d). Default: 30. */
+  /** Lookback window in days. Default: 30; capped server-side at the adapter ceiling. WordPress always requires a retention-aware repair, not this generic replace operation. */
   days: z.number().int().positive().optional(),
 })
 export type TrafficBackfillRequest = z.infer<typeof trafficBackfillRequestSchema>
@@ -465,11 +466,12 @@ export type TrafficBackfillRequest = z.infer<typeof trafficBackfillRequestSchema
  * so subsequent scheduled syncs resume from a recent timestamp. Used when an
  * idle source's `lastSyncedAt` has aged past the upstream's retention window
  * (Vercel `request-logs`, Cloud Logging) and every sync now throws a
- * retention error. Skipped history is the explicit trade-off; the operator
- * runs `traffic backfill` separately if they want to recover any of it. A
- * WordPress reset also clears its continuation cursor and pending-window
- * marker, so it starts at the new watermark rather than resuming an old
- * partial drain. That prevents replay; it is not a historical repair.
+ * retention error. Skipped history is the explicit trade-off. A WordPress
+ * reset also clears its continuation cursor and pending-window marker, then
+ * records an unrecovered skip through the reset instant. It starts at the new
+ * watermark rather than resuming an old partial drain, which prevents replay;
+ * it is not a historical repair. WordPress generic replace-mode backfill is
+ * unavailable because the retained feed cannot prove coverage.
  *
  * `advanceToNow` must be `true` — there is no implicit reset. The schema
  * rejects `false` / missing to keep the call sites self-documenting.
