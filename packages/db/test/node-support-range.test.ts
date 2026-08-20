@@ -110,6 +110,37 @@ function prebuiltMajors(): number[] {
   return [...majors].sort((a, b) => a - b)
 }
 
+/**
+ * The version `pnpm-lock.yaml` resolves better-sqlite3 to.
+ *
+ * Everything above reads the INSTALLED copy via `require.resolve`, so a
+ * `node_modules` that has drifted from the lockfile makes this whole file
+ * self-consistent about the wrong dependency — green, while describing a
+ * version the repo does not ship. Observed during review: a tree still on
+ * 12.6.2 with the lockfile already at 12.11.1, so `PREBUILT_MAJORS` was never
+ * consulted for the version CI actually installs.
+ *
+ * Parsed, not pattern-matched: the resolved version is a `packages:` KEY, and a
+ * loose scan also hits the `@types/better-sqlite3` entries and the peer suffixes
+ * on `drizzle-orm@…(better-sqlite3@…)`.
+ */
+function lockfileBetterSqlite3Version(): string {
+  const lock = parseYaml(readRepoFile('pnpm-lock.yaml')) as {
+    packages?: Record<string, unknown>
+  }
+  const prefix = 'better-sqlite3@'
+  const versions = Object.keys(lock.packages ?? {})
+    .filter((key) => key.startsWith(prefix))
+    .map((key) => key.slice(prefix.length))
+  if (versions.length !== 1) {
+    throw new Error(
+      `expected exactly one better-sqlite3 in pnpm-lock.yaml, found ${versions.length}` +
+        (versions.length ? `: ${versions.join(', ')}` : ''),
+    )
+  }
+  return versions[0]!
+}
+
 interface CiJob {
   strategy?: { matrix?: { include?: Array<Record<string, unknown>> } }
   steps?: Array<{ run?: string }>
@@ -157,6 +188,19 @@ function declaredEnginesCeiling(pkgRelPath: string[]): { declared: string; ceili
 }
 
 describe('Node support range', () => {
+  test('the installed better-sqlite3 matches the lockfile', () => {
+    // Runs FIRST because every other assertion here is only as true as this
+    // one: they all describe the installed copy.
+    const locked = lockfileBetterSqlite3Version()
+    const { version } = installedBetterSqlite3()
+    expect(
+      version,
+      `node_modules has better-sqlite3 ${version} but the lockfile pins ${locked}. ` +
+        'Run `pnpm install` — until then this file is asserting against a ' +
+        'dependency the repo does not ship.',
+    ).toBe(locked)
+  })
+
   test('the install guard matches the prebuilt majors at or above Canonry floor', () => {
     // Derived from prebuild coverage, not from engines.node. A dependency bump
     // that adds OR drops a prebuilt major fails here.
